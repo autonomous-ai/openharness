@@ -47,6 +47,7 @@ Both servers were stopped afterwards.
 | `agent.prompt` while working or blocked | **Typed anyway.** herdr has no queue and no idle check. The working agent's Enter was lost, and its text joined the next prompt |
 | A newline in the text | Typed as Enter: two submitted lines |
 | Empty text | Refused with `empty_agent_prompt` |
+| A named session (`herdr --session <name>`) | A server of its own, at `<config>/herdr/sessions/<name>/herdr.sock`. Its pane ids start again at `w1:p1`. Its panes have `HERDR_SESSION=<name>`; the default session's (plain `herdr`, or `--session default`) have none. Both have `HERDR_SOCKET_PATH` |
 
 From the screen alone, with no hook, herdr detects these kinds: pi, claude, codex, gemini, cursor, devin, agy, cline,
 opencode, copilot, kimi, kiro, droid, amp, grok, hermes, kilo, qodercli and maki (`herdr server agent-manifests`). Most
@@ -77,11 +78,15 @@ The herdr adapter and the herdr source share it.
 
 - **Socket path:** `$XDG_CONFIG_HOME/herdr/herdr.sock`, else `~/.config/herdr/herdr.sock`, from the daemon's own
   environment, as herdr itself works it out.
-  - Named sessions (`herdr --session <name>`) and remote servers are not followed.
+  - Named sessions (`herdr --session <name>`) and remote servers are not followed (Follow-ups). A hook from a named
+    session names no herdr pane (the adapter, below).
   - A `HERDR_SOCKET_PATH` set in another process is not seen: the daemon reads no other process's environment.
   - Before each connection the path must be a socket owned by this user (`lstat`).
 - **`request(method, params)`:** one connection, one line out, one answer in. It has a 10 s deadline
-  (`RUN_TIMEOUT_MS`). It answers the result, an error code, or `timeout`, and never throws.
+  (`RUN_TIMEOUT_MS`). It answers the result or a fault, and never throws. A fault is the client's own word
+  (`no_socket`, `refused`, `timeout`, `ended`, `oversize`, `bad_json`, `bad_answer`), or `rejected` for herdr's own
+  refusal, with herdr's code held beside it. So no code of herdr's reads as one of the client's words: a herdr that
+  answers `no_socket` has a socket.
 - **`subscribe(entries, onEvent, onClose)`:** one connection that is held open, closable by its caller.
 - **Bounds:** a line over 1 MiB, or bad JSON, closes that connection with a reason code.
 - **`prompt(paneId, kind, text)`:**
@@ -92,7 +97,8 @@ The herdr adapter and the herdr source share it.
   hooked agent's and a listed agent's alike, so each gets this check.
   - The text is never empty and at most `MAX_TEXT` (2000) characters.
   - Control characters become spaces, as Orca's `send` does, since herdr types a newline as Enter.
-  - The answer is `sent`, `busy` (not idle) or `failed` (with herdr's error code, or `timeout`).
+  - The answer is `sent`, `busy` (not idle) or `failed`, with the fault as a request says it, or `bad_request` (the
+    client would not send it) or `not_that_agent` (the pane holds another kind).
 - **No focus (Q6).** The socket carries listing, status and words only: `agent.list`, `agent.get`,
   `events.subscribe` and `agent.prompt`. A tap stays the `herdr agent focus` command (the adapter, below).
 
@@ -100,8 +106,12 @@ The herdr adapter and the herdr source share it.
 
 A new `HostSource` with the id `herdr`.
 
-- **When it runs:** while a dial is attached, as the open scan does (`devices.ts` `attached`), on macOS and Linux. On
-  Windows it never runs. It closes its connections, watch and timers when the dial detaches and when the devices stop.
+- **When it runs:** while a dial is attached, as the open scan does (`devices.ts` `attached`), on macOS and Linux, with
+  `herdr` on `PATH`, as the adapter's `focus` needs. `PATH` is read again at each attach.
+  - With no herdr installed, nothing is subscribed or watched: no watch of `~/.config` or the home folder (recursive on
+    macOS) waits for a socket that never comes.
+  - On Windows it never runs.
+  - It closes its connections, watch and timers when the dial detaches and when the devices stop.
 - **Following herdr's agents:** one subscription holds `pane.agent_detected`, `pane.closed`, `pane.exited`, and one
   `pane.agent_status_changed` entry per known agent pane. Every time a subscription starts, one `agent.list` follows
   it and sets every agent's fields and state. A change made while the list is in flight is still heard, because the
@@ -118,15 +128,21 @@ A new `HostSource` with the id `herdr`.
   - With no socket, it watches the nearest existing folder of `herdr/`, its config folder, and the home folder, and
     connects when the socket appears.
   - A refused connection or a dropped subscription retries after 1 s, doubling up to 60 s.
-  - After a 60 s retry fails, it stops retrying and waits on the watch: a server that starts again replaces the socket
-    file. A stale socket from a crashed herdr therefore costs about two minutes of retries, then nothing.
+  - After a 60 s retry of an attempt that never listed fails, it stops retrying and waits on the watch: a server that
+    starts again replaces the socket file. A stale socket from a crashed herdr therefore costs about two minutes of
+    retries, then nothing.
+  - An attempt that listed keeps the 60 s retry and is never given up on: that herdr is running, but drops each
+    subscription.
   - On a drop, the agents stay listed with their last state until the first retry. If that retry fails, the list
     empties.
+  - A retry that finds another socket (another inode or change time) is a herdr that started again. It numbers its
+    panes afresh, so the list empties before it connects: a kept row would take the status of the new pane of its id,
+    and a `working` row turned `idle` would give a done card no turn had.
 - **Each agent:**
 
   | Field | Value |
   |---|---|
-  | `id` | A fresh UUID per pane id and kind. It is kept across reconnects while the pane stays listed, and dropped with the pane |
+  | `id` | A fresh UUID per pane id and kind. It is kept across reconnects to the same socket while the pane stays listed, and dropped with the pane |
   | `engine` | herdr's kind |
   | `sessionId` | `agent_session.value` when its `kind` is `id` |
   | `cwd` | herdr's `cwd` |
@@ -150,10 +166,10 @@ A new `HostSource` with the id `herdr`.
 - **Capabilities:** status, voice and focus, but no answer (`svf`). A blocked agent's row shows `Waiting for you ·
   herdr`, as an observed agent with no question text does.
 - **Voice:**
-  - The source refuses by its own state first: needs-you gets the waiting sentence; working, unknown or a send under
-    way get the busy sentence.
+  - The source refuses by its own state first: needs-you gets the waiting sentence; working or unknown get the busy
+    sentence.
   - Then it prompts through the herdr adapter (below), which holds one operation per pane and calls
-    `client.prompt`.
+    `client.prompt`. Words already under way to the pane are the adapter's `busy`, which gets the busy sentence too.
   - The sentences are the observed source's:
     - busy: `<name> is busy. Say it when it is done.`
     - waiting: `<name> is waiting for your answer in herdr.`
@@ -184,6 +200,14 @@ A new `HostSource` with the id `herdr`.
   `agent.get` check runs as well, since that agent's pane was named by a hook.
   - On Windows the adapter has no `type`: the client does not speak herdr's named pipe, so no words are offered
     through herdr there, as today.
+  - `canType` (new on `HostAdapter`, asked at each look as `canShow` is) answers whether the client finds herdr's
+    socket (`socketStamp`). A daemon started by launchd or systemd may not have the shell's `XDG_CONFIG_HOME`. With no
+    socket the observed source's words skip herdr for the agent's next pane whose app types (Orca), as on `main`, and a
+    hooked agent in herdr alone (inside Ghostty, say) lists no voice.
+- **A hook's pane is the default session's.** A named session's pane ids start again at `w1:p1` (the spike), so a
+  hook's `HERDR_PANE_ID` from one could make the dial type into, fold away or focus the default session's agent of the
+  same id. The hook (`cli/hook/notify.mjs`) reads only its own environment: when `HERDR_SESSION` is set, it leaves
+  `HERDR_PANE_ID` out. It never sends the session's name or its socket's path.
 - **One operation per pane at a time**, as Orca's switch and send do. The adapter holds both the command and the
   client, so it keeps the order:
   - a prompt waits for a focus under way on the same pane;
@@ -193,7 +217,8 @@ A new `HostSource` with the id `herdr`.
 
   The herdr source's words go through the adapter too, so they keep this order with a tap.
 - herdr comes first in the adapter order. So a herdr inside an Orca terminal now takes words through herdr, into the
-  agent's own pane, instead of through Orca. Orca types into whichever pane herdr has focused (Q4).
+  agent's own pane, instead of through Orca, while herdr's socket is there. Orca types into whichever pane herdr has
+  focused (Q4).
 - `type` answers a boolean, as the interface says. The observed source counts `herdr` from `actions.count(adapter)`,
   as it does for Orca.
 
@@ -286,10 +311,16 @@ kind and folder), over the same local link. The socket is read as this user only
 - **A herdr plugin (Q5).** herdr has the plugin system above. The roadmap's plugin is a Phase 2 distribution item:
   "a small panel that says the device is connected and points to the shop; the integration stays in the app". It also
   needs a public GitHub repository for `herdr plugin install`.
-- Named herdr sessions and remote (`--remote`) servers.
 - Answering a blocked agent from the dial. It is answered in herdr, as today.
 - Installing or starting herdr, and herdr's own integrations (`herdr integration install`).
 - Windows, beyond the tap a hooked agent has there today.
+
+## Follow-ups
+
+- **Named herdr sessions (`herdr --session <name>`) and remote (`--remote`) servers.** The source follows only the
+  default session's socket. Today a hooked agent in a named session shows its status through its hook only: its hook
+  names no herdr pane, so no tap focuses its pane and no words go to it through herdr. It is reached only as an agent
+  outside herdr is (its app, its mod, Codex's queue). An agent there with no hook is not on the dial.
 
 ## Done when
 
