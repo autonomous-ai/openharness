@@ -3977,6 +3977,20 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     expect(calls('question')).toEqual([])
   })
 
+  // herdr's done is any finished turn in a pane it has not focused: each plug-in, reconnect and unfold lists it again.
+  it('a herdr agent first listed done is no card, its next turn\'s done is; an observed agent first heard done is one', async () => {
+    const { port, live, status } = withHerdr()
+    await live([listing({ agent_status: 'done' })])
+    const [{ id }] = await listed()
+    expect(calls('turnDone')).toEqual([])
+    status('working')
+    status('done')
+    expect(calls('turnDone')).toEqual([[id]])
+    const other = observedAgentId('claude', 'sess-2')
+    port.observed({ ...hook('turn-stop'), sessionId: 'sess-2', hostHints: {} })
+    expect(calls('turnDone')).toEqual([[id], [other]])
+  })
+
   it('a herdr agent mid-turn is reminded', async () => {
     const { live, status } = withHerdr()
     await live()
