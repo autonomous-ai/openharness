@@ -99,6 +99,20 @@ describe('the Claude app adapter', () => {
     expect(await forged.adapter.focus(pane('local_a&x=1'))).toBe(false)
     expect(forged.calls).toEqual([])
   })
+
+  // The end-to-end harness points HARNESS_OPEN_BIN at a fake that opens nothing (e2e/harness/daemon.ts), as open.ts
+  // takes it.
+  it.each([
+    ['/tmp/e2e/fake-open', '/tmp/e2e/fake-open'],
+    ['', OPEN],
+    ['fake-open', OPEN],
+    [undefined, OPEN],
+  ])('HARNESS_OPEN_BIN %j: an absolute path is the open a tap and a rest run; empty, relative and none run /usr/bin/open', async (bin, file) => {
+    const { calls, adapter } = recorder({ bin })
+    expect(await adapter.focus(pane(SESSION))).toBe(true)
+    expect(await adapter.show(pane(SESSION), 'a1')).toBe('ok')
+    expect(calls).toEqual([{ ...link(SESSION), file }, { ...link(SESSION), file }])
+  })
 })
 
 describe('a rest on a Claude app session', () => {

@@ -390,7 +390,11 @@ class _BrowserPanelState extends State<BrowserPanel> {
       await request();
       return true;
     } catch (error) {
-      appLog.warn('browser', 'request to ${widget.machineId} failed: $error');
+      appLog.warn(
+        'browser',
+        'request to ${widget.machineId} failed',
+        error: error,
+      );
       if (!mounted) return false;
       setState(
         () => _refused = switch (error) {

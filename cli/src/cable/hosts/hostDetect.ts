@@ -1,6 +1,8 @@
 // Which app an agent runs in, from the few environment values the hook sends. Own variables of a
 // multiplexer or terminal come first: they name the nearest host, while TERM_PROGRAM names the outermost one.
 
+import { HC_TERMINAL } from './hcClient.js'
+
 /** Each host's macOS app by the bundle id its Info.plist gives it: how `__CFBundleIdentifier` names the app, and how a
  *  tap brings it forward (open.ts). */
 export const APP_BUNDLES: Readonly<Record<string, string>> = {
@@ -76,11 +78,27 @@ export function appDisplayName(id: string): string {
   return id === UNKNOWN_APP ? 'Other' : hostDisplayName(id)
 }
 
+/** The multiplexers' own variables: one started in an hc terminal keeps its HC_TERMINAL_ID, and is the nearer host. */
+const NEARER_HOSTS = ['HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE']
+
+/** The agent runs in Herdr Core's own terminal (hc, hcClient.ts), the one HC_TERMINAL_ID names. Every program started
+ *  there inherits that variable (`code .`, tmux, zellij, herdr), and in it the address is the terminal the program was
+ *  started from, whose agent is another: so only with hc's own TERM_PROGRAM (`ghostty`) or none, and no nearer host's
+ *  variable. */
+export function inHerdr(hints: Readonly<Record<string, string>>): boolean {
+  const program = hints.TERM_PROGRAM ?? ''
+  return HC_TERMINAL.test(hints.HC_TERMINAL_ID ?? '') && (program === '' || program === 'ghostty')
+    && !NEARER_HOSTS.some((own) => hints[own])
+}
+
 /** The outermost app an agent runs in. The bundle id and TERM_PROGRAM name it, unlike a multiplexer's own variables,
  *  which name the nearest host; with neither set, the nearest host is the only one known. */
 export function detectApp(hints: Record<string, string>): string {
   const bundle = hints.__CFBundleIdentifier ?? ''
   const program = hints.TERM_PROGRAM ?? ''
+  // Herdr Core (hc) gives its programs TERM_PROGRAM=ghostty and its own bundle is dev.herdr.core, so neither can name
+  // it: its own terminal decides first.
+  if (inHerdr(hints)) return 'herdr'
   // Cursor is a VS Code fork and reports TERM_PROGRAM=vscode, so the bundle id decides first. A hint is outside text:
   // only a table's own key names an app, never one an object inherits (`constructor`).
   if (Object.hasOwn(BUNDLE_APPS, bundle)) return BUNDLE_APPS[bundle]
@@ -98,6 +116,7 @@ export function detectHost(hints: Record<string, string>): string {
   if (has('REX_BLOCK')) return 'rex'
   if (has('ZELLIJ')) return 'zellij'
   if (has('TMUX_PANE')) return 'tmux'
+  if (inHerdr(hints)) return 'herdr'
   if (has('KITTY_WINDOW_ID')) return 'kitty'
   if (has('WEZTERM_PANE')) return 'wezterm'
   if (has('ORCA_AGENT_SESSION_ID') || bundle === APP_BUNDLES.orca) return 'orca'
