@@ -73,8 +73,9 @@ export function createResumeRepairWorker(deps: { directory: string; log?: (name:
       try { key = safeDirectory(receipt.stage) } catch (error) { if (!missing(error)) throw error; key = null }
       if (key !== null) {
         if (key !== receipt.key) throw new Error('RESUME_REPAIR_CLEANUP_FAILED')
-        // Never follow a substituted directory, enumerate arbitrary entries, or touch published names.
-        for (const name of ['backup', 'history']) {
+        // Never follow a substituted directory, enumerate arbitrary entries, or touch published names. `original` is the
+        // history core's publication replaced, kept here so that its last link goes in this process, not core's (#4330).
+        for (const name of ['original', 'backup', 'history']) {
           verifyNativePathFacts(receipt.route)
           if (safeDirectory(receipt.stage) !== key) throw new Error('RESUME_REPAIR_CLEANUP_FAILED')
           rmSync(join(receipt.stage, name), { force: true })

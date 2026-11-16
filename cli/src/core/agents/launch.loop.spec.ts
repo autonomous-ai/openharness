@@ -1,14 +1,20 @@
 /**
  * A Codex resume prepares its history in a real subprocess while core retains only bounded identity evidence and
- * publication. Read in line, a 200 MB rollout with an item to repair held the core loop 2.4 s on a Mac.
+ * publication. Read in line, a 200 MB rollout with an item to repair held the core loop 2.4 s on a Mac. Published, its
+ * rename freed the replaced rollout's pages on the loop, 9 ms on an idle Linux and past 50 ms on a shared runner, until
+ * the worker's cleanup took that over (#4330).
  *
  * What is measured is the CPU time of the loop's own thread between two turns of a 1 ms timer: the longest the loop
  * did one thing without letting the timer in. A busy machine that keeps the process off the CPU for a while does not
- * read as a held loop.
+ * read as a held loop. A full collection of this process's own heap (vitest's and every module it loaded) runs just
+ * before the measure, so that none is due while it runs: one that fell in the wait for the worker held the loop 10 ms
+ * on a loaded Linux, which is no work of the repair's (#4330).
  */
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setFlagsFromString } from 'node:v8'
+import { runInNewContext } from 'node:vm'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { codexSessionMeta } from '../../testing/codexRollout.js'
@@ -17,6 +23,9 @@ import { createResumeRepairs } from '../engines/resumeRepairs.js'
 import { startResumeRepairWorker } from '../../testing/resumeRepairProcess.js'
 
 const SESSION = '01a0a3cd-a374-71f2-a11a-1fc1cc41b36d'
+// Only a context made after the flag has `gc`: this file's own globals stay as they were.
+setFlagsFromString('--expose-gc')
+const collect = runInNewContext('gc') as () => void
 
 /** The CPU time, in ms, of the thread this runs on: the loop's. */
 function threadCpuMs(): number {
@@ -65,6 +74,7 @@ it('a Codex resume repairs a 200 MB rollout without ever holding the core loop f
   })
   const session = { agentId: 'a1', sessionId: SESSION, engine: 'codex', transcriptPath: file, codexHome: profile } as RegisteredSession
   vi.spyOn(console, 'log').mockImplementation(() => {})
+  collect()
   const hold = loopHold()
   await prepareSessionResume(session, () => true)
   const longest = hold.stop()
