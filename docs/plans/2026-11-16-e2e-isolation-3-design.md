@@ -93,14 +93,17 @@ no engine and no `npm`. `<root>/tools/node` stays a symbolic link: it runs the c
 
 ### Test files that link the worker's Node themselves (PM, 2026-11-16, after the 3-minute timer)
 
-Three test files make their own `node` link to `process.execPath`, outside `IsolatedDaemon.start`:
+Three test files make their own `node` link (a fourth, a wrapper, below) to `process.execPath`, outside `IsolatedDaemon.start`:
 - `e2e/cli.e2e.ts:145` runs `harness start` on `<runtime>/node-e2e/bin/node`, a symbolic link to the worker's Node,
   recorded in `current-node`. Node names itself by the real path, so that daemon's `baseNode(process.execPath)` is the
   worker's Node folder again.
 - `e2e/creationPaths.e2e.ts:68` and `e2e/freshMachineEngines.e2e.ts:190` put a `node` link to the worker's Node first
   on a pane's `PATH`.
 
-All three link the run's Node (`E2E_NODE_PATH`) instead. `cli.e2e.ts` gets a case that the core `harness start` runs is
+The final review found a fourth: `e2e/tuiShell.e2e.ts` writes a `harness` wrapper into `<root>/bin` that ran
+`process.execPath`, and a fleet pane runs `harness shell-launch` through it.
+
+All four use the run's Node (`E2E_NODE_PATH`) instead. `cli.e2e.ts` gets a case that the core `harness start` runs is
 on the run's Node, red on the base.
 
 ### A script outside the suite (PM, 2026-11-16)
