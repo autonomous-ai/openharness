@@ -84,6 +84,29 @@ describe('openRouterComplete', () => {
     expect(await openRouterComplete(options)).toBeNull()
   })
 
+  it('logs an HTTP error by OpenRouter\'s own message, never the prompt its body can quote', async () => {
+    // A moderation refusal's body carries `metadata.flagged_input`: a piece of the prompt, which for the voice router
+    // is the person's spoken words and their sessions' names.
+    const refusal = {
+      error: {
+        code: 403,
+        message: 'deepseek/deepseek-v4-flash requires moderation. Your input was flagged for "harassment".',
+        metadata: { reasons: ['harassment'], flagged_input: 'SECRET-TRANSCRIPT fix the login bug', provider_name: 'x' },
+      },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 403, text: async () => JSON.stringify(refusal) }))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(await openRouterComplete(options)).toBeNull()
+      expect(warn.mock.calls).toEqual([[`[openrouter] ${options.model} failed with HTTP 403: ${refusal.error.message}`]])
+      // A body that is not OpenRouter's error shape says only its status.
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 502, text: async () => '<html>SECRET bad gateway</html>' }))
+      expect(await openRouterComplete(options)).toBeNull()
+      expect(warn.mock.calls[1]).toEqual([`[openrouter] ${options.model} failed with HTTP 502`])
+      expect(warn.mock.calls.flat().join('\n')).not.toContain('SECRET')
+    } finally { warn.mockRestore() }
+  })
+
   it('returns null on a transport failure and on an empty completion', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNRESET')))
     expect(await openRouterComplete(options)).toBeNull()
