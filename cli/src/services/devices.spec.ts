@@ -5358,6 +5358,53 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     ]))
   })
 
+  // The PM (2026-11-16): a pick of herdr brings Herdr while herdr's ring holds an agent in Herdr's window. herdr 0.8.0's
+  // agents have none of their own (#4366).
+  describe('a pick of herdr', () => {
+    /** Ghostty's two agents keep herdr's ring from being the one shown: the pick switches to it. */
+    const pickHerdr = async (port: DevicesPort) => {
+      elsewhere(port, 'g-1', 'ghostty')
+      elsewhere(port, 'g-2', 'ghostty')
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('ghostty')
+      expect(host().pickApp('herdr')).toBe('switched')
+    }
+
+    it('brings Herdr while hc lists an agent', async () => {
+      const { port, live } = withHc()
+      live()
+      await pickHerdr(port)
+      await vi.waitFor(() => expect(brings()).toEqual(['[device] app filter: bring · ok']))
+      expect(orcaRuns).toEqual([openHerdr])
+    })
+
+    it('brings Herdr while a hooked agent in an hc terminal is on herdr\'s ring', async () => {
+      const { port, live } = withHc()
+      port.observed(hook('session-start'))
+      live([])
+      await pickHerdr(port)
+      await vi.waitFor(() => expect(brings()).toEqual(['[device] app filter: bring · ok']))
+      expect(orcaRuns).toEqual([openHerdr])
+    })
+
+    it('brings nothing with herdr 0.8.0\'s agents alone on herdr\'s ring', async () => {
+      const herdrSubs: HerdrSubscriber[] = []
+      const herdrListing: HerdrClient = {
+        request: async () => ({ ok: true, result: { type: 'agent_list', agents: [{ pane_id: 'w1:p1', agent: 'claude', agent_status: 'idle', cwd: '/work/old' }] } }),
+        subscribe: (_entries, to) => { herdrSubs.push(to); return { close: () => {} } },
+        prompt: async () => ({ outcome: 'sent' }),
+        socketStamp: () => '1:1',
+      }
+      const { port, live } = withHc({ herdr: herdrListing })
+      live([])
+      herdrSubs[0].started()
+      await vi.waitFor(async () => expect(await listed()).toHaveLength(1))
+      await pickHerdr(port)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(orcaRuns).toEqual([])
+      expect(brings()).toEqual([])
+    })
+  })
+
   /** A dial attached with hc's socket there, then again with none: nothing subscribed, and hc's folder not watched. */
   const nothingAsked = ({ port, hc }: ReturnType<typeof withHc>) => {
     attach(port)
