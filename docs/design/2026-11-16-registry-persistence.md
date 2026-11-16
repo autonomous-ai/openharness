@@ -1979,3 +1979,64 @@ The final TypeScript check and diff check pass
 (`/tmp/core-registry-fingerprint-allocation-types.log`). No measured claim about
 the final runtime's CPU or whole RSS follows from the eliminated entry pairs;
 the required gates and uninstrumented final-source cost comparison remain open.
+
+## Canonical object representation after allocation sampling
+
+The uninstrumented `7b88dfa202` comparison still fails RSS acceptance: the
+160-row unchanged case is 86.44 MiB old versus 163.90 MiB candidate. Removing
+temporary property-pair arrays did not resolve the transient allocation pressure.
+The frozen allocation diagnostic at `/tmp/harness-registry-allocation-v2`
+samples collected objects as well as retained ones, at 64 KiB intervals, without
+operation wrappers or forced GC. Its one current-head child passes all 83
+workload outcomes and proves owned process/lock/runtime cleanup. The canonical
+replacer subtree accounts for 734.1 MB of 1,886.6 MB sampled cumulative
+allocations (38.9%); its own frame accounts for 394.4 MB. This is attribution,
+not a CPU/RSS acceptance result. Inputs have SHA-256
+`6f72fb8abec5964828d129719542272ed18b597732f22c8b3a685f11555bfd3b`;
+summary `/tmp/core-registry-allocation-v2-summary.json` has SHA-256
+`e418fb6e48e84b1facd505d6b834cd0a8048db2633cfbe2eece14c318425582c`.
+
+On pinned Node 24.22.2, a bounded V8 shape control confirms the current
+null-prototype canonical copies use dictionary properties. The former
+`Object.fromEntries` copies and own-property definitions use fast properties,
+with identical JSON bytes for a representative 23-key row and literal
+`__proto__`, `constructor` and `toJSON` data keys. Replace only canonical object
+construction: define sorted own data properties on a fresh object, reusing one
+descriptor per object. This avoids both dictionary backing stores and the
+former temporary array per property. Keep JSON.stringify's recursive replacer,
+normal scalar/array/toJSON semantics and canonical bytes.
+
+Design: no stored format, audience, identity, lock, migration, public contract or
+durability change. There is no retained cache. Each call owns its temporary
+object and descriptor; copies and peer/uncertainty fences are unchanged. The
+code remains shared across macOS/Linux/Windows. V8 representation evidence is a
+macOS x64 pinned-Node diagnostic, not native acceptance on other platforms.
+
+Before the runtime edit, run a public three-admission diagnostic against the
+frozen bundle. It checks actual V8 representations during the third admission,
+immediate durable receipt equality, preserved prior rows and detached nested
+receipt objects, then verifies owned cleanup. The expected RED is dictionary
+row copies. After the edit, run the same control and the existing canonical
+byte, admission, observation, merge and persistence safety tests plus TypeScript.
+The root schedules the final uninstrumented CPU/RSS comparison and broader
+gates; no shape count or sampled allocation amount claims that RSS passes.
+
+The first caller diagnostic stopped before measurement because its assertion
+compared an own `defaultName: undefined` receipt field to JSON, which omits that
+field. That fixture failure and its successful cleanup are retained at
+`/tmp/core-registry-shape-caller-red.{json,log}`. The corrected diagnostic compares
+the receipt's JSON value and then checks its nested alias independently; its
+bytes are frozen at `/tmp/harness-registry-shape-caller-v2.mjs`. Against `7b88`,
+all three admissions, durable receipts and cleanup pass, and the intended RED
+finds 17 dictionary-backed canonical row copies. After the construction change,
+the same 17 copies use fast properties and the diagnostic passes. Evidence is
+`/tmp/core-registry-shape-caller-v2-{red,green}.json`; no forced GC is used.
+
+On macOS x64 / Node 24.22.2, the six selected safety files pass together:
+137/137 cases in 53.34 seconds (`/tmp/core-registry-shape-safety.log`), including
+canonical bytes and literal prototype keys, zero property-pair arrays,
+immediate durable receipts, nested snapshots, peer merges and uncertainty
+fences. TypeScript and diff checks pass (`/tmp/core-registry-shape-types.log`).
+The uninstrumented final-source CPU/RSS comparison, native matrix and broader
+gates remain pending; the earlier RSS failures are not superseded by these
+correctness and representation results.
