@@ -99,7 +99,7 @@ export class HerdrSource implements HostSource {
   readonly id = 'herdr'
   private readonly listeners = new Set<() => void>()
   private rows = new Map<string, Row>()
-  /** Each pane and kind that asked for a subscription naming it, by `<pane>/<kind>`, until the pane leaves. */
+  /** Each pane and kind that asked for a subscription naming it, by `<pane>/<kind>`, until it is listed or leaves. */
   private readonly asked = new Map<string, string>()
   /** The panes the dial's words are being typed into. */
   private readonly sending = new Set<string>()
@@ -391,6 +391,8 @@ export class HerdrSource implements HostSource {
       row.agent.sessionId = sessionOf(entry.agent_session, kind)
       this.status(row, heard?.statuses.get(`${pane}/${kind}`) ?? status)
       rows.set(pane, row)
+      // Listed, it is named as a row: an ask kept would outlive a pane that closes unheard, and take one of the 64.
+      this.asked.delete(`${pane}/${kind}`)
     }
     this.rows = rows
     if (rows.size !== this.said) {
