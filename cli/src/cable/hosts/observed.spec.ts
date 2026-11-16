@@ -2296,6 +2296,79 @@ describe('ObservedSource panes', () => {
     expect(src.byPane('orca', HANDLE)).toBeUndefined()
     expect(src.paneOf(agent.id, 'orca')).toBe(OTHER)
   })
+
+  it('an agent in a pane with a name, and none of its own, is called by it', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', inOrca()))
+    src.setPaneNames('orca', new Map([[HANDLE, 'PM'], [OTHER, 'Dev']]))
+    expect(src.list()[0].name).toBe('PM')
+    // One heard of after the names were given is called by them at once.
+    src.ingest(ev('session-start', { sessionId: 's2', ...inOrca(OTHER) }))
+    expect(src.list().find((a) => a.sessionId === 's2')!.name).toBe('Dev')
+  })
+
+  it('its own title (the hook\'s) and a user record name win over the pane\'s name', async () => {
+    const { actions } = fakeActions()
+    const s = setup({ actions, recordName: async () => 'Mine' })
+    s.src.ingest(s.ev('turn-start', { title: 'Tho', ...inOrca() }))
+    s.open.set('a', 'terminal')
+    s.owners.set('a', { pid: 11, engine: 'claude' })
+    s.externals.set('a', { cwd: '/x/a', transcriptPath: '/t/a.jsonl' })
+    await s.src.scanOpen()
+    // Its record's name, then a hook that keeps it and says where it runs.
+    s.src.ingest(s.ev('turn-stop', { sessionId: 'a', callerPid: 11, cwd: '/x/a', ...inOrca(OTHER) }))
+    s.src.setPaneNames('orca', new Map([[HANDLE, 'PM'], [OTHER, 'Dev']]))
+    const agent = (sessionId: string) => s.src.list().find((a) => a.sessionId === sessionId)!
+    expect(agent('s1').name).toBe('Tho')
+    expect(agent('a').name).toBe('Mine')
+  })
+
+  it('with no pane name it keeps its folder\'s name; names set again with that pane gone give it back its folder\'s', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', inOrca()))
+    src.setPaneNames('orca', new Map([[OTHER, 'Dev']]))
+    expect(src.list()[0].name).toBe('proj')
+    src.setPaneNames('orca', new Map([[HANDLE, 'PM']]))
+    expect(src.list()[0].name).toBe('PM')
+    src.setPaneNames('orca', new Map([[OTHER, 'Dev']]))
+    expect(src.list()[0].name).toBe('proj')
+  })
+
+  it('new names rename it, and the change is told once; the same names again tell nothing', () => {
+    const { actions } = fakeActions()
+    const { src, ev, changes } = setup({ actions })
+    src.ingest(ev('session-start', inOrca()))
+    src.ingest(ev('session-start', { sessionId: 's2', ...inOrca(OTHER) }))
+    src.setPaneNames('orca', new Map([[HANDLE, 'PM'], [OTHER, 'Dev']]))
+    changes.mockClear()
+    src.setPaneNames('orca', new Map([[HANDLE, 'Lead'], [OTHER, 'Test']]))
+    expect(src.list().map((a) => a.name)).toEqual(['Lead', 'Test'])
+    expect(changes).toHaveBeenCalledTimes(1)
+    changes.mockClear()
+    src.setPaneNames('orca', new Map([[HANDLE, 'Lead'], [OTHER, 'Test']]))
+    expect(changes).not.toHaveBeenCalled()
+  })
+
+  it('names for another adapter, or for a pane it is not in, leave it alone', () => {
+    const { actions } = fakeActions()
+    const { src, ev, changes } = setup({ actions })
+    src.ingest(ev('session-start', inOrca()))
+    changes.mockClear()
+    src.setPaneNames('herdr', new Map([[HANDLE, 'PM']]))
+    src.setPaneNames('orca', new Map([[OTHER, 'PM']]))
+    expect(src.list()[0].name).toBe('proj')
+    expect(changes).not.toHaveBeenCalled()
+  })
+
+  it('an agent in a multiplexer inside Orca (no Orca pane) is not renamed', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', { hostHints: { TMUX_PANE: '%3', ORCA_TERMINAL_HANDLE: HANDLE } }))
+    src.setPaneNames('orca', new Map([[HANDLE, 'PM']]))
+    expect(src.list()[0].name).toBe('proj')
+  })
 })
 
 // An agent in Terminal, iTerm2 or Ghostty has a tab a rest selects, by the tty of its process
