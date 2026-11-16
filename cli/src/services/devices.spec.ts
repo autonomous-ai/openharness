@@ -677,8 +677,9 @@ describe('the dial\'s host, wired to the core', () => {
       { type: 'dial_focus', payload: { machineId: 'm1', agentId: 'a1' } },
       { type: 'dial_swarm', payload: { swarmId: 't2' } },
       { type: 'dial_scroll', payload: { phase: 'move', dy: 4, velocity: 120 } },
-      { type: 'dial_status', payload: { attached: true, fw: '1.2.3', notify: 'full' } },
-      { type: 'dial_status', payload: { attached: false, notify: 'full' } },
+      // With no listener of the devices, nothing could change the Notifications setting: the status does not offer it.
+      { type: 'dial_status', payload: { attached: true, fw: '1.2.3' } },
+      { type: 'dial_status', payload: { attached: false } },
     ])
     expect(vi.mocked(core.clients.devicesChanged).mock.calls).toEqual([
       [{ status: { attached: true, fw: '1.2.3' }, revision: 1 }],
@@ -4554,6 +4555,13 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
   const statuses = (core: CoreApi) => sentLocal(core).filter((frame) => frame.type === 'dial_status')
   const summary = (port: DevicesPort, agentId: string, payload: Record<string, unknown>) =>
     port.card({ type: 'commander_event', agentId, payload: { kind: 'summary', text: 'done', ...payload } })
+  /** Devices whose listener has opened: the cable starts once it has. */
+  const listening = async (over: Parameters<typeof start>[0] = {}) => {
+    const listener = fakeListener()
+    const started = start({ ...over, listen: listener.listen })
+    await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+    return { ...started, listener }
+  }
   /** Devices in Only you, with the fixed rules deciding. */
   const onlyYou = (over: Parameters<typeof start>[0] = {}) => {
     const listener = fakeListener()
@@ -4563,7 +4571,7 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
   }
 
   it('every dial status the windows and the watch hear says the mode, and the owner\'s other machines hear none', async () => {
-    const { core, requests } = start()
+    const { core, requests } = await listening()
     seen.dial.onDialStatus({ attached: true, id: 'usb-1' })
     expect(statuses(core)).toEqual([{ type: 'dial_status', payload: { attached: true, id: 'usb-1', notify: 'full' } }])
     expect(vi.mocked(core.clients.devicesChanged).mock.calls).toEqual([[{ status: { attached: true, id: 'usb-1' }, revision: 1 }]])
@@ -4571,7 +4579,7 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
     expect(await requests.harness_devices_list({}, { local: true, owner: true })).not.toHaveProperty('status.notify')
   })
 
-  it('the listener\'s notify stores the mode, says the status again and answers it', () => {
+  it('the listener\'s notify stores the mode, says the status again and answers it', async () => {
     const listener = fakeListener()
     const { core } = start({ listen: listener.listen })
     seen.dial.onDialStatus({ attached: true, id: 'usb-1' })
@@ -4583,9 +4591,21 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
     // A value that is no mode is refused by the listener's own handler.
     expect(listener.notify('loud')).toBe(REFUSED)
 
-    const again = start()
+    const again = await listening()
     seen.dial.onDialStatus({ attached: true, id: 'usb-1' })
     expect(statuses(again.core)).toEqual([{ type: 'dial_status', payload: { attached: true, id: 'usb-1', notify: 'you' } }])
+  })
+
+  // The menu offers Notifications when the status says a mode: where no listener of the devices opened (services inside
+  // the core, one that failed to open, Windows), every click would end NO_ANSWER.
+  it('a dial status says no mode where the devices\' own listener did not open', async () => {
+    const opens: Array<DevicesDeps['listen']> = [undefined, async () => null, async () => { throw new Error('EACCES') }]
+    for (const listen of opens) {
+      const { core } = start({ listen })
+      await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+      seen.dial.onDialStatus({ attached: true, id: 'usb-1' })
+      expect(statuses(core)).toEqual([{ type: 'dial_status', payload: { attached: true, id: 'usb-1' } }])
+    }
   })
 
   it('a mode that cannot be saved answers WRITE_FAILED and changes nothing', async () => {
