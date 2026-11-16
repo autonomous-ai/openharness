@@ -88,6 +88,27 @@ describe('removeEngineHooks', () => {
     expect(outcomes).toContainEqual({ file: targets.plugins[0].file, removed: 0, kept: 'another author’s file' })
     expect(existsSync(targets.plugins[0].file)).toBe(true)
   })
+
+  it('takes out the Codex rules file an earlier release wrote, and keeps one Harness did not write', async () => {
+    const { root, targets } = machine()
+    targets.codex.homes.push(join(root, 'codex-mine'))
+    const rules = (home: string) => join(root, home, 'rules', 'harness.rules')
+    // The head as releases before this one wrote it, without `device notify`, and before that without `browser`: the
+    // list of commands in its first line changes from one release to the next.
+    const head = (commands: string) => `# Written by Harness, which rewrites it: do not edit. Its agent commands (harness ${commands})\n`
+      + "# need Harness's daemon, which Codex's sandbox cannot reach, so they run outside it without asking. What each\n"
+      + '# may do is for Harness to decide: Settings > Experimental, and an agent gives work to and closes only what it started.\n'
+    write(rules('codex'), `${head('whoami, ps, search, machines, show, wait, new, close, send, tell, browser')}prefix_rule(pattern=["harness"], decision="allow")\n`)
+    write(rules('codex-profile'), `${head('whoami, ps, search, machines, show, wait, new, close, send, tell')}prefix_rule(pattern=["harness"], decision="allow")\n`)
+    write(rules('codex-mine'), '# My own rules.\nprefix_rule(pattern=["harness"], decision="allow")\n')
+
+    const outcomes = await removeEngineHooks(targets)
+
+    expect(existsSync(rules('codex'))).toBe(false)
+    expect(existsSync(rules('codex-profile'))).toBe(false)
+    expect(outcomes).toContainEqual({ file: rules('codex-mine'), removed: 0, kept: 'another author’s file' })
+    expect(existsSync(rules('codex-mine'))).toBe(true)
+  })
 })
 
 describe('pluginOwned', () => {
