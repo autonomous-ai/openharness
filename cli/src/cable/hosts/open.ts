@@ -8,7 +8,7 @@
  */
 import { isAbsolute } from 'node:path'
 import type { HostAdapter, Pane } from './adapter.js'
-import { APP_BUNDLES, HARNESS_BUNDLE } from './hostDetect.js'
+import { APP_BUNDLES, HARNESS_BUNDLE, inHerdr } from './hostDetect.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 
 /** Every app a tap brings forward. Alacritty is known by its bundle id alone: no other hint names it. Only one of these
@@ -25,8 +25,10 @@ export interface OpenTarget {
   pane?: Pane
 }
 
-/** The bundle a tap brings forward: the app the agent's own window belongs to wins over its host's. */
+/** The bundle a tap brings forward: the app the agent's own window belongs to wins over its host's. An hc terminal's is
+ *  Herdr's window, whatever bundle id the process that started Herdr Core handed down to it. */
 export function bundleOf(host: string, hints: Readonly<Record<string, string>>): string | undefined {
+  if (inHerdr(hints)) return APP_BUNDLES.herdr
   const own = hints.__CFBundleIdentifier
   return own && BUNDLES.has(own) ? own : APP_BUNDLES[host]
 }
