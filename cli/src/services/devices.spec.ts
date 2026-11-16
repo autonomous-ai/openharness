@@ -4132,6 +4132,18 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     nothingAsked(withHerdr({ orca: { ...onMac, platform: 'win32' } }))
   })
 
+  // With no herdr installed, no folder is watched (~/.config, or the home folder, recursive on macOS) for a socket that
+  // never comes. Installed later, the next dial attached finds it.
+  it('with no herdr on PATH nothing is subscribed or watched, and the next attach looks again', () => {
+    let installed = false
+    const started = withHerdr({ orca: { ...onMac, onPath: (name: string) => name !== 'herdr' || installed ? `/opt/${name}/bin/${name}` : null } })
+    nothingAsked(started)
+    seen.host.watching!(false)
+    installed = true
+    attach(started.port)
+    expect(watched.calls).toEqual([[herdrClientDeps(), expect.any(Function)]])
+  })
+
   it('with no socket, the folder herdr\'s socket goes in is watched, where the daemon\'s own environment puts it, while a dial is attached', () => {
     const { port, herdr } = withHerdr()
     herdr.stamp = undefined
