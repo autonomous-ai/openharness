@@ -7,8 +7,10 @@ two consumers together with one bounded frame-part publisher; the existing clien
 unchanged. Stream routing and Browser wake behavior are separate work.
 
 - Growth: only live agents retain parts. End/purge removes them; inline service failure clears its parts. A process
-  disconnect keeps the last known display fields, matching today's behavior. Each part is at most 16 KiB of JSON,
-  512 values, depth 8 and 32 top-level fields. All parts together are at most 4 MiB and 4096 service/agent entries.
+  disconnect keeps the last known display fields, matching today's behavior. Each part is at most 2 MiB of JSON,
+  16,384 values, depth 8 and 32 top-level fields. All parts together are at most 4 MiB and 4096 service/agent entries.
+  The former 16 KiB / 512-value cap could not carry existing Git histories; the measurements and bounded expansion
+  are in [Git facts outside the core](2026-11-16-git-frame-facts.md). Arrays and nested objects still admit at most 512 members.
   Publication leases are bounded to 4096 live agents; refused updates have a named result and a content-free log.
 - Concurrency: one synchronous core commit. `SERVICE_HOSTS` declares exclusive field ownership outside core policy.
   Services cannot publish reserved identity/authority fields or prototype keys. `follow({frames:true})` alone receives

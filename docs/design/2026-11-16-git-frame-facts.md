@@ -117,3 +117,35 @@ per-file coverage, typecheck, mapped local gates and private native tests.
 Freeze a matched before/after cost workload only on final reviewed source; root
 coordinates quiet with the other core work. No acceptance claim follows from a
 source-size reduction alone.
+
+## Implementation evidence
+
+- Public RED: the original core frame still called Git/SCM/history and did not
+  provide an immediate directory-only placeholder. The shared publisher and
+  cache refused full 128-entry history fixtures under their former bounds.
+- Seven full-frame JSON goldens were captured using the original frame function
+  from `70b1cdb402eb` and controlled probe/history inputs: plain folder, repository,
+  worktree, detached head, SSH alias, observed work and historical branches/PRs.
+  The extracted service producer matches those bytes. Only the process-random
+  context version is normalized. These are wire-contract tests, not native Git
+  or SSH process proof (`services/workspaces.frameBytes.spec.ts`).
+- Active and stopped placeholders retain a valid `project.cwd`, use the planned
+  plain-folder context, and perform no Git/SSH/history inspection. Invalid paths
+  remain unavailable (`lib/agentFrame.gitFacts.spec.ts`).
+- The exact import closure loses `agentProject`, `branchNaming`, `gitProject`,
+  `sessionGitContext`, `sessionGitHistory`, `sshHosts`, Windows `noWindow`, and the
+  two SCM implementation modules. It adds `projectPath` (pure launch-path
+  validation) and `scm/launch` (the pure launch/instruction contract every launch
+  uses): nine files removed, two added. The branch naming implementation also
+  leaves `agentNames` for its service-only module.
+- Typecheck, architecture checks and all 20 built lean-entry checks pass. The
+  lean-entry test uses a private home; its system-uptime read required running
+  outside the filesystem sandbox. Native process ownership, service kill/restart,
+  cross-platform execution and matched cost acceptance remain the integrating
+  parent's gates, not claims made by these unit checks.
+- The focused service/core controls and seven byte goldens pass with 100%
+  statements, branches, functions and lines for `frameParts`, `framePublisher`,
+  `workspaceFrames`, `workspaces`, `workspacesProcess` and `workspacesLink`.
+  This includes immediate clearing before a changed directory is inspected,
+  captured inline leases, full history retention, failed/late work, reconnects,
+  the 512-entry/four-inspection queue and the shared publication budgets.

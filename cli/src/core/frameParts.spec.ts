@@ -21,6 +21,15 @@ function setup() {
 }
 
 describe('service frame parts', () => {
+  it('admits all 512 declared array members without charging its non-JSON length property', () => {
+    const { publish, parts } = setup()
+    const browser = Array(512).fill(null)
+    expect(publish('agentBrowser', { browser })).toEqual({ ok: true })
+    expect(parts.read('a')).toEqual({ browser })
+    expect(publish('agentBrowser', { browser: [...browser, null] })).toEqual({ error: 'FRAME_PART_INVALID' })
+    expect(publish('agentBrowser', { browser: Array.from({ length: 63 }, () => Array(256).fill(null)) })).toEqual({ ok: true })
+    expect(publish('agentBrowser', { browser: Array.from({ length: 64 }, () => Array(256).fill(null)) })).toEqual({ error: 'FRAME_PART_INVALID' })
+  })
   it('retains full bounded histories and observed work through the same generic part', () => {
     const { publish, parts } = setup()
     const history = { branches: Array.from({ length: 128 }, (_, i) => ({ cwd: `/fixture/${i}`, branch: 'b'.repeat(400), at: '2026-11-16' })),

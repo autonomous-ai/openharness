@@ -31,7 +31,7 @@ function snapshot(fields: unknown, allowed: ReadonlySet<string>): { fields: Fiel
     const proto = Object.getPrototypeOf(value)
     if (proto !== Object.prototype && proto !== Array.prototype && proto !== null) return INVALID
     const keys = Reflect.ownKeys(value)
-    if (keys.length > 512) return INVALID
+    if (keys.length > 512 + (array ? 1 : 0)) return INVALID
     // No service object reaches stringify: even a hidden/inherited hook or a changing Proxy cannot run there.
     const copy = (array ? Object.setPrototypeOf(new Array(value.length), null) : Object.create(null)) as Record<string, unknown>
     parents.add(value)

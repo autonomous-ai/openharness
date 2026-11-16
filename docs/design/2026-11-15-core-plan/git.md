@@ -36,7 +36,14 @@ Open, said in the pull request:
   10 min).
 - Creates, renames and removals in one repository now take turns in the one edge process (`inRepositoryTurn`).
 
-## Step 2: frames' git facts (after package 2's frame parts land)
+## Step 2: frames' Git facts (prepared; review and native acceptance pending)
+
+Implementation and bounded-data decisions: [Git facts outside the core](../2026-11-16-git-frame-facts.md).
+Workspaces now computes and publishes these fields through package 2's shared
+parts. The exact core import closure removes nine implementation files and adds
+two pure launch/path contracts. The seven historical frame-byte goldens, live and
+stopped placeholders, lifecycle fencing and lean build are checked; the native
+process/cost gates below still belong to integration before this step is done.
 
 Do NOT build a frame cache of your own in the core: it waits for package 2's generic per-agent frame parts.
 

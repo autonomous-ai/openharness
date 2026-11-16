@@ -45,7 +45,7 @@ export function createFramePublisher(
     if (!before && live.get(agentId)?.acknowledged === update.fingerprint) return
     if (heldBytes - (before?.next?.bytes ?? 0) + update.bytes > FRAME_PART_TOTAL_BYTES) { refused('FRAME_PART_LIMIT'); return }
     if (before) { heldBytes += update.bytes - (before.next?.bytes ?? 0); before.next = update; return }
-    if (pending.size >= 4096) { refused('FRAME_PART_LIMIT'); return }
+    if (pending.size >= FRAME_PART_ENTRIES) { refused('FRAME_PART_LIMIT'); return }
     const mine = generation, source = connection
     let timer: ReturnType<typeof setTimeout>
     const slot: Pending = { bytes: update.bytes, cancel: () => clearTimeout(timer) }
