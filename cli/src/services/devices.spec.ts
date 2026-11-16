@@ -4905,6 +4905,17 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       expect(calls('question').slice(2).map(([, , questions]) => questions)).toEqual([card('Harness'), card('Orca')])
     })
 
+    it('the close of an older question leaves the newer one holding the notice back', () => {
+      const { port, listener } = devices({ core: bound() })
+      port.card({ type: 'commander_question', agentId: 'h1', payload: { requestId: 'r1', questions: QUESTIONS } })
+      port.card({ type: 'commander_question', agentId: 'h1', payload: { requestId: 'r2', questions: QUESTIONS } })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      port.card({ type: 'commander_question_close', agentId: 'h1', payload: { requestId: 'r1' } })
+      expect(asks()).toEqual([['h1', 'r1'], ['h1', 'r2']])
+      port.card({ type: 'commander_question_close', agentId: 'h1', payload: { requestId: 'r2' } })
+      expect(asks()).toEqual([['h1', 'r1'], ['h1', 'r2'], ['h1', expect.stringMatching(/^shown:/)]])
+    })
+
     it('a question left open by its turn holds back no notice of the next', () => {
       const { port, listener } = devices({ core: bound() })
       port.card({ type: 'commander_question', agentId: 'h1', payload: { requestId: 'r1', questions: QUESTIONS } })
