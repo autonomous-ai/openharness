@@ -151,6 +151,14 @@ void main() {
     );
   });
 
+  test('an action is shown when it is a token', () {
+    expect(redactValue({'action': 'share_tab'}), '{action: share_tab}');
+    expect(
+      redactValue({'action': 'open zebra-orchard'}),
+      '{action: <18 chars>}',
+    );
+  });
+
   test('a token is at most 64 characters', () {
     expect(redactValue({'id': 'a' * 64}), '{id: ${'a' * 64}}');
     expect(redactValue({'id': 'a' * 65}), '{id: <65 chars>}');
