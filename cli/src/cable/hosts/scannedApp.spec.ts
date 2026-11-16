@@ -81,6 +81,23 @@ describe('scannedApps on macOS', () => {
     expect(d.bundleId.mock.calls).toEqual([['/Applications/Visual Studio Code.app']])
   })
 
+  // The Codex app's bundle is named ChatGPT.app, and its CLI runs inside a .app of its own within it.
+  const CODEX_ROWS: Array<[number, number, string]> = [
+    [500, 499, '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex'],
+    [499, 1, '/Applications/ChatGPT.app/Contents/MacOS/ChatGPT'],
+  ]
+
+  it('a Codex session under the Codex app is in codex: the outermost .app of its path', async () => {
+    const d = deps(CODEX_ROWS, { '/Applications/ChatGPT.app': 'com.openai.codex' })
+    expect(await scannedApps([500], d)).toEqual(new Map([[500, 'codex']]))
+    expect(d.bundleId.mock.calls).toEqual([['/Applications/ChatGPT.app']])
+  })
+
+  it("OpenAI's chat app at that path names nothing", async () => {
+    const d = deps(CODEX_ROWS, { '/Applications/ChatGPT.app': 'com.openai.chat' })
+    expect(await scannedApps([500], d)).toEqual(new Map())
+  })
+
   it('a bundle no table lists is passed over, and the nearest listed app decides', async () => {
     const engine = `${HOME}/Library/Application Support/Claude/claude-code/1/x/claude.app`
     const d = deps([
@@ -229,6 +246,17 @@ describe('scannedApps elsewhere', () => {
     ], {}, 'linux')
     expect(await scannedApps([10, 20, 30, 40, 50], d)).toEqual(new Map([[10, 'vscode'], [20, 'cursor'], [30, 'kitty'], [40, 'ghostty'], [50, 'wezterm']]))
     expect(d.bundleId).not.toHaveBeenCalled()
+  })
+
+  it('on Linux a session under a process named harness is in Harness', async () => {
+    const d = deps([[10, 9, 'claude'], [9, 8, 'bash'], [8, 1, 'harness']], {}, 'linux')
+    expect(await scannedApps([10], d)).toEqual(new Map([[10, 'harness']]))
+  })
+
+  it('a process named codex names no app', async () => {
+    // The Codex CLI's own name: off macOS an exe name decides, and the CLI is no app.
+    const d = deps([[500, 499, 'codex'], [499, 498, 'bash'], [498, 1, 'codex']], {}, 'linux')
+    expect(await scannedApps([500], d)).toEqual(new Map())
   })
 
   it('on Linux windowsterminal and a name no table lists name nothing', async () => {

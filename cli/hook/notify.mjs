@@ -9,7 +9,8 @@
  *   but only from an authenticated tmux context.
  * SessionEnd:   asks the adapter to reconcile the terminal; process discovery remains
  *   the authority for whether the agent exists.
- * Outside a pane: tells the devices what the session did (postObserved), and registers nothing.
+ * Outside a pane, or in a tmux pane the person opened (ownPane): tells the devices what the session did
+ *   (postObserved), and registers nothing.
  *
  * Always exits 0 quickly and swallows every error, so it can never block or
  * delay claude's session start/teardown.
@@ -493,9 +494,18 @@ function postObserved(port, body) {
  * for the session it runs (`local_<random uuid>`): a tap on the dial opens the app on that session. It is an id, not a
  * credential (read in the app, 2026-11-14: it names the session in the app's list and its telemetry; the app's tokens
  * are other variables).
+ *
+ * CLAUDE_CODE_ENTRYPOINT is a fixed word naming how Claude Code was started, not a secret: the VS Code extension sets
+ * `claude-vscode` (read in the extension's code), and a tap then opens the extension's tab on the session.
+ *
+ * In order: the app's names first, then the hosts from the nearest, so a session with more than MAX_HINTS set loses
+ * the farthest. CLAUDE_CODE_ENTRYPOINT is last, the first the cap drops: without it a tap still brings the app forward.
  */
-const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'KITTY_WINDOW_ID',
-  'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID']
+const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE',
+  'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID',
+  'CLAUDE_CODE_ENTRYPOINT']
+/** The core's observed route takes no more (core/observedHook.ts MAX_HINTS, which hookNotify.spec.ts keeps this equal to). */
+const MAX_HINTS = 10
 
 /** A character the core refuses in a path or hint (core/observedHook.ts): one there is forged. */
 const CONTROL = /[\u0000-\u001f\u007f]/
@@ -503,8 +513,13 @@ const CONTROL = /[\u0000-\u001f\u007f]/
 function hostHints() {
   const hints = {}
   for (const name of HOST_HINTS) {
-    // The core refuses a whole event with more hints than this list holds, one over 64 characters or one with a
-    // control character (core/observedHook.ts): that hint is left out instead.
+    // The core refuses a whole event with more hints than MAX_HINTS, one over 64 characters or one with a control
+    // character (core/observedHook.ts): that hint is left out instead.
+    if (Object.keys(hints).length === MAX_HINTS) break
+    // A named herdr session (`herdr --session <name>`) is a server of its own whose pane ids start again at w1:p1, and
+    // herdr sets HERDR_SESSION in its panes alone (herdr 0.8.0): the devices follow the default session, where this id
+    // would be another agent's pane. Skipped before the cap counts it, so it costs no other hint its place.
+    if (name === 'HERDR_PANE_ID' && process.env.HERDR_SESSION) continue
     const value = process.env[name]?.slice(0, 64)
     if (value && !CONTROL.test(value)) hints[name] = value
   }
@@ -586,6 +601,24 @@ function relayedPrompt(engine, event, input) {
   return engine === 'claude' && event === 'UserPromptSubmit' && typeof input.prompt === 'string' && CROSS_SESSION.test(input.prompt)
 }
 
+/** The shells an engine runs its hook through: `/bin/sh -c` is dash on Debian and Ubuntu, bash on Fedora and Arch,
+ *  BusyBox's on Alpine, and each runs as `sh`; an engine that asks for bash or dash by name runs it so. */
+const HOOK_SHELLS = new Set(['sh', 'dash', 'bash'])
+
+/**
+ * The engine's pid, which the devices keep for a paneless agent (cable/hosts/observed.ts). On Linux dash keeps an
+ * engine's `sh -c` as the hook's parent, and it exits with the hook: the devices walked from a pid already gone,
+ * refused a tap on the agent's tmux pane and dropped the agent 30 s later (GitHub run 43721656615). The shell's parent
+ * is the engine, read from /proc, never the environment. macOS's /bin/sh is a bash that execs the hook, so its parent
+ * is the engine already, with no `ps` on the engine's wait.
+ */
+function observedCallerPid() {
+  if (process.platform !== 'linux') return process.ppid
+  const parent = linuxOwnerBirth(process.ppid)
+  // A shell left to init, its engine gone, is named itself: pid 1 never exits, and the devices would keep the agent.
+  return parent && HOOK_SHELLS.has(parent.command) && parent.parentPid > 1 ? parent.parentPid : process.ppid
+}
+
 /** The core refuses an event whose title is longer (core/observedHook.ts): the hook cuts it to this instead. */
 const MAX_TITLE = 64
 
@@ -624,7 +657,7 @@ function observedBody(engine, event, input) {
     : Array.isArray(input.workspacePaths) ? input.workspacePaths[0]
       : input.cwd || input.workspaceRoot || (engine === 'devin' ? process.cwd() : undefined)
   const body = {
-    engine, sessionId, event: kind, cwd: path(cwd), callerPid: process.ppid,
+    engine, sessionId, event: kind, cwd: path(cwd), callerPid: observedCallerPid(),
     transcriptPath: path(input.transcript_path || input.transcriptPath), hostHints: hostHints(),
   }
   if (relayedPrompt(engine, event, input)) body.relayed = true
@@ -911,6 +944,19 @@ async function paneFacts(pane, dataDir) {
     : session.startsWith(HARNESS_SESSION_PREFIX) ? 'yes'
     : /^[a-z][a-z0-9]*-\d{13}$/.test(session) ? 'if-held' : 'no'
   return { pid, taken }
+}
+
+/**
+ * Whether the session's tmux pane is one the person opened: tmux described it, no daemon tagged it, and the daemon
+ * would not take it for an agent (`paneFacts`, the rule that keeps such a session out of registration). The devices
+ * are told of it as of a session outside a pane (docs/specs/2026-11-15-device-wave1-checks.md, F1). A pane tmux could
+ * not describe is not the person's: the session stays in a pane, as before.
+ */
+async function ownPane(pane) {
+  if (!/^%\d+$/.test(pane || '')) return false
+  const described = await describePane(pane)
+  if (!described || described.owner) return false
+  return (await paneFacts(pane, paths().dataDir))?.taken === 'no'
 }
 
 /**
@@ -1997,11 +2043,12 @@ async function main() {
   const event = input.hook_event_name || input.hookEventName
   const tmuxPane = process.env.TMUX_PANE
   // A pane: tmux's, or a pty host's (Windows). Routing to another daemon and the offline registry fallback read
-  // tmux; from a pty host pane they find nothing and the daemon's own scan reconciles. A session outside a pane is
-  // told only to the devices, below, after the engine guards: it registers nothing.
-  const paneless = !tmuxPane && !PTY_PANE
-  // Notification is installed for the session outside a pane, to say it waits for the person. In a pane nothing is
-  // told, as before it was installed.
+  // tmux; from a pty host pane they find nothing and the daemon's own scan reconciles. A session outside a pane, or in
+  // a tmux pane the person opened (ownPane), is told only to the devices, below, after the engine guards: it registers
+  // nothing.
+  const paneless = (!tmuxPane && !PTY_PANE) || await ownPane(tmuxPane)
+  // Notification is installed for the session outside a pane, to say it waits for the person. In an agent's pane
+  // nothing is told, as before it was installed; whose pane it is is tmux's to say, so even that asks tmux first.
   if (!paneless && event === 'Notification') return
   // Before anything reads the data folder or posts: which daemon this pane is (routeToPaneOwner).
   if (!paneless && await routeToPaneOwner(tmuxPane)) port = argPort()

@@ -205,7 +205,9 @@ master too old to run it starts it beside itself, still in its own process (`src
   its port is looked at again later (src/cable/cableFleet.ts). `e2e/devicesProcess.e2e.ts` proves it,
   with fake dials on pseudo-terminals. An app the dial reaches an outside agent through is one adapter file
   under src/cable/hosts/ (`adapter.ts` has the interface), named once in src/services/devices.ts in the order
-  its panes are asked for; `observed.ts` and `open.ts` hold no rule about any app. Claude Code's mod and
+  its panes are asked for; `observed.ts` and `open.ts` hold no rule about any app. An app that lists its own
+  agents is one source file beside its adapter under src/cable/hosts/, named once in src/services/devices.ts;
+  a hooked copy and a listed copy of one agent are one row (src/cable/hosts/registry.ts). Claude Code's mod and
   `codex queue` are not adapters: they are the source's routes at the agent's own layer, asked before any pane.
   The Wi-Fi device runs beside them on a link of its own
   (src/services/wifiProcess.ts, src/core/wifiLink.ts): its sessions are the gateway's, so the core hands
@@ -220,8 +222,11 @@ master too old to run it starts it beside itself, still in its own process (`src
   first is told as a notice. What a local tool tells the devices (first the app in front, from `harness hardware
   watch`) goes to their own listener (src/services/devicesListener.ts), never through the core: a new message is a
   handler registered there by its type, with its own body and rate limits, beside `front`, `tab` and the mod's
-  `attach`, the session the Claude app shows (src/services/devices.ts). The one handler of a second kind is `tabs`: a
-  stream it holds open, one across every connection, on which the devices tell the watch which terminal tab to select.
+  `attach`, the session the Claude app shows (src/services/devices.ts). A handler of a second kind holds a stream open,
+  one of its type across every connection, and is told when the stream can take a line (`onWritable`) and why it
+  ended (`StreamEnd`): on `tabs` the devices tell the watch which terminal tab to select; on `dial` (`dialStream`),
+  opened with `standby` so it never takes the stream from another Orca, they tell Orca's Harness Device plugin
+  (plugins/harness-device-orca) whether a dial is attached and which agent it shows.
   Which path: a route of the core's local door, where the core checks who calls (the account's, the Wi-Fi device's,
   the add-ons'), is a `SERVICE_HTTP_ROUTES` route (above); what a tool on this computer tells the devices alone is a
   message on their listener, which the core never routes or reads.
@@ -333,4 +338,10 @@ from before (`src/harnessd/services.spec.ts`, `e2e/messagesSkew.e2e.ts`).
   401) or, to seal for one of the owner's other machines, the gateway's session with it (`lane`, as the
   fleet's lane does: `src/device/deviceLink.ts`). This machine's E2EE identity is the gateway's alone, and so is
   renewing the sign-in: the core asks the gateway for the token it hands you (`lib/authRefresh.ts`).
-- Do not write to tmux, the registry or another service's files.
+- Do not write to tmux, the registry or another service's files. A service never writes to Harness's tmux: no pane or
+  session Harness made. One thing is allowed in the person's own tmux (PM, 2026-11-15,
+  [the spec](../../../docs/specs/2026-11-15-device-wave1-checks.md)): the devices process may run `switch-client` (or
+  a select) to the pane a hook named, once it has checked that the pane's process is the agent's or one of its parents
+  (`cable/hosts/tmux.ts`). It names the client it moves, and never one on a session Harness made. It never types,
+  creates or closes anything there. Harness's panes and the person's can share one tmux server, so the rule is held
+  per pane and session, by the owner tag the hook reads (`hook/notify.mjs` `paneFacts`).

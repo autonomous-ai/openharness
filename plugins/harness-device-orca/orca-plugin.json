@@ -1,0 +1,16 @@
+{
+  "manifestVersion": 2,
+  "id": "harness-device",
+  "name": "Harness Device",
+  "version": "0.1.0",
+  "description": "The dial's state in Orca.",
+  "license": "MIT",
+  "engines": { "orca": ">=1.4.248" },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "contributes": {
+    "panels": [{ "id": "dial", "title": "Harness Device", "icon": "gauge", "entry": "src/panel.tsx", "ui": "components" }],
+    "statusBarItems": [{ "id": "dial", "text": "Dial", "icon": "gauge", "tooltip": "Harness Device" }]
+  }
+}

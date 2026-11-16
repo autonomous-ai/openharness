@@ -6,18 +6,21 @@
  * every daemon under test their connected services' tokens, and one with Harness OS connections under XDG_DATA_HOME
  * had them copied into the test's root (lib/connectors/store.ts `adoptLegacy`). A daemon now inherits only an allowlist
  * (src/testing/daemonEnvironment.ts), and the harness names the rest (harness/daemon.ts). A tmux server the test starts
- * takes the same allowlist (src/testing/isolatedTmux.ts).
+ * takes the same allowlist (src/testing/isolatedTmux.ts). A daemon runs on a Node alone in its folder
+ * (src/testing/testNode.ts).
  *
  * Every path and value here is made up, in a folder of this test. `vi.stubEnv` puts them in this worker's environment
  * as a developer's shell would, and takes them out again: no real value of these variables is read or printed.
  */
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, isAbsolute, join, relative } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFailed, vi } from 'vitest'
 import { LocalClient } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Store } from '../src/lib/connectors/store.js'
+import { placeNode } from '../src/testing/placeNode.js'
 
 /** A connections folder with one connection saved, as Connections leaves it. */
 function saved(root: string, code: string): void {
@@ -228,5 +231,59 @@ describe('a daemon under test knows nothing of the developer\'s own state', () =
       expect(await typed(d, tmuxPane, 'whence -p opencode cursor-agent', join(d.root, 'resolved-others'))).toBe('')
       expect(existsSync(mark)).toBe(false)
     } finally { client.close() }
+  })
+
+  // The product looks for npm-installed engines beside the Node it runs on, whatever PATH says (lib/engineLaunch.ts
+  // `npmRuntimeBins`), and a version manager puts the developer's real engines there (audit of 2026-11-16,
+  // docs/plans/2026-11-16-e2e-isolation-3-design.md). These read paths and listings, and run or type no engine.
+  it('runs on a Node alone in its folder, and so does node in its tiles', async () => {
+    const d = daemon = await IsolatedDaemon.create()
+    failed(d)
+    await d.start()
+    // The core's line: the master names itself harnessd (process.title), which is all ps then shows of it, and it
+    // starts the core on its own Node.
+    const ran = execFileSync('ps', ['-o', 'args=', '-p', String(d.corePid())], { encoding: 'utf8' }).trim().split(' ')[0]
+    // A yes or a no, and a count: at the base the folder is the developer's own, and the names in it their programs.
+    expect(ran === process.env.E2E_NODE_PATH, 'the daemon runs on the run\'s Node').toBe(true)
+    expect(dirname(ran) !== dirname(process.execPath), 'which is not beside the worker\'s').toBe(true)
+    expect(readdirSync(dirname(ran)).filter((name) => name !== 'node' && !name.startsWith('libnode.')).length, 'programs beside the daemon\'s Node').toBe(0)
+    const client = await LocalClient.connect(d)
+    try {
+      const { tmuxPane } = await tile(d, client, 'node')
+      expect(await typed(d, tmuxPane, 'node -p process.execPath', join(d.root, 'node-path')) === `${ran}\n`, 'node in a tile is the daemon\'s Node').toBe(true)
+    } finally { client.close() }
+  })
+
+  it('refuses a Node beside other programs, and starts nothing', async () => {
+    // A Node of the test's own with a made-up program beside it, as a version manager's folder has: an empty file,
+    // never executable, never run. By its real path: the refusal names the folder Node names itself by.
+    const decoy = join(realpathSync(scratch), 'decoy')
+    mkdirSync(decoy)
+    placeNode(join(decoy, 'node'))
+    writeFileSync(join(decoy, 'codex'), '')
+    const d = daemon = await IsolatedDaemon.create({ node: join(decoy, 'node') })
+    await expect(d.start()).rejects.toThrow(`${decoy} holds codex: a daemon under test must run on a Node alone in its folder`)
+    expect([d.pid, d.log()]).toEqual([null, ''])
+  })
+
+  it('starts nothing when the run gave it no Node, never falling back to the worker\'s', async () => {
+    // Created first: its tools folder already links the run's Node, and testPath.ts keeps what it found.
+    const d = daemon = await IsolatedDaemon.create()
+    for (const none of [undefined, '']) {
+      vi.stubEnv('E2E_NODE_PATH', none)
+      await expect(d.start()).rejects.toThrow('E2E_NODE_PATH is not set: run the end-to-end tests through vitest.e2e.config.ts')
+    }
+    expect([d.pid, d.log()]).toEqual([null, ''])
+  })
+
+  // A shell script: Windows has no `open` to stand in for.
+  it.skipIf(process.platform === 'win32')('opens nothing of the developer\'s: its open is a fake in its own root that records what it is asked and exits 0', async () => {
+    const d = daemon = await IsolatedDaemon.create()
+    const open = d.env.HARNESS_OPEN_BIN ?? ''
+    // Both before it runs: a path outside the root could be the real open, which would bring an app forward.
+    expect(isAbsolute(open), open).toBe(true)
+    expect(relative(d.root, open).startsWith('..'), open).toBe(false)
+    execFileSync(open, ['-b', 'com.example.none'])
+    expect(d.opens()).toEqual([['-b', 'com.example.none']])
   })
 })

@@ -20,6 +20,11 @@ describe('HarnessSource', () => {
     expect(capsLetters(src.capabilities())).toBe('sva')
   })
 
+  it('focus only where Harness Desktop can be started for a tap', () => {
+    expect(capsLetters(new HarnessSource(() => 1_000, true).capabilities())).toBe('svfa')
+    expect(capsLetters(new HarnessSource(() => 1_000).capabilities())).toBe('sva')
+  })
+
   it("a Harness agent's app is harness", () => {
     const src = new HarnessSource(() => 1_000)
     src.update(ROWS, 'mine', new Map())

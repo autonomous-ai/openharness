@@ -67,7 +67,7 @@ describe('the tabs adapter', () => {
     const deps = { isOpen: vi.fn<TabsDeps['isOpen']>(() => open), select: vi.fn<TabsDeps['select']>(() => selects) }
     return { deps, adapter: createTabsAdapter(deps) }
   }
-  const place = (app: string, tty?: string): Place => ({ host: 'claude', app, hints: {}, ...(tty === undefined ? {} : { tty }) })
+  const place = (app: string, tty?: string, host = app): Place => ({ host, app, hints: {}, ...(tty === undefined ? {} : { tty }) })
   const pane = (id: string) => ({ adapter: 'tabs', id })
 
   it('its id is tabs, and it is raised after its app', () => {
@@ -84,6 +84,15 @@ describe('the tabs adapter', () => {
     }
     for (const app of ['orca', 'vscode', 'terminal']) expect(adapter.paneOf(place(app, '/dev/ttys023'))).toBeUndefined()
     for (const tty of [undefined, '/dev/pts/3', '/dev/ttys023; rm']) expect(adapter.paneOf(place('iterm', tty))).toBeUndefined()
+  })
+
+  it('paneOf: only while the tab app is the agent\'s nearest host', () => {
+    const { adapter } = recorder()
+    for (const host of ['herdr', 'rex', 'zellij', 'tmux', 'wezterm', 'kitty', 'orca']) {
+      expect(adapter.paneOf(place('ghostty', '/dev/ttys023', host)), host).toBeUndefined()
+    }
+    // A session the open scan found: no hook has named its host yet, and its parents named the app.
+    expect(adapter.paneOf(place('ghostty', '/dev/ttys023', 'terminal'))).toStrictEqual(pane('ghostty:/dev/ttys023'))
   })
 
   it('canFocus and canShow are the stream being open, asked each time', () => {

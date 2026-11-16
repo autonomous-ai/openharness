@@ -19,6 +19,9 @@ import 'package:flutter/semantics.dart'
     show CustomSemanticsAction, SemanticsService;
 import 'package:xterm/xterm.dart' show Terminal, TerminalKey, TerminalStyle;
 
+import 'package:harness_mobile/chat/chat_composer.dart';
+import 'package:harness_mobile/chat/chat_view.dart';
+import 'package:harness_mobile/chat/chat_view_store.dart';
 import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/logging/typing_trace.dart';
 import 'package:harness_mobile/core/models.dart'
@@ -827,6 +830,7 @@ class _TerminalPageState extends State<TerminalPage>
     if (kTypingTrace) typingEvent('switch: terminal page mounted');
     WidgetsBinding.instance.addObserver(this);
     widget.notifier.addListener(_onNotifier);
+    chatViewStore.addListener(_onChatView);
     _lifecycle =
         WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed;
     // A session already taking input when the page comes ticks nothing to raise from.
@@ -883,6 +887,7 @@ class _TerminalPageState extends State<TerminalPage>
 
   @override
   void dispose() {
+    chatViewStore.removeListener(_onChatView);
     _endCardTimer?.cancel();
     // A take started here must not come back to a page that is gone.
     final session = widget.notifier
@@ -1620,6 +1625,50 @@ class _TerminalPageState extends State<TerminalPage>
   /// terminal (the desktop, on a click there) while the take was being spoken. Speaking to a
   /// harness is as plain a claim on it as a tap or a scroll, and so are a tapped answer and
   /// Interrupt; [why] names which in the log. Null when it cannot be had in 6s.
+  /// Settings ▸ Chat UI or this agent's own switch moved.
+  void _onChatView() {
+    if (mounted) setState(() {});
+  }
+
+  /// This agent shows as chat (`chat/chat_view.dart`) — when it is chosen, and the agent keeps a
+  /// conversation to show: a shell has none, and an agent whose engine has not named its session yet
+  /// has nothing to read.
+  bool get _showsChat {
+    if (!chatViewStore.showsChat(widget.machineId, widget.agentId)) {
+      return false;
+    }
+    final agent = widget.notifier
+        .stateOf(widget.machineId)
+        ?.agents
+        .where((a) => a.id == widget.agentId)
+        .firstOrNull;
+    return agent != null &&
+        agent.sessionId != null &&
+        agent.engine != null &&
+        agent.engine != 'terminal';
+  }
+
+  void _setShowsChat(bool chat) => unawaited(
+    chatViewStore.setShowsChat(widget.machineId, widget.agentId, chat),
+  );
+
+  /// A message from Chat UI's composer: the same `message` the mic's words go as, on a terminal this
+  /// phone takes back first if another has it.
+  Future<bool> _sendChat(String text) async {
+    final session = await _sessionForInput(why: 'chat');
+    if (session == null) {
+      if (mounted) _flash('✗ not sent', error: true);
+      return false;
+    }
+    return session.sendComposerText(text);
+  }
+
+  /// Stop from Chat UI: Esc, as in the agent's own terminal.
+  Future<void> _stopChat() async {
+    final session = await _sessionForInput(why: 'chat');
+    session?.terminal.keyInput(TerminalKey.escape);
+  }
+
   Future<TerminalSession?> _sessionForInput({String why = 'voice'}) async {
     TerminalSession? current() =>
         widget.notifier.paneOfAgent(widget.machineId, widget.agentId)?.session;
@@ -2503,6 +2552,16 @@ class _TerminalPageState extends State<TerminalPage>
     // Read once: the body reserves it, and search subtracts what the body
     // already took. See [_navigationBar].
     final navigationBar = _navigationBar;
+    // This agent as chat: its conversation over the terminal, which stays attached under it — the
+    // open question is read off the terminal's screen and its answer keyed into it.
+    final chat = agent != null && !agentGone && _showsChat
+        ? widget.notifier.chatConversations.open(
+            widget.machineId,
+            widget.agentId,
+            agent.sessionId!,
+            streamsText: agent.engine == 'opencode' || agent.engine == 'kilo',
+          )
+        : null;
     return Scaffold(
       // On the terminal's palette, which stays dark in a light app — see [TerminalLook].
       backgroundColor: TerminalLook.read(context, () => AppPalette.windowBg),
@@ -2692,7 +2751,11 @@ class _TerminalPageState extends State<TerminalPage>
                                                   // Whether it also HOLDS one that is already
                                                   // up is a separate question, and the pager asks
                                                   // it on every swipe — see [_shouldFocus].
-                                                  focused: _shouldFocus,
+                                                  // Never under Chat UI: the composer
+                                                  // has the keyboard there.
+                                                  focused:
+                                                      _shouldFocus &&
+                                                      chat == null,
                                                   // What the bar is finding — see [_openFind].
                                                   find: _find,
                                                   // Asks again when `focused` did
@@ -2834,6 +2897,22 @@ class _TerminalPageState extends State<TerminalPage>
                                   else if (session != null &&
                                       !session.hasScreen)
                                     Positioned.fill(child: placeholder),
+                                  if (chat != null)
+                                    Positioned.fill(
+                                      child: ChatTranscriptView(
+                                        conversation: chat,
+                                        // Under the title, which floats over the
+                                        // page's top as it does over a terminal.
+                                        topInset: 72,
+                                        question: _questionWatcher?.view,
+                                        onAnswer: (view, number) => _tapAnswer(
+                                          view,
+                                          (label: '', number: number),
+                                        ),
+                                        onAnswerInTerminal: () =>
+                                            _setShowsChat(false),
+                                      ),
+                                    ),
                                   // The mic and Search, floating in the
                                   // terminal's bottom-right corner — see
                                   // [TerminalActionColumn].
@@ -2875,6 +2954,17 @@ class _TerminalPageState extends State<TerminalPage>
                           // its field has one, at the terminal's foot while not.
                           if (session != null && _find != null)
                             TerminalFindBar(find: _find!, onClose: _closeFind)
+                          else if (chat != null)
+                            ListenableBuilder(
+                              listenable: chat,
+                              builder: (context, _) => ChatComposer(
+                                working: chat.working,
+                                // A terminal another app holds is taken back by the send
+                                // itself ([_sendChat]), as a tap on it would be.
+                                onSend: _sendChat,
+                                onStop: () => unawaited(_stopChat()),
+                              ),
+                            )
                           else if (session != null)
                             TerminalInputDock(
                               session: session,
@@ -3186,6 +3276,19 @@ class _TerminalPageState extends State<TerminalPage>
       sections: [
         PhoneSheetSection(
           actions: [
+            // This agent as chat or as its terminal, whatever Settings ▸ Chat UI says for the rest.
+            if (_showsChat)
+              PhoneSheetAction(
+                icon: LucideIcons.squareTerminal300,
+                label: 'Show terminal',
+                onTap: () => _setShowsChat(false),
+              )
+            else
+              PhoneSheetAction(
+                icon: LucideIcons.messagesSquare300,
+                label: 'Show chat',
+                onTap: () => _setShowsChat(true),
+              ),
             // First, because it is the one used mid-conversation: iOS has no paste gesture on a
             // terminal (long-press is selection there), and the soft keyboard has no paste key.
             // Hidden rather than dimmed while the stream is read-only: reclaiming is the header's

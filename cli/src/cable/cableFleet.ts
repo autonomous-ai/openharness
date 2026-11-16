@@ -420,6 +420,7 @@ export class CableFleet {
   syncMachines(...args: Parameters<Surface['syncMachines']>) { return this.send('syncMachines', ...args) }
   followApp(...args: Parameters<Surface['followApp']>) { return this.send('followApp', ...args) }
   followLocal(...args: Parameters<Surface['followLocal']>) { return this.send('followLocal', ...args) }
+  viewChanged() { return this.send('viewChanged') }
   replaceNotifications(...args: Parameters<Surface['replaceNotifications']>) { return this.send('replaceNotifications', ...args) }
   agentSeen(...args: Parameters<Surface['agentSeen']>) { return this.send('agentSeen', ...args) }
   question(...args: Parameters<Surface['question']>) { return this.send('question', ...args) }

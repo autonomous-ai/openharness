@@ -9,6 +9,9 @@
  * every hook event to the daemon, with its deadline and its offline registry writes. Before a daemon
  * starts, every folder it could install hooks into is checked to be inside the test's root
  * (`assertHooksContained`), and every file it says it wrote is checked again once it is up.
+ *
+ * It runs on a copy of the worker's Node alone in its folder (e2e/harness/testNode.ts), so it finds no engine beside
+ * its Node.
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
@@ -26,6 +29,7 @@ import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 import { endRootProcesses } from '../../src/testing/rootProcesses.js'
 import { assertSocketPathFits } from '../../src/testing/socketPathRoom.js'
 import { alive } from '../../src/testing/spawnedRuns.js'
+import { assertNodeAlone } from '../../src/testing/testNode.js'
 import { forgetGroup, forgetTmux, leaderGone, watchGroup, watchTmux } from './reaper.js'
 
 const exec = promisify(execFile)
@@ -85,7 +89,8 @@ export interface DaemonOptions {
   foreground?: boolean
   /** Start with these arguments to node instead (a launcher the test provides), in the daemon's environment. */
   launch?: string[]
-  /** Run the daemon on this Node instead of the test's own: a managed Node under the runtime folder. */
+  /** Run the daemon on this Node instead of the run's own (`E2E_NODE_PATH`): a managed Node under the runtime folder.
+   *  It must be alone in its folder too. */
   node?: string
   /** Run this bundle (an installed `cli.js`, its `notify.mjs` beside it: `assertHookScriptBeside`) instead of
    *  the checkout's source. */
@@ -258,7 +263,8 @@ const TILE_SHELL = '/bin/zsh'
 let besideCount = 0
 
 /** The executable a daemon finds for [name]: the fake engine, run with [config]. A test that wants one engine of a daemon
- *  to behave otherwise writes it over the daemon's own, before it starts. */
+ *  to behave otherwise writes it over the daemon's own, before it starts. It keeps the worker's Node, since a fake engine
+ *  looks up no engine. */
 export const fakeEngineShim = (name: 'claude' | 'codex', config: EngineConfig & Record<string, unknown>): string =>
   `#!${process.execPath}\nimport(${JSON.stringify(pathToFileURL(join(here, 'fakeEngine.mjs')).href)}).then((m) => m.run(${JSON.stringify(name)}, ${JSON.stringify(config)}))\n`
 
@@ -277,6 +283,8 @@ export class IsolatedDaemon {
     readonly options: DaemonOptions,
     /** What the fake engines' wrappers hand `fakeEngine.mjs` (updates.e2e.ts writes releases with it). */
     readonly engineConfig: EngineConfig,
+    /** Where the fake open notes each run's arguments. */
+    private readonly opensLog: string,
   ) {}
 
   static async create(options: DaemonOptions = {}): Promise<IsolatedDaemon> {
@@ -341,6 +349,12 @@ export class IsolatedDaemon {
     // helper (lib/guestAccounts.ts), which may be installed on the Mac the tests run on. Refused, as for an owner who
     // never turned guest access on.
     await writeFile(join(dirs.bin, 'sudo'), '#!/bin/sh\necho "sudo: a password is required" >&2\nexit 1\n', { mode: 0o755 })
+    // A pick on the dial brings that app forward with `open -b` (services/devices), and dialAppFilter.e2e.ts taps and
+    // picks VS Code and Ghostty: with the real open, a dial test on a Mac would bring the developer's own apps forward.
+    // Out of bin: the devices run open by its path, never by name. One line of arguments per run, for `opens()`.
+    const fakeOpen = join(own, 'fake-open')
+    const opensLog = join(own, 'opens.log')
+    await writeFile(fakeOpen, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${opensLog}'\n`, { mode: 0o755 })
     const env = daemonEnvironment(tmux.env, {
       NODE_ENV: 'test',
       HOME: dirs.home,
@@ -404,6 +418,7 @@ export class IsolatedDaemon {
       GRID_HOME: join(dirs.home, '.grid'),
       GRID_CONTROL_PLANE_URL: 'http://127.0.0.1:9',
       HARNESS_GRID_BIN: '',
+      HARNESS_OPEN_BIN: fakeOpen,
       // Claude Code's and Codex's hooks, installed as on a person's computer, into this home and CODEX_HOME
       // (assertHooksContained), and run by the fake engines. Every other engine's installer writes into
       // folders these tests have no engine for.
@@ -423,7 +438,7 @@ export class IsolatedDaemon {
       TERMINAL_RECONCILE_INTERVAL_MS: '5000',
       ...options.env,
     })
-    return new IsolatedDaemon(root, tmux, port, env, options, config)
+    return new IsolatedDaemon(root, tmux, port, env, options, config, opensLog)
   }
 
   /** What the fake engines noted of every hook they ran (fakeEngine.mjs `hookLog`); kept once the root is gone. */
@@ -431,6 +446,11 @@ export class IsolatedDaemon {
     try { return readFileSync(this.engineConfig.hookLog, 'utf8') } catch { return this.closedHookLog }
   }
   private closedHookLog = ''
+
+  /** The arguments of every run of the fake open, in order: none while it has not run. */
+  opens(): string[][] {
+    try { return readFileSync(this.opensLog, 'utf8').split('\n').filter(Boolean).map((line) => line.split(' ')) } catch { return [] }
+  }
 
   /** Throws when the daemon said it put hooks outside the root, or an engine refused hooks found there. */
   private assertHooksStayedInside(): void {
@@ -472,6 +492,15 @@ export class IsolatedDaemon {
     // and a test may name its script after `create` (`masterIpcExit.e2e.ts`).
     assertHooksContained(this.root, this.env)
     if (this.options.scriptPath) assertHookScriptBeside(this.options.scriptPath)
+    // The product looks for npm-installed engines beside the Node the daemon runs on (lib/engineLaunch.ts
+    // `npmRuntimeBins`), and on a developer's Mac the worker's Node was in the version manager's folder with their real
+    // engines, which freshMachineEngines.e2e.ts's daemon found "already installed" (audit of 2026-11-16,
+    // docs/plans/2026-11-16-e2e-isolation-3-design.md). No fallback to the worker's Node: it would reopen that without a
+    // word. Checked at every start, so a test's own Node is held to it too. The master starts the core and the services
+    // on the same Node, and the hooks are written with it.
+    const node = this.options.node || process.env.E2E_NODE_PATH
+    if (!node) throw new Error('E2E_NODE_PATH is not set: run the end-to-end tests through vitest.e2e.config.ts')
+    assertNodeAlone(node)
     const heap = this.options.heapMiB ? [`--max-old-space-size=${this.options.heapMiB}`] : []
     const entry = this.options.noMaster ? ['__run'] : this.options.foreground ? ['start', '-f'] : ['__harnessd']
     // Readiness is judged from what this start prints, never from an earlier boot's lines.
@@ -481,7 +510,7 @@ export class IsolatedDaemon {
     const script = bundle ? [bundle] : ['--import', 'tsx', 'src/cli.ts']
     // A process group of its own, which the core and the services join: one signal reaches all of them, whether or
     // not the master is still there, and the worker's reaper (reaper.ts) ends it should the worker go without closing it.
-    const child = spawn(this.options.node ?? process.execPath, this.options.launch ?? [...heap, ...script, ...entry], {
+    const child = spawn(node, this.options.launch ?? [...heap, ...script, ...entry], {
       cwd: CLI_ROOT, env: this.env, stdio: ['ignore', 'pipe', 'pipe'], ...ownProcessGroup(),
     })
     this.child = child

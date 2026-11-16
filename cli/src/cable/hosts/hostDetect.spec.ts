@@ -35,6 +35,15 @@ describe('detectHost', () => {
     expect(detectHost({ ZELLIJ: '0', TERM_PROGRAM: 'ghostty' })).toBe('zellij')
   })
 
+  it('TMUX_PANE names the host tmux, after herdr, Rex and Zellij and before kitty and WezTerm', () => {
+    expect(detectHost({ TMUX_PANE: '%3' })).toBe('tmux')
+    expect(detectHost({ TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.mitchellh.ghostty' })).toBe('tmux')
+    for (const own of ['HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ']) expect(detectHost({ [own]: '1', TMUX_PANE: '%3' })).not.toBe('tmux')
+    for (const own of ['KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID']) expect(detectHost({ [own]: '1', TMUX_PANE: '%3' })).toBe('tmux')
+    // TERM_PROGRAM alone names no host: a pane is what a tap switches to.
+    expect(detectHost({ TERM_PROGRAM: 'tmux' })).toBe('terminal')
+  })
+
   it('names', () => {
     expect(['orca', 'herdr', 'rex', 'zellij', 'kitty', 'wezterm', 'iterm', 'terminal-app', 'ghostty', 'vscode', 'cursor', 'warp', 'terminal', 'harness'].map(hostDisplayName))
       .toEqual(['Orca', 'herdr', 'Rex', 'Zellij', 'kitty', 'WezTerm', 'iTerm2', 'Terminal', 'Ghostty', 'VS Code', 'Cursor', 'Warp', 'Terminal', 'Harness'])
@@ -56,9 +65,19 @@ describe('detectApp', () => {
 
   it('an unknown bundle id or TERM_PROGRAM gives the unknown app', () => {
     expect(detectApp({ __CFBundleIdentifier: 'org.alacritty' })).toBe(UNKNOWN_APP)
-    expect(detectApp({ TERM_PROGRAM: 'tmux' })).toBe(UNKNOWN_APP)
+    expect(detectApp({ TERM_PROGRAM: 'rio' })).toBe(UNKNOWN_APP)
     expect(detectApp({ __CFBundleIdentifier: 'net.kovidgoyal.kitty-quick-access' })).toBe(UNKNOWN_APP)
     expect(UNKNOWN_APP).toBe('terminal')
+  })
+
+  it('tmux in Ghostty is on Ghostty\'s page; with no app named, tmux has a page of its own', () => {
+    expect(detectApp({ TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.mitchellh.ghostty' })).toBe('ghostty')
+    expect(detectApp({ TERM_PROGRAM: 'tmux' })).toBe('tmux')
+    expect(detectApp({ TMUX_PANE: '%3' })).toBe('tmux')
+    expect(detectApp({ TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', KITTY_WINDOW_ID: '1' })).toBe('tmux')
+    // tmux in Alacritty: a bundle id no table lists (PM, 2026-11-15).
+    expect(detectApp({ TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'org.alacritty' })).toBe('tmux')
+    expect([hostDisplayName('tmux'), appDisplayName('tmux')]).toEqual(['tmux', 'tmux'])
   })
 
   it("a hint naming an object's own key gives the unknown app: hint values are outside text", () => {
@@ -106,9 +125,29 @@ describe('detectApp', () => {
     expect(appDisplayName('claude')).toBe('Claude')
   })
 
-  it('APP_IDS has 15 ids, at most 16, and every one has a display name', () => {
-    expect(APP_IDS).toHaveLength(15)
-    expect(APP_IDS.length).toBeLessThanOrEqual(16)
+  it("the Codex app's bundle id is codex, read ChatGPT", () => {
+    const hints = { __CFBundleIdentifier: 'com.openai.codex' }
+    expect(detectHost(hints)).toBe('codex')
+    expect(detectApp(hints)).toBe('codex')
+    expect(hostDisplayName('codex')).toBe('ChatGPT')
+    expect(appDisplayName('codex')).toBe('ChatGPT')
+  })
+
+  it('a multiplexer inside the Codex app is on the Codex page', () => {
+    const hints = { TMUX_PANE: '%3', __CFBundleIdentifier: 'com.openai.codex' }
+    expect(detectHost(hints)).toBe('tmux')
+    expect(detectApp(hints)).toBe('codex')
+  })
+
+  it("OpenAI's chat app is not the Codex app", () => {
+    const hints = { __CFBundleIdentifier: 'com.openai.chat' }
+    expect(detectApp(hints)).toBe(UNKNOWN_APP)
+    expect(detectHost(hints)).toBe('terminal')
+  })
+
+  it('APP_IDS has 17 ids, and every one has a display name', () => {
+    expect(APP_IDS).toHaveLength(17)
+    expect(APP_IDS.indexOf('codex')).toBe(APP_IDS.indexOf('claude') + 1)
     for (const id of APP_IDS) expect(appDisplayName(id)).toMatch(/\S/)
   })
 
@@ -117,7 +156,7 @@ describe('detectApp', () => {
     expect(appDisplayName('terminal-app')).toBe('Terminal')
     expect(hostDisplayName('terminal')).toBe('Terminal')
     const others = APP_IDS.filter((id) => id !== 'terminal' && id !== 'terminal-app')
-    expect(others).toHaveLength(13)
+    expect(others).toHaveLength(15)
     for (const id of others) expect(appDisplayName(id)).toBe(hostDisplayName(id))
   })
 })

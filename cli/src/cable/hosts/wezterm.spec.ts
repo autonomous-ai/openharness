@@ -15,7 +15,7 @@ function recorder(over: Partial<OrcaDeps> = {}, codes: Array<number | null> = []
   const deps: OrcaDeps = {
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
-      return { code: codes.length ? codes.shift()! : 0 }
+      return { code: codes.length ? codes.shift()! : 0, stdout: '' }
     },
     onPath: (name) => (name === 'wezterm' ? FAKE_PATH_WEZTERM : null),
     exists: () => false,

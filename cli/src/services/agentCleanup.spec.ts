@@ -89,6 +89,20 @@ describe('closing the harnesses a closed harness started', () => {
     expect(sessions.map((s) => s.agentId)).toEqual(['other', 'mine'])
   })
 
+  // The core says when the record a close saved holds no conversation (lib/closeAgentService.ts `withoutConversation`):
+  // the line said "Its conversation is kept." of a Codex that never bound one (docs/plans/2026-11-16-codex-help-race-design.md).
+  it('says none was kept of one that had not started a conversation, and that it is kept of any other', async () => {
+    const sessions = [kid('unbound'), kid('bound')]
+    const { cleanup, closeStarted, log } = setup(sessions)
+    closeStarted.mockImplementationOnce(async () => { sessions.splice(0, 1); return { closed: true, withoutConversation: true } })
+    await cleanup.closeStartedBy('lead')
+    expect(log.mock.calls.map(([line]) => line)).toEqual([
+      '[agent-cleanup] closed unbound (unbound): the harness that started it was closed. It had not started a conversation, so none was kept.',
+      '[agent-cleanup] closed bound (bound): the harness that started it was closed. Its conversation is kept.',
+    ])
+    expect(sessions).toEqual([])
+  })
+
   it('closes nothing once its starter is back, and once for two notices of one stop', async () => {
     // Its starter resumed while the notice was held for a process that was down: its harnesses are its again.
     const back = setup([row('lead'), kid('a')])

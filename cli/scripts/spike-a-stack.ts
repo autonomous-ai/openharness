@@ -12,6 +12,7 @@ import { createServer } from 'node:http'
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
+import { setUpTestNode } from '../src/testing/testNode.js'
 // e2e/harness/artifacts.ts reads vitest's worker state on every daemon log line; outside vitest there
 // is none, so give it an empty one (no test path: artifacts stay off).
 ;(globalThis as any).__vitest_worker__ = { filepath: undefined, current: undefined, config: {}, ctx: {} }
@@ -26,11 +27,13 @@ const log = (line: string) => console.log(`[stack] ${line}`)
 const alice = account('alice'), bob = account('bob')
 const backend = await startRealBackend([alice, bob], log)
 let stopping = false
+let removeTestNode = () => {}
 const stop = async () => {
   if (stopping) return
   stopping = true
   log('stopping')
   await backend.stop()
+  removeTestNode()
   log('stopped')
   process.exit(0)
 }
@@ -38,6 +41,11 @@ process.on('SIGINT', stop)
 process.on('SIGTERM', stop)
 
 try {
+// A daemon under test starts only on the run's Node (e2e/harness/daemon.ts `start`), never beside the developer's
+// engines (audit of 2026-11-16, docs/plans/2026-11-16-e2e-isolation-3-design.md). Vitest's global setup makes it;
+// outside Vitest this script makes it itself, here, so a backend that cannot start copies nothing, and a Node that
+// cannot be copied stops the backend through the catch below.
+removeTestNode = setUpTestNode()
 const A = await signIn(backend, alice), B = await signIn(backend, bob)
 for (const [who, me] of [[alice, A], [bob, B]] as const) {
   await until(`${who.name} machine running`, async () => {

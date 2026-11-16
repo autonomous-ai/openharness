@@ -50,7 +50,8 @@ class KeychainLeftoverKeys implements LeftoverKeys {
 }
 
 /// What the Swarm left on this phone when it was taken out of the app (2026-11-14): sign-out used
-/// to clear it, and nothing reads it now. Gone at every launch until 2027-02-14, when this file can
+/// to clear it, and nothing reads it now. Its retired push registration cache goes too.
+/// Gone at every launch until 2027-02-14, when this file can
 /// go, and `harness/app_badge` in `ios/Runner/AppDelegate.swift` with it.
 ///
 /// Only the names above: what is not there is skipped, so a second run does nothing. One step that
@@ -94,6 +95,7 @@ Future<void> forgetSwarmLeftovers({
       if (await keys.remove(key)) removedKeys++;
     });
   }
+  await step(() => HarnessFileStore.shared.delete('push_token_sent_v1'));
   if (Platform.isIOS) {
     // The app icon's count the Swarm set, which no one else sets or takes off.
     await step(

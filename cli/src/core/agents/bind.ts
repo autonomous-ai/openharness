@@ -12,6 +12,7 @@ import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { cursorDataDir } from '../../engines/cursor/contract.js'
 import { HERMES_SANDBOX_HOLD } from '../../engines/hermes/contract.js'
 import { isOpenclawLocalStopped, openclawLocalStopped, OPENCLAW_SCREEN_HOLDS, OPENCLAW_STATES, readOpenclawScreen, type OpenclawScreen } from '../../engines/openclaw/contract.js'
+import { OTHER_ENGINE_STATES } from '../../engines/otherEngines.js'
 import { continuationOf } from '../../engines/sessionFiles.js'
 import { sessionStoreOf } from '../../engines/sessionStoreContracts.js'
 import type { TurnRecaps } from '../turns/recaps.js'
@@ -39,6 +40,8 @@ const REPAIR_EAGER_ATTEMPTS = 24   // ≈2 min at the 5s sweep
 
 /** What an OpenClaw agent says while its pane shows a screen its TUI cannot work for Harness on. */
 const OPENCLAW_HOLDS = new Set<string>(Object.values(OPENCLAW_SCREEN_HOLDS))
+/** What the other engines' reader says on a row while its worker is out or it rebuilds the live view. */
+const OTHER_ENGINE_HOLDS = new Set<string>(Object.values(OTHER_ENGINE_STATES))
 
 /**
  * The hold a pane's screen gives its agent. A stopped local run keeps the reason it was seen with once OpenClaw's later
@@ -102,6 +105,8 @@ export interface BindDeps {
   openclawStateDir: (pid: number) => Promise<string | null>
   /** What a Hermes's record of its own terminal says (hermesTerminal.ts). Absent, a Hermes is bound by its hooks and the repair. */
   hermesTerminal?: ReturnType<typeof createHermesTerminal>
+  /** Whether the session's live stream is still held, to be resumed where it stopped, by its reader itself. */
+  followsLive: (sessionId: string) => boolean
 }
 
 /** What one pass over a process works with: its authority check, its holds, and its contained native reads and registrations. */
@@ -117,6 +122,7 @@ interface BindPass {
 export function createBinding({
   registry, mirror, forgetSession, clients, attachSession, announceSession, stoppedAgents, syncRecapPool,
   input, submitAgent, deviceInput, homes, owners, capturePane, openclawPaneRead, openclawPaneDue, openclawStateDir, hermesTerminal,
+  followsLive,
 }: BindDeps) {
   /**
    * Forks whose engine session has not reported in yet, agentId → the SOURCE's sessionId. A fork's tile
@@ -328,7 +334,15 @@ export function createBinding({
     const found = registry.byProcess(observed.engine, observed.processIdentity)
     if (!found || changing(found.agentId) || isRecentlyDeleted(found.agentId)) return
     let agent: RegisteredSession = found
-    if (agent.identityHold && agent.sessionId && agent.transcriptPath) {
+    // The other engines' reader hold is otherStreams' to clear while it holds the session's stream, with its resume from
+    // the byte the core held. Revalidated then, it was cleared and the session attached again while the worker was down;
+    // on the worker's return a second stream opened from the transcript's end, and the turn typed meanwhile came as
+    // history (#4362, CLI end to end shard 5, e2e/otherEngines.e2e.ts). A reader that gave up on a session (five
+    // retries, then nothing queued, or a stream lost with its worker still connected) takes it up on no later
+    // connection, or on none that may come: this pass is the row's one rescue, as before #4362, or it stays held until
+    // the daemon restarts.
+    if (agent.identityHold && agent.sessionId && agent.transcriptPath
+      && !(OTHER_ENGINE_HOLDS.has(agent.identityHold) && followsLive(agent.sessionId))) {
       try {
         const previous = agent.sessionId
         const retried = registry.revalidateBinding(agent.agentId)

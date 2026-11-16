@@ -3,8 +3,10 @@
  * AppleScript handlers as a parameter, so every hop checks it against TAB_TTY and the app against TAB_APPS.
  */
 import { execFile } from 'node:child_process'
-// Types only: the CLI's watch loads this file, and it must load nothing of the daemon.
+// Types only, and hostDetect's constants (a file that imports nothing): the CLI's watch loads this file, and it must
+// load nothing of the daemon.
 import type { HostAdapter, Pane, Place } from './adapter.js'
+import { UNKNOWN_APP } from './hostDetect.js'
 import type { PaneSwitch } from './types.js'
 
 export const TAB_APPS = ['terminal-app', 'iterm', 'ghostty'] as const
@@ -74,6 +76,9 @@ export function createTabsAdapter(deps: TabsDeps): HostAdapter & Required<Pick<H
     id: 'tabs',
     tap: 'after',
     paneOf(place: Place): Pane | undefined {
+      // In a multiplexer inside the tab app the agent's tty is that pane's, which no tab holds. A session the open scan
+      // found has no host named yet, and its parents named the app.
+      if (place.host !== place.app && place.host !== UNKNOWN_APP) return undefined
       const tab = tabOf({ app: place.app, tty: place.tty })
       return tab ? { adapter: 'tabs', id: `${tab.app}:${tab.tty}` } : undefined
     },

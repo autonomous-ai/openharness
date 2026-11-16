@@ -18,7 +18,7 @@ import {
 import { READER_PART, READER_VERSION, record } from '../../engines/worker/protocol.js'
 import { sid } from '../../lib/log.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { transcriptReadIdentity } from '../transcripts/readIdentity.js'
+import { paneReadIdentity, transcriptReadIdentity } from '../transcripts/readIdentity.js'
 import { joinParts } from './readers.js'
 
 export interface OtherStreamsDeps {
@@ -31,6 +31,8 @@ export interface OtherStreamsDeps {
   reattach(session: RegisteredSession): void
   /** The live view is waiting on its reader; panes and Stop remain usable. */
   held?(session: RegisteredSession, held: boolean, rewritten?: boolean | 'lost'): void
+  /** The lifecycle's existing reservation. Reader recovery never changes its authority while Stop owns it. */
+  stopping?(session: RegisteredSession): Promise<unknown> | undefined
   log?(line: string): void
   /** How long a failed wait or open waits before it is tried again. */
   retryMs?: number
@@ -64,6 +66,8 @@ interface Handle extends OtherStream {
   stamp: LiveStamp | null | undefined
   /** The worker that holds the stream is gone: nothing is asked of it until it is opened again. */
   orphan: boolean
+  /** The reader tries the stream no more until its worker connects again. */
+  givenUp: boolean
   /** A close is on its way: what an older frame says of the turn does not open it again. */
   closing: number
   quietUntil: number
@@ -78,7 +82,8 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
   const byToken = new Map<string, Handle>()
   const pending = new Map<string, string>()
   /** Sessions whose open was not answered: attached again once the worker is there. */
-  const unopened = new Map<string, ReturnType<typeof setTimeout>>()
+  const unopened = new Map<string, { timer?: ReturnType<typeof setTimeout>;
+    stop?: { identity: string; generation?: number } }>()
   const attempts = new Map<string, number>()
   let connected = true
   /** One request, its answer put back together when it came in parts, all within the request's own wait. */
@@ -104,6 +109,67 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
   let stopped = false
   let endBackoff: (() => void) | undefined
 
+  const clearRecovery = (sessionId: string): void => {
+    const recovery = unopened.get(sessionId)
+    clearTimeout(recovery?.timer)
+    // Forget revokes the binding, not the lifetime of its pending Stop. Keep its cancelled marker until that
+    // promise settles, so repeated forget/open cannot append more callbacks to one still-running operation.
+    if (recovery?.stop) recovery.stop.generation = undefined
+    else unopened.delete(sessionId)
+  }
+  const cancelDeferredRecovery = (): void => {
+    // Keep the one continuation until its Stop settles. A reconnect may authorize it afresh for the same binding;
+    // adding another promise callback on every disconnect would retain unbounded callbacks during a long Stop.
+    for (const recovery of unopened.values()) if (recovery.stop) recovery.stop.generation = undefined
+  }
+  // A lost reader's retry cleared its hold while Close waited for SIGTERM to finish, changing evidenceRevision
+  // and refusing a safe Close after the engine had exited (storage comparison, 2026-11-16). Only optional reader
+  // recovery waits: native evidence still reaches frame(), and every native Stop fence remains in force.
+  const deferRecovery = (session: RegisteredSession): boolean => {
+    if (stopped) return true
+    const job = deps.stopping?.(session)
+    if (!job) return false
+    const sessionId = session.sessionId
+    const deferred = unopened.get(sessionId)?.stop
+    if (deferred) {
+      if (deferred.identity === paneReadIdentity(session)) deferred.generation = generation
+      return true
+    }
+    if (!unopened.has(sessionId) && unopened.size >= STREAMS_MAX) {
+      log('[engine-others] live recovery limit reached')
+      return true
+    }
+    clearRecovery(sessionId)
+    const authority: { identity: string; generation?: number } = { identity: paneReadIdentity(session), generation }
+    const recovery = { stop: authority }
+    unopened.set(sessionId, recovery)
+    const settled = (): void => {
+      if (unopened.get(sessionId) !== recovery) return
+      unopened.delete(sessionId)
+      const latest = deps.bySession(sessionId)
+      if (stopped || authority.generation !== generation || !latest || paneReadIdentity(latest) !== authority.identity) return
+      // A later Stop can take ownership before this continuation runs. It owns the same single recovery.
+      if (deferRecovery(latest)) return
+      if (!connected) {
+        deps.held?.(latest, true)
+        unopened.set(sessionId, {})
+        return
+      }
+      deps.held?.(latest, false)
+      deps.reattach(deps.bySession(sessionId)!)
+    }
+    void job.then(settled, settled).catch(() => log('[engine-others] LIVE_RECOVERY_FAILED'))
+    return true
+  }
+  const held = (session: RegisteredSession, value: boolean, rewritten?: boolean | 'lost'): void => {
+    if (deferRecovery(session)) return
+    if (rewritten === undefined) deps.held?.(session, value)
+    else deps.held?.(session, value, rewritten)
+  }
+  const reattach = (session: RegisteredSession): void => {
+    if (!deferRecovery(session)) deps.reattach(session)
+  }
+
   const apply = (handle: Handle, frames: readonly StreamFrame[]): boolean => {
     for (const frame of frames) {
       if (frame.serial <= handle.applied || byToken.get(handle.token) !== handle) continue
@@ -120,7 +186,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       if (session && session.engine === handle.engine) {
         if (frame.rewritten) {
           log(`[watcher] ${sid(handle.sessionId)} transcript rewritten in place — attaching it again from its end`)
-          deps.reattach(session)
+          reattach(session)
         }
         try { deps.frame(session, frame) } catch { log(`[engine-others] ${sid(handle.sessionId)} frame could not be applied`); unavailable(session) }
       }
@@ -159,14 +225,14 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     const session = deps.bySession(handle.sessionId)
     log(`[engine-others] ${sid(handle.sessionId)} its live stream was given up by the worker · attaching it again`)
     if (!session) { handles.delete(handle.sessionId); return }
-    deps.held?.(session, true, 'lost')
+    held(session, true, 'lost')
     retryLater(session)
   }
 
   const handleOf = (session: RegisteredSession, token: string, opened: StreamOpened, store: string | null): Handle => {
     const handle: Handle = {
       engine: session.engine, sessionId: session.sessionId, store, token, applied: 0, turn: opened.turn,
-      offset: opened.offset, stamp: opened.stamp, orphan: false, closing: 0, quietUntil: 0,
+      offset: opened.offset, stamp: opened.stamp, orphan: false, givenUp: false, closing: 0, quietUntil: 0,
       get turnOpen() { return handle.turn.turnOpen },
       closeTurn(reason) {
         handle.turn = { ...handle.turn, turnOpen: false }
@@ -184,37 +250,47 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     if (current() && answer && streamOpened(answer)) return answer
     // Not answered, or not checkable: the worker may hold a stream nobody follows; it is told to forget it.
     forgetToken(token)
-    if (current() && reply.error === 'ENGINE_TRANSCRIPT_CHANGED') {
+    if (!current()) return null
+    if (reply.error === 'ENGINE_TRANSCRIPT_CHANGED') {
       log('[engine-others] transcript changed while its reader was unavailable · rebuilding history; missed live events cannot be recovered')
-      deps.held?.(session, true, true)
+      held(session, true, true)
       retryLater(session)
-    }
-    if (current() && (reply.error === undefined || reply.error === 'ENGINE_UNAVAILABLE' || reply.error === 'SERVICE_UNAVAILABLE')) {
+    } else if (reply.error === undefined || reply.error === 'ENGINE_UNAVAILABLE' || reply.error === 'SERVICE_UNAVAILABLE') {
       unavailable(session)
-    }
+    } else giveUp(session.sessionId)
     return null
+  }
+  // A stream given up with its worker connected is left to a discovery pass to revalidate: no connection may come to
+  // resume it, and the row would stay held until the daemon restarts (#4362 final review).
+  const giveUp = (sessionId: string): void => {
+    const handle = handles.get(sessionId)
+    if (handle) handle.givenUp = true
   }
   const retryLater = (session: RegisteredSession): void => {
     if (stopped || unopened.has(session.sessionId)) return
     const count = attempts.get(session.sessionId) ?? 0
-    if (count >= 5) { log('[engine-others] live reader unavailable after 5 retries · waiting for its next connection'); return }
-    if (!attempts.has(session.sessionId) && attempts.size >= STREAMS_MAX) { log('[engine-others] live retry limit reached'); return }
+    if (count >= 5) { log('[engine-others] live reader unavailable after 5 retries · waiting for its next connection'); giveUp(session.sessionId); return }
+    if (unopened.size >= STREAMS_MAX || (!attempts.has(session.sessionId) && attempts.size >= STREAMS_MAX)) {
+      log('[engine-others] live retry limit reached')
+      giveUp(session.sessionId)
+      return
+    }
     attempts.set(session.sessionId, count + 1)
     const timer = setTimeout(() => {
       if (!connected) return
       unopened.delete(session.sessionId)
       const latest = deps.bySession(session.sessionId)
       if (latest && latest.engine === session.engine) {
-        deps.held?.(latest, false)
-        deps.reattach(deps.bySession(session.sessionId)!)
+        held(latest, false)
+        reattach(deps.bySession(session.sessionId)!)
       }
     }, retryMs * 2 ** count)
     timer.unref?.()
-    unopened.set(session.sessionId, timer)
+    unopened.set(session.sessionId, { timer })
   }
 
   const unavailable = (session: RegisteredSession): void => {
-    deps.held?.(session, true)
+    held(session, true)
     retryLater(session)
   }
 
@@ -235,7 +311,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
           log('[engine-others] live wait unavailable or invalid · delivery held')
           for (const handle of byToken.values()) {
             const session = deps.bySession(handle.sessionId)
-            if (session) deps.held?.(session, true)
+            if (session) held(session, true)
           }
           if (++failed === 5) return
           await new Promise<void>(resolve => {
@@ -258,7 +334,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
           const handle = byToken.get(page.token)
           if (handle) {
             const session = deps.bySession(handle.sessionId)
-            if (session) deps.held?.(session, false)
+            if (session) held(session, false)
             apply(handle, page.frames)
           }
         }
@@ -297,14 +373,13 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     },
     /** Opens the session's stream: its fold, and the tail or the poll after it. Null when the worker did not answer. */
     async open(session: RegisteredSession, options: OtherStreamOpen): Promise<StreamOpened | null> {
-      if (stopped) return null
+      if (stopped || deferRecovery(session)) return null
       if (!handles.has(session.sessionId) && !pending.has(session.sessionId) && handles.size + pending.size >= STREAMS_MAX) {
         log('[engine-others] live stream limit reached')
         unavailable(session)
         return null
       }
-      clearTimeout(unopened.get(session.sessionId))
-      unopened.delete(session.sessionId)
+      clearRecovery(session.sessionId)
       const token = randomUUID(), at = generation
       const binding = { ...session }, identity = transcriptReadIdentity(session)
       pending.set(session.sessionId, token)
@@ -324,13 +399,18 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       handles.set(session.sessionId, handle)
       byToken.set(token, handle)
       if (previous) forgetHandle(previous)
-      deps.held?.(session, false)
+      held(session, false)
       if (!apply(handle, opened.frames)) return null
       void wait()
       return opened
     },
     get: (sessionId: string): OtherStream | undefined => handles.get(sessionId),
     has: (sessionId: string): boolean => handles.has(sessionId),
+    /** Whether the reader takes the session's stream up again itself: held, and, its worker here, not given up. */
+    follows(sessionId: string): boolean {
+      const handle = handles.get(sessionId)
+      return !!handle && !(connected && handle.givenUp)
+    },
     /** A Stop's or a backstop's close: what the parser emits closing; when the worker does not answer, the core closes the
      *  turn itself and says so, so a Stop never leaves a turn open. */
     async close(sessionId: string, how: { abort?: boolean; error?: boolean; stop?: boolean }): Promise<LiveEvent[]> {
@@ -395,8 +475,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     },
     forget(sessionId: string): void {
       attempts.delete(sessionId)
-      clearTimeout(unopened.get(sessionId))
-      unopened.delete(sessionId)
+      clearRecovery(sessionId)
       const token = pending.get(sessionId)
       pending.delete(sessionId)
       if (token) forgetToken(token)
@@ -410,13 +489,15 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       connected = true
       attempts.clear()
       generation++
+      cancelDeferredRecovery()
       waiting = false
       const at = generation
       const orphans = [...handles.values()].filter(handle => handle.orphan)
+      for (const handle of handles.values()) handle.givenUp = false
       if (orphans.length) log(`[engine-others] the other engines' worker is back · following ${orphans.length} conversation(s) again`)
       for (const handle of orphans) void (async () => {
         const session = deps.bySession(handle.sessionId)
-        if (!session || session.engine !== handle.engine || handles.get(handle.sessionId) !== handle) return
+        if (!session || session.engine !== handle.engine || handles.get(handle.sessionId) !== handle || deferRecovery(session)) return
         const token = randomUUID(), identity = transcriptReadIdentity(session)
         const opened = await opening(session, token, { live: false, abandon: false, held: false,
           resume: { turnOpen: handle.turnOpen, ...(handle.offset !== undefined ? { offset: handle.offset, ...(handle.stamp !== undefined ? { stamp: handle.stamp } : {}) } : {}) },
@@ -425,15 +506,15 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
         byToken.delete(handle.token)
         Object.assign(handle, { token, applied: 0, orphan: false, turn: opened.turn, offset: opened.offset ?? handle.offset, stamp: opened.stamp })
         byToken.set(token, handle)
-        deps.held?.(session, false)
+        held(session, false)
         if (!apply(handle, opened.frames)) return
         void wait()
       })()
-      for (const [sessionId, timer] of unopened) {
-        clearTimeout(timer)
-        unopened.delete(sessionId)
+      for (const [sessionId, recovery] of [...unopened]) {
+        if (recovery.stop) continue
+        clearRecovery(sessionId)
         const session = deps.bySession(sessionId)
-        if (session) { deps.held?.(session, false); deps.reattach(deps.bySession(sessionId)!) }
+        if (session) { held(session, false); reattach(deps.bySession(sessionId)!) }
       }
       void wait()
     },
@@ -442,6 +523,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       connected = false
       endBackoff?.()
       generation++
+      cancelDeferredRecovery()
       waiting = false
       for (const sessionId of pending.keys()) {
         const session = deps.bySession(sessionId)
@@ -451,7 +533,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       for (const handle of handles.values()) {
         handle.orphan = true
         const session = deps.bySession(handle.sessionId)
-        if (session) deps.held?.(session, true)
+        if (session) held(session, true)
       }
       log(`[engine-others] the other engines' worker is gone · ${handles.size} conversation(s) held at what the core took, their panes running on`)
     },
@@ -462,7 +544,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       for (const token of pending.values()) forgetToken(token)
       pending.clear()
       attempts.clear()
-      for (const timer of unopened.values()) clearTimeout(timer)
+      for (const recovery of unopened.values()) clearTimeout(recovery.timer)
       unopened.clear()
       for (const handle of handles.values()) forgetHandle(handle)
       handles.clear()

@@ -319,6 +319,20 @@ describe('USB dial fleet', () => {
     } finally { await f.fleet.stop() }
   })
 
+  it('viewChanged reaches each attached dial', async () => {
+    const f = fixture()
+    try {
+      f.fleet.start()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(2))
+      for (const p of f.ports) p.say({ t: 'hello', product: 'harness', mac: p.path, fw: 'fixture', proto: 3, appFilter: 'v1' })
+      await vi.waitFor(() => { for (const p of f.ports) expect(p.sent.some(m => m.t === 'agents.end')).toBe(true) })
+      f.host.listSwarms = () => ({ selected: 'tab', swarms: [{ id: 'tab', name: 'Tab', agents: 1, panes: 1 }], tiles: [] })
+      const before = f.ports.map(p => p.sent.length)
+      await f.fleet.viewChanged()
+      for (const [i, p] of f.ports.entries()) expect(p.sent.slice(before[i]).some(m => m.t === 'swarms')).toBe(true)
+    } finally { await f.fleet.stop() }
+  })
+
   it('keeps simultaneous voice uploads separate even with the same upload id', async () => {
     const f = fixture()
     try {

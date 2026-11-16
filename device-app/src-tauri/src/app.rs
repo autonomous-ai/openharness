@@ -3,11 +3,18 @@
 use crate::keepalive::{Keep, KeepAlive};
 use crate::model::{due, menu, menu_log};
 use crate::types::{
-    Action, AppState, CliState, Daemon, Effect, Event, LoginEvent, MenuAction, MenuItem, Phase, Saved, Screen, View,
+    Action, AppState, AppUpdate, CliState, Daemon, Effect, Event, LoginEvent, MenuAction, MenuItem, Phase, Saved,
+    Screen, UpdateFailure, View,
 };
 
 /// The menu reads the account and Claude Code again at most this often.
 const READ_EVERY_SECS: u64 = 60;
+
+/// The app asks for its own update at most this often.
+const CHECK_EVERY_SECS: u64 = 21_600;
+
+/// Where a person whose app cannot replace itself gets the new one. Fixed: nothing of the manifest reaches `open`.
+const DEVICE_PAGE: &str = "https://harness.autonomous.ai/device";
 
 /// A start left to the desktop app, which supervises its own daemon.
 const DESKTOP_RUNS: &str = "keep-alive: the desktop app runs; not starting";
@@ -33,6 +40,17 @@ pub struct App {
     read_when_up: bool,
     /// The desktop app ran at the last tick.
     desktop_running: bool,
+    /// When the last update check started.
+    checked_at: Option<u64>,
+    /// A check, or the install it found, has not answered, or the install waits for the relaunch: no second check
+    /// starts, however long the Mac slept or the relaunch waits. Only the relaunch's new process starts without it.
+    updating: bool,
+    /// The version the last check found.
+    found: Option<String>,
+    /// The version last logged as not writable, so it is said once.
+    skipped: Option<String>,
+    /// An update is installed: the app relaunches on the first tick with nothing running.
+    relaunch: bool,
 }
 
 impl App {
@@ -46,6 +64,7 @@ impl App {
             claude: None,
             desktop_installed,
             saved,
+            app_update: AppUpdate::None,
         };
         let mut app = App {
             state,
@@ -59,6 +78,11 @@ impl App {
             last_read: now,
             read_when_up: false,
             desktop_running: false,
+            checked_at: None,
+            updating: false,
+            found: None,
+            skipped: None,
+            relaunch: false,
         };
         let mut effects = Vec::new();
         // A CLI seen once and gone now was removed on purpose: it stays Removed, never installed on its own.
@@ -92,6 +116,12 @@ impl App {
         match event {
             Event::Tick { now, desktop_running } => {
                 self.now = now;
+                if self.relaunch && !self.relaunch_waits() {
+                    self.relaunch = false;
+                    self.stop_watch(effects);
+                    effects.push(Effect::Relaunch);
+                    return;
+                }
                 match self.state.cli {
                     CliState::Found => match self.keep.tick(now, desktop_running) {
                         Some(Keep::SpawnWatch) => effects.push(Effect::SpawnWatch),
@@ -104,6 +134,13 @@ impl App {
                     CliState::Installing => {}
                 }
                 self.desktop_running = desktop_running;
+                // abs_diff: a clock set back checks too.
+                let due = self.checked_at.is_none_or(|at| now.abs_diff(at) >= CHECK_EVERY_SECS);
+                if due && !self.running() && !self.updating {
+                    self.checked_at = Some(now);
+                    self.updating = true;
+                    effects.push(Effect::CheckUpdate);
+                }
             }
             Event::MenuOpened { now, desktop_installed } => {
                 self.now = now;
@@ -223,6 +260,13 @@ impl App {
                 MenuAction::ClaudeOff => {
                     self.set_claude(false, effects);
                 }
+                MenuAction::SoundOn | MenuAction::SoundOff => {
+                    effects.push(Effect::SetSound(action == MenuAction::SoundOn));
+                    // A native check item flips its own check when clicked: the menu drawn again puts it back
+                    // where the dial is, and the dial's next status line moves it.
+                    effects.push(Effect::Menu(self.menu.clone()));
+                }
+                MenuAction::Update => effects.push(Effect::OpenUrl(DEVICE_PAGE.into())),
                 MenuAction::OpenHarness => effects.push(Effect::OpenDesktop),
                 MenuAction::Quit => {
                     self.stop_watch(effects);
@@ -241,7 +285,69 @@ impl App {
                 }
                 self.show(None, effects);
             }
+            // Nothing newer: a row that offered a version goes, as this app is at least as new.
+            Event::UpdateChecked(None) => {
+                self.updating = false;
+                self.found = None;
+                self.state.app_update = AppUpdate::None;
+            }
+            // Installed even while a sign-in runs: only the relaunch waits for it.
+            Event::UpdateChecked(Some(version)) => {
+                effects.push(Effect::Log(format!("update: found {version}")));
+                // A version already blocked keeps its row while it is tried again, so the menu does not flip.
+                if self.state.app_update != AppUpdate::Blocked(version.clone()) {
+                    self.state.app_update = AppUpdate::Installing;
+                }
+                self.found = Some(version);
+                effects.push(Effect::InstallUpdate);
+            }
+            // `updating` stays set: until the relaunch this process is the old version, and a check would install
+            // the same one again.
+            Event::UpdateInstalled => {
+                if let Some(version) = &self.found {
+                    effects.push(Effect::Log(format!("update: installed {version}")));
+                }
+                self.state.app_update = AppUpdate::None;
+                self.relaunch = true;
+            }
+            Event::UpdateFailed(failure) => self.update_failed(failure, effects),
         }
+    }
+
+    /// A failure changes nothing on disk: the next check tries again.
+    fn update_failed(&mut self, failure: UpdateFailure, effects: &mut Vec<Effect>) {
+        self.updating = false;
+        let word = match failure {
+            UpdateFailure::Check => "check",
+            UpdateFailure::Download => "download",
+            UpdateFailure::Signature => "signature",
+            UpdateFailure::Install => "install",
+            // Nothing was downloaded. The menu offers the page instead, and the log says so once per version.
+            UpdateFailure::NotWritable => {
+                let Some(version) = self.found.clone() else { return };
+                if self.skipped.as_ref() != Some(&version) {
+                    effects.push(Effect::Log("update: skipped not-writable".into()));
+                }
+                self.skipped = Some(version.clone());
+                self.state.app_update = AppUpdate::Blocked(version);
+                return;
+            }
+        };
+        effects.push(Effect::Log(format!("update: failed {word}")));
+        if self.state.app_update == AppUpdate::Installing {
+            self.state.app_update = AppUpdate::None;
+        }
+    }
+
+    /// The CLI install or a sign-in: no update check starts, and no relaunch, while one runs.
+    fn running(&self) -> bool {
+        self.state.cli == CliState::Installing || self.login.is_some()
+    }
+
+    /// The relaunch would also cut short a Claude Code change, a daemon start or what the window shows, so it waits
+    /// for them too; a check does not, as the first launch's window is open right after the CLI install.
+    fn relaunch_waits(&self) -> bool {
+        self.running() || self.setting.is_some() || self.keep.starting() || self.window.is_some()
     }
 
     /// Only a button the window shows does something, so a second click on one that started a run does nothing.
@@ -438,11 +544,15 @@ fn screen_at(screen: Screen, phase: Phase, lines: Vec<String>) -> View {
 mod tests {
     use super::*;
     use crate::types::{
-        Action, ClaudeStatus, DialStatus, Effect, Event, LoginEvent, MenuAction, MenuItem, Phase, Saved, Screen, View,
+        Action, ClaudeStatus, DialStatus, Effect, Event, LoginEvent, MenuAction, MenuItem, Phase, Saved, Screen,
+        UpdateFailure, View,
     };
 
     /// Second 0 of a minute.
     const B: u64 = 1794556800;
+
+    /// How often the app asks for its own update.
+    const H6: u64 = 21_600;
 
     /// A CLI seen before and a login item registered: only what each test does is saved.
     const SEEN: Saved =
@@ -482,10 +592,24 @@ mod tests {
         items
             .iter()
             .filter_map(|item| match item {
-                MenuItem::Text(label) | MenuItem::Action(_, label) => Some(label.clone()),
+                MenuItem::Text(label) | MenuItem::Action(_, label) | MenuItem::Check(_, label, _) => {
+                    Some(label.clone())
+                }
                 MenuItem::Separator => None,
             })
             .collect()
+    }
+
+    /// The items of the last menu sent.
+    fn menu_of(effects: &[Effect]) -> Vec<MenuItem> {
+        effects
+            .iter()
+            .rev()
+            .find_map(|effect| match effect {
+                Effect::Menu(items) => Some(items.clone()),
+                _ => None,
+            })
+            .expect("a menu")
     }
 
     /// What the window was told to show, in order.
@@ -858,6 +982,7 @@ mod tests {
                 board: None,
                 updating: None,
                 problem: None,
+                muted: None,
             })
         };
 
@@ -882,6 +1007,63 @@ mod tests {
     }
 
     #[test]
+    fn a_sound_click_asks_the_dial_and_draws_the_menu_again() {
+        let mut app = found();
+        let line = DialStatus {
+            attached: true,
+            fw: Some("0.0.95".into()),
+            hw: None,
+            board: None,
+            updating: None,
+            problem: None,
+            muted: None,
+        };
+        let menu = menu_of(&app.handle(Event::WatchLine(line)));
+        // Twice over: a click remembers nothing, so the same click gives the same effects.
+        for _ in 0..2 {
+            for (action, on) in [(MenuAction::SoundOff, false), (MenuAction::SoundOn, true)] {
+                assert_eq!(app.handle(Event::Menu(action)), [Effect::SetSound(on), Effect::Menu(menu.clone())]);
+            }
+        }
+    }
+
+    #[test]
+    fn the_check_follows_the_dial_not_the_click() {
+        let mut app = found();
+        let line = |muted| {
+            Event::WatchLine(DialStatus {
+                attached: true,
+                fw: Some("0.0.95".into()),
+                hw: None,
+                board: None,
+                updating: None,
+                problem: None,
+                muted: Some(muted),
+            })
+        };
+        let checks = |effects: &[Effect]| -> Vec<MenuItem> {
+            menu_of(effects).into_iter().filter(|item| matches!(item, MenuItem::Check(..))).collect()
+        };
+        let on = MenuItem::Check(MenuAction::SoundOff, "Sound".into(), true);
+        let off = MenuItem::Check(MenuAction::SoundOn, "Sound".into(), false);
+
+        let effects = app.handle(line(false));
+        assert_eq!(checks(&effects), vec![on.clone()]);
+        assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Sound ✓ | Quit".into())));
+
+        // The click's own check flipped natively: the menu drawn again puts it back where the dial is.
+        let effects = app.handle(Event::Menu(MenuAction::SoundOff));
+        assert_eq!(checks(&effects), [on]);
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Log(text) if text.starts_with("menu:"))));
+
+        let effects = app.handle(line(true));
+        assert_eq!(checks(&effects), [off]);
+        assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Sound | Quit".into())));
+
+        assert!(checks(&app.handle(Event::WatchExit(Some(3)))).is_empty());
+    }
+
+    #[test]
     fn a_dial_line_changes_the_menu_and_the_log() {
         let mut app = found();
         let line = DialStatus {
@@ -891,6 +1073,7 @@ mod tests {
             board: None,
             updating: None,
             problem: None,
+            muted: None,
         };
         let effects = app.handle(Event::WatchLine(line.clone()));
         assert_eq!(rows(&effects)[0], "Dial connected · 0.0.95");
@@ -905,7 +1088,7 @@ mod tests {
         let two_downs = || {
             let mut app = found();
             app.handle(Event::WatchExit(Some(3)));
-            assert_eq!(app.handle(tick(B + 5)), [Effect::SpawnWatch]);
+            assert_eq!(app.handle(tick(B + 5)), [Effect::SpawnWatch, Effect::CheckUpdate]);
             app.handle(Event::WatchExit(Some(3)));
             app
         };
@@ -935,7 +1118,7 @@ mod tests {
     fn only_a_watch_the_app_stopped_ends_for_good() {
         let mut app = found();
         app.handle(Event::WatchExit(Some(0)));
-        assert_eq!(app.handle(tick(B + 5)), [Effect::SpawnWatch]);
+        assert_eq!(app.handle(tick(B + 5)), [Effect::SpawnWatch, Effect::CheckUpdate]);
 
         let mut app = found();
         app.handle(Event::Menu(MenuAction::Quit));
@@ -946,7 +1129,7 @@ mod tests {
     #[test]
     fn a_cli_that_comes_back_is_found_on_a_tick() {
         let mut app = removed();
-        assert_eq!(app.handle(tick(B + 5)), [Effect::FindCli]);
+        assert_eq!(app.handle(tick(B + 5)), [Effect::FindCli, Effect::CheckUpdate]);
         let effects = app.handle(Event::Cli(true));
         for effect in [Effect::SpawnWatch, Effect::ReadAuth, Effect::ReadClaude] {
             assert!(has(&effects, &effect), "{effect:?}");
@@ -1026,5 +1209,202 @@ mod tests {
         let mut app = found();
         assert_eq!(app.handle(Event::Menu(MenuAction::OpenHarness)), [Effect::OpenDesktop]);
         assert_eq!(app.handle(Event::Menu(MenuAction::Quit)), [Effect::StopWatch, Effect::Quit]);
+    }
+
+    #[test]
+    fn the_first_tick_checks_and_then_every_six_hours() {
+        let mut app = found();
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        app.handle(Event::UpdateChecked(None));
+        for now in [B + 10, B + H6] {
+            assert!(!has(&app.handle(tick(now)), &Effect::CheckUpdate), "{now}");
+        }
+        assert!(has(&app.handle(tick(B + 5 + H6)), &Effect::CheckUpdate));
+        app.handle(Event::UpdateChecked(None));
+        // A clock set back checks too: abs_diff.
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+    }
+
+    #[test]
+    fn no_second_check_starts_while_one_runs() {
+        let mut app = found();
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        // A Mac asleep through the check, or a clock that jumps: six hours on, it has not answered.
+        assert!(!has(&app.handle(tick(B + 5 + H6)), &Effect::CheckUpdate));
+        app.handle(Event::UpdateChecked(None));
+        assert!(has(&app.handle(tick(B + 10 + H6)), &Effect::CheckUpdate));
+    }
+
+    #[test]
+    fn no_check_starts_while_the_cli_installs_or_a_sign_in_runs() {
+        let mut app = fresh();
+        assert!(!has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        app.handle(Event::InstallDone(Ok(())));
+        assert!(has(&app.handle(tick(B + 10)), &Effect::CheckUpdate));
+
+        let mut app = on_sign_in();
+        app.handle(Event::Act(Action::SignIn));
+        assert!(!has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        app.handle(login(LoginEvent::Done(Ok(()))));
+        assert!(has(&app.handle(tick(B + 10)), &Effect::CheckUpdate));
+    }
+
+    #[test]
+    fn a_newer_version_is_installed_and_the_app_relaunches() {
+        let mut app = found();
+        app.handle(tick(B + 5));
+        let effects = app.handle(Event::UpdateChecked(Some("0.1.3".into())));
+        assert!(has(&effects, &Effect::InstallUpdate));
+        assert_eq!(logs(&effects), ["update: found 0.1.3"]);
+        let menu = menu_of(&effects);
+        let row = MenuItem::Text("Updating Harness Device…".into());
+        let at = menu.iter().position(|item| *item == row).expect("the row");
+        assert_eq!(menu[at + 1], MenuItem::Separator);
+        assert!(!has(&app.handle(tick(B + 5 + H6)), &Effect::CheckUpdate));
+
+        let effects = app.handle(Event::UpdateInstalled);
+        assert_eq!(logs(&effects), ["update: installed 0.1.3"]);
+        assert!(!rows(&effects).contains(&"Updating Harness Device…".to_string()));
+        assert!(!has(&effects, &Effect::Relaunch));
+        assert_eq!(app.handle(tick(B + 10 + H6)), [Effect::StopWatch, Effect::Relaunch]);
+    }
+
+    #[test]
+    fn a_sign_in_delays_the_relaunch_not_the_download() {
+        let mut app = on_sign_in();
+        app.handle(tick(B + 5));
+        app.handle(Event::Act(Action::SignIn));
+        assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::InstallUpdate));
+        app.handle(Event::UpdateInstalled);
+        assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
+        app.handle(login(LoginEvent::Done(Ok(()))));
+        // The window moved on to Claude Code, which holds the relaunch too.
+        app.handle(Event::WindowClosed);
+        assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
+    }
+
+    /// The first check finds 0.1.3 and installs it.
+    fn installed(app: &mut App) {
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::InstallUpdate));
+        app.handle(Event::UpdateInstalled);
+    }
+
+    #[test]
+    fn a_claude_code_change_delays_the_relaunch() {
+        let mut app = found();
+        answer(&mut app, true, claude(true));
+        app.handle(Event::Menu(MenuAction::ClaudeOff));
+        installed(&mut app);
+        assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
+        app.handle(Event::ClaudeSet(Ok(())));
+        assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
+    }
+
+    #[test]
+    fn a_start_of_the_daemon_delays_the_relaunch() {
+        let mut app = found();
+        app.handle(Event::WatchExit(Some(3)));
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        app.handle(Event::WatchExit(Some(3)));
+        assert!(has(&app.handle(tick(B + 10)), &Effect::RunStart));
+        app.handle(Event::UpdateChecked(Some("0.1.3".into())));
+        app.handle(Event::UpdateInstalled);
+        assert!(!has(&app.handle(tick(B + 15)), &Effect::Relaunch));
+        app.handle(Event::StartDone { ok: true });
+        assert!(app.handle(tick(B + 20)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
+    }
+
+    #[test]
+    fn an_open_window_delays_the_relaunch() {
+        let mut app = on_claude();
+        installed(&mut app);
+        assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
+        app.handle(Event::WindowClosed);
+        assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
+    }
+
+    #[test]
+    fn an_install_waiting_to_relaunch_checks_no_more() {
+        let mut app = on_claude();
+        installed(&mut app);
+        // The window stays open past six hours: this process is still the old version, and a check would find the
+        // installed one again and install it a second time.
+        assert!(!has(&app.handle(tick(B + 10 + H6)), &Effect::CheckUpdate));
+        app.handle(Event::WindowClosed);
+        assert!(app.handle(tick(B + 15 + H6)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
+    }
+
+    #[test]
+    fn a_failure_is_one_line_and_the_next_check_tries_again() {
+        let kinds = [
+            (UpdateFailure::Check, "check"),
+            (UpdateFailure::Download, "download"),
+            (UpdateFailure::Signature, "signature"),
+            (UpdateFailure::Install, "install"),
+        ];
+        for (kind, word) in kinds {
+            // Kept from the start, so the last menu in it is the one shown.
+            let (mut app, mut sent) = App::new(SEEN, true, false, B);
+            sent.extend(app.handle(tick(B + 5)));
+            // A check fails on its own; the others fail installing what it found.
+            if kind != UpdateFailure::Check {
+                sent.extend(app.handle(Event::UpdateChecked(Some("0.1.3".into()))));
+            }
+            let effects = app.handle(Event::UpdateFailed(kind));
+            assert_eq!(logs(&effects), [format!("update: failed {word}")]);
+            assert!(!has(&effects, &Effect::InstallUpdate) && !has(&effects, &Effect::Relaunch), "{kind:?}");
+            sent.extend(effects);
+            assert!(!rows(&sent).contains(&"Updating Harness Device…".to_string()), "{kind:?}");
+            let effects = app.handle(tick(B + 10));
+            assert!(!has(&effects, &Effect::CheckUpdate) && !has(&effects, &Effect::Relaunch), "{kind:?}");
+            assert!(has(&app.handle(tick(B + 5 + H6)), &Effect::CheckUpdate), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_bundle_that_cannot_be_replaced_offers_the_page_and_says_so_once() {
+        let mut app = found();
+        app.handle(tick(B + 5));
+        app.handle(Event::UpdateChecked(Some("0.1.3".into())));
+        let effects = app.handle(Event::UpdateFailed(UpdateFailure::NotWritable));
+        assert_eq!(logs(&effects), ["update: skipped not-writable"]);
+        let menu = menu_of(&effects);
+        let row = MenuItem::Action(MenuAction::Update, "Update 0.1.3…".into());
+        let at = menu.iter().position(|item| *item == row).expect("the row");
+        assert_eq!(menu[at + 1], MenuItem::Separator);
+        // The fixed page, with nothing of the manifest in it.
+        assert_eq!(
+            app.handle(Event::Menu(MenuAction::Update)),
+            [Effect::OpenUrl("https://harness.autonomous.ai/device".into())]
+        );
+
+        // Six hours on, the same version: tried again, the row stays, and the line is not said twice.
+        assert!(has(&app.handle(tick(B + 5 + H6)), &Effect::CheckUpdate));
+        let effects = app.handle(Event::UpdateChecked(Some("0.1.3".into())));
+        assert!(has(&effects, &Effect::InstallUpdate));
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Menu(_))));
+        assert!(logs(&app.handle(Event::UpdateFailed(UpdateFailure::NotWritable))).is_empty());
+
+        // A newer version changes the row, and is said once more.
+        app.handle(tick(B + 5 + 2 * H6));
+        app.handle(Event::UpdateChecked(Some("0.1.4".into())));
+        let effects = app.handle(Event::UpdateFailed(UpdateFailure::NotWritable));
+        assert_eq!(logs(&effects), ["update: skipped not-writable"]);
+        assert!(rows(&effects).contains(&"Update 0.1.4…".to_string()));
+    }
+
+    #[test]
+    fn nothing_newer_changes_nothing() {
+        let mut app = found();
+        app.handle(tick(B + 5));
+        assert!(app.handle(Event::UpdateChecked(None)).is_empty());
+
+        // Nothing newer than the version a row offers: the row goes.
+        app.handle(tick(B + 5 + H6));
+        app.handle(Event::UpdateChecked(Some("0.1.3".into())));
+        app.handle(Event::UpdateFailed(UpdateFailure::NotWritable));
+        app.handle(tick(B + 5 + 2 * H6));
+        assert!(!rows(&app.handle(Event::UpdateChecked(None))).contains(&"Update 0.1.3…".to_string()));
     }
 }

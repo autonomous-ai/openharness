@@ -15,7 +15,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::menu::{Menu, MenuItem as NativeItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem as NativeItem, PredefinedMenuItem};
 use tauri::tray::{MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
@@ -48,6 +48,7 @@ fn main() {
     let mut app = tauri::Builder::default()
         // Managed before the window is made, so its first `view` finds it.
         .manage(Shared { view: Mutex::default(), events: events.clone() })
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![view, act])
         .setup(move |app| start(app.handle(), events, queue).map_err(Into::into))
         // Closing never quits: the window hides, and the app decides what closing answers.
@@ -88,6 +89,7 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
         },
         front: front::system(log.clone()),
         tabs: tabs::system(),
+        updater: harness_device::update::system(handle),
     };
 
     // A watch or a sign-in hands its events over holding a lock that stopping or cancelling it takes: `send` only
@@ -162,7 +164,8 @@ fn run_loop(
     // `asked`: the effects answer a menu click.
     let run = |effects: Vec<Effect>, asked: bool| {
         for effect in effects {
-            // Menu, Show and Quit are AppKit's, on the main thread, which runs them in the order they are handed over.
+            // Menu, Show, Quit and Relaunch are AppKit's, on the main thread, which runs them in the order they are
+            // handed over.
             if let Some(effect) = runner.run(effect) {
                 let (drawing, log) = (handle.clone(), log.clone());
                 let _ = handle.run_on_main_thread(move || {
@@ -203,6 +206,7 @@ fn draw(handle: &AppHandle, effect: Effect, asked: bool) -> tauri::Result<()> {
         }
         // The daemon is left running: the app only ever watched it.
         Effect::Quit => handle.exit(0),
+        Effect::Relaunch => handle.restart(),
         _ => {}
     }
     Ok(())
@@ -223,6 +227,9 @@ fn native_menu(handle: &AppHandle, items: &[MenuItem]) -> tauri::Result<Menu<tau
             MenuItem::Action(action, text) => {
                 menu.append(&NativeItem::with_id(handle, menu_id(*action), text, true, None::<&str>)?)?
             }
+            MenuItem::Check(action, text, checked) => {
+                menu.append(&CheckMenuItem::with_id(handle, menu_id(*action), text, true, *checked, None::<&str>)?)?
+            }
             MenuItem::Separator => menu.append(&PredefinedMenuItem::separator(handle)?)?,
         }
     }
@@ -236,6 +243,9 @@ fn menu_id(action: MenuAction) -> &'static str {
         MenuAction::SignIn => "sign_in",
         MenuAction::ClaudeOn => "claude_on",
         MenuAction::ClaudeOff => "claude_off",
+        MenuAction::SoundOn => "sound_on",
+        MenuAction::SoundOff => "sound_off",
+        MenuAction::Update => "update",
         MenuAction::OpenHarness => "open_harness",
         MenuAction::Quit => "quit",
     }
@@ -243,7 +253,9 @@ fn menu_id(action: MenuAction) -> &'static str {
 
 fn menu_action(id: &str) -> Option<MenuAction> {
     use MenuAction::*;
-    [Install, SignIn, ClaudeOn, ClaudeOff, OpenHarness, Quit].into_iter().find(|action| menu_id(*action) == id)
+    [Install, SignIn, ClaudeOn, ClaudeOff, SoundOn, SoundOff, Update, OpenHarness, Quit]
+        .into_iter()
+        .find(|action| menu_id(*action) == id)
 }
 
 #[cfg(test)]
@@ -253,6 +265,18 @@ mod tests {
 
     fn view(screen: Screen, phase: Phase, lines: &[&str]) -> View {
         View { screen, phase, lines: lines.iter().map(|line| line.to_string()).collect() }
+    }
+
+    #[test]
+    fn every_menu_action_has_its_own_id() {
+        use MenuAction::*;
+        let actions = [Install, SignIn, ClaudeOn, ClaudeOff, SoundOn, SoundOff, Update, OpenHarness, Quit];
+        for action in actions {
+            assert_eq!(menu_action(menu_id(action)), Some(action));
+        }
+        let ids: std::collections::HashSet<_> = actions.into_iter().map(menu_id).collect();
+        assert_eq!(ids.len(), actions.len());
+        assert_eq!(menu_action("sound"), None);
     }
 
     #[test]

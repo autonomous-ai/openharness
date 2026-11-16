@@ -249,6 +249,45 @@ describe('harness hardware watch', () => {
     expect(run.printed).toEqual([])
     await stillRunning(run)
   })
+  it('a status with an id and a boolean muted prints muted last', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    dial(run.socket, { attached: true, id: 'usb-1', fw: '0.0.95', settings: { muted: false, brightness: 80 } })
+    expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95","muted":false}'])
+    await stillRunning(run)
+  })
+  it('only a change of muted prints again', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    const usb = { attached: true, id: 'usb-1', fw: '0.0.95', settings: { muted: false, brightness: 80 } }
+    dial(run.socket, usb)
+    dial(run.socket, { ...usb, settings: { muted: false, brightness: 20 } })
+    dial(run.socket, { ...usb, settings: { muted: true, brightness: 20 } })
+    expect(run.printed).toEqual([
+      '{"attached":true,"fw":"0.0.95","muted":false}',
+      '{"attached":true,"fw":"0.0.95","muted":true}',
+    ])
+    await stillRunning(run)
+  })
+  it('without an id, settings or a boolean muted the line is as before', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    const flat = { attached: true, fw: '0.0.95' }
+    for (const payload of [
+      { ...flat, settings: { muted: true } },
+      { ...flat, id: '', settings: { muted: true } },
+      { ...flat, id: 'usb-1' },
+      { ...flat, id: 'usb-1', settings: null },
+      { ...flat, id: 'usb-1', settings: { muted: 'no' } },
+      { ...flat, id: 'usb-1', settings: { brightness: 80 } },
+      { ...flat, devices: [{ id: 'usb-2', settings: { muted: true } }] },
+    ]) dial(run.socket, payload)
+    expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95"}'])
+    await stillRunning(run)
+  })
   it('exits 0 when stdin closes', async () => {
     const after = watch()
     expect(after.stdin.resume).toHaveBeenCalled()
@@ -963,5 +1002,155 @@ describe('harness hardware watch: the selected tab', () => {
     dial(run.socket, { attached: false })
     expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95"}', SELECT, '{"attached":false}'])
     await stillRunning(run)
+  })
+})
+
+// The dial as the watch hears it, its sound on, and the line the watch prints for it.
+const USB = { attached: true, id: 'usb-1', fw: '0.0.95', settings: { muted: false } }
+const USB_LINE = '{"attached":true,"fw":"0.0.95","muted":false}'
+// A status the daemon puts in its answer: a watch that printed it would print a second line.
+const MUTED = { ...USB, settings: { muted: true } }
+interface SoundFrame { type: string; payload: { id: string; patch: { muted: boolean }; requestId: string } }
+/** A watch the daemon has answered, sent the dial's status. */
+async function attached() {
+  const run = watch()
+  await opened(run.socket)
+  connected(run.socket, ['dial-watch'])
+  dial(run.socket, USB)
+  return run
+}
+// What the Harness Device app writes on the watch's stdin when Sound is clicked.
+const sound = (run: ReturnType<typeof watch>, value: unknown) => run.stdin.emit('data', `${JSON.stringify({ muted: value })}\n`)
+const sounds = (run: ReturnType<typeof watch>): SoundFrame[] =>
+  run.socket.send.mock.calls.map(([data]) => JSON.parse(data) as SoundFrame).filter(frame => frame.type === 'harness_device_settings')
+const answer = (run: ReturnType<typeof watch>, request: SoundFrame, reply: Record<string, unknown>) =>
+  run.socket.emit('message', JSON.stringify({ type: 'harness_device_settings_result', payload: { ...reply, requestId: request.payload.requestId } }))
+
+describe('harness hardware watch: Sound', () => {
+  // The event loop's turns stay real: only the watch's own timers are the test's.
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
+  it("a muted line sends one request for the last status's dial", async () => {
+    const run = await attached()
+    sound(run, true)
+    expect(sounds(run)).toEqual([{ type: 'harness_device_settings', payload: { id: 'usb-1', patch: { muted: true }, requestId: expect.any(String) } }])
+    answer(run, sounds(run)[0]!, { ok: true, revision: 3, status: MUTED })
+    dial(run.socket, { ...USB, id: 'usb-2' })
+    sound(run, false)
+    expect(sounds(run)).toHaveLength(2)
+    expect(sounds(run)[1]).toEqual({ type: 'harness_device_settings', payload: { id: 'usb-2', patch: { muted: false }, requestId: expect.any(String) } })
+    expect(run.errors).toEqual([])
+    expect(run.printed).toEqual([USB_LINE])
+    await stillRunning(run)
+  })
+  it('lines that are not exactly one boolean muted send nothing', async () => {
+    const run = await attached()
+    for (const line of ['{"muted":"true"}', '{"muted":1}', '{"muted":null}', '{"muted":true,"quiet":true}', '{"muted":true,"id":"usb-9"}',
+      '{"patch":{"muted":true}}', '[{"muted":true}]', '"muted"', '{"muted":true']) run.stdin.emit('data', `${line}\n`)
+    expect(sounds(run)).toEqual([])
+    expect(run.errors).toEqual([])
+    sound(run, true)
+    expect(sounds(run)).toHaveLength(1)
+    await stillRunning(run)
+  })
+  it('while one is in flight the latest line waits, and is sent when the first answers', async () => {
+    const run = await attached()
+    for (const value of [true, false, true, false]) sound(run, value)
+    expect(sounds(run)).toHaveLength(1)
+    answer(run, sounds(run)[0]!, { ok: true })
+    expect(sounds(run)).toHaveLength(2)
+    expect(sounds(run)[1]!.payload).toMatchObject({ id: 'usb-1', patch: { muted: false } })
+    answer(run, sounds(run)[1]!, { ok: true })
+    expect(sounds(run)).toHaveLength(2)
+    expect(run.errors).toEqual([])
+    await stillRunning(run)
+  })
+  it('a waiting change keeps the dial it was read for', async () => {
+    const run = await attached()
+    sound(run, true)
+    sound(run, false)
+    dial(run.socket, { ...USB, id: 'usb-2' })
+    answer(run, sounds(run)[0]!, { ok: true })
+    expect(sounds(run)).toHaveLength(2)
+    expect(sounds(run)[1]!.payload).toMatchObject({ id: 'usb-1', patch: { muted: false } })
+    await stillRunning(run)
+  })
+  it('an error reply is one stderr line with its code, and nothing of the payload', async () => {
+    for (const code of ['DEVICE_OFFLINE', 'DEVICE_UPDATING', 'DEVICE_NOT_READY', 'DEVICE_WRITE_FAILED', 'SERVICE_UNAVAILABLE', 'BAD_DEVICE_SETTINGS', 'OWNER_REQUIRED']) {
+      const run = await attached()
+      sound(run, true)
+      answer(run, sounds(run)[0]!, { error: code, service: 'devices', status: MUTED })
+      expect(run.errors).toEqual([`sound: ${code}`])
+      expect(run.printed).toEqual([USB_LINE])
+      await stillRunning(run)
+    }
+  })
+  it('a reply that is not ok and names no code prints FAILED', async () => {
+    for (const reply of [
+      { error: 'The device at /dev/cu.usbmodem1 said no\nsound: OK' }, { error: 'x'.repeat(200) }, { error: 'X'.repeat(33) },
+      { error: 'DEVICE_OFFLINE\n' }, { error: 'device_offline' }, { error: 5 }, {},
+    ]) {
+      const run = await attached()
+      sound(run, true)
+      answer(run, sounds(run)[0]!, reply)
+      expect(run.errors).toEqual(['sound: FAILED'])
+      expect(run.printed).toEqual([USB_LINE])
+      await stillRunning(run)
+    }
+  })
+  it('a reply under another request id is not the answer', async () => {
+    const run = await attached()
+    sound(run, true)
+    sound(run, false)
+    for (const payload of [{ ok: true, requestId: 'another' }, { error: 'DEVICE_OFFLINE', requestId: 'another' }, { ok: true }]) {
+      run.socket.emit('message', JSON.stringify({ type: 'harness_device_settings_result', payload }))
+    }
+    expect(sounds(run)).toHaveLength(1)
+    expect(run.errors).toEqual([])
+    expect(run.printed).toEqual([USB_LINE])
+    await stillRunning(run)
+  })
+  it('before the daemon has answered, or with no dial, nothing is sent and stderr says so', async () => {
+    const run = watch()
+    await opened(run.socket)
+    sound(run, true)
+    expect(run.errors).toEqual(['sound: NOT_CONNECTED'])
+    connected(run.socket, ['dial-watch'])
+    sound(run, true)
+    expect(run.errors).toEqual(['sound: NOT_CONNECTED', 'sound: NO_DIAL'])
+    dial(run.socket, { attached: false })
+    sound(run, false)
+    expect(run.errors).toEqual(['sound: NOT_CONNECTED', 'sound: NO_DIAL', 'sound: NO_DIAL'])
+    expect(sounds(run)).toEqual([])
+    await stillRunning(run)
+  })
+  it('no answer in 12 s frees the slot, says so, and sends what waited', async () => {
+    const run = await attached()
+    sound(run, true)
+    sound(run, false)
+    await vi.advanceTimersByTimeAsync(11_999)
+    expect(run.errors).toEqual([])
+    expect(sounds(run)).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(run.errors).toEqual(['sound: NO_ANSWER'])
+    expect(sounds(run)).toHaveLength(2)
+    expect(sounds(run)[1]!.payload.patch).toEqual({ muted: false })
+    // The first's answer, late: its slot is gone.
+    answer(run, sounds(run)[0]!, { error: 'DEVICE_OFFLINE' })
+    expect(run.errors).toEqual(['sound: NO_ANSWER'])
+    await stillRunning(run)
+  })
+  it('stdin closing with a change in flight exits 0 and leaves no timer', async () => {
+    const run = await attached()
+    sound(run, true)
+    expect(sounds(run)).toHaveLength(1)
+    run.stdin.emit('end')
+    expect(await run.done).toBe(0)
+    expect(vi.getTimerCount()).toBe(0)
+    const closed = await attached()
+    sound(closed, true)
+    expect(sounds(closed)).toHaveLength(1)
+    closed.socket.emit('close', 1006, '')
+    expect(await closed.done).toBe(3)
+    expect(vi.getTimerCount()).toBe(0)
   })
 })

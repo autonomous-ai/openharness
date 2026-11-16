@@ -31,9 +31,9 @@ Taken from the orchestrator's brief; not reopened here.
 - **Thin over the CLI.** The app owns no daemon logic: install script, `harness start --if-down`, `harness login
   --json`, `harness auth status --json`, `harness hardware watch --json`, `harness device claude …`. The CLI and
   daemon update themselves.
-- **Out of this wave** (plan items only, no code): app self-update (tauri-plugin-updater), signing and notarization
-  per desktop/RELEASE.md (team 54DJVWMJCC), DMG, any release; the app holding macOS Automation/Accessibility
-  permissions for the helper (later wave, objc2).
+- **Out of this wave** (plan items only, no code): the app holding macOS Automation/Accessibility permissions for the
+  helper (later wave, objc2). App self-update, signing, notarization, the DMG and the release followed in
+  [the release design](2026-11-16-device-app-release-design.md).
 - **Boundaries:** no change to `cli/src/cable`, `cli/hook`, `cli/src/core`, `plugins/`, `devices/`.
 
 ## Decided in this brainstorm (orchestrator: override any of these)
@@ -230,6 +230,9 @@ while the desktop app runs (it has its own `HarnessStatusMenu`).
 | **Install** | when "Harness removed", or when an install failed and its window was closed (the dial line then stays "Setting up Harness") |
 | Account | "Signed in" (disabled), or **Sign in…** |
 | Claude Code | as above; absent when not supported or installed |
+| **Sound** (check item) | only while Harness runs and the dial is attached, not updating, and reports its settings; checked when the dial's sound is on ([design](2026-11-16-device-app-sound-design.md)) |
+| "Updating Harness Device…" (disabled) | while the app installs its own update ([design](2026-11-16-device-app-release-design.md)) |
+| **Update X…** | when the app cannot replace its bundle; opens `harness.autonomous.ai/device` ([design](2026-11-16-device-app-release-design.md)) |
 | separator | |
 | **Open Harness** | when the desktop app is installed (`open -b ai.autonomous.harness`) |
 | **Quit** | quits the app; the daemon keeps running |
@@ -269,6 +272,9 @@ System Settings ▸ Login Items, which the app respects: once registered, it doe
   exposed to it. Tauri capabilities allow only the app's own commands.
 - The app runs only the `harness` CLI found as above and the install script line above; every argument is fixed,
   nothing from the webview becomes a command line.
+- The app's own update installs only an archive signed with the committed key for the manifest's version, and the
+  relaunch is Tauri's restart, with nothing from the webview or the manifest in either
+  ([release design](2026-11-16-device-app-release-design.md#the-app-updates-itself)).
 - Only an `https:` authorize URL is opened. Logs carry no email, token or URL query (the authorize URL is logged
   without its query).
 
@@ -316,6 +322,6 @@ wave; the code keeps platform calls behind the traits above so it follows. The C
 
 ## Plan items for later waves (no code here)
 
-App self-update (tauri-plugin-updater); signing and notarization per desktop/RELEASE.md (team 54DJVWMJCC); DMG;
-release; Windows install (`install.ps1 -Desktop`) and packaging; the app holding macOS Automation/Accessibility
-permissions for the helper; a firmware update percent.
+Windows install (`install.ps1 -Desktop`) and packaging; the app holding macOS Automation/Accessibility permissions for
+the helper; a firmware update percent. App self-update, signing, notarization, the DMG and the release:
+[the release design](2026-11-16-device-app-release-design.md).

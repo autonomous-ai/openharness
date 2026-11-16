@@ -56,10 +56,11 @@
 // it draws or announces anything (an engine's first run after an update). `unreadableDescriptorMs` is how long,
 // once started, it holds a descriptor the daemon's process reader has no name for, as Codex 0.162.1 did for its
 // first seconds in a clean macOS VM (2026-10-12): every read of its process was refused until then ("the native
-// control descriptor type is unavailable"). `holdsRollout: false` (Codex) keeps no rollout open, so a test can
-// prove the daemon learned its home from something else (enginehomes.e2e.ts). `firstHookDelayMs` is how long
-// its first SessionStart takes to reach the daemon once the engine is up: the hook command starting on a
-// loaded machine, while the daemon has already found the engine and its conversation. `root` is the
+// control descriptor type is unavailable"). `helpDelayMs` is how long its help (`--help` or `-h`) takes to answer, as
+// a fresh Codex's first run held the launch script's help probe open for seconds. `holdsRollout: false` (Codex) keeps
+// no rollout open, so a test can prove the daemon learned its home from something else (enginehomes.e2e.ts).
+// `firstHookDelayMs` is how long its first SessionStart takes to reach the daemon once the engine is up: the hook
+// command starting on a loaded machine, while the daemon has already found the engine and its conversation. `root` is the
 // test's throwaway root, the only place whose hooks it will run, and `hookLog` where it notes every hook
 // it ran. `trustPrompt` makes it ask whether to trust a folder its own config has no answer for. Codex
 // refuses to resume a conversation it archived, as the real one does.
@@ -123,10 +124,15 @@ const heldHookUrl = new URL('./heldHook.mjs', import.meta.url).href
  * it is one the wrapper listens for (then the wrapper exits 0).
  */
 async function codexWrapper(config) {
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2)], {
+  const args = process.argv.slice(2)
+  const probe = args.length === 1 && ['--help', '-h', '--version', '-V'].includes(args[0])
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...args], {
     // Named `codex` from its start, as the native binary npm's launcher runs is: the daemon reads the rollout a
     // launcher's child holds open only from a child of the engine's own name (processTable.ts `engineChildren`).
-    argv0: 'codex',
+    // A probe's child keeps Node's name: the real Codex 0.167.0's is `<vendor>/codex --help`, which discovery skips,
+    // while `codex <script> --help` was recorded as the engine until it exited, and a close then said a conversation
+    // was kept (CLI end to end run 43746252131, shard 4; docs/plans/2026-11-16-codex-help-race-design.md).
+    ...(probe ? {} : { argv0: 'codex' }),
     stdio: 'inherit',
     env: { ...process.env, [CODEX_NATIVE]: JSON.stringify(config) },
   })
@@ -178,6 +184,9 @@ export async function run(engine, config = {}, { native = false } = {}) {
     return
   }
   if (args.includes('--help') || args.includes('-h')) {
+    // A slow first run of a fresh Codex held the launch script's help probe open (2.9 s measured,
+    // engines/kit/launchStartup.ts `ownedFlagProbe`); a test holds it open the same way, not unref'd so the process stays.
+    if (config.helpDelayMs) await new Promise((resolve) => setTimeout(resolve, config.helpDelayMs))
     // The flags the daemon looks for in the real CLIs' help before it launches them, less the ones this
     // release has dropped.
     process.stdout.write((engine === 'codex'
