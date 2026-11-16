@@ -342,6 +342,23 @@ describe('routeVoiceTask', () => {
     expect(d.confidence).toBeLessThanOrEqual(0.4)
   })
 
+  it('logs the task by its length and the candidates and pick by id, never the words or the names', async () => {
+    const transcript = 'SECRET-TRANSCRIPT fix the login bug'
+    const agents: RouterAgent[] = [
+      { id: 'abcdef0123456789', name: 'SECRET-NAME-A login work', engine: 'claude' },
+      { id: '9876543210fedcba', name: 'SECRET-NAME-B firmware', engine: 'codex' },
+    ]
+    rankAgents.mockResolvedValue([{ agentId: 'abcdef0123456789', score: 0.92, reason: 'SECRET-REASON the user wants login fixed' }] as never)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      await routeVoiceTask(transcript, agents)
+      const lines = log.mock.calls.map((call) => call.join(' '))
+      expect(lines).toContain(`[voice-route] task ${transcript.length} chars · candidates=2 [abcdef01/claude, 98765432/codex]`)
+      expect(lines).toContain('[voice-route] → picked id=abcdef0123456789 · confidence=0.92 · via=backend')
+      expect(lines.join('\n')).not.toContain('SECRET')
+    } finally { log.mockRestore() }
+  })
+
   it('RE-THROWS an AbortError (caller cancelled) rather than papering over it', async () => {
     routerImpl = async () => { throw Object.assign(new Error('aborted'), { name: 'AbortError' }) }
     await expect(routeVoiceTask('anything', AGENTS)).rejects.toThrow('aborted')
