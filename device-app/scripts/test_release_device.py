@@ -224,6 +224,12 @@ class ReleaseDeviceTests(unittest.TestCase):
                       result.stderr)
         self.assertIn("v0.1.1_device", self.tags(self.origin))
         self.assertIn("v0.1.1_device", self.tags(self.repo))
+        # The other way out the message names: a second run releases the next version.
+        self.assertIn("or run make release-device again to release the next version", result.stderr)
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.gh_calls()[-1], [*DISPATCH, "--ref", "v0.1.2_device", "-f", "version=0.1.2",
+                                               "-f", "publish=true"])
 
     def test_wait_follows_the_run_it_started(self):
         for args, dispatch in (
