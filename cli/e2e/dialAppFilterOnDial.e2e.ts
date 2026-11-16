@@ -87,7 +87,7 @@ function expectNamedOnly(script: string): void {
   }
 }
 
-/** Every `app filter:` line says only what the filter may say: a switch, the picker or the view, and never an app. */
+/** Every `app filter:` line says only what the filter may say: a switch, the picker, the view or a bring, and never an app. */
 function expectFilterLines(log: string): void {
   for (const line of log.split('\n').filter((line) => line.includes('app filter:'))) {
     expect(line).toMatch(/\[device\] app filter: (switched · (front|pick|empty|notice)|picker|view (tabs|apps) · (front|pick|window|empty)|bring · (ok|failed))$/)

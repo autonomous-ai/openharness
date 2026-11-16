@@ -2,8 +2,9 @@
  * A tap on an agent outside Harness brings it forward (docs/specs/2026-11-13-device-claude-orca.md): its own pane, where
  * its app has a way in that asks for no new permission, and on macOS the app itself, by its bundle id. Here is only what
  * every app shares: each pane, and whether it comes before its app, instead of it or after it, is its adapter's
- * (adapter.ts). Every value came from a hook: a bundle is one of the apps below, a pane is checked by its adapter, and
- * each command runs with no shell, every value one argument.
+ * (adapter.ts). Every value of a tap came from a hook: a bundle is one of the apps below, a pane is checked by its adapter,
+ * and each command runs with no shell, every value one argument. A pick in the dial's list of apps brings that app forward
+ * too (docs/plans/2026-11-16-dial-pick-brings-app-design.md): the dial's word is only a key into the bundles below.
  */
 import { isAbsolute } from 'node:path'
 import type { HostAdapter, Pane } from './adapter.js'
