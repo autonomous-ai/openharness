@@ -100,8 +100,19 @@ means installed apps can never update again.
 
 ## When it fails
 
-- A red run names its step. Fix the cause and cut the next version; never move a published tag.
-- The live manifest is untouched until the last write, so a failed run leaves the live release as it was.
+A red run names its step.
+
+- **Before `Publish`, nothing changes**, and `Publish` uploads the three files to the version's own folder before it
+  writes the manifest. A transient failure (Apple's notary service or stapler, the network, the runner) gets
+  **Re-run failed jobs** on the same run: the same commit, and `publish` takes the same artifact. The dmg's staple
+  already tries six times over about 8 minutes first.
+- **A fix that needs a new commit:** once a manifest is live, cut a higher version (the bump passes the failed tag).
+  While none is live (the first release), `--allow-no-manifest` refuses once a tag exists: delete the unreleased tag
+  (`git push origin :refs/tags/v0.1.0_device`, then `git tag -d v0.1.0_device`) and cut it again. Never move or delete
+  a tag a manifest has named.
+- **A failed `Verify`** comes after `Publish` wrote the manifest: it already names the new release, and a re-run is
+  refused as not above the live version. Download the dmg it names from the CDN and compare its sha256 with the
+  manifest's; a wrong one is fixed forward with a higher version.
 - A second run for the same version finishes only if the files already in the bucket equal its own; otherwise it
   stops before the manifest.
 - If the dispatch fails after the tag was pushed, the script prints the `gh workflow run` line: start the run by hand
