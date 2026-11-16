@@ -111,7 +111,7 @@ const SOUND_ANSWER_MS = 12_000
 const NOTIFY_ANSWER_MS = 12_000
 // All of a refused Sound or Notifications change that goes on stderr, and from there into the app's log: a code, never
 // the daemon's words.
-const SOUND_CODE = /^[A-Z][A-Z0-9_]{0,31}$/
+const CODE = /^[A-Z][A-Z0-9_]{0,31}$/
 
 /** One call per line of at most [max] bytes; a longer line is dropped whole, its start included. */
 function lines(max: number, line: (text: string) => void): (chunk: Buffer | string) => void {
@@ -287,7 +287,7 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
         // No answer at all (no listener, an older daemon's, its rate, none in 12 s) is told apart from a refusal, whose
         // code alone reaches stderr, never the listener's words.
         if (reply === null || typeof reply === 'number') deps.printError('notify: NO_ANSWER')
-        else if (reply.mode !== mode) deps.printError(`notify: ${typeof reply.error === 'string' && SOUND_CODE.test(reply.error) ? reply.error : 'FAILED'}`)
+        else if (reply.mode !== mode) deps.printError(`notify: ${typeof reply.error === 'string' && CODE.test(reply.error) ? reply.error : 'FAILED'}`)
         const next = notifyWaiting
         notifyWaiting = undefined
         if (next) sendNotify(next)
@@ -377,7 +377,7 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
           if (!sounding || reply?.requestId !== sounding.requestId) return
           if (reply.ok === true) return soundDone()
           // The daemon's own words (a path, a newline) never reach stderr: only a code does.
-          return soundDone(typeof reply.error === 'string' && SOUND_CODE.test(reply.error) ? reply.error : 'FAILED')
+          return soundDone(typeof reply.error === 'string' && CODE.test(reply.error) ? reply.error : 'FAILED')
         }
         if (frame?.type !== 'dial_status' || typeof frame.payload !== 'object' || frame.payload === null) return
         // The devices process usually starts with the dial, after this watch: it hears the app in front as the dial attaches.
