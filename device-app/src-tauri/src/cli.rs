@@ -805,6 +805,58 @@ mod tests {
         );
     }
 
+    #[test]
+    fn only_two_shapes_of_stderr_are_logged_as_they_come() {
+        let longest = format!("sound: {}", "A".repeat(32));
+        for line in
+            ["tabs stream replaced", "sound: DEVICE_OFFLINE", "sound: NO_DIAL", "sound: A", "sound: E2E_9", &longest]
+        {
+            assert!(logged_stderr(line.as_bytes()), "{line}");
+        }
+        let too_long = format!("sound: {}", "A".repeat(33));
+        let refused = [
+            "",
+            "sound: ",
+            "sound:NO_DIAL",
+            " sound: NO_DIAL",
+            "sound: NO_DIAL ",
+            "sound: device_offline",
+            "sound: DEVICE OFFLINE",
+            "sound: 9A",
+            "sound: _A",
+            "sound: /Users/person",
+            "sound: person@example.com",
+            &too_long,
+            "tabs stream replaced!",
+        ];
+        for line in refused {
+            assert!(!logged_stderr(line.as_bytes()), "{line}");
+        }
+        assert!(!logged_stderr(b"sound: \xff"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_watch_logs_a_sound_code_as_it_comes_and_no_other_stderr() {
+        let fake = Fake::new();
+        fake.script(
+            "hardware watch --json",
+            &["@err sound: DEVICE_OFFLINE", "@err sound: /Users/person/x", "@err sound: no dial", "started", "@hang"],
+        );
+        let mut child = fake.cli().spawn(&WATCH).unwrap();
+        assert_eq!(child.line(WAIT), Ok(Some("started".into())));
+        // Its end waits for stderr's, so the line, logged as it is read, comes first.
+        child.killer().kill();
+        assert_eq!(child.exit(WAIT), Ok(None));
+        assert_eq!(
+            fake.log().lines(),
+            [
+                "harness hardware watch --json: sound: DEVICE_OFFLINE",
+                "harness hardware watch --json: killed by a signal"
+            ]
+        );
+    }
+
     /// A stream that hands on each chunk it is sent, as one read, and ends once its sender is gone.
     struct Chunks(mpsc::Receiver<Vec<u8>>);
 
@@ -821,20 +873,27 @@ mod tests {
         let (send, chunks) = mpsc::channel();
         let (done, ended) = mpsc::channel();
         let (logged, said) = mpsc::channel();
-        tail(Chunks(chunks), done, move || logged.send(()).unwrap());
+        tail(Chunks(chunks), done, move |line| logged.send(line.to_string()).unwrap());
         // Split across reads, and found before the stream ends.
         send.send(b"tabs str".to_vec()).unwrap();
         send.send(b"eam replaced\n".to_vec()).unwrap();
-        assert_eq!(said.recv_timeout(WAIT), Ok(()));
+        assert_eq!(said.recv_timeout(WAIT), Ok("tabs stream replaced".into()));
+        send.send(b"sound: DEVICE_".to_vec()).unwrap();
+        send.send(b"OFFLINE\n".to_vec()).unwrap();
+        assert_eq!(said.recv_timeout(WAIT), Ok("sound: DEVICE_OFFLINE".into()));
         // A line that starts or ends with it, or holds it far into a long one, is not it.
         send.send(b"tabs stream replaced!\nx tabs stream replaced\n".to_vec()).unwrap();
         let long = [b"tabs stream replaced".repeat(400), b"\n".to_vec()].concat();
         send.send(long[..4096].to_vec()).unwrap();
         send.send(long[4096..].to_vec()).unwrap();
+        // Held only to one byte past the longest code, a longer one is still too long.
+        let long = [b"sound: ".to_vec(), b"A".repeat(8000), b"\n".to_vec()].concat();
+        send.send(long[..4096].to_vec()).unwrap();
+        send.send(long[4096..].to_vec()).unwrap();
         send.send(b"tabs stream replaced\n".to_vec()).unwrap();
         drop(send);
         assert_eq!(ended.recv_timeout(WAIT), Ok(()));
-        assert_eq!(said.try_iter().count(), 1);
+        assert_eq!(said.try_iter().collect::<Vec<_>>(), ["tabs stream replaced"]);
     }
 
     #[cfg(unix)]
