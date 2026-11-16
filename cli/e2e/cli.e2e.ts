@@ -21,6 +21,7 @@ import { pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { LAUNCHD_LABEL, SYSTEMD_UNIT, launchdPlist, systemdUnit } from '../src/harnessd/platform.js'
 import { savedDaemonPort } from '../src/lib/daemonRecord.js'
+import { assertNodeAlone } from '../src/testing/testNode.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 
@@ -178,6 +179,26 @@ describe('harness start, stop and status from the installed bundle', () => {
     expect(existsSync(join(dirname(dirname(m.node)), 'libexec', 'harnessd', 'harnessd'))).toBe(false)
     const stopped = await harness(m, 'stop')
     expect(stopped.status, said(stopped)).toBe(0)
+  })
+
+  // The product looks for npm-installed engines beside the Node the daemon runs on, whatever PATH says
+  // (lib/engineLaunch.ts `npmRuntimeBins`), and Node names itself by the real path behind the managed link: on a
+  // developer's Mac that was a version manager's folder, with their real engines in it (audit of 2026-11-16,
+  // docs/plans/2026-11-16-e2e-isolation-3-design.md). This reads one path and one listing, and makes no harness.
+  it('runs its core on the run\'s Node, alone in its folder, behind the managed link', async () => {
+    const m = await install()
+    const started = await harness(m, 'start')
+    expect(started.status, said(started)).toBe(0)
+    const master = pidOf(m)!
+    const core = (await statusOf(m)).corePid as number
+    seen.add(master).add(core)
+    // The core's line: the master names itself harnessd, which is all ps shows of it, and starts the core on its own Node.
+    const ran = commandOf(core).split(' ')[0]
+    // A yes or a no: at the base the path is the developer's own Node.
+    expect(ran === process.env.E2E_NODE_PATH, 'the core runs on the run\'s Node').toBe(true)
+    // Only after it: a refusal here names the run's folder, never the developer's.
+    expect(() => assertNodeAlone(ran)).not.toThrow()
+    expect((await harness(m, 'stop')).status).toBe(0)
   })
 
   it('without the service: start runs a master and core, an agent outlives stop in tmux and is back on the next start, and no platform is asked', async () => {
