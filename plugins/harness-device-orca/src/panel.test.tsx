@@ -1,6 +1,7 @@
 // The panel drawn by Orca's test kit, over a mock host that answers `dial.get` in the worker's place.
-import { assert, mockHost, mount, test, type TestPanel } from 'orca/testing'
+import { assert, hostError, mockHost, mount, test, type TestPanel } from 'orca/testing'
 import * as panel from './panel'
+import type { PanelContext } from 'orca'
 import type { DialState } from './protocol'
 
 const GET_HARNESS = 'https://harness.autonomous.ai/desktop'
@@ -82,6 +83,49 @@ test('the panel follows dial.changed with no refresh', async () => {
   await view.post('dial.changed', { state: 'unplugged' })
   assert.ok(view.find({ text: 'Dial unplugged.' }))
   assert.equal(view.find({ text: 'api' }), null)
+  await clean(view)
+})
+
+test('a dial.get answered after a dial.changed is not drawn over it', async () => {
+  // The kit's mount waits for each call the panel makes, so the late dial.get is a second setup's, once it has drawn.
+  let ctx: PanelContext | null = null
+  const answers: (DialState | Promise<DialState>)[] = [{ state: 'checking' }]
+  let answer: (state: DialState) => void = () => {}
+  answers.push(new Promise<DialState>((done) => (answer = done)))
+  const host = mockHost({ requests: { 'dial.get': () => answers.shift()! } })
+  const view = await mount(
+    {
+      default: panel.default,
+      setup(given) {
+        ctx = given
+        panel.setup(given)
+      },
+    },
+    { host }
+  )
+  panel.setup(ctx!)
+  // A post reaches the panel at once; it settles once the late dial.get is answered.
+  const posted = view.post('dial.changed', { state: 'attached' })
+  answer({ state: 'unplugged' })
+  await posted
+  assert.ok(view.find({ text: 'Dial attached.' }))
+  await clean(view)
+})
+
+test('a dial.get the worker refuses draws nothing and throws nothing; the next dial.changed is drawn', async () => {
+  const view = await mount(panel, {
+    host: mockHost({
+      requests: {
+        'dial.get': () => {
+          throw hostError('unavailable')
+        },
+      },
+    }),
+  })
+  await view.settled()
+  assert.deepEqual(view.findAll({ text: /\S/ }), [])
+  await view.post('dial.changed', { state: 'unplugged' })
+  assert.ok(view.find({ text: 'Dial unplugged.' }))
   await clean(view)
 })
 
