@@ -20,7 +20,7 @@ import { randomUUID } from 'node:crypto'
 import type { Socket } from 'node:net'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
-import { HERDR_KIND, MAX_LINE_BYTES } from './herdrClient.js'
+import { HERDR_KIND } from './herdrClient.js'
 import { CONTROL, MAX_TEXT, RUN_TIMEOUT_MS } from './orca.js'
 import { connectLines, socketStampOf } from './unixSocket.js'
 
@@ -33,6 +33,10 @@ export const HC_SILENCE_MS = 45_000
 export const HC_SEND_MS = 75_000
 /** The most terminals a subscription keeps. */
 export const HC_MAX_TERMINALS = 1024
+/** A line's bound on every connection to hc. Its snapshot is one line with every terminal of the core (hidden workers,
+ *  other machines' terminals, each command line twice), several times herdr's 1 MiB on a busy core; a `doc` line holds
+ *  no document (F5). */
+const HC_LINE_BYTES = 8 * 1024 * 1024
 /** The key a hooked copy and a listed copy of one agent share (registry.ts). */
 export const hcPaneKey = (address: string): string => `herdr-app:${address}`
 
@@ -206,7 +210,7 @@ export function createHcClient(deps: HcClientDeps): HcClient {
       }
       const deadline = setTimeout(() => finish({ ok: false, fault: 'timeout' }), deadlineMs)
       deadline.unref()
-      const socket = connectLines(deps.socketPath, lineOf(id, method, params), MAX_LINE_BYTES, (text) => {
+      const socket = connectLines(deps.socketPath, lineOf(id, method, params), HC_LINE_BYTES, (text) => {
         const body = parse(text)
         finish(body ? answerOf(body, id) : { ok: false, fault: 'bad_json' })
       }, (fault) => finish({ ok: false, fault }))
@@ -306,7 +310,7 @@ export function createHcClient(deps: HcClientDeps): HcClient {
     deadline = setTimeout(() => end('timeout'), RUN_TIMEOUT_MS)
     deadline.unref()
     const out = `${lineOf(hello, 'hello', { generation: 1 })}${lineOf(subscription, 'events.subscribe', {})}`
-    socket = connectLines(deps.socketPath, out, MAX_LINE_BYTES, line, (fault) => end(fault))
+    socket = connectLines(deps.socketPath, out, HC_LINE_BYTES, line, (fault) => end(fault))
     return handle
   }
 
