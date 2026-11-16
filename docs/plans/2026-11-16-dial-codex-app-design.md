@@ -94,6 +94,8 @@ names and bundle ids only.
   learnt app at once and walks nothing, so the page never flips back and forth.
 - Until the walk answers, the session keeps the app it had (a scan's `codex`), not the unknown app.
 - A walk that names no listed app, or fails, leaves the unknown app. A hook whose hints name an app is unchanged.
+- An answer for a session no longer listed is dropped; one for an ended session is kept for its caller but not applied
+  until it resumes. An answer that moves a session into or out of a tab app reads or drops its tty.
 - The host stays `detectHost(hints)`.
 
 This covers every app the scan knows, not only the Codex app: an agent whose hook names no app but whose parents run
