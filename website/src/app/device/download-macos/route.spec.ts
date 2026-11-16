@@ -58,6 +58,16 @@ describe("GET /device/download-macos", () => {
     expect(await res.text()).toMatch(/\(manifest unreachable\)\.\n$/);
   });
 
+  // The bucket answered: the fault is in what was published, not in the network.
+  it("reports 503 when the manifest is not JSON", async () => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response("<html>", { status: 200 })));
+
+    const res = await GET();
+
+    expect(res.status).toBe(503);
+    expect(await res.text()).toBe("Harness Device download is temporarily unavailable (manifest unreadable).\n");
+  });
+
   // A bucket that never answers must not hold the visitor's request open.
   it("reports 503 when the manifest does not answer within 10 s", async () => {
     vi.useFakeTimers();
