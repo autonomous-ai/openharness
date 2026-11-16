@@ -42,7 +42,7 @@ import type { LaunchOverrides } from './launchOverrides.js'
 import type { AgentLaunch, ProcessIdentity, RegisteredSession } from './registry.js'
 import type { TerminalDispatchControl, TerminalRuntimeRef } from './terminalTypes.js'
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
-import { processAmong, sameTerminalPlacement, terminalInstanceId, terminalRouteKey } from './terminalRuntime.js'
+import { processAmong, sameProcessIdentity, sameTerminalPlacement, terminalInstanceId, terminalRouteKey } from './terminalRuntime.js'
 import { resumesConversation } from './resumeCapability.js'
 
 export interface RestoreLaunch {
@@ -874,6 +874,17 @@ async function watchRestoredPane(
         if (!current()) return
         if (settled === 'gone') {
           if (!await relaunchFresh()) return
+          delayMs = 50
+          continue
+        }
+        // The process seen first can be a step of the launch, not the engine: Codex's script asks the binary's help
+        // first and runs it again after a failed start. Handed over on a process that has since gone, the route's
+        // next pass read the engine after it as a new agent and replaced this one (#4365): the hold stays until
+        // one process has run through a whole settling window.
+        const still = await deps.probeProcess(runtime, engine)
+        if (!current()) return
+        if (!sameProcessIdentity(still, identity)) {
+          deps.log(`[restore] ${engine} · agent ${agentId} · ${still ? 'another process replaced the one first seen' : 'the process first seen is gone'} · watching again`)
           delayMs = 50
           continue
         }

@@ -256,7 +256,8 @@ function harness(rows: RegisteredSession[], opts: { livePanes?: string[]; aliveP
     },
     probeProcess: async (runtime) => {
       const queue = h.probes.get(runtime.paneId) ?? []
-      return queue.length ? queue.shift()! : null
+      // The last answer stays: a pane goes on running the process it last showed.
+      return queue.length > 1 ? queue.shift()! : queue[0] ?? null
     },
     paneState: async (runtime) => {
       const queue = h.states.get(runtime.paneId) ?? []
@@ -1188,6 +1189,23 @@ describe('restoreAgents — waiting for the engine', () => {
     expect(h.respawns).toBe(1)
     expect(h.calls.some((call) => call.startsWith('unbind:'))).toBe(false)
     expect(h.calls).toContain('triggerHint:%0')
+  })
+
+  it.each([
+    ['another follows it', [identity(7), identity(8)]],
+    ['none shows for a while', [identity(7), null, identity(8)]],
+  ])('hands the pane over only on a process that ran through the whole settling window: the first one ends and %s', async (_, probes) => {
+    // Codex's launch script asks the binary's help before it starts the engine. A restore that took that probe for the
+    // engine let the route go on a process already gone, and the pass its hint asked for replaced the agent (#4365).
+    const h = harness([row()], { settleMs: 50 })
+    h.probes.set('%0', probes)
+    const seenByHint: Array<number | undefined> = []
+    h.deps.triggerHint = async () => { seenByHint.push(h.rows.get('agent-a')?.processIdentity?.pid) }
+    await restoreAgents(h.deps)
+    await settled(h, 1, 1)
+    expect(seenByHint).toEqual([8])
+    expect(h.respawns).toBe(1)
+    expect(h.calls.some((call) => call.startsWith('unbind:'))).toBe(false)
   })
 
   it('times out with the launch marked, never leaving the route held', async () => {
