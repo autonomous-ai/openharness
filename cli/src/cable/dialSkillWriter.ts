@@ -137,16 +137,21 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
     const result = writeSkill(skills)
     if (result === 'written') counts[engine].wrote++
     if (result === 'failed') return true
-    handle(engine, home)
-    if (result === 'theirs') return true
-    listed[engine].push(skills)
-    if (!save()) {
-      // Unlisted, a Turn off would never find it.
-      listed[engine].pop()
-      if (removeSkill(skills) === 'removed') counts[engine].removed++
+    if (result === 'theirs') {
+      handle(engine, home)
       return true
     }
-    return stillOn(engine, counts)
+    listed[engine].push(skills)
+    if (!save()) {
+      listed[engine].pop()
+      // Unlisted, a Turn off would never find what this wrote. One already there may be the command's, which its own
+      // Turn off finds.
+      if (result === 'written' && removeSkill(skills) === 'removed') counts[engine].removed++
+      return true
+    }
+    if (!stillOn(engine, counts)) return false
+    handle(engine, home)
+    return true
   }
 
   const startPass = (counts: Counts): void => {
