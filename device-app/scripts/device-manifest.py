@@ -21,6 +21,8 @@ import urllib.request
 BUCKET = "gs://s3-autonomous-upgrade-3/harness/device"
 CDN_BASE = "https://cdn.autonomous.ai/harness/device"
 ORIGIN_MANIFEST = "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/metadata.json"
+# The CDN's bot rules answer 403 to Python's default User-Agent ("Python-urllib/3.x").
+USER_AGENT = "harness-device-release"
 FILES = ("Harness-Device.dmg", "Harness-Device.app.tar.gz", "Harness-Device.app.tar.gz.sig")
 DMG, ARCHIVE, SIGNATURE = FILES
 # A release's files never change, so caches may keep them; the manifest must be read fresh every time.
@@ -195,7 +197,8 @@ def fetch(url, limit, timeout):
     """At most limit bytes of url, within about timeout seconds in all (a socket timeout alone bounds no transfer)."""
     deadline = time.monotonic() + timeout
     body = bytearray()
-    with urllib.request.urlopen(url, timeout=timeout) as response:
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         while len(body) < limit:
             # read1 returns what one socket read brings; read waits for all it asked for, past the deadline.
             chunk = response.read1(min(1 << 20, limit - len(body)))
