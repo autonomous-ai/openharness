@@ -87,7 +87,7 @@ The planner's own decisions below stand, among them: the inline mode (`HARNESSD_
 9. **Handled.** A home is handled once it was written, found ours or found the person's while the engine is On, never while it is Off. When the service reads Off it empties the list and forgets that engine's handled homes. A scan whose `stat` of `dial-skill.json` (inode, size, mtime) differs from the last one forgets both engines' handled homes and runs the start pass before it looks at its owners (answer 3); the first `stat` is taken at `started()`, and a missing file is a value of its own.
 10. **Log bounds.** A refusal is said once per home (`shape` once per run), the full list once per run.
 11. **The scan handles Codex only.** Claude Code's homes are written at the service's start (the spec's table).
-12. **The app.** `EngineChange` in `AppState` holds a change that runs or failed. Under a failure the action row is the one the last status read gives. The first screen waits for the account's answer alone.
+12. **The app.** `EngineChange` in `AppState` holds a change that runs or failed. Under a failure the action row is the failed change's own (Turn on after Could not turn on), as the spec says; this replaces the earlier choice of the last status read's action. The first screen waits for the account's answer alone.
 
 ## Design check (docs/feature-design-rules.md)
 

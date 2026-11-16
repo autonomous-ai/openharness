@@ -82,17 +82,17 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
 
 /// An engine's status row, and its action row unless a change runs.
 fn engine_rows(name: &str, enabled: bool, change: EngineChange, (on, off): (MenuAction, MenuAction)) -> Vec<MenuItem> {
-    let status = match change {
+    // A failure sits over its own change's action, so a click tries that change again.
+    let (status, turn_on) = match change {
         EngineChange::Running(true) => return vec![MenuItem::Text(format!("{name}: Turning on…"))],
         EngineChange::Running(false) => return vec![MenuItem::Text(format!("{name}: Turning off…"))],
-        EngineChange::Failed(true) => "Could not turn on",
-        EngineChange::Failed(false) => "Could not turn off",
-        EngineChange::None if enabled => "On",
-        EngineChange::None => "Off",
+        EngineChange::Failed(true) => ("Could not turn on", true),
+        EngineChange::Failed(false) => ("Could not turn off", false),
+        EngineChange::None if enabled => ("On", false),
+        EngineChange::None => ("Off", true),
     };
-    // A failure sits over the action of the last status read, so a click tries again.
     let action =
-        if enabled { MenuItem::Action(off, "Turn off".into()) } else { MenuItem::Action(on, "Turn on".into()) };
+        if turn_on { MenuItem::Action(on, "Turn on".into()) } else { MenuItem::Action(off, "Turn off".into()) };
     vec![MenuItem::Text(format!("{name}: {status}")), action]
 }
 
