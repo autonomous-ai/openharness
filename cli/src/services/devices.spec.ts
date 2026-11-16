@@ -269,8 +269,8 @@ const turnTo = (agentId: string): void => {
 }
 
 /** The listener the devices process opens (devicesProcess.ts), stood in for: what it was handed, its close, a front
- *  through its handler as `harness hardware watch` sends one, an attach as the harness-device mod sends one, and the tabs
- *  stream a watch holds open. */
+ *  through its handler as `harness hardware watch` sends one, an attach as the harness-device mod sends one, the tabs
+ *  stream a watch holds open, and the dial stream Orca's Harness Device plugin holds open. */
 function fakeListener() {
   type Handlers = Readonly<Record<string, ListenerHandler | ListenerStreamHandler>>
   const given: Array<{ handlers: Handlers; log: (line: string) => void }> = []
@@ -297,7 +297,23 @@ function fakeListener() {
     })).toBeUndefined()
     return stream
   }
-  return { given, close, listen, front, attach, tabs }
+  /** The lines the devices write on the dial stream, the stream saying it can take one, and its end. */
+  const dial = () => {
+    const lines: unknown[] = []
+    const ended = new AbortController()
+    let writable = (): void => {}
+    expect((given[0].handlers.dial as ListenerStreamHandler).open({ type: 'dial', standby: true }, {
+      write: (line) => {
+        if (ended.signal.aborted) return false
+        lines.push(line)
+        return true
+      },
+      onWritable: (run) => { writable = run },
+      ended: ended.signal,
+    })).toBeUndefined()
+    return { lines, writable: () => writable(), end: (reason: string) => ended.abort(reason) }
+  }
+  return { given, close, listen, front, attach, tabs, dial }
 }
 
 describe('the devices, as the core starts them', () => {
@@ -357,18 +373,19 @@ describe('the devices, as the core starts them', () => {
 })
 
 describe('the devices\' own listener (services/devicesListener.ts)', () => {
-  it('the devices open their listener once, with front, attach, the tab handler and the tabs stream', () => {
+  it('the devices open their listener once, with front, attach, the tab handler, the tabs stream and the dial stream', () => {
     const listener = fakeListener()
     start({ listen: listener.listen })
     expect(listener.listen).toHaveBeenCalledTimes(1)
     const [{ handlers, log }] = listener.given
-    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'tabs'])
+    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'tabs', 'dial'])
     expect(handlers.front).toMatchObject({ maxBytes: FRONT_MAX_BYTES, perSecond: FRONT_PER_SECOND })
     expect([FRONT_MAX_BYTES, FRONT_PER_SECOND]).toEqual([64, 10])
     expect(handlers.attach).toMatchObject({ maxBytes: ATTACH_MAX_BYTES, perSecond: ATTACH_PER_SECOND })
     expect([ATTACH_MAX_BYTES, ATTACH_PER_SECOND]).toEqual([96, 10])
     expect(handlers.tab).toMatchObject({ maxBytes: TAB_MAX_BYTES, perSecond: TAB_PER_SECOND })
     expect(handlers.tabs).toMatchObject({ maxBytes: TABS_MAX_BYTES, perSecond: TABS_PER_SECOND })
+    expect(handlers.dial).toMatchObject({ maxBytes: 64, perSecond: 1 })
     // The listener's own handlers: a name that is no app id, a session id that is no UUID, and an app with no tabs, are
     // refused there.
     expect(listener.front('Ghostty')).toBe(REFUSED)
@@ -439,6 +456,80 @@ describe('the devices\' own listener (services/devicesListener.ts)', () => {
     const nothing = start({ listen: async () => null })
     await nothing.port.stop()
     expect(logs).toEqual([])
+  })
+})
+
+describe('the dial stream, for Orca\'s Harness Device plugin (docs/specs/2026-11-16-orca-device-plugin.md)', () => {
+  const said = () => logs.filter((line) => line.startsWith('[devices] dial stream'))
+  const API = { name: 'api', app: 'Orca' }
+
+  it('the first line is {"attached":false}; a dial attaching, the agent it shows and the dial going are a line each', () => {
+    const listener = fakeListener()
+    start({ listen: listener.listen })
+    const stream = listener.dial()
+    stream.writable()
+    seen.host.watching!(true)
+    seen.host.dialShows!(API)
+    seen.host.watching!(false)
+    expect(stream.lines).toEqual([
+      { attached: false },
+      { attached: true, agent: null },
+      { attached: true, agent: { name: 'api', app: 'Orca' } },
+      { attached: false },
+    ])
+  })
+
+  it('the stream\'s open, its end and its count go to the devices\' log', async () => {
+    vi.useFakeTimers()
+    const listener = fakeListener()
+    start({ listen: listener.listen })
+    const stream = listener.dial()
+    stream.writable()
+    seen.host.watching!(true)
+    stream.end('gone')
+    expect(said()).toEqual(['[devices] dial stream · open', '[devices] dial stream · ended · gone'])
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(said()).toEqual([
+      '[devices] dial stream · open',
+      '[devices] dial stream · ended · gone',
+      '[devices] dial stream · 2 lines in the last minute',
+    ])
+  })
+
+  it('stopping the devices cancels the count\'s timer', async () => {
+    vi.useFakeTimers()
+    const listener = fakeListener()
+    const { port } = start({ listen: listener.listen })
+    listener.dial().writable()
+    await port.stop()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(said()).toEqual(['[devices] dial stream · open'])
+  })
+
+  it('with no listen given the dial\'s moves reach no stream and nothing throws', () => {
+    start()
+    expect(() => {
+      seen.host.watching!(true)
+      seen.host.dialShows!(API)
+      seen.host.dialShows!(null)
+      seen.host.watching!(false)
+    }).not.toThrow()
+    expect(said()).toEqual([])
+  })
+
+  it('no devices log line holds the agent\'s name or its app', async () => {
+    vi.useFakeTimers()
+    const listener = fakeListener()
+    start({ listen: listener.listen })
+    const stream = listener.dial()
+    stream.writable()
+    seen.host.watching!(true)
+    seen.host.dialShows!({ name: 'payroll-secrets', app: 'Ghostty' })
+    stream.end('stalled')
+    await vi.advanceTimersByTimeAsync(60_000)
+    const devices = logs.filter((line) => line.startsWith('[devices]'))
+    expect(devices).toHaveLength(3)
+    for (const line of devices) expect(line).not.toMatch(/payroll-secrets|Ghostty/)
   })
 })
 
