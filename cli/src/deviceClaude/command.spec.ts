@@ -485,7 +485,6 @@ describe('the dial skill', () => {
 })
 
 describe('harness device codex', () => {
-
   it('status without --json prints the same fields, indented', async () => {
     expect(await device(['codex', 'status'], { codex: () => false }))
       .toEqual({ code: 0, err: [], out: [JSON.stringify({ supported: true, installed: false, enabled: false }, null, 2)] })

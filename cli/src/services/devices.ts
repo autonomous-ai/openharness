@@ -398,7 +398,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log,
   }) : null
   if (skill) part.call('skill', () => skill.started())
-  const observed =env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, {
+  const observed = env.HARNESS_DEVICE_OBSERVED ?observedSource(core.dataDir, log, {
     adapters,
     modReady: (sessionId) => inbox.ready(sessionId),
     toMod: (sessionId, text) => inbox.deliver(sessionId, text),
