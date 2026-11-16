@@ -84,13 +84,15 @@ describe('openRouterComplete', () => {
     expect(await openRouterComplete(options)).toBeNull()
   })
 
-  it('logs an HTTP error by OpenRouter\'s own message, never the prompt its body can quote', async () => {
+  it('logs an HTTP error by its status and token code and type, never text that can quote the prompt', async () => {
     // A moderation refusal's body carries `metadata.flagged_input`: a piece of the prompt, which for the voice router
-    // is the person's spoken words and their sessions' names.
+    // is the person's spoken words and their sessions' names. Its `message`, or a free-text `type`, is not proven
+    // never to quote it either.
     const refusal = {
       error: {
         code: 403,
-        message: 'deepseek/deepseek-v4-flash requires moderation. Your input was flagged for "harassment".',
+        type: 'flagged: SECRET-TRANSCRIPT',
+        message: 'Your input "SECRET-TRANSCRIPT fix the login bug" was flagged for "harassment".',
         metadata: { reasons: ['harassment'], flagged_input: 'SECRET-TRANSCRIPT fix the login bug', provider_name: 'x' },
       },
     }
@@ -98,11 +100,15 @@ describe('openRouterComplete', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       expect(await openRouterComplete(options)).toBeNull()
-      expect(warn.mock.calls).toEqual([[`[openrouter] ${options.model} failed with HTTP 403: ${refusal.error.message}`]])
+      expect(warn.mock.calls[0]).toEqual([`[openrouter] ${options.model} failed with HTTP 403 · code=403`])
+      const limited = { error: { code: 'rate_limit_exceeded', type: 'requests', message: 'SECRET slow down' } }
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 429, text: async () => JSON.stringify(limited) }))
+      expect(await openRouterComplete(options)).toBeNull()
+      expect(warn.mock.calls[1]).toEqual([`[openrouter] ${options.model} failed with HTTP 429 · code=rate_limit_exceeded · type=requests`])
       // A body that is not OpenRouter's error shape says only its status.
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 502, text: async () => '<html>SECRET bad gateway</html>' }))
       expect(await openRouterComplete(options)).toBeNull()
-      expect(warn.mock.calls[1]).toEqual([`[openrouter] ${options.model} failed with HTTP 502`])
+      expect(warn.mock.calls[2]).toEqual([`[openrouter] ${options.model} failed with HTTP 502`])
       expect(warn.mock.calls.flat().join('\n')).not.toContain('SECRET')
     } finally { warn.mockRestore() }
   })
