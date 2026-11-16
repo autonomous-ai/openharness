@@ -725,7 +725,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       const { agentId } = event
       const recap = event.recap || event.text
       const onScreen = alreadyOnScreen(agentId)
-      const noted = (tier: Tier, rule: string): void => tally(cableHost.describe(agentId)?.name ?? '', tier, `rule:${rule}`, rule, 0)
+      const noted = (tier: Tier, rule: string): void => tally(tier, `rule:${rule}`, rule, 0)
       if (onScreen || event.subagent) { noted('silent', event.subagent ? 'subagent' : 'onScreen'); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, event.subagent); return }
       // No device attached (or the serial side disabled): nobody to tell, so the recap never leaves the machine.
       if (!cable.isConnected) { ended.delete(agentId); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, false); return }
@@ -738,13 +738,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       // here. A card without one (a cloud agent's, a recaps from before) is decided here.
       if (event.tier) {
         const lowered = needsYou && event.tier === 'alert' && event.failed !== true
-        if (lowered) tally(who?.name ?? '', 'list', 'rule:needs-you', 'needs-you', 0)
-        else tally(who?.name ?? '', event.tier, 'recaps', 'decided upstream', 0)
+        if (lowered) tally('list', 'rule:needs-you', 'needs-you', 0)
+        else tally(event.tier, 'recaps', 'decided upstream', 0)
         void cable.summary(agentId, recap, event.text, lowered ? 'list' : event.tier, event.fullText, false)
         return
       }
       // Returned, so the agent's next card waits behind this one (inOrder): a late recap must not follow turn.started.
-      return tierOf({ agent: who?.name ?? '', engine: who?.engine ?? '', recap, durationS: turn?.durationS ?? null,
+      return tierOf({ engine: who?.engine ?? '', recap, durationS: turn?.durationS ?? null,
         stats: turn?.stats ?? {}, subagent: false, onScreen: false, failed: event.failed === true, needsYou })
         .then((d) => d.tier, () => 'list' as const)
         .then((tier) => { void cable.summary(agentId, recap, event.text, tier, event.fullText, false) })
@@ -753,7 +753,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       began.delete(event.agentId); ended.delete(event.agentId)
       stats.take(event.agentId) // a failed turn's sums must not leak into the next turn
       starts.delete(event.agentId)
-      tally(cableHost.describe(event.agentId)?.name ?? '', 'alert', 'rule:failed', 'turn.error', 0)
+      tally('alert', 'rule:failed', 'turn.error', 0)
       void cable.turnError(event.agentId, event.text)
     }
   }
@@ -818,7 +818,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // "Working…" looks like from the outside.
     if (event.kind === 'state') { void cable.syncMachines(); return }
     if (event.kind === 'questionClosed') { inOrder(event.agentId, () => { void cable.questionClose(event.agentId, event.requestId) }); return }
-    if (event.kind === 'question') { tally(cableHost.describe(event.agentId)?.name ?? '', 'alert', 'rule:question', 'question', 0); inOrder(event.agentId, () => { void cable.question(event.agentId, event.requestId, event.questions) }); return }
+    if (event.kind === 'question') { tally('alert', 'rule:question', 'question', 0); inOrder(event.agentId, () => { void cable.question(event.agentId, event.requestId, event.questions) }); return }
     toDial({ ...event, subagent: event.subagent === true })
   }))
 
@@ -1246,7 +1246,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return
     }
     const question = cableQuestionFor(frame as Parameters<typeof cableQuestionFor>[0])
-    if (question) { questionsOpen.set(question.agentId, question.requestId); cableHost.harness.noteCard(question.agentId, 'question'); tally(cableHost.describe(question.agentId)?.name ?? '', 'alert', 'rule:question', 'question', 0); inOrder(question.agentId, () => { void cable.question(question.agentId, question.requestId, question.questions) }); return }
+    if (question) { questionsOpen.set(question.agentId, question.requestId); cableHost.harness.noteCard(question.agentId, 'question'); tally('alert', 'rule:question', 'question', 0); inOrder(question.agentId, () => { void cable.question(question.agentId, question.requestId, question.questions) }); return }
     // A shell result is only the stats' input: the dial is told the sums when the turn ends.
     const ran = frame as { type?: string; agentId?: string; payload?: { kind?: string; id?: string; command?: string; isError?: boolean; outputTail?: string } }
     if (ran.payload?.kind === 'reply_text' && ran.agentId) {

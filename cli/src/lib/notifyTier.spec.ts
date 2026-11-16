@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createTierDecider, fallbackTier, isTier, type TierInput } from './notifyTier.js'
 
 const base: TierInput = {
-  agent: 'lamp', engine: 'codex', recap: 'Shipped the thing.', durationS: 300,
+  engine: 'codex', recap: 'Shipped the thing.', durationS: 300,
   stats: { testsPassed: 640, testsFailed: 0, commits: 1 }, subagent: false, onScreen: false, failed: false,
 }
 const make = (extra: object = {}) => {
@@ -38,7 +38,7 @@ describe('notifyTier', () => {
   it('Needs you: an ordinary finished turn is a drawer row', async () => {
     const { decide, log } = make({ now: () => 0 })
     expect(await decide({ ...base, needsYou: true })).toEqual({ tier: 'list', by: 'rule:needs-you', detail: 'needs-you', ms: 0 })
-    expect(log.mock.calls[0][0]).toBe('notify · lamp · list · rule:needs-you · needs-you · 0ms')
+    expect(log.mock.calls[0][0]).toBe('notify · list · rule:needs-you · needs-you · 0ms')
   })
 
   it('Needs you lowers nothing else', async () => {

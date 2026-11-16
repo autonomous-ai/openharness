@@ -4713,7 +4713,7 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
     const { port } = needsYou()
     summary(port, 'a1', { recap: 'The requested build is ready.' })
     await vi.waitFor(() => expect(calls('summary')).toEqual([['a1', 'The requested build is ready.', 'done', 'list', undefined, false]]))
-    expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · .* · list · rule:needs-you · needs-you · \d+ms$/))
+    expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · list · rule:needs-you · needs-you · \d+ms$/))
     expect(logs.some((line) => line.includes('rule:turn'))).toBe(false)
   })
 
@@ -4724,7 +4724,7 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
     summary(port, 'a3', { recap: 'Deployed', tier: 'silent' })
     summary(port, 'a4', { recap: 'Deployed', tier: 'alert', failed: true })
     expect(calls('summary').map(([agentId, , , tier]) => [agentId, tier])).toEqual([['a1', 'list'], ['a2', 'list'], ['a3', 'silent'], ['a4', 'alert']])
-    expect(logs.filter((line) => line.includes(' · rule:needs-you · '))).toEqual([expect.stringMatching(/^\[cable\] notify · .* · list · rule:needs-you · needs-you · 0ms$/)])
+    expect(logs.filter((line) => line.includes(' · rule:needs-you · '))).toEqual([expect.stringMatching(/^\[cable\] notify · list · rule:needs-you · needs-you · 0ms$/)])
     expect(logs.filter((line) => line.includes(' · recaps · decided upstream'))).toEqual([
       expect.stringMatching(/ · list · recaps · /), expect.stringMatching(/ · silent · recaps · /), expect.stringMatching(/ · alert · recaps · /),
     ])
