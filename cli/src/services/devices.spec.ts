@@ -506,6 +506,20 @@ describe('the dial stream, for Orca\'s Harness Device plugin (docs/specs/2026-11
     expect(said()).toEqual(['[devices] dial stream · open'])
   })
 
+  it('a dial stream that throws costs the dial nothing: the throw is the stream\'s, and the core still hears the dial', () => {
+    const listener = fakeListener()
+    const { core } = start({ listen: listener.listen, faults: ['dialStream'] })
+    const stream = listener.dial()
+    stream.writable()
+    expect(() => {
+      seen.host.watching!(true)
+      seen.host.dialShows!(API)
+    }).not.toThrow()
+    expect(core.clients.dialWatching).toHaveBeenCalledWith(true)
+    expect(stream.lines).toEqual([{ attached: false }])
+    expect(logs).toContain('[devices] dialStream failed · injected fault: dialStream')
+  })
+
   it('with no listen given the dial\'s moves reach no stream and nothing throws', () => {
     start()
     expect(() => {
