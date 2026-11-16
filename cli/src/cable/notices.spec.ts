@@ -5,7 +5,7 @@ import { type NoticeCaller, Notices } from './notices.js'
 type Call = ['ask', string, string, unknown] | ['close', string, string]
 
 function desk(opts: { connected?: boolean; host?: string; hosts?: Record<string, string>; who?: NoticeCaller['who'] } = {}) {
-  const state = { connected: opts.connected ?? true, at: 0, ids: 0, resolved: 0 }
+  const state = { connected: opts.connected ?? true, at: 0, ids: 0, resolved: 0, held: new Set<string>() }
   const calls: Call[] = []
   const log: string[] = []
   const notices = new Notices({
@@ -15,6 +15,7 @@ function desk(opts: { connected?: boolean; host?: string; hosts?: Record<string,
       const agentId = ask.sessionId ?? 'a1'
       return { agentId, host: opts.hosts?.[agentId] ?? opts.host ?? 'orca', who: opts.who }
     },
+    held: (agentId) => state.held.has(agentId),
     ask: (agentId, id, questions) => calls.push(['ask', agentId, id, questions]),
     close: (agentId, id) => calls.push(['close', agentId, id]),
     uuid: () => `u${++state.ids}`,
@@ -110,6 +111,34 @@ describe('Notices', () => {
     calls.length = 0
     notices.attached()
     expect(calls).toEqual(before)
+  })
+
+  // The dial holds one question an agent: a notice asked over another would hide it, and drop its close.
+  it('a notice waits behind another question of its agent, and is asked as that one closes', () => {
+    const { notices, state, calls } = desk()
+    state.held.add('a1')
+    expect(notices.notify(notice(VPN))).toBe('shown')
+    notices.attached()
+    expect(calls).toEqual([])
+    expect(notices.rows('machine-1')).toEqual([])
+    state.held.delete('a1')
+    notices.reask('a1')
+    notices.reask('a2')
+    expect(calls).toEqual([['ask', 'a1', 'shown:u1', [{ key: 'notice', q: VPN, options: ['In Orca'] }]]])
+  })
+
+  it('a notice another question of its agent covered is asked again under its id, as that one closes', () => {
+    const { notices, state, asks } = desk()
+    notices.notify(notice(VPN))
+    state.held.add('a1')
+    notices.reask('a1')
+    expect(asks()).toHaveLength(1)
+    state.held.delete('a1')
+    notices.reask('a1')
+    expect(asks()).toEqual([asks()[0], asks()[0]])
+    notices.ended('a1')
+    notices.reask('a1')
+    expect(asks()).toHaveLength(2)
   })
 
   // A Harness agent's next turn reaches the devices only while a dial listens (services/recaps.ts): its card cannot

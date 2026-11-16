@@ -4790,7 +4790,8 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'processing', text: 'Working' } })
     port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'summary', text: 'done', recap: 'Built.' } })
     await vi.waitFor(() => expect(calls('summary')).toHaveLength(1))
-    expect(calls('question')).toHaveLength(3)
+    // The wait took the notice's place on the dial: it is asked again as the wait goes.
+    expect(calls('question')).toHaveLength(4)
     expect(calls('questionClose')).toHaveLength(1)
     expect(closed()).toEqual([])
     port.observed(hook('turn-start'))
@@ -4844,6 +4845,62 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     const [first] = calls('question')
     seen.host.watching!(true)
     expect(calls('question')).toEqual([first, first])
+  })
+
+  // The dial and its cable session hold one question an agent: one asked over another takes its place.
+  describe('another question of its agent', () => {
+    const QUESTIONS = [{ key: 'go', q: 'Deploy now?', options: ['Yes', 'No'] }]
+    const asked = (sessionId: string): ObservedAsked => ({ engine: 'claude', sessionId, event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/work/api' })
+    const asks = () => (calls('question') as Array<[string, string]>).map(([agentId, id]) => [agentId, id])
+
+    it('asked after the notice covers it, and the notice is asked again as that one closes', () => {
+      const { port, listener } = devices({ core: bound() })
+      port.observed(hook('turn-start'))
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })
+      const [own, outside] = ids()
+      port.card({ type: 'commander_question', agentId: 'h1', payload: { requestId: 'r1', questions: QUESTIONS } })
+      port.card({ type: 'commander_question_close', agentId: 'h1', payload: { requestId: 'r1' } })
+      port.observed(asked('sess-1'))
+      const wait = ids()[4]
+      port.observed(hook('turn-stop'))
+      expect(asks()).toEqual([['h1', own], [ID, outside], ['h1', 'r1'], ['h1', own], [ID, wait], [ID, outside]])
+      expect(calls('questionClose')).toEqual([['h1', 'r1'], [ID, wait]])
+    })
+
+    it('open as the notice comes holds it back until it closes', () => {
+      const { port, listener } = devices({ core: bound() })
+      port.card({ type: 'commander_question', agentId: 'h1', payload: { requestId: 'r1', questions: QUESTIONS } })
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual({ result: 'shown' })
+      port.observed(hook('turn-start'))
+      port.observed(asked('sess-1'))
+      const wait = ids()[1]
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      expect(asks()).toEqual([['h1', 'r1'], [ID, wait]])
+      // A drawer replaced whole keeps the question the dial shows, not the notice behind it.
+      port.unread([])
+      expect(calls('replaceNotifications')).toEqual([[[expect.objectContaining({ agentId: ID, text: expect.not.stringContaining('VPN') })]]])
+      port.card({ type: 'commander_question_close', agentId: 'h1', payload: { requestId: 'r1' } })
+      port.observed(hook('turn-stop'))
+      expect(asks()).toEqual([['h1', 'r1'], [ID, wait], ['h1', expect.stringMatching(/^shown:/)], [ID, expect.stringMatching(/^shown:/)]])
+      expect(calls('question').slice(2).map(([, , questions]) => questions)).toEqual([card('Harness'), card('Orca')])
+    })
+
+    it('a question left open by its turn holds back no notice of the next', () => {
+      const { port, listener } = devices({ core: bound() })
+      port.card({ type: 'commander_question', agentId: 'h1', payload: { requestId: 'r1', questions: QUESTIONS } })
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      expect(asks()).toEqual([['h1', 'r1'], ['h1', expect.stringMatching(/^shown:/)]])
+    })
+
+    it('or one left by a deleted agent', () => {
+      const { port, listener } = devices({ core: bound() })
+      port.card({ type: 'commander_question', agentId: 'h1', payload: { requestId: 'r1', questions: QUESTIONS } })
+      port.card({ type: 'agent_deleted', payload: { agentId: 'h1' } })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      expect(asks()).toEqual([['h1', 'r1'], ['h1', expect.stringMatching(/^shown:/)]])
+    })
   })
 
   // A Harness agent's turn_started is sent only while a dial is attached (services/recaps.ts): a turn during the unplug
