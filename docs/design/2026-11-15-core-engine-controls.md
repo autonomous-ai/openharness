@@ -188,3 +188,75 @@ Both failures reproduced locally before correcting the fixtures (71 passed, two 
 be answered after a readable capture. The authenticated worker assertion retains all fields and
 includes both connection hooks. Production behavior and golden files are unchanged by this correction.
 Final-head receipts and CI remain required; the measured CPU cost above remains unaccepted.
+
+## Proposed single display read (current-source profile, 16 November)
+
+The earlier profiles preceded the immutable-binding correction, so they did not attribute the remaining
+cost. A new, fixed A/B diagnostic used the exact `8fcfa7de5c` tree and the clean `452a65b5cb` candidate,
+the unchanged ten-Cursor workload, and identical inspector instrumentation. Both completed twenty
+pane observations and ten exact-Tab answers, with private-process/root cleanup verified. The input
+manifest is `a7559d11a6a8e14c0535d9c69ad8ff78473a130af0fd8094c32ca22b46b4398e` and the results remain in
+`/tmp/core-controls-cost-v2-profile-pair/`. Inspector CPU and idle readings are diagnostic overhead,
+not replacement acceptance measurements.
+
+The current bundle's sampled stacks map `selectedModel` and `workspace` through `byId`, `valid`,
+`sameBinding` and `sameProfile`. Their inclusive samples total 13.748 ms in the candidate versus
+4.903 ms in the parent; `toProject` totals 65.623 versus 53.350 ms. The fixture made 361 and 372
+profile-phase list requests respectively, so these totals are not equal-request benchmarks. Both
+frame paths in `backendSocket.toProject` and `main` ask for the model and workspace separately, and
+the code confirms that each performs the same current-binding verification. This identifies duplicate
+work worth removing, but does not attribute or promise to remove all of the earlier 30 ms regression.
+
+Proposed change, pending root review:
+
+- Return the two existing display fields together from one synchronous `display(session)` call. The
+  remote implementation performs the existing `isCurrent` and `byId` checks once, then copies only
+  `selectedModel` and `workspace` from that validated view. It never returns the view, state or control
+  object. Keep `selectedModel(session)` for consumers that need that single value; remove the standalone
+  workspace getter and the socket's two old provider slots in the same change.
+- Route both ordinary frames and pushed agent frames through the same display projection. Inline
+  compatibility returns the same two values from its existing state and selected-model interpretation,
+  preserving its unbound-session behavior. Wire fields, omitted workspace behavior and model IDs stay
+  byte-compatible. A missing provider still produces null model/no workspace.
+- Retain the exact binding comparison: every native/profile field, fresh route JSON including property
+  order and extra fields, process-start semantics, held state and evidence-revision presence. A copied
+  caller is still compared with the current row before reading the accepted view. Hold/release reads
+  still revoke old control/stage authority through `byId`; an empty workspace must not skip that work.
+
+For an ordinary current-row frame with a conversation, this removes one of two `isCurrent`/`byId`/`valid`
+chains: six registry resolutions become three, and two process-key constructions plus two route JSON
+serializations become one each. Copied callers retain their full additional comparison, once per
+projection. One small return object replaces the second validation; no result survives the call.
+The expected reduction is in operations, not a promised wall-time or CPU result.
+
+### Design
+
+- Growth: no retained data, cache, timer, queue, map or subscription; one ephemeral two-string/null
+  projection. Existing view and route bounds remain unchanged.
+- Concurrency: the projection is synchronous, with no await or callback between validation and copying
+  fields. Every subsequent call validates again. It grants no terminal/control authority.
+- Read cost: remove duplicate current-row validation from the two frame paths; no new native read,
+  catalog query, full-state poll or worker message. Single-field control readers keep their checks.
+- Scale: the same bounded views and route bytes; work per frame falls from two validations to one.
+  Reuse the unchanged ten-agent workload and report CPU/latency/RSS; the failed earlier comparison stays.
+- Compatibility: only internal provider composition changes. Public frames and private worker messages
+  are unchanged; last-30-day clients and inline/older-master composition retain their existing values.
+- Migration and rollback: no disk/schema change or migration; revert the getter/provider refactor.
+- Audience: existing authenticated frame routing is unchanged; the returned pair exposes only fields
+  already in those frames.
+- Identity: preserve every fresh binding check and copied-caller refusal; display facts never authorize
+  input or another login's work.
+- Failure: missing/stopped/stale views retain null results; supported hold display retention and stale
+  asynchronous completion refusal remain unchanged. No new failure, retry or wait is introduced.
+- Platforms: shared TypeScript for macOS/Linux/Windows. Local evidence is pinned Node 24.22.2 on macOS;
+  this proposal makes no Linux/native Windows acceptance claim.
+
+Before runtime edits, extend the real frame caller test to compose the one display provider and assert
+both fields/defaults; retain its red result against the old consumer. That red proves the new internal
+composition, not a pre-existing shipping frame bug. The measured CPU regression is the optimization's
+pre-fix evidence. Apply the existing all-binding-field, route/order/extra-property, null/undefined,
+process-start, copied-caller, hold/revision/ABA and late-control preservation tests to the combined
+projection, including a hold/release read with no workspace and mutation of a returned pair. Keep all
+golden frame bytes unchanged and preserve the startup-order assertion for the renamed provider. Then
+run affected tests, per-file coverage and typecheck before root selects native validation and a new
+fixed unprofiled comparison. No runtime edit or new native/performance run is included in this proposal.
