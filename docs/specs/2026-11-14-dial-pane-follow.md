@@ -102,7 +102,9 @@ it, and one timer runs per dial. When it fires and the dial still shows that age
 10 s timeout, one command per handle; a switch refused because one is running is dropped, not queued). It never runs
 `open -b`. A tap (`agent.open`) keeps #4296's behavior: switch, then Orca comes forward.
 
-- **No loop.** Orca reports no pane focus, so a switch never comes back as a prompt or a focus.
+- **No loop.** Orca reports no pane focus, so a switch never comes back as a prompt or a focus. Where Orca's CLI has
+  `watch-focus`, the dial follows its focus lines and its own switch is their echo
+  ([design](../plans/2026-11-16-dial-orca-focus-order-design.md)).
 - **Keyboard.** Orca stays where it is among the windows. If the person types in Orca, Orca's own focus moves to the new
   pane with the switch, so the next keys go there.
 - **Failure.** A switch that fails (Orca not running, the terminal gone) logs one line with the outcome and no handle,
