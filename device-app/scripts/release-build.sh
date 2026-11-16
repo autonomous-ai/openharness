@@ -32,7 +32,8 @@ if [[ $# -eq 3 ]]; then
 fi
 
 cd "$app/src-tauri"
-cargo tauri build --ci --target universal-apple-darwin --bundles app,dmg "${configs[@]}"
+# --locked reaches cargo build: a Cargo.lock that does not match Cargo.toml is refused, never rewritten.
+cargo tauri build --ci --target universal-apple-darwin --bundles app,dmg "${configs[@]}" -- --locked
 
 # CARGO_TARGET_DIR may put the target folder anywhere; cargo names it.
 target="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
