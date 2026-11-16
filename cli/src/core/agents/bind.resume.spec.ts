@@ -17,6 +17,7 @@ import { otherStreamRequests } from '../../engines/others/streamRequests.js'
 import { STREAM_OPEN } from '../../engines/worker/otherStreamProtocol.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
 import type { registry as Registry } from '../../lib/registry.js'
+import { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 
 const source = ts.createSourceFile('main.ts', readFileSync(join(import.meta.dirname, '../main.ts'), 'utf8'), ts.ScriptTarget.Latest, true)
 let initializer: ts.Expression | undefined
@@ -112,8 +113,9 @@ function setup(boundary: 'terminal' | 'store' | 'open' | 'none', pauseConfirmati
     OPENCODE_DB: '/fixture/opencode.db', KILO_DB: '/fixture/kilo.db', DEVIN_DB: '/fixture/devin.db' }, { timeout: 1000 }) as AttachDeps['storeOf']
   const runtimeProfiles = { transcriptFields: () => [], beginHydrate: vi.fn(), hydrate: vi.fn(), hydrateEvidence: vi.fn(),
     ingest: vi.fn(() => false), ingestConfig: vi.fn(async () => false), ingestPane: vi.fn(async () => false), capturePane: vi.fn(async () => null) } as AttachDeps['runtimeProfiles']
+  const terminalGone = vi.fn(async () => { await barrier('terminal'); return false })
   const attach = createAttach({ liveFor: () => undefined, resolve: id => registry.resolve(id),
-    terminalGone: async () => { await barrier('terminal'); return false }, normalizers: createSessionNormalizers(others), others,
+    terminalGone, normalizers: createSessionNormalizers(others), others,
     watcher: { addSession: vi.fn(async () => {}), removeSession: vi.fn(async () => {}), pollSession: vi.fn(async () => {}),
       hold: vi.fn(async () => null), tails: () => false },
     setInterpretationHold: registry.setInterpretationHold.bind(registry), announceSession: vi.fn(),
@@ -134,9 +136,12 @@ function setup(boundary: 'terminal' | 'store' | 'open' | 'none', pauseConfirmati
     storeStamp: async () => 'store-1', recordSeen: vi.fn(), now: Date.now,
   })
   const send = vi.fn()
+  const stoppedAgents = new StoppedAgentStore(join(directory, 'stopped-agents'))
+  stoppedAgents.save(saved)
+  vi.spyOn(stoppedAgents, 'save'); vi.spyOn(stoppedAgents, 'finishResume')
   const binding = createBinding({ registry, attachSession: requestAttach, hermesTerminal,
     mirror: { inheritSummary: vi.fn() }, forgetSession: id => attach.forget(id), clients: { send }, announceSession: vi.fn(),
-    stoppedAgents: { save: vi.fn(), finishResume: vi.fn(), get: () => saved }, syncRecapPool: vi.fn(),
+    stoppedAgents, syncRecapPool: vi.fn(),
     input: { forget: vi.fn(), awaitingConfirmation: () => false }, submitAgent: vi.fn(), deviceInput: { forget: vi.fn() },
     homes: { copilot: directory, grok: directory, agy: directory }, capturePane: async () => null,
     openclawPaneRead: () => false, openclawPaneDue: () => false, openclawStateDir: async () => null,
@@ -156,7 +161,7 @@ function setup(boundary: 'terminal' | 'store' | 'open' | 'none', pauseConfirmati
     expect(events.filter(event => event.type === 'turn_started')).toHaveLength(1)
     expect(events.filter(event => event.type === 'turn_ended')).toHaveLength(1)
   }
-  return { resumed, attach, requestAttach, confirm, attempts, entered, release, recordEntered, recordRelease, others, locateStore, send, liveTurn,
+  return { resumed, attach, requestAttach, confirm, attempts, entered, release, recordEntered, recordRelease, others, locateStore, send, liveTurn, stoppedAgents, terminalGone,
     installed: () => others.has(sessionId) && worker.all().length === 1 ? installed : undefined }
 }
 
@@ -193,12 +198,15 @@ it('can attach when native confirmation precedes the request', async () => {
   await t.liveTurn()
 })
 
-it('keeps a completed stream when terminal confirmation arrives after its attach', async () => {
+it('keeps a completed stream without repeating its saved record or terminal probe on native confirmation', async () => {
   const t = setup('none')
   expect(await t.requestAttach(t.resumed)).toBe(true)
   expect(t.installed()).toBeDefined()
+  t.terminalGone.mockClear()
   await t.confirm()
   await Promise.all(t.attempts)
+  expect({ saves: vi.mocked(t.stoppedAgents.save).mock.calls.length, finishes: vi.mocked(t.stoppedAgents.finishResume).mock.calls.length,
+    probes: t.terminalGone.mock.calls.length, attachments: t.requestAttach.mock.calls.length }).toEqual({ saves: 0, finishes: 0, probes: 0, attachments: 1 })
   expect(t.installed()).toBeDefined()
   expect(t.others.open).toHaveBeenCalledTimes(1)
   expect(t.others.forget).not.toHaveBeenCalled()
