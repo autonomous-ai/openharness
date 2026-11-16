@@ -162,9 +162,10 @@ else
     git tag -d "$tag" >/dev/null
     die "could not push $tag: removed it here, nothing started. Fix the push and run this again"
   }
-  # The tag stays: the run can still start on it, and a second run of this script would refuse it.
+  # The tag stays: the run can still start on it by hand, and a second run without a version releases the next version.
   if ! "${dispatch[@]}"; then
-    echo "ERROR $tag is pushed, but the release run did not start. Start it by hand:" >&2
+    echo "ERROR $tag is pushed, but the release run did not start. Start it by hand with the line below," \
+      "or run make release-device again to release the next version:" >&2
     echo "  ${dispatch[*]}" >&2
     exit 1
   fi
