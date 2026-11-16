@@ -129,13 +129,20 @@ jobs:
         run: |
           set -euo pipefail
           dmg="$RUNNER_TEMP/out/Harness-Device.dmg"
-          # --wait exits 0 on any final status, Invalid too, so the verdict is read from the answer.
-          result="$(xcrun notarytool submit "$dmg" --keychain-profile harness-notarize --wait --output-format json)"
+          # --wait exits 0 on any final status, Invalid too, so the verdict is read from the answer. A submit that fails
+          # outright must not end the step before its answer is printed and named below.
+          result="$(xcrun notarytool submit "$dmg" --keychain-profile harness-notarize --wait --output-format json)" || true
           echo "$result"
-          field() { printf '%s' "$result" | python3 -c 'import json, sys; print(json.load(sys.stdin).get(sys.argv[1], ""))' "$1"; }
-          if [[ "$(field status)" != Accepted ]]; then
-            echo "::error::Apple did not accept the dmg (status: $(field status))"
-            xcrun notarytool log "$(field id)" --keychain-profile harness-notarize || true
+          field() {
+            printf '%s' "$result" | python3 -c 'import json, sys; print(json.load(sys.stdin).get(sys.argv[1], ""))' "$1" 2>/dev/null || true
+          }
+          status="$(field status)"
+          if [[ "$status" != Accepted ]]; then
+            echo "::error::Apple did not accept the dmg (status: ${status:-no answer})"
+            id="$(field id)"
+            if [[ -n "$id" ]]; then
+              xcrun notarytool log "$id" --keychain-profile harness-notarize || true
+            fi
             exit 1
           fi
           # A ticket just issued can take a moment to be served.
