@@ -11,6 +11,7 @@ import '../core/app_version.dart';
 import '../core/sleep_aware.dart';
 import '../core/test_run.dart';
 import '../logging/app_log.dart';
+import '../logging/log_safe_error.dart';
 import '../logging/redact.dart';
 import '../core/models.dart';
 import 'local_daemon_transport.dart';
@@ -124,8 +125,8 @@ class WsRequestTimeout implements Exception {
 /// that had already thrown and could never run — the user got the wire code.
 ///
 /// [toString] is the sentence this used to be thrown with, so a call site that only prints it is
-/// unchanged.
-class WsRequestFailure implements Exception {
+/// unchanged. The logs write [logText] instead: the peer's [detail] can quote a prompt or a name.
+class WsRequestFailure implements Exception, LogSafeError {
   const WsRequestFailure({
     required this.responseType,
     required this.code,
@@ -151,6 +152,10 @@ class WsRequestFailure implements Exception {
   String toString() => detail == null || detail!.isEmpty
       ? '$responseType: $code'
       : '$responseType: $code — $detail';
+
+  /// A code that is not a short token (free text from the peer) shows as its length.
+  @override
+  String get logText => '${logToken(responseType)}: ${logToken(code)}';
 }
 
 /// One SSO-authenticated, machine-scoped connection to `/api/web-ws`.
