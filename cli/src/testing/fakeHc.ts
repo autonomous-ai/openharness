@@ -360,10 +360,12 @@ export async function fakeHc(): Promise<FakeHc> {
       if (!terminal) {
         const added = { ...to, address }
         fake.terminals.push(added)
-        // hc tells a new terminal whole, before its foreground is known, then the foreground (the recording).
+        // hc tells a new terminal whole before its program has reported and before its foreground is known, then the
+        // foreground, then the program's first status (the recording's t3, F5).
         const { foreground, ...created } = written(added)
-        told(address, 'created', created)
+        told(address, 'created', { ...created, reported: false, status: null, status_ms: null })
         if (foreground) told(address, 'foreground', foreground)
+        if (created.status) told(address, 'status', { records: {}, reported: true, status: created.status })
         return
       }
       const before = written(terminal)

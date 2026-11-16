@@ -213,7 +213,7 @@ describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11
     await s.until(() => listed(s).length === 2)
     server.change('t8', status('idle'))
     await s.until(() => listed(s).length === 3)
-    // A terminal hc creates, with the window's label and a status.
+    // A terminal hc creates with the window's label, listed once its program's first status follows.
     server.change('t12', { cwd: '/work/new' })
     await s.until(() => listed(s).length === 4)
     expect(listed(s)).toEqual(['herdr-app:t9', 'herdr-app:t7', 'herdr-app:t8', 'herdr-app:t12'])

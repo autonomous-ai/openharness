@@ -502,12 +502,14 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     server.change('t1025', { status: { state: 'working', app: 'claude-code' } })
     server.remove('t1')
     server.change('t2001', {})
-    await told(3)
+    await told(4)
     subscription.close()
     const idle = (address: string) => ({ ...agentIs('idle'), address })
     expect(calls).toEqual([
       ['snapshot', Array.from({ length: 1024 }, (_, at) => idle(`t${at + 1}`))],
       ['changed', { ...idle('t1'), live: false }],
+      // Created before its program reports, then its first status.
+      ['changed', { address: 't2001', live: true, space: true, cwd: '/work/hh' }],
       ['changed', idle('t2001')],
     ])
   })
