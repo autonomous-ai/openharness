@@ -147,4 +147,21 @@ describe('openRouterComplete', () => {
     }))
     await expect(openRouterComplete({ ...options, signal: controller.signal })).rejects.toThrow('aborted')
   })
+
+  it('re-throws an abort that lands during a body-parse failure as a bare AbortError, never the parse error', async () => {
+    // The SyntaxError quotes a window of the body (the model's answer, which can repeat the person's words), and the
+    // voice router lets this rejection reach whoever logs routeVoiceTask's failure.
+    const controller = new AbortController()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => {
+        controller.abort()
+        return JSON.parse('SECRET-TRANSCRIPT fix the login bug')
+      },
+    }))
+    const err = await openRouterComplete({ ...options, signal: controller.signal }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).name).toBe('AbortError')
+    expect(`${(err as Error).message}\n${(err as Error).stack}`).not.toContain('SECRET')
+  })
 })
