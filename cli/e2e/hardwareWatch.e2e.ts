@@ -196,7 +196,9 @@ describe('harness hardware watch with a dial: Notifications', () => {
   it("the menu's mode is kept by the daemon, and a finished turn follows it", async () => {
     const { d, desk } = await fresh()
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
-    // An agent outside a pane: its finished turn is decided on this computer, by its rules.
+    // An agent outside a pane: its finished turn is decided on this computer, by its rules. Started once the dial has its
+    // first list: the devices' process starts with the dial, and a SessionStart hook run before it is heard by nobody.
+    await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
     const engine = await Outside.start(d, 'in-ghostty', { TERM_PROGRAM: 'ghostty' })
     outside.push(engine)
     let run = watch(d)
@@ -220,7 +222,12 @@ describe('harness hardware watch with a dial: Notifications', () => {
     from = run.lines.length
     run.child.stdin!.write('{"notify":"full"}\n')
     await until('the watch to say Full again', () => run.lines.slice(from).some((line) => notifyOf(line) === 'full'), 30_000)
-    expect(await turnEnds(dial, engine, 'build it again', listedSince)).toMatchObject({ tier: 'alert' })
+    // The devices' process started again knows no agent outside a pane from before: a new one, once the dial has its
+    // list again.
+    await dial.next((m) => m.t === 'agents.end', 45_000, 'the list after the restart', listedSince)
+    const again = await Outside.start(d, 'in-ghostty-again', { TERM_PROGRAM: 'ghostty' })
+    outside.push(again)
+    expect(await turnEnds(dial, again, 'build it again', listedSince)).toMatchObject({ tier: 'alert' })
 
     await desk.unplug('E2E-A')
     await until('the watch to say no dial', () => run.lines.at(-1) === '{"attached":false}', 60_000)
