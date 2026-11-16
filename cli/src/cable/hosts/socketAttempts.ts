@@ -74,8 +74,7 @@ export class SocketAttempts {
 
   /** Its timer and its watch go; its retries and the stamp a subscription started on are forgotten. */
   stop(): void {
-    this.timer?.()
-    this.timer = undefined
+    this.cancel()
     this.unwatch?.()
     this.unwatch = undefined
     this.liveSince = undefined
@@ -149,6 +148,8 @@ export class SocketAttempts {
   }
 
   private retry(seconds: number): void {
+    // One attempt can fail twice (its list, then its close): it keeps one retry.
+    this.cancel()
     this.deps.log(`[${this.deps.name}] retry · ${seconds}`)
     this.timer = this.deps.after(seconds * 1000, () => {
       this.timer = undefined
@@ -159,6 +160,7 @@ export class SocketAttempts {
   /** No socket, or one given up on: nothing listed, no timer, and the watch held. A socket given up on is said stale only
    *  when it refused: a program that answered and never listed said why in its own lines. */
   private wait(stale: string | undefined, refused = false): void {
+    this.cancel()
     this.deps.close()
     this.deps.clear()
     this.stale = stale
@@ -167,6 +169,11 @@ export class SocketAttempts {
     this.unwatch ??= this.deps.watch(() => this.changed())
     // A socket made since the last look, before the watch started, is told by no change.
     this.changed()
+  }
+
+  private cancel(): void {
+    this.timer?.()
+    this.timer = undefined
   }
 
   private changed(): void {
