@@ -142,7 +142,7 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
     if (answer?.status !== 200) return set({ state: answer?.status === 409 ? 'elsewhere' : 'notRunning' })
     const opened = inputs.now()
     let skipped = 0
-    await eachLine(answer.chunks, (line) => {
+    const tooLong = await eachLine(answer.chunks, (line) => {
       if (line === REPLACED) return false
       const state = lineState(line)
       if (state) set(state)
@@ -150,6 +150,7 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
       return true
     })
     if (skipped > 0) log(`dial: ${skipped} lines skipped`)
+    if (tooLong) log('dial: line too long')
     if (inputs.now() - opened > LAST_WAIT_MS) wait = FIRST_WAIT_MS
   }
 
@@ -187,22 +188,23 @@ function readLink(ran: string | null): Link | null {
 }
 
 // Hands `take` each line until the chunks end or it says stop. A line that would hold more than LINE_BYTES with its
-// newline ends them before it is held.
-async function eachLine(chunks: AsyncIterable<Uint8Array>, take: (line: string) => boolean): Promise<void> {
+// newline ends them before it is held: true then.
+async function eachLine(chunks: AsyncIterable<Uint8Array>, take: (line: string) => boolean): Promise<boolean> {
   let held: Uint8Array = new Uint8Array(0)
   for await (const chunk of chunks) {
     let from = 0
     for (let end = chunk.indexOf(NEWLINE); end !== -1; end = chunk.indexOf(NEWLINE, from)) {
-      if (held.length + end - from >= LINE_BYTES) return
+      if (held.length + end - from >= LINE_BYTES) return true
       // Decoded whole, so a character split across two chunks is read as one.
       const line = decoder.decode(joined(held, chunk.subarray(from, end)))
       held = new Uint8Array(0)
       from = end + 1
-      if (!take(line)) return
+      if (!take(line)) return false
     }
-    if (held.length + chunk.length - from >= LINE_BYTES) return
+    if (held.length + chunk.length - from >= LINE_BYTES) return true
     held = joined(held, chunk.subarray(from))
   }
+  return false
 }
 
 // A copy, so what is held never keeps a whole chunk alive.
