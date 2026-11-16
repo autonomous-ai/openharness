@@ -121,6 +121,24 @@ is `cable.isConnected`, the gate on every follow, as in `followPrompt`.
   the reordered ring on the session's next list, as any ring change. A failed read keeps the previous rank and logs it.
   Reads run only while a dial is attached.
 
+### 4. An Orca agent is named by its tab (PM for Diego, 2026-11-16)
+
+Diego chose earlier that an Orca agent takes the title of its Orca tab. Example on his Mac: a terminal whose pane title
+is "harness root" sits in a tab he named "PM"; the dial must say "PM", and today says the folder or the pane title.
+
+- **Source:** the same layout read as the order (section 3): each `visualLayouts` tab's `title`, for every handle in
+  that tab's panes. No second read. `orcaTabOrder()` becomes `orcaTabs()`: the handles in tab order, each with its tab's
+  title, cleaned and cut as a hook's title is (`observedTitle`: whitespace folded, at most 64 characters, none with a
+  control character); a title it refuses is none.
+- **Precedence:** the name the person gave the session (the hook's `session_title`, a `user` name in Claude Code's
+  process record, #4333) > its Orca tab's title > the folder, as today. A tab whose title Orca made up ("Terminal 3", or
+  a title the program in it set) is still the tab's title: the dial says what the tab says.
+- **When:** each time the layout is read (a change of the Orca ring's members, section 3), the names follow. Renaming a
+  tab with no member change is seen at the next change: nothing polls.
+- **Where:** `observed.ts` names no app: it gains `setPaneNames(adapter, names)`, which replaces that adapter's names by
+  pane id; an agent with no name of its own and a pane with a name there is called by it. The devices process gives it
+  the Orca adapter's names after each read. Only Orca agents; nothing in the core.
+
 ### Measures
 
 Log lines, outcomes only, never a handle, an agent, a title or a path:
@@ -128,7 +146,7 @@ Log lines, outcomes only, never a handle, an agent, a title or a path:
 - `[device] focus · moved`, `[device] focus · skipped · echo | unknown agent | no tile | not in front`;
 - `[device] orca watch · started | unsupported | ended`;
 - `[device] prompt · skipped · focus followed`;
-- `[device] orca order · read | failed`.
+- `[device] orca order · read | failed` (the same read names the agents).
 
 ## Out of scope
 
@@ -162,13 +180,18 @@ on a tab drag with no member change; the Claude app, Terminal and other apps' ri
     swipe's echo line moves nothing; the Orca ring the dial gets is in the fake layout's tab order.
   - Without: no watch runs; a prompt still moves the dial.
 
+- Naming: `orcaTabs()` gives each handle its tab's title, cleaned, none for a bad one; an Orca agent with no name of its own
+  is called by its tab after a read, one with a `user` name or a hook title keeps it, one with no tab title keeps its
+  folder; a new read with another title renames it; the end-to-end dial shows the tab's title.
+
 **On a dial** (Diego's Mac, asked from the orchestrator when the pull request is ready): Orca's ring is in Orca's tab
-order (B); a prompt still moves the dial on Orca 1.4.256 (A cannot run there until Orca ships `watch-focus`).
+order (B); an Orca agent in a tab Diego named shows that name; a prompt still moves the dial on Orca 1.4.256 (A cannot run there until Orca ships `watch-focus`).
 
 ## Design notes
 
 - **Data.** Nothing stored. In memory: the latest focused handle, up to 8 recent switches, the Orca order (at most 256
-  ids), the probe answer per binary.
+  ids) and tab titles (at most 256, 64 characters each), the probe answer per binary. A tab title is the person's own
+  text: it reaches the dial as the agent's name, as a session's name does, and never a log.
 - **Cost.** No polling. One `orca --help` per Orca binary; one `watch-focus` process while a dial is attached and Orca
   has settled in front once, idle between focus changes; one `terminal list` per member change of Orca's ring.
 - **Security.** Orca's output is outside text: every handle is checked against `ORCA_HANDLE`, lines and stdout are

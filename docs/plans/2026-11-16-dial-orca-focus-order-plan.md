@@ -42,7 +42,9 @@
 | 6 One fake `orca` for the end-to-end daemons | `cli/e2e/harness/fakeOrca.ts` (new), `cli/e2e/harness/daemon.ts`, `cli/e2e/dialPaneFollow.e2e.ts` | none | high | none: no behavior (test files only) |
 | 7 Orca's ring follows Orca's tabs | `cli/src/services/devices.ts`, `devices.spec.ts` | 1, 3, 4 | xhigh | `devices.spec.ts` |
 | 8 The dial follows the pane focused in Orca | `cli/src/services/devices.ts`, `devices.spec.ts`, `cli/src/cable/cableSession.ts` | 1, 4, 7 | xhigh | `devices.spec.ts` |
-| 9 End to end, on a fake `orca` | `cli/e2e/dialOrcaFocus.e2e.ts` (new) | 6, 7, 8 | high | none: no behavior (the end-to-end test of Tasks 1 to 8) |
+| 9 End to end, on a fake `orca` | `cli/e2e/dialOrcaFocus.e2e.ts` (new) | 6, 7, 8, 12 | high | none: no behavior (the end-to-end test of Tasks 1 to 8) |
+| 11 An agent is called by its pane's name | `cli/src/cable/hosts/observed.ts`, `observed.spec.ts` | none | high | `observed.spec.ts` |
+| 12 An Orca agent is named by its tab | `cli/src/cable/hosts/orca.ts`, `orca.spec.ts`, `cli/src/services/devices.ts`, `devices.spec.ts` | 7, 8, 11 | high | `orca.spec.ts`, `devices.spec.ts` |
 | 10 Say it in the docs | `cli/AGENTS.md`, `cli/src/services/AGENTS.md`, `docs/specs/2026-11-14-dial-pane-follow.md`, `docs/specs/2026-11-14-dial-app-filter.md` | none | medium | none: no behavior |
 
 Longest chain: 2 → 3 → 7 → 8 → 9: five tasks.
@@ -572,9 +574,70 @@ The spec's "Decided" section holds each:
 - [ ] **Step 4: Run** the step 2 command, then `cd cli && npx vitest run src/cable src/architecture.spec.ts src/leanEntry.spec.ts && npm run test:core && npm run typecheck`. Expected: PASS, 100% for `services/devices.ts`.
 - [ ] **Step 5: Commit** `dial: the dial follows the pane focused in Orca`.
 
+### Task 11: An agent is called by its pane's name
+
+Added by the PM for Diego (2026-11-16): the spec's section 4. **Layer:** devices service process. **Depends on:** none.
+**Effort:** `high`.
+
+**Red test:** `cli/src/cable/hosts/observed.spec.ts`.
+
+**Files:** Modify `cli/src/cable/hosts/observed.ts`; test `cli/src/cable/hosts/observed.spec.ts`.
+
+**Interfaces:**
+- Produces: `ObservedSource.setPaneNames(adapter: string, names: ReadonlyMap<string, string>): void`. It replaces that
+  adapter's names (pane id → name) whole. `observed.ts` names no app (cli/src/services/AGENTS.md).
+- One rule for an agent's name, used everywhere `a.name` is set today (an event, the scan's first listing, the record
+  names): `entry.title ?? <the name of the entry's first pane that has one, among the adapters' names> ?? folderName(cwd, engine)`.
+  `entry.title` stays the person's own name (the hook's title, a `user` record name): it always wins.
+- After `setPaneNames`, every live entry's name is worked out again; when any changed, the source emits its change once
+  (as a name read from a record does).
+
+- [ ] **Step 1: Write the failing tests** in the `ObservedSource panes` describe (its `inOrca` and handles):
+  - `an agent in a pane with a name, and none of its own, is called by it`
+  - `its own title (the hook's) and a user record name win over the pane's name`
+  - `with no pane name it keeps its folder's name; names set again with that pane gone give it back its folder's`
+  - `new names rename it, and the change is told once; the same names again tell nothing`
+  - `names for another adapter, or for a pane it is not in, leave it alone`
+  - `an agent in a multiplexer inside Orca (no Orca pane) is not renamed`
+- [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/observed.spec.ts`. Expected: FAIL in the new tests only.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** `cd cli && npx vitest run src/cable/hosts && npm run typecheck`. Expected: PASS.
+- [ ] **Step 5: Commit** `dial: an agent is called by its pane's name when it has none of its own`.
+
+### Task 12: An Orca agent is named by its tab
+
+Added by the PM for Diego (2026-11-16): the spec's section 4. **Layer:** devices service process. **Depends on:**
+Tasks 7, 8 (they hold `devices.ts`) and 11. **Effort:** `high`.
+
+**Red test:** `cli/src/cable/hosts/orca.spec.ts`, then `cli/src/services/devices.spec.ts`.
+
+**Files:** Modify `cli/src/cable/hosts/orca.ts`, `cli/src/services/devices.ts`; test `orca.spec.ts`, `devices.spec.ts`.
+
+**Interfaces:**
+- `orca.ts`: `orcaTabOrder()` is replaced by `orcaTabs(): Promise<Array<{ handle: string; title?: string }> | null>`:
+  the same walk, order, bounds and null/[] rules; each handle carries its tab's `title` through `observedTitle`
+  (`./observedTitle.js`), none for a title it refuses or one that is not a string. One read: no second command.
+- `devices.ts`: the read Task 7 added calls `orcaTabs()`; the rank is built from its handles as before; after each read
+  that lands, `observed.setPaneNames('orca', <handle → title for each handle with one>)`. A failed read changes no name.
+  The test fakes (`fakeOrcaReads`, `inertOrcaReads`) take `orcaTabs`.
+
+- [ ] **Step 1: Write the failing tests.**
+  - `orca.spec.ts` (the tab order describe): `each handle carries its tab's title, every pane of a split tab the same`;
+    `a title over 64 characters is cut, one with a control character or not a string is none`; the existing order tests
+    read `.map((t) => t.handle)`.
+  - `devices.spec.ts` (Task 7's describe): `after a read, an Orca agent with no name of its own is called by its tab, and
+    the dial's list says it`; `a session the person named keeps its name`; `a later read with another title renames
+    it`; `a failed read renames nobody`; `no log line holds a title`.
+- [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/orca.spec.ts src/services/devices.spec.ts`. Expected:
+  FAIL in the new tests only.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** the step 2 command, then `cd cli && npx vitest run src/cable && npm run test:core && npm run typecheck`.
+  Expected: PASS, 100% for `services/devices.ts`.
+- [ ] **Step 5: Commit** `dial: an Orca agent is named by its Orca tab`.
+
 ### Task 9: End to end, on a fake `orca`
 
-**Layer:** test. **Depends on:** Tasks 6, 7 and 8. **Effort:** `high`.
+**Layer:** test. **Depends on:** Tasks 6, 7, 8 and 12. **Effort:** `high`.
 
 **Red test:** none: no behavior (it adds the end-to-end test of what Tasks 1 to 8 built).
 
@@ -600,6 +663,9 @@ The spec's "Decided" section holds each:
     3. C starts. The dial's latest list (the `agent` frames between its last `agents.begin` and `agents.end`) becomes C, A, B. The log has `[device] orca order · read`.
     4. Every `focus` the dial heard since C started names A, and one comes after that list's `agents.end`.
     5. `orca.runs()` is still A's one switch.
+    6. With C's tab titled `"PM"` in the fake layout (a title the fake writes per tab: extend `FakeOrca.layout` in this
+       file's own helper or Task 6's, whichever the fake allows without changing its other callers) and C with no name of
+       its own, the dial's `agent` frame for C names it `PM`.
   - `without watch-focus (Orca 1.4.256): no watch runs, and a prompt still moves the dial`:
     1. `watchFocus: false`. A and B listed, the dial turned to A, Orca in front.
     2. `typedUntilMoved(d, dial, b)`: one `[device] prompt · moved`.
