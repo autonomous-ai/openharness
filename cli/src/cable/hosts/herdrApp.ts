@@ -22,11 +22,14 @@ import type { PaneSwitch } from './types.js'
 export const HERDR_APP = '/Applications/Herdr.app/Contents/MacOS/Herdr'
 
 export interface HerdrAppDeps extends OrcaDeps {
-  client: Pick<HcClient, 'prompt' | 'socketStamp'>
+  client: Pick<HcClient, 'prompt'>
   /** Herdr is the app in front. */
   inFront(): boolean
-  /** Whether Herdr's window shows that terminal: the hc source lists it (hcSource.ts shows). */
+  /** Whether Herdr's window shows that terminal: a live one labeled `herdr.space`, with an agent or none (hcSource.ts
+   *  shows). */
   shows(address: string): boolean
+  /** Whether hc reports an agent's status for that live terminal, shown or not (hcSource.ts reports). */
+  reports(address: string): boolean
   /** The devices follow the default hc session, the one session whose addresses the hook sends (notify.mjs): another
    *  session counts its terminals from t1 again, where a hook's address is another agent's. None: no hook's is taken. */
   hookIds?: boolean
@@ -115,7 +118,8 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
     },
     ...(mac ? {
       type: async (pane: Pane, text: string, engine: string) => (await prompt(pane.id, engine, text)).outcome === 'sent',
-      canType: () => deps.client.socketStamp() !== undefined,
+      // hc types into any terminal by its address: one whose program reports no agent's status is at no agent's prompt.
+      canType: (pane: Pane) => deps.reports(pane.id),
     } : {}),
     paneKey: (pane) => hcPaneKey(pane.id),
     prompt,
