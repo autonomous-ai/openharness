@@ -1603,3 +1603,27 @@ disposing. All 118 Close service cases pass (24.16 s,
 passed in the preceding combined run. Runtime code and authority are unchanged;
 this fixture adds no timer, retry or storage behavior. Earlier cost failures and
 the remaining whole-package acceptance requirements still apply.
+
+### Matched cost after owner serialization and recovery corrections
+
+The fixed 83-case ABBA comparison at baseline `8fcfa7d` and candidate `546f1a0`
+passed all 332 behavior, provenance and cleanup checks. It used the unchanged
+reviewed v3 runner and workload with native OS access. Inputs:
+`/tmp/harness-registry-cost-v6/inputs.json`, SHA-256
+`95a2eba7999e469430c0c57871ba9e3aab7f73d3664b367e163684af66d278c0`.
+Result: `/tmp/core-registry-cost-v6-native-abba/manifest.json`, SHA-256
+`2dbcd1964dbbe0e7a486d9d83b10e80f3c99da82d8bb8d20bf3dddfdb95d1b15`.
+
+Median CPU totals for 20 operations, baseline to candidate: 16-row unchanged
+54.056 to 92.226 ms, 16-row changed 188.256 to 253.284 ms, 160-row unchanged
+118.306 to 159.785 ms, and 160-row changed 548.889 to 550.671 ms. For 160-row
+changed operations, p95 elapsed time was 122.899 to 123.698 ms, p95 heartbeat
+delay 123.200 to 2.989 ms, and maximum sampled RSS 121.367 to 169.523 MiB.
+For unchanged 160-row operations, sampled RSS was 87.451 to 170.811 MiB.
+These samples do not establish peak memory or attribute the remaining cost.
+
+Cost acceptance still fails: unchanged saves and smaller writes use more CPU,
+and memory is higher. Legacy-lock results compare an old refusal with a new
+success, so they are excluded from equal-outcome cost comparison. All previous
+failed comparisons remain retained. No further runtime optimization or full
+package acceptance is claimed by this measurement.
