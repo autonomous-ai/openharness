@@ -448,7 +448,9 @@ mod tests {
     use crate::state::StateFile;
     use crate::tabs::{NoTabs, Selected, TabApp, TabError, TabScripts};
     use crate::testing::{Fake, alive, fake_harness, wait_gone};
-    use crate::types::{ClaudeStatus, DialStatus, Effect, Event, LoginEvent, MenuItem, Output, Saved, UpdateFailure};
+    use crate::types::{
+        ClaudeStatus, DialStatus, Effect, Event, LoginEvent, MenuItem, NotifyMode, Output, Saved, UpdateFailure,
+    };
     use crate::update::AppUpdater;
     use std::collections::VecDeque;
     use std::fs;
@@ -989,6 +991,7 @@ mod tests {
             Effect::CancelLogin,
             Effect::SetClaude(true),
             Effect::SetSound(true),
+            Effect::SetNotify(NotifyMode::You),
             Effect::OpenUrl("https://id.example/a".into()),
             Effect::OpenDesktop,
             Effect::RegisterLoginItem,
@@ -1093,6 +1096,26 @@ mod tests {
         assert_eq!(w.fake.stdin(), [off, on]);
         let lines = w.fake.log().lines();
         assert!(lines.iter().all(|line| !line.contains("muted")), "{lines:?}");
+        assert_eq!(w.rest(), []);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_notifications_change_is_written_to_the_watch() {
+        let (you, full) = (r#"{"notify":"you"}"#, r#"{"notify":"full"}"#);
+        let w = world();
+        assert!(w.runner.find_cli());
+        w.fake.script("hardware watch --json", &RECORDING);
+        assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
+        assert_eq!(w.runner.run(Effect::SetNotify(NotifyMode::You)), None);
+        assert_eq!(w.runner.run(Effect::SetNotify(NotifyMode::Full)), None);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [you, full]);
+        // With no watch running there is nothing to write to.
+        assert_eq!(w.runner.run(Effect::SetNotify(NotifyMode::You)), None);
+        assert_eq!(w.fake.stdin(), [you, full]);
+        let lines = w.fake.log().lines();
+        assert!(lines.iter().all(|line| !line.contains("notify")), "{lines:?}");
         assert_eq!(w.rest(), []);
     }
 

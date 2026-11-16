@@ -121,7 +121,7 @@ mod tests {
     use crate::cli::{HarnessCli, find_cli};
     use crate::tabs::TabApp;
     use crate::testing::{Fake, wait_gone};
-    use crate::types::{DialStatus, Event, MemoryLog};
+    use crate::types::{DialStatus, Event, MemoryLog, NotifyMode};
     use std::io;
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
@@ -329,6 +329,24 @@ mod tests {
         watch.sound(false);
         assert_eq!(fake.stdin(), [off, on]);
         assert_eq!(fake.log().lines(), ["harness hardware watch --json: exit 0"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_notify_line_reaches_the_watch() {
+        let (you, full) = (r#"{"notify":"you"}"#, r#"{"notify":"full"}"#);
+        let fake = Fake::new();
+        fake.script("hardware watch --json", &[r#"{"attached":true}"#, "@record"]);
+        let (watch, events) = start(&fake);
+        assert_eq!(events.recv_timeout(WAIT), Ok(dial(true, None, None)));
+        watch.notify(NotifyMode::You);
+        watch.notify(NotifyMode::Full);
+        watch.stop();
+        assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(0))));
+        assert_eq!(fake.stdin(), [you, full]);
+        // A watch that has ended takes nothing.
+        watch.notify(NotifyMode::You);
+        assert_eq!(fake.stdin(), [you, full]);
     }
 
     #[cfg(unix)]
