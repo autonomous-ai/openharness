@@ -15,7 +15,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::menu::{CheckMenuItem, Menu, MenuItem as NativeItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem as NativeItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
@@ -222,18 +222,30 @@ fn raises(last: Option<&View>, next: &View, asked: bool) -> bool {
 fn native_menu(handle: &AppHandle, items: &[MenuItem]) -> tauri::Result<Menu<tauri::Wry>> {
     let menu = Menu::new(handle)?;
     for item in items {
-        match item {
-            MenuItem::Text(text) => menu.append(&NativeItem::new(handle, text, false, None::<&str>)?)?,
-            MenuItem::Action(action, text) => {
-                menu.append(&NativeItem::with_id(handle, menu_id(*action), text, true, None::<&str>)?)?
-            }
-            MenuItem::Check(action, text, checked) => {
-                menu.append(&CheckMenuItem::with_id(handle, menu_id(*action), text, true, *checked, None::<&str>)?)?
-            }
-            MenuItem::Separator => menu.append(&PredefinedMenuItem::separator(handle)?)?,
-        }
+        menu.append(native_item(handle, item)?.as_ref())?;
     }
     Ok(menu)
+}
+
+/// A submenu's items are drawn by the rules the top level uses.
+fn native_item(handle: &AppHandle, item: &MenuItem) -> tauri::Result<Box<dyn IsMenuItem<tauri::Wry>>> {
+    Ok(match item {
+        MenuItem::Text(text) => Box::new(NativeItem::new(handle, text, false, None::<&str>)?),
+        MenuItem::Action(action, text) => {
+            Box::new(NativeItem::with_id(handle, menu_id(*action), text, true, None::<&str>)?)
+        }
+        MenuItem::Check(action, text, checked) => {
+            Box::new(CheckMenuItem::with_id(handle, menu_id(*action), text, true, *checked, None::<&str>)?)
+        }
+        MenuItem::Submenu(text, items) => {
+            let submenu = Submenu::new(handle, text, true)?;
+            for item in items {
+                submenu.append(native_item(handle, item)?.as_ref())?;
+            }
+            Box::new(submenu)
+        }
+        MenuItem::Separator => Box::new(PredefinedMenuItem::separator(handle)?),
+    })
 }
 
 /// A menu item's id is its action's name.
@@ -245,6 +257,8 @@ fn menu_id(action: MenuAction) -> &'static str {
         MenuAction::ClaudeOff => "claude_off",
         MenuAction::SoundOn => "sound_on",
         MenuAction::SoundOff => "sound_off",
+        MenuAction::NotifyFull => "notify_full",
+        MenuAction::NotifyYou => "notify_you",
         MenuAction::Update => "update",
         MenuAction::OpenHarness => "open_harness",
         MenuAction::Quit => "quit",
@@ -253,7 +267,7 @@ fn menu_id(action: MenuAction) -> &'static str {
 
 fn menu_action(id: &str) -> Option<MenuAction> {
     use MenuAction::*;
-    [Install, SignIn, ClaudeOn, ClaudeOff, SoundOn, SoundOff, Update, OpenHarness, Quit]
+    [Install, SignIn, ClaudeOn, ClaudeOff, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, Quit]
         .into_iter()
         .find(|action| menu_id(*action) == id)
 }

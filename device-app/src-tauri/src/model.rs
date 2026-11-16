@@ -1,6 +1,8 @@
 //! What the menu shows and which screen is due, from the app's state.
 
-use crate::types::{AppState, AppUpdate, ClaudeStatus, CliState, Daemon, MenuAction, MenuItem, Screen};
+use crate::types::{
+    AppState, AppUpdate, ClaudeStatus, CliState, Daemon, DialStatus, MenuAction, MenuItem, NotifyMode, Screen,
+};
 
 /// The menu's first, disabled row: the first of these that applies.
 pub fn dial_line(state: &AppState) -> String {
@@ -51,10 +53,19 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
         None => {}
     }
     // The check is what the dial reports; the item carries the action its click does.
-    match sound_muted(state) {
+    match settable(state).and_then(|dial| dial.muted) {
         Some(false) => items.push(MenuItem::Check(MenuAction::SoundOff, "Sound".into(), true)),
         Some(true) => items.push(MenuItem::Check(MenuAction::SoundOn, "Sound".into(), false)),
         None => {}
+    }
+    if let Some(mode) = settable(state).and_then(|dial| dial.notify) {
+        items.push(MenuItem::Submenu(
+            "Notifications".into(),
+            vec![
+                MenuItem::Check(MenuAction::NotifyFull, "Full".into(), mode == NotifyMode::Full),
+                MenuItem::Check(MenuAction::NotifyYou, "Only you".into(), mode == NotifyMode::You),
+            ],
+        ));
     }
     match &state.app_update {
         // No version: the dial line's "Updating to X" is the dial's firmware.
@@ -83,7 +94,8 @@ pub fn due(state: &AppState) -> Option<Screen> {
     (claude_off && !state.saved.asked_claude).then_some(Screen::Claude)
 }
 
-/// The menu as one log line: its labels joined by ` | `, without separators.
+/// The menu as one log line: its labels joined by ` | `, without separators. A submenu is its label and its checked
+/// item's: `Notifications: Full`.
 pub fn menu_log(items: &[MenuItem]) -> String {
     let labels: Vec<String> = items
         .iter()
@@ -92,18 +104,22 @@ pub fn menu_log(items: &[MenuItem]) -> String {
                 Some(label.clone())
             }
             MenuItem::Check(_, label, true) => Some(format!("{label} ✓")),
+            MenuItem::Submenu(label, choices) => choices.iter().find_map(|choice| match choice {
+                MenuItem::Check(_, chosen, true) => Some(format!("{label}: {chosen}")),
+                _ => None,
+            }),
             MenuItem::Separator => None,
         })
         .collect();
     labels.join(" | ")
 }
 
-/// The dial's sound, when there is one to change: an attached dial, not updating, on a running Harness.
-fn sound_muted(state: &AppState) -> Option<bool> {
+/// The dial, when its settings can be changed: attached, not updating, on a running Harness.
+fn settable(state: &AppState) -> Option<&DialStatus> {
     if state.cli != CliState::Found || state.daemon != Daemon::Up {
         return None;
     }
-    state.dial.as_ref().filter(|dial| dial.attached && dial.updating.is_none()).and_then(|dial| dial.muted)
+    state.dial.as_ref().filter(|dial| dial.attached && dial.updating.is_none())
 }
 
 /// Claude Code can be turned on or off here.

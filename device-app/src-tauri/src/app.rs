@@ -3,8 +3,8 @@
 use crate::keepalive::{Keep, KeepAlive};
 use crate::model::{due, menu, menu_log};
 use crate::types::{
-    Action, AppState, AppUpdate, CliState, Daemon, Effect, Event, LoginEvent, MenuAction, MenuItem, Phase, Saved,
-    Screen, UpdateFailure, View,
+    Action, AppState, AppUpdate, CliState, Daemon, Effect, Event, LoginEvent, MenuAction, MenuItem, NotifyMode, Phase,
+    Saved, Screen, UpdateFailure, View,
 };
 
 /// The menu reads the account and Claude Code again at most this often.
@@ -264,6 +264,12 @@ impl App {
                     effects.push(Effect::SetSound(action == MenuAction::SoundOn));
                     // A native check item flips its own check when clicked: the menu drawn again puts it back
                     // where the dial is, and the dial's next status line moves it.
+                    effects.push(Effect::Menu(self.menu.clone()));
+                }
+                MenuAction::NotifyFull | MenuAction::NotifyYou => {
+                    let mode = if action == MenuAction::NotifyFull { NotifyMode::Full } else { NotifyMode::You };
+                    effects.push(Effect::SetNotify(mode));
+                    // As Sound's: the check moves when the watch's next line says the mode was saved.
                     effects.push(Effect::Menu(self.menu.clone()));
                 }
                 MenuAction::Update => effects.push(Effect::OpenUrl(DEVICE_PAGE.into())),

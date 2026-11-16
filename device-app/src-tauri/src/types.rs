@@ -13,6 +13,9 @@ pub struct DialStatus {
     pub problem: Option<String>,
     /// The dial's sound setting; None from an older CLI or a firmware with no settings.
     pub muted: Option<bool>,
+    /// The dial's Notifications setting; None from an older CLI, or a value this app does not know.
+    #[serde(default, deserialize_with = "notify_mode")]
+    pub notify: Option<NotifyMode>,
 }
 
 /// The dial's Notifications setting. Only you (`You`): an ordinary finished turn neither beeps nor wakes the dial.
@@ -20,6 +23,15 @@ pub struct DialStatus {
 pub enum NotifyMode {
     Full,
     You,
+}
+
+/// Lenient: a newer CLI's mode must not make its line no status, which the keep-alive would read as a silent watch.
+fn notify_mode<'de, D: serde::Deserializer<'de>>(value: D) -> Result<Option<NotifyMode>, D::Error> {
+    Ok(match serde_json::Value::deserialize(value)?.as_str() {
+        Some("full") => Some(NotifyMode::Full),
+        Some("you") => Some(NotifyMode::You),
+        _ => None,
+    })
 }
 
 /// harnessd, as the keep-alive last saw it.
@@ -112,17 +124,21 @@ pub enum MenuAction {
     ClaudeOff,
     SoundOn,
     SoundOff,
+    NotifyFull,
+    NotifyYou,
     Update,
     OpenHarness,
     Quit,
 }
 
-/// Text is a disabled line. Check: the action a click does, the label, whether it is checked.
+/// Text is a disabled line. Check: the action a click does, the label, whether it is checked. Submenu: its label and
+/// its items.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuItem {
     Text(String),
     Action(MenuAction, String),
     Check(MenuAction, String, bool),
+    Submenu(String, Vec<MenuItem>),
     Separator,
 }
 
