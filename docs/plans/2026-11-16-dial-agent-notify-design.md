@@ -100,6 +100,7 @@ Default: **All**, so nobody's dial changes until they choose (my call).
   `$CODEX_HOME/skills/dial/SKILL.md` (`~/.codex` by default), the Codex home the person's Codex reads, and removes it.
   Checked against Codex 0.167.1. The Harness Device app offers it once, as it offers Claude Code (consent
   first), and the menu shows Codex: On / Turn off as it does Claude Code.
+  Superseded by [the dial skill in every home](2026-11-16-dial-skill-every-home-design.md): no offer; Turn on in the menu.
 
 ### No approval prompt: the one existing allow-list (my call, from the builder check)
 
@@ -263,7 +264,8 @@ The menu-bar app:
 └───────────────────────────────┘
 ```
 
-The one-time Codex offer, when Codex is on this computer (as the Claude Code offer):
+The one-time Codex offer, when Codex is on this computer (as the Claude Code offer). Superseded by
+[the dial skill in every home](2026-11-16-dial-skill-every-home-design.md): no offer; Turn on in the menu.
 
 ```
 ╭──────────────────────────────────────────╮
@@ -279,7 +281,7 @@ The one-time Codex offer, when Codex is on this computer (as the Claude Code off
 An agent learns of the dial and rings it:
 
 ```
-harness device claude enable / codex enable   (the app asks once)
+harness device claude enable / codex enable   (Turn on in the menu: no offer, see the dial skill in every home)
    │  installs the "dial" skill (the notify rule is in Harness's allow-list)
    ▼
 Claude Code / Codex reads the skill's description: "the person has a dial"

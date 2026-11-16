@@ -697,7 +697,7 @@ Off (Settings ▸ Experimental ▸ Hachi), none of them is drawn and ⇧⌘H is 
 
 Harness Device is the menu-bar app for the dial (`device-app/`). It sets up
 Harness, keeps it running and shows the dial's state; sign-in is the one
-thing it offers. Claude Code and Codex are turned on in the menu.
+thing it offers. Claude Code and Codex are turned on and off in the menu.
 
 Its menu is the native menu. Its window has two screens, Install and Sign in,
 at 420 × 320, in plain HTML and CSS (`device-app/ui/src/styles.css`)
