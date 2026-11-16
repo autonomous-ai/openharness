@@ -164,7 +164,7 @@ const claudeRules = (skip: { bash?: string[]; mcp?: string[]; help?: boolean; co
     ...(skip.bash?.includes(verb) ? [] : [`Bash(harness ${verb}:*)`, `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} ${verb}:*)`]),
     ...(skip.mcp?.includes(verb) || !toolOf(verb) ? [] : [`mcp__harness__${toolOf(verb)}`, `mcp__plugin_harness_harness__${toolOf(verb)}`]),
   ]),
-  ...(skip.commands === false ? [] : ['Bash(harness device notify:*)', `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} device notify:*)`]),
+  ...(skip.commands ? [] : ['Bash(harness device notify:*)', `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} device notify:*)`]),
 ]
 
 it('allows Harness\'s agent commands and MCP tools in Claude Code beside the person\'s own rules, once', async () => {
@@ -268,7 +268,7 @@ it('a deny or an ask for harness device notify, or for all of harness device, ke
     writeFileSync(file, JSON.stringify({ permissions }))
     expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
     const allow: string[] = JSON.parse(readFileSync(file, 'utf8')).permissions.allow
-    expect(allow).toEqual(claudeRules({ commands: false }))
+    expect(allow).toEqual(claudeRules({ commands: true }))
     expect(allow).toContain('Bash(harness --help)')
   }
 })
