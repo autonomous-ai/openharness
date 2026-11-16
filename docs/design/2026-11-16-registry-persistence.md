@@ -1982,6 +1982,9 @@ the required gates and uninstrumented final-source cost comparison remain open.
 
 ## Canonical object representation after allocation sampling
 
+Status: rejected after the final matched workload below; the runtime change is
+reverted to `7b88dfa202`. The diagnostic and validation evidence is retained.
+
 The uninstrumented `7b88dfa202` comparison still fails RSS acceptance: the
 160-row unchanged case is 86.44 MiB old versus 163.90 MiB candidate. Removing
 temporary property-pair arrays did not resolve the transient allocation pressure.
@@ -2040,3 +2043,46 @@ fences. TypeScript and diff checks pass (`/tmp/core-registry-shape-types.log`).
 The uninstrumented final-source CPU/RSS comparison, native matrix and broader
 gates remain pending; the earlier RSS failures are not superseded by these
 correctness and representation results.
+
+The final frozen `05b5675705` ABBA completed all 332 expected outcomes and
+verified every owned worker, descendant, output stream, lock and private root
+was cleaned up. The six old legacy-lock refusals remain recorded separately
+from successful-save cost. Median values below compare the two old runs with
+the two candidate runs; CPU is total CPU for 20 calls, RSS is the maximum in
+each run, and heartbeat is p95 milliseconds.
+
+| Workload | CPU ms, old → candidate | RSS MiB, old → candidate | Heartbeat ms, old → candidate |
+| --- | --- | --- | --- |
+| 16 unchanged | 55.83 → 27.44 | 79.17 → 80.98 | 42.537 → 0.076 |
+| 16 changed | 195.64 → 211.02 | 87.74 → 88.46 | 104.324 → 0.634 |
+| 160 unchanged | 126.40 → 84.19 | 89.60 → 162.05 | 45.027 → 0.072 |
+| 160 changed | 559.20 → 600.55 | 123.53 → 163.93 | 122.836 → 3.789 |
+
+Removing dictionary-backed canonical copies did not resolve the RSS gap, and
+changed-save CPU now exceeds the old baseline. Reject the representation
+optimization and restore the prior null-prototype copy implementation. No
+unchanged acceptance rerun follows. The summary is
+`/tmp/core-registry-05b567-cost-summary.json` (SHA-256
+`01cd10792c347020987b417ec8564b30995e71d6d9eb2eada3e1746c22ab7583`);
+the explicit NOT_ACCEPTED result is `/tmp/core-registry-05b567-acceptance.json`.
+
+Safety validation at the rejected head nevertheless completed: core 4,773
+cases and 100% coverage, portability 1,066 and 100% (10 existing skips), Resume
+522 and 100%, real shell 10, tmux 6, native PTY host/lifecycle 8, and the private
+registry's 16-case cross-process/crash matrix with verified cleanup. The PTY
+host used the source-matched existing binary after checking all 100 tracked
+PTY/terminal/vendor inputs; its initially unexercised cases ran separately.
+These are named-head safety results, not acceptance of the restored head or a
+claim of native engine, Windows or whole-product validation.
+
+The smallest next investigation is repeated canonical comparison of the same
+transaction-owned snapshot: `beforeCommit`, changed-row detection and
+`mergedForSave` currently fingerprint it independently. Reuse its already
+computed fingerprint only within one persist operation. First establish that
+every candidate/displacement/recovery replacement gets a new snapshot and
+replace the resumed-row in-place edit with a new owned row; then a local
+snapshot-keyed comparison can reuse immutable values without caching live
+controller rows across awaits. A public admission control must show fewer
+actual comparisons while nested live edits, peer recovery, uncertainty fences
+and immediate durable receipts still hold. This is a proposed next step,
+not an implemented change or a predicted RSS result.

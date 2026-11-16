@@ -551,14 +551,9 @@ function rowId(row: unknown): string {
 function rowFingerprint(row: unknown): string {
   return JSON.stringify(row, (_key, value) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return value
-    // Admissions compare every row repeatedly. Own data properties avoid dictionary backing stores
-    // and temporary entry arrays while keeping literal __proto__ keys as data.
-    const ordered: Record<string, unknown> = {}
-    const property = { value: undefined as unknown, enumerable: true, configurable: true, writable: true }
-    for (const key of Object.keys(value).sort()) {
-      property.value = value[key]
-      Object.defineProperty(ordered, key, property)
-    }
+    // Admissions compare every row repeatedly; avoid a temporary entry array for every property.
+    const ordered: Record<string, unknown> = Object.create(null)
+    for (const key of Object.keys(value).sort()) ordered[key] = value[key]
     return ordered
   })
 }
