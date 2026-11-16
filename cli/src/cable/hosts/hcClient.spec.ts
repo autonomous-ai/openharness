@@ -36,6 +36,7 @@ function subscriber() {
     snapshot: (terminals) => push(['snapshot', terminals]),
     changed: (terminal) => push(['changed', terminal]),
     closed: (reason) => push(['closed', reason]),
+    over: (count) => push(['over', count]),
   }
   const told = (n: number) => new Promise<void>((resolve) => {
     if (calls.length >= n) resolve()
@@ -538,7 +539,7 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     ])
   })
 
-  it('past 1,024 terminals a new one is neither kept nor told', async () => {
+  it('past 1,024 terminals a new one is neither kept nor told; how many were left out is told as it changes', async () => {
     server.terminals = Array.from({ length: 1025 }, (_, at) => ({ address: `t${at + 1}` }))
     const { calls, to, told } = subscriber()
     const subscription = client().subscribe(to)
@@ -547,15 +548,23 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     server.change('t1025', { status: { state: 'working', app: 'claude-code' } })
     server.remove('t1')
     server.change('t2001', {})
-    await told(4)
+    // A fresh snapshot counts again.
+    server.terminals = server.terminals.slice(0, 2)
+    server.missed()
+    await fence()
     subscription.close()
     const idle = (address: string) => ({ ...agentIs('idle'), address })
     expect(calls).toEqual([
       ['snapshot', Array.from({ length: 1024 }, (_, at) => idle(`t${at + 1}`))],
+      ['over', 1],
+      // Created past the bound; a line of a terminal left out counts nothing more.
+      ['over', 2],
       ['changed', { ...idle('t1'), live: false }],
       // Created before its program reports, then its first status.
       ['changed', { address: 't2001', live: true, space: true, cwd: '/work/hh' }],
       ['changed', idle('t2001')],
+      ['snapshot', [idle('t2'), idle('t3')]],
+      ['over', 0],
     ])
   })
 

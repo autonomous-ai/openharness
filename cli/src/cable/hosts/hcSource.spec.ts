@@ -284,6 +284,20 @@ describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11
     expect(s.log).toEqual(['[herdr-app] socket · live', '[herdr-app] listed · 64 agents', '[herdr-app] over · 1 left out'])
   })
 
+  it('terminals the client leaves out past its 1,024 are in the over line', async () => {
+    // 1,024 terminals the window does not show, then an agent the client has no room for.
+    server.terminals = [...Array.from({ length: 1024 }, (_, at) => agent(`t${at + 1}`, { labels: {} })), agent('t1025')]
+    const s = setup()
+    await live(s)
+    expect(s.source.list()).toEqual([])
+    expect(s.log).toEqual(['[herdr-app] socket · live', '[herdr-app] listed · 0 agents', '[herdr-app] over · 1 left out'])
+    // One more created past the bound; then a kept one shown, whose line comes after it.
+    server.change('t2000', {})
+    server.change('t1', { labels: { 'herdr.space': 's1' } })
+    await s.until(() => s.source.list().length === 1)
+    expect(s.log.slice(3)).toEqual(['[herdr-app] over · 2 left out', '[herdr-app] listed · 1 agents'])
+  })
+
   it('missed: the fresh snapshot replaces the list, and a row that stays keeps its id', async () => {
     server.terminals = [agent('t7'), agent('t8')]
     const s = setup()
