@@ -1143,3 +1143,15 @@ against a budget of four. All five authority, alias/deletion and durability
 controls passed. `/tmp/core-registry-cost-correction-red-private.log` records
 two failures and five passes in 4.24 seconds on Node 24.22.2, one worker. No runtime
 change preceded that RED; the Design and test are committed before the correction.
+
+The two approved runtime edits pass all seven new caller cases in 4.21 seconds
+(`core-registry-cost-correction-green.log`). The existing focused persistence,
+observation and strict-admission selector then passed 23 cases, with 81 unrelated
+cases unselected, in 10.50 seconds (`core-registry-cost-correction-controls.log`).
+It covers live alias/deletion and same-value intentions, queued route authority,
+peer metadata and exact-file checks, displaced-owner publication, and uncertain
+strict recovery. Pinned Node 24.22.2 TypeScript also passed
+(`core-registry-cost-correction-types.log`). These logs are retained under `/tmp`.
+No native-wait patch was applied. No broad suite, build, crash matrix or new cost
+measurement was run for this correction; root's integrated-source acceptance is
+still required, and the earlier CPU/RSS/latency regression is not yet cleared.

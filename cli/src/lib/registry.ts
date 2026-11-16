@@ -3325,7 +3325,7 @@ class Registry {
       // Close intents always take the durable path, even when an identical request is retried.
       if (strict !== true && this.persistedContents !== null
         && currentRows.size === this.persistedBaseline.size
-        && [...currentRows].every(([id, row]) => this.persistedBaseline.get(id) === rowFingerprint(row))
+        && [...currentRows].every(([id]) => this.persistedBaseline.get(id) === beforeCommit.get(id))
         && await readPrivateRegistryFile(FILE).catch(error => {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
           throw error
@@ -3488,7 +3488,8 @@ class Registry {
           checkOwner()
           if (strict) this.verifyPreparedOwners(beforeOwners, currentRows, changed, mutationAgentId)
           bindingCommit?.verify()
-          const liveRows = new Map(this.list().map(row => [row.agentId, structuredClone(persistedRow(row)) as unknown as Record<string, unknown>]))
+          // This rebase and installation never yield; only the earlier preparation needs deep copies.
+          const liveRows = new Map(this.list().map(row => [row.agentId, persistedRow(row) as unknown as Record<string, unknown>]))
           const committed = new Map(serialized.map(row => [row.agentId, row as unknown as Record<string, unknown>]))
           const remainingIntents = new Map([...this.intended].filter(([id, intent]) => capturedIntents.get(id) !== intent))
           rebased = [...mergedForSave(committed, liveRows, beforeCommit, remainingIntents).values()].map(value => {
