@@ -408,6 +408,16 @@ mod tests {
     }
 
     #[test]
+    fn the_updater_checks_with_the_committed_key() {
+        let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let key = config["plugins"]["updater"]["pubkey"].as_str().expect("plugins.updater.pubkey");
+        assert!((100..=300).contains(&key.len()), "{}", key.len());
+        assert!(key.chars().all(|c| c.is_ascii_alphanumeric() || "+/=".contains(c)), "{key}");
+        // Base64 of "untrusted comment: minisign public key:", the first line of every key Tauri writes.
+        assert!(key.starts_with("dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6"), "{key}");
+    }
+
+    #[test]
     fn the_version_is_the_releases() {
         // The release writes its version through --config: a placeholder no release reads, so a local build never
         // outranks one.
