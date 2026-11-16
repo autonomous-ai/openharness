@@ -10,6 +10,8 @@
  * Opt-in, because it takes a dial and a person: `ON_DIAL_PORT=/dev/cu.usbmodem… ON_DIAL_OUT=<folder>
  * npx vitest run --config vitest.e2e.config.ts e2e/dialAppFilterOnDial.e2e.ts`. ON_DIAL_MINUTES (default 45) bounds the
  * walk. The rig's daemon has its own home and data folder: the everyday daemon, its dial and ~/.harness are untouched.
+ * Its `orca` is the stub that exits 1 (harness/daemon.ts), so Orca switches and Orca's order read fail on the rig: for
+ * an Orca check, remove that stub from the daemon's `bin`.
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'

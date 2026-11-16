@@ -5,7 +5,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { IsolatedDaemon } from './daemon.js'
 
 export interface OrcaRun { args: string; at: number }
@@ -39,14 +39,14 @@ const HELP_WATCH = HELP.replace(
   '  switch             Switch to a terminal tab in the UI\n  watch-focus        Print the focused terminal, then each change\n',
 )
 
-// `exec tail` makes the daemon's child the `tail` itself, so its SIGTERM ends it; `-n +1` prints the lines told before
-// the watch started, so none is lost to a watch that starts late.
+// `exec tail` makes the daemon's child the `tail` itself, so its SIGTERM ends it; `-n 1` prints the last line told before
+// the watch started, as Orca prints the focus of that moment first.
 const script = (dir: string): string => `#!/bin/sh
 printf '%s\\n' "$*" >> '${dir}/asked'
 case "$1 $2" in
   'terminal --help') cat '${dir}/help' ;;
   'terminal list') [ -f '${dir}/layout.json' ] || exit 1; cat '${dir}/layout.json' ;;
-  'terminal watch-focus') [ -f '${dir}/watches' ] || exit 1; exec tail -n +1 -f '${dir}/focus' ;;
+  'terminal watch-focus') [ -f '${dir}/watches' ] || exit 1; exec tail -n 1 -f '${dir}/focus' ;;
   'terminal switch'|'terminal send')
     printf '%s' "$*" > "$(mktemp '${dir}/runs/run.XXXXXX')"
     code=$(cat '${dir}/exit' 2>/dev/null); exit "\${code:-0}" ;;
@@ -66,12 +66,14 @@ export class FakeOrca {
   /** Writes `orca` into the daemon's `bin`, first on its PATH, before `d.start()`. `watchFocus` (default false): its
    *  `terminal --help` lists `watch-focus`, and `terminal watch-focus --json` runs. */
   static install(d: IsolatedDaemon, { watchFocus = false }: { watchFocus?: boolean } = {}): FakeOrca {
-    const dir = join(d.root, 'orca')
+    // The daemon's own `bin` (beside its fake engines): a daemon `beside` another shares that one's root, not its bin.
+    const bin = dirname(d.env.CLAUDE_PATH!)
+    const dir = join(dirname(bin), 'orca')
     mkdirSync(join(dir, 'runs'), { recursive: true })
     writeFileSync(join(dir, 'help'), watchFocus ? HELP_WATCH : HELP)
     writeFileSync(join(dir, 'focus'), '')
     if (watchFocus) writeFileSync(join(dir, 'watches'), '')
-    writeFileSync(join(d.root, 'bin', 'orca'), script(dir), { mode: 0o755 })
+    writeFileSync(join(bin, 'orca'), script(dir), { mode: 0o755 })
     return new FakeOrca(dir)
   }
 
@@ -112,7 +114,7 @@ export class FakeOrca {
     renameSync(`${file}.new`, file)
   }
 
-  /** A line on the watch's stdout: the terminal with focus, or none. A watch prints every line told so far, then each new one. */
+  /** A line on the watch's stdout: the terminal with focus, or none. A watch prints the last line told so far, then each new one. */
   focus(handle: string | null): void { appendFileSync(join(this.dir, 'focus'), `${JSON.stringify({ handle })}\n`) }
 
   /** Whether a `watch-focus` of this fake still runs: a process whose command names its focus file. */

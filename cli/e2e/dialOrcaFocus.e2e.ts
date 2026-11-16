@@ -116,7 +116,9 @@ describe("the dial follows Orca's focus and tabs", () => {
     const { d, dial, orca } = await fresh({ watchFocus: true })
     const a = inOrca(d, 'a')
     const b = inOrca(d, 'b')
-    orca.layout([[[a.handle], [b.handle]]])
+    // A's tab has a title the person gave it: a title is never logged.
+    const title = `tab ${randomUUID()}`
+    orca.layout([[{ title, panes: [a.handle] }, [b.handle]]])
     await listed(dial, a.claude, b.claude)
 
     // 1-2. B has focus in Orca as Orca comes in front: the watch's first line turns the dial to B.
@@ -157,14 +159,15 @@ describe("the dial follows Orca's focus and tabs", () => {
     await said(d, '[device] orca watch · ended')
     await until("the fake's watch gone", () => !orca.watching(), 30_000, 50)
 
-    // 8. Outcomes only: no handle, no session id, no worktree path.
+    // 8. Outcomes only: no handle, no session id, no worktree path, no tab title.
     for (const line of lines(d, '[device] focus ·')) expect(line).toMatch(FOCUS_LINE)
     const log = d.log()
-    for (const secret of [a.handle, b.handle, a.claude.sessionId, b.claude.sessionId, '/e2e/wt-']) expect(log).not.toContain(secret)
+    for (const secret of [a.handle, b.handle, a.claude.sessionId, b.claude.sessionId, '/e2e/wt-', title]) expect(log).not.toContain(secret)
   })
 
   it("Orca's ring reaches the dial in tab order, and the dial stays on the agent it shows", async () => {
-    const { d, dial, orca } = await fresh({ watchFocus: true })
+    // Orca 1.4.256, the one Diego runs: the order and the names need no watch-focus.
+    const { d, dial, orca } = await fresh({ watchFocus: false })
     const a = inOrca(d, 'a')
     const b = inOrca(d, 'b')
     const c = inOrca(d, 'c')
@@ -176,13 +179,14 @@ describe("the dial follows Orca's focus and tabs", () => {
 
     // 3. C starts: the ring is read again, and the dial's list comes in Orca's tab order.
     const since = dial.messages.length
+    const reads = count(d, '[device] orca order · read')
     await c.claude.hook('SessionStart', { source: 'startup' })
     const ordered = [c.claude.id, a.claude.id, b.claude.id]
     const list = await until('the ring in tab order', () => {
       const latest = latestList(dial)
       return latest && latest.end >= since && latest.agents.map((m) => m.id).join() === ordered.join() ? latest : undefined
     }, 45_000, 50)
-    await said(d, '[device] orca order · read')
+    await until("C's read", () => count(d, '[device] orca order · read') > reads, 30_000, 50)
 
     // 4. The dial stays on A: it is said again after that list, and no focus since C started names another agent.
     await dial.next((m) => m.t === 'focus', 30_000, 'the focus after the list', list.end + 1)
@@ -202,12 +206,14 @@ describe("the dial follows Orca's focus and tabs", () => {
     await turnedToFirst(d, dial, a, b)
     front(d, ORCA)
 
-    // 2. B's typed prompt moves the dial, as before Orca could tell its focus.
+    // 2. Orca settles in front, and the probe finds no watch-focus.
+    await said(d, '[device] orca watch · unsupported')
+
+    // 3. Then B's typed prompt moves the dial, as before Orca could tell its focus.
     await typedUntilMoved(d, dial, b)
     expect(count(d, '[device] prompt · moved')).toBe(1)
 
-    // 3. The CLI has no watch-focus: none is run, and no focus line is said.
-    await said(d, '[device] orca watch · unsupported')
+    // 4. None is run, and no focus line is said.
     expect(lines(d, '[device] orca watch · started')).toEqual([])
     expect(lines(d, '[device] focus ·')).toEqual([])
     expect(orca.asked().filter((args) => args.startsWith('terminal watch-focus'))).toEqual([])
