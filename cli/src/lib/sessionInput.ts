@@ -244,9 +244,14 @@ export class SessionInputController {
   /** Waits, bounded, for the engine's reader to start (`engineStarting`), saying so once to the person (a team delivery is
    *  automatic: its mailbox hears how it ends); one that does not come in time is logged by name. Whether it waited: the agent may
    *  have gone meanwhile, which its caller checks again. */
-  private async engineReady(sessionId: string, session: RegisteredSession, team: boolean): Promise<boolean> {
+  private engineReady(sessionId: string, session: RegisteredSession, team: boolean): Promise<true> | false {
     const starting = this.deps.engineStarting?.(session)
+    // Keep ready input synchronous: profiling found a needless Promise and continuation on every message.
     if (!starting) return false
+    return this.waitForEngine(sessionId, session, team, starting)
+  }
+
+  private async waitForEngine(sessionId: string, session: RegisteredSession, team: boolean, starting: Promise<boolean>): Promise<true> {
     console.warn(`[inject] ${sid(sessionId)} waiting · engine=${session.engine} · its reader is starting`)
     if (!team) this.deps.onWaiting?.(sessionId, 'engine_starting')
     const since = (this.deps.now ?? Date.now)()
@@ -772,7 +777,9 @@ export class SessionInputController {
       await this.deps.sendKey(session.agentId, 'C-u')
       if (!current()) { gone(); return }
     }
-    if (await this.engineReady(sessionId, session, false)) {
+    const waitingForEngine = this.engineReady(sessionId, session, false)
+    if (waitingForEngine) {
+      await waitingForEngine
       // Seconds may have passed: the agent may have been closed, or its process ended.
       if (!current()) { gone(); return }
       const stillValid = await this.deps.validateRuntime(session)
@@ -850,7 +857,9 @@ export class SessionInputController {
       }
       if (state.cancelled || this.states.get(sessionId) !== state) return
       // Before the team's own check of the pane, which a reader not yet up cannot read either.
-      if (await this.engineReady(sessionId, session, deliveryId.startsWith('team:'))) {
+      const waitingForEngine = this.engineReady(sessionId, session, deliveryId.startsWith('team:'))
+      if (waitingForEngine) {
+        await waitingForEngine
         if (state.cancelled || this.states.get(sessionId) !== state) return
         if (!(await this.deps.validateRuntime(session))) {
           console.warn(`[inject] ${sid(sessionId)} abort · engine=${session.engine} · process not running`)

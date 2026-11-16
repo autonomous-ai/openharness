@@ -87,3 +87,43 @@ capacity, lifecycle changes during validation/paste, and progress after failure.
   `/tmp/core-input-lifecycle-green-final.log`. The intermediate run retained one
   failure because a disappeared agent no longer reported its error; that report
   is restored without notifying a replacement agent. Both logs are retained.
+
+## Ready-reader allocation correction
+
+The fixed five-route ABBA comparison at `8848be2012` completed all 1.2 million
+messages, but direct input used 17.095 versus 15.696 microseconds of CPU per
+message. The other routes varied; this is not a claim that the lifecycle checks
+alone explain that difference. The complete samples remain in
+`/tmp/core-input-cost-v2/`.
+
+Separate CPU and allocation profiles of the unchanged old/current modules
+completed 100,000 direct messages each. They did not isolate the full CPU
+difference. Both allocated about 23 MiB in `engineReady`, even though the reader
+was ready on every call. A separate public-caller resource count found 23 Promise
+resources per message on both sides. These diagnostic results, all child exits,
+and the unchanged source hashes are in `/tmp/core-input-profile-v1/`.
+
+Return synchronous `false` when the readiness probe has no startup promise;
+await only an actual reader startup. That removes the ready path's Promise and
+await continuation. Real startup waits keep their existing reporting, cleanup,
+errors and revalidation. Every captured-state and current-row check stays at
+its existing boundary. This changes no data, queue, authority, protocol, timer
+or platform behavior. It reduces a measured allocation source; only the final
+matched comparison can establish the resulting CPU and memory cost.
+
+Before implementation, add a public-controller resource-count regression below
+the measured 23-Promise path, with one successful receipt per message. Then run
+the full input selection, TypeScript and preserved independent lifecycle
+controls. Root coordinates review and a single final five-route ABBA run; no
+acceptance timing overlaps other tests or builds.
+
+The resource regression records 2,102 Promise resources for 100 messages on
+unchanged `8848be2012`, against a budget of 2,002. Unlike the standalone
+diagnostic, the test calls directly in its loop instead of adding an async
+helper around each message. Vitest's asynchronous console capture is suppressed
+in this allocation check, as in the performance fixture; initial fixture logs
+are retained alongside the final RED at
+`/tmp/core-input-ready-allocation-red-final.log`. The correction passes all 219
+input/core input/device input/delivery cases in 5.38 seconds
+(`/tmp/core-input-ready-green.log`), including startup failure and lifecycle
+checks, and TypeScript passes (`/tmp/core-input-ready-types.log`).

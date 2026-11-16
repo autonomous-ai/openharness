@@ -1,6 +1,7 @@
 import { readInlineScreen } from '../testing/inlineScreen.js'
 import { inlineSubmission } from '../testing/inlineSubmission.js'
 import { readFileSync } from 'node:fs'
+import { AsyncResource, createHook } from 'node:async_hooks'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -34,6 +35,48 @@ const codexComposer = (draft: string, footer = '  ? for shortcuts') => `\n\u001b
 
 describe('SessionInputController', () => {
   afterEach(() => vi.useRealTimers())
+
+  it('keeps ready input below the measured allocation cost of an unnecessary reader wait', async () => {
+    // The direct-input profile found a Promise and continuation for an already-ready reader on every message.
+    // Count only this caller's descendants, so the test runner and other tests cannot spend its budget.
+    const scope = new AsyncResource('input-allocation-fixture'), owned = new Set([scope.asyncId()])
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    let promises = 0, submitted = 0, received = 0, resolveWrite!: () => void
+    const hook = createHook({ init(id, type, trigger) {
+      if (!owned.has(trigger)) return
+      owned.add(id)
+      if (type === 'PROMISE') promises++
+    } })
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session('claude'), validateRuntime: async () => true,
+      engineStarting: () => null, inject: async () => true, sendKey: async () => true,
+      onError: (_id, message) => { throw new Error(message) },
+      onSubmitted: () => { submitted++; resolveWrite() },
+    })
+    hook.enable()
+    try {
+      await scope.runInAsyncScope(async () => {
+        for (let i = 0; i < 100; i++) {
+          const written = new Promise<void>(resolve => { resolveWrite = resolve })
+          controller.submit('s1', 'ready input', undefined, outcome => {
+            expect(outcome).toBe('started')
+            received++
+          })
+          await written
+          controller.onTurnStarted('s1', 'ready input')
+          controller.onTurnEnded('s1')
+          await new Promise<void>(resolve => setImmediate(resolve))
+        }
+      })
+    } finally {
+      hook.disable()
+      scope.emitDestroy()
+      controller.forget('s1')
+      log.mockRestore()
+    }
+    expect({ submitted, received }).toEqual({ submitted: 100, received: 100 })
+    expect(promises).toBeLessThanOrEqual(2_002)
+  })
 
   it('holds a delivery while the agent works, and types it once the turn ends', async () => {
     vi.useFakeTimers()
