@@ -4,11 +4,15 @@
  * a rest's one link at a time, and the outcome. The link and `open` are macOS's, so elsewhere nothing runs.
  */
 import type { HostAdapter } from './adapter.js'
-import { OPEN } from './open.js'
+import { openPath } from './open.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import type { PaneSwitch } from './types.js'
 
-export type AppLinkDeps = Pick<OrcaDeps, 'run' | 'platform'> & { inFront(): boolean }
+export type AppLinkDeps = Pick<OrcaDeps, 'run' | 'platform'> & {
+  inFront(): boolean
+  /** The raw `HARNESS_OPEN_BIN` (open.ts openPath). */
+  bin?: string
+}
 
 /** One app whose session opens by a link of the app's own. */
 export interface AppLink {
@@ -27,13 +31,14 @@ export type AppLinkVerbs = Pick<HostAdapter, 'canFocus' | 'focus'> & Required<Pi
 
 export function createAppLink(deps: AppLinkDeps, link: AppLink): AppLinkVerbs {
   const mac = deps.platform === 'darwin'
+  const openBin = openPath(deps.bin)
   // A rest's link at a time per agent, in a set of its own: a tap is not refused while a rest's link runs, nor a rest
   // while a tap runs, and two opens of one link do no harm.
   const showing = new Set<string>()
 
   const opens = async (session: string): Promise<boolean> => {
     const url = link.url(session)
-    return (await deps.run(OPEN, link.bundle ? ['-b', link.bundle, url] : [url], RUN_TIMEOUT_MS)).code === 0
+    return (await deps.run(openBin, link.bundle ? ['-b', link.bundle, url] : [url], RUN_TIMEOUT_MS)).code === 0
   }
 
   return {
