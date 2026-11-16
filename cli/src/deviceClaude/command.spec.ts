@@ -1,7 +1,8 @@
 /**
- * `harness device claude …` as the menu-bar app, the plugin's hook and its mod run it: a fake `claude` (a ClaudeRun that
- * answers from a table), Claude Code's settings in a throwaway CLAUDE_CONFIG_DIR, and a daemon and the devices' listener on
- * sockets in a throwaway folder. The real `claude`, ~/.claude and the daemon are never touched.
+ * `harness device claude …` and `harness device codex …` as the menu-bar app, the plugin's hook and its mod run them: a
+ * fake `claude` (a ClaudeRun that answers from a table), Claude Code's settings in a throwaway CLAUDE_CONFIG_DIR, Codex's
+ * home a throwaway folder, and a daemon and the devices' listener on sockets in a throwaway folder. The real `claude`,
+ * ~/.claude, ~/.codex and the daemon are never touched.
  */
 import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
@@ -101,6 +102,7 @@ async function device(argv: string[], deps: Partial<DeviceDeps> = {}) {
   const err: string[] = []
   const code = await runDeviceCommand(argv, {
     dataDir: folder(), port: PORT, platform: 'darwin', stdin: chunks(), claude: () => fakeClaude(),
+    codexHome: folder(), codex: () => true,
     out: (line) => { out.push(line) }, err: (line) => { err.push(line) },
     ...deps,
   })
@@ -226,13 +228,15 @@ describe('harness device claude', () => {
   })
 
   it('an unknown subcommand prints the usage and exits 1', async () => {
-    for (const argv of [[], ['claude'], ['claude', 'install'], ['codex', 'status'], ['claude', 'status', 'extra']]) {
+    for (const argv of [[], ['claude'], ['claude', 'install'], ['claude', 'status', 'extra']]) {
       expect(await device(argv), argv.join(' ')).toEqual({ code: 1, out: [], err: [DEVICE_USAGE] })
     }
   })
 
-  it('DEVICE_USAGE names status, enable and disable, and neither asked nor link, and claims no answering', () => {
-    for (const word of ['status', 'enable', 'disable']) expect(DEVICE_USAGE).toContain(`harness device claude ${word}`)
+  it('DEVICE_USAGE names status, enable and disable for Claude Code and Codex, and neither asked nor link, and claims no answering', () => {
+    for (const engine of ['claude', 'codex']) {
+      for (const word of ['status', 'enable', 'disable']) expect(DEVICE_USAGE).toContain(`harness device ${engine} ${word}`)
+    }
     expect(DEVICE_USAGE).not.toMatch(/asked|approve|link|answers/)
   })
 
@@ -246,6 +250,34 @@ describe('harness device claude', () => {
         .map((name) => join(dir, name))
         .filter((file) => importsDevice.test(readFileSync(join(SRC, file), 'utf8'))))
     expect(importers).toEqual([])
+  })
+})
+
+describe('harness device codex', () => {
+  it('status --json, enable and disable write and remove the skill in Codex\'s home', async () => {
+    const codexHome = folder()
+    const status = (enabled: boolean) => ({ code: 0, err: [], out: [`{"supported":true,"installed":true,"enabled":${enabled}}`] })
+    expect(await device(['codex', 'status', '--json'], { codexHome })).toEqual(status(false))
+    expect(await device(['codex', 'enable'], { codexHome })).toEqual({ code: 0, out: [], err: [] })
+    expect(readFileSync(join(codexHome, 'skills', 'dial', 'SKILL.md'), 'utf8')).toContain('harness device notify')
+    expect(await device(['codex', 'status', '--json'], { codexHome })).toEqual(status(true))
+    expect(await device(['codex', 'disable'], { codexHome })).toEqual({ code: 0, out: [], err: [] })
+    expect(await device(['codex', 'status', '--json'], { codexHome })).toEqual(status(false))
+  })
+
+  it('status without --json prints the same fields, indented', async () => {
+    expect(await device(['codex', 'status'], { codex: () => false }))
+      .toEqual({ code: 0, err: [], out: [JSON.stringify({ supported: true, installed: false, enabled: false }, null, 2)] })
+  })
+
+  it('enable prints its error on stderr and exits 1', async () => {
+    expect(await device(['codex', 'enable'], { codex: () => false })).toEqual({ code: 1, out: [], err: ['Codex is not on this computer.'] })
+  })
+
+  it('codex with no verb, another verb or an extra word prints the usage and exits 1', async () => {
+    for (const argv of [['codex'], ['codex', 'install'], ['codex', 'status', 'extra']]) {
+      expect(await device(argv), argv.join(' ')).toEqual({ code: 1, out: [], err: [DEVICE_USAGE] })
+    }
   })
 })
 
