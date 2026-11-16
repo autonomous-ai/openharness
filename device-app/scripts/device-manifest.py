@@ -197,7 +197,8 @@ def fetch(url, limit, timeout):
     body = bytearray()
     with urllib.request.urlopen(url, timeout=timeout) as response:
         while len(body) < limit:
-            chunk = response.read(min(1 << 20, limit - len(body)))
+            # read1 returns what one socket read brings; read waits for all it asked for, past the deadline.
+            chunk = response.read1(min(1 << 20, limit - len(body)))
             if not chunk:
                 break
             body += chunk
