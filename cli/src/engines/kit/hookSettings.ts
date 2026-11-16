@@ -193,8 +193,12 @@ function touches(theirs: string, ours: string): boolean {
   return a.length > 0 && (b.startsWith(a) || a.startsWith(b))
 }
 
+/** How Harness's rules file begins in every release: the commands the header lists after it change from one to the
+ *  next, so uninstall knows a file an earlier release wrote by this alone. */
+export const RULES_OPENING = '# Written by Harness, which rewrites it: do not edit.'
+
 /** The head of Harness's rules file: what it is for, and that Harness keeps it. */
-export const RULES_HEADER = `# Written by Harness, which rewrites it: do not edit. Its agent commands (harness ${
+export const RULES_HEADER = `${RULES_OPENING} Its agent commands (harness ${
   [...HARNESS_AGENT_VERBS, ...HARNESS_AGENT_COMMANDS.map((words) => words.join(' '))].join(', ')})\n`
   + "# need Harness's daemon, which Codex's sandbox cannot reach, so they run outside it without asking. What each\n"
   + '# may do is for Harness to decide: Settings > Experimental, and an agent gives work to and closes only what it started.\n'
