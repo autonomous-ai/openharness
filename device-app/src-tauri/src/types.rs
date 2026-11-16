@@ -384,7 +384,36 @@ mod tests {
                 "allow-act"
             ])
         );
-        assert!(!include_str!("../Cargo.toml").contains("tauri-plugin"));
+        // The updater is registered in Rust only: the capability above grants the webview none of it.
+        let plugins: Vec<&str> =
+            include_str!("../Cargo.toml").lines().filter(|line| line.contains("tauri-plugin")).collect();
+        assert_eq!(plugins.len(), 1, "{plugins:?}");
+        assert!(plugins[0].starts_with("tauri-plugin-updater = "), "{}", plugins[0]);
+    }
+
+    #[test]
+    fn the_app_reads_one_https_manifest() {
+        let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let updater = config["plugins"]["updater"].as_object().expect("plugins.updater");
+        assert_eq!(
+            updater["endpoints"],
+            json!(["https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/metadata.json"])
+        );
+        // So no `dangerous…` key lets plain http or a bad certificate through.
+        for key in updater.keys() {
+            assert!(key == "endpoints" || key == "pubkey", "{key}");
+        }
+        // On, every local build would need the private key: the release turns it on through --config.
+        assert_eq!(config["bundle"].get("createUpdaterArtifacts"), None);
+    }
+
+    #[test]
+    fn the_version_is_the_releases() {
+        // The release writes its version through --config: a placeholder no release reads, so a local build never
+        // outranks one.
+        assert!(include_str!("../Cargo.toml").lines().any(|line| line == r#"version = "0.0.0""#));
+        let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(config.get("version"), None);
     }
 
     #[test]
