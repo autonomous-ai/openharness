@@ -148,8 +148,8 @@ fn codex_available(codex: &CodexStatus) -> bool {
 mod tests {
     use super::*;
     use crate::types::{
-        AppState, AppUpdate, ClaudeStatus, CliState, CodexStatus, Daemon, DialStatus, MenuAction, MenuItem, NotifyMode,
-        Saved, Screen,
+        AppState, AppUpdate, ClaudeStatus, CliState, CodexStatus, Daemon, DialStatus, EngineChange, MenuAction,
+        MenuItem, NotifyMode, Saved, Screen,
     };
     use MenuItem::{Action, Check, Separator, Submenu, Text};
 
@@ -202,6 +202,8 @@ mod tests {
                 login_item: true,
             },
             app_update: AppUpdate::None,
+            claude_change: EngineChange::None,
+            codex_change: EngineChange::None,
         }
     }
 
@@ -291,20 +293,71 @@ mod tests {
 
     #[test]
     fn the_claude_rows() {
-        let off = ClaudeStatus { supported: true, installed: true, enabled: false, claude_version: None };
-        assert_eq!(
-            menu(&AppState { claude: Some(off), ..state() })[2..4],
-            [text("Claude Code: Off"), act(MenuAction::ClaudeOn, "Turn on…")]
-        );
-        let without = [
-            Some(ClaudeStatus { supported: false, installed: true, enabled: true, claude_version: None }),
-            Some(ClaudeStatus { supported: true, installed: false, enabled: true, claude_version: None }),
-            None,
-        ];
+        // Off before its plugin is installed too: Turn on installs it.
+        for installed in [true, false] {
+            let off = ClaudeStatus { supported: true, installed, enabled: false, claude_version: None };
+            assert_eq!(
+                menu(&AppState { claude: Some(off), ..state() })[2..4],
+                [text("Claude Code: Off"), act(MenuAction::ClaudeOn, "Turn on")],
+                "{installed}"
+            );
+        }
+        let without =
+            [Some(ClaudeStatus { supported: false, installed: true, enabled: true, claude_version: None }), None];
         for claude in without {
             let items = menu(&AppState { claude: claude.clone(), ..state() });
             assert_eq!(items[..3], [text("Dial connected · 0.0.95"), text("Signed in"), Separator], "{claude:?}");
         }
+    }
+
+    #[test]
+    fn the_change_rows() {
+        use EngineChange::{Failed, Running};
+        let claude = |enabled, claude_change| {
+            let status = ClaudeStatus { supported: true, installed: true, enabled, claude_version: None };
+            menu(&AppState { claude: Some(status), claude_change, ..state() })
+        };
+        // While a change runs, its engine has no action row: the next row is the separator.
+        assert_eq!(claude(false, Running(true))[2..4], [text("Claude Code: Turning on…"), Separator]);
+        assert_eq!(claude(true, Running(false))[2..4], [text("Claude Code: Turning off…"), Separator]);
+        // A failure sits over the action row of the last status, to try again.
+        assert_eq!(
+            claude(false, Failed(true))[2..4],
+            [text("Claude Code: Could not turn on"), act(MenuAction::ClaudeOn, "Turn on")]
+        );
+        assert_eq!(
+            claude(true, Failed(false))[2..4],
+            [text("Claude Code: Could not turn off"), act(MenuAction::ClaudeOff, "Turn off")]
+        );
+        assert_eq!(
+            claude(true, Failed(true))[2..4],
+            [text("Claude Code: Could not turn on"), act(MenuAction::ClaudeOff, "Turn off")]
+        );
+
+        let codex = |enabled, codex_change| {
+            menu(&AppState {
+                codex: Some(CodexStatus { supported: true, installed: true, enabled }),
+                codex_change,
+                dial: Some(sound(Some(false))),
+                ..state()
+            })
+        };
+        let sound_on = Check(MenuAction::SoundOff, "Sound".into(), true);
+        assert_eq!(codex(false, Running(true))[4..6], [text("Codex: Turning on…"), sound_on.clone()]);
+        assert_eq!(codex(true, Running(false))[4..6], [text("Codex: Turning off…"), sound_on]);
+        assert_eq!(
+            codex(false, Failed(true))[4..6],
+            [text("Codex: Could not turn on"), act(MenuAction::CodexOn, "Turn on")]
+        );
+        assert_eq!(
+            codex(true, Failed(false))[4..6],
+            [text("Codex: Could not turn off"), act(MenuAction::CodexOff, "Turn off")]
+        );
+        // Each engine's change is its own: Claude Code's rows stay as its status says.
+        assert_eq!(
+            codex(false, Running(true))[2..4],
+            [text("Claude Code: On"), act(MenuAction::ClaudeOff, "Turn off")]
+        );
     }
 
     fn codex(supported: bool, installed: bool, enabled: bool) -> Option<CodexStatus> {
@@ -329,7 +382,7 @@ mod tests {
                 act(MenuAction::Quit, "Quit"),
             ]
         );
-        assert_eq!(with(codex(true, true, false))[4..6], [text("Codex: Off"), act(MenuAction::CodexOn, "Turn on…")]);
+        assert_eq!(with(codex(true, true, false))[4..6], [text("Codex: Off"), act(MenuAction::CodexOn, "Turn on")]);
         for codex in [codex(false, true, true), codex(true, false, true), None] {
             let items = with(codex.clone());
             assert!(!items.iter().any(|item| matches!(item, Text(label) if label.starts_with("Codex"))), "{codex:?}");
@@ -482,11 +535,16 @@ mod tests {
         assert_eq!(due(&AppState { saved: asked_sign_in, ..fresh.clone() }), Some(Screen::Claude));
         assert_eq!(due(&AppState { signed_in: Some(true), ..fresh.clone() }), Some(Screen::Claude));
         assert_eq!(due(&AppState { signed_in: None, ..fresh.clone() }), Some(Screen::Claude));
+        // Its plugin not installed yet: Turn on installs it.
+        let not_installed = ClaudeStatus { supported: true, installed: false, enabled: false, claude_version: None };
+        assert_eq!(
+            due(&AppState { signed_in: Some(true), claude: Some(not_installed), ..fresh.clone() }),
+            Some(Screen::Claude)
+        );
 
         // Claude Code is due only when it can be turned on here and is off.
         let not_due = [
             ClaudeStatus { supported: false, installed: true, enabled: false, claude_version: None },
-            ClaudeStatus { supported: true, installed: false, enabled: false, claude_version: None },
             ClaudeStatus { supported: true, installed: true, enabled: true, claude_version: None },
         ];
         for claude in not_due {

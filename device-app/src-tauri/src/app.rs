@@ -844,7 +844,16 @@ mod tests {
         assert_eq!(rows(&effects), ["Harness removed", "Install", "Quit"]);
         app.handle(Event::Cli(true));
         answer_all(&mut app, true, claude(true), codex(true));
-        assert_eq!(app.handle(Event::Menu(MenuAction::CodexOff)), [Effect::SetCodex(false)]);
+        assert!(has(&app.handle(Event::Menu(MenuAction::CodexOff)), &Effect::SetCodex(false)));
+
+        // A failed change goes with it too: its row does not come back with the CLI.
+        let mut app = found();
+        answer(&mut app, true, claude(true));
+        app.handle(Event::Menu(MenuAction::ClaudeOff));
+        app.handle(Event::ClaudeSet(Err("x".into())));
+        app.handle(Event::Cli(false));
+        app.handle(Event::Cli(true));
+        assert_eq!(rows(&answer(&mut app, true, claude(true)))[2..4], ["Claude Code: On", "Turn off"]);
     }
 
     #[test]
@@ -1054,17 +1063,11 @@ mod tests {
     fn claude_turns_off_from_the_menu() {
         let mut app = found();
         answer(&mut app, true, claude(true));
-        assert_eq!(app.handle(Event::Menu(MenuAction::ClaudeOff)), [Effect::SetClaude(false)]);
-        assert_eq!(app.handle(Event::ClaudeSet(Ok(()))), [Effect::ReadClaude]);
+        assert!(has(&app.handle(Event::Menu(MenuAction::ClaudeOff)), &Effect::SetClaude(false)));
+        assert!(has(&app.handle(Event::ClaudeSet(Ok(()))), &Effect::ReadClaude));
         let effects = app.handle(Event::Claude(claude(false)));
-        assert_eq!(rows(&effects)[2..4], ["Claude Code: Off", "Turn on…"]);
+        assert_eq!(rows(&effects)[2..4], ["Claude Code: Off", "Turn on"]);
         assert!(shows(&effects).is_empty());
-
-        // A failed turn-off changes nothing: the runner logged it.
-        let mut app = found();
-        answer(&mut app, true, claude(true));
-        app.handle(Event::Menu(MenuAction::ClaudeOff));
-        assert!(app.handle(Event::ClaudeSet(Err("x".into()))).is_empty());
     }
 
     #[test]
@@ -1099,25 +1102,73 @@ mod tests {
     fn codex_turns_off_from_the_menu() {
         let mut app = found();
         answer_all(&mut app, true, claude(true), codex(true));
-        assert_eq!(app.handle(Event::Menu(MenuAction::CodexOff)), [Effect::SetCodex(false)]);
+        assert!(has(&app.handle(Event::Menu(MenuAction::CodexOff)), &Effect::SetCodex(false)));
         assert!(app.handle(Event::Menu(MenuAction::CodexOff)).is_empty());
-        assert_eq!(app.handle(Event::CodexSet(Ok(()))), [Effect::ReadCodex]);
+        assert!(has(&app.handle(Event::CodexSet(Ok(()))), &Effect::ReadCodex));
         let effects = app.handle(Event::Codex(codex(false)));
-        assert_eq!(rows(&effects)[4..6], ["Codex: Off", "Turn on…"]);
+        assert_eq!(rows(&effects)[4..6], ["Codex: Off", "Turn on"]);
         assert!(shows(&effects).is_empty());
-
-        // A failed turn-off changes nothing: the runner logged it.
-        let mut app = found();
-        answer_all(&mut app, true, claude(true), codex(true));
-        app.handle(Event::Menu(MenuAction::CodexOff));
-        assert!(app.handle(Event::CodexSet(Err("x".into()))).is_empty());
 
         // Apart from Claude Code's: one change of each runs at once.
         let mut app = found();
         answer_all(&mut app, true, claude(true), codex(true));
         let mut effects = app.handle(Event::Menu(MenuAction::ClaudeOff));
         effects.extend(app.handle(Event::Menu(MenuAction::CodexOff)));
-        assert_eq!(effects, [Effect::SetClaude(false), Effect::SetCodex(false)]);
+        let sets: Vec<&Effect> =
+            effects.iter().filter(|effect| matches!(effect, Effect::SetClaude(_) | Effect::SetCodex(_))).collect();
+        assert_eq!(sets, [&Effect::SetClaude(false), &Effect::SetCodex(false)]);
+    }
+
+    #[test]
+    fn a_change_shows_in_the_menu_until_it_ends() {
+        let mut app = found();
+        answer_all(&mut app, true, claude(true), codex(true));
+        let effects = app.handle(Event::Menu(MenuAction::ClaudeOff));
+        assert!(has(&effects, &Effect::SetClaude(false)));
+        assert_eq!(rows(&effects)[2..4], ["Claude Code: Turning off…", "Codex: On"]);
+        // Until the status read answers, the rows say the last status.
+        let effects = app.handle(Event::ClaudeSet(Ok(())));
+        assert!(has(&effects, &Effect::ReadClaude));
+        assert_eq!(rows(&effects)[2..4], ["Claude Code: On", "Turn off"]);
+        assert_eq!(rows(&app.handle(Event::Claude(claude(false))))[2..4], ["Claude Code: Off", "Turn on"]);
+
+        let effects = app.handle(Event::Menu(MenuAction::CodexOff));
+        assert!(has(&effects, &Effect::SetCodex(false)));
+        assert_eq!(rows(&effects)[4..6], ["Codex: Turning off…", "Quit"]);
+        let effects = app.handle(Event::CodexSet(Ok(())));
+        assert!(has(&effects, &Effect::ReadCodex));
+        assert_eq!(rows(&effects)[4..6], ["Codex: On", "Turn off"]);
+
+        // A turn-on from the window shows in the menu too.
+        let mut app = on_claude();
+        let effects = app.handle(Event::Act(Action::TurnOn));
+        assert_eq!(rows(&effects)[2..4], ["Claude Code: Turning on…", "Quit"]);
+    }
+
+    #[test]
+    fn a_failed_change_reads_again_and_shows_its_row() {
+        let mut app = found();
+        answer_all(&mut app, true, claude(true), codex(true));
+        app.handle(Event::Menu(MenuAction::ClaudeOff));
+        let effects = app.handle(Event::ClaudeSet(Err("x".into())));
+        assert!(has(&effects, &Effect::ReadClaude));
+        assert!(shows(&effects).is_empty());
+        assert_eq!(rows(&effects)[2..4], ["Claude Code: Could not turn off", "Turn off"]);
+        // The read keeps the row; the next click clears it.
+        assert!(app.handle(Event::Claude(claude(true))).is_empty());
+        let effects = app.handle(Event::Menu(MenuAction::ClaudeOff));
+        assert!(has(&effects, &Effect::SetClaude(false)));
+        assert_eq!(rows(&effects)[2], "Claude Code: Turning off…");
+
+        app.handle(Event::Menu(MenuAction::CodexOff));
+        let effects = app.handle(Event::CodexSet(Err("x".into())));
+        assert!(has(&effects, &Effect::ReadCodex));
+        assert!(shows(&effects).is_empty());
+        assert_eq!(rows(&effects)[3..5], ["Codex: Could not turn off", "Turn off"]);
+        assert!(app.handle(Event::Codex(codex(true))).is_empty());
+        let effects = app.handle(Event::Menu(MenuAction::CodexOff));
+        assert!(has(&effects, &Effect::SetCodex(false)));
+        assert_eq!(rows(&effects)[3], "Codex: Turning off…");
     }
 
     #[test]
