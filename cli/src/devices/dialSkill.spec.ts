@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parse } from 'yaml'
-import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, claudePluginEnabled, ownDirectory, removeSkill, skillHeld, skillsFolderOf, writeSkill } from './dialSkill.js'
+import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, claudePluginEnabled, ownDirectory, removeSkill, skillsFolderOf, writeSkill } from './dialSkill.js'
 
 const MARKER = '# Written by Harness. Turn off the agent in Harness Device to remove it.'
 const uid = process.getuid!()
@@ -76,7 +76,7 @@ describe('the dial skill', () => {
     const home = folder()
     const skills = skillsFolderOf(home, true)
     expect(skills).toBe(realpathSync(join(home, 'skills')))
-    expect(skillHeld(skills!)).toBe('none')
+    expect(readdirSync(skills!)).toEqual([])
     expect(writeSkill(skills!)).toBe('written')
     const path = join(skills!, 'dial', 'SKILL.md')
     expect(readFileSync(path, 'utf8')).toBe(DIAL_SKILL)
@@ -85,7 +85,6 @@ describe('the dial skill', () => {
     expect(statSync(path).mode & 0o777).toBe(0o600)
     // The temp file it wrote first is gone.
     expect(readdirSync(join(skills!, 'dial'))).toEqual(['SKILL.md'])
-    expect(skillHeld(skills!)).toBe('ours')
     const inode = statSync(path).ino
     expect(writeSkill(skills!)).toBe('same')
     expect(statSync(path).ino).toBe(inode)
@@ -99,7 +98,6 @@ describe('the dial skill', () => {
     ]) {
       const skills = skillsAt()
       const path = skillOf(skills, older)
-      expect(skillHeld(skills), older).toBe('ours')
       expect(writeSkill(skills), older).toBe('written')
       expect(readFileSync(path, 'utf8'), older).toBe(DIAL_SKILL)
       expect(readdirSync(join(skills, 'dial')), older).toEqual(['SKILL.md'])
@@ -146,7 +144,6 @@ describe('the dial skill', () => {
       const linked = lstatSync(path).isSymbolicLink() ? realpathSync(path) : null
       const inLink = linked && statSync(linked).isDirectory() ? readdirSync(linked) : null
       const siblings = readdirSync(skills)
-      expect(skillHeld(skills), what).toBe('theirs')
       expect(writeSkill(skills), what).toBe('theirs')
       expect(removeSkill(skills), what).toBe('theirs')
       expect(stamp(path), what).toEqual(before)
@@ -166,7 +163,7 @@ describe('the dial skill', () => {
     expect(removeSkill(skills)).toBe('removed')
     expect(readdirSync(skills)).toEqual(['other'])
     expect(readFileSync(sibling, 'utf8')).toBe('mine')
-    expect(skillHeld(skills)).toBe('none')
+    expect(removeSkill(skills)).toBe('none')
 
     // Left empty, `skills` is still the person's agent folder: it stays.
     const alone = skillsAt()
@@ -204,7 +201,7 @@ describe('the dial skill', () => {
     expect(skillsFolderOf(second, false)).toBe(skills)
     expect(writeSkill(skills!)).toBe('written')
     expect(readFileSync(join(shared, 'dial', 'SKILL.md'), 'utf8')).toBe(DIAL_SKILL)
-    expect(skillHeld(skillsFolderOf(second, true)!)).toBe('ours')
+    expect(writeSkill(skillsFolderOf(second, true)!)).toBe('same')
   })
 
   it('a skills folder that is not this user\'s directory is refused', () => {
@@ -288,7 +285,7 @@ describe('the dial skill', () => {
     chmodSync(join(held, 'dial'), 0o500)
     cleanup.push(join(held, 'dial'))
     expect(removeSkill(held)).toBe('failed')
-    expect(skillHeld(held)).toBe('ours')
+    expect(readFileSync(join(held, 'dial', 'SKILL.md'), 'utf8')).toBe(DIAL_SKILL)
   })
 
   it('claudePluginEnabled', () => {

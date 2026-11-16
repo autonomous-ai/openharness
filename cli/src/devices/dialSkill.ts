@@ -12,7 +12,7 @@ export const DIAL_SKILL_DESCRIPTION = 'The person has a Harness dial on their de
 
 /** A YAML comment: both engines' front-matter parsers skip it, and Harness knows its own file by it, whatever the
  *  text around it, so a later release's text still reads as Harness's and is written over. */
-export const DIAL_SKILL_MARKER = '# Written by Harness. Turn off the agent in Harness Device to remove it.'
+const DIAL_SKILL_MARKER = '# Written by Harness. Turn off the agent in Harness Device to remove it.'
 
 /** The description is quoted: its `: ` ends a plain YAML scalar, and the engine would skip the skill without a word. */
 export const DIAL_SKILL = `---
@@ -76,11 +76,6 @@ export function skillsFolderOf(home: string, make: boolean, uid = ownUid()): str
     }
   }
   return ownDirectory(real, uid) === 'ok' ? real : null
-}
-
-export function skillHeld(skills: string): 'ours' | 'none' | 'theirs' {
-  const now = held(skills)
-  return now === 'same' ? 'ours' : now
 }
 
 /** A temp file, on disk before it is renamed into place: an engine, or a crash, never sees half a skill, which would read
