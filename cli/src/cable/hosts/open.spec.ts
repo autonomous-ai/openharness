@@ -135,6 +135,17 @@ describe('opening an agent outside Harness from the dial', () => {
     expect(switched).toEqual([])
   })
 
+  // hc's terminals carry whatever bundle id the process that started Herdr Core had: Ghostty's or Orca's would raise that
+  // app over Herdr's window.
+  it('an agent in Herdr brings Herdr, whatever bundle id its terminal inherited; one started from it brings its own app', () => {
+    for (const bundle of [undefined, 'com.mitchellh.ghostty', 'com.stablyai.orca', 'dev.herdr.core']) {
+      const hints = { HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty', ...(bundle ? { __CFBundleIdentifier: bundle } : {}) }
+      expect(bundleOf(detectHost(hints), hints), String(bundle)).toBe('dev.herdr.app')
+    }
+    const vscode = { HC_TERMINAL_ID: 't3', TERM_PROGRAM: 'vscode', __CFBundleIdentifier: 'com.microsoft.VSCode' }
+    expect(bundleOf(detectHost(vscode), vscode)).toBe('com.microsoft.VSCode')
+  })
+
   it('an app with no known bundle id opens nothing', async () => {
     const { calls, opener } = recorder()
     const none: Array<Record<string, string>> = [{}, { TERM_PROGRAM: 'tmux' }, { ZELLIJ: '0' }, { REX_BLOCK: 'x' }, { __CFBundleIdentifier: 'com.example.unknown' }]
