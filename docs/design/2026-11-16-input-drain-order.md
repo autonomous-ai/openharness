@@ -44,6 +44,24 @@ required before merge.
 
 ## Local evidence
 
+Independent review of the first correction found that a write waiting on the
+promise chain was neither cancellable nor bounded, and could resolve the same
+agent ID after `forget` into a replacement conversation. Direct submissions and
+host-move/cancel holds share this cause. The corrected design uses the existing
+`held` capacity tickets for pending writes, including their receipts and actual
+UTF-8 bytes. Cancelled tickets retain capacity until their callbacks are
+consumed, so repeated cancellation cannot grow an unbounded promise chain.
+Immediate writes retain the existing fast path. `forget` settles and revokes
+queued/held work; every delayed callback checks the captured input-state identity.
+Legacy writes repeat that check after asynchronous preparation and never arm
+confirmation against a replacement after a possible paste. No persisted or
+public contract changes are needed. This intentionally removes the old test's
+expectation that a forgotten person's message should still be typed.
+
+Additional selected controls cover direct/drained cancellation and replacement,
+move/cancel-held replacement, pending item/byte limits including cancelled
+capacity, lifecycle changes during validation/paste, and progress after failure.
+
 - The three barrier regressions fail on unchanged `f824010a`: a second write
   begins validation while the drained first write is still blocked. RED:
   `/tmp/core-input-drain-red.log` (3 failed, 122 unselected; 3.68 seconds).
@@ -57,3 +75,15 @@ required before merge.
   Its failed fixture root was removed and a subsequent read-only command
   and working-directory census found no owned processes there. The native
   regression still needs to run against this correction.
+
+- The first scheduling correction (`ae081733`) passed that previously failing
+  bundled Browser flow (12.84 seconds; `/tmp/core-input-ae0817-native.log`).
+  Independent review then reproduced the pending cancellation/replacement
+  failures and stopped acceptance; its records remain in
+  `/tmp/core-input-review-v1/`.
+- The lifecycle controls fail in 11 cases on that first correction:
+  `/tmp/core-input-lifecycle-red.log` (641 ms). The corrected full input selection
+  passes 218 cases across four files in 5.35 seconds:
+  `/tmp/core-input-lifecycle-green-final.log`. The intermediate run retained one
+  failure because a disappeared agent no longer reported its error; that report
+  is restored without notifying a replacement agent. Both logs are retained.
