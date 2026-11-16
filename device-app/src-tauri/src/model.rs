@@ -126,7 +126,7 @@ pub fn menu_log(items: &[MenuItem]) -> String {
     labels.join(" | ")
 }
 
-/// The dial, when its settings can be changed: attached, not updating, on a running Harness.
+/// An attached dial on a running Harness, not updating: when Sound and Notifications can be changed.
 fn settable(state: &AppState) -> Option<&DialStatus> {
     if state.cli != CliState::Found || state.daemon != Daemon::Up {
         return None;

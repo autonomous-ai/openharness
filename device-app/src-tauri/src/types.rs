@@ -13,12 +13,14 @@ pub struct DialStatus {
     pub problem: Option<String>,
     /// The dial's sound setting; None from an older CLI or a firmware with no settings.
     pub muted: Option<bool>,
-    /// The dial's Notifications setting; None from an older CLI, or a value this app does not know.
+    /// This computer's Notifications setting, kept by the daemon; None from an older CLI, or a value this app does not
+    /// know.
     #[serde(default, deserialize_with = "notify_mode")]
     pub notify: Option<NotifyMode>,
 }
 
-/// The dial's Notifications setting. Only you (`You`): an ordinary finished turn neither beeps nor wakes the dial.
+/// This computer's Notifications setting, kept by the daemon. Only you (`You`): an ordinary finished turn neither
+/// beeps nor wakes the dial.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NotifyMode {
     Full,

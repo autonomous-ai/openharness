@@ -29,8 +29,8 @@ Taken from the orchestrator's brief; not reopened here.
   exception line to AGENTS.md rule 9: "Harness Device app (device-app/): Rust + Tauri, UI webview TypeScript".
   `rustup update stable` is allowed (rustc here is 1.68; Tauri 2 needs >= 1.77; CI uses `dtolnay/rust-toolchain@stable`).
 - **Thin over the CLI.** The app owns no daemon logic: install script, `harness start --if-down`, `harness login
-  --json`, `harness auth status --json`, `harness hardware watch --json`, `harness device claude …`. The CLI and
-  daemon update themselves.
+  --json`, `harness auth status --json`, `harness hardware watch --json`, `harness device claude …`, `harness device
+  codex …`. The CLI and daemon update themselves.
 - **Out of this wave** (plan items only, no code): the app holding macOS Automation/Accessibility permissions for the
   helper (later wave, objc2). App self-update, signing, notarization, the DMG and the release followed in
   [the release design](2026-11-16-device-app-release-design.md).
@@ -61,7 +61,7 @@ Taken from the orchestrator's brief; not reopened here.
 
 ```
 Menu bar ─ Tauri tray (native menu) ─┐
-Window   ─ webview ui/ (3 screens) ──┤ invoke / events
+Window   ─ webview ui/ (4 screens) ──┤ invoke / events
                                      ▼
                          src-tauri lib (Rust)
      cli.rs      find and run `harness`; NDJSON line reader; timeouts
@@ -69,7 +69,7 @@ Window   ─ webview ui/ (3 screens) ──┤ invoke / events
      keepalive.rs  the daemon rule (down twice, :10-:20 slot, desktop app, start --if-down)
      install.rs  install script runs (--host, then --desktop)
      account.rs  `auth status --json`, `login --json`
-     claude.rs   `device claude status|enable|disable`
+     engine.rs   `device claude|codex status|enable|disable`
      state.rs    state.json in the app data folder (not ~/.harness)
      desktop.rs  desktop app installed / running (trait; macOS NSWorkspace)
      loginitem.rs SMAppService register (trait)
