@@ -193,7 +193,8 @@ import { createPaneSwap } from './agents/swap.js'
 import { createAgentRetargeter } from './agents/retarget.js'
 import { createAgentRestarter } from './agents/restart.js'
 import { createHostMove, moveWaitingArgv } from './agents/hostMove.js'
-import { createAgentBrowserLifecycle, createAgentLifecycle, createPurgeRequest, createStopRequest } from './agents/lifecycle.js'
+import { createAgentLifecycle, createPurgeRequest, createStopRequest } from './agents/lifecycle.js'
+import { createAgentLife } from './agentLife.js'
 import { createAgentClosing, createCloseRequests } from './agents/close.js'
 import { answerConversationQuery, conversationReads } from './conversationQueries.js'
 import { createLaunchRequests } from './agents/launches.js'
@@ -222,7 +223,7 @@ import { createRecapsLink } from './recapsLink.js'
 import { createAgentBrowserLink, wakeAgentBrowser } from './agentBrowserLink.js'
 import { createBrowserStreams, type BrowserStreams } from './browserStreams.js'
 import { createAgentCleanupLink } from './agentCleanupLink.js'
-import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, AGENT_CLEANUP_FALLBACKS, RECAPS_FALLBACKS, TERMINALS_OFF } from './api.js'
+import { agentView, AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, AGENT_CLEANUP_FALLBACKS, RECAPS_FALLBACKS, TERMINALS_OFF } from './api.js'
 import { answerAgentQuery } from './agentQueries.js'
 import { createDeliveries } from './deliveries.js'
 import { createTerminalWatch } from './terminalWatch.js'
@@ -234,7 +235,7 @@ import { answerSharedMachinesQuery } from './sharedMachinesQueries.js'
 import { inlineSharedMachinesPort } from '../lib/sharedMachinesPort.js'
 import { createOrchestratorLink } from './orchestratorLink.js'
 import { daemonCommand } from '../lib/daemonCommand.js'
-import { KNOWN_SERVICES, masterRunsEngineRuntime, masterRunsLiveEngines, otherEnginesVersion, servicesTheMasterRuns } from '../harnessd/services.js'
+import { heldAgentLife, KNOWN_SERVICES, masterRunsEngineRuntime, masterRunsLiveEngines, otherEnginesVersion, servicesTheMasterRuns } from '../harnessd/services.js'
 import { askForMessages, createMessagesLink } from './messagesLink.js'
 import { createDevicesLink } from './devicesLink.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, PROBE_COMMAND } from '../harnessd/protocol.js'
@@ -872,11 +873,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     quietStarted: (agentId) => { quietTurnRef?.(agentId); quietTitles.started(agentId) },
   })
   const ports = emptyPorts()
-  // Each agent's browser (services/agentBrowser.ts), told once however its agent ends (core/agents/lifecycle.ts),
-  // attached again on any look at its running agent that finds it left out (`observed`, from discovery), turned on
-  // and off by its person through the core (`CoreApi.agents.setBrowser`), and moved with its pane to the agent that
-  // takes it (`taken`, from discovery; `CoreApi.agents.moveBrowser`), so it is made before the core API.
-  const agentBrowsers = createAgentBrowserLifecycle(() => ports.agentBrowser, registry, stoppedAgents)
+  // What happens to agents, for the services that follow it (core/agentLife.ts): each look at a live agent, its end, a
+  // stop, a purge and a pane's new agent. Made before the core API, which lends it (`CoreApi.agents.follow`); what a
+  // service in its own process must not miss while down is held for it (harnessd/services.ts `hears`).
+  const agentLife = createAgentLife({
+    live: () => registry.list(),
+    notify: (service, frame, opts) => serviceLinksRef?.notify(service, frame, opts) ?? false,
+    hears: heldAgentLife(outOfProcess),
+  })
   // The Wi-Fi device's service runs with the dials (services/wifi.ts); what the core reads in line of it
   // (who is watching, which transcripts and streams it follows, the focus revision) and the check on every
   // answer it sends a device are here (core/wifi.ts). Its doors are the calls it made when it ran here.
@@ -943,7 +947,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     dshInstallStatus: (status) => backendRef?.send({ type: 'dsh_install_status', payload: status }),
     // The recaps' cards and recaps (services/recaps.ts) down the doors they took from here, and a turn's final answer.
     turnCard: (frame) => backendRef?.sendCommander(frame), turnSummary: (frame) => backendRef?.send(frame), lastTurn: (sessionId) => readLastTurn(sessionId),
-    // A service's product counters (the agent browser's), to the gateway's report, as the socket's own are.
+    // A service's product counters (lib/serviceMetrics.ts), to the gateway's report, as the socket's own are.
     count: (metric) => backendRef?.countUsage(metric),
     // The backend mints and remembers the account's grid name; this CLI holds neither the account's
     // email nor its id. An older backend (no route) answers nothing, which the grid reconcile treats as
@@ -1030,10 +1034,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // a harness another agent started. Read when it closes one, never now: the close service is built further down.
     closeAgent: (request) => backendRef?.closeAgentService?.request(request) ?? Promise.resolve({ error: 'UNSUPPORTED' }),
     activityAt: (session) => transcriptActivityAt(session.transcriptPath, session.engine),
-    // The person's Start and Stop of an agent's browser, which the agent browser asks of the core; and its flag, moved
-    // with its pane once the agent browser moved its entry.
-    setBrowser: agentBrowsers.set,
-    moveBrowser: agentBrowsers.move,
+    // What happens to agents, for the services in this process that follow it (core/agentLife.ts).
+    follow: agentLife.follow,
     // The process a pane runs, as `terminal_info` reads it: `harness browser`'s parents are held to it (`agents.ofPane`).
     panePid: (session) => {
       const runtime = primaryRuntime(session)
@@ -1076,12 +1078,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // the core carries on without it (core/serviceHost.ts).
   const serviceHost = createServiceHost(ports, { faults: testFaults(harnessd.HARNESSD_TEST_FAULTS) })
   // The DSH companions: each harness agent's viewer and verdict watch (services/viewers.ts), started below.
-  dshFrameContextRef = (s) => ports.viewers?.frameContext(s) ?? null
+  dshFrameContextRef = (s) => ports.viewers?.frameContext(agentView(s)) ?? null
   // Models (services/models.ts), started below: what an agent's frame says of its grid, from memory.
   gridAnnotationRef = (grid) => (ports.models ?? MODELS_OFF).annotation(grid)
-  const attachDsh = (s: RegisteredSession): void => ports.viewers?.attach(s)
+  // A look at a live agent, for the services that follow agents (core/agentLife.ts): a create, a fork, a resume, a
+  // start's restore, every scan.
+  const agentHere = (s: RegisteredSession): void => agentLife.running(s)
   // Every way an agent stops running here passes through this: a stop or other forget, and an engine's own exit.
-  const agentEnded = (agentId: string): void => { ports.viewers?.detach(agentId); agentBrowsers.ended(agentId); quietTitles.ended(agentId) }
+  const agentEnded = (agentId: string): void => { agentLife.ended(agentId); quietTitles.ended(agentId) }
 
   // The folders agents work in: branch names and unused worktrees (services/workspaces.ts), started below.
   const syncTerminalTitles = async (): Promise<void> => {
@@ -1644,8 +1648,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const agentCleanupLink = createAgentCleanupLink(coreApi, (frame, opts) => serviceLinks.notify('agentCleanup', frame, opts),
     (type, payload, waitMs) => serviceLinks.call('agentCleanup', type, payload, waitMs))
   // What the core tells the agent browser in its own process, keeps of what it says, and answers it (core/agentBrowserLink.ts).
-  const agentBrowserLink = createAgentBrowserLink({ core: coreApi, notify: (frame, opts) => serviceLinks.notify('agentBrowser', frame, opts), want: () => coreLink.want('agentBrowser'),
-    notifyBinary: (bytes) => serviceLinks.notifyBinary('agentBrowser', bytes), streamsGone: () => browserStreams.gone() })
+  const agentBrowserLink = createAgentBrowserLink({ core: coreApi, notify: (frame) => serviceLinks.notify('agentBrowser', frame),
+    notifyBinary: (bytes) => serviceLinks.notifyBinary('agentBrowser', bytes), streamsGone: () => browserStreams.gone(), want: () => coreLink.want('agentBrowser') })
   const usageLink = createUsageLink({ call: payload => ports.usage?.read(payload.target as AgentUsageTarget) ?? Promise.resolve({}), changed: agentEvents.onTokenUsageChanged })
   const serviceLinks = createServiceLinks({
     token: serviceToken,
@@ -1669,6 +1673,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     answer: async (service, query, payload, authority) => await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
       // Agent Messages is answered what it uses and nothing more, never what an experiment may ask (core/messagesLink.ts).
       ?? (service === 'messages' ? await messagesLink.answer(query, payload) : null)
+      // What happens to agents, for a service that follows them (core/agentLife.ts): the live agents' rows, which only a
+      // service whose answers come after the gateway's and Agent Messages' own may read, as it may read `live`.
+      ?? (query === 'follow_agents' ? agentLife.followed(service, payload) : null)
       ?? await answerConnectorsQuery(coreApi, service, query, payload)
       ?? await answerSharedMachinesQuery(sharedMachinesAccount, service, query, payload)
       ?? answerDaemonQuery(coreApi, service, query)
@@ -1741,6 +1748,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (service === 'recaps') recapsLink.disconnected()
       if (service === 'agentBrowser') agentBrowserLink.disconnected()
       if (service === 'workspaces') workspacesLink.disconnected()
+      agentLife.disconnected(service)
       void terminalWatch.gone(service)
     },
   })
@@ -1752,12 +1760,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The connection that asked closed: the services abort what it asked, wherever they run.
   backend.onConnectionClosed = (connId) => { serviceLinks.closeConnection(connId); serviceHost.closeConnection(connId) }
   // Session search (services/search.ts): in this process, or in its own (services/searchProcess.ts),
-  // where the core tells it what changed. A purge's forgetting waits for it if it is down.
+  // where the core tells it what changed. A purge's forgetting it hears as it follows agents, held for it if it is down
+  // (core/agentLife.ts).
   if (outOfProcess.has('search')) {
     ports.search = {
       inspect: async request => externalSessionAnswer(await serviceLinks.call('search', 'external_inspect', { ...request }, 4_000), request),
       touch: (sessionId) => { serviceLinks.notify('search', { type: 'service_event', payload: { kind: 'touch', sessionId } }) },
-      deleteHistory: (sessionId) => { serviceLinks.notify('search', { type: 'service_event', payload: { kind: 'deleteHistory', sessionId } }, { untilDelivered: true }) },
       session: () => undefined,
       stop: () => {},
     }
@@ -1767,8 +1775,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // What the core calls search through: guarded, so it answers its fallbacks once search is switched off.
   const sessionSearch = ports.search
   // The DSH viewers: in this process, or in its own (services/viewersProcess.ts), told of each agent.
-  if (outOfProcess.has('viewers')) ports.viewers = viewersLink.port
-  else serviceHost.start('viewers', inline!.startViewers, coreApi, VIEWERS_FALLBACKS)
+  if (outOfProcess.has('viewers')) {
+    ports.viewers = viewersLink.port
+    viewersLink.follow()
+  } else serviceHost.start('viewers', inline!.startViewers, coreApi, VIEWERS_FALLBACKS)
   // Workspaces: in this process, or in the edge host (services/workspacesProcess.ts), told what to do and when.
   if (outOfProcess.has('workspaces')) ports.workspaces = workspacesLink.port
   else serviceHost.start('workspaces', inline!.startWorkspaces, coreApi, WORKSPACES_FALLBACKS)
@@ -1849,8 +1859,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (!outOfProcess.has('shell')) serviceHost.serve('shell', inline!.startShell, coreApi, SHELL_REQUESTS)
   // A sandboxed Chrome beside each agent whose Browser is on (services/agentBrowser.ts): in its own process, on
   // demand (services/agentBrowserProcess.ts), or in this one.
-  if (outOfProcess.has('agentBrowser')) ports.agentBrowser = agentBrowserLink.port
-  else serviceHost.start('agentBrowser', inline!.startAgentBrowser, coreApi, AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS)
+  if (outOfProcess.has('agentBrowser')) {
+    ports.agentBrowser = agentBrowserLink.port
+    agentBrowserLink.follow()
+  } else serviceHost.start('agentBrowser', inline!.startAgentBrowser, coreApi, AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS)
   browserFrameRef = (agentId) => ports.agentBrowser?.frameContext(agentId)
   backend.browserFrameProvider = browserFrameRef
   // Models: grid access and its pin, the model pictures on agents' frames, the keystroke prewarm, where an
@@ -1884,7 +1896,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   backend.runtimeProfileProvider = (session) => runtimeProfiles.selectedModel(session)
   backend.workspaceProvider = (session) => runtimeProfiles.workspace(session)
-  backend.dshFrameProvider = (s) => ports.viewers?.frameContext(s) ?? null
+  backend.dshFrameProvider = (s) => ports.viewers?.frameContext(agentView(s)) ?? null
   // `harness remote` names the tile it was typed in by its pane; the registry knows whose it is (lib/terminalHandoff.ts).
   backend.onTerminalHandoff = (pane) => handoffAgentId(registry.advertised(), pane)
   // A rename, a model and effort, or an app opening an agent (core/agents/update.ts).
@@ -2045,9 +2057,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // What the reconciler's scans mean for the registry (core/agents/discovery.ts).
   const discovery = createDiscoveryHandlers({
     registry,
-    attachDsh,
-    attachBrowser: agentBrowsers.observed,
-    moveBrowser: agentBrowsers.taken,
+    attach: agentHere,
+    taken: (from, to) => agentLife.taken(from, to),
     forgetSession,
     announceSession,
     bindObservedAgent,
@@ -2662,11 +2673,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    }
   }
   })
-  // Every DSH agent the registry kept gets its viewer and verdict watch back — restored or not, an
-  // agent whose pane is still up is still that harness.
-  for (const session of registry.list()) if (session.dsh) attachDsh(session)
-  // And every agent whose Browser is on gets its browser back.
-  for (const session of registry.list()) if (session.browser) agentBrowsers.attached(session)
+  // Every agent the registry kept is looked at once more, restored or not: an agent whose pane is still up is still
+  // that agent, and a DSH agent gets its viewer and verdict watch back, an agent whose Browser is on its browser.
+  for (const session of registry.list()) agentHere(session)
   await agentReconciler.start(env.TERMINAL_RECONCILE_INTERVAL_MS ?? env.TMUX_REAP_INTERVAL_MS)
 
   // Reconciliation is deliberately full: drain every transcript to EOF, inspect each live pane, then
@@ -2817,8 +2826,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     externalResume: externalResumes.create,
     watchNewPane,
     announceSession,
-    attachDsh,
-    attachBrowser: agentBrowsers.attached,
+    attach: agentHere,
     prepareApiTools,
     hookPort,
     hooksDisabled: env.DISABLE_HOOK_INSTALL,
@@ -2850,7 +2858,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     pendingForkInherit,
     watchNewPane,
     announceSession,
-    attachDsh,
+    attach: agentHere,
     prepareApiTools,
     relaunchOverrides,
     gridName: () => backend.gridName(),
@@ -2919,7 +2927,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     sessionCheckpoints,
     mirror,
-    sessionSearch,
     // A purge erases the harness's told lines, which the agent cleanup does (services/agentCleanup.ts), and the requests
     // that made it; either failing refuses the purge.
     forgetTold: async (agentId) => await ports.agentCleanup?.forgetTold(agentId) ?? false,
@@ -2933,15 +2940,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     prepareSessionResume,
     stopBackgroundJob: backgroundJobs.stop,
     refreshGridWebSearch,
-    attachDsh,
-    attachBrowser: agentBrowsers.attached,
+    attach: agentHere,
     attachSession: (session) => attachSession(session),
     relaunchMarks,
     // A harness closed or stopped: the harnesses it started close with it (services/agentCleanup.ts). Its browser stops,
     // its login kept, through `agentEnded`, which the stop's forget reaches.
-    stopped: (agentId) => ports.agentCleanup?.closed(agentId),
-    // Purged: its browser and its login go too.
-    purged: (agentId) => ports.agentBrowser?.deleted(agentId),
+    stopped: (agentId) => agentLife.stopped(agentId),
+    // Purged: its conversations leave search, and its browser and its login go too.
+    purged: (agentId, sessionIds) => agentLife.purged(agentId, sessionIds),
     moveHeld: (agentId) => moveHeld.has(agentId),
   })
   const stopJobs = lifecycle.stopJobs

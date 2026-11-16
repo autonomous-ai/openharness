@@ -2291,30 +2291,6 @@ describe('registry across a reboot and pane loss', () => {
     expect(reloaded.reinstateArchived(shell.agentId, saved, processIdentity(51))?.browser).toBe(true)
   })
 
-  // The person's Start and Stop (core/agents/lifecycle.ts `createAgentBrowserLifecycle`): the flag means its Browser is on.
-  it('setBrowser sets and clears the flag on a live row, saves it, and answers null for no row', async () => {
-    const { registry } = await loadRegistryModule()
-    registry.load()
-    const agent = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%53' }], cwd: '/tmp/demo' })!
-    const saved = (): unknown => (JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8')) as Array<{ agentId: string; browser?: unknown }>)
-      .find(r => r.agentId === agent.agentId)?.browser
-    const on = registry.setBrowser(agent.agentId, true)
-    expect(on).toBe(registry.byAgent(agent.agentId))
-    expect(on?.browser).toBe(true)
-    expect(saved()).toBe(true)
-    // Asked again, the row stays as it is.
-    expect(registry.setBrowser(agent.agentId, true)?.browser).toBe(true)
-    const { registry: reloaded } = await loadRegistryModule()
-    reloaded.load()
-    expect(reloaded.byAgent(agent.agentId)?.browser).toBe(true)
-    const off = registry.setBrowser(agent.agentId, false)
-    expect(off).not.toHaveProperty('browser')
-    expect(saved()).toBeUndefined()
-    expect(registry.setBrowser(agent.agentId, false)).not.toHaveProperty('browser')
-    expect(registry.setBrowser('nobody', true)).toBeNull()
-    expect(registry.setBrowser('nobody', false)).toBeNull()
-  })
-
   // A fresh move's remembered conversation went with a retired model switch (#3901): a row an older release saved with
   // one loads without it, and its agent's moves reopen its own conversation (core/agents/retarget.ts).
   it('loads a row saved with a remembered subscription session without it', async () => {
@@ -2890,22 +2866,17 @@ describe('a shell names the agent that ended in its pane', () => {
     expect(older.byAgent(shell.agentId)).not.toHaveProperty('previousAgentId')
   })
 
-  it('a process that takes a bound agent\'s pane says whether the agent it evicted had its Browser on', async () => {
+  // Whose Browser is on is the agent browser's own since 2026-11-15 (services/agentBrowser.ts): the eviction names the
+  // agent, and the browser hears that its pane was taken (core/agentLife.ts `taken`).
+  it('a process that takes a bound agent\'s pane names the agent it evicted, and nothing of its Browser', async () => {
     const transcriptPath = join(dataDir, 'evicted.jsonl')
     writeFileSync(transcriptPath, '{}\n')
     const { registry } = await loadRegistryModule()
     registry.load()
-    registry.openProcessAgent({ agentId: 'on-agent', engine: 'claude', tmuxPane: '%72', cwd: '/tmp/demo', processIdentity: processIdentity(172) })
-    registerProcess(registry, { launcherId: 'on-agent', sessionId: 's-on', transcriptPath, tmuxPane: '%72', cwd: '/tmp/demo' })
-    expect(registry.setBrowser('on-agent', true)?.browser).toBe(true)
-    const on = registry.openProcessAgent({ agentId: 'next-on', engine: 'claude', tmuxPane: '%72', cwd: '/tmp/demo', processIdentity: processIdentity(272) })
-    expect(on?.evicted).toEqual({ agentId: 'on-agent', sessionId: 's-on', browser: true })
-
     registry.openProcessAgent({ agentId: 'off-agent', engine: 'claude', tmuxPane: '%73', cwd: '/tmp/demo', processIdentity: processIdentity(173) })
     registerProcess(registry, { launcherId: 'off-agent', sessionId: 's-off', transcriptPath, tmuxPane: '%73', cwd: '/tmp/demo' })
     const off = registry.openProcessAgent({ agentId: 'next-off', engine: 'claude', tmuxPane: '%73', cwd: '/tmp/demo', processIdentity: processIdentity(273) })
     expect(off?.evicted).toEqual({ agentId: 'off-agent', sessionId: 's-off' })
-    expect(off?.evicted).not.toHaveProperty('browser')
   })
 })
 

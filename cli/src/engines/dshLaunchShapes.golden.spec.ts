@@ -223,7 +223,7 @@ const gridSetups: string[] = []
 const createRest = (privateGrid: string | null) => ({
   createBackend: { capabilities: async () => ({ sessionEnv: pane.tmux }) } as never, registry: { setLaunch: () => pending } as never,
   adoptableSession: async () => ({ ok: false, error: 'UNUSED' }) as never, heldBy: async () => 'none' as const, takeOverWhenIdle: async () => {},
-  watchNewPane: (async () => {}) as never, announceSession: () => {}, attachDsh: () => {}, hookPort: 4242, hooksDisabled: true,
+  watchNewPane: (async () => {}) as never, announceSession: () => {}, attach: () => {}, hookPort: 4242, hooksDisabled: true,
   installOpencodePlugin: async () => true, terminalHintMachineName: () => 'this-mac', blocksFolder: () => false,
   gridSetup: () => async (request: { ownGrid: boolean }) => { gridSetups.push(`ensure ownGrid=${request.ownGrid}`); return {} as never },
   privateGridName: async () => privateGrid,
@@ -326,7 +326,7 @@ async function relaunchCases(): Promise<Record<string, unknown>> {
 const mirror = { isBusy: () => false, recentAsks: () => [], recent: () => [], lastFullText: () => undefined }
 const forkRest = (source: RegisteredSession) => ({
   createBackend: {} as never, registry: { byAgent: (id: string) => (id === source.agentId ? source : undefined) } as never, mirror: mirror as never,
-  pendingForkInherit: new Map<string, string>(), watchNewPane: (async () => {}) as never, announceSession: () => {}, attachDsh: () => {},
+  pendingForkInherit: new Map<string, string>(), watchNewPane: (async () => {}) as never, announceSession: () => {}, attach: () => {},
 })
 
 async function forkCase(source: RegisteredSession, options: { gridName?: string; before?: () => Promise<void> | void } = {}): Promise<unknown> {

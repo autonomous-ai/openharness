@@ -11,6 +11,7 @@ config/testIsolation.ts
 core/accountQueries.ts
 core/agentBrowserLink.ts
 core/agentCleanupLink.ts
+core/agentLife.ts
 core/agentQueries.ts
 core/agents/adopt.ts
 core/agents/bind.ts
@@ -298,7 +299,6 @@ lib/agentNames.ts
 lib/agentProject.ts
 lib/agentSessionEnv.ts
 lib/agentSettings.ts
-lib/agentTmp.ts
 lib/agentUsageWire.ts
 lib/apiConnectionMetadata.ts
 lib/apiInstructions.ts
@@ -356,7 +356,6 @@ lib/gridLaunchWire.ts
 lib/guestEngines.ts
 lib/guestRunner.ts
 lib/guestUser.ts
-lib/hachiMetrics.ts
 lib/handoffAuthority.ts
 lib/handoffDiscovery.ts
 lib/handoffFiles.ts
@@ -456,6 +455,7 @@ lib/runtimeControl.ts
 lib/runtimeProfileState.ts
 lib/runtimeProfileWire.ts
 lib/secureState.ts
+lib/serviceMetrics.ts
 lib/sessionCheckpoint.ts
 lib/sessionGitContext.ts
 lib/sessionGitHistory.ts

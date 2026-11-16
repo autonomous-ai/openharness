@@ -35,19 +35,37 @@ describe('what a service in its own process may ask the core of the agents', () 
     expect(await answerAgentQuery(core, 'agentUsage', { target })).toMatchObject({ value: { totalTokens: 4 } })
   })
 
-  it('hands on one of Hachi\'s daemon counters, and refuses any other name', () => {
+  it('hands on one of the counters a service may count (Hachi\'s, the agent browser\'s), and refuses any other name', () => {
     const count = vi.fn()
     const core = fakeCore({ count })
     expect(answerAgentQuery(core, 'count', { metric: 'hachi_wake_done' })).toEqual({ ok: true })
-    expect(count).toHaveBeenCalledWith('hachi_wake_done')
+    expect(answerAgentQuery(core, 'count', { metric: 'agent_browser_failed_podman_old' })).toEqual({ ok: true })
+    expect(count.mock.calls).toEqual([['hachi_wake_done'], ['agent_browser_failed_podman_old']])
     // The App's, the launch twins and the person's days are counted where they happen, never by a service.
-    for (const metric of ['ui_desktop_hachi_switch_on', 'launch_hachi_started_claude', 'hachi_person_turn_days', 'create_requests', 'PRIVATE_CANARY', 7]) {
+    for (const metric of ['ui_desktop_hachi_switch_on', 'launch_hachi_started_claude', 'hachi_person_turn_days', 'create_requests', 'agent_browser_made_up', 'PRIVATE_CANARY', 7]) {
       expect(answerAgentQuery(core, 'count', { metric })).toEqual({ error: 'INVALID_REQUEST' })
     }
     expect(answerAgentQuery(core, 'count')).toEqual({ error: 'INVALID_REQUEST' })
-    expect(count).toHaveBeenCalledTimes(1)
+    expect(count).toHaveBeenCalledTimes(2)
     // A core that offers no counter takes it and counts nothing.
     expect(answerAgentQuery(fakeCore(), 'count', { metric: 'hachi_turns_person' })).toEqual({ ok: true })
+  })
+
+  // `harness browser` in an agent's pane names it so (core/api.ts `ofPane`), held to the command's parents' pids.
+  it('the live agent of a pane and whether it is a guest\'s, held to the parents it was given', async () => {
+    const ofPane = vi.fn(async (pane: string, _ancestors?: number[]) => (pane === '%7' ? { agentId: 'a1', guest: false } : pane === '%8' ? { agentId: 'kim', guest: true } : null))
+    const core = fakeCore({ agents: { ofPane } })
+    expect(await answerAgentQuery(core, 'agent_of_pane', { pane: '%7', ancestors: [4242, 1] })).toEqual({ agentId: 'a1', guest: false })
+    expect(await answerAgentQuery(core, 'agent_of_pane', { pane: '%8', ancestors: [4343] })).toEqual({ agentId: 'kim', guest: true })
+    expect(await answerAgentQuery(core, 'agent_of_pane', { pane: '%9', ancestors: [4242] })).toEqual({ agentId: null })
+    // An older relay's `agent_browser_state` names its pane alone.
+    expect(await answerAgentQuery(core, 'agent_of_pane', { pane: '%7' })).toEqual({ agentId: 'a1', guest: false })
+    for (const payload of [{}, { pane: 7 }, { pane: '%7', ancestors: 4242 }, { pane: '%7', ancestors: [4242, '1'] }, { pane: '%7', ancestors: [-1] }, { pane: '%7', ancestors: [1.5] }]) {
+      expect(await answerAgentQuery(core, 'agent_of_pane', payload), JSON.stringify(payload)).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    expect(ofPane.mock.calls).toEqual([['%7', [4242, 1]], ['%8', [4343]], ['%9', [4242]], ['%7', undefined]])
+    // A core that cannot say names none.
+    expect(await answerAgentQuery(fakeCore(), 'agent_of_pane', { pane: '%7' })).toEqual({ agentId: null })
   })
 
   // Hachi 5a (OPENHARNES-15): the goals in the edge host tell the windows a goal closed; the core decides whose it is

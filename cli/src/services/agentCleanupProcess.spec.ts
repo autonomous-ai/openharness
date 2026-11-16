@@ -20,28 +20,37 @@ describe('the agent cleanup in its own process', () => {
   const setup = () => {
     let options: ServiceProcessOptions | null = null
     let api: CoreApi | null = null
-    const port = { closed: vi.fn(), typed: vi.fn(), forgetTold: vi.fn(async () => true), stop: vi.fn() }
+    const port = { typed: vi.fn(), forgetTold: vi.fn(async () => true), stop: vi.fn() }
+    /** The stops the cleanup heard, as it follows agents (services/followLink.ts). */
+    const stops: string[] = []
     let refresh: (() => Promise<void>) | undefined
     const stop = vi.fn()
     const service = runAgentCleanupService({
       dataDir: dir, socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't',
       run: (given) => { options = given; return { stop } },
-      create: (core, deps) => { api = core; refresh = deps?.refresh; return { port, look: vi.fn(), closeStartedBy: vi.fn() } },
+      create: (core, deps) => {
+        api = core
+        refresh = deps?.refresh
+        core.agents.follow!((event) => { if (event.kind === 'stopped') stops.push(event.agentId) }, { running: false })
+        return { port, look: vi.fn(), closeStartedBy: vi.fn() }
+      },
     })
-    return { options: options!, api: api!, port, refresh: refresh!, service, stop }
+    return { options: options!, api: api!, port, refresh: refresh!, service, stop, stops }
   }
 
   it('hears from the core which harness was closed and which the person typed into, and nothing else', () => {
-    const { options, port } = setup()
+    const { options, port, stops } = setup()
     expect(options).toMatchObject({ name: 'agentCleanup', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
     // The apps ask it nothing: its one request is the core's own (core/agentCleanupLink.ts), which no client's is routed to.
     expect(Object.keys(options.requests)).toEqual(['forgetTold'])
-    options.onEvent!({ kind: 'closed', agentId: 'lead' })
+    options.onEvent!({ kind: 'agent', event: { kind: 'stopped', agentId: 'lead' } })
+    // A core from before stops were followed (2026-11-15) says one so. Delete on or after 2026-12-18.
+    options.onEvent!({ kind: 'closed', agentId: 'older' })
     options.onEvent!({ kind: 'typed', agentId: 'kid' })
     options.onEvent!({ kind: 'typed', agentId: '' })
     options.onEvent!({ kind: 'closed' })
     options.onEvent!({ kind: 'other', agentId: 'x' })
-    expect(port.closed.mock.calls).toEqual([['lead']])
+    expect(stops).toEqual(['lead', 'older'])
     expect(port.typed.mock.calls).toEqual([['kid']])
   })
 
@@ -143,7 +152,7 @@ describe('the agent cleanup in its own process', () => {
       const query = vi.fn(async (name: string, _payload?: Record<string, unknown>) => (name === 'live' ? { agents: [kid('k1')] } : { closed: true }))
       options.onConnected!({ query })
       const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-      options.onEvent!({ kind: 'closed', agentId: 'lead' })
+      options.onEvent!({ kind: 'agent', event: { kind: 'stopped', agentId: 'lead' } })
       await vi.advanceTimersByTimeAsync(0)
       expect(query.mock.calls).toEqual([['live', {}], ['daemon', {}], ['closeStarted', { agentId: 'k1', mode: 'now' }]])
       expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[agent-cleanup\] closed a harness \(k1\): the harness that started it was closed/))

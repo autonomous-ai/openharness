@@ -5,7 +5,9 @@
  *
  * A service on the core boundary (docs/design/2026-10-03-harnessd.md, step 13): it reads the core
  * only through `CoreApi`, the core reaches it only through `ports.search`, which stays null when
- * there is no index, and the apps through the two requests it answers.
+ * there is no index, and the apps through the two requests it answers. A purged conversation it forgets
+ * as it hears the purge, as every service that follows agents does (`CoreApi.agents.follow`), held for
+ * it while its process is down (harnessd/services.ts `hears`).
  */
 import { join } from 'node:path'
 import { createExternalSessions, type ExternalReaderOptions } from './externalSessions.js'
@@ -55,9 +57,13 @@ export function startSearch(core: CoreApi, ports: CorePorts, options?: ExternalR
   const readers = createExternalSessions({ ...(options ?? { providers: externalProviders(), excluded: [core.dataDir], log: console.warn }),
     title: id => options?.title?.(id) ?? index?.session(id)?.title })
   index = openIndex(core, readers)
+  // Every conversation of a purged harness leaves the index: the person deleted it, and it is no longer searchable here.
+  const unfollow = core.agents.follow?.((event) => {
+    if (event.kind === 'purged') for (const sessionId of event.sessionIds) index?.deleteHistory(sessionId)
+  }, { running: false })
   ports.search = {
-    touch: id => index?.touch(id), deleteHistory: id => index?.deleteHistory(id), session: id => index?.session(id),
-    inspect: readers.inspect, stop: () => index?.stop(),
+    touch: id => index?.touch(id), session: id => index?.session(id),
+    inspect: readers.inspect, stop: () => { unfollow?.(); index?.stop() },
   }
   return index ? searchRequests(index) : {}
 }

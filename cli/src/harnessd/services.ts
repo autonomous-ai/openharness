@@ -26,7 +26,14 @@ export interface ServiceSpec {
   /** The core protocol (./protocol.ts) from which a core asks for this process on demand; 3, the experiments',
    *  when unset. A core that speaks an older one never asks for it, and it is started as that core binds. */
   askedSince?: number
+  /** What happens to agents that this process's services must not miss while it is down, by service: the core holds
+   *  each of these for that service from its own start until the service hears it (core/agentLife.ts). */
+  hears?: Readonly<Record<string, readonly HeldAgentLife[]>>
 }
+
+/** The kinds of what happens to an agent that a service in its own process can be held (core/api.ts `AgentLife`): a stop
+ *  a person or an agent made, a purge, and a new agent in the pane one ended in. */
+export type HeldAgentLife = 'stopped' | 'purged' | 'taken'
 
 /** A process the services run in: the services it hosts, and its memory budget. */
 export type ServiceHostSpec = Omit<ServiceSpec, 'name'>
@@ -53,7 +60,8 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // transcripts and stores, at most sixteen reads at once with replies capped at 4 MiB, each engine's code loaded
   // only once one of its sessions is read. Started on demand, as theirs are: a computer that runs none never pays.
   'engine-others': { services: ['engine-others'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 0 },
-  search: { services: ['search'], heapLimitMiB: 1_024, rssLimitMiB: 2_048 },
+  // A purged conversation is never left searchable: its purge is held for search while it is down (core/agentLife.ts).
+  search: { services: ['search'], heapLimitMiB: 1_024, rssLimitMiB: 2_048, hears: { search: ['purged'] } },
   // Its file watches on every harness's workspace; the viewer servers it starts are processes of their
   // own, outside this budget. The Store beside them: its installs run git and the harnesses' toolchains
   // in their own processes too, and take minutes, which is what it must not spend in the core.
@@ -76,7 +84,9 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // timestamp and runs its commands bounded, or detached when they must outlive this process.
   // The engine probe (services/engineProbe.ts) holds this process's login-shell environment, read once; the shells
   // a probe starts, four at once, are processes of their own, outside this budget.
-  edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'goals', 'hachi', 'engineProbe'], heapLimitMiB: 384, rssLimitMiB: 768 },
+  // A harness stopped while the host is down still closes the harnesses it started: held for the cleanup.
+  edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'goals', 'hachi', 'engineProbe'], heapLimitMiB: 384, rssLimitMiB: 768,
+    hears: { agentCleanup: ['stopped'] } },
   // The orchestrator (services/orchestratorProcess.ts), an experiment: started only once it is on, for a
   // saved project or a request (core/api.ts `EXPERIMENTS`). Its projects' files and the frames of their
   // Directors; the agents it runs are the core's.
@@ -118,11 +128,23 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // prints for minutes and a setup that waits on a password dialog. Chrome itself runs in Podman's containers, outside
   // this budget. Started only once a browser is wanted here (core/agentBrowserLink.ts): a computer that never ticked
   // Browser never pays for it.
-  agentBrowser: { services: ['agentBrowser'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 7 },
+  // A purge and a pane's new agent are held for it while it is down: a deleted agent's login, and a pane's logins that go
+  // with the pane (decision 19).
+  agentBrowser: { services: ['agentBrowser'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 7, hears: { agentBrowser: ['purged', 'taken'] } },
 }
 
 /** Every service this build can run outside the core's process: what `HARNESSD_SERVICES` names. */
 export const KNOWN_SERVICES: readonly string[] = Object.values(SERVICE_HOSTS).flatMap((host) => host.services)
+
+/** What the core holds for each service of [outOfProcess] while it is down (`hears`), by service. A service in the
+ *  core's process is told as it happens, and none is held for it. */
+export function heldAgentLife(outOfProcess: ReadonlySet<string>, hosts: Readonly<Record<string, ServiceHostSpec>> = SERVICE_HOSTS): Record<string, readonly HeldAgentLife[]> {
+  const held: Record<string, readonly HeldAgentLife[]> = {}
+  for (const host of Object.values(hosts)) {
+    for (const [service, kinds] of Object.entries(host.hears ?? {})) if (outOfProcess.has(service)) held[service] = kinds
+  }
+  return held
+}
 
 /**
  * The updater's process (services/updaterProcess.ts): checks for a newer build of the CLI and of hn, and

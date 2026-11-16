@@ -5,17 +5,23 @@
  * through, and the requests the apps send.
  *
  * Only the agent's person turns its Browser on and off, from its chat (`agent_browser_start`, `_stop`;
- * docs/superpowers/specs/2026-11-11-browser-from-chat-design.md). The core sets the agent's flag and tells this port
- * `attached` or `stopped` in the same turn (`CoreApi.agents.setBrowser`), so the browser starts and stops in the order
- * the person asked, and comes back with its agent while the flag is on. The agent learns of it from two lines typed
- * into it (agentBrowser/notices.ts): when its person's Start is ready, and at its person's Stop.
+ * docs/superpowers/specs/2026-11-11-browser-from-chat-design.md). Whose Browser is on is this service's own, kept in its
+ * state file (`on`), and no part of the core: the browser starts and stops in the order the person asked, and comes back
+ * with its agent while it is on. What happens to agents it hears as every service that follows agents does
+ * (`CoreApi.agents.follow`): an agent here starts its browser if it is on, one that ended stops it and keeps its profile,
+ * and one purged loses it. The agent learns of it from two lines typed into it (agentBrowser/notices.ts): when its
+ * person's Start is ready, and at its person's Stop.
  *
  * The browser moves with its pane (decision 19): when a new agent takes the pane its previous agent ended in, the core
- * tells this port both ids (`moved`). The entry and its profile go to the new agent in both agents' queues
- * (agentBrowser/browsers.ts `move`), and then the core is asked to move the flag (`CoreApi.agents.moveBrowser`, the
- * process's `move_browser`), which attaches the new agent: its browser starts on the same volume and it is typed the
- * ready line. Every name in Podman comes from the entry's profile, so the stream and the tool server exec into the
- * container the profile names.
+ * says so (`taken`). The entry, its profile and whether it is on go to the new agent in both agents' queues
+ * (agentBrowser/browsers.ts `move`), and the new agent's browser starts on the same volume once it runs, and it is
+ * typed the ready line. Every name in Podman comes from the entry's profile, so the stream and the tool server exec
+ * into the container the profile names.
+ *
+ * Until 2026-11-15 the core kept whose Browser was on, as a flag on each agent's row. Each agent seen running with that
+ * flag still set has it taken in here once (`adopted`), which migrates them all as their agents run, and keeps a
+ * Desktop from before Browser left New agent working: its create still sets the flag. Delete that on or after
+ * 2026-12-18, with the row's field (lib/registry.ts `browser`).
  *
  * The agent drives it with `harness browser <command>` from its own pane (`agent_browser_run`, from this computer only):
  * the core proves the pane and names its agent, and the command runs on that agent's tool server, which this service
@@ -33,7 +39,8 @@ import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { availableParallelism, totalmem } from 'node:os'
 import { join, resolve } from 'node:path'
-import { AGENT_BROWSER_REQUESTS, mayOpenBrowser, type Asker, type BrowserSwitch, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
+import { AGENT_BROWSER_REQUESTS, mayOpenBrowser, type AgentLife, type Asker, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
+import { sweepAgentTmpWhenDue } from '../lib/agentTmp.js'
 import { browserTools } from '../lib/browserToolsAsset.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import { BROWSER_CHUNK_BYTES, encodeTerminalLocal } from '../lib/terminalBinary.js'
@@ -60,6 +67,8 @@ type Reply = Record<string, unknown>
 
 const LOCAL_ONLY = { error: 'LOCAL_ONLY' }
 const INVALID_REQUEST = { error: 'INVALID_REQUEST' }
+/** What a Start is answered while this service does not know whether its agent runs: asked again, it is answered. */
+const UNANSWERED = { error: 'SERVICE_UNAVAILABLE', service: 'agentBrowser', retryable: true }
 /** Setup's own failures whose Retry installs Podman again (agentBrowser/setup.ts); no start fails with them. */
 const SETUP_INSTALL_FAILURES = new Set(['podman_install_failed', 'podman_manual'])
 /** What a viewer's bytes are piped through inside a browser's container: to Xvnc, which listens on the container's own
@@ -75,6 +84,16 @@ export interface AgentBrowserOptions {
   /** How the core hears a browser's state when this runs in a process of its own (services/agentBrowserProcess.ts);
    *  absent, the core is asked to send the agent's frame again, and reads the state through the port. */
   told?: (agentId: string, state: BrowserState | undefined) => void
+  /** Whether what it follows of the agents is caught up: in its own process, the core's first answer since it connected
+   *  (services/followLink.ts `ready`); in the core's, at once. */
+  followed?: () => Promise<boolean>
+  /** Every agent here, live and stopped, read now; null when the core did not answer. */
+  everyAgent?: () => Promise<RegisteredSession[] | null>
+  /** Presence for settings only; an older core can name ids without supplying migration rows. Null is unknown. */
+  hasAgent?: (agentId: string) => Promise<boolean | null>
+  /** A core from before 2026-11-15 keeps Browser flags itself. Its move includes the destination row and on/off;
+   *  the process completes that core's handshake after this move. Delete on or after 2026-12-18. */
+  legacyMoves?: (move: (from: string, session: RegisteredSession, on: boolean) => Promise<boolean>) => () => void
   podman?: Podman
   platform?: NodeJS.Platform
   host?: BrowserHost
@@ -122,10 +141,6 @@ function named(error: unknown): Reply {
  */
 function unsupported(ports: Pick<CorePorts, 'agentBrowser'>): ServiceRequests {
   ports.agentBrowser = {
-    attached: () => {},
-    stopped: () => {},
-    deleted: () => {},
-    moved: () => {},
     frameContext: () => undefined,
     stream: () => false,
     streamInput: () => false,
@@ -158,11 +173,17 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
   const toolServers = new ToolServers({ spawn: agentId => podman.spawn(containers.execArgs(browsers.profile(agentId)!, TOOL_SERVER)) as ToolChild, log })
   /** The commands an agent may run: the tools of `browser-tools.json`, by the name `harness browser` gives them. */
   const tools: ReadonlySet<string> = new Set(browserTools().tools.map(tool => tool.name))
-  /**
-   * The agents whose person's Stop is under way: marked before the core is asked, so the port's `stopped` that follows
-   * is told apart from the agent's own end, and a browser that turns ready meanwhile is owed nothing.
-   */
-  const byPerson = new Set<string>()
+  const followed = options.followed ?? (async () => true)
+  const everyAgent = options.everyAgent ?? (async () => core.agents.all())
+  /** The folder `harness browser` keeps its screenshots and long output in where nothing sets a TMPDIR
+   *  (agentClient/browserOutput.ts), swept of what nothing changed in for a week, at most once a day (lib/agentTmp.ts):
+   *  as this service begins, and as an agent runs a command. The core swept it at each launch until 2026-11-15. */
+  const sweepTmp = () => sweepAgentTmpWhenDue({ platform, dataDir: core.dataDir, log: line => log(`[agent-tmp] ${line}`), now: () => now().getTime() })
+  /** Whether the agent's Browser is on: its person's Start, until their Stop. A state file that cannot be read has none
+   *  on, and every browser that tries to start says so. */
+  const isOn = (agentId: string): boolean => {
+    try { return state.read().on?.[agentId] === true } catch { return false }
+  }
   // Built after setup, which tells it each step.
   let browsers: Browsers
   /**
@@ -211,7 +232,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       const shown = browsers.state(agentId)
       // A browser that leaves ready takes its tool server with it: what runs or waits is answered the state now.
       if (shown?.state !== 'ready') toolServers.end(agentId, 'ENDED')
-      if (shown?.state === 'ready' && !byPerson.has(agentId)) notices.ready(agentId)
+      if (shown?.state === 'ready') notices.ready(agentId)
       if (options.told) return options.told(agentId, shown)
       const session = core.agents.byAgent(agentId)
       if (session) core.agents.sync(session)
@@ -221,33 +242,140 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
     podmanAnswered: () => events?.wake(),
   })
 
-  /** The agents attached since this service started: attached is said on every look at an agent. */
+  /** The live agents, as the core told of them (`CoreApi.agents.follow`): each with its row as it began to run here. */
+  const live = new Map<string, RegisteredSession>()
+  /** The agents whose browser this service started and has not stopped since. */
   const attached = new Set<string>()
+  /** Only Starts still waiting for catch-up: a later Stop/end/purge must win before that answer arrives. */
+  const pendingStarts = new Map<string, object>()
   /** Whether the state file lists the agent; null when the file cannot be read. */
   const listed = (agentId: string): boolean | null => {
     try { return Object.hasOwn(state.read().browsers, agentId) } catch { return null }
   }
-  const hasBrowser = (agentId: string) => attached.has(agentId) || listed(agentId) === true
+  /** Turn the agent's Browser on or off in the state file: whether that changed it. Rejects when the file cannot be
+   *  written, with nothing changed. */
+  const setOn = (agentId: string, on: boolean): boolean => {
+    let changed = false
+    state.update(s => {
+      changed = (s.on?.[agentId] === true) !== on
+      if (on) s.on = { ...s.on, [agentId]: true }
+      else if (s.on) delete s.on[agentId]
+      // The person's choice is newer than a legacy row that catch-up may not have delivered yet.
+      s.adopted = { ...s.adopted, [agentId]: true }
+    })
+    return changed
+  }
+  /** The flag the core kept on the agent's row until 2026-11-15, taken in once for each agent: its person's Start, or an
+   *  older Desktop's create. A person's Stop after it is never undone by the row, which keeps the flag as it was.
+   *  Delete on or after 2026-12-18, with the row's field (lib/registry.ts `browser`). */
+  const adopt = (session: Pick<RegisteredSession, 'agentId' | 'browser'>): void => {
+    if (session.browser !== true) return
+    try {
+      state.update(s => {
+        if (s.adopted?.[session.agentId]) return
+        s.adopted = { ...s.adopted, [session.agentId]: true }
+        s.on = { ...s.on, [session.agentId]: true }
+      })
+    } catch (error) {
+      // The next time it runs, it is taken in then.
+      log(`agent browser ${session.agentId}: its Browser flag was not taken in: ${(error as Error).message}`)
+    }
+  }
+  /** Its browser, started: once each time it runs here, and not for a guest's (the machine's Podman, memory and network
+   *  are its owner's). */
+  const startFor = (session: RegisteredSession): void => {
+    if (session.guest || attached.has(session.agentId) || !isOn(session.agentId)) return
+    begin()
+    attached.add(session.agentId)
+    // Once per agent: its settings are in the state file from its first start on.
+    if (listed(session.agentId) === false) count('agent_browser_enabled')
+    void browsers.start(session.agentId)
+  }
 
   /**
    * [to] took the pane [from] ended in (decision 19). A move that fails is said once, by its name only: the state file
-   * could not be read or written (both agents as they were), or the core refused or did not answer (the entry is the
-   * new agent's, and its Start finds the logins). Nothing is started here: the core's `attached` starts it.
+   * could not be read or written, and both agents are as they were. [to]'s browser starts once it runs, if [from]'s
+   * was on: at once when it already does.
    */
-  const move = async (from: string, to: string, on: boolean): Promise<void> => {
-    const failed = (why: string) => log(`agent browser ${to}: browser_move_failed (${why})`)
+  const move = async (from: string, to: string, legacyOn?: boolean): Promise<boolean> => {
+    // A stopped agent whose browser has an entry may still carry the flag from before on its saved row, never taken in
+    // since it did not run under this build: taken in first, so its Browser being on goes with the pane. Delete on or
+    // after 2026-12-18, with `adopt`.
     let moved: boolean
     try {
-      moved = await browsers.move(from, to)
+      moved = await browsers.move(from, to, async () => {
+        // The lookup belongs inside both queues: a second pane move must not pass this one while it waits.
+        const saved = state.read()
+        if (!Object.hasOwn(saved.browsers, from) || saved.adopted?.[from] === true) return
+        let row: Pick<RegisteredSession, 'agentId' | 'browser'> | undefined
+        if (legacyOn === undefined) {
+          const rows = await everyAgent().catch(() => null)
+          // A person's choice or purge while the read waited is newer than the legacy flag.
+          const current = state.read()
+          if (!Object.hasOwn(current.browsers, from) || current.adopted?.[from] === true || current.deleting.includes(from)) return
+          row = rows?.find(session => session.agentId === from)
+          if (!row) throw new PodmanError('migration_unavailable', 'the core did not answer the legacy Browser flag')
+        } else row = { agentId: from, browser: legacyOn ? true as const : undefined }
+        adopt(row)
+      })
     } catch (error) {
-      return failed(error instanceof PodmanError ? error.state : 'state_unwritable')
+      log(`agent browser ${to}: browser_move_failed (${error instanceof PodmanError ? error.state : 'state_unwritable'})`)
+      return false
     }
-    // No entry, or one of [to]'s own; or no flag to move.
-    if (!moved || !on) return
-    let answer: BrowserSwitch | null = null
-    try { answer = await core.agents.moveBrowser!(from, to) } catch { /* named below */ }
-    if (!answer) failed('no_answer')
-    else if ('error' in answer) failed(answer.error.toLowerCase())
+    const session = live.get(to)
+    if (moved && session) startFor(session)
+    return moved
+  }
+
+  /** What happens to agents, as every service that follows them hears it. */
+  const heard = (event: AgentLife): void => {
+    if (event.kind === 'running') {
+      live.set(event.session.agentId, event.session)
+      adopt(event.session)
+      startFor(event.session)
+    } else if (event.kind === 'ended') {
+      pendingStarts.delete(event.agentId)
+      live.delete(event.agentId)
+      // Its own end takes back what waits for it; its profile stays, so the login survives a resume.
+      notices.ended(event.agentId)
+      if (attached.delete(event.agentId) || browsers.state(event.agentId)) void browsers.stop(event.agentId)
+    } else if (event.kind === 'purged') {
+      pendingStarts.delete(event.agentId)
+      live.delete(event.agentId)
+      notices.ended(event.agentId)
+      // One started and not yet in the file is deleted too, and so is one a file that cannot be read may hold: its delete
+      // says why it could not be done.
+      if (attached.delete(event.agentId) || listed(event.agentId) !== false || browsers.pending(event.agentId)) void browsers.delete(event.agentId)
+      else forget(event.agentId)
+    } else if (event.kind === 'taken') {
+      // The agent that ended is typed nothing more, and keeps no browser. A guest's agent gets nothing of the owner's,
+      // and one whose Browser is on keeps its own. A move never begins Podman's watch: with no state file there is no
+      // entry, and it ends at one read.
+      notices.ended(event.from)
+      pendingStarts.delete(event.from)
+      attached.delete(event.from)
+      if (!event.guest && !isOn(event.to)) void move(event.from, event.to)
+    }
+  }
+  const unlegacy = options.legacyMoves?.((from, session, on) => {
+    notices.ended(from)
+    pendingStarts.delete(from)
+    attached.delete(from)
+    if (session.guest || isOn(session.agentId)) return Promise.resolve(false)
+    return move(from, session.agentId, on)
+  })
+  /** A purged agent with no entry may still have been turned on, or taken in: nothing of it stays. The file is written
+   *  only when it holds something of it: a purge of an agent that never had a Browser makes no state file, which would
+   *  start this service's process at every start of the core (core/agentBrowserLink.ts `wakeAgentBrowser`). */
+  const forget = (agentId: string): void => {
+    try {
+      const saved = state.read()
+      if (!saved.on?.[agentId] && !saved.adopted?.[agentId]) return
+      state.update(s => {
+        delete s.on?.[agentId]
+        delete s.adopted?.[agentId]
+      })
+    } catch { /* unreadable or unwritable: what is left names an agent that never runs again, and starts nothing */ }
   }
 
   let begun = false
@@ -257,48 +385,25 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
   const begin = () => {
     if (begun) return
     begun = true
+    sweepTmp()
     // Once looked for: a stream started before Podman's path is known fails and waits its backoff.
     void podman.path().catch(() => null).then(() => {
       if (stopped) return
       events = watchEvents(podman, daemonId, { exited: agentId => browsers.exited(agentId), reconnected: () => void browsers.reconcile(), log })
     })
     void (async () => {
-      // Only an answer deletes: none, or a failed one, must never cost a person a login.
-      const ids = core.agents.ids ? await core.agents.ids().catch(() => null) : null
-      await browsers.resume(ids ? new Set([...ids.live, ...ids.stopped]) : null)
+      // A readable agent list omits corrupt archives: only a recorded purge authorizes deleting a profile.
+      await browsers.resume()
+      // A browser left running for an agent that is not here, or not on: its agent ended while this service could not
+      // hear it (its process and the core both restarted). Only once what it follows is caught up.
+      if (await followed()) await browsers.stopAllBut(agentId => attached.has(agentId) || (live.has(agentId) && isOn(agentId)))
     })()
   }
   if (existsSync(statePath)) begin()
+  // What happens to agents: told at once every live agent, then each change (in its own process, once it connects).
+  const unfollow = core.agents.follow?.(heard)
 
   ports.agentBrowser = {
-    attached(session: RegisteredSession) {
-      if (!session.browser || attached.has(session.agentId)) return
-      begin()
-      attached.add(session.agentId)
-      // Once per agent: its settings are in the state file from its first start on.
-      if (listed(session.agentId) === false) count('agent_browser_enabled')
-      void browsers.start(session.agentId)
-    },
-    stopped(agentId) {
-      // The person's Stop told the agent already; its own end takes back what waits for it.
-      if (!byPerson.delete(agentId)) notices.ended(agentId)
-      if (!hasBrowser(agentId)) return
-      attached.delete(agentId)
-      void browsers.stop(agentId)
-    },
-    deleted(agentId) {
-      notices.ended(agentId)
-      if (!hasBrowser(agentId)) return
-      attached.delete(agentId)
-      void browsers.delete(agentId)
-    },
-    // A move never begins Podman's watch: with no state file there is no entry, and it ends at one read.
-    moved(from, to, on) {
-      // The agent that ended is typed nothing more, and keeps no browser.
-      notices.ended(from)
-      attached.delete(from)
-      void move(from, to.agentId, on)
-    },
     frameContext: agentId => browsers.state(agentId),
     // A viewer's stream (agentBrowser/streams.ts). Who may open one is the core's word, with whether it is a window here.
     stream(connId, type, payload, asker) {
@@ -317,6 +422,9 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
     streamRefused: streamId => streams.refused(streamId),
     stop() {
       stopped = true
+      pendingStarts.clear()
+      unfollow?.()
+      unlegacy?.()
       events?.close()
       notices.close()
       toolServers.endAll()
@@ -327,8 +435,6 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
   }
 
   const idOf = (payload: Reply) => (typeof payload.agentId === 'string' ? payload.agentId : '')
-  /** The person's Start and Stop go through the core, which owns the agent's flag (`CoreApi.agents.setBrowser`). */
-  const setBrowser = (agentId: string, on: boolean) => core.agents.setBrowser!(agentId, on)
 
   /**
    * A request for one agent's browser from its own person: the agent's id, or why not. `anyAgent`: an agent of this
@@ -338,13 +444,20 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
     if (!mayOpenBrowser(asker)) return { error: 'NOT_OWNER' }
     begin()
     const agentId = idOf(payload)
-    if (!agentId || !(browsers.state(agentId) || (anyAgent && await isHere(agentId)))) return { error: 'NO_BROWSER' }
+    if (!agentId) return { error: 'NO_BROWSER' }
+    if (!browsers.state(agentId)) {
+      if (!anyAgent) return { error: 'NO_BROWSER' }
+      const here = await isHere(agentId)
+      if (here === null) return UNANSWERED
+      if (!here) return { error: 'NO_BROWSER' }
+    }
     try { return await handler(agentId, payload, asker) } catch (error) { return named(error) }
   }
-  /** Whether the core has the agent, live or stopped; a core that cannot say has none. */
-  const isHere = async (agentId: string): Promise<boolean> => {
-    const ids = await core.agents.ids?.().catch(() => null)
-    return !!ids && (ids.live.includes(agentId) || ids.stopped.includes(agentId))
+  /** Whether the core has the agent, live or stopped; an unavailable answer stays unknown. */
+  const isHere = async (agentId: string): Promise<boolean | null> => {
+    if (options.hasAgent) return options.hasAgent(agentId).catch(() => null)
+    const every = await everyAgent().catch(() => null)
+    return every?.some(session => session.agentId === agentId) ?? null
   }
 
   /** The agent of the pane a command runs in, and whether it is a guest's; null for a pane with no parents to hold it to. */
@@ -400,43 +513,56 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       }
     },
     agent_browser_retry: ownBrowser((agentId, _payload, asker) => retry(agentId, asker)),
-    // The browser itself starts through the port's `attached`, which the core calls as it sets the flag. A browser its
-    // person is stopping is asked of the core all the same: the core switches in the order it is asked, so it starts
-    // again after that stop.
+    // Turned on here, where whose Browser is on is kept, and started once its agent runs: at once for one that does. Only a
+    // live agent that is not a guest's: the machine's Podman, memory and network are its owner's.
     agent_browser_start: async (payload, asker) => {
       if (!mayOpenBrowser(asker)) return { error: 'NOT_OWNER' }
       const agentId = idOf(payload)
-      const shown = byPerson.has(agentId) ? undefined : browsers.state(agentId)
+      const shown = browsers.state(agentId)
       if (shown) return shown.state === 'failed' ? retry(agentId, asker) : { ok: true }
-      const answer = await setBrowser(agentId, true)
-      if ('error' in answer) return answer
-      if (answer.changed) count('agent_browser_started')
-      return { ok: true }
+      // Not caught up with the core (it has not answered since this process connected) is not knowing whether the agent
+      // runs: never read as an agent that does not.
+      const intent = {}
+      pendingStarts.set(agentId, intent)
+      try {
+        const caughtUp = await followed()
+        // Superseded by a later request or an end: this Start has no effect, even if catch-up failed.
+        if (pendingStarts.get(agentId) !== intent) return { ok: true }
+        if (!caughtUp) return UNANSWERED
+        const session = live.get(agentId)
+        if (!session) return { error: 'NOT_RUNNING' }
+        if (session.guest) return { error: 'NOT_ALLOWED' }
+        let changed: boolean
+        try { changed = setOn(agentId, true) } catch (error) { return named(error) }
+        if (changed) count('agent_browser_started')
+        startFor(session)
+        return { ok: true }
+      } finally {
+        if (pendingStarts.get(agentId) === intent) pendingStarts.delete(agentId)
+      }
     },
     // The volume and the settings stay: the login is there at the next Start.
     agent_browser_stop: async (payload, asker) => {
       if (!mayOpenBrowser(asker)) return { error: 'NOT_OWNER' }
       const agentId = idOf(payload)
-      if (attached.has(agentId)) {
-        byPerson.add(agentId)
-        // Every command running or waiting is answered the stop line: the agent has read it, and is typed nothing.
-        notices.stopped(agentId, toolServers.end(agentId, 'STOPPED') > 0)
+      pendingStarts.delete(agentId)
+      // Every command running or waiting is answered the stop line: the agent has read it, and is typed nothing.
+      if (attached.has(agentId)) notices.stopped(agentId, toolServers.end(agentId, 'STOPPED') > 0)
+      // Off even when it was never on: a Stop of a browser that is off, or of an agent gone since, is done already. One the
+      // state file does not take still stops the browser, and starts it again at its agent's next run: said here.
+      let changed = false
+      try { changed = setOn(agentId, false) } catch (error) {
+        log(`agent browser ${agentId}: its Stop was not kept: ${(error as Error).message}`)
       }
-      let answer: BrowserSwitch
-      try {
-        answer = await setBrowser(agentId, false)
-      } finally {
-        // The core told the port nothing to stop, or did not answer: nothing stays marked, and the agent's own end is
-        // heard as its own.
-        byPerson.delete(agentId)
-      }
-      if ('changed' in answer && answer.changed) count('agent_browser_stopped')
+      if (attached.delete(agentId) || browsers.state(agentId) || browsers.pending(agentId)) void browsers.stop(agentId)
+      if (changed) count('agent_browser_stopped')
       return { ok: true }
     },
     // One of the agent's commands, on its own browser and nothing else's. It never wakes Podman: a browser that is not
     // ready says what it is, and the agent asks its person.
     agent_browser_run: async (payload, asker, closed) => {
       if (!asker.local) return LOCAL_ONLY
+      sweepTmp()
       const agent = await paneAgent(payload)
       if (!agent) return { error: 'NO_AGENT' }
       // The machine's Podman, memory and network are its owner's.
@@ -445,7 +571,6 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       const args = payload.args
       if (!tools.has(`browser_${command}`) || typeof args !== 'object' || args === null || Array.isArray(args)) return INVALID_REQUEST
       const { agentId } = agent
-      if (byPerson.has(agentId)) return { error: 'STOPPED' }
       const shown = browsers.state(agentId)
       if (!shown) return { error: 'OFF' }
       if (shown.state !== 'ready') return notReady(shown)

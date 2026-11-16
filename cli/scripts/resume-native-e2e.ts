@@ -198,7 +198,7 @@ try {
     const resumeAgent = createResumeAgentService({
       registry, stoppedAgents, createBackend: backend, backendFor: () => backend, restartJobs: jobs, stopJobs, pinnedControls: new Set(),
       announceSession: () => {}, relaunchOverrides: async () => ({ ok: true, overrides: { env: launchEnv, extraArgs: [], clearEnv: ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CLAUDECODE'] } }),
-      prepareSessionResume: () => {}, refreshGridWebSearch: () => {}, clearDeleted: () => {}, attachDsh: () => {},
+      prepareSessionResume: () => {}, refreshGridWebSearch: () => {}, clearDeleted: () => {}, attach: () => {},
       // This fixture checks the native TUI's history directly; it has no daemon transcript watcher.
       attachSession: async () => false,
       retainExitedSession: (row, alive) => { stoppedAgents.save(row); if (alive) registry.releaseEngine(row.agentId, true); else registry.removeAgent(row.agentId) },

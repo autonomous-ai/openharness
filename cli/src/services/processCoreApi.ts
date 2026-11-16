@@ -14,21 +14,20 @@ import { usageTarget, usageTargetKey, usageSnapshot, validUsage, validUsageTarge
  * each asked of the core over its link (`ask`). The agents it reads come as the apps are shown them (`service_query shown`): each with its
  * name, whether its terminal is there and its harness's viewer.
  */
-import { CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_OFF, type CloudCore, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
+import { CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_OFF, type AgentView, type CloudCore, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
-import type { RegisteredSession } from '../lib/registry.js'
 import type { turnsLink } from './turnsLink.js'
 
 type Payload = Record<string, unknown>
 
 /** An agent as the core shows it to an experiment (core/experimentQueries.ts `shown`). */
-export type ShownAgent = RegisteredSession & { displayName?: string; terminalAvailable?: boolean; selectedModel?: string | null; dshContext?: AgentDshContext | null }
+export type ShownAgent = AgentView & { displayName?: string; terminalAvailable?: boolean; selectedModel?: string | null; dshContext?: AgentDshContext | null }
 
 /** The agents a process was last told of, and how it asks the core to act. Those it is never told of read
  *  as none, and with no way to ask, it acts on nothing. */
 export interface AgentsView {
   live?: () => ShownAgent[]
-  advertised?: () => RegisteredSession[]
+  advertised?: () => AgentView[]
   /** Ask the core (`CoreConnection.query`, services/process.ts), for an experiment that acts. */
   ask?: (query: string, payload: Payload) => Promise<Payload>
   /** The delivered turns it makes and hears of, through `ask` (services/turnsLink.ts). */
@@ -42,11 +41,11 @@ export interface AgentsView {
 }
 
 /** Whether what the core sent is an agent. */
-export const isSession = (value: unknown): value is RegisteredSession =>
+export const isSession = (value: unknown): value is AgentView =>
   !!value && typeof value === 'object' && typeof (value as { agentId?: unknown }).agentId === 'string'
 
 /** The agents in a core's answer (`{ agents: [...] }`), or null when it is not one. */
-export function agentsIn(answer: Record<string, unknown> | null | undefined): RegisteredSession[] | null {
+export function agentsIn(answer: Record<string, unknown> | null | undefined): AgentView[] | null {
   return Array.isArray(answer?.agents) ? answer.agents.filter(isSession) : null
 }
 

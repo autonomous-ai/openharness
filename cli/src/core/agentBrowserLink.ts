@@ -1,17 +1,14 @@
 /**
  * The agent browser in its own process, as the core sees it (services/agentBrowserProcess.ts; on demand).
  *
- * The core tells the process what happens to agents and goes on: one whose Browser is on is here (`service_event attached`),
- * one stopped, one was purged, and a pane whose agent ended has a new one (`moved`, decision 19). A stop or a purge it
- * missed would leave a browser running, or a login on disk, and a move it missed would leave the pane's logins with the
- * agent that ended, so those are held until the process hears them. An attach is not: it is said on every look at an
- * agent, and the core says every one again each time the process connects, which a process that restarted needs anyway.
- * An attach, and a move of a browser that is on, also ask for the process, which runs only once a browser is wanted
- * here, or as the core starts when its state file is there.
+ * What happens to its agents it hears as every service that follows agents does (core/agentLife.ts), and whose Browser
+ * is on is its own: nothing of either is kept here.
  *
  * An agent's frame reads its browser in line, and cannot wait on another process: the process tells the core each
- * browser's state as it changes (`browser_state`), and the port answers from the last of them. The core keeps them
- * only for the agents it attached and has not since stopped or deleted, so a late word never brings a browser back.
+ * browser's state as it changes (`browser_state`), and the port answers from the last of them. The core keeps them only
+ * for the agents it was told run and not since told ended (it follows them here as a service does), so a late word
+ * never brings a browser back; an agent that ends has its frame sent without its browser at once, whether or not the
+ * process is there to hear it.
  *
  * A viewer's stream of a browser's screen is the process's whole (services/agentBrowser/streams.ts): the core passes a
  * viewer's frames on as events and its bytes as binary frames on this link (a terminal's plain frame,
@@ -19,17 +16,13 @@
  * core/browserStreams.ts, which holds each to the connection that opened the stream. A process says once it is connected that it takes streams (`streams`): one from before 2026-11-13 does
  * not, and a viewer's open is then refused at once rather than left unanswered.
  *
- * The process asks the core what only the core knows: its agents' ids (`agent_ids`), the agent of a pane and whether it
- * is a guest's, held to the parents of the command that names it (`agent_of_pane`), and to hand on one of its own
- * product counters (`count`), none other. And it asks the core to
- * turn an agent's Browser on or off (`set_browser`), its person's Start and Stop: the core sets the row's flag and
- * tells this port `attached` or `stopped` before it answers; and, once it moved a pane's browser to its new agent, to
- * move the flag (`move_browser`), which attaches that agent the same way.
+ * Whatever else the process asks it asks as any service may (core/agentQueries.ts), and only what it uses: every agent,
+ * the agent of a pane, a product counter.
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentBrowserFrame } from '../lib/agentFrame.js'
-import { PRODUCT_USAGE_AGENT_BROWSER_METRICS, type ProductUsageMetric } from '../lib/productUsageContract.js'
+import { answerAgentQuery } from './agentQueries.js'
 import type { AgentBrowserPort, CoreApi } from './api.js'
 import type { ServiceFrame } from './serviceLinks.js'
 import { encodeTerminalLocal, TerminalBinaryKind } from '../lib/terminalBinary.js'
@@ -37,8 +30,9 @@ import { encodeTerminalLocal, TerminalBinaryKind } from '../lib/terminalBinary.j
 type Payload = Record<string, unknown>
 
 const STATES: ReadonlySet<string> = new Set(['setup', 'starting', 'ready', 'failed'])
-const METRICS: ReadonlySet<string> = new Set(PRODUCT_USAGE_AGENT_BROWSER_METRICS)
 const INVALID = { error: 'INVALID_REQUEST' }
+/** The questions any service may ask (core/agentQueries.ts) that the process asks. */
+const ANSWERED: ReadonlySet<string> = new Set(['agents', 'agent_of_pane', 'count'])
 
 /** Only the shape the frame carries, so the process can put nothing else on it. */
 function browserState(value: unknown): AgentBrowserFrame | null {
@@ -49,58 +43,29 @@ function browserState(value: unknown): AgentBrowserFrame | null {
   return { state: state as AgentBrowserFrame['state'], ...(step !== undefined ? { step } : {}), ...(error !== undefined ? { error } : {}) }
 }
 
-/** A command's parents' pids, as `harness browser` sends them; null for anything else. */
-function pidsOf(value: unknown): number[] | null {
-  return Array.isArray(value) && value.every(pid => Number.isSafeInteger(pid) && pid > 0) ? value as number[] : null
-}
-
 export function createAgentBrowserLink(deps: {
-  core: Pick<CoreApi, 'agents' | 'count' | 'clients'>
-  notify: (frame: ServiceFrame, opts?: { untilDelivered?: boolean }) => boolean
+  core: Pick<CoreApi, 'agents' | 'count' | 'clients' | 'usage'>
+  notify: (frame: ServiceFrame) => boolean
   /** Bytes for the process, on its link (core/serviceLinks.ts `notifyBinary`); false when it would not take them. */
   notifyBinary: (bytes: Uint8Array) => boolean
-  /** Ask the master for the process (`coreLink.want`). */
-  want: () => void
   /** The process went: every stream it held is gone with it (core/browserStreams.ts `gone`). */
   streamsGone: () => void
+  /** Ask the master for the process (`coreLink.want`), for an agent whose row still carries the flag from before the
+   *  agent browser kept whose Browser is on (lib/registry.ts `browser`), which only that process takes in: a Desktop
+   *  from before Browser left New agent still sets it at a create. Delete on or after 2026-12-18, with the flag. */
+  want: () => void
 }) {
   const { core, notify } = deps
-  const attached = new Set<string>()
-  const states = new Map<string, AgentBrowserFrame>()
+  /** Whether the process is connected now. */
   let up = false
+  /** The agents told running here and not since told ended: the only ones a browser's state is kept for. */
+  const live = new Set<string>()
+  const states = new Map<string, AgentBrowserFrame>()
   /** Whether the process connected now takes streams: it says so as it connects. */
   let streams = false
-  const event = (payload: Payload, opts?: { untilDelivered?: boolean }) => notify({ type: 'service_event', payload }, opts)
-  // A stop or a purge sends the agent's frame without its browser, whether or not the process is there to hear it:
-  // what the process says of it from now on is not kept, and a panel whose frame was not sent again went on showing
-  // the browser ready or starting (CLI 0.6.40, 2026-11-12). Its viewers' streams end in the process, which is told.
-  const forget = (agentId: string) => {
-    attached.delete(agentId)
-    states.delete(agentId)
-    const session = core.agents.byAgent(agentId)
-    if (session) core.agents.sync(session)
-  }
+  const event = (payload: Payload) => notify({ type: 'service_event', payload })
 
   const port: AgentBrowserPort = {
-    attached: (session) => {
-      if (!session.browser) return
-      attached.add(session.agentId)
-      if (!up) deps.want()
-      event({ kind: 'attached', session })
-    },
-    stopped: (agentId) => {
-      forget(agentId)
-      event({ kind: 'stopped', agentId }, { untilDelivered: true })
-    },
-    deleted: (agentId) => {
-      forget(agentId)
-      event({ kind: 'deleted', agentId }, { untilDelivered: true })
-    },
-    moved: (from, session, on) => {
-      forget(from)
-      if (on && !up) deps.want()
-      event({ kind: 'moved', from, session, on }, { untilDelivered: true })
-    },
     frameContext: agentId => states.get(agentId),
     // Never held for a process that is down: a viewer's frame told late would open a stream nobody waits for.
     stream: (connId, type, payload, asker) => streams && event({ kind: 'stream', connId, type, payload, ...(asker ? { asker } : {}) }),
@@ -124,7 +89,7 @@ export function createAgentBrowserLink(deps: {
       // The exec into a ready browser, which a process still names for a core from before 2026-11-13, is not read: this
       // core starts no command for the browser.
       if (!agentId || state === null) return INVALID
-      if (!attached.has(agentId)) return { ok: true }
+      if (!live.has(agentId)) return { ok: true }
       if (state) states.set(agentId, state)
       else states.delete(agentId)
       const session = core.agents.byAgent(agentId)
@@ -136,29 +101,9 @@ export function createAgentBrowserLink(deps: {
       streams = true
       return { ok: true }
     }
-    if (query === 'agent_ids') return core.agents.ids ? { ...await core.agents.ids() } : { error: 'UNSUPPORTED' }
-    if (query === 'agent_of_pane') {
-      // No parents: an older relay's `agent_browser_state` (core/api.ts `ofPane`).
-      const ancestors = payload.ancestors === undefined ? undefined : pidsOf(payload.ancestors)
-      if (typeof payload.pane !== 'string' || ancestors === null) return INVALID
-      const agent = await core.agents.ofPane?.(payload.pane, ancestors)
-      return agent ? { ...agent } : { agentId: null }
-    }
-    if (query === 'set_browser') {
-      if (typeof payload.agentId !== 'string' || typeof payload.on !== 'boolean') return INVALID
-      return core.agents.setBrowser ? { ...await core.agents.setBrowser(payload.agentId, payload.on) } : { error: 'UNSUPPORTED' }
-    }
-    if (query === 'move_browser') {
-      const { from, to } = payload
-      if (typeof from !== 'string' || !from || typeof to !== 'string' || !to) return INVALID
-      return core.agents.moveBrowser ? { ...await core.agents.moveBrowser(from, to) } : { error: 'UNSUPPORTED' }
-    }
-    if (query === 'count') {
-      if (typeof payload.metric !== 'string' || !METRICS.has(payload.metric)) return INVALID
-      core.count?.(payload.metric as ProductUsageMetric)
-      return { ok: true }
-    }
-    return { error: 'UNKNOWN_QUERY' }
+    // What else it asks it asks as any service may (core/agentQueries.ts), and only what it uses: every agent here (a
+    // browser of an agent in neither list is deleted), the agent of a pane, a product counter.
+    return ANSWERED.has(query) ? answerAgentQuery(core, query, payload) : { error: 'UNKNOWN_QUERY' }
   }
 
   return {
@@ -174,13 +119,29 @@ export function createAgentBrowserLink(deps: {
      *  It names its stream and no connection: whose the stream is, is the core's to say (core/browserStreams.ts, which
      *  reads it and sends it on as it came). */
     binary: (bytes: Uint8Array): void => { core.clients.browserBytes?.(bytes) },
+    /** Follow the agents (core/agentLife.ts): the ones whose browser's state is kept. One that ends has its frame sent
+     *  without its browser, whether or not the process is there to hear it: a panel whose frame was not sent again went
+     *  on showing the browser ready or starting (CLI 0.6.40, 2026-11-12). Its viewers' streams end in the process,
+     *  which hears it too. Only while the agent browser runs in its own process: in the core's, the port is its own. */
+    follow(): () => void {
+      return core.agents.follow?.((life) => {
+        if (life.kind === 'running') {
+          live.add(life.session.agentId)
+          if (life.session.browser && !up) deps.want()
+        } else if (life.kind === 'ended') {
+          live.delete(life.agentId)
+          if (!states.delete(life.agentId)) return
+          const session = core.agents.byAgent(life.agentId)
+          if (session) core.agents.sync(session)
+        }
+      }) ?? (() => {})
+    },
     connected: () => {
       // The process before this one may have gone unseen: a link that is replaced is never said disconnected
       // (core/serviceLinks.ts). Whatever streams it held are gone with it, and this one has said nothing yet.
+      up = true
       streams = false
       deps.streamsGone()
-      up = true
-      for (const session of core.agents.live()) if (session.browser) event({ kind: 'attached', session })
     },
     disconnected: () => {
       up = false

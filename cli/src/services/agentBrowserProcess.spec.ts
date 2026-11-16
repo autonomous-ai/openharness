@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AgentBrowserPort, CoreApi, CorePorts } from '../core/api.js'
+import type { AgentBrowserPort, AgentLife, CoreApi, CorePorts } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { AgentBrowserOptions } from './agentBrowser.js'
 import { agentBrowserCoreApi, runAgentBrowserService } from './agentBrowserProcess.js'
@@ -17,61 +17,169 @@ describe('the agent browser in its own process', () => {
     let options: ServiceProcessOptions | null = null
     let api: CoreApi | null = null
     let given: AgentBrowserOptions | undefined
+    /** What the service heard of agents, as it follows them (services/followLink.ts). */
+    const heard: AgentLife[] = []
     const port: AgentBrowserPort = {
-      attached: vi.fn(), stopped: vi.fn(), deleted: vi.fn(), moved: vi.fn(), frameContext: vi.fn(), stop: vi.fn(),
+      frameContext: vi.fn(), stop: vi.fn(),
       stream: vi.fn(() => true), streamInput: vi.fn(), streamClosed: vi.fn(), streamRoute: vi.fn(), streamTransportError: vi.fn(), streamRefused: vi.fn(),
     }
     const requests = { agent_browser_available: vi.fn() }
     const stop = vi.fn()
+    const move = vi.fn(async (_from: string, _session: RegisteredSession, _on: boolean) => true)
+    let unlegacy!: () => void
     const service = runAgentBrowserService({
       dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't',
       run: (opts) => { options = opts; return { stop } },
-      start: (core, ports: Pick<CorePorts, 'agentBrowser'>, opts) => { api = core; given = opts; ports.agentBrowser = port; return requests },
+      start: (core, ports: Pick<CorePorts, 'agentBrowser'>, opts) => {
+        api = core
+        given = opts
+        unlegacy = opts!.legacyMoves!(move)
+        core.agents.follow!((event) => { heard.push(event) })
+        ports.agentBrowser = port
+        return requests
+      },
     })
-    return { options: options!, api: api!, given: given!, port, requests, service, stop }
+    return { options: options!, api: api!, given: given!, port, requests, service, stop, heard, move, unlegacy }
   }
 
   it('answers its requests and hears what the core tells it of agents, and nothing else', () => {
-    const { options, port, requests } = setup()
+    const { options, requests, heard } = setup()
     expect(options).toMatchObject({ name: 'agentBrowser', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't', requests })
+    const row = { agentId: 'a1', sessionId: 's1' } as RegisteredSession
+    const told = (event: Record<string, unknown>) => options.onEvent!({ kind: 'agent', event })
+    told({ kind: 'running', session: row })
+    told({ kind: 'running', session: { browser: true } })
+    told({ kind: 'ended', agentId: 'a1' })
+    told({ kind: 'purged', agentId: 'a2', sessionIds: ['s2'] })
+    told({ kind: 'taken', from: 'a1', to: 'b1' })
+    options.onEvent!({ kind: 'other', agentId: 'x' })
+    expect(heard).toEqual([
+      { kind: 'running', session: row },
+      { kind: 'ended', agentId: 'a1' },
+      { kind: 'purged', agentId: 'a2', sessionIds: ['s2'] },
+      { kind: 'taken', from: 'a1', to: 'b1' },
+    ])
+  })
+
+  // Until 2026-11-15 the core told this process `attached`, `stopped`, `deleted` and `moved`, and kept whose Browser was
+  // on. A core from before still does (a newer master after a rollback): heard as what happens to agents now. Delete on
+  // or after 2026-12-18.
+  it('hears what a core from before tells of agents as what happens to them now, and drops what is not one', () => {
+    const { options, heard, move } = setup()
     const row = { agentId: 'a1', sessionId: 's1', browser: true } as RegisteredSession
     options.onEvent!({ kind: 'attached', session: row })
-    options.onEvent!({ kind: 'attached', session: { browser: true } })
     options.onEvent!({ kind: 'stopped', agentId: 'a1' })
-    options.onEvent!({ kind: 'deleted', agentId: 'a2' })
-    options.onEvent!({ kind: 'deleted', agentId: '' })
-    options.onEvent!({ kind: 'other', agentId: 'x' })
-    expect(vi.mocked(port.attached).mock.calls).toEqual([[row]])
-    expect(vi.mocked(port.stopped).mock.calls).toEqual([['a1']])
-    expect(vi.mocked(port.deleted).mock.calls).toEqual([['a2']])
+    options.onEvent!({ kind: 'deleted', agentId: 'a1' })
+    options.onEvent!({ kind: 'moved', from: 'a1', session: { agentId: 'b1' }, on: false })
+    options.onEvent!({ kind: 'moved', from: 'a1' })
+    options.onEvent!({ kind: 'attached', session: { browser: true } })
+    expect(heard).toEqual([
+      { kind: 'running', session: row },
+      { kind: 'ended', agentId: 'a1' },
+      { kind: 'purged', agentId: 'a1', sessionIds: [] },
+    ])
+    expect(move).toHaveBeenCalledWith('a1', { agentId: 'b1' }, false)
   })
 
-  // Decision 19: the pane's new agent takes the browser of the agent that ended there.
-  it('a move the core says reaches the port', () => {
-    const { options, port } = setup()
-    const to = { agentId: 'shell', sessionId: '' } as RegisteredSession
-    options.onEvent!({ kind: 'moved', from: 'ended', session: to, on: true })
-    options.onEvent!({ kind: 'moved', from: 'ended', session: to, on: false })
-    expect(vi.mocked(port.moved).mock.calls).toEqual([['ended', to, true], ['ended', to, false]])
-    expect(port.attached).not.toHaveBeenCalled()
-    expect(port.stopped).not.toHaveBeenCalled()
+  it('finishes a legacy move before asking that core to move its flag and publishing the destination', async () => {
+    const { options, move, heard } = setup()
+    let moved!: (value: boolean) => void
+    move.mockReturnValue(new Promise(resolve => { moved = resolve }))
+    const query = vi.fn(async (name: string) => name === 'move_browser' ? { ok: true } : { agents: [] })
+    options.onConnected!({ query })
+    const session = { agentId: 'b1', sessionId: 's-b1' }
+    options.onEvent!({ kind: 'moved', from: 'a1', session, on: true })
+    expect(query.mock.calls.some(([name]) => name === 'move_browser')).toBe(false)
+    moved(true)
+    await vi.waitFor(() => expect(heard).toContainEqual({ kind: 'running', session: { ...session, browser: true } }))
+    expect(query).toHaveBeenCalledWith('move_browser', { from: 'a1', to: 'b1' })
   })
 
-  it('a move without a session or a flag is dropped', () => {
-    const { options, port } = setup()
-    const to = { agentId: 'shell', sessionId: '' } as RegisteredSession
-    for (const payload of [
-      { kind: 'moved', session: to, on: true }, { kind: 'moved', from: '', session: to, on: true }, { kind: 'moved', from: 7, session: to, on: true },
-      { kind: 'moved', from: 'ended', on: true }, { kind: 'moved', from: 'ended', session: { browser: true }, on: true },
-      { kind: 'moved', from: 'ended', session: to }, { kind: 'moved', from: 'ended', session: to, on: 'yes' },
-      // The fields the other events share are not a move's.
-      { kind: 'moved', agentId: 'ended', session: to, on: true },
-    ]) options.onEvent!(payload)
-    options.onEvent!({ kind: 'moved', from: 'ended', session: to, on: true })
-    expect(vi.mocked(port.moved).mock.calls).toEqual([['ended', to, true]])
-    expect(port.attached).not.toHaveBeenCalled()
-    expect(port.stopped).not.toHaveBeenCalled()
-    expect(port.deleted).not.toHaveBeenCalled()
+  it.each([false, true])('a legacy move that returns %s while off changes no core flag', async moved => {
+    const { options, move } = setup()
+    move.mockResolvedValue(moved)
+    const query = vi.fn(async (_name: string) => ({ agents: [] }))
+    options.onConnected!({ query })
+    options.onEvent!({ kind: 'moved', from: 'a1', session: { agentId: 'b1' }, on: false })
+    await Promise.resolve()
+    expect(query.mock.calls.some(args => args[0] === 'move_browser')).toBe(false)
+  })
+
+  it('drops malformed legacy moves and moves after the service unsubscribes', () => {
+    const { options, move, unlegacy } = setup()
+    const valid = { kind: 'moved', from: 'a1', session: { agentId: 'b1' }, on: true }
+    for (const payload of [{ ...valid, from: 2 }, { ...valid, from: '' }, { ...valid, session: null }, { ...valid, on: 'yes' }]) options.onEvent!(payload)
+    unlegacy()
+    options.onEvent!(valid)
+    expect(move).not.toHaveBeenCalled()
+  })
+
+  it.each(['missing', 'refused', 'throws', 'times out'] as const)('names a legacy move whose core answer %s without attaching the destination', async kind => {
+    vi.useFakeTimers()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { options, heard } = setup()
+    const query = vi.fn(async (name: string) => {
+      if (name !== 'move_browser') return { agents: [] }
+      if (kind === 'throws') throw new Error('disconnected')
+      if (kind === 'times out') return new Promise<Record<string, unknown>>(() => {})
+      return kind === 'refused' ? { error: 'NOT_RUNNING' } : {}
+    })
+    options.onConnected!({ query })
+    options.onEvent!({ kind: 'moved', from: 'a1', session: { agentId: 'b1' }, on: true })
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(log).toHaveBeenCalledWith(`agent browser b1: browser_move_failed (${kind === 'refused' ? 'not_running' : 'no_answer'})`)
+    expect(heard).toEqual([])
+    log.mockRestore()
+  })
+
+  it.each(['before connection', 'before move completes', 'before answer'] as const)('a legacy move disconnected %s never restores a stale destination', async when => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { options, move, heard } = setup()
+    let moved!: (value: boolean) => void
+    move.mockReturnValue(new Promise(resolve => { moved = resolve }))
+    let answer!: (value: Record<string, unknown>) => void
+    const reply = new Promise<Record<string, unknown>>(resolve => { answer = resolve })
+    const query = vi.fn(async (name: string) => name === 'move_browser' ? reply : { agents: [] })
+    if (when !== 'before connection') options.onConnected!({ query })
+    options.onEvent!({ kind: 'moved', from: 'a1', session: { agentId: 'b1' }, on: true })
+    if (when === 'before move completes') options.onDisconnected!()
+    moved(true)
+    if (when === 'before answer') {
+      await vi.waitFor(() => expect(query).toHaveBeenCalledWith('move_browser', { from: 'a1', to: 'b1' }))
+      options.onDisconnected!()
+      answer({ ok: true })
+    }
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith('agent browser b1: browser_move_failed (no_answer)'))
+    expect(heard).toEqual([])
+    log.mockRestore()
+  })
+
+  it('names a legacy move handler failure without an unhandled rejection', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { options, move } = setup()
+    move.mockRejectedValue(new Error('closing'))
+    options.onEvent!({ kind: 'moved', from: 'a1', session: { agentId: 'b1' }, on: true })
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith('agent browser b1: browser_move_failed (no_answer)'))
+    log.mockRestore()
+  })
+
+  it('asks to follow every agent each time it connects, and is caught up once the core answers, waiting 10 s at most', async () => {
+    vi.useFakeTimers()
+    const { options, given, heard } = setup()
+    const waiting = given.followed!()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(await waiting).toBe(false)
+    const row = { agentId: 'a1', sessionId: 's1' } as RegisteredSession
+    const query = vi.fn(async (name: string, _payload?: Record<string, unknown>) => (name === 'follow_agents' ? { agents: [row] } : {}))
+    options.onConnected!({ query } satisfies CoreConnection)
+    expect(query).toHaveBeenCalledWith('follow_agents', {})
+    expect(await given.followed!()).toBe(true)
+    expect(heard).toEqual([{ kind: 'running', session: row }])
+    // Gone: not caught up until the next connection's answer.
+    options.onDisconnected!()
+    const again = given.followed!()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(await again).toBe(false)
   })
 
   it('tells the core each browser\'s state, and all of them again at every connection', async () => {
@@ -80,12 +188,12 @@ describe('the agent browser in its own process', () => {
     given.told!('a1', { state: 'starting' })
     const query = vi.fn(async (_query: string, _payload?: Record<string, unknown>) => ({}))
     options.onConnected!({ query } satisfies CoreConnection)
-    // First that it takes viewers' streams, said to each core it connects to.
-    expect(query.mock.calls).toEqual([['streams', {}], ['browser_state', { agentId: 'a1', state: { state: 'starting' } }]])
+    // First that it takes viewers' streams, said to each core it connects to; then what it follows of agents.
+    expect(query.mock.calls).toEqual([['streams', {}], ['browser_state', { agentId: 'a1', state: { state: 'starting' } }], ['follow_agents', {}]])
     given.told!('a1', { state: 'ready' })
     given.told!('a2', { state: 'setup', step: 'building' })
     given.told!('a2', undefined)
-    expect(query.mock.calls.slice(2)).toEqual([
+    expect(query.mock.calls.slice(3)).toEqual([
       ['browser_state', { agentId: 'a1', state: { state: 'ready' } }],
       ['browser_state', { agentId: 'a2', state: { state: 'setup', step: 'building' } }],
       ['browser_state', { agentId: 'a2' }],
@@ -93,7 +201,7 @@ describe('the agent browser in its own process', () => {
     options.onDisconnected!()
     const next = vi.fn(async () => { throw new Error('gone') })
     options.onConnected!({ query: next } as CoreConnection)
-    expect(next.mock.calls).toEqual([['streams', {}], ['browser_state', { agentId: 'a1', state: { state: 'ready' } }]])
+    expect(next.mock.calls).toEqual([['streams', {}], ['browser_state', { agentId: 'a1', state: { state: 'ready' } }], ['follow_agents', {}]])
     given.told!('a3', { state: 'starting' })
     await Promise.resolve()
   })
@@ -105,7 +213,7 @@ describe('the agent browser in its own process', () => {
     const query = vi.fn(async (_query: string, _payload?: Record<string, unknown>) => ({}))
     options.onConnected!({ query } satisfies CoreConnection)
     given.told!('a9', { state: 'ready' })
-    expect(query.mock.calls.slice(1)).toEqual([['browser_state', { agentId: 'a9', state: { state: 'ready' } }]])
+    expect(query.mock.calls.slice(2)).toEqual([['browser_state', { agentId: 'a9', state: { state: 'ready' } }]])
   })
 
   const STREAM = '11111111-2222-4333-8444-555555555555'
@@ -135,9 +243,6 @@ describe('the agent browser in its own process', () => {
     expect(vi.mocked(port.streamRoute).mock.calls).toEqual([[STREAM, 'turn'], [STREAM, null]])
     expect(port.streamTransportError).toHaveBeenCalledOnce()
     expect(vi.mocked(port.streamRefused).mock.calls).toEqual([[STREAM]])
-    // None of them is an agent's stop or delete, whatever else it carries.
-    expect(port.stopped).not.toHaveBeenCalled()
-    expect(port.deleted).not.toHaveBeenCalled()
   })
 
   it('a stream\'s frame that names no connection, no type, no stream or no route is dropped', () => {
@@ -150,7 +255,7 @@ describe('the agent browser in its own process', () => {
       { kind: 'stream_route', route: 'direct' }, { kind: 'stream_route', streamId: STREAM, route: 'carrier-pigeon' }, { kind: 'stream_route', streamId: STREAM },
       { kind: 'stream_refused' }, { kind: 'stream_refused', streamId: 7, agentId: 'a1' },
     ]) options.onEvent!(payload)
-    for (const member of ['stream', 'streamClosed', 'streamRoute', 'streamRefused', 'stopped', 'deleted'] as const) expect(port[member], member).not.toHaveBeenCalled()
+    for (const member of ['stream', 'streamClosed', 'streamRoute', 'streamRefused'] as const) expect(port[member], member).not.toHaveBeenCalled()
   })
 
   it('a viewer\'s bytes reach its stream, and nothing else on the link\'s binary side does', () => {
@@ -225,17 +330,19 @@ describe('the agent browser in its own process', () => {
     expect(port.streamClosed).toHaveBeenCalledOnce()
   })
 
-  it('asks the core for its agents\' ids, and a pane\'s agent, and gets no answer when the core cannot say', async () => {
-    const { options, api } = setup()
-    await expect(api.agents.ids!()).rejects.toThrow('no core')
+  it('asks the connected core for every agent here independently of catch-up, and a pane\'s agent, and gets no answer when the core cannot say', async () => {
+    const { options, api, given } = setup()
+    // Disconnected is unknown, with no catch-up or query to wait on.
+    expect(await given.everyAgent!()).toBeNull()
     expect(await api.agents.ofPane!('%7', [4242])).toBeNull()
-    let answer: Record<string, unknown> = { live: ['a1', 7], stopped: ['a2'] }
+    const row = { agentId: 'a1', sessionId: 's1' } as RegisteredSession
+    let answer: Record<string, unknown> = { agents: [row, 7] }
     const query = vi.fn(async (_query: string, _payload?: Record<string, unknown>) => answer)
     options.onConnected!({ query } satisfies CoreConnection)
-    expect(await api.agents.ids!()).toEqual({ live: ['a1'], stopped: ['a2'] })
-    expect(query).toHaveBeenLastCalledWith('agent_ids', {})
+    expect(await given.everyAgent!()).toEqual([row])
+    expect(query).toHaveBeenLastCalledWith('agents', {})
     answer = { error: 'UNKNOWN_QUERY' }
-    await expect(api.agents.ids!()).rejects.toThrow('no answer')
+    expect(await given.everyAgent!()).toBeNull()
     // The command's parents go with its pane: the core holds the pane's own process to them.
     answer = { agentId: 'a1', guest: false }
     expect(await api.agents.ofPane!('%7', [4242, 1])).toEqual({ agentId: 'a1', guest: false })
@@ -263,73 +370,94 @@ describe('the agent browser in its own process', () => {
     expect(await asked).toBeNull()
   })
 
-  it('a core that never answers the ids is no answer after 10 s', async () => {
-    vi.useFakeTimers()
-    const { options, api } = setup()
-    options.onConnected!({ query: () => new Promise(() => {}) } as CoreConnection)
-    const asked = api.agents.ids!()
-    const settled = asked.catch((error: Error) => error.message)
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(await settled).toBe('the core did not answer within 10000 ms')
+  it('a core caught up with that cannot say which agents are here is no answer', async () => {
+    const { options, given } = setup()
+    options.onConnected!({ query: async (name: string) => { if (name === 'follow_agents') return { agents: [] }; throw new Error('gone') } } as CoreConnection)
+    expect(await given.followed!()).toBe(true)
+    expect(await given.everyAgent!()).toBeNull()
   })
 
-  // The person's Start and Stop: the core sets the row's flag and tells this process before it answers.
-  it('asks the core to set the flag, and answers what it said', async () => {
-    const { options, api } = setup()
-    let answer: Record<string, unknown> = { ok: true, changed: true }
-    const query = vi.fn(async (_query: string, _payload?: Record<string, unknown>) => answer)
-    options.onConnected!({ query } satisfies CoreConnection)
-    expect(await api.agents.setBrowser!('a1', true)).toEqual({ ok: true, changed: true })
-    expect(query).toHaveBeenLastCalledWith('set_browser', { agentId: 'a1', on: true })
-    answer = { ok: true, changed: false }
-    expect(await api.agents.setBrowser!('a1', false)).toEqual({ ok: true, changed: false })
-    expect(query).toHaveBeenLastCalledWith('set_browser', { agentId: 'a1', on: false })
-    for (const error of ['NOT_RUNNING', 'NOT_ALLOWED']) {
-      answer = { error }
-      expect(await api.agents.setBrowser!('a1', true)).toEqual({ error })
-    }
+  it('a core that never answers which agents are here is no answer after 10 s', async () => {
+    vi.useFakeTimers()
+    const { options, given } = setup()
+    options.onConnected!({ query: () => new Promise(() => {}) } as CoreConnection)
+    const asked = given.everyAgent!()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(await asked).toBeNull()
   })
 
-  it('a core that does not answer the switch rejects', async () => {
-    const { options, api } = setup()
-    await expect(api.agents.setBrowser!('a1', true)).rejects.toThrow('no core')
-    let answer: Record<string, unknown> = { error: 'UNKNOWN_QUERY' }
-    options.onConnected!({ query: async () => answer } as CoreConnection)
-    await expect(api.agents.setBrowser!('a1', true)).rejects.toThrow('no answer')
-    answer = { ok: true }
-    await expect(api.agents.setBrowser!('a1', true)).rejects.toThrow('no answer')
-    vi.useFakeTimers()
-    options.onConnected!({ query: () => new Promise(() => {}) } as CoreConnection)
-    const settled = api.agents.setBrowser!('a1', true).catch((error: Error) => error.message)
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(await settled).toBe('the core did not answer within 10000 ms')
+  it('settings presence uses actual rows on a new core and only membership on an older core', async () => {
+    const { options, given } = setup()
+    expect(await given.hasAgent!('live')).toBeNull()
+    let old = false
+    const query = vi.fn(async (name: string) => name === 'agents' && !old
+      ? { agents: [{ agentId: 'live' }, { agentId: 'stopped' }] }
+      : name === 'agent_ids' ? { live: ['live'], stopped: ['stopped'] } : { error: 'UNKNOWN_QUERY' })
+    options.onConnected!({ query })
+    for (const id of ['live', 'stopped']) expect(await given.hasAgent!(id)).toBe(true)
+    expect(await given.hasAgent!('absent')).toBe(false)
+    expect(query).not.toHaveBeenCalledWith('agent_ids', {})
+    old = true
+    for (const id of ['live', 'stopped']) expect(await given.hasAgent!(id)).toBe(true)
+    expect(await given.hasAgent!('absent')).toBe(false)
+    expect(query).toHaveBeenCalledWith('agent_ids', {})
+    // An old membership list supplies no Browser flags or deletion authority.
+    expect(await given.everyAgent!()).toBeNull()
   })
 
-  // Decision 19: the browser moved its entry to the pane's new agent; the core moves the flag and attaches it.
-  it('asks the core to move the flag and answers what it said; a core that does not answer rejects', async () => {
-    const { options, api } = setup()
-    await expect(api.agents.moveBrowser!('ended', 'shell')).rejects.toThrow('no core')
-    let answer: Record<string, unknown> = { ok: true, changed: true }
-    const query = vi.fn(async (_query: string, _payload?: Record<string, unknown>) => answer)
-    options.onConnected!({ query } satisfies CoreConnection)
-    expect(await api.agents.moveBrowser!('ended', 'shell')).toEqual({ ok: true, changed: true })
-    expect(query).toHaveBeenLastCalledWith('move_browser', { from: 'ended', to: 'shell' })
-    answer = { error: 'NOT_RUNNING' }
-    expect(await api.agents.moveBrowser!('ended', 'shell')).toEqual({ error: 'NOT_RUNNING' })
-    for (const shape of [{ error: 'UNKNOWN_QUERY' }, { ok: true }]) {
-      answer = shape
-      await expect(api.agents.moveBrowser!('ended', 'shell'), JSON.stringify(shape)).rejects.toThrow('no answer')
-    }
+  it.each(['rejected', 'timeout', 'malformed', 'error', 'invalid row'] as const)('a %s modern presence query remains unknown without trying the old adapter', async failure => {
     vi.useFakeTimers()
-    options.onConnected!({ query: () => new Promise(() => {}) } as CoreConnection)
-    const settled = api.agents.moveBrowser!('ended', 'shell').catch((error: Error) => error.message)
+    const { options, given } = setup()
+    const query = vi.fn(async (name: string): Promise<Record<string, unknown>> => {
+      if (name !== 'agents') return {}
+      if (failure === 'rejected') throw new Error('lost')
+      if (failure === 'timeout') return new Promise(() => {})
+      if (failure === 'invalid row') return { agents: [{ agent: 'a1' }] }
+      return failure === 'error' ? { error: 'SERVICE_UNAVAILABLE' } : { agents: 'broken' }
+    })
+    options.onConnected!({ query })
+    const waiting = given.hasAgent!('a1')
     await vi.advanceTimersByTimeAsync(10_000)
-    expect(await settled).toBe('the core did not answer within 10000 ms')
+    expect(await waiting).toBeNull()
+    expect(query).not.toHaveBeenCalledWith('agent_ids', {})
+  })
+
+  it.each(['rejected', 'timeout', 'missing', 'live not strings', 'stopped not strings'] as const)('a legacy presence answer that is %s remains unknown', async failure => {
+    vi.useFakeTimers()
+    const { options, given } = setup()
+    const query = vi.fn(async (name: string): Promise<Record<string, unknown>> => {
+      if (name !== 'agent_ids') return { error: 'UNKNOWN_QUERY' }
+      if (failure === 'rejected') throw new Error('lost')
+      if (failure === 'timeout') return new Promise(() => {})
+      if (failure === 'missing') return { live: [] }
+      return { live: failure === 'live not strings' ? [1] : [], stopped: failure === 'stopped not strings' ? [1] : [] }
+    })
+    options.onConnected!({ query })
+    const waiting = given.hasAgent!('a1')
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(await waiting).toBeNull()
+  })
+
+  it.each(['agents', 'agent_ids', 'migration'] as const)('a stale %s reply after reconnect is unknown even when the connection object is reused', async phase => {
+    const { options, given } = setup()
+    let answer!: (value: Record<string, unknown>) => void
+    const reply = new Promise<Record<string, unknown>>(resolve => { answer = resolve })
+    const query = vi.fn(async (name: string) => name === (phase === 'migration' ? 'agents' : phase) ? reply : { error: 'UNKNOWN_QUERY' })
+    const connection = { query }
+    options.onConnected!(connection)
+    const waiting = phase === 'migration' ? given.everyAgent!() : given.hasAgent!('a1')
+    await vi.waitFor(() => expect(query).toHaveBeenCalledWith(phase === 'migration' ? 'agents' : phase, {}))
+    options.onDisconnected!()
+    options.onConnected!(connection)
+    answer(phase === 'agent_ids' ? { live: ['a1'], stopped: [] } : { agents: [{ agentId: 'a1', browser: true }] })
+    expect(await waiting).toBeNull()
+    query.mockImplementation(async () => ({ agents: [{ agentId: 'a1' }] }))
+    expect(await given.hasAgent!('a1')).toBe(true)
   })
 
   // The ready and stop lines (agentBrowser/notices.ts): typed by the core, which tells this process what became of each.
   it('delivers its lines through the core and hears what became of them', async () => {
-    const { options, api, port } = setup()
+    const { options, api, heard: agents } = setup()
     const query = vi.fn(async (_query: string, _payload?: Record<string, unknown>) => ({}))
     options.onConnected!({ query } satisfies CoreConnection)
     const heard = vi.fn()
@@ -342,9 +470,7 @@ describe('the agent browser in its own process', () => {
     const event = { deliveryId: 'agent-browser:a1:ready:1', sessionId: 'a1', state: 'delivered' }
     options.onEvent!({ kind: 'delivery', event })
     expect(heard).toHaveBeenCalledWith(event)
-    expect(port.attached).not.toHaveBeenCalled()
-    expect(port.stopped).not.toHaveBeenCalled()
-    expect(port.deleted).not.toHaveBeenCalled()
+    expect(agents).toEqual([])
   })
 
   // A line asked of no core was never written, so it is not counted as perhaps written (`unknown`): its next try types

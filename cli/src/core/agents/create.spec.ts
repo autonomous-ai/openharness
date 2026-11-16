@@ -140,7 +140,7 @@ function setup(over: Partial<CreateAgentDeps> = {}) {
     externalResume: vi.fn<CreateAgentDeps['externalResume']>(async () => ({ ok: true, session: pending })),
     watchNewPane: vi.fn(async () => {}),
     announceSession: vi.fn(),
-    attachDsh: vi.fn(),
+    attach: vi.fn(),
     prepareApiTools: vi.fn(),
     hookPort: 4242,
     hooksDisabled: false,
@@ -592,7 +592,8 @@ describe('creating an agent', () => {
       expect(result).toEqual({ ok: true, session: pending })
       expect(deps.prepareApiTools).toHaveBeenCalled()
       expect(deps.announceSession).toHaveBeenCalledWith(pending)
-      expect(deps.attachDsh).not.toHaveBeenCalled()
+      // Every new agent is looked at for the services that follow agents, a harness or not (core/agentLife.ts).
+      expect(deps.attach).toHaveBeenCalledWith(pending)
       expect(deps.watchNewPane).toHaveBeenCalledWith('claude', pending, { runtime: { paneId: '%1' } }, ['claude'], { install: 'recipe' }, undefined)
       const pane = vi.mocked(createAndRegisterPane).mock.calls[0][0]
       expect(pane).toMatchObject({ engine: 'claude', sessionLabel: expect.any(String), grid: null, gridLaunchRecord: null, dsh: null, dshRuntime: null, defaultName: null })
@@ -672,17 +673,16 @@ describe('creating an agent', () => {
       vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
     })
 
-    it('with an older Desktop\'s browser: true, the row says so and its browser is attached; without, neither', async () => {
-      const attachBrowser = vi.fn()
+    it('with an older Desktop\'s browser: true, the row says so, which the agent browser takes in; without, it does not', async () => {
       vi.mocked(createAndRegisterPane).mockResolvedValue({ ok: true, spawned: { runtime: { paneId: '%1' } }, pending: { ...pending, browser: true } } as never)
-      const { create } = setup({ attachBrowser })
+      const { deps, create } = setup()
       await create(request({ browser: true }))
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ browser: true })
-      expect(attachBrowser).toHaveBeenCalledWith({ ...pending, browser: true })
+      expect(deps.attach).toHaveBeenCalledWith({ ...pending, browser: true })
       vi.mocked(createAndRegisterPane).mockClear().mockResolvedValue({ ok: true, spawned: { runtime: { paneId: '%1' } }, pending } as never)
       await create(request())
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).not.toHaveProperty('browser')
-      expect(attachBrowser).toHaveBeenCalledTimes(1)
+      expect(deps.attach).toHaveBeenLastCalledWith(pending)
     })
 
     it('as a DSH: its workspace prepared, trusted when it went into an empty folder, and its launch layered on', async () => {
@@ -692,7 +692,7 @@ describe('creating an agent', () => {
       const { deps, create } = setup()
       await create(request({ dsh: 'blender' }))
       expect(preTrustClaudeProject).toHaveBeenCalled()
-      expect(deps.attachDsh).toHaveBeenCalled()
+      expect(deps.attach).toHaveBeenCalledWith(expect.objectContaining({ dsh: 'blender' }))
       const pane = vi.mocked(createAndRegisterPane).mock.calls[0][0]
       expect(pane).toMatchObject({ dsh: 'blender', dshRuntime: expect.any(String), label: 'Blender', env: expect.objectContaining({ HARNESS_DSH: 'blender' }) })
       await create(request({ dsh: 'blender', engine: 'codex' }))

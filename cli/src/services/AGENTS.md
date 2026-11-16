@@ -77,7 +77,7 @@ hang or leak costs only its process. A process per risk, not per feature (`SERVI
 | `memory` | memory | an experiment: Memories across machines | on demand |
 | `router` | router | an experiment: where ⌘B sends a task, decided by Jev | on demand |
 | `cloud` | cloud | an experiment: cloud agents (Fo, Devin Cloud, Cursor Cloud), harnesses on their makers' servers | on demand |
-| `agentBrowser` | agentBrowser | Podman's calls and event stream, image builds, Podman's setup, and each viewer's stream of a browser's screen: its exec into the container, the viewer's VNC bytes, the credit and the pacing (`agentBrowserProcess.ts`, `core/agentBrowserLink.ts`; the core passes a stream on and holds it to the connection that opened it, `core/browserStreams.ts`) | on demand |
+| `agentBrowser` | agentBrowser | Podman's calls and event stream, image builds, Podman's setup, whose Browser is on (its state file), and each viewer's stream of a browser's screen: its exec into the container, the viewer's VNC bytes, the credit and the pacing (`agentBrowserProcess.ts`, `core/agentBrowserLink.ts`; the core passes a stream on and holds it to the connection that opened it, `core/browserStreams.ts`) | on demand |
 
 A fault in one of the edge host's services can cost the others in it, never the core. Every service in
 `KNOWN_SERVICES` runs out of the core's process by default, unless `HARNESSD_SERVICES` names a subset, by
@@ -144,6 +144,14 @@ master too old to run it starts it beside itself, still in its own process (`src
   and work that belongs to one connection's request (a Grid harness's command) is keyed by the connection
   and request id the core gives every request (`Asker`). `e2e/serviceProcesses.e2e.ts` proves it: a create
   on a grid model while models is killed answers GRID_UNAVAILABLE, and every agent works on.
+- A service that acts on what happens to agents follows them (`CoreApi.agents.follow`, `core/agentLife.ts`; in its own
+  process `services/followLink.ts`, which asks `follow_agents` each time it connects): it is told every live agent at
+  once, then each look at one (once a run, or every look with `each`, only agents whose row has the fields in `having`),
+  its end, a stop a person or an agent made, a purge with every conversation it had, and a new agent in the pane one
+  ended in (decision 19). The core names no follower. What one in its own process must not miss while it is down (a stop,
+  a purge, a pane taken) is held for it when its process says it hears that kind (`hears` in `SERVICE_HOSTS`); a run and
+  an end its catch-up finds again. The viewers' attach and detach, the agent cleanup's stops, search's purges and the
+  agent browser all hear agents this way.
 - Workspaces (`src/services/workspacesProcess.ts`, `src/core/workspacesLink.ts`) run the git the core runs none of:
   the folder a create asks for (a clone, a worktree, a branch) and a purge's worktree, reviewed and removed. The core
   asks each with a deadline and checks the answer's shape; a process says it makes folders each time it connects
@@ -233,8 +241,8 @@ master too old to run it starts it beside itself, still in its own process (`src
   `e2e/recapsProcess.e2e.ts` proves turns end on time with them killed, hung or slow, and
   `e2e/recapsCompat.e2e.ts` that the dial and the windows hear the same cards and recaps as before.
   The agent cleanup (`src/services/agentCleanupProcess.ts`, `src/core/agentCleanupLink.ts`) is told the same way
-  (a harness stopped, the person typing into one another agent started), and acts on the core only through what the
-  core lets it: `closeStarted` closes a harness another agent started and refuses any other. One thing the core asks
+  (the person typing into a harness another agent started), hears a harness stopped as it follows agents (above), and
+  acts on the core only through what the core lets it: `closeStarted` closes a harness another agent started and refuses any other. One thing the core asks
   it and waits for, ten seconds at most: to erase what a harness being deleted was told (`forgetTold`, the agent
   ledger's lines, which this service reads and locks and the core never does). It is asked before anything of the
   harness is deleted, and a delete it does not answer is refused with nothing deleted.
@@ -269,8 +277,9 @@ like any other. Named in `HARNESSD_SERVICES`, it starts with the others.
   which a core asks for this process. A core that speaks an older one never asks, so the master starts the
   process as that core binds (`ServiceSupervisor.unasked`). It is 3 by default, the experiments'; the
   devices, models and the gateway became on demand at protocol 4, which may also ask before it binds; the
-  viewers at protocol 5; the agent browser at protocol 7, asked for by an agent whose Browser is on or as the core starts
-  when its state file is there (`core/agentBrowserLink.ts`). Making another process on demand needs a protocol bump, and that number in its
+  viewers at protocol 5; the agent browser at protocol 7, asked for by a request, as the core starts when its state file
+  is there, or by an agent whose row still carries the Browser flag the core kept until 2026-11-15
+  (`core/agentBrowserLink.ts`, until 2026-12-18). Making another process on demand needs a protocol bump, and that number in its
   `askedSince`. A newer core under an older master asks for a process that master started with the others,
   which changes nothing.
 - **Proof.** `e2e/experiments.e2e.ts`, `e2e/devicesOnDemand.e2e.ts`, `e2e/modelsOnDemand.e2e.ts`,

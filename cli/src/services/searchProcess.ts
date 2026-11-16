@@ -3,8 +3,9 @@
  *
  * The same index as in the core's process (services/search.ts, lib/sessionSearch/), on a core API built
  * here: the agents come from the core (`service_query agents`, refreshed on every turn boundary it is
- * told of), and everything else — the database readers, the conversations Harness did not start — is
- * read here, as the core would read it. Its SQLite index, its memory and its native code are this
+ * told of), a purge as every service that follows agents hears one (services/followLink.ts), and
+ * everything else — the database readers, the conversations Harness did not start — is read here, as the
+ * core would read it. Its SQLite index, its memory and its native code are this
  * process's alone: a crash or a leak in search costs search, and the master starts it again.
  */
 import type { CoreApi } from '../core/api.js'
@@ -13,6 +14,7 @@ import { databaseHistory } from '../lib/databaseHistory.js'
 import { externalSessionRequest, externalUnavailable } from '../lib/externalSessionWire.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import { followLink, type FollowLink } from './followLink.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { UNASKED } from './processCoreApi.js'
 import { SEARCH_REQUESTS, startSearch } from './search.js'
@@ -31,12 +33,14 @@ export interface SearchServiceOptions {
 }
 
 /**
- * The core API search runs on in its own process: the agents the core last named, and everything else
- * read here, as the core would read it. What search never asks — windows, sign-in — answers as nothing.
+ * The core API search runs on in its own process: the agents the core last named, what it hears of them
+ * ([follow], services/followLink.ts), and everything else read here, as the core would read it. What search
+ * never asks — windows, sign-in — answers as nothing.
  */
 export function searchCoreApi(
   dataDir: string,
   agents: () => Array<RegisteredSession & { displayName?: string }>,
+  follow?: FollowLink,
 ): CoreApi {
   return {
     dataDir,
@@ -56,6 +60,7 @@ export function searchCoreApi(
       runtimeProfile: () => null,
       setRuntime: () => {},
       fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
+      ...(follow ? { follow: follow.follow } : {}),
       ...AGENT_ACTIONS_OFF,
       activityText: UNASKED.activityText,
       activity: UNASKED.activity,
@@ -91,7 +96,9 @@ export function runSearchService(options: SearchServiceOptions): ServiceProcess 
     const answer = await connection.query('agents').catch(() => null)
     if (core === connection && Array.isArray(answer?.agents)) agents = answer.agents as typeof agents
   }
-  const api = searchCoreApi(options.dataDir, () => agents)
+  // A purge, which the core holds for this service while its process is down (harnessd/services.ts `hears`).
+  const follow = followLink({ running: false })
+  const api = searchCoreApi(options.dataDir, () => agents, follow)
   const ports = emptyPorts()
   const answers = (options.start ?? startSearch)(api, ports, { providers: options.providers ?? externalProviders(), excluded: [options.dataDir], log: console.warn })
   const index = ports.search
@@ -110,13 +117,16 @@ export function runSearchService(options: SearchServiceOptions): ServiceProcess 
         return { ...(request && index ? await index.inspect(request) : externalUnavailable()) }
       } },
     onEvent: (payload) => {
+      if (follow.heard(payload)) return
       const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : ''
       if (!sessionId || !index) return
       // A turn boundary: the agents may have changed (a new one, a new conversation), and this
       // session has new turns to index. Returned, so a failure is logged rather than left unhandled,
       // which would end this process.
       if (payload.kind === 'touch') return refresh().then(() => index.touch(sessionId))
-      if (payload.kind === 'deleteHistory') index.deleteHistory(sessionId)
+      // A core from before purges were told as what happens to agents (2026-11-15) tells each purged conversation so, and
+      // a deleted conversation must not stay searchable under one. Delete on or after 2026-12-18.
+      if (payload.kind === 'deleteHistory') follow.heard({ kind: 'agent', event: { kind: 'purged', agentId: sessionId, sessionIds: [sessionId] } })
     },
     onDisconnected: () => { core = null; agents = [] },
     onConnected: (connection) => {

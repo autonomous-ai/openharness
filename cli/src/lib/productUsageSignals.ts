@@ -15,7 +15,7 @@ const actions = { agent_create: 'create', agent_resume: 'resume', agent_restart:
 const unmeasured = (..._args: unknown[]): void => {}
 const setup = new Set(['TMUX_UNAVAILABLE', 'PTY_HOST_UNAVAILABLE', 'TMUX_TOO_OLD_FOR_DSH', 'TMUX_TOO_OLD_FOR_GRID',
   'ENGINE_UNAVAILABLE', 'NATIVE_LAUNCH_HELD', 'DSH_MATERIALIZE_FAILED', 'SPAWN_FAILED', 'REGISTRATION_FAILED', 'GRID_CONFIG_FAILED'])
-// The Browser's Start refusals (core/agents/lifecycle.ts) answer no launch, so they take a fixed kind, not the launch
+// The Browser's Start refusals (services/agentBrowser.ts) answer no launch, so they take a fixed kind, not the launch
 // code list, where each would have joined all twelve launch families: a guest's agent (`NOT_ALLOWED`) is `auth`, and an
 // agent that does not run here (`NOT_RUNNING`) is `invalid`.
 const auth = new Set(['UNAUTHORIZED', 'AUTH_REQUIRED', 'LOGIN_REQUIRED', 'OWNER_REQUIRED', 'E2EE_REQUIRED', 'NOT_ALLOWED'])

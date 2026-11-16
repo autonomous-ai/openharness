@@ -226,7 +226,7 @@ it.each(['same', 'repaired'] as const)('composes discovery, retry and inline att
     announceSession: vi.fn(), stoppedAgents: { save: vi.fn() }, syncRecapPool: vi.fn(),
   } as unknown as BindDeps)
   const discover = createDiscoveryHandlers({ registry, bindObservedAgent: bind.bindObservedAgent,
-    attachSession: run.attach.attachSession, announceSession: vi.fn(), syncRecapPool: vi.fn(),
+    attachSession: run.attach.attachSession, announceSession: vi.fn(), syncRecapPool: vi.fn(), attach: vi.fn(), taken: vi.fn(),
   } as unknown as DiscoveryDeps)
   const seen = { engine: 'codex', processIdentity: { pid: 42, startMarker: 'fixture' }, args: 'codex', runtimes: [] } as unknown as DiscoveredTerminalAgent
   vi.clearAllMocks()
