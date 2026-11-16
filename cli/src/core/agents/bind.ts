@@ -12,6 +12,7 @@ import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { cursorDataDir } from '../../engines/cursor/contract.js'
 import { HERMES_SANDBOX_HOLD } from '../../engines/hermes/contract.js'
 import { isOpenclawLocalStopped, openclawLocalStopped, OPENCLAW_SCREEN_HOLDS, OPENCLAW_STATES, readOpenclawScreen, type OpenclawScreen } from '../../engines/openclaw/contract.js'
+import { OTHER_ENGINE_STATES } from '../../engines/otherEngines.js'
 import { continuationOf } from '../../engines/sessionFiles.js'
 import { sessionStoreOf } from '../../engines/sessionStoreContracts.js'
 import type { TurnRecaps } from '../turns/recaps.js'
@@ -39,6 +40,8 @@ const REPAIR_EAGER_ATTEMPTS = 24   // ≈2 min at the 5s sweep
 
 /** What an OpenClaw agent says while its pane shows a screen its TUI cannot work for Harness on. */
 const OPENCLAW_HOLDS = new Set<string>(Object.values(OPENCLAW_SCREEN_HOLDS))
+/** What the other engines' reader says on a row while its worker is out or it rebuilds the live view. */
+const OTHER_ENGINE_HOLDS = new Set<string>(Object.values(OTHER_ENGINE_STATES))
 
 /**
  * The hold a pane's screen gives its agent. A stopped local run keeps the reason it was seen with once OpenClaw's later
@@ -328,7 +331,11 @@ export function createBinding({
     const found = registry.byProcess(observed.engine, observed.processIdentity)
     if (!found || changing(found.agentId) || isRecentlyDeleted(found.agentId)) return
     let agent: RegisteredSession = found
-    if (agent.identityHold && agent.sessionId && agent.transcriptPath) {
+    // The other engines' reader hold is otherStreams' to set and to clear, with its resume from the byte the core held.
+    // Revalidated here, it was cleared and the session attached again while the worker was down; on the worker's return
+    // a second stream opened from the transcript's end, and the turn typed meanwhile came as history (#4362, CLI end to
+    // end shard 5, e2e/otherEngines.e2e.ts).
+    if (agent.identityHold && !OTHER_ENGINE_HOLDS.has(agent.identityHold) && agent.sessionId && agent.transcriptPath) {
       try {
         const previous = agent.sessionId
         const retried = registry.revalidateBinding(agent.agentId)
