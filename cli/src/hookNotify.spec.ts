@@ -134,8 +134,10 @@ function runHook(opts: RunHookOpts): Promise<string> {
     // failure in five full-suite runs. Give the child room so these specs test behaviour, not the load
     // on the machine running them.
     env.HARNESS_HOOK_DEADLINE_MS = '30000'
-    // Run inside a named herdr session, the hook would leave out the HERDR_PANE_ID a spec sets.
+    // Run inside a named herdr or Herdr Core session, the hook would leave out the HERDR_PANE_ID or HC_TERMINAL_ID a
+    // spec sets.
     delete env.HERDR_SESSION
+    delete env.HC_SESSION
     if (opts.env) Object.assign(env, opts.env)
     delete env.TMUX_PANE
     if (opts.tmuxPane) env.TMUX_PANE = opts.tmuxPane
@@ -2249,11 +2251,13 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
 
 describe('hook notify: a session outside a pane', () => {
   /** The environment names the hook may send as host hints, and nothing else (spec: The hook). */
-  const HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE',
-    'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID',
-    'CLAUDE_CODE_ENTRYPOINT']
+  const HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'HC_TERMINAL_ID', 'REX_BLOCK', 'ZELLIJ',
+    'TMUX_PANE', 'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE',
+    'CLAUDE_CODE_HOST_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT']
+  /** HINTS as this platform's hook sends them: Herdr Core runs on macOS only (spec Q5). */
+  const SENT = HINTS.filter((name) => name !== 'HC_TERMINAL_ID' || process.platform === 'darwin')
   /** The names a session outside a pane can set, as many as the hook sends: runHook sets no TMUX_PANE without a pane. */
-  const panelessHints = HINTS.filter((name) => name !== 'TMUX_PANE').slice(0, MAX_HINTS)
+  const panelessHints = SENT.filter((name) => name !== 'TMUX_PANE').slice(0, MAX_HINTS)
   /** The hint names unset, so the environment this test runs in sends none of its own. */
   const noHints = Object.fromEntries(HINTS.map((name) => [name, '']))
   const folder = (prefix: string): string => {
@@ -2361,7 +2365,7 @@ describe('hook notify: a session outside a pane', () => {
     const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE').map((name, index) => [name, `hint-${index}`]))
     await runHook({ port, ...own, env: set, input: typed })
     expect(HINTS.length).toBeGreaterThan(MAX_HINTS)
-    expect(Object.keys(requests[0].body.hostHints as object)).toEqual(HINTS.slice(0, MAX_HINTS))
+    expect(Object.keys(requests[0].body.hostHints as object)).toEqual(SENT.slice(0, MAX_HINTS))
   })
 
   it('says how Claude Code was started, beside the app it runs in', async () => {
@@ -2606,7 +2610,51 @@ describe('hook notify: a session outside a pane', () => {
     const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE').map((name, index) => [name, `hint-${index}`]))
     await runHook({ port, env: { ...set, HERDR_SESSION: 'side' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
     expect(Object.keys(requests[0].body.hostHints as object))
-      .toEqual(HINTS.filter((name) => name !== 'TMUX_PANE' && name !== 'HERDR_PANE_ID').slice(0, MAX_HINTS))
+      .toEqual(SENT.filter((name) => name !== 'TMUX_PANE' && name !== 'HERDR_PANE_ID').slice(0, MAX_HINTS))
+  })
+
+  // HC_TERMINAL_ID is Herdr Core's address of the terminal the agent runs in (t1, t2… per session): an id, no credential.
+  it.runIf(process.platform === 'darwin')('sends HC_TERMINAL_ID from an hc terminal', async () => {
+    const sessions: Record<string, string>[] = [{}, { HC_SESSION: 'default' }]
+    for (const session of sessions) {
+      const { port, requests } = await collect()
+      await runHook({
+        port, env: { ...noHints, ...session, HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty' },
+        input: { hook_event_name: 'Stop', session_id: 'sess-1' },
+      })
+      expect(requests[0].body.hostHints).toEqual({ TERM_PROGRAM: 'ghostty', HC_TERMINAL_ID: 't7' })
+    }
+  })
+
+  // A named hc session's terminal addresses start again at t1, and the devices follow the default session, where that
+  // address is another terminal. The rest of the event still posts, and neither the session's name nor its socket is sent.
+  it.runIf(process.platform === 'darwin')('leaves out HC_TERMINAL_ID in a terminal of a named hc session', async () => {
+    const { port, requests } = await collect()
+    await runHook({
+      port,
+      env: { ...noHints, HC_TERMINAL_ID: 't1', HC_SESSION: 'side', HC_SOCKET: '/h/.local/state/herdr-core/side/side.sock' },
+      input: { hook_event_name: 'Stop', session_id: 'sess-1' },
+    })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body.hostHints).toEqual({})
+    expect(JSON.stringify(requests[0].body)).not.toMatch(/side/)
+  })
+
+  // Left out before the cap counts it: an address never sent would cost the farthest hint its place.
+  it.runIf(process.platform === 'darwin')('a named hc session\'s address takes none of the MAX_HINTS', async () => {
+    const { port, requests } = await collect()
+    const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE').map((name, index) => [name, `hint-${index}`]))
+    await runHook({ port, env: { ...set, HC_SESSION: 'side' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    expect(Object.keys(requests[0].body.hostHints as object))
+      .toEqual(HINTS.filter((name) => name !== 'TMUX_PANE' && name !== 'HC_TERMINAL_ID').slice(0, MAX_HINTS))
+  })
+
+  it.runIf(process.platform !== 'darwin')('off macOS HC_TERMINAL_ID is left out, and takes none of the MAX_HINTS', async () => {
+    const { port, requests } = await collect()
+    const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE').map((name, index) => [name, `hint-${index}`]))
+    await runHook({ port, env: set, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    expect(Object.keys(requests[0].body.hostHints as object))
+      .toEqual(HINTS.filter((name) => name !== 'TMUX_PANE' && name !== 'HC_TERMINAL_ID').slice(0, MAX_HINTS))
   })
 
   // The core reads 4096 bytes of a body at most (hookServer.ts): the transcript's path goes first, then the folder.
