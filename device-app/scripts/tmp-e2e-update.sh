@@ -87,7 +87,6 @@ trap cleanup EXIT
 # Keys made here, for this run only: no secret is read.
 cargo tauri signer generate --ci -w "$work/key"
 cargo tauri signer generate --ci -w "$work/other"
-export TAURI_SIGNING_PRIVATE_KEY="$work/key" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" APPLE_SIGNING_IDENTITY=-
 pub="$(cat "$work/key.pub")"
 other="$(cat "$work/other.pub")"
 
@@ -101,9 +100,14 @@ port="$(sed -n 's/^Serving HTTP on 127\.0\.0\.1 port \([0-9]*\) .*/\1/p' "$work/
 # Only 0.0.1 may read plain http (a release build refuses it without the dangerous key). 0.0.2 asks https of this plain
 # server, which fails, so the relaunched app reaches nothing.
 config() { printf '{"plugins":{"updater":{"pubkey":"%s","endpoints":["%s"]%s}}}' "$pub" "$1" "$2"; }
-bash "$here/release-build.sh" 0.0.1 "$work/old" \
-  "$(config "http://127.0.0.1:$port/metadata.json" ',"dangerousInsecureTransportProtocol":true')"
-bash "$here/release-build.sh" 0.0.2 "$work/new" "$(config "https://127.0.0.1:$port/metadata.json" '')"
+# release-device.yml's two steps: the compile with no signing key in its environment, then the bundle with it.
+build() {
+  bash "$here/release-build.sh" compile "$1" "$3"
+  TAURI_SIGNING_PRIVATE_KEY="$work/key" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" APPLE_SIGNING_IDENTITY=- \
+    bash "$here/release-build.sh" bundle "$1" "$2" "$3"
+}
+build 0.0.1 "$work/old" "$(config "http://127.0.0.1:$port/metadata.json" ',"dangerousInsecureTransportProtocol":true')"
+build 0.0.2 "$work/new" "$(config "https://127.0.0.1:$port/metadata.json" '')"
 
 # Informational, never a failure (PM, 2026-11-16): requireSignedVersion needs the version in the signature's trusted
 # comment, tab-separated key:value fields that minisign's global signature covers.

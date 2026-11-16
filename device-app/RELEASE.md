@@ -40,12 +40,15 @@ The first release, with Diego's go. The bucket holds no manifest yet, so both na
 | Job | Runs on | Does |
 |---|---|---|
 | `version` | ubuntu | Checks the version, the run's ref, and that the run's commit is on `main`. |
-| `build` | macos-15 | Builds, signs, notarizes and checks; keeps the three files and their sha256 and size as a run artifact for 7 days. |
+| `build` | macos-15 | Compiles, then bundles, signs, notarizes and checks; keeps the three files and their sha256 and size as a run artifact for 7 days. |
 | `publish` | ubuntu, only with `publish=true` | Uploads to GCS, writes the manifest, verifies the public downloads. |
 
 - **Every run's commit is on `main`.** With `publish=true` the run's ref must be `refs/tags/v<version>_device`; without
   it, `refs/heads/main`. Only `main` may be prepared: the repository is public, so anyone can download a run's
   artifact, and a signed, notarized build of unreviewed branch code must not exist.
+- **The build's code never runs beside a secret.** `Compile` runs the crates' build scripts and the UI's npm packages
+  before the keychain or any secret exists, and refuses a signing secret in its environment; `Bundle and sign`, which
+  holds them, runs only the Tauri CLI.
 - **Two notarizations.** Tauri notarizes and staples the app; it signs the dmg but does not notarize it, so the
   workflow submits the dmg itself (`notarytool submit --wait`) and staples it.
 - **Checks before anything leaves `build`** (`scripts/release-check.sh --notarized`): the three files; the app is
@@ -57,8 +60,8 @@ The first release, with Diego's go. The bucket holds no manifest yet, so both na
   year-long cache, writes `metadata.json` only over the generation it read (`no-cache`), then reads the manifest back
   and downloads each file it names from the CDN, comparing it with the build's.
 
-The scripts the jobs run: `scripts/release-setup.sh` (the runner's tools), `scripts/release-build.sh` (the build, under
-the fixed names `Harness-Device.dmg`, `Harness-Device.app.tar.gz`, `Harness-Device.app.tar.gz.sig`),
+The scripts the jobs run: `scripts/release-setup.sh` (the runner's tools), `scripts/release-build.sh` (`compile`, then
+`bundle` under the fixed names `Harness-Device.dmg`, `Harness-Device.app.tar.gz`, `Harness-Device.app.tar.gz.sig`),
 `scripts/release-check.sh` and `scripts/device-manifest.py`.
 
 ## The manifest
