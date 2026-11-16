@@ -1,7 +1,7 @@
 // The Codex home a rollout path is in, for the dial skill. The path is another process's open file, read by `lsof`, so a
 // home is taken only from the exact shape Codex writes, by fixed levels, never by looking for the first `sessions`: a
 // home whose own path holds a `sessions` folder still resolves right, and any other shape gives nothing.
-import { resolve } from 'node:path'
+import { listable } from '../devices/dialSkillFiles.js'
 import type { SessionOwner } from '../lib/sessionSearch/external.js'
 import { within } from '../lib/sessionSearch/externals/support.js'
 
@@ -14,15 +14,13 @@ export function takesOwner(owner: RolloutOwner): boolean {
   return owner.engine === 'codex' && !owner.harness && !owner.fromArgs
 }
 
-const MAX_BYTES = 1024
-
 /** `sessions/YYYY/MM/DD/rollout-*.jsonl`, the path's last segments under the home. */
 const LEVELS = [/^sessions$/, /^\d{4}$/, /^\d{2}$/, /^\d{2}$/, /^rollout-.*\.jsonl$/]
 
 /** The home a rollout path is in, or null when the path fails a rule (`shape`). Reads no file. */
 export function rolloutHome(record: string, dataDir: string): string | null {
-  // Equal to its own resolve(): absolute, with no `..`, `.`, `//` or trailing `/` that would move the home.
-  if (Buffer.byteLength(record) > MAX_BYTES || /[\x00-\x1f\x7f]/.test(record) || resolve(record) !== record) return null
+  // The lists' own check: no `..`, `.`, `//` or trailing `/` that would move the home, and nothing a list would drop.
+  if (!listable(record)) return null
   const segments = record.split('/')
   // One more than the levels is the filesystem root as the home, which is never one.
   if (segments.length <= LEVELS.length + 1) return null

@@ -75,14 +75,21 @@ export function writeAnswer(dataDir: string, engine: DialEngine, on: boolean): s
   return writeJson(join(dataDir, DIAL_SKILL_FILE), { ...readAnswers(dataDir), [engine]: on })
 }
 
-/** Turn off removes from every folder the list holds, so only a path that names one folder exactly is kept: a
- *  relative path, a `..` or a control character in a list damaged or edited by hand reads as no folder. */
+/**
+ * A path a list holds: Turn off removes from every folder a list holds, so only a path that names one folder exactly
+ * is kept. Equal to its own resolve(): absolute, with no `..`, `.`, `//` or trailing `/`; no control character; at most
+ * 1024 bytes. A skill goes only into a folder that passes, so none is written that a list would drop.
+ */
+export const listable = (path: string): boolean =>
+  Buffer.byteLength(path) <= MAX_PATH_BYTES && !CONTROL.test(path) && resolve(path) === path
+
+/** A list damaged or edited by hand keeps only what it may hold. */
 const homesOf = (value: unknown): string[] => {
   if (!Array.isArray(value)) return []
   const kept = new Set<string>()
   for (const path of value) {
     if (kept.size === MAX_HOMES) break
-    if (typeof path === 'string' && resolve(path) === path && !CONTROL.test(path) && Buffer.byteLength(path) <= MAX_PATH_BYTES) kept.add(path)
+    if (typeof path === 'string' && listable(path)) kept.add(path)
   }
   return [...kept]
 }

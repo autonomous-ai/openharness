@@ -5,7 +5,7 @@
 import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import { claudePluginState, ownDirectory, removeSkill, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
-import { DIAL_SKILL_FILE, MAX_HOMES, readHomes, writeHomes, type DialEngine, type DialSkillAnswers, type DialSkillHomes } from '../devices/dialSkillFiles.js'
+import { DIAL_SKILL_FILE, MAX_HOMES, listable, readHomes, writeHomes, type DialEngine, type DialSkillAnswers, type DialSkillHomes } from '../devices/dialSkillFiles.js'
 import { rolloutHome, takesOwner, type RolloutOwner } from './codexRolloutHome.js'
 
 export interface DialSkillWriterDeps {
@@ -96,6 +96,11 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
     }
     const skills = skillsFolderOf(home, true, deps.uid)
     if (!skills) return true
+    // Through its link the folder can be one no list holds: written, it would be one a Turn off never finds.
+    if (!listable(skills)) {
+      sayOnce('shape', 'dial skill: path refused (shape)')
+      return true
+    }
     // Homes linked to one skills folder (an Orca profile's) are one write, listed once.
     if (listed[engine].includes(skills)) {
       const result = writeSkill(skills)
