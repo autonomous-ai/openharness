@@ -14,6 +14,7 @@ const BUNDLES: [string, string][] = [
   ['com.todesktop.230313mzl4w4u92', 'cursor'],
   ['dev.warp.Warp-Stable', 'warp'],
   ['com.anthropic.claudefordesktop', 'claude'],
+  ['com.openai.codex', 'codex'],
   ['ai.autonomous.harness', 'harness'],
 ]
 
@@ -42,7 +43,7 @@ describe('frontAppId', () => {
   })
 
   it.each(['com.apple.Safari', 'org.alacritty', 'net.kovidgoyal.kitty-quick-access', 'alacritty', '', 'x'.repeat(128),
-    'constructor', '__proto__', 'toString', 'COM.MITCHELLH.GHOSTTY'])(
+    'constructor', '__proto__', 'toString', 'COM.MITCHELLH.GHOSTTY', 'com.openai.chat', 'codex', 'Codex.exe', 'ChatGPT'])(
     'an unknown app, the empty string and a 128-character string are none: %j', (value) => {
       expect(frontAppId(value)).toBe(FRONT_NONE)
     })

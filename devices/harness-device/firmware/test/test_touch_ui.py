@@ -1975,7 +1975,8 @@ int main(int argc, char **argv) {
     reset(); fake_ms = 1000; ui_project_set_host_caps("a","iterm",CABLE_CAP_S); scene_take();
     tap(1000,233,220); assert(!starts && scene_says("See it in iTerm2"));
     { static const char *const named[][2] = {{"kitty","See it in kitty"},{"wezterm","See it in WezTerm"},
-                                             {"zellij","See it in Zellij"},{"rex","See it in Rex"}};
+                                             {"zellij","See it in Zellij"},{"rex","See it in Rex"},
+                                             {"codex","See it in Codex"}};
       for (unsigned i = 0; i < sizeof named / sizeof named[0]; i++) {
           reset(); fake_ms = 1000; ui_project_set_host_caps("a",named[i][0],CABLE_CAP_S); scene_take();
           tap(1000,233,220); assert(!starts && scene_says(named[i][1]));
