@@ -2373,7 +2373,8 @@ export class CableSession {
         const decision = await this.host.route(transcript, routable)
         if (!current()) return
         agentId = decision.agentId
-        this.log(`cable: routed → ${agentId} (${decision.reason})`)
+        // The router's reason paraphrases the spoken sentence, so the log keeps only the pick and how sure it was.
+        this.log(`cable: routed → ${agentId} (confidence ${decision.confidence.toFixed(2)})`)
       } catch (err) {
         await reply({ t: 'voice.error', message: (err as Error).message })
         return
@@ -3085,7 +3086,8 @@ export class CableSession {
       await this.sendActivity(agentId, activity)
       if (this.activityLabels.get(agentId) !== (activity?.text ?? '')) {
         this.activityLabels.set(agentId, activity?.text ?? '')
-        this.log(`cable: terminal activity ${agentId}: ${activity?.text || '(no live footer)'}`)
+        // The footer is the agent's screen text, which can quote the person's work; its length still shows a change.
+        this.log(`cable: terminal activity ${agentId}: ${activity?.text ? `footer ${activity.text.length} chars` : 'no live footer'}`)
       }
     } catch { /* A capture failure says nothing about whether the turn ended. */ }
     finally {
