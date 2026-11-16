@@ -1572,6 +1572,17 @@ mod tests {
     }
 
     #[test]
+    fn a_codex_change_delays_the_relaunch() {
+        let mut app = found();
+        answer_all(&mut app, true, claude(true), codex(true));
+        app.handle(Event::Menu(MenuAction::CodexOff));
+        installed(&mut app);
+        assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
+        app.handle(Event::CodexSet(Ok(())));
+        assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
+    }
+
+    #[test]
     fn a_start_of_the_daemon_delays_the_relaunch() {
         let mut app = found();
         app.handle(Event::WatchExit(Some(3)));
