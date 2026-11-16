@@ -39,6 +39,10 @@ describe('the other engines\' worker', () => {
     const d = daemon = await IsolatedDaemon.create({ scriptPath, env: { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000', ...env } })
     onTestFailed(() => console.log(d.log()))
     d.env.PI_HOME = join(d.root, 'pi')
+    // While this file exists a starting worker stays off the core, beating to its master (services/process.ts
+    // heldOffFile): the test, not a backoff, decides how long an outage lasts. Absent, nothing waits.
+    const gate = join(d.root, 'others-connect-hold')
+    d.env.HARNESSD_TEST_HOLD_CONNECT = `engine-others:${gate}`
     const bin = join(d.root, 'bin', 'pi')
     d.env.PI_PATH = bin
     writeFileSync(bin, `#!${process.execPath}
@@ -63,7 +67,7 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
 `, { mode: 0o755 })
     await d.start()
     const c = client = await LocalClient.connect(d)
-    return { d, c }
+    return { d, c, gate }
   }
 
   const worker = (d: IsolatedDaemon) => harnessdProcesses(d).get('engine-others')
@@ -99,11 +103,26 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
     await d.tmux.run('send-keys', '-t', pane, '-l', text)
     await d.tmux.run('send-keys', '-t', pane, 'Enter')
   }
+  /** The live turn the core follows from the agent's transcript, not one replayed as history. */
+  const turnEnded = (c: LocalClient, agent: { id: string }, text: string) =>
+    c.next(frame => frame.type === 'turn_ended' && frame.agentId === agent.id && !frame.replay, 30_000, `turn ${text}`)
   /** A line typed into Pi's pane, and the turn the core follows live from its transcript. */
   const live = async (d: IsolatedDaemon, c: LocalClient, agent: { id: string; pane: string }, text: string) => {
-    const ended = c.next(frame => frame.type === 'turn_ended' && frame.agentId === agent.id && !frame.replay, 30_000, `turn ${text}`)
+    const ended = turnEnded(c, agent, text)
     await type(d, agent.pane, text)
     await ended
+  }
+  /**
+   * One whole discovery pass, ended when this returns. A hook's resolution waits for a whole pass before it matches
+   * its caller (core/engines/hooks.ts resolveHookAgent), and no client request does. This one comes from the test's
+   * process, not the Pi's, so after the pass it is ignored and changes nothing.
+   */
+  const discoveryPass = async (d: IsolatedDaemon, agent: { pane: string }) => {
+    const reply = await fetch(`http://127.0.0.1:${d.port}/api/hook/session-start`, { method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-harness-hook-token': d.hookCredential() },
+      body: JSON.stringify({ engine: 'pi', tmuxPane: agent.pane, callerPid: process.pid,
+        runtimeHints: [{ backend: 'tmux', paneId: agent.pane }] }) })
+    expect(await reply.json()).toEqual({ ignored: true, reason: 'no_matching_engine_process' })
   }
   const said = (reply: Record<string, any>, text: string) => JSON.stringify(reply.events ?? []).includes(`pi says ${text}`)
 
@@ -200,7 +219,7 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
   })
 
   it.each(['shared', 'independent'] as const)('answers at once while the worker is killed or frozen, the agent working on, and reads again once it is back (%s connection)', async connection => {
-    const { d, c } = await fresh({ HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '4000', HARNESSD_SERVICE_STOP_GRACE_MS: '100' })
+    const { d, c, gate } = await fresh({ HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '4000', HARNESSD_SERVICE_STOP_GRACE_MS: '100' })
     const agent = await pi(d, c, 'before-the-faults')
     await until('a first read through the worker', async () => said(await history(c, agent.id), 'before-the-faults') || null, 30_000, 250)
     const bystander = await c.request('agent_create', { engine: 'claude', cwd: d.projectsDir, bypassPermission: true }, 60_000)
@@ -214,6 +233,8 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
       const before = worker(d)!
       const connections = linked(d)
       const framesBeforeFault = c.frames.length
+      // The worker that replaces this one waits at the gate until the test lets it go.
+      writeFileSync(gate, '')
       process.kill(before, signal)
       const at = Date.now()
       const pending = history(c, agent.id)
@@ -224,14 +245,23 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
       if (signal === 'SIGSTOP') expect(worker(d)).toBe(before)
       // The pane goes on while the worker is down; the core holds the conversation where it took it, and the turn typed
       // meanwhile arrives once the worker is back, from that byte, live and once.
-      await live(d, c, agent, `during-${signal}`)
+      const ended = turnEnded(c, agent, `during-${signal}`)
+      await type(d, agent.pane, `during-${signal}`)
+      await until('the turn typed meanwhile on disk', () => readFileSync(agent.fake.file, 'utf8').includes(`pi says during-${signal}`) || null, 15_000, 50)
+      // Awaited before the worker is back: a frozen worker's outage shows only after its heartbeat timeout.
+      await c.waitFor(frame => frame.type === 'agent_synced' && frame.payload?.agent?.id === agent.id
+        && frame.payload.agent.namedState === 'Live view is waiting for its engine reader. The terminal and Stop still work.',
+      15_000, 'the visible reader outage', framesBeforeFault)
+      expect(d.log()).toContain("the other engines' worker is gone · 1 conversation(s) held")
+      // #4362: a discovery pass in the outage took the reader's hold for a broken binding, and the turn typed meanwhile
+      // came as history. One whole pass ends here, with the worker still out.
+      await discoveryPass(d, agent)
+      expect(linked(d)).toBe(connections)
+      rmSync(gate)
+      await ended
       const starts = c.frames.filter((frame) => frame.type === 'turn_started' && frame.agentId === agent.id
         && JSON.stringify(frame.payload ?? {}).includes(`during-${signal}`))
       expect(starts).toHaveLength(1)
-      await c.waitFor(frame => frame.type === 'agent_synced' && frame.payload?.agent?.id === agent.id
-        && frame.payload.agent.namedState === 'Live view is waiting for its engine reader. The terminal and Stop still work.',
-      5_000, 'the visible reader outage', framesBeforeFault)
-      expect(d.log()).toContain("the other engines' worker is gone · 1 conversation(s) held")
       const answer = await pending
       if (answer.error) {
         expect(['ENGINE_UNAVAILABLE', 'ENGINE_STALE_REPLY']).toContain(answer.error)
