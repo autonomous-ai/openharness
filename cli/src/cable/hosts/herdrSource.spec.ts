@@ -30,9 +30,11 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     await server.stop()
   })
 
+  const herdrClient = () => createHerdrClient({ socketPath: server.path, home: dirname(server.path), uid: process.getuid!(), platform: process.platform })
+
   /** A source on the real client and the fake server, with a timer queue, a watch and two clocks the test runs by hand. */
   function setup(over: Partial<HerdrSourceDeps> = {}) {
-    const client = createHerdrClient({ socketPath: server.path, home: dirname(server.path), uid: process.getuid!(), platform: process.platform })
+    const client = herdrClient()
     let mono = 0
     let wall = WALL
     const timers: Array<{ at: number; ms: number; run: () => void }> = []
@@ -324,6 +326,41 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     ])
     expect(s.timers).toEqual([])
     expect(server.requests.filter(({ request }) => method(request) === 'events.subscribe')).toHaveLength(2)
+  })
+
+  it('what a subscription tells while its list is in flight wins over that list', async () => {
+    server.agents = [agent('w1:p1', 'working'), agent('w2:p1')]
+    const real = herdrClient()
+    let lists = 0
+    let held!: () => void
+    const holding = new Promise<void>((resolve) => { held = resolve })
+    let release!: () => void
+    // The third list's answer is read only after events herdr told once it had made that list.
+    const s = setup({
+      client: {
+        ...real,
+        request: async (method, params) => {
+          const answer = await real.request(method, params)
+          if (method === 'agent.list' && ++lists === 3) await new Promise<void>((resolve) => { release = resolve; held() })
+          return answer
+        },
+      },
+    })
+    await live(s)
+    // w3:p1 asks, so the third subscription names it before any list has.
+    server.event('pane_agent_detected', detected('w3:p1'))
+    await s.until(() => s.timers.length === 1)
+    server.agents = [agent('w1:p1', 'working'), agent('w2:p1'), agent('w3:p1', 'working')]
+    s.advance(1000)
+    await holding
+    server.event('pane.agent_status_changed', { agent: 'claude', agent_status: 'idle', pane_id: 'w3:p1' })
+    server.event('pane_closed', { pane_id: 'w2:p1', type: 'pane_closed', workspace_id: 'w2' })
+    server.event('pane.agent_status_changed', { agent: 'claude', agent_status: 'idle', pane_id: 'w1:p1' })
+    await s.until(() => row(s, 'w1:p1')?.state === 'done' && !row(s, 'w2:p1'))
+    release()
+    await s.until(() => row(s, 'w3:p1') !== undefined)
+    expect(s.source.list().map(({ paneKeys, state }) => [paneKeys![0], state])).toEqual([['herdr:w1:p1', 'done'], ['herdr:w3:p1', 'idle']])
+    expect(s.timers).toEqual([])
   })
 
   it('a pane not yet known asks for one new subscription, and detections within the second join it', async () => {
