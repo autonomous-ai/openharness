@@ -2596,6 +2596,28 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     ])
   })
 
+  // The end-to-end harness points HARNESS_OPEN_BIN at a fake that opens nothing (e2e/harness/daemon.ts): a link opened by
+  // the real `open` would drive the developer's own app.
+  it('the Claude app\'s, the Codex app\'s and VS Code\'s links run HARNESS_OPEN_BIN as their open', async () => {
+    vi.stubEnv('HARNESS_OPEN_BIN', '/tmp/e2e/fake-open')
+    const CLAUDE = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+    const VSCODE = '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+    const { port } = startHere({ orca: mac })
+    port.observed(hook('session-start', { hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop', CLAUDE_CODE_HOST_SESSION_ID: CLAUDE } }))
+    port.observed(hook('session-start', { sessionId: VSCODE, hostHints: { __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
+    port.observed(hook('session-start', inApp))
+    attach(port)
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(await host().openAgent(CX)).toBeUndefined()
+    expect(await host().openAgent(observedAgentId('claude', VSCODE))).toBeUndefined()
+    expect(orcaRuns).toEqual([
+      ['/tmp/e2e/fake-open', ['-b', 'com.anthropic.claudefordesktop', `claude://code/continue?session=${CLAUDE}`], 10_000],
+      ['/tmp/e2e/fake-open', ['-b', 'com.openai.codex', `codex://threads/${THREAD}`], 10_000],
+      ['/tmp/e2e/fake-open', [`vscode://anthropic.claude-code/open?session=${VSCODE}`], 10_000],
+      ['/tmp/e2e/fake-open', ['-b', 'com.microsoft.VSCode'], 10_000],
+    ])
+  })
+
   it('an agent in the person\'s own tmux lists f, and its tap checks the pane\'s process, then switches the person\'s client', async () => {
     readers.processes.mockResolvedValue([{ pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 1, executable: 'zsh' }])
     const says = ['4000|work|\n', '9999|work|\n']
