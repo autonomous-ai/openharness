@@ -150,6 +150,7 @@ people on their next plugin update, before any CLI release.
 2. After a CLI release carries `harness device notify`: a small second pull request adds the skill to
    `plugins/harness-device/`. People who already turned the plugin on get it with no new offer: they agreed to the
    dial reaching Claude Code, and this is the same reach the other way; the plugin's README says what it adds.
+   Replaced by [the dial skill design](2026-11-16-dial-skill-every-home-design.md); #4386 was closed.
 
 The Codex skill is written by `harness device codex enable`, which ships with the CLI that has the command, so it
 needs no such wait.

@@ -1,8 +1,8 @@
 # Harness Device
 
 A menu-bar app for the round dial, for people who do not use the Harness desktop app. It installs the `harness` CLI,
-keeps the daemon running, shows the dial's state in its menu, and offers sign-in, Claude Code and Codex once. Rust and
-Tauri 2 in `src-tauri/`; the window's four screens are plain TypeScript in `ui/`.
+keeps the daemon running, shows the dial's state in its menu, and offers sign-in once; Claude Code and Codex are turned
+on and off in the menu. Rust and Tauri 2 in `src-tauri/`; the window's two screens are plain TypeScript in `ui/`.
 
 ## Toolchain
 
@@ -32,7 +32,7 @@ Tauri 2 in `src-tauri/`; the window's four screens are plain TypeScript in `ui/`
 - **Thin over the CLI.** The app owns no daemon logic: it runs the `harness` CLI and reads its NDJSON. It also
   fetches its own update manifest (`update.rs`), with nothing from the webview in the request.
 - **Fixed arguments.** The app runs only the CLI it found, the two install lines and `open`, each with arguments
-  fixed in Rust. Nothing from the webview becomes a command line: it sends one of six action names. It relaunches itself
+  fixed in Rust. Nothing from the webview becomes a command line: it sends one of four action names. It relaunches itself
   through Tauri's restart (`open -n` on its own bundle), and the updater plugin runs `touch` on the bundle after the
   swap (the `touch` found on the person's PATH); nothing from the webview or the manifest is in either.
 - **The app in front is private.** It is written to the watch's stdin and nowhere else (`front.rs`), and never logged.
