@@ -19,7 +19,9 @@ export type AgentClosePlan = {
 /** `background`, the cleanup's alone and only with `idle`: `refuse` while any background command runs, `count` closes
  *  whatever runs (past its ceiling) and says how many. */
 export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean; background?: 'refuse' | 'count' }
-/** `withoutConversation`: closed while still starting, before Harness could read its conversation, so none is kept.
+/** `withoutConversation`: the record the close saved, or the one a harness closed already was kept as, holds no
+ *  conversation a resume could bring back, so none is kept: closed while still starting, before Harness could read its
+ *  conversation, or its engine never bound one.
  *  `backgroundCommands`: how many an idle harness still runs; `null` when Harness cannot know. */
 export type AgentCloseResult = { closed?: true; withoutConversation?: true; deferred?: true; cancelled?: true; error?: string; detail?: string; activity?: CloseActivity; backgroundCommands?: number | null }
 
@@ -37,6 +39,13 @@ const CLOSE_BIND_RETRY_MS = 1_000
  * as before: a harness that has run longer may have work that only its conversation holds.
  */
 export const CLOSE_STARTING_MS = 60_000
+
+/** A record a stop saved is what a resume starts from: with no conversation id, an engine that resumes by one brings
+ *  nothing back (resumesConversation in resumeCapability.ts), so none was kept. A terminal and an engine with no resume
+ *  argv have no id to lose. */
+function keptNone(s: Pick<RegisteredSession, 'engine' | 'sessionId'>): boolean {
+  return resumeMode(s.engine) === 'conversation' && !s.sessionId
+}
 
 type CloseSession = Pick<RegisteredSession, 'engine' | 'sessionId' | 'transcriptPath' | 'boundAt' | 'launch' | 'resumeOnly'>
 
@@ -113,8 +122,9 @@ export interface CloseAgentServiceDeps {
   stop(agentId: string, options: StopAgentOptions): Promise<void>
   changed(s: RegisteredSession): void
   openTabs?: { assertHidden(s: RegisteredSession): Promise<void>; isHidden(s: RegisteredSession): boolean }
-  /** Whether the conversation [request] names is closed already: no longer live, and kept as stopped. */
-  closedAlready?(request: AgentCloseRequest): boolean
+  /** The record the conversation [request] names was kept as, when it is closed already: no longer live, and kept as
+   *  stopped. Null when it is not. */
+  closedAlready?(request: AgentCloseRequest): RegisteredSession | null
   /** Whether its pane shows a question the engine asks before any conversation: the folder's trust, or an MCP server the
    *  folder brings (`trust_open`). */
   atStartupQuestion?(s: RegisteredSession): Promise<boolean>
@@ -194,11 +204,13 @@ export class CloseAgentService {
    * with it (services/agentCleanup.ts), and the window's own close of them, asked a moment later, was answered
    * AGENT_CHANGED and shown as "Could not confirm that it stopped". An inspect of one is closed too: the terminal client
    * inspects before every close, and its close again of one it had closed was answered "Stop not confirmed:
-   * AGENT_CHANGED". Anything else is AGENT_CHANGED.
+   * AGENT_CHANGED". Anything else is AGENT_CHANGED. Said of the record it was kept as: answered `{ closed: true }`
+   * alone, `harness close` said "Its conversation is kept" of one kept with none.
    */
   private changed(request: AgentCloseRequest): AgentCloseResult {
-    return (request.mode === 'idle' || request.mode === 'now' || request.mode === 'inspect') && this.deps.closedAlready?.(request)
-      ? { closed: true } : { error: 'AGENT_CHANGED' }
+    const kept = request.mode === 'idle' || request.mode === 'now' || request.mode === 'inspect' ? this.deps.closedAlready?.(request) : null
+    if (!kept) return { error: 'AGENT_CHANGED' }
+    return keptNone(kept) ? { closed: true, withoutConversation: true } : { closed: true }
   }
 
   private async execute(request: AgentCloseRequest, target: string, revision: number): Promise<AgentCloseResult> {
@@ -324,7 +336,11 @@ export class CloseAgentService {
           if (this.deps.idleCurrent?.(latest) === false) idleRevoked = true
           return !idleRevoked
         },
-        checkpoint: (s, phase) => this.deps.checkpoint(s, phase),
+        checkpoint: (s, phase) => {
+          // The record saved before the stop is the one a resume starts from.
+          if (phase === 'before' && keptNone(s)) unkept = true
+          return this.deps.checkpoint(s, phase)
+        },
         confirmUnusedConversation: async captured => {
           // A missing ID alone could be failed discovery of active work. Only
           // an unused chat with a freshly observed empty composer can skip the
