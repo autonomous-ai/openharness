@@ -136,11 +136,18 @@ describe('harness hardware watch with a dial: Sound', () => {
     dial.send({ t: 'settings.state', ok: true, settings: SETTINGS })
     await until('the watch to say the sound is on again', () => mutedOf(run.lines.at(-1)) === false, 30_000)
 
+    // The daemon's answer on the watch's own socket, under its request id, which no unit test reaches: a second change
+    // goes out at once only if the first was answered. One never answered holds the slot 12 s, then says
+    // `sound: NO_ANSWER`, which the last check reads, and only then sends the second.
+    since = dial.messages.length
+    run.child.stdin!.write('{"muted":true}\n')
+    expect(await dial.next((m) => m.t === 'settings.set', 30_000, 'the watch\'s second settings.set', since)).toEqual({ t: 'settings.set', muted: true })
+
     await desk.unplug('E2E-A')
     await until('the watch to say no dial', () => run.lines.at(-1) === '{"attached":false}', 60_000)
     run.child.stdin!.write('{"muted":true}\n')
     await until('the watch to say it has no dial to change', () => run.errors.includes('sound: NO_DIAL'), 30_000)
-    // The change it did send was answered ok: no other sound line.
+    // The first change was answered ok before the second went out: no NO_ANSWER, nor any other sound line.
     expect(run.errors.filter((line) => line.startsWith('sound: '))).toEqual(['sound: NO_DIAL'])
   })
 })
