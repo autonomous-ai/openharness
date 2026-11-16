@@ -4,13 +4,14 @@
  * it alone; the dial's words go over hc's socket. macOS only: Herdr's window elsewhere is not tried.
  *
  * A tap opens Herdr first: hc keeps running when Herdr's window is closed, and the window must be up to switch. `open`
- * runs by its own path, so no `open` earlier on PATH runs instead, and `herdr-app` with no shell, each value one
- * argument. The address came from a hook or from hc, so it is held to hc's form again before either runs. Once `open`
- * came back Herdr is in front, so a tap whose switch fails is still a tap that came: a window still opening may not take
- * the switch yet, and the log says so.
+ * runs by its own path (or `HARNESS_OPEN_BIN`'s, as open.ts takes it), so no `open` earlier on PATH runs instead, and
+ * `herdr-app` with no shell, each value one argument. The address came from a hook or from hc, so it is held to hc's
+ * form again before either runs. Once `open` came back Herdr is in front, so a tap whose switch fails is still a tap
+ * that came: a window still opening may not take the switch yet, and the log says so.
  *
  * Words do not wait for a tap, nor a tap for words: hc types by address, whatever the window shows.
  */
+import { isAbsolute } from 'node:path'
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { HC_TERMINAL, hcPaneKey, type HcClient, type HcPrompt } from './hcClient.js'
 import { APP_BUNDLES } from './hostDetect.js'
@@ -28,6 +29,8 @@ export interface HerdrAppDeps extends OrcaDeps {
   /** Whether Herdr's window shows that terminal: the hc source lists it (hcSource.ts shows). */
   shows(address: string): boolean
   log(line: string): void
+  /** The raw `HARNESS_OPEN_BIN`: an absolute path is the `open` run instead of `OPEN`. */
+  bin?: string
 }
 
 export interface HerdrAppAdapter extends HostAdapter {
@@ -45,6 +48,7 @@ interface Run { forward: boolean; switched: boolean }
 
 export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
   const mac = deps.platform === 'darwin'
+  const openBin = deps.bin && isAbsolute(deps.bin) ? deps.bin : OPEN
   // Per terminal, the run under way, which a second tap or a rest joins: a swipe's rest and a tap just after it switch
   // to the same terminal.
   const running = new Map<string, Promise<Run>>()
@@ -95,7 +99,7 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
     async focus(pane) {
       if (!mac || !HC_TERMINAL.test(pane.id)) return false
       const run = await once(pane.id, async () => {
-        if ((await deps.run(OPEN, ['-b', APP_BUNDLES.herdr], RUN_TIMEOUT_MS)).code !== 0) return { forward: false, switched: false }
+        if ((await deps.run(openBin, ['-b', APP_BUNDLES.herdr], RUN_TIMEOUT_MS)).code !== 0) return { forward: false, switched: false }
         return { forward: true, switched: await switchTo(pane.id) }
       })
       return run.forward

@@ -31,7 +31,10 @@ import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
 import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
 import { createCodexAppAdapter } from '../cable/hosts/codexApp.js'
 import { codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
+import { createHcClient, hcClientDeps, type HcClient } from '../cable/hosts/hcClient.js'
+import { HcSource } from '../cable/hosts/hcSource.js'
 import { createHerdrAdapter } from '../cable/hosts/herdr.js'
+import { createHerdrAppAdapter } from '../cable/hosts/herdrApp.js'
 import { createHerdrClient, herdrClientDeps, type HerdrClient } from '../cable/hosts/herdrClient.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { Inbox } from '../cable/hosts/inbox.js'
@@ -111,6 +114,8 @@ export interface DevicesDeps {
   codex?: Pick<CodexQueueDeps, 'run' | 'binary' | 'platform'>
   /** For this service's tests: herdr's socket (cable/hosts/herdrClient.ts). */
   herdr?: HerdrClient
+  /** For this service's tests: Herdr Core's socket (cable/hosts/hcClient.ts). */
+  hc?: HcClient
   /** Opens the devices' own listener with these handlers (services/devicesListener.ts). Given by the devices process
    *  alone: inside the core's process (`HARNESSD_SERVICES=none`, Harness OS) there is none, so the core's process opens
    *  no socket for the devices, and the dial follows no app in front there. */
@@ -289,6 +294,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const herdrAt = herdrClientDeps()
   const herdrClient = deps.herdr ?? createHerdrClient(herdrAt)
   const herdrAdapter = createHerdrAdapter({ ...apps, client: herdrClient })
+  /** `HARNESS_OPEN_BIN`: the end-to-end tests' fake `open`, run for each `open -b` (cable/hosts/open.ts). */
+  const openBin = process.env.HARNESS_OPEN_BIN
+  /** Where Herdr Core's socket is, from the daemon's own environment: the client reads it, and the hc source watches for
+   *  it. */
+  const hcAt = hcClientDeps()
+  const hcClient = deps.hc ?? createHcClient(hcAt)
+  const herdrApp = createHerdrAppAdapter({ ...apps, client: hcClient, log, bin: openBin,
+    inFront: () => cableHost.latestFront() === 'herdr', shows: (address) => hcSource?.shows(address) === true })
+  const hcPane = (address: string): Pane => ({ adapter: herdrApp.id, id: address })
   const claude = createClaudeAppAdapter({ ...apps, inFront: () => cableHost.latestFront() === 'claude' })
   // Harness's own Codex home, whose config `codex queue` loads; run from the home folder, so no project's .codex/ is read.
   const codexQueue = createCodexQueue({ ...(deps.codex ?? codexQueueDeps()), home: env.CODEX_HOME, cwd: homedir() })
@@ -328,11 +342,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   /** herdr's adapter as the dial's verbs reach it: a tap on an agent herdr lists (below) is the dial's own move too. */
   const herdrNoted = noting(herdrAdapter)
+  /** Herdr's adapter as the dial's verbs reach it: a tap or a rest on an agent hc lists (below) is the dial's own move. */
+  const herdrAppNoted = noting(herdrApp)
   /** The apps an outside agent runs in, in the order its panes are kept: each verb of the dial takes the first that can.
    *  The nearest host first: a multiplexer keeps the environment it started in, so in a tmux pane WezTerm's and Orca's
-   *  values name the terminal the tmux server began in, and herdr inside tmux carries tmux's pane. */
-  const adapters: readonly HostAdapter[] = [herdrNoted, ...[
-    createTmuxAdapter({ run: apps.run, processes: readProcessNames, log }),
+   *  values name the terminal the tmux server began in, and herdr inside tmux carries tmux's pane. Herdr comes after
+   *  tmux, as a tmux inside an hc terminal is the nearer host, and before the terminals: hc tells its programs they run
+   *  in Ghostty, whose tabs hold none of them. */
+  const tmux = noting(createTmuxAdapter({ run: apps.run, processes: readProcessNames, log }))
+  const adapters: readonly HostAdapter[] = [herdrNoted, tmux, herdrAppNoted, ...[
     createWeztermAdapter(apps),
     createOrcaAdapter(apps),
     // A rest's continue link: the app's attach that follows is the dial's own echo.
@@ -349,7 +367,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       },
     }),
   ].map(noting)]
-  const opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log, bin: process.env.HARNESS_OPEN_BIN })
+  const opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log, bin: openBin })
   const bring = opener.bring
   /** The route or the refusal of the dial's words, and why a queue failed: never the words, the session, the terminal or a
    *  path. */
@@ -381,6 +399,27 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // herdr's adapter never refuses one, though the noted copy is typed as any adapter's.
     focus: async (paneId) => (await herdrNoted.focus({ adapter: herdrAdapter.id, id: paneId })) === true,
     after: timerIn('herdr'),
+    now: Date.now,
+    monotonic,
+    uuid: randomUUID,
+    platform: apps.platform,
+    log,
+    count: voiced,
+  }) : null
+  /** Herdr's agents, hook or no hook, listed and followed over Herdr Core's socket
+   *  (docs/plans/2026-11-16-herdr-app-design.md). It runs only while a dial is attached, behind the observed agents'
+   *  switch, on macOS alone, where Herdr's window is tried, and only with Herdr installed (dialAttached). */
+  const hcSource = observed && apps.platform === 'darwin' ? new HcSource({
+    client: hcClient,
+    watch: (changed) => watchSocket(hcAt, changed),
+    prompt: herdrApp.prompt,
+    // The dial's move is noted, as every tap's is. Herdr's adapter never refuses one, though the noted copy is typed as
+    // any adapter's.
+    focus: async (address) => (await herdrAppNoted.focus(hcPane(address))) === true,
+    canShow: (address) => herdrApp.canShow(hcPane(address)),
+    // The noted copy keeps the show Herdr's adapter has.
+    show: (address, agentId) => herdrAppNoted.show!(hcPane(address), agentId),
+    after: timerIn('herdr-app'),
     now: Date.now,
     monotonic,
     uuid: randomUUID,
@@ -550,7 +589,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   })
   // What the dial lists with no window, or with one in the apps view: this computer's harness agents, and the ones outside
   // a pane unless switched off.
-  const registry = new HostRegistry(observed && herdr ? [cableHost.harness, observed, herdr] : [cableHost.harness])
+  const registry = new HostRegistry([cableHost.harness, observed, herdr, hcSource].filter((source) => source !== null))
   cableHost.setRegistry(registry)
   // The dial's log lives with the app's, one file a day (dialLog.ts). The old unbounded `dial.log` in the
   // data folder is cut down to a pointer, for anyone with a bookmark.
@@ -856,6 +895,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   observed?.onChange(() => part.call('dial', outsideTurn))
   herdr?.onChange(() => part.call('dial', outsideTurn))
+  hcSource?.onChange(() => part.call('dial', outsideTurn))
   /** One of the observed source's timers, each run guarded as a notice is: one that throws is logged and the next runs. */
   const every = (ms: number, run: () => unknown): ReturnType<typeof setInterval> => {
     const timer = setInterval(() => part.call('observed', run), ms)
@@ -885,7 +925,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const listed = new Set(lists.flatMap((list) => list.agents.map((agent) => agent.id)))
     for (const entry of mid) if (listed.has(entry.agent.id)) tell(started(entry))
   }
-  /** The scan, the reminders and herdr's socket, for an attached dial alone. */
+  /** The scan, the reminders, and herdr's and Herdr Core's sockets, for an attached dial alone. */
   let attached: ReturnType<typeof setInterval>[] = []
   const dialAttached = (on: boolean): void => {
     for (const timer of attached) clearInterval(timer)
@@ -901,6 +941,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // Only with herdr installed, read at each attach, as a tap needs it (herdr.ts): with none, no folder is watched
     // (~/.config, or the home folder, recursive on macOS) for a socket that never comes.
     part.call('herdr', () => on && apps.onPath('herdr') ? herdr.start() : herdr.stop())
+    // Only with Herdr installed, read at each attach as herdr's is: with none, no folder is watched for hc's socket.
+    if (hcSource) part.call('herdr-app', () => on && herdrApp.binary() ? hcSource.start() : hcSource.stop())
     if (!on) return
     // Agents already running when the dial came are listed now, idle until their next hook event.
     part.call('observed', () => observed.scanOpen())
