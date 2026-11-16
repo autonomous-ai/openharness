@@ -577,6 +577,19 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     ])
   })
 
+  it('a terminal left out past 1,024 that is removed is one fewer left out, created past the bound or in the snapshot', async () => {
+    server.terminals = Array.from({ length: 1025 }, (_, at) => ({ address: `t${at + 1}` }))
+    const { calls, to, told } = subscriber()
+    const subscription = client().subscribe(to)
+    await told(1)
+    server.change('t2000', {})
+    server.remove('t2000')
+    server.remove('t1025')
+    await fence()
+    subscription.close()
+    expect(calls.slice(1)).toEqual([['over', 1], ['over', 2], ['over', 1], ['over', 0]])
+  })
+
   describe('closed is told once, and nothing after it', () => {
     // An event follows each bad line, and is never told.
     const thenEvent = (chunk: string) => `${chunk}${RECORDED.subscription[2]}\n`
