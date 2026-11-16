@@ -15,7 +15,7 @@
  * herdr's answers name people's folders and agents, and the source says what happened in its own fixed words.
  */
 import { randomUUID } from 'node:crypto'
-import { lstatSync, watch, type FSWatcher } from 'node:fs'
+import { existsSync, lstatSync, watch, type FSWatcher } from 'node:fs'
 import { createConnection, type Socket } from 'node:net'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
@@ -216,11 +216,17 @@ export function createHerdrClient(deps: HerdrClientDeps): HerdrClient {
 }
 
 /** Calls `changed` on each change in the nearest existing folder of `<config>/herdr`, `<config>` and `home`, moving
- *  to a nearer one as it appears. Returns its stop. Never throws: a watch that cannot be held tells nothing. */
+ *  to a nearer one as it appears, and out of one that is removed. Returns its stop. Never throws: a watch that cannot be
+ *  held tells nothing. */
 export function watchHerdrSocket(deps: Pick<HerdrClientDeps, 'socketPath' | 'home'>, changed: () => void): () => void {
   const folders = [dirname(deps.socketPath), dirname(dirname(deps.socketPath)), deps.home]
   let held: { watcher: FSWatcher; at: number } | undefined
   const hold = () => {
+    // inotify ends the watch of a folder that is removed, so a herdr that made it again would never be seen.
+    if (held && !existsSync(folders[held.at])) {
+      held.watcher.close()
+      held = undefined
+    }
     for (let at = 0; at < (held?.at ?? folders.length); at++) {
       let watcher: FSWatcher
       try {
@@ -231,8 +237,11 @@ export function watchHerdrSocket(deps: Pick<HerdrClientDeps, 'socketPath' | 'hom
       } catch {
         continue
       }
-      // A watch that fails, its folder gone, tells nothing more, and throws nothing into the devices process.
-      watcher.on('error', () => watcher.close())
+      // A watch that fails tells nothing more, and throws nothing into the devices process. Its folder gone, it moves out.
+      watcher.on('error', () => {
+        watcher.close()
+        hold()
+      })
       held?.watcher.close()
       held = { watcher, at }
       return
