@@ -47,6 +47,7 @@ import { createTmuxAdapter } from '../cable/hosts/tmux.js'
 import type { HostAgentState } from '../cable/hosts/types.js'
 import { createVscodeAdapter } from '../cable/hosts/vscode.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
+import { Notices, type NoticeCaller } from '../cable/notices.js'
 import { NOTIFY_MODE_FILE, NotifyModeStore, type NotifyMode } from '../cable/notifyMode.js'
 import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
@@ -56,6 +57,7 @@ import { createWindowRouter } from '../cable/windowRoute.js'
 import { WindowSelection } from '../cable/windowSelection.js'
 import { WindowVisit } from '../cable/windowVisit.js'
 import { MachineListCache } from '../device/machineList.js'
+import type { NoticeAsk, NoticeResult } from '../lib/dialNotice.js'
 import { claudeProjectsRoots, codexHomeRoots } from '../lib/engineHomes.js'
 import { harnessDevicesRequest } from '../lib/harnessDevices.js'
 import { OpenSessions, SessionRows } from '../lib/sessionSearch/external.js'
@@ -64,7 +66,7 @@ import { fileStamp, listProcesses, processAlive } from '../lib/sessionSearch/ext
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
 import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
 import { createPartGuard } from './devicesGuard.js'
-import { attachHandler, dialStream, frontHandler, notifyHandler, tabHandler, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
+import { attachHandler, dialStream, frontHandler, noticeHandler, notifyHandler, tabHandler, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
 import { FLEET_FALLBACKS, startFleet, type Fleet } from './fleet.js'
 
 export { DEVICES_REQUESTS }
@@ -455,6 +457,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // tab, and an older window that does not know the field opens one as before.
     opened: (machineId, agentId, reason) =>
       core.clients.sendLocal({ type: 'dial_open', payload: { machineId, agentId, ...(reason ? { reason } : {}) } }),
+    // A person's tap on an agent, a notice's "In <app>" among them, brings them to it: its notice goes. Opening the alert to
+    // read it does not.
+    tapped: (agentId) => endNotice(agentId),
+    noticeFrom: (agentId) => notices.from(agentId),
     notificationRead: (machineId, agentId, readToken) =>
       core.clients.sendLocal({ type: 'dial_notification_read', payload: { machineId, agentId, readToken } }),
     forked: (machineId, agentId, sourceAgentId) => core.clients.sendLocal({ type: 'dial_forked', payload: { machineId, agentId, sourceAgentId } }),
@@ -717,7 +723,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // An agent outside a pane reaches the dial through the same calls, as its state changes. What the dial was told of each
   // is kept, so that a change is told once.
   const told = new Map<string, { state: HostAgentState; line: string | null; answer?: string }>()
-  const busy = ({ agent }: HostEntry): boolean => agent.state === 'working' || agent.state === 'needs-you'
+  const busyState = (state: HostAgentState): boolean => state === 'working' || state === 'needs-you'
+  const busy = ({ agent }: HostEntry): boolean => busyState(agent.state)
   /** Its turn, with the waiting line: the session's activity read right after it (`activityText` above) repeats the line. */
   const started = (entry: HostEntry): DialEvent => ({ kind: 'processing', agentId: entry.agent.id, text: waiting(entry) ?? '', recap: '', subagent: false })
   /** A window is open (its tabs, not null). */
@@ -756,12 +763,50 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         questions: [{ key: 'prompt', q: line, options: [`In ${hostDisplayName(entry.agent.host)}`] }] })
     }
   }
+
+  // ── an agent's notice ──────────────────────────────────────────────────────────────────────────────
+  //
+  // `harness device notify`: the agent's own one line for the person, a card every dial pins until that agent's next turn
+  // starts, a tap opens it in its app, or it leaves (cable/notices.ts). It takes its own path to the dials, never `tell` or
+  // `showWaits`: it is the agent asking for the person, so it rings with a window open on its tab too, which holds an
+  // outside agent's turns (heldOnTab), and `showWaits` closes any question `shown` does not hold
+  // (docs/plans/2026-11-16-dial-agent-notify-design.md, "Which agents it covers").
+  /** Whose notice it is, read from what the devices hold, with no wait: the listener gives a connection 2 s. */
+  const noticeCaller = ({ engine, sessionId, folder }: NoticeAsk): NoticeCaller => {
+    const who = { name: folder ?? 'An agent', machine: core.machine.name() }
+    if (!engine || !sessionId) return { agentId: observedAgentId('notify', folder ?? ''), host: '', who: { ...who, engine: '' } }
+    // A Harness agent first, by the session the core bound to it: an outside source lists its session too until the
+    // dial's list is read again.
+    const own = core.agents.advertised().find((session) => session.engine === engine && session.sessionId === sessionId)
+    if (own) return { agentId: own.agentId, host: 'harness' }
+    const entry = outsideEntries().find(({ agent }) => agent.engine === engine && agent.sessionId === sessionId)
+    if (entry) return { agentId: entry.agent.id, host: entry.agent.host }
+    return { agentId: observedAgentId(engine, sessionId), host: '', who: { ...who, engine } }
+  }
+  // Typed, or its type would be read from itself: the cable host's wiring reads it, and it reads the cable built on that host.
+  const notices: Notices = new Notices({
+    connected: () => cable.isConnected,
+    resolve: noticeCaller,
+    // In its agent's order, as every card is: a card must not overtake a done still being sent.
+    ask: (agentId, id, questions) => inOrder(agentId, () => { void cable.question(agentId, id, questions) }),
+    close: (agentId, id) => inOrder(agentId, () => { void cable.questionClose(agentId, id) }),
+    uuid: randomUUID,
+    now: monotonic,
+    log,
+  })
+  /** That agent's next turn started, a tap opened it, or it left: its card goes. */
+  const endNotice = (agentId: string): void => part.call('notices', () => notices.ended(agentId))
+
   /** What changed among them, told: run whenever a source of theirs says its list changed. */
   const outsideTurn = (): void => {
     showWaits()
     const entries = outsideEntries()
     const ids = new Set(entries.map((entry) => entry.agent.id))
-    for (const id of told.keys()) if (!ids.has(id)) told.delete(id)
+    for (const id of told.keys()) {
+      if (ids.has(id)) continue
+      told.delete(id)
+      endNotice(id)
+    }
     for (const entry of entries) {
       const { agent } = entry
       const was = told.get(agent.id)
@@ -778,6 +823,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         continue
       }
       told.set(agent.id, { state: agent.state, line, answer: agent.lastAnswer })
+      // Only an observed agent has a hook to say its turn started (port.observed): another's going busy is its next turn.
+      if (entry.source !== observed && busy(entry) && !(was && busyState(was.state))) endNotice(agent.id)
       // An agent a listing names for the first time ended no turn the dial saw: herdr says done of any turn that ended in a
       // pane it has not focused, and lists it again at each plug-in, reconnect and unfold. An observed one is first heard
       // by its hook, which may be the turn's end.
@@ -827,6 +874,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // or closed, again. Closed as the last goes, an older dial that comes next is not asked it. A second dial coming or
     // going does not reach here: the fleet tells `watching` for the first and the last alone.
     if (!on) part.call('dial', showWaits)
+    // Its questions were in its RAM: each notice still pending is asked again, under its id, whatever source is on.
+    if (on) part.call('notices', () => notices.attached())
     if (!observed || !herdr) return
     // Only with herdr installed, read at each attach, as a tap needs it (herdr.ts): with none, no folder is watched
     // (~/.config, or the home folder, recursive on macOS) for a socket that never comes.
@@ -872,9 +921,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   deps.onCoreGone?.(endHookCalls)
 
   // `harness hardware watch` tells the devices' own listener which app is in front, and the dial follows it once it
-  // settles, with no window or with one in the apps view (cable/hosts/appFilter.ts), and the harness-device mod tells it
-  // the session the Claude app shows: the core never hears either. Another message type is another key here. A
-  // rejection's text is not logged: it can hold the socket's path, and a path the account's name.
+  // settles, with no window or with one in the apps view (cable/hosts/appFilter.ts), the harness-device mod tells it the
+  // session the Claude app shows, and `harness device notify` an agent's notice: the core never hears any of them. Another
+  // message type is another key here. A rejection's text is not logged: it can hold the socket's path, and a path the
+  // account's name.
   const listening = deps.listen?.({
     front: frontHandler((app) => part.call('dial', () => cableHost.front(app))),
     attach: attachHandler((sessionId) => part.call('dial', () => claudeAttached(sessionId))),
@@ -885,6 +935,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       let answer: { mode: NotifyMode } | { error: string } = { error: 'FAILED' }
       part.call('dial', () => { answer = setNotify(mode) })
       return answer
+    }),
+    notice: noticeHandler((ask) => {
+      let result: NoticeResult = 'no dial'
+      part.call('notices', () => { result = notices.notify(ask) })
+      return result
     }),
   }, log)
     .catch((): null => { log('[devices] listener not opened · failed'); return null })
@@ -918,6 +973,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return
     }
     if (ran.payload?.kind === 'turn_started' && ran.agentId) {
+      endNotice(ran.agentId)
       endReplies(ran.agentId, false)
       stats.take(ran.agentId)
       if (cable.wantsStats()) starts.set(ran.agentId, settle(readUsage(ran.agentId)))
@@ -929,7 +985,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     }
     // A tool card is a step for a `steps-v1` device and nothing for any other: the session drops it.
     const gone = (frame as { type?: string; payload?: { agentId?: unknown } })
-    if (gone.type === 'agent_deleted' && typeof gone.payload?.agentId === 'string') { latestUpdate.delete(gone.payload.agentId); began.delete(gone.payload.agentId); ended.delete(gone.payload.agentId); endReplies(gone.payload.agentId, false) }
+    if (gone.type === 'agent_deleted' && typeof gone.payload?.agentId === 'string') { latestUpdate.delete(gone.payload.agentId); began.delete(gone.payload.agentId); ended.delete(gone.payload.agentId); endReplies(gone.payload.agentId, false); endNotice(gone.payload.agentId) }
     const step = cableStepFor(frame as Parameters<typeof cableStepFor>[0])
     if (step) { inOrder(step.agentId, () => { void cable.turnStep(step.agentId, step.step) }); return }
     const event = cableEventFor(frame as Parameters<typeof cableEventFor>[0])
@@ -1053,6 +1109,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // switched off.
     observed: (event) => {
       part.call('observed', () => {
+        // With the source switched off too: a notice no list held is under its session's id.
+        if (event.event === 'turn-start') endNotice(observedAgentId(event.engine, event.sessionId))
         if (!observed) return
         const source = observed.ingest(event)
         if (event.event === 'session-end') {
