@@ -178,7 +178,13 @@ export class SocketAttempts {
 
   private changed(): void {
     const stamp = this.deps.socketStamp()
-    if (!this.unwatch || !stamp || stamp === this.stale) return
+    if (!this.unwatch) return
+    // The stale socket removed, none is there: each word is said as it changes.
+    if (!stamp && this.stale !== undefined) {
+      this.stale = undefined
+      this.say('none')
+    }
+    if (!stamp || stamp === this.stale) return
     this.unwatch()
     this.unwatch = undefined
     // Another socket is a program that started again: it has retries of its own.
