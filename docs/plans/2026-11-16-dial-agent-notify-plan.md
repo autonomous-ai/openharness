@@ -45,7 +45,7 @@ Nothing under `cli/src/core/` changes and `cli/src/architecture.coreFiles.txt` g
 - **The line.** One line, at most 120 characters after trimming; control characters and line breaks out; longer is cut with `…`. It is data: drawn as text, never interpreted.
 - **Answers** of `harness device notify`, exit 0 for each: `shown`, `no dial`, `limited`.
 - **Limits.** Per agent: one notice a minute; the same text again within 10 minutes is refused. Per computer: 20 notices an hour. A notice for an agent with a pending card replaces that card.
-- **What rings.** A notice, a question, a permission ask and a failed turn ring in both modes. In Needs you only an `alert` for an ordinary finished turn (`rule:turn`, here or decided upstream) becomes `list`, logged `rule:only-you`. Default **Full**.
+- **What rings.** A notice, a question, a permission ask and a failed turn ring in both modes. In Needs you only an `alert` for an ordinary finished turn (`rule:turn`, here or decided upstream) becomes `list`, logged `rule:needs-you`. Default **Full**.
 - **The allow rule** covers exactly `harness device notify`: Claude Code `Bash(harness device notify:*)` and the launcher's full-path spelling; Codex `prefix_rule(pattern=["harness", "device", "notify"], decision="allow")`. Never the whole `device` word. A person's deny or ask rule keeps it out.
 - **Local.** The mode and the notice stay on this computer: not in `harness_devices_changed`, not in `harness_devices_list`, not a dial setting.
 - **Logs.** `[device] notify · <engine> · shown|no dial|limited`. Never the line, a session id, a folder or a path.
@@ -193,12 +193,12 @@ Longest chain: 3 → 7 → 9 → 10 → 13. A dependency on a task that shares a
 - Modify: `cli/src/lib/notifyTier.ts`, `cli/src/lib/notifyTier.spec.ts`
 
 **Interfaces:**
-- Produces: `TierInput.onlyYou?: boolean` (the dial's Notifications setting is Needs you). The decider's last rule: `input.onlyYou ? rule('list', 'only-you') : rule('alert', 'turn')`. Every rule before it is unchanged. The recaps pass none, so the phone and the windows are as before.
+- Produces: `TierInput.needsYou?: boolean` (the dial's Notifications setting is Needs you). The decider's last rule: `input.needsYou ? rule('list', 'needs-you') : rule('alert', 'turn')`. Every rule before it is unchanged. The recaps pass none, so the phone and the windows are as before.
 
 - [ ] **Step 1: Write the failing tests.**
-  - `Needs you: an ordinary finished turn is a drawer row`: `onlyYou: true` with a recap → `{ tier: 'list', by: 'rule:only-you', detail: 'only-you' }`, and the tally line `notify · <agent> · list · rule:only-you · only-you · 0ms`.
+  - `Needs you: an ordinary finished turn is a drawer row`: `needsYou: true` with a recap → `{ tier: 'list', by: 'rule:needs-you', detail: 'needs-you' }`, and the tally line `notify · <agent> · list · rule:needs-you · needs-you · 0ms`.
   - `Needs you lowers nothing else`: `failed: true` → `alert`, `rule:failed`; `subagent`, `onScreen` and an empty recap → `silent`, each by its own rule.
-  - `onlyYou` false or absent → `alert`, `rule:turn` (the existing cases pass unchanged).
+  - `needsYou` false or absent → `alert`, `rule:turn` (the existing cases pass unchanged).
 - [ ] **Step 2: Run** `cd cli && npx vitest run src/lib/notifyTier.spec.ts`. Expected: FAIL (`alert` where `list` is expected).
 - [ ] **Step 3: Implement.** The file's head comment says what Needs you does.
 - [ ] **Step 4: Run** the same, then `npm run typecheck`. Expected: PASS.
@@ -430,7 +430,7 @@ Longest chain: 3 → 7 → 9 → 10 → 13. A dependency on a task that shares a
 
 ### Task 9: The devices: the mode
 
-**Layer:** the devices process. **Depends on:** Task 2 (`onlyYou`), Task 3 (`NotifyModeStore`), Task 7 (`notifyHandler`). **Effort:** `high`.
+**Layer:** the devices process. **Depends on:** Task 2 (`needsYou`), Task 3 (`NotifyModeStore`), Task 7 (`notifyHandler`). **Effort:** `high`.
 
 **Red test:** `cli/src/services/devices.spec.ts`, a new `describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-design.md)')`.
 
@@ -438,14 +438,14 @@ Longest chain: 3 → 7 → 9 → 10 → 13. A dependency on a task that shares a
 - Modify: `cli/src/services/devices.ts`, `cli/src/services/devices.spec.ts`
 
 **Interfaces:**
-- Consumes: `NotifyModeStore`, `NOTIFY_MODE_FILE`, `notifyHandler`, `TierInput.onlyYou`.
+- Consumes: `NotifyModeStore`, `NOTIFY_MODE_FILE`, `notifyHandler`, `TierInput.needsYou`.
 - Produces, inside `startDevices`:
   - The store, at `join(core.dataDir, NOTIFY_MODE_FILE)`.
   - Every local `dial_status` frame carries the mode: `core.clients.sendLocal({ type: 'dial_status', payload: { ...status, notify: mode } })`. `core.clients.devicesChanged` is given the status without it, and the Devices tab's `status()` too.
   - The listener's handlers gain `notify: notifyHandler(…)`: it stores the mode; not saved → `{ error: 'WRITE_FAILED' }` and the log line `[device] notifications · not saved`; saved → the current status is sent again as a local `dial_status` with the new mode (no revision, no `devicesChanged`), the log line `[device] notifications · <mode>`, and `{ mode }`. A part that throws answers `{ error: 'FAILED' }`.
   - `dispatch`'s summary branch, in Needs you:
-    - a card with a tier: `alert` and not `failed` → `list`, tallied `list · rule:only-you · only-you`; any other tier as today (`recaps · decided upstream`).
-    - a card with none: `tierOf` is asked with `onlyYou: true` (Task 2 lowers and tallies it). In Full it is asked with `onlyYou: false`.
+    - a card with a tier: `alert` and not `failed` → `list`, tallied `list · rule:needs-you · needs-you`; any other tier as today (`recaps · decided upstream`).
+    - a card with none: `tierOf` is asked with `needsYou: true` (Task 2 lowers and tallies it). In Full it is asked with `needsYou: false`.
     - `onScreen`, a sub-agent, no dial, and the decider's own failure (`list`) are as today.
   - Nothing else is lowered: `turnError`, a question and a waiting prompt's card are as today.
 
@@ -453,12 +453,12 @@ Longest chain: 3 → 7 → 9 → 10 → 13. A dependency on a task that shares a
   - `every dial status the windows and the watch hear says the mode, and the owner's other machines hear none`: the host's `dialStatus({ attached: true, id: 'usb-1' })` → `sendLocal` got `{ type: 'dial_status', payload: { attached: true, id: 'usb-1', notify: 'full' } }`; `devicesChanged` got `{ status: { attached: true, id: 'usb-1' }, revision: 1 }`; `harness_devices_list`'s status holds no `notify`.
   - `the listener's notify stores the mode, says the status again and answers it`: `notify('you')` → `{ mode: 'you' }`; `dial-notify.json` in the data folder is `{"mode":"you"}\n`; the last `sendLocal` is the current status with `notify: 'you'`; `devicesChanged` is not called again; the log holds `[device] notifications · you`. Devices started again on that folder say `notify: 'you'`.
   - `a mode that cannot be saved answers WRITE_FAILED and changes nothing` (the file's path is a folder): no `dial_status` is sent, and a summary still alerts.
-  - `Needs you: a finished turn decided here is a drawer row` (`decideTier: null`): `calls('summary')` is `[['a1', 'The requested build is ready.', 'done', 'list', undefined, false]]`; the log holds `list · rule:only-you · only-you` and no `rule:turn` line.
-  - `Needs you: a tier the recaps decided is lowered when it is an alert, and only then`: payload `tier: 'alert'` → `list`, tallied `rule:only-you`; `'list'` → `list` and `'silent'` → `silent`, tallied `recaps`; `tier: 'alert', failed: true` → `alert`.
+  - `Needs you: a finished turn decided here is a drawer row` (`decideTier: null`): `calls('summary')` is `[['a1', 'The requested build is ready.', 'done', 'list', undefined, false]]`; the log holds `list · rule:needs-you · needs-you` and no `rule:turn` line.
+  - `Needs you: a tier the recaps decided is lowered when it is an alert, and only then`: payload `tier: 'alert'` → `list`, tallied `rule:needs-you`; `'list'` → `list` and `'silent'` → `silent`, tallied `recaps`; `tier: 'alert', failed: true` → `alert`.
   - `Needs you: another machine's card is lowered here`: the fleet's `{ kind: 'summary', tier: 'alert' }` → `list`; one without a tier → `list`; `tier: 'silent'` → `silent`.
   - `Needs you: an agent outside a pane ends as a drawer row`: an observed session's `turn-stop` and its answer → `summary` with `list`.
   - `Needs you: a failed turn, a question and a waiting prompt ring as in Full`: a summary with `failed: true` and no tier → `alert`; `kind: 'error'` → `turnError`; a `commander_question` → `question`; an `asked` prompt → `question`.
-  - `the decider is told the mode`: a `decideTier` spy is called with `expect.objectContaining({ onlyYou: false })`, and `true` after `notify('you')`.
+  - `the decider is told the mode`: a `decideTier` spy is called with `expect.objectContaining({ needsYou: false })`, and `true` after `notify('you')`.
   - `a notify the dial's part cannot take answers FAILED` (`faults: ['dial']`).
   - `the devices open their listener once, with …`: the keys are `['front', 'attach', 'tab', 'tabs', 'dial', 'notify']`.
 - [ ] **Step 2: Run** `cd cli && npx vitest run src/services/devices.spec.ts -t Notifications`. Expected: FAIL (no `notify` handler; a `dial_status` without `notify`).

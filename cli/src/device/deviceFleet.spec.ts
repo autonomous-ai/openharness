@@ -310,7 +310,7 @@ describe('DeviceFleet', () => {
     expect(seen.map((e) => (e as { tier?: string }).tier)).toEqual(['silent', undefined, undefined])
   })
 
-  // A cloud harness's card carries no tier (core/agents/cloud.ts): this dial decides it, and a failed turn rings in Only you
+  // A cloud harness's card carries no tier (core/agents/cloud.ts): this dial decides it, and a failed turn rings in Needs you
   // only when the card still says it failed.
   it('carries a summary\'s failed, and only a summary\'s true one', () => {
     const { fleet, say } = make()

@@ -208,7 +208,7 @@ describe('harness hardware watch with a dial: Notifications', () => {
     // On any line since, never on a count of lines: the dial greets again every 15 s, and a greeting brings a status.
     let from = run.lines.length
     run.child.stdin!.write('{"notify":"you"}\n')
-    await until('the watch to say Only you', () => run.lines.slice(from).some((line) => notifyOf(line) === 'you'), 30_000)
+    await until('the watch to say Needs you', () => run.lines.slice(from).some((line) => notifyOf(line) === 'you'), 30_000)
     expect(readFileSync(join(d.dataDir, 'dial-notify.json'), 'utf8')).toBe('{"mode":"you"}\n')
     // An ordinary finished turn is a drawer row: the dial does not beep.
     expect(await turnEnds(dial, engine, 'build it', 0)).toMatchObject({ tier: 'list', quiet: true })
@@ -217,7 +217,7 @@ describe('harness hardware watch with a dial: Notifications', () => {
     const listedSince = dial.messages.length
     await d.restart()
     run = watch(d)
-    await until('the new watch to say Only you', () => notifyOf(run.lines.at(-1)) === 'you', 60_000)
+    await until('the new watch to say Needs you', () => notifyOf(run.lines.at(-1)) === 'you', 60_000)
 
     from = run.lines.length
     run.child.stdin!.write('{"notify":"full"}\n')

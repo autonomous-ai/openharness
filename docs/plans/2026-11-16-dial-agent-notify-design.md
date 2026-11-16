@@ -158,7 +158,7 @@ needs no such wait.
 
 - Stored per computer in the daemon's data dir, read by the devices service where it sends `cable.summary`
   (`services/devices.ts`, both the upstream-tier and the `tierOf` paths): in Needs you an `alert` decided by
-  `rule:turn` becomes `list`, logged as `rule:only-you`; nothing else is lowered.
+  `rule:turn` becomes `list`, logged as `rule:needs-you`; nothing else is lowered.
 - The menu-bar app reads and writes it through `harness hardware watch --json`, as its Sound item does (#4360): out,
   `"notify":"full"|"you"` on the watch line; in, exactly `{"notify":"full"}` or `{"notify":"you"}` on the watch's
   stdin; latest wins, one change in flight, 12 s bound, one stderr line on an error.

@@ -1,5 +1,5 @@
 // The Notifications setting: whether an ordinary finished turn still beeps the dial (Full) or only lists
-// (Only you). It is this computer's, not the dial's, so it lives in the daemon's data folder and outlives the
+// (Needs you). It is this computer's, not the dial's, so it lives in the daemon's data folder and outlives the
 // devices' process, which restarts often. One writer: the devices' process.
 import { closeSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 

@@ -4562,8 +4562,8 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
     return { ...started, listener }
   }
-  /** Devices in Only you, with the fixed rules deciding. */
-  const onlyYou = (over: Parameters<typeof start>[0] = {}) => {
+  /** Devices in Needs you, with the fixed rules deciding. */
+  const needsYou = (over: Parameters<typeof start>[0] = {}) => {
     const listener = fakeListener()
     const started = start({ decideTier: null, ...over, listen: listener.listen })
     expect(listener.notify('you')).toEqual({ mode: 'you' })
@@ -4618,29 +4618,29 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
     await vi.waitFor(() => expect(calls('summary')).toEqual([['a1', 'The requested build is ready.', 'done', 'alert', undefined, false]]))
   })
 
-  it('Only you: a finished turn decided here is a drawer row', async () => {
-    const { port } = onlyYou()
+  it('Needs you: a finished turn decided here is a drawer row', async () => {
+    const { port } = needsYou()
     summary(port, 'a1', { recap: 'The requested build is ready.' })
     await vi.waitFor(() => expect(calls('summary')).toEqual([['a1', 'The requested build is ready.', 'done', 'list', undefined, false]]))
-    expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · .* · list · rule:only-you · only-you · \d+ms$/))
+    expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · .* · list · rule:needs-you · needs-you · \d+ms$/))
     expect(logs.some((line) => line.includes('rule:turn'))).toBe(false)
   })
 
-  it('Only you: a tier the recaps decided is lowered when it is an alert, and only then', () => {
-    const { port } = onlyYou()
+  it('Needs you: a tier the recaps decided is lowered when it is an alert, and only then', () => {
+    const { port } = needsYou()
     summary(port, 'a1', { recap: 'Deployed', tier: 'alert' })
     summary(port, 'a2', { recap: 'Deployed', tier: 'list' })
     summary(port, 'a3', { recap: 'Deployed', tier: 'silent' })
     summary(port, 'a4', { recap: 'Deployed', tier: 'alert', failed: true })
     expect(calls('summary').map(([agentId, , , tier]) => [agentId, tier])).toEqual([['a1', 'list'], ['a2', 'list'], ['a3', 'silent'], ['a4', 'alert']])
-    expect(logs.filter((line) => line.includes(' · rule:only-you · '))).toEqual([expect.stringMatching(/^\[cable\] notify · .* · list · rule:only-you · only-you · 0ms$/)])
+    expect(logs.filter((line) => line.includes(' · rule:needs-you · '))).toEqual([expect.stringMatching(/^\[cable\] notify · .* · list · rule:needs-you · needs-you · 0ms$/)])
     expect(logs.filter((line) => line.includes(' · recaps · decided upstream'))).toEqual([
       expect.stringMatching(/ · list · recaps · /), expect.stringMatching(/ · silent · recaps · /), expect.stringMatching(/ · alert · recaps · /),
     ])
   })
 
-  it('Only you: another machine\'s card is lowered here', async () => {
-    onlyYou()
+  it('Needs you: another machine\'s card is lowered here', async () => {
+    needsYou()
     const tell = seen.fleet!.events!
     tell({ machineId: 'mac-mini', kind: 'summary', agentId: 'far-1', text: 'done', recap: 'Planned.', tier: 'alert' })
     tell({ machineId: 'mac-mini', kind: 'summary', agentId: 'far-2', text: 'done', recap: 'Planned.' })
@@ -4649,24 +4649,24 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
     expect(calls('summary').map(([agentId, , , tier]) => [agentId, tier])).toEqual([['far-1', 'list'], ['far-3', 'silent'], ['far-2', 'list']])
   })
 
-  it('Only you: another machine\'s failed card rings', async () => {
-    onlyYou()
+  it('Needs you: another machine\'s failed card rings', async () => {
+    needsYou()
     seen.fleet!.events!({ machineId: 'cloud', kind: 'summary', agentId: 'far-1', text: 'done', recap: 'The build broke.', failed: true })
     await vi.waitFor(() => expect(calls('summary')).toEqual([['far-1', 'The build broke.', 'done', 'alert', undefined, false]]))
   })
 
-  it('Only you: an agent outside a pane ends as a drawer row', async () => {
+  it('Needs you: an agent outside a pane ends as a drawer row', async () => {
     vi.useFakeTimers()
     readers.answer.mockResolvedValue('All 12 tests pass.')
-    const { port } = onlyYou()
+    const { port } = needsYou()
     port.observed(hook('turn-start'))
     port.observed(hook('turn-stop'))
     await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
     expect(calls('summary')).toEqual([[ID, 'All 12 tests pass.', 'All 12 tests pass.', 'list', 'All 12 tests pass.', false]])
   })
 
-  it('Only you: a failed turn, a question and a waiting prompt ring as in Full', async () => {
-    const { port } = onlyYou({ faults: ['fleet'] })
+  it('Needs you: a failed turn, a question and a waiting prompt ring as in Full', async () => {
+    const { port } = needsYou({ faults: ['fleet'] })
     summary(port, 'a1', { recap: 'The build broke.', failed: true })
     await vi.waitFor(() => expect(calls('summary')).toEqual([['a1', 'The build broke.', 'done', 'alert', undefined, false]]))
     port.card({ type: 'commander_event', agentId: 'a2', payload: { kind: 'error', text: 'boom' } })
@@ -4683,10 +4683,10 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
     const listener = fakeListener()
     const { port } = start({ decideTier, listen: listener.listen })
     summary(port, 'a1', { recap: 'first' })
-    await vi.waitFor(() => expect(decideTier).toHaveBeenCalledWith(expect.objectContaining({ recap: 'first', onlyYou: false })))
+    await vi.waitFor(() => expect(decideTier).toHaveBeenCalledWith(expect.objectContaining({ recap: 'first', needsYou: false })))
     listener.notify('you')
     summary(port, 'a1', { recap: 'second' })
-    await vi.waitFor(() => expect(decideTier).toHaveBeenLastCalledWith(expect.objectContaining({ recap: 'second', onlyYou: true })))
+    await vi.waitFor(() => expect(decideTier).toHaveBeenLastCalledWith(expect.objectContaining({ recap: 'second', needsYou: true })))
   })
 
   it('a notify the dial\'s part cannot take answers FAILED', () => {

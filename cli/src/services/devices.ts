@@ -640,20 +640,20 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       const turn = ended.get(agentId) // a sub-agent's summary leaves the main turn's numbers alone
       ended.delete(agentId)
       const who = cableHost.describe(agentId)
-      const onlyYou = notifyMode.get() === 'you'
+      const needsYou = notifyMode.get() === 'you'
       // Decided once already, by the recaps (services/recaps.ts) or another machine, for the phone as well: the dial
-      // follows it and nobody is asked again, but Only you is this computer's, so an ordinary turn's alert is lowered
+      // follows it and nobody is asked again, but Needs you is this computer's, so an ordinary turn's alert is lowered
       // here. A card without one (a cloud agent's, a recaps from before) is decided here.
       if (event.tier) {
-        const lowered = onlyYou && event.tier === 'alert' && event.failed !== true
-        if (lowered) tally(who?.name ?? '', 'list', 'rule:only-you', 'only-you', 0)
+        const lowered = needsYou && event.tier === 'alert' && event.failed !== true
+        if (lowered) tally(who?.name ?? '', 'list', 'rule:needs-you', 'needs-you', 0)
         else tally(who?.name ?? '', event.tier, 'recaps', 'decided upstream', 0)
         void cable.summary(agentId, recap, event.text, lowered ? 'list' : event.tier, event.fullText, false)
         return
       }
       // Returned, so the agent's next card waits behind this one (inOrder): a late recap must not follow turn.started.
       return tierOf({ agent: who?.name ?? '', engine: who?.engine ?? '', recap, durationS: turn?.durationS ?? null,
-        stats: turn?.stats ?? {}, subagent: false, onScreen: false, failed: event.failed === true, onlyYou })
+        stats: turn?.stats ?? {}, subagent: false, onScreen: false, failed: event.failed === true, needsYou })
         .then((d) => d.tier, () => 'list' as const)
         .then((tier) => { void cable.summary(agentId, recap, event.text, tier, event.fullText, false) })
     }
