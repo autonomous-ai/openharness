@@ -1793,9 +1793,10 @@ export function closeCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
         try { o.ledger.append({ at: s.now(), by: { machineId: o.caller.machineId, agentId: o.caller.agentId }, closed: { machineId: t.machineId, agentId: t.frame.id } }) }
         catch { /* `wait` then says it stopped */ }
       }
-      // Closed while still starting, before its machine could read its conversation: there is none to keep.
+      // The record its machine kept holds no conversation (lib/closeAgentService.ts `withoutConversation`): closed while
+      // still starting or at a question its engine asks first (the folder's trust, an MCP server), or its engine never
+      // bound one. There is none to keep.
       const kept = reply.withoutConversation !== true
-      // Still starting, or at a question its engine asks first (the folder's trust, an MCP server): it had none yet.
       const effect = kept ? 'Its conversation is kept; the person can resume it.' : 'It had not started a conversation, so none was kept.'
       // How many of its own are left, counted as `whoami` counts them, without the one just closed.
       const closedHere = t.machineId === o.where.machineId, closedId = t.frame.id
