@@ -292,6 +292,9 @@ def main(argv=None):
     try:
         if args.command == "next":
             live = live_version(args.manifest.read_bytes()) if args.manifest else None
+            # Read, so something is live: only a manifest that could not be read may be the first release's.
+            if args.manifest and live is None:
+                raise ValueError(f"the live manifest at {ORIGIN_MANIFEST} has no readable X.Y.Z version")
             result = next_version(args.tags.read_text().split(), live, args.minor, args.version, args.allow_no_manifest)
             for key, value in result.items():
                 print(f"{key}={value}")
