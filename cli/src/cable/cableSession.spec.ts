@@ -5713,6 +5713,28 @@ describe('the agent the dial shows (docs/specs/2026-11-16-orca-device-plugin.md)
     } finally { await session.stop() }
   })
 
+  it("with a window open, a dial that says appFilter reports the app's agent on an app's ring, and the window's back on the tab", async () => {
+    const { host, state } = appHost()
+    state.window = true
+    const { session, port, told } = await greeted(host, { appFilter: 'v1' })
+    try {
+      port.say({ t: 'focus', agentId: 'a1' })
+      expect(told().at(-1)).toEqual({ name: 'Fix login screen', app: 'Harness' })
+      state.appView = true
+      await session.viewChanged()
+      port.say({ t: 'focus', agentId: 'g2' })
+      expect(told().at(-1)).toEqual({ name: 'g2', app: 'Ghostty' })
+      // A window focus off the ring moves neither the dial nor what is reported.
+      const before = told().length
+      await session.followApp('mac-local', 'a1')
+      expect(told()).toHaveLength(before)
+      state.focus = { machineId: 'mac-local', agentId: 'a2' }
+      state.appView = false
+      await session.viewChanged()
+      expect(told().at(-1)).toEqual({ name: 'Device firmware voice', app: 'Harness' })
+    } finally { await session.stop() }
+  })
+
   it('an agent with no host is in Harness, and so is a host the table does not know; one in an unknown terminal is in Other', async () => {
     let ring = RING
     const { session, told } = await greeted({ listAgents: async () => ring })
