@@ -120,6 +120,25 @@ describe('openRouterComplete', () => {
     expect(await openRouterComplete(options)).toBeNull()
   })
 
+  it('logs a failed call by its error name and token code, never a message that can quote the body', async () => {
+    // V8's JSON.parse error quotes a window of the body it failed on, and a completion's body holds the model's
+    // answer, which for the voice router can repeat the person's spoken words.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => JSON.parse('SECRET-TRANSCRIPT fix the login bug') }))
+      expect(await openRouterComplete(options)).toBeNull()
+      expect(warn.mock.calls[0]).toEqual([`[openrouter] ${options.model} call failed: SyntaxError`])
+      const reset = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }) })
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(reset))
+      expect(await openRouterComplete(options)).toBeNull()
+      expect(warn.mock.calls[1]).toEqual([`[openrouter] ${options.model} call failed: TypeError · code=ECONNRESET`])
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue('SECRET thrown text'))
+      expect(await openRouterComplete(options)).toBeNull()
+      expect(warn.mock.calls[2]).toEqual([`[openrouter] ${options.model} call failed: error`])
+      expect(warn.mock.calls.flat().join('\n')).not.toContain('SECRET')
+    } finally { warn.mockRestore() }
+  })
+
   it("re-throws the CALLER's abort, so a superseded recap stays superseded", async () => {
     const controller = new AbortController()
     vi.stubGlobal('fetch', vi.fn().mockImplementation(() => {
