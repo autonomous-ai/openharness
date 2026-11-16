@@ -97,6 +97,9 @@ export interface HcTerminal {
   kind?: string
   name?: string
   cwd?: string
+  /** hc's count of its program's turns: it goes up each time the status leaves `working` (F7), so a turn that ran while
+   *  nothing was subscribed still shows. */
+  turn?: number
 }
 
 export interface HcSubscriber {
@@ -151,6 +154,7 @@ export function hcTerminal(value: unknown): HcTerminal | undefined {
     ...(kind ? { kind } : {}),
     ...(typeof value.name === 'string' ? { name: value.name } : {}),
     ...(typeof cwd === 'string' ? { cwd } : {}),
+    ...(Number.isSafeInteger(value.turn) && (value.turn as number) >= 0 ? { turn: value.turn as number } : {}),
   }
 }
 
@@ -158,7 +162,7 @@ export function hcTerminal(value: unknown): HcTerminal | undefined {
  *  object's own narrowed to the keys it reads. A terminal's command line (in it and in its foreground), its title and a
  *  status's records are left in the line they came in. */
 const READ: Record<string, readonly string[] | undefined> = {
-  address: undefined, state: undefined, name: undefined, cwd: undefined,
+  address: undefined, state: undefined, name: undefined, cwd: undefined, turn: undefined,
   labels: ['herdr.space'], status: ['app', 'state'], foreground: ['cwd'],
 }
 const only = (value: unknown, keys: readonly string[]): unknown => isObject(value)
@@ -169,8 +173,8 @@ const factsOf = (value: Fields): Fields => Object.fromEntries(Object.entries(REA
   .map(([key, keys]) => [key, keys ? only(value[key], keys) : value[key]]))
 
 /** How each kind of event changes its terminal's fields, as Task 1 recorded them (F5); what is kept of them is
- *  `factsOf`'s. `removed` is the subscription's own. Every other kind (`turn`, `title`, `keep`, `doc`, `size`, one hc
- *  adds later) changes nothing. */
+ *  `factsOf`'s. `removed` is the subscription's own. Every other kind (`title`, `keep`, `doc`, `size`, one hc adds
+ *  later) changes nothing. */
 const whole = (facts: Fields, data: Fields): Fields => ({ ...facts, ...data })
 const TAKES: Record<string, (facts: Fields, data: Fields) => Fields> = {
   created: whole,
@@ -180,12 +184,13 @@ const TAKES: Record<string, (facts: Fields, data: Fields) => Fields> = {
   status: (facts, data) => ({ ...facts, status: data.status }),
   labels: (facts, data) => ({ ...facts, labels: data.labels }),
   foreground: (facts, data) => ({ ...facts, foreground: data }),
+  turn: (facts, data) => ({ ...facts, turn: data.turn }),
   // Its line names no state: the exit's code, signal and reason.
   finished: (facts) => ({ ...facts, state: 'finished' }),
 }
 
 const same = (a: HcTerminal, b: HcTerminal) => a.live === b.live && a.space === b.space && a.status === b.status
-  && a.kind === b.kind && a.name === b.name && a.cwd === b.cwd
+  && a.kind === b.kind && a.name === b.name && a.cwd === b.cwd && a.turn === b.turn
 
 const lineOf = (id: string, method: string, params: Record<string, unknown>) =>
   `${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`

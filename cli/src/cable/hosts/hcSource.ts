@@ -51,10 +51,12 @@ export interface HcSourceDeps {
   count(what: 'herdr-app' | 'busy' | 'waiting' | 'too-long' | 'no-answer'): void
 }
 
-/** A kept agent, its terminal, and hc's last status of it: a turn that ends `idle` reads the one before. */
+/** A kept agent, its terminal, and hc's last status and turn of it: a turn that ends `idle` reads the status before, and
+ *  one that ran while nothing was subscribed reads the turn. */
 interface Row {
   address: string
   status?: HcStatus
+  turn?: number
   agent: HostAgent
 }
 
@@ -228,20 +230,20 @@ export class HcSource implements HostSource {
     const before = JSON.stringify(this.list())
     const fresh = new Map(terminals.filter(listable).map((terminal) => [terminal.address, terminal]))
     for (const [address, row] of this.rows) if (fresh.get(address)?.kind !== row.agent.engine) this.rows.delete(address)
-    for (const terminal of fresh.values()) this.take(terminal)
+    for (const terminal of fresh.values()) this.take(terminal, true)
     this.told(before)
   }
 
   private changed(terminal: HcTerminal): void {
     const before = JSON.stringify(this.list())
-    if (listable(terminal)) this.take(terminal)
+    if (listable(terminal)) this.take(terminal, false)
     else this.rows.delete(terminal.address)
     this.told(before)
   }
 
   /** Sets a terminal's row. Another kind at its address is another agent, whose first status ends no turn of the one
-   *  before: a new row. */
-  private take(terminal: Listable): void {
+   *  before: a new row. `snapshot` is hc's whole list, after a time nothing of the terminal was heard. */
+  private take(terminal: Listable, snapshot: boolean): void {
     const { address, kind } = terminal
     let row = this.rows.get(address)
     if (row?.agent.engine !== kind) {
@@ -258,7 +260,7 @@ export class HcSource implements HostSource {
     const cwd = terminal.cwd ? terminal.cwd.slice(0, MAX_CWD) : undefined
     row.agent.cwd = cwd
     row.agent.name = shown(terminal.name) || shown(cwd && basename(cwd)) || kind
-    this.status(row, terminal.status)
+    this.status(row, terminal.status, terminal.turn, snapshot)
   }
 
   /** The counts said when they change, and one onChange when anything a listed row shows changed. */
@@ -282,15 +284,21 @@ export class HcSource implements HostSource {
     }
   }
 
-  /** Sets a row's state from hc's status and the one before it. */
-  private status(row: Row, next: HcStatus): void {
+  /** Sets a row's state from hc's status and the one before it, and in a snapshot from hc's turn. */
+  private status(row: Row, next: HcStatus, turn: number | undefined, snapshot: boolean): void {
     const before = row.status
+    // A turn that ran while nothing was heard (a reconnect, or hc's `missed`) may end on the word it started from: only
+    // hc's count of turns, which went up, says so. Live, each status line is heard and ends its own turn; the turn line
+    // after it, which may follow a new agent's first status, ends none.
+    const ended = snapshot && turn !== undefined && row.turn !== undefined && turn > row.turn
     const { state: was, unseenDone: unseen } = row.agent
     row.status = next
+    row.turn = turn
     // An agent may report idle, not done, as its turn ends: the turn is done all the same, with nothing unseen.
-    const state = next !== 'idle' ? STATES[next] : before === 'working' || before === 'blocked' ? 'done' : before === 'idle' ? was : 'idle'
+    const state = next !== 'idle' ? STATES[next]
+      : ended || before === 'working' || before === 'blocked' ? 'done' : before === 'idle' ? was : 'idle'
     row.agent.state = state
-    row.agent.unseenDone = next === 'done' && (before !== 'done' || unseen)
-    if (state !== was) row.agent.lastActivityAt = this.deps.now()
+    row.agent.unseenDone = next === 'done' && (before !== 'done' || ended || unseen)
+    if (state !== was || ended) row.agent.lastActivityAt = this.deps.now()
   }
 }
