@@ -544,8 +544,8 @@ Spec Q5: macOS only.
   export function hcKind(app: unknown): string | undefined
 
   export type HcStatus = 'idle' | 'working' | 'done' | 'blocked' | 'error'
-  export type HcFault = 'no_socket' | 'refused' | 'timeout' | 'ended' | 'oversize' | 'bad_json' | 'bad_answer' | 'rejected'
-  export type HcFailure = { fault: Exclude<HcFault, 'rejected'> } | { fault: 'rejected'; kind: string }
+  // SocketFault is unixSocket.ts's, one set for both socket clients and their attempts.
+  export type HcFailure = { fault: Exclude<SocketFault, 'rejected'> } | { fault: 'rejected'; kind: string }
   export type HcAnswer = { ok: true; result: Record<string, unknown> } | ({ ok: false } & HcFailure)
   export type HcPrompt = { outcome: 'sent' | 'busy' }
     | ({ outcome: 'failed' } & (HcFailure | { fault: 'bad_request' | 'not_that_agent' }))
@@ -559,6 +559,8 @@ Spec Q5: macOS only.
     kind?: string
     name?: string
     cwd?: string
+    /** hc's count of its program's turns (F7): a turn that ran while nothing was subscribed still shows. */
+    turn?: number
   }
   /** hc's terminal, read: none for another machine's, or one with no address in its form. */
   export function hcTerminal(value: unknown): HcTerminal | undefined
@@ -567,7 +569,9 @@ Spec Q5: macOS only.
     snapshot(terminals: readonly HcTerminal[]): void
     /** One terminal as it is after a change; `live: false` once it finished or was removed. */
     changed(terminal: HcTerminal): void
-    closed(reason: HcFault): void
+    closed(reason: SocketFault): void
+    /** How many terminals of this machine were left out past 1,024, told as it changes. */
+    over(count: number): void
   }
   export interface HcClient {
     request(method: string, params: Record<string, unknown>, deadlineMs?: number): Promise<HcAnswer>
@@ -592,12 +596,12 @@ Spec Q5: macOS only.
       - `removed`: `changed` with `live: false`, and it is kept no more;
       - `missed`: the fresh snapshot replaces what was kept, and `snapshot` tells it;
       - `heartbeat`, and every other kind (`doc`, `size`, `title`, `turn`, `keep`, one hc adds later): nothing is told, and nothing of the line is kept.
-    - Past `HC_MAX_TERMINALS` kept, a terminal is not kept and not told: the rest of a snapshot, and one an event adds.
-    - `HC_SILENCE_MS` with no line at all: `closed('timeout')`. Every line puts it off.
+    - Past 1,024 kept, a terminal is not kept and not told: the rest of a snapshot, and one an event adds. How many are left out is told by `over` as it changes: each snapshot counts again, each created past the bound adds one, each of those removed takes one off.
+    - 45 s with no line at all: `closed('timeout')`. Every line puts it off.
     - `closed` is told once, and nothing after it. The caller's `close()` ends the connection and tells nothing.
   - **`prompt`**: an address or a kind not in its form, a text over `MAX_TEXT`, or one blank once its control characters are spaces: `failed`, `bad_request`, and nothing connects. Then:
     1. `request('terminal.get', { terminal: address })`. Not ok: `failed` with its fault. No terminal, or another address: `failed`, `bad_answer`. Not live, or a kind that is not `kind`: `failed`, `not_that_agent`. A status that is neither `idle` nor `done`: `busy`.
-    2. `request('terminal.send', { terminal: address, text: <the line>, if: 'idle' }, HC_SEND_MS)` when it was idle; with no `if` when it was done. Never `force`. Ok: `sent`. `rejected` with `status_mismatch`: `busy`. Else `failed` with its fault. Nothing is sent twice.
+    2. `request('terminal.send', { terminal: address, text: <the line>, if: 'idle' }, 75_000)` (75 s) when it was idle; with no `if` when it was done. Never `force`. Ok: `sent`. `rejected` with `status_mismatch`: `busy`. Else `failed` with its fault. Nothing is sent twice.
   - No member throws or rejects. The file logs nothing. Sockets and timers are unref'd.
 
 - [ ] **Step 1: Write the failing tests** in `hcClient.spec.ts`, `describe.skipIf(process.platform === 'win32')`. Each client is `createHcClient({ socketPath: server.path, home: dirname(server.path), uid: process.getuid!(), platform: 'darwin' })`. Deadlines run on `vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })`, after `await server.got(…)`.
@@ -651,7 +655,7 @@ Spec Q6 (the shared attempts), Q7 (an errored agent's words) and Q8 (the young s
 - Test: `cli/src/cable/hosts/hcSource.spec.ts`
 
 **Interfaces:**
-- Consumes: `HcClient`, `HcTerminal`, `HcStatus`, `HcFault`, `HcPrompt`, `hcPaneKey`, `createHcClient` (Task 7); `SocketAttempts` (Task 4); `shown`, `MAX_AGENTS`, `MAX_CWD` (`./herdrSource.js`, Task 4); `MAX_TEXT` (`./orca.js`); `fakeHc` (Task 1).
+- Consumes: `HcClient`, `HcTerminal`, `HcStatus`, `HcPrompt`, `hcPaneKey`, `createHcClient` (Task 7); `SocketAttempts` (Task 4); `shown`, `MAX_AGENTS`, `MAX_CWD` (`./herdrSource.js`, Task 4); `MAX_TEXT` (`./orca.js`); `fakeHc` (Task 1).
 - Produces:
   ```ts
   export interface HcSourceDeps {
@@ -784,7 +788,7 @@ Spec Q6 (the shared attempts), Q7 (an errored agent's words) and Q8 (the young s
     - `show`: an address not in its form is `failed`. Else `agent.focus` alone: exit 0 is `ok`; else `failed`, with the same line.
     - Joined: `focus` answers whether Herdr came forward; `show` answers `ok` when `agent.focus` exited 0.
   - `prompt`: a prompt under way for that address answers `{ outcome: 'busy' }` and asks the client nothing. Else `deps.client.prompt(address, kind, text)`. It does not wait for a focus, and a focus does not wait for it.
-  - `type`: `(await prompt(pane.id, engine, text)).outcome === 'sent'`. `canType`: `deps.client.socketStamp() !== undefined`. `paneKey`: `hcPaneKey(pane.id)`.
+  - `type`: `(await prompt(pane.id, engine, text)).outcome === 'sent'`. `canType`: `deps.reports(pane.id)`, hc reports an agent's status for that live terminal (hcSource.ts reports). `paneKey`: `hcPaneKey(pane.id)`.
 
 - [ ] **Step 1: Write the failing tests** in `herdrApp.spec.ts`, with a `recorder` as `herdr.spec.ts`'s: a runner that records each call and answers the next of `codes`, `onPath` answering `/fake/bin/herdr-app` for `herdr-app`, `platform: 'darwin'`, a client whose `prompt` answers what the test sets, `inFront` and `shows` the test sets (true by default), and a `log` it keeps.
   - `its id is herdr-app, and a tap is its own`: `tap` is `'instead'`; `type`, `show` and `canShow` are functions.

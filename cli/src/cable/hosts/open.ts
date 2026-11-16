@@ -47,7 +47,7 @@ export interface OpenDeps {
   /** The raw `HARNESS_OPEN_BIN` (openPath). */
   bin?: string
   /** Herdr.app's window is herdr's ring's: the ring holds an agent in Herdr (hostDetect.ts inHerdr, or one the hc source
-   *  lists), or Herdr.app is running. Asked at each pick. None: herdr's ring is herdr 0.8.0's alone. */
+   *  lists). Asked at each pick. None: herdr's ring is herdr 0.8.0's alone. */
   herdrApp?(): boolean
 }
 
