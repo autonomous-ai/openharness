@@ -96,20 +96,13 @@ fn engine_rows(name: &str, enabled: bool, change: EngineChange, (on, off): (Menu
     vec![MenuItem::Text(format!("{name}: {status}")), action]
 }
 
-/// The screen the window should show next, in the order they chain: install, sign-in, Claude Code, Codex.
+/// The screen the window should show next, in the order they chain: install, then sign-in. Claude Code and Codex are
+/// turned on in the menu.
 pub fn due(state: &AppState) -> Option<Screen> {
     if matches!(state.cli, CliState::Installing | CliState::InstallFailed) {
         return Some(Screen::Install);
     }
-    if state.signed_in == Some(false) && !state.saved.asked_sign_in {
-        return Some(Screen::SignIn);
-    }
-    let claude_off = state.claude.as_ref().is_some_and(|claude| available(claude) && !claude.enabled);
-    if claude_off && !state.saved.asked_claude {
-        return Some(Screen::Claude);
-    }
-    let codex_off = state.codex.as_ref().is_some_and(|codex| codex_available(codex) && !codex.enabled);
-    (codex_off && !state.saved.asked_codex).then_some(Screen::Codex)
+    (state.signed_in == Some(false) && !state.saved.asked_sign_in).then_some(Screen::SignIn)
 }
 
 /// The menu as one log line: its labels joined by ` | `, without separators. A submenu is its label and its checked

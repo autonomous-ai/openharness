@@ -73,31 +73,20 @@ pub struct CodexStatus {
     pub enabled: bool,
 }
 
-/// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "askedClaude", "askedCodex", "loginItem" }`. Default:
-/// version 1, all false.
+/// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "loginItem" }`. Default: version 1, all false. The keys of
+/// the Claude Code and Codex offers an older app wrote are ignored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Saved {
     pub version: u32,
     pub cli_seen: bool,
     pub asked_sign_in: bool,
-    pub asked_claude: bool,
-    /// Absent from a file written before Codex was offered: that file's answers stand, and Codex is not yet asked.
-    #[serde(default)]
-    pub asked_codex: bool,
     pub login_item: bool,
 }
 
 impl Default for Saved {
     fn default() -> Self {
-        Saved {
-            version: 1,
-            cli_seen: false,
-            asked_sign_in: false,
-            asked_claude: false,
-            asked_codex: false,
-            login_item: false,
-        }
+        Saved { version: 1, cli_seen: false, asked_sign_in: false, login_item: false }
     }
 }
 
@@ -106,8 +95,6 @@ impl Default for Saved {
 pub enum Screen {
     Install,
     SignIn,
-    Claude,
-    Codex,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -127,7 +114,7 @@ pub struct View {
     pub lines: Vec<String>,
 }
 
-/// What the window may ask: `"retry" | "sign_in" | "later" | "cancel" | "turn_on" | "not_now"`. Anything else is refused.
+/// What the window may ask: `"retry" | "sign_in" | "later" | "cancel"`. Anything else is refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
@@ -135,8 +122,6 @@ pub enum Action {
     SignIn,
     Later,
     Cancel,
-    TurnOn,
-    NotNow,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

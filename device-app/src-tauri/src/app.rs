@@ -28,9 +28,8 @@ pub struct App {
     window: Option<View>,
     /// The sign-in that runs, as its screen draws it.
     login: Option<View>,
-    /// Whether the account, Claude Code and Codex answered since the CLI was found; None once the first screen is
-    /// chosen.
-    first_answers: Option<(bool, bool, bool)>,
+    /// The CLI was found and the account has not answered since: its first answer chooses the first screen.
+    awaiting_account: bool,
     /// The last time an event told, for the keep-alive.
     now: u64,
     last_read: u64,
@@ -74,7 +73,7 @@ impl App {
             menu: Vec::new(),
             window: None,
             login: None,
-            first_answers: None,
+            awaiting_account: false,
             now,
             last_read: now,
             read_when_up: false,
@@ -167,7 +166,7 @@ impl App {
                 self.state.signed_in = None;
                 self.state.claude = None;
                 self.state.codex = None;
-                self.first_answers = None;
+                self.awaiting_account = false;
                 if self.window.is_some() {
                     self.show(None, effects);
                 }
@@ -213,24 +212,13 @@ impl App {
             // A read that failed keeps the last answer.
             Event::Auth(answer) if self.state.cli == CliState::Found => {
                 self.state.signed_in = answer.or(self.state.signed_in);
-                if let Some((auth, _, _)) = &mut self.first_answers {
-                    *auth = true;
-                }
                 self.first_screen(effects);
             }
             Event::Claude(status) if self.state.cli == CliState::Found => {
                 self.state.claude = status.or(self.state.claude.take());
-                if let Some((_, claude, _)) = &mut self.first_answers {
-                    *claude = true;
-                }
-                self.first_screen(effects);
             }
             Event::Codex(status) if self.state.cli == CliState::Found => {
                 self.state.codex = status.or(self.state.codex.take());
-                if let Some((_, _, codex)) = &mut self.first_answers {
-                    *codex = true;
-                }
-                self.first_screen(effects);
             }
             // A read of a CLI that went away answers late: nothing reads it.
             Event::Auth(_) | Event::Claude(_) | Event::Codex(_) => {}
@@ -238,47 +226,16 @@ impl App {
             Event::ClaudeSet(result) => {
                 // A change that no longer runs (its CLI went away) answers late: nothing reads it.
                 let EngineChange::Running(on) = self.state.claude_change else { return };
-                // Failed or not, the status is read again: a change may have done part of its work.
+                // Failed or not, the status is read again: a change may have done part of its work. The runner logged
+                // a failure's reason; the menu's row says it failed.
                 effects.push(Effect::ReadClaude);
                 self.state.claude_change = if result.is_ok() { EngineChange::None } else { EngineChange::Failed(on) };
-                match result {
-                    Ok(()) => {
-                        // Every turn-on is the window's: the menu's Turn on opens it.
-                        if on {
-                            self.remember(|saved| saved.asked_claude = true, effects);
-                            if self.showing(Screen::Claude) {
-                                self.next(effects);
-                            }
-                        }
-                    }
-                    // The runner logged the reason; the menu's row says it failed.
-                    Err(text) => {
-                        if on && self.showing(Screen::Claude) {
-                            self.show(Some(screen_at(Screen::Claude, Phase::Failed, vec![text])), effects);
-                        }
-                    }
-                }
             }
             // As Claude Code's.
             Event::CodexSet(result) => {
                 let EngineChange::Running(on) = self.state.codex_change else { return };
                 effects.push(Effect::ReadCodex);
                 self.state.codex_change = if result.is_ok() { EngineChange::None } else { EngineChange::Failed(on) };
-                match result {
-                    Ok(()) => {
-                        if on {
-                            self.remember(|saved| saved.asked_codex = true, effects);
-                            if self.showing(Screen::Codex) {
-                                self.next(effects);
-                            }
-                        }
-                    }
-                    Err(text) => {
-                        if on && self.showing(Screen::Codex) {
-                            self.show(Some(screen_at(Screen::Codex, Phase::Failed, vec![text])), effects);
-                        }
-                    }
-                }
             }
             // A failure is tried again at the next start.
             Event::LoginItem(registered) => {
@@ -289,14 +246,10 @@ impl App {
             Event::Menu(action) => match action {
                 MenuAction::Install => self.install(effects),
                 MenuAction::SignIn => self.show(Some(self.view_of(Screen::SignIn)), effects),
-                MenuAction::ClaudeOn => self.show(Some(self.view_of(Screen::Claude)), effects),
-                MenuAction::ClaudeOff => {
-                    self.set_claude(false, effects);
+                MenuAction::ClaudeOn | MenuAction::ClaudeOff => {
+                    self.set_claude(action == MenuAction::ClaudeOn, effects)
                 }
-                MenuAction::CodexOn => self.show(Some(self.view_of(Screen::Codex)), effects),
-                MenuAction::CodexOff => {
-                    self.set_codex(false, effects);
-                }
+                MenuAction::CodexOn | MenuAction::CodexOff => self.set_codex(action == MenuAction::CodexOn, effects),
                 MenuAction::SoundOn | MenuAction::SoundOff => {
                     effects.push(Effect::SetSound(action == MenuAction::SoundOn));
                     // A native check item flips its own check when clicked: the menu drawn again puts it back
@@ -319,15 +272,8 @@ impl App {
             Event::Act(action) => self.act(action, effects),
             // Decision 2: closing answers an offer, and never stops what runs.
             Event::WindowClosed => {
-                match self.window.as_ref().map(|shown| (shown.screen, shown.phase)) {
-                    Some((Screen::SignIn, _)) => self.remember(|saved| saved.asked_sign_in = true, effects),
-                    Some((Screen::Claude, Phase::Offer | Phase::Failed)) => {
-                        self.remember(|saved| saved.asked_claude = true, effects)
-                    }
-                    Some((Screen::Codex, Phase::Offer | Phase::Failed)) => {
-                        self.remember(|saved| saved.asked_codex = true, effects)
-                    }
-                    _ => {}
+                if self.showing(Screen::SignIn) {
+                    self.remember(|saved| saved.asked_sign_in = true, effects);
                 }
                 self.show(None, effects);
             }
@@ -420,24 +366,6 @@ impl App {
                 effects.push(Effect::CancelLogin);
                 self.show(Some(screen_at(Screen::SignIn, Phase::Offer, Vec::new())), effects);
             }
-            (Screen::Claude, Phase::Offer, Action::TurnOn) | (Screen::Claude, Phase::Failed, Action::Retry) => {
-                if self.set_claude(true, effects) {
-                    self.show(Some(screen_at(Screen::Claude, Phase::Working, Vec::new())), effects);
-                }
-            }
-            (Screen::Claude, Phase::Offer, Action::NotNow) => {
-                self.remember(|saved| saved.asked_claude = true, effects);
-                self.next(effects);
-            }
-            (Screen::Codex, Phase::Offer, Action::TurnOn) | (Screen::Codex, Phase::Failed, Action::Retry) => {
-                if self.set_codex(true, effects) {
-                    self.show(Some(screen_at(Screen::Codex, Phase::Working, Vec::new())), effects);
-                }
-            }
-            (Screen::Codex, Phase::Offer, Action::NotNow) => {
-                self.remember(|saved| saved.asked_codex = true, effects);
-                self.next(effects);
-            }
             _ => {}
         }
     }
@@ -487,7 +415,7 @@ impl App {
         self.state.cli = CliState::Found;
         self.remember(|saved| saved.cli_seen = true, effects);
         self.keep = KeepAlive::new();
-        self.first_answers = Some((false, false, false));
+        self.awaiting_account = true;
         self.read(effects);
     }
 
@@ -517,32 +445,29 @@ impl App {
     }
 
     /// One change at a time: a click while one runs does nothing. A new change clears a failed one's row.
-    fn set_claude(&mut self, on: bool, effects: &mut Vec<Effect>) -> bool {
+    fn set_claude(&mut self, on: bool, effects: &mut Vec<Effect>) {
         if matches!(self.state.claude_change, EngineChange::Running(_)) {
-            return false;
+            return;
         }
         self.state.claude_change = EngineChange::Running(on);
         effects.push(Effect::SetClaude(on));
-        true
     }
 
     /// As Claude Code's, with a change of its own, so each may run beside the other.
-    fn set_codex(&mut self, on: bool, effects: &mut Vec<Effect>) -> bool {
+    fn set_codex(&mut self, on: bool, effects: &mut Vec<Effect>) {
         if matches!(self.state.codex_change, EngineChange::Running(_)) {
-            return false;
+            return;
         }
         self.state.codex_change = EngineChange::Running(on);
         effects.push(Effect::SetCodex(on));
-        true
     }
 
-    /// Once the account, Claude Code and Codex have all answered, the window shows the screen that is due. A window
-    /// that shows another screen keeps it; the Install screen gives way, as its install has finished.
+    /// At the account's first answer, the window shows the screen that is due. A window that shows another screen keeps
+    /// it; the Install screen gives way, as its install has finished.
     fn first_screen(&mut self, effects: &mut Vec<Effect>) {
-        if self.first_answers != Some((true, true, true)) {
+        if !std::mem::take(&mut self.awaiting_account) {
             return;
         }
-        self.first_answers = None;
         if self.window.as_ref().is_some_and(|shown| shown.screen != Screen::Install) {
             return;
         }
@@ -563,14 +488,6 @@ impl App {
         match screen {
             Screen::Install => screen_at(screen, Phase::Working, Vec::new()),
             Screen::SignIn => self.login.clone().unwrap_or_else(|| screen_at(screen, Phase::Offer, Vec::new())),
-            Screen::Claude if self.state.claude_change == EngineChange::Running(true) => {
-                screen_at(screen, Phase::Working, Vec::new())
-            }
-            Screen::Claude => screen_at(screen, Phase::Offer, Vec::new()),
-            Screen::Codex if self.state.codex_change == EngineChange::Running(true) => {
-                screen_at(screen, Phase::Working, Vec::new())
-            }
-            Screen::Codex => screen_at(screen, Phase::Offer, Vec::new()),
         }
     }
 
