@@ -789,7 +789,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     for (const timer of attached) clearInterval(timer)
     attached = []
     if (!observed || !herdr) return
-    part.call('herdr', () => on ? herdr.start() : herdr.stop())
+    // Only with herdr installed, read at each attach, as a tap needs it (herdr.ts): with none, no folder is watched
+    // (~/.config, or the home folder, recursive on macOS) for a socket that never comes.
+    part.call('herdr', () => on && apps.onPath('herdr') ? herdr.start() : herdr.stop())
     if (!on) return
     // Agents already running when the dial came are listed now, idle until their next hook event.
     part.call('observed', () => observed.scanOpen())
