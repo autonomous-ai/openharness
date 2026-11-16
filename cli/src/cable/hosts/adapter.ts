@@ -42,8 +42,12 @@ export interface HostAdapter {
   /** Whether a rest can show the pane inside its app now (the app in front, a watch open): asked at each look. */
   canShow?(pane: Pane): boolean
   show?(pane: Pane, agentId: string): Promise<PaneSwitch>
-  /** Types a line at the agent's prompt and submits it. Only the source decides that the prompt is free. */
-  type?(pane: Pane, text: string): Promise<boolean>
+  /** Types a line at the agent's prompt and submits it; `engine` is the agent's, for an app that checks who holds the
+   *  pane. Only the source decides that the prompt is free. */
+  type?(pane: Pane, text: string, engine: string): Promise<boolean>
+  /** The key a source that lists this app's agents knows the same pane by (registry.ts). Only an app with such a
+   *  source has one. */
+  paneKey?(pane: Pane): string
   /** A tap's order with the app's own `open -b`: the pane first (Orca, WezTerm, herdr), the pane alone (the Claude
    *  app's link brings the app itself), or the app first (a tab is selected once its app is in front). A pane that comes
    *  after its app is raised only when it is the pane a rest would show, so an adapter with `tap: 'after'` needs `show`:

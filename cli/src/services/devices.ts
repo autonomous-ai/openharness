@@ -31,6 +31,7 @@ import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
 import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
 import { codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
 import { createHerdrAdapter } from '../cable/hosts/herdr.js'
+import { createHerdrClient, herdrClientDeps, type HerdrClient } from '../cable/hosts/herdrClient.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
 import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type ObservedDeps, type PromptSource } from '../cable/hosts/observed.js'
@@ -102,6 +103,8 @@ export interface DevicesDeps {
   orca?: OrcaDeps
   /** For this service's tests: how `codex` is found and run (cable/hosts/codexQueue.ts). */
   codex?: Pick<CodexQueueDeps, 'run' | 'binary' | 'platform'>
+  /** For this service's tests: herdr's socket (cable/hosts/herdrClient.ts). */
+  herdr?: HerdrClient
   /** Opens the devices' own listener with these handlers (services/devicesListener.ts). Given by the devices process
    *  alone: inside the core's process (`HARNESSD_SERVICES=none`, Harness OS) there is none, so the core's process opens
    *  no socket for the devices, and the dial follows no app in front there. */
@@ -268,6 +271,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   const inbox = new Inbox({ now: monotonic, after: timerIn('inbox') })
   const apps = deps.orca ?? orcaDeps()
+  const herdrClient = deps.herdr ?? createHerdrClient(herdrClientDeps())
+  const herdrAdapter = createHerdrAdapter({ ...apps, client: herdrClient })
   const claude = createClaudeAppAdapter({ ...apps, inFront: () => cableHost.latestFront() === 'claude' })
   // Harness's own Codex home, whose config `codex queue` loads; run from the home folder, so no project's .codex/ is read.
   const codexQueue = createCodexQueue({ ...(deps.codex ?? codexQueueDeps()), home: env.CODEX_HOME, cwd: homedir() })
@@ -309,7 +314,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  The nearest host first: a multiplexer keeps the environment it started in, so in a tmux pane WezTerm's and Orca's
    *  values name the terminal the tmux server began in, and herdr inside tmux carries tmux's pane. */
   const adapters: readonly HostAdapter[] = [
-    createHerdrAdapter(apps),
+    herdrAdapter,
     createTmuxAdapter({ run: apps.run, processes: readProcessNames, log }),
     createWeztermAdapter(apps),
     createOrcaAdapter(apps),

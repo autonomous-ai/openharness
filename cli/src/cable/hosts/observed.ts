@@ -174,7 +174,11 @@ export class ObservedSource implements HostSource {
   constructor(private readonly deps: ObservedDeps) {}
 
   list(): HostAgent[] {
-    return [...this.entries.values()].map((e) => ({ ...e.agent }))
+    return [...this.entries.values()].map((e) => {
+      // The keys a listing source knows its panes by (registry.ts): an ended session's pane holds something else now.
+      const paneKeys = this.live(e) ? e.panes.flatMap(({ adapter, pane }) => (adapter.paneKey ? [adapter.paneKey(pane)] : [])) : []
+      return paneKeys.length ? { ...e.agent, paneKeys } : { ...e.agent }
+    })
   }
 
   onChange(listener: () => void): () => void {
@@ -221,8 +225,8 @@ export class ObservedSource implements HostSource {
    * own queue first, in every state: a queued message types nothing and answers no approval, and runs once the turn is over
    * (docs/specs/2026-11-15-device-codex.md, the spike). Claude Code's go to its mod in every state, as a Harness agent's
    * are (lib/sessionInput.ts), whose `$.prompt.submit` types nothing and starts them once the turn is over. Else, and
-   * after a queue that definitely failed, they are typed into the first of its panes whose app types (an Orca terminal),
-   * only at its prompt.
+   * after a queue that definitely failed, they are typed into the first of its panes whose app types (a herdr pane, an
+   * Orca terminal), only at its prompt.
    */
   async send(agent: HostAgent, text: string): Promise<SendResult> {
     const e = this.entries.get(agent.id)
@@ -277,7 +281,7 @@ export class ObservedSource implements HostSource {
     if (e.agent.state === 'working' || !this.idleKnown(e)) return refuse('busy', `${name} is busy. Say it when it is done.`)
     // Recorded first: `orca terminal send` returns once the prompt is submitted, and its turn's hook can be heard before.
     const record = this.dialPrompt(e)
-    if (!await typer.adapter.type!(typer.pane, text)) {
+    if (!await typer.adapter.type!(typer.pane, text, e.agent.engine)) {
       this.forgetDialPrompt(e, record)
       return noAnswer()
     }
