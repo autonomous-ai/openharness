@@ -633,6 +633,58 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     await s.until(() => s.log.at(-1) === '[herdr] retry · 1')
   })
 
+  it('a herdr that lists and drops each subscription is retried at 60 s, and given up on only once a retry lists nothing', async () => {
+    server.agents = [agent('w1:p1')]
+    const s = setup()
+    s.source.start()
+    await listRead(1)
+    // Each retry lists, and its subscription drops before the 60 s that would put the wait back to 1 s.
+    let lists = 1
+    for (const seconds of [1, 2, 4, 8, 16, 32, 60]) {
+      server.drop()
+      await s.until(() => s.log.at(-1) === `[herdr] retry · ${seconds}`)
+      s.advance(seconds * 1000)
+      await listRead(++lists)
+    }
+    const said = s.log.length
+    server.drop()
+    await s.until(() => s.log.length > said)
+    expect(s.log.slice(said)).toEqual(['[herdr] closed · ended', '[herdr] retry · 60'])
+    expect(s.source.list()).toHaveLength(1)
+    expect(s.watchers.size).toBe(0)
+
+    await server.stale()
+    s.advance(60_000)
+    await s.until(() => s.watchers.size === 1)
+    expect(s.timers).toEqual([])
+    expect(s.source.list()).toEqual([])
+  })
+
+  it('a herdr that starts again while the last retry fails is tried within the second', async () => {
+    await server.stale()
+    const real = herdrClient()
+    let moved = false
+    // What the source reads of herdr's socket: once moved, the socket of a herdr that started again.
+    const s = setup({ client: { ...real, socketStamp: () => moved ? 'restarted' : real.socketStamp() } })
+    s.source.start()
+    for (const seconds of [1, 2, 4, 8, 16, 32]) {
+      await s.until(() => s.log.at(-1) === `[herdr] retry · ${seconds}`)
+      s.advance(seconds * 1000)
+    }
+    await s.until(() => s.log.at(-1) === '[herdr] retry · 60')
+    const said = s.log.length
+    s.advance(60_000)
+    // The last retry has tried the stale socket; herdr starts again before the refusal comes back.
+    moved = true
+    await s.until(() => s.log.length > said)
+    expect(s.watchers.size).toBe(0)
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
+    server.agents = [agent('w1:p1')]
+    await server.start()
+    s.advance(1000)
+    await s.until(() => s.source.list().length === 1)
+  })
+
   it('a list that fails, and a new subscription that does not start, are a drop', async () => {
     server.answer('agent.list', refusal('invalid_request'))
     const s = setup()
