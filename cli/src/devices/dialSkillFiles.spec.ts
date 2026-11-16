@@ -7,7 +7,7 @@ import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, wr
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { DIAL_SKILL_FILE, DIAL_SKILL_HOMES_FILE, MAX_HOMES, listable, readAnswers, readHomes, writeAnswer, writeHomes } from './dialSkillFiles.js'
+import { DIAL_SKILL_FILE, DIAL_SKILL_HOMES_FILE, MAX_HOMES, listable, readAnswers, readHomes, readWritten, writeAnswer, writeHomes } from './dialSkillFiles.js'
 
 const folders: string[] = []
 afterEach(() => {
@@ -35,12 +35,12 @@ describe('whether each engine is On', () => {
       writeFileSync(join(dataDir, DIAL_SKILL_FILE), text)
       expect(readAnswers(dataDir)).toEqual({})
     }
-    // Good answers, padded one byte past the bound.
+    // Good answers, padded one byte past the bound: two full lists of the command's folders fit under it.
     const answers = '{"claude":true,"codex":true,"pad":""}'
-    writeFileSync(join(dataDir, DIAL_SKILL_FILE), answers.replace('""', `"${'x'.repeat(1025 - answers.length)}"`))
+    writeFileSync(join(dataDir, DIAL_SKILL_FILE), answers.replace('""', `"${'x'.repeat(256 * 1024 + 1 - answers.length)}"`))
     expect(readAnswers(dataDir)).toEqual({})
     // At the bound it still reads.
-    writeFileSync(join(dataDir, DIAL_SKILL_FILE), answers.replace('""', `"${'x'.repeat(1024 - answers.length)}"`))
+    writeFileSync(join(dataDir, DIAL_SKILL_FILE), answers.replace('""', `"${'x'.repeat(256 * 1024 - answers.length)}"`))
     expect(readAnswers(dataDir)).toEqual({ claude: true, codex: true })
   })
 
@@ -60,6 +60,28 @@ describe('whether each engine is On', () => {
     expect(statSync(join(dataDir, DIAL_SKILL_FILE)).mode & 0o777).toBe(0o600)
     // The temp file it wrote first is gone.
     expect(readdirSync(dataDir)).toEqual([DIAL_SKILL_FILE])
+  })
+
+  it('the command\'s folders: saved with an answer, kept by the next, read like a list', () => {
+    const dataDir = aDataDir()
+    expect(readWritten(dataDir)).toEqual({ claude: [], codex: [] })
+    expect(writeAnswer(dataDir, 'codex', true, ['/Users/someone/.codex/skills'])).toBeUndefined()
+    expect(writeAnswer(dataDir, 'claude', true, ['/Users/someone/.claude/skills', 'relative/skills', '/Users/someone/.claude/skills'])).toBeUndefined()
+    // An answer given no folders keeps them.
+    expect(writeAnswer(dataDir, 'codex', false)).toBeUndefined()
+    expect(readAnswers(dataDir)).toEqual({ claude: true, codex: false })
+    expect(readWritten(dataDir)).toEqual({ claude: ['/Users/someone/.claude/skills'], codex: ['/Users/someone/.codex/skills'] })
+    // Emptied, the file holds the answers alone.
+    writeAnswer(dataDir, 'claude', false, [])
+    writeAnswer(dataDir, 'codex', false, [])
+    expect(JSON.parse(readFileSync(join(dataDir, DIAL_SKILL_FILE), 'utf8'))).toEqual({ claude: false, codex: false })
+    // Two full lists of the longest paths read back whole, 64 an engine.
+    const longest = Array.from({ length: 70 }, (_, i) => `/${String(i).padStart(2, '0')}${'a'.repeat(1021)}`)
+    expect(Buffer.byteLength(longest[0])).toBe(1024)
+    writeAnswer(dataDir, 'claude', true, longest)
+    writeAnswer(dataDir, 'codex', true, longest)
+    expect(readWritten(dataDir)).toEqual({ claude: longest.slice(0, MAX_HOMES), codex: longest.slice(0, MAX_HOMES) })
+    expect(readAnswers(dataDir)).toEqual({ claude: true, codex: true })
   })
 
   it('a write that fails says its code and leaves the file', () => {

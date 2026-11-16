@@ -295,11 +295,37 @@ describe('harness device claude', () => {
 })
 
 describe('the dial skill', () => {
-  it('claude enable writes the skill into the default home and sets On', async () => {
+  it('claude enable writes the skill into the default home and sets On, with the folder it wrote', async () => {
     const dataDir = folder()
     expect(await device(['claude', 'enable'], { dataDir })).toEqual({ code: 0, out: [], err: [] })
     expect(readFileSync(skillAt(claudeHome), 'utf8')).toBe(DIAL_SKILL)
-    expect(answers(dataDir)).toEqual({ claude: true })
+    expect(answers(dataDir)).toEqual({ claude: true, homes: { claude: [realpathSync(join(claudeHome, 'skills'))], codex: [] } })
+  })
+
+  it('disable removes the skill an enable run with another home wrote', async () => {
+    // The menu-bar app runs the command with neither CODEX_HOME nor CLAUDE_CONFIG_DIR; a person may run it with one.
+    const dataDir = folder()
+    const [codexThen, codexNow] = [folder(), folder()]
+    expect(await device(['codex', 'enable'], { dataDir, codexHome: codexThen })).toEqual({ code: 0, out: [], err: [] })
+    expect(await device(['codex', 'disable'], { dataDir, codexHome: codexNow })).toEqual({ code: 0, out: [], err: [] })
+    expect(existsSync(join(codexThen, 'skills', 'dial'))).toBe(false)
+
+    const claudeThen = claudeHome
+    expect(await device(['claude', 'enable'], { dataDir })).toEqual({ code: 0, out: [], err: [] })
+    vi.stubEnv('CLAUDE_CONFIG_DIR', folder())
+    expect(await device(['claude', 'disable'], { dataDir })).toEqual({ code: 0, out: [], err: [] })
+    expect(existsSync(join(claudeThen, 'skills', 'dial'))).toBe(false)
+    // Nothing is left to find: the record holds no folder.
+    expect(answers(dataDir)).toEqual({ claude: false, codex: false })
+  })
+
+  it('an enable into a home no record could hold writes no skill', async () => {
+    const dataDir = folder()
+    // U+0085 is a control character the record refuses: written, the skill would be one a Turn off never finds.
+    const codexHome = join(folder(), 'co\u0085dex')
+    expect(await device(['codex', 'enable'], { dataDir, codexHome })).toEqual({ code: 1, out: [], err: ['Could not write the Codex skill.'] })
+    expect(existsSync(join(codexHome, 'skills', 'dial'))).toBe(false)
+    expect(answers(dataDir)).toEqual({ codex: true })
   })
 
   it('an enable that fails writes nothing', async () => {
@@ -332,7 +358,8 @@ describe('the dial skill', () => {
       const after = lstatSync(path)
       expect([after.ino, after.mode, after.mtimeMs], engine).toEqual([before.ino, before.mode, before.mtimeMs])
       expect(readFileSync(path, 'utf8'), engine).toBe(PERSONS)
-      expect(answers(dataDir), engine).toEqual({ [engine]: true })
+      const homes = { claude: [], codex: [], [engine]: [realpathSync(dirname(dirname(path)))] }
+      expect(answers(dataDir), engine).toEqual({ [engine]: true, homes })
     }
   })
 
@@ -422,7 +449,7 @@ describe('the dial skill', () => {
     const codexHome = join(folder(), 'codex')
     expect(await device(['codex', 'enable'], { dataDir, codexHome })).toEqual({ code: 0, out: [], err: [] })
     expect(readFileSync(skillAt(codexHome), 'utf8')).toBe(DIAL_SKILL)
-    expect(answers(dataDir)).toEqual({ codex: true })
+    expect(answers(dataDir)).toEqual({ codex: true, homes: { claude: [], codex: [realpathSync(join(codexHome, 'skills'))] } })
     expect(await device(['codex', 'status', '--json'], { dataDir, codexHome })).toEqual(status(true))
 
     const others = [folder(), folder()]
