@@ -118,9 +118,12 @@ function orcaBinary(deps: OrcaDeps): string | null {
 export interface OrcaWorktrees {
   worktreeOf(handle: string): string | undefined
   log(line: string): void
+  /** Told as `terminal switch` starts after an activate: an activate can take long, and Orca's focus line for the pane
+   *  follows the switch, so the dial's echo of it is kept from then too. */
+  switching(handle: string): void
 }
 
-const NO_WORKTREES: OrcaWorktrees = { worktreeOf: () => undefined, log: () => {} }
+const NO_WORKTREES: OrcaWorktrees = { worktreeOf: () => undefined, log: () => {}, switching: () => {} }
 
 function createOrcaActions(deps: OrcaDeps, worktrees: OrcaWorktrees): { send(handle: string, text: string): Promise<boolean>; switchTo(handle: string): Promise<PaneSwitch> } {
   // Per terminal, the switch under way: a second one is that same run. A swipe's rest runs a switch, and a tap 0.4 to 1 s
@@ -167,7 +170,10 @@ function createOrcaActions(deps: OrcaDeps, worktrees: OrcaWorktrees): { send(han
       if (!orca) return 'failed'
       const switched = () => deps.run(orca, ['terminal', 'switch', '--terminal', handle, '--json'], RUN_TIMEOUT_MS)
       const worktreeId = worktrees.worktreeOf(handle)
-      const run = (worktreeId === undefined ? switched() : activate(orca, worktreeId).then(switched))
+      const run = (worktreeId === undefined ? switched() : activate(orca, worktreeId).then(() => {
+        worktrees.switching(handle)
+        return switched()
+      }))
         .then(({ code }): PaneSwitch => (code === 0 ? 'ok' : 'failed'))
         .finally(() => switching.delete(handle))
       switching.set(handle, run)

@@ -102,7 +102,8 @@ types (1.4.256's bundle): a group tree is `group` or `split`, a pane tree `termi
   `::` and a folder), never a shell's. The devices keep the latest landed read's and hand the adapter a lookup. No id
   known: the switch alone. An activate that fails, throws or times out still lets the switch run, whose outcome is the
   answer, and logs one line. The per-handle dedupe and the busy-while-typing rule cover the two commands as one; words
-  never activate.
+  never activate. An activate can take long, and Orca's focus line for the pane follows the switch: the echo guard
+  (section 2) keeps the switch from the rest's or the tap's start and again from the switch command's own start.
 
 ### 2. Focus follow (devices process)
 

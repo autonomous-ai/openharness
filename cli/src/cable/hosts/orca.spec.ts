@@ -450,6 +450,8 @@ describe('a switch activates its terminal\'s worktree first', () => {
     const waiting: Array<(code?: number | null) => void> = []
     const refusing: Array<() => void> = []
     const lines: string[] = []
+    // Each switch told as it starts, with how many commands had run.
+    const told: Array<[string, number]> = []
     const worktrees = new Map([[HANDLE, WT]])
     const adapter = createOrcaAdapter({
       ...quietDeps(),
@@ -460,13 +462,13 @@ describe('a switch activates its terminal\'s worktree first', () => {
           refusing.push(() => reject(new Error('made up')))
         })
       },
-    }, { worktreeOf: (handle) => worktrees.get(handle), log: (line) => { lines.push(line) } })
+    }, { worktreeOf: (handle) => worktrees.get(handle), log: (line) => { lines.push(line) }, switching: (handle) => { told.push([handle, calls.length]) } })
     const settled = () => new Promise((resolve) => setImmediate(resolve))
-    return { calls, waiting, refusing, lines, adapter, settled }
+    return { calls, waiting, refusing, lines, told, adapter, settled }
   }
 
-  it('with its worktree known, a rest and a tap run worktree activate, then the switch once it has ended', async () => {
-    const { calls, waiting, lines, adapter, settled } = activating()
+  it('with its worktree known, a rest and a tap run worktree activate, then the switch once it has ended, told as it starts', async () => {
+    const { calls, waiting, lines, told, adapter, settled } = activating()
     const shown = adapter.show(pane(HANDLE), 'a1')
     await settled()
     expect(calls).toEqual([activated])
@@ -483,16 +485,18 @@ describe('a switch activates its terminal\'s worktree first', () => {
     expect(await focused).toBe(true)
     expect(calls.slice(2)).toEqual([activated, switched(HANDLE)])
     expect(lines).toEqual([])
+    expect(told).toEqual([[HANDLE, 1], [HANDLE, 3]])
   })
 
-  it('with no worktree known, the switch alone', async () => {
-    const { calls, waiting, adapter, settled } = activating()
+  it('with no worktree known, the switch alone, told as nothing more: the rest that started it was', async () => {
+    const { calls, waiting, told, adapter, settled } = activating()
     const shown = adapter.show(pane(OTHER), 'a1')
     await settled()
     expect(calls).toEqual([switched(OTHER)])
     waiting[0]()
     expect(await shown).toBe('ok')
     expect(calls).toHaveLength(1)
+    expect(told).toEqual([])
   })
 
   it('an activate that fails, times out or throws: the switch still runs, its outcome is the answer, and one line says it with no id', async () => {
@@ -519,7 +523,7 @@ describe('a switch activates its terminal\'s worktree first', () => {
   })
 
   it('a switch while one activates is that same run; words wait for both; a switch while words are typed is busy and activates nothing', async () => {
-    const { calls, waiting, adapter, settled } = activating()
+    const { calls, waiting, told, adapter, settled } = activating()
     const rest = adapter.show(pane(HANDLE), 'a1')
     const tap = adapter.show(pane(HANDLE), 'a1')
     const typed = adapter.type(pane(HANDLE), 'one', 'claude')
@@ -537,6 +541,7 @@ describe('a switch activates its terminal\'s worktree first', () => {
     waiting[2]()
     expect(await typed).toBe(true)
     expect(calls).toHaveLength(3)
+    expect(told).toEqual([[HANDLE, 1]])
   })
 })
 
@@ -826,7 +831,7 @@ describe("Orca's tab order", () => {
     const stdout = listedIn([inWorktree(1, 'a\nb'), inWorktree(2, WT)])
     const worktrees = (await reads({}, [{ stdout }]).orca.orcaTabs())!.worktrees
     const { calls, run } = recordingRun()
-    const adapter = createOrcaAdapter({ ...quietDeps(), run }, { worktreeOf: (handle) => worktrees.get(handle), log: () => {} })
+    const adapter = createOrcaAdapter({ ...quietDeps(), run }, { worktreeOf: (handle) => worktrees.get(handle), log: () => {}, switching: () => {} })
     expect(await adapter.show({ adapter: 'orca', id: H(1) }, 'a1')).toBe('ok')
     expect(await adapter.show({ adapter: 'orca', id: H(2) }, 'a1')).toBe('ok')
     expect(calls.map((call) => call.args)).toEqual([
