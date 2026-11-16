@@ -203,6 +203,20 @@ class ReleaseDeviceTests(unittest.TestCase):
         self.assertIn("v0.1.0_device", result.stderr)
         self.assertEqual(self.tags(self.origin), ["v0.1.0_device"])
 
+    def test_a_refused_push_leaves_no_tag_and_a_rerun_releases(self):
+        hook = self.origin / "hooks" / "pre-receive"
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        result = self.run_script()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("could not push v0.1.1_device", result.stderr)
+        self.assertEqual(self.tags(self.repo), ["v0.1.0_device"])
+        self.assertFalse(self.gh_log.exists())
+        hook.unlink()
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.tags(self.origin), ["v0.1.0_device", "v0.1.1_device"])
+
     def test_a_dispatch_that_fails_after_the_push_says_what_to_run(self):
         result = self.run_script(fail_gh=True)
         self.assertEqual(result.returncode, 1, result.stdout)
