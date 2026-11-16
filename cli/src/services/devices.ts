@@ -31,7 +31,7 @@ import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
 import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
 import { createCodexAppAdapter } from '../cable/hosts/codexApp.js'
 import { codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
-import { createHcClient, hcClientDeps, type HcClient } from '../cable/hosts/hcClient.js'
+import { createHcClient, hcClientDeps, hcSocketPath, type HcClient } from '../cable/hosts/hcClient.js'
 import { HcSource } from '../cable/hosts/hcSource.js'
 import { createHerdrAdapter } from '../cable/hosts/herdr.js'
 import { createHerdrAppAdapter } from '../cable/hosts/herdrApp.js'
@@ -300,7 +300,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  it. */
   const hcAt = hcClientDeps()
   const hcClient = deps.hc ?? createHcClient(hcAt)
-  const herdrApp = createHerdrAppAdapter({ ...apps, client: hcClient, log, bin: openBin,
+  /** The devices follow the default hc session, the one whose addresses the hook sends (notify.mjs): its socket is
+   *  where the daemon's own environment, with no session or socket named, puts it. */
+  const hookIds = hcAt.socketPath === hcSocketPath({ ...process.env, HC_SESSION: undefined, HC_SOCKET: undefined }, hcAt.home)
+  const herdrApp = createHerdrAppAdapter({ ...apps, client: hcClient, log, bin: openBin, hookIds,
     inFront: () => cableHost.latestFront() === 'herdr', shows: (address) => hcSource?.shows(address) === true })
   const hcPane = (address: string): Pane => ({ adapter: herdrApp.id, id: address })
   const claude = createClaudeAppAdapter({ ...apps, inFront: () => cableHost.latestFront() === 'claude' })
