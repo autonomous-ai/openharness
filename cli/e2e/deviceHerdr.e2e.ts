@@ -251,7 +251,7 @@ describe.skipIf(process.platform === 'win32')('a stale herdr socket', () => {
     const first = herdrLines(d)
     expect([['[herdr] socket · stale'], ['[herdr] retry · 1', '[herdr] socket · stale']]).toContainEqual(first)
 
-    // Plugged in again once the devices saw it go: the same socket is said nothing of, and tried no more.
+    // Plugged in again once the devices saw it go: the same socket is said nothing of, and given no retry.
     const closed = lines(d, 'cable: closed')
     await desk.unplug('E2E-A')
     await until('the dial gone', () => lines(d, 'cable: closed') > closed, 30_000, 50)
