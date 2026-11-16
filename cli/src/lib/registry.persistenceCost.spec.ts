@@ -54,6 +54,8 @@ const disk = (): Row[] => JSON.parse(readFileSync(io.file, 'utf8')) as Row[]
 const row = (rows: Row[], id = A) => rows.find(value => value.agentId === id)!
 const isPersistedRow = (value: unknown) => !!value && typeof value === 'object'
   && Object.hasOwn(value, 'schemaVersion') && Object.hasOwn(value, 'agentId')
+const isOwnershipRecord = (value: unknown) => !!value && typeof value === 'object'
+  && Object.hasOwn(value, 'agentId') && Object.hasOwn(value, 'evidenceRevision') && !isPersistedRow(value)
 function within<T>(pending: Promise<T>, name: string, ms = 5_000): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(name + ' deadline')), ms)
@@ -122,11 +124,54 @@ it('fingerprints each unchanged row once while preserving the exact durable byte
   const stringify = vi.spyOn(JSON, 'stringify')
   await registry!.flush()
   const fingerprints = stringify.mock.calls.filter(([value, replacer]) => isPersistedRow(value) && typeof replacer === 'function').length
+  const owners = stringify.mock.calls.filter(([value, replacer]) => isOwnershipRecord(value) && typeof replacer === 'function').length
   stringify.mockRestore()
   expect(readFileSync(io.file, 'utf8')).toBe(before)
   expect(registry!.byAgent(A)).toBe(live)
   expect(io.durable).toEqual([])
   expect(fingerprints).toBeLessThanOrEqual(2)
+  // An awaited observation still needs its owner fence if the private disk image has changed.
+  expect(owners).toBe(2)
+})
+
+it('captures owners for the awaited flush, without repeating that unused work in its best-effort save', async () => {
+  const live = registry!.byAgent(A)!, peer = row(disk(), B)
+  const stringify = vi.spyOn(JSON, 'stringify')
+  expect(registry!.setCwd(A, '/fixture/changed')).toBe(true)
+  await registry!.flush()
+  const owners = stringify.mock.calls.filter(([value, replacer]) => isOwnershipRecord(value) && typeof replacer === 'function').length
+  stringify.mockRestore()
+  expect(registry!.byAgent(A)).toBe(live)
+  expect(registry!.byProcess('claude', live.processIdentity!)).toBe(live)
+  expect(row(disk())).toMatchObject({ cwd: '/fixture/changed', launchArgs: ['--before'] })
+  expect(row(disk(), B)).toEqual(peer)
+  expect(io.durable).toHaveLength(1)
+  expect(owners).toBe(2)
+})
+
+it.each(['flush', 'transaction'] as const)('refuses an acknowledged %s observation whose owner changes during preparation', async via => {
+  const live = registry!.byAgent(A)!, peer = row(disk(), B), held = holdPreparation()
+  let pending: Promise<unknown>
+  if (via === 'flush') {
+    live.cwd = '/fixture/acknowledged-observation'
+    pending = track(registry!.flush())
+  } else {
+    pending = track(registry!.transaction(() => {
+      expect(registry!.setCwd(A, '/fixture/acknowledged-observation')).toBe(true)
+    }))
+  }
+  await held.entered()
+  expect(io.durable).toEqual([])
+  expect(row(disk()).cwd).not.toBe('/fixture/acknowledged-observation')
+  expect(registry!.updateProcessIdentity(A, { ...live.processIdentity!, startMarker: 'replacement' })).toBe(true)
+  held.release()
+  await expect(pending).rejects.toThrow('owner')
+  await registry!.flush()
+  expect(registry!.byAgent(A)).toBe(live)
+  expect(row(disk())).toMatchObject({ cwd: '/fixture/acknowledged-observation', processIdentity: { startMarker: 'replacement' } })
+  expect(row(disk(), B)).toEqual(peer)
+  expect(io.durable.length).toBeGreaterThan(0)
+  expect(io.durable.every(image => (row(image).processIdentity as RegisteredSession['processIdentity'])?.startMarker === 'replacement')).toBe(true)
 })
 
 it('copies only the two pre-await row images for a changed observation and its public flush', async () => {

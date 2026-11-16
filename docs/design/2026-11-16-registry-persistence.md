@@ -1190,3 +1190,76 @@ on macOS/Node 24.22.2 (`core-registry-bounded-waits-green.log`). TypeScript pass
 (`core-registry-bounded-waits-types.log`). Teardown still tolerates setup failure
 before the registry exists; losing readiness listeners are aborted. These
 test-only changes do not alter or clear the failed production cost evidence.
+
+## Ownership capture only when its final check runs
+
+Prepared on `c022f5a4b68e5c1b4730155fd724231ec4f0d841`, before runtime edits or
+test execution. Root's fixed old/c022 attribution pair completed both private
+workloads, provenance checks and cleanup. Its manifest is
+`/tmp/core-registry-attribution-v1-pair/manifest.json`, SHA-256
+`0aa63238d2161a0d06b70449bafa2d84db38f1eaa7d5da0efc2127671412a87c`.
+At 160 rows, twenty unchanged flushes captured 3,200 ownership identities; twenty
+changed `setCwd`/`flush` pairs captured 6,400. The diagnostic's caller counts and
+profiled fingerprint work support removing unused captures. Inspector samples
+are stack residency, not CPU; wrapper overhead is included. The earlier matched
+ABBA CPU/RSS/latency failure remains, and no improvement is yet measured here.
+
+### Design
+
+`persist` captures `beforeOwners` unconditionally, but only its final
+`if (strict) verifyPreparedOwners(...)` consumes it. All binding candidates pass
+`true`. Public flush, exit flush and transaction completion pass the truthy
+`'observation'` mode. Only the private best-effort `save()` leaves the mode false;
+its unused ownership strings and table walk can be omitted. Keep the existing
+mode and final guard, constructing an empty ownership map for that false branch.
+The proposed runtime edit is limited to that map's initializer. It adds no cache,
+option, retained identity or asynchronous boundary.
+
+This saves one 160-row ownership capture per changed `setCwd`/`flush` pair. The
+later awaited flush still captures every owner even when its local image is
+unchanged, because a different durable file may require publication. Unchanged
+flushes therefore retain all 3,200 captures in the measured twenty-call workload.
+Do not change the condition to `strict === true`: that would weaken acknowledged
+observation and transaction checks. Immutable row/candidate copies, exact-byte
+reads, changed-row calculation, owner/current/native/cancellation checks, rebase,
+intent revisions, lock token, final rename, directory fsync and uncertain-group
+recovery remain as they are. No other fingerprint reuse is part of this change.
+
+- Growth: one transient ownership table contains no entries on a best-effort save;
+  existing image, queue and retention bounds remain. No stored data is added.
+- Concurrency: the same single writer and cross-process lock run. Ownership is
+  still captured before the first await on every path that checks it later.
+- Read cost: omit only the unused live-table ownership projection. All exact
+  private-file and locked reads remain.
+- Scale: deterministic forwarded call counts cover the avoided work. The same
+  16/160-row matched workload must still establish CPU/RSS/latency acceptance;
+  this local improvement alone cannot clear it.
+- Compatibility: persisted bytes, public methods and acknowledged outcomes are
+  unchanged for supported old/new writers and clients.
+- Migration and rollback: no migration; rollback is a code revert.
+- Audience and identity: no data is newly exposed; no login or authority changes.
+- Failure: existing named failures, deadlines, cancellation and uncertain durable
+  outcomes remain. No failure becomes a best-effort result.
+- Platforms: TypeScript daemon on macOS, Linux and Windows; no platform or process
+  launch change. Native evidence for this proposal is still pending root's run.
+
+### Caller RED and controls, prepared only
+
+Extend `registry.persistenceCost.spec.ts` with a two-row public
+`setCwd`/`flush` case. Forward `JSON.stringify` unchanged and count only the
+ownership-record shape used by `ownershipIdentity`, requiring two captures for
+the awaited flush instead of the current four. Check the actual durable cwd,
+unchanged peer, exact live owner reference and one published image. This is a
+work-budget regression, not a timing assertion or a substitute for measurement.
+
+The unchanged-flush control explicitly requires both ownership captures to stay.
+Two controls hold actual prepared-image fsync after a public flush or transaction,
+replace the live process identity while it waits, and require the acknowledged
+write to reject without publishing its old-owner image. The queued replacement
+must then persist. Existing strict close cancellation/replacement, immutable
+nested-alias/deletion, repeated same-value cancellation and uncertain directory
+durability controls remain unchanged. No filesystem result or authority answer
+is replaced; the existing fixture forwards I/O and bounds every wait/teardown.
+
+No test, typecheck, build or diagnostic has run for this proposal. Root reviews
+the Design and prepared RED before execution and any runtime correction.
