@@ -143,7 +143,7 @@ esac
     await plugged(desk)
     const claudeHome = dirname(d.env.CLAUDE_PROJECTS_DIR!)
     await until('Claude Code\'s skill', () => read(skillOf(claudeHome)) === DIAL_SKILL, 45_000, 100)
-    await until('the pass in the log', () => d.log().includes('dial skill: claude wrote 1 removed 0, codex wrote 0 removed 0'), 30_000, 50)
+    await until('the pass in the log', () => d.log().includes('dial skill: claude wrote 1 removed 0 failed 0, codex wrote 0 removed 0 failed 0'), 30_000, 50)
   })
 
   it('a Codex in another home gets the skill once the scan sees it, Turn off removes every copy, and Turn on brings it back', async () => {
@@ -163,7 +163,7 @@ esac
     await plugged(desk)
     await until('the skill in the other home', () => read(skillOf(other)) === DIAL_SKILL, 45_000, 100)
     // The scan's report is said once its pass is over, so every owner it read was handled by then.
-    await until('the pass in the log', () => /dial skill: claude wrote 0 removed 0, codex wrote [1-9]/.test(d.log()), 30_000, 50)
+    await until('the pass in the log', () => /dial skill: claude wrote 0 removed 0 failed 0, codex wrote [1-9]/.test(d.log()), 30_000, 50)
     const listed = JSON.parse(readFileSync(join(d.dataDir, 'dial-skill-homes.json'), 'utf8')) as { codex: string[] }
     expect([...listed.codex].sort()).toEqual([join(d.env.CODEX_HOME!, 'skills'), join(other, 'skills')].sort())
     expect(read(skillOf(mine))).toBe(theirs)

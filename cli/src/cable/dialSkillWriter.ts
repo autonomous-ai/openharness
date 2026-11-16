@@ -29,7 +29,7 @@ export interface DialSkillWriter {
   scanned(owners: Iterable<RolloutOwner>): void
 }
 
-type Counts = Record<DialEngine, { wrote: number; removed: number }>
+type Counts = Record<DialEngine, { wrote: number; removed: number; failed: number }>
 /** What became of one home: written, or found holding a skill (`done`); given none for a reason the next scan would
  *  meet again (`refused`); or the engine read Off and was handled as Off (`off`). */
 type Outcome = 'done' | 'refused' | 'off'
@@ -72,7 +72,18 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
     deps.log(line)
   }
 
-  const save = (): boolean => writeHomes(deps.dataDir, listed) === undefined
+  /** One file's result, in the pass's counts. */
+  const tally = (counts: Counts, engine: DialEngine, result: string): void => {
+    if (result === 'written') counts[engine].wrote++
+    else if (result === 'removed') counts[engine].removed++
+    else if (result === 'failed') counts[engine].failed++
+  }
+
+  const save = (counts: Counts, engine: DialEngine): boolean => {
+    if (writeHomes(deps.dataDir, listed) === undefined) return true
+    counts[engine].failed++
+    return false
+  }
 
   /** The folders [engine]'s skill may be in: its list, the folders the command recorded and its default home's. */
   const foldersOf = (engine: DialEngine): Set<string | null> =>
@@ -89,13 +100,13 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
     for (const skills of foldersOf(engine)) {
       if (skills === null || shared.has(skills)) continue
       const result = removeSkill(skills)
-      if (result === 'removed') counts[engine].removed++
+      tally(counts, engine, result)
       if (result === 'failed') failed.add(skills)
     }
     const kept = listed[engine].filter((skills) => failed.has(skills))
     if (kept.length === listed[engine].length) return
     listed[engine] = kept
-    save()
+    save(counts, engine)
   }
 
   /** After a write: a Turn off between the read that let it in and the write removed from the folders as they stood,
@@ -117,7 +128,7 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
     // Homes linked to one skills folder (an Orca profile's) are one write, listed once.
     if (found !== null && listed[engine].includes(found)) {
       const result = writeSkill(found)
-      if (result === 'written') counts[engine].wrote++
+      tally(counts, engine, result)
       if (result === 'failed') return 'refused'
       return result === 'written' && !stillOn(engine, counts) ? 'off' : 'done'
     }
@@ -137,15 +148,15 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
       return 'refused'
     }
     const result = writeSkill(skills)
-    if (result === 'written') counts[engine].wrote++
+    tally(counts, engine, result)
     if (result === 'failed') return 'refused'
     if (result === 'theirs') return 'done'
     listed[engine].push(skills)
-    if (!save()) {
+    if (!save(counts, engine)) {
       listed[engine].pop()
       // Unlisted, a Turn off would never find what this wrote. One already there may be the command's, which its own
       // Turn off finds.
-      if (result === 'written' && removeSkill(skills) === 'removed') counts[engine].removed++
+      if (result === 'written') tally(counts, engine, removeSkill(skills))
       return 'refused'
     }
     return stillOn(engine, counts) ? 'done' : 'off'
@@ -164,15 +175,15 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
       let wrote = false
       const kept = listed[engine].filter((skills) => {
         const state = ownDirectory(skills, deps.uid)
-        if (state === 'ok' && writeSkill(skills) === 'written') {
-          counts[engine].wrote++
-          wrote = true
-        }
-        return state !== 'missing'
+        if (state !== 'ok') return state !== 'missing'
+        const result = writeSkill(skills)
+        tally(counts, engine, result)
+        wrote ||= result === 'written'
+        return true
       })
       if (kept.length !== listed[engine].length) {
         listed[engine] = kept
-        save()
+        save(counts, engine)
       }
       if (wrote && !stillOn(engine, counts)) continue
       // Only the command makes a default home that is missing.
@@ -183,11 +194,14 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
   }
 
   const report = (counts: Counts): void => {
-    if (!ENGINES.some((engine) => counts[engine].wrote || counts[engine].removed)) return
-    deps.log(`dial skill: ${ENGINES.map((engine) => `${engine} wrote ${counts[engine].wrote} removed ${counts[engine].removed}`).join(', ')}`)
+    if (!ENGINES.some((engine) => counts[engine].wrote || counts[engine].removed || counts[engine].failed)) return
+    deps.log(`dial skill: ${ENGINES.map((engine) => {
+      const { wrote, removed, failed } = counts[engine]
+      return `${engine} wrote ${wrote} removed ${removed} failed ${failed}`
+    }).join(', ')}`)
   }
 
-  const zero = (): Counts => ({ claude: { wrote: 0, removed: 0 }, codex: { wrote: 0, removed: 0 } })
+  const zero = (): Counts => ({ claude: { wrote: 0, removed: 0, failed: 0 }, codex: { wrote: 0, removed: 0, failed: 0 } })
 
   return {
     started() {
