@@ -1,6 +1,7 @@
 // The notice desk: an agent's one line to the dial, as a card the dial pins until the agent's next turn. The devices
 // process holds it; the core knows nothing of notices.
 
+import { truncateUtf8 } from '../lib/deviceRecentTrim.js'
 import { NoticeLimits, type NoticeAsk, type NoticeResult } from '../lib/dialNotice.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import { SHOWN_ONLY_PREFIX } from './cableSession.js'
@@ -30,6 +31,13 @@ export interface NoticesDeps {
 }
 
 export const NOTICES_PENDING_MAX = 20
+/** The bytes of a line the dial keeps whole: its drawer row cuts at 239, and a question of 256 or more reads "This
+ *  question needs the desktop" (firmware ui_habitat.c). 120 letters can be 360 bytes. */
+const LINE_MAX_BYTES = 239
+
+/** The line within LINE_MAX_BYTES, cut between letters, with `…` when cut. */
+const fitBytes = (line: string): string =>
+  Buffer.byteLength(line) <= LINE_MAX_BYTES ? line : `${truncateUtf8(line, LINE_MAX_BYTES - Buffer.byteLength('…'))}…`
 
 interface Pending { id: string; line: string; questions: unknown; host: string; who?: NoticeCaller['who'] }
 
@@ -55,7 +63,7 @@ export class Notices {
     this.ended(caller.agentId)
     if (this.pending.size >= NOTICES_PENDING_MAX) this.ended(this.pending.keys().next().value!)
     const id = SHOWN_ONLY_PREFIX + this.deps.uuid()
-    const line = roundDrawable(ask.text)
+    const line = fitBytes(roundDrawable(ask.text))
     const questions = [{ key: 'notice', q: line, options: [`In ${hostDisplayName(caller.host)}`] }]
     this.pending.set(caller.agentId, { id, line, questions, host: caller.host, who: caller.who })
     this.reask(caller.agentId)
