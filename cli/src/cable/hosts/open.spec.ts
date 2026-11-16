@@ -542,6 +542,22 @@ describe('a pick on the dial brings its app forward', () => {
     expect(calls).toHaveLength(3)
   })
 
+  // A tap on a Harness agent with no window turns the dial to Harness's ring and starts Desktop by desktop(): a pick
+  // waiting would come forward over Desktop and its settle turn the dial away.
+  it('a tap\'s start of Desktop while a bring runs runs at once and drops the waiting bring', async () => {
+    const { calls, pending, opener, bring } = held()
+    const first = bring('vscode')
+    const waiting = bring('ghostty')
+    const desktop = opener.desktop!()
+    expect(calls).toEqual([forward(VSCODE), forward('ai.autonomous.harness')])
+    expect(await settled(waiting)).toBeUndefined()
+    for (const run of pending) run.exit(0)
+    expect(await first).toBe('ok')
+    expect(await desktop).toBe(true)
+    await settled(first)
+    expect(calls).toHaveLength(2)
+  })
+
   it('off macOS there is no bring', () => {
     const { opener } = recorder({ platform: 'linux' })
     expect(opener.bring).toBeUndefined()
