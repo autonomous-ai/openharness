@@ -7,7 +7,7 @@ import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, wr
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { DIAL_SKILL_FILE, DIAL_SKILL_HOMES_FILE, MAX_HOMES, readAnswers, readHomes, writeAnswer, writeHomes } from './dialSkillFiles.js'
+import { DIAL_SKILL_FILE, DIAL_SKILL_HOMES_FILE, MAX_HOMES, listable, readAnswers, readHomes, writeAnswer, writeHomes } from './dialSkillFiles.js'
 
 const folders: string[] = []
 afterEach(() => {
@@ -109,6 +109,15 @@ describe('the skills folders Harness wrote into', () => {
     const longest = `/${'a'.repeat(1023)}`
     writeFileSync(join(dataDir, DIAL_SKILL_HOMES_FILE), JSON.stringify({ claude: [], codex: [longest] }))
     expect(readHomes(dataDir)).toEqual({ claude: [], codex: [longest] })
+  })
+
+  it('listable: the one check of a path a list holds', () => {
+    for (const path of ['/Users/someone/.codex/skills', '/Users/someone/Library/Application Support/orca/ä/skills', `/${'a'.repeat(1023)}`]) {
+      expect(listable(path), path).toBe(true)
+    }
+    for (const path of ['relative/skills', '/Users/someone/../skills', '/Users/someone/skills/', '/Users/some\u0085one/skills', `/${'é'.repeat(600)}`]) {
+      expect(listable(path), JSON.stringify(path)).toBe(false)
+    }
   })
 
   it('homes: a list that is not one reads as two empty lists', () => {

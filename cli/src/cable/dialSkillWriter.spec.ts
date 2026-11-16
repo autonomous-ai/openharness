@@ -402,6 +402,19 @@ describe('the devices write the dial skill', () => {
     expect(existsSync(join(listed[0], 'dial'))).toBe(false)
   })
 
+  it('a home whose skills folder no list could hold gets no skill', () => {
+    // U+0085 is a control character the list refuses: written, the skill would be one a Turn off never finds.
+    const codexHome = join(folder(), 'co\u0085dex')
+    mkdirSync(codexHome)
+    const r = rig({ codexHome, answers: () => ({ codex: true }) })
+
+    r.writer.started()
+
+    expect(existsSync(join(codexHome, 'skills', 'dial'))).toBe(false)
+    expect(readHomes(r.dataDir).codex).toEqual([])
+    expect(r.lines).toEqual(['dial skill: path refused (shape)'])
+  })
+
   it('a home whose listing cannot be saved keeps no skill', () => {
     const r = rig({ answers: () => ({ codex: true }) })
     chmodSync(r.dataDir, 0o500)

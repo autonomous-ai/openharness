@@ -37,6 +37,8 @@ describe('a Codex home from a rollout path', () => {
       '/h/sessions/2026/11/16/rollout-a.jsonl/.',
       '/h\n/sessions/2026/11/16/rollout-a.jsonl',
       '/h\x7f/sessions/2026/11/16/rollout-a.jsonl',
+      // A control character past ASCII, as a list refuses it.
+      '/h\u0085/sessions/2026/11/16/rollout-a.jsonl',
       tooLong,
       `${dataDir}/sessions/2026/11/16/rollout-a.jsonl`,
       `${dataDir}/codex/sessions/2026/11/16/rollout-a.jsonl`,
