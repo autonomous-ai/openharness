@@ -1999,6 +1999,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     forgetSession,
     clients: backend,
     attachSession,
+    captureReader: attach.captureReader,
     announceSession,
     stoppedAgents,
     syncRecapPool,

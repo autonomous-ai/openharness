@@ -88,6 +88,7 @@ function setup(over: Partial<BindDeps> = {}) {
     forgetSession: vi.fn(),
     clients: { send: vi.fn() },
     attachSession: vi.fn(async () => true),
+    captureReader: vi.fn(() => () => false),
     announceSession: vi.fn(),
     stoppedAgents: { save: vi.fn(), finishResume: vi.fn(), get: vi.fn(() => null) },
     syncRecapPool: vi.fn(),

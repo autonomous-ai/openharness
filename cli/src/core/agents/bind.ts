@@ -79,6 +79,7 @@ export interface BindDeps {
   /** The app. */
   clients: { send(frame: { type: string; payload: Record<string, unknown> }): void }
   attachSession: (session: RegisteredSession, reset?: boolean, replayCursorFromStart?: boolean, replayFromStart?: boolean) => Promise<boolean>
+  captureReader: (session: RegisteredSession) => (confirmed: RegisteredSession) => boolean
   announceSession: (session: RegisteredSession) => void
   stoppedAgents: Pick<StoppedAgentStore, 'save' | 'finishResume' | 'get'>
   syncRecapPool: () => void
@@ -115,7 +116,7 @@ interface BindPass {
 }
 
 export function createBinding({
-  registry, mirror, forgetSession, clients, attachSession, announceSession, stoppedAgents, syncRecapPool,
+  registry, mirror, forgetSession, clients, attachSession, captureReader, announceSession, stoppedAgents, syncRecapPool,
   input, submitAgent, deviceInput, homes, owners, capturePane, openclawPaneRead, openclawPaneDue, openclawStateDir, hermesTerminal,
 }: BindDeps) {
   /**
@@ -517,6 +518,7 @@ export function createBinding({
         // `/new`, `/resume`, a branch and a compression split all rewrite the record: the rotation the Copilot switch
         // takes, so the reader, the recaps and the apps see a session change as they saw one from a hook.
         const was = agent.sessionId
+        const keepReader = captureReader(agent)
         const rotated = commit({
           engine: 'hermes',
           sessionId: answer.sessionId,
@@ -528,6 +530,7 @@ export function createBinding({
           hookEvent: 'HermesTerminal',
         })
         if (!rotated) return
+        if (!rotated.isNew && !rotated.rebound && !rotated.evicted && !rotated.orphaned && keepReader(rotated.entry)) return
         if (rotated.isNew) console.log(`[discovery] ${sid(agent.agentId)} switched hermes session ${sid(was)} → ${sid(answer.sessionId)}`)
         // Same-conversation confirmation fills boundAt and revokes a Resume attach still reading. Follow its new
         // identity too: the tracker waits for the obsolete attempt; later terminal passes settle to 'wait'.

@@ -394,6 +394,13 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     },
     get: (sessionId: string): OtherStream | undefined => handles.get(sessionId),
     has: (sessionId: string): boolean => handles.has(sessionId),
+    /** A retained handle alone is not a running reader: loss and recovery keep its turn state here. */
+    ready(sessionId: string): boolean {
+      const handle = handles.get(sessionId), session = deps.bySession(sessionId)
+      return !!handle && !!session && handle.engine === session.engine && connected && !stopped && waiting && !endBackoff
+        && !handle.orphan && !handle.closing && byToken.get(handle.token) === handle
+        && !pending.has(sessionId) && !unopened.has(sessionId) && !deps.stopping?.(session)
+    },
     /** A Stop's or a backstop's close: what the parser emits closing; when the worker does not answer, the core closes the
      *  turn itself and says so, so a Stop never leaves a turn open. */
     async close(sessionId: string, how: { abort?: boolean; error?: boolean; stop?: boolean }): Promise<LiveEvent[]> {

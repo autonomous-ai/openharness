@@ -10,10 +10,12 @@ This source defect is independently reproduced with deterministic caller tests. 
 `6e06272d1a` also timed out after Resume confirmation without another completed attachment, but its log does not
 establish which guard rejected that particular attempt. Do not attribute that run's exact interleaving to this proof.
 
-For every successful Hermes terminal commit, call the existing `followRegistered`; emit the session-switch log
-only when the conversation is new. Keep every identity and cancellation guard. `AttachTracker` already compares
-the captured identity: the successor waits for an obsolete attachment, then runs, while an identical one joins.
-An already completed stream takes the ordinary reattach path. No new retry mechanism is needed.
+The initial correction called the existing `followRegistered` for every successful Hermes terminal commit and
+logged a switch only for a new conversation. `AttachTracker` already compares the captured identity: the successor
+waits for an obsolete attachment, then runs, while an identical one joins. Its completed-reader reattach passed
+functional acceptance but failed the matched core-CPU comparison. The [measured follow-up](2026-11-16-confirmed-reader-reuse.md)
+keeps an already completed, current reader through pure same-ID confirmation and preserves this successor for
+unfinished or unavailable readers. Every identity and cancellation guard remains; no new retry mechanism is needed.
 
 ## Design
 
@@ -25,8 +27,9 @@ Root reviewed this Design and the real-caller RED before runtime implementation 
   serializes old and new attempts. A stale native read, Close, process replacement or different conversation still
   revokes its operation. The successor receives the committed row, never authority copied from the stale attempt.
 - Read cost: one attachment for an actual native confirmation. There is no additional discovery query or ordinary
-  per-pass attachment; the terminal follower's next pass settles to `wait`. A completed parser is reused. Native
-  and affected cost acceptance remain required; earlier stopped-history numbers cover that unchanged workload only.
+  per-pass attachment; the terminal follower's next pass settles to `wait`. The follow-up avoids repeated archive
+  and terminal-probe work for a completed reader. Native and affected cost acceptance remain required; earlier
+  stopped-history numbers cover that unchanged workload only.
 - Scale: one confirmation per resumed process, with the existing terminal-follower and attach-pool bounds. No idle
   work is added. Required core gates, native completion and affected healthy-path CPU/latency check the limit.
 - Compatibility: no backend, client, wire or saved-row schema change. The resumed conversation gains the stream

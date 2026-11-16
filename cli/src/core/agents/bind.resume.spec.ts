@@ -18,6 +18,7 @@ import { STREAM_OPEN } from '../../engines/worker/otherStreamProtocol.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
 import type { registry as Registry } from '../../lib/registry.js'
 import { StoppedAgentStore } from '../../lib/stoppedAgents.js'
+import { createRelaunchMarks } from '../transcripts/relaunch.js'
 
 const source = ts.createSourceFile('main.ts', readFileSync(join(import.meta.dirname, '../main.ts'), 'utf8'), ts.ScriptTarget.Latest, true)
 let initializer: ts.Expression | undefined
@@ -64,7 +65,7 @@ afterEach(async () => {
   vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(directory, { recursive: true, force: true })
 })
 
-function setup(boundary: 'terminal' | 'store' | 'open' | 'none', pauseConfirmation = false) {
+function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none', pauseConfirmation = false) {
   registry.openProcessAgent({ engine: 'hermes', agentId, tmuxPane: '%41', cwd: directory, processIdentity: firstProcess })
   const saved = { ...registry.register({ engine: 'hermes', sessionId, tmuxPane: '%41', cwd: directory, processIdentity: firstProcess })!.entry }
   registry.removeAgent(agentId)
@@ -112,10 +113,11 @@ function setup(boundary: 'terminal' | 'store' | 'open' | 'none', pauseConfirmati
   const storeOf = runInNewContext(composition, { createStoreOf, otherStreams: { locateStore },
     OPENCODE_DB: '/fixture/opencode.db', KILO_DB: '/fixture/kilo.db', DEVIN_DB: '/fixture/devin.db' }, { timeout: 1000 }) as AttachDeps['storeOf']
   const runtimeProfiles = { transcriptFields: () => [], beginHydrate: vi.fn(), hydrate: vi.fn(), hydrateEvidence: vi.fn(),
-    ingest: vi.fn(() => false), ingestConfig: vi.fn(async () => false), ingestPane: vi.fn(async () => false), capturePane: vi.fn(async () => null) } as AttachDeps['runtimeProfiles']
+    ingest: vi.fn(() => false), ingestConfig: vi.fn(async () => { await barrier('config'); return false }), ingestPane: vi.fn(async () => false), capturePane: vi.fn(async () => null) } as AttachDeps['runtimeProfiles']
   const terminalGone = vi.fn(async () => { await barrier('terminal'); return false })
+  const relaunchMarks = createRelaunchMarks()
   const attach = createAttach({ liveFor: () => undefined, resolve: id => registry.resolve(id),
-    terminalGone, normalizers: createSessionNormalizers(others), others,
+    terminalGone, normalizers: createSessionNormalizers(others), others, relaunchMarks,
     watcher: { addSession: vi.fn(async () => {}), removeSession: vi.fn(async () => {}), pollSession: vi.fn(async () => {}),
       hold: vi.fn(async () => null), tails: () => false },
     setInterpretationHold: registry.setInterpretationHold.bind(registry), announceSession: vi.fn(),
@@ -139,7 +141,7 @@ function setup(boundary: 'terminal' | 'store' | 'open' | 'none', pauseConfirmati
   const stoppedAgents = new StoppedAgentStore(join(directory, 'stopped-agents'))
   stoppedAgents.save(saved)
   vi.spyOn(stoppedAgents, 'save'); vi.spyOn(stoppedAgents, 'finishResume')
-  const binding = createBinding({ registry, attachSession: requestAttach, hermesTerminal,
+  const binding = createBinding({ registry, attachSession: requestAttach, captureReader: attach.captureReader, hermesTerminal,
     mirror: { inheritSummary: vi.fn() }, forgetSession: id => attach.forget(id), clients: { send }, announceSession: vi.fn(),
     stoppedAgents, syncRecapPool: vi.fn(),
     input: { forget: vi.fn(), awaitingConfirmation: () => false }, submitAgent: vi.fn(), deviceInput: { forget: vi.fn() },
@@ -161,7 +163,8 @@ function setup(boundary: 'terminal' | 'store' | 'open' | 'none', pauseConfirmati
     expect(events.filter(event => event.type === 'turn_started')).toHaveLength(1)
     expect(events.filter(event => event.type === 'turn_ended')).toHaveLength(1)
   }
-  return { resumed, attach, requestAttach, confirm, attempts, entered, release, recordEntered, recordRelease, others, locateStore, send, liveTurn, stoppedAgents, terminalGone,
+  return { resumed, attach, requestAttach, confirm, attempts, entered, release, recordEntered, recordRelease, others, locateStore, send, liveTurn, stoppedAgents, terminalGone, relaunchMarks, observed,
+    pause: () => { boundary = 'terminal'; suspended = false },
     installed: () => others.has(sessionId) && worker.all().length === 1 ? installed : undefined }
 }
 
@@ -211,8 +214,84 @@ it('keeps a completed stream without repeating its saved record or terminal prob
   expect(t.others.open).toHaveBeenCalledTimes(1)
   expect(t.others.forget).not.toHaveBeenCalled()
   expect(t.send).not.toHaveBeenCalled()
+  await t.confirm()
+  expect(t.requestAttach).toHaveBeenCalledTimes(1)
   await t.liveTurn()
 })
+
+it('follows a reader installed while its attachment has not completed', async () => {
+  const t = setup('config'), first = t.requestAttach(t.resumed)
+  await t.entered.promise
+  expect(t.others.ready(sessionId)).toBe(true)
+  await t.confirm(); t.release.resolve()
+  expect(await first).toBe(false)
+  await Promise.all(t.attempts)
+  expect(t.requestAttach).toHaveBeenCalledTimes(2)
+  expect(t.others.open).toHaveBeenCalledTimes(1)
+  await t.liveTurn()
+})
+
+it('keeps the current successor behind queued work even with a prior reader', async () => {
+  const t = setup('none')
+  expect(await t.requestAttach(t.resumed)).toBe(true)
+  t.pause()
+  const running = t.requestAttach(t.resumed, true); await t.entered.promise
+  const queued = t.requestAttach(t.resumed, true)
+  await t.confirm(); t.release.resolve()
+  expect(await running).toBe(false); expect(await queued).toBe(false)
+  await Promise.all(t.attempts)
+  expect(t.requestAttach).toHaveBeenCalledTimes(4)
+  await t.liveTurn()
+})
+
+it.each(['missing', 'disconnected'] as const)('follows a %s reader instead of trusting its retained state', async state => {
+  const t = setup('none')
+  expect(await t.requestAttach(t.resumed)).toBe(true)
+  if (state === 'missing') t.others.forget(sessionId)
+  else t.others.disconnected()
+  expect(t.others.ready(sessionId)).toBe(false)
+  await t.confirm(); await Promise.all(t.attempts)
+  expect(t.requestAttach).toHaveBeenCalledTimes(2)
+  expect(t.stoppedAgents.save).toHaveBeenCalledTimes(1)
+  if (state === 'disconnected') {
+    t.others.connected()
+    await vi.waitFor(() => expect(t.others.ready(sessionId)).toBe(true))
+  }
+  await t.liveTurn()
+})
+
+it('follows native confirmation that also changes its route', async () => {
+  const t = setup('none')
+  expect(await t.requestAttach(t.resumed)).toBe(true)
+  t.observed.runtimes = [{ backend: 'tmux', paneId: '%43' }]; t.observed.primaryRuntimeKey = 'tmux:%43'
+  await t.confirm(); await Promise.all(t.attempts)
+  expect(t.requestAttach).toHaveBeenCalledTimes(2)
+  await t.liveTurn()
+})
+
+it.each(['home', 'process', 'cwd', 'evidence', 'forgotten lifetime', 'retained turn', 'relaunch', 'identity hold', 'interpretation hold'] as const)(
+  'revokes a captured completed reader after %s changes', async change => {
+    const t = setup('none')
+    expect(await t.requestAttach(t.resumed)).toBe(true)
+    const keep = t.attach.captureReader(registry.byAgent(agentId)!)
+    if (change === 'home') registry.setHermesHome(agentId, join(directory, 'profile'))
+    else if (change === 'process') registry.updateProcessIdentity(agentId, { ...nextProcess, pid: 1043 })
+    else if (change === 'cwd') registry.setCwd(agentId, join(directory, 'other'))
+    else if (change === 'forgotten lifetime') t.attach.forget(sessionId)
+    else if (change === 'retained turn') t.attach.afterStop(registry.byAgent(agentId)!)
+    else if (change === 'relaunch') t.relaunchMarks.note(sessionId, 0, true)
+    else {
+      const row = registry.byAgent(agentId)!
+      if (change === 'identity hold') registry.setIdentityHold(agentId, 'private fixture hold')
+      else if (change === 'interpretation hold') registry.setInterpretationHold(agentId, row.evidenceRevision, 'private fixture hold', true)
+      else row.evidenceRevision = (row.evidenceRevision ?? 0) + 1
+    }
+    const row = registry.byAgent(agentId)!
+    const confirmed = registry.register({ engine: 'hermes', sessionId, runtimes: row.runtimes,
+      primaryRuntimeKey: row.primaryRuntimeKey, cwd: row.cwd ?? undefined, processIdentity: row.processIdentity!, hookEvent: 'HermesTerminal' })!.entry
+    expect(keep(confirmed)).toBe(false)
+  },
+)
 
 it.each(['forgotten', 'different conversation'] as const)('does not follow stale native confirmation after the row is %s', async change => {
   const t = setup('store', true)

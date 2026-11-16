@@ -48,7 +48,7 @@ A transcript-backed never-folded row cannot qualify. For fileless Hermes, the ac
 the reader exists; that file-tail flag cannot override it. The readiness query remains owned by attachment;
 binding only captures before commit and consults the guard for pure same-ID metadata.
 
-## Planned validation
+## Caller evidence and acceptance
 
 The existing real registry/main-store/attachment/native-follower/core-port/worker-reader caller adds a real private
 `StoppedAgentStore`. After the reader finishes, native confirmation must cause zero extra saves, reservation
@@ -57,10 +57,21 @@ Before the correction this failed on actual delegated calls, not a timing thresh
 finish and terminal probe, and two attachment requests instead of one. The other six caller tests passed, including
 all three stale-attachment overlaps. This max-one-worker RED ran before any runtime edit on 2026-11-16.
 
-Keep all three overlap controls and late forget/rebind controls. Add missing/disconnected reader and unfinished
-attachment cases, including a queued attach and a handle installed before its attach settles. Native same-ID
-identity changes and retained/relaunch/held obligations must still follow. The worker readiness tests cover actual
+The tests keep all three overlap controls and late forget/rebind controls, and add missing/disconnected reader
+and unfinished attachment cases, including a queued attach and a handle installed before its attach settles.
+Native same-ID identity changes and retained/relaunch/held obligations still follow. Worker readiness covers actual
 pending/open/disconnect/reconnect/lost/closing/forget states. A later native pass still waits without attachment.
-Run focused tests with one worker and TypeScript, then obtain root review before broad/native/cost validation.
+Root reviews the frozen checkpoint before broad/native/cost validation.
+
+The corrected affected selection passed 443 tests in seven files, with 100% statements, branches, functions and
+lines for `bind.ts`, `attach.ts` and `otherStreams.ts`. The other-engine identity golden caller and TypeScript also passed.
+The first expansion exposed two fixture assumptions: same-session registration preserves cwd, and polling a
+20 ms backoff with a 50 ms assertion interval misses it. The controls now use the actual cwd mutation and the
+actual held-log promise barrier. Their original failed outputs are retained. A later discovered transcript is
+also tested: its never-folded flag prevents reuse and the ordinary attachment tails it from the start.
+
+Native and matched cost acceptance for this corrected checkpoint remain pending. Main's later test-isolation
+change requires the same private copied Node and current helpers on both benchmark sides; no earlier candidate
+result is relabeled as evidence for this correction.
 
 The earlier native timeout's exact interleaving remains unobserved; the independent source/caller defect is proven.
