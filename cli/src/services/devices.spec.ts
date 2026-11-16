@@ -297,13 +297,16 @@ function fakeListener() {
     })).toBeUndefined()
     return stream
   }
-  /** The lines the devices write on the dial stream, the stream saying it can take one, and its end. */
+  /** The lines the devices write on the dial stream, the stream saying it can take one, its end, and its writes throwing
+   *  from then on. */
   const dial = () => {
     const lines: unknown[] = []
     const ended = new AbortController()
     let writable = (): void => {}
+    let broken = false
     expect((given[0].handlers.dial as ListenerStreamHandler).open({ type: 'dial', standby: true }, {
       write: (line) => {
+        if (broken) throw new Error('write broken')
         if (ended.signal.aborted) return false
         lines.push(line)
         return true
@@ -311,7 +314,7 @@ function fakeListener() {
       onWritable: (run) => { writable = run },
       ended: ended.signal,
     })).toBeUndefined()
-    return { lines, writable: () => writable(), end: (reason: string) => ended.abort(reason) }
+    return { lines, writable: () => writable(), end: (reason: string) => ended.abort(reason), break: () => { broken = true } }
   }
   return { given, close, listen, front, attach, tabs, dial }
 }
@@ -506,7 +509,8 @@ describe('the dial stream, for Orca\'s Harness Device plugin (docs/specs/2026-11
     expect(said()).toEqual(['[devices] dial stream · open'])
   })
 
-  it('a dial stream that throws costs the dial nothing: the throw is the stream\'s, and the core still hears the dial', () => {
+  it('a dial stream that throws costs the dial nothing: the throw is the stream\'s, and the core still hears the dial', async () => {
+    vi.useFakeTimers()
     const listener = fakeListener()
     const { core } = start({ listen: listener.listen, faults: ['dialStream'] })
     const stream = listener.dial()
@@ -518,6 +522,21 @@ describe('the dial stream, for Orca\'s Harness Device plugin (docs/specs/2026-11
     expect(core.clients.dialWatching).toHaveBeenCalledWith(true)
     expect(stream.lines).toEqual([{ attached: false }])
     expect(logs).toContain('[devices] dialStream failed · injected fault: dialStream')
+    // Its minute count is the stream's too.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(said()).toEqual(['[devices] dial stream · open'])
+  })
+
+  it('a write on the dial stream that throws is the stream\'s: neither move of the dial throws', () => {
+    const listener = fakeListener()
+    const { core } = start({ listen: listener.listen })
+    const stream = listener.dial()
+    stream.writable()
+    stream.break()
+    expect(() => seen.host.watching!(true)).not.toThrow()
+    expect(() => seen.host.dialShows!(API)).not.toThrow()
+    expect(core.clients.dialWatching).toHaveBeenCalledWith(true)
+    expect(logs).toContain('[devices] dialStream failed · write broken')
   })
 
   it('with no listen given the dial\'s moves reach no stream and nothing throws', () => {
