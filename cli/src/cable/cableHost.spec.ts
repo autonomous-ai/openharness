@@ -1055,6 +1055,52 @@ describe('the dial that shows one app at a time', () => {
     expect(localFollowed.mock.calls).toEqual([['prompt', 'moved'], ['tab', 'no-tile']])
   })
 
+  describe('the agent the dial shows (docs/specs/2026-11-16-orca-device-plugin.md)', () => {
+    const A = {}
+    const B = {}
+    const x = { name: 'api', app: 'Orca' }
+    const y = { name: 'web', app: 'Harness' }
+    const z = { name: 'docs', app: 'Terminal' }
+
+    it('the dial that reported last is the one shown', () => {
+      const dialShows = vi.fn()
+      const host = setup(five(), { dialShows })
+      host.dialShows(A, x)
+      host.dialShows(B, y)
+      expect(dialShows.mock.calls).toEqual([[x], [y]])
+    })
+
+    it('a none from another dial is dropped: unplugging one of two does not blank the other\'s agent', () => {
+      const dialShows = vi.fn()
+      const host = setup(five(), { dialShows })
+      host.dialShows(A, x)
+      host.dialShows(B, y)
+      host.dialShows(A, null)
+      expect(dialShows.mock.calls).toEqual([[x], [y]])
+    })
+
+    it('a none from the dial that reported last reaches the wiring, and the other dial\'s next move fills it again', () => {
+      const dialShows = vi.fn()
+      const host = setup(five(), { dialShows })
+      host.dialShows(A, x)
+      host.dialShows(B, y)
+      host.dialShows(B, null)
+      host.dialShows(A, z)
+      expect(dialShows.mock.calls).toEqual([[x], [y], [null], [z]])
+    })
+
+    it('a none with no report kept is not told', () => {
+      const dialShows = vi.fn()
+      const host = setup(five(), { dialShows })
+      host.dialShows(A, null)
+      expect(dialShows).not.toHaveBeenCalled()
+      host.dialShows(B, y)
+      host.dialShows(B, null)
+      host.dialShows(B, null)
+      expect(dialShows.mock.calls).toEqual([[y], [null]])
+    })
+  })
+
   it('knows an agent outside Harness', () => {
     const host = setup(five())
     expect(host.knows('g1')).toBe(true)
