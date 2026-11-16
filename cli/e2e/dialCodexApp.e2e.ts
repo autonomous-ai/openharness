@@ -3,7 +3,7 @@
  * Codex session whose own hook names the Codex app (harness/codexOutside.ts) is listed on a fake dial on the desk under
  * "Codex", its row's host the app. The real Codex app and a real Codex session never run. Nothing here sends a tap
  * (`agent.open`) or a rest (`focus`) from the dial, and no `harness hardware watch` puts an app in front, so nothing can
- * reach `/usr/bin/open`: the log holds that no open or swipe ran.
+ * reach `/usr/bin/open`. A link that works logs nothing, so the log holds only that no fallback and no swipe ran.
  */
 import type { ChildProcess } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
