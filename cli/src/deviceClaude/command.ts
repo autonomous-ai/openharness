@@ -21,12 +21,12 @@ import { claudeDisable, claudeEnable, claudePluginOn, claudeSettingsPath, claude
 
 /** `asked`, `link` and `orca link` are left out: they are the plugins', and typed by hand they only wait on stdin or print a path. */
 export const DEVICE_USAGE = `Harness device (the dial shows Claude Code's waiting prompts in any terminal, takes a spoken prompt, and rings when an agent needs you):
-  harness device claude status [--json]  whether Claude Code has the harness-device plugin, and its version
+  harness device claude status [--json]  whether the dial is on for Claude Code (its harness-device plugin on, and not turned off), and its version
   harness device claude enable           install the plugin, or turn it on, and write the dial skill (Claude Code 2.1.287 or later)
   harness device claude disable          uninstall the plugin and remove the dial skill
   harness device codex status [--json]   whether the dial is on for Codex
   harness device codex enable            write the dial skill into Codex's home
-  harness device codex disable           remove the dial skill from every Codex home
+  harness device codex disable           remove the dial skill Harness wrote into Codex's homes
   ${NOTICE_USAGE}`
 
 export interface DeviceDeps {

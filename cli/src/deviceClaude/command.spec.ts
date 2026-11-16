@@ -273,11 +273,12 @@ describe('harness device claude', () => {
 
   it('the usage names the dial skill', () => {
     for (const line of [
+      'harness device claude status [--json]  whether the dial is on for Claude Code (its harness-device plugin on, and not turned off), and its version',
       'harness device claude enable           install the plugin, or turn it on, and write the dial skill (Claude Code 2.1.287 or later)',
       'harness device claude disable          uninstall the plugin and remove the dial skill',
       'harness device codex status [--json]   whether the dial is on for Codex',
       'harness device codex enable            write the dial skill into Codex\'s home',
-      'harness device codex disable           remove the dial skill from every Codex home',
+      'harness device codex disable           remove the dial skill Harness wrote into Codex\'s homes',
     ]) expect(DEVICE_USAGE.split('\n').map((usage) => usage.trim())).toContain(line)
   })
 
