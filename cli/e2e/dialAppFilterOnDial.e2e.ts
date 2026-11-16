@@ -90,7 +90,7 @@ function expectNamedOnly(script: string): void {
 /** Every `app filter:` line says only what the filter may say: a switch, the picker or the view, and never an app. */
 function expectFilterLines(log: string): void {
   for (const line of log.split('\n').filter((line) => line.includes('app filter:'))) {
-    expect(line).toMatch(/\[device\] app filter: (switched · (front|pick|empty|notice)|picker|view (tabs|apps) · (front|pick|window|empty))$/)
+    expect(line).toMatch(/\[device\] app filter: (switched · (front|pick|empty|notice)|picker|view (tabs|apps) · (front|pick|window|empty)|bring · (ok|failed))$/)
   }
 }
 
@@ -175,7 +175,7 @@ describe('the on-dial rig\'s scripts', () => {
 
   it('the rig\'s log check takes the view\'s lines and refuses one that names an app', () => {
     expectFilterLines('[device] app filter: view apps · front\n[device] app filter: view tabs · pick\n' +
-      '[device] app filter: view tabs · empty\n[device] app filter: switched · front')
+      '[device] app filter: view tabs · empty\n[device] app filter: switched · front\n[device] app filter: bring · ok')
     expect(() => expectFilterLines('[device] app filter: view apps · front ghostty')).toThrow()
   })
 
@@ -189,8 +189,10 @@ describe('the on-dial rig\'s scripts', () => {
 describe.skipIf(!PORT)('the dial\'s app filter on a real dial', () => {
   it('a person walks the filter on the dial; the log says only what the filter may say', async () => {
     if (!OUT) throw new Error('ON_DIAL_PORT is set but ON_DIAL_OUT is not: the rig needs a folder for its files')
-    // CABLE_FW_DISABLE stays true (the suite's default): this daemon offers the dial no firmware.
-    const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false', HARNESSD_TEST_DIAL_PORT: PORT! } })
+    // CABLE_FW_DISABLE stays true (the suite's default): this daemon offers the dial no firmware. The real open, not the
+    // suite's fake: a pick on the dial brings its app forward, and the person at the desk walking this opt-in rig is
+    // there to see it come (the PM, 2026-11-16).
+    const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false', HARNESSD_TEST_DIAL_PORT: PORT!, HARNESS_OPEN_BIN: '/usr/bin/open' } })
     const rig = rigWindow(d)
     let greeted: string | undefined
     let log = ''
