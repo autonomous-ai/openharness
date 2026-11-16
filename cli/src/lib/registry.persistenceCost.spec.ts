@@ -134,11 +134,12 @@ it('fingerprints each unchanged row once while preserving the exact durable byte
   expect(owners).toBe(2)
 })
 
-it('captures owners for the awaited flush, without repeating that unused work in its best-effort save', async () => {
+it('avoids repeated row comparisons and unused owner captures in a changed save and flush', async () => {
   const live = registry!.byAgent(A)!, peer = row(disk(), B)
   const stringify = vi.spyOn(JSON, 'stringify')
   expect(registry!.setCwd(A, '/fixture/changed')).toBe(true)
   await registry!.flush()
+  const fingerprints = stringify.mock.calls.filter(([value, replacer]) => isPersistedRow(value) && typeof replacer === 'function').length
   const owners = stringify.mock.calls.filter(([value, replacer]) => isOwnershipRecord(value) && typeof replacer === 'function').length
   stringify.mockRestore()
   expect(registry!.byAgent(A)).toBe(live)
@@ -146,6 +147,7 @@ it('captures owners for the awaited flush, without repeating that unused work in
   expect(row(disk())).toMatchObject({ cwd: '/fixture/changed', launchArgs: ['--before'] })
   expect(row(disk(), B)).toEqual(peer)
   expect(io.durable).toHaveLength(1)
+  expect(fingerprints).toBeLessThanOrEqual(14)
   expect(owners).toBe(2)
 })
 
@@ -248,10 +250,18 @@ it('keeps a queued same-value close cancellation durable after the earlier remov
 it.skipIf(process.platform === 'win32')('refuses a successful strict receipt when the published image lacks directory durability', async () => {
   const { AtomicWriteUnconfirmed } = await import('./registryPersistence.js')
   const live = registry!.byAgent(A)!
+  const serialize = JSON.stringify
+  let recoveryFingerprints = 0
+  const stringify = vi.spyOn(JSON, 'stringify').mockImplementation((value, replacer, space) => {
+    if (io.published && isPersistedRow(value) && typeof replacer === 'function') recoveryFingerprints++
+    return serialize(value, replacer, space)
+  })
   io.failDirectorySync = true
   await expect(track(registry!.setClosePlan(A, plan))).rejects.toBeInstanceOf(AtomicWriteUnconfirmed)
+  stringify.mockRestore()
   expect(row(disk()).closePlan).toEqual(plan)
   expect(io.durable).toEqual([])
   expect(registry!.byAgent(A)).toBe(live)
   expect(live.closePlan).toBeUndefined()
+  expect(recoveryFingerprints).toBeLessThanOrEqual(4)
 })

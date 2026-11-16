@@ -1270,3 +1270,59 @@ intended ownership-count failure (4 instead of2), with9controls passing in7.41s
 passed all10cases in5.95s (`core-registry-owner-capture-green.log`); typecheck passed
 (`core-registry-owner-capture-types.log`). Strict and observation checks are unchanged.
 No corrected matched-cost run has occurred yet; the previous acceptance remains failed.
+
+## Compare each changed-set key once
+
+Prepared on `33ed50b87b8e9cfe4ab893924e2ce1d05df5a14c`, before runtime edits or
+execution. The retained attribution pair counted 25,600 persisted-row fingerprints
+across twenty changed calls with 160 rows. Source review found that both the
+ordinary changed-set calculation and uncertain-publication affected-set calculation
+concatenate the two maps' keys, compare every entry, and only then deduplicate the
+result. A key present in both maps therefore repeats the same comparison. This
+duplication also exists on the old baseline; it does not explain the regression
+or establish performance acceptance.
+
+### Design
+
+Deduplicate each union of keys before its existing fingerprint comparison. A
+`Set` keeps first-insertion order, so the same keys are compared in the same order
+and the result has the same membership and iteration order. Both calculations
+remain synchronous over their existing operation-local snapshots. Every key from
+either map remains present, including additions and deletions. The ordinary path
+still fingerprints each current row; recovery still compares both prior and
+published images. No fingerprint result is cached across operations or awaits.
+
+Growth, concurrency and read cost: this removes duplicate transient comparison
+work, without adding stored state, changing existing limits, the single writer,
+the cross-process lock, or any file read. Scale: the normal 160-row changed-call
+workload is predicted to omit 3,200 fingerprints across twenty calls (25,600 to
+22,400); these are source-derived counts, not executed measurements. Root must
+still run the matched 16/160-row CPU/RSS/latency comparison. Compatibility,
+audience and identity: persisted bytes, supported writer/client contracts and
+access remain unchanged. Migration: none; rollback is a code revert. Failure:
+immutable capture, owner/current/native/cancellation checks, rebase, intent
+revisions, final publication and directory fsync, and uncertain-group recovery
+remain authoritative. Platforms: the same TypeScript path on macOS, Linux and
+Windows; no OS call or process-start change, and no new platform evidence yet.
+
+### Caller RED and controls, prepared only
+
+Extend the existing two-row public `setCwd` followed by awaited `flush` case in
+`registry.persistenceCost.spec.ts`. Forward `JSON.stringify` unchanged and count
+persisted-row fingerprints with its existing function replacer, with a budget of
+14 against the current source-derived 16. Preserve the exact live owner reference,
+process lookup, durable cwd, unchanged peer, one publication, and two required
+ownership captures. This is a deterministic work budget, not a timing assertion.
+
+Extend the existing uncertain-directory-durability case with a forwarded counter
+after its actual file rename. Require at most four persisted-row fingerprints
+for the two prior/image comparisons, against the current source-derived eight.
+The strict caller must still reject with `AtomicWriteUnconfirmed`, the written
+close plan must remain visible on disk without a durable receipt, and the live
+owner must not adopt it. No extra case, authority substitute or filesystem result
+is added. Existing alias/deletion, strict owner/cancellation, same-value intent,
+peer recovery and cleanup controls remain in place.
+
+Only this Design and those caller-test extensions are prepared. No test, typecheck,
+build, diagnostic or benchmark has run, and no runtime code has changed. Root owns
+the actual RED, the two-site runtime correction, GREEN and matched cost evidence.
