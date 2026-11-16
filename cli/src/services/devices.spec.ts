@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
 import { AppFilter, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
 import type { CodexRunEnd } from '../cable/hosts/codexQueue.js'
-import type { HerdrClient } from '../cable/hosts/herdrClient.js'
+import { herdrClientDeps, type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrPrompt, type HerdrSubscriber } from '../cable/hosts/herdrClient.js'
+import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { observedAgentId } from '../cable/hosts/observed.js'
 import { AppRings } from '../cable/hosts/select.js'
 import { env } from '../config/env.js'
@@ -193,6 +194,15 @@ vi.mock('../cable/hosts/lastAnswer.js', async (real) => ({
   ...await real<typeof import('../cable/hosts/lastAnswer.js')>(),
   readLastAnswer: readers.answer,
 }))
+// The watch on the folder herdr's socket lives in: recorded, with its stops, so no spec watches this machine's folders.
+const watched = vi.hoisted(() => ({ calls: [] as unknown[][], stopped: 0 }))
+vi.mock('../cable/hosts/herdrClient.js', async (real) => ({
+  ...await real<typeof import('../cable/hosts/herdrClient.js')>(),
+  watchHerdrSocket: (deps: unknown, changed: () => void) => {
+    watched.calls.push([deps, changed])
+    return () => { watched.stopped++ }
+  },
+}))
 
 const { startDevices } = await import('./devices.js')
 
@@ -235,6 +245,8 @@ beforeEach(() => {
   orcaRuns.length = 0
   codexRuns.length = 0
   herdrCalls.length = 0
+  watched.calls.length = 0
+  watched.stopped = 0
   seen.bridges = {}
   seen.fleet = null
   readers.open = readers.external = null
@@ -3872,5 +3884,284 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     seen.host.appSettled!('claude')
     expect(logs).toContain('[devices] dial failed · dial unplugged')
     expect(tabLines()).toEqual(['[device] tab · skipped · not in front', '[device] tab · skipped · not in front'])
+  })
+})
+
+describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.md)', () => {
+  const PANE = 'w1:p1'
+  const ID = observedAgentId('claude', 'sess-1')
+  /** An agent as herdr's `agent.list` reads it: Claude Code at its prompt in /work/api. */
+  const listing = (over: Record<string, unknown> = {}) => ({ pane_id: PANE, agent: 'claude', agent_status: 'idle', cwd: '/work/api', ...over })
+  /** Claude Code's hook from inside that herdr pane. */
+  const hook = (event: ObservedHookEvent['event']): ObservedHookEvent => ({
+    engine: 'claude', sessionId: 'sess-1', event, cwd: '/work/api', callerPid: 4242, transcriptPath: '/t/sess-1.jsonl',
+    hostHints: { HERDR_PANE_ID: PANE },
+  })
+  /** On macOS, each app's command on the path: what a tap runs is read in `orcaRuns`. */
+  const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => `/opt/${name}/bin/${name}` }
+  const host = () => seen.dial as unknown as DaemonCableHost
+  /** A dial on the cable, on this computer's agents: no window. */
+  const attach = (port: DevicesPort) => { seen.host.watching!(true); port.swarms(null) }
+  const listed = async () => (await host().listAgentSnapshot()).agents.map(({ id, name, caps }) => ({ id, name, caps }))
+  const said = () => logs.filter((line) => line.startsWith('[device] '))
+  beforeEach(() => { vi.useFakeTimers() })
+
+  /**
+   * The devices with a herdr the test drives, the dial not attached yet. Its socket is there (`stamp`). Each subscription
+   * keeps its entries, its callbacks and whether it was closed; `agent.list` answers `agents`; a prompt is recorded and
+   * answers the next of `prompts`, else sent. `live` attaches the dial, starts the first subscription and awaits the list
+   * that follows it; `status` is herdr telling the pane's status on it.
+   */
+  const withHerdr = (over: Parameters<typeof start>[0] = {}) => {
+    const subs: Array<{ entries: readonly HerdrEntry[]; to: HerdrSubscriber; closed: boolean }> = []
+    const lists: Array<Promise<HerdrAnswer>> = []
+    const herdr = { agents: [listing()] as unknown[], stamp: '1:1' as string | undefined, subs, asked: [] as unknown[][], prompts: [] as HerdrPrompt[] }
+    const client: HerdrClient = {
+      request: (method, params) => {
+        herdr.asked.push(['request', method, params])
+        const answer = Promise.resolve<HerdrAnswer>({ ok: true, result: { type: 'agent_list', agents: herdr.agents } })
+        lists.push(answer)
+        return answer
+      },
+      subscribe: (entries, to) => {
+        const sub = { entries, to, closed: false }
+        subs.push(sub)
+        return { close: () => { sub.closed = true } }
+      },
+      prompt: async (...args) => {
+        herdr.asked.push(['prompt', ...args])
+        return herdr.prompts.shift() ?? { outcome: 'sent' }
+      },
+      socketStamp: () => herdr.stamp,
+    }
+    const started = start({ orca: onMac, tty: async () => undefined, herdr: client, ...over, faults: ['fleet', ...over.faults ?? []] })
+    const live = async (agents: unknown[] = [listing()]): Promise<void> => {
+      herdr.agents = agents
+      attach(started.port)
+      subs[0].to.started()
+      // The source took the answer before this await resumes: its own was waiting on the same promise first.
+      await lists.at(-1)
+    }
+    const status = (agentStatus: string) =>
+      subs[0].to.event('pane.agent_status_changed', { agent: 'claude', agent_status: agentStatus, pane_id: PANE, workspace_id: 'w1' })
+    return { ...started, herdr, live, status }
+  }
+
+  it('with a dial attached herdr\'s agents are listed svf, with host herdr; detached, the source stops', async () => {
+    const { herdr, live } = withHerdr()
+    // No dial: herdr is not asked.
+    expect(herdr.subs).toEqual([])
+    await live()
+    expect(herdr.subs.map(({ entries }) => entries)).toEqual([[{ type: 'pane.agent_detected' }, { type: 'pane.closed' }, { type: 'pane.exited' }]])
+    expect(await listed()).toEqual([{ id: expect.any(String), name: 'api', caps: 'svf' }])
+    expect((await host().listAgentSnapshot()).agents).toEqual([expect.objectContaining({ engine: 'claude', host: 'herdr' })])
+    expect(logs).toContain('[herdr] listed · 1 agents')
+    seen.host.watching!(false)
+    expect(herdr.subs.map(({ closed }) => closed)).toEqual([true])
+    expect(await listed()).toEqual([])
+  })
+
+  it('a status change is a card', async () => {
+    const { live, status } = withHerdr()
+    await live()
+    const [{ id }] = await listed()
+    status('working')
+    expect(calls('turnStarted')).toEqual([[id, '', undefined]])
+    status('blocked')
+    expect(calls('turnStarted')).toEqual([[id, '', undefined], [id, 'Waiting for you · herdr', undefined]])
+    expect(await host().activityText(id)).toBe('Waiting for you · herdr')
+    status('done')
+    expect(calls('turnDone')).toEqual([[id]])
+    // No last answer to say, and nothing for the dial to show as a question: it is answered in herdr.
+    expect(calls('summary')).toEqual([])
+    expect(calls('question')).toEqual([])
+  })
+
+  it('a herdr agent mid-turn is reminded', async () => {
+    const { live, status } = withHerdr()
+    await live()
+    const [{ id }] = await listed()
+    status('working')
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(calls('turnStarted')).toEqual([[id, '', undefined], [id, '', undefined]])
+  })
+
+  // herdr says idle, never done, when a turn ends in the pane it has focused (Q10).
+  it('a turn that ends idle, its pane focused in herdr, is a done card', async () => {
+    const { live, status } = withHerdr()
+    await live()
+    const [{ id }] = await listed()
+    // First listed idle: nothing ended.
+    expect(calls('turnDone')).toEqual([])
+    status('working')
+    status('idle')
+    expect(calls('turnDone')).toEqual([[id]])
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(calls('turnStarted')).toEqual([[id, '', undefined]])
+    status('blocked')
+    status('idle')
+    expect(calls('turnDone')).toEqual([[id], [id]])
+    // herdr's own done is the card; the idle after it ends no turn.
+    status('working')
+    status('done')
+    status('idle')
+    expect(calls('turnDone')).toEqual([[id], [id], [id]])
+  })
+
+  it('a hooked agent in a herdr pane is one row, its hook\'s, and gets each card once', async () => {
+    const { port, live, status } = withHerdr()
+    port.observed(hook('session-start'))
+    await live()
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
+    port.observed(hook('turn-start'))
+    status('working')
+    expect(calls('turnStarted')).toEqual([[ID, '', undefined]])
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(calls('turnStarted')).toEqual([[ID, '', undefined], [ID, '', undefined]])
+  })
+
+  // Q7: the id the dial still holds is refused or ignored, as on main, until its next list.
+  it('the herdr row first, then its hook: the row becomes the hook\'s, and the old id never reaches the core', async () => {
+    const { core, port, live, status } = withHerdr()
+    await live()
+    const [{ id: was }] = await listed()
+    status('working')
+    expect(calls('turnStarted')).toEqual([[was, '', undefined]])
+    port.observed(hook('session-start'))
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
+    expect(await host().activityText(was)).toBeNull()
+    expect(await host().sendTurn(was, 'hi')).toEqual({ ok: false, machine: expect.any(String), reason: 'it runs outside Harness' })
+    expect(await host().openAgent(was)).toBeUndefined()
+    expect(orcaRuns).toEqual([])
+    expect(core.agents.activityText).not.toHaveBeenCalledWith(was)
+    expect(core.turns.send).not.toHaveBeenCalled()
+  })
+
+  it('the dial\'s words reach an idle herdr agent, and each refusal is said once', async () => {
+    const { herdr, live, status } = withHerdr()
+    await live()
+    const [{ id }] = await listed()
+    expect(await host().sendTurn(id, 'run the tests')).toEqual({ ok: true })
+    expect(herdr.asked.filter(([what]) => what === 'prompt')).toEqual([['prompt', PANE, 'claude', 'run the tests']])
+    expect(said()).toEqual(['[device] voice · herdr'])
+    status('working')
+    expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'api is busy. Say it when it is done.' })
+    status('blocked')
+    expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'api is waiting for your answer in herdr.' })
+    status('idle')
+    expect(await host().sendTurn(id, 'x'.repeat(2001))).toMatchObject({ ok: false, message: 'Too long. Say it shorter.' })
+    herdr.prompts.push({ outcome: 'failed', code: 'agent_not_ready' })
+    expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(said()).toEqual(['[device] voice · herdr', '[device] voice · busy', '[device] voice · waiting', '[device] voice · too-long',
+      '[device] voice · no-answer'])
+    // Refused by its state, nothing was typed.
+    expect(herdr.asked.filter(([what]) => what === 'prompt')).toHaveLength(2)
+  })
+
+  it('a tap runs herdr agent focus for the pane, brings no app forward, and is the dial\'s own move', async () => {
+    const listener = fakeListener()
+    const { herdr, live } = withHerdr({ listen: listener.listen })
+    await live()
+    const [{ id }] = await listed()
+    const asked = herdr.asked.length
+    // Terminal came forward and reported its tab, which waits on its settle.
+    expect(listener.front('terminal-app')).toBeUndefined()
+    ;(listener.given[0].handlers.tab as ListenerHandler).handle({ type: 'tab', app: 'terminal-app', tty: '/dev/ttys023' }, never)
+    expect(await host().openAgent(id)).toBeUndefined()
+    expect(orcaRuns).toEqual([['/opt/herdr/bin/herdr', ['agent', 'focus', PANE], 10_000]])
+    expect(herdr.asked).toHaveLength(asked)
+    // The tap moved the dial since that report: the settle does not pull it back.
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    expect(logs.filter((line) => line.startsWith('[device] tab'))).toEqual(['[device] tab · skipped · echo'])
+  })
+
+  it('turning the dial to a done agent marks it seen here, and asks herdr nothing', async () => {
+    const begun = vi.spyOn(HerdrSource.prototype, 'start')
+    const { herdr, live, status } = withHerdr()
+    await live()
+    const source = begun.mock.contexts[0] as HerdrSource
+    const [{ id }] = await listed()
+    status('working')
+    status('done')
+    expect(source.list()).toEqual([expect.objectContaining({ id, state: 'done', unseenDone: true })])
+    const asked = herdr.asked.length
+    turnTo(id)
+    expect(source.list()).toEqual([expect.objectContaining({ id, state: 'done', unseenDone: false })])
+    expect(herdr.asked).toHaveLength(asked)
+    expect(herdr.subs).toHaveLength(1)
+  })
+
+  /** A dial attached with herdr's socket there, then again with none: nothing subscribed, nothing watched. */
+  const nothingAsked = ({ port, herdr }: ReturnType<typeof withHerdr>) => {
+    attach(port)
+    seen.host.watching!(false)
+    herdr.stamp = undefined
+    attach(port)
+    expect(herdr.subs).toEqual([])
+    expect(watched.calls).toEqual([])
+  }
+
+  it('HARNESS_DEVICE_OBSERVED=off: nothing is subscribed or watched', () => {
+    const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+    switched.HARNESS_DEVICE_OBSERVED = false
+    onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+    nothingAsked(withHerdr())
+  })
+
+  it('on Windows nothing is subscribed or watched', () => {
+    nothingAsked(withHerdr({ orca: { ...onMac, platform: 'win32' } }))
+  })
+
+  it('with no socket, the folder herdr\'s socket goes in is watched, where the daemon\'s own environment puts it, while a dial is attached', () => {
+    const { port, herdr } = withHerdr()
+    herdr.stamp = undefined
+    attach(port)
+    expect(watched.calls).toEqual([[herdrClientDeps(), expect.any(Function)]])
+    seen.host.watching!(false)
+    expect(watched.stopped).toBe(1)
+  })
+
+  it('the devices stopping stops the source', async () => {
+    const { port, herdr, live } = withHerdr()
+    await live()
+    // A second after the first, the subscription that names the listed pane opens.
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(herdr.subs).toHaveLength(2)
+    await port.stop()
+    expect(herdr.subs.map(({ closed }) => closed)).toEqual([true, true])
+    expect(vi.getTimerCount()).toBe(0)
+    // With no socket, it waits on the watch: the devices stopping stops that too.
+    const away = withHerdr()
+    away.herdr.stamp = undefined
+    attach(away.port)
+    expect(watched.calls).toHaveLength(1)
+    await away.port.stop()
+    expect(watched.stopped).toBe(1)
+  })
+
+  it('a herdr part that throws costs the dial nothing', async () => {
+    const { port, herdr } = withHerdr({ faults: ['herdr'] })
+    port.observed(hook('session-start'))
+    attach(port)
+    expect(herdr.subs).toEqual([])
+    expect(logs).toContain('[devices] herdr failed · injected fault: herdr')
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
+  })
+
+  it('no log line holds a pane id, a name, a folder or the words', async () => {
+    const { herdr, live, status } = withHerdr()
+    await live([listing({ name: 'Nebula', cwd: '/work/secret-folder' })])
+    const [{ id }] = await listed()
+    status('working')
+    status('blocked')
+    await host().sendTurn(id, 'run the secret tests')
+    status('idle')
+    await host().sendTurn(id, 'run the secret tests')
+    await host().openAgent(id)
+    herdr.subs[0].to.closed('ended')
+    expect(logs).toEqual(expect.arrayContaining(['[herdr] listed · 1 agents', '[device] voice · waiting', '[device] voice · herdr',
+      '[herdr] closed · ended', '[herdr] retry · 1']))
+    const secrets = [PANE, 'Nebula', 'secret-folder', 'secret tests']
+    expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
   })
 })
