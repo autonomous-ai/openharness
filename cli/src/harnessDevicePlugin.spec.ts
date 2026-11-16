@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { DIAL_SKILL } from './devices/codexSkill.js'
 
 // The harness-device plugin is files Claude Code reads and a hook it runs as a child process. These checks hold the
 // files to what the marketplace and Claude Code expect, and run the hook as Claude Code does: its stdin, a HOME and a
@@ -80,6 +81,11 @@ describe('the harness-device plugin', () => {
     const command = hooks.PermissionRequest[0].hooks[0].command.replaceAll('${CLAUDE_PLUGIN_ROOT}', root)
     const result = spawnSync('/bin/sh', ['-c', command], { input: INPUT, env: { HOME: tempDir(), PATH: '/usr/bin:/bin' }, encoding: 'utf8' })
     expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
+  })
+
+  // One dial skill for every agent: Claude Code loads the plugin's copy, Codex the one codexEnable writes.
+  it('skills/dial/SKILL.md is the dial skill Codex gets, byte for byte', () => {
+    expect(readFileSync(join(pluginRoot, 'skills', 'dial', 'SKILL.md'), 'utf8')).toBe(DIAL_SKILL)
   })
 
   it('hooks.json loads the voice mod, hooks/device.js', () => {
