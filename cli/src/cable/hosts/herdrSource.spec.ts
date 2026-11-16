@@ -551,6 +551,17 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     await s.until(() => s.source.list().length === 1)
   })
 
+  it('a socket that appears after it found none, before its watch started, connects', async () => {
+    server.agents = [agent('w1:p1')]
+    const real = herdrClient()
+    let looks = 0
+    // herdr's socket appears just after the source first looked and found none.
+    const s = setup({ client: { ...real, socketStamp: () => (looks++ === 0 ? undefined : real.socketStamp()) } })
+    s.source.start()
+    expect(s.watchers.size).toBe(0)
+    await s.until(() => s.source.list().length === 1)
+  })
+
   it('a dropped subscription keeps its agents until the first retry; that retry failing empties the list', async () => {
     server.agents = [agent('w1:p1')]
     const s = setup()
