@@ -51,8 +51,10 @@ export class PrivateHerdr {
     if (!herdrBinary) throw new Error('herdr is not installed')
     const config = join(d.env.HOME!, '.config')
     const socket = join(config, 'herdr', 'herdr.sock')
-    if (Buffer.byteLength(socket) > SOCKET_ROOM) {
-      throw new Error(`herdr's socket ${socket} would be over ${SOCKET_ROOM} bytes: run with TMPDIR=/tmp`)
+    // Beside it herdr binds herdr-client.sock, the longer, and exits when it does not fit.
+    const client = join(config, 'herdr', 'herdr-client.sock')
+    if (Buffer.byteLength(client) > SOCKET_ROOM) {
+      throw new Error(`herdr's socket ${client} would be over ${SOCKET_ROOM} bytes: run with TMPDIR=/tmp`)
     }
     await mkdir(join(config, 'herdr'), { recursive: true })
     await writeFile(join(config, 'herdr', 'config.toml'), '[update]\nversion_check = false\nmanifest_check = false\n')
@@ -66,9 +68,14 @@ export class PrivateHerdr {
     // Ended by the worker's reaper should the worker go before `stop`.
     watchGroup(server.pid!)
     server.once('exit', () => leaderGone(server.pid!))
+    // A server that exits will never answer: the wait ends at once and says so.
+    let exited: string | undefined
+    server.once('exit', (code, signal) => { exited = String(code ?? signal) })
     const herdr = new PrivateHerdr(d, server, socket)
     try {
-      await until('the private herdr to answer', () => existsSync(socket) && herdr.rpc('workspace.list'), 20_000, 100)
+      await until('the private herdr to answer',
+        async () => exited !== undefined || (existsSync(socket) && await herdr.rpc('workspace.list')), 20_000, 100)
+      if (exited !== undefined) throw new Error(`the private herdr exited (${exited}) before it answered`)
       // A plain workspace in front, so that an agent's pane is never the focused one.
       await herdr.rpc('workspace.create', { focus: true })
     } catch (error) {
