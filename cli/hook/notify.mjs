@@ -516,13 +516,13 @@ function hostHints() {
     // The core refuses a whole event with more hints than MAX_HINTS, one over 64 characters or one with a control
     // character (core/observedHook.ts): that hint is left out instead.
     if (Object.keys(hints).length === MAX_HINTS) break
+    // A named herdr session (`herdr --session <name>`) is a server of its own whose pane ids start again at w1:p1, and
+    // herdr sets HERDR_SESSION in its panes alone (herdr 0.8.0): the devices follow the default session, where this id
+    // would be another agent's pane. Skipped before the cap counts it, so it costs no other hint its place.
+    if (name === 'HERDR_PANE_ID' && process.env.HERDR_SESSION) continue
     const value = process.env[name]?.slice(0, 64)
     if (value && !CONTROL.test(value)) hints[name] = value
   }
-  // A named herdr session (`herdr --session <name>`) is a server of its own whose pane ids start again at w1:p1, and
-  // herdr sets HERDR_SESSION in its panes alone (herdr 0.8.0): the devices follow the default session, where this id
-  // would be another agent's pane.
-  if (process.env.HERDR_SESSION) delete hints.HERDR_PANE_ID
   return hints
 }
 
