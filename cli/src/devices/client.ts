@@ -116,11 +116,17 @@ function lines(max: number, line: (text: string) => void): (chunk: Buffer | stri
   }
 }
 
-/** A dial_status reduced to what the menu-bar app shows, so a settings change alone prints nothing. */
+/**
+ * A dial_status reduced to what the menu-bar app shows, so a change of any setting but `muted` prints nothing. `muted`
+ * only for a dial with an id, the one a Sound change can name; read from the primary's flat fields, never `devices`.
+ */
 export function dialWatchLine(payload: unknown): string {
   const status = (typeof payload === 'object' && payload !== null ? payload : {}) as Record<string, unknown>
   const line: Record<string, unknown> = { attached: status.attached === true }
   for (const field of DIAL_FIELDS) if (typeof status[field] === 'string') line[field] = status[field]
+  const settings = status.settings
+  if (typeof status.id === 'string' && status.id !== '' && typeof settings === 'object' && settings !== null
+    && typeof (settings as Record<string, unknown>).muted === 'boolean') line.muted = (settings as Record<string, unknown>).muted
   return JSON.stringify(line)
 }
 
