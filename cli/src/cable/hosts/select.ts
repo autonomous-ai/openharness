@@ -13,6 +13,9 @@ const needsYou = (a: HostAgent): boolean => a.state === 'needs-you'
 /** Idle for the ring, wider than the state 'idle': done (seen or not) and error too, as nobody is following those. */
 const idle = (a: HostAgent): boolean => a.state !== 'working' && !needsYou(a)
 
+/** A place per agent id in its app's own order (Orca's tabs). One object per read that landed: told apart by identity. */
+export type RingRank = ReadonlyMap<string, number>
+
 /**
  * This computer's agents in a fixed ring for the dial with no Harness window. The list used to be sorted again on every
  * change (65 pushes in one hour of Diego's log, 2026-11-14), so the agent a swipe landed on changed under the finger. The
@@ -20,6 +23,8 @@ const idle = (a: HostAgent): boolean => a.state !== 'working' && !needsYou(a)
  * keeps its place from when it enters, and a new one enters at the end. Only an idle agent gives up its place (Diego,
  * 2026-11-14): one that works or waits on the person is one the person is following. An agent with no known activity
  * (a Harness agent nobody has reported on yet) counts from when it entered: missing data is not rest (PM, 2026-11-14).
+ * With a rank the fixed order is the app's own (Orca's tabs, 2026-11-16) instead of first entry: the ring is put in rank
+ * order only when its members change or a new rank lands, and holds still between two.
  */
 export class DialRing {
   private ring: string[] = []
@@ -27,10 +32,12 @@ export class DialRing {
   private enteredAt = new Map<string, number>()
   /** The ids the last pass listed: one met before enters a full ring only when it needs the person. */
   private seen = new Set<string>()
+  /** The last pass's rank: the same object again is the same read, so it moves nobody. */
+  private rank: RingRank | undefined
 
   constructor(private readonly now: () => number = Date.now) {}
 
-  select(agents: HostAgent[]): { rows: HostAgent[]; total: number } {
+  select(agents: HostAgent[], rank?: RingRank): { rows: HostAgent[]; total: number } {
     const byId = new Map(agents.map((a) => [a.id, a]))
     const before = this.ring.filter((id) => byId.has(id))
     const inRing = new Set(before)
@@ -60,6 +67,14 @@ export class DialRing {
       entered.add(a.id)
     }
     const rows = [...before.filter((id) => inRing.has(id)).map((id) => byId.get(id)!), ...agents.filter((a) => entered.has(a.id))]
+    // Nobody entered and nobody left: the same members, as every one kept is from the last ring.
+    const sameMembers = entered.size === 0 && rows.length === this.ring.length
+    if (rank && (!sameMembers || rank !== this.rank)) {
+      const place = (a: HostAgent): number => rank.get(a.id) ?? Infinity
+      // The sort is stable: equal places, and the unranked after the ranked, keep their ring order.
+      rows.sort((x, y) => (place(x) === place(y) ? 0 : place(x) - place(y)))
+    }
+    this.rank = rank
     this.ring = rows.map((a) => a.id)
     const at = this.now()
     this.enteredAt = new Map(this.ring.map((id) => [id, this.enteredAt.get(id) ?? at]))
@@ -87,7 +102,7 @@ export class AppRings {
   private rings = new Map<string, AppRing>()
   private sizes = new Map<string, number>()
 
-  update(agents: HostAgent[]): void {
+  update(agents: HostAgent[], ranks?: ReadonlyMap<string, RingRank>): void {
     const byApp = new Map<string, HostAgent[]>()
     for (const a of agents) {
       const app = pageOf(a)
@@ -98,7 +113,7 @@ export class AppRings {
     for (const app of this.rings.keys()) if (!byApp.has(app)) this.rings.delete(app)
     for (const [app, list] of byApp) {
       const entry = this.rings.get(app) ?? { ring: new DialRing(), rows: [], waiting: 0 }
-      entry.rows = entry.ring.select(list).rows
+      entry.rows = entry.ring.select(list, ranks?.get(app)).rows
       entry.waiting = list.filter(needsYou).length
       this.rings.set(app, entry)
     }
