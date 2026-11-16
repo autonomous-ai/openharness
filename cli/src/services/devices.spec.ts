@@ -292,6 +292,7 @@ function fakeListener() {
         lines.push(line)
         return true
       },
+      onWritable: () => {},
       ended: ended.signal,
     })).toBeUndefined()
     return stream

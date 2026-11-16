@@ -49,10 +49,18 @@ export interface ListenerHandler {
   handle(message: Record<string, unknown>, gone: AbortSignal): unknown
 }
 
+/** Why a stream ended: its client went (it closed, its socket errored, or it sent a second message), a line did not
+ *  drain in 2 s, a newer stream of its type opened, or the listener closed. */
+export type StreamEnd = 'gone' | 'stalled' | 'replaced' | 'closed'
+
 export interface ListenerStream {
-  /** One NDJSON line. False, with nothing written, once the stream has ended or while an earlier line has not drained. */
+  /** One NDJSON line. False, with nothing written, inside `open`, once the stream has ended or while an earlier line has
+   *  not drained. */
   write(line: unknown): boolean
-  /** Aborts when the stream ends. */
+  /** `run` is called each time the stream can take a line: once it has opened, and each time a written line has drained.
+   *  Never once it has ended. A later call replaces the listener. */
+  onWritable(run: () => void): void
+  /** Aborts when the stream ends; its `reason` is a StreamEnd. */
   readonly ended: AbortSignal
 }
 
@@ -134,7 +142,7 @@ export async function openDevicesListener(
   const deadlines = new WeakMap<Socket, NodeJS.Timeout>()
   const waiting = new Set<AbortController>()
   // The open stream of each type, as how to end it; and the connections that hold one.
-  const streams = new Map<string, (replaced?: boolean) => void>()
+  const streams = new Map<string, (reason: StreamEnd) => void>()
   const streaming = new WeakSet<Socket>()
   let dropped = { ...NONE_DROPPED }
   let minute: NodeJS.Timeout | undefined
@@ -189,51 +197,66 @@ export async function openDevicesListener(
     // would otherwise hold the stream and its buffered lines.
     let writable = false
     let stall: NodeJS.Timeout | undefined
-    const end = (replaced = false): void => {
+    let whenWritable: (() => void) | undefined
+    // The first reason stays: the close that follows any end reads as the client gone.
+    const end = (reason: StreamEnd): void => {
       if (ended.signal.aborted) return
       writable = false
-      ended.abort()
+      ended.abort(reason)
       clearTimeout(stall)
       streams.delete(type)
       // Its connection has no deadline left to free its slot. A replaced one's goes once its last line is taken, which
       // tells its watch to stand by, or 2 s on for a client that has stopped reading.
-      if (!replaced) return void socket.destroy()
+      if (reason !== 'replaced') return void socket.destroy()
       const unread = setTimeout(() => socket.destroy(), LISTENER_TIMEOUT_MS).unref()
       socket.once('close', () => clearTimeout(unread))
       res.end(`${REPLACED_LINE}\n`, () => socket.destroy())
+    }
+    // The handler's code, run from the socket's write callback too: a throw there would end the devices process, so it
+    // ends only this stream.
+    const ready = (): void => {
+      writable = true
+      try {
+        whenWritable?.()
+      } catch {
+        count('failed')
+        end('closed')
+      }
     }
     let answer: typeof REFUSED | void
     try {
       answer = handler.open(message, {
         ended: ended.signal,
+        onWritable: (run) => { whenWritable = run },
         write: (line) => {
           if (!writable) return false
           writable = false
-          stall = setTimeout(end, LISTENER_TIMEOUT_MS).unref()
-          // Called once the socket has taken the line, or with an error once the stream ended: it stays unwritable then.
-          res.write(`${JSON.stringify(line)}\n`, () => {
+          stall = setTimeout(() => end('stalled'), LISTENER_TIMEOUT_MS).unref()
+          // Called once the socket has taken the line, or with an error as its connection goes, before the close that
+          // ends the stream: it stays unwritable then.
+          res.write(`${JSON.stringify(line)}\n`, (error) => {
             clearTimeout(stall)
-            writable = !ended.signal.aborted
+            if (!error && !ended.signal.aborted) ready()
           })
           return true
         },
       })
     } catch {
-      ended.abort()
+      ended.abort('closed')
       return drop(res, 500, 'failed')
     }
     if (answer === REFUSED) {
-      ended.abort()
+      ended.abort('closed')
       return drop(res, 400, 'refused')
     }
-    streams.get(type)?.(true)
+    streams.get(type)?.('replaced')
     streams.set(type, end)
     streaming.add(socket)
     clearTimeout(deadlines.get(socket))
-    res.once('close', end)
+    res.once('close', () => end('gone'))
     // Every end destroys its connection, so a client must not keep it for another message.
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson', Connection: 'close' }).flushHeaders()
-    writable = true
+    ready()
   }
 
   const settle = async (req: IncomingMessage, res: ServerResponse, body: Buffer): Promise<void> => {
@@ -317,7 +340,7 @@ export async function openDevicesListener(
   return {
     close: () => closed ??= (async () => {
       clearTimeout(minute)
-      for (const end of streams.values()) end()
+      for (const end of streams.values()) end('closed')
       const gone = listening.close()
       for (const each of waiting) each.abort()
       await gone
