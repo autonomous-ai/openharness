@@ -3,11 +3,18 @@
 use crate::keepalive::{Keep, KeepAlive};
 use crate::model::{due, menu, menu_log};
 use crate::types::{
-    Action, AppState, CliState, Daemon, Effect, Event, LoginEvent, MenuAction, MenuItem, Phase, Saved, Screen, View,
+    Action, AppState, AppUpdate, CliState, Daemon, Effect, Event, LoginEvent, MenuAction, MenuItem, Phase, Saved,
+    Screen, UpdateFailure, View,
 };
 
 /// The menu reads the account and Claude Code again at most this often.
 const READ_EVERY_SECS: u64 = 60;
+
+/// The app asks for its own update at most this often.
+const CHECK_EVERY_SECS: u64 = 21_600;
+
+/// Where a person whose app cannot replace itself gets the new one. Fixed: nothing of the manifest reaches `open`.
+const DEVICE_PAGE: &str = "https://harness.autonomous.ai/device";
 
 /// A start left to the desktop app, which supervises its own daemon.
 const DESKTOP_RUNS: &str = "keep-alive: the desktop app runs; not starting";
@@ -33,6 +40,14 @@ pub struct App {
     read_when_up: bool,
     /// The desktop app ran at the last tick.
     desktop_running: bool,
+    /// When the last update check started.
+    checked_at: Option<u64>,
+    /// The version the last check found.
+    found: Option<String>,
+    /// The version last logged as not writable, so it is said once.
+    skipped: Option<String>,
+    /// An update is installed: the app relaunches on the first tick with nothing running.
+    relaunch: bool,
 }
 
 impl App {
@@ -46,6 +61,7 @@ impl App {
             claude: None,
             desktop_installed,
             saved,
+            app_update: AppUpdate::None,
         };
         let mut app = App {
             state,
@@ -59,6 +75,10 @@ impl App {
             last_read: now,
             read_when_up: false,
             desktop_running: false,
+            checked_at: None,
+            found: None,
+            skipped: None,
+            relaunch: false,
         };
         let mut effects = Vec::new();
         // A CLI seen once and gone now was removed on purpose: it stays Removed, never installed on its own.
@@ -92,6 +112,12 @@ impl App {
         match event {
             Event::Tick { now, desktop_running } => {
                 self.now = now;
+                if self.relaunch && !self.running() {
+                    self.relaunch = false;
+                    self.stop_watch(effects);
+                    effects.push(Effect::Relaunch);
+                    return;
+                }
                 match self.state.cli {
                     CliState::Found => match self.keep.tick(now, desktop_running) {
                         Some(Keep::SpawnWatch) => effects.push(Effect::SpawnWatch),
@@ -104,6 +130,12 @@ impl App {
                     CliState::Installing => {}
                 }
                 self.desktop_running = desktop_running;
+                // abs_diff: a clock set back checks too.
+                let due = self.checked_at.is_none_or(|at| now.abs_diff(at) >= CHECK_EVERY_SECS);
+                if due && !self.running() && !matches!(self.state.app_update, AppUpdate::Installing(_)) {
+                    self.checked_at = Some(now);
+                    effects.push(Effect::CheckUpdate);
+                }
             }
             Event::MenuOpened { now, desktop_installed } => {
                 self.now = now;
@@ -229,6 +261,7 @@ impl App {
                     // where the dial is, and the dial's next status line moves it.
                     effects.push(Effect::Menu(self.menu.clone()));
                 }
+                MenuAction::Update => effects.push(Effect::OpenUrl(DEVICE_PAGE.into())),
                 MenuAction::OpenHarness => effects.push(Effect::OpenDesktop),
                 MenuAction::Quit => {
                     self.stop_watch(effects);
@@ -247,7 +280,59 @@ impl App {
                 }
                 self.show(None, effects);
             }
+            // Nothing newer: a row that offered a version goes, as this app is at least as new.
+            Event::UpdateChecked(None) => {
+                self.found = None;
+                self.state.app_update = AppUpdate::None;
+            }
+            // Installed even while a sign-in runs: only the relaunch waits for it.
+            Event::UpdateChecked(Some(version)) => {
+                effects.push(Effect::Log(format!("update: found {version}")));
+                // A version already blocked keeps its row while it is tried again, so the menu does not flip.
+                if self.state.app_update != AppUpdate::Blocked(version.clone()) {
+                    self.state.app_update = AppUpdate::Installing(version.clone());
+                }
+                self.found = Some(version);
+                effects.push(Effect::InstallUpdate);
+            }
+            Event::UpdateInstalled => {
+                if let Some(version) = &self.found {
+                    effects.push(Effect::Log(format!("update: installed {version}")));
+                }
+                self.state.app_update = AppUpdate::None;
+                self.relaunch = true;
+            }
+            Event::UpdateFailed(failure) => self.update_failed(failure, effects),
         }
+    }
+
+    /// A failure changes nothing on disk: the next check tries again.
+    fn update_failed(&mut self, failure: UpdateFailure, effects: &mut Vec<Effect>) {
+        let word = match failure {
+            UpdateFailure::Check => "check",
+            UpdateFailure::Download => "download",
+            UpdateFailure::Signature => "signature",
+            UpdateFailure::Install => "install",
+            // Nothing was downloaded. The menu offers the page instead, and the log says so once per version.
+            UpdateFailure::NotWritable => {
+                let Some(version) = self.found.clone() else { return };
+                if self.skipped.as_ref() != Some(&version) {
+                    effects.push(Effect::Log("update: skipped not-writable".into()));
+                }
+                self.skipped = Some(version.clone());
+                self.state.app_update = AppUpdate::Blocked(version);
+                return;
+            }
+        };
+        effects.push(Effect::Log(format!("update: failed {word}")));
+        if matches!(self.state.app_update, AppUpdate::Installing(_)) {
+            self.state.app_update = AppUpdate::None;
+        }
+    }
+
+    /// The CLI install or a sign-in: no update check starts, and no relaunch, while one runs.
+    fn running(&self) -> bool {
+        self.state.cli == CliState::Installing || self.login.is_some()
     }
 
     /// Only a button the window shows does something, so a second click on one that started a run does nothing.

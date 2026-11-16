@@ -10,6 +10,7 @@ use crate::loginitem::LoginItem;
 use crate::state::StateFile;
 use crate::tabs::{Out, POLL_EVERY, Select, TabApp, TabFollow, TabScripts};
 use crate::types::{Effect, Event, Log, LoginEvent};
+use crate::update::AppUpdater;
 use crate::watch::{self, Watch};
 use std::ffi::OsString;
 use std::io;
@@ -35,6 +36,8 @@ pub struct Doors {
     pub front: Arc<dyn FrontSource>,
     /// The terminal apps' tab scripts (`tabs::system`), which only the runner's tab thread calls.
     pub tabs: Arc<dyn TabScripts>,
+    /// None where the app does not update itself.
+    pub updater: Option<Arc<dyn AppUpdater>>,
 }
 
 pub struct Runner(Arc<Shared>);
@@ -159,12 +162,12 @@ impl Runner {
         self.0.find_cli()
     }
 
-    /// Menu, Show and Quit come back for the binary. Everything else is done here, anything slow on a thread, and
-    /// answers through `send`.
+    /// Menu, Show, Quit and Relaunch come back for the binary. Everything else is done here, anything slow on a thread,
+    /// and answers through `send`.
     pub fn run(&self, effect: Effect) -> Option<Effect> {
         let shared = &self.0;
         match effect {
-            Effect::Menu(_) | Effect::Show(_) | Effect::Quit => return Some(effect),
+            Effect::Menu(_) | Effect::Show(_) | Effect::Quit | Effect::Relaunch => return Some(effect),
             Effect::FindCli => shared.answer(Event::Cli(shared.find_cli())),
             Effect::SpawnWatch => shared.spawn_watch(),
             // Its child then exits 0 by itself, and its WatchExit(Some(0)) is the answer.
@@ -233,6 +236,14 @@ impl Runner {
                 }
             }
             Effect::Log(text) => shared.doors.log.line(&text),
+            Effect::CheckUpdate => shared.with_updater(|updater| match updater.check() {
+                Ok(found) => Event::UpdateChecked(found),
+                Err(failure) => Event::UpdateFailed(failure),
+            }),
+            Effect::InstallUpdate => shared.with_updater(|updater| match updater.install() {
+                Ok(()) => Event::UpdateInstalled,
+                Err(failure) => Event::UpdateFailed(failure),
+            }),
         }
         None
     }
@@ -268,6 +279,13 @@ impl Shared {
         let Some(cli) = self.cli() else { return self.answer(Event::Cli(false)) };
         let send = self.send.clone();
         thread::spawn(move || send(work(&cli)));
+    }
+
+    /// `work` on a thread, with the updater; UpdateChecked(None) at once where the app does not update itself.
+    fn with_updater(&self, work: impl FnOnce(&dyn AppUpdater) -> Event + Send + 'static) {
+        let Some(updater) = self.doors.updater.clone() else { return self.answer(Event::UpdateChecked(None)) };
+        let send = self.send.clone();
+        thread::spawn(move || send(work(&*updater)));
     }
 
     fn spawn_watch(&self) {

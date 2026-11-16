@@ -88,6 +88,7 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
         },
         front: front::system(log.clone()),
         tabs: tabs::system(),
+        updater: None,
     };
 
     // A watch or a sign-in hands its events over holding a lock that stopping or cancelling it takes: `send` only
@@ -162,7 +163,8 @@ fn run_loop(
     // `asked`: the effects answer a menu click.
     let run = |effects: Vec<Effect>, asked: bool| {
         for effect in effects {
-            // Menu, Show and Quit are AppKit's, on the main thread, which runs them in the order they are handed over.
+            // Menu, Show, Quit and Relaunch are AppKit's, on the main thread, which runs them in the order they are
+            // handed over.
             if let Some(effect) = runner.run(effect) {
                 let (drawing, log) = (handle.clone(), log.clone());
                 let _ = handle.run_on_main_thread(move || {
@@ -203,6 +205,7 @@ fn draw(handle: &AppHandle, effect: Effect, asked: bool) -> tauri::Result<()> {
         }
         // The daemon is left running: the app only ever watched it.
         Effect::Quit => handle.exit(0),
+        Effect::Relaunch => handle.restart(),
         _ => {}
     }
     Ok(())
@@ -241,6 +244,7 @@ fn menu_id(action: MenuAction) -> &'static str {
         MenuAction::ClaudeOff => "claude_off",
         MenuAction::SoundOn => "sound_on",
         MenuAction::SoundOff => "sound_off",
+        MenuAction::Update => "update",
         MenuAction::OpenHarness => "open_harness",
         MenuAction::Quit => "quit",
     }
@@ -248,7 +252,7 @@ fn menu_id(action: MenuAction) -> &'static str {
 
 fn menu_action(id: &str) -> Option<MenuAction> {
     use MenuAction::*;
-    [Install, SignIn, ClaudeOn, ClaudeOff, SoundOn, SoundOff, OpenHarness, Quit]
+    [Install, SignIn, ClaudeOn, ClaudeOff, SoundOn, SoundOff, Update, OpenHarness, Quit]
         .into_iter()
         .find(|action| menu_id(*action) == id)
 }

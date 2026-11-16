@@ -1,6 +1,6 @@
 //! What the menu shows and which screen is due, from the app's state.
 
-use crate::types::{AppState, ClaudeStatus, CliState, Daemon, MenuAction, MenuItem, Screen};
+use crate::types::{AppState, AppUpdate, ClaudeStatus, CliState, Daemon, MenuAction, MenuItem, Screen};
 
 /// The menu's first, disabled row: the first of these that applies.
 pub fn dial_line(state: &AppState) -> String {
@@ -55,6 +55,12 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
         Some(false) => items.push(MenuItem::Check(MenuAction::SoundOff, "Sound".into(), true)),
         Some(true) => items.push(MenuItem::Check(MenuAction::SoundOn, "Sound".into(), false)),
         None => {}
+    }
+    match &state.app_update {
+        AppUpdate::Installing(version) => items.push(MenuItem::Text(format!("Updating to {version}…"))),
+        // The app cannot replace its bundle: the click opens the download page.
+        AppUpdate::Blocked(version) => items.push(MenuItem::Action(MenuAction::Update, format!("Update {version}…"))),
+        AppUpdate::None => {}
     }
     items.push(MenuItem::Separator);
     if state.desktop_installed {

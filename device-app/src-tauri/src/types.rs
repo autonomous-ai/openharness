@@ -105,6 +105,7 @@ pub enum MenuAction {
     ClaudeOff,
     SoundOn,
     SoundOff,
+    Update,
     OpenHarness,
     Quit,
 }
@@ -118,6 +119,25 @@ pub enum MenuItem {
     Separator,
 }
 
+/// Why an update did not happen. NotWritable: the person cannot replace the bundle; nothing was downloaded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdateFailure {
+    Check,
+    Download,
+    Signature,
+    Install,
+    NotWritable,
+}
+
+/// The app's own update, as the menu shows it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum AppUpdate {
+    #[default]
+    None,
+    Installing(String),
+    Blocked(String),
+}
+
 /// What the menu is drawn from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppState {
@@ -128,6 +148,7 @@ pub struct AppState {
     pub claude: Option<ClaudeStatus>,
     pub desktop_installed: bool,
     pub saved: Saved,
+    pub app_update: AppUpdate,
 }
 
 /// AuthorizeUrl holds an `https:` URL only (account.rs lets no other through).
@@ -138,7 +159,7 @@ pub enum LoginEvent {
     Done(Result<(), String>),
 }
 
-/// What happened. WatchExit(None): ended by a signal.
+/// What happened. WatchExit(None): ended by a signal. UpdateChecked(Some): a strictly newer release.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     Tick { now: u64, desktop_running: bool },
@@ -156,9 +177,12 @@ pub enum Event {
     Menu(MenuAction),
     Act(Action),
     WindowClosed,
+    UpdateChecked(Option<String>),
+    UpdateInstalled,
+    UpdateFailed(UpdateFailure),
 }
 
-/// What to do about it. Show(None) hides the window. Menu, Show and Quit are the binary's.
+/// What to do about it. Show(None) hides the window. Menu, Show, Quit and Relaunch are the binary's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     FindCli,
@@ -178,9 +202,12 @@ pub enum Effect {
     RegisterLoginItem,
     Save(Saved),
     Log(String),
+    CheckUpdate,
+    InstallUpdate,
     Menu(Vec<MenuItem>),
     Show(Option<View>),
     Quit,
+    Relaunch,
 }
 
 /// A finished run.
