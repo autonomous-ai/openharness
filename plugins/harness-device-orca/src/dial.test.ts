@@ -385,8 +385,8 @@ test('once the watch is on, link is asked once more a second after, so a socket 
   assert.deepEqual(w.due(), [2_000])
   w.to(2_000)
   await w.until(() => w.runs.length === 3 && w.timers.size > 0)
-  // Once: the watch that stays on asks nothing more, and the wait goes on from 4 s.
-  assert.deepEqual([w.watches.length, w.due()], [1, [6_000]])
+  // Once: the watch that stays on asks nothing more, and link is looked at again in 30 s.
+  assert.deepEqual([w.watches.length, w.due()], [1, [32_000]])
 })
 
 test('the stream: the open is POST / with {"type":"dial","standby":true}, and each line becomes the state', async () => {
@@ -509,6 +509,27 @@ test('when the stream ends the state is kept, and link is asked again after 1 s,
     await w.until(() => w.runs.length === pass && w.timers.size > 0)
   }
   assert.deepEqual(w.runs.map((run) => run.at), [0, 1_000, 3_000, 7_000, 15_000, 31_000, 61_000, 91_000])
+})
+
+test('a pass that ends unplugged with its watch on looks again in 30 s, and starts the wait again from 1 s', async () => {
+  const { socket, opened } = await devices()
+  // Three failing passes first, so the wait has grown to 8 s.
+  const w = world([null, null, null, UNPLUGGED, UNPLUGGED, ready(socket)])
+  for (let pass = 1; pass <= 4; pass++) {
+    await w.until(() => w.runs.length === pass && w.timers.size > 0)
+    w.to(w.due()[0])
+  }
+  await w.until(() => w.runs.length === 5 && w.timers.size > 0)
+  assert.deepEqual([w.runs.map((run) => run.at), w.due()], [[0, 1_000, 3_000, 7_000, 8_000], [38_000]])
+  // The socket appears; the stream it opens ends at once.
+  w.to(9_000)
+  w.watches[0].changed('devices.sock')
+  const stream = await opened
+  stream.res.write('{"attached":true,"agent":null}\n')
+  await w.until(() => w.states.length === 3)
+  stream.res.end()
+  await w.until(() => w.timers.size > 0)
+  assert.deepEqual(w.due(), [10_000])
 })
 
 test('a stream that stayed open over 30 s starts the wait again from 1 s; one that stayed 30 s does not', async () => {
