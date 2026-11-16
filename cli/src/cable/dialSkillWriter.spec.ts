@@ -484,6 +484,22 @@ describe('the devices write the dial skill', () => {
     expect(existsSync(gone)).toBe(false)
   })
 
+  it('a rollout in the data dir by its real path gives no home', () => {
+    // lsof names a file by its real path, and the data dir can be reached through a link (macOS's /var is /private/var).
+    const real = folder()
+    const dataDir = join(folder(), 'data')
+    symlinkSync(real, dataDir)
+    const r = rig({ dataDir, answers: () => ({ codex: true }) })
+    const inData = join(realpathSync(real), 'codex')
+    mkdirSync(inData)
+
+    r.writer.started()
+    r.writer.scanned([ownerIn(inData)])
+
+    expect(existsSync(join(inData, 'skills'))).toBe(false)
+    expect(r.lines).toContain('dial skill: path refused (shape)')
+  })
+
   describe('a listed folder that is gone is dropped at each pass, and nothing is made again', () => {
     it('at the start pass', () => {
       const r = rig({ answers: () => ({ codex: true }) })
