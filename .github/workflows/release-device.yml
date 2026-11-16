@@ -1,0 +1,222 @@
+name: Release Harness Device
+run-name: Harness Device ${{ inputs.publish && 'release' || 'candidate' }} ${{ inputs.version }}
+
+# Started by `make release-device` only (device-app/RELEASE.md): on the tag v<version>_device it just pushed, with
+# publish, or on main without it (--prepare). Neither a commit nor a tag starts it.
+#
+# Only `build` holds the Apple and updater secrets, and only `publish` may mint the OIDC token a GCS credential needs,
+# so the job that runs the build's code can never write to the bucket.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (X.Y.Z)'
+        required: true
+      publish:
+        description: 'Publish (run on the tag v<version>_device)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: device-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  # A wrong ref, a commit not on main or a version not X.Y.Z fails here in seconds, before the macOS build.
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.ref.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The commits, not their files: the check below reads history only.
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: /device-app/scripts/
+          sparse-checkout-cone-mode: false
+
+      # Only main may be prepared and only v<version>_device published, and the commit must be on main: the repository
+      # is public, so a signed build of unreviewed code must never exist, even as a run artifact.
+      - id: ref
+        name: Check the ref, the commit and the version
+        env:
+          VERSION: ${{ inputs.version }}
+          REF: ${{ github.ref }}
+          PUBLISH: ${{ inputs.publish }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --filter=blob:none origin +refs/heads/main:refs/remotes/origin/main
+          python3 device-app/scripts/device-manifest.py ref "$VERSION" "$REF" "$PUBLISH" "$COMMIT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # The tag's message becomes the manifest's notes, so a tag without one stops here, not after the build.
+      - name: Check the tag carries the release notes
+        if: ${{ inputs.publish }}
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Checkout leaves a pushed annotated tag lightweight; fetch the tag object itself.
+          git fetch --depth=1 --force origin tag "$REF_NAME"
+          if [[ "$(git cat-file -t "refs/tags/$REF_NAME")" != tag ]]; then
+            echo "::error::$REF_NAME is not an annotated tag: its message is the release notes. Tag with make release-device"
+            exit 1
+          fi
+          if ! git tag -l --format='%(contents)' "$REF_NAME" | grep -q '[^[:space:]]'; then
+            echo "::error::$REF_NAME has an empty message: it is the release notes. Tag with make release-device"
+            exit 1
+          fi
+
+  build:
+    needs: version
+    runs-on: macos-15
+    # The Tauri CLI's install takes about 8 minutes, then two notarizations: the app by Tauri, the dmg below.
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /device-app/
+            /.github/actions/macos-signing/
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.22.2
+
+      - name: Install the build tools
+        run: bash device-app/scripts/release-setup.sh
+
+      # The throwaway keychain with the Developer ID certificate and the `harness-notarize` profile; it sets
+      # KEYCHAIN_PATH.
+      - uses: ./.github/actions/macos-signing
+        with:
+          certificate-base64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          keychain-password: ${{ secrets.KEYCHAIN_PASSWORD }}
+          apple-id: ${{ secrets.APPLE_ID }}
+          apple-team-id: ${{ secrets.APPLE_TEAM_ID }}
+          apple-app-password: ${{ secrets.APPLE_APP_PASSWORD }}
+
+      # Tauri signs the app and the dmg, notarizes and staples the app, and signs the update archive.
+      - name: Build
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          bash device-app/scripts/release-build.sh "$VERSION" "$RUNNER_TEMP/out"
+
+      # Tauri does not notarize the dmg, and the dmg is what a person downloads and Gatekeeper checks.
+      - name: Notarize and staple the dmg
+        run: |
+          set -euo pipefail
+          dmg="$RUNNER_TEMP/out/Harness-Device.dmg"
+          # --wait exits 0 on any final status, Invalid too, so the verdict is read from the answer.
+          result="$(xcrun notarytool submit "$dmg" --keychain-profile harness-notarize --wait --output-format json)"
+          echo "$result"
+          field() { printf '%s' "$result" | python3 -c 'import json, sys; print(json.load(sys.stdin).get(sys.argv[1], ""))' "$1"; }
+          if [[ "$(field status)" != Accepted ]]; then
+            echo "::error::Apple did not accept the dmg (status: $(field status))"
+            xcrun notarytool log "$(field id)" --keychain-profile harness-notarize || true
+            exit 1
+          fi
+          # A ticket just issued can take a moment to be served.
+          for try in 1 2 3; do
+            xcrun stapler staple "$dmg" && break
+            [[ $try -lt 3 ]] || exit 1
+            sleep 10
+          done
+
+      # Against the committed key, the one every installed app checks updates with, so a signing secret that does not
+      # match it fails here, before anything is published.
+      - name: Check the build
+        run: |
+          set -euo pipefail
+          PUBKEY="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["plugins"]["updater"]["pubkey"])' device-app/src-tauri/tauri.conf.json)"
+          bash device-app/scripts/release-check.sh "$RUNNER_TEMP/out" "$VERSION" "$PUBKEY" --notarized
+
+      # `publish` refuses files that differ from these, so what it uploads is what was checked here.
+      - name: Record the checksums
+        run: python3 device-app/scripts/device-manifest.py sums --dir "$RUNNER_TEMP/out" --out "$RUNNER_TEMP/out/sums.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harness-device-${{ needs.version.outputs.version }}
+          path: ${{ runner.temp }}/out
+          retention-days: 7
+          if-no-files-found: error
+
+      # The certificate's private key must not outlive the job, should the runner ever be reused.
+      - name: Remove the signing keychain
+        if: always()
+        run: security delete-keychain "$KEYCHAIN_PATH" || true
+
+  publish:
+    needs: [version, build]
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /device-app/scripts/
+            /.github/actions/setup-gcloud/
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: harness-device-${{ needs.version.outputs.version }}
+          path: out
+
+      - name: Check the files are the ones the build checked
+        run: python3 device-app/scripts/device-manifest.py sums --dir out --check out/sums.json
+
+      - name: Take the release notes from the tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 --force origin tag "$REF_NAME"
+          git tag -l --format='%(contents)' "$REF_NAME" > notes.txt
+
+      - name: Authenticate to GCP (workload identity federation)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: ./.github/actions/setup-gcloud
+
+      # The three files first, then the manifest, written only if no one else wrote it since it was read.
+      - name: Publish
+        run: |
+          set -euo pipefail
+          python3 device-app/scripts/device-manifest.py publish --version "$VERSION" --dir out --notes-file notes.txt \
+            --pub-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      - name: Verify the public manifest and downloads
+        run: python3 device-app/scripts/device-manifest.py verify --version "$VERSION" --dir out
+
+      - name: Summary
+        run: echo "Harness Device **$VERSION** is live." >> "$GITHUB_STEP_SUMMARY"
