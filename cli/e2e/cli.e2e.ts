@@ -139,11 +139,14 @@ describe('harness start, stop and status from the installed bundle', () => {
     const cli = join(cliDir, 'cli.js')
     copyFileSync(bundle, cli)
     copyFileSync(join(dirname(bundle), 'notify.mjs'), join(cliDir, 'notify.mjs'))
-    // The managed Node as the installer records it: a runtime folder, and current-node naming its binary.
+    // The managed Node as the installer records it: a runtime folder, and current-node naming its binary. The link
+    // names the run's Node (e2e/harness/testNode.ts), not the worker's: Node names itself by the real path behind a
+    // link, and the product looks beside that path for engines (audit of 2026-11-16,
+    // docs/plans/2026-11-16-e2e-isolation-3-design.md).
     const runtime = daemon.env.ADAPTER_RUNTIME_DIR!
     const node = join(runtime, 'node-e2e', 'bin', 'node')
     mkdirSync(dirname(node), { recursive: true })
-    symlinkSync(process.execPath, node)
+    symlinkSync(process.env.E2E_NODE_PATH!, node)
     writeFileSync(join(runtime, 'current-node'), `${node}\n`)
     const fakes = join(daemon.root, 'platform-bin')
     mkdirSync(fakes)
@@ -170,7 +173,7 @@ describe('harness start, stop and status from the installed bundle', () => {
 
   it('starts on an external Node reached through a managed-runtime symlink without relocating it', async () => {
     // Found by QA on a quiet machine: a Homebrew Node hard-linked under a daemon name aborted in dyld.
-    // install() deliberately points this managed path at the external interpreter running the fixture.
+    // install() deliberately points this managed path at a Node outside the runtime folder: the run's.
     const m = await install()
     const started = await harness(m, 'start')
     expect(started.status, said(started)).toBe(0)
