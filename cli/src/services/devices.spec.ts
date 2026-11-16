@@ -265,21 +265,22 @@ const inertOrcaReads: OrcaReads = {
   orcaTabOrder: () => new Promise(() => {}),
   watchOrcaFocus: () => { throw new Error('no watch outside Orca\'s own specs') },
 }
-/** Orca's reads, driven by the spec: the probe's answer and how often it was asked, each order read held until the
- *  spec lands it, and each watch with its lines, its end and whether it was stopped. */
-function fakeOrcaReads(over: { watches?: boolean } = {}) {
+/** Orca's reads, driven by the spec: the probe's answer (one the spec holds, when a promise) and how often it was asked,
+ *  each order read held until the spec lands it, and each watch with its lines, its end and whether it was stopped. A
+ *  stop ends it, as the child's exit does. */
+function fakeOrcaReads(over: { watches?: boolean | Promise<boolean> } = {}) {
   const probes = { count: 0 }
   const orders: Array<(handles: string[] | null) => void> = []
   const watches: Array<{ line(handle: string | null): void; end(): void; stopped: boolean }> = []
   const reads: OrcaReads = {
-    orcaWatchesFocus: async () => { probes.count++; return over.watches === true },
+    orcaWatchesFocus: () => { probes.count++; return Promise.resolve(over.watches ?? false) },
     orcaTabOrder: () => new Promise((resolve) => { orders.push(resolve) }),
     watchOrcaFocus: (onHandle) => {
       let end = (): void => {}
       const ended = new Promise<void>((resolve) => { end = resolve })
       const watch = { line: onHandle, end: () => end(), stopped: false }
       watches.push(watch)
-      return { stop: () => { watch.stopped = true }, ended }
+      return { stop: () => { watch.stopped = true; end() }, ended }
     },
   }
   return { reads, probes, orders, watches }
@@ -5812,5 +5813,474 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     expect(orderLines()).toEqual(['[device] orca order · read', '[device] orca order · failed'])
     const secrets = [1, 2, 3].flatMap((n) => [H(n), agent(n), `sess-${n}`])
     expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
+  })
+})
+
+describe('the dial follows the pane focused in Orca (docs/plans/2026-11-16-dial-orca-focus-order-design.md)', () => {
+  const H = (n: number) => `term_00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+  /** Claude Code in Orca terminal `n`, as its hook says. */
+  const hook = (n: number, over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
+    engine: 'claude', sessionId: `sess-${n}`, event: 'session-start', cwd: '/work/api', callerPid: 4240 + n,
+    transcriptPath: `/t/sess-${n}.jsonl`,
+    hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1', ORCA_TERMINAL_HANDLE: H(n), __CFBundleIdentifier: 'com.stablyai.orca' }, ...over,
+  })
+  const agent = (n: number) => observedAgentId('claude', `sess-${n}`)
+  const host = () => seen.dial as unknown as DaemonCableHost
+  let clock = 0
+  /** Lets what a landing sets off run. */
+  const settled = () => new Promise((resolve) => setImmediate(resolve))
+  /** The devices on Orca's reads the spec drives, `agents` sessions in Orca listed, no window, a dial attached unless
+   *  `attached` is false, no app settled in front, and the devices' monotonic clock at 0. `settle` keeps an app in front
+   *  for the settle, as `harness hardware watch` tells it, and lets the probe it asks land. `line` is a line of the
+   *  latest watch. The timers are held; `setImmediate` is left to let a landing run. */
+  const dialWith = async (over: { watches?: boolean | Promise<boolean>; agents?: number; attached?: boolean; faults?: string[] } = {}) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    clock = 0
+    const listener = fakeListener()
+    const fake = fakeOrcaReads({ watches: over.watches ?? true })
+    const started = start({ faults: ['fleet', ...over.faults ?? []], listen: listener.listen, now: () => clock, orcaReads: fake.reads })
+    for (let n = 1; n <= (over.agents ?? 2); n++) started.port.observed(hook(n))
+    if (over.attached !== false) seen.host.watching!(true)
+    started.port.swarms(null)
+    const settle = async (app: string) => {
+      expect(listener.front(app)).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      await settled()
+    }
+    const line = (handle: string | null) => {
+      const watch = fake.watches.at(-1)
+      expect(watch, 'a watch runs').toBeDefined()
+      watch!.line(handle)
+    }
+    return { ...started, fake, settle, line }
+  }
+  const asked = () => calls('followLocal')
+  const focusLines = () => logs.filter((line) => line.startsWith('[device] focus'))
+  const watchLines = () => logs.filter((line) => line.startsWith('[device] orca watch'))
+  const prompts = () => logs.filter((line) => line.startsWith('[device] prompt'))
+  const unlinked = (off: boolean) => { (seen.cable as unknown as { connected: boolean }).connected = !off }
+  const STARTED = '[device] orca watch · started'
+  const ENDED = '[device] orca watch · ended'
+  const ECHO = '[device] focus · skipped · echo'
+
+  describe('the watch\'s life', () => {
+    it('Orca\'s settle with a dial attached asks the CLI and starts one watch; a second settle starts no other', async () => {
+      const { fake, settle } = await dialWith()
+      await settle('orca')
+      expect(fake.probes.count).toBe(1)
+      expect(fake.watches).toHaveLength(1)
+      // A front told again starts no settle: Orca settles again after another app.
+      await settle('ghostty')
+      await settle('orca')
+      expect(fake.probes.count).toBe(1)
+      expect(fake.watches).toHaveLength(1)
+      expect(watchLines()).toEqual([STARTED])
+    })
+
+    it('a CLI without watch-focus starts none, says unsupported, and is asked again at the next settle', async () => {
+      const { fake, settle } = await dialWith({ watches: false })
+      await settle('orca')
+      expect(watchLines()).toEqual(['[device] orca watch · unsupported'])
+      await settle('ghostty')
+      await settle('orca')
+      expect(fake.probes.count).toBe(2)
+      expect(fake.watches).toEqual([])
+      expect(watchLines()).toEqual(['[device] orca watch · unsupported', '[device] orca watch · unsupported'])
+    })
+
+    it('with no dial attached, and for another app\'s settle, nothing is asked', async () => {
+      const { fake, settle } = await dialWith({ attached: false })
+      await settle('orca')
+      await settle('ghostty')
+      seen.host.watching!(true)
+      await settle('claude')
+      expect(fake.probes.count).toBe(0)
+      expect(watchLines()).toEqual([])
+    })
+
+    it('a dial that attaches while Orca is already the settled front app asks the CLI and starts the watch, its first line followed by the settle rule; one that attaches with another app in front starts none', async () => {
+      const { fake, settle, line } = await dialWith({ attached: false })
+      await settle('orca')
+      seen.host.watching!(true)
+      await settled()
+      expect(fake.probes.count).toBe(1)
+      expect(watchLines()).toEqual([STARTED])
+      // The settle's rule: the dial turned a moment ago, and Orca's focus must not turn it back.
+      turnTo(agent(1))
+      clock = 1_999
+      line(H(2))
+      expect(focusLines()).toEqual([ECHO])
+      expect(asked()).toEqual([])
+      seen.host.watching!(false)
+      await settle('ghostty')
+      seen.host.watching!(true)
+      await settled()
+      expect(fake.probes.count).toBe(1)
+      expect(fake.watches).toHaveLength(1)
+      expect(watchLines()).toEqual([STARTED, ENDED])
+    })
+
+    it('a settle while the probe runs starts nothing more: one watch', async () => {
+      let answer = (_watches: boolean): void => {}
+      const { fake, settle } = await dialWith({ watches: new Promise<boolean>((resolve) => { answer = resolve }) })
+      await settle('orca')
+      await settle('ghostty')
+      await settle('orca')
+      expect(fake.probes.count).toBe(1)
+      answer(true)
+      await settled()
+      expect(fake.watches).toHaveLength(1)
+      expect(watchLines()).toEqual([STARTED])
+    })
+
+    it('a dial that detaches during the probe gets no watch; one attached again with Orca in front does', async () => {
+      let answer = (_watches: boolean): void => {}
+      const { fake, settle } = await dialWith({ watches: new Promise<boolean>((resolve) => { answer = resolve }) })
+      await settle('orca')
+      seen.host.watching!(false)
+      answer(true)
+      await settled()
+      expect(fake.watches).toEqual([])
+      expect(watchLines()).toEqual([])
+      seen.host.watching!(true)
+      await settled()
+      expect(fake.probes.count).toBe(2)
+      expect(fake.watches).toHaveLength(1)
+      expect(watchLines()).toEqual([STARTED])
+    })
+
+    it('a dial that detaches and attaches again during the probe gets one watch', async () => {
+      let answer = (_watches: boolean): void => {}
+      const { fake, settle } = await dialWith({ watches: new Promise<boolean>((resolve) => { answer = resolve }) })
+      await settle('orca')
+      seen.host.watching!(false)
+      seen.host.watching!(true)
+      answer(true)
+      await settled()
+      expect(fake.probes.count).toBe(1)
+      expect(fake.watches).toHaveLength(1)
+      expect(watchLines()).toEqual([STARTED])
+    })
+
+    it('the dial detaching stops the watch and drops its pane: a late line of the old one moves nothing, and the next settle starts a new one', async () => {
+      const { fake, settle, line } = await dialWith()
+      await settle('orca')
+      const old = fake.watches[0]
+      line(H(1))
+      expect(asked()).toEqual([[agent(1), 'focus']])
+      seen.host.watching!(false)
+      expect(old.stopped).toBe(true)
+      // A line already on its way as it stopped: neither followed nor kept.
+      old.line(H(2))
+      await settled()
+      await settle('ghostty')
+      seen.host.watching!(true)
+      await settle('orca')
+      expect(fake.watches).toHaveLength(2)
+      await settle('ghostty')
+      await settle('orca')
+      expect(asked()).toEqual([[agent(1), 'focus']])
+      expect(watchLines()).toEqual([STARTED, ENDED, STARTED])
+    })
+
+    it('a watch that ends by itself is dropped and says ended; nothing starts until Orca settles again, and a prompt in Orca moves the dial again meanwhile', async () => {
+      const { port, fake, settle, line } = await dialWith()
+      await settle('orca')
+      line(H(1))
+      fake.watches[0].end()
+      await settled()
+      expect(watchLines()).toEqual([STARTED, ENDED])
+      port.observed(hook(2, { event: 'turn-start' }))
+      expect(asked()).toEqual([[agent(1), 'focus'], [agent(2), 'prompt']])
+      await settle('ghostty')
+      expect(fake.probes.count).toBe(1)
+      await settle('orca')
+      expect(fake.probes.count).toBe(2)
+      expect(fake.watches).toHaveLength(2)
+      // Its pane went with it: the settle that started the new one followed nothing.
+      expect(asked()).toHaveLength(2)
+      expect(watchLines()).toEqual([STARTED, ENDED, STARTED])
+    })
+
+    it('the devices stopping stops the watch', async () => {
+      const { port, fake, settle } = await dialWith()
+      await settle('orca')
+      await port.stop()
+      expect(fake.watches[0].stopped).toBe(true)
+      await settled()
+      expect(watchLines()).toEqual([STARTED, ENDED])
+    })
+  })
+
+  describe('following', () => {
+    it('the watch\'s first line is followed as the settle: the dials are asked to follow that pane\'s agent, as a focus follow', async () => {
+      const { settle, line } = await dialWith()
+      await settle('orca')
+      line(H(2))
+      expect(asked()).toEqual([[agent(2), 'focus']])
+      // What the dials make of it is theirs to count.
+      expect(focusLines()).toEqual([])
+    })
+
+    it('a later line with Orca in front asks the dials to follow, right after a turn of the dial too', async () => {
+      const { settle, line } = await dialWith()
+      await settle('orca')
+      line(H(1))
+      // Only the settle is set aside by a turn: a person clicks a pane after it.
+      turnTo(agent(1))
+      line(H(2))
+      expect(asked()).toEqual([[agent(1), 'focus'], [agent(2), 'focus']])
+      expect(focusLines()).toEqual([])
+    })
+
+    it('the dial\'s answer is counted: focus · moved, and focus · skipped · no tile', () => {
+      start({ faults: ['fleet'] })
+      seen.host.localFollowed!('focus', 'moved')
+      seen.host.localFollowed!('focus', 'no-tile')
+      expect(focusLines()).toEqual(['[device] focus · moved', '[device] focus · skipped · no tile'])
+    })
+
+    it('a line with another app in front moves nothing, counted not in front, and Orca\'s next settle follows it', async () => {
+      const { settle, line } = await dialWith()
+      await settle('orca')
+      await settle('ghostty')
+      // The first line too: it is kept for the settle.
+      line(H(1))
+      expect(asked()).toEqual([])
+      await settle('orca')
+      expect(asked()).toEqual([[agent(1), 'focus']])
+      await settle('ghostty')
+      line(H(2))
+      expect(asked()).toHaveLength(1)
+      await settle('orca')
+      expect(asked()).toEqual([[agent(1), 'focus'], [agent(2), 'focus']])
+      expect(focusLines()).toEqual(Array(2).fill('[device] focus · skipped · not in front'))
+    })
+
+    it('a null line is kept and moves nothing: the settle after it follows nothing', async () => {
+      const { settle, line } = await dialWith()
+      await settle('orca')
+      line(H(1))
+      line(null)
+      await settle('ghostty')
+      line(null)
+      await settle('orca')
+      expect(asked()).toEqual([[agent(1), 'focus']])
+      expect(focusLines()).toEqual([])
+    })
+
+    it('a pane no listed agent holds, or an ended session\'s, is skipped as unknown agent', async () => {
+      const { port, settle, line } = await dialWith()
+      await settle('orca')
+      line(H(9))
+      port.observed(hook(2, { event: 'session-end' }))
+      line(H(2))
+      expect(asked()).toEqual([])
+      expect(focusLines()).toEqual(Array(2).fill('[device] focus · skipped · unknown agent'))
+    })
+
+    it('no dial linked: nothing is followed or counted, in front or not', async () => {
+      const { settle, line } = await dialWith()
+      await settle('orca')
+      unlinked(true)
+      turnTo(agent(1))
+      line(H(1))
+      line(H(2))
+      await settle('ghostty')
+      line(H(1))
+      await settle('orca')
+      expect(asked()).toEqual([])
+      expect(focusLines()).toEqual([])
+    })
+  })
+
+  describe('the echo guard', () => {
+    it('a rest\'s switch is the dial\'s echo: a line for that pane within 2 s is skipped once', async () => {
+      const { settle, line } = await dialWith()
+      await settle('orca')
+      line(null)
+      host().swipeEnded(agent(2), 'rest')
+      expect(orcaRuns.map(([, args]) => args)).toEqual([['terminal', 'switch', '--terminal', H(2), '--json']])
+      clock = 1_999
+      line(H(2))
+      expect(focusLines()).toEqual([ECHO])
+      expect(asked()).toEqual([])
+      // The person focusing that pane again moves the dial.
+      line(H(2))
+      expect(asked()).toEqual([[agent(2), 'focus']])
+      clock = 3_000
+      host().swipeEnded(agent(2), 'rest')
+      clock = 5_000
+      line(H(2))
+      expect(asked()).toEqual([[agent(2), 'focus'], [agent(2), 'focus']])
+      expect(focusLines()).toEqual([ECHO])
+    })
+
+    it('a tap\'s switch is its echo too', async () => {
+      const { settle, line } = await dialWith()
+      await settle('orca')
+      line(null)
+      expect(await host().openAgent(agent(2))).toBeUndefined()
+      expect(orcaRuns.map(([, args]) => args)).toEqual([['terminal', 'switch', '--terminal', H(2), '--json']])
+      clock = 1_000
+      line(H(2))
+      expect(focusLines()).toEqual([ECHO])
+      expect(asked()).toEqual([])
+    })
+
+    it('a line for a pane switched before the latest switch is still an echo, and uses up those before it', async () => {
+      const { settle, line } = await dialWith({ agents: 3 })
+      await settle('orca')
+      line(null)
+      host().swipeEnded(agent(1), 'rest')
+      clock = 300
+      host().swipeEnded(agent(2), 'rest')
+      clock = 500
+      host().swipeEnded(agent(3), 'rest')
+      // Orca's line for the pane a fast swipe passed comes late: the dial is not pulled back to it.
+      clock = 900
+      line(H(2))
+      // Orca shows its switches in order: the one before it will print no line now.
+      clock = 1_000
+      line(H(1))
+      clock = 1_100
+      line(H(3))
+      expect(focusLines()).toEqual([ECHO, ECHO])
+      expect(asked()).toEqual([[agent(1), 'focus']])
+    })
+
+    it('of nine switches the oldest is forgotten', async () => {
+      const { settle, line } = await dialWith({ agents: 9 })
+      await settle('orca')
+      line(null)
+      for (let n = 1; n <= 9; n++) {
+        clock = (n - 1) * 100
+        host().swipeEnded(agent(n), 'rest')
+      }
+      line(H(1))
+      expect(asked()).toEqual([[agent(1), 'focus']])
+      line(H(2))
+      expect(focusLines()).toEqual([ECHO])
+      expect(asked()).toHaveLength(1)
+    })
+
+    it('the settle is set aside right after the dial moved, counted echo, and follows 2 s later', async () => {
+      const { settle, line } = await dialWith()
+      turnTo(agent(1))
+      await settle('orca')
+      line(H(2))
+      expect(focusLines()).toEqual([ECHO])
+      expect(asked()).toEqual([])
+      clock = 2_000
+      await settle('ghostty')
+      await settle('orca')
+      expect(asked()).toEqual([[agent(2), 'focus']])
+      expect(focusLines()).toEqual([ECHO])
+    })
+
+    it('the dial detaching forgets its switches', async () => {
+      const { settle, line } = await dialWith()
+      await settle('orca')
+      host().swipeEnded(agent(2), 'rest')
+      seen.host.watching!(false)
+      seen.host.watching!(true)
+      await settled()
+      clock = 2_000
+      line(H(2))
+      expect(asked()).toEqual([[agent(2), 'focus']])
+      expect(focusLines()).toEqual([])
+    })
+  })
+
+  describe('the prompt', () => {
+    it('while the watch runs, a prompt in an agent with an Orca pane asks nothing, counted focus followed', async () => {
+      const { port, settle } = await dialWith()
+      await settle('orca')
+      expect(watchLines()).toEqual([STARTED])
+      port.observed(hook(1, { event: 'turn-start' }))
+      expect(asked()).toEqual([])
+      expect(prompts()).toEqual(['[device] prompt · skipped · focus followed'])
+    })
+
+    it('one in tmux inside Orca still asks', async () => {
+      const { port, settle } = await dialWith()
+      const inTmux = { hostHints: { TMUX_PANE: '%3', ORCA_TERMINAL_HANDLE: H(3), __CFBundleIdentifier: 'com.stablyai.orca' } }
+      port.observed(hook(3, inTmux))
+      await settle('orca')
+      expect(watchLines()).toEqual([STARTED])
+      port.observed(hook(3, { ...inTmux, event: 'turn-start' }))
+      expect(asked()).toEqual([[agent(3), 'prompt']])
+      expect(prompts()).toEqual([])
+    })
+
+    it('with a CLI without watch-focus a prompt in Orca asks as before', async () => {
+      const { port, settle } = await dialWith({ watches: false })
+      await settle('orca')
+      port.observed(hook(1, { event: 'turn-start' }))
+      expect(asked()).toEqual([[agent(1), 'prompt']])
+    })
+
+    it('a relayed prompt, the dial\'s own and one not in front keep their own lines while the watch runs', async () => {
+      const { port, settle } = await dialWith()
+      await settle('orca')
+      port.observed(hook(1, { event: 'turn-start', relayed: true }))
+      port.observed(hook(1, { event: 'turn-stop' }))
+      const poll = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })
+      expect(await host().sendTurn(agent(1), 'run the tests')).toEqual({ ok: true })
+      expect(await poll).toEqual({ text: 'run the tests' })
+      port.observed(hook(1, { event: 'turn-start' }))
+      port.observed(hook(1, { event: 'turn-stop' }))
+      await settle('ghostty')
+      port.observed(hook(1, { event: 'turn-start' }))
+      expect(asked()).toEqual([])
+      expect(prompts()).toEqual(['relayed', 'dial prompt', 'not in front'].map((why) => `[device] prompt · skipped · ${why}`))
+    })
+  })
+
+  describe('the rest', () => {
+    it('HARNESS_DEVICE_OBSERVED=off: no probe and no watch', async () => {
+      const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+      switched.HARNESS_DEVICE_OBSERVED = false
+      onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+      const { fake, settle } = await dialWith()
+      await settle('orca')
+      seen.host.watching!(false)
+      seen.host.watching!(true)
+      await settled()
+      expect(fake.probes.count).toBe(0)
+      expect(fake.watches).toEqual([])
+      expect(watchLines()).toEqual([])
+    })
+
+    it('an orca part that throws costs the dial nothing', async () => {
+      const { port, fake, settle } = await dialWith({ faults: ['orca'] })
+      await settle('orca')
+      port.observed(hook(1, { event: 'turn-start' }))
+      expect(asked()).toEqual([[agent(1), 'prompt']])
+      expect(fake.probes.count).toBe(0)
+      expect(logs).toContain('[devices] orca failed · injected fault: orca')
+    })
+
+    it('no line holds a handle or an agent', async () => {
+      const { port, settle, line } = await dialWith()
+      turnTo(agent(1))
+      await settle('orca')
+      line(H(1))
+      line(H(9))
+      host().swipeEnded(agent(2), 'rest')
+      line(H(2))
+      port.observed(hook(1, { event: 'turn-start' }))
+      await settle('ghostty')
+      line(H(2))
+      seen.host.localFollowed!('focus', 'moved')
+      seen.host.localFollowed!('focus', 'no-tile')
+      seen.host.watching!(false)
+      expect(focusLines()).toHaveLength(6)
+      for (const said of focusLines()) expect(said).toMatch(/^\[device\] focus · (moved|skipped · (echo|unknown agent|no tile|not in front))$/)
+      expect(watchLines()).toEqual([STARTED, ENDED])
+      expect(prompts()).toEqual(['[device] prompt · skipped · focus followed'])
+      const secrets = [1, 2, 9].flatMap((n) => [H(n), agent(n), `sess-${n}`])
+      expect(logs.filter((said) => secrets.some((secret) => said.includes(secret)))).toEqual([])
+    })
   })
 })
