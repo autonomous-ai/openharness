@@ -41,10 +41,10 @@ function holding() {
 
 const place = (hints: Record<string, string>): Place => ({ host: 'claude', app: 'claude', hints })
 const pane = (id: string) => ({ adapter: 'claude', id })
-const link = (session: string): Call => ({ file: OPEN, args: [`claude://code/continue?session=${session}`], timeoutMs: 10_000 })
+const link = (session: string): Call => ({ file: OPEN, args: ['-b', CLAUDE, `claude://code/continue?session=${session}`], timeoutMs: 10_000 })
 
 describe('the Claude app adapter', () => {
-  it('its id is claude, and its link takes the place of open -b', () => {
+  it('its id is claude, and its link takes the place of a plain open', () => {
     const { adapter } = recorder()
     expect(adapter.id).toBe('claude')
     expect(adapter.tap).toBe('instead')
