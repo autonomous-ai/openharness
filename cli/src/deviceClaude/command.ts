@@ -2,17 +2,17 @@
  * `harness device claude …`: the menu-bar app's status, enable and disable, and two words the harness-device plugin runs
  * that a person never types: `asked` (its PermissionRequest hook) and `link` (its mod, for the daemon's socket and the
  * devices' listener's). `harness device codex …`: the menu-bar app's status, enable and disable for Codex. For both,
- * `enable` saves On in dial-skill.json and writes the dial skill into the engine's default home; `disable` saves Off,
- * then removes Harness's skill from that home and from every home the devices service listed, which writes the skill
- * into the other homes while the engine is On. `harness device orca link` is Orca's plugin's word, never typed either:
- * whether the daemon is up and where the devices' socket is, so the plugin builds no path. `harness device notify` is an
- * agent's, from the dial skill (devices/notice.ts). This runs only in the `harness` command's own process; nothing the
- * core or a service loads imports this folder.
+ * `enable` saves On in dial-skill.json, with the folder it writes the dial skill into: the engine's default home's;
+ * `disable` saves Off, then removes Harness's skill from that home, from each folder an enable saved and from each the
+ * devices service listed, which writes the skill into the other homes while the engine is On. `harness device orca
+ * link` is Orca's plugin's word, never typed either: whether the daemon is up and where the devices' socket is, so the
+ * plugin builds no path. `harness device notify` is an agent's, from the dial skill (devices/notice.ts). This runs only
+ * in the `harness` command's own process; nothing the core or a service loads imports this folder.
  */
 import { connect, type Socket } from 'node:net'
 import { dirname } from 'node:path'
 import { removeSkill, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
-import { readAnswers, readHomes, writeAnswer, type DialEngine } from '../devices/dialSkillFiles.js'
+import { listable, MAX_HOMES, readAnswers, readHomes, readWritten, writeAnswer, type DialEngine } from '../devices/dialSkillFiles.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { NOTICE_USAGE, runNotice } from '../devices/notice.js'
 import { localSocketRoute, socketIsPrivate } from '../lib/localTransport.js'
@@ -127,17 +127,20 @@ function claudeHome(): string {
 }
 
 /**
- * On is saved before the skill is written: the devices service writes the other homes from it. The default home is
- * made when missing, as a fresh install has none yet; a person's own dial skill there stays, and On still holds for
- * the other homes.
+ * On is saved before the skill is written: the devices service writes the other homes from it. The skills folder is
+ * saved with it, so a Turn off run with another home still finds it; a folder the record cannot hold gets no skill. The
+ * default home is made when missing, as a fresh install has none yet; a person's own dial skill there stays, and On
+ * still holds for the other homes.
  */
 function turnOn(engine: DialEngine, home: string, deps: DeviceDeps): number {
-  if (writeAnswer(deps.dataDir, engine, true) !== undefined) {
+  const skills = skillsFolderOf(home, true)
+  const written = readWritten(deps.dataDir)[engine]
+  const recorded = skills !== null && listable(skills) && (written.includes(skills) || written.length < MAX_HOMES) ? skills : null
+  if (writeAnswer(deps.dataDir, engine, true, recorded === null ? undefined : [...written, recorded]) !== undefined) {
     deps.err(SAVE_FAILED)
     return 1
   }
-  const skills = skillsFolderOf(home, true)
-  const result = skills === null ? 'failed' : writeSkill(skills)
+  const result = recorded === null ? 'failed' : writeSkill(recorded)
   if (result === 'theirs') deps.err(`${ENGINE_NAMES[engine]} already has a skill named dial that Harness did not write; it stays.`)
   if (result !== 'failed') return 0
   deps.err(`Could not write the ${ENGINE_NAMES[engine]} skill.`)
@@ -145,18 +148,26 @@ function turnOn(engine: DialEngine, home: string, deps: DeviceDeps): number {
 }
 
 /**
- * Off is saved first, so the devices service writes no new copy while these are removed. Each step runs whatever the
- * one before did, so a failed one leaves no more behind than it must; the first error is the one printed. The homes
- * list is only read: its one writer is the devices service, which empties it once it reads Off.
+ * Off is saved first, so the devices service writes no new copy while these are removed: the default home, each folder
+ * the command recorded and each one the devices service listed. Each step runs whatever the one before did, so a
+ * failed one leaves no more behind than it must; the first error is the one printed. The command's record then keeps
+ * only the folders still holding the skill, for the next Turn off. The homes list is only read: its one writer is the
+ * devices service, which empties it once it reads Off.
  */
 async function turnOff(engine: DialEngine, home: string, deps: DeviceDeps, plugin?: () => Promise<ClaudeResult>): Promise<number> {
   let error = writeAnswer(deps.dataDir, engine, false) === undefined ? undefined : SAVE_FAILED
   const uninstalled = await plugin?.()
   if (uninstalled && !uninstalled.ok) error ??= uninstalled.error
+  const written = readWritten(deps.dataDir)[engine]
+  const failed = new Set<string>()
   // A home linked to a listed folder is one folder, cleared once.
-  for (const skills of new Set([skillsFolderOf(home, false), ...readHomes(deps.dataDir)[engine]])) {
-    if (skills !== null && removeSkill(skills) === 'failed') error ??= `Could not remove the ${ENGINE_NAMES[engine]} skill.`
+  for (const skills of new Set([skillsFolderOf(home, false), ...written, ...readHomes(deps.dataDir)[engine]])) {
+    if (skills === null || removeSkill(skills) !== 'failed') continue
+    failed.add(skills)
+    error ??= `Could not remove the ${ENGINE_NAMES[engine]} skill.`
   }
+  const kept = written.filter((skills) => failed.has(skills))
+  if (kept.length !== written.length && writeAnswer(deps.dataDir, engine, false, kept) !== undefined) error ??= SAVE_FAILED
   if (error === undefined) return 0
   deps.err(error)
   return 1
