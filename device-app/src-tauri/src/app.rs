@@ -42,6 +42,8 @@ pub struct App {
     desktop_running: bool,
     /// When the last update check started.
     checked_at: Option<u64>,
+    /// A check, or the install it found, has not answered: no second check starts, however long the Mac slept.
+    updating: bool,
     /// The version the last check found.
     found: Option<String>,
     /// The version last logged as not writable, so it is said once.
@@ -76,6 +78,7 @@ impl App {
             read_when_up: false,
             desktop_running: false,
             checked_at: None,
+            updating: false,
             found: None,
             skipped: None,
             relaunch: false,
@@ -132,8 +135,9 @@ impl App {
                 self.desktop_running = desktop_running;
                 // abs_diff: a clock set back checks too.
                 let due = self.checked_at.is_none_or(|at| now.abs_diff(at) >= CHECK_EVERY_SECS);
-                if due && !self.running() && !matches!(self.state.app_update, AppUpdate::Installing(_)) {
+                if due && !self.running() && !self.updating {
                     self.checked_at = Some(now);
+                    self.updating = true;
                     effects.push(Effect::CheckUpdate);
                 }
             }
@@ -282,6 +286,7 @@ impl App {
             }
             // Nothing newer: a row that offered a version goes, as this app is at least as new.
             Event::UpdateChecked(None) => {
+                self.updating = false;
                 self.found = None;
                 self.state.app_update = AppUpdate::None;
             }
@@ -296,6 +301,7 @@ impl App {
                 effects.push(Effect::InstallUpdate);
             }
             Event::UpdateInstalled => {
+                self.updating = false;
                 if let Some(version) = &self.found {
                     effects.push(Effect::Log(format!("update: installed {version}")));
                 }
@@ -308,6 +314,7 @@ impl App {
 
     /// A failure changes nothing on disk: the next check tries again.
     fn update_failed(&mut self, failure: UpdateFailure, effects: &mut Vec<Effect>) {
+        self.updating = false;
         let word = match failure {
             UpdateFailure::Check => "check",
             UpdateFailure::Download => "download",
@@ -1211,6 +1218,7 @@ mod tests {
             assert!(!has(&app.handle(tick(now)), &Effect::CheckUpdate), "{now}");
         }
         assert!(has(&app.handle(tick(B + 5 + H6)), &Effect::CheckUpdate));
+        app.handle(Event::UpdateChecked(None));
         // A clock set back checks too: abs_diff.
         assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
     }
