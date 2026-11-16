@@ -192,20 +192,20 @@ it('applies a synchronous route-swap transaction before yielding and awaits its 
 
 it('preserves later field deletion and explicit undefined without restoring a captured value', async () => {
   ;(await registry.setLaunchModel(input.agentId, { model: 'fixture-model', effort: null }))
-  registry.setBrowser(input.agentId, true)
+  registry.setBypassPermission(input.agentId, true)
   await registry.flush()
   await locked()
   const committed = registry.setClosePlan(input.agentId, plan)
   expect(committed).toBeInstanceOf(Promise)
   const live = registry.byAgent(input.agentId)!
   delete live.launchModel
-  live.browser = undefined
+  live.bypassPermission = undefined
   holder!.send('release')
   await committed
   await registry.flush()
   expect(registry.byAgent(input.agentId)).toBe(live)
   expect(rows()[0]).not.toHaveProperty('launchModel')
-  expect(rows()[0]).not.toHaveProperty('browser')
+  expect(rows()[0]).not.toHaveProperty('bypassPermission')
 })
 
 it('keeps a later repeated cancellation intent when an earlier commit finishes', async () => {

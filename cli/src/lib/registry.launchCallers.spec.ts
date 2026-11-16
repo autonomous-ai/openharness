@@ -392,7 +392,7 @@ it.each((['new owner', 'adopted shell', 'archived owner', 'starting owner'] as c
   vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity)
   const observed = { engine: 'claude', cwd: directory, runtimes: [runtime], primaryRuntimeKey: current.primaryRuntimeKey,
     processIdentity: identity, args: '/fixture/claude', resumeSessionId: null } as DiscoveredTerminalAgent
-  const deps: DiscoveryDeps = { registry, attachDsh: vi.fn(), attachBrowser: vi.fn(), moveBrowser: moved, forgetSession: forgotten,
+  const deps: DiscoveryDeps = { registry, attach: vi.fn(), taken: moved, forgetSession: forgotten,
     announceSession: announce, bindObservedAgent: vi.fn(async () => {}), syncRecapPool: vi.fn(), attachSession: async () => true,
     invalidateTerminalControl: vi.fn(), input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() }, questionWatcher: { stop: vi.fn() },
     stopHeartbeat: vi.fn(), retainExitedSession: vi.fn(), stoppedAgents: store, send, restoreDegraded: () => false,
@@ -436,7 +436,7 @@ it.each([false, true])('discovery cleans every fully displaced owner (selected=%
     expect(persisted().some(entry => entry.agentId === options?.agentId)).toBe(false)
     send({ type: 'agent_deleted', payload: { agentId: options?.agentId, id } })
   })
-  const handlers = createDiscoveryHandlers({ registry, attachDsh: vi.fn(), attachBrowser: vi.fn(), moveBrowser: moved,
+  const handlers = createDiscoveryHandlers({ registry, attach: vi.fn(), taken: moved,
     forgetSession: forgotten, announceSession: announce, bindObservedAgent: vi.fn(async () => {}), syncRecapPool: vi.fn(),
     attachSession: async () => true, invalidateTerminalControl: vi.fn(), input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() },
     questionWatcher: { stop: vi.fn() }, stopHeartbeat: vi.fn(), retainExitedSession: vi.fn(), stoppedAgents: store,
@@ -448,7 +448,7 @@ it.each([false, true])('discovery cleans every fully displaced owner (selected=%
   expect(send).toHaveBeenCalledTimes(2)
   expect(persisted().some(entry => entry.agentId === row.agentId || entry.agentId === second.agentId)).toBe(false)
   if (selected) { expect(registry.byAgent(selectedId!)?.runtimes).toHaveLength(3); expect(moved).not.toHaveBeenCalled() }
-  else expect(moved).toHaveBeenCalledExactlyOnceWith(row.agentId, expect.any(Object), false)
+  else expect(moved).toHaveBeenCalledExactlyOnceWith(row.agentId, expect.any(Object))
 })
 
 it.each(['name', 'model'] as const)('explicit %s update waits for its durable image before acknowledgement', async choice => {
@@ -532,7 +532,7 @@ it('discovery cannot retire an engine that appeared while its exit image was pre
   const store = new StoppedAgentStore(join(directory, 'dormant-archive')), send = vi.fn()
   const retain = createRetainExitedSession({ registry, stoppedAgents: store, send, publishStoppedAgent: async () => {}, announceSession: announce,
     invalidateTerminalControl: vi.fn(), forgetInput: vi.fn(), ended: vi.fn(), syncRecapPool: vi.fn(), warn: vi.fn() })
-  const handlers = createDiscoveryHandlers({ registry, attachDsh: vi.fn(), attachBrowser: vi.fn(), moveBrowser: vi.fn(),
+  const handlers = createDiscoveryHandlers({ registry, attach: vi.fn(), taken: vi.fn(),
     forgetSession: vi.fn(), announceSession: announce, bindObservedAgent: async () => {}, syncRecapPool: vi.fn(), attachSession: async () => true,
     invalidateTerminalControl: vi.fn(), input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() }, questionWatcher: { stop: vi.fn() },
     stopHeartbeat: vi.fn(), retainExitedSession: retain, stoppedAgents: store, send, restoreDegraded: () => false,
