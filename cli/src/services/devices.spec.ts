@@ -4607,6 +4607,24 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
     }
   })
 
+  // The dial is not kept waiting for a listener slow to open (LISTENER_WAIT_MS): its status, said meanwhile, is said
+  // again with the mode once one opens, or the menu would offer no Notifications until the dial's next status.
+  it('a listener that opens after the dial\'s status says it again with the mode', async () => {
+    let open!: (listener: DevicesListener) => void
+    const { core } = start({ listen: () => new Promise((resolve) => { open = resolve }) })
+    seen.dial.onDialStatus({ attached: true, id: 'usb-1' })
+    expect(statuses(core)).toEqual([{ type: 'dial_status', payload: { attached: true, id: 'usb-1' } }])
+    open({ close: async () => {} })
+    await vi.waitFor(() => expect(statuses(core)).toEqual([
+      { type: 'dial_status', payload: { attached: true, id: 'usb-1' } },
+      { type: 'dial_status', payload: { attached: true, id: 'usb-1', notify: 'full' } },
+    ]))
+    // A status is said only once a dial has said one.
+    const quiet = start({ listen: async () => ({ close: async () => {} }) })
+    await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+    expect(statuses(quiet.core)).toEqual([])
+  })
+
   it('a mode that cannot be saved answers WRITE_FAILED and changes nothing', async () => {
     mkdirSync(join(dataDir, 'dial-notify.json'))
     const listener = fakeListener()
@@ -4914,6 +4932,17 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       expect(asks()).toEqual([['h1', 'r1'], ['h1', 'r2']])
       port.card({ type: 'commander_question_close', agentId: 'h1', payload: { requestId: 'r2' } })
       expect(asks()).toEqual([['h1', 'r1'], ['h1', 'r2'], ['h1', expect.stringMatching(/^shown:/)]])
+    })
+
+    // A notice asked again rings the dial again: only the close of the question that held it back lets it out.
+    it('a close heard again, or of a question never held open, asks the notice no more', () => {
+      const { port, listener } = devices({ core: bound() })
+      port.card({ type: 'commander_question', agentId: 'h1', payload: { requestId: 'r1', questions: QUESTIONS } })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      port.card({ type: 'commander_question_close', agentId: 'h1', payload: { requestId: 'r1' } })
+      port.card({ type: 'commander_question_close', agentId: 'h1', payload: { requestId: 'r1' } })
+      port.card({ type: 'commander_question_close', agentId: 'h1', payload: { requestId: 'r9' } })
+      expect(asks()).toEqual([['h1', 'r1'], ['h1', expect.stringMatching(/^shown:/)]])
     })
 
     it('a question left open by its turn holds back no notice of the next', () => {
