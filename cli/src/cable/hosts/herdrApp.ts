@@ -4,18 +4,17 @@
  * it alone; the dial's words go over hc's socket. macOS only: Herdr's window elsewhere is not tried.
  *
  * A tap opens Herdr first: hc keeps running when Herdr's window is closed, and the window must be up to switch. `open`
- * runs by its own path (or `HARNESS_OPEN_BIN`'s, as open.ts takes it), so no `open` earlier on PATH runs instead, and
+ * runs by its own path (open.ts openPath), so no `open` earlier on PATH runs instead, and
  * `herdr-app` with no shell, each value one argument. The address came from a hook or from hc, so it is held to hc's
  * form again before either runs. Once `open` came back Herdr is in front, so a tap whose switch fails is still a tap
  * that came: a window still opening may not take the switch yet, and the log says so.
  *
  * Words do not wait for a tap, nor a tap for words: hc types by address, whatever the window shows.
  */
-import { isAbsolute } from 'node:path'
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { HC_TERMINAL, hcPaneKey, type HcClient, type HcPrompt } from './hcClient.js'
 import { APP_BUNDLES, inHerdr } from './hostDetect.js'
-import { OPEN } from './open.js'
+import { openPath } from './open.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import type { PaneSwitch } from './types.js'
 
@@ -32,7 +31,7 @@ export interface HerdrAppDeps extends OrcaDeps {
    *  session counts its terminals from t1 again, where a hook's address is another agent's. None: no hook's is taken. */
   hookIds?: boolean
   log(line: string): void
-  /** The raw `HARNESS_OPEN_BIN`: an absolute path is the `open` run instead of `OPEN`. */
+  /** The raw `HARNESS_OPEN_BIN` (open.ts openPath). */
   bin?: string
 }
 
@@ -51,7 +50,7 @@ interface Run { forward: boolean; switched: boolean }
 
 export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
   const mac = deps.platform === 'darwin'
-  const openBin = deps.bin && isAbsolute(deps.bin) ? deps.bin : OPEN
+  const openBin = openPath(deps.bin)
   // Per terminal, the run under way, which a second tap or a rest joins: a swipe's rest and a tap just after it switch
   // to the same terminal.
   const running = new Map<string, Promise<Run>>()

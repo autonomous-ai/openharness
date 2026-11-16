@@ -14,10 +14,15 @@ import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 /** Every app a tap brings forward. Alacritty is known by its bundle id alone: no other hint names it. Only one of these
  *  ever reaches `open`, never a hint's own value. */
 const BUNDLES: ReadonlySet<string> = new Set([...Object.values(APP_BUNDLES), 'org.alacritty'])
-/** `open`'s own path, so no `open` earlier on PATH runs instead. `HARNESS_OPEN_BIN` (read in services/devices.ts, handed
- *  here as `bin`) is for the end-to-end tests, whose harness points it at a fake that records its arguments and opens
- *  nothing (e2e/harness/daemon.ts). Only an absolute path is taken, so a relative one is never looked up on PATH. */
-export const OPEN = '/usr/bin/open'
+/** `open`'s own path, so no `open` earlier on PATH runs instead. */
+const OPEN = '/usr/bin/open'
+
+/** The `open` every command of the devices runs: `bin`, the raw `HARNESS_OPEN_BIN` (read in services/devices.ts), when it
+ *  is an absolute path, else `OPEN`. It is for the end-to-end tests, whose harness points it at a fake that records its
+ *  arguments and opens nothing (e2e/harness/daemon.ts). A relative one is never looked up on PATH. */
+export function openPath(bin?: string): string {
+  return bin && isAbsolute(bin) ? bin : OPEN
+}
 
 /** What a tap can open of an agent: its app, by bundle id, and its own pane in it. */
 export interface OpenTarget {
@@ -39,7 +44,7 @@ export interface OpenDeps {
   /** The apps whose pane a tap brings forward: a pane of any other is none. */
   adapters: readonly HostAdapter[]
   log(line: string): void
-  /** The raw `HARNESS_OPEN_BIN`: an absolute path is the `open` run instead of `OPEN`. */
+  /** The raw `HARNESS_OPEN_BIN` (openPath). */
   bin?: string
 }
 
@@ -54,7 +59,7 @@ export function createOpenActions(deps: OpenDeps): {
   const mac = deps.platform === 'darwin'
   // One command at a time per agent: a second tap while the first runs would only bring the same app forward twice.
   const running = new Set<string>()
-  const openBin = deps.bin && isAbsolute(deps.bin) ? deps.bin : OPEN
+  const openBin = openPath(deps.bin)
   // The last pick wins, so the Mac's front app ends matching the dial's ring (spec decision 4): one bring runs at a time
   // for any app, and a later one takes the single waiting place, answering the one it replaces at once.
   let bringing = false
