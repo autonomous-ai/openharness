@@ -38,8 +38,8 @@ export interface HcSourceDeps {
   watch(changed: () => void): () => void
   /** The dial's words: the Herdr adapter's prompt (herdrApp.ts). */
   prompt(address: string, kind: string, text: string): Promise<HcPrompt>
-  /** A tap: the Herdr adapter's focus, as the devices hold it. */
-  focus(address: string): Promise<boolean>
+  /** A tap on that agent at that terminal: the Herdr adapter's focus, as the devices route it. */
+  focus(address: string, agentId: string): Promise<boolean>
   /** Whether a rest can show it now, and the rest: the Herdr adapter's canShow and show. */
   canShow(address: string): boolean
   show(address: string, agentId: string): Promise<PaneSwitch>
@@ -157,7 +157,7 @@ export class HcSource implements HostSource {
 
   async focus(agent: HostAgent): Promise<boolean> {
     const row = this.find(agent.id)
-    return row ? this.deps.focus(row.address) : false
+    return row ? this.deps.focus(row.address, row.agent.id) : false
   }
 
   hasPane(agent: HostAgent): boolean {
