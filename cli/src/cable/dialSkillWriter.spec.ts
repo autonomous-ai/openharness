@@ -49,8 +49,9 @@ const pluginOn = (claudeHome: string): void =>
   writeFileSync(join(claudeHome, 'settings.json'), JSON.stringify({ enabledPlugins: { [DIAL_PLUGIN_ID]: true } }))
 
 const sorted = (list: string[]): string[] => [...list].sort()
-const counts = (claude: [number, number], codex: [number, number]): string =>
-  `dial skill: claude wrote ${claude[0]} removed ${claude[1]}, codex wrote ${codex[0]} removed ${codex[1]}`
+/** The pass's line: wrote, removed and failed per engine, failed 0 unless given. */
+const counts = (claude: [number, number, number?], codex: [number, number, number?]): string =>
+  `dial skill: claude wrote ${claude[0]} removed ${claude[1]} failed ${claude[2] ?? 0}, codex wrote ${codex[0]} removed ${codex[1]} failed ${codex[2] ?? 0}`
 
 /** A writer over throwaway homes; `answers` reads the real dial-skill.json unless the test gives its own. Every call to
  *  it is counted. */
@@ -568,6 +569,34 @@ describe('the devices write the dial skill', () => {
     r.writer.started()
 
     expect(hasSkill(r.codexHome)).toBe(true)
+  })
+
+  it('a write, a removal or a listing that fails is counted, with no path', () => {
+    // A dial folder that takes no file.
+    const r = rig({ answers: () => ({ codex: true }) })
+    mkdirSync(join(skillsAt(r.codexHome), 'dial'))
+    chmodSync(join(r.codexHome, 'skills', 'dial'), 0o500)
+    r.writer.started()
+    expect(r.lines).toEqual([counts([0, 0], [0, 0, 1])])
+
+    // Off, and ours in a listed folder that lets nothing go.
+    const stuck = folder()
+    const dataDir = folder()
+    writeSkill(skillsAt(stuck))
+    chmodSync(join(stuck, 'skills', 'dial'), 0o500)
+    writeHomes(dataDir, { claude: [], codex: [skillsOf(stuck)] })
+    const off = rig({ dataDir, answers: () => ({ codex: false }) })
+    off.writer.started()
+    chmodSync(join(stuck, 'skills', 'dial'), 0o700)
+    expect(off.lines).toEqual([counts([0, 0], [0, 0, 1])])
+
+    // A list that cannot be saved: what was written goes again.
+    const unsaved = rig({ answers: () => ({ codex: true }) })
+    chmodSync(unsaved.dataDir, 0o500)
+    unsaved.writer.started()
+    expect(unsaved.lines).toEqual([counts([0, 0], [1, 1, 1])])
+
+    expect([...r.lines, ...off.lines, ...unsaved.lines].join('\n')).not.toContain('/')
   })
 
   it('on Windows nothing is written', () => {
