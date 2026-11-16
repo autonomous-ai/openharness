@@ -107,7 +107,7 @@ export interface HcSubscriber {
   changed(terminal: HcTerminal): void
   closed(reason: SocketFault): void
   /** How many terminals of this machine the subscription left out past HC_MAX_TERMINALS, told as it changes: the rest of
-   *  a snapshot, which each snapshot counts again, and each terminal created past them. */
+   *  a snapshot, which each snapshot counts again, and each terminal created past them, less each of those removed. */
   over(count: number): void
 }
 
@@ -287,7 +287,8 @@ export function createHcClient(deps: HcClientDeps): HcClient {
       if (typeof seq !== 'number' || seq <= since || typeof address !== 'string' || typeof type !== 'string') return
       const was = kept.get(address)
       if (type === 'removed') {
-        if (!was) return
+        // Every terminal of this machine not kept is one left out, from the snapshot or created past the bound.
+        if (!was) return HC_TERMINAL.test(address) && left > 0 ? leave(left - 1) : undefined
         kept.delete(address)
         return to.changed({ ...was.told, live: false })
       }
