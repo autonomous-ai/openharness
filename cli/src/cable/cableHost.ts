@@ -113,6 +113,11 @@ export interface CableHostWiring {
    * `'question'` it was a question screen instead, and the window only brings the agent forward.
    */
   opened?: (machineId: string, agentId: string, reason?: OpenReason) => void
+  /** A person's tap opens an agent (an open with no reason), told as it is taken, before the open and whatever becomes
+   *  of it: the notice desk ends that agent's notice. Never a question screen that came up by itself. */
+  tapped?: (agentId: string) => void
+  /** Who sent a notice, for an agent no list holds: `describe` asks it last, after the outside agents and the fleet. */
+  noticeFrom?: (agentId: string) => { name: string; engine: string; machine: string } | undefined
   /** Brings Harness Desktop forward, starting it when it is not running: a tap on one of this computer's agents with no
    *  window. False when it could not. Absent where a tap cannot start it (off macOS): its agents then take no tap. */
   launchDesktop?: () => Promise<boolean>
@@ -925,7 +930,7 @@ export class DaemonCableHost implements CableHost {
   describe(agentId: string): { name: string; engine: string; machine: string } | undefined {
     const outside = this.outside(agentId)
     if (outside) return { name: outside.name, engine: outside.engine, machine: this.wiring.machineName() }
-    return this.viaFleet((r) => r.describe(agentId))
+    return this.viaFleet((r) => r.describe(agentId)) ?? this.wiring.noticeFrom?.(agentId)
   }
 
   async activityText(agentId: string): Promise<string | null> {
@@ -974,7 +979,10 @@ export class DaemonCableHost implements CableHost {
   openAgent(agentId: string, reason?: OpenReason): void | Promise<void | { ok: false; error: string }> {
     // The last tap wins, whatever agent it is on: a tap still waiting for Desktop's window would open its agent over the
     // app this one brings forward. A question screen that came up by itself is no tap.
-    if (!reason) this.endWaiting()
+    if (!reason) {
+      this.endWaiting()
+      this.wiring.tapped?.(agentId)
+    }
     const outside = this.outsideEntry(agentId)
     if (outside) {
       // Only a person's tap switches the other app: a question screen that came up by itself never does.
