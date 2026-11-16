@@ -226,6 +226,35 @@ describe('the devices write the dial skill', () => {
     expect(readHomes(r.dataDir)).toEqual({ claude: [], codex: [] })
   })
 
+  it('Off takes ours from the default home and the command\'s folders too, which no list holds', () => {
+    // The command wrote both at Turn on; the plugin was then uninstalled through /plugin, which runs no Turn off.
+    const r = rig()
+    const recorded = folder()
+    writeSkill(skillsAt(r.claudeHome))
+    writeSkill(skillsAt(recorded))
+    writeAnswer(r.dataDir, 'claude', true, [skillsOf(recorded)])
+
+    r.writer.started()
+
+    expect(existsSync(join(r.claudeHome, 'skills', 'dial'))).toBe(false)
+    expect(existsSync(join(recorded, 'skills', 'dial'))).toBe(false)
+    expect(r.lines).toEqual([counts([0, 2], [0, 0])])
+  })
+
+  it('the plugin uninstalled through /plugin takes the skill at the next scan', () => {
+    const r = rig()
+    pluginOn(r.claudeHome)
+    r.writer.started()
+    expect(hasSkill(r.claudeHome)).toBe(true)
+
+    // Claude Code writes its settings again, without the entry; dial-skill.json is untouched.
+    writeFileSync(join(r.claudeHome, 'settings.json'), JSON.stringify({ enabledPlugins: {} }))
+    r.writer.scanned([])
+
+    expect(existsSync(skillFile(r.claudeHome))).toBe(false)
+    expect(readHomes(r.dataDir).claude).toEqual([])
+  })
+
   it('the race: Off set between the write and the recheck removes the new one', () => {
     // The person turns Codex off the moment the skill lands: every read after that says Off.
     let off = false
