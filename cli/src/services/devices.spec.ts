@@ -4840,6 +4840,20 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     expect(calls('question')).toEqual([first, first])
   })
 
+  // A Harness agent's turn_started is sent only while a dial is attached (services/recaps.ts): a turn during the unplug
+  // would leave its card to ring again on the next plug-in.
+  it('a Harness agent\'s card goes with the last dial, an outside agent\'s stays', () => {
+    const { port, listener } = devices({ core: bound() })
+    port.observed(hook('turn-start'))
+    listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+    listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })
+    const [own, outside] = ids()
+    seen.host.watching!(false)
+    expect(calls('questionClose')).toEqual([['h1', own]])
+    seen.host.watching!(true)
+    expect(ids()).toEqual([own, outside, outside])
+  })
+
   // The window's unread list replaces the dial's whole drawer, and a question the dial pins is a row of that drawer.
   it('a window that changes what it has unread leaves the notices and the waits on the dial', () => {
     const { port, listener } = devices()

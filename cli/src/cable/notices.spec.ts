@@ -4,7 +4,7 @@ import { type NoticeCaller, Notices } from './notices.js'
 
 type Call = ['ask', string, string, unknown] | ['close', string, string]
 
-function desk(opts: { connected?: boolean; host?: string; who?: NoticeCaller['who'] } = {}) {
+function desk(opts: { connected?: boolean; host?: string; hosts?: Record<string, string>; who?: NoticeCaller['who'] } = {}) {
   const state = { connected: opts.connected ?? true, at: 0, ids: 0, resolved: 0 }
   const calls: Call[] = []
   const log: string[] = []
@@ -12,7 +12,8 @@ function desk(opts: { connected?: boolean; host?: string; who?: NoticeCaller['wh
     connected: () => state.connected,
     resolve: (ask) => {
       state.resolved += 1
-      return { agentId: ask.sessionId ?? 'a1', host: opts.host ?? 'orca', who: opts.who }
+      const agentId = ask.sessionId ?? 'a1'
+      return { agentId, host: opts.hosts?.[agentId] ?? opts.host ?? 'orca', who: opts.who }
     },
     ask: (agentId, id, questions) => calls.push(['ask', agentId, id, questions]),
     close: (agentId, id) => calls.push(['close', agentId, id]),
@@ -109,6 +110,20 @@ describe('Notices', () => {
     calls.length = 0
     notices.attached()
     expect(calls).toEqual(before)
+  })
+
+  // A Harness agent's next turn reaches the devices only while a dial listens (services/recaps.ts): its card cannot
+  // wait for it through an unplug, as another agent's can.
+  it('the last dial going ends the cards of Harness agents, and only theirs', () => {
+    const { notices, calls } = desk({ hosts: { h1: 'harness' } })
+    notices.notify(notice(VPN, 'h1'))
+    notices.notify(notice(VPN, 'o1'))
+    calls.length = 0
+    notices.detached()
+    expect(calls.map((c) => [c[0], c[1]])).toEqual([['close', 'h1']])
+    calls.length = 0
+    notices.attached()
+    expect(calls.map((c) => [c[0], c[1]])).toEqual([['ask', 'o1']])
   })
 
   it('each pending card is a drawer row, newest first, for a drawer replaced whole', () => {
