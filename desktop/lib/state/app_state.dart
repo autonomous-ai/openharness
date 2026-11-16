@@ -15363,13 +15363,14 @@ class AppNotifier extends ChangeNotifier {
         made.folder,
         keepBranch: made.keepBranch,
       )) {
-        appLog.info('worktree', 'kept after cancel: ${made.folder}');
+        appLog.info('worktree', 'kept after cancel');
       }
     } catch (error) {
+      // A filesystem error quotes the path, named after the person's branch.
       appLog.warn(
         'worktree',
-        'not removed after cancel: ${made.folder}',
-        error: error,
+        'not removed after cancel',
+        error: error.runtimeType,
       );
     }
   }
