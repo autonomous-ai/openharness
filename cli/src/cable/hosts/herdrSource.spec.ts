@@ -441,6 +441,28 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.timers).toEqual([])
   })
 
+  it('a pane that asked is named only until it is listed', async () => {
+    server.agents = [agent('w1:p1')]
+    const s = setup()
+    await live(s)
+    server.event('pane_agent_detected', detected('w2:p1'))
+    await s.until(() => s.timers.length === 1)
+    server.agents = [agent('w1:p1'), agent('w2:p1')]
+    s.advance(1000)
+    await listRead(3)
+    // w2:p1 closes while no subscription hears it.
+    server.drop()
+    server.agents = [agent('w1:p1')]
+    await s.until(() => s.log.at(-1) === '[herdr] retry · 1')
+    s.advance(1000)
+    await listRead(4)
+    server.event('pane_agent_detected', detected('w3:p1'))
+    await s.until(() => s.timers.length === 1)
+    s.advance(1000)
+    const fifth = await server.got('events.subscribe', 5)
+    expect(fifth.request).toMatchObject({ params: { subscriptions: [...KINDS, statusEntry('w1:p1'), statusEntry('w3:p1')] } })
+  })
+
   it('an entry with a bad pane id, kind or status is left out, the rest listed', async () => {
     server.agents = [
       agent('w1'), { ...agent('w2:p1'), agent: 'Claude' }, agent('w3:p1', null as unknown as string), agent('w4:p1', 'paused'),
