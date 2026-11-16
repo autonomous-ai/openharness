@@ -29,7 +29,6 @@ const PROJECTS: RouteOption[] = [{ id: '/code/billing', name: 'billing' }, { id:
 const AGENTS: RouteOption[] = [{ id: 'claude', name: 'Claude Code' }, { id: 'codex', name: 'Codex' }]
 
 const input = (over: Partial<RouteInput> = {}): RouteInput => ({ text: 'the prometheus alert fired again', sessions: DESK, projects: [], agents: [], ...over })
-const steps = (trace: string) => trace.split(' · ')
 
 const TARGET_QUESTION = 'A person typed this message into a box that either sends it to one of their ongoing sessions or starts a new one. ' +
   "Choose a session only when the message is clearly about that session's own work: it continues that work, or it is the same " +
@@ -99,7 +98,7 @@ describe('where a task goes', () => {
     const remote = jev({ target: said('s1', 0.8, TARGETS), project: said('p1', 0.9, ['p0', 'p1']), agent: said('a1', 0.9, ['a0', 'a1']) })
     const verdict = await decideRoute(input({ projects: PROJECTS, agents: AGENTS }), { jev: remote })
     // A session needs no project or agent: Jev's picks of them are not part of the verdict.
-    expect(verdict).toEqual({ kind: 'session', id: 'a2', p: 0.8, trace: '2 sessions · jev: "Prometheus alerts" 0.80, then "billing retries" 0.10' })
+    expect(verdict).toEqual({ kind: 'session', id: 'a2', p: 0.8, trace: '2 sessions · jev: "Prometheus alerts" 0.80, then "billing retries" 0.10', weighed: 2 })
     expect(remote).toHaveBeenCalledOnce()
     const [state, questions] = remote.mock.calls[0]!
     expect(state).toEqual({ message: 'the prometheus alert fired again' })
@@ -164,7 +163,7 @@ describe('where a task goes', () => {
     const remote = jev({ target: said('new', 1, ['new']) })
     const verdict = await decideRoute(input({ sessions: [] }), { jev: remote })
     expect(remote.mock.calls[0]![1].target!.criteria).toEqual({ new: 'None of them: no session does this kind of work' })
-    expect(verdict).toEqual({ kind: 'new', via: 'jev', why: 'Jev: new work', trace: '0 sessions · jev: "new" 1.00' })
+    expect(verdict).toEqual({ kind: 'new', via: 'jev', why: 'Jev: new work', weighed: 0 })
   })
 
   it('cuts a long rail to its first forty sessions, projects and agents for Jev, as the client ordered them', async () => {
@@ -180,8 +179,8 @@ describe('where a task goes', () => {
     expect(questions.target!.criteria.s39).toBe('topic 39')
     expect(Object.keys(questions.project!.criteria)).toEqual(Array.from({ length: 40 }, (_, i) => `p${i}`))
     expect(Object.keys(questions.agent!.criteria)).toEqual(Array.from({ length: 40 }, (_, i) => `a${i}`))
-    // The trace counts the sessions Jev weighed.
-    expect(steps(verdict.trace)[0]).toBe('40 sessions')
+    // The verdict counts the sessions Jev weighed.
+    expect(verdict.weighed).toBe(40)
   })
 
   it('tells Jev where the person\'s last task went when that was ten minutes ago or less, and that session is among those asked', async () => {
@@ -208,7 +207,7 @@ describe('where a task goes', () => {
       agent: said('a0', 0.65, ['a0', 'a1']),
     })
     const verdict = await decideRoute(input({ text: 'rename my photos by date', projects: PROJECTS, agents: AGENTS }), { jev: remote })
-    expect(verdict).toEqual({ kind: 'new', project: '/code/infra', agent: 'claude', via: 'jev', why: 'Jev: new work', trace: '2 sessions · jev: "new" 0.90, then "billing retries" 0.05' })
+    expect(verdict).toEqual({ kind: 'new', project: '/code/infra', agent: 'claude', via: 'jev', why: 'Jev: new work', weighed: 2 })
   })
 
   it('leaves the project and the agent to the caller when Jev is not sure of them, or did not answer them', async () => {
@@ -218,7 +217,7 @@ describe('where a task goes', () => {
       agent: said('a1', 0.4, ['a0', 'a1']),
     })
     const verdict = await decideRoute(input({ projects: PROJECTS, agents: AGENTS }), { jev: remote })
-    expect(verdict).toEqual({ kind: 'new', via: 'jev', why: 'Jev: new work', trace: '2 sessions · jev: "new" 0.90, then "billing retries" 0.05' })
+    expect(verdict).toEqual({ kind: 'new', via: 'jev', why: 'Jev: new work', weighed: 2 })
     const silent = await decideRoute(input({ projects: PROJECTS, agents: AGENTS }), { jev: jev({ target: said('new', 0.9, TARGETS) }) })
     expect(silent).not.toHaveProperty('project')
     expect(silent).not.toHaveProperty('agent')
@@ -231,12 +230,12 @@ describe('where a task goes', () => {
       agent: said('a1', 0.8, ['a0', 'a1']),
     })
     const verdict = await decideRoute(input({ projects: PROJECTS, agents: AGENTS }), { jev: remote })
-    expect(verdict).toEqual({ kind: 'new', project: '/code/billing', agent: 'codex', via: 'unsure', why: 'Jev was not sure', trace: '2 sessions · jev: "billing retries" 0.50, then "Prometheus alerts" 0.30' })
+    expect(verdict).toEqual({ kind: 'new', project: '/code/billing', agent: 'codex', via: 'unsure', why: 'Jev was not sure', weighed: 2 })
   })
 
   it('is new work Jev was not sure of when Jev leans to new work below the bar', async () => {
     const verdict = await decideRoute(input(), { jev: jev({ target: { choice: 'new', probabilities: { s0: 0.35, s1: 0.1, new: 0.55 } } }) })
-    expect(verdict).toEqual({ kind: 'new', via: 'unsure', why: 'Jev was not sure', trace: '2 sessions · jev: "new" 0.55, then "billing retries" 0.35' })
+    expect(verdict).toEqual({ kind: 'new', via: 'unsure', why: 'Jev was not sure', weighed: 2 })
   })
 
   it('goes to a session Jev leads with clearly below 0.6, and traces how far ahead it was', async () => {
@@ -244,7 +243,7 @@ describe('where a task goes', () => {
     const answer = (s1: number, other: number) => ({ target: { choice: 's1', probabilities: { s0: 0.05, s1, s2: 0.05, s3: 0.05, s4: 0.05, new: other } } })
     expect((await decideRoute(input({ sessions: desk }), { jev: jev(answer(0.45, 0.35)) })).kind).toBe('new')
     const led = await decideRoute(input({ sessions: desk }), { jev: jev(answer(0.57, 0.23)) })
-    expect(led).toEqual({ kind: 'session', id: 'a2', p: 0.57, trace: '5 sessions · jev: "Prometheus alerts" 0.57, then "new" 0.23' })
+    expect(led).toEqual({ kind: 'session', id: 'a2', p: 0.57, trace: '5 sessions · jev: "Prometheus alerts" 0.57, then "new" 0.23', weighed: 5 })
     // Two sessions and new work are three options: the bar stands.
     expect((await decideRoute(input(), { jev: jev({ target: { choice: 's1', probabilities: { s0: 0.2, s1: 0.57, new: 0.23 } } }) })).kind).toBe('new')
   })
@@ -261,17 +260,24 @@ describe('where a task goes', () => {
   })
 
   it('traces what Jev said even when it is no session on the desk, or nothing', async () => {
-    const strange = await decideRoute(input(), { jev: jev({ target: { choice: 's7', probabilities: { s0: 0.5, s1: 0.5 } } }) })
-    expect(strange).toEqual({ kind: 'new', via: 'unsure', why: 'Jev was not sure', trace: '2 sessions · jev: "s7" 0.00, then "billing retries" 0.50' })
-    const silent = await decideRoute(input(), { jev: jev({}) })
-    expect(silent).toEqual({ kind: 'new', via: 'unsure', why: 'Jev was not sure', trace: '2 sessions · jev: no answer' })
+    const strangely = { target: { choice: 's7', probabilities: { s0: 0.5, s1: 0.5 } } }
+    // A message that names nothing still goes where the last one went, and the trace says what Jev said.
+    const follow = input({ text: 'merge it', last: { id: 'a2', agoMs: 60_000 } })
+    const went = 'names nothing: to "Prometheus alerts", where the last went'
+    expect(await decideRoute(follow, { jev: jev({ ...strangely, topic: topicless() }) }))
+      .toEqual({ kind: 'session', id: 'a2', p: 0.8, trace: `2 sessions · jev: "s7" 0.00, then "billing retries" 0.50 · ${went}`, weighed: 2 })
+    expect(await decideRoute(follow, { jev: jev({ topic: topicless() }) }))
+      .toEqual({ kind: 'session', id: 'a2', p: 0.8, trace: `2 sessions · jev: no answer · ${went}`, weighed: 2 })
+    // A message that names something is then new work Jev was not sure of.
+    expect(await decideRoute(input(), { jev: jev(strangely) })).toEqual({ kind: 'new', via: 'unsure', why: 'Jev was not sure', weighed: 2 })
+    expect(await decideRoute(input(), { jev: jev({}) })).toEqual({ kind: 'new', via: 'unsure', why: 'Jev was not sure', weighed: 2 })
   })
 
   it('decides nothing when Jev is not set up', async () => {
     const lines: string[] = []
     expect(await decideRoute(input({ projects: PROJECTS, agents: AGENTS }), { log: (line) => lines.push(line) }))
-      .toEqual({ kind: 'unavailable', why: 'Jev is not set up', trace: '2 sessions · jev: not set up' })
-    expect(await decideRoute(input({ sessions: [] }), {})).toEqual({ kind: 'unavailable', why: 'Jev is not set up', trace: '0 sessions · jev: not set up' })
+      .toEqual({ kind: 'unavailable', why: 'Jev is not set up', weighed: 2 })
+    expect(await decideRoute(input({ sessions: [] }), {})).toEqual({ kind: 'unavailable', why: 'Jev is not set up', weighed: 0 })
     // Nothing failed: there is nothing to log.
     expect(lines).toEqual([])
   })
@@ -281,7 +287,7 @@ describe('where a task goes', () => {
     const failing = vi.fn(async () => { throw Object.assign(new JevUnavailable('BUSY', 'OpenRouter is busy'), { cause: { code: 'UND_ERR_SOCKET' } }) })
     const verdict = await decideRoute(input({ projects: PROJECTS, agents: AGENTS }), { jev: failing, log: (line) => lines.push(line) })
     // The verdict says the error alone, for the person; the log says its cause too, for whoever debugs it.
-    expect(verdict).toEqual({ kind: 'unavailable', why: 'OpenRouter is busy', trace: '2 sessions · jev: failed' })
+    expect(verdict).toEqual({ kind: 'unavailable', why: 'OpenRouter is busy', weighed: 2 })
     expect(lines).toEqual(['jev could not answer: OpenRouter is busy (UND_ERR_SOCKET)'])
     // A cause with no code says its message; no cause, the error alone.
     const logged = async (error: Error) => {
@@ -290,15 +296,15 @@ describe('where a task goes', () => {
       return { answer, said }
     }
     expect(await logged(new Error('fetch failed', { cause: { message: 'socket hang up' } }))).toEqual({
-      answer: { kind: 'unavailable', why: 'fetch failed', trace: '2 sessions · jev: failed' },
+      answer: { kind: 'unavailable', why: 'fetch failed', weighed: 2 },
       said: ['jev could not answer: fetch failed (socket hang up)'],
     })
     expect(await logged(new JevUnavailable('NO_KEY', 'no OpenRouter key on this computer'))).toEqual({
-      answer: { kind: 'unavailable', why: 'no OpenRouter key on this computer', trace: '2 sessions · jev: failed' },
+      answer: { kind: 'unavailable', why: 'no OpenRouter key on this computer', weighed: 2 },
       said: ['jev could not answer: no OpenRouter key on this computer'],
     })
     // Without a log it goes the same way.
-    await expect(decideRoute(input(), { jev: failing })).resolves.toEqual({ kind: 'unavailable', why: 'OpenRouter is busy', trace: '2 sessions · jev: failed' })
+    await expect(decideRoute(input(), { jev: failing })).resolves.toEqual({ kind: 'unavailable', why: 'OpenRouter is busy', weighed: 2 })
   })
 })
 
@@ -353,8 +359,7 @@ describe('a message that names nothing of its own', () => {
   it('goes where the last task went, minutes ago, whatever the sessions\' words', async () => {
     const remote = jev({ target: said('s0', 0.5, TARGETS), topic: topicless() })
     const verdict = await decideRoute(input({ text: 'merge it', last: { id: 'a2', agoMs: 60_000 } }), { jev: remote })
-    expect(verdict).toMatchObject({ kind: 'session', id: 'a2', p: 0.8 })
-    expect(steps(verdict.trace)).toContain('names nothing: to "Prometheus alerts", where the last went')
+    expect(verdict).toMatchObject({ kind: 'session', id: 'a2', p: 0.8, trace: expect.stringMatching(/ · names nothing: to "Prometheus alerts", where the last went$/) })
     // The previous session is told to Jev, and how to read it.
     expect(remote.mock.calls[0]![0]).toEqual({ message: 'merge it', previous_message_went_to: 'Prometheus alerts' })
     expect(remote.mock.calls[0]![1].target!.instructions).toBe(TARGET_QUESTION + FOLLOW_UP)
@@ -363,7 +368,6 @@ describe('a message that names nothing of its own', () => {
   it('is new work when nothing went anywhere just now, even with a session Jev is sure of', async () => {
     const verdict = await decideRoute(input({ text: 'merge it' }), { jev: jev({ target: said('s0', 0.95, TARGETS), topic: topicless() }) })
     expect(verdict).toMatchObject({ kind: 'new', via: 'jev', why: 'names nothing, and no task went anywhere just now' })
-    expect(steps(verdict.trace)).toContain('names nothing: nowhere to go')
   })
 
   it('is new work when Jev is sure of another session than the last: the two disagree', async () => {

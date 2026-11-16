@@ -214,21 +214,15 @@ export function pickAgentHeuristic(
   }
 }
 
-/** One line of the voice task, bounded — the adapter log already carries injected messages this way. */
-function taskPreview(text: string): string {
-  const flat = text.replace(/\s+/g, ' ').trim()
-  return flat.length > 80 ? `${flat.slice(0, 79)}…` : flat
-}
-
-/** Name the winner. Without this the log said an engine ran and never which agent it picked, so a wrong
- *  route looked identical to a right one. `via` separates a real classification from a fallback. */
-function logDecision(via: string, agents: RouterAgent[], decision: RouteDecision): RouteDecision {
+/** Say which agent won. Without this the log said an engine ran and never which agent it picked, so a wrong
+ *  route looked identical to a right one. `via` separates a real classification from a fallback. The id
+ *  identifies the pick; the agent's name and the router's reason are left out because they quote the
+ *  person's session titles and spoken words. */
+function logDecision(via: string, decision: RouteDecision): RouteDecision {
   decision = { ...decision, via }
-  const chosen = agents.find((agent) => agent.id === decision.agentId)
   console.log(
-    `[voice-route] → picked "${chosen?.name ?? '(unknown)'}" id=${decision.agentId || '(none)'}` +
-    ` · confidence=${decision.confidence.toFixed(2)} · via=${via}` +
-    `${decision.reason ? ` · "${decision.reason}"` : ''}`,
+    `[voice-route] → picked id=${decision.agentId || '(none)'}` +
+    ` · confidence=${decision.confidence.toFixed(2)} · via=${via}`,
   )
   return decision
 }
@@ -382,6 +376,14 @@ const CONTINUITY_SCORE = 3
 
 export const ROUTE_CLASSIFY_MS = 12_000
 
+/** A failed one-shot for the log, from its fields and never its message: an engine's stderr or result
+ *  can echo the prompt (the spoken task, agent names). */
+function failureOf(err: unknown): string {
+  const { failure, stderrBytes, code } = (err ?? {}) as { failure?: unknown; stderrBytes?: unknown; code?: unknown }
+  if (typeof failure === 'string') return `${failure} · stderr=${stderrBytes}B`
+  return typeof code === 'string' ? code : 'error'
+}
+
 export async function routeVoiceTask(
   transcript: string,
   agents: RouterAgent[],
@@ -398,17 +400,18 @@ export async function routeVoiceTask(
   const dropped = agents.length - routable.length
   agents = routable
   // What the backend handed down, and what it may choose between. Logged before anything can fail, so a
-  // route that times out still shows the task and the candidates it was weighing.
+  // route that times out still shows the task and the candidates it was weighing. The task by its length and
+  // each candidate by a short id, because the words and the session titles are the person's own content.
   console.log(
-    `[voice-route] task "${taskPreview(transcript)}" · candidates=${agents.length}` +
+    `[voice-route] task ${transcript.length} chars · candidates=${agents.length}` +
     `${dropped ? ` (${dropped} terminal${dropped === 1 ? '' : 's'} not routable)` : ''}` +
-    `${agents.length ? ` [${agents.map((agent) => `${agent.name}/${agent.engine ?? '?'}`).join(', ')}]` : ''}`,
+    `${agents.length ? ` [${agents.map((agent) => `${agent.id.slice(0, 8)}/${agent.engine ?? '?'}`).join(', ')}]` : ''}`,
   )
   if (agents.length === 0) {
-    return logDecision('empty-machine', agents, { agentId: '', confidence: 0, reason: 'no agents in machine', needNewAgent: true })
+    return logDecision('empty-machine', { agentId: '', confidence: 0, reason: 'no agents in machine', needNewAgent: true })
   }
   if (agents.length === 1) {
-    return logDecision('only-agent', agents, { agentId: agents[0].id, confidence: 1, reason: 'only agent in machine', needNewAgent: false })
+    return logDecision('only-agent', { agentId: agents[0].id, confidence: 1, reason: 'only agent in machine', needNewAgent: false })
   }
 
   // THE BACKEND FIRST — it owns the prompt now, so a wording fix ships with a deploy instead of with a
@@ -427,7 +430,7 @@ export async function routeVoiceTask(
   })
   if (ranked && ranked.length > 0) {
     const [top, ...rest] = ranked
-    return logDecision('backend', agents, {
+    return logDecision('backend', {
       agentId: top.agentId,
       confidence: top.score,
       reason: top.reason,
@@ -456,7 +459,7 @@ export async function routeVoiceTask(
       const text = await openRouterComplete({
         prompt, model: env.ORI_VOICE_ROUTE_MODEL, apiKey, signal, timeoutMs, maxTokens: 256,
       })
-      if (text) return logDecision('openrouter', agents, parseRouteOutput(text, agents))
+      if (text) return logDecision('openrouter', parseRouteOutput(text, agents))
       console.log('[voice-route] openrouter classification unavailable → engine one-shot')
     }
   }
@@ -467,7 +470,7 @@ export async function routeVoiceTask(
   const engine = chooseRouterEngine(agents.filter((agent) => agent.engine).map((agent) => ({ engine: agent.engine as string }))) ?? routerEngine
   if (!engine) {
     console.log('[voice-route] no agent this router can run on → name matching')
-    return logDecision('heuristic (no engine)', agents, pickAgentHeuristic(transcript, agents, continuity))
+    return logDecision('heuristic (no engine)', pickAgentHeuristic(transcript, agents, continuity))
   }
   const model = routerModelFor(engine)
   ensureRouterConfigured(engine)   // so runRouterOneShot matches the pool config and uses the warm worker
@@ -480,12 +483,12 @@ export async function routeVoiceTask(
     const { text } = engine === 'grok'
       ? await runGrokOneShot(options)
       : await runRouterOneShot(engine, options)
-    return logDecision(engine, agents, parseRouteOutput(text || '', agents))
+    return logDecision(engine, parseRouteOutput(text || '', agents))
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') throw err   // caller cancelled — don't paper over it
     // The classifier timed out / spawn failed → NEVER fail the RPC. Fall back to a heuristic pick so the
     // voice still dispatches to a plausible agent instead of erroring out on the device.
-    console.log(`[voice-route] ${engine} one-shot failed (${err instanceof Error ? err.message : String(err)}) → name matching`)
-    return logDecision(`heuristic (${engine} failed)`, agents, pickAgentHeuristic(transcript, agents, continuity))
+    console.log(`[voice-route] ${engine} one-shot failed (${failureOf(err)}) → name matching`)
+    return logDecision(`heuristic (${engine} failed)`, pickAgentHeuristic(transcript, agents, continuity))
   }
 }

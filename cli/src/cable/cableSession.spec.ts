@@ -247,6 +247,25 @@ describe('cable session', () => {
     } finally { await session.stop() }
   })
 
+  it('logs the terminal footer by its length, never its words', async () => {
+    const lines: string[] = []
+    const footer = 'SECRET-FOOTER fix the login bug'
+    const activityText = vi.fn(async (): Promise<string | null> => footer)
+    const { session, port } = await connect(makeHost({ activityText, log: (line) => lines.push(line) }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      await session.focusAgent('a1')
+      await session['refreshFocusedActivity']()
+      expect(lines).toContain(`cable: terminal activity a1: footer ${footer.length} chars`)
+      activityText.mockResolvedValueOnce(null)
+      await session.focusAgent('a2')
+      await session['refreshFocusedActivity']()
+      expect(lines).toContain('cable: terminal activity a2: no live footer')
+      expect(lines.join('\n')).not.toContain('SECRET')
+    } finally { await session.stop() }
+  })
+
   it('sends the exact terminal activity without delaying turn liveness', async () => {
     let finish!: (text: string | null) => void
     const { session, port } = await connect(makeHost({ activityText: () => new Promise(resolve => { finish = resolve }) }))
@@ -2023,6 +2042,26 @@ describe('cable session', () => {
       expect(lines).toContain('cable: voice turn agent=none cmd=none lang=en sr=16000 peak=0 rms=0 transcript=0')
       expect(lines.filter((l) => l.startsWith('cable: voice turn '))).toHaveLength(2)
       expect(lines.join('\n')).not.toContain('login')
+    } finally { await session.stop() }
+  })
+
+  it('logs a routed voice turn by the pick and its confidence, never the words or the router\'s reason', async () => {
+    const lines: string[] = []
+    const host = makeHost({
+      log: (line) => lines.push(line),
+      transcribe: async () => 'SECRET-TRANSCRIPT fix the login bug',
+      route: async () => ({ agentId: 'a1', confidence: 0.87, reason: 'SECRET-REASON the user wants the login bug fixed' }),
+    })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await settle()
+      port.say({ t: 'voice.begin', lang: 'en', sr: 16000 })
+      port.pcm(Buffer.alloc(3200, 7))
+      port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalled())
+      expect(lines).toContain('cable: routed → a1 (confidence 0.87)')
+      expect(lines.join('\n')).not.toContain('SECRET')
     } finally { await session.stop() }
   })
 
