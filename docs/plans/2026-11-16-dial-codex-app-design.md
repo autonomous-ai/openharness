@@ -50,7 +50,9 @@ and it registers the URL scheme `codex`. `cli/src/cable/hosts/hostDetect.ts` `AP
    fallback line and run `open -b` once more, unchanged: rare and harmless (PM, 2026-11-16).
 10. **Docs:** the devices row in `cli/AGENTS.md` and the adapter table in
     [the host adapter spec](../specs/2026-11-15-device-host-adapter.md) name the Codex app.
-11. **Not in this pull request:** the dial following the session the app's window shows (the Claude app has that from
+11. **The link goes to the Codex app alone** (`open -b com.openai.codex <url>`), so no other app that registers
+    `codex` gets a thread id. The Claude app's link keeps its one-argument form here (Follow-ups).
+12. **Not in this pull request:** the dial following the session the app's window shows (the Claude app has that from
    its mod's `session.attach`; the Codex app offers no such event that is known).
 
 ## Design
@@ -91,7 +93,9 @@ One `HostAdapter`, `id: 'codex'`, `tap: 'instead'` (the link brings the app forw
   'codex'` and `place.sessionId` matches `CODEX_THREAD`; none otherwise. A hook's place and a scanned place both have
   these three (the scan sets the app and the session id, `observed.ts` `scanOnce`, then `learnTty` locates the panes).
 - `canFocus`: macOS only. `focus(pane)`: checks the id against `CODEX_THREAD` again, then runs
-  `/usr/bin/open codex://threads/<id>` with no shell, the URL one argument, under `RUN_TIMEOUT_MS`; true on exit 0.
+  `/usr/bin/open -b com.openai.codex codex://threads/<id>` with no shell, the URL one argument, under
+  `RUN_TIMEOUT_MS`; true on exit 0. `-b` hands the link to the Codex app alone, so another app that registers the
+  `codex` scheme never receives a thread id (PM, 2026-11-16).
 - `canShow`: macOS and the app most recently reported in front is `codex` (`cableHost.latestFront()`), asked at each
   look. `show(pane, agentId)`: the same link; `'busy'` while a link for that agent runs; `'ok'` or `'failed'`.
 - A link that fails (`open` exits non-zero or times out) brings the app forward from the adapter itself:
@@ -158,7 +162,7 @@ goes only into the `open` argument, checked against its form; it is never logged
   - `scannedApp.spec.ts`: a Codex process under `/Applications/ChatGPT.app` is the `codex` app.
   - `codexApp.spec.ts`: `paneOf` for a hook's place and a scan's place; none for another app, another engine or a
     session id that is not a UUID; `focus` runs `/usr/bin/open` with `codex://threads/<id>` as its one argument on
-    macOS, nothing elsewhere; a link that exits non-zero or times out runs `open -b com.openai.codex` once and logs the
+    macOS (as `-b com.openai.codex <url>`), nothing elsewhere; a link that exits non-zero or times out runs `open -b com.openai.codex` once and logs the
     fallback line with no thread id; `show` only with the app in front, `'busy'` while one runs.
   - `open.spec.ts`: a Codex pane whose link failed and whose app came forward runs no second `open -b`.
   - `appLink` and `claudeApp.spec.ts`: the Claude app's behavior unchanged.
@@ -172,6 +176,11 @@ goes only into the `open` argument, checked against its form; it is never logged
 - **By Diego, on his Mac and dial** (holds the merge; the PM asks him once the PR is ready): with the Codex app open
   on its sessions, the dial shows a "Codex" page; a tap on one opens that chat in the app; a rest with the app in front
   shows it.
+
+## Follow-ups
+
+- **The Claude app's link by its bundle id too:** `open -b com.anthropic.claudefordesktop claude://code/continue?…`,
+  so no other app that registers `claude` gets a session id (`claudeApp.ts`).
 
 ## Done when
 
