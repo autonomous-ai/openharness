@@ -1323,6 +1323,17 @@ mod tests {
     }
 
     #[test]
+    fn an_install_waiting_to_relaunch_checks_no_more() {
+        let mut app = on_claude();
+        installed(&mut app);
+        // The window stays open past six hours: this process is still the old version, and a check would find the
+        // installed one again and install it a second time.
+        assert!(!has(&app.handle(tick(B + 10 + H6)), &Effect::CheckUpdate));
+        app.handle(Event::WindowClosed);
+        assert!(app.handle(tick(B + 15 + H6)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
+    }
+
+    #[test]
     fn a_failure_is_one_line_and_the_next_check_tries_again() {
         let kinds = [
             (UpdateFailure::Check, "check"),
