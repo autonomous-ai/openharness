@@ -655,16 +655,37 @@ describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11
     expect(s.show).toHaveBeenCalledTimes(2)
   })
 
-  it('shows answers for a listed address only', async () => {
-    server.terminals = [agent('t7'), agent('t8', { labels: {} }), ...Array.from({ length: 64 }, (_, at) => agent(`t${at + 9}`))]
+  it('shows: each live terminal Herdr\'s window shows, with a status or none, listed or past the 64; reports: each live one hc reports an agent status for, shown or not', async () => {
+    server.terminals = [
+      agent('t7'),
+      agent('t8', { status: null }),
+      // A hidden worker, whose hook's copy takes words.
+      agent('t9', { labels: {} }),
+      agent('t10', status('idle', 'Weird App')),
+      agent('t11', status('paused')),
+      agent('t12', { state: 'finished' }),
+      // With t7, 65 listable: t76 is past the 64.
+      ...Array.from({ length: 64 }, (_, at) => agent(`t${at + 13}`)),
+    ]
     const s = setup()
     await live(s)
-    expect(s.source.shows('t7')).toBe(true)
-    expect(s.source.shows('t71')).toBe(true)
-    // Not in Herdr's window, the 65th listable, and one hc does not hold.
-    expect(s.source.shows('t8')).toBe(false)
-    expect(s.source.shows('t72')).toBe(false)
-    expect(s.source.shows('t99')).toBe(false)
+    expect(row(s, 't76')).toBeUndefined()
+    const shown = () => ['t7', 't8', 't9', 't10', 't11', 't12', 't76', 't99'].filter((address) => s.source.shows(address))
+    const reported = () => ['t7', 't8', 't9', 't10', 't11', 't12', 't76', 't99'].filter((address) => s.source.reports(address))
+    expect(shown()).toEqual(['t7', 't8', 't10', 't11', 't76'])
+    expect(reported()).toEqual(['t7', 't9', 't76'])
+
+    server.change('t8', status('working'))
+    server.remove('t9')
+    // Lines come in order: t7's is read after the others.
+    server.change('t7', { labels: {} })
+    await s.until(() => row(s, 't7') === undefined)
+    expect(shown()).toEqual(['t8', 't10', 't11', 't76'])
+    expect(reported()).toEqual(['t7', 't8', 't76'])
+
+    s.source.stop()
+    expect(shown()).toEqual([])
+    expect(reported()).toEqual([])
   })
 
   it('no log line holds an address, a name, a folder or the words', async () => {
