@@ -196,6 +196,10 @@ function touches(theirs: string, ours: string): boolean {
 /** How Harness's rules file begins in every release: the commands the header lists after it change from one to the
  *  next, so uninstall knows a file an earlier release wrote by this alone. */
 export const RULES_OPENING = '# Written by Harness, which rewrites it: do not edit.'
+/** Each way a release began that file, the first release's whole line included (CLI 0.3.74 to 0.3.79): uninstall
+ *  takes out a file that begins with one, and keeps any other as the person's. */
+export const RULES_OPENINGS: readonly string[] = [
+  '# Written by Harness: agents in a tab with Agent Messages on reply with harness send. Do not edit.\n', RULES_OPENING]
 
 /** The head of Harness's rules file: what it is for, and that Harness keeps it. */
 export const RULES_HEADER = `${RULES_OPENING} Its agent commands (harness ${
