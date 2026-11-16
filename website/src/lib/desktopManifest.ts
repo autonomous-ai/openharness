@@ -75,7 +75,8 @@ export async function resolveManifestDownload(download: ManifestDownload): Promi
   const { manifestUrl, field, allowedPrefixes, extension, product } = download;
   let manifest: unknown;
   try {
-    const res = await fetch(manifestUrl, { cache: "no-store" });
+    // Bounded, so a bucket that never answers cannot hold the visitor's request open.
+    const res = await fetch(manifestUrl, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
     if (!res.ok) return unavailable(product, `manifest HTTP ${res.status}`);
     manifest = await res.json();
   } catch {
