@@ -88,9 +88,11 @@ export function writeSkill(skills: string): 'written' | 'same' | 'theirs' | 'fai
   const now = held(skills)
   if (now === 'same' || now === 'theirs') return now
   const folder = join(skills, 'dial')
+  let made = false
   try {
     // Not recursive: `skills` is the resolved folder, and a `dial` already there was checked to be a real folder.
     mkdirSync(folder, { mode: 0o700 })
+    made = true
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return 'failed'
   }
@@ -101,6 +103,8 @@ export function writeSkill(skills: string): 'written' | 'same' | 'theirs' | 'fai
     return 'written'
   } catch {
     rmSync(temporary, { force: true })
+    // Left empty, the folder this call made would be nobody's.
+    if (made) removeEmpty(folder)
     return 'failed'
   }
 }
@@ -115,13 +119,18 @@ export function removeSkill(skills: string): 'removed' | 'none' | 'theirs' | 'fa
     // Another remover took it first: the command and the devices service both remove at a Turn off.
     return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'none' : 'failed'
   }
+  // `skills` is the person's agent folder and stays.
+  removeEmpty(folder)
+  return 'removed'
+}
+
+/** Only an empty folder goes: a file of the person's beside the skill makes the folder theirs. */
+function removeEmpty(folder: string): void {
   try {
-    // Only an empty folder goes; `skills` is the person's agent folder and stays.
     rmdirSync(folder)
   } catch {
-    // A file of the person's beside the skill: the folder is theirs now.
+    // Not empty, or already gone.
   }
-  return 'removed'
 }
 
 /**
