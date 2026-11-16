@@ -2248,3 +2248,59 @@ checks pass (`/tmp/core-registry-index-v3-types.log`). These checks ran on macOS
 x64 / pinned Node 24.22.2, with no more than two test workers. No broad gate or
 acceptance workload has run on this correction; the next artifact is a diagnostic
 allocation profile of the frozen candidate, not permission to clear the RSS gate.
+
+### Design — reuse unchanged prepared normalization (2026-11-16)
+
+The exact `63444a6a` allocation profile attributes 81.99 MB (5.61% of sampled
+cumulative allocation) to parsing the post-refresh rebase. Every unchanged
+prepared row has already passed `validatedRows`, but that final map parses it
+again. Keep an operation-local identity lookup from each serialized prepared
+object to its normalized private row. Reuse only when the fresh live merge
+returns that exact object. Any live-derived or changed result is parsed afresh;
+ids, equal contents or a cached pre-await owner never authorize reuse.
+
+The captured inputs come from deep private snapshots, JSON-read disk data or
+the existing private uncertain-publication images. Normalization constructs its
+own row and normalized arrays; serialization copies the top level and runtimes.
+Neither object is exposed to live callers before the no-yield installation.
+The fresh merge never mutates the committed objects: changes produce new rows.
+Keep native refresh, ownership/revision checks, peer reconciliation, durable
+publication, detached receipts and final live/baseline comparisons unchanged.
+
+Growth: one lookup entry per prepared row, discarded after that operation; no
+retained cache, new queue or disk data. The registry's existing full-image reads
+have no finite configured production row/byte limit. The 160-row fixture is a
+scale sample, not a production bound; that architecture debt remains in the
+parent's scale review. Read cost: remove only duplicate normalization, not any
+disk read or live comparison. Scale and measures: the existing content-free
+persistence phase/queue measures remain; root owns final-source CPU/RSS and
+latency headroom review. Sampled allocation is not retained memory or acceptance.
+
+Compatibility, migration, audience and identity: no public or stored shape,
+account, credential, access decision or retention changes. No migration is
+needed; rollback is a code revert. Failure behavior is unchanged: a changed
+invalid live row still rejects before publication. Platforms are shared
+TypeScript on macOS, Linux and Windows; focused checks here run on macOS x64,
+pinned Node 24.22.2. Root approved this narrow Design before implementation.
+
+Validation selected first: tighten the public third-admission normalization
+budget from 18 to 15 (three prepared rows), preserving complete bytes, row order
+and receipt checks. Add a held-preparation invalid live-row control so an id-only
+lookup would fail. Run the existing caller, merge, admission, observation,
+persistence and fingerprint suites (at most two workers) and TypeScript. Their
+nested edits, deletion, uncertainty and recovery controls must still pass.
+No broad/native gate or final timing rerun belongs to this correction's first
+pass; prior cost failures remain recorded.
+
+Before the runtime change, the two selected caller controls produced the intended
+RED: 18 normalizations against the 15 budget, while rejecting an invalid live row
+after preparation already passed (1.77 seconds). The failure is retained in
+`/tmp/core-registry-prepared-row-v1-red.log`.
+
+With the identity lookup, all 144 selected caller, merge, admission, observation,
+persistence and fingerprint checks pass (six files, 52.61 seconds), including
+the 15-normalization budget and the new invalid-live-row refusal. TypeScript and
+diff checks pass. Logs are `/tmp/core-registry-prepared-row-v1-green.log` and
+`/tmp/core-registry-prepared-row-v1-types.log`. The runtime delta is nine added
+lines and two removed. Independent review and final-source acceptance remain
+root's work; no cost or RSS improvement is claimed from these tests.

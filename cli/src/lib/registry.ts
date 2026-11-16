@@ -3532,7 +3532,14 @@ class Registry {
         const merged = [...mergedForSave(latest, currentRows, this.persistedBaseline, capturedIntents, snapshotFingerprint, identities).values()]
         const rows = validatedRows(merged)
         if (!rows) throw new Error('registry transaction would violate global identity invariants')
-        const serialized = rows.map(persistedRow)
+        // Exact prepared objects may survive the fresh live rebase unchanged; their normalized rows
+        // are still private. Changed/live-derived objects must be parsed again after refresh.
+        const preparedRows = new Map<object, RegisteredSession>()
+        const serialized = rows.map(row => {
+          const saved = persistedRow(row)
+          preparedRows.set(saved, row)
+          return saved
+        })
         const contents = JSON.stringify(serialized, null, 2)
         const prepared = await prepareRegistryImage(FILE, contents, deadline)
         let rebased: RegisteredSession[]
@@ -3547,7 +3554,7 @@ class Registry {
           const committed = new Map(serialized.map(row => [row.agentId, row as unknown as Record<string, unknown>]))
           const remainingIntents = new Map([...this.intended].filter(([id, intent]) => capturedIntents.get(id) !== intent))
           rebased = [...mergedForSave(committed, liveRows, beforeCommit, remainingIntents).values()].map(value => {
-            const row = strictPersistedRow(value)
+            const row = preparedRows.get(value) ?? strictPersistedRow(value)
             if (!row) throw new IdentityReadUnavailable('a live registry observation changed to an invalid row')
             return row
           })

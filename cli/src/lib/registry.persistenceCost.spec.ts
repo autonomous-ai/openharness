@@ -206,7 +206,7 @@ it('avoids repeated canonical row copies when admitting a new durable owner', as
   expect(fingerprints).toBeLessThanOrEqual(11)
 })
 
-it('normalizes an unchanged durable owner once for synchronous admission conflict checks and merge', async () => {
+it('reuses private normalization across admission checks and unchanged prepared rows', async () => {
   const previous = disk(), { validTerminalRuntime } = await import('./registry.js')
   const filter = Array.prototype.filter
   let normalizations = 0
@@ -226,8 +226,24 @@ it('normalizes an unchanged durable owner once for synchronous admission conflic
   expect(saved.slice(0, 2)).toEqual(previous)
   expect(saved[2]).toEqual(opened!.entry)
   expect(io.durable).toEqual([saved])
-  // Twenty-two previously: the same two prior rows were indexed three times before preparation.
-  expect(normalizations).toBeLessThanOrEqual(18)
+  // Eighteen before prepared-row reuse: all three unchanged prepared rows were parsed again.
+  expect(normalizations).toBeLessThanOrEqual(15)
+})
+
+it('rejects a live row made invalid after preparation instead of reusing its earlier normalized owner', async () => {
+  const live = registry!.byAgent(A)!, originalProject = live.projectDir
+  const before = readFileSync(io.file, 'utf8'), held = holdPreparation()
+  const pending = track(registry!.setClosePlan(A, plan))
+  await held.entered()
+  ;(live as unknown as Record<string, unknown>).projectDir = 42
+  held.release()
+  try {
+    await expect(pending).rejects.toThrow('invalid row')
+    expect(io.durable).toEqual([])
+    expect(readFileSync(io.file, 'utf8')).toBe(before)
+    expect(live.closePlan).toBeUndefined()
+    expect(registry!.byAgent(A)).toBe(live)
+  } finally { live.projectDir = originalProject }
 })
 
 it('removes a departed baseline owner before placing its durable successor last', async () => {
