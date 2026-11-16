@@ -8,7 +8,8 @@ in `src-tauri/`; the window's three screens are plain TypeScript in `ui/`.
 
 - Rust stable, 1.95 or newer (`rust-version` in `src-tauri/Cargo.toml`): `rustup update stable`. The repo pins no
   toolchain; CI uses `dtolnay/rust-toolchain@stable`.
-- The Tauri CLI, to build and run the app (CI does not use it): `cargo install tauri-cli --version "^2" --locked`.
+- The Tauri CLI 2.12.4, to build and run the app: `cargo install tauri-cli --version 2.12.4 --locked`. PR CI does not
+  use it; the release pins that version (`scripts/release-setup.sh`).
 - macOS 13 or later (`SMAppService`). Linux builds need webkit2gtk 4.1, appindicator and rsvg.
 - Tauri's dependencies take minutes to compile: one `CARGO_TARGET_DIR` outside the repository compiles them once.
 
@@ -17,7 +18,8 @@ in `src-tauri/`; the window's three screens are plain TypeScript in `ui/`.
 - `cd src-tauri && cargo test --lib`: every rule. It needs no `ui/dist`.
 - `cd ui && npm run build` first, before `cargo test` or `cargo build`: the binary embeds `ui/dist`.
 - `cd ui && npm test` and `npm run typecheck`: the window.
-- `cd src-tauri && cargo tauri build --debug`: the app bundle.
+- `cd src-tauri && cargo tauri build --debug`: the app bundle. A local build is version 0.0.0 and never checks for
+  updates: only a build the release stamped with its version updates itself.
 - `cd ui && npm run gallery`: every screen in every state, both themes (`ui/gallery.html`).
 - `cd src-tauri && cargo test --locked --lib -- --ignored scratch_terminal_windows`, on a Mac, run from another
   terminal app than Terminal, with Terminal running and another app in front: the Terminal scripts against two Terminal
@@ -31,7 +33,8 @@ in `src-tauri/`; the window's three screens are plain TypeScript in `ui/`.
   fetches its own update manifest (`update.rs`), with nothing from the webview in the request.
 - **Fixed arguments.** The app runs only the CLI it found, the two install lines and `open`, each with arguments
   fixed in Rust. Nothing from the webview becomes a command line: it sends one of six action names. It relaunches itself
-  through Tauri's restart (`open -n` on its own bundle), with nothing from the webview or the manifest in it.
+  through Tauri's restart (`open -n` on its own bundle), and the updater plugin runs `touch` on the bundle after the
+  swap (the `touch` found on the person's PATH); nothing from the webview or the manifest is in either.
 - **The app in front is private.** It is written to the watch's stdin and nowhere else (`front.rs`), and never logged.
 - **Fixed scripts.** Every AppleScript is fixed text in `tabs_macos.rs`, for an app from its own list of three. A tty
   passes the tty check and reaches a script only as a handler parameter, never in its text.

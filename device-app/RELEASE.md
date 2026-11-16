@@ -122,10 +122,13 @@ A red run names its step.
 
 ## How an installed app updates
 
-A release build on macOS checks the manifest on its first tick after launch, then every 6 hours, but never while the
-CLI installs or a sign-in runs. A newer version is downloaded, its signature checked against the public key, installed
-over the running bundle, and the app relaunches. While it downloads, the menu shows `Updating to 0.1.3…`. Timeouts:
-check 30 s, download 5 min. A failure changes nothing on disk; the next check tries again.
+A build the release stamped with its version checks the manifest on macOS on its first tick after launch, then every
+6 hours, but never while the CLI installs or a sign-in runs. A local `cargo tauri build` is version 0.0.0 and never
+checks. A newer version is downloaded, its signature checked against the public key and the version signed into it
+against the manifest's, installed over the running bundle, and the app relaunches. The relaunch waits while the window
+is open, a Claude Code change or `harness start` runs, or the CLI installs or a sign-in runs. While it updates, the
+menu's row reads `Updating Harness Device…`. Timeouts: check 30 s, download 5 min. A failure changes nothing on disk;
+the next check tries again.
 
 Its log (`~/Library/Logs/ai.autonomous.harness.device/`) has one line per step, never a URL:
 
