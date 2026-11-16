@@ -134,7 +134,7 @@ pub enum UpdateFailure {
 pub enum AppUpdate {
     #[default]
     None,
-    Installing(String),
+    Installing,
     Blocked(String),
 }
 

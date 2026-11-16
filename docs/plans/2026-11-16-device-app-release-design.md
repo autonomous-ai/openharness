@@ -173,8 +173,9 @@ Rust only: `tauri-plugin-updater` is registered in Rust and the webview gets no 
   later). A sign-in that starts while an update downloads delays the relaunch, not the download: the reducer emits
   `Relaunch` on the first tick with no run in progress. The relaunch also waits while a Claude Code change runs,
   while the keep-alive's `harness start --if-down` runs, and while the window is open (PM, 2026-11-16).
-- **The menu.** While an update downloads and installs, one disabled row `Updating to 0.1.3…` sits just before the
-  separator; otherwise the menu is as today.
+- **The menu.** While an update downloads and installs, one disabled row `Updating Harness Device…` sits just before
+  the separator; otherwise the menu is as today. It names no version, so it is not read as the dial's
+  `Updating to X` (PM, 2026-11-16).
 - **Failures are seen.** One log line each, through `log::redact`, never a URL: `update: found 0.1.3`,
   `update: installed 0.1.3`, `update: failed <check|download|signature|install>`. A failure changes nothing on disk;
   the next check tries again. Every network step has a timeout (check 30 s, download 5 min).

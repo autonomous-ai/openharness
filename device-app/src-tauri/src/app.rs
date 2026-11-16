@@ -295,7 +295,7 @@ impl App {
                 effects.push(Effect::Log(format!("update: found {version}")));
                 // A version already blocked keeps its row while it is tried again, so the menu does not flip.
                 if self.state.app_update != AppUpdate::Blocked(version.clone()) {
-                    self.state.app_update = AppUpdate::Installing(version.clone());
+                    self.state.app_update = AppUpdate::Installing;
                 }
                 self.found = Some(version);
                 effects.push(Effect::InstallUpdate);
@@ -332,7 +332,7 @@ impl App {
             }
         };
         effects.push(Effect::Log(format!("update: failed {word}")));
-        if matches!(self.state.app_update, AppUpdate::Installing(_)) {
+        if self.state.app_update == AppUpdate::Installing {
             self.state.app_update = AppUpdate::None;
         }
     }
