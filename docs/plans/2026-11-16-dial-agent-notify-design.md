@@ -18,7 +18,7 @@ Done when, on a Mac with a dial and no Harness desktop app:
 1. A Claude Code or Codex session that needs the person (information, an action outside its reach such as a VPN, a
    sign-in or a cable, a decision) runs `harness device notify "<one line>"`, and the dial beeps, wakes and shows that
    line with the agent's name, pinned like a question.
-2. The menu has Notifications: Full / Only you. In Only you an ordinary finished turn is a drawer row with no beep and
+2. The menu has Notifications: Full / Needs you. In Needs you an ordinary finished turn is a drawer row with no beep and
    no wake; in Full it beeps as today. Questions, permission asks, failed turns and agent notices beep in both.
 
 ## Goals, non-goals, anti-goals
@@ -53,7 +53,7 @@ Done when, on a Mac with a dial and no Harness desktop app:
 
 ## What rings
 
-| Event | Full | Only you |
+| Event | Full | Needs you |
 |---|---|---|
 | `harness device notify` from an agent (new) | rings, pinned, its line | rings, pinned, its line |
 | A question or a permission ask | rings (today) | rings |
@@ -122,7 +122,7 @@ hold: a person's own deny or ask rule for the command keeps it out.
 
 ## Which agents it covers (my call, from the builder check)
 
-| Agent | `harness device notify` | Only you lowers its turn ends |
+| Agent | `harness device notify` | Needs you lowers its turn ends |
 |---|---|---|
 | Claude Code or Codex outside Harness on this computer (Orca, terminals) | yes, tied to its observed session | yes |
 | A Harness pane agent on this computer (it reads the same `~/.claude` / `~/.codex`, so it sees the skill) | yes, tied by its Harness agent id, as `harness whoami` resolves it | yes |
@@ -138,7 +138,7 @@ connected dial shows) that holds outside agents' turn cards today (my call).
 
 Outside agents now come from more than one source (`outsideEntries()`: the observed source and, since #4366, herdr's
 source). A notice from an agent herdr lists is tied the same way as an observed one, through the entry the registry
-holds for it; Only you lowers herdr agents' turn ends like any other.
+holds for it; Needs you lowers herdr agents' turn ends like any other.
 
 ## Release order (my call, from the builder check)
 
@@ -154,15 +154,15 @@ people on their next plugin update, before any CLI release.
 The Codex skill is written by `harness device codex enable`, which ships with the CLI that has the command, so it
 needs no such wait.
 
-### The setting: Notifications, Full or Only you
+### The setting: Notifications, Full or Needs you
 
 - Stored per computer in the daemon's data dir, read by the devices service where it sends `cable.summary`
-  (`services/devices.ts`, both the upstream-tier and the `tierOf` paths): in Only you an `alert` decided by
+  (`services/devices.ts`, both the upstream-tier and the `tierOf` paths): in Needs you an `alert` decided by
   `rule:turn` becomes `list`, logged as `rule:only-you`; nothing else is lowered.
 - The menu-bar app reads and writes it through `harness hardware watch --json`, as its Sound item does (#4360): out,
   `"notify":"full"|"you"` on the watch line; in, exactly `{"notify":"full"}` or `{"notify":"you"}` on the watch's
   stdin; latest wins, one change in flight, 12 s bound, one stderr line on an error.
-- Menu: a **Notifications** submenu, **Full** and **Only you**, the one in force checked; shown while a dial is
+- Menu: a **Notifications** submenu, **Full** and **Needs you**, the one in force checked; shown while a dial is
   attached and not updating and the watch's line carries `notify`, absent otherwise (unlike Sound, it does not wait
   for the dial to report its settings: the setting is this computer's); the check follows what the watch reports.
 - The setting and the notice are local to this computer: neither is relayed to other machines, the phone or the
@@ -188,7 +188,7 @@ needs no such wait.
   log, no path of another component in a string.
 - The core gains nothing: the notice and the setting go through the devices' own listener, and no name is added to
   `cli/src/core/api.ts`. The allow-list rule is one more line in the engine contracts the core already loads.
-- Copy (docs/naming-system.md): "Notifications", "Full", "Only you"; the dial card's footer as the permission cards'.
+- Copy (docs/naming-system.md): "Notifications", "Full", "Needs you"; the dial card's footer as the permission cards'.
 - Platforms: macOS for the app (Linux built in CI); the CLI and skill wherever the dial path runs (macOS, Linux).
 
 ## Left to the builder
@@ -196,7 +196,7 @@ needs no such wait.
 - How the daemon ties a `harness device notify` call to the session, for each engine, and what it shows when it
   cannot.
 - The request names and the stored file's name.
-- How the fleet path's cards are lowered in Only you without changing what the remote machine decided for its own
+- How the fleet path's cards are lowered in Needs you without changing what the remote machine decided for its own
   dial.
 
 ## Tests (red first)
@@ -208,10 +208,10 @@ needs no such wait.
   is tried by hand in each engine (below).
 - Codex enable/disable: writes and removes exactly the skill; status reads it.
 - Coverage: a pane agent's and an outside session's notice each name the right agent; a fleet card is lowered in
-  Only you; a notice rings with the desktop window open.
+  Needs you; a notice rings with the desktop window open.
 - App `cargo test --lib`: the submenu's states, the click's fixed stdin line.
 - By hand, on a Mac with a dial and no Harness desktop app: a Claude Code and a Codex session each asked to do work that
-  needs a VPN ring the dial with their own line and no approval prompt; Only you keeps an ordinary turn silent; Full
+  needs a VPN ring the dial with their own line and no approval prompt; Needs you keeps an ordinary turn silent; Full
   beeps it.
 
 ## What the person sees
@@ -237,7 +237,7 @@ The card goes when that agent's next turn starts or the person taps "In Orca" to
 An ordinary finished turn:
 
 ```
- Full                              Only you
+ Full                              Needs you
  ╭────────────────────╮            ╭────────────────────╮
  │ ✓ Fix login        │  beep      │                    │  no beep, no wake,
  │ Done: tests pass,  │  wake      │     (dark)         │  one drawer row
@@ -257,7 +257,7 @@ The menu-bar app:
 │ ✓ Sound                       │
 │   Notifications             ▸ ├──┬──────────────┐
 │ ───────────────────────────── │  │ ✓ Full       │
-│   Sign in…                    │  │   Only you   │
+│   Sign in…                    │  │   Needs you  │
 │   Quit                        │  └──────────────┘
 └───────────────────────────────┘
 ```
@@ -303,7 +303,7 @@ the agent finishes a turn
    ▼
 the daemon decides its tier by today's rules
    ▼
-Only you, and the tier came from rule:turn?
+Needs you, and the tier came from rule:turn?
    ├─ yes ─▶ list: one drawer row, no beep
    └─ no  ─▶ unchanged (questions, permission asks, errors always ring)
 ```
@@ -311,7 +311,7 @@ Only you, and the tier came from rule:turn?
 The setting changes:
 
 ```
-click "Only you" ─▶ {"notify":"you"} ─▶ harness hardware watch
+click "Needs you" ─▶ {"notify":"you"} ─▶ harness hardware watch
    ─▶ the daemon stores "you" (this computer only)
    ─▶ the watch prints {"notify":"you"} ─▶ the menu moves its check
 ```

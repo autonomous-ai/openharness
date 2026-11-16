@@ -71,7 +71,7 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
             "Notifications".into(),
             vec![
                 MenuItem::Check(MenuAction::NotifyFull, "Full".into(), mode == NotifyMode::Full),
-                MenuItem::Check(MenuAction::NotifyYou, "Only you".into(), mode == NotifyMode::You),
+                MenuItem::Check(MenuAction::NotifyYou, "Needs you".into(), mode == NotifyMode::You),
             ],
         ));
     }
@@ -179,7 +179,7 @@ mod tests {
             "Notifications".into(),
             vec![
                 Check(MenuAction::NotifyFull, "Full".into(), full),
-                Check(MenuAction::NotifyYou, "Only you".into(), you),
+                Check(MenuAction::NotifyYou, "Needs you".into(), you),
             ],
         )
     }
@@ -538,7 +538,7 @@ mod tests {
         );
         assert_eq!(
             menu_log(&menu(&AppState { dial: Some(notifying(NotifyMode::You)), ..state() })),
-            "Dial connected · 0.0.95 | Signed in | Claude Code: On | Turn off | Sound ✓ | Notifications: Only you | Open Harness | Quit"
+            "Dial connected · 0.0.95 | Signed in | Claude Code: On | Turn off | Sound ✓ | Notifications: Needs you | Open Harness | Quit"
         );
     }
 }

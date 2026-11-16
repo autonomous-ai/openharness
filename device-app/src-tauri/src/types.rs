@@ -19,7 +19,7 @@ pub struct DialStatus {
     pub notify: Option<NotifyMode>,
 }
 
-/// This computer's Notifications setting, kept by the daemon. Only you (`You`): an ordinary finished turn neither
+/// This computer's Notifications setting, kept by the daemon. Needs you (`You`): an ordinary finished turn neither
 /// beeps nor wakes the dial.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NotifyMode {

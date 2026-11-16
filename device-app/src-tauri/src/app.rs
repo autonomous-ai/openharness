@@ -1298,7 +1298,7 @@ mod tests {
                 "Notifications".into(),
                 vec![
                     MenuItem::Check(MenuAction::NotifyFull, "Full".into(), full),
-                    MenuItem::Check(MenuAction::NotifyYou, "Only you".into(), you),
+                    MenuItem::Check(MenuAction::NotifyYou, "Needs you".into(), you),
                 ],
             )
         };
@@ -1314,7 +1314,7 @@ mod tests {
 
         let effects = app.handle(notifying(NotifyMode::You));
         assert_eq!(submenus(&effects), [checked(false, true)]);
-        assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Notifications: Only you | Quit".into())));
+        assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Notifications: Needs you | Quit".into())));
 
         assert!(submenus(&app.handle(Event::WatchExit(Some(3)))).is_empty());
     }
