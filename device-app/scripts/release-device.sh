@@ -60,6 +60,8 @@ if [ -n "$notes_file" ]; then
 fi
 cd "$(git -C "$here" rev-parse --show-toplevel)"
 
+# A stalled fetch or push over HTTPS gives up after 30 s below 1000 bytes/s instead of hanging.
+export GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=30
 # The tag must hold exactly the reviewed source, and CI must be able to fetch it.
 git fetch --tags --quiet origin
 [ -z "$(git status --porcelain)" ] || die "the working tree is dirty: a release tag must hold exactly the tested source"
