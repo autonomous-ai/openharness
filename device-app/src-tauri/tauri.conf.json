@@ -30,5 +30,10 @@
       "minimumSystemVersion": "13.0",
       "entitlements": "Entitlements.plist"
     }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": ["https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/metadata.json"]
+    }
   }
 }

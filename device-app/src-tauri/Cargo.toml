@@ -1,6 +1,8 @@
 [package]
 name = "harness-device"
-version = "0.1.0"
+# A placeholder no release reads: the release build sets its version through `--config`, so a local build never
+# outranks a release.
+version = "0.0.0"
 edition = "2024"
 # sysinfo 0.40, off macOS, needs 1.95; Tauri 2.12 needs 1.90.
 rust-version = "1.95"
@@ -20,6 +22,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1"
 url = "2"
+# On every platform, so Linux compiles the door; only a release build on macOS calls it (update.rs).
+tauri-plugin-updater = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

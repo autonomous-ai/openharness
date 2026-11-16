@@ -48,6 +48,7 @@ fn main() {
     let mut app = tauri::Builder::default()
         // Managed before the window is made, so its first `view` finds it.
         .manage(Shared { view: Mutex::default(), events: events.clone() })
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![view, act])
         .setup(move |app| start(app.handle(), events, queue).map_err(Into::into))
         // Closing never quits: the window hides, and the app decides what closing answers.
@@ -88,7 +89,7 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
         },
         front: front::system(log.clone()),
         tabs: tabs::system(),
-        updater: None,
+        updater: harness_device::update::system(handle),
     };
 
     // A watch or a sign-in hands its events over holding a lock that stopping or cancelling it takes: `send` only
