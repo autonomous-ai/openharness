@@ -503,7 +503,8 @@ export function dialStream({ log, after }: { log(line: string): void; after(ms: 
         writer = write
         log('[devices] dial stream · open')
         stream.ended.addEventListener('abort', () => {
-          writer = undefined
+          // A newer stream is the open one by the time the older ends.
+          if (writer === write) writer = undefined
           log(`[devices] dial stream · ended · ${stream.ended.reason}`)
         })
         stream.onWritable(write)
