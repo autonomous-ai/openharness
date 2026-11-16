@@ -244,6 +244,41 @@ describe('frame publication in a service process', () => {
     warn.mockRestore()
   })
 
+  it('bounds pending queries across ended lifecycles, coalesces at capacity and admits after completion', async () => {
+    vi.useFakeTimers()
+    const { api, query, running, heard, log } = setup()
+    let finishFirst!: (value: Record<string, unknown>) => void
+    let finishSecond!: (value: Record<string, unknown>) => void
+    query.mockReturnValue(new Promise(() => {}))
+      .mockReturnValueOnce(new Promise(resolve => { finishFirst = resolve }))
+      .mockReturnValueOnce(new Promise(resolve => { finishSecond = resolve }))
+    for (let i = 0; i < 4096; i++) {
+      const session = running(active(`agent-${i}`))
+      api.agents.publishFrame!(session, {})
+      heard({ kind: 'ended', agentId: session.agentId })
+    }
+    const extra = running(active('extra'))
+    api.agents.publishFrame!(extra, {})
+    expect(query).toHaveBeenCalledTimes(4096)
+    expect(log).toHaveBeenLastCalledWith('[frames] FRAME_PART_LIMIT')
+
+    const replacement = running(active('agent-0', 'core:2'))
+    api.agents.publishFrame!(replacement, { browser: { state: 'ready' } })
+    expect(log).toHaveBeenCalledOnce()
+    finishFirst({ ok: true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(query).toHaveBeenCalledTimes(4097)
+    expect(query).toHaveBeenLastCalledWith('frame_part', {
+      agentId: 'agent-0', frameEpoch: 'core:2', fields: { browser: { state: 'ready' } },
+    })
+
+    finishSecond({ ok: true })
+    await vi.advanceTimersByTimeAsync(0)
+    api.agents.publishFrame!(extra, {})
+    expect(query).toHaveBeenCalledTimes(4098)
+    expect(query).toHaveBeenLastCalledWith('frame_part', { agentId: 'extra', frameEpoch: 'core:1', fields: {} })
+  })
+
   it('bounds live identities and queued bytes, and rejects malformed JSON before querying', () => {
     vi.useFakeTimers()
     const { api, query, running, log } = setup()

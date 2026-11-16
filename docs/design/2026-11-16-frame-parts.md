@@ -36,6 +36,23 @@ unchanged. Stream routing and Browser wake behavior are separate work.
 
 ## Validation selected before implementation
 
+Independent acceptance reproduced 5,000 outstanding empty publications while only
+one agent was live at a time. The byte bound alone allowed ended lifecycles to
+retain too many pending query promises and deadlines. Bound the existing pending
+map to 4096 entries as well; coalescing an existing entry remains allowed at the
+limit, and completion frees capacity. A caller test drives lifecycle churn,
+coalescing at the limit and recovery after completion before the runtime fix.
+This changes no persisted data, client contract, authority or core state.
+The caller regression failed with 4097 queries against the 4096 limit before the
+guard, then all 84 publisher/Browser/Viewers process cases passed in 2.04 seconds,
+with 100% per-file publisher coverage. Logs are
+`/tmp/core-frame-publisher-count-red.log` and
+`/tmp/core-frame-publisher-count-green.log`. Exact-head native acceptance also
+found the custody fixture still using removed `context`; it now follows with
+`frames:true` and publishes through the captured lease, preserving all credential
+custody assertions. Its original failure is retained; corrected native evidence
+is pending.
+
 Independent review found that settled unchanged publications were still sent on
 each Viewers observation. Core suppressed the redundant client frame, but still
 paid for IPC, parsing and snapshot validation. The publisher will retain only a
