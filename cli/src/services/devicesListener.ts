@@ -12,8 +12,8 @@
  * and an empty body, and counted: what a sender wrote is never echoed or logged, since a front names the app a person
  * has in front of them.
  *
- * A stream type (`tabs`) is answered with NDJSON lines that stay open: the way the devices process says something to a
- * watch without the watch asking each time. One of a type is open at once, across every connection: a newer one ends
+ * A stream type (`tabs`, `dial`) is answered with NDJSON lines that stay open: the way the devices process says something
+ * to a watch without the watch asking each time. One of a type is open at once, across every connection: a newer one ends
  * the older with a last line, `{"replaced":true}`, and one asked with `"standby":true` opens only while none is.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -21,6 +21,7 @@ import type { Socket } from 'node:net'
 import { lstatSync, type Stats } from 'node:fs'
 import { dirname } from 'node:path'
 import { listenLocalSocket, type LocalSocketServer } from '../lib/localSocket.js'
+import type { DialAgent } from '../cable/cableSession.js'
 import { APP_IDS } from '../cable/hosts/hostDetect.js'
 import { FRONT_NONE } from '../cable/hosts/frontApp.js'
 import { REPLACED_LINE, tabOf, type Tab } from '../cable/hosts/tabs.js'
@@ -49,10 +50,19 @@ export interface ListenerHandler {
   handle(message: Record<string, unknown>, gone: AbortSignal): unknown
 }
 
+/** Why a stream ended: its client went (it closed, its socket errored, or it sent a second message), a line did not
+ *  drain in 2 s, a newer stream of its type opened, or `closed`: the listener closed, the handler's `onWritable` run
+ *  threw, or its open was refused or threw. */
+export type StreamEnd = 'gone' | 'stalled' | 'replaced' | 'closed'
+
 export interface ListenerStream {
-  /** One NDJSON line. False, with nothing written, once the stream has ended or while an earlier line has not drained. */
+  /** One NDJSON line. False, with nothing written, inside `open`, once the stream has ended or while an earlier line has
+   *  not drained. */
   write(line: unknown): boolean
-  /** Aborts when the stream ends. */
+  /** `run` is called each time the stream can take a line: once it has opened, and each time a written line has drained.
+   *  Never once it has ended. A later call replaces the listener. */
+  onWritable(run: () => void): void
+  /** Aborts when the stream ends; its `reason` is a StreamEnd. */
   readonly ended: AbortSignal
 }
 
@@ -134,7 +144,7 @@ export async function openDevicesListener(
   const deadlines = new WeakMap<Socket, NodeJS.Timeout>()
   const waiting = new Set<AbortController>()
   // The open stream of each type, as how to end it; and the connections that hold one.
-  const streams = new Map<string, (replaced?: boolean) => void>()
+  const streams = new Map<string, (reason: StreamEnd) => void>()
   const streaming = new WeakSet<Socket>()
   let dropped = { ...NONE_DROPPED }
   let minute: NodeJS.Timeout | undefined
@@ -189,51 +199,66 @@ export async function openDevicesListener(
     // would otherwise hold the stream and its buffered lines.
     let writable = false
     let stall: NodeJS.Timeout | undefined
-    const end = (replaced = false): void => {
+    let whenWritable: (() => void) | undefined
+    // The first reason stays: the close that follows any end reads as the client gone.
+    const end = (reason: StreamEnd): void => {
       if (ended.signal.aborted) return
       writable = false
-      ended.abort()
+      ended.abort(reason)
       clearTimeout(stall)
       streams.delete(type)
       // Its connection has no deadline left to free its slot. A replaced one's goes once its last line is taken, which
       // tells its watch to stand by, or 2 s on for a client that has stopped reading.
-      if (!replaced) return void socket.destroy()
+      if (reason !== 'replaced') return void socket.destroy()
       const unread = setTimeout(() => socket.destroy(), LISTENER_TIMEOUT_MS).unref()
       socket.once('close', () => clearTimeout(unread))
       res.end(`${REPLACED_LINE}\n`, () => socket.destroy())
+    }
+    // The handler's code, run from the socket's write callback too: a throw there would end the devices process, so it
+    // ends only this stream.
+    const ready = (): void => {
+      writable = true
+      try {
+        whenWritable?.()
+      } catch {
+        count('failed')
+        end('closed')
+      }
     }
     let answer: typeof REFUSED | void
     try {
       answer = handler.open(message, {
         ended: ended.signal,
+        onWritable: (run) => { whenWritable = run },
         write: (line) => {
           if (!writable) return false
           writable = false
-          stall = setTimeout(end, LISTENER_TIMEOUT_MS).unref()
-          // Called once the socket has taken the line, or with an error once the stream ended: it stays unwritable then.
-          res.write(`${JSON.stringify(line)}\n`, () => {
+          stall = setTimeout(() => end('stalled'), LISTENER_TIMEOUT_MS).unref()
+          // Called once the socket has taken the line, or with an error as its connection goes, before the close that
+          // ends the stream: it stays unwritable then.
+          res.write(`${JSON.stringify(line)}\n`, (error) => {
             clearTimeout(stall)
-            writable = !ended.signal.aborted
+            if (!error && !ended.signal.aborted) ready()
           })
           return true
         },
       })
     } catch {
-      ended.abort()
+      ended.abort('closed')
       return drop(res, 500, 'failed')
     }
     if (answer === REFUSED) {
-      ended.abort()
+      ended.abort('closed')
       return drop(res, 400, 'refused')
     }
-    streams.get(type)?.(true)
+    streams.get(type)?.('replaced')
     streams.set(type, end)
     streaming.add(socket)
     clearTimeout(deadlines.get(socket))
-    res.once('close', end)
+    res.once('close', () => end('gone'))
     // Every end destroys its connection, so a client must not keep it for another message.
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson', Connection: 'close' }).flushHeaders()
-    writable = true
+    ready()
   }
 
   const settle = async (req: IncomingMessage, res: ServerResponse, body: Buffer): Promise<void> => {
@@ -317,7 +342,7 @@ export async function openDevicesListener(
   return {
     close: () => closed ??= (async () => {
       clearTimeout(minute)
-      for (const end of streams.values()) end()
+      for (const end of streams.values()) end('closed')
       const gone = listening.close()
       for (const each of waiting) each.abort()
       await gone
@@ -422,5 +447,80 @@ export function tabsStream(): TabsStream {
     },
     isOpen: () => open !== undefined,
     select: ({ app, tty }, raise) => open?.write(raise ? { app, tty, raise: true } : { app, tty }) ?? false,
+  }
+}
+
+/** One a second on a connection: the plugin's worker opens it again after it ends, and a loop cannot churn it. */
+export const DIAL_PER_SECOND = 1
+/** Its message, `{"type":"dial","standby":true}`, is 30 bytes. */
+export const DIAL_MAX_BYTES = 64
+/** The longest name a line holds, in code points: a line stays under 400 bytes in any script. */
+export const DIAL_NAME_MAX = 64
+
+export type DialLine = { attached: false } | { attached: true; agent: DialAgent | null }
+
+export interface DialStream {
+  handler: ListenerStreamHandler
+  /** Whether any dial is attached. */
+  attached(on: boolean): void
+  /** The agent the dial shows, or null for none. */
+  shows(agent: DialAgent | null): void
+}
+
+/**
+ * The stream Orca's Harness Device plugin holds open to show the dial's state
+ * (docs/specs/2026-11-16-orca-device-plugin.md): the state as it opens, then a line each time it changes. Only the latest
+ * state is written, once the stream can take a line and only when it differs from the last one written, so a swipe
+ * across ten agents while a line drains is two lines, and no timer writes one. A name leaves the process here and
+ * nowhere else: the log says only that the stream opened, why it ended and how many lines a minute.
+ */
+export function dialStream({ log, after }: { log(line: string): void; after(ms: number, run: () => void): () => void }): DialStream {
+  let on = false
+  let agent: DialAgent | null = null
+  /** Writes the latest line on the open stream; none with no stream open. */
+  let writer: (() => void) | undefined
+  let written = 0
+
+  const latest = (): DialLine => on ? { attached: true, agent } : { attached: false }
+
+  return {
+    handler: {
+      maxBytes: DIAL_MAX_BYTES,
+      perSecond: DIAL_PER_SECOND,
+      open: (message, stream) => {
+        // A standby open never takes the stream from another Orca that holds it, so this one is never replaced.
+        if (message.standby !== true) return REFUSED
+        let last: string | undefined
+        const write = (): void => {
+          const line = latest()
+          const text = JSON.stringify(line)
+          // One that answers false is not remembered: the next writable call writes the then latest line.
+          if (text === last || !stream.write(line)) return
+          last = text
+          if (written++ === 0) after(MINUTE_MS, () => {
+            log(`[devices] dial stream · lines in the last minute: ${written}`)
+            written = 0
+          })
+        }
+        writer = write
+        log('[devices] dial stream · open')
+        stream.ended.addEventListener('abort', () => {
+          // A newer stream is the open one by the time the older ends.
+          if (writer === write) writer = undefined
+          log(`[devices] dial stream · ended · ${stream.ended.reason}`)
+        })
+        stream.onWritable(write)
+      },
+    },
+    attached: (next) => {
+      on = next
+      writer?.()
+    },
+    shows: (next) => {
+      // Made anew: the line's keys in its own order, and nothing else the caller holds. Cut by code point, so a pair
+      // stays whole.
+      agent = next && { name: [...next.name].slice(0, DIAL_NAME_MAX).join(''), app: next.app }
+      writer?.()
+    },
   }
 }

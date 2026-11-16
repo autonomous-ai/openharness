@@ -9,12 +9,12 @@
 import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, type Mock } from 'vitest'
 
 import { CABLE_MAX_FRAME, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DaemonCableHost } from './cableHost.js'
 import type { MachineFleet } from './machineFleet.js'
-import { CableSession, SHOWN_ONLY_PREFIX, SWIPE_REST_MS, type CableAgent, type CableHost, type CableMachine, type CablePort, type SendOutcome } from './cableSession.js'
+import { CableSession, SHOWN_ONLY_PREFIX, SWIPE_REST_MS, type CableAgent, type CableHost, type CableMachine, type CablePort, type DialAgent, type SendOutcome } from './cableSession.js'
 import { DialLog } from './dialLog.js'
 import type { PetStore } from './pets/store.js'
 import { HostRegistry } from './hosts/registry.js'
@@ -4101,52 +4101,53 @@ describe('the machine list with no window', () => {
   })
 })
 
+const row = (id: string, host: string, caps = 's'): CableAgent =>
+  ({ id, name: id, engine: 'claude', machineId: 'mac-local', machine: 'MacBook Pro', host, caps })
+const NAMES: Record<string, string> = { ghostty: 'Ghostty', vscode: 'VS Code' }
+
+/** A host with the cable host's app answers: Ghostty (3) shown, VS Code (2, one waiting); v1 can be brought forward. */
+function appHost(over: Partial<CableHost> = {}) {
+  const state = {
+    shown: 'ghostty',
+    window: false,
+    rings: { ghostty: [row('g1', 'ghostty'), row('g2', 'ghostty'), row('g3', 'ghostty')], vscode: [row('v1', 'vscode', 'sf'), row('v2', 'vscode')] } as Record<string, CableAgent[]>,
+    waiting: { vscode: 1 } as Record<string, number>,
+  }
+  const asked: Array<{ apps?: boolean } | undefined> = []
+  const all = () => Object.values(state.rings).flat()
+  const list = (): AppList => ({
+    shown: state.shown,
+    apps: Object.entries(state.rings).filter(([, r]) => r.length).map(([id, r]) => ({ id, name: NAMES[id], count: r.length, waiting: state.waiting[id] ?? 0 })),
+  })
+  const pickApp = vi.fn((app: string, _cause?: 'pick' | 'notice'): AppPick => {
+    if (state.window || !state.rings[app]?.length) return 'ignored'
+    if (app === state.shown) return 'same'
+    state.shown = app
+    return 'switched'
+  })
+  const host = makeHost({
+    listAgentSnapshot: async (opts) => {
+      asked.push(opts)
+      if (state.window) return { agents: AGENTS, tab: 't1', total: 2 }
+      if (!opts?.apps) return { agents: all(), tab: '', total: all().length, view: 'machine' as const }
+      const rows = state.rings[state.shown] ?? []
+      return { agents: rows, tab: '', total: rows.length, view: 'machine' as const, apps: list() }
+    },
+    pickApp,
+    appOf: (id) => state.window ? undefined : Object.entries(state.rings).find(([, r]) => r.some((a) => a.id === id))?.[0],
+    capsOf: (id) => all().find((a) => a.id === id)?.caps,
+    hostOf: (id) => all().find((a) => a.id === id)?.host,
+    markSeen: vi.fn(),
+    openAgent: vi.fn(async () => ({ ok: false as const, error: 'Harness did not open it.' })),
+    ...over,
+  })
+  return { host, state, asked, pickApp, list }
+}
+
 describe('the app filter', () => {
-  const row = (id: string, host: string, caps = 's'): CableAgent =>
-    ({ id, name: id, engine: 'claude', machineId: 'mac-local', machine: 'MacBook Pro', host, caps })
-  const NAMES: Record<string, string> = { ghostty: 'Ghostty', vscode: 'VS Code' }
   const LIST = new Set(['apps', 'agents.begin', 'agent', 'agents.end'])
   const listFrames = (port: LoopbackPort) => port.sent.filter((m) => LIST.has(m.t as string))
   const listTypes = (port: LoopbackPort) => listFrames(port).map((m) => m.t)
-
-  /** A host with the cable host's app answers: Ghostty (3) shown, VS Code (2, one waiting); v1 can be brought forward. */
-  function appHost(over: Partial<CableHost> = {}) {
-    const state = {
-      shown: 'ghostty',
-      window: false,
-      rings: { ghostty: [row('g1', 'ghostty'), row('g2', 'ghostty'), row('g3', 'ghostty')], vscode: [row('v1', 'vscode', 'sf'), row('v2', 'vscode')] } as Record<string, CableAgent[]>,
-      waiting: { vscode: 1 } as Record<string, number>,
-    }
-    const asked: Array<{ apps?: boolean } | undefined> = []
-    const all = () => Object.values(state.rings).flat()
-    const list = (): AppList => ({
-      shown: state.shown,
-      apps: Object.entries(state.rings).filter(([, r]) => r.length).map(([id, r]) => ({ id, name: NAMES[id], count: r.length, waiting: state.waiting[id] ?? 0 })),
-    })
-    const pickApp = vi.fn((app: string, _cause?: 'pick' | 'notice'): AppPick => {
-      if (state.window || !state.rings[app]?.length) return 'ignored'
-      if (app === state.shown) return 'same'
-      state.shown = app
-      return 'switched'
-    })
-    const host = makeHost({
-      listAgentSnapshot: async (opts) => {
-        asked.push(opts)
-        if (state.window) return { agents: AGENTS, tab: 't1', total: 2 }
-        if (!opts?.apps) return { agents: all(), tab: '', total: all().length, view: 'machine' as const }
-        const rows = state.rings[state.shown] ?? []
-        return { agents: rows, tab: '', total: rows.length, view: 'machine' as const, apps: list() }
-      },
-      pickApp,
-      appOf: (id) => state.window ? undefined : Object.entries(state.rings).find(([, r]) => r.some((a) => a.id === id))?.[0],
-      capsOf: (id) => all().find((a) => a.id === id)?.caps,
-      hostOf: (id) => all().find((a) => a.id === id)?.host,
-      markSeen: vi.fn(),
-      openAgent: vi.fn(async () => ({ ok: false as const, error: 'Harness did not open it.' })),
-      ...over,
-    })
-    return { host, state, asked, pickApp, list }
-  }
 
   async function greeted(host: CableHost, appFilter = true) {
     const c = await connect(host)
@@ -5297,6 +5298,189 @@ describe('a prompt in the app in front', () => {
       expect(followApp.mock.calls).toEqual([['mac-local', 'a3']])
       expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'a3' }])
       expect(localFollowed.mock.calls).toEqual([['tab', 'moved']])
+    } finally { await session.stop() }
+  })
+})
+
+describe('the agent the dial shows (docs/specs/2026-11-16-orca-device-plugin.md)', () => {
+  const RING: CableAgent[] = [{ id: 'o1', name: 'api', host: 'orca' }, { id: 'h1', name: 'web' }, { id: 't1', name: 'docs', host: 'terminal' }]
+  const API: DialAgent = { name: 'api', app: 'Orca' }
+  const HELLO = { t: 'hello', product: 'harness', mac: 'aa:bb' }
+
+  /** Each agent the host heard, every one from `session`. */
+  const heard = (dialShows: Mock, session: CableSession) =>
+    dialShows.mock.calls.map(([dial, agent]) => { expect(dial).toBe(session); return agent as DialAgent | null })
+
+  async function greeted(over: Partial<CableHost> = {}, hello: Record<string, unknown> = {}) {
+    const dialShows = vi.fn<NonNullable<CableHost['dialShows']>>()
+    const c = await connect(makeHost({ dialShows, listAgents: async () => RING, ...over }))
+    c.port.say({ ...HELLO, ...hello })
+    await vi.waitFor(() => expect(c.port.types()).toContain('agents.end'))
+    return { ...c, dialShows, told: () => heard(dialShows, c.session) }
+  }
+
+  it("a swipe's focus from the dial reports that agent's name and app", async () => {
+    const { session, port, told } = await greeted()
+    try {
+      port.say({ t: 'focus', agentId: 'o1' })
+      expect(told()).toEqual([API])
+    } finally { await session.stop() }
+  })
+
+  it('focusAgent and followApp report it too', async () => {
+    const { session, told } = await greeted()
+    try {
+      await session.focusAgent('h1')
+      expect(told()).toEqual([{ name: 'web', app: 'Harness' }])
+      await session.followApp('mac-local', 't1')
+      expect(told()).toEqual([{ name: 'web', app: 'Harness' }, { name: 'docs', app: 'Other' }])
+    } finally { await session.stop() }
+  })
+
+  it("a tapped notice that turns the dial to another app's ring reports its agent", async () => {
+    const { session, port, told } = await greeted(appHost({ openAgent: vi.fn() }).host, { appFilter: 'v1' })
+    try {
+      port.say({ t: 'agent.open', agentId: 'v1' })
+      await vi.waitFor(() => expect(told()).toEqual([{ name: 'v1', app: 'VS Code' }]))
+    } finally { await session.stop() }
+  })
+
+  it('an agent with no host is in Harness, and so is a host the table does not know; one in an unknown terminal is in Other', async () => {
+    let ring = RING
+    const { session, told } = await greeted({ listAgents: async () => ring })
+    try {
+      await session.focusAgent('h1')
+      expect(told().at(-1)).toEqual({ name: 'web', app: 'Harness' })
+      // As the dial's own page names it, never as Apple's Terminal.
+      await session.focusAgent('t1')
+      expect(told().at(-1)).toEqual({ name: 'docs', app: 'Other' })
+      // A host is outside text: only the table's own entries name an app, never one every object inherits.
+      for (const host of ['nope', 'constructor', '__proto__']) {
+        ring = [{ id: 't1', name: host, host }]
+        await session.syncAgents(true)
+        expect(told().at(-1)).toEqual({ name: host, app: 'Harness' })
+      }
+    } finally { await session.stop() }
+  })
+
+  it('a move to an agent the ring does not hold reports none', async () => {
+    const { session, port, told } = await greeted()
+    try {
+      port.say({ t: 'focus', agentId: 'o1' })
+      await session.focusAgent('gone')
+      expect(told()).toEqual([API, null])
+    } finally { await session.stop() }
+  })
+
+  it('a ring push that renames the shown agent reports the new name; one that drops it reports none; one that brings it back reports it again', async () => {
+    let ring = RING
+    const { session, port, told } = await greeted({ listAgents: async () => ring })
+    try {
+      port.say({ t: 'focus', agentId: 'o1' })
+      ring = [{ ...RING[0], name: 'api v2' }, ...RING.slice(1)]
+      await session.syncAgents(true)
+      expect(told()).toEqual([API, { name: 'api v2', app: 'Orca' }])
+      ring = RING.slice(1)
+      await session.syncAgents(true)
+      expect(told()).toEqual([API, { name: 'api v2', app: 'Orca' }, null])
+      ring = RING
+      await session.syncAgents(true)
+      expect(told()).toEqual([API, { name: 'api v2', app: 'Orca' }, null, API])
+    } finally { await session.stop() }
+  })
+
+  it('nothing is reported when nothing changed', async () => {
+    let ring = RING
+    const { session, port, told } = await greeted({ listAgents: async () => ring })
+    try {
+      port.say({ t: 'focus', agentId: 'o1' })
+      port.say({ t: 'focus', agentId: 'o1' })
+      await session.syncAgents(true)
+      ring = [RING[0], { ...RING[1], name: 'web v2' }, RING[2]]
+      await session.syncAgents(true)
+      expect(told()).toEqual([API])
+    } finally { await session.stop() }
+  })
+
+  it('the port closing reports none, once', async () => {
+    const { session, port, told } = await greeted()
+    try {
+      port.say({ t: 'focus', agentId: 'o1' })
+      await port.close('unplugged')
+      expect(told()).toEqual([API, null])
+    } finally { await session.stop() }
+    expect(told()).toEqual([API, null])
+  })
+
+  it('a ring push still reading its list as the port closes reports nothing after the close', async () => {
+    let release: (() => void) | undefined
+    const listAgents = vi.fn(async () => RING)
+    const { session, port, told } = await greeted({ listAgents })
+    try {
+      port.say({ t: 'focus', agentId: 'o1' })
+      listAgents.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve(RING) }))
+      const push = session.syncAgents(true)
+      await vi.waitFor(() => expect(release).toBeDefined())
+      await port.close('unplugged')
+      expect(told()).toEqual([API, null])
+      release!()
+      await push
+      expect(told()).toEqual([API, null])
+    } finally { await session.stop() }
+  })
+
+  it('a session that showed none reports nothing as it closes', async () => {
+    const { session, port, dialShows } = await greeted()
+    try {
+      await port.close('unplugged')
+      expect(dialShows).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
+  it('a dial that comes back on its port is reported again once its ring is pushed', async () => {
+    const dialShows = vi.fn<NonNullable<CableHost['dialShows']>>()
+    const ports: LoopbackPort[] = []
+    const session = new CableSession(makeHost({ dialShows, listAgents: async () => RING }), tmpLog(), async (onData, onClosed) => {
+      const next = new LoopbackPort(onData, onClosed)
+      ports.push(next)
+      return next
+    })
+    session.start()
+    try {
+      await vi.waitFor(() => expect(ports).toHaveLength(1))
+      ports[0].say(HELLO)
+      await vi.waitFor(() => expect(ports[0].types()).toContain('agents.end'))
+      ports[0].say({ t: 'focus', agentId: 'o1' })
+      await ports[0].close('unplugged')
+      // The session's tick reopens the port, and the dial greets again.
+      await vi.waitFor(() => expect(ports).toHaveLength(2), NEXT_TICKS)
+      expect(heard(dialShows, session)).toEqual([API, null])
+      ports[1].say(HELLO)
+      await vi.waitFor(() => expect(heard(dialShows, session)).toEqual([API, null, API]))
+    } finally { await session.stop() }
+  })
+
+  it('a host whose dialShows throws: the port still closes, stop() resolves, and onFault hears it', async () => {
+    const onFault = vi.fn()
+    const { session, port, dialShows } = await greeted({ onFault })
+    dialShows.mockImplementation(() => { throw new Error('orca is gone') })
+    port.say({ t: 'focus', agentId: 'o1' })
+    await expect(session.stop()).resolves.toBeUndefined()
+    expect(port.closedWith).toBe('daemon stopping')
+    expect(dialShows.mock.calls.map(([, agent]) => agent)).toEqual([API, null])
+    expect(onFault.mock.calls).toEqual([
+      [expect.objectContaining({ message: 'orca is gone' }), false],
+      [expect.objectContaining({ message: 'orca is gone' }), false],
+    ])
+  })
+
+  it('a host whose dialShows throws on a swipe still hears focus', async () => {
+    const { session, port, host, dialShows } = await greeted()
+    dialShows.mockImplementation(() => { throw new Error('orca is gone') })
+    try {
+      port.say({ t: 'focus', agentId: 'o1' })
+      expect(dialShows).toHaveBeenCalled()
+      expect(host.focus).toHaveBeenCalledWith('o1')
     } finally { await session.stop() }
   })
 })
