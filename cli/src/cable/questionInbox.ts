@@ -22,6 +22,8 @@ type Entry = {
   agentId: string; id: string; token: string; signature: string; questions: ReviewQuestion[]
   drafts: Map<number, Draft>
   submitted?: Promise<AnswerReceipt>
+  /** Asked of the dial since it last lost its questions. */
+  asked?: boolean
 }
 
 /** The host owns the pending catalog; the dial holds only the question it is reading.
@@ -56,6 +58,20 @@ export class QuestionInbox {
   /** Every question still open, for a resync. */
   open(): Array<{ agentId: string; id: string; questions: ReviewQuestion[] }> {
     return [...this.entries.values()].map(({ agentId, id, questions }) => ({ agentId, id, questions }))
+  }
+
+  /** Whether the dial is to be asked that agent's open question, marking it asked: the dial beeps at each ask, so it is
+   *  asked once until it loses its questions. False when it was, or that question is no longer the open one. */
+  ask(agentId: string, id: string): boolean {
+    const entry = this.entries.get(agentId)
+    if (!entry || entry.id !== id || entry.asked) return false
+    entry.asked = true
+    return true
+  }
+
+  /** The dial lost its questions (a greeting, a drawer replaced whole, a resync): each is to be asked again. */
+  forget(): void {
+    for (const entry of this.entries.values()) entry.asked = false
   }
 
   close(agentId: string, id: string): boolean {

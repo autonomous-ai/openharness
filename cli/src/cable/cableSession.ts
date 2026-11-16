@@ -690,6 +690,9 @@ export class CableSession {
   private seqOn = false
   private seq = 0
   private resyncAt = 0
+  /** From a dial's greeting to its push's walk of the open questions: a question asked meanwhile waits for that walk,
+   *  which asks it after the drawer that would clear it. */
+  private greeting = false
 
   /** For the greeting's log line: which capabilities this hello named, or nothing. */
   private capabilitiesNamed(): string {
@@ -1364,11 +1367,16 @@ export class CableSession {
           this.report({ fw })
           // BEFORE the state push, not after: the push reads the selected machine, and for a remote one
           // that means an RPC over a lane this is what re-opens.
-          this.host.onDialAttached?.()
-          // Both halves of the test above mean the same thing to this line: a dial with nothing on its
-          // screen. A repeat greeting from the same dial on the same image is a keepalive and is skipped,
-          // which is the whole reason the branch exists.
-          await this.pushAgents()
+          // The host asks again, as the dial arrives, what it should hold (a pending notice, a wait, an open
+          // question): those wait for the push below.
+          this.greeting = true
+          try {
+            this.host.onDialAttached?.()
+            // Both halves of the test above mean the same thing to this line: a dial with nothing on its
+            // screen. A repeat greeting from the same dial on the same image is a keepalive and is skipped,
+            // which is the whole reason the branch exists.
+            await this.pushAgents()
+          } finally { this.greeting = false }
           const focused = this.host.appFocus?.(this.asItself)
           if (focused) await this.followApp(focused.machineId, focused.agentId)
         }
@@ -2781,10 +2789,14 @@ export class CableSession {
     await this.resendQuestions()
   }
 
-  /** Every question still open, asked again of a dial that lost it. */
+  /** Every question still open, asked again of a dial that lost it: each once, here or by an ask that overtakes this walk. */
   private async resendQuestions(): Promise<void> {
+    this.questionInbox.forget()
+    this.greeting = false
     for (const { agentId, id, questions } of this.questionInbox.open()) {
-      if (this.liveTurns.get(agentId) === 'question') await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
+      if (this.liveTurns.get(agentId) === 'question' && this.questionInbox.ask(agentId, id)) {
+        await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
+      }
     }
   }
 
@@ -3251,6 +3263,9 @@ export class CableSession {
   async question(agentId: string, id: string, questions: unknown): Promise<void> {
     this.questionInbox.set(agentId, id, questions)
     this.liveTurns.set(agentId, 'question')
+    // The dial beeps at each ask, and the devices and the core ask again what a dial should hold as it arrives or they
+    // reconnect: one the inbox holds is asked once until the dial loses it. One it cannot hold is sent as it comes.
+    if (this.questionInbox.read(agentId).ok && (this.greeting || !this.questionInbox.ask(agentId, id))) return
     await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
   }
   /** A turn ended: its agent is no longer live. */
