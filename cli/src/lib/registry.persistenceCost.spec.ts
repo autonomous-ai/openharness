@@ -141,12 +141,15 @@ it('avoids repeated row comparisons and unused owner captures in a changed save 
   await registry!.flush()
   const fingerprints = stringify.mock.calls.filter(([value, replacer]) => isPersistedRow(value) && typeof replacer === 'function').length
   const owners = stringify.mock.calls.filter(([value, replacer]) => isOwnershipRecord(value) && typeof replacer === 'function').length
+  const images = stringify.mock.calls.filter(([value, replacer, space]) => Array.isArray(value)
+    && value.length > 0 && value.every(isPersistedRow) && replacer === null && space === 2).length
   stringify.mockRestore()
   expect(registry!.byAgent(A)).toBe(live)
   expect(registry!.byProcess('claude', live.processIdentity!)).toBe(live)
   expect(row(disk())).toMatchObject({ cwd: '/fixture/changed', launchArgs: ['--before'] })
   expect(row(disk(), B)).toEqual(peer)
   expect(io.durable).toHaveLength(1)
+  expect(images).toBe(1)
   expect(fingerprints).toBeLessThanOrEqual(12)
   expect(owners).toBe(0)
 })

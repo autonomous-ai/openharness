@@ -3487,7 +3487,8 @@ class Registry {
         const rows = validatedRows(merged)
         if (!rows) throw new Error('registry transaction would violate global identity invariants')
         const serialized = rows.map(persistedRow)
-        const prepared = await prepareRegistryImage(FILE, JSON.stringify(serialized, null, 2), deadline)
+        const contents = JSON.stringify(serialized, null, 2)
+        const prepared = await prepareRegistryImage(FILE, contents, deadline)
         let rebased: RegisteredSession[]
         try {
           await bindingCommit?.refresh?.()
@@ -3530,7 +3531,7 @@ class Registry {
           throw error
         }
         this.unconfirmedBinding = null
-        this.persistedContents = JSON.stringify(serialized, null, 2)
+        this.persistedContents = contents
         for (const [id, intent] of capturedIntents) if (this.intended.get(id) === intent) this.intended.delete(id)
 
         // External refresh keeps controller references. Registration replaces its target only now:
@@ -3611,10 +3612,16 @@ class Registry {
       await privateRegistryDirectory(env.ADAPTER_DATA_DIR)
       deadline.check()
       let existing: Record<string, string> = {}
+      let contents: string | undefined
       try {
-        const obj = JSON.parse(await readPrivateRegistryFile(NAMES_FILE, 1024 * 1024)) as Record<string, unknown>
+        contents = await readPrivateRegistryFile(NAMES_FILE, 1024 * 1024)
+        const obj = JSON.parse(contents) as Record<string, unknown>
         existing = Object.fromEntries(Object.entries(obj).filter(([, value]) => typeof value === 'string')) as Record<string, string>
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      deadline.check()
+      // Equal bytes can still be an unconfirmed rename. Only a clean observation may omit publication.
+      if (!intent && !this.namesUnsaved && deleted.size === 0 && revision === this.namesRevision
+        && contents === JSON.stringify(names, null, 2)) return
       for (const id of deleted) delete existing[id]
       const prepared = await prepareRegistryImage(NAMES_FILE, JSON.stringify({ ...existing, ...names }, null, 2), deadline)
       try { intent?.verify(); prepared.publish() }
@@ -3629,7 +3636,7 @@ class Registry {
         this.namesUnsaved = false
         for (const id of deleted) this.deletedNames.delete(id)
       }
-    } catch (error) { throw persistenceFailure(error, true) }
+    } catch (error) { this.namesUnsaved = true; throw persistenceFailure(error, true) }
   }
 
 }

@@ -1627,3 +1627,104 @@ and memory is higher. Legacy-lock results compare an old refusal with a new
 success, so they are excluded from equal-outcome cost comparison. All previous
 failed comparisons remain retained. No further runtime optimization or full
 package acceptance is claimed by this measurement.
+
+## Avoid publishing an unchanged, already durable names image
+
+### Design
+
+The retained attribution records twenty names-file writes, twenty file fsyncs
+and twenty directory fsyncs for twenty unchanged public flushes. `flush()` calls
+`persistNames()` even when no rename was requested. These writes do not change
+the bytes, but asynchronous preparation still consumes CPU and allocations.
+The latest matched comparison remains the failed cost result above; this
+correction has no measured acceptance result yet.
+
+Keep the private names-file read, descriptor checks, size bound, parsing and
+deadline checks. Omit preparation and publication only without an explicit
+rename intent, pending dirty names or deletion tombstones, when the bytes read
+exactly match the captured local names image and its revision is still current.
+A missing file, different bytes or peer-only names take the existing merge and
+durable publication path. An explicit same-value rename still checks its owner
+and publishes before it succeeds.
+
+Every `persistNames()` failure must set the existing `namesUnsaved` flag. A
+same-value explicit rename can replace the file and then fail directory fsync;
+equal bytes alone cannot make the next flush acknowledge that uncertain write.
+Its retry must publish durably. An earlier operation cannot clear a dirty name
+or deletion admitted while it was reading or preparing its image.
+
+- Growth and scale: no new state, cache, timer or queue. The existing 1 MiB
+  names read limit and single bounded writer remain. The retained workload
+  measures the omitted publications, CPU and memory; no new margin is claimed.
+- Concurrency: keep captured names, revision and tombstones, the writer queue,
+  guarded file read and explicit owner predicate. No cross-process lock or
+  merge rule changes.
+- Read cost: still read the same private names file. Only proven unnecessary
+  writes and fsyncs disappear; no stat-based shortcut or polling is added.
+- Compatibility: no wire, stored schema, filename or client contract changes.
+  Existing clients and backends keep the same success and held outcomes.
+- Migration and rollback: no migration; revert the correction to restore
+  unconditional names publication.
+- Audience and identity: existing private-file and registry-owner checks remain;
+  no other account, home or caller gains access.
+- Failure: malformed, unsafe and unreadable files still fail with the existing
+  content-free persistence error. Failed publication remains dirty until a
+  durable retry succeeds; no caller error becomes success.
+- Platforms: shared TypeScript affects macOS, Linux and Windows. No process
+  start changes. Directory-fsync fault coverage applies where that fsync runs;
+  root records the actual validation platforms.
+
+Before runtime changes, dedicated caller controls will require unchanged
+flushes to keep the exact bytes without names publication. They also retain
+explicit same-value rename durability and revocation, failure retry despite
+matching bytes, inherited-name mutation during a read, malformed-file
+errors and peer-name merging. Existing inherited-write failure and queued
+deletion controls remain required. Root ran the dedicated caller controls
+before runtime changes: both unchanged-image cases failed because each flush
+republished names, while the other seven cases passed (3.89 s,
+`/tmp/core-registry-names-cost-red.log`).
+
+After both names and image-encoding corrections, root ran the dedicated names
+and persistence-cost suites together with `registry.spec.ts` and
+`registry.launchCallers.spec.ts`: all 222 cases passed across four files
+(75.62 s, `/tmp/core-registry-publication-green.log`, macOS/Node 24.22.2).
+TypeScript passed (`/tmp/core-registry-publication-types.log`). Independent
+source review of both corrections found no actionable findings. The unchanged
+matched workload remains pending; no cost improvement is claimed yet.
+
+## Retain the bytes prepared for a successful registry publication
+
+The retained attribution found two full registry serializations for each changed
+publication. The first string is the actual temporary-file image; after its
+rename and directory fsync succeed, the same immutable rows are serialized again
+for `persistedContents`. Retain the first string in that operation and install
+it as the acknowledged baseline only after publication succeeds.
+
+The recovery-alias correction above detached live recovered rows from both the
+locked image and the prepared candidate. Preparation therefore owns its nested
+values; the synchronous live rebase does not mutate that image. No row clone,
+owner fingerprint, validation, lock or recovery serialization is removed.
+Unconfirmed publication retains its existing owned image and prior snapshot.
+
+Growth, concurrency and scale: one already allocated immutable string lives
+until its existing operation completes; no cache, queue, mirror or timer is
+added. Read cost is unchanged; one repeated encoding disappears. Storage,
+wire contracts, audience and identity do not change. No migration is needed;
+rollback is a revert. Failure and publication deadlines remain unchanged. The
+shared TypeScript affects macOS, Linux and Windows without starting a process.
+
+Before changing runtime, the existing changed-save caller control additionally
+requires one full encoded image for its one durable publication, while keeping
+the same durable bytes, live owner and untouched peer. Its forwarded stringify
+spy preserves real encoding. Existing held-preparation, nested-alias, recovery
+and authority controls remain required. Root will record actual red/green and
+matched cost; the earlier cost failures remain retained.
+
+The pre-correction macOS/Node 24.22.2 run failed the intended count (two full
+images instead of one), with twelve authority, recovery and alias controls
+passing (14.48 s, `/tmp/core-registry-image-encoding-red.log`). Runtime now
+retains that first string. The combined macOS/Node 24.22.2 run above passed all
+222 cases across four files (75.62 s, `/tmp/core-registry-publication-green.log`),
+and TypeScript passed (`/tmp/core-registry-publication-types.log`). Independent
+source review found no actionable findings. Matched cost and whole-package
+acceptance remain pending; the earlier cost failures still apply.
