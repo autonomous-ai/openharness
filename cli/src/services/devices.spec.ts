@@ -5759,8 +5759,8 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   const diego4 = [{ handle: H(1), title: 'Terminal 3' }, { handle: H(2), title: 'harness' }, { handle: H(3), title: 'Skill từ SKILL.md' },
     { handle: H(4), title: 'PM', renamed: true as const }]
   /** Diego's four tabs, read: Skill (agent 3) placed at its terminal by elimination. */
-  const diegoPlaced = async () => {
-    const { port, fake } = withOrca(0)
+  const diegoPlaced = async (over: Parameters<typeof start>[0] = {}) => {
+    const { port, fake } = withOrca(0, over)
     port.observed(hook(2))
     port.observed(hook(4))
     scanned(3)
@@ -5786,6 +5786,27 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     expect(orcaRuns).toEqual([switchTo(3)])
   })
 
+  it('on macOS a tap on it switches to its placed terminal, then brings Orca forward by Orca\'s own bundle', async () => {
+    await diegoPlaced({ orca: { ...orca, platform: 'darwin' } })
+    expect(await host().openAgent(agent(3))).toBeUndefined()
+    expect(orcaRuns).toEqual([switchTo(3), ['/usr/bin/open', ['-b', 'com.stablyai.orca'], 10_000]])
+  })
+
+  it('on macOS a hooked agent\'s tap brings forward the app its own hook named', async () => {
+    const { port } = await diegoPlaced({ orca: { ...orca, platform: 'darwin' } })
+    // Its hook says its window is VS Code's, though its terminal is Orca's.
+    port.observed(hook(2, { hostHints: { ...hook(2).hostHints, __CFBundleIdentifier: 'com.microsoft.VSCode' } }))
+    expect(await host().openAgent(agent(2))).toBeUndefined()
+    expect(orcaRuns).toEqual([switchTo(2), ['/usr/bin/open', ['-b', 'com.microsoft.VSCode'], 10_000]])
+  })
+
+  it('on macOS words to it are never typed into its placed terminal, nor anywhere', async () => {
+    await diegoPlaced({ orca: { ...orca, platform: 'darwin' } })
+    expect(await host().sendTurn(agent(3), 'run the tests')).toMatchObject({ ok: false })
+    await settled()
+    expect(orcaRuns).toEqual([])
+  })
+
   it('words or voice to it are never typed into its placed terminal, nor anywhere', async () => {
     await diegoPlaced()
     expect(await host().sendTurn(agent(3), 'run the tests')).toMatchObject({ ok: false })
@@ -5793,8 +5814,8 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     expect(orcaRuns).toEqual([])
   })
 
-  it('an ambiguous placement switches nothing', async () => {
-    const { port, fake } = withOrca(0)
+  it('an ambiguous placement switches nothing and, on macOS, brings nothing forward', async () => {
+    const { port, fake } = withOrca(0, { orca: { ...orca, platform: 'darwin' } })
     port.observed(hook(3))
     scanned(1, 2)
     seen.host.watching!(true)

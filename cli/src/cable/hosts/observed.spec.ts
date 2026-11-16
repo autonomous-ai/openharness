@@ -2426,7 +2426,8 @@ describe('ObservedSource panes', () => {
     expect(actions.orcaSwitch.mock.calls).toEqual([[HANDLE]])
     expect(s.src.capabilities(agent)).toMatchObject({ focus: true, voice: false })
     expect(await s.src.focus(agent)).toBe(true)
-    expect(actions.open.mock.calls).toEqual([[id, { pane: { adapter: 'orca', id: HANDLE } }]])
+    // No hook named its app: the app of the adapter it was placed in comes forward.
+    expect(actions.open.mock.calls).toEqual([[id, { bundle: 'com.stablyai.orca', pane: { adapter: 'orca', id: HANDLE } }]])
     expect(await s.src.send(agent, 'run the tests')).toMatchObject({ ok: false })
     expect(actions.orcaSend).not.toHaveBeenCalled()
     // Focus and a prompt follow only a pane its own hook named.
