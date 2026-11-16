@@ -44,13 +44,15 @@ function ownUid(): number {
   return process.getuid?.() ?? -1
 }
 
-/** 'ok', or why a path is no folder of this user's. */
-export function ownDirectory(path: string, uid = ownUid()): 'ok' | 'missing' | 'owner' {
+/** 'ok', or why a path is no folder of this user's: 'unreadable' when it cannot be looked at now (a folder above it
+ *  shut), which says nothing of it being gone, so a listed folder stays listed. */
+export function ownDirectory(path: string, uid = ownUid()): 'ok' | 'missing' | 'owner' | 'unreadable' {
   let info
   try {
     info = statSync(path)
-  } catch {
-    return 'missing'
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'unreadable'
   }
   if (!info.isDirectory()) return 'missing'
   return info.uid === uid ? 'ok' : 'owner'

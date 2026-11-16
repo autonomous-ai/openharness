@@ -137,7 +137,8 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
         turnOff(engine, counts)
         continue
       }
-      // A listed folder that no longer exists is dropped, never made again.
+      // A listed folder that no longer exists is dropped, never made again; one that cannot be looked at now stays,
+      // unwritten.
       const kept = listed[engine].filter((skills) => {
         const state = ownDirectory(skills, deps.uid)
         if (state === 'ok' && writeSkill(skills) === 'written') counts[engine].wrote++
