@@ -130,8 +130,8 @@ it('fingerprints each unchanged row once while preserving the exact durable byte
   expect(registry!.byAgent(A)).toBe(live)
   expect(io.durable).toEqual([])
   expect(fingerprints).toBeLessThanOrEqual(2)
-  // An awaited observation still needs its owner fence if the private disk image has changed.
-  expect(owners).toBe(2)
+  // A matching disk image needs no owner serialization; the snapshot still fences a changed image.
+  expect(owners).toBe(0)
 })
 
 it('avoids repeated row comparisons and unused owner captures in a changed save and flush', async () => {
@@ -148,7 +148,7 @@ it('avoids repeated row comparisons and unused owner captures in a changed save 
   expect(row(disk(), B)).toEqual(peer)
   expect(io.durable).toHaveLength(1)
   expect(fingerprints).toBeLessThanOrEqual(12)
-  expect(owners).toBe(2)
+  expect(owners).toBe(0)
 })
 
 it.each(['flush', 'transaction'] as const)('refuses an acknowledged %s observation whose owner changes during preparation', async via => {
@@ -174,6 +174,48 @@ it.each(['flush', 'transaction'] as const)('refuses an acknowledged %s observati
   expect(row(disk(), B)).toEqual(peer)
   expect(io.durable.length).toBeGreaterThan(0)
   expect(io.durable.every(image => (row(image).processIdentity as RegisteredSession['processIdentity'])?.startMarker === 'replacement')).toBe(true)
+})
+
+it.each(['nested process identity', 'evidence revision'] as const)('refuses an acknowledged observation whose %s changes during preparation', async change => {
+  const live = registry!.byAgent(A)!, peer = row(disk(), B), bytes = readFileSync(io.file, 'utf8')
+  const identity = { ...live.processIdentity! }, revision = live.evidenceRevision
+  expect(live).not.toHaveProperty('identityHold')
+  live.cwd = '/fixture/acknowledged-observation'
+  const before = structuredClone(live), held = holdPreparation()
+  const pending = track(registry!.flush())
+  await held.entered()
+  expect(io.durable).toEqual([])
+  expect(readFileSync(io.file, 'utf8')).toBe(bytes)
+
+  const currentIdentity = change === 'nested process identity' ? { ...identity, startMarker: 'nested-replacement' } : identity
+  if (change === 'nested process identity') {
+    const nested = live.processIdentity!
+    nested.startMarker = currentIdentity.startMarker
+    expect(live.processIdentity).toBe(nested)
+    expect(live.evidenceRevision).toBe(revision)
+  } else {
+    expect(registry!.setIdentityHold(A, 'fixture evidence changed')).toBe(true)
+    expect(registry!.setIdentityHold(A)).toBe(true)
+    expect(live).not.toHaveProperty('identityHold')
+    expect(live.evidenceRevision).not.toBe(revision)
+    // Clearing the hold restores every field except the authority revision; no persisted fact changed.
+    expect({ ...live, evidenceRevision: revision }).toEqual(before)
+  }
+  held.release()
+  await expect(pending).rejects.toThrow('owner')
+  expect(io.durable).toEqual([])
+  expect(readFileSync(io.file, 'utf8')).toBe(bytes)
+
+  await registry!.flush()
+  expect(registry!.byAgent(A)).toBe(live)
+  expect(registry!.byProcess('claude', currentIdentity)).toBe(live)
+  expect(live.processIdentity).toEqual(currentIdentity)
+  const saved = row(disk())
+  expect(saved).toMatchObject({ cwd: '/fixture/acknowledged-observation', processIdentity: currentIdentity })
+  expect(saved).not.toHaveProperty('identityHold')
+  expect(saved).not.toHaveProperty('evidenceRevision')
+  expect(row(disk(), B)).toEqual(peer)
+  expect(io.durable).toHaveLength(1)
 })
 
 it('copies only the two pre-await row images for a changed observation and its public flush', async () => {

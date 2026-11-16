@@ -1481,3 +1481,80 @@ and 171.0755 ms. The manifest is
 The preceding sandbox attempt failed before candidate samples because native
 uptime/process checks were denied; that failed receipt remains retained. Neither
 result is relabeled as measurement of this subsequent recovery correction.
+
+## Serialize owner snapshots only when their fence is checked
+
+Prepared against `7c55706d13a20d3d195dd4451cb0b62d10865977`, before runtime
+edits or execution. The retained native comparison still rejects the save cost:
+twenty unchanged 160-row flushes consumed 114.256 ms CPU before and 171.0755 ms
+after. Attribution recorded 3,200 owner fingerprints in those candidate calls,
+even though the unchanged-image return never consults an owner fingerprint.
+This proposal removes that unused serialization, not the captured authority.
+
+### Design
+
+Keep the existing `structuredClone(persistedRow(entry))` capture and its location
+before any await. At that same point, `beforeOwners` holds a separate shallow
+object made from each original captured row plus the live row's current
+`evidenceRevision`. `persistedRow` deliberately removes that transient revision;
+the other fields `ownershipIdentity` reads are already in the deep snapshot:
+agent/registration/engine, conversation/path, process identity, terminal routes
+and primary, engine homes, and the external-resume token. Neither a live row nor
+a later lookup into the mutable `currentRows` map is an owner snapshot.
+
+Keep those original shallow objects when binding candidates, displaced rows,
+confirmation or peer recovery replace/delete entries in `currentRows`. The
+separate top level also cannot inherit the resumed path's changes to
+`previousAgentId` and `touchedAt`. Nested owner values belong to the existing deep
+capture; the merge and validation helpers do not mutate them. Keep the recovery
+snapshot fix and every ordinary pre-await deep copy. Do not reconstruct these
+objects by parsing fingerprint text: JSON conversion changes own undefined
+properties, non-finite numbers and sparse arrays before validation.
+
+`verifyPreparedOwners` selects exactly the same affected IDs and claims as today.
+For each selected ID, compare `ownershipIdentity(live)` with
+`ownershipIdentity(capturedOwner)` immediately before publication. Missing owners
+still compare as undefined. Preserve the truthy `strict` guard, including public
+flush, exit flush and transaction completion's `'observation'`; the unchanged
+disk-image return needs no owner serialization but retains its snapshot if it
+instead reaches the fence. No capture moves across an await, and no authority,
+durability or rebase check is omitted.
+
+Growth: no persisted data, cache, timer or queue is added. One transient shallow
+owner object per captured row replaces its eagerly serialized string for this
+write. Concurrency: the existing writer, lock and final synchronous fence remain;
+snapshots retain their original identities across candidate replacement. Read
+cost: no extra file read, scan or process probe, and no new deep copy. Scale:
+unchanged public flushes are expected to serialize zero owners instead of N;
+an actual write checking K existing owners serializes 2K instead of N + K.
+These are source-derived work counts, not accepted timing or a new 10x margin;
+root must measure the same frozen 16/160-row workload after the change.
+Compatibility: no backend/client, storage, wire or receipt shape change; the
+30-day contracts remain. Migration and rollback: none; reverting restores eager
+serialization without rewriting data. Audience and identity: access and native
+authority are unchanged, including the transient evidence revision. Failure:
+an owner mutation or hold/recovery cycle still rejects the stale acknowledged
+write before publication, with the existing named error. Platforms: shared
+TypeScript on macOS, Linux and Windows; no OS call or process-launch change and
+no new platform result claimed.
+
+### Caller RED and authority controls, prepared only
+
+Tighten the two existing forwarded `JSON.stringify` work budgets from two owner
+fingerprints to zero: an unchanged public flush, and public `setCwd` followed by
+its queued flush. Keep exact durable bytes, row references, process lookup,
+unchanged peer, row-fingerprint budget and publication assertions. On the current
+runtime those two budgets are expected to fail with two actual serializations.
+
+Keep the existing acknowledged flush/transaction replacement controls. Add two
+held-real-fsync cases: change the live nested process marker in place without
+changing its revision; or use `setIdentityHold` and clear it again so only the
+evidence revision differs when the fence runs. Each must reject the stale public
+flush, leave the durable bytes untouched, then let a fresh flush save the local
+cwd and current identity without persisting the hold or revision. These controls
+protect against retaining live nested references or omitting `evidenceRevision`;
+they are expected to pass on the existing implementation.
+
+Only this Design and caller tests are prepared. No runtime code, admission test,
+syntax check, test run, typecheck, build, diagnostic or benchmark is part of this
+preparation. Root owns the actual RED, runtime correction, GREEN and cost decision.
