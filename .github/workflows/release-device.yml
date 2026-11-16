@@ -145,11 +145,16 @@ jobs:
             fi
             exit 1
           fi
-          # A ticket just issued can take a moment to be served.
-          for try in 1 2 3; do
+          # A ticket just issued can take minutes to be served, and Apple's connection drops even after Accepted:
+          # Desktop's bounded backoff (desktop/scripts/upload-desktop.sh), six tries over 465 s.
+          for delay in 15 30 60 120 240 0; do
             xcrun stapler staple "$dmg" && break
-            [[ $try -lt 3 ]] || exit 1
-            sleep 10
+            if [[ $delay -eq 0 ]]; then
+              echo "::error::Could not staple the dmg's notarization ticket after 6 tries: Re-run failed jobs"
+              exit 1
+            fi
+            echo "Stapling the dmg failed; trying again in ${delay}s"
+            sleep "$delay"
           done
 
       # Against the committed key, the one every installed app checks updates with, so a signing secret that does not
