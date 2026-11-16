@@ -10,9 +10,11 @@ import { CONVERSATIONS_OFF, type ConversationReads, type CoreApi } from './api.j
 /** The optional deadline is the existing publication fixture budget; production keeps its default. */
 export function conversationReads(wiring: HandoffWiring, directory: string, deadlineMs?: number): ConversationReads {
   let dependencies: Promise<HandoffDeps> | undefined
+  // Warm queries start their read in the caller's turn, as the eager facade did.
+  let ready: HandoffDeps | undefined
   // Discovery and publication must share witnesses across requests (#1145), including concurrent first use.
   const load = () => dependencies ??= import('./handoffDependencies.js')
-    .then(({ createHandoffDependencies }) => createHandoffDependencies(wiring, directory, deadlineMs))
+    .then(({ createHandoffDependencies }) => ready = createHandoffDependencies(wiring, directory, deadlineMs))
     .catch(() => {
       dependencies = undefined
       console.error('[handoff] initialization failed: HANDOFF_UNAVAILABLE')
@@ -20,22 +22,22 @@ export function conversationReads(wiring: HandoffWiring, directory: string, dead
     })
   return {
     publish: async (prepared, permit) => {
-      const deps = await load()
+      const deps = ready ?? await load()
       if (!deps.publish) throw new HandoffError('HANDOFF_UNAVAILABLE')
       return deps.publish(prepared, permit)
     },
-    resolve: async (id) => (await (await load()).resolve(id)) ?? null,
-    recentAsks: async (id, n) => (await load()).recentAsks(id, n),
-    lastFullText: async (id) => (await (await load()).lastFullText(id)) ?? null,
-    recaps: async (id, n) => (await (await load()).recaps?.(id, n)) ?? [],
+    resolve: async (id) => (await (ready ?? await load()).resolve(id)) ?? null,
+    recentAsks: async (id, n) => (ready ?? await load()).recentAsks(id, n),
+    lastFullText: async (id) => (await (ready ?? await load()).lastFullText(id)) ?? null,
+    recaps: async (id, n) => (await (ready ?? await load()).recaps?.(id, n)) ?? [],
     discover: async (id) => {
-      const deps = await load()
+      const deps = ready ?? await load()
       const session = await deps.resolve(id)
       const found = session && await deps.discoverSession?.(session)
       return found ? { engine: found.engine as AgentEngine, sessionId: found.sessionId, transcriptPath: found.transcriptPath ?? null } : null
     },
-    findTranscript: async (engine, id, options) => ((await load()).findTranscript ?? CONVERSATIONS_OFF.findTranscript)(engine, id, options),
-    transcriptOk: async (engine, path, home) => (await (await load()).transcriptOk?.(engine, path, home)) ?? false,
+    findTranscript: async (engine, id, options) => ((ready ?? await load()).findTranscript ?? CONVERSATIONS_OFF.findTranscript)(engine, id, options),
+    transcriptOk: async (engine, path, home) => (await (ready ?? await load()).transcriptOk?.(engine, path, home)) ?? false,
   }
 }
 

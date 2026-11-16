@@ -34,7 +34,7 @@ set and rejects another target hidden behind the same door.
 
 | Question | Decision |
 | --- | --- |
-| Growth | No new persisted data, cache, timer, queue, witness map or registry mirror. One lazy dependency reference replaces one eager reference. Existing discovery/selection maps stay capped at 128 each. Existing receipt/stage lifetime growth remains an open package 11 limitation. |
+| Growth | No new persisted data, cache, timer, queue, witness map or registry mirror. One dependency instance and its initialization promise replace one eager instance. Existing discovery/selection maps stay capped at 128 each. Existing receipt/stage lifetime growth remains an open package 11 limitation. |
 | Concurrency | Concurrent initialization shares one promise. Existing project/receipt/exclusion locks and final publication guards are unchanged. A failed attempt settles before a later caller can create another. |
 | Read cost | No additional data read, scan or polling. All existing query and publication reads retain their scope; stopped-owner discovery still scans its existing stopped IDs. |
 | Scale | Loading occurs once per daemon facade. No claim of a new 10x margin. Startup/first-query CPU, RSS and latency are measured separately from warmed publication and event-loop delay. |
@@ -78,6 +78,37 @@ conversation-facade tests cover its changed file at 100% statements, branches, f
 Architecture and query checks passed 33 cases. The separately included lean-entry suite failed its
 sandbox `os.uptime` call with EPERM and skipped 20 cases; it is not accepted and needs a root-scheduled
 run with the required OS access. The full core gate and actual private-daemon checks remain pending.
+
+## Warm query dispatch correction
+
+The retained matched composition run at main `1119380` and candidate `276a211` measured 10,000
+warmed resolves at 4.362 and 4.910 ms CPU respectively; both pairs increased. The source awaits the
+settled initialization promise on every query. This adds scheduling work after initialization and
+defers the underlying read until after the caller's current turn, unlike the eager facade. These
+measurements describe those builds only and do not attribute the entire CPU difference to that await.
+
+Keep the successfully constructed dependency object beside the shared initialization promise. Each
+operation uses that object immediately once ready, otherwise it awaits the same initialization as
+other first callers. The methods stay asynchronous: synchronous dependency errors still reject the
+returned promise. Set the ready reference only after successful construction, so a failed attempt
+cannot leave a usable partial object. No authority, witness, data, lock, timer, deadline or final
+publication guard changes. The design decisions above, including rollback, identity and platforms,
+still apply.
+
+Before this correction, table-driven caller tests initialize each operation, issue a warm request,
+and then replace its backing conversation before yielding. The request must start against the
+conversation present when called; the next request must see its replacement. They also cover every
+cold entry and a synchronous dependency error through the asynchronous facade. Existing concurrent
+initialization, held failure, later retry and pending-request revocation controls remain mandatory.
+Root runs the red/green checks, coverage and matched cost measurement; none is claimed by this design.
+
+The pre-correction focused run on macOS/Node 24.22.2 failed all eight warm dispatch cases as expected;
+the other four controls passed (1.05 s, `/tmp/core-handoff-warm-dispatch-red.log`). After correction,
+both facade suites passed all 17 tests in 1.49 s with `conversationQueries.ts` at 100% statements,
+branches, functions and lines (56 statements, 85 branches, 16 functions, 47 lines;
+`/tmp/core-handoff-warm-dispatch-green.log`). TypeScript passed
+(`/tmp/core-handoff-warm-dispatch-types.log`). Independent source review found no actionable findings;
+root also reviewed the change. Final gates, build and new matched cost evidence remain pending.
 
 ## Limits retained
 

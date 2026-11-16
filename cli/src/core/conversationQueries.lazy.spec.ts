@@ -4,6 +4,7 @@ import type { HandoffDeps } from '../lib/agentHandoff.js'
 import type { HandoffWiring } from '../lib/handoffDiscovery.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
+import type { ConversationReads } from './api.js'
 
 const loading = vi.hoisted(() => ({ evaluated: vi.fn(), create: vi.fn(), gate: undefined as Promise<void> | undefined }))
 
@@ -51,6 +52,50 @@ it('keeps construction cold and shares one composition across concurrent first q
   expect(await reads.lastFullText(row.sessionId)).toBe('answer')
   expect(await reads.recaps(row.sessionId, 5)).toEqual(['recap'])
   expect(await reads.transcriptOk('codex', '/private-fixture/native', null)).toBe(true)
+  expect(loading.create).toHaveBeenCalledOnce()
+})
+
+const transcript = (session: RegisteredSession) => `/private-fixture/${session.sessionId}`
+const found = (session: RegisteredSession) => ({ engine: session.engine, sessionId: session.sessionId, transcriptPath: transcript(session) })
+const published = (session: RegisteredSession) => ({ cwd: transcript(session), file: null, gitRepo: false, degraded: [] })
+const queryCases: { name: string; ask: (reads: ConversationReads) => Promise<unknown>; value: (session: RegisteredSession) => unknown }[] = [
+  { name: 'resolve', ask: reads => reads.resolve(row.agentId), value: session => session },
+  { name: 'recentAsks', ask: reads => reads.recentAsks(row.sessionId, 1), value: session => [session.sessionId] },
+  { name: 'lastFullText', ask: reads => reads.lastFullText(row.sessionId), value: session => session.sessionId },
+  { name: 'recaps', ask: reads => reads.recaps(row.sessionId, 1), value: session => [session.sessionId] },
+  { name: 'discover', ask: reads => reads.discover(row.agentId), value: found },
+  { name: 'findTranscript', ask: reads => reads.findTranscript('codex', row.sessionId, {}), value: transcript },
+  { name: 'transcriptOk', ask: reads => reads.transcriptOk('codex', transcript(row), null), value: session => session === row },
+  { name: 'publish', ask: reads => reads.publish({} as never, { current: () => true }), value: published },
+]
+
+it.each(queryCases)('starts a warmed $name request before the next caller replaces its conversation', async ({ ask, value }) => {
+  let current = row
+  const deps: HandoffDeps = {
+    resolve: () => current, readHistory: () => undefined,
+    recentAsks: () => [current.sessionId], lastFullText: () => current.sessionId, recaps: () => [current.sessionId],
+    discoverSession: async session => found(session), findTranscript: async () => transcript(current),
+    transcriptOk: () => current === row, publish: async () => published(current),
+  }
+  loading.create.mockReturnValue(deps)
+  const { reads } = await facade()
+  expect(await ask(reads)).toEqual(value(row))
+  const pending = ask(reads)
+  current = { ...row, sessionId: 'replacement-conversation' }
+  expect(await pending).toEqual(value(row))
+  expect(await ask(reads)).toEqual(value(current))
+  expect(loading.create).toHaveBeenCalledOnce()
+})
+
+it('keeps synchronous dependency failures as rejected warm queries', async () => {
+  const deps = dependencies(), failure = new Error('query unavailable')
+  loading.create.mockReturnValue(deps)
+  const { reads } = await facade()
+  await reads.resolve(row.agentId)
+  deps.lastFullText = () => { throw failure }
+  let pending!: Promise<string | null>
+  expect(() => { pending = reads.lastFullText(row.sessionId) }).not.toThrow()
+  await expect(pending).rejects.toBe(failure)
   expect(loading.create).toHaveBeenCalledOnce()
 })
 
