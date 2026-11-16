@@ -299,7 +299,7 @@ import type { FormCommand, FormResult } from './windowForm.js'
 import { deriveLongRecap, extendShortRecap } from '../lib/deviceRecap.js'
 import type { TurnStatsFields } from './turnStats.js'
 import type { Tier } from '../lib/notifyTier.js'
-import { APP_IDS, hostDisplayName } from './hosts/hostDetect.js'
+import { APP_IDS, appDisplayName, hostDisplayName } from './hosts/hostDetect.js'
 import type { AppList, AppPick } from './hosts/types.js'
 
 export interface RouteDecision {
@@ -741,7 +741,7 @@ export class CableSession {
     const entry = this.lastRing.find((a) => a.id === this.focusRecord)
     // A host is outside text: only the table's own ids name an app, never a key every object has (`constructor`).
     const shown = entry
-      ? { name: entry.name, app: entry.host !== undefined && APP_IDS.includes(entry.host) ? hostDisplayName(entry.host) : 'Harness' }
+      ? { name: entry.name, app: entry.host !== undefined && APP_IDS.includes(entry.host) ? appDisplayName(entry.host) : 'Harness' }
       : null
     if (shown?.name === this.shown?.name && shown?.app === this.shown?.app) return
     this.shown = shown
