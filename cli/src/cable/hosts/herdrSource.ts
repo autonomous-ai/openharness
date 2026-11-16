@@ -11,9 +11,9 @@
  * agent it cannot read (a status a newer herdr adds, or one past 64): asked again for such a pane, each subscription
  * would ask for the next, one a second for ever.
  *
- * The socket's stamp is kept when the retries give up. herdr writes its log beside its socket on every request, so the
- * watched folder keeps changing while a stale socket sits there: only another socket, one a herdr that started again
- * made, connects.
+ * The retries give up only on a socket whose last attempt listed nothing, and keep its stamp. herdr writes its log beside
+ * its socket on every request, so the watched folder keeps changing while a stale socket sits there: only another
+ * socket, one a herdr that started again made, connects.
  *
  * Everything from the socket is checked here before use, and a log line says only fixed words and counts: herdr's
  * answers name people's folders and agents.
@@ -32,7 +32,8 @@ const MAX_NAME = 64
 const MAX_CWD = 4096
 /** The least time between two subscriptions' starts. */
 const SUBSCRIBE_EVERY_MS = 1000
-/** The waits before each retry of a failed attempt; after the last, only the watch. */
+/** The waits before each retry of a failed attempt; after the last, the last again while each attempt lists, else only
+ *  the watch. */
 const RETRIES_S = [1, 2, 4, 8, 16, 32, 60]
 /** Followed this long, a herdr that drops its subscription is retried from the first wait again. */
 const LIVE_MS = 60_000
@@ -112,6 +113,8 @@ export class HerdrSource implements HostSource {
   /** The one timer: the next subscription, or the next retry. */
   private timer: (() => void) | undefined
   private unwatch: (() => void) | undefined
+  /** The stamp of the socket the attempt tries, taken as it starts: a herdr that starts again meanwhile makes another. */
+  private stamp: string | undefined
   /** The stamp of the stale socket the retries gave up on. */
   private stale: string | undefined
   private openedAt: number | undefined
@@ -205,7 +208,8 @@ export class HerdrSource implements HostSource {
   }
 
   private connect(): void {
-    if (!this.deps.client.socketStamp()) return this.wait(undefined)
+    this.stamp = this.deps.client.socketStamp()
+    if (!this.stamp) return this.wait(undefined)
     this.soon()
   }
 
@@ -276,9 +280,11 @@ export class HerdrSource implements HostSource {
     // starts goes on to the longer waits.
     else if (this.deps.monotonic() - since >= LIVE_MS) this.retries = 0
     if (code === 'no_socket') return this.wait(undefined)
-    const seconds = RETRIES_S[this.retries]
-    if (seconds === undefined) return this.wait(this.deps.client.socketStamp())
-    this.retries++
+    const last = this.retries === RETRIES_S.length
+    // Only an attempt that listed nothing gives up: a herdr that lists is running, and keeps the longest wait.
+    if (last && since === undefined) return this.wait(this.stamp)
+    if (!last) this.retries++
+    const seconds = RETRIES_S[this.retries - 1]
     this.deps.log(`[herdr] retry · ${seconds}`)
     this.timer = this.deps.after(seconds * 1000, () => {
       this.timer = undefined
