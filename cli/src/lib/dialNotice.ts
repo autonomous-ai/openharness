@@ -22,7 +22,8 @@ export function noticeLine(text: string): string {
 
 /** A folder's name for a card: through noticeLine's cleaning, 64 code points at most, no `…`; '' when nothing is left. */
 export function noticeFolder(name: string): string {
-  return clean(name).slice(0, NOTICE_FOLDER_MAX).join('')
+  // Trimmed after the cut too: the listener refuses a folder that cleaning again would change, as a space left last would.
+  return clean(name).slice(0, NOTICE_FOLDER_MAX).join('').trimEnd()
 }
 
 export interface NoticeAsk { text: string; engine?: 'claude' | 'codex'; sessionId?: string; folder?: string }
