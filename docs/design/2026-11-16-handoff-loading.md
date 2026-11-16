@@ -24,11 +24,13 @@ restart. Normal turns, input, Stop and readiness never call or wait for this doo
 
 The import walker excludes only `core/conversationQueries.ts`'s dynamic import of
 `core/handoffDependencies.ts`. A static import, a different importer or another target is still
-walked. Its warmed closure remains checked and reported. The expected cold reduction is seven files:
+walked. Its warmed closure remains checked and reported. The cold reduction is eight files:
 `core/handoffDependencies.ts`, `core/handoffPublication.ts`, `lib/handoffDiscovery.ts`,
-`lib/handoffPublication.ts`, `lib/handoffFiles.ts`, `lib/handoffValidation.ts` and `lib/handoffGit.ts`.
-The exact inventory must be proved before changing the checked-in list. Physical source counts are
-informational, not runtime performance evidence.
+`lib/handoffPublication.ts`, `lib/handoffFiles.ts`, `lib/handoffValidation.ts`, `lib/handoffGit.ts` and
+`lib/subagentTranscript.ts`. Against the pre-runtime checkpoint, cold load changes from 541 files /
+92,752 lines to 533 / 91,993; the handoff-warmed load is 541 / 92,764. Physical source counts are
+informational, not runtime performance evidence. The test requires the exact warmed-minus-cold file
+set and rejects another target hidden behind the same door.
 
 | Question | Decision |
 | --- | --- |
@@ -58,7 +60,24 @@ Stop while handoff is unavailable. Root schedules builds, full gates and native 
 Profile current loading before changing runtime. Freeze source, bundle, fixture, Node and environment
 identities; compare the same quiet workload before/after. Separate daemon startup, first handoff
 query and warmed successful/same-intent publication. Retain every failed outcome and cleanup receipt;
-never use profiler-overhead results as unprofiled acceptance timing. No cost result has run yet.
+never use profiler-overhead results as unprofiled acceptance timing.
+
+Before runtime edits, the private composition diagnostic v2 passed on Node 24.22.2/macOS. Its four
+profiled phases were import 15.460 ms / 17.842 ms CPU, construction 0.519 / 0.578, first resolve
+0.159 / 0.184, and 10,000 warm resolves 3.573 / 4.944. Samples locate module compilation and the
+existing dependency factory; inspector start/stop also dominates sampled totals. These numbers are
+attribution only, not unprofiled acceptance or full-daemon startup. Manifest SHA256:
+`755e4a9c5d7d42e9569ba8a88eea5d28251e5afceaf9d1e1ee6b662e58641028`.
+The v1 fixture's missing ESM `createRequire` banner caused an import failure; its failed artifacts
+remain retained, with child reap and private-root cleanup verified. Matched candidate timing,
+full-daemon startup and publication acceptance are still pending.
+
+Focused validation on macOS/Node 24.22.2: TypeScript passed; 262 tests across ten handoff
+caller/authority/files/service files passed, retaining the existing native output goldens. The eight
+conversation-facade tests cover its changed file at 100% statements, branches, functions and lines.
+Architecture and query checks passed 33 cases. The separately included lean-entry suite failed its
+sandbox `os.uptime` call with EPERM and skipped 20 cases; it is not accepted and needs a root-scheduled
+run with the required OS access. The full core gate and actual private-daemon checks remain pending.
 
 ## Limits retained
 

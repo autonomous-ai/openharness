@@ -1,9 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { HandoffDeps } from '../lib/agentHandoff.js'
+import type { HandoffWiring } from '../lib/handoffDiscovery.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { CONVERSATIONS_OFF } from './api.js'
 import { answerConversationQuery, conversationReads } from './conversationQueries.js'
+
+const create = vi.hoisted(() => vi.fn())
+vi.mock('./handoffDependencies.js', () => ({ createHandoffDependencies: create }))
+const readsOf = (deps: HandoffDeps) => {
+  create.mockReturnValueOnce(deps)
+  return conversationReads({} as HandoffWiring, '/private-fixture/handoff')
+}
 
 const session = { agentId: 'retained', sessionId: 's1', engine: 'claude' } as RegisteredSession
 const source = { engine: 'claude', sessionId: 's1', transcriptPath: '/claude/s1.jsonl' }
@@ -27,7 +35,7 @@ describe('the conversation reads the handoff asks of the core', () => {
   })
 
   it('reads retained agents and their recaps now, and discovers from the core record alone', async () => {
-    const d = deps(), reads = conversationReads(d)
+    const d = deps(), reads = readsOf(d)
     expect(await reads.resolve('retained')).toBe(session)
     expect(await reads.resolve('missing')).toBeNull()
     expect(await reads.recentAsks('s', 20)).toEqual(['ask'])
@@ -47,18 +55,18 @@ describe('the conversation reads the handoff asks of the core', () => {
 
   it('keeps missing and optional data empty instead of guessing a conversation or a path', async () => {
     const d = deps()
-    const reads = conversationReads({ ...d, lastFullText: () => undefined, recaps: undefined, discoverSession: undefined, findTranscript: undefined, transcriptOk: undefined })
+    const reads = readsOf({ ...d, lastFullText: () => undefined, recaps: undefined, discoverSession: undefined, findTranscript: undefined, transcriptOk: undefined })
     expect(await reads.lastFullText('s')).toBeNull()
     expect(await reads.recaps('s', 5)).toEqual([])
     expect(await reads.discover('retained')).toBeNull()
     expect(await reads.findTranscript('claude', 's', {})).toBeNull()
     expect(await reads.transcriptOk('claude', '/x', null)).toBe(false)
-    expect(await conversationReads({ ...d, discoverSession: async () => ({ engine: 'claude', sessionId: 's', transcriptPath: null }) }).discover('retained'))
+    expect(await readsOf({ ...d, discoverSession: async () => ({ engine: 'claude', sessionId: 's', transcriptPath: null }) }).discover('retained'))
       .toEqual({ engine: 'claude', sessionId: 's', transcriptPath: null })
   })
 
   it('answers only the declared read queries, preserving all arguments', async () => {
-    const core = fakeCore({ conversations: conversationReads(deps()) })
+    const core = fakeCore({ conversations: readsOf(deps()) })
     const ask = (query: string, payload: Record<string, unknown>) => answerConversationQuery(core, query, payload)
     expect(await ask('resolve', { id: 'retained' })).toEqual({ value: session })
     expect(await ask('discover', { id: 'retained' })).toEqual({ value: source })
@@ -84,7 +92,7 @@ describe('the conversation reads the handoff asks of the core', () => {
 it('publishes only with a live core-owned originating request and preserves held failures', async () => {
   const { HandoffError } = await import('../lib/handoffAuthority.js')
   await expect(CONVERSATIONS_OFF.publish({} as never, { current: () => true })).rejects.toThrow()
-  const empty = conversationReads({ resolve: () => null, readHistory: () => undefined, recentAsks: () => [], lastFullText: () => undefined })
+  const empty = readsOf({ resolve: () => null, readHistory: () => undefined, recentAsks: () => [], lastFullText: () => undefined })
   await expect(empty.publish({} as never, { current: () => true })).rejects.toMatchObject({ code: 'HANDOFF_UNAVAILABLE' })
   const request = { agentId: 'a', changeId: '1'.repeat(32), targetEngine: 'claude' }
   const prepared = { request }, ownsRequest = vi.fn(() => true)

@@ -6,11 +6,6 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 
 const loading = vi.hoisted(() => ({ evaluated: vi.fn(), create: vi.fn(), gate: undefined as Promise<void> | undefined }))
-vi.mock('./handoffDependencies.js', async () => {
-  loading.evaluated()
-  await loading.gate
-  return { createHandoffDependencies: loading.create }
-})
 
 const row = { agentId: 'selected', sessionId: 'conversation', engine: 'codex' } as RegisteredSession
 const wiring = {} as HandoffWiring
@@ -26,8 +21,15 @@ const facade = async () => {
   return { reads: conversationReads(wiring, directory), answerConversationQuery }
 }
 
-beforeEach(() => { vi.resetModules(); loading.evaluated.mockClear(); loading.create.mockReset(); loading.gate = undefined })
-afterEach(() => { vi.restoreAllMocks(); vi.resetModules() })
+beforeEach(() => {
+  vi.resetModules(); loading.evaluated.mockClear(); loading.create.mockReset(); loading.gate = undefined
+  vi.doMock('./handoffDependencies.js', async () => {
+    loading.evaluated()
+    await loading.gate
+    return { createHandoffDependencies: loading.create }
+  })
+})
+afterEach(() => { vi.restoreAllMocks(); vi.doUnmock('./handoffDependencies.js'); vi.resetModules() })
 
 it('keeps construction cold and shares one composition across concurrent first queries', async () => {
   const deps = dependencies(), selected: string[] = []
