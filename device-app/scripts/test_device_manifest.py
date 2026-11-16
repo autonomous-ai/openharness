@@ -167,15 +167,19 @@ class VersionTests(TempTest):
                          {"version": "0.1.0", "last_tag": "", "live": "0.0.0"})
 
     def test_a_manifest_that_is_not_one_cannot_be_read(self):
-        tags, manifest = self.root / "tags", self.root / "metadata.json"
+        tags, no_tags, manifest = self.root / "tags", self.root / "no-tags", self.root / "metadata.json"
         tags.write_text("v0.1.0_device\n")
+        no_tags.write_text("")
         for text in ("not json", "[]", "{}", '{"version":"1.0"}'):
             with self.subTest(text=text):
                 self.assertIsNone(rules.live_version(text))
                 manifest.write_text(text)
-                result = run("next", "--tags", tags, "--manifest", manifest)
-                refused(self, result)
-                self.assertIn(ORIGIN_MANIFEST, result.stderr)
+                # Something is live, so not even the first release may go on without its version.
+                for args in (("--tags", tags), ("--tags", no_tags, "--allow-no-manifest", "0.1.0")):
+                    result = run("next", "--manifest", manifest, *args)
+                    refused(self, result)
+                    self.assertIn(f"the live manifest at {ORIGIN_MANIFEST} has no readable X.Y.Z version",
+                                  result.stderr)
 
     def test_next_prints_one_value_a_line(self):
         tags, manifest = self.root / "tags", self.root / "metadata.json"
