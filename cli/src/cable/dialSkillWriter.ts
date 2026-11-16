@@ -96,6 +96,14 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
     save()
   }
 
+  /** After a write: a Turn off between the read that let it in and the write removed from the folders as they stood,
+   *  so what was written is taken out here instead. false: the engine read Off, and was handled as Off. */
+  const stillOn = (engine: DialEngine, counts: Counts): boolean => {
+    if (on(engine)) return true
+    turnOff(engine, counts)
+    return false
+  }
+
   /** One existing home. false: the engine read Off, and was handled as Off. */
   const writeHome = (engine: DialEngine, home: string, counts: Counts): boolean => {
     // Read before anything is made in the home: while Off a home is not handled, and nothing goes into it.
@@ -114,7 +122,9 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
     if (listed[engine].includes(skills)) {
       const result = writeSkill(skills)
       if (result === 'written') counts[engine].wrote++
-      if (result !== 'failed') handle(engine, home)
+      if (result === 'failed') return true
+      if (result === 'written' && !stillOn(engine, counts)) return false
+      handle(engine, home)
       return true
     }
     // A throwaway home that is gone makes room first; a list still full writes nothing, so every file Harness wrote
@@ -136,11 +146,7 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
       if (removeSkill(skills) === 'removed') counts[engine].removed++
       return true
     }
-    // A Turn off between the read that let this write in and the listing removed from the list as it stood: this one
-    // is taken out here instead.
-    if (on(engine)) return true
-    turnOff(engine, counts)
-    return false
+    return stillOn(engine, counts)
   }
 
   const startPass = (counts: Counts): void => {
@@ -153,15 +159,20 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
       }
       // A listed folder that no longer exists is dropped, never made again; one that cannot be looked at now stays,
       // unwritten.
+      let wrote = false
       const kept = listed[engine].filter((skills) => {
         const state = ownDirectory(skills, deps.uid)
-        if (state === 'ok' && writeSkill(skills) === 'written') counts[engine].wrote++
+        if (state === 'ok' && writeSkill(skills) === 'written') {
+          counts[engine].wrote++
+          wrote = true
+        }
         return state !== 'missing'
       })
       if (kept.length !== listed[engine].length) {
         listed[engine] = kept
         save()
       }
+      if (wrote && !stillOn(engine, counts)) continue
       // Only the command makes a default home that is missing.
       for (const home of [defaultHome[engine], ...adopted[engine]]) {
         if (ownDirectory(home, deps.uid) === 'ok' && !writeHome(engine, home, counts)) break
