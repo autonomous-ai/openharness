@@ -13,15 +13,40 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/logging/app_log.dart';
+import 'package:harness/logging/log_stream.dart';
+import 'package:harness/logging/log_stream_sinks.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/terminal/terminal_session.dart';
+import 'package:harness/ws/ws_conn.dart';
 
 AppNotifier _notifier() => AppNotifier(
   config: AppConfig.dev,
   authSession: AuthSession(),
   configStore: null,
 );
+
+/// An app whose reveal of a prepared agent is refused, with a detail that must stay out of the log.
+class _RefusingReveal extends AppNotifier {
+  _RefusingReveal()
+    : super(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+      );
+
+  @override
+  Future<bool> revealPreparedAgent(
+    String machineId,
+    String agentId,
+    String operationId,
+  ) async => throw const WsRequestFailure(
+    responseType: 'agent_focus_result',
+    code: 'NOT_READY',
+    detail: 'zebra-orchard is busy',
+  );
+}
 
 Agent _agent(String id) => Agent.fromJson({
   'id': id,
@@ -116,6 +141,29 @@ void main() {
       }
     },
   );
+
+  test('a reveal that fails is logged by its code', () async {
+    final previousLog = appLog;
+    final stream = LogStream();
+    appLog = StreamAppLog(stream);
+    addTearDown(() => appLog = previousLog);
+    final app = _RefusingReveal();
+    addTearDown(app.dispose);
+    _machine(app, 'm1', ['a1']);
+
+    await app.handleEventForTest('m1', {
+      'type': 'device_prepare_open',
+      'payload': {'operationId': 'a' * 64, 'agentId': 'a1', 'machineId': 'm1'},
+    });
+    await pumpEventQueue();
+
+    final line = stream.entries.singleWhere((e) => e.category == 'device');
+    expect(line.message, 'Could not reveal prepared agent');
+    expect(line.error, 'agent_focus_result: NOT_READY');
+    for (final e in stream.entries) {
+      expect('${e.message} ${e.error}', isNot(contains('zebra-orchard')));
+    }
+  });
 
   test('the roster the daemon builds its ring from is in tile order', () {
     // The section in the rail, the tile order on screen and the dial's carousel

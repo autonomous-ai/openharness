@@ -7,14 +7,18 @@
  */
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { APP_BUNDLES } from './hostDetect.js'
-import { OPEN } from './open.js'
+import { openPath } from './open.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 
 /** A Claude Code session's own id, which the extension's link names. */
 const VSCODE_SESSION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
-export function createVscodeAdapter(deps: Pick<OrcaDeps, 'run' | 'platform'>): HostAdapter {
+export function createVscodeAdapter(deps: Pick<OrcaDeps, 'run' | 'platform'> & {
+  /** The raw `HARNESS_OPEN_BIN` (open.ts openPath). */
+  bin?: string
+}): HostAdapter {
   const mac = deps.platform === 'darwin'
+  const openBin = openPath(deps.bin)
 
   return {
     id: 'vscode',
@@ -33,7 +37,7 @@ export function createVscodeAdapter(deps: Pick<OrcaDeps, 'run' | 'platform'>): H
     // Exits 0 once macOS has handed the link on: VS Code still comes forward after it, as after any pane.
     async focus(pane) {
       return mac && VSCODE_SESSION.test(pane.id)
-        && (await deps.run(OPEN, [`vscode://anthropic.claude-code/open?session=${pane.id}`], RUN_TIMEOUT_MS)).code === 0
+        && (await deps.run(openBin, [`vscode://anthropic.claude-code/open?session=${pane.id}`], RUN_TIMEOUT_MS)).code === 0
     },
   }
 }

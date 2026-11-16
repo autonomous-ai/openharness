@@ -90,7 +90,8 @@ export interface HostAdapter {
   /** Types a line at the agent's prompt and submits it. Only the source decides that the prompt is free. */
   type?(pane: Pane, text: string): Promise<boolean>
   /** A tap's order with the app's own `open -b`: the pane first (Orca, WezTerm, herdr), the pane alone (the Claude
-   *  app's link brings the app itself), or the app first (a tab is selected once its app is in front). */
+   *  app's link and Herdr's focus bring the app themselves), or the app first (a tab is selected once its app is in
+   *  front). */
   readonly tap: 'before' | 'instead' | 'after'
 }
 ```
@@ -127,8 +128,11 @@ pane it left (PM, 2026-11-15).
 | `tabs` | `hosts/tabs.ts` (#4331's file) | a tab app and a learnt tty | none | the watch's select with raise | the watch's select, while a watch is open |
 | `wezterm` | `hosts/wezterm.ts` (new, from `open.ts`) | `WEZTERM_PANE` | none | `wezterm cli activate-pane` | none |
 | `herdr` | `hosts/herdr.ts` (new, from `open.ts`) | `HERDR_PANE_ID` | none | `herdr agent focus` | none |
+| `herdr-app` | `hosts/herdrApp.ts` | `HC_TERMINAL_ID` | Herdr Core's `terminal.send` | `open -b dev.herdr.app`, then `herdr-app do agent.focus`, macOS only | `herdr-app do agent.focus`, while Herdr is in front |
 
 herdr's adapter now types, over herdr's socket, and its focus is still `herdr agent focus` ([herdr](2026-11-16-device-herdr.md#the-herdr-adapter-hostsherdrts)).
+
+`herdr-app` is the Herdr app over Herdr Core, a different program from herdr 0.8.0; its tap brings Herdr itself, as the Claude app's link does ([Herdr Core](../plans/2026-11-16-herdr-app-design.md#the-herdr-adapter-herdrappts)).
 
 `open.ts` keeps only what every app shares:
 

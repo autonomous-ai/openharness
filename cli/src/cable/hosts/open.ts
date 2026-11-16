@@ -8,16 +8,21 @@
  */
 import { isAbsolute } from 'node:path'
 import type { HostAdapter, Pane } from './adapter.js'
-import { APP_BUNDLES, HARNESS_BUNDLE } from './hostDetect.js'
+import { APP_BUNDLES, HARNESS_BUNDLE, inHerdr } from './hostDetect.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 
 /** Every app a tap brings forward. Alacritty is known by its bundle id alone: no other hint names it. Only one of these
  *  ever reaches `open`, never a hint's own value. */
 const BUNDLES: ReadonlySet<string> = new Set([...Object.values(APP_BUNDLES), 'org.alacritty'])
-/** `open`'s own path, so no `open` earlier on PATH runs instead. `HARNESS_OPEN_BIN` (read in services/devices.ts, handed
- *  here as `bin`) is for the end-to-end tests, whose harness points it at a fake that records its arguments and opens
- *  nothing (e2e/harness/daemon.ts). Only an absolute path is taken, so a relative one is never looked up on PATH. */
-export const OPEN = '/usr/bin/open'
+/** `open`'s own path, so no `open` earlier on PATH runs instead. */
+const OPEN = '/usr/bin/open'
+
+/** The `open` every command of the devices runs: `bin`, the raw `HARNESS_OPEN_BIN` (read in services/devices.ts), when it
+ *  is an absolute path, else `OPEN`. It is for the end-to-end tests, whose harness points it at a fake that records its
+ *  arguments and opens nothing (e2e/harness/daemon.ts). A relative one is never looked up on PATH. */
+export function openPath(bin?: string): string {
+  return bin && isAbsolute(bin) ? bin : OPEN
+}
 
 /** What a tap can open of an agent: its app, by bundle id, and its own pane in it. */
 export interface OpenTarget {
@@ -25,8 +30,10 @@ export interface OpenTarget {
   pane?: Pane
 }
 
-/** The bundle a tap brings forward: the app the agent's own window belongs to wins over its host's. */
+/** The bundle a tap brings forward: the app the agent's own window belongs to wins over its host's. An hc terminal's is
+ *  Herdr's window, whatever bundle id the process that started Herdr Core handed down to it. */
 export function bundleOf(host: string, hints: Readonly<Record<string, string>>): string | undefined {
+  if (inHerdr(hints)) return APP_BUNDLES.herdr
   const own = hints.__CFBundleIdentifier
   return own && BUNDLES.has(own) ? own : APP_BUNDLES[host]
 }
@@ -37,8 +44,11 @@ export interface OpenDeps {
   /** The apps whose pane a tap brings forward: a pane of any other is none. */
   adapters: readonly HostAdapter[]
   log(line: string): void
-  /** The raw `HARNESS_OPEN_BIN`: an absolute path is the `open` run instead of `OPEN`. */
+  /** The raw `HARNESS_OPEN_BIN` (openPath). */
   bin?: string
+  /** Herdr.app's window is herdr's ring's: the ring holds an agent in Herdr (hostDetect.ts inHerdr, or one the hc source
+   *  lists). Asked at each pick. None: herdr's ring is herdr 0.8.0's alone. */
+  herdrApp?(): boolean
 }
 
 export function createOpenActions(deps: OpenDeps): {
@@ -52,7 +62,7 @@ export function createOpenActions(deps: OpenDeps): {
   const mac = deps.platform === 'darwin'
   // One command at a time per agent: a second tap while the first runs would only bring the same app forward twice.
   const running = new Set<string>()
-  const openBin = deps.bin && isAbsolute(deps.bin) ? deps.bin : OPEN
+  const openBin = openPath(deps.bin)
   // The last pick wins, so the Mac's front app ends matching the dial's ring (spec decision 4): one bring runs at a time
   // for any app, and a later one takes the single waiting place, answering the one it replaces at once.
   let bringing = false
@@ -73,9 +83,13 @@ export function createOpenActions(deps: OpenDeps): {
   const can = (target: OpenTarget): boolean => !!paneOn(target) || (mac && !!target.bundle)
   const forward = async (bundle: string): Promise<boolean> => (await deps.run(openBin, ['-b', bundle], RUN_TIMEOUT_MS)).code === 0
 
-  // herdr's ring is herdr's socket's agents, whose terminal nobody knows (#4366): its own app is no window of theirs.
-  const bundleFor = (app: string): string | undefined =>
-    app === 'harness' ? HARNESS_BUNDLE : app !== 'herdr' && Object.hasOwn(APP_BUNDLES, app) ? APP_BUNDLES[app] : undefined
+  // herdr 0.8.0's agents, whose terminal nobody knows (#4366), have no window of their own: herdr's ring brings Herdr
+  // only while Herdr.app's window is the ring's.
+  const bundleFor = (app: string): string | undefined => {
+    if (app === 'harness') return HARNESS_BUNDLE
+    if (app === 'herdr') return deps.herdrApp?.() ? APP_BUNDLES.herdr : undefined
+    return Object.hasOwn(APP_BUNDLES, app) ? APP_BUNDLES[app] : undefined
+  }
 
   async function bringNow(bundle: string): Promise<'ok' | 'failed'> {
     bringing = true
