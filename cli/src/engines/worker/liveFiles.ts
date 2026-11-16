@@ -17,11 +17,16 @@ export async function stampAt(file: string, offset: number, expectedFile?: Trans
     const head = await handle.read(first, 0, bytes, 0)
     const tail = await handle.read(last, 0, bytes, offset - bytes)
     if (head.bytesRead !== bytes || tail.bytesRead !== bytes) throw new Error('ENGINE_TRANSCRIPT_CHANGED')
-    return { device: stat.dev, inode: stat.ino, bytes, digest: createHash('sha256').update(first).update(last).digest('hex') }
+    return stampOf(stat.dev, stat.ino, first, last)
   } finally { await handle.close() }
 }
 
 export function sameStamp(a: LiveStamp | null, b: LiveStamp | null): boolean {
   return a === null ? b === null : b !== null && a.device === b.device && a.inode === b.inode
     && a.bytes === b.bytes && a.digest === b.digest
+}
+
+/** The same bounded fingerprint when a tail already holds these bytes from its own read. */
+export function stampOf(device: number, inode: number, first: Buffer, last: Buffer): LiveStamp {
+  return { device, inode, bytes: first.length, digest: createHash('sha256').update(first).update(last).digest('hex') }
 }

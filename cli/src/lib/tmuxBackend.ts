@@ -59,12 +59,14 @@ import {
 } from './tmuxVersion.js'
 
 import { ensureTmuxOnPath, type TmuxPathOutcome } from './tmuxOnPath.js'
-import { isHarnessdVariable } from './harnessdEnv.js'
-import { isAgentSessionVariable } from './agentSessionEnv.js'
+import { harnessdEnv, isHarnessdVariable } from './harnessdEnv.js'
+import { AGENT_SESSION_VARIABLES, ORCA_VARIABLES } from './agentSessionEnv.js'
+import { LEAN_CORE_SCRIPT_ENV } from '../harnessd/protocol.js'
+import { serviceProcessesEnv } from '../harnessd/services.js'
 import { DEFAULT_HOST_THEME, windowStyleOf, type HostTheme } from './hostTheme.js'
 import { machineNames } from './machineNames.js'
 import { adoptLegacyHarnessSessions, isNoTmuxServerError, listTmuxPanes } from './tmuxAgentDiscovery.js'
-import { sameProcessIdentity, terminalRouteKey } from './terminalRuntime.js'
+import { processAmong, sameProcessIdentity, terminalRouteKey } from './terminalRuntime.js'
 import { TMUX_KEYS } from './terminalKeys.js'
 
 // Every tmux call here: a held event loop must not turn a timeout into a failure, or into an empty
@@ -98,12 +100,38 @@ export function clearEnvArgs(sessionId: string, names: readonly string[]): strin
 }
 
 /**
- * The names `tmux show-environment -g` lists [listing] with a value that [matches] names. A `-NAME` line
- * is one already marked for removal, which tmux keeps out of every new pane itself.
+ * The `HARNESSD_*` names harnessd sets in the environment of a process it starts, whether or not this core was given
+ * them: the supervisor's for a core (harnessd/supervisor.ts), the master's for a core and the updater
+ * (harnessd/master.ts, harnessd/services.ts), the service supervisor's (harnessd/serviceSupervisor.ts), this core's for
+ * the updater beside it (core/main.ts), a lean bundle's and a handover's for a master (masterProcess.ts,
+ * harnessd/reexec.ts), and the service definition's (harnessd/platform.ts: launchd's plist, systemd's unit). Those in
+ * the core's own files come from them; the rest are written out, as importing their files would load them into the
+ * core, and tmuxBackend.spec.ts holds the constants among them to their files.
  */
-export function serverVariables(listing: string, matches: (name: string) => boolean): string[] {
-  return [...new Set(listing.split('\n').map((line) => /^([^-=\s][^=\s]*)=/.exec(line)?.[1]).filter((name): name is string => !!name && matches(name)))]
+export const HARNESSD_SET_VARIABLES: readonly string[] = [
+  ...Object.keys(serviceProcessesEnv([], 0)), LEAN_CORE_SCRIPT_ENV,
+  'HARNESSD_SUPERVISED', 'HARNESSD_RESTARTS', 'HARNESSD_WATCHDOG_MS', 'HARNESSD_JUDGES_SUPERSEDED', 'HARNESSD_UPDATES',
+  'HARNESSD_LAST_EXIT', 'HARNESSD_SAFE_MODE', 'HARNESSD_SERVICE_TOKEN', 'HARNESSD_JUDGES_PTY', 'HARNESSD_SERVICE',
+  'HARNESSD_UPDATER_BESIDE_CORE', 'HARNESSD_BUNDLE', 'HARNESSD_BUNDLE_SHA256', 'HARNESSD_LEAN_FINGERPRINT',
+  'HARNESSD_RESUME', 'HARNESSD_PLATFORM',
+]
+
+/**
+ * What the core unsets in the tmux server's global environment: every agent session name, Orca's known names, every
+ * `HARNESSD_*` harnessd sets, and every `HARNESSD_*` [own] has, this process's as it was started by default, its names
+ * alone. For Orca only the fixed ORCA_VARIABLES list applies: dropAgentSessionEnv() has cleared every `ORCA_*` from this
+ * process before tmux is prepared, so [own] holds none. Named, never listed from the server: that environment is the
+ * person's, their keys among it. A `HARNESSD_*` only an older build set, and an `ORCA_*` not in ORCA_VARIABLES, stay
+ * until the server restarts.
+ */
+export function serverVariablesToUnset(own: NodeJS.ProcessEnv = harnessdEnv()): string[] {
+  const ownNames = Object.keys(own).filter(isHarnessdVariable)
+  return [...new Set([...AGENT_SESSION_VARIABLES, ...ORCA_VARIABLES, ...HARNESSD_SET_VARIABLES, ...ownNames])]
 }
+
+/** How many names one tmux call unsets: tmux refuses a command line over 16 KiB ("command too long"), and 64 of
+ *  these names take some 4 KiB. */
+const UNSET_PER_CALL = 64
 
 /** The argv for removing [names] from the tmux server's global environment, which every new pane starts from. */
 export function unsetServerEnvArgs(names: readonly string[]): string[] {
@@ -218,8 +246,8 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     // Before the first pane this boot makes or restarts: a server an earlier core started still has that
     // core's HARNESSD_* (the service token among them) in the environment it gives every new pane, and one
     // started from an agent's shell that agent's session (lib/agentSessionEnv.ts).
-    const forgotten = await this.unsetServerEnvironment((name) => isHarnessdVariable(name) || isAgentSessionVariable(name))
-    if (forgotten.length) console.log(`[terminal] tmux: removed ${forgotten.join(', ')} from the environment new panes start with`)
+    const unset = await this.unsetServerEnvironment(serverVariablesToUnset())
+    if (unset) console.log(`[terminal] tmux: unset ${unset} harnessd and agent session names in the environment new panes start with`)
     // A first inventory that cannot be read is said, not fatal: tmux is there, and the next scan asks again.
     const startup = await this.inventory()
     console.log(startup.state === 'available'
@@ -508,22 +536,27 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
   }
 
   /**
-   * Remove every variable [matches] names from the tmux server's global environment, and say which.
+   * Remove [names] from the tmux server's global environment, and say how many tmux took: an unset of a name it
+   * lacks is one it takes.
    *
    * A tmux server keeps the environment it was started with as its global environment, and builds every
    * new pane's from it (with the session's own on top). A server a core started before that core held
    * harnessd's variables back (lib/harnessdEnv.ts), an earlier boot's or an older build's, hands them to
    * every pane it makes until it is told to forget them, and it outlives the core. Nothing to do with no
-   * server: the next one starts from this core's environment, which no longer has them. Asked once, as
-   * the core takes the server over at start; a failure costs only this, never the start.
+   * server, which the first call finds: the next one starts from this core's environment, which no longer has
+   * them. Asked once, as the core takes the server over at start; a failure costs only this, never the start.
    */
-  async unsetServerEnvironment(matches: (name: string) => boolean): Promise<string[]> {
-    const ask = (args: string[]) => new Promise<string | null>((resolve) => {
-      run('tmux', args, { timeout: 5_000 }, (error, stdout) => resolve(error ? null : stdout))
-    })
-    const names = serverVariables(await ask(['show-environment', '-g']) ?? '', matches)
-    if (!names.length) return []
-    return await ask(unsetServerEnvArgs(names)) === null ? [] : names
+  async unsetServerEnvironment(names: readonly string[]): Promise<number> {
+    let unset = 0
+    for (let at = 0; at < names.length; at += UNSET_PER_CALL) {
+      const batch = names.slice(at, at + UNSET_PER_CALL)
+      const taken = await new Promise<boolean>((resolve) => {
+        run('tmux', unsetServerEnvArgs(batch), { timeout: 5_000 }, (error) => resolve(!error))
+      })
+      if (!taken) break
+      unset += batch.length
+    }
+    return unset
   }
 
   async inventory(): Promise<TerminalInventoryResult> {
@@ -579,7 +612,12 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
   async validate(runtime: TmuxRuntimeRef, expected: TerminalProcessExpectation): Promise<RuntimeValidation> {
     try {
       const found = await lookupPaneEngineProcess(this, runtime, expected.engine)
-      if (!found.ok) return { state: found.unknown ? 'unknown' : 'gone', reason: found.reason }
+      if (!found.ok) {
+        // The process the agent was bound to still runs in the pane under another name while its engine loads
+        // (a wrapper that `exec`s): a message sent then would be refused as sent to a stopped agent (#4259).
+        if (processAmong(expected.processIdentity, found.paneProcesses)) return { state: 'alive' }
+        return { state: found.unknown ? 'unknown' : 'gone', reason: found.reason }
+      }
       const live = found.identity
       // A saved marker that is not a C-locale `lstart` stamp was written either by the pre-fix parser,
       // with its fields shifted, or by a `ps` that still inherited the user's LC_TIME (see psEnv in

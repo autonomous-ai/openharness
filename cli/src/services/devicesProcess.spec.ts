@@ -2,18 +2,25 @@
 // link, what the core tells them reaching the devices' port, and what the core asks answered from it.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi, CorePorts, DevicesPort, ServiceRequests } from '../core/api.js'
+import { createDeviceHookCalls } from '../core/deviceHookCalls.js'
+import { createDevicesLink, type DevicesState } from '../core/devicesLink.js'
+import { devicesListenerPath } from '../devices/listenerPath.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { DevicesDeps } from './devices.js'
-import { runDevicesService } from './devicesProcess.js'
+import type { ListenerHandler } from './devicesListener.js'
+import { runDevicesService, type DevicesServiceOptions } from './devicesProcess.js'
 import type { CoreConnection, ServiceProcessOptions } from './process.js'
 
 // The real devices and the real link, as a process started by the master runs them: stood in for here.
-const real = vi.hoisted(() => ({ started: [] as unknown[], linked: [] as unknown[] }))
+const real = vi.hoisted(() => ({ started: [] as unknown[], linked: [] as unknown[], listened: [] as unknown[] }))
 vi.mock('./devices.js', () => ({
   startDevices: (_core: unknown, ports: { devices: unknown }) => { real.started.push(ports); ports.devices = { stop: async () => {} }; return {} },
 }))
 vi.mock('./process.js', () => ({
   runServiceProcess: (options: unknown) => { real.linked.push(options); return { stop: () => {} } },
+}))
+vi.mock('./devicesListener.js', () => ({
+  openDevicesListener: async (options: unknown) => { real.listened.push(options); return null },
 }))
 
 /** A devices' port that records what reached it. */
@@ -21,19 +28,21 @@ function devicesPort() {
   const calls: Array<[string, unknown[]]> = []
   const record = (name: string) => (...args: unknown[]) => { calls.push([name, args]) }
   const port = {
-    card: record('card'), desk: record('desk'), swarms: record('swarms'), swarmCards: record('swarmCards'), swarmCardRecap: record('swarmCardRecap'), unread: record('unread'), appFocus: record('appFocus'),
+    card: record('card'), observed: (...args: unknown[]) => { calls.push(['observed', args]); return true }, desk: record('desk'), swarms: record('swarms'), unread: record('unread'), appFocus: record('appFocus'),
     seen: record('seen'), settings: record('settings'), windowFocus: record('windowFocus'), windowReply: record('windowReply'),
-    voiceReply: record('voiceReply'), windowGone: record('windowGone'), scroll: record('scroll'), engines: record('engines'),
+    windowGone: record('windowGone'), scroll: record('scroll'), engines: record('engines'),
     commanders: record('commanders'),
     routeTask: vi.fn(async (text: string) => ({ agentId: 'a1', machineId: 'm1', name: 'api', confidence: 1, reason: text, candidates: [], weighed: 1, machines: 1, via: 'model' })),
     routeSend: vi.fn(async () => ({ ok: true as const })),
     stepFocus: vi.fn(async (): Promise<{ machineId: string; agentId: string } | 'no_agents'> => ({ machineId: 'm1', agentId: 'a2' })),
+    inboxPoll: vi.fn(async (_poll: unknown): Promise<{ text?: string; off?: true }> => ({ text: 'run the tests' })),
+    inboxGone: record('inboxGone'),
     stop: vi.fn(async () => {}),
   } satisfies DevicesPort
   return { port, calls }
 }
 
-function setup(over: { processEnv?: NodeJS.ProcessEnv } = {}) {
+function setup(over: { processEnv?: NodeJS.ProcessEnv; openListener?: DevicesServiceOptions['openListener'] } = {}) {
   const { port, calls } = devicesPort()
   let api!: CoreApi
   let deps!: DevicesDeps
@@ -49,7 +58,7 @@ function setup(over: { processEnv?: NodeJS.ProcessEnv } = {}) {
   const run = vi.fn((given: ServiceProcessOptions) => { options = given; return { stop } })
   const service = runDevicesService({
     dataDir: '/data', socketPath: '/sock', machineId: 'computer-9', token: 't',
-    start, run, processEnv: over.processEnv ?? {},
+    start, run, processEnv: over.processEnv ?? {}, openListener: over.openListener,
   })
   const queries: Array<[string, Record<string, unknown> | undefined]> = []
   const notices: Array<[string, Record<string, unknown> | undefined]> = []
@@ -82,7 +91,7 @@ describe('the devices in their own process', () => {
     expect(Object.keys(f.deps())).not.toContain('identity')
     expect([...f.deps().faults!]).toEqual(['dial', 'fleet.knows'])
     // The Devices tab's requests are the devices' own, beside what only the core asks.
-    expect(Object.keys(f.options().requests).sort()).toEqual(['harness_devices_list', 'routeSend', 'routeTask', 'stepFocus'])
+    expect(Object.keys(f.options().requests).sort()).toEqual(['harness_devices_list', 'inboxPoll', 'routeSend', 'routeTask', 'stepFocus'])
   })
 
   it('read no serials, dial or faults without them', () => {
@@ -103,20 +112,35 @@ describe('the devices in their own process', () => {
     }
   })
 
-  it('run what the devices registered for a core that connects, each time one does', () => {
+  it('run what the devices registered for a core that goes, each time one does', () => {
     const f = setup()
-    const again = vi.fn()
-    f.deps().onCoreConnected!(again)
-    expect(again).not.toHaveBeenCalled()
+    const gone = vi.fn()
+    f.deps().onCoreGone!(gone)
     f.connect()
+    expect(gone).not.toHaveBeenCalled()
+    f.options().onDisconnected!()
     f.connect()
-    expect(again).toHaveBeenCalledTimes(2)
+    f.options().onDisconnected!()
+    expect(gone).toHaveBeenCalledTimes(2)
   })
 
   it('run the devices and their link as the master starts them', () => {
     runDevicesService({ dataDir: '/data', socketPath: '/sock', machineId: 'c', token: 't' })
     expect(real.started).toHaveLength(1)
     expect(real.linked).toEqual([expect.objectContaining({ name: 'devices', socketPath: '/sock', token: 't' })])
+  })
+
+  it('the devices process gives the devices its listener, on the data folder\'s devices socket', async () => {
+    const opened: unknown[] = []
+    const listener = { close: async () => {} }
+    const f = setup({ openListener: async (options) => { opened.push(options); return listener } })
+    const handlers: Record<string, ListenerHandler> = { front: { maxBytes: 64, perSecond: 10, handle: () => {} } }
+    const log = vi.fn()
+    expect(await f.deps().listen!(handlers, log)).toBe(listener)
+    expect(opened).toEqual([{ path: devicesListenerPath('/data'), handlers, log }])
+    // The real listener when no test stands in for it.
+    await setup().deps().listen!(handlers, log)
+    expect(real.listened).toEqual([{ path: devicesListenerPath('/data'), handlers, log }])
   })
 
   it('stop their link, then the devices, serial ports first', async () => {
@@ -234,12 +258,6 @@ describe('the core\'s doors, across the link', () => {
     expect(await api.account.machines()).toEqual({ status: 200, body: { data: { machines: [] } } })
     f.answer('machines', { body: 'broken' })
     expect(await api.account.machines()).toEqual({ status: 502, body: {} })
-    // The Swarm cards' requests, asked of the core as its own `super_tabs` query; a core that cannot answer is unavailable.
-    f.answer('super_tabs', { ok: true })
-    expect(await api.superTabRequest!({ action: 'cardsWanted', on: true })).toEqual({ ok: true })
-    expect(f.queries.at(-1)).toEqual(['super_tabs', { action: 'cardsWanted', on: true }])
-    f.answer('super_tabs', new Error('the core went away'))
-    expect(await api.superTabRequest!({ action: 'cardsWanted', on: false })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
     api.agents.setRuntime('a1', 'opus', 'high')
     api.turns.send('a1', 'hello')
     api.turns.stop('a1')
@@ -320,10 +338,6 @@ describe('what the core tells the devices, reaching their port', () => {
       { kind: 'desk', agentIds: 'nonsense' },
       { kind: 'swarms', swarms: { active: 't1', swarms: [], tiles: [] } },
       { kind: 'swarms', swarms: null },
-      { kind: 'swarmCards', items: [{ id: 't1' }] },
-      { kind: 'swarmCards', items: 'nonsense' },
-      { kind: 'swarmCardRecap', recap: { tabId: 't1' } },
-      { kind: 'swarmCardRecap', recap: 'nonsense' },
       { kind: 'unread', items: [{ agentId: 'a1' }] },
       { kind: 'unread', items: 'nonsense' },
       { kind: 'appFocus', machineId: 'm1', agentId: 'a1' },
@@ -336,7 +350,6 @@ describe('what the core tells the devices, reaching their port', () => {
       { kind: 'windowReply', which: 'form', connId: 'w1', machineId: 'm1', reply: { ok: true } },
       { kind: 'windowReply', which: 'visit', connId: 'w1', machineId: 'm1', reply: null },
       { kind: 'windowReply', which: 'anything', connId: 'w1', machineId: 'm1', reply: {} },
-      { kind: 'voiceReply', voiceId: 'v1', reply: { t: 'taken' } },
       { kind: 'windowGone', connId: 'w1' },
       { kind: 'scroll', phase: 'move', dy: 2, velocity: Infinity },
       { kind: 'scroll', phase: 'sideways', dy: 2, velocity: 1 },
@@ -352,10 +365,6 @@ describe('what the core tells the devices, reaching their port', () => {
       ['desk', [[], true]],
       ['swarms', [{ active: 't1', swarms: [], tiles: [] }]],
       ['swarms', [null]],
-      ['swarmCards', [[{ id: 't1' }]]],
-      ['swarmCards', [[]]],
-      ['swarmCardRecap', [{ tabId: 't1' }]],
-      ['swarmCardRecap', [{}]],
       ['unread', [[{ agentId: 'a1' }]]],
       ['unread', [[]]],
       ['appFocus', ['m1', 'a1']],
@@ -368,12 +377,28 @@ describe('what the core tells the devices, reaching their port', () => {
       ['windowReply', ['form', 'w1', 'm1', { ok: true }]],
       ['windowReply', ['visit', 'w1', 'm1', {}]],
       ['windowReply', ['selection', 'w1', 'm1', {}]],
-      ['voiceReply', ['v1', { t: 'taken' }]],
       ['windowGone', ['w1']],
       ['scroll', ['move', 2, 0]],
       ['engines', [['claude']]],
       ['commanders', [true]],
     ])
+  })
+
+  it('is a paneless agent\'s hook event, handed to the devices as the core checked it', () => {
+    const f = setup()
+    const event = { engine: 'claude', sessionId: 's1', event: 'turn-stop', cwd: '/work/api', callerPid: 42, transcriptPath: '/t/s1.jsonl',
+      hostHints: { TERM_PROGRAM: 'ghostty' }, at: 7 }
+    f.event({ ...event, kind: 'observed' })
+    expect(f.calls).toEqual([['observed', [event]]])
+  })
+
+  // The mod's poll, told when its client went first (core/deviceHookCalls.ts): the poll ends. No approval is held to end.
+  it('is inbox.gone, reaching the port; approval.gone reaches nothing', () => {
+    const f = setup()
+    f.event({ kind: 'approval.gone', id: 'r1' })
+    f.event({ kind: 'inbox.gone', pollId: 'p1' })
+    f.event({ kind: 'inbox.gone', pollId: 7 })
+    expect(f.calls).toEqual([['inboxGone', ['p1']], ['inboxGone', ['']]])
   })
 
   it('is everything the windows said at once when the devices connect, and nothing they did not', () => {
@@ -409,5 +434,43 @@ describe('what the core asks of the devices', () => {
     expect(await requests.stepFocus({ direction: 'sideways', currentAgentId: 7 }, asker)).toEqual({ step: 'no_agents' })
     expect(f.port.stepFocus).toHaveBeenLastCalledWith('next', undefined)
     expect(await requests.harness_devices_list({}, asker)).toEqual({ protocol: 1 })
+  })
+
+  it('is the mod\'s poll, answered { text } from the devices\' port; an approval is no request', async () => {
+    const f = setup()
+    const asker = { local: true, owner: true }
+    const { requests } = f.options()
+    expect(requests.approval).toBeUndefined()
+    // The link's own request id rides along, and is not the poll's.
+    expect(await requests.inboxPoll({ pollId: 'p1', sessionId: 's1', requestId: 'q10' }, asker)).toEqual({ text: 'run the tests' })
+    expect(f.port.inboxPoll).toHaveBeenLastCalledWith({ pollId: 'p1', sessionId: 's1' })
+    f.port.inboxPoll.mockResolvedValueOnce({})
+    expect(await requests.inboxPoll({ pollId: 'p2', sessionId: 's1' }, asker)).toEqual({})
+    // Their inbox failed: said as such, so the core answers no device.
+    f.port.inboxPoll.mockResolvedValueOnce({ off: true })
+    expect(await requests.inboxPoll({ pollId: 'p3', sessionId: 's1' }, asker)).toEqual({ off: true })
+  })
+
+  // The core's checked call (core/deviceHookCalls.ts) on the link as the core sends it (core/devicesLink.ts), to the port.
+  it('is the mod\'s poll from the core\'s route to the devices\' port, and its client going told', async () => {
+    const f = setup()
+    const asker = { local: true, owner: true }
+    const link = createDevicesLink({
+      core: {} as CoreApi,
+      notify: (frame) => { f.event(frame.payload ?? {}); return true },
+      call: async (type, payload) => f.options().requests[type](payload, asker),
+      state: (): DevicesState => ({ desk: [], foreground: true, swarms: null, unread: [], focus: { voice: null, form: null }, engines: [], commanders: false }),
+    })
+    let n = 0
+    const calls = createDeviceHookCalls({ ready: () => true, devices: () => link.port, newId: () => `p${++n}` })
+    expect(await calls.onInbox({ sessionId: 's1' }, new AbortController().signal)).toEqual({ text: 'run the tests' })
+    expect(f.port.inboxPoll).toHaveBeenLastCalledWith({ pollId: 'p1', sessionId: 's1' })
+
+    f.port.inboxPoll.mockImplementationOnce(() => new Promise<{ text?: string }>(() => {}))
+    const client = new AbortController()
+    const left = calls.onInbox({ sessionId: 's1' }, client.signal)
+    client.abort()
+    expect(await left).toBe('off')
+    expect(f.calls).toEqual([['inboxGone', ['p2']]])
   })
 })

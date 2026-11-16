@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { noOtherStreams } from '../testing/otherStreams.js'
 
 // These are ownership and injected-I/O outcomes, independent of host scheduling. Actual
 // elapsed-work deadlines are exercised separately in engines/kit/nativeEvidence.spec.ts.
@@ -758,7 +759,7 @@ it.each(['before-followup', 'during-followup', 'during-registration', 'during-in
   const row = registry.byAgent(owner.agentId)!
   // Only the core's eager cancellation fence is needed. Unexpected attachment
   // or native interpretation would fail this fixture before any external access.
-  const attach = createAttach({ normalizers: createSessionNormalizers(), resolve: registry.byAgent } as import('../core/transcripts/attach.js').AttachDeps)
+  const attach = createAttach({ normalizers: createSessionNormalizers(noOtherStreams()), resolve: registry.byAgent } as import('../core/transcripts/attach.js').AttachDeps)
   let laterTurnOpen = false, resolutions = 0
   let finish: (() => void) | undefined
   const onTurnStop = vi.fn(() => { laterTurnOpen = false })

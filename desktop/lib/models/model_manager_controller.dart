@@ -740,14 +740,9 @@ class ModelManagerController extends ChangeNotifier {
     }
   }
 
-  /// [grid]: start or stop it on that Swarm's grid instead of the account's own (docs/plans/2026-10-23-swarm-local-models.md).
   /// Answers why the request was refused, or null. The answer is kept for the caller: the list read that follows
-  /// clears [error], and a refused Run for Swarm said nothing (2026-10-26: "Free plan allows 5 networks").
-  Future<String?> control(
-    LocalModel model,
-    String action, {
-    String? grid,
-  }) async {
+  /// clears [error] (2026-10-26: "Free plan allows 5 networks").
+  Future<String?> control(LocalModel model, String action) async {
     final owner = machine;
     if (owner == null ||
         owner.connectionStatus != ConnectionStatus.connected ||
@@ -770,8 +765,7 @@ class ModelManagerController extends ChangeNotifier {
       }
     } else if (startModel) {
       if (!current.canStart) return null;
-    } else if (action != 'stop' ||
-        !(grid == null ? current.canStop : current.servedOn(grid))) {
+    } else if (action != 'stop' || !current.canStop) {
       return null;
     }
     String? refused;
@@ -790,7 +784,6 @@ class ModelManagerController extends ChangeNotifier {
               owner.machine.machineId,
               model.id,
               start: startModel,
-              grid: grid,
             );
       if (!_current(owner)) return null;
       error = refused = answer['error'] as String?;

@@ -1,9 +1,9 @@
 # Windows agents report quota from Claude Code's status line too: implementation plan
 
-> Written by the project's Engineer way of working (project instructions, Engineer): plan first, then each task test first,
+> Plan first, then each task test first,
 > the failing test committed before its code. No Execution Handoff.
 
-**Goal:** task #4164 (requested by Dee through Harness, Swarm v3). Quota comes only from the CLIs' own reports (#4137, PR #3451).
+**Goal:** task #4164 (requested by Dee through Harness). Quota comes only from the CLIs' own reports (#4137, PR #3451).
 On Windows, Harness's status line was left out whenever the person had a status line of their own, and whenever a path held a
 character that needed quoting (`C:\Users\Jo Smith`), so a Windows Claude agent reported no quota and the router could not tell
 whether it had any left. Codex's app-server read already runs on Windows (lib/codexRateLimits.ts, no window: `ownProcessGroup`).

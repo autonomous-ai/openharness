@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { expect, it } from 'vitest'
-import { prepareResume as prepareCodexResume } from '../launchPrep.js'
+import { prepareResume as prepareCodexResume } from '../resumePreparation.js'
 
 it.skipIf(process.env.RUN_CODEX_RESUME_E2E !== '1')('resumes the same Codex conversation after a rejected reasoning id is repaired', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'codex-resume-wire-'))
@@ -71,7 +71,7 @@ it.skipIf(process.env.RUN_CODEX_RESUME_E2E !== '1')('resumes the same Codex conv
     expect(requests[0].input.find(item => item.type === 'reasoning')?.id).toBe(badId)
     expect(failed.stdout + failed.stderr).toContain('invalid_id_prefix')
 
-    expect(prepareCodexResume({ engine: 'codex', sessionId: id, transcriptPath: file, codexHome: profile }).repairedItems).toBe(1)
+    expect((await prepareCodexResume({ engine: 'codex', sessionId: id, transcriptPath: file, codexHome: profile }, () => true)).repairedItems).toBe(1)
     const resumed = await run()
     expect(resumed.code, resumed.stderr).toBe(0)
     expect(resumed.stdout).toContain(`"thread_id":"${id}"`)

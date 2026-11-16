@@ -31,10 +31,6 @@ def plan(paths=("cli/src/core/agents/create.ts",), **changes):
                      required_jobs=["cli-tests", "cli-typecheck", "process-checks"], local_checks=["cli-core"]), **changes)
 
 
-def train(members=(("d" * 40, ["cli-core"]), ("e" * 40, [])), **changes):
-    return plan(train_members=[dict(head=head, local_checks=checks) for head, checks in members], **changes)
-
-
 def needs(receipts=None):
     result = {name: dict(result="success") for name in ("plan", "process-checks", "cli-tests", "cli-typecheck")}
     if receipts is not None:
@@ -175,33 +171,6 @@ class LocalGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cli-harnessd"):
             planner.verify(p, needs([receipt()]), "a" * 40)
 
-    # Train #4115, 2026-11-11: its head is a merge commit nobody ran anything on, so no cli-core receipt could name it, and
-    # no CLI pull request could land.
-    def test_a_train_needs_each_member_receipt_at_that_member_head(self):
-        member = receipt(head="d" * 40)
-        self.assertEqual(planner.verify(train(), needs([member]), "a" * 40)["local_receipts"], [member])
-        for receipts in ([], [receipt()], [receipt(head="e" * 40)], [receipt(head="f" * 40)]):
-            with self.subTest(receipts=receipts), self.assertRaisesRegex(ValueError, "cli-core at ddddddd"):
-                planner.verify(train(), needs(receipts), "a" * 40)
-
-    def test_every_member_of_a_train_needs_its_own_receipts(self):
-        p = train([("d" * 40, ["cli-core"]), ("e" * 40, ["cli-core", "cli-harnessd"])],
-                  paths=["cli/src/core/api.ts", "cli/src/harnessd/main.ts"], local_checks=["cli-core", "cli-harnessd"])
-        with self.assertRaisesRegex(ValueError, r"receipts: cli-core at eeeeeee, cli-harnessd at eeeeeee\."):
-            planner.verify(p, needs([receipt(head="d" * 40)]), "a" * 40)
-        every = [receipt(head="d" * 40), receipt(head="e" * 40),
-                 receipt("cli-harnessd", command="npm run test:harnessd", head="e" * 40)]
-        self.assertEqual(planner.verify(p, needs(every[::-1]), "a" * 40)["local_receipts"], every)
-
-    def test_a_train_plan_cannot_drop_or_move_what_its_paths_need(self):
-        for members in [[], [("d" * 40, [])], [("d" * 40, ["cli-core"]), ("d" * 40, [])], [("d" * 7, ["cli-core"])],
-                        [("d" * 40, ["cli-core", "cli-core"])], [("d" * 40, ["cli-harnessd", "cli-core"])],
-                        [("d" * 40, ["cli-core", "unknown"])], [("d" * 40, "cli-core")],
-                        [(f"{i:040x}", ["cli-core"]) for i in range(21)]]:
-            p = train(members) if members else plan(train_members="not a list")
-            with self.subTest(members=members), self.assertRaisesRegex(ValueError, "local check"):
-                planner.verify(p, needs([receipt(head="d" * 40)]), "a" * 40)
-
     def test_a_refused_body_says_how_to_make_the_receipts(self):
         with self.assertRaisesRegex(ValueError, r"receipts: cli-core\. Run python3 scripts/local-checks\.py --run "):
             planner.verify(plan(), needs(), "a" * 40)
@@ -261,15 +230,6 @@ class LocalProcessTests(unittest.TestCase):
                 result, output = self.run_check(body)
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertEqual(output, "")
-
-    def test_a_train_passes_with_its_members_receipts_and_fails_without(self):
-        result, output = self.run_check("Harness's train into main", train())
-        self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertIn("cli-core at ddddddd", result.stderr)
-        self.assertEqual(output, "")
-        result, output = self.run_check(self.body([receipt(head="d" * 40)]), train())
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(output.removeprefix("local_receipts=")), [receipt(head="d" * 40)])
 
     def test_event_source_mismatch_fails_and_drafts_do_not_need_receipts(self):
         result, _ = self.run_check(self.body([receipt()]), event_head="f" * 40)
@@ -354,40 +314,6 @@ class LocalMappingTests(GitFixture, unittest.TestCase):
         self.git("sparse-checkout", "set", "scripts")
         self.assertEqual(self.select().get("local_checks"), ["cli-core", "cli-harnessd"])
 
-    def branch(self, name, path):
-        self.git("checkout", "-qb", name, self.base)
-        self.write(path)
-        return self.commit()
-
-    def test_a_train_names_each_member_head_with_the_checks_its_own_merge_needs(self):
-        core, docs = self.branch("pip/1", "cli/src/core/agents/create.ts"), self.branch("pip/2", "docs/guide.md")
-        self.git("checkout", "-qb", "harness-train/1", self.base)
-        self.git("merge", "-q", "--no-ff", "-m", "Train: #1", core)
-        self.git("merge", "-q", "--no-ff", "-m", "Train: #2", docs)
-        train = self.select("harness-train/1")
-        self.assertEqual(train["local_checks"], ["cli-core"])
-        self.assertEqual(train["train_members"], [dict(head=core, local_checks=["cli-core"]),
-                                                  dict(head=docs, local_checks=[])])
-        # The same commits on any other branch are one pull request's, whose receipt names its own head.
-        self.assertEqual(self.select("pip/3")["train_members"], [])
-
-    def test_what_a_train_merge_adds_beyond_its_member_is_that_member_to_prove(self):
-        docs = self.branch("pip/2", "docs/guide.md")
-        self.git("checkout", "-qb", "harness-train/1", self.base)
-        self.git("merge", "-q", "--no-ff", "--no-commit", docs)
-        self.write("cli/src/harnessd/main.ts")
-        self.commit()
-        self.assertEqual(self.select("harness-train/1")["train_members"], [dict(head=docs, local_checks=["cli-harnessd"])])
-
-    def test_a_train_branch_with_a_commit_that_merges_no_member_has_no_plan(self):
-        core = self.branch("pip/1", "cli/src/core/agents/create.ts")
-        self.git("checkout", "-qb", "harness-train/1", self.base)
-        self.git("merge", "-q", "--no-ff", "-m", "Train: #1", core)
-        self.write("cli/src/harnessd/main.ts")
-        self.commit()
-        with self.assertRaisesRegex(ValueError, "train"):
-            self.select("harness-train/1")
-
 
 class LocalRunRuleTests(unittest.TestCase):
     def setUp(self):
@@ -400,8 +326,8 @@ class LocalRunRuleTests(unittest.TestCase):
             with mock.patch.object(checks.sys, "platform", name):
                 self.assertEqual(checks.host_platform(), expected)
 
-    # Every Vitest suite sizes its own workers to half the cores its run may use: the machine's, or its Swarm agent's
-    # share (cli/src/testing/suiteWorkers.ts). A --maxWorkers from here would override that share.
+    # Every Vitest suite sizes its own workers to half the machine's cores (cli/src/testing/suiteWorkers.ts). A --maxWorkers
+    # from here would override that.
     def test_run_adds_only_the_desktop_budget(self):
         with mock.patch.object(checks.os, "cpu_count", return_value=8):
             for name, contract in checks.CHECKS.items():
@@ -418,7 +344,7 @@ class LocalRunRuleTests(unittest.TestCase):
         for name, contract in checks.CHECKS.items():
             r = receipt(name, command=checks.run_command(name), cwd=contract["cwd"],
                         platform=contract["platform"] or "linux")
-            self.assertEqual(checks.validate_receipts({"a" * 40: [name]}, [r]), [r])
+            self.assertEqual(checks.validate_receipts("a" * 40, [name], [r]), [r])
 
     def test_the_count_is_the_last_vitest_summary_without_colour(self):
         for output, count in [

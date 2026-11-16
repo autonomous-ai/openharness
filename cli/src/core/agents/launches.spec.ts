@@ -13,11 +13,11 @@ import type { AgentFrame } from '../../lib/agentFrame.js'
 import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent, unsupportedLaunchModelFlag } from '../../lib/engineLaunch.js'
 import { parseGridLaunchOverride } from '../../lib/gridLaunchWire.js'
 import { parseNewAgentModel } from '../../lib/newAgentModel.js'
-import { parseProjectFolder, prepareProjectFolder, ProjectFolderError, RepositoryAccessError } from '../../lib/projectFolder.js'
+import { parseProjectFolder, prepareNewFolder, ProjectFolderError, type GitProjectFolder } from '../../lib/projectFolder.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { createLaunchRequests, type CreateAgent, type ForkAgent, type LaunchRequestDeps, type RestartAgent, type ResumeAgent } from './launches.js'
+import { WORKSPACES_OFF, type PreparedFolder } from '../api.js'
+import { createLaunchRequests, WORKSPACES_WAIT_MS, type CreateAgent, type ForkAgent, type LaunchRequestDeps, type RestartAgent, type ResumeAgent } from './launches.js'
 import * as pendingLaunches from './pendingLaunches.js'
-import { swarmLaunch } from '../../superTabs/inCore/launch.js'
 
 /**
  * The requests that start an agent's process, answered by the core: every refusal before a pane exists,
@@ -61,8 +61,12 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
 }))
 vi.mock('../../lib/projectFolder.js', async (real) => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
-  return { ...actual, parseProjectFolder: vi.fn(actual.parseProjectFolder), prepareProjectFolder: vi.fn(async () => '/projects/prepared'), projectsRoot: vi.fn(() => root.projects) }
+  return { ...actual, parseProjectFolder: vi.fn(actual.parseProjectFolder), prepareNewFolder: vi.fn(async () => '/projects/prepared'), projectsRoot: vi.fn(() => root.projects) }
 })
+/** The folder workspaces make for what git makes: a worktree where Harness makes them, a clone in the projects folder,
+ *  the folder itself on its branch. */
+const gitFolder = (project: GitProjectFolder): PreparedFolder => ({ ok: true,
+  cwd: project.source === 'worktree' ? join(root.projects, 'worktrees', 'repo', 'feature') : project.source === 'remote' ? join(root.projects, project.name) : project.gitSource })
 
 const CREATION = 'creation-0123456789abcdef'
 /** Where the models service resolves a new agent's grid model (core/api.ts `ModelsPort.launchTarget`). */
@@ -92,13 +96,15 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
   const resume = launches.resume === undefined ? vi.fn(async () => ({ ok: true as const, session: session('a1'), resumed: true })) : launches.resume
   const restart = launches.restart === undefined ? vi.fn(async () => ({ ok: true as const, session: session('a1'), resumed: false })) : launches.restart
   const known = new Map([['new-agent', session('new-agent')], ['forked', session('forked')], ['a1', session('a1')]])
+  // Workspaces in the edge host, which make every folder git makes (services/workspaces.ts).
+  const workspaces = { ...WORKSPACES_OFF, ready: vi.fn(() => true), prepareFolder: vi.fn(async (project: GitProjectFolder, _options: { cloneFallback: boolean }) => gitFolder(project)) }
   const deps: LaunchRequestDeps = {
     receipts: new AgentCreationReceipts(join(dir, `receipts-${++stores}`)),
     createAgent: () => create, forkAgent: () => fork, resumeAgent: () => resume, restartAgent: () => restart,
     byAgent: (id) => known.get(id), toProject: vi.fn(async (s: RegisteredSession) => frameOf(s)),
     modelTarget: resolveNewAgentModel,
-    swarmLaunch: swarmLaunch(() => []),
     stoppedAgent: () => undefined,
+    workspaces: () => workspaces,
     ...over,
   }
   const requests = createLaunchRequests(deps)
@@ -106,7 +112,7 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
   const replies: Array<Record<string, unknown>> = []
   const reply = (result: Record<string, unknown>) => { replies.push(result) }
   return {
-    deps, create, fork, resume, restart, replies, requests,
+    deps, create, fork, resume, restart, replies, requests, workspaces,
     ask: async (payload: Record<string, unknown>, local = true) => { await requests.create(payload, { local }, reply); return replies.at(-1) },
     status: async (payload: Record<string, unknown>) => { await requests.createStatus(payload, { local: true }, reply); return replies.at(-1) },
     // An app of the owner's own unless a test says otherwise: only that asker may change an agent's launch flags.
@@ -331,100 +337,6 @@ describe('agent_create, refused before any pane exists', () => {
     vi.mocked(installedDsh).mockReturnValueOnce({ id: 'acme/notes', manifest: { kind: 'agent' } } as never)
     expect(await ask({ engine: 'pi', cwd: '/w', dsh: 'acme/notes' })).toStrictEqual({ error: 'INVALID_DSH', detail: 'acme/notes supports claude, codex; pi is not compatible' })
     expect(create).not.toHaveBeenCalled()
-  })
-
-  it('passes explicit Swarm roles and refuses invalid role metadata before dispatch', async () => {
-    const { ask, create } = setup()
-    // Taken as the kinds the CLI keeps (project instructions, phase 4); a Reviewer keeps its Reviewer kind.
-    const kinds = { lead: { swarmRole: 'coordinator' }, dev: { swarmRole: 'agent' }, review: { swarmRole: 'agent', swarmFallback: 'review' } }
-    for (const engine of ['claude', 'codex']) for (const swarmRole of ['lead', 'dev', 'review'] as const) {
-      await ask({ engine, cwd: '/w', swarmRole })
-      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ engine, ...kinds[swarmRole] })
-    }
-    for (const swarmRole of [7, '', 'builder', 'reviewer']) {
-      expect(await ask({ engine: 'claude', cwd: '/w', swarmRole })).toMatchObject({ error: 'INVALID_SWARM_ROLE' })
-    }
-    expect(await ask({ engine: 'terminal', cwd: '/w', swarmRole: 'dev' })).toMatchObject({ error: 'INVALID_SWARM_ROLE' })
-    expect(await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev', resumeSessionId: 'old-session' })).toMatchObject({ error: 'INVALID_SESSION' })
-  })
-
-  // Project instructions, phase 4 (decision 1): an older Harness sends lead, dev or review; the next one may send the kinds.
-  it('takes older and newer Swarm roles from agent_create', async () => {
-    const { ask, create } = setup()
-    const launched = () => vi.mocked(create!).mock.calls.at(-1)![0]
-    await ask({ engine: 'claude', cwd: '/w', swarmRole: 'review' })
-    expect(launched()).toMatchObject({ swarmRole: 'agent', swarmFallback: 'review' })
-    for (const [swarmRole, role] of [['lead', 'coordinator'], ['dev', 'agent'], ['coordinator', 'coordinator'], ['agent', 'agent']]) {
-      await ask({ engine: 'codex', cwd: '/w', swarmRole })
-      expect(launched()).toMatchObject({ swarmRole: role })
-      expect(launched()).not.toHaveProperty('swarmFallback')
-    }
-    const calls = vi.mocked(create!).mock.calls.length
-    for (const swarmRole of ['pm', 'Coordinator', 'reviewer']) {
-      expect(await ask({ engine: 'claude', cwd: '/w', swarmRole })).toStrictEqual({ error: 'INVALID_SWARM_ROLE',
-        detail: 'A Swarm role is coordinator or agent (or lead, dev or review from an older Harness), for Claude Code or Codex.' })
-    }
-    expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
-  })
-
-  it('finds the receipt a start got before role kinds when it is asked again, whichever role values it carries', async () => {
-    const { ask, create, deps, replies } = setup()
-    // What this machine fingerprinted for a Reviewer's start before its update.
-    const before = { engine: 'claude', cwd: '/w', bypassPermission: true, permissionMode: null, grid: null, codexHome: null, dsh: null, prompt: null,
-      swarmRole: 'review', name: null, agent: null, resumeSessionId: null, takeOver: null }
-    await deps.receipts.run(CREATION, creationFingerprint(before), async () => ({ state: 'created', agentId: 'new-agent' }))
-    await ask({ engine: 'claude', cwd: '/w', swarmRole: 'review', creationId: CREATION })
-    await vi.waitFor(() => expect(replies.at(-1)).toMatchObject({ state: 'created' }))
-    await ask({ engine: 'claude', cwd: '/w', swarmRole: 'agent', creationId: `${CREATION}-new` })
-    await vi.waitFor(() => expect(replies).toHaveLength(2))
-    expect(create).toHaveBeenCalledTimes(1)
-    expect(deps.receipts.has(`${CREATION}-new`, creationFingerprint({ ...before, swarmRole: 'dev' }))).toBe(true)
-  })
-
-  // A start asked with the Harness GitHub App before this machine's update still finds the receipt its first ask got.
-  it('finds the receipt a start got with the GitHub App before the update when it is asked again', async () => {
-    const { ask, create, deps, replies } = setup()
-    const before = { engine: 'claude', cwd: '/w', bypassPermission: true, permissionMode: null, grid: null, codexHome: null, dsh: null, prompt: null,
-      swarmRole: 'dev', swarmGitHub: true, name: null, agent: null, resumeSessionId: null, takeOver: null }
-    await deps.receipts.run(CREATION, creationFingerprint(before), async () => ({ state: 'created', agentId: 'new-agent' }))
-    await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev', swarmGitHub: true, creationId: CREATION })
-    await vi.waitFor(() => expect(replies.at(-1)).toMatchObject({ state: 'created' }))
-    expect(create).not.toHaveBeenCalled()
-  })
-
-  // The Swarm's skill modes are gone (PM, 2026-11-11: agents start as plain Claude Code or Codex): a start that still sends one
-  // (Desktop's Personal Swarm, until its own removal) is not refused, and the mode goes no further.
-  it('takes a start that still sends a skill mode as any other, and passes the mode on to nothing', async () => {
-    const { ask, create } = setup()
-    for (const swarmSkillMode of ['default', 'orchestration', 'light', 7, null]) {
-      await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev', swarmSkillMode })
-      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'agent' })
-      expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmSkillMode')
-    }
-  })
-
-  // The Harness GitHub App is gone: a start that still sends its flag is not refused, and the flag goes no further.
-  it('takes a start that still sends the GitHub App flag as any other, and passes the flag on to nothing', async () => {
-    const { ask, create } = setup()
-    for (const swarmGitHub of [true, false, 'yes']) {
-      await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev', swarmGitHub })
-      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'agent' })
-      expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmGitHub')
-    }
-    const calls = vi.mocked(create!).mock.calls.length
-    expect(await ask({ engine: 'claude', cwd: '/w', swarmGitHub: true })).not.toMatchObject({ error: 'INVALID_SWARM_ROLE' })
-    expect(vi.mocked(create!).mock.calls).toHaveLength(calls + 1)
-  })
-
-  // HARNESS_SWARM=off: nothing of the Swarm's is asked of a launch, and a start that asks for it is refused at the wire.
-  it('refuses every Swarm field while the Swarm is off, before dispatch, and starts everything else as before', async () => {
-    const { ask, create } = setup({ swarmLaunch: undefined })
-    for (const payload of [{ swarmRole: 'dev' }, { swarmRole: 'lead', swarmSkillMode: 'orchestration' }]) {
-      expect(await ask({ engine: 'claude', cwd: '/w', ...payload })).toStrictEqual({ error: 'INVALID_SWARM_ROLE', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' })
-    }
-    expect(create).not.toHaveBeenCalled()
-    await ask({ engine: 'claude', cwd: '/w', swarmRole: null })
-    expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmRole')
   })
 
   it('a first prompt that is not text, too long, or for an engine that cannot take one', async () => {
@@ -736,50 +648,49 @@ describe('agent_create with a receipt', () => {
     vi.mocked(installedDsh).mockReturnValue({ id: 'acme/notes', manifest: { kind: 'agent', name: 'Notes' } } as never)
     await ask({ engine: 'claude', projectSource: 'new', projectName: 'Docs', creationId: CREATION, dsh: 'acme/notes' })
     await vi.waitFor(() => expect(replies).toHaveLength(1))
-    expect(prepareProjectFolder).toHaveBeenCalledWith({ source: 'new', name: 'Docs' }, { label: 'Notes', onPrepared: expect.any(Function) })
+    expect(prepareNewFolder).toHaveBeenCalledWith({ source: 'new', name: 'Docs' }, { label: 'Notes' })
     expect(vi.mocked(create!).mock.calls[0][0].cwd).toBe('/projects/prepared')
     vi.mocked(installedDsh).mockReturnValue(undefined)
     await ask({ engine: 'pi', projectSource: 'new', creationId: `${CREATION}-pi` })
     await vi.waitFor(() => expect(replies).toHaveLength(2))
-    expect(prepareProjectFolder).toHaveBeenLastCalledWith({ source: 'new' }, { label: 'Pi', onPrepared: expect.any(Function) })
+    expect(prepareNewFolder).toHaveBeenLastCalledWith({ source: 'new' }, { label: 'Pi' })
     expect(vi.mocked(create!).mock.calls[1][0].scmLaunchRecord).toBeNull()
   })
 
   it('hands the launch the SCM record the prepared workspace reported (registry `scmLaunch`)', async () => {
-    const { ask, create, replies } = setup()
-    vi.mocked(prepareProjectFolder).mockImplementationOnce(async (_project, options) => {
-      options?.onPrepared?.({ cwd: '/projects/prepared', scmLaunchRecord: { kind: 'git' } })
-      return '/projects/prepared'
-    })
+    const { ask, create, replies, workspaces } = setup()
+    workspaces.prepareFolder.mockResolvedValueOnce({ ok: true, cwd: '/projects/prepared', scmLaunchRecord: { kind: 'git' } })
     await ask({ engine: 'claude', projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main', creationId: CREATION })
     await vi.waitFor(() => expect(replies).toHaveLength(1))
     expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ cwd: '/projects/prepared', scmLaunchRecord: { kind: 'git' } })
-  })
-
-  it('fetches a Swarm worktree as any other, whatever its start says of the GitHub App', async () => {
-    const { ask, replies } = setup()
-    await ask({ engine: 'codex', projectSource: 'worktree', gitSource: '/swarm/project', branchName: 'super-tab/start-1', branchBase: 'default',
-      swarmRole: 'dev', swarmGitHub: true, creationId: CREATION })
-    await vi.waitFor(() => expect(replies).toHaveLength(1))
-    expect(prepareProjectFolder).toHaveBeenLastCalledWith({ source: 'worktree', gitSource: '/swarm/project', branchName: 'super-tab/start-1',
-      fromDefaultBranch: true }, expect.anything())
+    // Asked of workspaces, as parsed: the core runs no git for it.
+    expect(workspaces.prepareFolder).toHaveBeenCalledExactlyOnceWith({ source: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main' }, { cloneFallback: true })
+    expect(prepareNewFolder).not.toHaveBeenCalled()
   })
 
   it('records a folder it could not prepare as failed, in the folder\'s own words when it has them', async () => {
-    const { ask, create, replies } = setup()
-    vi.mocked(prepareProjectFolder).mockRejectedValueOnce(new ProjectFolderError('CLONE_FAILED', 'Could not clone it.')).mockRejectedValueOnce(new Error('disk full'))
+    const { ask, create, replies, workspaces } = setup()
+    vi.mocked(prepareNewFolder).mockRejectedValueOnce(new ProjectFolderError('PROJECT_PREPARATION_FAILED', 'Could not create it.')).mockRejectedValueOnce(new Error('disk full'))
     await ask({ engine: 'claude', projectSource: 'new', creationId: CREATION })
     await ask({ engine: 'claude', projectSource: 'new', creationId: `${CREATION}-2` })
-    await vi.waitFor(() => expect(replies).toHaveLength(2))
+    // Git's folders, in workspaces' words: theirs to say, as they said it.
+    workspaces.prepareFolder.mockResolvedValueOnce({ ok: false, error: 'WORKTREE_FAILED', detail: 'Could not create the worktree.' })
+    await ask({ engine: 'claude', projectSource: 'worktree', gitSource: '/work/repo', creationId: `${CREATION}-3` })
+    // Workspaces gone while making it: named, and in words the window shows.
+    workspaces.prepareFolder.mockImplementationOnce((project, options) => WORKSPACES_OFF.prepareFolder(project, options))
+    await ask({ engine: 'claude', projectSource: 'remote', repositoryUrl: 'acme/app', creationId: `${CREATION}-4` })
+    await vi.waitFor(() => expect(replies).toHaveLength(4))
     expect(replies.map((r) => r.failure)).toEqual([
-      { code: 'CLONE_FAILED', detail: 'Could not clone it.' }, { code: 'PROJECT_PREPARATION_FAILED', detail: 'Could not prepare the project folder.' },
+      { code: 'PROJECT_PREPARATION_FAILED', detail: 'Could not create it.' }, { code: 'PROJECT_PREPARATION_FAILED', detail: 'Could not prepare the project folder.' },
+      { code: 'WORKTREE_FAILED', detail: 'Could not create the worktree.' },
+      { code: 'SERVICE_UNAVAILABLE', detail: 'Could not make the project folder. Harness\'s workspaces service did not answer. Try again in a moment.' },
     ])
     expect(create).not.toHaveBeenCalled()
   })
 
   it('records the folder a typed name found already there, so the apps can offer to start in it', async () => {
     const { ask, status, create, replies } = setup()
-    vi.mocked(prepareProjectFolder).mockRejectedValueOnce(new ProjectFolderError('PROJECT_EXISTS', '“payments” already exists.', '/projects/payments'))
+    vi.mocked(prepareNewFolder).mockRejectedValueOnce(new ProjectFolderError('PROJECT_EXISTS', '“payments” already exists.', '/projects/payments'))
     await ask({ engine: 'claude', projectSource: 'new', projectName: 'payments', creationId: CREATION })
     const refused = { creationId: CREATION, state: 'failed', failure: { code: 'PROJECT_EXISTS', detail: '“payments” already exists.', existingFolder: '/projects/payments' } }
     await vi.waitFor(() => expect(replies).toStrictEqual([refused]))
@@ -789,12 +700,9 @@ describe('agent_create with a receipt', () => {
   })
 
   it('lets the person\'s own clone try every way in, says which alias worked, and calls a refusal everywhere denied', async () => {
-    const { ask, status, replies } = setup()
+    const { ask, status, replies, workspaces } = setup()
     const remote = { engine: 'claude', projectSource: 'remote', repositoryUrl: 'https://github.com/acme/app' }
-    vi.mocked(prepareProjectFolder).mockImplementationOnce(async (_project, options) => {
-      options?.onCloned?.({ url: 'git@gh-work:acme/app.git', alias: 'gh-work' })
-      return '/projects/prepared'
-    })
+    workspaces.prepareFolder.mockResolvedValueOnce({ ok: true, cwd: '/projects/prepared', clonedVia: { alias: 'gh-work' } })
     const answer = async (payload: Record<string, unknown>) => {
       const before = replies.length
       await ask(payload)
@@ -802,20 +710,92 @@ describe('agent_create with a receipt', () => {
       return replies.at(-1)!
     }
     expect(await answer({ ...remote, creationId: CREATION })).toMatchObject({ state: 'created', agent: { id: 'new-agent' }, clonedVia: { alias: 'gh-work' } })
-    expect(vi.mocked(prepareProjectFolder).mock.calls.at(-1)![1]).toMatchObject({ cloneFallback: true })
+    expect(workspaces.prepareFolder.mock.calls.at(-1)![1]).toEqual({ cloneFallback: true })
     expect(await status({ creationId: CREATION })).toMatchObject({ clonedVia: { alias: 'gh-work' } })
     // A transport switch is no news: the account is the same.
-    vi.mocked(prepareProjectFolder).mockImplementationOnce(async (_project, options) => {
-      options?.onCloned?.({ url: 'git@github.com:acme/app.git' })
-      return '/projects/prepared'
-    })
+    workspaces.prepareFolder.mockResolvedValueOnce({ ok: true, cwd: '/projects/prepared' })
     expect(await answer({ ...remote, creationId: `${CREATION}-plain` })).not.toHaveProperty('clonedVia')
-    vi.mocked(prepareProjectFolder).mockRejectedValueOnce(new RepositoryAccessError('CLONE_FAILED', 'Could not access this repository.'))
+    workspaces.prepareFolder.mockResolvedValueOnce({ ok: false, error: 'CLONE_FAILED', detail: 'Could not access this repository.', access: 'denied' })
     expect(await answer({ ...remote, creationId: `${CREATION}-denied` })).toStrictEqual({ creationId: `${CREATION}-denied`, state: 'failed',
       failure: { code: 'CLONE_FAILED', detail: 'Could not access this repository.', access: 'denied' } })
-    // A Swarm agent's repository was cloned by its start, one address per transport and never an alias.
-    await answer({ ...remote, swarmRole: 'lead', creationId: `${CREATION}-swarm` })
-    expect(vi.mocked(prepareProjectFolder).mock.calls.at(-1)![1]).toMatchObject({ cloneFallback: false })
+  })
+
+  it('holds a create whose folder git makes while workspaces cannot make it, and makes it once, when they can', async () => {
+    // An edge host restarting takes a few seconds: a create asked then waits for it, held as one waiting for its model
+    // is, never failed, and nothing of its launch is claimed meanwhile.
+    let clock = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    const dispatch = vi.fn(async () => ({ ok: true as const, session: session('new-agent') }))
+    const prepareCreate = vi.fn<NonNullable<LaunchRequestDeps['prepareCreate']>>(async () => ({ ok: true, dispatch }))
+    const prepareEngine = vi.fn<NonNullable<LaunchRequestDeps['prepareEngine']>>(async () => ({ ok: true, launch: {} as never }))
+    const { ask, replies, requests, deps, workspaces } = setup({ prepareCreate, prepareEngine })
+    workspaces.ready.mockReturnValue(false)
+    await ask({ engine: 'claude', projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main', creationId: CREATION })
+    const held = { service: 'workspaces', detail: 'Waiting for Harness\'s workspaces service to make the project folder. This request is saved and will continue when it is available.' }
+    await vi.waitFor(() => expect(replies[0]).toMatchObject({ state: 'pending', held }))
+    requests.open()
+    clock += 3_000; await requests.recover()
+    await vi.waitFor(() => expect(workspaces.ready).toHaveBeenCalledTimes(2))
+    expect(deps.receipts.status(CREATION)).toMatchObject({ state: 'pending', held })
+    expect(workspaces.prepareFolder).not.toHaveBeenCalled()
+    expect(dispatch).not.toHaveBeenCalled()
+    workspaces.ready.mockReturnValue(true)
+    clock += 3_000; await requests.recover()
+    await vi.waitFor(() => expect(deps.receipts.status(CREATION)).toEqual({ state: 'created', agentId: 'new-agent' }))
+    expect(workspaces.prepareFolder).toHaveBeenCalledOnce()
+    expect(prepareCreate).toHaveBeenCalledWith(expect.objectContaining({ cwd: join(root.projects, 'worktrees', 'repo', 'feature') }), expect.anything(), { local: true })
+    // A new empty folder is the core's own, and never waits for them.
+    workspaces.ready.mockReturnValue(false)
+    await ask({ engine: 'claude', projectSource: 'new', creationId: `${CREATION}-new` })
+    await vi.waitFor(() => expect(deps.receipts.status(`${CREATION}-new`)).toEqual({ state: 'created', agentId: 'new-agent' }))
+  })
+
+  it('refuses a create that waited ten minutes for workspaces, in words, with nothing of its launch done', async () => {
+    // A process that never comes (parked, switched off, a build that never says it makes folders) must not keep a create
+    // to start hours later, when nobody waits for it.
+    let clock = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    const prepareCreate = vi.fn<NonNullable<LaunchRequestDeps['prepareCreate']>>(async () => ({ ok: true, dispatch: vi.fn() }))
+    const prepareEngine = vi.fn<NonNullable<LaunchRequestDeps['prepareEngine']>>(async () => ({ ok: true, launch: {} as never }))
+    const { ask, requests, deps, workspaces } = setup({ prepareCreate, prepareEngine })
+    workspaces.ready.mockReturnValue(false)
+    await ask({ engine: 'claude', projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main', creationId: CREATION })
+    await vi.waitFor(() => expect(deps.receipts.status(CREATION)).toMatchObject({ state: 'pending', held: { service: 'workspaces' } }))
+    requests.open()
+    clock += WORKSPACES_WAIT_MS - 1_000; await requests.recover()
+    await vi.waitFor(() => expect(workspaces.ready).toHaveBeenCalledTimes(2))
+    expect(deps.receipts.status(CREATION)).toMatchObject({ state: 'pending', held: { service: 'workspaces' } })
+    clock += 3_000; await requests.recover()
+    await vi.waitFor(() => expect(deps.receipts.status(CREATION)).toMatchObject({ state: 'failed', error: 'SERVICE_UNAVAILABLE',
+      detail: 'Could not make the project folder: Harness\'s workspaces service was not available for 10 minutes. Try again, or restart Harness.' }))
+    expect(workspaces.prepareFolder).not.toHaveBeenCalled()
+    expect(prepareCreate).not.toHaveBeenCalled()
+  })
+
+  it('holds a create on a picked model for workspaces too, once its model is known, and while they are off', async () => {
+    let clock = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    vi.mocked(parseNewAgentModel).mockReturnValue({ state: 'ok', selection: { model: 'fixture-model', grid: 'fixture-grid' } })
+    resolveNewAgentModel.mockResolvedValue({ networkId: 'fixture' } as never)
+    let off = true
+    const run = setup({ workspaces: () => off ? null : run.workspaces })
+    await run.ask({ engine: 'claude', projectSource: 'remote', repositoryUrl: 'acme/app', creationId: CREATION })
+    await vi.waitFor(() => expect(run.deps.receipts.status(CREATION)).toMatchObject({ state: 'pending', held: { service: 'workspaces' } }))
+    expect(run.create).not.toHaveBeenCalled()
+    off = false
+    run.requests.open()
+    clock += 3_000; await run.requests.recover()
+    await vi.waitFor(() => expect(run.deps.receipts.status(CREATION)).toEqual({ state: 'created', agentId: 'new-agent' }))
+    expect(vi.mocked(run.create!).mock.calls[0][0]).toMatchObject({ cwd: join(root.projects, 'app'), grid: { networkId: 'fixture' } })
+  })
+
+  it('fails a create that cannot wait for workspaces, in words the window shows', async () => {
+    // No launch preparation to hold it in (a create the core makes itself): with workspaces off, said at once.
+    const { ask, replies, create } = setup({ workspaces: () => null })
+    await ask({ engine: 'claude', projectSource: 'branch', gitSource: '/work/repo', branchRef: 'refs/heads/feature', creationId: CREATION })
+    await vi.waitFor(() => expect(replies).toStrictEqual([{ creationId: CREATION, state: 'failed', failure: { code: 'SERVICE_UNAVAILABLE',
+      detail: 'Could not make the project folder. Harness\'s workspaces service did not answer. Try again in a moment.' } }]))
+    expect(create).not.toHaveBeenCalled()
   })
 
   it('records the prepared folder of a launch that then failed, so the person can open it', async () => {
@@ -837,12 +817,12 @@ describe('agent_create with a receipt', () => {
     const payload = { engine: 'codex', projectSource: 'new', projectName: 'scratch1', creationId: CREATION, prompt: 'Reply with pong' }
     await ask(payload)
     await vi.waitFor(() => expect(replies[0]).toMatchObject({ state: 'pending', held: { service: 'install', detail: installing.detail } }))
-    expect(prepareProjectFolder).not.toHaveBeenCalled()
+    expect(prepareNewFolder).not.toHaveBeenCalled()
     expect(deps.receipts.pendingIntent(CREATION)!.request).toMatchObject({ projectFolder: { source: 'new', name: 'scratch1' }, input: { cwd: '' } })
     await ask(payload)
     await vi.waitFor(() => expect(replies[1]).toMatchObject({ state: 'created', agent: { id: 'new-agent' } }))
     expect(prepareEngine).toHaveBeenCalledWith('codex', expect.objectContaining({ prompt: 'Reply with pong' }), expect.objectContaining({ id: CREATION }))
-    expect(prepareProjectFolder).toHaveBeenCalledOnce()
+    expect(prepareNewFolder).toHaveBeenCalledOnce()
     expect(prepareCreate).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/projects/prepared', prompt: 'Reply with pong' }),
       expect.objectContaining({ id: CREATION, label: expect.stringMatching(/^harness-codex-/) }), { local: true })
     expect(dispatch).toHaveBeenCalledOnce()
@@ -858,7 +838,7 @@ describe('agent_create with a receipt', () => {
     setup({ prepareCreate: vi.fn(), prepareEngine })
     expect(await prepare({ kind: 'native-create-v1', input: { engine: 'codex', cwd: '' }, projectFolder: { source: 'new', name: 'scratch1' },
       label: 'harness-codex-fixture', local: true }, { id: CREATION, current: () => current, hold: vi.fn() })).toBeNull()
-    expect(prepareProjectFolder).not.toHaveBeenCalled()
+    expect(prepareNewFolder).not.toHaveBeenCalled()
   })
 
   it('refuses a new project for a harness it does not have at once, before any engine install or folder', async () => {
@@ -869,7 +849,7 @@ describe('agent_create with a receipt', () => {
       .toStrictEqual({ error: 'INVALID_DSH', detail: 'acme/notes is not installed on this machine' })
     expect(deps.receipts.status(CREATION)).toEqual({ state: 'missing' })
     expect(prepareEngine).not.toHaveBeenCalled()
-    expect(prepareProjectFolder).not.toHaveBeenCalled()
+    expect(prepareNewFolder).not.toHaveBeenCalled()
   })
 
   it('refuses a new project whose engine could not be installed, before any folder exists', async () => {
@@ -880,13 +860,13 @@ describe('agent_create with a receipt', () => {
     await ask({ engine: 'codex', projectSource: 'new', projectName: 'scratch1', creationId: CREATION })
     await vi.waitFor(() => expect(replies).toStrictEqual([{ creationId: CREATION, state: 'failed',
       failure: { code: 'ENGINE_INSTALL_FAILED', detail: 'Codex could not be installed: getaddrinfo ENOTFOUND registry.npmjs.org' } }]))
-    expect(prepareProjectFolder).not.toHaveBeenCalled()
+    expect(prepareNewFolder).not.toHaveBeenCalled()
     expect(prepareCreate).not.toHaveBeenCalled()
   })
 
   it('removes the empty folder a new project made when nothing starts in it, and keeps one that has anything', async () => {
     const made = join(root.projects, 'scratch1')
-    vi.mocked(prepareProjectFolder).mockImplementation(async () => { mkdirSync(made); return made })
+    vi.mocked(prepareNewFolder).mockImplementation(async () => { mkdirSync(made); return made })
     const prepareCreate = vi.fn<NonNullable<LaunchRequestDeps['prepareCreate']>>(async () => ({ ok: false, error: 'CODEX_CLI_TOO_OLD', detail: 'Update codex.' }))
     const { ask, replies } = setup({ prepareCreate })
     await ask({ engine: 'codex', projectSource: 'new', projectName: 'scratch1', creationId: CREATION })
@@ -930,7 +910,7 @@ describe('agent_create with a receipt', () => {
     await vi.waitFor(() => expect(inspect).toHaveBeenCalledTimes(2))
     await vi.waitFor(() => expect(downloadingNow).toHaveBeenCalledTimes(2))
     expect(deps.receipts.status(CREATION)).toMatchObject({ state: 'pending', held: { service: 'install' } })
-    expect(prepareProjectFolder).not.toHaveBeenCalled()
+    expect(prepareNewFolder).not.toHaveBeenCalled()
     // The download ends: the next pass creates it.
     downloading = false
     clock += 3_000; await requests.recover()
@@ -940,20 +920,21 @@ describe('agent_create with a receipt', () => {
     for (let pass = 0; pass < 3; pass++) { clock += 3_000; await requests.recover() }
     await settle()
     expect(dispatch).toHaveBeenCalledOnce()
-    expect(prepareProjectFolder).toHaveBeenCalledOnce()
+    expect(prepareNewFolder).toHaveBeenCalledOnce()
     expect(ensure).not.toHaveBeenCalled()
   })
 
   it('trusts only a folder it just made empty, or a worktree of a repository the engine already trusts', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const { ask, replies } = setup()
+    const run = setup()
+    const { ask, replies } = run
     const launch = async (payload: Record<string, unknown>, n: number) => { await ask({ creationId: `${CREATION}-${n}`, ...payload }); await vi.waitFor(() => expect(replies).toHaveLength(n)) }
     await launch({ engine: 'claude', projectSource: 'new' }, 1)
     expect(preTrustClaudeProject).toHaveBeenCalledWith('/projects/prepared')
     vi.mocked(codexTrusts).mockReturnValueOnce(true)
     await launch({ engine: 'codex', projectSource: 'worktree', gitSource: '/repo', branchName: 'feature' }, 2)
     expect(codexTrusts).toHaveBeenCalledWith('/repo', null)
-    expect(preTrustCodexProject).toHaveBeenCalledWith('/projects/prepared', null)
+    expect(preTrustCodexProject).toHaveBeenCalledWith(join(root.projects, 'worktrees', 'repo', 'feature'), null)
     await launch({ engine: 'claude', projectSource: 'worktree', gitSource: '/repo', branchName: 'feature' }, 3)
     await launch({ engine: 'claude', projectSource: 'branch', gitSource: '/repo', branchRef: 'refs/heads/main' }, 4)
     await launch({ engine: 'pi', projectSource: 'new' }, 5)
@@ -965,48 +946,14 @@ describe('agent_create with a receipt', () => {
     expect(console.warn).toHaveBeenCalledWith('[agent] pre-trust /projects/prepared · config locked')
     expect(console.warn).toHaveBeenCalledWith('[agent] pre-trust /projects/prepared · busy')
     expect(claudeTrusts).toHaveBeenCalledWith('/repo')
-  })
-
-  // WIN-DELL and the Mac Studio, 2026-10-26: Swarm Leads in a reused or fresh checkout of the project's repository sat at
-  // Claude Code's trust question, and so did the next Lead in a worktree of it, its source never answered.
-  it('trusts a Swarm agent\'s checkout of its remote project in any mode, and no other existing folder', async () => {
-    const { ask, replies } = setup()
-    const launch = async (payload: Record<string, unknown>, n: number) => { await ask({ creationId: `${CREATION}-${n}`, ...payload }); await vi.waitFor(() => expect(replies).toHaveLength(n)) }
-    const remote = { projectSource: 'remote', repositoryUrl: 'https://github.com/acme/app.git' }
-    await launch({ engine: 'claude', ...remote, swarmRole: 'lead' }, 1)
-    expect(preTrustClaudeProject).toHaveBeenCalledWith('/projects/prepared')
-    // The guard: the same checkout outside a Swarm, and a Swarm agent in a folder it was handed.
-    await launch({ engine: 'claude', ...remote, permissionMode: 'full' }, 2)
-    await launch({ engine: 'claude', cwd: dir, swarmRole: 'lead' }, 3)
-    await launch({ engine: 'claude', cwd: dir, swarmRole: 'lead', permissionMode: 'full' }, 4)
-    await ask({ creationId: `${CREATION}-5`, engine: 'claude', projectSource: 'worktree', gitSource: '/elsewhere', branchName: 'feature', swarmRole: 'lead' }, false)
-    await vi.waitFor(() => expect(replies).toHaveLength(5))
-    expect(preTrustClaudeProject).toHaveBeenCalledOnce()
-    // Claude Code only: a Codex Lead's checkout is not trusted for it.
-    await launch({ engine: 'codex', ...remote, swarmRole: 'lead' }, 6)
-    expect(preTrustCodexProject).not.toHaveBeenCalled()
-    // A worktree made from that checkout then inherits its answer.
-    vi.mocked(claudeTrusts).mockImplementation(path => path === '/projects/prepared')
-    await launch({ engine: 'claude', projectSource: 'worktree', gitSource: '/projects/prepared', branchName: 'feature', swarmRole: 'lead' }, 7)
-    expect(preTrustClaudeProject).toHaveBeenCalledTimes(2)
-  })
-
-  // 2026-10-30: a new Swarm made with Cmd+S on a local openharness checkout started its PM in a worktree of that
-  // checkout, which Claude Code had never been told to trust; the PM sat at the question, shown as Idle in the Swarm.
-  it('trusts the worktree of a repository the person picked in this machine\'s window for a Swarm agent in any mode', async () => {
-    const { ask, replies } = setup()
-    const launch = async (payload: Record<string, unknown>, local: boolean, n: number) => { await ask({ creationId: `${CREATION}-${n}`, ...payload }, local); await vi.waitFor(() => expect(replies).toHaveLength(n)) }
-    const worktree = { projectSource: 'worktree', gitSource: '/Users/me/openharness', branchName: 'lively-meteor' }
-    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead' }, true, 1)
-    expect(preTrustClaudeProject).toHaveBeenCalledWith('/projects/prepared')
-    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead', permissionMode: 'full' }, true, 2)
-    expect(preTrustClaudeProject).toHaveBeenCalledTimes(2)
-    // Not relayed, not outside a Swarm, not for Codex: those stay the person's question.
-    await launch({ engine: 'claude', ...worktree, swarmRole: 'lead' }, false, 3)
-    await launch({ engine: 'claude', ...worktree, permissionMode: 'full' }, true, 4)
-    await launch({ engine: 'codex', ...worktree, swarmRole: 'lead' }, true, 5)
-    expect(preTrustClaudeProject).toHaveBeenCalledTimes(2)
-    expect(preTrustCodexProject).not.toHaveBeenCalled()
+    // A worktree workspaces answered anywhere but where Harness makes worktrees is not trusted, its repository trusted or
+    // not: the folder is their word, and a trust above it would cover every repository there.
+    vi.mocked(claudeTrusts).mockReturnValue(true)
+    for (const [n, cwd] of [[8, root.projects], [9, join(root.projects, 'worktrees')], [10, join(root.projects, 'worktreesx', 'repo')]] as const) {
+      run.workspaces.prepareFolder.mockResolvedValueOnce({ ok: true, cwd })
+      await launch({ engine: 'claude', projectSource: 'worktree', gitSource: '/repo', branchName: 'feature' }, n)
+    }
+    expect(preTrustClaudeProject).toHaveBeenCalledTimes(3)
   })
 
   // A Codex agent on its own profile reads its trust from THAT profile's config.toml: the trust was
@@ -1020,7 +967,7 @@ describe('agent_create with a receipt', () => {
     await ask({ creationId: `${CREATION}-2`, engine: 'codex', codexHome: '/profiles/work', cwd: empty })
     await vi.waitFor(() => expect(replies).toHaveLength(2))
     expect(codexTrusts).toHaveBeenCalledWith('/repo', '/profiles/work')
-    expect(preTrustCodexProject).toHaveBeenNthCalledWith(1, '/projects/prepared', '/profiles/work')
+    expect(preTrustCodexProject).toHaveBeenNthCalledWith(1, join(root.projects, 'worktrees', 'repo', 'feature'), '/profiles/work')
     expect(preTrustCodexProject).toHaveBeenNthCalledWith(2, empty, '/profiles/work')
   })
 
@@ -1124,7 +1071,7 @@ describe('durable model request validation', () => {
     await vi.waitFor(() => expect(retry).toHaveBeenCalledTimes(records.length))
     for (let n = 0; n < records.length; n++) expect(deps.receipts.status(`${CREATION}-${n}`)).toEqual({ state: 'pending', held })
     expect(resolveNewAgentModel).not.toHaveBeenCalled()
-    expect(prepareProjectFolder).not.toHaveBeenCalled()
+    expect(prepareNewFolder).not.toHaveBeenCalled()
     expect(create).not.toHaveBeenCalled()
     expect(prepareCreate).not.toHaveBeenCalled()
   })

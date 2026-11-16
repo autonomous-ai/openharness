@@ -1,4 +1,4 @@
-// The inner upper arc (design 2026-10-28-round-dial-swarm-chat §3): the chat name under the project on a Swarm face,
+// The inner upper arc (design 2026-10-28, §3): the face's grey line under the name (the machine view's host),
 // smaller and on a tighter curve than the title. Long, short and missing names; its span and radius; its mask cache,
 // made only when a chat name is drawn; and the title arc it sits under, unchanged by it.
 #include "../main/ui/habitat/terminal.c"

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { wholeHistoryPage } from '../../core/transcripts/history.js'
+import { wholeHistoryPage } from '../others/transcripts.js'
 import { agyMessagesToEvents } from './normalizer.js'
 
 const agyHistoryPage = (lines: string[], paginated: boolean) => wholeHistoryPage(agyMessagesToEvents(lines), paginated)

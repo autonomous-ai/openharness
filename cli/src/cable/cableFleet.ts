@@ -124,6 +124,9 @@ export class CableFleet {
   /** Is any connected dial asking for `turn.stats`? */
   wantsStats(): boolean { return [...this.entries.values()].some(e => e.session.wantsStats) }
 
+  /** Is any connected dial showing one app's ring? */
+  wantsApps(): boolean { return [...this.entries.values()].some(e => e.session.wantsApps) }
+
   start(): void {
     if (!this.stopped) return
     this.stopped = false
@@ -415,9 +418,8 @@ export class CableFleet {
   syncAgents(...args: Parameters<Surface['syncAgents']>) { return this.send('syncAgents', ...args) }
   syncSwarms(...args: Parameters<Surface['syncSwarms']>) { return this.send('syncSwarms', ...args) }
   syncMachines(...args: Parameters<Surface['syncMachines']>) { return this.send('syncMachines', ...args) }
-  syncSwarmCards(...args: Parameters<Surface['syncSwarmCards']>) { return this.send('syncSwarmCards', ...args) }
-  swarmCardRecap(...args: Parameters<Surface['swarmCardRecap']>) { return this.send('swarmCardRecap', ...args) }
   followApp(...args: Parameters<Surface['followApp']>) { return this.send('followApp', ...args) }
+  followLocal(...args: Parameters<Surface['followLocal']>) { return this.send('followLocal', ...args) }
   replaceNotifications(...args: Parameters<Surface['replaceNotifications']>) { return this.send('replaceNotifications', ...args) }
   agentSeen(...args: Parameters<Surface['agentSeen']>) { return this.send('agentSeen', ...args) }
   question(...args: Parameters<Surface['question']>) { return this.send('question', ...args) }

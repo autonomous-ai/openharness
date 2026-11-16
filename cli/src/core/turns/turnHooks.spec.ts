@@ -1,20 +1,17 @@
 import type { LiveParser } from '../../engines/facets/live.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { removePendingCursorTasks } from '../engines/cursorTasks.js'
 import type { TurnState } from '../../lib/normalize.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createSessionNormalizers } from '../transcripts/normalizers.js'
+import { noOtherStreams } from '../../testing/otherStreams.js'
 import { createTurnHooks, STOP_HOOK_GRACE_MS, type TurnHookDeps } from './turnHooks.js'
 import { engineHooks } from '../../engines/hooks.js'
 import type { HookTurnContext } from '../../engines/facets/hooks.js'
 
-// Cursor's queued Tasks are cleared through the core's own door to them (core/engines/cursorTasks.ts).
-vi.mock('../engines/cursorTasks.js', () => ({ removePendingCursorTasks: vi.fn(async () => {}) }))
-
 const END = [{ type: 'turn_ended', payload: {} }]
 const ABORT = [{ type: 'turn_ended', payload: { aborted: true } }]
 
-/** A normalizer or reader with the turn calls the hooks make. */
+/** Another engine's parser, in its worker, with the turn calls the hooks make of its stream (core/engines/otherStreams.ts). */
 const engineState = (turnOpen = true) => {
   const state = {
     turnOpen,
@@ -26,23 +23,30 @@ const engineState = (turnOpen = true) => {
 }
 
 function setup(engine: string, over: Partial<TurnHookDeps> = {}) {
-  const normalizers = createSessionNormalizers()
+  const normalizers = createSessionNormalizers(noOtherStreams())
+  const states = new Map<string, ReturnType<typeof engineState>>()
+  const others = {
+    get: (id: string) => states.get(id) as never,
+    close: vi.fn(async (id: string, how: { abort?: boolean }) => {
+      const state = states.get(id)
+      return state ? how.abort ? state.abortTurn() : state.closeTurn() : []
+    }),
+    openTurn: vi.fn(async (id: string) => states.get(id)?.openTurn() ?? []),
+    task: vi.fn(),
+  }
   const deps: TurnHookDeps = {
     resolve: (id) => id === 's1' ? ({ agentId: 'a1', sessionId: 's1', engine } as RegisteredSession) : undefined,
     normalizers,
+    others: others as unknown as TurnHookDeps['others'],
     emit: vi.fn(),
     drain: vi.fn(async () => {}),
-    onCursorTaskStart: vi.fn(),
-    cursorTaskHooks: { wait: vi.fn(async () => {}) },
-    cursorSubagents: { closeParent: vi.fn() },
     announceTurnAborted: vi.fn(),
     armAgyIdleWatch: vi.fn(),
     clearAgyIdleWatch: vi.fn(),
     mirror: { noteEngineStopped: vi.fn() },
-    dataDir: '/data',
     ...over,
   }
-  return { deps, normalizers, hooks: createTurnHooks(deps) }
+  return { deps, normalizers, others, states, hooks: createTurnHooks(deps) }
 }
 
 // Existing hook scenarios control transcript arrival without exposing mutable state through the port.
@@ -61,30 +65,37 @@ function parserOf(state: TurnState & { openedAt?: number }): LiveParser {
 }
 const setState = (run: ReturnType<typeof setup>, state: TurnState) => run.normalizers.liveParsers.set('s1', parserOf(state))
 
-const put = (map: Map<string, unknown>, state: unknown) => map.set('s1', state)
+const put = (run: ReturnType<typeof setup>, state: unknown) => run.states.set('s1', state as ReturnType<typeof engineState>)
 
 describe('turn hooks', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
-  it('opens Command Code\'s turn on its first tool call, and nothing else\'s', () => {
+  it('opens Command Code\'s turn on its first tool call, in its worker, and nothing else\'s', async () => {
     const cc = setup('commandcode')
     const normalizer = engineState(false)
     cc.hooks.onTurnStart({ sessionId: 's1' })
-    put(cc.normalizers.commandcodeNormalizers, normalizer)
+    put(cc, normalizer)
     cc.hooks.onTurnStart({ sessionId: 's1' })
     cc.hooks.onTurnStart({ sessionId: 'nobody' })
     setup('claude').hooks.onTurnStart({ sessionId: 's1' })
+    await vi.advanceTimersByTimeAsync(0)
     expect(cc.deps.emit).toHaveBeenCalledTimes(1)
     expect(cc.deps.emit).toHaveBeenCalledWith('s1', normalizer.openTurn.mock.results[0].value)
+    // One that opened nothing says nothing.
+    normalizer.openTurn.mockReturnValueOnce([])
+    cc.hooks.onTurnStart({ sessionId: 's1' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(cc.deps.emit).toHaveBeenCalledTimes(1)
   })
 
-  it('registers a Cursor sub-agent when its Task tool starts', () => {
-    const { deps, hooks } = setup('cursor')
+  it('hands a Cursor Task tool start to its stream, which follows the sub-agent', () => {
+    const { others, hooks } = setup('cursor')
     hooks.onToolStart({ sessionId: 's1', toolUseId: 't1', toolName: 'Task', input: { prompt: 'x' } })
     hooks.onToolStart({ sessionId: 's1', toolUseId: 't2', toolName: 'Read', input: {} })
-    expect(deps.onCursorTaskStart).toHaveBeenCalledTimes(1)
-    expect(deps.onCursorTaskStart).toHaveBeenCalledWith('s1', 't1', { prompt: 'x' })
+    setup('claude').hooks.onToolStart({ sessionId: 's1', toolUseId: 't3', toolName: 'Task', input: {} })
+    expect(others.task).toHaveBeenCalledTimes(1)
+    expect(others.task).toHaveBeenCalledWith('s1', 't1', { prompt: 'x' })
   })
 
   it('does nothing for a Stop from a session it does not know, or an engine with no Stop rule', async () => {
@@ -107,7 +118,7 @@ describe('turn hooks', () => {
     expect(() => setup('claude').hooks.onTurnStop({ sessionId: 's1' })).not.toThrow()
     const other = setup('commandcode')
     const state = engineState()
-    put(other.normalizers.commandcodeNormalizers, state)
+    put(other, state)
     other.hooks.onTurnStop({ sessionId: 's1' })
     await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
     expect(other.deps.emit).toHaveBeenCalledWith('s1', END)
@@ -303,14 +314,12 @@ describe('turn hooks', () => {
 
   describe('engines whose Stop hook is their turn boundary', () => {
     for (const engine of ['commandcode', 'copilot', 'agy'] as const) {
-      const map = (run: ReturnType<typeof setup>) => engine === 'commandcode' ? run.normalizers.commandcodeNormalizers
-        : engine === 'copilot' ? run.normalizers.copilotNormalizers : run.normalizers.agyNormalizers
 
       it(`${engine}: drains, waits the grace, then closes what is still open`, async () => {
         const log = vi.spyOn(console, 'log').mockImplementation(() => {})
         const run = setup(engine)
         const normalizer = engineState()
-        put(map(run), normalizer)
+        put(run, normalizer)
         run.hooks.onTurnStop({ sessionId: 's1' })
         await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS - 1)
         expect(run.deps.emit).not.toHaveBeenCalled()
@@ -324,7 +333,7 @@ describe('turn hooks', () => {
         const run = setup(engine)
         run.hooks.onTurnStop({ sessionId: 's1' }) // no normalizer at all
         const normalizer = engineState(false)
-        put(map(run), normalizer)
+        put(run, normalizer)
         run.hooks.onTurnStop({ sessionId: 's1' })
         await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
         normalizer.turnOpen = true
@@ -337,7 +346,7 @@ describe('turn hooks', () => {
       it(`${engine}: reports a Stop hook that fails`, async () => {
         const error = vi.spyOn(console, 'error').mockImplementation(() => {})
         const run = setup(engine)
-        put(map(run), engineState())
+        put(run, engineState())
         vi.mocked(run.deps.drain).mockRejectedValueOnce(new Error('tail gone')).mockRejectedValueOnce('worse')
         run.hooks.onTurnStop({ sessionId: 's1' })
         run.hooks.onTurnStop({ sessionId: 's1' })
@@ -350,7 +359,7 @@ describe('turn hooks', () => {
       it(`${engine}: says why a turn ended early, and aborts it`, async () => {
         const run = setup(engine)
         const normalizer = engineState()
-        put(engine === 'copilot' ? run.normalizers.copilotNormalizers : run.normalizers.agyNormalizers, normalizer)
+        put(run, normalizer)
         run.hooks.onTurnStop({ sessionId: 's1', status: 'error' })
         await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
         expect(run.deps.announceTurnAborted).toHaveBeenCalledWith('s1', engine, expect.stringContaining('ended the turn early'))
@@ -360,7 +369,7 @@ describe('turn hooks', () => {
 
     it('agy: a Stop that waits for sub-agents arms the backstop and closes nothing; any other clears it', async () => {
       const run = setup('agy')
-      put(run.normalizers.agyNormalizers, engineState())
+      put(run, engineState())
       run.hooks.onTurnStop({ sessionId: 's1', status: 'waiting' })
       expect(run.deps.armAgyIdleWatch).toHaveBeenCalledWith('s1')
       expect(run.deps.drain).not.toHaveBeenCalled()
@@ -377,19 +386,19 @@ describe('turn hooks', () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup('devin')
       const reader = engineState()
-      put(run.normalizers.devinReaders, reader)
+      put(run, reader)
       run.hooks.onTurnStop({ sessionId: 's1' })
       await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
       expect(reader.closeTurn).toHaveBeenCalled()
       expect(run.deps.emit).toHaveBeenCalledWith('s1', END)
-      expect(String(log.mock.calls[0][0])).toContain('force-closed by Stop hook')
+      expect(String(log.mock.calls[0][0])).toContain('closed by its devin Stop hook (after grace)')
     })
 
     it('leaves a turn that is closed, or closes during the grace, and survives no reader', async () => {
       const run = setup('devin')
       run.hooks.onTurnStop({ sessionId: 's1' })
       const reader = engineState(false)
-      put(run.normalizers.devinReaders, reader)
+      put(run, reader)
       run.hooks.onTurnStop({ sessionId: 's1' })
       reader.turnOpen = true
       run.hooks.onTurnStop({ sessionId: 's1' })
@@ -402,10 +411,10 @@ describe('turn hooks', () => {
       const error = vi.spyOn(console, 'error').mockImplementation(() => {})
       const run = setup('devin')
       const broken = { get turnOpen(): boolean { throw new Error('store gone') } }
-      put(run.normalizers.devinReaders, broken)
+      put(run, broken)
       run.hooks.onTurnStop({ sessionId: 's1' })
       const worse = { get turnOpen(): boolean { throw 'worse' } }
-      put(run.normalizers.devinReaders, worse)
+      put(run, worse)
       run.hooks.onTurnStop({ sessionId: 's1' })
       await vi.advanceTimersByTimeAsync(0)
       expect(error.mock.calls).toEqual([['[hooks] devin stop hook failed:', 'store gone'], ['[hooks] devin stop hook failed:', 'worse']])
@@ -416,7 +425,7 @@ describe('turn hooks', () => {
     it('announces and aborts a turn that ended in error, and leaves a clean stop to the transcript', async () => {
       const run = setup('grok')
       const normalizer = engineState()
-      put(run.normalizers.grokNormalizers, normalizer)
+      put(run, normalizer)
       run.hooks.onTurnStop({ sessionId: 's1' })
       await vi.advanceTimersByTimeAsync(0)
       expect(run.deps.emit).not.toHaveBeenCalled()
@@ -424,10 +433,11 @@ describe('turn hooks', () => {
       await vi.advanceTimersByTimeAsync(0)
       expect(run.deps.announceTurnAborted).toHaveBeenCalledWith('s1', 'grok', 'Grok ended the turn with an error')
       expect(run.deps.emit).toHaveBeenCalledWith('s1', ABORT)
-      run.normalizers.grokNormalizers.delete('s1')
+      // With no stream there is nothing of it to close.
+      run.states.delete('s1')
       run.hooks.onTurnStop({ sessionId: 's1', status: 'error' })
       await vi.advanceTimersByTimeAsync(0)
-      expect(run.deps.emit).toHaveBeenLastCalledWith('s1', [])
+      expect(run.deps.emit).toHaveBeenCalledTimes(1)
     })
 
     it('reports a StopFailure hook that fails', async () => {
@@ -437,23 +447,21 @@ describe('turn hooks', () => {
       run.hooks.onTurnStop({ sessionId: 's1', status: 'error' })
       run.hooks.onTurnStop({ sessionId: 's1', status: 'error' })
       await vi.advanceTimersByTimeAsync(0)
-      expect(error.mock.calls).toEqual([['[hooks] grok StopFailure hook failed:', 'tail gone'], ['[hooks] grok StopFailure hook failed:', 'worse']])
+      expect(error.mock.calls).toEqual([['[hooks] grok stop hook failed:', 'tail gone'], ['[hooks] grok stop hook failed:', 'worse']])
     })
   })
 
   describe('Cursor', () => {
-    it('closes the turn once its sub-agent hooks and transcript are in, then clears its pending tasks', async () => {
+    it('closes the turn once its transcript is in, in its worker, which ends its sub-agents and its queued Tasks', async () => {
       const run = setup('cursor')
       const normalizer = engineState()
-      put(run.normalizers.cursorNormalizers, normalizer)
+      put(run, normalizer)
       run.hooks.onTurnStop({ sessionId: 's1' })
       await vi.advanceTimersByTimeAsync(0)
-      expect(run.deps.cursorTaskHooks.wait).toHaveBeenCalledWith('s1')
-      expect(run.deps.cursorSubagents.closeParent).toHaveBeenCalledWith('s1', false)
+      expect(run.deps.drain).toHaveBeenCalledWith('s1')
+      expect(run.others.close).toHaveBeenCalledWith('s1', { abort: false, error: false, stop: true })
       expect(run.deps.emit).toHaveBeenCalledWith('s1', END)
       expect(run.deps.announceTurnAborted).not.toHaveBeenCalled()
-      await vi.advanceTimersByTimeAsync(2_500)
-      expect(removePendingCursorTasks).toHaveBeenCalledWith('/data', 's1')
     })
 
     it('announces a turn that failed before writing anything, and leaves a session with no normalizer', async () => {
@@ -462,21 +470,21 @@ describe('turn hooks', () => {
       await vi.advanceTimersByTimeAsync(0)
       expect(run.deps.emit).not.toHaveBeenCalled()
       const silent = { ...engineState(false), closeTurn: vi.fn(() => []) }
-      put(run.normalizers.cursorNormalizers, silent)
+      put(run, silent)
       run.hooks.onTurnStop({ sessionId: 's1', status: 'error' })
       await vi.advanceTimersByTimeAsync(0)
-      expect(run.deps.cursorSubagents.closeParent).toHaveBeenCalledWith('s1', true)
+      expect(run.others.close).toHaveBeenCalledWith('s1', { abort: false, error: true, stop: true })
       expect(run.deps.announceTurnAborted).toHaveBeenCalledWith('s1', 'cursor', expect.stringContaining('before producing any output'))
     })
 
     it('reports a stop hook that fails', async () => {
       const error = vi.spyOn(console, 'error').mockImplementation(() => {})
       const run = setup('cursor')
-      vi.mocked(run.deps.cursorTaskHooks.wait).mockRejectedValueOnce(new Error('queue gone')).mockRejectedValueOnce('worse')
+      vi.mocked(run.deps.drain).mockRejectedValueOnce(new Error('queue gone')).mockRejectedValueOnce('worse')
       run.hooks.onTurnStop({ sessionId: 's1' })
       run.hooks.onTurnStop({ sessionId: 's1' })
       await vi.advanceTimersByTimeAsync(0)
-      expect(error.mock.calls).toEqual([['[cursor] stop hook failed:', 'queue gone'], ['[cursor] stop hook failed:', 'worse']])
+      expect(error.mock.calls).toEqual([['[hooks] cursor stop hook failed:', 'queue gone'], ['[hooks] cursor stop hook failed:', 'worse']])
     })
   })
 
@@ -492,7 +500,7 @@ describe('turn hooks', () => {
 })
 
 it.each([
-  ['cursor', 'tasks'], ['cursor', 'drain1'], ['commandcode', 'drain1'], ['commandcode', 'grace'], ['commandcode', 'drain2'],
+  ['cursor', 'drain1'], ['commandcode', 'drain1'], ['commandcode', 'grace'], ['commandcode', 'drain2'],
   ['copilot', 'drain1'], ['copilot', 'grace'], ['copilot', 'drain2'], ['agy', 'drain1'], ['agy', 'grace'], ['agy', 'drain2'],
   ['devin', 'grace'], ['grok', 'drain1'], ['claude', 'drain1'], ['claude', 'grace'], ['claude', 'drain2'],
 ])('retains %s Stop intent when evidence changes during %s', async (engine, phase) => {
@@ -500,15 +508,11 @@ it.each([
   const row = { agentId: 'a1', sessionId: 's1', engine, evidenceRevision: 0 } as RegisteredSession
   const holdStop = vi.fn(() => true), run = setup(engine, { resolve: () => row, holdStop })
   const state = engineState()
-  const maps = { cursor: run.normalizers.cursorNormalizers, commandcode: run.normalizers.commandcodeNormalizers,
-    copilot: run.normalizers.copilotNormalizers, agy: run.normalizers.agyNormalizers,
-    devin: run.normalizers.devinReaders, grok: run.normalizers.grokNormalizers }
   if (engine === 'claude') setState(run, { turnOpen: true, pendingTools: new Set(), toolIdToName: new Map(), thinkingCounter: 0 })
-  else (maps[engine as keyof typeof maps] as Map<string, unknown>).set('s1', state)
+  else put(run, state)
   let release!: () => void
   const pending = () => new Promise<void>(resolve => { release = resolve })
-  if (phase === 'tasks') vi.mocked(run.deps.cursorTaskHooks.wait).mockImplementationOnce(pending)
-  else if (phase === 'drain1') vi.mocked(run.deps.drain).mockImplementationOnce(pending)
+  if (phase === 'drain1') vi.mocked(run.deps.drain).mockImplementationOnce(pending)
   else if (phase === 'drain2') vi.mocked(run.deps.drain).mockResolvedValueOnce(undefined).mockImplementationOnce(pending)
   run.hooks.onTurnStop({ sessionId: 's1', status: 'error' })
   await vi.advanceTimersByTimeAsync(phase === 'drain2' ? STOP_HOOK_GRACE_MS : 0)
@@ -520,7 +524,7 @@ it.each([
   expect(state.abortTurn).not.toHaveBeenCalled()
   expect(run.deps.emit).not.toHaveBeenCalled()
   expect(run.deps.announceTurnAborted).not.toHaveBeenCalled()
-  expect(run.deps.cursorSubagents.closeParent).not.toHaveBeenCalled()
+  expect(run.others.close).not.toHaveBeenCalled()
   vi.useRealTimers()
 })
 
@@ -554,10 +558,7 @@ it.each([
   vi.useFakeTimers()
   try {
     const afterStop = vi.fn(), run = setup(engine!, { afterStop }), state = engineState()
-    const maps = { cursor: run.normalizers.cursorNormalizers, commandcode: run.normalizers.commandcodeNormalizers,
-      devin: run.normalizers.devinReaders, grok: run.normalizers.grokNormalizers,
-      copilot: run.normalizers.copilotNormalizers, agy: run.normalizers.agyNormalizers }
-    ;(maps[engine as keyof typeof maps] as Map<string, unknown>).set('s1', state)
+    put(run, state)
     run.hooks.onTurnStop({ sessionId: 's1', status })
     await vi.runAllTimersAsync()
     expect(afterStop).toHaveBeenCalledOnce()

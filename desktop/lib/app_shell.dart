@@ -42,6 +42,7 @@ import 'widgets/setup_tour.dart';
 import 'widgets/sign_in_step.dart';
 import 'widgets/transient_menus.dart';
 import 'core/startup.dart';
+import 'core/swarm_leftovers.dart';
 import 'logging/app_log.dart';
 import 'logging/install.dart';
 import 'shortcuts/app_keymap.dart';
@@ -119,8 +120,9 @@ Future<void> startHarness({
     ),
   );
   // After the first frame is on its way: a launcher entry is not worth
-  // holding the window up for.
+  // holding the window up for, nor is clearing what the Swarm left.
   unawaited(registerAppImageLauncher());
+  if (!kUnderTest) unawaited(clearSwarmLeftovers());
 }
 
 class HarnessApp extends StatelessWidget {

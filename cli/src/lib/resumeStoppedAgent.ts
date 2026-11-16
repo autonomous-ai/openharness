@@ -1,9 +1,9 @@
-import { terminalRouteKey } from './terminalRuntime.js'
+import { sameProcessIdentity, terminalRouteKey } from './terminalRuntime.js'
 import { isTerminalEngine } from '../engines/types.js'
 import type { RegisteredSession, ProcessIdentity } from './registry.js'
 import { resumesConversation } from './resumeCapability.js'
 import type { RestartAgentReply } from './restartAgent.js'
-import type { RuntimeCheck } from './paneEngineProcess.js'
+import { ENGINE_SETTLE_MS, type RuntimeCheck } from './paneEngineProcess.js'
 
 export interface ResumeStoppedDeps {
   live: () => RegisteredSession | undefined
@@ -101,16 +101,18 @@ export interface ResumeReadinessDeps {
 /**
  * Wait for the replacement process to prove it came back.
  *
- * The proof is the engine process alive in this row's own pane — the bar `agent_restart` has cleared
- * for every engine for as long as it has existed. Claude and Codex were held to their `SessionStart`
- * hook instead; see the note at the check itself for why that is no longer a precondition.
+ * The proof is the same engine process still alive in this row's own pane a settle time after it was
+ * first seen — the bar `agent_restart` clears for every engine. Claude and Codex were held to their
+ * `SessionStart` hook instead; see the note at the check itself for why that is no longer a precondition.
  *
- * The budget is only reached when NO engine process was ever seen: the pane is up, and nothing this
- * row would recognise is running in it. That is the one state worth reporting as unconfirmed.
+ * The budget is only reached when no engine process was seen, or none stayed for the settle time: the
+ * pane is up, and nothing this row would recognise has held it. That is the one state worth reporting
+ * as unconfirmed.
  */
 export async function waitForResumedAgent(saved: RegisteredSession, deps: ResumeReadinessDeps): Promise<RestartAgentReply> {
   const now = deps.now ?? Date.now
   const until = now() + (deps.budgetMs ?? RESUME_READINESS_BUDGET_MS)
+  let seen: { process: ProcessIdentity; at: number } | undefined
   while (now() < until) {
     if (!deps.current()) return resumeChanged
     const process = await deps.process()
@@ -144,7 +146,16 @@ export async function waitForResumedAgent(saved: RegisteredSession, deps: Resume
     // the person could type in — with `active` cleared and the desk refusing to open it, the cost of
     // the strict rule was never the resume, it was the harness. A resume that reopened the WRONG
     // conversation is still caught, by `registry.register`'s mismatch guard, when the hook arrives.
-    if (process) return { ok: true, session: { ...row, processIdentity: process }, resumed: resumesConversation(saved.engine, saved.sessionId) }
+    //
+    // Up means still up a settle time later. A launch the engine refuses (`codex resume` after an
+    // update dropped it) runs for an instant, and a resume that saw it in that instant was confirmed
+    // over a dead engine (`e2e/updates.e2e.ts`). The restart holds the same rule (`swap.ts`). Every
+    // check above runs on each probe in between, so a pane that exits or a row a hook fails wins
+    // over the confirmation; another process in the pane starts the settle time again.
+    if (process) {
+      if (!seen || !sameProcessIdentity(seen.process, process)) seen = { process, at: now() }
+      if (now() - seen.at >= ENGINE_SETTLE_MS) return { ok: true, session: { ...row, processIdentity: process }, resumed: resumesConversation(saved.engine, saved.sessionId) }
+    }
     await deps.sleep(250)
   }
   return resumeUnconfirmed

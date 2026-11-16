@@ -1,0 +1,197 @@
+# Core secrets package: notes to finish from
+
+Package 6 of [the plan](../2026-11-15-core-plan.md): the secrets the core holds, and what it takes unchecked (audit
+[security](../2026-11-12-core-audit.md#security) 9, 7 and 6, and section 1's `lib/apiConnectionMetadata.ts` row). One
+pull request a step, each on a branch of its own (`core-secrets-1` is step 1's, `core-secrets-2` step 2's), worktrees at
+`.claude/worktrees/<branch>` from a fresh `origin/main`, with `npm ci` in the worktree's `cli/`.
+
+Secrets and tokens never appear in logs, errors, tests or pull request text: tests use fake keys.
+
+## Step 1, security 9: the saved APIs' note only in a project folder Harness made (branch `core-secrets-1`)
+
+Found: `lib/apiInstructions.ts` `prepareApiInstructions` appended its "Saved APIs" block to the instruction file
+(`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`) of any folder a start, a relaunch or a fork ran in, once any API was saved:
+the person's own repository too. Its comment promised only workspaces Harness made; the code checked only that an API
+was saved. `lib/apiInstructions.spec.ts` showed it: 6 of its 10 cases failed on main, and `e2e/storeProcess.e2e.ts` too.
+
+Fixed:
+- The note goes only into a project folder Harness made: directly inside the projects root (`lib/projectFolder.ts`
+  `projectsRoot`: `~/harnesses`, `~/projects` on Harness OS), as the trust checks read it (`core/agents/create.ts`), and
+  no Git checkout. A clone or a worktree is a repository's, and an agent may commit the note in its tracked
+  `AGENTS.md`; worktrees are also not directly inside (`<root>/worktrees/<repo>/<name>`). Nor `<root>/worktrees` itself:
+  Claude Code reads a `CLAUDE.md` in every folder above it, so a note there would reach every worktree.
+- Both paths are resolved first with `realpathSync.native` (the case as on disk; the JS one keeps a typed case on a
+  Mac), so a link in the root to a folder of the person's is that folder. A root that is not there holds no project
+  folder; any other failure throws, and the caller logs its `[apis]` line, as before.
+- For a folder the person chose, the saved-API store is not read at all (step 2 wants a launch to read no keys).
+- The check is in `prepareApiInstructions`, a default parameter, so every caller has it: `core/main.ts` (create,
+  relaunch, fork). `testing/launchShapes.ts` takes the root from each spec (`LaunchWorld.projectsRoot`, required).
+  No new file in the core's process.
+- The three goldens that record the note (`launch-prep`, `launch-shapes`, `grid-assignment-shapes`) are unchanged:
+  their specs name a projects root that holds their workspaces.
+- `e2e/storeProcess.e2e.ts`: the two harnesses held through a Store outage are in `~/harnesses` and get the note only
+  after recovery, as before; a plain harness started in a folder of the person's gets none.
+- `docs/api-connections.md` says where the note goes.
+
+Left, and why:
+- A note written into a person's folder, a clone or a worktree before this fix stays there: removing it would be
+  writing into their folder again. The block starts with `<!-- harness:apis -->`.
+- A harness in a folder the person chose, a clone or a worktree is no longer told of saved APIs at start. `harness api
+  list` works there as before. Telling it some other way (the launch's own instructions, as `lib/agentAttribution.ts`
+  does for Claude Code and Codex) is a product call: a proposal for the PM, not this package.
+- A Store harness's bootstrap (`dsh/runtime.ts` `installBootstrap`, `migrateHarnessInstructions`) still writes into
+  the folder the harness runs in, the person's too: that is how its instructions reach its engine. Not this audit row.
+- On Harness OS, Desktop makes local projects in `~/harnesses` (`desktop/lib/core/project_folder.dart`) while the CLI's
+  root is `~/projects`; the trust checks already disagree the same way. Not changed here.
+
+Found beside, not this package: `lib/pathContainment.ts` `within` tests `'../'` only. On Windows `relative` answers
+`..\`, so any folder on the home's drive counts as inside it (`C:\Windows\System32` inside `C:\Users\a`), for the folder
+browser (`lib/fsBrowse.ts`) and `lib/gitProject.ts`. A security fix of its own, with a Windows test.
+
+## Step 2: the saved APIs' keys apart from what a launch reads (branch `core-secrets-2`, on top of step 1)
+
+Found: every launch's note (`lib/apiInstructions.ts`) asked `ApiConnectionMetadata.list()`, which parsed the whole
+store, `api-connections/connections.json`, keys included, to learn whether an API was saved.
+
+Done:
+- `api-connections/list.json`: the saved APIs without their keys (`{ version: 1, connections: [metadata] }`, 0600). A
+  launch reads only that, through `ApiConnectionMetadata.saved()`, and checks it strictly: a list with anything more
+  than the metadata (a key above all) is refused. The core never opens the store.
+- The store keeps the list in step (`lib/apiConnections.ts`): written after every save and removal, and rewritten
+  whenever a read finds it missing or different. A list that cannot be written is logged (`[apis]`), never thrown:
+  the store is already saved, and the next read writes it.
+- The store's own checked reader (`readApiConnectionStore`, with the keys' schema) moved into `lib/apiConnections.ts`,
+  out of the core's process. The engine probe (`lib/engineAccount.ts`, edge host and gateway) keeps that checked read
+  of the store: switching it to the list would change its answer for a store not read since the update.
+- Why the keys did not move instead: every build since September reads `connections.json` with its keys, and the
+  master puts the last build back when a new one fails. A file that lost its keys would leave that build with no
+  saved API, and every agent on one unable to restart.
+
+Migration: an older build's store has no list. `saved()` then takes the store's being there, unread, for a saved API
+(it holds one, or did), until the store is first read in this build: models reads it as it starts
+(`rememberSavedApis`), and so do the Models panel, `harness api` and every launch on an API's model. That fallback
+goes on 2026-12-15. `e2e/storeProcess.e2e.ts` writes such a store by hand and still gets the note.
+
+Rollback: an older build reads and writes `connections.json` as before and never reads the list. Back on this build,
+the store's next read rewrites the list from the store. Until then a launch may read a list an older build left
+stale; the note is only guidance, and `harness api list` reads the store itself.
+
+### Step 2 continuation Design (2026-11-15)
+
+Continue on `codex/core-secrets-continue`, from `c6d421b1d2` plus current main. Keep the September key-store
+format and the metadata-only launch reader. No feature state, rule, service port or file is added to core.
+
+- Growth: the authoritative store remains limited to 100 connections / 2 MiB; its derivative list to 1 MiB.
+  Removing a connection removes its metadata on the same call. Repair replaces the list atomically and cleans only
+  its own temporary file. Removing the legacy store also clears a stale list at the next store read.
+- Concurrency: each document is published by atomic rename; there is no cross-file transaction or new lock.
+  The key store remains authoritative. A concurrent legacy writer or interrupted list publication can leave guidance
+  stale until the next successful store read. This does not change key-store writers' existing concurrency contract.
+- Read cost: launches read the bounded list only; a missing-list fallback checks the legacy file's stat, never its
+  contents. Repair checks a regular bounded file before reading it; directories, FIFOs, links and oversized lists
+  cannot turn the new repair path into an unbounded read. Unchanged lists are not rewritten.
+- Scale: 10x stays within the existing 100-connection bound for accounts with at most ten connections; the explicit
+  capacity error warns first. No new telemetry or cardinality is introduced; filesystem errors stay content-free.
+- Compatibility: backend N/A, machine-local files only; wire contracts and the old key store are unchanged.
+  The existing missing-list fallback remains until 2026-12-15. Last-30-day clients continue through existing APIs.
+- Migration and rollback: only a successfully validated key store can produce metadata. Malformed or unsafe key
+  storage fails without changing it or the list. Existing owner-controlled files use the existing private-state
+  hardening rules; group/world writable storage is refused. A damaged derivative is safely replaced from the store.
+  Rollback reads/writes the unchanged key document; upgrading again repairs old-build additions, edits and removals.
+- Audience: local OS user, as before; no server data or access changes. POSIX ownership and writable-mode checks
+  use existing private-state helpers. Windows keeps its existing profile/configured-data-root boundary.
+- Identity: all reads/writes run as the existing local owner; no other person's login or process is accessed.
+- Failure: store errors remain `API_CONNECTIONS_FAILED` with a content-free detail. A derivative-write failure keeps
+  the committed key and emits the existing `[apis]` warning; the next store read repairs it. No silent key loss.
+- Platforms: macOS, Linux and Windows CLI. Local evidence is macOS; Linux CI and native Windows remain root's gates.
+
+Selected validation: migration/rollback/security regressions first (red then green), affected API/engine-account and
+launch-golden unit files, architecture boundary tests, typecheck, and the existing Store launch end-to-end test.
+The full CLI unit suite is required from automatic PR CI. No core/service source is changed by this continuation.
+All local test homes are isolated. Validation waits for the performance marker and owns the shared validation lock.
+
+Continuation implementation:
+- Existing private-state readers enforce ownership and writable-mode rules before any key bytes are read, and
+  harden safe legacy modes. Dangling links and non-files are errors, not missing stores.
+- The missing-list fallback checks only the key file's stat. Launches still never open that file. Linked metadata
+  is rejected, including a hard-link alias, and damaged derivatives are repaired only from a validated key store.
+- Repair skips reads of oversized/non-regular lists, preserves the authoritative store on publication failure,
+  and clears stale metadata after a legacy store is removed. Unchanged metadata is not rewritten.
+- `apiConnectionsMigration.spec.ts` covers old-format migration, old-build edits/additions/removals, malformed stores,
+  unsafe entries and permissions, broken metadata, publication failure/recovery, and simulated Windows behavior.
+
+### Step 2 validation and review (2026-11-15)
+
+Continued in `/tmp/harness-core-secrets-continue`, branch `codex/core-secrets-continue`, on main `aad8dcd535`.
+Runtime head `803bd2f17f`; `b0f3fde523` corrects trusted fixtures to use private modes under umask `0002`.
+No original worktree was edited. Step 1 (#4322) merged as `690e9b4ae5`; this branch integrates that main.
+Root owns PR CI and merge. Integration preserves the validated runtime and fixtures exactly; the conflicts were
+the already-merged step 1 using `list()` versus step 2 using `saved()`, plus package status and notes.
+
+Observed on macOS with the pinned Node 24.22.2, isolated test homes:
+- The 28 migration tests on the preserved pre-fix sources: **9 failed, 19 passed**, from assertions about stale
+  metadata, unsafe legacy entries/permissions, a dangling list and an oversized derivative read.
+- At `96059c1dea`: typecheck and **218 tests in 15 files passed**, including migration, API/model/account behavior,
+  launch/assignment goldens, instruction writes, architecture and environment boundaries. Clean-source receipt:
+  `.harness/validation/20261115T112927.792648Z-75543/receipt.json` in the continuation worktree.
+- A trusted API directory created with ambient modes failed under umask `0002` before fixture correction; **80 tests
+  passed afterward**. Store's legacy fixture now also uses `0700`, its key document `0600`.
+- At `b0f3fde523`: **19 lean-bundle tests passed**; both selected Store-at-boot cases (killed and hung) passed in
+  **98.2 s** with `E2E_BUNDLE=1` (the other three cases were filtered, not run).
+- The final stat-reuse optimization below: **90 API/migration/launch-note tests passed under umask `0002`**, and
+  typecheck passed. It adds no import or runtime state; the bundle boundary is unchanged.
+- `git diff --check` passed; `scripts/local-checks.py --run --base aad8dcd535` selects no local coverage gate.
+
+Independent review found no remaining runtime correctness defect. It checked migration, rollback, damaged/unsafe
+files, linked metadata, failure recovery, public replies and the core's import boundary. Root independently reviewed
+the final stat guard. Linux PR CI and native Windows remain unverified; Windows filesystem/root behavior passed in
+simulation. This evidence is not a claim that those platforms or CI ran.
+
+The core still imports `apiConnectionMetadata.ts` (metadata schema, zod, existing `secureState`) and
+`apiInstructions.ts` (the eligible project's note). It does **not** import `apiConnections.ts` or the key schema/reader.
+A launch reads only the checked metadata list, at most 100 rows / 1 MiB. Until 2026-12-15 the missing-list fallback
+stats the legacy key document and never opens it. Tests prove that a launch still works with the key file unreadable,
+and that the fallback reads no file contents. There is no timer, watcher or service dependency added. This step
+removes keys from core reads; moving the remaining saved-API note/schema knowledge out of core is not done here.
+
+The core closure remains **539 files**, **92,691 → 92,737 lines** against main `aad8dcd535` (both steps combined).
+
+### Launch-read performance
+
+Measured the old launch read (`ApiConnectionMetadata.list().length > 0`) against `saved()`, same private fixture
+files and Node 24.22.2 process, nine rounds of 1,000 calls, alternating order, after warm-up. Other workers paused
+compilers/tests. Values below are median per-call wall time across the nine batches, not request p95.
+
+The first profile found a small-store regression from reopening a directory just checked by `lstat`: an empty list
+49.28 → 67.01 µs and one API 62.37 → 75.19 µs. Syscall profiling identified that directory open, fstat and close.
+The final code reuses **this read's** fresh stat only for a real, owned `0700` POSIX directory. Legacy permissions,
+unsafe owners and Windows still use the existing checked helper. Every leaf-file check remains. Nothing is cached.
+
+| Fixture | Before µs | Final µs | Before CPU µs | Final CPU µs |
+| --- | ---: | ---: | ---: | ---: |
+| No API directory | 4.98 | 5.11 | 5.33 | 5.23 |
+| Existing empty list | 48.26 | 44.02 | 49.38 | 46.99 |
+| 1 API, 64-byte key | 61.85 | 51.12 | 63.73 | 51.48 |
+| 10 APIs, 64-byte keys | 110.91 | 77.17 | 110.87 | 77.24 |
+| 100 APIs, 64-byte keys | 610.78 | 343.03 | 610.71 | 342.84 |
+| 100 APIs, 8,192-byte keys | 1,965.40 | 338.92 | 1,968.62 | 338.86 |
+
+CPU cost fell for every fixture; all existing-store wall times improved. The absent-directory wall difference is
++0.14 µs, while its CPU cost decreased; the initial run showed the opposite small wall difference. That path does
+not enter the optimization. No claim that every wall-time sample improved is made. At the largest fixture, a launch
+reads **17,409 metadata bytes instead of 837,809 bytes containing keys**.
+
+Baseline `aad8dcd535`, final runtime `803bd2f17f`. Raw reports, syscall profiles, test logs and the standalone reproducer
+are listed in `/tmp/core-refactor-secrets-final-handoff.md`; the final benchmark took 34.1 s. No remote run, push,
+merge, release or live-daemon operation was performed by this continuation.
+
+## Step 3, security 7: keys the core holds without need
+
+Still open: a grid's API key on the registry row and in each stopped agent's file (`lib/registry.ts`,
+`lib/stoppedAgents.ts`), and a connected service's secret through the core in the clear (`lib/connectors/vaultOps.ts`).
+Main already removed the process-environment cache and unused OpenRouter key in #4327; the continuation preserves it.
+
+## Step 4, security 6: what models, the Store and shared machines may set
+
+Not started: launch arguments, environment and files from models, the Store and shared machines are checked for shape
+only (`core/modelsLink.ts`, `storeLink.ts`, `sharedMachinesLink.ts`). Each link enforces a declared allowlist.

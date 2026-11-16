@@ -511,7 +511,7 @@ export function createProductUsage(deps: ProductUsageDeps) {
       if (!['created', 'failed', 'refused', 'cancelled', 'unconfirmed'].includes(signal.phase)) return
       launch.done = true
       add(`launch_${signal.phase}` as ProductUsageMetric)
-      // Agents' and Swarms' launches, counted again: since Oct 21 there are many more of them, and they moved a rate
+      // Agents' launches, counted again: since Oct 21 there are many more of them, and they moved a rate
       // people read as a person's. A person's own are the total less these.
       if (launch.agent && ['created', 'failed', 'refused'].includes(signal.phase)) add(`launch_agent_${signal.phase}` as ProductUsageMetric)
       if (launch.hachi && ['created', 'failed', 'refused'].includes(signal.phase)) add(`launch_hachi_${signal.phase}_${launch.hachi}` as ProductUsageMetric)

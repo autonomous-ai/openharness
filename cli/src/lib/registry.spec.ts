@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { processLockIdentity, processStartMarker } from './processLiveness.js'
@@ -125,7 +125,7 @@ describe('registry remote display names', () => {
     expect(projectDisplayName(registry.bySession('session-1')!)).toBe('Fix the login test')
   })
 
-  // Task #2920: the agent frame says which names a person chose, so Desktop can send those to the Swarm and never an
+  // Task #2920: the agent frame says which names a person chose, so Desktop can send those on and never an
   // engine's session title.
   it('says a name was chosen by a person only for a rename, and keeps saying so after a restart', async () => {
     const transcriptPath = join(dataDir, 'session-1.jsonl')
@@ -696,8 +696,6 @@ describe('registry remote display names', () => {
       at('swarm-ask', '%55', { swarmSkill, permissionMode: 'ask' }),
     ]
     writeFileSync(join(dataDir, 'registry.json'), JSON.stringify(saved), { mode: 0o600 })
-    // The later Auto-approve sweep has run (its own test is below): this one reads the forced-mode sweep alone.
-    writeFileSync(join(dataDir, 'registry-swarm-auto'), '1')
     // As a machine upgrading from a build before the sweep: no marker yet.
     rmSync(join(dataDir, 'registry-own-modes'), { force: true })
 
@@ -722,31 +720,27 @@ describe('registry remote display names', () => {
     expect([later.byAgent('swarm-full')?.permissionMode, later.byAgent('swarm-full')?.bypassPermission]).toEqual(['full', true])
   })
 
-  // A Swarm agent starts in Auto-approve since 2026-11-12 (anh Dee). One started between task #4215 and then has no mode, and a
-  // restart or restore reapplies none: a PM stood still before each tool, and Codex refused every ask to leave its sandbox.
-  it('gives, once, Auto-approve to each saved Claude Code or Codex Swarm agent with no mode, and keeps every recorded mode', async () => {
-    const { registry } = await loadRegistryModule()
+  // The Swarm was deleted on 2026-11-14; a row an older build saved may still name its role. One the Swarm started with no
+  // mode comes back in Auto-approve (it had that mode since 2026-11-12), so neither discovery reading a pane Harness started
+  // in full mode, nor a restart, decides its mode; a person's own agent keeps its own default, and a recorded mode stays.
+  it('gives Auto-approve to a saved Claude Code or Codex agent the Swarm started with no mode, once, and keeps every other', async () => {
+    const { registry, strictPersistedRow } = await loadRegistryModule()
     registry.load()
     registry.openProcessAgent({ agentId: 'template', engine: 'claude', tmuxPane: '%60', processIdentity: processIdentity(960) })
     const [row] = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))
     const at = (agentId: string, pane: string, fields: Record<string, unknown>) => ({ ...row, agentId, sessionId: '', processIdentity: null,
       tmuxPane: pane, runtimes: [{ backend: 'tmux', paneId: pane }], primaryRuntimeKey: `tmux\u0000${pane}`, ...fields })
     const lead = { role: 'lead', key: 'swarm-lead' }, dev = { role: 'dev', key: 'swarm-dev' }
-    const saved = [
+    writeFileSync(join(dataDir, 'registry.json'), JSON.stringify([
       at('pm', '%61', { swarmSkill: lead, startedBy: 'agent', bypassPermission: false }),
       at('codex-builder', '%62', { engine: 'codex', swarmSkill: dev, startedBy: 'agent' }),
       at('swarm-ask', '%63', { swarmSkill: dev, startedBy: 'agent', permissionMode: 'ask', bypassPermission: false }),
       at('own', '%64', { bypassPermission: false }),
       at('opencode-swarm', '%65', { engine: 'opencode', swarmSkill: dev, startedBy: 'agent' }),
-      // A person's own agents attached to a Swarm (superTabs/inCore/adoption.ts): one they started, one another harness did.
+      // A person's own agents attached to a Swarm: one they started, one another harness did.
       at('attached', '%66', { engine: 'codex', swarmSkill: dev }),
       at('attached-child', '%67', { swarmSkill: dev, startedBy: 'agent', parentAgentId: 'parent' }),
-    ]
-    writeFileSync(join(dataDir, 'registry.json'), JSON.stringify(saved), { mode: 0o600 })
-    // As a machine upgrading from a build before this sweep, which already ran the forced-mode one.
-    writeFileSync(join(dataDir, 'registry-own-modes'), '1')
-    rmSync(join(dataDir, 'registry-swarm-auto'), { force: true })
-
+    ]), { mode: 0o600 })
     const { registry: reloaded } = await loadRegistryModule()
     reloaded.load()
     const modeOf = (registered: typeof reloaded, id: string) => [registered.byAgent(id)?.permissionMode, registered.byAgent(id)?.bypassPermission]
@@ -755,9 +749,8 @@ describe('registry remote display names', () => {
     for (const id of ['own', 'opencode-swarm', 'attached', 'attached-child']) expect(reloaded.byAgent(id)?.permissionMode, id).toBeUndefined()
     const persisted = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8')) as Array<Record<string, unknown>>
     expect(persisted.find(entry => entry.agentId === 'pm')).toMatchObject({ permissionMode: 'auto', bypassPermission: true })
-    expect(existsSync(join(dataDir, 'registry-swarm-auto'))).toBe(true)
-
-    // Once: a Swarm agent a person later sets to no mode keeps it.
+    expect(persisted.filter(entry => 'swarmSkill' in entry)).toEqual([])
+    // Once: with the role gone from the file, a mode its person later takes away stays away.
     writeFileSync(join(dataDir, 'registry.json'), JSON.stringify(persisted.map(entry => {
       if (entry.agentId !== 'pm') return entry
       const { permissionMode: _mode, ...rest } = entry
@@ -766,34 +759,16 @@ describe('registry remote display names', () => {
     const { registry: later } = await loadRegistryModule()
     later.load()
     expect(later.byAgent('pm')?.permissionMode).toBeUndefined()
+    // A stopped one an older build saved comes back the same way when it is opened (lib/stoppedAgents.ts reads it so).
+    expect(strictPersistedRow({ ...at('stopped', '%68', { swarmSkill: lead, startedBy: 'agent' }), active: false })).toMatchObject({ permissionMode: 'auto', bypassPermission: true })
   })
 
-  // A machine upgrading from before task #4215 runs both sweeps on one load: full mode Harness forced is cleared first, then
-  // the Swarm agent is given Auto-approve, and a person's own full mode is kept.
-  it('runs both sweeps on one load: a forced full mode becomes Auto-approve, a person\'s own full mode stays', async () => {
-    const { registry } = await loadRegistryModule()
-    registry.load()
-    registry.openProcessAgent({ agentId: 'template', engine: 'claude', tmuxPane: '%70', processIdentity: processIdentity(970) })
-    const [row] = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))
-    const at = (agentId: string, pane: string, fields: Record<string, unknown>) => ({ ...row, agentId, sessionId: '', processIdentity: null,
-      tmuxPane: pane, runtimes: [{ backend: 'tmux', paneId: pane }], primaryRuntimeKey: `tmux\u0000${pane}`, ...fields })
-    writeFileSync(join(dataDir, 'registry.json'), JSON.stringify([
-      at('swarm-full', '%71', { swarmSkill: { role: 'lead', key: 'swarm-lead' }, startedBy: 'agent', permissionMode: 'full', bypassPermission: true }),
-      at('own-full', '%72', { permissionMode: 'full', bypassPermission: true }),
-    ]), { mode: 0o600 })
-    for (const marker of ['registry-own-modes', 'registry-swarm-auto']) rmSync(join(dataDir, marker), { force: true })
-    const { registry: reloaded } = await loadRegistryModule()
-    reloaded.load()
-    expect([reloaded.byAgent('swarm-full')?.permissionMode, reloaded.byAgent('swarm-full')?.bypassPermission]).toEqual(['auto', true])
-    expect([reloaded.byAgent('own-full')?.permissionMode, reloaded.byAgent('own-full')?.bypassPermission]).toEqual(['full', true])
-  })
-
-  it('marks both sweeps done on a machine with no saved agents yet, so a later load changes nothing', async () => {
+  it('marks the sweep done on a machine with no saved agents yet, so a later load changes nothing', async () => {
     rmSync(join(dataDir, 'registry.json'), { force: true })
-    for (const marker of ['registry-own-modes', 'registry-swarm-auto']) rmSync(join(dataDir, marker), { force: true })
+    rmSync(join(dataDir, 'registry-own-modes'), { force: true })
     const { registry } = await loadRegistryModule()
     registry.load()
-    for (const marker of ['registry-own-modes', 'registry-swarm-auto']) expect(existsSync(join(dataDir, marker)), marker).toBe(true)
+    expect(existsSync(join(dataDir, 'registry-own-modes'))).toBe(true)
   })
 
   it('repairs a Codex parent registry entry overwritten with a child rollout', async () => {
@@ -1791,6 +1766,87 @@ describe('agent identity: the process owns the agent, the session is bound to it
     }
   })
 
+  it('takes the gateway a hook reports for Claude Code, OpenCode and Hermes, keeps it through a hook that says nothing, and leaves Codex\'s to its argv', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const claude = { launcherId: 'agent-1', sessionId: 's1', transcriptPath: transcript('s1'), tmuxPane: '%1', cwd: '/tmp/demo' }
+    expect(registerProcess(registry, { ...claude, gateway: 'ori' })?.entry.gateway).toBe('ori')
+    // An older hook, or one that did not say: the row keeps what the last one said.
+    expect(registerProcess(registry, claude)?.entry.gateway).toBe('ori')
+    expect(registerProcess(registry, { ...claude, gateway: null })?.entry.gateway).toBeNull()
+    for (const [engine, pane] of [['opencode', '%2'], ['hermes', '%3']] as const) {
+      expect(registerProcess(registry, { engine, sessionId: `${engine}-1`, tmuxPane: pane, cwd: '/tmp/demo', gateway: 'ori' })?.entry.gateway).toBe('ori')
+    }
+    // Codex's argv says it, and its hook never speaks over that.
+    registry.openProcessAgent({ engine: 'codex', tmuxPane: '%4', cwd: '/tmp/demo', processIdentity: processIdentity(104), gateway: 'ori' })
+    const rollout = join(dataDir, 'sessions', 'rollout-codex-1.jsonl')
+    mkdirSync(join(rollout, '..'), { recursive: true })
+    writeFileSync(rollout, JSON.stringify({ type: 'session_meta', payload: { id: 'codex-1', cwd: '/tmp/demo', source: 'cli' } }) + '\n')
+    expect(registry.register({ engine: 'codex', sessionId: 'codex-1', transcriptPath: rollout, tmuxPane: '%4', cwd: '/tmp/demo',
+      processIdentity: processIdentity(104), gateway: null })?.entry.gateway).toBe('ori')
+  })
+
+  it('fills a Codex row\'s home from its hook when the transcript is under it, and from nothing else', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const profile = mkdtempSync(join(tmpdir(), 'adapter-codex-profile-'))
+    const other = mkdtempSync(join(tmpdir(), 'adapter-codex-other-'))
+    const rollout = (home: string, id: string): string => {
+      const file = join(home, 'sessions', `rollout-${id}.jsonl`)
+      mkdirSync(join(file, '..'), { recursive: true })
+      writeFileSync(file, JSON.stringify({ type: 'session_meta', payload: { id, cwd: '/tmp/demo', source: 'cli' } }) + '\n')
+      return file
+    }
+    // A Codex discovery found in a pane, with no home of its own on the row.
+    let pid = 900
+    const discovered = (id: string, transcriptPath: string, codexHome: string) => {
+      const pane = `%${++pid}`
+      registry.openProcessAgent({ engine: 'codex', tmuxPane: pane, cwd: '/tmp/demo', processIdentity: processIdentity(pid) })
+      return registry.register({ engine: 'codex', sessionId: id, transcriptPath, tmuxPane: pane, cwd: '/tmp/demo',
+        processIdentity: processIdentity(pid), codexHome })
+    }
+    try {
+      const under = discovered('s-under', rollout(profile, 's-under'), profile)
+      expect(under?.entry.codexHome).toBe(profile)
+      expect(under?.refusedHome).toBeUndefined()
+      // The transcript is under the daemon's own home: the session binds, and the home it named is not taken.
+      const elsewhere = discovered('s-elsewhere', rollout(dataDir, 's-elsewhere'), profile)
+      expect(elsewhere?.entry.sessionId).toBe('s-elsewhere')
+      expect(elsewhere?.entry.codexHome).toBeNull()
+      expect(elsewhere?.refusedHome).toBe(true)
+      // The daemon's own home (CODEX_HOME, which exists), named another way: no home, and nothing refused.
+      const link = join(other, 'default-link')
+      symlinkSync(dataDir, link)
+      for (const [n, named] of [`${dataDir}/`, link].entries()) {
+        const own = discovered(`s-own-${n}`, rollout(dataDir, `s-own-${n}`), named)
+        expect(own?.entry.codexHome).toBeNull()
+        expect(own?.refusedHome).toBeUndefined()
+      }
+      // A home whose sessions folder is no folder cannot hold the registration up.
+      const broken = join(other, 'broken')
+      mkdirSync(broken)
+      writeFileSync(join(broken, 'sessions'), '')
+      const unreadable = discovered('s-broken', rollout(dataDir, 's-broken'), broken)
+      expect(unreadable?.entry.sessionId).toBe('s-broken')
+      expect(unreadable?.entry.codexHome).toBeNull()
+      expect(unreadable?.refusedHome).toBe(true)
+      // A row that has a home keeps it.
+      registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%99' }], cwd: '/tmp/demo', codexHome: profile })
+      const kept = registry.register({ engine: 'codex', sessionId: 's-kept', transcriptPath: rollout(profile, 's-kept'), tmuxPane: '%99',
+        cwd: '/tmp/demo', processIdentity: processIdentity(999), codexHome: other })
+      expect(kept?.entry.codexHome).toBe(profile)
+      expect(kept?.refusedHome).toBeUndefined()
+      // Claude Code has no such home.
+      const claude = registerProcess(registry, { launcherId: 'claude-1', sessionId: 'c1', transcriptPath: transcript('c1'), tmuxPane: '%1',
+        cwd: '/tmp/demo', codexHome: profile })
+      expect(claude?.entry.codexHome).toBeNull()
+      expect(claude).not.toHaveProperty('refusedHome')
+    } finally {
+      rmSync(profile, { recursive: true, force: true })
+      rmSync(other, { recursive: true, force: true })
+    }
+  })
+
   it('never registers a delegated Codex session, agreeing with the hook server\'s admission', async () => {
     const { registry } = await loadRegistryModule()
     const { admitHook } = await import('../engines/hooks.js')
@@ -2135,7 +2191,7 @@ describe('registry across a reboot and pane loss', () => {
     expect(bound?.entry.subscriptionModel).toBe('opus')
   })
 
-  // Task #3395 (anh Dee, 11-05): a Product Manager launched on Opus at xhigh came back on its engine's own default once
+  // Task #3395 (anh Dee, 11-05): an agent launched on Opus at xhigh came back on its engine's own default once
   // its session was reopened, since the launch's flags were for the first launch alone.
   it('keeps the launch model across a reload and a hook bind, replaced by its setter and gone with its engine', async () => {
     const { registry } = await loadRegistryModule()
@@ -2259,7 +2315,7 @@ describe('registry across a reboot and pane loss', () => {
     expect(registry.setBrowser('nobody', false)).toBeNull()
   })
 
-  // A fresh move's remembered conversation went with the v3 Buddy's model switch (#3901): a row an older release saved with
+  // A fresh move's remembered conversation went with a retired model switch (#3901): a row an older release saved with
   // one loads without it, and its agent's moves reopen its own conversation (core/agents/retarget.ts).
   it('loads a row saved with a remembered subscription session without it', async () => {
     const { registry } = await loadRegistryModule()
@@ -2276,52 +2332,22 @@ describe('registry across a reboot and pane loss', () => {
     expect(reloaded.byAgent('agent-1')).not.toHaveProperty('subscriptionSessionId')
   })
 
-  it('fills an old supported session role once and persists it through reload', async () => {
-    const { registry } = await loadRegistryModule(); registry.load()
-    const pending = registry.openPendingAgent({ engine: 'claude', cwd: dataDir, runtimes: [{ backend: 'tmux', paneId: '%21' }] })!
-    const skill = { role: 'coordinator' as const, key: pending.agentId }
-    expect(registry.setSwarmSkill('missing', skill)).toBe(false)
-    expect(registry.setSwarmSkill(pending.agentId, skill)).toBe(true)
-    expect(registry.setSwarmSkill(pending.agentId, { role: 'agent', key: 'replacement' })).toBe(false)
-    const { registry: reloaded } = await loadRegistryModule(); reloaded.load()
-    expect(reloaded.byAgent(pending.agentId)?.swarmSkill).toEqual(skill)
-    const other = reloaded.openPendingAgent({ engine: 'opencode', cwd: dataDir, runtimes: [{ backend: 'tmux', paneId: '%22' }] })!
-    expect(reloaded.setSwarmSkill(other.agentId, skill)).toBe(false)
-  })
-
-  it('preserves Swarm role and runtime key across hooks and reload', async () => {
-    const { registry } = await loadRegistryModule()
-    registry.load()
-    const swarmSkill = { role: 'agent' as const, key: 'harness-claude-worker' }
-    const pending = registry.openPendingAgent({ engine: 'claude', cwd: dataDir,
-      runtimes: [{ backend: 'tmux', paneId: '%21' }], swarmSkill })!
-    const transcriptPath = join(dataDir, 'swarm.jsonl')
-    writeFileSync(transcriptPath, '{}\n')
-    expect(registry.register({ engine: 'claude', sessionId: 'swarm', transcriptPath, cwd: dataDir, tmuxPane: '%21' })?.entry.swarmSkill).toEqual(swarmSkill)
-    const { registry: reloaded } = await loadRegistryModule()
-    reloaded.load()
-    expect(reloaded.byAgent(pending.agentId)?.swarmSkill).toEqual(swarmSkill)
-    expect(reloaded.releaseEngine(pending.agentId, true)?.swarmSkill).toBeUndefined()
-  })
-
-  // Project instructions, phase 4 (decision 1): a row an older CLI saved names its Swarm role in the wire's values, and
-  // the skill mode it kept is read as nothing (the modes are gone, PM 2026-11-11).
-  it('reads a Swarm role an older CLI saved as this release keeps it, on load and from a stopped harness\'s row', async () => {
+  // The Swarm was deleted on 2026-11-14: a row a build before that saved may still name its Swarm role. It loads as any row, and
+  // the role is dropped, from the registry's own rows and from a stopped harness's.
+  it('drops the Swarm role a row from an older build saved, on load and from a stopped harness\'s row', async () => {
     const { registry, strictPersistedRow } = await loadRegistryModule()
     registry.load()
-    const pending = registry.openPendingAgent({ engine: 'claude', cwd: dataDir, runtimes: [{ backend: 'tmux', paneId: '%23' }],
-      swarmSkill: { role: 'agent', fallback: 'review', key: 'reviewer' } })!
+    const pending = registry.openPendingAgent({ engine: 'claude', cwd: dataDir, runtimes: [{ backend: 'tmux', paneId: '%23' }] })!
     const file = join(dataDir, 'registry.json')
     const row = (JSON.parse(readFileSync(file, 'utf8')) as Array<Record<string, unknown>>).find(r => r.agentId === pending.agentId)!
-    expect(row.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: 'reviewer' })
-    const older = { ...row, swarmSkill: { role: 'review', key: 'reviewer', mode: 'default' } }
-    expect(strictPersistedRow(older)?.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: 'reviewer' })
-    expect(strictPersistedRow({ ...row, swarmSkill: { role: 'lead', key: 'pm' } })?.swarmSkill).toEqual({ role: 'coordinator', key: 'pm' })
-    expect(strictPersistedRow({ ...row, swarmSkill: { role: 'pm', key: 'pm' } })).not.toHaveProperty('swarmSkill')
+    const older = { ...row, swarmSkill: { role: 'agent', fallback: 'review', key: 'reviewer' } }
+    expect(strictPersistedRow(older)).toEqual(strictPersistedRow(row))
+    expect(strictPersistedRow(older)).not.toHaveProperty('swarmSkill')
     writeFileSync(file, JSON.stringify([older]), { mode: 0o600 })
     const { registry: reloaded } = await loadRegistryModule()
     reloaded.load()
-    expect(reloaded.byAgent(pending.agentId)?.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: 'reviewer' })
+    expect(reloaded.byAgent(pending.agentId)).toMatchObject({ agentId: pending.agentId, cwd: dataDir })
+    expect(reloaded.byAgent(pending.agentId)).not.toHaveProperty('swarmSkill')
   })
 
   it('keeps strict conversation resume after the engine binds and the daemon reloads', async () => {

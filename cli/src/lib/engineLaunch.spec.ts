@@ -820,7 +820,7 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
     // The Team-written mode went with Team accounts (backend #3872): no engine has it.
     expect(permissionModeFlags('claude', 'teamWritten')).toBeNull()
     expect(permissionModeFlags('codex', 'teamWritten')).toBeNull()
-    // An older Buddy's saved mode is no mode: the registry clears it on load (task #4215).
+    // An older release's saved `buddy` mode is no mode: the registry clears it on load (task #4215).
     expect(permissionModeFlags('claude', 'buddy')).toBeNull()
     expect(permissionModeFlags('codex', 'readOnlyAsk')).toBeNull()
     expect(buildEngineCommandArgv('codex', { permissionMode: 'full' }))

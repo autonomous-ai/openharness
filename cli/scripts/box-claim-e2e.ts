@@ -20,6 +20,8 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
+import { backendListeningPortIn } from '../src/testing/backendListeningPort.js'
+import { readDaemonRecord } from '../src/lib/daemonRecord.js'
 
 if (process.env.HARNESS_BOX_E2E !== '1') throw new Error('Opt in with HARNESS_BOX_E2E=1')
 const servicesDir = process.env.HARNESS_E2E_SERVICES_DIR
@@ -47,6 +49,8 @@ async function until(label: string, ok: () => Promise<unknown>, ms = 30_000): Pr
   }
   throw new Error(`Timed out: ${label}; logs: ${root}`)
 }
+/** A box daemon's configured PORT, which names its socket and its record. The port it binds is read from that record:
+ *  a pick handed over and then trusted could be taken before the bind (cli-e2e run 43568618113, shard 2). */
 async function freePort(): Promise<number> {
   const server = netServer()
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
@@ -55,6 +59,7 @@ async function freePort(): Promise<number> {
   return port
 }
 
+/** `port` is the daemon's configured PORT, not the port it bound (daemonStatus reads that). */
 interface Box { name: string; home: string; port: number; computerId: string; env: NodeJS.ProcessEnv }
 let cli = ''
 
@@ -100,8 +105,13 @@ function result(stdout: string): Record<string, unknown> {
   }
   return {}
 }
-const daemonStatus = async (box: Box) =>
-  (await (await fetch(`http://127.0.0.1:${box.port}/api/status`)).json()) as { machineId?: string; connected?: boolean; signedIn?: boolean }
+/** Read on every call: `harness start` starts the daemon and a sign-in starts it again, and a start that finds its port
+ *  taken binds another and records it. */
+async function daemonStatus(box: Box): Promise<{ machineId?: string; connected?: boolean; signedIn?: boolean }> {
+  const port = readDaemonRecord(join(box.home, 'data'), box.port)?.port
+  if (port === undefined) throw new Error(`${box.name}'s daemon has not recorded its port yet`)
+  return (await (await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(5_000) })).json()) as { machineId?: string; connected?: boolean; signedIn?: boolean }
+}
 const session = (box: Box) => JSON.parse(readFileSync(join(box.home, 'auth', 'session.json'), 'utf8')) as Record<string, unknown>
 
 let failed = true
@@ -129,11 +139,10 @@ try {
   await new Promise<void>((done) => sso.listen(0, '127.0.0.1', done))
   cleanups.push(() => new Promise((done) => sso.close(done)))
 
-  const [backendPort, proxyPort] = await Promise.all([freePort(), freePort()])
   const mongoUri = new URL(mongo.getUri('harness'))
   mongoUri.searchParams.set('directConnection', 'true')
   const backendEnv = {
-    ...process.env, NODE_ENV: 'test', PORT: String(backendPort), PORT_APP_PROXY: String(proxyPort),
+    ...process.env, NODE_ENV: 'test', PORT: '0', PORT_APP_PROXY: '0',
     DATABASE_URL: mongoUri.toString(), REDIS_URL: `redis://127.0.0.1:${redisPort}`,
     HARNESS_BILLING_ENABLED: 'false', MESH_ENABLED: 'false', TERMINAL_P2P_ROLLOUT_PERCENT: '0',
     SSO_PROFILE_URL: `http://127.0.0.1:${(sso.address() as { port: number }).port}/profile`, SSO_IDENTITY_URL: '',
@@ -147,9 +156,16 @@ try {
   backend.stdout!.pipe(backendLog)
   backend.stderr!.pipe(backendLog)
   children.push(backend)
+  // The backend binds a port of the system's choosing and logs it: a port picked here could be taken before the
+  // backend bound it (cli-e2e run 43568618113, shard 2). Ready, not only alive: /api/health answers before its Redis
+  // is connected (cli/e2e/harness/realBackend.ts).
+  const boundPort = () => backendListeningPortIn(join(root, 'backend.log'))
+  await until('backend readiness', async () => {
+    const port = boundPort()
+    return port !== null && (await fetch(`http://127.0.0.1:${port}/api/ready`, { signal: AbortSignal.timeout(5_000) })).ok
+  }, 90_000)
+  const backendPort = boundPort()!
   const api = `http://127.0.0.1:${backendPort}`
-  // Ready, not only alive: /api/health answers before its Redis is connected (cli/e2e/harness/realBackend.ts).
-  await until('backend readiness', async () => (await fetch(`${api}/api/ready`, { signal: AbortSignal.timeout(5_000) })).ok, 90_000)
   pass('backend up on in-memory Mongo + Redis')
 
   /** The phone: a signed-in account calling the backend. */

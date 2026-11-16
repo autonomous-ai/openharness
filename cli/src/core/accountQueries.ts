@@ -4,9 +4,11 @@
  * - `access_token`: a token, refreshed once when the asker says the last one was refused with a 401;
  * - `lane`: one step of the fleet's lane's sealing (`LaneSeal`), which the gateway does with this
  *   machine's E2EE identity (gateway/lane.ts).
- * The core answers them only for the services it names (core/main.ts): the gateway asks for tokens, and the
- * process that runs the fleet asks for both. The process's side is services/accountLink.ts.
+ * The core answers them only for the services it names (core/main.ts): the process that runs the fleet asks for both.
+ * A token the core asks of the gateway itself, which renews the sign-in (core/gatewayLink.ts). The process's side is
+ * services/accountLink.ts.
  */
+import { tokenAnswer, tokenOptionsOf } from '../lib/authSession.js'
 import type { CoreApi } from './api.js'
 
 type Payload = Record<string, unknown>
@@ -20,11 +22,7 @@ const record = (value: unknown): Payload => (value && typeof value === 'object' 
  *  refreshed just now. */
 export async function answerAccountQuery(account: Account, query: string, payload: Payload): Promise<Payload | null> {
   if (query === 'access_token') {
-    try {
-      return { token: await account.accessToken({ force: payload.force === true, ...(typeof payload.failedToken === 'string' ? { failedToken: payload.failedToken } : {}) }) }
-    } catch (error) {
-      return { code: text((error as { code?: unknown }).code) || 'UNAVAILABLE', message: error instanceof Error ? error.message : String(error) }
-    }
+    return tokenAnswer(() => account.accessToken(tokenOptionsOf(payload)))
   }
   if (query !== 'lane') return null
   const machineId = text(payload.machineId)

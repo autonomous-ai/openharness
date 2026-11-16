@@ -16,6 +16,12 @@ import {
 // computer use's default leaves OpenCode's own config alone (agentClient/computerUse.ts applyOpencode).
 const child = vi.hoisted(() => ({ execFile: vi.fn(), spawn: vi.fn(), execFileSync: vi.fn(() => { throw new Error('no opencode here') }) }))
 vi.mock('node:child_process', () => child)
+// The sign-in's child goes through spawnTied, which takes the tied path where its file exists and the plain one where it
+// does not (/usr/bin/gh is on the Linux runner, not on a Mac): handed to the same fake, every case reads alike on both.
+vi.mock('../lib/tied.js', async (real) => ({
+  ...await real<typeof import('../lib/tied.js')>(),
+  spawnTied: (...args: unknown[]) => child.spawn(...args),
+}))
 // Harness OS's computer-use tools are files under /usr/lib/harness-os, on no test machine: a test may say they are there.
 vi.mock('../agentClient/computerUse.js', async (real) => {
   const actual = await real<typeof import('../agentClient/computerUse.js')>()

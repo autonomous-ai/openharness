@@ -48,11 +48,6 @@ const Set<String> encryptedDownTypes = {
   'agent_update',
   'agent_files',
   'agent_read_file',
-  // An agent's instructions file, read and saved from another of the owner's
-  // computers (CLI services/projects.ts): the text is the person's own, so the
-  // relay sees none of it. `MACHINE_REQUESTS` types in the CLI.
-  'agent_instructions_read',
-  'agent_instructions_write',
   'fs_list_dir',
   'project_preview',
   // The branches of a folder on that machine, for the New Harness form
@@ -86,9 +81,6 @@ const Set<String> encryptedDownTypes = {
   // A Harness OS computer managed from here (`AppNotifier.osDevice`, CLI services/osDevice.ts): its
   // update, and its Wi-Fi with the password. A `MACHINE_REQUESTS` type in the CLI.
   'os_device',
-  // Swarm (`AppNotifier.swarmRequest`, CLI superTabs/service.ts): the machine forwards the call to the
-  // backend, and the answer is the Swarm's conversations and decisions. A `MACHINE_REQUESTS` type in the CLI.
-  'super_tabs',
   'codex_profiles_list',
   'codex_profile_link',
   // Asks the machine to read its OWN agent accounts' usage (cli/src/lib/accountUsage.ts). Missing

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { resumeStoppedAgent, waitForResumedAgent } from './resumeStoppedAgent.js'
 import { AgentRestartCoordinator } from './restartAgent.js'
-import type { RuntimeCheck } from './paneEngineProcess.js'
+import { ENGINE_SETTLE_MS, type RuntimeCheck } from './paneEngineProcess.js'
 import type { RegisteredSession } from './registry.js'
 
 const saved = { agentId: 'saved-agent', sessionId: 'original-conversation', engine: 'codex', cwd: '/work', codexHome: '/profile', permissionMode: 'plan' } as RegisteredSession
@@ -178,7 +178,8 @@ describe('exact conversation readiness', () => {
       resumed: true,
       session: { sessionId: saved.sessionId },
     })
-    expect(deps.sleep).not.toHaveBeenCalled()
+    expect(deps.process).toHaveBeenCalledTimes(3)
+    expect(deps.now()).toBe(ENGINE_SETTLE_MS)
   })
   // The one state the budget still exists for: the pane is up and nothing this row would recognise
   // is running in it.
@@ -198,7 +199,8 @@ describe('exact conversation readiness', () => {
       resumed: true,
       session: { sessionId: saved.sessionId },
     })
-    expect(deps.sleep).not.toHaveBeenCalled()
+    expect(deps.process).toHaveBeenCalledTimes(3)
+    expect(deps.now()).toBe(ENGINE_SETTLE_MS)
   })
 
   it('still reports a hookless engine whose pane died', async () => {
@@ -228,6 +230,7 @@ describe('exact conversation readiness', () => {
     deps.pane.mockResolvedValueOnce('unknown')
     await expect(waitForResumedAgent(saved, deps)).resolves.toMatchObject({ ok: true, resumed: true })
     expect(deps.sleep).toHaveBeenCalledWith(250)
+    expect(deps.now()).toBe(250 + ENGINE_SETTLE_MS)
   })
   // A row whose bound conversation is no longer the one being resumed is still refused — that check
   // is on the row, ahead of any proof, and is what `registry.register`'s mismatch guard feeds.
@@ -247,6 +250,41 @@ describe('exact conversation readiness', () => {
     deps.set({ lastHookAt: 100, launch: { state: 'ready' } })
     deps.process.mockImplementation(async () => { deps.current.mockReturnValue(false); return process })
     await expect(waitForResumedAgent(saved, deps)).resolves.toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+  })
+  // A launch the engine refuses (`codex resume` after an update dropped it: Codex exits 2, Claude Code 1) runs for an
+  // instant. Seen in that instant, the resume was called confirmed over a dead engine (e2e/updates.e2e.ts, nightly).
+  it.each(['gone' as const, { dead: true }, { dead: false, engineExit: 2 }])('fails a resume whose engine is seen on one probe and gone on the next: %s', async exited => {
+    const deps = readiness()
+    deps.pane.mockResolvedValueOnce({ dead: false }).mockResolvedValue(exited)
+    await expect(waitForResumedAgent(saved, deps)).resolves.toMatchObject({
+      ok: false, error: 'RESUME_FAILED', detail: expect.stringContaining('exited before confirming the saved conversation'),
+    })
+    expect(deps.process).toHaveBeenCalledTimes(2)
+  })
+  it('starts the settle time again when another process is the pane\'s engine on a later probe', async () => {
+    const deps = readiness()
+    const replacement = { pid: 43, startMarker: 'replacement', executable: 'codex' }
+    deps.process.mockResolvedValueOnce(process).mockResolvedValue(replacement)
+    await expect(waitForResumedAgent(saved, deps)).resolves.toMatchObject({ ok: true, session: { processIdentity: replacement } })
+    expect(deps.now()).toBe(250 + ENGINE_SETTLE_MS)
+  })
+  it('keeps the sighting through a probe that could not find the process', async () => {
+    const deps = readiness()
+    deps.process.mockResolvedValueOnce(process).mockResolvedValueOnce(null).mockResolvedValue({ ...process })
+    await expect(waitForResumedAgent(saved, deps)).resolves.toMatchObject({ ok: true, resumed: true })
+    expect(deps.now()).toBe(ENGINE_SETTLE_MS)
+  })
+  it('reports a failure a hook puts on the row during the settle time, not a confirmation', async () => {
+    const deps = readiness()
+    deps.process.mockResolvedValueOnce(process).mockImplementationOnce(async () => {
+      deps.set({ launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'fixture' } })
+      return process
+    })
+    await expect(waitForResumedAgent(saved, deps)).resolves.toMatchObject({ ok: false, error: 'RESUME_SESSION_MISMATCH', detail: 'fixture' })
+  })
+  it('leaves an engine first seen inside the last settle time of the budget unconfirmed', async () => {
+    const deps = { ...readiness(), budgetMs: ENGINE_SETTLE_MS }
+    await expect(waitForResumedAgent(saved, deps)).resolves.toMatchObject({ ok: false, error: 'RESUME_UNCONFIRMED' })
   })
 })
 
@@ -307,7 +345,7 @@ describe('resume refusal and readiness edge cases', () => {
     const result = await waitForResumedAgent(saved, {
       current: () => mode !== 'cancelled', session: () => row,
       process: async () => mode === 'no process' ? null : process, pane: async () => ({ dead: false }),
-      sleep: async ms => { time += ms }, now: () => time, budgetMs: 250,
+      sleep: async ms => { time += ms }, now: () => time, budgetMs: 1000,
     })
     // `different start` is a row whose recorded identity is stale, not a pane with nothing in it:
     // the engine process is there, which is the proof, and discovery re-reads the identity anyway.

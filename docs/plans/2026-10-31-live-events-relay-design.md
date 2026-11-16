@@ -3,8 +3,8 @@
 Status: design, 2026-10-31. Requested by Ken.
 
 > **Status after the builder check (2026-10-31):** changes 2 (heartbeats) and 4 (slim transcript events) stand and
-> are built on branch `fewer-relay-frames` (2026-10-31; not released). Changes 1 (`swarm_changed`) and 3 (`agent_synced`) are **on hold** for the reasons in "On hold" below;
-> change 1 needs its own design with a client change, which Ken has not yet decided on. Change 5 (TUI-only events not
+> are built on branch `fewer-relay-frames` (2026-10-31; not released). Change 3 (`agent_synced`) is **on hold** for the reasons in "On hold" below.
+> Change 5 (TUI-only events not
 > sent while no terminal app is open) was added on 2026-10-31 at Ken's request and is built on the same branch
 > (backend f90a30727, CLI d8a2b1d0f; not released). Release order: backend first, then the CLI.
 
@@ -13,8 +13,7 @@ Status: design, 2026-10-31. Requested by Ken.
 Every frame a daemon sends its apps away from the computer crosses the backend: the daemon's link is
 `/api/adapter-ws` (`backend/src/lib/adapterWs.ts`, `env.t === 'up'`), which parses it, runs its taps and PUBLISHes it
 to Redis on `up:{machineId}` (`bus.ts` `publishUp`); the instances with clients for the machine stringify it again for
-each socket (`hub.ts` `deliverUpLocal`). The backend's own pushes to apps (`swarm_changed`) go out on every socket of
-every member. Fewer and smaller frames is less backend CPU, Redis traffic, sealing on the daemon and work on the
+each socket (`hub.ts` `deliverUpLocal`). Fewer and smaller frames is less backend CPU, Redis traffic, sealing on the daemon and work on the
 apps' UI threads.
 
 ## What was measured (before)
@@ -25,7 +24,7 @@ the 24 hours. Values in the log are cut, so byte counts understate tool payloads
 
 | Frame | Per day | Share |
 |---|---|---|
-| `swarm_changed` | 54,282 | 31.8% |
+| frames of a feature since removed | 54,282 | 31.8% |
 | `agent_activity` | 32,819 | 19.2% |
 | `turn_heartbeat` | 28,411 | 16.6% |
 | `agent_synced` | 17,099 | 10.0% (about 44% of the logged bytes) |
@@ -35,13 +34,6 @@ the 24 hours. Values in the log are cut, so byte counts understate tool payloads
 
 Findings behind each change:
 
-- **`swarm_changed`**: all 54k are for one Swarm (openharness), one about every second (median gap 1.07 s), at the
-  backend's cap of one push per Swarm a second (`backend/src/lib/swarmClientPushes.ts` `COALESCE_MS`). Their source is
-  each machine's reading every 15 s (`cli/src/superTabs/machines.ts` `MACHINE_HEARTBEAT_MS`): each is a Swarm write
-  that pushes `parts: ['machine']` to every socket of every member (`backend/src/superTabs/store.ts` ~2503); ten
-  machines make about 57,600 a day. Desktop reads a Swarm at most once per its read gap (3 s) and makes a machine-only
-  change wait for that tick anyway (`desktop/lib/super_tabs/controller.dart` `told`), so pushes faster than that buy
-  it nothing.
 - **Heartbeats**: while a turn is open, every 5 s, the daemon sends `agent_activity` and, while working, also
   `turn_heartbeat`, both carrying the same `activity` (`cli/src/core/turns/heartbeats.ts`). Desktop and the terminal
   app read `activity` from any frame that has it (`app_state.dart`, `tui/src/app.rs` `on_frame`); the phone reads only
@@ -71,19 +63,6 @@ is attached about 22 hours a day (his Desktop); and those events are about 19% o
 client is looking at would need every client changed, for at most that 19%.
 
 ## The changes
-
-### 1. `swarm_changed`: a machine's reading pushed at most every 30 s (backend)
-
-Where the server publishes a commit to its people (`announceSwarmChanges`, `backend/src/lib/swarmClientPushes.ts`,
-design call: there it also saves the Redis PUBLISH per person, not only the socket frame), a change whose parts are
-only `machine` goes at once if none went for that Swarm in the last `MACHINE_COALESCE_MS = 30_000`, else waits, merged
-with any others, until that window ends. A change with `main` keeps today's rule (the first at once, the next within
-`COALESCE_MS = 1_000` merged) and carries any held machine part with it, so nothing is told twice. The per-socket
-coalescing in `relaySwarmChanges` and the repeat that keeps apps on pushes (`PUSHES_REPEAT_MS`) are unchanged.
-
-Effect: from about 54,000 to at most about 2,880 machine pushes a day per socket for a Swarm of any size, plus its
-`main` changes. A machine card (CPU, slots, quota) on Desktop, web or phone is at most 30 s behind, against readings
-taken every 15 s.
 
 ### 2. Heartbeats: one per beat, and an unchanged activity not repeated (CLI)
 
@@ -131,7 +110,7 @@ process), a pure `slimForRelay(frame)` (in `cli/src/lib/slimForRelay.ts`: the co
 
 Every one keeps `activity`, `agentId`, `sessionId` and `replay` in its payload; the envelope (`type`, `agentId`,
 `dbSessionId`, `replay`, `subagent`) is never touched. Windows on this computer and everything inside the daemon (the
-dial's cards, recaps, the Swarm, search, the orchestrator, local tool clients) keep the full event. The gateway's
+dial's cards, recaps, search, the orchestrator, local tool clients) keep the full event. The gateway's
 `productUsage.observe` reads only fields the slim frame keeps.
 
 Security: `subagent_finished`, `turn_heartbeat` and `agent_activity` are not in `ENCRYPTED_UP_TYPES`
@@ -173,7 +152,7 @@ as a machine's proof of life (`lastHeardFromMachineAt`); `text_delta` and `tool_
   pings), and publishes an account push `__tui_open` `{ forMs: 180000 }` at most once a minute per account (a second
   key `tui_open_said:{userId}` `SET NX EX 60`), and always on an `open`. It goes through the account channel every
   daemon of the account listens on (`backend/src/lib/adapterAccountPushes.ts`, beside `desk_changed`,
-  `machines_changed`). A team socket (`opts.team`) does not get it.
+  `machines_changed`).
 - On every daemon socket's attach, the backend also says whether one is open now: `__tui_open` `{ forMs: 180000 }` if
   `tui_open:{userId}` exists, else `{ forMs: 0 }`. A zero still says "this server tells you", which is what turns
   the rule on.
@@ -181,8 +160,8 @@ as a machine's proof of life (`lastHeardFromMachineAt`); `text_delta` and `tool_
   `__` frames); a plain name would be refused as plaintext and logged on every push. The newer daemon reads it in
   `backendControl` beside `__clients`.
 - The daemon's gateway keeps `tuiUntil` (`now + forMs` on each `__tui_open`, `null` before it hears one, and `null`
-  again when the link drops). The rule applies only once one was heard: with no word (an older backend, a team
-  account, the link down and not yet re-attached) every event is sent, as today. While `now < tuiUntil` every event
+  again when the link drops). The rule applies only once one was heard: with no word (an older backend, the link
+  down and not yet re-attached) every event is sent, as today. While `now < tuiUntil` every event
   is sent; after, the first three rows of the table are not.
 - A terminal app closed is noticed within 180 s, with no message for it; one opened is noticed at once (its `open`).
   A daemon attaching while one is open hears it at attach.
@@ -194,17 +173,6 @@ events, all kept) and before sealing, so a dropped frame costs no seal and no ba
 still applies to what is sent.
 
 ## On hold (builder check, 2026-10-31)
-
-**Change 1 would show machines late or offline.** Desktop and the web build judge a machine by how old its last
-reading is (now minus `observation.receivedAt`, `desktop/lib/super_tabs/machine_status.dart`): late after 20 s
-(`kSuperTabMachineLateAfter`), offline after 35 s (`kSuperTabMachineOfflineAfter`). Today a reading is at most about
-19 s old when shown (about 1 s of push batching, Desktop's 3 s read gap, a reading every 15 s). Held 30 s, it reaches
-about 48 s: dots flap between late and offline. The same 35 s decides which machines can take a Buddy
-(`buddy_machines.dart`), whether team work can launch (`launch.dart`), and `terminal_unavailable.dart`,
-`agent_mark.dart`, `message_receipt.dart` and the dimming in `machines.dart`. Released apps cannot change those
-thresholds. Any saving here needs its own design: the server judges a machine's freshness and says so, apps stop
-deriving it from read timing, and older apps keep today's pushes. The phone is unaffected either way (it ignores
-`swarm_changed` and reads the Swarm every 5 s on screen, `mobile/lib/swarm/swarm_reader.dart`).
 
 **Change 3 saves little that is safe to drop.** Most identical `agent_synced` come from the deliberate full
 republish every 5 minutes (`cli/src/core/main.ts` ~2617, `RUNTIME_RECONCILE_MS`, "safety passes"), which Desktop and the
@@ -219,7 +187,6 @@ direct ones plus about 40 through `announceSession`.
 
 | Change | Frames a day |
 |---|---|
-| 1. `swarm_changed` | on hold (about -48,000 if it can be done safely) |
 | 2. heartbeats | about -30,000 |
 | 3. `agent_synced` | on hold |
 | 4. transcript events | none fewer; smaller |
@@ -253,14 +220,14 @@ counting `↓` frames by type), written into this document beside the "before" t
 
 ## Results
 
-Counted with `python3 -I scripts/desktop-frame-count.py <Desktop log>` (received `↓` frames by type, the
-`swarm_changed` gap, and each `agent_synced` against the previous one for its agent).
+Counted with `python3 -I scripts/desktop-frame-count.py <Desktop log>` (received `↓` frames by type, and
+each `agent_synced` against the previous one for its agent).
 
-| Log | Window | Frames | `swarm_changed` | `agent_activity` | `turn_heartbeat` | `agent_synced` (identical / activity only, as logged) |
-|---|---|---|---|---|---|---|
-| Before: Ken's Desktop, 2026-10-30 (the table above) | about 22 h open | 170,666 | 54,282 | 32,819 | 28,411 | 17,099 (4,239 / 181) |
-| Before: the build Mac's Desktop, 2026-10-30 | 03:05-17:02 | 161,203 | 40,344 (median gap 1 s) | 22,670 | 18,980 | 59,467 (35,601 / 147) |
-| After | pending: a comparable day after the release | | | | | |
+| Log | Window | Frames | `agent_activity` | `turn_heartbeat` | `agent_synced` (identical / activity only, as logged) |
+|---|---|---|---|---|---|
+| Before: Ken's Desktop, 2026-10-30 (the table above) | about 22 h open | 170,666 | 32,819 | 28,411 | 17,099 (4,239 / 181) |
+| Before: the build Mac's Desktop, 2026-10-30 | 03:05-17:02 | 161,203 | 22,670 | 18,980 | 59,467 (35,601 / 147) |
+| After | pending: a comparable day after the release | | | | |
 
 The build Mac's Desktop had far more identical `agent_synced` (60% of them, against 25% on Ken's): worth weighing if
 change 3 is taken up again. "Identical" is as the log shows them: Desktop logs a frame's first 1,200 characters, each
@@ -269,37 +236,30 @@ and both counts are upper bounds.
 
 ## Design
 
-- **Growth**: one held change per Swarm per socket (backend); one small object per live session and per agent
-  (daemon); all dropped with their session, agent or socket. Change 5: two Redis keys per account with a terminal
+- **Growth**: one small object per live session and per agent (daemon); all dropped with their session, agent or socket. Change 5: two Redis keys per account with a terminal
   app open (150 s and 60 s TTL); one timestamp in each daemon.
-- **Concurrency**: the held machine part is per socket and merged into the next send; the daemon's memories are
-  per process and only decide whether to send.
+- **Concurrency**: the daemon's memories are per process and only decide whether to send.
 - **Read cost**: none added; each change removes work per frame.
-- **Scale**: `swarm_changed` stops growing with the number of machines in a Swarm (30 s per Swarm per socket);
-  heartbeats stop growing with idle sessions. The warning metrics are the frame counts above and backend CPU.
+- **Scale**: heartbeats stop growing with idle sessions. The warning metrics are the frame counts above and backend CPU.
 - **Compatibility**: older Desktop, web, phone and terminal apps read only fields that stay (change 4), keep their
-  working state from `turn_heartbeat` and `activity` (change 2), read the Swarm on their own timers when not told
-  (change 1), and list agents themselves on connect (change 3). An older backend keeps pushing every second; an older
-  daemon keeps sending everything.
+  working state from `turn_heartbeat` and `activity` (change 2), and list agents themselves on connect (change 3). An
+  older daemon keeps sending everything.
 - **Migration and rollback**: none; a rollback restores today's frames.
 - **Audience**: unchanged; `subagent_finished` no longer carries a sub-agent's words in the clear.
 - **Identity**: unchanged.
-- **Failure**: a held machine push lost with its socket is replaced by the app's own read; a heartbeat or
-  `agent_synced` skipped wrongly is corrected by the next change or the next `agents_list`.
+- **Failure**: a heartbeat or `agent_synced` skipped wrongly is corrected by the next change or the next `agents_list`.
 - **Platforms**: daemon and backend, the same everywhere.
 
 ## Tests
 
 - Change 5, backend: a TUI-surface `app_presence` `open` publishes `__tui_open` at once, a `ping` at most once a minute
   per account, never for the desktop surface; `tui_open:{userId}` lives 150 s; an attaching daemon socket hears
-  `__tui_open` with 180,000 when the key exists and 0 when not; a team socket hears neither.
+  `__tui_open` with 180,000 when the key exists and 0 when not.
 - Change 5, CLI gateway: before any `__tui_open` every event is relayed; with `forMs: 0`, or 180 s after the last
   `forMs: 180000`, `tool_end`, `subagent_finished`, `done` and `context_compact` are not enqueued while the others
   (thinking included) are; a link drop resets to "no word"; a guest-sealed copy is always sent; local windows always
   get every event; product usage still observes `text_delta` and turn events.
 
-- Backend: `swarmClientPushes` unit tests: machine-only changes within 30 s give one push; a `main` change goes at once
-  and carries a held machine part; the repeat still goes.
 - CLI: heartbeats unit tests: working sends only `turn_heartbeat` with `activity`; an unchanged waiting activity is
   sent once; a change sends again; a restarted heartbeat sends again.
 - CLI: `sessionSync` unit tests: an identical or activity-only frame is not sent to the apps but still to the dial; any

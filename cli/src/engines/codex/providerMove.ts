@@ -7,8 +7,8 @@
  * destination model in a new conversation. They stay in the new thread's metadata, so the pane's plain `codex resume`
  * needs no extra flags. The history and the source conversation are not touched.
  */
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
+import { spawnTied } from '../../lib/tied.js'
 import gridInstructions from './gridInstructions.json' with { type: 'json' }
 
 const REQUEST_MS = 30_000
@@ -48,9 +48,9 @@ export function appServerArgs(args: readonly string[]): { config: string[]; mode
 async function catalogInstructions(move: CodexMove, slug: string): Promise<string | null> {
   const output = await new Promise<string>((resolve) => {
     const [command, ...args] = move.argv(['debug', 'models', ...appServerArgs(move.args).config])
-    const child = spawn(command!, args, { env: move.env, stdio: ['ignore', 'pipe', 'ignore'] })
+    const child = spawnTied(command!, args, { env: move.env, stdio: ['ignore', 'pipe', 'ignore'] })
     let text = ''
-    child.stdout.on('data', (chunk) => { text += chunk })
+    child.stdout!.on('data', (chunk) => { text += chunk })
     const timer = setTimeout(() => child.kill(), REQUEST_MS)
     child.on('error', () => { clearTimeout(timer); resolve('') })
     child.on('close', () => { clearTimeout(timer); resolve(text) })
@@ -63,14 +63,14 @@ async function catalogInstructions(move: CodexMove, slug: string): Promise<strin
 
 function appServer(move: CodexMove) {
   const [command, ...args] = move.argv(['app-server', ...appServerArgs(move.args).config])
-  const child: ChildProcessWithoutNullStreams = spawn(command!, args, { env: move.env, stdio: ['pipe', 'pipe', 'pipe'] })
+  const child = spawnTied(command!, args, { env: move.env, stdio: ['pipe', 'pipe', 'pipe'] })
   let next = 1
   const waiting = new Map<number, { resolve(result: any): void; reject(error: Error): void }>()
   const fail = (error: Error) => { for (const entry of waiting.values()) entry.reject(error); waiting.clear() }
   child.on('error', fail)
   child.on('exit', () => fail(new Error('Codex exited during the move')))
-  child.stderr.resume()
-  createInterface({ input: child.stdout }).on('line', (line) => {
+  child.stderr!.resume()
+  createInterface({ input: child.stdout! }).on('line', (line) => {
     let message: any
     try { message = JSON.parse(line) } catch { return }
     const entry = typeof message.id === 'number' ? waiting.get(message.id) : undefined
@@ -86,9 +86,9 @@ function appServer(move: CodexMove) {
       resolve: (result) => { clearTimeout(timer); resolve(result) },
       reject: (error) => { clearTimeout(timer); reject(error) },
     })
-    child.stdin.write(`${JSON.stringify({ id, method, params })}\n`)
+    child.stdin!.write(`${JSON.stringify({ id, method, params })}\n`)
   })
-  return { child, request, notify: (method: string) => child.stdin.write(`${JSON.stringify({ method })}\n`) }
+  return { child, request, notify: (method: string) => child.stdin!.write(`${JSON.stringify({ method })}\n`) }
 }
 
 /** Returns the new conversation's id, ready for `codex resume`. Throws, having left the source as it was. */

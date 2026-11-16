@@ -7,8 +7,8 @@
  *    native install, help probes, Windows paths, decoys and every other engine's) against every engine:
  *    the match score and its evidence, and whether the row is an unresolved `agent`;
  *  - argv against every engine: the session id it resumes, and the permission mode and approval it names;
- *  - a grid launch's argv and environment: the model it was pointed at;
- *  - a process environment: the profile home it runs under;
+ *  - a grid launch's argv, for each engine whose argv discovery reads for it: the model it was pointed at;
+ *  - a hook's report of its own environment: the profile home it runs under;
  *  - Claude Code transcripts: whether one sits in a project directory, which folder it belongs to, the folder
  *    it names for itself (past one read, a character across reads, a limit), and the folder a row with a
  *    drifted cwd is put back in at start-up.
@@ -28,9 +28,10 @@ import { env } from '../config/env.js'
 import { repairedCwd } from '../lib/cwdRepair.js'
 import type { AgentCommandOwnershipSnapshot } from '../lib/engineBin.js'
 import { classifyGridAssignment } from '../lib/gridAssignment.js'
+import { gridAssignmentProcess } from '../lib/gridAssignmentWire.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { ambiguousAgentProcess, bypassPermissionActive, engineProcessMatch, permissionModeFromArgv, resumeSessionId, type ProcessRow } from '../lib/processTable.js'
-import { profileHomeFromEnv, transcriptProject } from './discoveries.js'
+import { reportedProfileHome, transcriptProject } from './discoveries.js'
 import { ENGINES, PROCESS_ENGINES } from './types.js'
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/discovery.golden.json', import.meta.url))
@@ -158,20 +159,21 @@ function argvCases(): Record<string, unknown> {
 
 const RELAY = 'https://grid.example/relay/v1'
 function gridCases(): Record<string, unknown> {
-  const shapes: Array<[string, Record<string, string>, string]> = [
-    ['argv with a model', {}, `codex -c model_providers.grid.base_url="${RELAY}" -m gpt-5`],
-    ['argv, unquoted url', {}, `codex -c model_providers.grid.base_url=${RELAY} -m gpt-5`],
-    ['argv, no model', {}, `codex -c model_providers.grid.base_url="${RELAY}"`],
-    ['argv, the router', {}, `grok -c model_providers.grid.base_url="${RELAY}" -m Auto`],
-    ['argv, a model in a prompt', {}, `codex -c model_providers.grid.base_url="${RELAY}" "-m nope"`],
-    ['argv, not a relay', {}, 'codex -c model_providers.x.base_url="https://api.openai.com/v1" -m gpt-5'],
-    ['environment', { ANTHROPIC_BASE_URL: RELAY, ANTHROPIC_MODEL: 'qwen', OPENAI_BASE_URL: RELAY, OPENAI_MODEL: 'qwen' }, 'claude -m other'],
-    ['nothing', {}, 'codex -m gpt-5'],
+  const shapes: Array<[string, string]> = [
+    ['argv with a model', `codex -c model_providers.grid.base_url="${RELAY}" -m gpt-5`],
+    ['argv, unquoted url', `codex -c model_providers.grid.base_url=${RELAY} -m gpt-5`],
+    ['argv, no model', `codex -c model_providers.grid.base_url="${RELAY}"`],
+    ['argv, the router', `grok -c model_providers.grid.base_url="${RELAY}" -m Auto`],
+    ['argv, a model in a prompt', `codex -c model_providers.grid.base_url="${RELAY}" "-m nope"`],
+    ['argv, not a relay', 'codex -c model_providers.x.base_url="https://api.openai.com/v1" -m gpt-5'],
+    ['nothing', 'codex -m gpt-5'],
   ]
   const cases: Record<string, unknown> = {}
-  for (const [name, environment, args] of shapes) {
+  for (const [name, args] of shapes) {
     cases[name] = Object.fromEntries(ENGINES.flatMap((engine) => {
-      const found = classifyGridAssignment(engine, environment, args)
+      // Only a command line discovery hands models: never one of an engine whose grid is in none, nor a Pi's without
+      // its extension.
+      const found = gridAssignmentProcess('golden', engine, args) && classifyGridAssignment(engine, args)
       return found ? [[engine, found]] : []
     }))
   }
@@ -193,8 +195,8 @@ function profileCases(): Record<string, unknown> {
     'relative': [{ CODEX_HOME: 'relative/codex' }, '/daemon/.codex'],
     'a control character': [{ CODEX_HOME: '/bad\nline' }, '/daemon/.codex'],
     'DEL': [{ CODEX_HOME: '/bad\x7fdel' }, '/daemon/.codex'],
-    'too long': [{ CODEX_HOME: `/${'x'.repeat(4096)}` }, '/daemon/.codex'],
-    'just long enough': [{ CODEX_HOME: `/${'x'.repeat(4095)}` }, '/daemon/.codex'],
+    'too long': [{ CODEX_HOME: `/${'x'.repeat(1024)}` }, '/daemon/.codex'],
+    'just long enough': [{ CODEX_HOME: `/${'x'.repeat(1023)}` }, '/daemon/.codex'],
     'empty': [{ CODEX_HOME: '' }, '/daemon/.codex'],
     'the daemon\'s own default': [{ CODEX_HOME: '/profiles/other' }, undefined],
     'another engine\'s variable': [{ CLAUDE_CONFIG_DIR: '/profiles/claude' }, '/daemon/.codex'],
@@ -202,7 +204,7 @@ function profileCases(): Record<string, unknown> {
   const cases: Record<string, unknown> = {}
   for (const [name, [environment, defaultHome]] of Object.entries(shapes)) {
     cases[name] = Object.fromEntries(ENGINES.flatMap((engine) => {
-      const found = profileHomeFromEnv(engine, environment, defaultHome)
+      const found = reportedProfileHome(engine, environment.CODEX_HOME, defaultHome)
       return found !== null ? [[engine, found.split(root).join('<root>')]] : []
     }))
   }

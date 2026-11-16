@@ -10,9 +10,14 @@
  * here, or as the core starts when its state file is there.
  *
  * An agent's frame reads its browser in line, and cannot wait on another process: the process tells the core each
- * browser's state as it changes (`browser_state`, with the exec into it once it is ready), and the port answers from the
- * last of them, a viewer's stream command too. The core keeps them
+ * browser's state as it changes (`browser_state`), and the port answers from the last of them. The core keeps them
  * only for the agents it attached and has not since stopped or deleted, so a late word never brings a browser back.
+ *
+ * A viewer's stream of a browser's screen is the process's whole (services/agentBrowser/streams.ts): the core passes a
+ * viewer's frames on as events and its bytes as binary frames on this link (a terminal's plain frame,
+ * lib/terminalBinary.ts, which names the stream), and hands the process's answers and the screen's bytes to
+ * core/browserStreams.ts, which holds each to the connection that opened the stream. A process says once it is connected that it takes streams (`streams`): one from before 2026-11-13 does
+ * not, and a viewer's open is then refused at once rather than left unanswered.
  *
  * The process asks the core what only the core knows: its agents' ids (`agent_ids`), the agent of a pane and whether it
  * is a guest's, held to the parents of the command that names it (`agent_of_pane`), and to hand on one of its own
@@ -25,9 +30,9 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentBrowserFrame } from '../lib/agentFrame.js'
 import { PRODUCT_USAGE_AGENT_BROWSER_METRICS, type ProductUsageMetric } from '../lib/productUsageContract.js'
-import { agentBrowserStreamCommand, type AgentBrowserPort, type CoreApi } from './api.js'
+import type { AgentBrowserPort, CoreApi } from './api.js'
 import type { ServiceFrame } from './serviceLinks.js'
-import { sid } from '../lib/log.js'
+import { encodeTerminalLocal, TerminalBinaryKind } from '../lib/terminalBinary.js'
 
 type Payload = Record<string, unknown>
 
@@ -50,28 +55,28 @@ function pidsOf(value: unknown): number[] | null {
 }
 
 export function createAgentBrowserLink(deps: {
-  core: Pick<CoreApi, 'agents' | 'count'>
+  core: Pick<CoreApi, 'agents' | 'count' | 'clients'>
   notify: (frame: ServiceFrame, opts?: { untilDelivered?: boolean }) => boolean
+  /** Bytes for the process, on its link (core/serviceLinks.ts `notifyBinary`); false when it would not take them. */
+  notifyBinary: (bytes: Uint8Array) => boolean
   /** Ask the master for the process (`coreLink.want`). */
   want: () => void
+  /** The process went: every stream it held is gone with it (core/browserStreams.ts `gone`). */
+  streamsGone: () => void
 }) {
   const { core, notify } = deps
   const attached = new Set<string>()
   const states = new Map<string, AgentBrowserFrame>()
-  /** The exec into each ready browser, as the process said it with that state. */
-  const commands = new Map<string, string[]>()
-  const viewerListeners: Array<(agentId: string) => void> = []
   let up = false
-  let refusalSaid = false
-  const event = (payload: Payload, opts?: { untilDelivered?: boolean }) => { notify({ type: 'service_event', payload }, opts) }
-  // A stop or a purge ends the browser's viewers here and now, whether or not the process is there to hear it, and
-  // sends the agent's frame without its browser: what the process says of it from now on is not kept, and a panel
-  // whose frame was not sent again went on showing the browser ready or starting (CLI 0.6.40, 2026-11-12).
+  /** Whether the process connected now takes streams: it says so as it connects. */
+  let streams = false
+  const event = (payload: Payload, opts?: { untilDelivered?: boolean }) => notify({ type: 'service_event', payload }, opts)
+  // A stop or a purge sends the agent's frame without its browser, whether or not the process is there to hear it:
+  // what the process says of it from now on is not kept, and a panel whose frame was not sent again went on showing
+  // the browser ready or starting (CLI 0.6.40, 2026-11-12). Its viewers' streams end in the process, which is told.
   const forget = (agentId: string) => {
     attached.delete(agentId)
     states.delete(agentId)
-    commands.delete(agentId)
-    for (const listener of viewerListeners) listener(agentId)
     const session = core.agents.byAgent(agentId)
     if (session) core.agents.sync(session)
   }
@@ -97,13 +102,18 @@ export function createAgentBrowserLink(deps: {
       event({ kind: 'moved', from, session, on }, { untilDelivered: true })
     },
     frameContext: agentId => states.get(agentId),
-    streamCommand: (agentId) => {
-      const shown = states.get(agentId)
-      if (!shown) return { error: 'NO_BROWSER' }
-      const argv = commands.get(agentId)
-      return shown.state === 'ready' && argv ? { argv } : { error: 'NOT_READY' }
+    // Never held for a process that is down: a viewer's frame told late would open a stream nobody waits for.
+    stream: (connId, type, payload, asker) => streams && event({ kind: 'stream', connId, type, payload, ...(asker ? { asker } : {}) }),
+    streamInput: (streamId, bytes) => {
+      const frame = streams ? encodeTerminalLocal({ kind: TerminalBinaryKind.browser, streamId, seq: 0, bytes, compressed: false }) : null
+      return !!frame && deps.notifyBinary(frame)
     },
-    onCloseViewers: listener => { viewerListeners.push(listener) },
+    // The process hears every connection's end from the core's service links itself (`service_connection_closed`,
+    // core/serviceLinks.ts), as every service does.
+    streamClosed: () => {},
+    streamRoute: (streamId, route) => { if (streams) event({ kind: 'stream_route', streamId, route }) },
+    streamTransportError: () => { if (streams) event({ kind: 'stream_transport_error' }) },
+    streamRefused: (streamId) => { if (streams) event({ kind: 'stream_refused', streamId }) },
     stop: () => {},
   }
 
@@ -111,22 +121,19 @@ export function createAgentBrowserLink(deps: {
     if (query === 'browser_state') {
       const agentId = typeof payload.agentId === 'string' ? payload.agentId : ''
       const state = payload.state === undefined ? undefined : browserState(payload.state)
-      // The exec into its ready browser and no other command line: the core starts it for a viewer (core/api.ts). Another
-      // is the process's fault, and is said: its state is not taken with it, so the browser would only look stuck.
-      const command = payload.command === undefined ? undefined : agentBrowserStreamCommand(payload.command)
-      if (command === null && !refusalSaid) {
-        // Once for each time the process connects: a process that names one again and again fills no log.
-        refusalSaid = true
-        console.warn(`[agent-browser] refused a stream command that is not the exec into a browser's container (agent ${sid(agentId)})`)
-      }
-      if (!agentId || state === null || command === null) return INVALID
+      // The exec into a ready browser, which a process still names for a core from before 2026-11-13, is not read: this
+      // core starts no command for the browser.
+      if (!agentId || state === null) return INVALID
       if (!attached.has(agentId)) return { ok: true }
       if (state) states.set(agentId, state)
       else states.delete(agentId)
-      if (command && state?.state === 'ready') commands.set(agentId, command)
-      else commands.delete(agentId)
       const session = core.agents.byAgent(agentId)
       if (session) core.agents.sync(session)
+      return { ok: true }
+    }
+    // Said by the process as it connects: it takes viewers' streams.
+    if (query === 'streams') {
+      streams = true
       return { ok: true }
     }
     if (query === 'agent_ids') return core.agents.ids ? { ...await core.agents.ids() } : { error: 'UNSUPPORTED' }
@@ -157,12 +164,29 @@ export function createAgentBrowserLink(deps: {
   return {
     port,
     answer,
+    /** What the process tells the core without asking: a stream's answer for one viewer's connection. One the core
+     *  does not pass on (not that connection's, or it is gone) needs no word back: a connection that closed was told. */
+    notice: (payload: Payload): void => {
+      if (payload.kind !== 'stream_frame' || typeof payload.connId !== 'string' || typeof payload.type !== 'string') return
+      core.clients.browserFrame?.(payload.connId, payload.type, payload.payload && typeof payload.payload === 'object' ? payload.payload as Payload : {})
+    },
+    /** A stream's screen bytes, from the process: a terminal's plain frame (lib/terminalBinary.ts), as a window is sent.
+     *  It names its stream and no connection: whose the stream is, is the core's to say (core/browserStreams.ts, which
+     *  reads it and sends it on as it came). */
+    binary: (bytes: Uint8Array): void => { core.clients.browserBytes?.(bytes) },
     connected: () => {
+      // The process before this one may have gone unseen: a link that is replaced is never said disconnected
+      // (core/serviceLinks.ts). Whatever streams it held are gone with it, and this one has said nothing yet.
+      streams = false
+      deps.streamsGone()
       up = true
-      refusalSaid = false
       for (const session of core.agents.live()) if (session.browser) event({ kind: 'attached', session })
     },
-    disconnected: () => { up = false },
+    disconnected: () => {
+      up = false
+      streams = false
+      deps.streamsGone()
+    },
   }
 }
 

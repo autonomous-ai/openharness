@@ -46,6 +46,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEngine } from '../engines/types.js'
 import { isOpencodeV2 } from '../engines/opencode/contract.js'
+import { CODEX_GRID_CATALOG_FILE, codexGridModelCatalog } from './codexGridModel.js'
 import {
   anthropicBaseUrl, API_NETWORK_PREFIX, GRID_KEY_VAR, GRID_ROUTER_MODEL, isApiLaunch, relayBaseUrl,
   type GridEngineLaunch, type GridLaunchAnswer, type GridLaunchMachine, type GridLaunchOverride, type GridLaunchRequest,
@@ -163,10 +164,8 @@ function opencodeGridConfig(
   // EXACTLY ONE model, and that is deliberate: it is what the agent was created with.
   //
   // Offering the router alongside it would let someone switch inside OpenCode, which reads as a
-  // kindness until you ask what the agent is running on. The probe that answers that
-  // (`readOpencodeGridAssignment`) reads this file, so a file naming two models can only say which
-  // one is live by parsing the engine's argv — and an argv is a live process's business, which it
-  // may rewrite. One model here makes the answer a fact about a file that cannot change under us.
+  // kindness until you ask what the agent is running on. The answer is the grid this launch recorded
+  // on the agent's row, as the process is not read back, so one model here keeps that record true.
   //
   // Choosing a different model is what every other engine here does too: per agent, at creation.
   const models: Record<string, { name: string; limit?: { context: number; output: number } }> = {
@@ -367,6 +366,18 @@ const GRID_ENGINE_CONTRACTS: Partial<Record<AgentEngine, GridEngineContract>> = 
           ]
           : []),
       ],
+      // The model's card, with tool search on, so the person's MCP servers and ChatGPT apps are found
+      // when needed instead of sent on every turn (see `codexGridModel.ts`). Only for a grid model:
+      // the relay is what runs the search for the engine, and a saved API's provider has no relay.
+      ...(override.model && !isApiLaunch(override)
+        ? {
+          configDir: {
+            cliConfigKey: 'model_catalog_json',
+            pointAt: CODEX_GRID_CATALOG_FILE,
+            files: [{ name: CODEX_GRID_CATALOG_FILE, content: codexGridModelCatalog(override.model, override.contextWindow) }],
+          },
+        }
+        : {}),
       webSearch: webSearchWhenWired(override),
     }),
   },

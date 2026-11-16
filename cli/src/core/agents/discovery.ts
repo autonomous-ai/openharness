@@ -29,7 +29,7 @@ import { bypassPermissionActive, permissionModeFromArgv } from '../../lib/proces
 export interface DiscoveryDeps {
   registry: Pick<typeof registry,
     'byRuntimeEngine' | 'openProcessAgent' | 'adoptEngine' | 'reinstateArchived' | 'updateRuntimes' | 'updateProcessIdentity' | 'setBypassPermission'
-    | 'setPermissionMode' | 'setCodexHome' | 'setHermesHome' | 'setDsh' | 'byAgent' | 'setLaunch' | 'setActive'
+    | 'setPermissionMode' | 'setCodexHome' | 'setHermesHome' | 'byAgent' | 'setLaunch' | 'setActive'
     | 'terminalAvailable' | 'setTerminalAvailable'>
   attachDsh: (session: RegisteredSession) => void
   /** The agent browser's look at a running agent whose Browser is on (agents/lifecycle.ts `observed`). */
@@ -127,7 +127,6 @@ export function createDiscoveryHandlers({
       gateway: observed.gateway,
       grid: observed.grid,
       codexHome: observed.codexHome,
-      dsh: observed.dsh,
     })
     if (!opened) return
     if (opened.entry.dsh) attachDsh(opened.entry)
@@ -158,8 +157,8 @@ export function createDiscoveryHandlers({
     if (externalResumePending(current.externalResume)) return
     if (observed.engine === 'openclaw' && current.engine !== 'openclaw' && !await showsOpenclaw(observed)) return
     const wasDormant = !current.active
-    // Read BEFORE the update, because the update is what overwrites it. `undefined` means the probe
-    // could not look, which never counts as a move — see `probeGridAssignment`'s three answers.
+    // Read BEFORE the update, because the update is what overwrites it. `undefined` means the command
+    // line says nothing of the grid, which never counts as a move (lib/gridAssignmentWire.ts `gridAssignmentEvidence`).
     const gridMoved = observed.grid !== undefined
       && !sameGridAssignment(current.grid ?? null, observed.grid)
     const wasLaunching = current.launch?.state !== undefined && current.launch.state !== 'ready'
@@ -198,16 +197,12 @@ export function createDiscoveryHandlers({
     // that did not yet) learns it here, before any pane recreation ever needs it.
     // `observed.engine`, not `current.engine`: for a terminal that just adopted one, the row's
     // engine was `terminal` a line ago, which has no bypass flag and would read every launch as "no".
-    // Not a Swarm agent's (task #4215): its mode is the one it started in, Auto-approve, or its person chose. One Harness
-    // started in full mode before then still runs with that flag until it relaunches, and read back the relaunch would skip
-    // permissions again.
-    const own = !current.swarmSkill
-    if (own) registry.setBypassPermission(current.agentId, bypassPermissionActive(observed.engine, observed.args))
+    registry.setBypassPermission(current.agentId, bypassPermissionActive(observed.engine, observed.args))
     // And the exact MODE, fill-only: a row that recorded one at create is authoritative, and one
     // that never did (adopted from a terminal, written by an older build, created by a path that
     // passes no mode) learns it from the same argv — so its restart brings back
     // `--dangerously-skip-permissions`, not the auto mode `bypassPermission` alone would pick.
-    if (own && !current.permissionMode) {
+    if (!current.permissionMode) {
       const mode = permissionModeFromArgv(observed.engine, observed.args)
       if (mode) registry.setPermissionMode(current.agentId, mode)
     }
@@ -215,17 +210,14 @@ export function createDiscoveryHandlers({
     // under learns it from the process, before the hook path validates a transcript against it.
     // Fill-only — a profile the row already knows is never re-derived.
     if (observed.codexHome && !current.codexHome) registry.setCodexHome(current.agentId, observed.codexHome)
-    // …and a Hermes home the same way, when the process names one. A row that learns it here never
-    // has to look its session up store by store (openharness#191). A home Harness worked out is marked, so a
-    // relaunch does not export it; a row that has it unmarked (an older daemon saved over the mark) is marked again.
-    if (observed.hermesHome && (!current.hermesHome || (observed.hermesHomeDerived && !current.hermesHomeDerived
-      && current.hermesHome === observed.hermesHome))) {
-      if (observed.hermesHomeDerived) registry.setHermesHome(current.agentId, observed.hermesHome, true)
-      else registry.setHermesHome(current.agentId, observed.hermesHome)
+    // …and a Hermes home the same way, from the store its process holds open. A row that learns it here never
+    // has to look its session up store by store (openharness#191). The daemon's path of a sandbox's home is marked, so
+    // a relaunch does not export it. A home the row has is never marked: a descriptor cannot tell an older daemon's
+    // row from one Harness launched by name, whose relaunch must export it.
+    if (observed.hermesHome && !current.hermesHome) {
+      registry.setHermesHome(current.agentId, observed.hermesHome, observed.hermesHomeDerived === true)
     }
-    // And the DSH: a row minted by discovery (or written before the field existed) learns it from
-    // the process's own `HARNESS_DSH`, and gets its viewer and verdict watch from here on.
-    if (observed.dsh && !current.dsh) registry.setDsh(current.agentId, observed.dsh)
+    // A row Harness created as a DSH gets its viewer and verdict watch back from here on.
     const live = registry.byAgent(current.agentId)
     if (live?.dsh) attachDsh(live)
     // And its browser, if its person left it on, for the same reason: whatever path brought this agent back to running,

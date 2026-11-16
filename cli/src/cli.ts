@@ -2,7 +2,7 @@
 import './lib/connectWait.js'
 import './config/startHome.js'
 import './config/loadEnv.js'
-import { runDevicesCommand } from './devices/client.js'
+import { runDevicesCommand, runDialWatch, type DevicesClientDeps } from './devices/client.js'
 import { fingerprint as e2eeCoreFingerprint, b64d as e2eeCoreDecode } from './lib/e2ee/core.js'
 /**
  * machine-adapter CLI (the `harness` command) — connect this computer to a "remote" agent.
@@ -53,7 +53,8 @@ import { infoBlockFooter } from './lib/infoBlockFooter.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
-import { AUTH_DIR, AuthSessionError, AuthSessionManager, harnessSessionRequest, knownSsoClientId, recordMachineId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { AUTH_DIR, AuthSessionError, knownSsoClientId, recordMachineId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { AuthSessionManager, harnessSessionRequest } from './lib/authRefresh.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { claimTicket, qrSignIn, type QrSignInTokens } from './lib/qrSignIn.js'
 import { pickSignInMethod, signInMethodFlag, signInProviderName, withSignInProvider, type SignInMethod, type SignInProvider } from './lib/signInMethodPicker.js'
@@ -69,6 +70,9 @@ import { dshCommand, dshUsage } from './dsh/command.js'
 import { ApiConnections } from './lib/apiConnections.js'
 import { apiCommand, apiUsage } from './lib/apiCommand.js'
 import { connectionsCommand, connectionsUsage } from './lib/connectors/command.js'
+// Static, not import(): --help prints DEVICE_USAGE, so the module loads at start anyway, and the core and services never load cli.ts.
+import { DEVICE_USAGE, runDeviceCommand } from './deviceClaude/command.js'
+import { claudeRun } from './deviceClaude/plugin.js'
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { machineChoices, newCommand, type MachineRow, type NewMachine } from './lib/newCommand.js'
@@ -119,8 +123,9 @@ Usage: harness start [options]
 
   -f, --foreground       run the daemon in the FOREGROUND (for a supervisor; logs to stdout)
   --repair               also re-verify the managed Node runtime and repoint the launcher at it
-  --if-down              start only if it is not running and \`harness stop\` has not stopped it
-                         (what Windows's scheduled task runs; quiet otherwise)
+  --if-down              start only if it is not running, \`harness stop\` has not stopped it and
+                         \`harness flash\` or \`harness uninstall\` is not at work (what Windows's
+                         scheduled task and the Harness Device app run; quiet otherwise)
   --at-logon             with --if-down: the sign-in task's start, first forgets a \`harness stop\`
   --restart              stop the daemon that is running for this data folder and start it over
                          (without it, a running daemon is never replaced by a start that has no
@@ -168,8 +173,9 @@ Machine:
   harness start --restart      stop the daemon that is running and start it over (a start with no sign-in of its own
                                never replaces a running daemon without it)
   harness start --help         the start options; starts nothing
-  harness start --if-down      start the daemon only if it is not running and \`harness stop\` has not stopped it
-                               since the computer started (what Windows's scheduled task runs; quiet otherwise).
+  harness start --if-down      start the daemon only if it is not running, \`harness stop\` has not stopped it
+                               since the computer started and \`harness flash\` or \`harness uninstall\` is not at
+                               work (what Windows's scheduled task and the Harness Device app run; quiet otherwise).
                                --at-logon (the sign-in task's start) first forgets a \`harness stop\`
   harness logout               stop the adapter and clear this computer's SSO session
   harness stop                 stop the background adapter (keeps the SSO session)
@@ -184,11 +190,9 @@ Machine:
   harness service uninstall    undo that: the daemon goes back to \`harness start\`
   harness service status       what launchd, systemd or Task Scheduler has registered, and whether it runs (--json)
   harness logs export          zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
-  harness tui                  all of Harness in this terminal: swarms, panes, every machine (⌥O ⌥P ⌥N)
+  harness tui                  all of Harness in this terminal: tabs, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [--machine <name>] [folder|name] [-- task]
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
-  harness swarm [list|status|machines|agents|starts]
-                               the Swarm as you read it: people, machines, agents, starts
   harness machines             list the machines on this account (this computer's is marked)
   harness search <words>       find the conversation on this computer that said them: every turn of
                                every harness, live or stopped (--limit=N, --json)
@@ -243,6 +247,8 @@ ${dshUsage()}
 ${apiUsage}
 
 ${connectionsUsage}
+
+${DEVICE_USAGE}
 
 Browser end-to-end encryption:
   harness autonomous-device <command>     pair/status/list/revoke an Autonomous device; addon state/propose/proposal
@@ -2801,9 +2807,6 @@ if (cmd === 'version' || cmd === '--version' || cmd === '-v') {
   process.exit(0)
 }
 
-/** The Swarm's commands, loaded only when one runs (src/architecture.spec.ts SWARM_DOORS: one door). */
-const swarmCommands = () => import('./superTabs/command.js')
-
 switch (cmd) {
   case 'privacy':
     privacyCommand(args[0], flags.includes('--json')).catch(onError)
@@ -2880,16 +2883,6 @@ switch (cmd) {
   case 'orchestrator':
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
-  // The Swarm's commands are loaded only when run: started from the sources, every daemon process runs this file, and
-  // with the Swarm off (`HARNESS_SWARM`) none of them loads its code (src/architecture.spec.ts).
-  case 'super-tab':
-    swarmCommands().then(({ superTabCommand }) => superTabCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
-    break
-  case 'git-credential':
-    // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not. Only sessions
-    // started with the App before its removal name it; delete on or after 2026-12-10 (lib/swarmGitHub.ts).
-    import('./superTabs/gitCredential.js').then(({ gitCredentialCommand }) => gitCredentialCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
-    break
   case 'login': {
     // The result line goes out FIRST (loginCommand prints it), then the daemon is swapped onto the
     // account: the desktop app reads that line and does not wait for a restart it observes anyway.
@@ -2942,13 +2935,18 @@ switch (cmd) {
   case 'autonomous-device':
     runAutonomousDeviceCommand(rest, env.ADAPTER_DATA_DIR, daemonPort()).then(code => { process.exitCode = code }).catch(onError)
     break
-  case 'hardware':
-    runDevicesCommand(rest, {
+  case 'hardware': {
+    const daemon: DevicesClientDeps = {
       port: daemonPort(),
       machineId: async () => (await runningDaemonStatus())?.machineId ?? null,
       connect: (url, headers) => new NewCommandSocket(url, { headers }),
-    }).then(code => { process.exitCode = code }).catch(onError)
+    }
+    const run = rest[0] === 'watch'
+      ? runDialWatch(rest.slice(1), { ...daemon, stdin: process.stdin, print: (line) => console.log(line), printError: (line) => console.error(line) })
+      : runDevicesCommand(rest, daemon)
+    run.then(code => { process.exitCode = code }).catch(onError)
     break
+  }
   case 'pair':
     pairCommand(args[0]).catch(onError)
     break
@@ -3083,6 +3081,17 @@ switch (cmd) {
   case 'devices':
     devicesCommand(args[0], args[1], flags).catch(onError)
     break
+  case 'device':
+    runDeviceCommand(rest, {
+      dataDir: env.ADAPTER_DATA_DIR,
+      port: daemonPort(),
+      platform: process.platform,
+      stdin: process.stdin,
+      claude: claudeRun,
+      out: (line) => console.log(line),
+      err: (line) => console.error(line),
+    }).then((code) => { process.exitCode = code }).catch(onError)
+    break
   case 'remote-password':
     if (args[0] === 'set') remotePasswordSetCommand(flags.includes('--json'), flags.includes('--stdin')).catch(onError)
     else if (args[0] === 'clear') remotePasswordClearCommand(flags.includes('--json')).catch(onError)
@@ -3111,16 +3120,6 @@ switch (cmd) {
     break
   case 'service':
     serviceCommand(rest, serviceCommandDeps({ relaunch: () => launch(false), tildify }))
-      .then((code) => { process.exitCode = code }).catch(onError)
-    break
-  case 'swarm':
-    import('./swarm/command.js')
-      .then(({ swarmCommand }) => swarmCommand(rest, {
-        out: (line) => console.log(line),
-        err: (line) => console.error(line),
-        auth: controlPlaneAuth,
-        get: (path, headers) => requestJson('GET', path, undefined, headers),
-      }, flags.includes('--json')))
       .then((code) => { process.exitCode = code }).catch(onError)
     break
   case '__remove-team-account': // internal: Desktop asks the person, then runs this hidden (team/remove.ts)

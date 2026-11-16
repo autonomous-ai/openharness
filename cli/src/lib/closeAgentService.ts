@@ -16,15 +16,12 @@ export type AgentClosePlan = {
   state: 'waiting' | 'failed'
   detail?: string
 }
-/** Why the Lead of an active Swarm project is not closed (owner, 2026-10-23: it is never stopped, in any case). */
-export const LEAD_PROTECTED_DETAIL = 'This harness is the Product Manager of a Swarm project. Delete its project first to stop it.'
-export const LEAD_SWITCHING_DETAIL = 'This Product Manager is already switching its agent. Wait for it to finish.'
-
-/** `changeId`: the Change agent switch this `now` close is part of, which its handoff was prepared for (superTabs/leadSwitch.ts).
- *  `background`, the cleanup's alone and only with `idle`: `refuse` while any background command runs, `count` closes
+/** `background`, the cleanup's alone and only with `idle`: `refuse` while any background command runs, `count` closes
  *  whatever runs (past its ceiling) and says how many. */
-export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean; onlyIfOriginalLaunch?: boolean; expiresAt?: number; changeId?: string; background?: 'refuse' | 'count' }
-/** `withoutConversation`: closed while still starting, before Harness could read its conversation, so none is kept.
+export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean; background?: 'refuse' | 'count' }
+/** `withoutConversation`: the record the close saved, or the one a harness closed already was kept as, holds no
+ *  conversation a resume could bring back, so none is kept: closed while still starting, before Harness could read its
+ *  conversation, or its engine never bound one.
  *  `backgroundCommands`: how many an idle harness still runs; `null` when Harness cannot know. */
 export type AgentCloseResult = { closed?: true; withoutConversation?: true; deferred?: true; cancelled?: true; error?: string; detail?: string; activity?: CloseActivity; backgroundCommands?: number | null }
 
@@ -42,6 +39,13 @@ const CLOSE_BIND_RETRY_MS = 1_000
  * as before: a harness that has run longer may have work that only its conversation holds.
  */
 export const CLOSE_STARTING_MS = 60_000
+
+/** A record a stop saved is what a resume starts from: with no conversation id, an engine that resumes by one brings
+ *  nothing back (resumesConversation in resumeCapability.ts), so none was kept. A terminal and an engine with no resume
+ *  argv have no id to lose. */
+function keptNone(s: Pick<RegisteredSession, 'engine' | 'sessionId'>): boolean {
+  return resumeMode(s.engine) === 'conversation' && !s.sessionId
+}
 
 type CloseSession = Pick<RegisteredSession, 'engine' | 'sessionId' | 'transcriptPath' | 'boundAt' | 'launch' | 'resumeOnly'>
 
@@ -99,10 +103,10 @@ function stillStarting(s: RegisteredSession, at: number): boolean {
  *  shows the agent, and its rule for background commands. A cleanup that finds the agent on screen again must not
  *  answer the person's own close, and its refusal over a background command must not answer a window's close. */
 function jobKey(request: AgentCloseRequest): string {
-  return JSON.stringify([request.agentId, request.mode, request.onlyIfHidden === true, request.onlyIfOriginalLaunch === true, request.expiresAt, request.background])
+  return JSON.stringify([request.agentId, request.mode, request.onlyIfHidden === true, request.background])
 }
 function matches(s: RegisteredSession | undefined, request: AgentCloseRequest, at: number): s is RegisteredSession {
-  if (!s || (request.expiresAt !== undefined && request.expiresAt <= at) || (request.onlyIfOriginalLaunch && s.startedBy !== 'agent') || new Date(s.registeredAt).toISOString() !== request.createdAt) return false
+  if (!s || new Date(s.registeredAt).toISOString() !== request.createdAt) return false
   // Asked of a harness still starting, which has bound its first conversation since the list the request was made
   // from: the same harness, and the close keeps that conversation. Refused as changed, a close sent in the seconds a
   // Codex binds was answered "changed while closing".
@@ -118,17 +122,9 @@ export interface CloseAgentServiceDeps {
   stop(agentId: string, options: StopAgentOptions): Promise<void>
   changed(s: RegisteredSession): void
   openTabs?: { assertHidden(s: RegisteredSession): Promise<void>; isHidden(s: RegisteredSession): boolean }
-  /** Whether the conversation [request] names is closed already: no longer live, and kept as stopped. */
-  closedAlready?(request: AgentCloseRequest): boolean
-  /** Whether the agent may be the Lead of an active Swarm project (superTabs/leadSwitch.ts `leadCloseProtected`): never closed,
-   *  but by the `now` close of a switch of its engine its owner prepared ([changeId]). */
-  leadProtected?(agentId: string, changeId?: string): boolean
-  /** Whether another switch of this Lead's engine than [changeId] is running (superTabs/leadSwitch.ts `leadSwitching`). */
-  leadSwitching?(agentId: string, changeId: string): boolean
-  /** The `now` close naming switch [changeId] ended, [stopped] or not (superTabs/leadSwitch.ts `leadSwitchEnded`): the pass its
-   *  stop was given is gone either way. */
-  leadSwitchEnded?(agentId: string, changeId: string, stopped: boolean): void
-
+  /** The record the conversation [request] names was kept as, when it is closed already: no longer live, and kept as
+   *  stopped. Null when it is not. */
+  closedAlready?(request: AgentCloseRequest): RegisteredSession | null
   /** Whether its pane shows a question the engine asks before any conversation: the folder's trust, or an MCP server the
    *  folder brings (`trust_open`). */
   atStartupQuestion?(s: RegisteredSession): Promise<boolean>
@@ -177,18 +173,8 @@ export class CloseAgentService {
 
   request(request: AgentCloseRequest): Promise<AgentCloseResult> {
     const current = this.deps.registry.byAgent(request.agentId)
-    // A Product Manager's switch named while another runs is refused before anything else: the first one may have stopped it
-    // already, and a stopped agent's close would answer closed, starting a second replacement (Lead, 11-01).
-    const changeId = request.mode === 'now' ? request.changeId : undefined
-    if (changeId && this.deps.leadSwitching?.(request.agentId, changeId)) {
-      return Promise.resolve({ error: 'LEAD_SWITCHING', detail: LEAD_SWITCHING_DETAIL })
-    }
     if (!matches(current, request, this.now())) return Promise.resolve(this.changed(request))
     if (request.mode === 'cancel') { this.cancel(request.agentId); return Promise.resolve({ cancelled: true }) }
-    // Refused before anything is read or saved: a Close after task once answered a Lead "deferred" (the review of #1635).
-    if (request.mode !== 'inspect' && this.deps.leadProtected?.(request.agentId, changeId)) {
-      return Promise.resolve({ error: 'LEAD_PROTECTED', detail: LEAD_PROTECTED_DETAIL })
-    }
 
     // A job answers only a request of its own kind. When any job running for the agent answered every
     // request, a close asked for while another window (or the cleanup preview) was inspecting the agent
@@ -209,15 +195,7 @@ export class CloseAgentService {
     })
     this.jobs.set(key, job)
     this.queues.set(request.agentId, job)
-    // A switch's close ends its pass, stopped or not: nothing is left open after it (security review 2 of #2493).
-    const answered = !changeId ? job : job.then(result => {
-      this.deps.leadSwitchEnded?.(request.agentId, changeId, result.closed === true)
-      return result
-    }, (error: unknown) => {
-      this.deps.leadSwitchEnded?.(request.agentId, changeId, false)
-      throw error
-    })
-    return answered
+    return job
   }
 
   /**
@@ -226,11 +204,13 @@ export class CloseAgentService {
    * with it (services/agentCleanup.ts), and the window's own close of them, asked a moment later, was answered
    * AGENT_CHANGED and shown as "Could not confirm that it stopped". An inspect of one is closed too: the terminal client
    * inspects before every close, and its close again of one it had closed was answered "Stop not confirmed:
-   * AGENT_CHANGED". Anything else is AGENT_CHANGED.
+   * AGENT_CHANGED". Anything else is AGENT_CHANGED. Said of the record it was kept as: answered `{ closed: true }`
+   * alone, `harness close` said "Its conversation is kept" of one kept with none.
    */
   private changed(request: AgentCloseRequest): AgentCloseResult {
-    return (request.mode === 'idle' || request.mode === 'now' || request.mode === 'inspect') && this.deps.closedAlready?.(request)
-      ? { closed: true } : { error: 'AGENT_CHANGED' }
+    const kept = request.mode === 'idle' || request.mode === 'now' || request.mode === 'inspect' ? this.deps.closedAlready?.(request) : null
+    if (!kept) return { error: 'AGENT_CHANGED' }
+    return keptNone(kept) ? { closed: true, withoutConversation: true } : { closed: true }
   }
 
   private async execute(request: AgentCloseRequest, target: string, revision: number): Promise<AgentCloseResult> {
@@ -262,9 +242,7 @@ export class CloseAgentService {
     first: AgentCloseResult): Promise<AgentCloseResult> {
     const same = () => {
       const s = this.deps.registry.byAgent(request.agentId)
-      return !this.disposed && (this.revisions.get(request.agentId) ?? 0) === revision && s && harnessIdentity(s) === harness
-        && (request.expiresAt === undefined || request.expiresAt > this.now())
-        && (!request.onlyIfOriginalLaunch || s.startedBy === 'agent') ? s : undefined
+      return !this.disposed && (this.revisions.get(request.agentId) ?? 0) === revision && s && harnessIdentity(s) === harness ? s : undefined
     }
     let tried = target, result = first, waiting = false
     for (;;) {
@@ -298,8 +276,6 @@ export class CloseAgentService {
       const s = this.deps.registry.byAgent(request.agentId)
       return !this.disposed && (this.revisions.get(request.agentId) ?? 0) === revision
         && s && identity(s) === target
-        && (request.expiresAt === undefined || request.expiresAt > this.now())
-        && (!request.onlyIfOriginalLaunch || s.startedBy === 'agent')
         && (!request.onlyIfHidden || this.deps.openTabs?.isHidden(s)) ? s : undefined
     }
     try {
@@ -351,8 +327,6 @@ export class CloseAgentService {
       }
       await this.deps.stop(s.agentId, {
         ...(withoutConversation ? { withoutConversation: () => { unkept = true } } : {}),
-        // The pass a Product Manager's switch earned rides with this one stop, and with no other (security review 1 of #2493).
-        ...(request.mode === 'now' && request.changeId ? { leadSwitch: request.changeId } : {}),
         current: () => {
           const latest = current()
           if (!latest) return false
@@ -362,7 +336,11 @@ export class CloseAgentService {
           if (this.deps.idleCurrent?.(latest) === false) idleRevoked = true
           return !idleRevoked
         },
-        checkpoint: (s, phase) => this.deps.checkpoint(s, phase),
+        checkpoint: (s, phase) => {
+          // The record saved before the stop is the one a resume starts from.
+          if (phase === 'before' && keptNone(s)) unkept = true
+          return this.deps.checkpoint(s, phase)
+        },
         confirmUnusedConversation: async captured => {
           // A missing ID alone could be failed discovery of active work. Only
           // an unused chat with a freshly observed empty composer can skip the

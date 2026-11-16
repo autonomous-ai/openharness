@@ -25,6 +25,22 @@ describe('the Windows release workflows', () => {
     // The Rust two-build test runs on that build too: without HARNESS_PTY_BIN_OLD it returns at once.
     expect(pty).toMatch(/- name: 'Rust: two versions side by side'\n\s+if: \$\{\{ !inputs\.release \}\}\n[\s\S]*?HARNESS_PTY_BIN_OLD: \$\{\{ github\.workspace \}\}\\pty\\target\\\$\{\{ matrix\.target \}\}\\previous\\harness-pty\.exe\n\s+run: cargo test --locked --target \$\{\{ matrix\.target \}\} --test control two_versions_serve_side_by_side -- --nocapture\n/)
     for (const spec of ['src/lib/hostMove/hostMove.real.spec.ts', 'src/lib/ptyHost/drain.spec.ts', 'src/lib/windows/ptyInstall.windows.real.spec.ts']) expect(pty).toContain(spec)
+    // The PowerShell that installPs1.spec.ts makes its library calls in has a spec of its own, for Windows only, and PR CI
+    // runs no Windows: it runs here, in the same step.
+    const paths = pty.match(/^ +\$paths = @\(([^\n]*'src\/scripts\/installPs1\.spec\.ts'[^\n]*)\)$/m)?.[1] ?? ''
+    expect(paths.split(', ')).toContain("'src/testing/windowsPowerShell.spec.ts'")
+  })
+
+  // With every step run the arm64 job takes about 43 minutes and the x64 job 16 (2026-11-14). One limit of 40 for both
+  // cancelled arm64 in its last test step, and the install job was skipped (run 43565271777). The job's name lists the
+  // matrix without the limit, so the jobs keep the names they had.
+  it('gives each architecture of the Windows PTY job its own time limit', () => {
+    const job = read('windows.yml').match(/\n  windows-pty:\n([\s\S]*?)(?=\n  [\w-]+:\n|$)/)?.[1] ?? ''
+    const entries = (job.match(/\n {8}include:\n((?: {10}[^\n]*\n)+)/)?.[1] ?? '').split(/^ {10}- /m).slice(1)
+    const limits = entries.map((entry) => [entry.match(/^\s*arch: (\S+)$/m)?.[1], entry.match(/^\s*timeout: (\d+)$/m)?.[1]])
+    expect(limits).toStrictEqual([['x64', '40'], ['arm64', '60']])
+    expect(job.match(/^ {4}timeout-minutes: (.+)$/m)?.[1]).toBe('${{ matrix.timeout }}')
+    expect(job.match(/^ {4}name: (.+)$/m)?.[1]).toBe('windows-pty (${{ matrix.runner }}, ${{ matrix.target }}, ${{ matrix.arch }}, ${{ matrix.artifact }})')
   })
 
   it('publishes the Windows bits to staging, and to production only when a dispatch asks', () => {

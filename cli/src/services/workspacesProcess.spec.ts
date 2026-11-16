@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { CoreApi, CorePorts, WorkspacesPort } from '../core/api.js'
+import type { CoreApi, CorePorts, PreparedFolder, WorkspacesPort, WorktreeAnswer } from '../core/api.js'
+import type { WorkspaceInspection, WorktreeReview } from '../lib/worktreeDeletion.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcessOptions } from './process.js'
 import { runWorkspacesService, workspacesCoreApi } from './workspacesProcess.js'
@@ -11,14 +12,22 @@ const agent = (agentId = 'a1', over: Partial<RegisteredSession> = {}) =>
   ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: `/h/worktrees/repo/${agentId}`, title: 'Fix the login page', ...over }) as RegisteredSession
 
 const flush = () => new Promise((done) => setTimeout(done, 0))
+const OWNER = { local: true, owner: true, connection: 'core', requestId: 'r1' } as never
+const CLOSED = new AbortController().signal
 
 describe('workspaces in their own process', () => {
-  afterEach(() => vi.clearAllMocks())
+  afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
   const setup = (over: Partial<Parameters<typeof runWorkspacesService>[0]> = {}) => {
     let api: CoreApi | null = null
     let options: ServiceProcessOptions | null = null
-    const port = { nameBranches: vi.fn() } satisfies WorkspacesPort
+    const port = {
+      nameBranches: vi.fn(), ready: vi.fn(() => true),
+      prepareFolder: vi.fn(async (): Promise<PreparedFolder> => ({ ok: true, cwd: '/h/harnesses/repo' })),
+      describeWorkspace: vi.fn(async (): Promise<WorkspaceInspection | null> => null),
+      reviewWorktree: vi.fn(async (): Promise<WorktreeAnswer> => ({ ok: false, reason: 'No separate worktree. This folder is not a Git worktree.' })),
+      removeWorktree: vi.fn(async () => ({ ok: true as const })),
+    } satisfies WorkspacesPort
     const service = { stop: vi.fn() }
     const handle = runWorkspacesService({
       dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't',
@@ -39,15 +48,75 @@ describe('workspaces in their own process', () => {
     return { core: { query } satisfies CoreConnection, query }
   }
 
-  it('reaches the core as `workspaces`, through the socket and token it was given, and answers the apps\' requests workspaces declares', () => {
+  it('reaches the core as `workspaces`, through the socket and token it was given, and answers the apps\' requests workspaces declares and the core\'s own', () => {
     const { options } = setup()
     expect(options).toMatchObject({ name: 'workspaces', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
-    expect(Object.keys(options.requests)).toEqual(['worktrees_list'])
+    // The apps' (core/api.ts WORKSPACES_REQUESTS), then the port's own members, which the core asks as itself
+    // (core/workspacesLink.ts): no app request names them.
+    expect(Object.keys(options.requests)).toEqual(['worktrees_list', 'prepareFolder', 'describeWorkspace', 'reviewWorktree', 'removeWorktree'])
+  })
+
+  it('says it makes folders each time it connects, so a core of this build asks it for them; a word lost is said', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { options } = setup()
+    const { core, query } = connection()
+    options.onConnected!(core)
+    expect(query.mock.calls).toEqual([['folders']])
+    options.onConnected!({ query: vi.fn(async () => { throw new Error('the core went away') }) })
+    options.onConnected!({ query: vi.fn(async () => { throw 'closed' }) })
+    await flush()
+    expect(warn.mock.calls).toEqual([['[workspaces] could not tell the core this process makes folders · the core went away'],
+      ['[workspaces] could not tell the core this process makes folders · closed']])
+    warn.mockRestore()
+  })
+
+  it('makes the folder the core asks for, from a project it checks first', async () => {
+    const { options, port } = setup()
+    const ask = (payload: Record<string, unknown>) => options.requests.prepareFolder!(payload, OWNER, CLOSED)
+    const project = { source: 'worktree', gitSource: '/h/code/repo', branchRef: 'refs/heads/main', branchName: 'fix-login', existingBranch: true }
+    expect(await ask({ project, cloneFallback: true })).toEqual({ ok: true, cwd: '/h/harnesses/repo' })
+    expect(port.prepareFolder).toHaveBeenLastCalledWith(project, { cloneFallback: true })
+    await ask({ project: { source: 'remote', repositoryUrl: 'https://github.com/acme/app.git', name: 'app' }, cloneFallback: 'yes' })
+    expect(port.prepareFolder).toHaveBeenLastCalledWith({ source: 'remote', repositoryUrl: 'https://github.com/acme/app.git', name: 'app' }, { cloneFallback: false })
+    for (const bad of [undefined, { source: 'new' }, { source: 'branch', gitSource: 7 }]) {
+      expect(await ask({ project: bad, cloneFallback: true })).toEqual({ ok: false, error: 'INVALID_PROJECT_SOURCE', detail: 'Choose a project.' })
+    }
+    expect(port.prepareFolder).toHaveBeenCalledTimes(2)
+  })
+
+  it('reads, reviews and removes a harness\'s worktree for the core, for the harness and the folders it was sent', async () => {
+    const { options, port } = setup()
+    const ask = (type: string, payload: Record<string, unknown>) => options.requests[type]!(payload, OWNER, CLOSED)
+    const target = { cwd: '/h/harnesses/worktrees/repo/a1', transcriptPath: '/h/.claude/projects/x/s1.jsonl', codexHome: null, hermesHome: 7 }
+    const read = { cwd: target.cwd, transcriptPath: target.transcriptPath }
+    const others = ['/h/code/repo', '/h/code/other']
+    expect(await ask('describeWorkspace', { target, others })).toEqual({ workspace: null })
+    expect(port.describeWorkspace).toHaveBeenLastCalledWith(read, others)
+    expect(await ask('reviewWorktree', { target: { cwd: null }, others: [] })).toEqual({ ok: false, reason: 'No separate worktree. This folder is not a Git worktree.' })
+    expect(port.reviewWorktree).toHaveBeenLastCalledWith({ cwd: null }, [])
+    const review = { path: target.cwd } as WorktreeReview
+    expect(await ask('removeWorktree', { review, target, others, discardChanges: true })).toEqual({ ok: true })
+    expect(port.removeWorktree).toHaveBeenLastCalledWith(review, read, others, true)
+    await ask('removeWorktree', { review, target, others: [], discardChanges: 'yes' })
+    expect(port.removeWorktree).toHaveBeenLastCalledWith(review, read, [], false)
+    // A harness, a review or the other harnesses' folders it cannot read whole is refused in words, and nothing of git
+    // runs for it: a list cut short could leave out the harness whose files a removal would take.
+    const refused = { ok: false, reason: 'The request to review this worktree was malformed.' }
+    for (const bad of [{ target: undefined, others }, { target: 'a1', others }, { target: { cwd: 7 }, others }, { target: { transcriptPath: '/t' }, others },
+      { target }, { target, others: 'all' }, { target, others: ['/h/code/repo', 7] }, { target, others: Array(10_001).fill('/h/code/repo') }]) {
+      expect(await ask('describeWorkspace', bad)).toEqual({ workspace: null })
+      expect(await ask('reviewWorktree', bad)).toEqual(refused)
+      expect(await ask('removeWorktree', { review, ...bad })).toEqual(refused)
+    }
+    expect(await ask('removeWorktree', { review: 'r', target, others })).toEqual(refused)
+    expect(await ask('removeWorktree', { target, others })).toEqual(refused)
+    expect(port.describeWorkspace).toHaveBeenCalledOnce()
+    expect(port.reviewWorktree).toHaveBeenCalledOnce()
+    expect(port.removeWorktree).toHaveBeenCalledTimes(2)
   })
 
   it('answers an app\'s request with every agent the core lists as it arrives, and knows them only then', async () => {
     const { api, options } = setup()
-    const OWNER = { local: true, owner: true }
     const { core, query } = connection(async () => ({ agents: [agent('live'), agent('stopped', { cwd: null as never })] }))
     options.onConnected!(core)
     expect(await options.requests.worktrees_list!({}, OWNER)).toEqual({ inUse: ['/h/worktrees/repo/live', null] })
@@ -59,14 +128,17 @@ describe('workspaces in their own process', () => {
   })
 
   it('acts on none when the core cannot list every agent: not connected, failed, or an entry that is no agent', async () => {
+    // A core that fails every question fails the word that this process makes folders too, which is said.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { options } = setup()
-    const OWNER = { local: true, owner: true }
     const unavailable = { error: 'WORKTREES_UNAVAILABLE' }
     expect(await options.requests.worktrees_list!({}, OWNER)).toEqual(unavailable)
     for (const answer of [async () => ({ error: 'QUERY_FAILED' }), async () => ({ agents: [agent(), { not: 'an agent' }] }), () => Promise.reject(new Error('gone'))]) {
       options.onConnected!(connection(answer).core)
       expect(await options.requests.worktrees_list!({}, OWNER)).toEqual(unavailable)
     }
+    await flush()
+    expect(warn).toHaveBeenCalledWith('[workspaces] could not tell the core this process makes folders · gone')
   })
 
   it('names branches when the core says, with the live agents it sent', () => {
@@ -82,6 +154,7 @@ describe('workspaces in their own process', () => {
   })
 
   it('asks the core to send a renamed agent\'s frame again, once connected; a lost word costs nothing', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { api, options } = setup()
     api.agents.sync(agent('a1'))
     const core = connection()
@@ -101,7 +174,7 @@ describe('workspaces in their own process', () => {
     options.onConnected!(core)
     options.onEvent!({ kind: 'sweep' })
     await flush()
-    expect(query).not.toHaveBeenCalled()
+    expect(query.mock.calls).toEqual([['folders']])
     expect(port.nameBranches).not.toHaveBeenCalled()
   })
 

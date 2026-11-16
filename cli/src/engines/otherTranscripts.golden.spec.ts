@@ -3,13 +3,17 @@
  * code left the core's static imports (docs/design/2026-10-08-other-engines-out-of-core.md, (o3)). Every case
  * goes through the core's own entries, wired as core/main.ts wires them:
  *
- * - **Live.** `createAttach(...).attachSession` folds what the transcript already holds (what it emits and
- *   announces, where it starts the tail), then `createIngest(...).ingestLine` takes each later line. Every
- *   transcript is read by every file engine, split at its start, its middle and its end. The database engines'
- *   readers start on half of a store, are handed the rest and poll once.
+ * - **Live.** `createAttach(...).attachSession` opens the session's stream in the engines' worker
+ *   (engines/others/streams.ts), which folds what the transcript already holds and starts its tail (what it emits and
+ *   announces, where it starts the tail); then each later line reaches the worker's tail, and the core takes the frame
+ *   it made (`createIngest(...).acceptStreamFrame`), every request and answer crossing as JSON, as they cross its link
+ *   (core/engines/otherStreams.ts, engines/others/streamRequests.ts). Every transcript is read by every file engine,
+ *   split at its start, its middle and its end. The database engines' readers start on half of a store, are handed the
+ *   rest and poll once (a drain of the stream).
  * - **History and the last turn.** `createHistory(...).sessionGet`, whole, the latest page and each older one,
- *   and a stale cursor; `createLastTurnReader`.
- * - **agy's idle backstop and Cursor's Task hooks**, which close a turn and follow a sub-agent.
+ *   and a stale cursor; `createLastTurnReader`. Both read through the core's reader port from the engines' worker
+ *   (engines/others/readerRequests.ts), every request and reply crossing as JSON, as they cross its link.
+ * - **agy's idle backstop and Cursor's Task hooks**, which close a turn and follow a sub-agent, through the same stream.
  *
  * The inputs are the ones the repository has: the session fixtures in lib/__fixtures__, the stores built from
  * kilo-session.json and hermes-async-delegation.json, and every transcript written out line by line in the
@@ -203,10 +207,22 @@ async function loadCore() {
   const { createIngest } = await import('../core/transcripts/ingest.js')
   const { createHistory } = await import('../core/transcripts/history.js')
   const { createLastTurnReader } = await import('../core/transcripts/lastTurn.js')
+  const { createEngineReaders } = await import('../core/engines/readers.js')
+  const { createStoreOf } = await import('../core/transcripts/stores.js')
+  const { otherReaderRequests } = await import('./others/readerRequests.js')
   const { createSessionNormalizers } = await import('../core/transcripts/normalizers.js')
   const { createAgyBackstop } = await import('../core/turns/agyBackstop.js')
-  const { createCursorTaskHooks } = await import('../core/engines/cursorTasks.js')
-  return { createAttach, createIngest, createHistory, createLastTurnReader, createSessionNormalizers, createAgyBackstop, createCursorTaskHooks }
+  const { createOtherStreams } = await import('../core/engines/otherStreams.js')
+  const { createOtherStreams: createWorkerStreams } = await import('./others/streams.js')
+  const { otherStreamRequests } = await import('./others/streamRequests.js')
+  // The worker's readers behind the core's port, as engines/others/otherEnginesProcess.ts hosts them and core/main.ts reaches them.
+  const requests = otherReaderRequests()
+  const port = createEngineReaders({ isolated: new Set(['engine-others']), call: async (_service, type, payload) =>
+    JSON.parse(JSON.stringify(await requests[type](JSON.parse(JSON.stringify(payload)), { owner: true, local: true }))) })
+  port.connected('engine-others')
+  const reading = () => ({ readerFor: port.forEngine, storeOf: createStoreOf(dbs(), hermesDb) })
+  return { createAttach, createIngest, createHistory, createLastTurnReader, createSessionNormalizers, createAgyBackstop, createOtherStreams,
+    createWorkerStreams, otherStreamRequests, createStoreOf, reading }
 }
 
 /** OpenClaw's store is found per session (lib/openclawStore.ts); here it is always the one the case built. */
@@ -215,21 +231,51 @@ const dbs = () => ({ opencode: join(root, 'db', 'opencode.db'), kilo: join(root,
   openclaw: async () => OPENCLAW_DB() })
 const hermesDb = async (): Promise<string> => join(root, 'db', 'hermes.db')
 
-/** The core's live path for one session: attach, then each later line through ingest. */
+/**
+ * The core's live path for one session: attach, then each later line through the worker's tail, and its frame taken by
+ * the core. `phase` names what a frame's events are recorded as: what the attach emitted, a line's events, a Task's.
+ */
 function livePath(core: Core, session: RegisteredSession, pane: string | null) {
-  const normalizers = core.createSessionNormalizers()
   const out: unknown[] = []
   const events: Array<{ type?: string }> = []
+  const live = { phase: 'emit' as 'emit' | 'line' | 'task', taken: [] as Array<{ type?: string }> }
   const emit = (sessionId: string, emitted: Array<{ type?: string }>, opts?: unknown): void => {
-    out.push(['emit', sessionId, emitted, opts ?? null]); events.push(...emitted)
+    if (live.phase === 'line') { live.taken.push(...emitted); return }
+    out.push([live.phase, sessionId, emitted, ...(live.phase === 'task' ? [] : [opts ?? null])]); events.push(...emitted)
   }
   const announceTurnAborted = (...args: unknown[]): void => { out.push(['aborted', ...args]) }
+  // The worker's side: its tailer records where each tail starts, as the core's did, and hands it lines as it would.
+  const listeners = new Map<string, (event: unknown) => void>()
+  const tailer = {
+    on: (name: string, listener: (event: unknown) => void) => { listeners.set(name, listener); return tailer },
+    addSession: async (s: { sessionId: string }, options?: unknown) => {
+      // A byte cursor is worker transport state; the golden retains the caller-visible tail/replay contract.
+      const { fromOffset: _offset, cursorLines: _cursor, stamp: _stamp, current: _current, validate: _validate, deliveryAllowed: _delivery, ...tail } = (options ?? {}) as Record<string, unknown>
+      out.push(['tail', s.sessionId, tail])
+    },
+    removeSession: async () => {}, pollSession: async () => {},
+  }
+  const worker = core.createWorkerStreams({ watcher: tailer as never, log: () => {}, warn: () => {} })
+  const requests = core.otherStreamRequests({ streams: worker })
+  const json = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
+  let ingest: ReturnType<Core['createIngest']>
+  const streams = core.createOtherStreams({
+    call: async (type, payload) => json(await requests[type](json(payload), { owner: true, local: true }) as Record<string, unknown>),
+    bySession: () => session, frame: (s, frame) => ingest.acceptStreamFrame(s, frame), reattach: () => {}, log: () => {},
+  })
+  const normalizers = core.createSessionNormalizers(streams)
+  const runtimeProfiles = {
+    transcriptFields: () => [], beginHydrate: () => ({ ingest: () => {}, commit: () => {} }), hydrate: () => {}, hydrateEvidence: () => {},
+    ingest: () => false, evidence: () => false, ingestConfig: async () => {}, ingestPane: () => false,
+    capturePane: async () => pane,
+  } as never
   const attach = core.createAttach({
-    setInterpretationHold: () => false, setIdentityHold: () => false, announceSession: () => {},
+    setInterpretationHold: () => false, announceSession: () => {},
     liveFor: () => undefined,
     resolve: () => session,
     terminalGone: async () => false,
     normalizers,
+    others: streams,
     watcher: {
       removeSession: async () => {}, pollSession: async () => {},
       addSession: async (s, options) => { out.push(['tail', s.sessionId, options ?? null]) },
@@ -238,35 +284,40 @@ function livePath(core: Core, session: RegisteredSession, pane: string | null) {
     },
     cursorDiscovery: { add: async (sessionId) => { out.push(['cursor discovery', sessionId]) } },
     device: () => undefined,
-    runtimeProfiles: {
-      transcriptFields: () => [], beginHydrate: () => ({ ingest: () => {}, commit: () => {} }), hydrate: () => {},
-      ingest: () => false, ingestConfig: async () => {}, ingestPane: () => false,
-      capturePane: async () => pane,
-    } as never,
+    runtimeProfiles,
     captureTerminal: async () => pane,
     emit: emit as never,
-    announceTurnAborted,
-    questionWatcher: { start: (sessionId) => { out.push(['question watch', sessionId]) } },
+    tokenUsage: { changed: () => {} }, questionWatcher: { start: (sessionId) => { out.push(['question watch', sessionId]) } },
     terminalLabel: () => 'tmux:%0',
-    dbs: dbs(),
-    devinHome: join(root, 'devin'),
-    hermesDb,
+    storeOf: core.createStoreOf(dbs(), hermesDb),
     concurrency: 1,
     settled: (sessionId) => { out.push(['settled', sessionId]) },
   })
-  const ingest = core.createIngest({
+  ingest = core.createIngest({
     liveFor: () => undefined,
     has: () => true,
     bySession: () => session,
     tokenUsage: { changed: () => {} },
     device: () => undefined,
-    runtimeProfiles: { ingest: () => {} } as never,
+    runtimeProfiles,
     normalizers,
     announceTurnAborted,
     emit: emit as never,
     attachSession: async () => true,
+    setIdentityHold: () => false,
+    announceSession: () => {},
   })
-  return { normalizers, out, events, attach, ingest }
+  /** One line through the worker's tail, and what the core took of it. */
+  const line = async (text: string): Promise<Array<{ type?: string }>> => {
+    live.phase = 'line'
+    live.taken = []
+    listeners.get('line')!({ sessionId: session.sessionId, engine: session.engine, text })
+    await streams.drain(session.sessionId)
+    live.phase = 'emit'
+    return live.taken
+  }
+  const stop = (): void => { streams.stop(); worker.clear() }
+  return { normalizers, streams, out, events, attach, line, live, stop }
 }
 
 const record: Golden['cases'] = {}
@@ -276,6 +327,7 @@ async function check(key: string, produced: { out: unknown[]; events: Array<{ ty
   // Paths under the throwaway root are named by it, never by where it is.
   const entry = { sha: sha(JSON.stringify(produced.out).split(root).join('<root>')).slice(0, 20), types: typesOf(produced.events) }
   record[key] = entry
+  ;(produced as { stop?: () => void }).stop?.()
   if (!RECORD) expect({ key, ...entry }).toEqual({ key, ...golden.cases[key] })
 }
 
@@ -360,22 +412,22 @@ describe('the other engines\' conversations, through the core', () => {
           await live.attach.attachSession(session)
           for (const text of transcript.lines.slice(at)) {
             live.out.push(['line'])
-            const events = live.ingest.ingestLine({ sessionId: session.sessionId, engine, text } as never) ?? []
+            const events = await live.line(text)
             live.out.push(['ingested', events]); live.events.push(...events)
           }
           live.normalizers.stopPollers()
           await check(`${engine} live: ${transcript.id} @${at}/${transcript.lines.length}`, live)
         }
-        // Lines for a session whose normalizer the line path makes itself (none attached under this id; another of
-        // the engine's sessions was).
+        // Lines alone, into a fresh normalizer: a session attached before its transcript existed, which then has every
+        // line live (the core's line path once made such a normalizer itself; the worker's stream makes it at the attach).
         {
           const session = { ...sessionOf(engine, null), sessionId: `${IDS[engine]}-unattached` } as RegisteredSession
           const live = livePath(core, session, null)
-          await live.attach.attachSession(sessionOf(engine, null))
+          await live.attach.attachSession(session)
           live.out.length = 0
           live.events.length = 0
           for (const text of transcript.lines) {
-            const events = live.ingest.ingestLine({ sessionId: session.sessionId, engine, text } as never) ?? []
+            const events = await live.line(text)
             live.out.push(['ingested', events]); live.events.push(...events)
           }
           await check(`${engine} lines alone: ${transcript.id}`, live)
@@ -384,7 +436,7 @@ describe('the other engines\' conversations, through the core', () => {
         const session = sessionOf(engine, path)
         const history = core.createHistory({
           resolve: () => session, stopped: () => [], pages: { lineCount: async () => transcript.lines.length } as never,
-          readerFor: () => undefined, dbs: dbs(), hermesDb,
+          ...core.reading(),
         })
         const out: unknown[] = []
         const events: Array<{ type?: string }> = []
@@ -398,7 +450,7 @@ describe('the other engines\' conversations, through the core', () => {
         for (let pages = 0; page.hasMore && typeof page.oldestCursor === 'string' && pages < 100; pages++) page = await ask({ limit: 3, before: page.oldestCursor })
         await ask({ limit: 3, before: 'a-stale-cursor' })
         out.push(['sessions', await history.sessionsList({ agentId: session.agentId })])
-        out.push(['last turn', await core.createLastTurnReader({ bySession: () => session, readerFor: () => undefined, dbs: dbs(), hermesDb })(session.sessionId)])
+        out.push(['last turn', await core.createLastTurnReader({ bySession: () => session, ...core.reading() })(session.sessionId)])
         await check(`${engine} history: ${transcript.id}`, { out, events })
       }
     }, 120_000)
@@ -413,13 +465,13 @@ describe('the other engines\' conversations, through the core', () => {
       live.normalizers.stopPollers()
       // The backstop: a check of the pane, once, with no wait.
       const backstop = core.createAgyBackstop({
-        agyNormalizers: live.normalizers.agyNormalizers, bySession: () => session,
+        streams: live.streams, bySession: () => session,
         captureTerminal: async () => '? for shortcuts', drain: async () => {}, emit: (sessionId, events) => { live.out.push(['backstop', sessionId, events]); live.events.push(...events) },
       })
       const busy = livePath(core, session, null)
       await busy.attach.attachSession(session)
       const second = core.createAgyBackstop({
-        agyNormalizers: busy.normalizers.agyNormalizers, bySession: () => session,
+        streams: busy.streams, bySession: () => session,
         captureTerminal: async () => '? for shortcuts', drain: async () => {}, emit: (sessionId, events) => { live.out.push(['backstop', sessionId, events]); live.events.push(...events) },
       })
       vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'], now: NOW })
@@ -430,6 +482,7 @@ describe('the other engines\' conversations, through the core', () => {
         backstop.clearAgyIdleWatch(session.sessionId)
         second.clearAgyIdleWatch(session.sessionId)
       } finally { vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'], now: NOW }) }
+      busy.stop()
       await check(`agy idle: ${transcript.id}`, live)
     }
   }, 120_000)
@@ -440,15 +493,11 @@ describe('the other engines\' conversations, through the core', () => {
       const session = sessionOf('cursor', path)
       const live = livePath(core, session, null)
       await live.attach.attachSession(session)
-      const tasks = core.createCursorTaskHooks({
-        emitSessionEvents: (sessionId, events) => { live.out.push(['task', sessionId, events]); live.events.push(...events) },
-        watcher: { pollSession: async () => {} },
-        registry: { bySession: () => session, resolve: () => session } as never,
-        cursorNormalizers: live.normalizers.cursorNormalizers,
-      })
-      tasks.onCursorTaskStart(session.sessionId, 'toolu_golden', { description: 'Count the files', prompt: 'count them', subagent_type: 'explore' })
-      await tasks.cursorTaskHooks.wait(session.sessionId)
-      tasks.cursorSubagents.stop()
+      // Its Task hook goes to its stream, whose drain waits for the Task queued behind it.
+      live.live.phase = 'task'
+      live.streams.task(session.sessionId, 'toolu_golden', { description: 'Count the files', prompt: 'count them', subagent_type: 'explore' })
+      await live.streams.drain(session.sessionId)
+      live.live.phase = 'emit'
       await check(`cursor task: ${transcript.id}`, live)
     }
   }, 120_000)
@@ -462,14 +511,14 @@ describe('the other engines\' conversations, through the core', () => {
         const live = livePath(core, session, null)
         await live.attach.attachSession(session)
         write(messages)
-        const readers = { opencode: live.normalizers.opencodeReaders, kilo: live.normalizers.kiloReaders, hermes: live.normalizers.hermesReaders, devin: live.normalizers.devinReaders }[engine]
-        await (readers.get(session.sessionId) as unknown as { tick(): Promise<void> } | undefined)?.tick()
+        // Its reader's poll, once: a drain of its stream.
+        await live.streams.drain(session.sessionId)
         live.normalizers.stopPollers()
         await check(`${engine} live: @${at}/${messages.length}`, live)
       }
       write(messages)
       const session = sessionOf(engine, null)
-      const history = core.createHistory({ resolve: () => session, stopped: () => [], pages: { lineCount: async () => 0 } as never, readerFor: () => undefined, dbs: dbs(), hermesDb })
+      const history = core.createHistory({ resolve: () => session, stopped: () => [], pages: { lineCount: async () => 0 } as never, ...core.reading() })
       const out: unknown[] = []
       const events: Array<{ type?: string }> = []
       const ask = async (payload: Record<string, unknown>) => {
@@ -481,7 +530,7 @@ describe('the other engines\' conversations, through the core', () => {
       let page = await ask({ limit: 2 })
       for (let pages = 0; page.hasMore && typeof page.oldestCursor === 'string' && pages < 100; pages++) page = await ask({ limit: 2, before: page.oldestCursor })
       await ask({ limit: 2, before: 'a-stale-cursor' })
-      out.push(['last turn', await core.createLastTurnReader({ bySession: () => session, readerFor: () => undefined, dbs: dbs(), hermesDb })(session.sessionId)])
+      out.push(['last turn', await core.createLastTurnReader({ bySession: () => session, ...core.reading() })(session.sessionId)])
       await check(`${engine} history`, { out, events })
     }, 120_000)
   }
@@ -508,11 +557,10 @@ describe('the other engines\' conversations, through the core', () => {
       await live.attach.attachSession(session)
       db.exec('BEGIN; INSERT INTO transcript_events SELECT * FROM held_events; INSERT INTO session_transcript_active_events SELECT * FROM held_active; COMMIT;')
       db.close()
-      const reader = live.normalizers.openclawReaders.get(key) as unknown as { reader: { tick(): Promise<void> } } | undefined
-      await reader?.reader.tick()
+      await live.streams.drain(key)
       live.normalizers.stopPollers()
       await check(`openclaw live: ${scenario} @${half}/${last}`, live)
-      const history = core.createHistory({ resolve: () => session, stopped: () => [], pages: { lineCount: async () => 0 } as never, readerFor: () => undefined, dbs: dbs(), hermesDb })
+      const history = core.createHistory({ resolve: () => session, stopped: () => [], pages: { lineCount: async () => 0 } as never, ...core.reading() })
       const out: unknown[] = []
       const events: Array<{ type?: string }> = []
       const ask = async (payload: Record<string, unknown>) => {
@@ -524,7 +572,7 @@ describe('the other engines\' conversations, through the core', () => {
       let page = await ask({ limit: 4 })
       for (let pages = 0; page.hasMore && typeof page.oldestCursor === 'string' && pages < 100; pages++) page = await ask({ limit: 4, before: page.oldestCursor })
       await ask({ limit: 4, before: 'a-stale-cursor' })
-      out.push(['last turn', await core.createLastTurnReader({ bySession: () => session, readerFor: () => undefined, dbs: dbs(), hermesDb })(key)])
+      out.push(['last turn', await core.createLastTurnReader({ bySession: () => session, ...core.reading() })(key)])
       await check(`openclaw history: ${scenario}`, { out, events })
     }
   }, 120_000)

@@ -68,8 +68,8 @@ Two defects:
 
 ### First task through the session input
 
-- OpenClaw still takes a first task everywhere a launch carries one today: New, `harness new`, a Swarm launch, the
-  restore launch's `continue` (`core/main.ts`), and a fork should OpenClaw ever take one. `supportsFirstPrompt('openclaw')`
+- OpenClaw still takes a first task everywhere a launch carries one today: New, `harness new`, the restore
+  launch's `continue` (`core/main.ts`), and a fork should OpenClaw ever take one. `supportsFirstPrompt('openclaw')`
   stays true, so no caller is refused with `PROMPT_UNSUPPORTED`; the engine's launch contract says its first prompt is
   typed rather than given in argv (the shape is the builder's call), and every such launch takes the path below.
 - Its launch no longer carries `--message`: the TUI starts as `openclaw tui --session harness-<agentId>`.
@@ -78,8 +78,8 @@ Two defects:
   (`readOpenclawScreen(...).state === 'ready'`), on the bind pass that already reads the pane (`core/agents/bind.ts`):
   no poll of its own. The field is removed from the row **before** the task is handed over, so a daemon restart after
   that never types it again (at most once); a restart before it finds the field and hands it over on the next `ready`.
-- It is typed as the person's own message, as `--message` was (Enter retried within the session input's bound), Swarm
-  launches included. From there the existing path applies: confirmation by the store's user row, bounded retry, and
+- It is typed as the person's own message, as `--message` was (Enter retried within the session input's bound). From
+  there the existing path applies: confirmation by the store's user row, bounded retry, and
   its existing failure (`onError`, delivery `unknown`).
 - No timeout while it waits. While the pane cannot take it, the agent already says why (`no-gateway`, `no-token`,
   `remote` holds); the task goes in once the Gateway answers, however late. A relaunch keeps a field not yet handed
@@ -126,7 +126,7 @@ Two defects:
   confirmed by a user row; handed over once even if the pane flips ready → busy → ready.
 - Restart: a row with the field hands it over on the next `ready`; a row without it (handed over before the restart)
   types nothing.
-- The restore launch's `continue` and a Swarm launch take the same path.
+- The restore launch's `continue` takes the same path.
 - OpenClaw's confirmation waits at least 30 s for the user row (fake clock).
 - Store: `running` for 30 s with no node: the hold; it clears once the node appears; `connecting` or `ready` with no
   node: nothing; `running` for 29 s: nothing.

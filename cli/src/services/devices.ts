@@ -16,15 +16,34 @@
  * The Wi-Fi device is a service of its own beside these (services/wifi.ts), in the same process, on a link
  * of its own: it rides the gateway's sessions, and borrows the dial's walk and stroke through the core.
  */
+import { randomUUID } from 'node:crypto'
 import { existsSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
-import { DEVICES_REQUESTS, SUPER_TAB_REQUEST_PREFIX, type CardChat, type CoreApi, type SaidOnCard, type CorePorts, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
+import { DEVICES_FALLBACKS, DEVICES_REQUESTS, type CoreApi, type CorePorts, type DeviceHookPort, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/cableFleet.js'
 import { isLocalOnly } from '../lib/cardUpdate.js'
 import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
 import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost } from '../cable/cableHost.js'
-import { CableSession } from '../cable/cableSession.js'
+import { CableSession, SHOWN_ONLY_PREFIX, type FollowCause } from '../cable/cableSession.js'
+import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
+import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
+import { codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
+import { createHerdrAdapter } from '../cable/hosts/herdr.js'
+import { Inbox } from '../cable/hosts/inbox.js'
+import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
+import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type ObservedDeps, type PromptSource } from '../cable/hosts/observed.js'
+import { createOpenActions } from '../cable/hosts/open.js'
+import { createOrcaAdapter, orcaDeps, type OrcaDeps } from '../cable/hosts/orca.js'
+import { readRecordName } from '../cable/hosts/recordName.js'
+import { HostRegistry } from '../cable/hosts/registry.js'
+import { learnApps, readProcessNames } from '../cable/hosts/scannedApp.js'
+import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
+import { createTmuxAdapter } from '../cable/hosts/tmux.js'
+import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
+import { createVscodeAdapter } from '../cable/hosts/vscode.js'
+import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
 import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
 import { DialVerdicts } from '../cable/dialPortVerdicts.js'
@@ -33,11 +52,15 @@ import { createWindowRouter } from '../cable/windowRoute.js'
 import { WindowSelection } from '../cable/windowSelection.js'
 import { WindowVisit } from '../cable/windowVisit.js'
 import { MachineListCache } from '../device/machineList.js'
+import { claudeProjectsRoots, codexHomeRoots } from '../lib/engineHomes.js'
 import { harnessDevicesRequest } from '../lib/harnessDevices.js'
-import { truncateUtf8 } from '../lib/deviceRecentTrim.js'
+import { OpenSessions, SessionRows } from '../lib/sessionSearch/external.js'
+import { externalProviders } from '../lib/sessionSearch/externals/index.js'
+import { fileStamp, listProcesses, processAlive } from '../lib/sessionSearch/externals/support.js'
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
 import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
 import { createPartGuard } from './devicesGuard.js'
+import { attachHandler, dialStream, frontHandler, tabHandler, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
 import { FLEET_FALLBACKS, startFleet, type Fleet } from './fleet.js'
 
 export { DEVICES_REQUESTS }
@@ -66,32 +89,94 @@ export interface DevicesDeps {
   /** Read this computer's agents again before a list is built from them: in their own process the devices
    *  keep a copy, asked of the core as the dial's tick or ⌘K needs it (services/devicesProcess.ts). */
   refresh?: () => Promise<void>
-  /** Called with a function this part runs whenever it (re)connects to the core, which has forgotten what the devices
-   *  told it (services/devicesProcess.ts): the cards wanted are said again. */
-  onCoreConnected?: (run: () => void) => void
+  /** Called with a function this part runs whenever its link to the core drops: the calls that core held have failed. */
+  onCoreGone?: (run: () => void) => void
   /** An agent's conversation token totals, read fresh (not the 15 s cache); null when unknown or remote.
    *  Defaults to the core's `usageFresh`. */
   readUsage?: (agentId: string) => Promise<{ input?: number; cached?: number; output?: number } | null>
   /** For this service's tests: the dial's session, and how dials are found and opened. */
   Session?: ConstructorParameters<typeof CableFleet>[0]
   cable?: Partial<CableFleetOptions>
+  /** For this service's tests: how `orca`, and the commands a tap runs to open an app (cable/hosts/open.ts), are found and
+   *  run. */
+  orca?: OrcaDeps
+  /** For this service's tests: how `codex` is found and run (cable/hosts/codexQueue.ts). */
+  codex?: Pick<CodexQueueDeps, 'run' | 'binary' | 'platform'>
+  /** Opens the devices' own listener with these handlers (services/devicesListener.ts). Given by the devices process
+   *  alone: inside the core's process (`HARNESSD_SERVICES=none`, Harness OS) there is none, so the core's process opens
+   *  no socket for the devices, and the dial follows no app in front there. */
+  listen?: (handlers: Readonly<Record<string, ListenerHandler | ListenerStreamHandler>>, log: (line: string) => void) => Promise<DevicesListener | null>
+  /** For this service's tests: how an agent's tty is read; `ps` by default (cable/hosts/tabs.ts). */
+  tty?: (pid: number) => Promise<string | undefined>
 }
 
 /** ⌘K's answer while the fleet is not running: it never started, so there is no list to weigh. */
 const NO_AGENT_LIST = 'no agent list yet'
-/** A Super Tab conversation id as the dials hold one (48 bytes with its NUL). */
-const CHAT_ID = /^[A-Za-z0-9_-]{1,47}$/
-/** A backend's refusal as a dial's voice error: a sentence or two, never a page. */
-const VOICE_ERROR_BYTES = 300
 const unrouted = (reason: string): RouteAnswer => ({ agentId: '', machineId: '', name: '', confidence: 0, reason, candidates: [], weighed: 0, machines: 0, via: '' })
 const sid = (id: string): string => id.slice(0, 8)
 /** A card for the dial, and the machine it came from when another machine sent it (services/fleet.ts). */
 type DialEvent = NonNullable<ReturnType<typeof cableEventFor>> & { machineId?: string }
+/** What a dial made of a local follow, by its cause, or the settle's that asked it as an attach: the outcome only, never
+ *  the app or the agent. */
+const FOLLOWED: Record<FollowCause | 'settle', Record<'moved' | 'no-tile', string>> = {
+  prompt: { moved: '[device] prompt · moved', 'no-tile': '[device] prompt · skipped · no tile' },
+  attach: { moved: '[device] attach · moved', 'no-tile': '[device] attach · skipped · no tile' },
+  settle: { moved: '[device] settle · moved', 'no-tile': '[device] settle · skipped · no tile' },
+  tab: { moved: '[device] tab · moved', 'no-tile': '[device] tab · skipped · no tile' },
+}
+/** A tab app reports back each tab the dial selects: a report within this long of a select of its tty is that select's
+ *  echo. Every select of that long is kept, as a fast swipe's late report for a tab it passed must not pull the dial back,
+ *  and at most ECHO_KEPT of them. */
+const TAB_ECHO_MS = 2_000
+const ECHO_KEPT = 8
+
+// The agents outside a pane: how often their processes are checked, the turns no hook moves are looked at, and, while a dial
+// is attached, the open sessions are scanned (docs/specs/2026-11-13-device-without-the-app.md, "ObservedSource").
+const OBSERVED_TICK_MS = 30_000
+const TURN_CHECK_MS = 3_000
+const OPEN_SCAN_MS = 60_000
+/** Under the round dial's 25 s fuse (firmware ui_prune_stale_busy): it forgets a turn it hears nothing of for that long,
+ *  and only `turn.started` renews it. An agent outside a pane sends no step to renew it with. */
+const REMIND_MS = 20_000
+/** The observed source drops an ended session 10 s after its end, by the wall clock (observed.ts); looked at a beat later,
+ *  as a timer can fire a little before the wall clock says it is due. */
+const ENDED_MS = 10_500
+/** How long the cable waits for the devices' listener to open: it opens in a few milliseconds. */
+const LISTENER_WAIT_MS = 1_000
+/** How long after the dial's own continue link to a Claude app session an attach is that link's echo: the app attaches
+ *  the session it shows within about a second. Also how long any move of the dial sets the Claude app's settle aside. */
+const ATTACH_ECHO_MS = 2_000
+
+/** This computer's agents outside a pane, read with ⌘P's readers (services/externalSessions.ts), and how the dial's voice
+ *  and tap reach them. */
+function observedSource(dataDir: string, log: (line: string) => void, actions: ObservedActions, tty: ObservedDeps['tty']): ObservedSource {
+  const providers = externalProviders()
+  return new ObservedSource({
+    now: Date.now,
+    processes: listProcesses,
+    alive: processAlive,
+    openSessions: new OpenSessions({ providers, log }),
+    sessionRows: new SessionRows({ providers, excluded: [dataDir], log }),
+    excluded: [dataDir],
+    // Asked for Claude Code's and Codex's alone (observed.ts), and read only inside their own folders: a hook can name any path.
+    lastAnswer: (engine, path) => readLastAnswer(engine as 'claude' | 'codex', path, {
+      roots: engine === 'claude' ? claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR) : codexHomeRoots(env.CODEX_HOME).map((home) => join(home, 'sessions')),
+      maxBytes: LAST_ANSWER_MAX_BYTES, deadlineMs: LAST_ANSWER_DEADLINE_MS,
+    }),
+    fileStamp,
+    log,
+    actions,
+    apps: learnApps,
+    // Asked for Claude Code's sessions alone (observed.ts), and read only inside its own folders, worked out at each read:
+    // a home the person moved is adopted while the daemon runs.
+    recordName: (owner) => readRecordName(owner, { roots: claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR) }),
+    tty,
+  })
+}
 
 export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps): ServiceRequests {
   const log = deps.log ?? ((line: string) => console.log(line))
   const monotonic = deps.now ?? (() => performance.now())
-  const superTabWait = (requestId: unknown): boolean => typeof requestId === 'string' && requestId.startsWith(SUPER_TAB_REQUEST_PREFIX)
   const tally = createTally((line) => log(`[cable] ${line}`))
   const tierOf = deps.decideTier ?? createTierDecider({
     tally,
@@ -163,41 +248,126 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const pets = new PetStore(deps.petsDir ?? join(env.HARNESS_DEVICES_DIR, 'pets'))
   // The assistant's latest paragraph per agent, as the processing cards carry it; gone when the turn ends.
   const latestUpdate = new Map<string, string>()
-  // The Swarm cards' requests to the Super Tab service, through the core (core/devicesLink.ts). An error is an answer too.
-  /** What became of words for a Lead, as the service answered: a refusal keeps its code and its message, cut to what a dial
-   *  shows in a voice error. */
-  const saidOf = (answer: Record<string, unknown>): SaidOnCard => {
-    if (answer.said === true) return { said: true }
-    const refused = answer.refused && typeof answer.refused === 'object' ? answer.refused as Record<string, unknown> : {}
-    if (typeof refused.code !== 'string' || typeof refused.message !== 'string') return { said: false }
-    return { said: false, refused: { code: refused.code, message: truncateUtf8(refused.message, VOICE_ERROR_BYTES) } }
+  // ── the agents outside a pane ──────────────────────────────────────────────────────────────────────
+  //
+  // Claude Code in Orca, Codex in Ghostty: their hooks reach here through the core, which keeps nothing of them, and their
+  // open sessions are read here. Nothing of them leaves this computer: the core, a window and the gateway hear none of it
+  // (docs/specs/2026-11-13-device-without-the-app.md). `HARNESS_DEVICE_OBSERVED=off` is the kill switch.
+  //
+  // The dial's voice reaches them through their mod's long poll (Claude Code's) or Codex's own queue, idle or working, or
+  // typed into their Orca terminal when idle, and a tap brings its app forward, on its own pane where the app has a way in
+  // that asks for no new permission (docs/specs/2026-11-13-device-claude-orca.md, docs/specs/2026-11-15-device-codex.md).
+  /** The part timers still to fire: the devices stopping cancels them, as a part with no stop of its own cannot. */
+  const pending = new Set<ReturnType<typeof setTimeout>>()
+  /** A timer of one part, its run guarded as a notice into that part is, and never what keeps the process up. */
+  const timerIn = (name: string) => (ms: number, run: () => void): (() => void) => {
+    const timer = setTimeout(() => { pending.delete(timer); part.call(name, run) }, ms)
+    timer.unref()
+    pending.add(timer)
+    return () => { pending.delete(timer); clearTimeout(timer) }
   }
-  /** A card request's chat, as the core passes it on: none for the Pro, whose requests stay as they were. */
-  const chatFlag = (chat: CardChat | undefined): { chat?: true | 'buddy' } => chat ? { chat } : {}
-  const askCards = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
-    try { return await core.superTabRequest!(payload) } catch { return { error: 'SERVICE_UNAVAILABLE' } }
+  const inbox = new Inbox({ now: monotonic, after: timerIn('inbox') })
+  const apps = deps.orca ?? orcaDeps()
+  const claude = createClaudeAppAdapter({ ...apps, inFront: () => cableHost.latestFront() === 'claude' })
+  // Harness's own Codex home, whose config `codex queue` loads; run from the home folder, so no project's .codex/ is read.
+  const codexQueue = createCodexQueue({ ...(deps.codex ?? codexQueueDeps()), home: env.CODEX_HOME, cwd: homedir() })
+  // The stream a watch holds open on the devices' listener: a rest or a tap on an agent in Terminal, iTerm2 or Ghostty
+  // asks it to select that agent's tab (docs/specs/2026-11-15-dial-terminal-follow.md). Only macOS's apps select a tab
+  // by its tty: elsewhere no agent's is read, and none has a tab.
+  const tabs = tabsStream()
+  // The stream Orca's Harness Device plugin holds open: whether a dial is attached and the agent it shows
+  // (docs/specs/2026-11-16-orca-device-plugin.md). A part of its own, so a throw on its path is never the dial's. Its
+  // count's timer stops with the devices.
+  const dial = dialStream({ log, after: timerIn('dialStream') })
+  const ttyOf = apps.platform === 'darwin' ? deps.tty ?? readTty : undefined
+  /** The ttys the dial selected lately, a rest's and a tap's alike: the echoes a tab report is checked against, each
+   *  excusing one. */
+  let selects: Array<{ tty: string; at: number }> = []
+  const selected = (tty: string): void => {
+    const at = monotonic()
+    selects = [...selects.filter((sent) => at - sent.at < TAB_ECHO_MS), { tty, at }].slice(-ECHO_KEPT)
   }
-  // How many attached devices asked for Swarm cards, and which Swarms the desktop has tabs for (read first). The core keeps
-  // whether they are wanted (superTabs/inCore/cards.ts); this says it on a change and again when the core connects anew.
-  let cardDevices = 0
-  let cardInclude: string[] = []
-  // The conversation the window has open in its active Swarm tab, which the round dial's face follows (design
-  // 2026-10-28-round-dial-swarm-chat): said with the wish, and left out when there is none, as before.
-  let cardFocus: { tabId: string; conversationId: string } | null = null
-  const tellCards = (): void => {
-    const on = cardDevices > 0
-    void askCards({ action: 'cardsWanted', on, include: on ? cardInclude : [], ...(on && cardFocus ? { focus: cardFocus } : {}) })
+  /** The dial's own moves, each as it starts: a hand's turn to any agent, a tap, and the pane a rest or a tap's raise
+   *  switches. How many, and when the latest started: a settle is set aside by one made within it. */
+  let dialMoves = 0
+  let dialMovedAt: number | undefined
+  const noteMove = (): void => {
+    dialMoves++
+    dialMovedAt = monotonic()
   }
-  deps.onCoreConnected?.(() => { if (cardDevices > 0) tellCards() })
+  /** That adapter, its `show` and its `focus` noting the dial's move as they start: busy or failed, the dial is on that
+   *  agent all the same. A hand's turn and a tap are noted as they are made (`turned`, `open`), but a rest switches the
+   *  pane 400 ms after its turn, and a tab is raised only once `open -b` brought its app: the app's report of the tab it
+   *  had can come between. */
+  const noting = (adapter: HostAdapter): HostAdapter => {
+    const { show, focus } = adapter
+    const noted: HostAdapter = { ...adapter, focus: (pane) => { noteMove(); return focus(pane) } }
+    // One with no `show` gets none: the source reads whether it has one (observed.ts rest).
+    return show ? { ...noted, show: (pane, agentId) => { noteMove(); return show(pane, agentId) } } : noted
+  }
+  /** The apps an outside agent runs in, in the order its panes are kept: each verb of the dial takes the first that can.
+   *  The nearest host first: a multiplexer keeps the environment it started in, so in a tmux pane WezTerm's and Orca's
+   *  values name the terminal the tmux server began in, and herdr inside tmux carries tmux's pane. */
+  const adapters: readonly HostAdapter[] = [
+    createHerdrAdapter(apps),
+    createTmuxAdapter({ run: apps.run, processes: readProcessNames, log }),
+    createWeztermAdapter(apps),
+    createOrcaAdapter(apps),
+    // A rest's continue link: the app's attach that follows is the dial's own echo.
+    { ...claude, show: (pane: Pane, agentId: string) => { noteLink(agentId); return claude.show(pane, agentId) } },
+    createVscodeAdapter(apps),
+    createTabsAdapter({
+      isOpen: () => tabs.isOpen(),
+      select: (tab, raise) => {
+        if (!tabs.select(tab, raise)) return false
+        selected(tab.tty)
+        return true
+      },
+    }),
+  ].map(noting)
+  const opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log })
+  const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, {
+    adapters,
+    modReady: (sessionId) => inbox.ready(sessionId),
+    toMod: (sessionId, text) => inbox.deliver(sessionId, text),
+    canOpen: opener.can,
+    // Noted before `open -b`, which can take a while, and for an app with no pane of its own. A tap on a Claude app agent
+    // runs the continue link a rest runs: its attach is the dial's own echo too.
+    open: (agentId, target) => {
+      noteMove()
+      if (target.pane?.adapter === claude.id && opener.can(target)) noteLink(agentId)
+      return opener.open(agentId, target)
+    },
+    codexQueue,
+    codexHome: env.CODEX_HOME,
+    // The route or the refusal, and why a queue failed: never the words, the session, the terminal or a path.
+    count: (what) => log(`[device] voice · ${typeof what === 'string' ? what : what.id}`),
+  }, ttyOf) : null
+  /** One of them, by the id the dial holds: what the dial asks of it is answered here, never by a door of the core. */
+  const outside = (agentId: string): HostAgent | undefined => observed?.list().find((agent) => agent.id === agentId)
+  /** Its line while it waits on the person, where a harness agent shows its terminal's footer: what its permission prompt
+   *  asks once its hook said, and the app it is answered in. The dial never answers it. */
+  const waiting = (agent: HostAgent): string | null => {
+    if (agent.state !== 'needs-you') return null
+    const host = hostDisplayName(agent.host)
+    const asks = observed?.waitingOn(agent.id)
+    return asks ? askedLine(asks, host) : `Waiting for you · ${host}`
+  }
+
   const cableHost = new DaemonCableHost({
     // The cloud harnesses too, where the core offers them: tiles on the desk the dial walks like any other.
     sessions: () => [...core.agents.advertised(), ...core.agents.cloud?.() ?? []],
     refresh: deps.refresh,
     displayName: (session) => core.agents.displayName(session),
     appFocus: () => focus.voice ?? undefined,
-    activityText: (agentId) => core.agents.activityText(agentId),
+    activityText: async (agentId) => {
+      const agent = outside(agentId)
+      return agent ? waiting(agent) : core.agents.activityText(agentId)
+    },
     // The footer and its timer from the core; the agent's own latest sentence from the cards already seen here.
     activitySnapshot: async (agentId) => {
+      const agent = outside(agentId)
+      if (agent) { const text = waiting(agent); return text ? { text } : null }
       const reading = core.agents.activitySnapshot
         ? await core.agents.activitySnapshot(agentId)
         : await core.agents.activityText(agentId).then((text) => text ? { text } : null)
@@ -210,19 +380,24 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     signedIn: () => core.account.signedIn(),
     accessToken: (opts) => core.account.accessToken(opts),
     environment: () => core.account.environment(),
-    watching: (on) => core.clients.dialWatching(on),
+    watching: (on) => {
+      core.clients.dialWatching(on)
+      dialAttached(on)
+      part.call('dialStream', () => dial.attached(on))
+    },
+    dialShows: (agent) => part.call('dialStream', () => dial.shows(agent)),
     // The core's own doors for a local agent. The fleet's router reaches them the same way; the dial uses
-    // these only when it routes by itself, with the fleet off.
+    // these only when it routes by itself, with the fleet off. An agent outside a pane never reaches them: the host shuts
+    // each to it, the fleet's way too (cableHost.ts `outside`).
     sendTurn: (agentId, text) => core.turns.send(agentId, text),
     stopTurn: (agentId) => core.turns.stop(agentId),
-    // A Super Tab wait is shown, never answered here: its id is no pane's, and nothing is typed for it.
-    answer: (agentId, requestId, answers) => { if (!superTabWait(requestId)) core.questions.answer(agentId, requestId, answers) },
-    answerReviewed: (answer) => superTabWait(answer.requestId) ? Promise.resolve(false) : core.questions.answerReviewed(answer),
+    answer: (agentId, requestId, answers) => core.questions.answer(agentId, requestId, answers),
+    answerReviewed: (answer) => core.questions.answerReviewed(answer),
     recent: (agentId, n) => core.turns.recent(agentId, n),
     recentAsks: (agentId) => core.turns.asks(agentId),
     runtimeProfile: (session) => core.agents.runtimeProfile(session),
     updateAgent: (agentId, model, effort) => core.agents.setRuntime(agentId, model, effort),
-    listModels: (agentId) => core.agents.runtimeModels(agentId),
+    listModels: async (agentId) => core.agents.runtimeModels(agentId),
     // Each of these is for the windows on this computer alone: they describe a hand at this desk, not a
     // change in what the machine is doing, and the cloud web audience may be sitting at another computer.
     // A notification tap asks for a tile of its OWN (see CableHost.openAgent). `reason` rides along only
@@ -236,33 +411,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // The dial's Fork: the same path the window's `agent_fork` takes, then `forked` above lands on it.
     forkAgent: (agentId) => core.agents.fork(agentId),
     focused: (machineId, agentId) => core.clients.sendLocal({ type: 'dial_focus', payload: { machineId, agentId } }),
+    // The outcome only: never the agent, its session or its terminal.
+    swiped: (outcome) => log(`[device] swipe · ${outcome}`),
+    turned: noteMove,
+    localFollowed: (cause, outcome) => log(FOLLOWED[cause === 'attach' ? attachAsk : cause][outcome]),
     swarmSelected: (swarmId) => core.clients.sendLocal({ type: 'dial_swarm', payload: { swarmId } }),
-    swarmCardsWanted: (on) => {
-      const before = cardDevices
-      cardDevices = Math.max(0, cardDevices + (on ? 1 : -1))
-      if ((before === 0) !== (cardDevices === 0)) tellCards()
-    },
-    // The text is the service's to read and not validated by the core: cut here, on a character, to what the Pro takes.
-    // With `chat` (a round dial that speaks swarmChat, or 'buddy' for swarmBuddy), the chat on that dial's face's, which must
-    // name that chat by an id: a dial never shows it for another one.
-    swarmCardRecap: async (tabId, leadId, chat) => {
-      const r = await askCards({ action: 'cardRecap', tabId, leadId, ...chatFlag(chat) })
-      // A refusal fails with its code, which the dial's log names; null was silent (Diego, 2026-11-03).
-      if (r.ok !== true && typeof r.error === 'string') throw new Error(r.error)
-      if (r.ok !== true || typeof r.text !== 'string' || typeof r.at !== 'number' || !Number.isInteger(r.at) || r.at < 0 || typeof r.none !== 'boolean') return null
-      if (chat && !(typeof r.chatId === 'string' && CHAT_ID.test(r.chatId))) return null
-      return { tabId, leadId, text: truncateUtf8(r.text, 1500), at: r.at, none: r.none, ...(chat ? { chatId: r.chatId as string } : {}),
-        ...(chat === 'buddy' ? { buddy: true as const } : {}) }
-    },
-    swarmCardOpen: (session, tabId, leadId, chat) => { void askCards({ action: 'cardOpen', session, tabId, leadId, ...chatFlag(chat) }) },
-    // An error (no service, a refused post) is not `said`: the words go to the harness instead, never lost.
-    swarmSay: async (harnessId, text, chat, chatId, reviewed) => saidOf(await askCards({ action: 'cardSay', harnessId, text, ...chatFlag(chat),
-      ...(chatId ? { chatId, ...(reviewed ? { reviewed: true } : {}) } : {}) })),
-    // The Pro picked a Lead: the window opens that Swarm tab and project. Harmless with no window. `chat`, from a round dial
-    // that keeps sides: the Buddy chat or the Lead chat there; a window from before it opens the project's Lead chat.
-    superTabSelected: (superTabId, projectId, chat) =>
-      core.clients.sendLocal({ type: 'dial_super_tab', payload: { superTabId, projectId, ...(chat ? { chat } : {}) } }),
-    scrolled: (phase, dy, velocity, superTabId) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity, ...(superTabId ? { superTabId } : {}) } }),
+    scrolled: (phase, dy, velocity) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } }),
     // Gestures stay at this desk. The device inventory and its settings also reach the owner's other
     // machines, through the encrypted device-management event.
     dialStatus: (status) => {
@@ -283,7 +437,36 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // started; a member that fails answers "unavailable", and the host routes this computer by itself.
     fleet: () => fleet,
     pets: () => pets,
+    // The app a dial that says appFilter shows (cable/hosts/appFilter.ts). Each line is a measure, read from the log as the
+    // notify tally is: a cause, never the app or an agent.
+    appSwitched: (cause) => {
+      log(`[device] app filter: switched · ${cause}`)
+      // After the list read that found it (an app emptying is found inside one), never from within it: the new ring goes
+      // to every dial, and its agents mid-turn, which the dial has heard nothing of, are told again.
+      queueMicrotask(() => {
+        part.call('dial', () => cable.syncAgents())
+        part.call('dial', remind)
+      })
+    },
+    // The settle of the app in front: the Claude app's turns the dial to the session it last attached
+    // (docs/specs/2026-11-15-dial-claude-app-follow.md), and any app's judges the tab report waiting on it. Each guarded on
+    // its own: the filter drops what this answers, so a follow that rejects would go unseen, and one that throws would
+    // cost the other its settle.
+    appSettled: (app) => {
+      if (app === 'claude') part.call('dial', claudeSettled)
+      part.call('dial', () => tabSettled(app))
+    },
+    appPicked: () => log('[device] app filter: picker'),
+    // A tap on a Harness agent with no window starts Desktop, on macOS only (docs/specs/2026-11-15-device-wave1-checks.md,
+    // F2).
+    launchDesktop: opener.desktop,
+    // A measure: the app's name only.
+    desktopTimedOut: () => log('[device] open · harness · no window'),
+    // The settle of the app in front: a filter that throws costs the devices nothing, and the devices stopping cancels it.
+    appTimer: timerIn('dial'),
   })
+  // What the dial lists with no window: this computer's harness agents, and the ones outside a pane unless switched off.
+  cableHost.setRegistry(new HostRegistry(observed ? [cableHost.harness, observed] : [cableHost.harness]))
   // The dial's log lives with the app's, one file a day (dialLog.ts). The old unbounded `dial.log` in the
   // data folder is cut down to a pointer, for anyone with a bookmark.
   const legacyDialLog = join(core.dataDir, 'dial.log')
@@ -382,7 +565,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       }
       // Returned, so the agent's next card waits behind this one (inOrder): a late recap must not follow turn.started.
       return tierOf({ agent: who?.name ?? '', engine: who?.engine ?? '', recap, durationS: turn?.durationS ?? null,
-        stats: turn?.stats ?? {}, subagent: false, onScreen: false, failed: event.failed === true, swarm: swarmAgent(event) })
+        stats: turn?.stats ?? {}, subagent: false, onScreen: false, failed: event.failed === true })
         .then((d) => d.tier, () => 'list' as const)
         .then((tier) => { void cable.summary(agentId, recap, event.text, tier, event.fullText, false) })
     }
@@ -390,60 +573,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       began.delete(event.agentId); ended.delete(event.agentId)
       stats.take(event.agentId) // a failed turn's sums must not leak into the next turn
       starts.delete(event.agentId)
-      // A Swarm Reviewer failed every turn in 1-2 s (2026-10-28), and each failure took over
-      // the round dial with the engine's raw error for 8 s. A Swarm's workers answer to their Lead, who hears of it in the
-      // Swarm: one the person has not put on a tab ends its tile quietly, as a finished turn does, and never stays Working.
-      const quiet = (): void => {
-        tally(cableHost.describe(event.agentId)?.name ?? '', 'silent', 'rule:swarm-worker', 'turn.error', 0)
-        void cable.turnDone(event.agentId)
-      }
-      const shown = (): void => {
-        tally(cableHost.describe(event.agentId)?.name ?? '', 'alert', 'rule:failed', 'turn.error', 0)
-        void cable.turnError(event.agentId, event.text)
-      }
-      if (onDesk(event.agentId)) return shown()
-      if (swarmWorker(event)) return quiet()
-      // Another of the person's computers says nothing of the Swarm in its card: the Swarm service is asked, and returned so
-      // the agent's next card waits behind the answer. No answer (an older computer, the service down) shows it, as before.
-      if (!event.machineId) return shown()
-      return remoteWorker(event.machineId, event.agentId).then((worker) => worker ? quiet() : shown())
+      tally(cableHost.describe(event.agentId)?.name ?? '', 'alert', 'rule:failed', 'turn.error', 0)
+      void cable.turnError(event.agentId, event.text)
     }
   }
-  /** An agent the Swarm started here, a Builder or Reviewer as it was (its record's Swarm role, and an agent started it, as
-   *  every Swarm start is). The coordinator is the person's own agent leading the
-   *  Swarm, and one the person started by hand is theirs whatever its role: their failures reach the dial as before. */
-  const swarmWorker = (event: DialEvent): boolean => {
-    const session = event.machineId ? undefined : core.agents.byAgent(event.agentId)
-    const role = session?.startedBy === 'agent' ? session.swarmSkill?.role : undefined
-    return role === 'agent'
-  }
-  /** Any Swarm agent, whatever its role (PM, Buddy, Builder, Reviewer, Tester): its registry row carries `swarmSkill`. Its
-   *  news reaches the dial through the Swarm's cards, so its finished turn is silent. */
-  const swarmAgent = (event: DialEvent): boolean => !event.machineId && !!core.agents.byAgent(event.agentId)?.swarmSkill
-  /** Whether an agent on another machine is a Swarm's Builder or Reviewer, as the Swarm service read it last
-   *  (superTabs/cards.ts `worker`). Asked once a minute at most per agent: a failing worker fails every 1-2 s. */
-  const WORKER_ANSWER_MS = 60_000
-  /** How long a failure waits for the answer before it shows as before: a hung service must not leave the tile working. */
-  const WORKER_WAIT_MS = 2_000
-  const workerAnswers = new Map<string, { worker: boolean; at: number }>()
-  const remoteWorker = async (machineId: string, agentId: string): Promise<boolean> => {
-    const key = `${machineId}/${agentId}`
-    const held = workerAnswers.get(key)
-    if (held && monotonic() - held.at < WORKER_ANSWER_MS) return held.worker
-    let timer: ReturnType<typeof setTimeout> | undefined
-    // No answer in time is held as "not a worker" like any other, so the next failures in the minute do not wait again.
-    const worker = await Promise.race([
-      askCards({ action: 'cardWorker', machineId, harnessId: agentId }).then((answer) => answer.worker === true),
-      new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), WORKER_WAIT_MS) }),
-    ]).finally(() => clearTimeout(timer))
-    // Each key is an agent that failed off the desk; a long-lived process forgets them all rather than grow.
-    if (workerAnswers.size >= 256) workerAnswers.clear()
-    workerAnswers.set(key, { worker, at: monotonic() })
-    return worker
-  }
-  /** On any of the window's tabs, or the desk the dial walks: the person put it there, so its failure is theirs to see. */
-  const onDesk = (agentId: string): boolean =>
-    desk.includes(agentId) || cableHost.listSwarms().swarms.some((tab) => tab.agentIds?.includes(agentId))
   /**
    * The reply as it streams: a `steps-v1` device shows the agent's latest paragraph, but a text delta arrives every
    * few tokens and the link is lossy. So at most one send per 750 ms per agent, a trailing send of the last text
@@ -509,50 +642,322 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     toDial({ ...event, subagent: event.subagent === true })
   }))
 
+  // An agent outside a pane reaches the dial through the same calls, as its state changes. What the dial was told of each
+  // is kept, so that a change is told once.
+  const told = new Map<string, { state: HostAgentState; line: string | null; answer?: string }>()
+  const busy = (agent: HostAgent): boolean => agent.state === 'working' || agent.state === 'needs-you'
+  /** Its turn, with the waiting line: the session's activity read right after it (`activityText` above) repeats the line. */
+  const started = (agent: HostAgent): DialEvent => ({ kind: 'processing', agentId: agent.id, text: waiting(agent) ?? '', recap: '', subagent: false })
+  /** A window is open (its tabs, not null): the dial shows the tab, as before there were agents outside a pane, and hears
+   *  nothing of them. What they do is still noted, so that only a later change is told once the window closes. */
+  let windowOpen = false
+  const tell = (event: DialEvent): void => { if (!windowOpen) toDial(event) }
+  /**
+   * The prompt an agent waits on, once its hook said what it asks, is also a question for the dial, which the dial only
+   * shows (cableSession.ts SHOWN_ONLY_PREFIX): the round dial draws a line on its working face, a question on its asking
+   * one. One option, as a question needs one, and none to speak. By agent, so that each is closed by its own id.
+   */
+  const shown = new Map<string, { id: string; line: string; questions: unknown }>()
+  const ask = (agentId: string, question: { id: string; line: string; questions: unknown }): void => {
+    shown.set(agentId, question)
+    inOrder(agentId, () => { void cable.question(agentId, question.id, question.questions) })
+  }
+  /** Asks what waits and closes what no longer does (or what a window covers): before a line, which it takes the place of. */
+  const showWaits = (): void => {
+    const want = new Map<string, HostAgent>()
+    if (!windowOpen) for (const agent of observed?.list() ?? []) if (observed?.waitingOn(agent.id) !== undefined) want.set(agent.id, agent)
+    for (const [agentId, question] of shown) {
+      const agent = want.get(agentId)
+      if (agent && waiting(agent) === question.line) continue
+      shown.delete(agentId)
+      inOrder(agentId, () => { void cable.questionClose(agentId, question.id) })
+    }
+    for (const [agentId, agent] of want) {
+      const line = waiting(agent)
+      if (shown.has(agentId) || !line) continue
+      ask(agentId, { id: `${SHOWN_ONLY_PREFIX}${randomUUID()}`, line,
+        questions: [{ key: 'prompt', q: line, options: [`In ${hostDisplayName(agent.host)}`] }] })
+    }
+  }
+  observed?.onChange(() => part.call('dial', () => {
+    showWaits()
+    const agents = observed.list()
+    const ids = new Set(agents.map((agent) => agent.id))
+    for (const id of told.keys()) if (!ids.has(id)) told.delete(id)
+    for (const agent of agents) {
+      const was = told.get(agent.id)
+      const card = { agentId: agent.id, text: '', recap: '', subagent: false }
+      // A wait whose line changed is told again.
+      const line = waiting(agent)
+      if (was?.state === agent.state && was.line === line) {
+        // The answer is read after the turn ends (observed.ts), so its summary follows the done. One still the last
+        // turn's (this turn's was not found) is not said again.
+        if (agent.state === 'done' && agent.lastAnswer && agent.lastAnswer !== was.answer) {
+          was.answer = agent.lastAnswer
+          tell({ ...card, kind: 'summary', text: agent.lastAnswer, recap: agent.lastAnswer, fullText: agent.lastAnswer })
+        }
+        continue
+      }
+      told.set(agent.id, { state: agent.state, line, answer: agent.lastAnswer })
+      if (busy(agent)) tell(started(agent))
+      else if (agent.state === 'done') tell({ ...card, kind: 'done' })
+      else if (agent.state === 'error') tell({ ...card, kind: 'error' })
+    }
+  }))
+  /** One of the observed source's timers, each run guarded as a notice is: one that throws is logged and the next runs. */
+  const every = (ms: number, run: () => unknown): ReturnType<typeof setInterval> => {
+    const timer = setInterval(() => part.call('observed', run), ms)
+    timer.unref()
+    return timer
+  }
+  const timers = observed ? [every(OBSERVED_TICK_MS, () => observed.tick()), every(TURN_CHECK_MS, () => observed.checkWorking())] : []
+  /** A look at the processes for each session that ended, once it is old enough to go: the 30 s one leaves it listed for
+   *  up to 40 s. One per listed session (fifty at most), a later end of it putting its look off. */
+  const endings = new Map<string, ReturnType<typeof setTimeout>>()
+  const dropEnded = (source: ObservedSource, agentId: string): void => {
+    if (!outside(agentId)) return
+    clearTimeout(endings.get(agentId))
+    const timer = setTimeout(() => { endings.delete(agentId); part.call('observed', () => source.tick()) }, ENDED_MS)
+    timer.unref()
+    endings.set(agentId, timer)
+  }
+  /** Each observed agent mid-turn that a dial lists (sixteen at most of the fifty in each list), told again: the dial forgets
+   *  a turn it hears nothing of for 25 s, and one that just came, whose window just closed, or whose app the dial was just
+   *  turned to, has heard nothing of it yet. Both lists a dial can hold: the one ring, and the shown app's for a dial that
+   *  says appFilter, read only while one is connected: that read can switch the app, which no older dial shows. */
+  const remind = async (): Promise<void> => {
+    const mid = (observed?.list() ?? []).filter(busy)
+    if (!mid.length || windowOpen) return
+    const apps = cable.wantsApps() ? [cableHost.listAgentSnapshot({ apps: true })] : []
+    const lists = await Promise.all([cableHost.listAgentSnapshot(), ...apps])
+    const listed = new Set(lists.flatMap((list) => list.agents.map((agent) => agent.id)))
+    for (const agent of mid) if (listed.has(agent.id)) tell(started(agent))
+  }
+  /** The scan and the reminders, for an attached dial alone. */
+  let attached: ReturnType<typeof setInterval>[] = []
+  const dialAttached = (on: boolean): void => {
+    for (const timer of attached) clearInterval(timer)
+    attached = []
+    if (!on || !observed) return
+    // Agents already running when the dial came are listed now, idle until their next hook event.
+    part.call('observed', () => observed.scanOpen())
+    // Its questions were in its RAM: the ones still waiting are asked again, under their ids.
+    part.call('dial', () => { for (const [agentId, question] of shown) ask(agentId, question) })
+    part.call('dial', remind)
+    attached = [
+      every(OPEN_SCAN_MS, () => observed.scanOpen()),
+      // A person can take minutes to come to an agent that waits on them.
+      every(REMIND_MS, remind),
+    ]
+  }
+
+  // ── the mod's polls ────────────────────────────────────────────────────────────────────────────────
+  //
+  // Guarded as the fleet is: a part that throws, or did not start, answers as with no dial, so the mod waits a minute. One
+  // switched off ends what it holds: the `gone` that would have ended a poll is swallowed from then on.
+  const { inboxPoll, inboxGone } = DEVICES_FALLBACKS
+  const inboxCalls = part.start('inbox', (): Pick<DeviceHookPort, 'inboxPoll' | 'inboxGone'> & { stop(): void } => ({
+    inboxPoll: ({ pollId, sessionId }) => inbox.poll(pollId, sessionId),
+    inboxGone: (pollId) => inbox.gone(pollId),
+    stop: () => inbox.closeAll(),
+  }), { inboxPoll, inboxGone, stop: undefined })
+  /** Every poll held for the core's calls: that core went, or the devices stop. */
+  const endHookCalls = (): void => { part.call('inbox', () => inbox.closeAll()) }
+  // The core's calls failed to none when its link dropped: a transcript for a poll nobody holds would wait for nothing.
+  deps.onCoreGone?.(endHookCalls)
+
+  // `harness hardware watch` tells the devices' own listener which app is in front, and the dial with no window follows it
+  // once it settles (cable/hosts/appFilter.ts), and the harness-device mod tells it the session the Claude app shows: the
+  // core never hears either. Another message type is another key here. A rejection's text is not logged: it can hold the
+  // socket's path, and a path the account's name.
+  const listening = deps.listen?.({
+    front: frontHandler((app) => part.call('dial', () => cableHost.front(app))),
+    attach: attachHandler((sessionId) => part.call('dial', () => claudeAttached(sessionId))),
+    tab: tabHandler((tab) => part.call('dial', () => tabReported(tab))),
+    tabs: tabs.handler,
+    dial: dial.handler,
+  }, log)
+    .catch((): null => { log('[devices] listener not opened · failed'); return null })
+
+  let stopped = false
   if (deps.cableDisabled) log('[cable] disabled (CABLE_DISABLE=true) — the serial port is left alone')
-  else cable.start()
+  else if (!listening) cable.start()
+  else {
+    // After the listener has opened, so a dial that attaches finds it open: the watch tells it the app in front once, as
+    // the dial attaches. One that has not opened in a second does not keep the dial off.
+    let bound: ReturnType<typeof setTimeout> | undefined
+    void Promise.race([listening, new Promise((resolve) => { bound = setTimeout(resolve, LISTENER_WAIT_MS).unref() })]).then(() => {
+      clearTimeout(bound)
+      if (!stopped) cable.start()
+    })
+  }
   ;(deps.onExit ?? ((run) => { process.once('exit', run) }))(() => shutdownVoiceRouter())
 
+  /** A card bound for the devices, translated once for the cable. */
+  const toCable = (frame: Record<string, unknown>): void => {
+    // A question, its close and a turn's card each also move the agent on the dial's list with no window (hosts/harness.ts).
+    const close = cableQuestionCloseFor(frame as Parameters<typeof cableQuestionCloseFor>[0])
+    if (close) { cableHost.harness.noteCard(close.agentId, 'question.close'); inOrder(close.agentId, () => { void cable.questionClose(close.agentId, close.requestId) }); return }
+    const question = cableQuestionFor(frame as Parameters<typeof cableQuestionFor>[0])
+    if (question) { cableHost.harness.noteCard(question.agentId, 'question'); tally(cableHost.describe(question.agentId)?.name ?? '', 'alert', 'rule:question', 'question', 0); inOrder(question.agentId, () => { void cable.question(question.agentId, question.requestId, question.questions) }); return }
+    // A shell result is only the stats' input: the dial is told the sums when the turn ends.
+    const ran = frame as { type?: string; agentId?: string; payload?: { kind?: string; id?: string; command?: string; isError?: boolean; outputTail?: string } }
+    if (ran.payload?.kind === 'reply_text' && ran.agentId) {
+      const update = (ran.payload as { update?: unknown }).update
+      if (typeof update === 'string' && update) { latestUpdate.set(ran.agentId, update); replyText(ran.agentId, update) }
+      return
+    }
+    if (ran.payload?.kind === 'turn_started' && ran.agentId) {
+      endReplies(ran.agentId, false)
+      stats.take(ran.agentId)
+      if (cable.wantsStats()) starts.set(ran.agentId, settle(readUsage(ran.agentId)))
+      return
+    }
+    if (isLocalOnly(frame) && ran.agentId && ran.payload?.id) {
+      stats.toolResult(ran.agentId, ran.payload.command, ran.payload.isError === true, ran.payload.outputTail ?? '')
+      return
+    }
+    // A tool card is a step for a `steps-v1` device and nothing for any other: the session drops it.
+    const gone = (frame as { type?: string; payload?: { agentId?: unknown } })
+    if (gone.type === 'agent_deleted' && typeof gone.payload?.agentId === 'string') { latestUpdate.delete(gone.payload.agentId); began.delete(gone.payload.agentId); ended.delete(gone.payload.agentId); endReplies(gone.payload.agentId, false) }
+    const step = cableStepFor(frame as Parameters<typeof cableStepFor>[0])
+    if (step) { inOrder(step.agentId, () => { void cable.turnStep(step.agentId, step.step) }); return }
+    const event = cableEventFor(frame as Parameters<typeof cableEventFor>[0])
+    // Logged at the fork, not at the send: this answers "did the daemon even decide to tell the dial",
+    // a different question from "did the wire carry it", and the one nobody could answer when a tile
+    // stayed idle through a whole turn.
+    if (env.LOG_FRAMES && frame.type === 'commander_event') {
+      log(`[cable] tee ${(frame as { payload?: { kind?: string } }).payload?.kind ?? '?'} → ${event ? 'sent' : 'ignored'}`)
+    }
+    if (!event) return
+    // A silent one (a sub-agent's, a restored recap) is not news of the agent itself.
+    if (!event.subagent) cableHost.harness.noteCard(event.agentId, event.kind)
+    toDial(event)
+  }
+  /**
+   * A turn's start outside a pane turns the dials to its agent only when a person typed its prompt in the app settled in
+   * front (docs/specs/2026-11-14-dial-pane-follow.md). The front, never the app a dial shows: a pick on the dial leaves
+   * the front where it is, and a dial whose ring lacks the agent answers no tile itself. Each prompt line is a reason,
+   * never the app, the agent or the session; the move's own line, followApp's, names the agent's id as it does for a
+   * Harness agent.
+   */
+  const followPrompt = (agentId: string, source: PromptSource): Promise<void> | undefined => {
+    // No dial linked: nothing to turn or count. The turn still used up a dial's prompt, in `ingest`.
+    if (!cable.isConnected) return
+    if (source === 'relayed') { log('[device] prompt · skipped · relayed'); return }
+    if (source === 'dial') { log('[device] prompt · skipped · dial prompt'); return }
+    const front = cableHost.settledApp()
+    if (front === undefined || outside(agentId)?.app !== front) { log('[device] prompt · skipped · not in front'); return }
+    return cable.followLocal(agentId, 'prompt')
+  }
+  // ── the session the Claude app shows ───────────────────────────────────────────────────────────────
+  //
+  // The harness-device mod says which session the app attached, and the dials turn to its agent while the app has settled
+  // in front, by a prompt's rules (docs/specs/2026-11-15-dial-claude-app-follow.md). Each line is a reason, never the app,
+  // the agent or the session.
+  /** The agent of the app's last attach that named a listed Claude app agent, moved to or not: the session on the app's
+   *  screen, which the dials turn to once the app settles in front. Gone with its session. */
+  let claudeAgent: string | undefined
+  /** What the latest 'attach' follow was asked for: an attach, or the app settling in front. FollowCause is shared with
+   *  the tab follow and has no settle of its own, so this tells a settle's answer from an attach's; a dial answers only
+   *  for its latest ask (cableSession.ts followLocal's generation), so its answer is this ask's. */
+  let attachAsk: 'attach' | 'settle' = 'attach'
+  /** When the dial's own continue link to each agent started, by the devices' clock: at most one per listed agent. */
+  const dialLinks = new Map<string, number>()
+  /** A tap's or a rest's link, noted as it starts, as the app's attach can come before `open` exits: that attach is the
+   *  dial's own echo, not a session the person chose. Busy or failed, the dial is on that agent all the same. */
+  const noteLink = (agentId: string): void => {
+    const at = monotonic()
+    for (const [id, linked] of dialLinks) if (at - linked >= ATTACH_ECHO_MS) dialLinks.delete(id)
+    dialLinks.set(agentId, at)
+  }
+  /** Whether a link of the dial's own to that agent is younger than ATTACH_ECHO_MS. Compared each time: an older one stays
+   *  in the map until the next link. */
+  const linkedByDial = (agentId: string): boolean => {
+    const linked = dialLinks.get(agentId)
+    return linked !== undefined && monotonic() - linked < ATTACH_ECHO_MS
+  }
+  const claudeAttached = (sessionId: string): Promise<void> | undefined => {
+    const agentId = observedAgentId('claude', sessionId)
+    const listed = outside(agentId)?.app === 'claude'
+    // Kept whatever follows: an echo, or an attach with another app in front, is still the session the app shows.
+    if (listed) claudeAgent = agentId
+    if (!cable.isConnected) return
+    if (!listed) { log('[device] attach · skipped · unknown agent'); return }
+    if (linkedByDial(agentId)) { log('[device] attach · skipped · echo'); return }
+    if (cableHost.settledApp() !== 'claude') { log('[device] attach · skipped · not in front'); return }
+    attachAsk = 'attach'
+    return cable.followLocal(agentId, 'attach')
+  }
+  const claudeSettled = (): Promise<void> | undefined => {
+    if (claudeAgent === undefined || !cable.isConnected) return
+    // Resumed in another app, or gone with no end: the app no longer shows it.
+    if (outside(claudeAgent)?.app !== 'claude') { claudeAgent = undefined; return }
+    // Any move of the dial, to another agent, another app's pane or none: a turn as the app comes in front puts the dial on
+    // that one, and the settle must not turn the dial back. A link's attach, a moment later, is kept and skipped as its own
+    // echo. Within ATTACH_ECHO_MS, not since the attach kept: that can be minutes old after a look away and back.
+    if (dialMovedAt !== undefined && monotonic() - dialMovedAt < ATTACH_ECHO_MS) { log('[device] settle · skipped · echo'); return }
+    attachAsk = 'settle'
+    return cable.followLocal(claudeAgent, 'attach')
+  }
+  /**
+   * A tab selected in Terminal, iTerm2 or Ghostty turns the dials to its agent as a person's prompt does, once its app has
+   * settled in front (docs/specs/2026-11-15-dial-terminal-follow.md, "2. Selecting a tab moves the dial"): Harness Device
+   * reports as the app comes to the front, before it settles. The latest report waits for that settle, and another app
+   * settling drops it. Each line is an outcome, never the app, the tty or the agent.
+   */
+  /** A tab report, when it came and how many moves the dial had made by then. */
+  type TabReport = Tab & { at: number; moves: number }
+  let tabReport: TabReport | undefined
+  /** Uses up the report: with no dial linked nothing is followed or counted, as with a prompt. */
+  const followTab = (report: TabReport): Promise<void> | undefined => {
+    tabReport = undefined
+    if (!cable.isConnected) return
+    const { app, tty, at } = report
+    // The dial moved while the report waited for the settle, to a tab, another app's pane or none: it names a tab the dial
+    // has left. When that move selected a tab, the app's report of it is still to come.
+    if (report.moves !== dialMoves) { log('[device] tab · skipped · echo'); return }
+    // By when the report came, not when its app settled: the wait for the settle must not age the dial's own select. It
+    // excuses this report only: the person selecting that tab again soon after moves the dial. The app runs selects and
+    // reports tabs in order, so a select before it will see no echo now (Harness Device replaced it while it waited, or
+    // its tab was already shown): it goes too.
+    const echo = selects.findIndex((sent) => sent.tty === tty && at - sent.at < TAB_ECHO_MS)
+    if (echo >= 0) { selects = selects.slice(echo + 1); log('[device] tab · skipped · echo'); return }
+    const agent = observed?.byTab(app, tty)
+    if (!agent) { log('[device] tab · skipped · unknown agent'); return }
+    return cable.followLocal(agent.id, 'tab')
+  }
+  const tabReported = (tab: Tab): Promise<void> | undefined => {
+    const report = { ...tab, at: monotonic(), moves: dialMoves }
+    if (cableHost.settledApp() === tab.app) return followTab(report)
+    tabReport = report
+  }
+  const tabSettled = (app: string): Promise<void> | undefined => {
+    if (!tabReport) return
+    if (tabReport.app === app) return followTab(tabReport)
+    tabReport = undefined
+    if (cable.isConnected) log('[device] tab · skipped · not in front')
+  }
   const port: DevicesPort = {
+    // A paneless session's hook event, as the core checked it: taken, and dropped here while the observed source is
+    // switched off.
+    observed: (event) => {
+      part.call('observed', () => {
+        if (!observed) return
+        const source = observed.ingest(event)
+        if (event.event === 'session-end') {
+          const agentId = observedAgentId(event.engine, event.sessionId)
+          dropEnded(observed, agentId)
+          // Listed for a while once ended, but on no app's screen: a settle must not turn the dial to it.
+          if (agentId === claudeAgent) claudeAgent = undefined
+        }
+        if (source) part.call('dial', () => followPrompt(observedAgentId(event.engine, event.sessionId), source))
+      })
+      return true
+    },
     // Every card bound for the Wi-Fi devices goes down the cable too, translated once: a new kind of card
     // reaches the dial the day it reaches the backend's devices.
-    card: (frame) => part.call('dial', () => {
-      const close = cableQuestionCloseFor(frame as Parameters<typeof cableQuestionCloseFor>[0])
-      if (close) { inOrder(close.agentId, () => { void cable.questionClose(close.agentId, close.requestId) }); return }
-      const question = cableQuestionFor(frame as Parameters<typeof cableQuestionFor>[0])
-      // A Super Tab member waiting on a person (superTabs/inCore/attention.ts) is an alert as any question is.
-      if (question) { tally(cableHost.describe(question.agentId)?.name ?? '', 'alert', question.superTab ? 'rule:super-tab' : 'rule:question', 'question', 0); inOrder(question.agentId, () => { void cable.question(question.agentId, question.requestId, question.questions, question.superTab) }); return }
-      // A shell result is only the stats' input: the dial is told the sums when the turn ends.
-      const ran = frame as { type?: string; agentId?: string; payload?: { kind?: string; id?: string; command?: string; isError?: boolean; outputTail?: string } }
-      if (ran.payload?.kind === 'reply_text' && ran.agentId) {
-        const update = (ran.payload as { update?: unknown }).update
-        if (typeof update === 'string' && update) { latestUpdate.set(ran.agentId, update); replyText(ran.agentId, update) }
-        return
-      }
-      if (ran.payload?.kind === 'turn_started' && ran.agentId) {
-        endReplies(ran.agentId, false)
-        stats.take(ran.agentId)
-        if (cable.wantsStats()) starts.set(ran.agentId, settle(readUsage(ran.agentId)))
-        return
-      }
-      if (isLocalOnly(frame) && ran.agentId && ran.payload?.id) {
-        stats.toolResult(ran.agentId, ran.payload.command, ran.payload.isError === true, ran.payload.outputTail ?? '')
-        return
-      }
-      // A tool card is a step for a `steps-v1` device and nothing for any other: the session drops it.
-      const gone = (frame as { type?: string; payload?: { agentId?: unknown } })
-      if (gone.type === 'agent_deleted' && typeof gone.payload?.agentId === 'string') { latestUpdate.delete(gone.payload.agentId); began.delete(gone.payload.agentId); ended.delete(gone.payload.agentId); endReplies(gone.payload.agentId, false) }
-      const step = cableStepFor(frame as Parameters<typeof cableStepFor>[0])
-      if (step) { inOrder(step.agentId, () => { void cable.turnStep(step.agentId, step.step) }); return }
-      const event = cableEventFor(frame as Parameters<typeof cableEventFor>[0])
-      // Logged at the fork, not at the send: this answers "did the daemon even decide to tell the dial",
-      // a different question from "did the wire carry it", and the one nobody could answer when a tile
-      // stayed idle through a whole turn.
-      if (env.LOG_FRAMES && frame.type === 'commander_event') {
-        log(`[cable] tee ${(frame as { payload?: { kind?: string } }).payload?.kind ?? '?'} → ${event ? 'sent' : 'ignored'}`)
-      }
-      if (event) toDial(event)
-    }),
+    card: (frame) => part.call('dial', () => toCable(frame)),
     desk: (agentIds, front) => {
       // ORDER matters, not just membership: the dial's carousel is the tiles, in tile order, so the thumb
       // walks the grid the eyes are on, and a change is a new ring, pushed at once. Left to the next tick,
@@ -567,25 +972,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     },
     // Null is the window gone: an empty desk with a window behind it is an empty tab, with none a shut app.
     swarms: (swarms) => part.call('dial', () => {
+      const closed = windowOpen && swarms === null
+      windowOpen = swarms !== null
       cableHost.setSwarms(swarms)
-      // The Swarms the window has tabs for are read first; said again to the core only when they change.
-      const include = [...new Set((swarms?.swarms ?? []).map((s) => s.superTabId).filter((id): id is string => !!id))].slice(0, 16)
-      const open = cableHost.activeSwarmProject()
-      const focus = open?.conversationId
-        ? { tabId: open.superTabId, conversationId: open.conversationId } : null
-      const refocused = `${focus?.tabId}/${focus?.conversationId}` !== `${cardFocus?.tabId}/${cardFocus?.conversationId}`
-      if (include.join(',') !== cardInclude.join(',') || refocused) { cardInclude = include; cardFocus = focus; if (cardDevices > 0) tellCards() }
       void cable.syncSwarms()
       void cable.syncAgents()
-      // The Swarm cards link to their desk tab and follow its open project.
-      void cable.syncSwarmCards()
+      // An open window closes the questions of the agents outside it, as it covers their lines; closed, they are asked again.
+      showWaits()
+      if (closed) part.call('dial', remind)
     }),
-    // The Swarms' cards and a Lead's recap for the Harness Pro: the cable carries them once it speaks the frames.
-    swarmCards: (items) => part.call('dial', () => {
-      cableHost.setSwarmCards(items)
-      void cable.syncSwarmCards()
-    }),
-    swarmCardRecap: (recap) => part.call('dial', () => { void cable.swarmCardRecap(recap) }),
     // Held rather than acted on: the dial is handed it when it attaches, the one moment its drawer is known
     // to be empty.
     unread: (items) => part.call('dial', () => {
@@ -608,7 +1003,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     },
     windowReply: (kind, connId, machineId, payload) => part.call('window', () =>
       (kind === 'form' ? windowForm : kind === 'visit' ? windowVisit : windowSelection).reply(connId, machineId, payload)),
-    voiceReply: (voiceId, reply) => part.call('window', () => windowRouter.reply(voiceId, reply)),
     windowGone: (connId) => part.call('window', () => {
       windowForm.disconnected(connId)
       windowSelection.focusChanged()
@@ -629,9 +1023,24 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // The voice router warms a worker on an engine the machine runs, while a device is watching.
     engines: (engines) => setVoiceRouterSessions(engines.map((engine) => ({ engine }))),
     commanders: (connected) => setVoiceRouterDeviceConnected(connected),
+    // The mod's poll, as the core checked and bounded it (core/deviceHookCalls.ts).
+    inboxPoll: async (poll) => (inboxCalls ? inboxCalls.inboxPoll(poll) : { off: true }),
+    inboxGone: (pollId) => inboxCalls?.inboxGone(pollId),
     // The serial ports first: a port left held makes esptool fail in a way that reads like dead hardware.
     stop: async () => {
+      // A cable still waiting on the listener never starts.
+      stopped = true
+      // The listener before anything, once it has opened: no front reaches a stopped cable or sets a timer after the
+      // timers below are cleared.
+      await (await listening)?.close()
       for (const agentId of [...replies.keys()]) endReplies(agentId, false)   // no timer may fire into a stopped cable
+      for (const timer of timers) clearInterval(timer)
+      for (const timer of endings.values()) clearTimeout(timer)
+      for (const timer of pending) clearTimeout(timer)
+      tabReport = undefined
+      selects = []
+      endHookCalls()
+      dialAttached(false)
       await cable.stop()
       fleet?.stop()
       shutdownVoiceRouter()
@@ -651,11 +1060,38 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   const answer = (type: string) => (payload: Record<string, unknown>, asker: { local?: boolean; owner: boolean }) =>
     asker.owner ? harnessDevicesRequest(tab, type, payload) : { error: 'OWNER_REQUIRED' }
+  /**
+   * A window's frames (core/api.ts `SERVICE_WS_FRAMES`), checked as the local WebSocket checked them before they left the
+   * core: ⌘K's pick (an empty task picks no agent), its send (nothing to send without both), and its answer to a spoken
+   * task, whose states other than the three are dropped rather than guessed at: an answer this side cannot read must not
+   * settle a spoken turn as though it had been understood. A window's only, on this computer.
+   */
+  const windowFrame = async (payload: Record<string, unknown>, asker: { local?: boolean; owner: boolean }): Promise<Record<string, unknown>> => {
+    if (!asker.local || !asker.owner) return { error: 'LOCAL_ONLY' }
+    const frame = (payload.payload && typeof payload.payload === 'object' ? payload.payload : {}) as Record<string, unknown>
+    const said = (field: string): string => (typeof frame[field] === 'string' ? frame[field] as string : '')
+    if (payload.frame === 'route_task') {
+      const task = said('text').trim()
+      return { ...(task ? await port.routeTask(task) : unrouted('empty task')) }
+    }
+    if (payload.frame === 'route_send') {
+      const sent = said('agentId') && said('text') ? await port.routeSend(said('agentId'), said('text')) : { ok: false as const, machine: '', reason: 'nothing to send' }
+      return sent.ok ? { ok: true } : { ok: false, machine: sent.machine, reason: sent.reason }
+    }
+    if (payload.frame === 'voice_route_reply') {
+      const voiceId = said('voiceId'), state = said('state')
+      const reply = state === 'taken' ? { t: 'taken' as const } : state === 'sent' ? { t: 'sent' as const, agentId: said('agentId') } : state === 'cancelled' ? { t: 'cancelled' as const } : null
+      if (voiceId && reply) part.call('window', () => windowRouter.reply(voiceId, reply))
+      return {}
+    }
+    return { error: 'UNKNOWN_FRAME' }
+  }
   // Pets name files on this computer by path, so they are answered to a process here only, never the owner's relayed app.
   const local = (type: string) => (payload: Record<string, unknown>, asker: { local?: boolean; owner: boolean }) =>
     !asker.owner ? { error: 'OWNER_REQUIRED' } : asker.local ? harnessDevicesRequest(tab, type, payload) : { error: 'LOCAL_ONLY' }
   return {
     harness_devices_list: answer('harness_devices_list'), harness_device_settings: answer('harness_device_settings'),
     pet_preview: local('pet_preview'), pet_apply: local('pet_apply'), pet_reset: local('pet_reset'), pet_status: local('pet_status'),
+    devices_ws: (payload, asker) => windowFrame(payload, asker),
   }
 }

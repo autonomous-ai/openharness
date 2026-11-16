@@ -113,7 +113,7 @@ beforeAll(async () => {
     const upserts = (docs: { _id: string }[]) => docs.map(doc => ({ replaceOne: { filter: { _id: doc._id }, replacement: doc, upsert: true } }))
     await settled(() => db.collection<{ _id: string }>('product_usage_receipts').bulkWrite(upserts(Array.from({ length: 50 }, (_, i) => ({ _id: `r${i}`, expiresAt: new Date(NOW) }))), { writeConcern: { w: 2 } }))
     await settled(() => db.collection('product_usage_receipts').createIndex({ expiresAt: 1 }))
-    await settled(() => db.collection<{ _id: string }>('SwarmGroup').bulkWrite(upserts([{ _id: 'g', tabId: 't', note: 'x'.repeat(100) } as { _id: string }]), { writeConcern: { w: 2 } }))
+    await settled(() => db.collection<{ _id: string }>('agent_message_tabs').bulkWrite(upserts([{ _id: 'g', tabId: 't', note: 'x'.repeat(100) } as { _id: string }]), { writeConcern: { w: 2 } }))
     for (;;) {
       const { members } = await db.admin().command({ replSetGetStatus: 1 }) as { members: { stateStr: string }[] }
       if (members.every(m => m.stateStr === 'PRIMARY' || m.stateStr === 'SECONDARY')) break

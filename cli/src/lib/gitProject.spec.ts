@@ -8,8 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
 import { placeholderBranch, sessionBranchNames, worktreeFolderName } from './agentNames.js'
 import { nameBranchAfterSession } from './branchNaming.js'
-import { harnessMadeWorktree, prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
-import { parseProjectFolder, prepareProjectFolder } from './projectFolder.js'
+import { prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
+import { prepareGitFolder } from './gitProjectFolder.js'
+import { parseProjectFolder, type GitProjectFolder } from './projectFolder.js'
 import { engineSessionTitle, namingTitle } from './sessionTitle.js'
 
 const exec = promisify(execFile)
@@ -44,22 +45,9 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
   afterEach(async () => { vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true }) })
   const options = () => ({ root: join(root, 'harnesses'), label: 'Codex', now: () => new Date(2026, 8, 21, 12, 0) })
   const prepare = (source: 'worktree' | 'branch', branchRef = 'refs/heads/feature', path = repo, extra: Record<string, unknown> = {}) =>
-    prepareProjectFolder(parseProjectFolder({ projectSource: source, gitSource: path, branchRef, ...extra })!, options())
+    prepareGitFolder(parseProjectFolder({ projectSource: source, gitSource: path, branchRef, ...extra }) as GitProjectFolder, options())
   const worktrees = () => join(root, 'harnesses', 'worktrees', 'project with spaces')
   const current = async (path: string) => (await exec('git', ['-C', path, 'branch', '--show-current'])).stdout.trim()
-
-  // 2026-10-30: the desktop's New Swarm makes its PM's worktree itself; the daemon trusts it for Claude Code only on this.
-  it('knows a worktree Harness made from the person\'s own checkout and worktrees', async () => {
-    const harnesses = join(root, 'harnesses')
-    const made = await prepareGitProject(repo, { root: harnesses, worktree: true, branchName: 'tidy-badger' })
-    expect(await harnessMadeWorktree(made, harnesses)).toBe(true)
-    const own = join(harnesses, 'worktrees', 'own')
-    await git('worktree', 'add', '-b', 'mine', own)
-    expect(await harnessMadeWorktree(own, harnesses)).toBe(false)
-    expect(await harnessMadeWorktree(repo, harnesses)).toBe(false)
-    expect(await harnessMadeWorktree(join(harnesses, 'worktrees'), harnesses)).toBe(false)
-    expect(await harnessMadeWorktree(join(root, 'missing'), harnesses)).toBe(false)
-  })
 
   it('encrypts Git metadata requests and replies', () => {
     expect(encryptDownFrame('git_project_info')).toBe(true)
@@ -438,94 +426,6 @@ exec '${realGit}' "$@"
     expect((await exec('git', ['-C', tracking, 'rev-parse', '--abbrev-ref', '@{upstream}'])).stdout.trim()).toBe('origin/fix/typo')
   })
 
-  describe('a Swarm start that names no branch', () => {
-    // A Swarm host clones a project once and reuses that checkout for every Builder, so its HEAD falls behind the
-    // remote. `branchBase: 'default'` is what a Swarm start without `branchRef` asks for.
-    let origin: string, managed: string
-    const identity = ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null']
-    const inClone = (...args: string[]) => exec('git', ['-C', managed, ...args]).then(out => out.stdout.trim())
-    /** What the worktree a Swarm start made shows of `src/value`. */
-    const swarmStart = async (extra: Record<string, unknown> = {}, path = managed) =>
-      readFile(join(await prepareProjectFolder(parseProjectFolder({ projectSource: 'worktree', gitSource: path, branchName: 'super-tab/start-1',
-        branchBase: 'default', ...extra })!, options()), 'src', 'value'), 'utf8')
-    beforeEach(async () => {
-      origin = join(root, 'origin.git'); managed = join(root, 'managed')
-      await exec('git', ['clone', '--quiet', '--bare', repo, origin])
-      await exec('git', ['clone', '--quiet', origin, managed])
-    })
-    /** Someone pushes to the remote's default branch after the managed clone was made. */
-    const pushToOrigin = async (value: string) => {
-      const pusher = join(root, 'pusher')
-      await exec('git', ['clone', '--quiet', origin, pusher])
-      await writeFile(join(pusher, 'src', 'value'), value)
-      await exec('git', ['-C', pusher, ...identity, 'commit', '-qam', value])
-      await exec('git', ['-C', pusher, 'push', '--quiet', 'origin', 'main'])
-    }
-
-    it('starts from the remote default branch, fetched first, and leaves the checkout\'s own branch where it was', async () => {
-      const before = await inClone('rev-parse', 'HEAD')
-      await pushToOrigin('pushed')
-      expect(await swarmStart()).toBe('pushed')
-      expect(await inClone('rev-parse', 'HEAD')).toBe(before)
-      expect(await inClone('rev-parse', 'refs/remotes/origin/main')).not.toBe(before)
-    })
-
-    it('starts from what the checkout has when the fetch fails', async () => {
-      await pushToOrigin('pushed')
-      await inClone('remote', 'set-url', 'origin', join(root, 'gone.git'))
-      expect(await swarmStart()).toBe('main')
-    })
-
-    it('starts from HEAD in a repository with no remote default branch', async () => {
-      const local = join(root, 'local-only')
-      await mkdir(local)
-      await exec('git', ['-C', local, 'init', '-q', '-b', 'trunk'])
-      await mkdir(join(local, 'src'))
-      await writeFile(join(local, 'src', 'value'), 'trunk')
-      await exec('git', ['-C', local, 'add', '.'])
-      await exec('git', ['-C', local, ...identity, 'commit', '-qm', 'initial'])
-      expect(await swarmStart({}, local)).toBe('trunk')
-    })
-
-    it('names the default branch when the remote has no origin/HEAD but has main', async () => {
-      await pushToOrigin('pushed')
-      await inClone('remote', 'set-head', 'origin', '--delete')
-      expect(await swarmStart()).toBe('pushed')
-    })
-
-    it('starts from the branch it is given, not the default one', async () => {
-      await pushToOrigin('pushed')
-      expect(await swarmStart({ branchBase: undefined, branchRef: 'refs/remotes/origin/feature' })).toBe('feature')
-    })
-
-    it('is not what a start from Desktop or the CLI does: without the flag the checkout\'s HEAD is used and nothing is fetched', async () => {
-      const before = await inClone('rev-parse', 'refs/remotes/origin/main')
-      await pushToOrigin('pushed')
-      expect(await swarmStart({ branchBase: undefined })).toBe('main')
-      expect(await inClone('rev-parse', 'refs/remotes/origin/main')).toBe(before)
-    })
-
-    it('is accepted only for a worktree that names no branch', () => {
-      const parse = (extra: Record<string, unknown>) => () => parseProjectFolder({ projectSource: 'worktree', gitSource: managed,
-        branchName: 'super-tab/start-1', ...extra })
-      expect(parse({ branchBase: 'default' })()).toMatchObject({ source: 'worktree', fromDefaultBranch: true })
-      expect(parseProjectFolder({ projectSource: 'worktree', gitSource: managed, branchBase: 'default' })).toMatchObject({ fromDefaultBranch: true })
-      expect(parse({})()).not.toHaveProperty('fromDefaultBranch')
-      expect(parse({ branchBase: 'default', branchRef: 'refs/remotes/origin/main' })).toThrow()
-      expect(parse({ branchBase: 'main' })).toThrow()
-      expect(parse({ branchBase: true })).toThrow()
-      expect(() => parseProjectFolder({ projectSource: 'branch', gitSource: managed, branchRef: 'refs/heads/main', branchBase: 'default' })).toThrow()
-    })
-
-    it('does not change a direct prepareGitProject call', async () => {
-      await pushToOrigin('pushed')
-      const path = await prepareGitProject(managed, { root: join(root, 'harnesses'), worktree: true, branchName: 'plain' })
-      expect(await readFile(join(path, 'src', 'value'), 'utf8')).toBe('main')
-      const asked = await prepareGitProject(managed, { root: join(root, 'harnesses'), worktree: true, branchName: 'asked', fromDefaultBranch: true })
-      expect(await readFile(join(asked, 'src', 'value'), 'utf8')).toBe('pushed')
-    })
-  })
-
   describe('a worktree whose git is slow or fails', () => {
     const harnesses = () => join(root, 'harnesses')
     const listed = () => git('worktree', 'list', '--porcelain')
@@ -754,7 +654,7 @@ exec '${realGit}' "$@"
     await mkdir(empty)
     await exec('git', ['-C', empty, 'init', '-b', 'main'])
     expect(await read(empty)).toMatchObject({ isGit: true, branch: 'main', branches: [] })
-    await expect(prepareProjectFolder({ source: 'worktree', gitSource: empty }, options()))
+    await expect(prepareGitFolder({ source: 'worktree', gitSource: empty }, options()))
       .rejects.toMatchObject({ code: 'GIT_PROJECT_UNAVAILABLE' })
   })
 

@@ -45,7 +45,8 @@ it('keeps the mark with the home through a save, a load and a rebind', async () 
   expect(registry.byAgent(id)).toMatchObject({ hermesHome: HOME, hermesHomeDerived: true })
 })
 
-it('leaves a home the process named unmarked, as a row an older release saved is', async () => {
+// The row a relaunch exports as HERMES_HOME (engines/nativeLaunch.ts).
+it('leaves a home found outside a sandbox unmarked, as a row an older release saved is', async () => {
   registry.setHermesHome(id, '/h/.hermes/profiles/work')
   expect(registry.byAgent(id)).not.toHaveProperty('hermesHomeDerived')
   expect(readRows()[0]).not.toHaveProperty('hermesHomeDerived')
@@ -60,11 +61,12 @@ it('takes the mark with a home a bind brings, and drops it when another home rep
   expect(registry.byAgent(id)).not.toHaveProperty('hermesHomeDerived')
 })
 
-it('marks again a row an older daemon saved over, and never moves a row to another home', () => {
+it('never marks a row that has its home unmarked, and never moves a row to another home', () => {
   registry.setHermesHome(id, HOME)                                              // the home, no mark
-  expect(registry.setHermesHome(id, HOME, true)).toBe(true)
-  expect(registry.byAgent(id)).toMatchObject({ hermesHome: HOME, hermesHomeDerived: true })
-  expect(registry.setHermesHome(id, HOME, true)).toBe(false)                    // nothing to change, nothing saved
+  // A descriptor cannot tell an older daemon's row from one Harness launched by name, whose relaunch must export it.
+  expect(registry.setHermesHome(id, HOME, true)).toBe(false)
+  expect(registry.byAgent(id)).not.toHaveProperty('hermesHomeDerived')
+  expect(readRows()[0]).not.toHaveProperty('hermesHomeDerived')
   expect(registry.setHermesHome(id, '/elsewhere/.hermes', true)).toBe(false)
   expect(registry.byAgent(id)!.hermesHome).toBe(HOME)
 })

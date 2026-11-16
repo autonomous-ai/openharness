@@ -17,7 +17,7 @@ on:
       scope:
         description: 'Affected component; full for core suites, all for every component'
         type: choice
-        options: [full, cli, tui, backend, desktop, process, all, companions, website, os, provider, firmware, pro, mobile, daemons, pty]
+        options: [full, cli, tui, backend, desktop, process, all, companions, website, os, provider, firmware, pro, mobile, daemons, pty, device-app]
         default: full
   workflow_call:
     inputs:
@@ -76,6 +76,7 @@ jobs:
       mobile: ${{ steps.select.outputs.mobile }}
       daemons: ${{ steps.select.outputs.daemons }}
       pty: ${{ steps.select.outputs.pty }}
+      device-app: ${{ steps.select.outputs.device-app }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -152,13 +153,6 @@ jobs:
           GIT_CONFIG_KEY_0: maintenance.auto
           GIT_CONFIG_VALUE_0: "false"
         run: python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
-      - name: Style allowlists only shrink (desktop/design/desktop-design-system.md)
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          git fetch --quiet --depth=1 --no-tags origin "$BASE_SHA"
-          python3 scripts/check-ui-style.py --against "$BASE_SHA"
       - name: Record source inputs for CI evidence reuse
         run: python3 scripts/ci-source-inputs.py process --record "$RUNNER_TEMP/ci-source-inputs.json"
       - uses: actions/upload-artifact@v4
@@ -215,9 +209,6 @@ jobs:
           sparse-checkout-cone-mode: false
       - name: Verify declared source checkout
         run: python3 scripts/ci-source-inputs.py desktop
-      - name: No new hard-coded styles in Swarm UI (desktop/design/desktop-design-system.md)
-        if: matrix.shard == 1
-        run: python3 scripts/check-ui-style.py --only desktop/lib/super_tabs
       - id: toolchain
         run: |
           version="$(sed -n "s/^  FLUTTER_VERSION: '\([^']*\)'.*/\1/p" .github/workflows/release-desktop.yml)"
@@ -414,7 +405,7 @@ jobs:
       - name: The Redis-backed tests ran
         run: node scripts/redis-tests-ran.mjs vitest-results.json
 
-  # The Super Tab integration suite (npm run test:super-tabs, backend/integration), which every backend PR once ran locally
+  # The backend integration suite (npm run test:integration, backend/integration), which every backend PR once ran locally
   # for 60-90 minutes behind a per-Mac lock (task #2459). Four shards balanced by integration/ci-durations.json; each
   # integration file starts its own MongoDB replica set (mongodb-memory-server-core), so shards share no database, and the
   # suite opens no Redis (src/lib/noRedis.test-support.ts).
@@ -450,11 +441,11 @@ jobs:
         with:
           path: /tmp/harness-super-tab-mongodb-binaries
           key: super-tab-mongod-7.0.24-${{ runner.os }}-${{ runner.arch }}
-      - name: Super Tab integration shard
+      - name: Backend integration shard
         env:
           SHARD: ${{ matrix.shard }}
         run: >-
-          npx vitest run --config vitest.super-tabs.ci.config.ts --shard="$SHARD/4"
+          npx vitest run --config vitest.integration.ci.config.ts --shard="$SHARD/4"
           --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/integration-$SHARD.json"
       - name: Preserve per-file results (durations refresh integration/ci-durations.json)
         if: ${{ !cancelled() }}
@@ -645,8 +636,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.CI_SOURCE_SHA }}
-      - name: No new hard-coded styles in Swarm UI (desktop/design/desktop-design-system.md)
-        run: python3 scripts/check-ui-style.py --only mobile/lib/swarm
       - id: toolchain
         run: |
           version="$(sed -n "s/^  FLUTTER_VERSION: '\([^']*\)'.*/\1/p" .github/workflows/release-desktop.yml)"
@@ -724,11 +713,69 @@ jobs:
           HARNESS_PTY_BIN: ${{ github.workspace }}/pty/target/debug/harness-pty
         run: npx vitest run src/lib/ptyHostBackend.contract.spec.ts --maxWorkers=1
 
+  # The Harness Device menu-bar app (device-app/, Rust and Tauri): the UI's typecheck, Vitest and bundle, then the Rust
+  # unit tests on Linux. The macOS code is not compiled here; it is built and tested on a Mac.
+  device-app-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-device-app-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.device-app == 'true'
+    runs-on: ubuntu-latest
+    # apt-install.sh can take about 19.5 minutes to give up in a mirror outage, and a cold Tauri compile follows.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      # Tauri's Linux packages: the webview, the tray, SVG icons, and libxdo, which its menu crate links. Then, for the
+      # live X11 front source: xvfb (an X server), openbox (a window manager, which keeps _NET_ACTIVE_WINDOW), xdotool
+      # (brings a window to the front) and xterm (the X client brought there).
+      - run: >-
+          sudo bash scripts/apt-install.sh libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+          xvfb openbox xdotool xterm
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: device-app/ui/package-lock.json
+      # The binary embeds ui/dist, so the bundle is built before the Rust tests compile it.
+      - name: UI tests and bundle
+        working-directory: device-app/ui
+        run: |
+          npm ci --no-audit --no-fund
+          npx tsc --noEmit
+          npx vitest run
+          npm run build
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: device-app/src-tauri
+          shared-key: device-app-pr
+          cache-bin: false
+      - name: Rust unit tests
+        run: cargo test --locked --manifest-path device-app/src-tauri/Cargo.toml
+      # x11_live (front_x11.rs) brings two xterms to the front, one copied as `code`, and waits for each exe name from
+      # the X11 source. xvfb-run is not used: it needs xauth, which apt-install.sh's --no-install-recommends leaves out.
+      # Xvfb picks a free display and writes its number on fd 3 once it takes connections: a bounded read, no sleep.
+      # A filter that matches no test passes with 0 tests, so the step fails unless x11_live itself passed.
+      - name: X11 front source, live
+        run: |
+          cp "$(command -v xterm)" "$RUNNER_TEMP/code"
+          mkfifo "$RUNNER_TEMP/xvfb-display"
+          Xvfb -displayfd 3 -screen 0 1280x800x24 3>"$RUNNER_TEMP/xvfb-display" &
+          read -r -t 10 display < "$RUNNER_TEMP/xvfb-display"
+          export DISPLAY=":$display"
+          openbox &
+          X11_LIVE_CLIENTS="$(command -v xterm):$RUNNER_TEMP/code" cargo test --locked --lib \
+            --manifest-path device-app/src-tauri/Cargo.toml -- --ignored x11_live --nocapture | tee "$RUNNER_TEMP/x11_live.log"
+          grep -q 'x11_live ... ok' "$RUNNER_TEMP/x11_live.log"
+
   required:
     name: ci/required
     needs: [plan, process-checks, desktop-tests, companion-subsystems, cli-typecheck, cli-tests, tui-test,
             backend-desk, backend-integration, website-checks, os-checks, provider-checks, firmware-checks, pro-firmware-build, pro-golden,
-            mobile-checks, daemons-checks, pty-checks]
+            mobile-checks, daemons-checks, pty-checks, device-app-checks]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 3

@@ -8,7 +8,7 @@ Add OpenClaw as a Harness engine, on the same footing as OpenCode, Pi and Hermes
 their OpenClaw sessions in Harness, can start one from New, and watches its turns, tool calls and completion live on
 Desktop, mobile and web, as with any other engine.
 
-Why: OpenClaw is a widely used open-source agent, and Harness covers "every lab in one crew". Supporting it widens the
+Why: OpenClaw is a widely used open-source agent, and Harness covers every lab. Supporting it widens the
 set of CLIs a person can bring, without changing how they use it.
 
 ## Goals
@@ -57,9 +57,8 @@ this work, so the OpenClaw install recipe runs with the Node that Harness ships.
     written back to the previous Node, and the master re-execs onto it, as a failed update rolls back. A master whose
     lean bundle does not answer on 24 stays on its own Node and puts `current-node` back the same way. The Node that
     failed is recorded, and later updates go in without the switch until the manifest offers another Node 24.
-  - After a switch, everything else that names the Node moves with it: the `harness` launcher (`ensureLauncher`), the
-    launchd plist and systemd unit (`harnessd/platform.ts`), and a Team account's copied Node and links
-    (`team/script.ts`, `linkTeamNodeTools`).
+  - After a switch, everything else that names the Node moves with it: the `harness` launcher (`ensureLauncher`) and the
+    launchd plist and systemd unit (`harnessd/platform.ts`).
   - The manifest fetch gets a timeout. Today `runtimeInstall.ts:200` calls `fetch()` with none.
 - **Engines installed under Node 22 keep working.** `npm i -g` with Harness's Node installs into the versioned
   runtime folder, and engines are found through `npmRuntimeBins()` (`engines/kit/launchExecutable.ts:123`), which only
@@ -83,14 +82,12 @@ this work, so the OpenClaw install recipe runs with the Node that Harness ships.
   `masterProcess.ts`, `lib/sleepAware.ts`, `lib/patientExec.ts`, `kit/windowsFiles.ts`, `lib/sqliteRead.ts`) is measured
   again on 24 with a probe of Node's own behavior, not only by running our specs.
 - **Validation.** The full CLI coverage gates, the Windows install E2E, and a migration E2E on macOS, Linux (a box
-  installed with `install.sh`, not the docker image's system Node), Windows, Harness OS and a Team account, with an
-  engine installed under 22. Daemon idle CPU and memory are measured before and after on the same workload.
+  installed with `install.sh`, not the docker image's system Node), Windows and Harness OS, with an engine installed
+  under 22. Daemon idle CPU and memory are measured before and after on the same workload.
 - This part ships first, as its own pull request and release. The OpenClaw engine builds on it.
 
 ## Non-goals
 
-- **Swarm.** OpenClaw does not become a Swarm agent. `backend/src/superTabs/commands.ts:133` keeps accepting only
-  Claude Code and Codex. (Decided by Ken.)
 - Driving OpenClaw's chat channels (WhatsApp, Telegram and so on), Control UI, nodes, cron and Canvas.
 - Grid/model routing through OpenClaw, and Harness changing which model OpenClaw uses.
 - `openclaw chat` / `tui --local` (embedded mode). It needs exclusive ownership of the state folder and refuses to run

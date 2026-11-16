@@ -19,7 +19,9 @@ import { WebSocket } from 'ws'
 import { hostname } from 'os'
 import { env } from '../config/env.js'
 import { tuiPresence, WINDOW_SURFACES, type LocalWindows, type WindowSurface } from '../lib/windowSurfaces.js'
-import { AuthSessionError, AuthSessionManager } from '../lib/authSession.js'
+import { AuthSessionError } from '../lib/authSession.js'
+import { AuthSessionManager } from '../lib/authRefresh.js'
+import { backendHttpBase } from '../lib/backendHttpBase.js'
 import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness, type LivenessWatch } from '../lib/wsLiveness.js'
 import { decodeTerminalHop, TerminalHopDirection } from '../lib/terminalBinary.js'
 import { VERSION } from '../version.js'
@@ -133,7 +135,7 @@ export class UpstreamLink {
   private readonly events: UpstreamEvents
 
   constructor({ machineId, auth, computerId = '', autonomousEnv = 'prod', events }: UpstreamOptions) {
-    this.auth = auth ?? new AuthSessionManager(env.BACKEND_WS_URL.replace(/\/$/, '').replace(/^wss:/, 'https:').replace(/^ws:/, 'http:'))
+    this.auth = auth ?? new AuthSessionManager(backendHttpBase())
     this.testToken = auth ? undefined : machineId
     this.events = events
     // `?label=<hostname>` lets the backend record which machine connected (shown on the machine card);

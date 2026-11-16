@@ -9,7 +9,6 @@
  */
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { availableParallelism } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -49,6 +48,8 @@ const AGENT_SESSION = {
 }
 const HARNESSD = 'HARNESSD_'
 const SESSION = 'AI_AGENT,CLAUDECODE,CLAUDE_CODE_MESSAGING,CLAUDE_CODE_SESSION,CODEX_THREAD'
+/** What the core says as it takes a server over: how many names it unset, never which the server had. */
+const UNSET = /\[terminal\] tmux: unset \d+ harnessd and agent session names in the environment new panes start with/
 
 /** What an agent's engine answers to [directive] (fakeEngine), read from its thread by the answer's [lead]. */
 async function engineAnswer(client: LocalClient, agentId: string, directive: string, lead: string): Promise<string> {
@@ -67,11 +68,6 @@ async function engineAnswer(client: LocalClient, agentId: string, directive: str
 /** The names an agent's engine has that start with [prefixes], asked as an agent reads its environment (fakeEngine `!env`). */
 const engineHas = (client: LocalClient, agentId: string, prefixes = HARNESSD): Promise<string> =>
   engineAnswer(client, agentId, `!env ${prefixes}`, `env ${prefixes}: `)
-
-/** The share of the machine's cores an agent's engine was started with (fakeEngine `!cores`); [tag] tells this answer from
- *  the thread's earlier ones. */
-const coresOf = (client: LocalClient, agentId: string, tag: string): Promise<string> =>
-  engineAnswer(client, agentId, `!cores ${tag}`, `cores ${tag}: `)
 
 /** The names starting with [prefixes] in the environment of the shell a pane runs, written to a file by that shell. */
 async function shellHas(d: IsolatedDaemon, pane: string, name: string, prefixes = HARNESSD): Promise<string[]> {
@@ -119,12 +115,14 @@ describe('a pane\'s environment', () => {
     // The server as an earlier core left it: started from an environment with that boot's HARNESSD_*, and a
     // pane of that boot's still in it, which keeps what it was started with.
     const earlier = join(d.root, 'earlier.env')
-    await exec('tmux', ['-S', d.tmux.socket, 'new-session', '-d', '-s', 'earlier-boot', '/bin/sh', '-c', `env > ${earlier}; sleep 600`],
+    // The shell creates the file before env writes it, so the file shows up empty first (CI run 43672659842 read
+    // it then): write it aside and move it into place whole.
+    await exec('tmux', ['-S', d.tmux.socket, 'new-session', '-d', '-s', 'earlier-boot', '/bin/sh', '-c', `env > ${earlier}.tmp && mv ${earlier}.tmp ${earlier}; sleep 600`],
       { env: { ...d.env, ...EARLIER_BOOT }, timeout: 10_000 })
     await until('the earlier boot\'s pane to write its environment', () => existsSync(earlier) || null, 10_000, 50)
     expect(names(readFileSync(earlier, 'utf8'))).toEqual(Object.keys(EARLIER_BOOT).sort())
     await d.start()
-    expect(d.log()).toContain(`[terminal] tmux: removed ${Object.keys(EARLIER_BOOT).sort().join(', ')} from the environment new panes start with`)
+    expect(d.log()).toMatch(UNSET)
     const client = await LocalClient.connect(d)
     await expectNoneIn(d, client)
     client.close()
@@ -138,53 +136,9 @@ describe('a pane\'s environment', () => {
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
     await exec('tmux', ['-S', d.tmux.socket, 'new-session', '-d', '-s', 'agent-shell', '/bin/sh', '-c', 'sleep 600'], { env: d.env, timeout: 10_000 })
     await d.start()
-    expect(d.log()).toContain(`[terminal] tmux: removed ${Object.keys(AGENT_SESSION).sort().join(', ')} from the environment new panes start with`)
+    expect(d.log()).toMatch(UNSET)
     const client = await LocalClient.connect(d)
     await expectNoneIn(d, client, SESSION)
-    client.close()
-  }, 300_000)
-
-  // anh Dee, 2026-11-11: "with multiple agents, it's CPU constraint" (docs/research/2026-11-11-agents-share-cpu.md). A Swarm's
-  // agent starts with its share of this machine's cores (superTabs/inCore/launch.ts); a person's own session with none, not
-  // even when the daemon was started from the shell of a Swarm agent that has one.
-  it('gives a Swarm\'s agent its share of the machine\'s cores at its start and when it is resumed, and a person\'s own session none', async () => {
-    const d = await IsolatedDaemon.create({ env: { ANTHROPIC_API_KEY: 'fixture-not-a-credential', HARNESS_CORES: '3' } })
-    daemon = d
-    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
-    await d.start()
-    const client = await LocalClient.connect(d)
-    const own = await create(d, client, 'claude', 'own')
-    expect(await engineHas(client, own.id, 'HARNESS_CORES')).toBe('(none)')
-    const agent = await create(d, client, 'claude', 'swarm', { swarmRole: 'dev' })
-    // The Swarm's only agent here has the whole machine: the person's own session takes no part of it, and the share the
-    // daemon's own shell had is not its.
-    expect(await coresOf(client, agent.id, 'started')).toBe(String(availableParallelism()))
-    // Stopped and resumed, it is in a new pane, whose environment is built again (lib/launchOverrides.ts).
-    expect((await client.request('agent_delete', { agentId: agent.id }, 90_000)).error).toBeUndefined()
-    await until('the Swarm\'s agent to stop', async () => (await row(client, agent.id))?.status === 'stopped' || null, 60_000, 500)
-    expect((await client.request('agent_resume', { agentId: agent.id }, 90_000)).error).toBeUndefined()
-    await until('the Swarm\'s agent to be active again', async () => {
-      const again = await row(client, agent.id)
-      return again?.sessionId && again.status === 'active' ? again : null
-    }, 60_000, 500)
-    expect(await coresOf(client, agent.id, 'resumed')).toBe(String(availableParallelism()))
-    client.close()
-  }, 300_000)
-
-  // The review of #4150: no test checked that the daemon counts its Swarm's agents (core/main.ts hands the share the core's
-  // registry). Those already running count, across a restart too, as the restarted daemon reads their rows again.
-  it('shares the machine\'s cores among the Swarm\'s agents here, one running from before a restart counted', async () => {
-    const d = await created()
-    await d.start()
-    let client = await LocalClient.connect(d)
-    const first = await create(d, client, 'claude', 'swarm-first', { swarmRole: 'dev' })
-    expect(await coresOf(client, first.id, 'first')).toBe(String(availableParallelism()))
-    client.close()
-    await d.restart()
-    client = await LocalClient.connect(d)
-    await until('the first Swarm agent back after the restart', async () => (await row(client, first.id))?.status === 'active' || null, 60_000, 500)
-    const second = await create(d, client, 'claude', 'swarm-second', { swarmRole: 'dev' })
-    expect(await coresOf(client, second.id, 'second')).toBe(String(Math.max(1, Math.floor(availableParallelism() / 2))))
     client.close()
   }, 300_000)
 })

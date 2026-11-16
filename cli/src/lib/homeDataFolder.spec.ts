@@ -93,6 +93,6 @@ describe('config/startHome', () => {
   })
 
   it('a command an agent reaches its own daemon with keeps the variable', async () => {
-    expect(await load('super-tab')).toBe(REAL_DATA)
+    expect(await load('tell')).toBe(REAL_DATA)
   })
 })

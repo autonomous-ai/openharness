@@ -11,7 +11,7 @@ import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { PtyHostClient } from '../ptyHost/client.js'
 import { hostInstanceName } from '../ptyHost/instance.js'
-import { VERSION_COMMAND, readInstanceDiscovery } from '../ptyHost/launch.js'
+import { probeVersionLine, readInstanceDiscovery } from '../ptyHost/launch.js'
 import { PTY_PROTOCOL, SHUTDOWN_PROTOCOL, SUPPORTED_PTY_PROTOCOLS } from '../ptyHost/protocol.js'
 import { windowsProcessRows } from './processTable.js'
 import { readSignatureProblems, unsignedAllowed } from './ptySignatures.js'
@@ -185,17 +185,7 @@ async function unzipWithTool(zip: Buffer, dest: string): Promise<void> {
   }
 }
 
-/** The last line a binary prints for `version`, parsed: ptyHost/launch.ts `VERSION_COMMAND`, the run `binaryVersion`
- *  makes, but asynchronous. A binary whose child holds its output open past the timeout keeps a synchronous run going
- *  with it, the updater's event loop blocked and the process killed as hung; here `canary`'s own timer ends the wait. */
-export function probeVersionLine(binary: string): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    execFile(binary, [...VERSION_COMMAND.args], VERSION_COMMAND.options, (err, stdout) => {
-      if (err) return reject(err)
-      try { resolve(JSON.parse(String(stdout).trim().split(/\r?\n/).filter(Boolean).pop() ?? '')) } catch (e) { reject(e) }
-    })
-  })
-}
+export { probeVersionLine } from '../ptyHost/launch.js'
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 const reasonOf = (error: unknown): string => (error instanceof Error ? error.message : String(error))

@@ -39,7 +39,7 @@ function decode(raw: Record<string, unknown>): RuntimeRecord | null {
   if (!source && !version) return null
   // A turn's context is the whole of what it runs: one naming a model and no effort runs that model at its own default, which
   // Codex writes as `reasoning_effort: null` (0.164 and 0.165, 2026-10-30). Read as auto, as the screen's "default" is, so
-  // the agent's model is known from its first turn: without an effort it was never reported, and its Swarm attempts were
+  // the agent's model is known from its first turn: without an effort it was never reported, and its turns were
   // recorded with no model (Scholes, 2026-10-30). A settings change names only what it changed, so it keeps the effort.
   const effort = text(source?.reasoning_effort) || text(source?.effort)
   const ownDefault = raw.type === 'turn_context' && !!text(source?.model) && !effort

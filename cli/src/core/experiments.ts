@@ -17,9 +17,9 @@ import type { BackendNotice } from './api.js'
 type Experiments = Readonly<Record<string, { state: readonly string[] }>>
 
 /** Whether any of `state` is in `dataDir`: a path under it, or `dir/prefix*suffix` for a file of that kind in that folder.
- *  The star was only read after a slash, so `super-tabs/host-*.json` was looked up as that literal file name and never
- *  found: a machine contributed to a Swarm never woke the Swarm service at a start, and after the master re-executed
- *  (every update) it stayed off until some request started it (remote-deepseek, 3 hours offline, 2026-10-22). */
+ *  The star was only read after a slash, so `folder/name-*.json` was looked up as that literal file name and never found:
+ *  an experiment with saved state was not woken at a start, and after the master re-executed (every update) it stayed off
+ *  until some request started it (remote-deepseek, 3 hours offline, 2026-10-22). */
 export function stateIsThere(dataDir: string, state: readonly string[]): boolean {
   return state.some((entry) => {
     const slash = entry.lastIndexOf('/')

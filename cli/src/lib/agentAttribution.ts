@@ -1,14 +1,9 @@
-/** Legacy agent-spawn instructions remain readable for existing harnesses.
- * Super Tab supplies its own scoped coordination instructions. New launches
- * no longer add Harness branding to pull requests, including old accounts
- * whose saved pullRequestLine compatibility field is still true. */
+/** Legacy agent-spawn instructions remain readable for existing harnesses. New launches no longer add Harness branding
+ * to pull requests, including old accounts whose saved pullRequestLine compatibility field is still true. */
 import { env } from '../config/env.js'
 import { agentInstructionArgs, launchContract, type AttributionPlace } from '../engines/launches.js'
 import { joinedSettings } from '../engines/kit/statusLine.js'
 import { readAgentSettings } from './agentSettings.js'
-
-/** The line: short and plain, as the engines' own are, and linked to Harness's site. */
-export const AGENT_ATTRIBUTION_LINE = '🤝 Started by another agent in [Harness](https://harness.autonomous.ai) — agents that run agents.'
 
 /** Who started a harness, as `agent_create` takes it and its row keeps it: another agent; absent, the person. */
 export type StartedBy = 'agent'
@@ -29,10 +24,9 @@ export const HARNESS_INSTRUCTIONS = 'You are running in Harness, and the person 
  * A launch’s argv for legacy agent-spawn instructions, read at each launch.
  * The retired PR branding preference never changes a new launch.
  */
-export function agentLaunchArgs(engine: string, _startedBy: StartedBy | null | undefined, place: AttributionPlace & { swarmInstructions?: string },
+export function agentLaunchArgs(engine: string, _startedBy: StartedBy | null | undefined, place: AttributionPlace,
   dataDir: string = env.ADAPTER_DATA_DIR): string[] {
-  // Swarm roles route through their Lead; generic spawning advice would invite private worker teams.
-  const instructions = place.swarmInstructions ?? (readAgentSettings(dataDir).agentsStartAgents ? HARNESS_INSTRUCTIONS : null)
+  const instructions = readAgentSettings(dataDir).agentsStartAgents ? HARNESS_INSTRUCTIONS : null
   return agentInstructionArgs(engine, {
     instructions,
     prLine: null,

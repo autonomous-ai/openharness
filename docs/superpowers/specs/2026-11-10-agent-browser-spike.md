@@ -288,7 +288,7 @@ need Step 3 and Step 4.
    - A route-aware setting is consistent with these numbers: uncapped on a direct link, and on the relay and TURN a
      cap with a lower quality.
    - Even 5 fps at 1280x720 needs a relay budget of about 250 KB/s (the p95) per scrolling viewer, not 140 KB/s. That
-     budget is for the PM, because it sets the relay's cost per viewer.
+     budget is a product call, because it sets the relay's cost per viewer.
 2. **The spike section: "How many bytes per second noVNC needs at Tight, quality 6, while Gmail scrolls at
    1920x1080."** Answered for a long public page, not Gmail.
 
@@ -410,7 +410,7 @@ CODEX_HOME=<scratch> codex app-server \
    - The 120 s auto-background needs a decision. Either the launch sets `CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0`, which
      applies to every MCP server of that agent and not only `browser`, or the design accepts that the agent's turn
      ends two minutes into an ask and a new turn starts when the person is done. The second changes what "the agent
-     is waiting" looks like to the Swarm (an idle agent with a running MCP task), so it is a product call.
+     is waiting" looks like (an idle agent with a running MCP task), so it is a product call.
    - *(Inferred, not measured:)* the relay could send MCP progress notifications during an ask. That would reset the
      idle limit without the `"timeout"` key. It would not stop the auto-background.
 2. **Spec, same place: "Codex gets `-c mcp_servers.browser.tool_timeout_sec=1900`; its default is far shorter."** The

@@ -464,7 +464,7 @@ void registry.afterTransaction(() => registry.takeFirstTask(agent.agentId)).then
 - Consumes: `typedFirstPrompt`, `openPendingAgent({ firstTask })`, `beginExternalDispatch(agentId, firstTask?)`.
 - `CreateAgentPaneDeps.firstTask?: string`, handed to `registry.openPendingAgent` when set.
 - `create.ts` and `fork.ts` pass `firstTask: typedFirstPrompt(engine, firstPrompt)` to `createAndRegisterPane` when it
-  is defined (New, `harness new`, a Swarm launch, and a handoff fork, which OpenClaw already takes). `launchOptions`
+  is defined (New, `harness new`, and a handoff fork, which OpenClaw already takes). `launchOptions`
   keeps `firstPrompt`.
 - `RestoreLaunch.firstTask?: string`. In `main.ts`'s restore launch, the `continue` it decides today is named once
   (`const firstPrompt = … ? 'continue' : undefined`), given to `buildEngineLaunchArgv` as now, and returned as
@@ -477,7 +477,6 @@ void registry.afterTransaction(() => registry.takeFirstTask(agent.agentId)).then
 |---|---|---|
 | `createAgentPane.spec.ts` | `a first task goes onto the row the pane is registered as` | `openPendingAgent` called with `objectContaining({ firstTask: 'Fix the parser' })`; without the dep, its argument has no `firstTask` key |
 | `create.spec.ts` | `an OpenClaw first task is kept for typing, not launched with` | `create(request({ engine: 'openclaw', prompt: 'Fix the parser' }))`: the pane's `firstTask === 'Fix the parser'`, and its `argv` contains neither `Fix the parser` nor `--message` |
-| `create.spec.ts` | `a Swarm launch takes the same path` | the same with `swarmRole: 'agent'` |
 | `create.spec.ts` | `an engine that takes its first prompt in argv keeps none` | `engine: 'claude'`: the pane has no `firstTask`; its `argv` holds the prompt |
 | `fork.spec.ts` | `a fork of an OpenClaw agent keeps its handoff for typing` | source `engine: 'openclaw'`, `prompt: 'next'`: the pane's `firstTask` is a string containing `next`; no `argv` element contains it |
 | `restoreAgents.spec.ts` | `an external resume that continues commits its first task with the dispatch` | a launch built with `firstTask: 'continue'` on an admitted row: `beginExternalDispatch` called with `(agentId, 'continue')`; a launch without it: `(agentId, undefined)` |
@@ -580,7 +579,7 @@ environment (`npx tsx src/cli.ts new openclaw -- …`).
 
 ## Self-review
 
-- **Spec coverage.** First task: Tasks 2, 3, 4, 8, 9 (New, `harness new`, Swarm, fork, restore's `continue`). Store
+- **Spec coverage.** First task: Tasks 2, 3, 4, 8, 9 (New, `harness new`, fork, restore's `continue`). Store
   hold: Tasks 1, 6, 7, 10. Default folder and the TUI's environment: Tasks 1, 4, 5. Spec tests: each has its named
   test above; the end-to-end check is Task 12.
 - **Beyond the spec, and why:** Task 10 (the restart the state asks for must change what Harness reads);

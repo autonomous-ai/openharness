@@ -23,8 +23,16 @@ import { agentTmpRoot } from './agentTmp.js'
  * `relative()` rather than `startsWith`, because `/a/bc` starts with `/a/b` and is not inside it.
  */
 export function within(root: string, path: string): boolean {
-  const rel = relative(root, path)
-  return rel === '' || (rel !== '..' && !rel.startsWith('../') && !isAbsolute(rel))
+  return staysInside(relative(root, path))
+}
+
+/**
+ * Whether a `relative()` answer stays inside the folder it was taken from: `''` is the folder itself. Not `..` nor
+ * under it, with either separator, since Windows answers `..\Windows`; checked for `../` alone, every folder on the
+ * home's drive counted as inside the home (15 November). Nor another drive, which Windows answers as an absolute path.
+ */
+export function staysInside(rel: string): boolean {
+  return !/^\.\.(?:[\\/]|$)/.test(rel) && !isAbsolute(rel)
 }
 
 /**
@@ -43,8 +51,8 @@ export async function withinRoots(target: string, roots: readonly string[]): Pro
 
 /**
  * Where agents drop the files they make. macOS gives each user a private `/var/folders/…` as
- * `tmpdir()`, but an agent told to "save it to /tmp" writes to `/tmp` itself, so both are roots. A Swarm agent has a
- * private folder of its own (./agentTmp.ts), and the daemon's `tmpdir()` is not it.
+ * `tmpdir()`, but an agent told to "save it to /tmp" writes to `/tmp` itself, so both are roots, beside the folder
+ * Harness keeps for its agents' files (./agentTmp.ts), which the daemon's `tmpdir()` is not.
  */
 export function tempRoots(): string[] {
   const agents = agentTmpRoot()

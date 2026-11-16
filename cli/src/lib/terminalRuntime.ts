@@ -93,6 +93,15 @@ export function sameProcessIdentity(a: ProcessStart | undefined | null, b: Proce
   return ticksA !== undefined && ticksB !== undefined ? ticksA === ticksB : a.startMarker === b.startMarker
 }
 
+/**
+ * The process an agent was bound to still runs among its pane's [processes], whatever its name now: a wrapper that
+ * `exec`s keeps its pid and start under another name, and its agent was reported stopped while it ran (lamp-9adf,
+ * 2026-11-13, #4259).
+ */
+export function processAmong(recorded: ProcessStart | undefined | null, processes: readonly ProcessStart[] | undefined): boolean {
+  return !!recorded && !!processes?.some((process) => sameProcessIdentity(recorded, process))
+}
+
 /** The identity a row stands for, without the rest of the row. */
 export function processIdentityOf(row: ProcessIdentity): ProcessIdentity {
   return {

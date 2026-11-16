@@ -1,11 +1,17 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { SpawnLockOwner } from './daemonSpawnLock.js'
 import type { ProcessRow } from './processTable.js'
-import { processIfDownDeps, releaseAbandonedLock, runningDaemon, startIfDown, type IfDownDeps, type IfDownIo } from './startIfDown.js'
+import {
+  flashHolds, freshMarker, processIfDownDeps, releaseAbandonedLock, runningDaemon, startIfDown, type IfDownDeps, type IfDownIo,
+} from './startIfDown.js'
 
 const owner: SpawnLockOwner = { pid: 77, startMarker: '', token: 't', purpose: 'update', since: Date.now() - 4_000 }
 const deps = (over: Partial<IfDownDeps> = {}): IfDownDeps => ({
-  readPid: () => null, masterRuns: async () => false, lockOwner: () => null, ownerRuns: async () => true, stoppedThisBoot: () => false, forgetStop: () => {}, ...over,
+  readPid: () => null, masterRuns: async () => false, lockOwner: () => null, ownerRuns: async () => true, stoppedThisBoot: () => false, forgetStop: () => {},
+  flashing: () => false, uninstalling: () => false, ...over,
 })
 
 describe('harness start --if-down', () => {
@@ -48,6 +54,48 @@ describe('harness start --if-down --at-logon', () => {
   })
 })
 
+// A supervisor (the Windows scheduled task, the Harness Device app) that starts the daemon while `harness flash`
+// writes the dial takes its serial port mid-write; one that starts it during `harness uninstall` holds the files
+// being removed.
+describe('harness start --if-down while a flash or an uninstall is at work', () => {
+  it('does nothing, after the logon start forgot a stop and before the pid file is read', async () => {
+    await expect(startIfDown(deps({ flashing: () => true }))).resolves.toEqual({ start: false, why: "`harness flash` holds the dial's port" })
+    await expect(startIfDown(deps({ uninstalling: () => true }))).resolves.toEqual({ start: false, why: '`harness uninstall` is at work' })
+    const forgetStop = vi.fn(), readPid = vi.fn(() => null)
+    await startIfDown(deps({ flashing: () => true, forgetStop, readPid }), { atLogon: true })
+    expect(forgetStop).toHaveBeenCalledOnce()
+    expect(readPid).not.toHaveBeenCalled()
+    // A `harness stop` still answers first.
+    await expect(startIfDown(deps({ stoppedThisBoot: () => true, flashing: () => true }))).resolves.toMatchObject({ why: expect.stringMatching(/^`harness stop`/) })
+  })
+
+  const NOW = 1_800_000_000_000
+  const folder = () => mkdtempSync(join(tmpdir(), 'if-down-markers-'))
+
+  it('a marker is fresh for ten minutes, and never from the future', () => {
+    const dir = folder()
+    const marker = (text: string) => { const file = join(dir, 'marker'); writeFileSync(file, text); return file }
+    expect(freshMarker(marker('1799999401\n'), NOW)).toBe(true)
+    for (const text of ['1799999400', '1800000001', 'soon', '', '12.5']) expect(freshMarker(marker(text), NOW)).toBe(false)
+    expect(freshMarker(join(dir, 'missing'), NOW)).toBe(false)
+    mkdirSync(join(dir, 'a-folder'))
+    expect(freshMarker(join(dir, 'a-folder'), NOW)).toBe(false)
+  })
+
+  it('a flash holds the port by either of its files', () => {
+    const holds = (name: string, text = '1799999700') => { const dir = folder(); writeFileSync(join(dir, name), text); return flashHolds(dir, NOW) }
+    const hex = '0123456789abcdef0123456789abcdef'
+    expect(holds('flashing')).toBe(true)
+    expect(holds(`flashing.${hex}`)).toBe(true)
+    expect(holds(`flashing.${hex.slice(1)}`)).toBe(false)
+    expect(holds(`flashing.${hex.toUpperCase()}`)).toBe(false)
+    expect(holds('flashing.bak')).toBe(false)
+    expect(holds('flashing', '1799999400')).toBe(false)
+    expect(holds(`flashing.${hex}`, '1799999400')).toBe(false)
+    expect(flashHolds(join(folder(), 'missing'), NOW)).toBe(false)
+  })
+})
+
 describe("--if-down's view of this computer", () => {
   const CLAIMED = Date.parse('2026-10-16T08:00:00Z')
   /** A FILETIME start marker for [ms]. */
@@ -58,7 +106,8 @@ describe("--if-down's view of this computer", () => {
   const master = (pid: number, startedMs = CLAIMED - 5_000) => row(pid, startedMs, ['C:\\node.exe', 'C:\\cli.js', '__harnessd'])
   const io = (over: Partial<IfDownIo> = {}): IfDownIo => ({
     readPid: () => 500, isAlive: () => true, pidFileWrittenMs: () => CLAIMED, forgetPid: vi.fn(), rows: async () => [master(500)],
-    readLockOwner: () => null, lockOwnerAlive: () => true, releaseAbandoned: vi.fn(() => true), stoppedThisBoot: () => true, forgetStop: vi.fn(), ...over,
+    readLockOwner: () => null, lockOwnerAlive: () => true, releaseAbandoned: vi.fn(() => true), stoppedThisBoot: () => true, forgetStop: vi.fn(),
+    flashing: () => false, uninstalling: () => false, ...over,
   })
 
   it('on Windows, counts the pid file as a running master only when the table does not prove otherwise', async () => {
@@ -99,6 +148,44 @@ describe("--if-down's view of this computer", () => {
     expect(released.releaseAbandoned).toHaveBeenCalledWith(lock, reissued)
     // The lock changed hands, or could not be removed: someone holds it, and this start waits for the next tick.
     await expect(processIfDownDeps('win32', io({ rows: async () => [reissued], releaseAbandoned: () => false })).ownerRuns(lock)).resolves.toBe(true)
+  })
+
+  it('every supervisor asks, on every platform', () => {
+    for (const platform of ['win32', 'darwin', 'linux'] as const) {
+      expect(processIfDownDeps(platform, io({ flashing: () => true })).flashing()).toBe(true)
+      expect(processIfDownDeps(platform, io({ uninstalling: () => true })).uninstalling()).toBe(true)
+    }
+  })
+
+  it('the scheduled task decides as before when neither is at work', async () => {
+    await expect(startIfDown(processIfDownDeps('win32', io({ stoppedThisBoot: () => false })))).resolves.toEqual({ start: false, why: 'it runs (pid 500)' })
+    await expect(startIfDown(processIfDownDeps('win32', io({ stoppedThisBoot: () => false, readPid: () => null })))).resolves.toEqual({ start: true })
+    await expect(startIfDown(processIfDownDeps('win32', io()))).resolves.toEqual({ start: false, why: '`harness stop` stopped it since this computer started; `harness start` starts it again' })
+  })
+
+  it("this computer's own markers are read by default", async () => {
+    // FLASHER_DIR is read as its module loads: load it again without an override from the shell that ran the suite.
+    const cache = process.env.HARNESS_FLASHER_CACHE
+    delete process.env.HARNESS_FLASHER_CACHE
+    try {
+      vi.resetModules()
+      const { FLASHER_DIR } = await import('./flasherDir.js')
+      const { processIfDownDeps: own } = await import('./startIfDown.js')
+      expect(FLASHER_DIR).toBe(join(homedir(), '.harness', 'flasher'))
+      expect(own('darwin').flashing()).toBe(false)
+      expect(own('darwin').uninstalling()).toBe(false)
+      const now = `${Math.floor(Date.now() / 1000)}\n`
+      mkdirSync(FLASHER_DIR, { recursive: true })
+      writeFileSync(join(FLASHER_DIR, 'flashing'), now)
+      writeFileSync(join(homedir(), '.harness', 'uninstalling'), now)
+      expect(own('darwin').flashing()).toBe(true)
+      expect(own('darwin').uninstalling()).toBe(true)
+    } finally {
+      rmSync(join(homedir(), '.harness', 'flasher', 'flashing'), { force: true })
+      rmSync(join(homedir(), '.harness', 'uninstalling'), { force: true })
+      if (cache !== undefined) process.env.HARNESS_FLASHER_CACHE = cache
+      vi.resetModules()
+    }
   })
 
   it('on macOS and Linux, a live pid is the daemon, a live owner holds the lock, and no stop is written down', async () => {

@@ -271,8 +271,8 @@ describe('the edge host: several services in one process of their own', () => {
       return answer.engines.map((entry: Record<string, any>) => [entry.engine, entry.installed])
     }
     expect(await installed()).toEqual([['claude', true], ['codex', true]])
-    // A Swarm told nothing would take it for no engine here (superTabs/start.ts): asked while the host is gone,
-    // the answer waits for the one the master starts.
+    // A caller told nothing would take it for no engine here: asked while the host is gone, the answer waits for the one
+    // the master starts.
     const before = edgePids(d)
     expect(before).toHaveLength(1)
     for (const pid of before) process.kill(pid, 'SIGKILL')
@@ -458,7 +458,7 @@ describe('models in its own process', () => {
     client.close()
   })
 
-  it('models killed during discovery: existing assignments stay, new marked processes bind without waiting, and later learn their grid', async () => {
+  it('models killed during discovery: existing assignments stay, new processes bind without waiting, and a Codex\'s argv later gives its grid', async () => {
     const holdDir = mkdtempSync(join(tmpdir(), 'assignment-hold-'))
     const hold = join(holdDir, 'hold')
     try {
@@ -466,11 +466,9 @@ describe('models in its own process', () => {
       const client = await LocalClient.connect(d)
       const grid = { networkId: 'assignment-e2e', networkName: 'Assignment', baseUrl: 'https://fixture.invalid/g/assignment/relay/v1', apiKey: 'fixture-key', model: 'Small-Q4' }
       const known = await createOn(d, client, 'claude', 'assignment-known', grid)
-      const knownAssignment = { baseUrl: grid.baseUrl.replace(/\/v1$/, ''), model: grid.model }
-      await until('the existing Claude assignment to reflect its real endpoint', async () => {
-        const now = await row(client, known.id)
-        return now?.grid?.baseUrl === knownAssignment.baseUrl ? now : null
-      }, 15_000, 200)
+      // The launch record's grid, as the app sent it.
+      const knownAssignment = { baseUrl: grid.baseUrl, model: grid.model }
+      expect((await row(client, known.id))?.grid).toMatchObject(knownAssignment)
       writeFileSync(hold, '')
       for (const pid of modelsPids(d)) process.kill(pid, 'SIGKILL')
       await until('models disconnected', () => d.log().includes('[services] models disconnected') || null, 15_000, 100)
@@ -500,10 +498,13 @@ describe('models in its own process', () => {
       expect((await row(client, known.id))?.grid).toMatchObject(knownAssignment)
       for (const agent of discovered) expect((await row(client, agent.id))?.grid ?? null).toBeNull()
       rmSync(hold)
-      for (const agent of discovered) await until(`${agent.engine} classified after models returns`, async () => {
-        const now = await row(client, agent.id)
-        return now?.sessionId === agent.sessionId && now.grid?.baseUrl === grid.baseUrl && now.grid?.model === grid.model ? now : null
+      const [claude, codex] = discovered
+      await until('codex classified from its argv after models returns', async () => {
+        const now = await row(client, codex.id)
+        return now?.sessionId === codex.sessionId && now.grid?.baseUrl === grid.baseUrl && now.grid?.model === grid.model ? now : null
       }, 45_000, 250)
+      // Its endpoint is in its environment alone, which the daemon never reads.
+      expect((await row(client, claude.id))?.grid ?? null).toBeNull()
       expect(d.coresStarted()).toBe(1)
       client.close()
     } finally { rmSync(holdDir, { recursive: true, force: true }) }

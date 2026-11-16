@@ -17,8 +17,11 @@ vi.mock('./processLiveness.js', async original => ({ ...await original<object>()
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
 }))
 vi.mock('./deleteAgentFallback.js', () => ({ checkPidRuntime: async () => ({ state: 'gone', reason: 'fixture' }) }))
+// The engine this fake stands for never exits, so there is no settle time to wait out; the rule is tested in
+// `resumeStoppedAgent.spec.ts`.
 vi.mock('./paneEngineProcess.js', () => ({ checkSessionRuntime: async () => ({ state: 'alive' }),
   resolvePaneEngineProcess: async () => ({ pid: 7001, executable: '<engine>', startMarker: 'fixture-start' }),
+  ENGINE_SETTLE_MS: 0,
 }))
 vi.mock('./engineLaunch.js', async original => ({ ...await original<object>(),
   buildEngineLaunchArgv: (engine: string, options: { resumeSessionId?: string }) => [
@@ -83,7 +86,7 @@ it.each(['linux', 'darwin'])('keeps healthy native resume composition on %s', as
         announceSession: session => { events.push(['announce', session.engine, session.sessionId, session.launch?.state]) },
         relaunchOverrides: async session => { events.push(['launch-prepare', session.engine, session.sessionId]);
           return { ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } } },
-        prepareSessionResume: session => { events.push(['history-prepare', session.sessionId]) },
+        prepareSessionResume: async session => { events.push(['history-prepare', session.sessionId]); return false },
         refreshGridWebSearch: () => { events.push(['grid']) }, clearDeleted: () => {}, attachDsh: () => {},
         attachSession: async session => { events.push(['attach', session.sessionId]); return true },
       })

@@ -3,7 +3,7 @@ import { createAgentUsage } from './agentUsage.js'
 import type { CorePorts } from '../core/api.js'
 /**
  * This machine's Claude and Codex allowances, as the CLIs report them (`usage_read`): how the desktop reads an account
- * on a machine it does not run on, and what the router's `quotaOf` reads (superTabs/capacity.ts). Claude's comes from
+ * on a machine it does not run on. Claude's comes from
  * the report its status line writes (lib/quotaReports.ts), Codex's from its app-server (lib/codexRateLimits.ts):
  * Harness never opens a Claude or ChatGPT sign-in to ask (#4137).
  *

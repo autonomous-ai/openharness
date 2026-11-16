@@ -3,6 +3,7 @@ import type { AgentBrowserPort, CoreApi, CorePorts } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { AgentBrowserOptions } from './agentBrowser.js'
 import { agentBrowserCoreApi, runAgentBrowserService } from './agentBrowserProcess.js'
+import { encodeTerminalLocal, TerminalBinaryKind } from '../lib/terminalBinary.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcessOptions } from './process.js'
 import { turnsLink } from './turnsLink.js'
 
@@ -17,8 +18,8 @@ describe('the agent browser in its own process', () => {
     let api: CoreApi | null = null
     let given: AgentBrowserOptions | undefined
     const port: AgentBrowserPort = {
-      attached: vi.fn(), stopped: vi.fn(), deleted: vi.fn(), moved: vi.fn(), frameContext: vi.fn(), stop: vi.fn(), onCloseViewers: vi.fn(),
-      streamCommand: vi.fn((agentId: string) => (agentId === 'a9' ? { argv: ['podman', 'exec'] } : { error: 'NOT_READY' as const })),
+      attached: vi.fn(), stopped: vi.fn(), deleted: vi.fn(), moved: vi.fn(), frameContext: vi.fn(), stop: vi.fn(),
+      stream: vi.fn(() => true), streamInput: vi.fn(), streamClosed: vi.fn(), streamRoute: vi.fn(), streamTransportError: vi.fn(), streamRefused: vi.fn(),
     }
     const requests = { agent_browser_available: vi.fn() }
     const stop = vi.fn()
@@ -79,11 +80,12 @@ describe('the agent browser in its own process', () => {
     given.told!('a1', { state: 'starting' })
     const query = vi.fn(async (_query: string, _payload?: Record<string, unknown>) => ({}))
     options.onConnected!({ query } satisfies CoreConnection)
-    expect(query.mock.calls).toEqual([['browser_state', { agentId: 'a1', state: { state: 'starting' } }]])
+    // First that it takes viewers' streams, said to each core it connects to.
+    expect(query.mock.calls).toEqual([['streams', {}], ['browser_state', { agentId: 'a1', state: { state: 'starting' } }]])
     given.told!('a1', { state: 'ready' })
     given.told!('a2', { state: 'setup', step: 'building' })
     given.told!('a2', undefined)
-    expect(query.mock.calls.slice(1)).toEqual([
+    expect(query.mock.calls.slice(2)).toEqual([
       ['browser_state', { agentId: 'a1', state: { state: 'ready' } }],
       ['browser_state', { agentId: 'a2', state: { state: 'setup', step: 'building' } }],
       ['browser_state', { agentId: 'a2' }],
@@ -91,22 +93,136 @@ describe('the agent browser in its own process', () => {
     options.onDisconnected!()
     const next = vi.fn(async () => { throw new Error('gone') })
     options.onConnected!({ query: next } as CoreConnection)
-    expect(next.mock.calls).toEqual([['browser_state', { agentId: 'a1', state: { state: 'ready' } }]])
+    expect(next.mock.calls).toEqual([['streams', {}], ['browser_state', { agentId: 'a1', state: { state: 'ready' } }]])
     given.told!('a3', { state: 'starting' })
     await Promise.resolve()
   })
 
-  // The core answers a viewer's open in line, so a ready browser's state carries the exec that reaches it.
-  it('a ready browser\'s state carries its stream command', () => {
+  // The exec into a ready browser is this process's own, to start for a viewer: the core is told the state and no
+  // command line (until the audit of 2026-11-12 the core was told the exec, and started it).
+  it('a ready browser\'s state carries no command', () => {
     const { options, given } = setup()
     const query = vi.fn(async (_query: string, _payload?: Record<string, unknown>) => ({}))
     options.onConnected!({ query } satisfies CoreConnection)
     given.told!('a9', { state: 'ready' })
-    given.told!('a1', { state: 'ready' })
-    expect(query.mock.calls).toEqual([
-      ['browser_state', { agentId: 'a9', state: { state: 'ready' }, command: ['podman', 'exec'] }],
-      ['browser_state', { agentId: 'a1', state: { state: 'ready' } }],
+    expect(query.mock.calls.slice(1)).toEqual([['browser_state', { agentId: 'a9', state: { state: 'ready' } }]])
+  })
+
+  const STREAM = '11111111-2222-4333-8444-555555555555'
+  const asker = { local: false, owner: true, accountOwner: true }
+
+  it('a viewer\'s frames the core passes on reach the port, with who asked as the core established it', () => {
+    const { options, port } = setup()
+    options.onEvent!({ kind: 'stream', connId: 'c1', type: 'agent_browser_open', payload: { requestId: 'r-1', agentId: 'a1' }, asker })
+    // An ack and a close are the stream's own: nobody asking comes with them.
+    options.onEvent!({ kind: 'stream', connId: 'c1', type: 'agent_browser_ack', payload: { streamId: STREAM, bytes: 9 } })
+    // A frame with no payload is an empty one; who asked that is not one is nobody.
+    options.onEvent!({ kind: 'stream', connId: 'c1', type: 'agent_browser_close' })
+    options.onEvent!({ kind: 'stream', connId: 'c1', type: 'agent_browser_close', payload: 'x', asker: 'owner' })
+    expect(vi.mocked(port.stream).mock.calls).toEqual([
+      ['c1', 'agent_browser_open', { requestId: 'r-1', agentId: 'a1' }, asker],
+      ['c1', 'agent_browser_ack', { streamId: STREAM, bytes: 9 }, undefined],
+      ['c1', 'agent_browser_close', {}, undefined],
+      ['c1', 'agent_browser_close', {}, undefined],
     ])
+    // A connection's end, as every service hears it from the core's service links.
+    options.onConnectionClosed!('c1')
+    options.onEvent!({ kind: 'stream_route', streamId: STREAM, route: 'turn' })
+    options.onEvent!({ kind: 'stream_route', streamId: STREAM, route: null })
+    options.onEvent!({ kind: 'stream_transport_error' })
+    options.onEvent!({ kind: 'stream_refused', streamId: STREAM })
+    expect(vi.mocked(port.streamClosed).mock.calls).toEqual([['c1']])
+    expect(vi.mocked(port.streamRoute).mock.calls).toEqual([[STREAM, 'turn'], [STREAM, null]])
+    expect(port.streamTransportError).toHaveBeenCalledOnce()
+    expect(vi.mocked(port.streamRefused).mock.calls).toEqual([[STREAM]])
+    // None of them is an agent's stop or delete, whatever else it carries.
+    expect(port.stopped).not.toHaveBeenCalled()
+    expect(port.deleted).not.toHaveBeenCalled()
+  })
+
+  it('a stream\'s frame that names no connection, no type, no stream or no route is dropped', () => {
+    const { options, port } = setup()
+    for (const payload of [
+      { kind: 'stream', type: 'agent_browser_open', payload: {}, asker }, { kind: 'stream', connId: 7, type: 'agent_browser_open', asker },
+      { kind: 'stream', connId: 'c1', payload: {}, asker },
+      // The core says a connection's end as it says it to every service, never as a stream's event.
+      { kind: 'stream_closed', connId: 'c1' },
+      { kind: 'stream_route', route: 'direct' }, { kind: 'stream_route', streamId: STREAM, route: 'carrier-pigeon' }, { kind: 'stream_route', streamId: STREAM },
+      { kind: 'stream_refused' }, { kind: 'stream_refused', streamId: 7, agentId: 'a1' },
+    ]) options.onEvent!(payload)
+    for (const member of ['stream', 'streamClosed', 'streamRoute', 'streamRefused', 'stopped', 'deleted'] as const) expect(port[member], member).not.toHaveBeenCalled()
+  })
+
+  it('a viewer\'s bytes reach its stream, and nothing else on the link\'s binary side does', () => {
+    const { options, port } = setup()
+    const frame = (kind: TerminalBinaryKind, ...bytes: number[]) => encodeTerminalLocal({ kind, streamId: STREAM, seq: 0, bytes: Uint8Array.from(bytes), compressed: false })!
+    options.onBinary!(frame(TerminalBinaryKind.browser, 1, 2))
+    expect(vi.mocked(port.streamInput).mock.calls).toEqual([[STREAM, Uint8Array.of(1, 2)]])
+    // A terminal's keys are never a browser's; and what is no frame is dropped.
+    options.onBinary!(frame(TerminalBinaryKind.input, 3))
+    options.onBinary!(Uint8Array.of(9, 9, 9))
+    expect(port.streamInput).toHaveBeenCalledOnce()
+  })
+
+  it('a stream\'s answers go to the core as notices and the screen\'s bytes as binary frames, and neither while no core can take them', () => {
+    const { options, api } = setup()
+    // No core yet.
+    expect(api.clients.browserFrame!('c1', 'agent_browser_close', { streamId: STREAM, reason: 'agent' })).toBe(false)
+    const screen = (seq: number, ...bytes: number[]) => encodeTerminalLocal({ kind: TerminalBinaryKind.browser, streamId: STREAM, seq, bytes: Uint8Array.from(bytes), compressed: false })!
+    expect(api.clients.browserBytes!(screen(0, 1))).toBe(false)
+    const notice = vi.fn()
+    const sendBinary = vi.fn((_bytes: Uint8Array) => true)
+    options.onConnected!({ query: async () => ({}), notice, sendBinary } satisfies CoreConnection)
+    expect(api.clients.browserFrame!('c1', 'agent_browser_open_result', { requestId: 'r-1', streamId: STREAM })).toBe(true)
+    expect(notice.mock.calls).toEqual([['stream_frame', { connId: 'c1', type: 'agent_browser_open_result', payload: { requestId: 'r-1', streamId: STREAM } }]])
+    // The service's own frame, a terminal's plain one that names the stream, goes on the link as it is.
+    const frame = screen(7, 4, 5)
+    expect(api.clients.browserBytes!(frame)).toBe(true)
+    expect(sendBinary.mock.calls[0]![0]).toBe(frame)
+    // What the link would not take ends the stream (agentBrowser/streams.ts).
+    sendBinary.mockReturnValueOnce(false)
+    expect(api.clients.browserBytes!(screen(8, 6))).toBe(false)
+    expect(sendBinary).toHaveBeenCalledTimes(2)
+    // A link that carries no notices or no bytes takes neither.
+    options.onDisconnected!()
+    options.onConnected!({ query: async () => ({}) } satisfies CoreConnection)
+    expect(api.clients.browserFrame!('c1', 'agent_browser_close', { streamId: STREAM })).toBe(false)
+    expect(api.clients.browserBytes!(screen(9, 6))).toBe(false)
+  })
+
+  // The core that went forgot every stream it held and told their panels so. An exec left piping a still screen sends
+  // nothing that would end it, and holds one of its browser's four viewer places.
+  it('ends every viewer\'s streams when the core goes, once each', () => {
+    const { options, port } = setup()
+    options.onConnected!({ query: async () => ({}) } satisfies CoreConnection)
+    options.onEvent!({ kind: 'stream', connId: 'c1', type: 'agent_browser_open', payload: { requestId: 'r-1' }, asker })
+    options.onEvent!({ kind: 'stream', connId: 'c1', type: 'agent_browser_ack', payload: {}, asker })
+    options.onEvent!({ kind: 'stream', connId: 'c2', type: 'agent_browser_open', payload: { requestId: 'r-2' }, asker })
+    options.onEvent!({ kind: 'stream', connId: 'c3', type: 'agent_browser_open', payload: { requestId: 'r-3' }, asker })
+    // One whose connection ended already was told so then.
+    options.onConnectionClosed!('c3')
+    expect(vi.mocked(port.streamClosed).mock.calls).toEqual([['c3']])
+    vi.mocked(port.streamClosed).mockClear()
+    options.onDisconnected!()
+    expect(vi.mocked(port.streamClosed).mock.calls).toEqual([['c1'], ['c2']])
+    options.onDisconnected!()
+    expect(port.streamClosed).toHaveBeenCalledTimes(2)
+  })
+
+  // Every window and phone that goes is said to every service. The ones that never watched a browser cost nothing, and
+  // the process keeps only the connections still open that did: a stream that closed and then its window going left
+  // the connection kept for good (review, 2026-11-13).
+  it('keeps no connection that ended, whether or not it watched, and tells the service only of one that did', () => {
+    const { options, port } = setup()
+    options.onConnectionClosed!('phone-1')
+    expect(port.streamClosed).not.toHaveBeenCalled()
+    options.onEvent!({ kind: 'stream', connId: 'c1', type: 'agent_browser_open', payload: { requestId: 'r-1' }, asker })
+    options.onEvent!({ kind: 'stream', connId: 'c1', type: 'agent_browser_close', payload: { streamId: STREAM } })
+    options.onConnectionClosed!('c1')
+    options.onConnectionClosed!('c1')
+    expect(vi.mocked(port.streamClosed).mock.calls).toEqual([['c1']])
+    options.onDisconnected!()
+    expect(port.streamClosed).toHaveBeenCalledOnce()
   })
 
   it('asks the core for its agents\' ids, and a pane\'s agent, and gets no answer when the core cannot say', async () => {
@@ -271,7 +387,7 @@ describe('the agent browser in its own process', () => {
 
   it('is the light services\' core API besides', () => {
     const ask = async () => ({})
-    const api = agentBrowserCoreApi('/data', ask, turnsLink(ask))
+    const api = agentBrowserCoreApi('/data', ask, turnsLink(ask), { frame: () => false, bytes: () => false })
     expect(api.dataDir).toBe('/data')
     expect(api.agents.live()).toEqual([])
   })

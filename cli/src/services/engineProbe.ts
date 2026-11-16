@@ -1,6 +1,6 @@
 /**
  * Which engines this machine has, asked before a create rather than discovered by one failing: the New dialog, a
- * Swarm's start, a contributed computer's readiness. Answered here, on the machine in question, because a Mac and the
+ * contributed computer's readiness. Answered here, on the machine in question, because a Mac and the
  * Docker rig routinely hold different engines, and a list worked out anywhere else is wrong for exactly the remote
  * case this request exists to serve.
  *

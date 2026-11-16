@@ -295,7 +295,8 @@ export interface GridEngineLaunch {
   /**
    * For an engine that reads its provider out of a file rather than an environment variable: files
    * the daemon writes into a directory IT owns, and how the engine is pointed at it — the variable
-   * [envVar] set to it, or the flag [arg] handed it after the other args. Exactly one of the two.
+   * [envVar] set to it, the flag [arg] handed it after the other args, or Codex's config override
+   * `-c <cliConfigKey>="<path>"` ([cliConfigKey]). Exactly one of the three.
    *
    * This is not "editing the user's dotfiles" — the point of the indirection is that it never
    * touches them. The engine gets a private configuration for this agent, the user's own stays
@@ -306,6 +307,8 @@ export interface GridEngineLaunch {
     envVar?: string
     /** Pi's `-e`: its extension file adds the provider without moving Pi's home. */
     arg?: string
+    /** Codex's `-c model_catalog_json="<path>"`: the grid model's card (`codexGridModel.ts`). */
+    cliConfigKey?: string
     files: GridConfigFile[]
     /**
      * Point the engine at ONE of the written files rather than at the directory holding them.
@@ -326,10 +329,12 @@ export interface GridEngineLaunch {
   }
 }
 
-/** What a written config directory adds to a launch: [configDir]'s variable set to it, or its flag and path. */
+/** What a written config directory adds to a launch: [configDir]'s variable set to it, its flag and path, or its config key. */
 export function gridConfigHandOff(configDir: NonNullable<GridEngineLaunch['configDir']>, dir: string): { env: Record<string, string>; args: string[] } {
   const path = configDir.pointAt ? join(dir, configDir.pointAt) : dir
   if (configDir.arg) return { env: {}, args: [configDir.arg, path] }
+  // A TOML string: JSON's quoting and escapes are valid TOML basic-string syntax (a Windows path's `\` too).
+  if (configDir.cliConfigKey) return { env: {}, args: ['-c', `${configDir.cliConfigKey}=${JSON.stringify(path)}`] }
   return { env: configDir.envVar ? { [configDir.envVar]: path } : {}, args: [] }
 }
 

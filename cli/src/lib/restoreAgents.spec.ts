@@ -210,7 +210,12 @@ function harness(rows: RegisteredSession[], opts: { livePanes?: string[]; aliveP
         const r = h.rows.get(id); if (!r) return null
         r.launch = launch; return r
       },
-      updateProcessIdentity: (id, pi) => { note(`updateIdentity:${id}:${pi.pid}`); const r = h.rows.get(id); if (r) r.processIdentity = pi; return !!r },
+      updateProcessIdentity: (id, pi, _gateway, grid) => {
+        note(`updateIdentity:${id}:${pi.pid}`)
+        const r = h.rows.get(id)
+        if (r) { r.processIdentity = pi; if (grid !== undefined) r.grid = grid }
+        return !!r
+      },
       unbindSession: (sid) => { note(`unbind:${sid}`); return true },
       inheritName: (from, to) => { note(`inheritName:${from}->${to}`) },
       releaseEngine: (id) => {
@@ -316,7 +321,7 @@ describe('restore ownership across asynchronous work', () => {
     h.deps.probeProcess = () => probe.promise
     await restoreAgents(h.deps)
     const swap = createPaneSwap({ restartJobs, byAgent: h.deps.registry.byAgent,
-      prepareSessionResume: () => {}, keepAbandonedConversation: () => {}, stopNative: async () => {} })
+      prepareSessionResume: async () => {}, keepAbandonedConversation: () => {}, stopNative: async () => {} })
     expect(swap.restartJobs).toBe(restartJobs)
     probe.resolve(identity(8))
     await settled(h, 1, 1)
@@ -733,6 +738,41 @@ describe('restoreAgents — which agents get a pane back', () => {
     expect(h.launched[2].launch.argv).toEqual(['claude', '--grid', 'grid-abc'])
   })
 
+  it('writes on the row the grid each launch puts the engine on, with its process, the fresh fallback\'s included', async () => {
+    const now = { baseUrl: 'https://saved.example/now/v1', model: 'm' }
+    const h = harness([row({ agentId: 'gridded', grid: { baseUrl: GRID.baseUrl, model: null }, gridLaunch: GRID })])
+    h.probes.set('%0', [identity(7)])
+    const build = h.deps.buildLaunch
+    h.deps.buildLaunch = async (entry, options) => ({ ...await build(entry, options) as RestoreLaunch, grid: now })
+    await restoreAgents(h.deps)
+    await settled(h, 1, 1)
+    expect(h.rows.get('gridded')!.grid).toEqual(now)
+
+    // Its resume dies, and the fresh launch that follows is on the engine's own login.
+    const fresh = harness([row({ agentId: 'gridded', grid: { baseUrl: GRID.baseUrl, model: null }, gridLaunch: GRID })])
+    fresh.states.set('%0', [{ dead: true }])
+    fresh.probes.set('%0', [null, identity(8)])
+    const resumed = fresh.deps.buildLaunch
+    fresh.deps.buildLaunch = async (entry, options) => ({ ...await resumed(entry, options) as RestoreLaunch, grid: options.resumeSessionId ? now : null })
+    await restoreAgents(fresh.deps)
+    await settled(fresh, 1, 1)
+    expect(fresh.calls).toContain('updateIdentity:gridded:8')
+    expect(fresh.rows.get('gridded')!.grid).toBeNull()
+  })
+
+  it('writes the grid an earlier daemon\'s launch left on the row once it finds that launch\'s engine', async () => {
+    // That launch wrote its record on the row before it dispatched (`refreshGridWebSearch`); its engine was never seen.
+    const entry = row({ agentId: 'gridded', grid: { baseUrl: 'https://grid.example/old/relay', model: null }, gridLaunch: { ...GRID, model: 'm' },
+      launch: { state: 'starting', nativeToken: 'original' } })
+    const h = harness([entry], { alivePanes: ['%3'] })
+    h.deps.waitingPane = vi.fn(async () => false)
+    h.probes.set('%3', [identity(9)])
+    await restoreAgents(h.deps)
+    await vi.waitFor(() => expect(h.calls).toContain('updateIdentity:gridded:9'))
+    expect(entry.grid).toEqual({ baseUrl: GRID.baseUrl, model: 'm' })
+    expect(h.launches).toEqual([])
+  })
+
   it('does not relaunch a grid agent whose credential was never persisted, and marks it so', async () => {
     // A row written before `gridLaunch` existed: it knows WHERE it pointed and nothing else. On the
     // engine's own login it would spend the wrong account while looking identical.
@@ -764,7 +804,7 @@ describe('restoreAgents — which agents get a pane back', () => {
       workspaceMissing: () => null,
       relaunchOverrides: async () => ({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } }),
       downgradedPermission: async () => ({ bypassPermission: false }),
-      prepareSessionResume: () => {}, refreshGridWebSearch: () => {},
+      prepareSessionResume: async () => {}, refreshGridWebSearch: () => {},
       launch: (entry) => {
         if (entry.agentId === 'agent-a') throw new WindowsBatchLaunchRefused('claude', 'C:\\tools\\claude.cmd')
         return { argv: [entry.engine, '--resume', entry.sessionId] }
@@ -1525,5 +1565,29 @@ describe('external adoption crash boundaries', () => {
     expect(h.deps.retainStopped).not.toHaveBeenCalled()
     expect(h.launches).toEqual([{ agentId: 'agent-a', resumeSessionId: 'imported-session' }])
     expect(h.rows.get('agent-a')).toMatchObject({ sessionId: 'imported-session', launch: { state: 'failed', error: 'RESUME_FAILED' } })
+  })
+})
+
+describe('restoreAgents — a pane that holds only the recorded process (#4259)', () => {
+  it('keeps the agent whose recorded process still runs in its pane under another name, and archives the one whose process is gone', async () => {
+    const bound = identity(11)
+    const kept = row({ agentId: 'kept', processIdentity: bound })
+    const gone = row({ agentId: 'gone', sessionId: 'session-b', tmuxPane: '%4', runtimes: [{ backend: 'tmux', paneId: '%4' }],
+      primaryRuntimeKey: 'tmux\u0000%4', processIdentity: identity(21) })
+    const h = harness([kept, gone])
+    const retainStopped = h.deps.retainStopped = vi.fn()
+    const panes: TerminalRuntimeRef[] = [{ backend: 'tmux', paneId: '%3' }, { backend: 'tmux', paneId: '%4' }]
+    h.deps.survey = () => terminalSurvey(async () => ({ ok: true, panes }), async (runtime) => ({
+      ok: false, unknown: false,
+      paneProcesses: runtime.paneId === '%3'
+        ? [identity(10), { ...bound, executable: 'unshare' }]
+        // The same pid started later is another process.
+        : [identity(20), { ...identity(21), startMarker: 'start later' }],
+    }))
+    const summary = await restoreAgents(h.deps)
+    expect(retainStopped.mock.calls.map(([entry, paneAlive]) => [entry.agentId, paneAlive])).toEqual([['gone', true]])
+    expect(summary).toEqual({ restored: [], skipped: [], failed: [], held: [], unsurveyed: [] })
+    expect(h.paneCreates).toBe(0)
+    expect(h.rows.get('kept')!.processIdentity).toEqual(bound)
   })
 })

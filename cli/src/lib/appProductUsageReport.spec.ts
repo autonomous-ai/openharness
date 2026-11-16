@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { expect, it } from 'vitest'
-import { appProductUsageReport, APP_USAGE_VOCABULARY, isAppProductUsageReport } from './appProductUsageReport.js'
+import { APP_USAGE_VOCABULARY } from '../core/api.js'
+import { appProductUsageReport, isAppProductUsageReport } from './appProductUsageReport.js'
 import { HEALTH_MEASURES, CLI_REPORT_FAILURES } from './productHealthContract.js'
 import { PRODUCT_USAGE_ADD_PHONE_METRICS, PRODUCT_USAGE_UI_METRICS } from './productUsageContract.js'
 

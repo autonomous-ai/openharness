@@ -7,10 +7,14 @@ import '../core/models.dart';
 import '../core/runtime_platform.dart';
 import '../logging/app_log.dart';
 import '../shared/theme/app_icons.dart';
+import '../shared/theme/app_pane_icon.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import '../shared/theme/swarm_layout.dart';
+import '../shared/theme/workspace_bar_style.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../state/app_state.dart';
+import '../theme/app_theme.dart' show AppColors;
+import '../widgets/agent_drag.dart'
+    show PaneCarry, PaneDragHandle, PaneHeaderButton;
 import '../widgets/desktop_chrome.dart';
 import '../widgets/native_webview_host.dart';
 import '../widgets/web_pane_panel.dart';
@@ -21,8 +25,8 @@ import 'browser_setup_dialog.dart';
 import 'browser_stream.dart';
 import 'browser_view.dart';
 
-/// An agent chat's Browser icon, after Terminal: selected while its panel is open, and marked with the connection dot's
-/// green while the agent's browser is [running].
+/// An agent's Browser icon, in its terminal pane's header before ×: selected while its tile is open, and marked with
+/// the connection dot's green while the agent's browser is [running].
 class BrowserButton extends StatelessWidget {
   const BrowserButton({
     super.key,
@@ -30,6 +34,10 @@ class BrowserButton extends StatelessWidget {
     this.running = false,
     required this.onPressed,
   });
+
+  /// What the header gives it: an [AppIconButton]'s target.
+  static const width = 32.0;
+
   final bool open, running;
   final VoidCallback onPressed;
 
@@ -101,9 +109,9 @@ const _stepLines = [
 /// What only the panel knows, after a stream it had ended: its line, and whether Retry opens another.
 typedef _Failure = ({String line, bool retry});
 
-/// An agent's own Chrome beside its chat (Mockups 3 and 4): off, a line and Start; while it is set up or starts, its
-/// progress; when it failed, why and what to press; when ready, its screen through noVNC, which the person uses as
-/// the agent does. Stop is in its header whenever the browser is on.
+/// An agent's own Chrome, in a tile beside its terminal (Mockups 3 and 4): off, a line and Start; while it is set up
+/// or starts, its progress; when it failed, why and what to press; when ready, its screen through noVNC, which the
+/// person uses as the agent does. Stop is in its header whenever the browser is on.
 class BrowserPanel extends StatefulWidget {
   const BrowserPanel({
     super.key,
@@ -112,6 +120,9 @@ class BrowserPanel extends StatefulWidget {
     required this.agentId,
     required this.thisComputer,
     this.onClose,
+    this.visible = true,
+    this.compactHeader = false,
+    this.paneDrag,
     @visibleForTesting this.newView,
   });
 
@@ -121,6 +132,16 @@ class BrowserPanel extends StatefulWidget {
   /// The agent runs on this computer: setup can be started only here.
   final bool thisComputer;
   final VoidCallback? onClose;
+
+  /// In sight: not in a tab behind another, nor beside a zoomed pane. Only a tile in sight streams the screen, so
+  /// one parked out of sight costs its machine nothing and no window draws a webview over another tab.
+  final bool visible;
+
+  /// The workspace's pane header height (38) rather than a lone pane's (46).
+  final bool compactHeader;
+
+  /// The header carries the tile to another, as a terminal's does; null when it is alone in its tab.
+  final PaneDragHandle? paneDrag;
 
   /// The page for each stream; a test gives its own.
   final BrowserView Function()? newView;
@@ -183,6 +204,15 @@ class _BrowserPanelState extends State<BrowserPanel> {
   }
 
   @override
+  void didUpdateWidget(BrowserPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Out of sight the stream ends; back in sight it opens again.
+    if (oldWidget.visible != widget.visible) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _sync());
+    }
+  }
+
+  @override
   void dispose() {
     _app.removeListener(_sync);
     _waitEnds?.cancel();
@@ -206,6 +236,7 @@ class _BrowserPanelState extends State<BrowserPanel> {
     if (_waiting == null) _waitEnds?.cancel();
     final wanted =
         WebPanePanel.webviewAvailable &&
+        widget.visible &&
         _online &&
         browser?.state == 'ready' &&
         _failure == null &&
@@ -425,66 +456,77 @@ class _BrowserPanelState extends State<BrowserPanel> {
     grid.AppTheme.watch(context);
     return ColoredBox(
       key: const ValueKey('swarm-browser-panel'),
-      // The Swarm's one ground, beside the chat or in its place (design system, One surface).
-      color: grid.AppPalette.swarmField,
+      color: grid.AppPalette.windowBg,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Container(
-            height: 52,
-            padding: const EdgeInsets.symmetric(
-              horizontal: SwarmLayout.barSide,
-            ),
-            decoration: BoxDecoration(
-              border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
-            ),
-            child: Row(
-              spacing: 4,
-              children: [
-                Expanded(
-                  child: Text(
-                    'Browser',
-                    style: DesktopChrome.text(medium: true),
-                  ),
-                ),
-                if (_browser != null)
-                  // Not a bare square: that is an unticked box in its settings and Maximize in the window's bar.
-                  AppIconButton(
-                    key: const ValueKey('swarm-browser-stop'),
-                    icon: AppIcons.circleStop,
-                    tooltip: 'Stop',
-                    onPressed: _stop,
-                  ),
-                AppIconButton(
-                  key: const ValueKey('swarm-browser-settings'),
-                  icon: AppIcons.settings,
-                  tooltip: 'Browser settings',
-                  selected: _settings,
-                  onPressed: () {
-                    _settings = !_settings;
-                    _sync();
-                  },
-                ),
-                AppIconButton(
-                  key: const ValueKey('swarm-browser-paste'),
-                  icon: AppIcons.clipboardPaste,
-                  tooltip: 'Paste',
-                  onPressed: _open && !_settings ? _paste : null,
-                ),
-                AppIconButton(
-                  key: const ValueKey('swarm-browser-close'),
-                  icon: AppIcons.close,
-                  tooltip: 'Close',
-                  onPressed: widget.onClose,
-                ),
-              ],
-            ),
+          PaneCarry(
+            handle: widget.paneDrag,
+            label: 'Browser',
+            child: MediaQuery.withNoTextScaling(child: _header()),
           ),
+          // Under the header, as under every tile's: in line with its terminal's.
+          Divider(height: 1, color: AppColors.border),
           Expanded(child: _body()),
         ],
       ),
     );
   }
+
+  /// A pane's header, as a viewer tile's: its name, then Stop while the browser is on, the gear, Paste and the pane's
+  /// ×, which only hides the tile.
+  Widget _header() => Container(
+    height: widget.compactHeader ? 38 : 46,
+    padding: const EdgeInsets.only(
+      left: 14,
+      right: grid.AppDesktop.paneCloseInset,
+    ),
+    child: Row(
+      spacing: 4,
+      children: [
+        Expanded(
+          child: Text(
+            'Browser',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: workspaceBarTextStyle(color: AppColors.text),
+          ),
+        ),
+        if (_browser != null)
+          // Not a bare square: that is an unticked box in its settings and Maximize in the window's bar.
+          AppIconButton(
+            key: const ValueKey('swarm-browser-stop'),
+            icon: AppIcons.circleStop,
+            tooltip: 'Stop',
+            onPressed: _stop,
+          ),
+        AppIconButton(
+          key: const ValueKey('swarm-browser-settings'),
+          icon: AppIcons.settings,
+          tooltip: 'Browser settings',
+          selected: _settings,
+          onPressed: () {
+            _settings = !_settings;
+            _sync();
+          },
+        ),
+        AppIconButton(
+          key: const ValueKey('swarm-browser-paste'),
+          icon: AppIcons.clipboardPaste,
+          tooltip: 'Paste',
+          onPressed: _open && !_settings ? _paste : null,
+        ),
+        PaneHeaderButton(
+          key: const ValueKey('swarm-browser-close'),
+          label: 'Close Browser',
+          command: 'pane.close',
+          icon: AppPaneSymbol.close,
+          iconSize: AppIcons.closeSize,
+          onPressed: widget.onClose,
+        ),
+      ],
+    ),
+  );
 
   Widget _body() {
     if (!_online) return _line('Reconnect this machine to open its browser');
@@ -534,7 +576,10 @@ class _BrowserPanelState extends State<BrowserPanel> {
                 return Stack(
                   fit: StackFit.expand,
                   children: [
-                    NativeWebViewHost(child: view.build(context)),
+                    NativeWebViewHost(
+                      visible: widget.visible,
+                      child: view.build(context),
+                    ),
                     if (!_open) _progressLine('Starting browser…'),
                   ],
                 );

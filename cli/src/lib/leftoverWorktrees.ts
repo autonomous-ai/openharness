@@ -4,11 +4,28 @@
  * unless the person asks, and nothing is deleted: a worktree kept when its harness was deleted stays until it is chosen
  * here (#711). The branch stays too; `git worktree prune` only drops the repository's record of a folder that is gone.
  */
+import { execFile } from 'node:child_process'
 import { lstat, readdir, rmdir, stat } from 'node:fs/promises'
 import { basename, dirname, join, normalize, resolve, sep } from 'node:path'
+import { promisify } from 'node:util'
 import { inRepositoryTurn } from './gitProject.js'
 import { TrashError, type Trash } from './trash.js'
-import { git } from './worktreeSweep.js'
+
+const exec = promisify(execFile)
+
+/**
+ * git as itself: none of the repository settings a parent process left in the environment, and not the repository's
+ * settings that run a program or hide new files from the uncommitted check: `core.fsmonitor` names a program git runs on
+ * a status, no hook of the repository's runs here, and with `status.showUntrackedFiles=no` a worktree holding only new
+ * files read as clean (review of the allocator's package 6, 12 November).
+ */
+async function git(cwd: string, args: string[]): Promise<string> {
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
+  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE']) delete env[key]
+  const guarded = ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'status.showUntrackedFiles=normal']
+  return (await exec('git', [...guarded, '-C', cwd, ...args], { timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024, env }))
+    .stdout.replace(/\r?\n$/, '')
+}
 
 export interface LeftoverWorktree {
   path: string

@@ -10,7 +10,6 @@ const {
   ADOPTED_SIGN_IN,
   AUTH_SESSION_FILE,
   AuthSessionError,
-  AuthSessionManager,
   clearAuthSession,
   ensureSignInEpoch,
   hasAuthSession,
@@ -18,11 +17,16 @@ const {
   newSignInEpoch,
   readAuthSession,
   readSignedOut,
+  recordMachineId,
   releaseHeldAuthLock,
   updateAuthSession,
   signInOf,
+  tokenAnswer,
+  tokenOf,
   writeAuthSession,
 } = await import('./authSession.js')
+// The renewal, in its own file so the core's process loads none of it (lib/authRefresh.ts).
+const { AuthSessionManager } = await import('./authRefresh.js')
 
 const baseSession = () => ({
   version: 1 as const,
@@ -54,29 +58,27 @@ describe('sign-in epoch', () => {
     }))))
     const manager = new AuthSessionManager('https://api.example.test')
     await manager.accessToken()
-    await manager.updateMachineId('machine-2', epoch)
+    await recordMachineId('machine-2', epoch)
     expect(readAuthSession()).toMatchObject({ accessToken: 'refreshed-access', machineId: 'machine-2', signInEpoch: epoch, signInAcct: 'acct-1' })
     expect(newSignInEpoch()).not.toBe(epoch)
   })
 
   describe('a machine id found under one sign-in', () => {
-    const manager = () => new AuthSessionManager('https://api.example.test')
-
     it('is written into that sign-in, refreshed or not', async () => {
       writeAuthSession({ ...baseSession(), signInEpoch: 'first@1' })
-      await manager().updateMachineId('machine-2', 'first@1')
+      await recordMachineId('machine-2', 'first@1')
       expect(readAuthSession()).toMatchObject({ machineId: 'machine-2', signInEpoch: 'first@1' })
     })
 
     it('is dropped by a new sign-in', async () => {
       writeAuthSession({ ...baseSession(), machineId: 'machine-new', signInEpoch: 'next@2' })
-      await manager().updateMachineId('machine-old', 'first@1')
+      await recordMachineId('machine-old', 'first@1')
       expect(readAuthSession()).toMatchObject({ machineId: 'machine-new', signInEpoch: 'next@2' })
     })
 
     it('is dropped by a new sign-in when the lookup started with no epoch', async () => {
       writeAuthSession({ ...baseSession(), machineId: 'machine-new', signInEpoch: 'next@2' })
-      await manager().updateMachineId('machine-old', undefined)
+      await recordMachineId('machine-old', undefined)
       expect(readAuthSession()).toMatchObject({ machineId: 'machine-new' })
     })
 
@@ -84,7 +86,7 @@ describe('sign-in epoch', () => {
       const { signInEpoch: _none, ...old } = { ...baseSession(), signInEpoch: undefined }
       writeAuthSession(old)
       await ensureSignInEpoch()
-      await manager().updateMachineId('machine-2', undefined)
+      await recordMachineId('machine-2', undefined)
       expect(readAuthSession()).toMatchObject({ machineId: 'machine-2' })
     })
   })
@@ -418,3 +420,32 @@ describe('AuthSessionManager', () => {
     expect(readAuthSession()).toMatchObject({ accessToken: 'new-sign-in' })
   })
 })
+
+// A token crosses processes: the gateway's renews the sign-in and hands the core one, and the core hands one to a service
+// that asks (core/accountQueries.ts). The refusal has to arrive as the session's own, or a sign-in that is over reads as
+// one that could not be renewed just now.
+describe('a token between processes', () => {
+  it('is the token, or the refusal with its code and its words', async () => {
+    expect(await tokenAnswer(async () => 't-1')).toEqual({ token: 't-1' })
+    expect(await tokenAnswer(async () => { throw new AuthSessionError('Run `harness login`.', 'INVALID_REFRESH') })).toEqual({ code: 'INVALID_REFRESH', message: 'Run `harness login`.' })
+    // Not the session's own: one that could not be renewed just now.
+    expect(await tokenAnswer(async () => { throw new Error('socket hang up') })).toEqual({ code: 'UNAVAILABLE', message: 'socket hang up' })
+    expect(await tokenAnswer(async () => { throw 'down' })).toEqual({ code: 'UNAVAILABLE', message: 'down' })
+    expect(await tokenAnswer(async () => { throw Object.assign(new Error('odd'), { code: '' }) })).toEqual({ code: 'UNAVAILABLE', message: 'odd' })
+  })
+
+  it('reads back as the token, or the session\'s own error; anything else is UNAVAILABLE, in the asker\'s words', () => {
+    expect(tokenOf({ token: 't-1' }, 'unused')).toBe('t-1')
+    for (const code of ['MISSING', 'INVALID_REFRESH', 'UNAVAILABLE', 'SIGN_IN_AGAIN']) {
+      let thrown: unknown
+      try { tokenOf({ code, message: `said ${code}` }, 'unused') } catch (error) { thrown = error }
+      expect(thrown).toBeInstanceOf(AuthSessionError)
+      expect(thrown).toMatchObject({ code, message: `said ${code}` })
+    }
+    // A code that is not a session's, and an answer that is not one at all (the process was not there).
+    expect(() => tokenOf({ code: 'REVOKED_BY_MARS', message: 'odd' }, 'unused')).toThrow(expect.objectContaining({ code: 'UNAVAILABLE', message: 'odd' }))
+    expect(() => tokenOf({ error: 'SERVICE_UNAVAILABLE' }, 'the gateway is not running')).toThrow(expect.objectContaining({ code: 'UNAVAILABLE', message: 'the gateway is not running' }))
+    expect(() => tokenOf({ token: 7, message: '' }, 'no token')).toThrow(expect.objectContaining({ code: 'UNAVAILABLE', message: 'no token' }))
+  })
+})
+

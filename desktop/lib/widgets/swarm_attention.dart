@@ -8,7 +8,6 @@ import 'package:harness/terminal/terminal_text.dart';
 
 import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
-import '../super_tabs/swarm_name.dart';
 import '../state/swarm_attention.dart';
 import '../state/swarm_navigation.dart';
 import 'engine_identity.dart';
@@ -53,9 +52,7 @@ class _SwarmAttentionState extends State<_SwarmAttention> {
   int _cursor = 0;
   double _rowHeight = 104;
   bool _revealScheduled = false;
-  late final _targetName =
-      swarmTabShownName(widget.app, widget.app.activeSwarm) ??
-      widget.app.activeSwarm.name;
+  late final _targetName = widget.app.activeSwarm.name;
 
   @override
   void initState() {

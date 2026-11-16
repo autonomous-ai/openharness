@@ -11,7 +11,6 @@
 #include "config_store.h"
 #include "../cable_machines.h"   // cable_machine_t — the wheel's row, already parsed and diffed
 #include "../cable_client.h"     // cable_swarm_t — one of the window's tabs, as the wire carries it
-#include "habitat/supertab.h"   // ht_supertab_t — one Swarm and its Leads, as cable_client parsed it
 
 struct cJSON;
 
@@ -54,6 +53,19 @@ void ui_project_set_engine(const char *project_id, const char *engine);
 // Which machine an agent lives on. A tab spans machines, so this is what the tile's machine line and
 // line shows and what a machine row uses to find the first agent to land on.
 void ui_project_set_machine(const char *project_id, const char *machine_id, const char *machine);
+
+// Where an agent runs (the daemon's short id: orca, ghostty, ...) and which of CABLE_CAP_* the dial may
+// use on it. An agent outside Harness can be watched, not spoken to, so a face tap without voice shows
+// "See it in {Host}" instead of opening the microphone.
+void ui_project_set_host_caps(const char *project_id, const char *host, uint8_t caps);
+// `view: machine` on the roster: it is this computer's agents rather than a tab's, so each face names
+// where its agent lives under the agent's name.
+void ui_fleet_set_view(bool machine);
+// The `apps` frame: the apps this dial can show with no window and the one shown. Known from the first frame, even
+// an empty one, until forgotten when the session ends: an older daemon sends none, and the dial then reads as before.
+// Memory only. Safe from the reader task.
+void ui_apps_replace(const cable_app_t *rows, int count, const char *shown);
+void ui_apps_forget(void);
 
 // Runtime model/effort (remote machines): store the opaque runtime-v1 profile and repaint the Model/Effort
 // chips. set_ is authoritative (agent_synced, clears the optimistic hold); reconcile_ is the guarded poll
@@ -137,27 +149,6 @@ void ui_machine_select_error(const char *machine_id, const char *code, const cha
 // Replace the whole list from one `swarms` frame. `selected` names the one the window has on screen; it
 // is what every tile's swarm line draws. count 0 hides the line. Safe from the reader task.
 void ui_swarms_replace(const cable_swarm_t *rows, int count, const char *selected);
-
-// --- The Swarms (Super Tabs; cable_client.h). Each is safe from the reader task. ---
-// The `supertabs` list: the Swarms shown, in order. A Swarm gone from it leaves the list and the inbox.
-void ui_supertabs_ids(const char ids[][ID_MAX], int n);
-// One Swarm's card. True when the caller should beep: a Lead started needing a person, off the face.
-bool ui_supertab(const ht_supertab_t *in);
-// `chat_id`: the chat the text is the last message of, "" from a daemon without swarmChat. Dropped for another chat.
-void ui_supertab_recap(const char *tab, const char *lead, const char *chat_id, const char *thread, const char *text, uint32_t at, bool none);
-void ui_supertab_focus(const char *tab, const char *lead);
-// A tag in the Lead's project, or an older daemon's Lead message (`supertab.notice`): that Lead's one inbox entry, read at
-// once when its chat is on the face. `thread`: the root of the thread it replies in, "" for the main stream; such a notice
-// is read at once only when the face shows that thread. True when the caller should beep.
-bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, const char *chat_id, const char *thread, const char *text, uint32_t at);
-// The desktop opened that chat (`supertab.notice.read`): the entry goes.
-void ui_supertab_notice_read(const char *tab, const char *lead, const char *chat_id);
-// A Super Tab wait from harness `agent_id` (some Lead's `local`). It only sets that Lead's inbox text and face;
-// it never opens the question screen. True when the caller should beep.
-bool ui_supertab_wait(const char *agent_id, const char *request, const char *swarm_name, bool stuck, const char *text);
-void ui_supertab_wait_close(const char *agent_id, const char *request);
-// Link lost: forget every Swarm and its inbox entries.
-void ui_supertabs_clear(void);
 
 // Drain the select deadline. Called from refresh_task, off the LVGL task; drops the spinner and shows the
 // reason when the daemon never answered.

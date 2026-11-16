@@ -17,7 +17,7 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import { AgentRestartCoordinator, type RelaunchArgvOptions, type RestartAgentDeps } from '../../lib/restartAgent.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import type { RestartTarget } from '../../lib/terminalBackend.js'
-import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
+import { ENGINE_SETTLE_MS, resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import { bypassPermissionActive } from '../../lib/processTable.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
 import { signalAgentProcess } from '../../lib/processSignals.js'
@@ -27,7 +27,7 @@ import { paneReadIdentity } from '../transcripts/readIdentity.js'
 export interface PaneSwapDeps {
   restartJobs?: AgentRestartCoordinator
   byAgent: (agentId: string) => RegisteredSession | undefined
-  prepareSessionResume: (session: RegisteredSession) => void
+  prepareSessionResume: (session: RegisteredSession, current: () => boolean) => Promise<unknown>
   /** Keeps a conversation a swap had to leave for a new one as a stopped harness (lib/keepAbandonedConversation.ts). */
   keepAbandonedConversation: (left: RegisteredSession) => void
   /** Release the conversation on its engine's server before replacing the terminal client. */
@@ -35,9 +35,6 @@ export interface PaneSwapDeps {
   /** Stops a Claude Code background job holding the session before it is resumed, in its worker (core/engines/backgroundJobs.ts). */
   stopBackgroundJob?: ClearBackgroundJob
 }
-
-/** How long a relaunched engine must stay running before a restart counts it as come up (`waitForProcess`). */
-export const SWAP_SETTLE_MS = 500
 
 export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedConversation, stopNative, stopBackgroundJob, restartJobs = new AgentRestartCoordinator() }: PaneSwapDeps) {
   /**
@@ -98,7 +95,8 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
     })
     return {
       ...(current ? { isCurrent: current } : {}),
-      prepareResume: () => prepareSessionResume(session),
+      // The history is replaced only while the swap holds, as `restartAgent` judges it (`isCurrent`).
+      prepareResume: async () => { await prepareSessionResume(session, () => current?.() !== false) },
       // The conversation the swap meant to reopen: the one a fallback to a fresh start leaves behind.
       keepAbandoned: () => keepAbandonedConversation(session),
       // Only a backend that can refuse is asked (tmux, too old for `-e`); the pty host takes any environment.
@@ -156,8 +154,8 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
             // Up means still up a moment later: a launch the engine refuses (`codex resume` after an update
             // dropped it) runs for an instant, and seen then, the restart said "resumed" and never fell back
             // to a fresh start (e2e/updates.e2e.ts on Linux, whose faster start put it in the first look).
-            await new Promise((resolve) => setTimeout(resolve, SWAP_SETTLE_MS))
-            waited += SWAP_SETTLE_MS
+            await new Promise((resolve) => setTimeout(resolve, ENGINE_SETTLE_MS))
+            waited += ENGINE_SETTLE_MS
             const still = await resolvePaneEngineProcess(backend, runtime, session.engine)
             if (sameProcessIdentity(still, found)) return found
           }

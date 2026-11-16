@@ -27,7 +27,7 @@ drives it as one more host (`p<host>:%N` names already carry the host).
 - It takes one request at a time from a folder only the owner can write, and accepts fixed verbs with strictly checked words:
   `create hg_<12 hex>`, `remove hg_<12 hex>`, `share hg_<12 hex> <folder> read|write`, `unshare …`. Anything else is refused and
   logged. It takes no command to run and no path to a program: nothing the daemon sends can make it run something else.
-- It refuses any account but `hg_<12 hex>`, so it can never touch the owner, an administrator, or the Team account.
+- It refuses any account but `hg_<12 hex>`, so it can never touch the owner or an administrator.
 
 ### A guest's account
 
@@ -35,8 +35,8 @@ drives it as one more host (`p<host>:%N` names already carry the host).
   keeps, in no group but Users, denied network and interactive logon.
 - Its host runs from a task in that account with **S4U logon**, so no password is stored anywhere. S4U has no network
   credentials, which a guest's agent does not need: it reaches models through the owner's relay, and git over HTTPS.
-- Its home is a normal profile, which the owner's account cannot read and which cannot read the owner's. The Team account's
-  privacy probes run in each guest account and prove the second half before a guest's first harness starts.
+- Its home is a normal profile, which the owner's account cannot read and which cannot read the owner's. Privacy
+  probes run in each guest account and prove the second half before a guest's first harness starts.
 
 ### The owner's daemon and the guest's host
 
@@ -57,7 +57,7 @@ drives it as one more host (`p<host>:%N` names already carry the host).
 On the Windows PC, with a signed build:
 
 1. A host in a second account, started by an S4U task, with a pipe admitting the owner: can the owner's daemon reach it and open a
-   pane? (If not: each guest needs their own daemon, as the Team account has, and this design changes.)
+   pane? (If not: each guest needs their own daemon, and this design changes.)
 2. Does a pane's engine run under S4U at all: ConPTY, Node, Claude Code's own install and sign-in through the relay?
 3. Is a profile created for an S4U task's first logon, or does the helper have to create it (`CreateProfile`)?
 4. What does Smart App Control do with a signed program run as that account?

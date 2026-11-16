@@ -130,6 +130,9 @@ export class OpenclawLive {
 
   stop(): void { this.reader.stop() }
 
+  /** A read of the store now, as its poll makes: what a drain of the session asks (engines/others/streams.ts). */
+  poll(): Promise<void> { return this.reader.tick() }
+
   /** A cancel: the turn is over. What closing it returns is not emitted (a cancel sends no turn end). */
   closeTurn(): void {
     this.normalizer.closeTurn('aborted')

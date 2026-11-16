@@ -168,7 +168,7 @@ async function commitReports(reports: QueuedReport[]): Promise<IngestResult[]> {
 async function pauseForConflict(error: unknown, attempt: number, started: number): Promise<void> {
   const code = (error as { code?: string } | null)?.code
   const pause = 25 * 2 ** attempt + Math.floor(Math.random() * 50)
-  // A Mongo lock wait comes without a Prisma code, labelled transient, as Swarm's do (superTabs/store.ts).
+  // A Mongo lock wait comes without a Prisma code, labelled transient.
   const transient = error instanceof Error && error.message.includes('TransientTransactionError')
   if ((code !== 'P2034' && code !== 'P2002' && !transient) || attempt >= 3
     || performance.now() - started + pause >= 1000) throw error
@@ -288,24 +288,24 @@ export function resetActivityMarksForTests(): void { marked.clear(); markedDay =
 let activityWarnedAt = 0
 
 /** Fire-and-forget from the relay touch points; never awaited by a socket, never throws. */
-export async function markActivity(userId: string, now: Date, mark: { surface?: ActivitySurface; worked?: boolean; hosting?: boolean },
+export async function markActivity(userId: string, now: Date, mark: { surface?: ActivitySurface; worked?: boolean },
   key: string = env.PRODUCT_USAGE_SUBJECT_KEY): Promise<void> {
-  if (!key || (!mark.surface && !mark.worked && !mark.hosting)) return
+  if (!key || (!mark.surface && !mark.worked)) return
   try {
     const dayUtc = new Date(Math.floor(now.getTime() / DAY) * DAY)
     const day = dayUtc.toISOString().slice(0, 10)
     if (day !== markedDay) { marked.clear(); markedDay = day }
     const subject = activitySubject(userId, key)
-    const seen = `${subject}|${mark.surface ?? ''}|${mark.worked ? 'w' : ''}|${mark.hosting ? 'h' : ''}`
+    const seen = `${subject}|${mark.surface ?? ''}|${mark.worked ? 'w' : ''}`
     if (marked.has(seen)) return
     if (!(await productUsageChoice(userId)).enabled) return
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { createdAt: true, email: true } })
     if (!user) return
     const where = { subject_dayUtc: { subject, dayUtc } }
-    const update = { ...(mark.surface ? { surfaces: { push: mark.surface } } : {}), ...(mark.worked ? { worked: true } : {}), ...(mark.hosting ? { hosting: true } : {}) }
+    const update = { ...(mark.surface ? { surfaces: { push: mark.surface } } : {}), ...(mark.worked ? { worked: true } : {}) }
     try {
       await prisma.productUsageActivity.upsert({ where, update, create: {
-        subject, dayUtc, surfaces: mark.surface ? [mark.surface] : [], worked: mark.worked === true, ...(mark.hosting ? { hosting: true } : {}),
+        subject, dayUtc, surfaces: mark.surface ? [mark.surface] : [], worked: mark.worked === true,
         signupDay: new Date(Math.floor(user.createdAt.getTime() / DAY) * DAY),
         staff: user.email.toLowerCase().endsWith(STAFF_EMAIL),
         expiresAt: new Date(dayUtc.getTime() + ACTIVITY_DAYS * DAY),

@@ -1,7 +1,7 @@
 # Hub: three reports hide an item from everyone — Implementation Plan
 
-> **For agentic workers:** this plan is carried out by the task's Engineer, task by task, test first, as the project's
-> instructions (Engineer role) say. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** this plan is carried out task by task, test first. Steps use checkbox (`- [ ]`) syntax for
+> tracking.
 
 **Goal:** A harness or comment that three readers reported is hidden from every reader, including rows of
 `community_hidden` written before the fix (no `restoredAt` field at all).
@@ -13,17 +13,17 @@ so it shows Mongo's behavior; a new integration test runs the same flow on a rea
 
 **Tech Stack:** TypeScript, Prisma (MongoDB), Vitest, mongodb-memory-server (`planDatabase`).
 
-**Spec:** Task #2299 brief (Super Tab conversation f90ee44a6662554cfaa30431), requested by diego@autonomous.ai.
+**Spec:** Task #2299 brief, requested by diego@autonomous.ai.
 
 ## Global Constraints
 
 - PR body first line: "Requested by diego@autonomous.ai through Harness."
 - Before Ready: a test that fails without the fix for every risk named, red/green evidence in a PR comment, and the
-  full Super Tab integration suite (`npm run test:super-tabs` in backend/).
+  full backend integration suite (`npm run test:integration` in backend/).
 - Never run a test that signs the Mac out of the real CLI. Stop only processes you started, by id. Temp files only in
   mktemp -d folders.
 - Owns: backend/src/lib/communityReports.ts, backend/src/routes/community.test.ts, backend/integration. One line in
-  backend/vitest.super-tabs.config.ts adds the new test file to the suite.
+  backend/vitest.integration.config.ts adds the new test file to the suite.
 
 ## Review Focus
 
@@ -40,7 +40,7 @@ so it shows Mongo's behavior; a new integration test runs the same flow on a rea
 
 **Files:**
 - Create: `backend/integration/communityReports.test.ts`
-- Modify: `backend/vitest.super-tabs.config.ts` (add the file to `include`)
+- Modify: `backend/vitest.integration.config.ts` (add the file to `include`)
 - Modify: `backend/src/lib/communityReports.ts:16-32` (readers), `:66` (create)
 - Modify: `backend/src/routes/community.test.ts:21` (fake `isSet: false` matches only an absent field), `:85` (drop
   `defaults: { restoredAt: null }` from `communityHidden`)
@@ -64,11 +64,11 @@ so it shows Mongo's behavior; a new integration test runs the same flow on a rea
     change (1), which the readers' fix alone would otherwise hide.
   - `two reports hide it only from those who reported it`: anonymous and r3 not hidden; r1 hidden.
   - `a restored item is shown until three new reports`: restored row (date) is visible; three later reports hide it.
-- [x] **Step 2: Run it, watch it fail** — `npx vitest run --config vitest.super-tabs.config.ts integration/communityReports.test.ts`.
+- [x] **Step 2: Run it, watch it fail** — `npx vitest run --config vitest.integration.config.ts integration/communityReports.test.ts`.
   Expected: the three "hide" cases FAIL (`expected false to be true`), the others pass.
 - [x] **Step 3: Make the route unit fake honest** — fake `isSet: false` matches only `undefined`; drop the
   `restoredAt` default. Run `npx vitest run src/routes/community.test.ts`: expect the report-hiding cases to FAIL as on Mongo.
 - [x] **Step 4: Commit the failing tests.**
 - [x] **Step 5: Fix `communityReports.ts`** — `notRestored` in both readers; `create: { ...key, harnessId, restoredAt: null }`.
-- [x] **Step 6: Run both test files, then `npm test` and `npm run test:super-tabs`.** Expected: all PASS.
+- [x] **Step 6: Run both test files, then `npm test` and `npm run test:integration`.** Expected: all PASS.
 - [x] **Step 7: Commit the fix; post red/green evidence as a PR comment.**

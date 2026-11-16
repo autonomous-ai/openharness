@@ -18,7 +18,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 
 import { agentCommandOwnershipSnapshot } from '../../engineBin.js'
-import { argvTokens, engineProcessMatch } from '../../processTable.js'
+import { argvTokens, commandOf, engineProcessMatch } from '../../processTable.js'
 import { forEachLine } from '../../transcriptLines.js'
 import { absoluteFolder, entries, epochMs, fileStamp, parseLine, readJson, readTail, record, text, UUID } from './support.js'
 import type { ExternalProvider, ExternalSession, OwnerClaim, ProcessView, RunningProcess, ScanContext } from './types.js'
@@ -169,7 +169,7 @@ async function streamOf(home: string, sessionId: string, cwd: string): Promise<s
  */
 function isGrok(row: RunningProcess, ownership: ReturnType<typeof agentCommandOwnershipSnapshot>): boolean {
   if (engineProcessMatch(row, 'grok', ownership).score > 0) return true
-  const named = [basename(row.executable), basename(argvTokens(row.args)[0] ?? '')].some((name) => name.toLowerCase() === 'agent')
+  const named = [basename(commandOf(row)), basename(argvTokens(row.args)[0] ?? '')].some((name) => name.toLowerCase() === 'agent')
   return named && engineProcessMatch(row, 'cursor', ownership).score === 0
 }
 

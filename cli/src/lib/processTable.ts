@@ -12,16 +12,19 @@ import {
   engineFileOwners,
   enginePathOverride,
   executableFileIdentity,
+  type AgentCommandOwnershipSnapshot,
 } from './engineBin.js'
 import { BYPASS_PERMISSION_FLAGS, PERMISSION_MODES, permissionModeApproves } from './engineLaunch.js'
 import { discoveryField, versionedInstalls } from '../engines/discoveries.js'
 import { HERMES_HISTORY_ID_RE } from '../engines/hermes/contract.js'
+import type { AgentEngine } from '../engines/types.js'
 import { psEnv } from './childLocale.js'
+import { ENGINE_CHILDREN_MOST } from './processHeldFiles.js'
 import { processStartTicks } from './processLiveness.js'
 import { nativeProcessImages } from './nativeProcessImages.js'
 import { patientExec } from './patientExec.js'
 import { probeExecFile } from './offThreadExec.js'
-import { sameProcessIdentity } from './terminalRuntime.js'
+import { processIdentityOf, sameProcessIdentity } from './terminalRuntime.js'
 
 // Every `ps` call here: a held event loop must not turn a timeout into an empty answer
 // (patientExec.ts).
@@ -36,6 +39,17 @@ export interface ProcessRow extends ProcessIdentity {
   imagePath?: string
   imageFileKey?: string
   entrypointFileKey?: string
+  /**
+   * macOS: the whole `comm`, where `executable` is its first 16 bytes. Ephemeral like `imagePath`: never
+   * persisted, never sent. `executable` stays the cut one, because it is the saved identity every later read is
+   * compared with (`processIdentityOf`).
+   */
+  commandPath?: string
+}
+
+/** The program [row] runs, as `ps` names it: its whole path where macOS cut `executable`. */
+export function commandOf(row: Pick<ProcessRow, 'executable' | 'commandPath'>): string {
+  return row.commandPath ?? row.executable
 }
 
 const ARGV_TOKEN = /"[^"]*"|'[^']*'|\S+/g
@@ -198,6 +212,19 @@ export function hermesGatewaysUnder(rows: readonly ProcessRow[], engine: Process
       ...(row.startTicks !== undefined ? { startTicks: row.startTicks } : {}) }))
 }
 
+/**
+ * The processes right under `selected` that are `engine`'s too, lowest pid first, ENGINE_CHILDREN_MOST at most:
+ * npm's launcher of Codex starts two `codex` processes there, and one of them holds the rollout
+ * (docs/plans/2026-11-15-process-env-secrets-plan.md, "Spike result"). With more, the lowest pids are named and the
+ * rest never are. Empty with none. Direct children only: a process further down is never named, whatever it is, nor
+ * one whose launcher is gone (the `codex` a `/quit` leaves behind). `ownership` has no default: the default walks
+ * PATH, which was most of an idle core's CPU (#3880).
+ */
+export function engineChildren(rows: readonly ProcessRow[], engine: AgentEngine, selected: ProcessIdentity, ownership: AgentCommandOwnershipSnapshot): ProcessIdentity[] {
+  return rows.filter((row) => row.parentPid === selected.pid && engineProcessMatchScore(row, engine, ownership) > 0)
+    .sort((a, b) => a.pid - b.pid).slice(0, ENGINE_CHILDREN_MOST).map(processIdentityOf)
+}
+
 function hasCursorPackageEntrypoint(args: string): boolean {
   // Cursor's launcher uses `exec -a "$0" node .../index.js`, so argv[0] may stay `agent` instead of
   // `node`. Restrict this scan to the executable prefix: prompt text can appear later and is not proof.
@@ -241,8 +268,8 @@ function hermesInlineLauncher(row: Pick<ProcessRow, 'args'>): boolean {
   return !!run && literals[Number(run[1])] === 'hermes_cli.main' && literals[Number(run[2])] === '__main__'
 }
 
-function agentAliasCandidate(row: Pick<ProcessRow, 'executable' | 'args'>): boolean {
-  if (programName(row.executable) === 'agent') return true
+function agentAliasCandidate(row: Pick<ProcessRow, 'executable' | 'commandPath' | 'args'>): boolean {
+  if (programName(commandOf(row)) === 'agent') return true
   return programName(processEntrypoint(row.args)) === 'agent'
 }
 
@@ -397,8 +424,12 @@ export function processRows(): Promise<ProcessRow[] | null> {
   return processRowsInFlight
 }
 
-async function readProcessRows(): Promise<ProcessRow[] | null> {
-  const rows = await new Promise<ProcessRow[] | null>((resolve) => {
+/**
+ * One read of the table. Callers go through `processRows`, which shares the read in flight; [os] is a parameter so
+ * the spec runs the macOS read on the Linux runner PR CI has.
+ */
+export async function readProcessRows(os: NodeJS.Platform = process.platform): Promise<ProcessRow[] | null> {
+  const [rows, commandPaths] = await Promise.all([new Promise<ProcessRow[] | null>((resolve) => {
     run('ps', ['-axo', 'pid=,ppid=,comm=,lstart=,args='], { timeout: 3000, env: psEnv() }, (err, stdout) => {
       if (err) { resolve(null); return }
       const rows: ProcessRow[] = []
@@ -410,8 +441,54 @@ async function readProcessRows(): Promise<ProcessRow[] | null> {
       // an answer it says every engine on the machine has exited.
       resolve(rows.length ? rows : null)
     })
+  }), os === 'darwin' ? readCommandPaths() : null])
+  if (!rows) return null
+  const live = withStartTicks(liveProcessRows(repairMangledRows(rows)), processStartTicks, os)
+  return commandPaths ? live.map((row) => withCommandPath(row, commandPaths.get(row.pid))) : live
+}
+
+/**
+ * macOS: each process's whole `comm`, by pid, beside the start it was read with. `ps` cuts `comm` to 16 bytes
+ * unless it is the last column, and the table needs `lstart` and `args` after it. Measured on one Mac,
+ * 2026-11-15: 667 of 789 rows cut, 127 of them from a path with a space, which `args` splits too. The Claude app
+ * runs Claude Code from `~/Library/Application Support/…`: both fields named a folder, and its sessions matched
+ * nothing. So a second read, `comm` last, runs beside the first (44 ms beside its 63 ms). Empty when it fails:
+ * the rows then stay as the table gave them.
+ */
+function readCommandPaths(): Promise<ReadonlyMap<number, { startMarker: string; comm: string }>> {
+  return new Promise((resolve) => {
+    run('ps', ['-axo', 'pid=,lstart=,comm='], { timeout: 3000, env: psEnv() }, (err, stdout) => {
+      const paths = new Map<number, { startMarker: string; comm: string }>()
+      if (err) { resolve(paths); return }
+      for (const line of stdout.split('\n')) {
+        const match = /^\s*(\d+)\s+(\S+\s+\S+\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})\s+(.+?)\s*$/.exec(line)
+        if (match) paths.set(Number(match[1]), { startMarker: match[2], comm: match[3] })
+      }
+      resolve(paths)
+    })
   })
-  return rows ? withStartTicks(liveProcessRows(repairMangledRows(rows))) : null
+}
+
+/**
+ * What the table reads of [comm] where it cuts it; null where it reads it whole. macOS `ps` cuts a column that is
+ * not the last at 16 bytes, wherever they fall: a character cut in two reads back as U+FFFD, and a cut ending in a
+ * space loses it in the parse (measured 2026-11-15: `/Users/abcdefghé/…` reads `/Users/abcdefgh\uFFFD`). Counted
+ * in bytes, not characters: a cut inside the last character has as many characters as the whole name.
+ */
+function cutComm(comm: string): string | null {
+  const bytes = Buffer.from(comm)
+  return bytes.length > 16 ? bytes.subarray(0, 16).toString().trimEnd() : null
+}
+
+/**
+ * [row] with the whole path the second read gave its pid, when that is the same process (same start) and the
+ * row's `executable` is that path cut; otherwise [row] itself. A pid that went to another process, or a process
+ * that ran another program, between the two reads must not be matched as that program.
+ */
+function withCommandPath(row: ProcessRow, read: { startMarker: string; comm: string } | undefined): ProcessRow {
+  if (!read || read.startMarker !== row.startMarker || cutComm(read.comm) !== row.executable) return row
+  // Owns its storage, as `parseProcessRow`'s fields do: a slice would keep the whole `ps` output alive.
+  return { ...row, commandPath: Buffer.from(read.comm, 'utf16le').toString('utf16le') }
 }
 
 /**
@@ -605,9 +682,10 @@ export function processTreePids(rows: readonly ProcessRow[], rootPids: readonly 
 
 /**
  * Linux caps `comm` at 15 bytes (TASK_COMM_LEN) and never prints a path there, while macOS prints the
- * full executable path. Measured on Ubuntu 24.04: a binary named `a-very-long-engine-name-binary` reads
- * back as `a-very-long-eng`. So on Linux the full-path clause can never fire, and an override whose
- * basename is longer than the cap can only ever be seen truncated — accept that prefix as evidence.
+ * executable path: its first 16 bytes in the table, the whole of it as `commandPath`. Measured on Ubuntu
+ * 24.04: a binary named `a-very-long-engine-name-binary` reads back as `a-very-long-eng`. So on Linux the
+ * full-path clause can never fire, and an override whose basename is longer than the cap can only ever be
+ * seen truncated — accept that prefix as evidence.
  * No supported engine's own basename reaches the cap; this covers a user-set `*_PATH` override.
  */
 function commTruncatedPrefixOf(seen: string, want: string): boolean {
@@ -691,27 +769,28 @@ export const ENGINE_PROCESS_SIGNATURES: Readonly<Record<RegisteredSession['engin
 }
 
 function heuristicEngineProcessMatchScore(
-  row: Pick<ProcessRow, 'executable' | 'args' | 'nativeArgv' | 'imageFileKey' | 'entrypointFileKey'>,
+  row: Pick<ProcessRow, 'executable' | 'commandPath' | 'args' | 'nativeArgv' | 'imageFileKey' | 'entrypointFileKey'>,
   engine: RegisteredSession['engine'],
   ownership = agentCommandOwnershipSnapshot(),
 ): number {
-  const executable = programName(row.executable)
+  const command = commandOf(row)
+  const executable = programName(command)
   const entrypoint = processEntrypoint(row.args, argvPrefix(row.args, row.nativeArgv)).toLowerCase()
   const entrybase = programName(entrypoint)
   // Antigravity also ships an IDE-side `agy` inside its .app bundle. It is not the terminal engine,
   // even when an AGY_PATH override happens to use the same basename.
-  if (engine === 'agy' && /\.app[\/\\]Contents[\/\\]/.test(`${row.executable}\n${entrypoint}`)) return 0
+  if (engine === 'agy' && /\.app[\/\\]Contents[\/\\]/.test(`${command}\n${entrypoint}`)) return 0
   // Only an explicit override is ownership evidence. A default command label is not: both Cursor and
   // Grok ship `agent`, which is exactly the collision this matcher must resolve rather than assume away.
   const configured = enginePathOverride(engine)?.toLowerCase()
   const configuredBase = programName(configured ?? '')
   // Linux's `comm` cap is in bytes of the name as the kernel holds it: compared unstripped.
-  if (configured && configuredBase !== 'agent' && (row.executable.toLowerCase() === configured
+  if (configured && configuredBase !== 'agent' && (command.toLowerCase() === configured
     || entrypoint === configured || executable === configuredBase || entrybase === configuredBase
-    || commTruncatedPrefixOf(basename(row.executable).toLowerCase(), basename(configured).toLowerCase()))) return 4
+    || commTruncatedPrefixOf(basename(command).toLowerCase(), basename(configured).toLowerCase()))) return 4
 
   // Command Code rewrites argv/comm to a session title, which becomes its only long-lived marker.
-  if (engine === 'commandcode' && (/^\s*⌘(?:\s|$)/.test(row.executable) || /^\s*⌘(?:\s|$)/.test(row.args))) return 3
+  if (engine === 'commandcode' && (/^\s*⌘(?:\s|$)/.test(command) || /^\s*⌘(?:\s|$)/.test(row.args))) return 3
 
   // Cursor's launcher can retain argv[0]=agent while the Node package path appears later in argv.
   if (engine === 'cursor' && hasCursorPackageEntrypoint(row.args)) return 3
@@ -725,7 +804,7 @@ function heuristicEngineProcessMatchScore(
 
   // A native binary named only by its version (Claude Code's): only the vendor layout makes that name meaningful.
   const versioned = versionedInstalls[engine]
-  if (versioned && (versioned(row.executable) || versioned(entrypoint))) return 3
+  if (versioned && (versioned(command) || versioned(entrypoint))) return 3
 
   if (engine === 'cursor') {
     return agentAliasOwner([row.imageFileKey, row.entrypointFileKey], ownership) === 'cursor' ? 4 : 0
@@ -755,7 +834,7 @@ export interface EngineProcessMatch {
  * File identity wins; basename/package rules are compatibility fallbacks for launchers and scripts.
  */
 export function engineProcessMatch(
-  row: Pick<ProcessRow, 'executable' | 'args' | 'nativeArgv' | 'imagePath' | 'imageFileKey' | 'entrypointFileKey'>,
+  row: Pick<ProcessRow, 'executable' | 'commandPath' | 'args' | 'nativeArgv' | 'imagePath' | 'imageFileKey' | 'entrypointFileKey'>,
   engine: RegisteredSession['engine'],
   ownership = agentCommandOwnershipSnapshot(),
 ): EngineProcessMatch {
@@ -789,7 +868,7 @@ export function engineProcessMatch(
 
 /** Compatibility surface for callers that only need ordering. */
 export function engineProcessMatchScore(
-  row: Pick<ProcessRow, 'executable' | 'args' | 'nativeArgv' | 'imagePath' | 'imageFileKey' | 'entrypointFileKey'>,
+  row: Pick<ProcessRow, 'executable' | 'commandPath' | 'args' | 'nativeArgv' | 'imagePath' | 'imageFileKey' | 'entrypointFileKey'>,
   engine: RegisteredSession['engine'],
   ownership = agentCommandOwnershipSnapshot(),
 ): number {
@@ -798,12 +877,12 @@ export function engineProcessMatchScore(
 
 /** An unresolved top-level `agent` is a barrier: a nested sub-agent must not steal its tmux pane. */
 export function ambiguousAgentProcess(
-  row: Pick<ProcessRow, 'executable' | 'args' | 'imageFileKey' | 'entrypointFileKey'>,
+  row: Pick<ProcessRow, 'executable' | 'commandPath' | 'args' | 'imageFileKey' | 'entrypointFileKey'>,
   ownership = agentCommandOwnershipSnapshot(),
 ): boolean {
   if (engineCapabilityProbe(row.args)) return false
   if (!agentAliasCandidate(row) || hasCursorPackageEntrypoint(row.args)) return false
-  const executable = programName(row.executable)
+  const executable = programName(commandOf(row))
   const entrybase = programName(processEntrypoint(row.args))
   if (executable === 'cursor-agent' || entrybase === 'cursor-agent' || executable === 'grok' || entrybase === 'grok') return false
   const owner = agentAliasOwner([row.imageFileKey, row.entrypointFileKey], ownership)
@@ -814,8 +893,8 @@ export function selectEngineProcess(
   rows: ProcessRow[],
   rootPid: number,
   engine: RegisteredSession['engine'],
+  ownership = agentCommandOwnershipSnapshot(),
 ): ProcessRow | null {
-  const ownership = agentCommandOwnershipSnapshot()
   const byPid = new Map(rows.map((row) => [row.pid, row]))
   const children = new Map<number, ProcessRow[]>()
   for (const row of rows) {
@@ -824,9 +903,14 @@ export function selectEngineProcess(
     children.set(row.parentPid, list)
   }
   const queue: Array<{ pid: number; depth: number }> = [{ pid: rootPid, depth: 0 }]
+  const seen = new Set<number>()
   let best: { row: ProcessRow; depth: number; score: number } | null = null
   while (queue.length > 0) {
     const current = queue.shift()!
+    // Windows never re-parents a process and reuses pids, so a root's parent pid can name one of its own
+    // descendants: without this the walk circles forever (#4268).
+    if (seen.has(current.pid)) continue
+    seen.add(current.pid)
     const row = byPid.get(current.pid)
     const score = row ? engineProcessMatchScore(row, engine, ownership) : 0
     if (row && score > 0 && (!best || current.depth < best.depth || (current.depth === best.depth && score > best.score))) {

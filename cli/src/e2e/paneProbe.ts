@@ -212,9 +212,19 @@ export function findRef(screen: string, ref: string): [number, number] | null {
   return last
 }
 
-/** A short tag typed after the prompt so THIS check's echo can be told from earlier ones. */
+/** A short tag typed with the prompt so THIS check's echo can be told from earlier ones. */
 export function checkRef(now: number): string {
   return `ref-${now.toString(36).slice(-4).padStart(4, '0')}${Math.floor(Math.random() * 1296).toString(36).padStart(2, '0')}`
+}
+
+/**
+ * What is typed for a check: the tag first, then the prompt. A prompt can end in a command to run as
+ * given ("run this exact command …: cat notes/info-1.txt"), and a tag after it read as part of that
+ * command: GPT-6-Luna ran `cat notes/info-1.txt (ref-9qa2nu)`, a bash syntax error, and the read step
+ * was stuck (grid-dev 2026-11-10, and twice on 2026-11-13 with the same prompt passing between).
+ */
+export function typedPrompt(prompt: string, ref: string): string {
+  return `(${ref}) ${prompt}`
 }
 
 /**
@@ -237,7 +247,7 @@ export async function runCheck(tmux: Tmux, pane: string, check: SmokeCheck, opts
   }
   const start = tmux.now()
   const ref = checkRef(start)
-  await tmux.type(pane, `${check.prompt} (${ref})`)
+  await tmux.type(pane, typedPrompt(check.prompt, ref))
   // Make sure it landed. A tool that has only just started can drop input while it is still
   // loading — measured on grid-dev: claude's first question of a run never reached it (its own
   // transcript has every later question and not that one). The tag is on screen within a second
@@ -249,7 +259,7 @@ export async function runCheck(tmux: Tmux, pane: string, check: SmokeCheck, opts
       landed = findRef(await tmux.capture(pane, o.tailLines), ref) !== null
     }
     if (landed) break
-    await tmux.type(pane, `${check.prompt} (${ref})`)
+    await tmux.type(pane, typedPrompt(check.prompt, ref))
   }
 
   // The proof, never the reply: a log line for exactly these numbers, the file on disk as asked,

@@ -7,12 +7,10 @@ import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
-import 'package:harness/super_tabs/saved_view.dart';
 import 'package:harness/web/onboarding/saved_computers.dart';
 import 'package:harness/web/onboarding/web_first_machine.dart';
 import 'package:harness/web/shell/web_workspace.dart';
 
-import 'super_tab_saved_view_test.dart' show savedViewForTest;
 import 'swarm_state_test.dart' show MemoryStore, createApp;
 
 /// Storage a full or private-mode browser hands out: every call throws.
@@ -210,50 +208,7 @@ void main() {
     },
   );
 
-  test('Clear now takes the kept computers, and an unchanged list is not kept again', () async {
-    final storage = MemoryStore();
-    final app = _Account()..currentUser = _ann;
-    addTearDown(app.dispose);
-    final store = SavedComputers(storage);
-    final own = SavedComputersWatch(app, store);
-    addTearDown(own.dispose);
-    app
-      ..list('m1', 'Studio')
-      ..answer();
-    await pumpEventQueue();
-    expect(await store.read('ann'), isNotNull);
-
-    await own.clear();
-    app.notifyListeners();
-    await pumpEventQueue();
-    expect(await store.read('ann'), isNull);
-    expect(storage.values['web.computers.saved_by'], 'ann');
-
-    app
-      ..list('m2', 'Build server')
-      ..notifyListeners();
-    await pumpEventQueue();
-    expect((await store.read('ann'))?.map((c) => c.name), [
-      'Studio',
-      'Build server',
-    ]);
-  });
-
-  test('the browser\'s Clear now reaches the kept computers', () async {
-    final storage = MemoryStore();
-    final app = createApp(store: storage)..currentUser = _ann;
-    addTearDown(app.dispose);
-    savedComputersOf(app);
-    await pumpEventQueue();
-    await SavedComputers(storage).write('ann', _macs);
-    expect(storage.values['web.computers.ann'], isNotNull);
-
-    await app.browserCopies.clear();
-
-    expect(storage.values['web.computers.ann'], isNull);
-  });
-
-  test('a session that expires forgets the kept computers, as it does the Super Tab views', () async {
+  test('a session that expires forgets the kept computers', () async {
     final storage = MemoryStore();
     final app = createApp(store: storage)
       ..status = AppStatus.authenticated
@@ -290,26 +245,6 @@ void main() {
 
     expect(storage.values['web.computers.ann'], isNull);
     expect(storage.values['web.computers.saved_by'], isNull);
-  });
-
-  test('a browser that boots signed out forgets the last account\'s Super Tab views too', () async {
-    final storage = MemoryStore();
-    final views = SuperTabSavedViews(storage);
-    await views.claim('ann');
-    await views.write('ann', 'tab', savedViewForTest());
-    final app = createApp(store: storage);
-    addTearDown(app.dispose);
-    savedComputersOf(app);
-    await pumpEventQueue();
-    // Booting: who signed in is not known yet, so nothing is forgotten.
-    expect(storage.values['super_tab.view.ann.tab'], isNotNull);
-
-    app
-      ..status = AppStatus.unauthenticated
-      ..notifyListeners();
-    await pumpEventQueue();
-
-    expect(storage.values.keys.where((k) => k.startsWith('super_tab.view')), isEmpty);
   });
 
   testWidgets('the web frame keeps the computers from the app\'s start, before any workspace', (

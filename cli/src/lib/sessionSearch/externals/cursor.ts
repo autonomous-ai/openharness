@@ -27,7 +27,7 @@ import { pathToFileURL } from 'node:url'
 
 import { agentCommandOwnershipSnapshot } from '../../engineBin.js'
 import { builtinSqlite } from '../../sqliteBuiltin.js'
-import { argvTokens, engineProcessMatch, resumeSessionId } from '../../processTable.js'
+import { argvTokens, commandOf, engineProcessMatch, resumeSessionId } from '../../processTable.js'
 import { absoluteFolder, entries, fileStamp, parseLine, readJson, readTail, record, text, UUID } from './support.js'
 import type { ExternalProvider, ExternalSession, OwnerClaim, ProcessView, RunningProcess, ScanContext } from './types.js'
 
@@ -251,7 +251,7 @@ function persistent(row: RunningProcess, byPid: ReadonlyMap<number, RunningProce
   let parent = byPid.get(row.ppid)
   for (let depth = 0; parent && depth < 4; depth++) {
     const tokens = argvTokens(parent.args)
-    const tmux = basename(parent.executable) === 'tmux' || basename(tokens[0] ?? '') === 'tmux'
+    const tmux = basename(commandOf(parent)) === 'tmux' || basename(tokens[0] ?? '') === 'tmux'
     if (tmux && tokens.some((token, i) => /^-Lcursor/.test(token) || (token === '-L' && /^cursor/.test(tokens[i + 1] ?? '')))) return true
     parent = byPid.get(parent.ppid)
   }

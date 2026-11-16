@@ -5,7 +5,7 @@ in its config). Harness CLI v0.6.19.
 
 ## How it was measured
 
-The plan's route (two Swarm agents started with `harness new`) needs the `agents-start-agents` setting, which is off and
+The plan's route (two agents started with `harness new`) needs the `agents-start-agents` setting, which is off and
 only the person may turn on. So:
 
 - **Headless engines**, in a scratch folder, tiny prompts, naming no timeout:
@@ -20,7 +20,7 @@ only the person may turn on. So:
 - **Harness's code** (this worktree), for how agents are launched (step 3) and what a typed line does (step 5).
 - **Step 6** was timed in a shell outside a Harness pane.
 
-These are not Swarm agents in Harness panes: no Harness launch flags or `TMPDIR`. Each cell says whether it was
+These are not agents in Harness panes: no Harness launch flags or `TMPDIR`. Each cell says whether it was
 **measured** headless or **read** from code, binary or docs.
 
 ## Results
@@ -42,7 +42,7 @@ These are not Swarm agents in Harness panes: no Harness launch flags or `TMPDIR`
 - **Mid-turn** (`sleep 60`). A typed delivery whose maker does not queue it in the engine's own input waits for an
   idle pane: "absent, every typed delivery waits for idle" (`cli/src/core/input.ts:67-69`, `paneHold` at `:179-184`).
   So the line arrives after the running turn ends, and starts a turn of its own.
-- **At a question.** The pane reads `question_open` and the delivery is held. Only a person's Swarm message in a
+- **At a question.** The pane reads `question_open` and the delivery is held. Only a person's message in a
   Claude pane closes the question, with Escape. "Never a permission prompt, an agent's message, another engine"
   (`cli/src/core/input.ts:220-235`). Any other line waits until the question is answered.
 - **The turn it starts.** Every live turn's end makes a recap (`cli/src/lib/commander.ts:653-712`).
@@ -51,8 +51,7 @@ These are not Swarm agents in Harness panes: no Harness launch flags or `TMPDIR`
   `turn_summary` carries that notification (`cli/src/lib/commander.ts:822-832`). Desktop then raises
   `_raiseAlert(AlertKind.done)` (`desktop/lib/state/app_state.dart:23243-23261`): an unread mark, a sound, a banner, and
   an OS notification when the window is not in front (`:14703-14751`). It skips this only when that agent is on screen
-  (`:14719-14721`). On the devices a Swarm agent's tier is `silent` (`cli/src/lib/notifyTier.ts:55`), but the Desktop
-  window does not read the tier (`cli/src/services/recaps.ts:101-104`).
+  (`:14719-14721`). The Desktop window does not read the tier (`cli/src/services/recaps.ts:101-104`).
 
 ## The three results
 

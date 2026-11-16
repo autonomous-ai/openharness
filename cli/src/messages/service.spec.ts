@@ -460,7 +460,7 @@ describe('a harness and the harnesses it started', () => {
     expect(t.delivered.map(([agentId]) => agentId)).toEqual(['api'])
   })
 
-  // Queued by 0.3.75 under its `started` log, or by a v3 Buddy under `relayed`: one waiting in web's inbox for its hook, and one
+  // Queued by 0.3.75 under its `started` log, or by an older release under `relayed`: one waiting in web's inbox for its hook, and one
   // to api, which shares a tab with lead now.
   it.each(['started', 'relayed'])('a message an older version queued between them under no tab (%s) is never delivered, read directory or not', async (tab) => {
     vi.useFakeTimers()
@@ -721,10 +721,10 @@ describe('the wake into Hachi\'s mailbox', () => {
   })
 })
 
-describe('a Swarm session\'s tell (the v3 Buddy is gone)', () => {
-  // A Swarm session started by the Swarm, as a person's Buddy was: it tells only the harnesses it started, as any agent.
-  const swarm = { ...session('swarm', '%1'), swarmSkill: { role: 'agent', key: 'k1' }, startedBy: 'agent' } as unknown as RegisteredSession
-  const agents = [swarm, session('web', '%2')]
+describe('the tell of an agent another agent started, with no starter here', () => {
+  // It tells only the harnesses it started, as any agent: its person's own harness is not one of them.
+  const started = { ...session('started', '%1'), startedBy: 'agent' } as unknown as RegisteredSession
+  const agents = [started, session('web', '%2')]
 
   it('is refused for its person\'s own harness, and sends nothing', async () => {
     const t = setup({ tabs: [], agents })

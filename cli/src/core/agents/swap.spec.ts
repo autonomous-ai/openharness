@@ -7,11 +7,11 @@ import { checkPidRuntime, terminateDeletedAgent } from '../../lib/deleteAgentFal
 import { buildEngineLaunchArgv } from '../../lib/engineLaunch.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
-import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
+import { ENGINE_SETTLE_MS, resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import { bypassPermissionActive } from '../../lib/processTable.js'
 import { AgentRestartCoordinator } from '../../lib/restartAgent.js'
 import { setAgentSignaller } from '../../lib/processSignals.js'
-import { createPaneSwap, SWAP_SETTLE_MS, type PaneSwapDeps } from './swap.js'
+import { createPaneSwap, type PaneSwapDeps } from './swap.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { NATIVE_LAUNCH_MARKER } from '../../lib/nativePaneHold.js'
 
@@ -82,6 +82,16 @@ describe('the pane-process swap', () => {
       stopBackgroundJob.mock.lastCall![2]('stopped background job bg-1 holding session s1')
       expect(said).toHaveBeenCalledWith('[resume] stopped background job bg-1 holding session s1')
     } finally { said.mockRestore() }
+  })
+  it('prepares the conversation only while the swap holds: its history is replaced under the same check', async () => {
+    const { deps, swap } = setup(session({ engine: 'codex' }))
+    let holds = true
+    await swap.paneSwapDeps(session({ engine: 'codex' }), place(), {}, null, () => holds).prepareResume!()
+    const [prepared, current] = vi.mocked(deps.prepareSessionResume).mock.lastCall!
+    expect(prepared).toEqual(session({ engine: 'codex' }))
+    expect(current()).toBe(true)
+    holds = false
+    expect(current()).toBe(false)
   })
   it('skips the background-job check for a non-Claude engine', () => {
     const prepared = setup(session({ engine: 'codex' })).swap.paneSwapDeps(session({ engine: 'codex' }), place())
@@ -199,8 +209,10 @@ describe('the pane-process swap', () => {
   it('prepares the resume, holds the pane open and respawns it in the home folder, saying why when tmux will not', async () => {
     const { deps, tmuxBackend, swap } = setup()
     const swapDeps = swap.paneSwapDeps(session(), place(), { env: { GRID_KEY: 'k' } })
-    swapDeps.prepareResume?.()
-    expect(deps.prepareSessionResume).toHaveBeenCalledWith(session())
+    await swapDeps.prepareResume?.()
+    // With no hold of its own, the history is replaced as the restart's own checks allow.
+    expect(deps.prepareSessionResume).toHaveBeenCalledWith(session(), expect.any(Function))
+    expect(vi.mocked(deps.prepareSessionResume).mock.lastCall![1]()).toBe(true)
     swapDeps.keepAbandoned?.()
     expect(deps.keepAbandonedConversation).toHaveBeenCalledWith(session())
     // Asked of tmux with the relaunch's own environment, before anything is stopped.
@@ -234,7 +246,7 @@ describe('the pane-process swap', () => {
     vi.useFakeTimers()
     vi.mocked(resolvePaneEngineProcess).mockResolvedValue({ pid: 9, startMarker: 'm' } as never)
     const waiting = swapDeps.waitForProcess()
-    await vi.advanceTimersByTimeAsync(150 + SWAP_SETTLE_MS)
+    await vi.advanceTimersByTimeAsync(150 + ENGINE_SETTLE_MS)
     expect(await waiting).toEqual({ pid: 9, startMarker: 'm' })
     expect(resolvePaneEngineProcess).toHaveBeenCalledWith(ptyBackend, pty, 'claude')
     expect(tmuxBackend.holdOpen).not.toHaveBeenCalled()
@@ -315,7 +327,7 @@ describe('the pane-process swap', () => {
     const found = { pid: 99, startMarker: 'now' }
     vi.mocked(resolvePaneEngineProcess).mockResolvedValueOnce(null).mockResolvedValueOnce(found as never).mockResolvedValueOnce({ ...found } as never)
     const waiting = swap.paneSwapDeps(session(), place()).waitForProcess()
-    await vi.advanceTimersByTimeAsync(150 + 300 + SWAP_SETTLE_MS)
+    await vi.advanceTimersByTimeAsync(150 + 300 + ENGINE_SETTLE_MS)
     expect(await waiting).toEqual(found)
     // Asked of the pane's own backend, about the pane being swapped.
     expect(resolvePaneEngineProcess).toHaveBeenCalledWith(tmuxBackend, runtime, 'claude')
@@ -338,7 +350,7 @@ describe('the pane-process swap', () => {
       .mockResolvedValueOnce(lasting as never).mockResolvedValueOnce({ pid: 99, startMarker: 'later' } as never)
       .mockResolvedValueOnce(lasting as never).mockResolvedValueOnce({ ...lasting } as never)
     const waiting = swap.paneSwapDeps(session(), place()).waitForProcess()
-    await vi.advanceTimersByTimeAsync(150 + SWAP_SETTLE_MS + 300 + SWAP_SETTLE_MS + 600 + SWAP_SETTLE_MS)
+    await vi.advanceTimersByTimeAsync(150 + ENGINE_SETTLE_MS + 300 + ENGINE_SETTLE_MS + 600 + ENGINE_SETTLE_MS)
     expect(await waiting).toEqual(lasting)
     expect(resolvePaneEngineProcess).toHaveBeenCalledTimes(6)
     // One that never stays up is no engine: the wait ends as one that found none.

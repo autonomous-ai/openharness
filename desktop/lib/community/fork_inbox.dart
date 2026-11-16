@@ -8,23 +8,14 @@ import 'fork_link.dart';
 
 /// Queued before authentication; persisted without credentials or project content.
 class ForkInbox extends ChangeNotifier {
-  ForkInbox(
-    this.store, {
-    this.channel = const MethodChannel('harness/community_links'),
-    this.claimLink,
-    this.onUnhandledLink,
-  });
+  ForkInbox(this.store, {this.claimLink});
   final LocalKeyValueStore store;
-  final MethodChannel channel;
+  static const channel = MethodChannel('harness/community_links');
 
   /// Another feature's link on the same channel: true takes it, and it is
   /// never queued here. A Windows toast's click arrives this way
   /// (`SystemNotifications.openLink`).
   final bool Function(String url)? claimLink;
-
-  /// Hand non-fork links to a typed feature inbox without persisting them here.
-  /// Swarm join links may contain bearer tokens and remain in memory only.
-  final Future<void> Function(String)? onUnhandledLink;
   static const storageKey = 'community.forks.v1';
   final List<ForkLink> pending = [];
   Future<void> _tail = Future.value();
@@ -67,10 +58,7 @@ class ForkInbox extends ChangeNotifier {
 
   Future<void> _queue(String url) => _serialize(() async {
     final link = ForkLink.parse(url);
-    if (link == null) {
-      await onUnhandledLink?.call(url);
-      return;
-    }
+    if (link == null) return;
     if (pending.any((p) => p.key == link.key)) {
       return;
     }

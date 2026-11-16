@@ -1,16 +1,18 @@
 import { randomBytes } from 'node:crypto'
-import { request, type Server } from 'node:http'
+import { request, type IncomingMessage, type Server } from 'node:http'
+import type { Socket } from 'node:net'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { startHookServer, type HookServerHandlers, chooseHookAgent, clientEnvPane, hookFiredAt, knownTranscriptFor } from './hookServer.js'
+import { startHookServer, type HookServerHandlers, chooseHookAgent, clientEnvPane, hookFacts, hookFiredAt, knownTranscriptFor } from './hookServer.js'
 import { registry, type RegisteredSession } from './lib/registry.js'
 import { env } from './config/env.js'
 import { readHookCredential } from './lib/hookAuth.js'
 import { ENGINES } from './engines/types.js'
 import { engineHooks } from './engines/hooks.js'
 import { pipeRequest } from './lib/windows/pipeClient.js'
+import type { DoorRequest } from './core/serviceRoutes.js'
 
 let server: Server | null = null
 
@@ -301,6 +303,177 @@ describe('process-owned hook server', () => {
   })
 
   it.each([
+    ['ok', 200], ['invalid', 400], ['dropped', 200],
+  ] as const)('answers %s from onObserved with %i', async (outcome, status) => {
+    const onObserved = vi.fn(() => outcome)
+    const { base, headers } = await start({ onObserved })
+    const response = await fetch(`${base}/api/hook/observed`, { method: 'POST', headers, body: JSON.stringify({ engine: 'claude' }) })
+    expect(response.status).toBe(status)
+    expect(onObserved).toHaveBeenCalledWith({ engine: 'claude' })
+  })
+
+  it('answers 200 to /api/hook/observed when no handler is wired', async () => {
+    const { base, headers } = await start()
+    expect((await fetch(`${base}/api/hook/observed`, { method: 'POST', headers, body: '{}' })).status).toBe(200)
+  })
+
+  it('answers 400 to a bad json body on /api/hook/observed', async () => {
+    const onObserved = vi.fn(() => 'ok' as const)
+    const { base, headers } = await start({ onObserved })
+    expect((await fetch(`${base}/api/hook/observed`, { method: 'POST', headers, body: '{nope' })).status).toBe(400)
+    expect(onObserved).not.toHaveBeenCalled()
+  })
+
+  it('answers 400 to a 4097-byte body', async () => {
+    const onObserved = vi.fn(() => 'ok' as const)
+    const { base, headers } = await start({ onObserved })
+    const body = JSON.stringify({ pad: 'x'.repeat(4097 - 10) })
+    expect(Buffer.byteLength(body)).toBe(4097)
+    expect((await fetch(`${base}/api/hook/observed`, { method: 'POST', headers, body })).status).toBe(400)
+    expect(onObserved).not.toHaveBeenCalled()
+  })
+
+  it('answers 401 without the hook token', async () => {
+    const onObserved = vi.fn(() => 'ok' as const)
+    const { base } = await start({ onObserved })
+    const response = await fetch(`${base}/api/hook/observed`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+    expect(response.status).toBe(401)
+    expect(onObserved).not.toHaveBeenCalled()
+  })
+
+  describe('the mod\'s inbox route', () => {
+    const INBOX = '/api/hook/inbox'
+    const POLL = { sessionId: 'session-1' }
+    const post = (base: string, path: string, headers: Record<string, string>, body: string, signal?: AbortSignal) =>
+      fetch(`${base}${path}`, { method: 'POST', headers, body, signal })
+
+    it('/api/hook/inbox answers 401 without the hook token', async () => {
+      const handler = vi.fn(async () => 'invalid' as const)
+      const { base } = await start({ onInbox: handler })
+      expect((await post(base, INBOX, { 'content-type': 'application/json' }, '{}')).status).toBe(401)
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('/api/hook/inbox answers 400 to a bad json body', async () => {
+      const handler = vi.fn(async () => 'invalid' as const)
+      const { base, headers } = await start({ onInbox: handler })
+      expect((await post(base, INBOX, headers, '{nope')).status).toBe(400)
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('/api/hook/inbox answers 400 to a body one byte over its limit, and takes one at it', async () => {
+      const limit = 1024
+      const handler = vi.fn(async () => 'invalid' as const)
+      const { base, headers } = await start({ onInbox: handler })
+      // `{"pad":""}` is 10 bytes.
+      const padded = (bytes: number): string => JSON.stringify({ pad: 'x'.repeat(bytes - 10) })
+      expect(Buffer.byteLength(padded(limit + 1))).toBe(limit + 1)
+      expect((await post(base, INBOX, headers, padded(limit + 1))).status).toBe(400)
+      expect(handler).not.toHaveBeenCalled()
+      await post(base, INBOX, headers, padded(limit))
+      expect(handler).toHaveBeenCalledTimes(1)
+    })
+
+    it('/api/hook/inbox answers 400 when the handler says invalid', async () => {
+      const handler = vi.fn(async () => 'invalid' as const)
+      const { base, headers } = await start({ onInbox: handler })
+      expect((await post(base, INBOX, headers, JSON.stringify({ sessionId: 'session-1' }))).status).toBe(400)
+      expect(handler).toHaveBeenCalledWith({ sessionId: 'session-1' }, expect.any(AbortSignal))
+    })
+
+    // The dial only shows a waiting prompt (docs/specs/2026-11-13-device-claude-orca.md): no route answers one.
+    it('/api/hook/approval is no route: 404, with no decision', async () => {
+      const { base, headers } = await start()
+      const response = await post(base, '/api/hook/approval', headers, JSON.stringify({ sessionId: 'session-1', tool: 'Bash', summary: 'npm test' }))
+      expect(response.status).toBe(404)
+      expect(await response.json()).toEqual({ error: 'not found' })
+    })
+
+    it.each([
+      [{ text: 'run the tests' }, 200, { text: 'run the tests' }],
+      [{}, 200, {}],
+      ['off', 503, { error: 'NO_DEVICE' }],
+    ] as const)('/api/hook/inbox answers %j with %i', async (answer, status, reply) => {
+      const onInbox = vi.fn(async () => answer)
+      const { base, headers } = await start({ onInbox })
+      const response = await post(base, '/api/hook/inbox', headers, JSON.stringify({ sessionId: 'session-1' }))
+      expect(response.status).toBe(status)
+      expect(await response.json()).toEqual(reply)
+    })
+
+    it('/api/hook/inbox answers 503 when no handler is wired', async () => {
+      const { base, headers } = await start()
+      const response = await post(base, '/api/hook/inbox', headers, JSON.stringify({ sessionId: 'session-1' }))
+      expect(response.status).toBe(503)
+      expect(await response.json()).toEqual({ error: 'NO_DEVICE' })
+    })
+
+    it('/api/hook/inbox aborts its signal when the client goes before the answer', async () => {
+      let answer!: (value: { text?: string }) => void
+      let reached!: (gone: AbortSignal) => void
+      const held = new Promise<AbortSignal>((resolve) => { reached = resolve })
+      const handler = vi.fn((_body: unknown, gone: AbortSignal) => {
+        reached(gone)
+        return new Promise<{ text?: string }>((resolve) => { answer = resolve })
+      })
+      const { base, headers } = await start({ onInbox: handler })
+      const client = new AbortController()
+      const request = post(base, INBOX, headers, JSON.stringify(POLL), client.signal).catch(() => 'gone')
+      const gone = await held
+      expect(gone.aborted).toBe(false)
+      const aborted = new Promise<void>((resolve) => gone.addEventListener('abort', () => resolve(), { once: true }))
+      client.abort()
+      expect(await request).toBe('gone')
+      await aborted
+      // The answer that comes after has nobody to go to.
+      answer({ text: 'late' })
+    })
+
+    // Over TCP, who is calling is looked up before any route (audit H1). A client gone during that closed before the route
+    // listened for it: the route never saw it go, and sat reading a body that never comes.
+    it('/api/hook/inbox lets go of a client that went while who it is was looked up, reading and forwarding nothing', async () => {
+      const handler = vi.fn(async () => 'invalid' as const)
+      let answered!: () => void
+      const lookedUp = new Promise<void>((resolve) => { answered = resolve })
+      // The lookup answers only once the client has gone.
+      const peerAccount = (socket: Socket) => new Promise<boolean>((resolve) => socket.once('close', () => { resolve(true); answered() }))
+      const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onInbox: handler }, { peerAccount })
+      server = started.server
+      const arrived: IncomingMessage[] = []
+      server.prependListener('request', (req: IncomingMessage) => { arrived.push(req) })
+      const client = new AbortController()
+      const request = fetch(`http://127.0.0.1:${started.port}${INBOX}`, {
+        method: 'POST', body: JSON.stringify(POLL), signal: client.signal,
+        headers: { 'content-type': 'application/json', 'x-harness-hook-token': readHookCredential(env.ADAPTER_DATA_DIR)! },
+      }).catch(() => 'gone')
+      await vi.waitFor(() => expect(arrived).toHaveLength(1))
+      client.abort()
+      expect(await request).toBe('gone')
+      await lookedUp
+      // Every step the route takes after the lookup has run.
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(arrived[0].listenerCount('data')).toBe(0)
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('/api/hook/inbox leaves its signal alone once the answer is written', async () => {
+      let seen: AbortSignal | undefined
+      const handler = vi.fn(async (_body: unknown, gone: AbortSignal) => {
+        seen = gone
+        return {}
+      })
+      const { base, headers } = await start({ onInbox: handler })
+      // This listener runs before the route's own: by the time it resolves, the route has heard the close too.
+      const closed = new Promise<void>((resolve) => server!.once('request', (_req, res) => res.once('close', () => resolve())))
+      const response = await post(base, INBOX, headers, JSON.stringify(POLL))
+      expect(response.status).toBe(200)
+      await response.text()
+      await closed
+      expect(seen?.aborted).toBe(false)
+    })
+  })
+
+  it.each([
     ['/api/hook/session-end', { reason: 'clear' }, 'onSessionEnd'],
     ['/api/hook/turn-start', {}, 'onTurnStart'],
     ['/api/hook/tool-start', { toolUseId: 'tool-1', toolName: 'Task' }, 'onToolStart'],
@@ -363,13 +536,180 @@ describe('process-owned hook server', () => {
     expect(await response.json()).toEqual({ success: false, error: { code: 'PROXY_FAILED', message: 'fetch failed' } })
   })
 
-  it('forwards a proxied answer verbatim, status and body alike', async () => {
-    const { base } = await start({
-      onAuthMe: async () => ({ status: 504, body: { success: false, error: { code: 'BACKEND_TIMEOUT', message: 'slow' } } }),
-    })
-    const response = await fetch(`${base}/api/auth/me`)
+  it('hands a route a service answers on as it came, and writes its answer and the headers it declares', async () => {
+    const heard: unknown[] = []
+    const onServiceRoute = vi.fn((path: string, request: DoorRequest, localOk: boolean) => (path === '/api/auth/me' || path === '/api/desk/ops'
+      ? (async () => {
+        heard.push({ path, method: request.method, target: request.target, localOk, ...(request.method === 'GET' ? {} : { body: await request.readBody(4) }) })
+        return { status: 504, body: { success: false, error: { code: 'BACKEND_TIMEOUT', message: 'slow' } }, headers: { 'x-harness-usage-vocabulary': '10' } }
+      })()
+      : null))
+    const { base } = await start({ onServiceRoute })
+    const response = await fetch(`${base}/api/auth/me?fresh=1`)
     expect(response.status).toBe(504)
+    expect(response.headers.get('x-harness-usage-vocabulary')).toBe('10')
     expect(await response.json()).toEqual({ success: false, error: { code: 'BACKEND_TIMEOUT', message: 'slow' } })
+    // A write's body as text, read up to its route's bound (past it, empty), and whether it carries the local header.
+    await fetch(`${base}/api/desk/ops`, { method: 'POST', headers: { 'x-adapter-local': '1' }, body: '{}' })
+    await fetch(`${base}/api/desk/ops`, { method: 'POST', body: '{"ops":[]}' })
+    expect(heard).toEqual([
+      { path: '/api/auth/me', method: 'GET', target: '/api/auth/me?fresh=1', localOk: false },
+      { path: '/api/desk/ops', method: 'POST', target: '/api/desk/ops', localOk: true, body: '{}' },
+      { path: '/api/desk/ops', method: 'POST', target: '/api/desk/ops', localOk: false, body: '' },
+    ])
+    // No service answers it: the door's own 404.
+    const missing = await fetch(`${base}/api/nowhere`, { method: 'POST', body: '{}' })
+    expect(missing.status).toBe(404)
+    expect(await missing.json()).toEqual({ error: 'not found' })
+    // A path open without the credential (a hook's), asked without it, never reaches a service.
+    onServiceRoute.mockClear()
+    expect((await realFetch(`${base}/api/hook/unknown`, { method: 'POST', body: '{}' })).status).toBe(404)
+    expect(onServiceRoute).not.toHaveBeenCalled()
+  })
+})
+
+// The hook says the gateway and the Codex home of its own environment in two headers (hook/notify.mjs): a daemon that
+// does not read a header ignores it, where it refuses a body with a field it does not list.
+describe('what a hook says of its own environment', () => {
+  const GATEWAY = 'x-harness-hook-gateway', HOME = 'x-harness-hook-codex-home'
+
+  it.each([
+    [{ [GATEWAY]: 'ori' }, { gateway: 'ori' }, []],
+    [{ [GATEWAY]: 'none' }, { gateway: null }, []],
+    [{}, {}, []],
+    [{ [GATEWAY]: 'vendor' }, {}, [GATEWAY]],
+    [{ [GATEWAY]: 'ori, none' }, {}, [GATEWAY]],
+    [{ [HOME]: '/home/u/.codex-work' }, { codexHome: '/home/u/.codex-work' }, []],
+    [{ [HOME]: encodeURIComponent('/home/nguyễn/.codex work') }, { codexHome: '/home/nguyễn/.codex work' }, []],
+    [{ [HOME]: encodeURIComponent(`/${'あ'.repeat(1023)}`) }, { codexHome: `/${'あ'.repeat(1023)}` }, []],
+    [{ [HOME]: 'relative/home' }, {}, [HOME]],
+    [{ [HOME]: `/${'x'.repeat(1024)}` }, {}, [HOME]],
+    [{ [HOME]: '/bad%0Ahome' }, {}, [HOME]],
+    [{ [HOME]: '/cut%E0%A4%A' }, {}, [HOME]],
+    [{ [HOME]: '' }, {}, [HOME]],
+  ])('%j is taken as %j, refusing %j', (headers, taken, refused) => {
+    expect(hookFacts({ headers }, 'linux')).toEqual({ ...taken, refused })
+  })
+
+  // A home on a share or a device would have the core open another computer's folder on every registration
+  // (cli/AGENTS.md rule 4): on Windows only a drive's path is taken, as agent_create takes one.
+  it.each([
+    ['C:\\Users\\u\\.codex-work', { codexHome: 'C:\\Users\\u\\.codex-work' }, []],
+    ['\\\\host\\share\\.codex', {}, [HOME]],
+    ['//host/share/.codex', {}, [HOME]],
+    ['\\\\?\\C:\\x', {}, [HOME]],
+    ['\\foo', {}, [HOME]],
+    ['/foo', {}, [HOME]],
+  ])('on Windows the home %j is taken as %j, refusing %j', (home, taken, refused) => {
+    expect(hookFacts({ headers: { [HOME]: encodeURIComponent(home) } }, 'win32')).toEqual({ ...taken, refused })
+  })
+
+  /** A session-start from the pane of a live agent of `engine`, which registers: `registry.register` is spied and
+   *  answers `result`. */
+  async function registering(engine: 'claude' | 'codex', result: Record<string, unknown> = {}) {
+    const agent = { engine, sessionId: '', agentId: `${engine}-agent`, active: true,
+      runtimes: [{ backend: 'tmux', paneId: '%1' }], primaryRuntimeKey: 'tmux\u0000%1',
+      processIdentity: { pid: 4242, startMarker: 'fixture', executable: `<${engine}>` } } as RegisteredSession
+    vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
+    const register = vi.spyOn(registry, 'register')
+      .mockReturnValue({ entry: agent, isNew: true, evicted: null, rebound: null, orphaned: null, ...result })
+    const { base, headers } = await start({ resolveHookAgent: async () => agent })
+    const post = (extra: Record<string, string>) => fetch(`${base}/api/hook/session-start`, {
+      method: 'POST', headers: { ...headers, ...extra },
+      body: JSON.stringify({ engine, sessionId: 'session-1', tmuxPane: '%1', hookEvent: 'SessionStart' }),
+    })
+    return { register, post }
+  }
+
+  it('registers with the facts it took, and names a refused header without its value', async () => {
+    const logged = (['log', 'warn', 'error', 'info', 'debug'] as const).map(level => vi.spyOn(console, level).mockImplementation(() => {}))
+    const { register, post } = await registering('claude')
+    // What the start said (the dial's prompts are off with no Unix socket, as here) is not this request's.
+    vi.mocked(console.warn).mockClear()
+    expect((await post({ [GATEWAY]: 'vendor', [HOME]: 'secret/place' })).status).toBe(200)
+    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce())
+    expect(register.mock.calls[0][0]).not.toHaveProperty('gateway')
+    expect(register.mock.calls[0][0]).not.toHaveProperty('codexHome')
+    expect(vi.mocked(console.warn).mock.calls).toEqual([
+      ['[hooks] session- SessionStart header refused · x-harness-hook-gateway'],
+      ['[hooks] session- SessionStart header refused · x-harness-hook-codex-home'],
+    ])
+    expect(JSON.stringify(logged.flatMap(spy => spy.mock.calls))).not.toMatch(/vendor|secret/)
+  })
+
+  it('registers with the gateway it took', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { register, post } = await registering('claude')
+    await post({ [GATEWAY]: 'ori' })
+    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce())
+    expect(register.mock.calls[0][0]).toMatchObject({ gateway: 'ori' })
+  })
+
+  it('takes the longest home a hook sends', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const home = `/${'あ'.repeat(1023)}`
+    expect(Buffer.byteLength(encodeURIComponent(home))).toBe(9_210)
+    const { register, post } = await registering('codex')
+    expect((await post({ [HOME]: encodeURIComponent(home) })).status).toBe(200)
+    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce())
+    expect(register.mock.calls[0][0]).toMatchObject({ codexHome: home })
+  })
+
+  it('names a home the registration refused, without its value', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { register, post } = await registering('codex', { refusedHome: true })
+    await post({ [HOME]: '/home/u/.codex-work' })
+    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith('[hooks] session- SessionStart header refused · x-harness-hook-codex-home'))
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('codex-work')
+  })
+
+  it('reads neither on another route', async () => {
+    const onTurnStop = vi.fn(), onSessionEnd = vi.fn()
+    const agent = { engine: 'claude', sessionId: 'real-session', agentId: 'agent-1', runtimes: [], processIdentity: null } as unknown as RegisteredSession
+    vi.spyOn(registry, 'bySession').mockReturnValue(agent)
+    vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { base, headers } = await start({ onTurnStop, onSessionEnd, resolveHookAgent: async () => agent })
+    // The start's own line (no Unix socket here) is not these requests'.
+    warn.mockClear()
+    for (const path of ['/api/hook/turn-stop', '/api/hook/session-end']) {
+      const send = async (extra: Record<string, string>) => {
+        const response = await fetch(`${base}${path}`, { method: 'POST', headers: { ...headers, ...extra },
+          body: JSON.stringify({ engine: 'claude', sessionId: 'real-session', tmuxPane: '%1', callerPid: 123 }) })
+        return [response.status, await response.json()]
+      }
+      expect(await send({ [GATEWAY]: 'vendor', [HOME]: 'secret/place' })).toEqual(await send({}))
+    }
+    expect(onTurnStop).toHaveBeenCalledTimes(2)
+    expect(onTurnStop.mock.calls[0]).toEqual(onTurnStop.mock.calls[1])
+    expect(onSessionEnd).toHaveBeenCalledTimes(2)
+    expect(onSessionEnd.mock.calls[0]).toEqual(onSessionEnd.mock.calls[1])
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it.each([{ gateway: 'ori' }, { codexHome: '/x' }])('a body that names them is refused as before: %j', async (field) => {
+    const resolveHookAgent = vi.fn(async () => null)
+    const { base, headers } = await start({ resolveHookAgent })
+    const response = await fetch(`${base}/api/hook/session-start`, {
+      method: 'POST', headers, body: JSON.stringify({ engine: 'claude', sessionId: 'session-1', tmuxPane: '%1', ...field }),
+    })
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({ error: 'invalid hook body' })
+    expect(resolveHookAgent).not.toHaveBeenCalled()
+  })
+
+  // The daemon a later hook will meet as the older one.
+  it('ignores a header it does not read', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { register, post } = await registering('claude')
+    await post({})
+    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce())
+    await post({ 'X-Harness-Hook-Next': '1' })
+    await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(2))
+    expect(register.mock.calls[1]).toEqual(register.mock.calls[0])
   })
 })
 
@@ -446,299 +786,7 @@ describe('the pane a Hermes client environment names', () => {
   })
 })
 
-describe('the account name proxy', () => {
-  it('passes the signed-in person\'s new name on only with the local header, body and answer verbatim', async () => {
-    const update = vi.fn(async (body: unknown) => ({ status: 200, body: { success: true, data: { user: { id: 'u1', name: 'Elvis' }, echo: body } } }))
-    const { base } = await start({ onAuthMeUpdate: update })
-    const refused = await fetch(`${base}/api/auth/me`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: '{"name":"Elvis"}' })
-    expect(refused.status).toBe(403)
-    expect(update).not.toHaveBeenCalled()
-
-    const saved = await fetch(`${base}/api/auth/me`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{"name":"Elvis"}' })
-    expect(saved.status).toBe(200)
-    expect(((await saved.json()) as { data: unknown }).data).toEqual({ user: { id: 'u1', name: 'Elvis' }, echo: { name: 'Elvis' } })
-    expect(update).toHaveBeenCalledWith({ name: 'Elvis' })
-
-    const bad = await fetch(`${base}/api/auth/me`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{nope' })
-    expect(bad.status).toBe(400)
-    expect(update).toHaveBeenCalledTimes(1)
-  })
-
-  it('answers a refusal as the backend gave it, so the app can say why', async () => {
-    const { base } = await start({
-      onAuthMeUpdate: async () => ({ status: 400, body: { success: false, error: { code: 'INVALID_NAME', message: 'Use 1 to 60 characters, with no hidden ones.' } } }),
-    })
-    const response = await fetch(`${base}/api/auth/me`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{"name":" "}' })
-    expect(response.status).toBe(400)
-    expect(((await response.json()) as { error: { code: string } }).error.code).toBe('INVALID_NAME')
-  })
-})
-
-describe('the desk proxy', () => {
-  it('reads the desk ungated and writes its ops only with the local header, body passed through', async () => {
-    const ops = vi.fn(async (body: unknown) => ({ status: 200, body: { success: true, data: { revision: 2, tabs: [], echo: body } } }))
-    const { base } = await start({
-      onDeskRead: async () => ({ status: 200, body: { success: true, data: { revision: 1, tabs: [] } } }),
-      onDeskOps: ops,
-    })
-    const read = await fetch(`${base}/api/desk`)
-    expect(await read.json()).toEqual({ success: true, data: { revision: 1, tabs: [] } })
-
-    const refused = await fetch(`${base}/api/desk/ops`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"ops":[]}' })
-    expect(refused.status).toBe(403)
-    expect(ops).not.toHaveBeenCalled()
-
-    const body = { ops: [{ op: 'tab.create', id: 'a', name: 'Local' }] }
-    const written = await fetch(`${base}/api/desk/ops`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: JSON.stringify(body) })
-    expect(((await written.json()) as { data: unknown }).data).toMatchObject({ revision: 2, echo: body })
-    expect(ops).toHaveBeenCalledWith(body)
-
-    const bad = await fetch(`${base}/api/desk/ops`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{nope' })
-    expect(bad.status).toBe(400)
-  })
-})
-
-describe('the Agent Messages proxy', () => {
-  it('reads which tabs have Agent Messages on ungated, and sets one tab only with the local header', async () => {
-    const write = vi.fn(async (tabId: string, body: unknown) => ({ status: 200, body: { success: true, data: { tabId, echo: body } } }))
-    const { base } = await start({
-      onAgentMessagesRead: async () => ({ status: 200, body: { success: true, data: { revision: 1, machines: [], tabs: [] } } }),
-      onAgentMessagesWrite: write,
-    })
-    expect(await (await fetch(`${base}/api/agent-messages`)).json()).toEqual({ success: true, data: { revision: 1, machines: [], tabs: [] } })
-    const patch = (path: string, body: string, local = true) => fetch(`${base}${path}`, { method: 'PATCH', headers: { 'content-type': 'application/json', ...(local ? { 'x-adapter-local': '1' } : {}) }, body })
-    expect((await patch('/api/agent-messages/tabs/app', '{"enabled":true}', false)).status).toBe(403)
-    expect(write).not.toHaveBeenCalled()
-    const saved = await patch('/api/agent-messages/tabs/app', '{"enabled":true}')
-    expect(((await saved.json()) as { data: unknown }).data).toEqual({ tabId: 'app', echo: { enabled: true } })
-    expect(write).toHaveBeenCalledExactlyOnceWith('app', { enabled: true })
-    expect((await patch('/api/agent-messages/tabs/app', '{nope')).status).toBe(400)
-    expect((await patch('/api/agent-messages/tabs/bad.tab', '{}')).status).toBe(404)
-  })
-
-  it('answers UNAVAILABLE where the daemon has no handler for it', async () => {
-    const { base } = await start({})
-    expect((await fetch(`${base}/api/agent-messages`)).status).toBe(503)
-    expect((await fetch(`${base}/api/agent-messages/tabs/app`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{}' })).status).toBe(503)
-  })
-})
-
-// The desktop and web apps approve a device that says its code aloud (a lamp, #1410), as the phone does:
-// the daemon passes the phone half of a sign-in through with its own session, and nothing else.
-describe('sign-in approval proxy', () => {
-  it('passes lookup, approve and deny through with the code only, guarded from cross-origin requests', async () => {
-    const send = vi.fn(async () => ({ status: 200, body: { success: true, data: { ok: true } } }))
-    const { base } = await start({ onSignInAnswer: send })
-    const headers = { 'x-adapter-local': '1', 'content-type': 'application/json' }
-    for (const h of [{}, { ...headers, origin: 'https://untrusted.example' }]) {
-      expect((await fetch(`${base}/api/auth/qr/approve`, { method: 'POST', headers: h, body: JSON.stringify({ code: '12345678' }) })).status).toBe(403)
-    }
-    for (const invalid of [{}, { code: '' }, { code: 5 }, { code: 'x'.repeat(129) }, { code: '12345678', userId: 'u2' }]) {
-      expect((await fetch(`${base}/api/auth/qr/approve`, { method: 'POST', headers, body: JSON.stringify(invalid) })).status).toBe(400)
-    }
-    expect((await fetch(`${base}/api/auth/qr/claim`, { method: 'POST', headers, body: JSON.stringify({ code: '12345678' }) })).status).toBe(404)
-    expect(send).not.toHaveBeenCalled()
-    for (const action of ['lookup', 'approve', 'deny'] as const) {
-      expect((await fetch(`${base}/api/auth/qr/${action}`, { method: 'POST', headers, body: JSON.stringify({ code: '1234 5678' }) })).status).toBe(200)
-      expect(send).toHaveBeenLastCalledWith(action, { code: '1234 5678' })
-    }
-  })
-
-  it('is unavailable on a daemon that cannot reach the backend for it', async () => {
-    const { base } = await start({})
-    const r = await fetch(`${base}/api/auth/qr/lookup`, { method: 'POST', headers: { 'x-adapter-local': '1', 'content-type': 'application/json' }, body: JSON.stringify({ code: '12345678' }) })
-    expect(r.status).toBe(503)
-  })
-})
-
-// The native desktop's chat files: its REST client has no account token, so the daemon streams the upload on with its own.
-describe('Super Tab attachment pass-through', () => {
-  it('hands a local multipart POST to the pass-through as a stream, guarded like the other writes', async () => {
-    const forward = vi.fn(async (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, path: string) => {
-      let bytes = 0
-      for await (const chunk of req) bytes += (chunk as Buffer).byteLength
-      res.writeHead(201, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ path, bytes }))
-    })
-    const { base } = await start({ onSuperTabAttachment: forward })
-    const headers = { 'x-adapter-local': '1', 'content-type': 'multipart/form-data; boundary=x' }
-    const body = Buffer.alloc(300 * 1024, 1)
-    for (const h of [{ 'content-type': headers['content-type'] }, { ...headers, origin: 'https://untrusted.example' }]) {
-      expect((await fetch(`${base}/api/super-tabs/tab-1/attachments`, { method: 'POST', headers: h, body })).status).toBe(403)
-    }
-    expect((await fetch(`${base}/api/super-tabs/../attachments`, { method: 'POST', headers, body })).status).toBe(404)
-    expect((await fetch(`${base}/api/super-tabs/tab-1/commands`, { method: 'POST', headers, body })).status).toBe(404)
-    expect(forward).not.toHaveBeenCalled()
-    // Past the 256 KiB the JSON routes read: the body reaches the pass-through whole, as a stream.
-    const r = await fetch(`${base}/api/super-tabs/tab-1/attachments?asAgentId=agent-1&other=x`, { method: 'POST', headers, body })
-    expect(r.status).toBe(201)
-    // An agent's own `post --attach` names it; nothing else in the query goes on.
-    expect(await r.json()).toEqual({ path: '/api/super-tabs/tab-1/attachments?asAgentId=agent-1', bytes: body.byteLength })
-    const person = await fetch(`${base}/api/super-tabs/tab-1/attachments?asAgentId=../x`, { method: 'POST', headers, body: 'x' })
-    expect(await person.json()).toEqual({ path: '/api/super-tabs/tab-1/attachments', bytes: 1 })
-  })
-
-  // A profile picture goes the same way (Desktop's Upload picture…); before this, the daemon answered 404 and Desktop
-  // showed only "Could not upload the file".
-  // The profile picture route went with the v3 people screens (backend #3892): the daemon passes no picture through.
-  it('passes no avatar picture through', async () => {
-    const forward = vi.fn()
-    const { base } = await start({ onSuperTabAttachment: forward })
-    const r = await fetch(`${base}/api/super-tabs/tab-1/avatars`, { method: 'POST',
-      headers: { 'x-adapter-local': '1', 'content-type': 'multipart/form-data; boundary=x' }, body: 'picture' })
-    expect(r.status).not.toBe(200)
-    expect(forward).not.toHaveBeenCalled()
-  })
-
-  // Files over 10 MB go straight to storage (contract of group 1604): the daemon asks the backend for the link and says the
-  // upload is complete, with the account's token; the bytes never pass through it.
-  it('passes a direct upload\'s link request and completion on, guarded like the other writes', async () => {
-    const forward = vi.fn(async (path: string, body: unknown) => ({ status: 200, body: { success: true, data: { path, body } } }))
-    const { base } = await start({ onSuperTabAttachmentUpload: forward })
-    const headers = { 'x-adapter-local': '1', 'content-type': 'application/json' }
-    const ask = { conversationId: 'c1', name: 'AC4 - 26 Oct v2.step', mime: 'application/octet-stream', size: 123456789 }
-    const link = `${base}/api/super-tabs/tab-1/attachments/uploads`, complete = `${link}/0123456789abcdef01234567/complete`
-    for (const url of [link, complete]) {
-      for (const h of [{ 'content-type': 'application/json' }, { ...headers, origin: 'https://untrusted.example' }]) {
-        expect((await fetch(url, { method: 'POST', headers: h, body: JSON.stringify(ask) })).status).toBe(403)
-      }
-    }
-    // Only the two upload paths: no other path, encoded or not, reaches the backend with this account's token.
-    for (const url of [`${base}/api/super-tabs/../attachments/uploads`, `${link}/../x/complete`, `${link}/u1`, `${link}/u1/complete/x`,
-      `${link}/u1%2F..%2F..%2Fcommands/complete`, `${base}/api/super-tabs/tab-1%2Fcommands%3F/attachments/uploads`, `${link}/%2e%2e/complete`,
-      `${base}/api/super-tabs/tab-1/commands`, `${base}/api/super-tabs/tab-1/attachments/uploads/u1/complete/../../../commands`]) {
-      expect((await fetch(url, { method: 'POST', headers, body: '{}' })).status).toBe(404)
-    }
-    expect((await fetch(link, { method: 'POST', headers, body: 'not json' })).status).toBe(400)
-    expect((await fetch(link, { method: 'POST', headers, body: '[1]' })).status).toBe(400)
-    expect(forward).not.toHaveBeenCalled()
-    const asked = await fetch(`${link}?asAgentId=agent-1&other=x`, { method: 'POST', headers, body: JSON.stringify({ ...ask, command: { type: 'member.remove' } }) })
-    expect(asked.status).toBe(200)
-    expect(await asked.json()).toEqual({ success: true, data: { path: '/api/super-tabs/tab-1/attachments/uploads?asAgentId=agent-1', body: ask } })
-    // Completion's body is {}, and an empty one is read as that.
-    const done = await fetch(`${complete}?asAgentId=../x`, { method: 'POST', headers })
-    expect(await done.json()).toEqual({ success: true, data: { path: '/api/super-tabs/tab-1/attachments/uploads/0123456789abcdef01234567/complete', body: {} } })
-    // The backend's refusal, as it said it.
-    forward.mockResolvedValueOnce({ status: 413, body: { success: false, error: { code: 'ATTACHMENT_TOO_LARGE', message: 'Files can be up to 256 MB.' } } } as never)
-    const refused = await fetch(link, { method: 'POST', headers, body: JSON.stringify({ ...ask, size: 256 * 1024 * 1024 + 1 }) })
-    expect(refused.status).toBe(413)
-    expect(await refused.json()).toEqual({ success: false, error: { code: 'ATTACHMENT_TOO_LARGE', message: 'Files can be up to 256 MB.' } })
-  })
-
-  it('is unavailable on a daemon without it', async () => {
-    const { base } = await start({})
-    expect((await fetch(`${base}/api/super-tabs/tab-1/attachments/uploads`, { method: 'POST',
-      headers: { 'x-adapter-local': '1', 'content-type': 'application/json' }, body: '{}' })).status).toBe(503)
-    expect((await fetch(`${base}/api/super-tabs/tab-1/attachments`, { method: 'POST',
-      headers: { 'x-adapter-local': '1', 'content-type': 'multipart/form-data; boundary=x' }, body: 'x' })).status).toBe(503)
-  })
-})
-
 describe('account Experimental settings proxy', () => {
-  it('proxies only voluntary fixed-choice feedback and guards it from cross-origin requests', async () => {
-    const send = vi.fn(async () => ({ status: 200, body: { success: true, data: { accepted: true } } }))
-    const { base } = await start({ onProductFeedback: send })
-    const path = `${base}/api/product-usage/feedback`
-    const body = { id: '12345678-1234-4234-8234-123456789012', answer: 'useful' }
-    const headers = { 'x-adapter-local': '1', 'content-type': 'application/json' }
-    for (const h of [{}, { ...headers, origin: 'https://untrusted.example' }]) {
-      expect((await fetch(path, { method: 'POST', headers: h, body: JSON.stringify(body) })).status).toBe(403)
-    }
-    for (const invalid of [{ ...body, text: 'PRIVATE_CANARY' }, { ...body, answer: 'PRIVATE_CANARY' }, { ...body, id: 'PRIVATE_CANARY' }]) {
-      expect((await fetch(path, { method: 'POST', headers, body: JSON.stringify(invalid) })).status).toBe(400)
-    }
-    expect(send).not.toHaveBeenCalled()
-    expect((await fetch(path, { method: 'POST', headers, body: JSON.stringify(body) })).status).toBe(200)
-    expect(send).toHaveBeenCalledExactlyOnceWith(body)
-  })
-  it('accepts only bounded fixed app counts through the local gateway proxy', async () => {
-    const send = vi.fn(async () => ({ status: 200, body: { success: true, data: { accepted: true } } }))
-    const { base } = await start({ onProductUsageReport: send })
-    const body = { schemaVersion: 1, revision: 0, id: '12345678-1234-4234-8234-123456789012', day: '2026-10-14', counters: { ui_desktop_sign_in_ok: 1 } }
-    const headers = { 'x-adapter-local': '1', 'content-type': 'application/json' }
-    const post = (value: unknown, h = headers) => fetch(`${base}/api/product-usage/report`, { method: 'POST', headers: h, body: JSON.stringify(value) })
-    expect((await post(body, { ...headers, origin: 'https://untrusted.example' } as typeof headers)).status).toBe(403)
-    for (const bad of [{ ...body, prompt: 'PRIVATE_CANARY' }, { ...body, counters: { turns_started: 1 } },
-      { ...body, counters: { ui_desktop_sign_in_ok: -1 } }, { ...body, counters: { ui_desktop_sign_in_ok: 'PRIVATE_CANARY' } },
-      { ...body, counters: { 'PRIVATE_CANARY': 1 } }, { ...body, prompt: 'PRIVATE_CANARY'.repeat(1000) }]) {
-      const response = await post(bad)
-      expect(response.status).toBe(400)
-      expect(await response.text()).not.toContain('PRIVATE_CANARY')
-    }
-    expect(send).not.toHaveBeenCalled()
-    expect((await post(body)).status).toBe(200)
-    expect(send).toHaveBeenCalledExactlyOnceWith(body)
-    send.mockRejectedValueOnce(new Error('PRIVATE_CANARY'))
-    const failed = await post(body)
-    expect(failed.status).toBe(502)
-    expect(await failed.text()).not.toContain('PRIVATE_CANARY')
-    // The backend's busy answer reaches the Desktop with its Retry-After, which the Desktop waits out.
-    const busy = { success: false, error: { code: 'USAGE_WRITE_CONFLICT', message: 'Usage measurement busy' } }
-    send.mockResolvedValueOnce({ status: 429, body: busy, retryAfterMs: 90_500 } as never)
-    const refused = await post(body)
-    expect(refused.status).toBe(429)
-    expect(refused.headers.get('retry-after')).toBe('91')
-    expect(await refused.json()).toEqual(busy)
-    expect((await post(body)).headers.get('retry-after')).toBeNull()
-  })
-  it('forwards the current Desktop health report intact while rejecting private context', async () => {
-    const body = JSON.parse(readFileSync(new URL('../../tests/fixtures/desktop-product-usage-report.json', import.meta.url), 'utf8'))
-    const send = vi.fn(async () => ({ status: 200, body: { success: true, data: { accepted: true } } }))
-    const { base } = await start({ onProductUsageReport: send })
-    const headers = { 'content-type': 'application/json', 'x-adapter-local': '1' }
-    const post = (value: unknown, h = headers) => fetch(`${base}/api/product-usage/report`, { method: 'POST', headers: h, body: JSON.stringify(value) })
-    expect((await post(body, { ...headers, origin: 'https://untrusted.example' } as typeof headers)).status).toBe(403)
-    for (const bad of [{ ...body, context: { ...body.context, path: 'PRIVATE_CANARY' } },
-      { ...body, context: { ...body.context, release: 'PRIVATE_CANARY' } },
-      { ...body, counters: { health_cli_report_failure_auth: 1 } }]) {
-      const refused = await post(bad)
-      expect(refused.status).toBe(400); expect(await refused.text()).not.toContain('PRIVATE_CANARY')
-    }
-    expect(send).not.toHaveBeenCalled()
-    expect((await post(body)).status).toBe(200)
-    expect(send).toHaveBeenCalledExactlyOnceWith(body)
-  })
-  it('forwards a newer Desktop report without the names it does not know, and says which it knows', async () => {
-    // Refused whole before: the Desktop drops a refused packet for good, so one new name lost all of it.
-    const body = JSON.parse(readFileSync(new URL('../../tests/fixtures/desktop-product-usage-report.json', import.meta.url), 'utf8'))
-    const send = vi.fn(async () => ({ status: 200, body: { success: true, data: { accepted: true } } }))
-    const { base } = await start({ onProductUsageReport: send })
-    const headers = { 'content-type': 'application/json', 'x-adapter-local': '1' }
-    const post = (value: unknown, h: Record<string, string> = headers) =>
-      fetch(`${base}/api/product-usage/report`, { method: 'POST', headers: h, body: JSON.stringify(value) })
-    const newer = { ...body, counters: { ...body.counters, health_desktop_frame_slow_wait: 2, health_desktop_PRIVATE_CANARY: 1 } }
-    const kept = await post(newer)
-    expect(kept.status).toBe(200)
-    expect(kept.headers.get('x-harness-usage-vocabulary')).toBe('10')
-    expect(send).toHaveBeenCalledExactlyOnceWith({ ...body,
-      counters: { ...body.counters, health_desktop_frame_slow_wait: 2, health_desktop_report_unknown_metric: 1 } })
-    expect(JSON.stringify(send.mock.calls)).not.toContain('PRIVATE_CANARY')
-    // Everything else is refused as before, and every answer names the vocabulary.
-    for (const [refused, h] of [
-      [{ ...body, counters: { health_desktop_PRIVATE_CANARY: 1 } }, headers],
-      [{ ...newer, counters: { ...newer.counters, turns_started: 1 } }, headers],
-      [{ ...newer, prompt: 'PRIVATE_CANARY' }, headers],
-      [newer, { 'content-type': 'application/json' }],
-    ] as const) {
-      const response = await post(refused, h)
-      expect(response.status).toBe('x-adapter-local' in h ? 400 : 403)
-      expect(response.headers.get('x-harness-usage-vocabulary')).toBe('10')
-      expect(await response.text()).not.toContain('PRIVATE_CANARY')
-    }
-    expect(send).toHaveBeenCalledOnce()
-  })
-  it('serves the Privacy switch and rejects cross-origin, extra-field and malformed writes', async () => {
-    const write = vi.fn(async () => ({ status: 200, body: { success: true, data: { enabled: false, revision: 1 } } }))
-    const { base } = await start({ onProductUsageRead: async () => ({ status: 200, body: { success: true, data: { enabled: true, revision: 0 } } }), onProductUsageWrite: write })
-    expect((await (await fetch(`${base}/api/product-usage/settings`)).json())).toMatchObject({ data: { enabled: true } })
-    const path = `${base}/api/product-usage/settings`
-    expect((await fetch(path, { method: 'POST', body: '{"enabled":false}' })).status).toBe(403)
-    const headers = { 'x-adapter-local': '1', 'content-type': 'application/json' }
-    expect((await fetch(path, { method: 'POST', headers: { ...headers, origin: 'https://untrusted.example' }, body: '{"enabled":false}' })).status).toBe(403)
-    expect((await fetch(path, { method: 'POST', headers, body: '{"enabled":false,"userId":"other"}' })).status).toBe(400)
-    expect((await fetch(path, { method: 'POST', headers, body: '{"enabled":false}' })).status).toBe(200)
-    expect(write).toHaveBeenCalledExactlyOnceWith({ enabled: false })
-  })
   it('reads through the account proxy and guards writes with the local header', async () => {
     const snapshot = { accountId: 'owner', revision: 0, features: { focus_bar_creature: false, share_button: false } }
     const write = vi.fn(async (body: unknown) => ({ status: 200, body: { success: true, data: { ...snapshot, echo: body } } }))
@@ -782,7 +830,7 @@ describe('optional feature routes are absent from core', () => {
   it.each(['/api/zoo', '/api/zoo/ops', '/api/hook/memory-context', '/api/hook/memory-emitted', '/api/hook/opencode-memory-runtime'])(
     'does not handle %s or consult account metadata', async path => {
       const me = vi.fn(async () => ({ status: 200, body: {} }))
-      const { base } = await start({ onAuthMe: me })
+      const { base } = await start({ onServiceRoute: (route) => (route === '/api/auth/me' ? me() : null) })
       const response = await fetch(`${base}${path}`, {
         method: path === '/api/zoo' ? 'GET' : 'POST', headers: { 'x-adapter-local': '1' }, body: path === '/api/zoo' ? undefined : '{}',
       })
@@ -790,39 +838,6 @@ describe('optional feature routes are absent from core', () => {
       expect(me).not.toHaveBeenCalled()
     },
   )
-})
-
-describe('the Harness Store proxy', () => {
-  it('forwards a store read with its path and query, and a store write only with the local header', async () => {
-    const calls: Array<[string, string, unknown]> = []
-    const { base } = await start({
-      onStore: async (method, path, body) => { calls.push([method, path, body]); return { status: 200, body: { success: true, data: { ok: method } } } },
-    })
-    const read = await fetch(`${base}/api/store/harnesses/autonomous/marp/reviews?limit=5`)
-    expect(read.status).toBe(200)
-    expect(await read.json()).toEqual({ success: true, data: { ok: 'GET' } })
-
-    const crossOrigin = await fetch(`${base}/api/store/harnesses/autonomous/marp/review`, { method: 'PUT', body: JSON.stringify({ rating: 5 }) })
-    expect(crossOrigin.status).toBe(403)
-
-    const write = await fetch(`${base}/api/store/harnesses/autonomous/marp/review`, {
-      method: 'PUT', headers: { 'x-adapter-local': '1', 'content-type': 'application/json' }, body: JSON.stringify({ rating: 5, title: 'Keynote' }),
-    })
-    expect(write.status).toBe(200)
-    const gone = await fetch(`${base}/api/store/harnesses/autonomous/marp/review`, { method: 'DELETE', headers: { 'x-adapter-local': '1' } })
-    expect(gone.status).toBe(200)
-    expect(calls).toEqual([
-      ['GET', '/api/store/harnesses/autonomous/marp/reviews?limit=5', undefined],
-      ['PUT', '/api/store/harnesses/autonomous/marp/review', { rating: 5, title: 'Keynote' }],
-      ['DELETE', '/api/store/harnesses/autonomous/marp/review', undefined],
-    ])
-  })
-
-  it('refuses a store path with anything but id characters in it', async () => {
-    const { base } = await start({ onStore: async () => ({ status: 200, body: {} }) })
-    expect((await fetch(`${base}/api/store/harnesses/a%20b/reviews`)).status).toBe(400)
-    expect((await fetch(`${base}/api/store/ratings`, { method: 'POST', headers: { 'x-adapter-local': '1' } })).status).toBe(405)
-  })
 })
 
 describe('knownTranscriptFor', () => {
@@ -1002,37 +1017,34 @@ describe('requests must name this server', () => {
   })
 })
 
-describe('the trust group endpoints', () => {
-  const local = { 'x-adapter-local': '1', 'content-type': 'application/json' }
-  const key = Buffer.alloc(32, 7).toString('base64')
-  const machineId = 'a'.repeat(32)
-
-  it('trust-peer takes only a real key and machine id, and trims the label', async () => {
-    const onTrustLinkedPeer = vi.fn(() => ({ status: 200, body: { ok: true } }))
-    const { base } = await start({ onTrustLinkedPeer })
-    const post = (body: unknown, headers: Record<string, string> = local) =>
-      fetch(`${base}/api/link/trust-peer`, { method: 'POST', headers, body: JSON.stringify(body) })
-    for (const bad of [{ pub: 'x', machineId }, { pub: key, machineId: 'nope' }, { machineId }, { pub: `${key}AA`, machineId }]) {
-      expect((await post(bad)).status, JSON.stringify(bad)).toBe(400)
-    }
-    expect((await post({ pub: key, machineId }, { 'content-type': 'application/json' })).status).toBe(403)
-    expect((await post({ pub: key, machineId, label: `  ${'n'.repeat(80)} ` })).status).toBe(200)
-    expect(onTrustLinkedPeer).toHaveBeenCalledTimes(1)
-    expect(onTrustLinkedPeer).toHaveBeenCalledWith({ pub: key, machineId, label: 'n'.repeat(60) })
+describe('the Wi-Fi device\'s routes at the door', () => {
+  it('hands each on as it came once its checks pass, and writes the answer its service gave', async () => {
+    const onServiceRoute = vi.fn((path: string, request: DoorRequest) => path === '/api/autonomous-device/nobody' ? null : (async () => {
+      const body = request.method === 'GET' ? undefined : await request.readBody()
+      return { status: 207, body: { path, request: { method: request.method, target: request.target, ...(body === undefined ? {} : { body }) } } }
+    })())
+    const { base } = await start({ onServiceRoute })
+    const bearer = { authorization: `Bearer ${readHookCredential(env.ADAPTER_DATA_DIR)}` }
+    // A read: its query goes with it, and no body.
+    const read = await realFetch(`${base}/api/autonomous-device/status?all=true`, { headers: bearer })
+    expect(read.status).toBe(207)
+    expect(await read.json()).toEqual({ path: '/api/autonomous-device/status', request: { method: 'GET', target: '/api/autonomous-device/status?all=true' } })
+    // A write: its body as text, whatever it holds, for its service to read.
+    const write = await realFetch(`${base}/api/autonomous-device/revoke`, { method: 'POST', headers: bearer, body: 'not json' })
+    expect(await write.json()).toEqual({ path: '/api/autonomous-device/revoke', request: { method: 'POST', target: '/api/autonomous-device/revoke', body: 'not json' } })
+    // No service answers the path.
+    const none = await realFetch(`${base}/api/autonomous-device/nobody`, { headers: bearer })
+    expect(none.status).toBe(503)
+    expect(await none.json()).toEqual({ error: { code: 'UNAVAILABLE', message: 'Autonomous device service unavailable' } })
+    // The door's own refusal comes first: nothing is handed on.
+    expect((await realFetch(`${base}/api/autonomous-device/status`)).status).toBe(403)
+    expect(onServiceRoute).toHaveBeenCalledTimes(3)
   })
 
-  it('group remove and sync are local writes; list is readable', async () => {
-    const onGroupRemove = vi.fn(() => ({ status: 200, body: { label: 'b', fingerprint: 'fp' } }))
-    const onGroupSync = vi.fn(() => ({ status: 200, body: { ok: true } }))
-    const onGroupList = vi.fn(() => ({ status: 200, body: { members: [] } }))
-    const { base } = await start({ onGroupRemove, onGroupSync, onGroupList })
-    expect((await fetch(`${base}/api/group/remove`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"selector":"1"}' })).status).toBe(403)
-    expect((await fetch(`${base}/api/group/sync`, { method: 'POST' })).status).toBe(403)
-    expect((await fetch(`${base}/api/group/remove`, { method: 'POST', headers: local, body: '{"selector":"  "}' })).status).toBe(400)
-    expect((await fetch(`${base}/api/group/remove`, { method: 'POST', headers: local, body: '{"selector":" 1 "}' })).status).toBe(200)
-    expect(onGroupRemove).toHaveBeenCalledWith('1')
-    expect((await fetch(`${base}/api/group/sync`, { method: 'POST', headers: local })).status).toBe(200)
-    expect(await (await fetch(`${base}/api/group`)).json()).toEqual({ members: [] })
+  it('answers 503 when no service is wired to answer them', async () => {
+    const { base } = await start()
+    const reply = await realFetch(`${base}/api/autonomous-device/status`, { headers: { authorization: `Bearer ${readHookCredential(env.ADAPTER_DATA_DIR)}` } })
+    expect(reply.status).toBe(503)
   })
 })
 
@@ -1049,8 +1061,8 @@ describe('the daemon socket', () => {
     const dir = mkdtempSync('/tmp/hsock-')
     const socketPath = join(dir, 'daemon.sock')
     const onStatus = vi.fn(() => ({ ok: true }))
-    const onAutonomousDeviceRequest = vi.fn(async () => ({ status: 200, body: { ok: true } }))
-    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onStatus, onAutonomousDeviceRequest }, { socketPath })
+    const onServiceRoute = vi.fn(() => Promise.resolve({ status: 200, body: { ok: true } }))
+    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onStatus, onServiceRoute }, { socketPath })
     server = started.server
     try {
       expect(started.localSocket?.path).toBe(socketPath)
@@ -1062,9 +1074,9 @@ describe('the daemon socket', () => {
       const bearer = { authorization: `Bearer ${readHookCredential(env.ADAPTER_DATA_DIR)}` }
       expect(await viaSocket(socketPath, 'GET', '/api/autonomous-device/status', bearer)).toBe(200)
       expect(await viaSocket(socketPath, 'GET', '/api/autonomous-device/status')).toBe(403)
-      expect(onAutonomousDeviceRequest).toHaveBeenCalledTimes(1)
+      expect(onServiceRoute).toHaveBeenCalledTimes(1)
       // Mutations still need the CSRF header, hooks still need their credential.
-      expect(await viaSocket(socketPath, 'POST', '/api/group/sync')).toBe(403)
+      expect(await viaSocket(socketPath, 'PATCH', '/api/agent-settings')).toBe(403)
       expect(await viaSocket(socketPath, 'POST', '/api/hook/session-start')).not.toBe(200)
       // The TCP port is untouched: a foreign Host is still refused there.
       const port = (started.server.address() as { port: number }).port
@@ -1080,24 +1092,23 @@ describe('the daemon socket', () => {
     }
   })
 
-  it('hands out a phone sign-in code over the socket only — never on the loopback port', async () => {
+  it('says which requests came over the socket, for a route only the socket may ask (the phone\'s sign-in code)', async () => {
     const dir = mkdtempSync('/tmp/hsock-')
     const socketPath = join(dir, 'daemon.sock')
-    const onAuthHandoff = vi.fn(async () => ({ status: 200, body: { success: true, data: { code: 'hnh_x', expiresIn: 90 } } }))
-    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onAuthHandoff }, { socketPath })
+    const onServiceRoute = vi.fn((_path: string, _request: DoorRequest, _localOk: boolean, socket: boolean) => Promise.resolve({ status: socket ? 200 : 403, body: {} }))
+    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onServiceRoute }, { socketPath })
     server = started.server
     try {
       const local = { 'x-adapter-local': '1' }
       expect(await viaSocket(socketPath, 'POST', '/api/auth/handoff', local)).toBe(200)
-      expect(await viaSocket(socketPath, 'POST', '/api/auth/handoff')).toBe(403)
       const port = (started.server.address() as { port: number }).port
-      // Over the port: refused without the local credential, and still refused with it.
+      // Over the port: refused without the local credential before any route, and not the socket with it.
       const tcp = await fetch(`http://127.0.0.1:${port}/api/auth/handoff`, { method: 'POST', headers: local })
       expect(tcp.status).toBe(401)
       const credential = readHookCredential(env.ADAPTER_DATA_DIR) ?? ''
       const credentialed = await fetch(`http://127.0.0.1:${port}/api/auth/handoff`, { method: 'POST', headers: { ...local, 'x-harness-local': credential } })
       expect(credentialed.status).toBe(403)
-      expect(onAuthHandoff).toHaveBeenCalledTimes(1)
+      expect(onServiceRoute.mock.calls.map(([path, , localOk, socket]) => [path, localOk, socket])).toEqual([['/api/auth/handoff', true, true], ['/api/auth/handoff', true, false]])
     } finally {
       await started.localSocket?.close()
       rmSync(dir, { recursive: true, force: true })
@@ -1144,15 +1155,15 @@ describe('the daemon socket', () => {
     const dir = mkdtempSync('/tmp/hsock-')
     const socketPath = join(dir, `harness-${randomBytes(16).toString('hex')}`)
     const token = randomBytes(32)
-    const onAuthHandoff = vi.fn(async () => ({ status: 200, body: { success: true, data: { code: 'hnh_x', expiresIn: 90 } } }))
-    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onAuthHandoff }, { socketPath, pipeToken: token })
+    const onServiceRoute = vi.fn((_path: string, _request: DoorRequest, _localOk: boolean, socket: boolean) => Promise.resolve({ status: socket ? 200 : 403, body: {} }))
+    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onServiceRoute }, { socketPath, pipeToken: token })
     server = started.server
     try {
       const local = { 'x-adapter-local': '1' }
       // The route a Unix socket's file mode guards: here the token is what lets it through.
       expect((await pipeRequest({ pipe: socketPath, token }, { method: 'POST', path: '/api/auth/handoff', headers: local })).status).toBe(200)
       expect(await viaSocket(socketPath, 'POST', '/api/auth/handoff', local)).toBe(401)
-      expect(onAuthHandoff).toHaveBeenCalledTimes(1)
+      expect(onServiceRoute).toHaveBeenCalledTimes(1)
     } finally {
       await started.localSocket?.close()
       rmSync(dir, { recursive: true, force: true })
@@ -1169,61 +1180,33 @@ describe('the daemon socket', () => {
     expect(started.port).toBeGreaterThan(0)
     rmSync(dir, { recursive: true, force: true })
   })
-})
 
-describe('the device history and dismiss endpoints', () => {
-  const local = { 'x-adapter-local': '1', 'content-type': 'application/json' }
-
-  it('history needs the local header', async () => {
-    const onDevicesHistory = vi.fn(async () => ({ status: 200, body: { rows: [], complete: true, frozen: null } }))
-    const { base } = await start({ onDevicesHistory })
-    expect((await fetch(`${base}/api/devices/history`)).status).toBe(403)
-    expect(onDevicesHistory).not.toHaveBeenCalled()
-    const ok = await fetch(`${base}/api/devices/history`, { headers: local })
-    expect(ok.status).toBe(200)
-    expect(await ok.json()).toEqual({ rows: [], complete: true, frozen: null })
-  })
-
-  it('dismiss needs the local header, parses the body and refuses bad JSON', async () => {
-    const onDevicesDismiss = vi.fn(() => ({ status: 200, body: { ok: true } }))
-    const { base } = await start({ onDevicesDismiss })
-    const post = (body: string, headers: Record<string, string> = local) => fetch(`${base}/api/devices/dismiss`, { method: 'POST', headers, body })
-    expect((await post('{}', { 'content-type': 'application/json' })).status).toBe(403)
-    expect(onDevicesDismiss).not.toHaveBeenCalled()
-    expect((await post('{bad')).status).toBe(400)
-    expect((await post(JSON.stringify({ pub: 5 }))).status).toBe(400)
-    expect((await post(JSON.stringify({ pub: 'k' }))).status).toBe(200)
-    expect(onDevicesDismiss).toHaveBeenLastCalledWith({ pub: 'k' })
-    expect((await post(JSON.stringify({ baseline: true }))).status).toBe(200)
-    expect(onDevicesDismiss).toHaveBeenLastCalledWith({ baseline: true })
-    expect((await post('{}')).status).toBe(200)
-    expect(onDevicesDismiss).toHaveBeenLastCalledWith({})
-    // The keys a window displayed: a list of strings, bounded.
-    expect((await post(JSON.stringify({ pubs: ['a', 'b'] }))).status).toBe(200)
-    expect(onDevicesDismiss).toHaveBeenLastCalledWith({ pubs: ['a', 'b'] })
-    expect((await post(JSON.stringify({ pubs: 'a' }))).status).toBe(400)
-    expect((await post(JSON.stringify({ pubs: ['a', 5] }))).status).toBe(400)
-    expect((await post(JSON.stringify({ pubs: Array.from({ length: 257 }, (_, i) => `k${i}`) }))).status).toBe(400)
-    // "It's mine": only a literal true asks for the other devices to be told.
-    expect((await post(JSON.stringify({ pubs: ['a'], confirm: true }))).status).toBe(200)
-    expect(onDevicesDismiss).toHaveBeenLastCalledWith({ pubs: ['a'], confirm: true })
-    expect((await post(JSON.stringify({ pub: 'k', confirm: 'yes' }))).status).toBe(200)
-    expect(onDevicesDismiss).toHaveBeenLastCalledWith({ pub: 'k' })
-  })
-
-  it('rebaseline passes the previewed head on, and refuses a malformed one', async () => {
-    const onDevicesRebaseline = vi.fn(async () => ({ status: 200, body: {} }))
-    const { base } = await start({ onDevicesRebaseline })
-    const post = (body: unknown) => fetch(`${base}/api/devices/rebaseline`, { method: 'POST', headers: local, body: JSON.stringify(body) })
-    expect((await post({ confirm: true, head: { seq: 3, hash: 'h' } })).status).toBe(200)
-    expect(onDevicesRebaseline).toHaveBeenLastCalledWith(true, { seq: 3, hash: 'h' })
-    expect((await post({ confirm: true })).status).toBe(200)
-    expect(onDevicesRebaseline).toHaveBeenLastCalledWith(true, undefined)
-    expect((await post({ confirm: true, head: { seq: -1, hash: 'h' } })).status).toBe(400)
-    expect((await post({ confirm: true, head: 'x' })).status).toBe(400)
+  // The permission hook (deviceClaude/asked.ts) and the mod's voice poll post over the socket only: without one, this line is
+  // why the dial shows no waiting prompt and takes no voice.
+  it('says once, with no path, that the dial\'s waiting prompts and voice are off where it has no Unix socket', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const said = () => warn.mock.calls.filter(([line]) => String(line).includes('the dial\'s waiting prompts'))
+    const dir = mkdtempSync('/tmp/hsock-')
+    const blocked = join(dir, 'daemon.sock')
+    writeFileSync(blocked, 'not a socket')
+    try {
+      for (const socketPath of [null, blocked]) {
+        const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn() }, { socketPath })
+        await new Promise<void>((resolve) => started.server.close(() => resolve()))
+        expect(said()).toEqual([['[hooks] the dial\'s waiting prompts and voice from the Claude Code plugin are off: no Unix socket']])
+        warn.mockClear()
+      }
+      const socketPath = join(dir, 'open.sock')
+      const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn() }, { socketPath })
+      await started.localSocket?.close()
+      await new Promise<void>((resolve) => started.server.close(() => resolve()))
+      expect(started.localSocket?.path).toBe(socketPath)
+      expect(said()).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
-
 
 it.each(['/api/hook/session-end', '/api/hook/turn-start', '/api/hook/tool-start', '/api/hook/turn-stop'])(
   'refuses a binding changed during process resolution on %s', async path => {
@@ -1249,7 +1232,7 @@ describe('audit H1: what a secret heard on the daemon\'s port can do', () => {
   const serve = async (peerAccount: () => Promise<boolean | 'unanswered'>) => {
     const started = await startHookServer(0, {
       onRegistered: vi.fn(), onSessionEnd: vi.fn(), onStatus: async () => ({ supported: true, secretDetail: 'x' }),
-      onAutonomousDeviceRequest: async () => ({ status: 200, body: { ok: true } }),
+      onServiceRoute: () => Promise.resolve({ status: 200, body: { ok: true } }),
     }, { peerAccount })
     return { port: started.port, close: () => new Promise<void>((resolve) => { started.server.closeAllConnections(); started.server.close(() => resolve()) }) }
   }

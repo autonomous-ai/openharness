@@ -1,13 +1,14 @@
 /**
  * The one way the agent browser runs Podman: where it is, whether it can run a browser, and every call to it, each
- * with a timeout and started without a window (docs/windows-rules.md, rule 1). Harness runs `podman` only, never
- * `docker`.
+ * with a timeout, started without a window (docs/windows-rules.md, rule 1) and ended with this process (lib/tied.ts).
+ * Harness runs `podman` only, never `docker`.
  */
-import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { oneShotParentEnv } from '../../lib/loginShellEnv.js'
 import { resolveViaLoginShell } from '../../lib/tmuxOnPath.js'
 import { ownProcessGroup } from '../../lib/windows/noWindow.js'
+import { execFileTied, spawnTied, type TiedExecError } from '../../lib/tied.js'
 
 export class PodmanError extends Error {
   /** A call that exited with an error: all it printed, stdout then stderr. A build's RUN steps print to stdout. */
@@ -28,10 +29,8 @@ export type Availability =
 export interface Podman {
   path(): Promise<string | null>
   run(args: string[], opts?: { timeoutMs?: number; stdin?: string }): Promise<{ stdout: string; stderr: string }>
+  /** Throws `needs_setup` until Podman has been found. */
   spawn(args: string[]): ChildProcess
-  /** The command line `spawn` runs for [args], for a process the core starts itself (a browser stream's exec,
-   *  core/browserStreams.ts). Throws `needs_setup` until Podman has been found. */
-  argv(args: string[]): string[]
   available(): Promise<Availability>
   startMachine(): Promise<void>
   memoryBytes(): Promise<number>
@@ -51,13 +50,15 @@ const MIN_VERSION: readonly [number, number] = [4, 6]
 const MiB = 1024 ** 2
 // Enough of Podman's complaint to act on, never a whole build log.
 const MESSAGE_LIMIT = 2_000
-// An image build prints a line per package it installs, past execFile's 1 MB default, which kills the child.
-const OUTPUT_LIMIT = 64 * 1024 * 1024
+// An image build prints a line per package it installs, megabytes of it. A call that prints more than this on stdout or
+// on stderr is ended, and fails saying so.
+export const OUTPUT_LIMIT = 64 * MiB
 // `cat | podman …` with podman ($0 "$@") ended by the shell when a timeout ends the shell, never left running. In the
 // background so the trap runs at once; stdin is kept on fd 3, since a background list's own stdin is /dev/null. The
 // trap is set first and `ended` looked at once podman is started, so a timeout before then still ends it. The shell
 // exits only after waiting for both (`wait` again after the trap): a run that failed on its timeout left podman
-// unreaped behind it, and a spec's teardown deleted the fake's folder under it (CI, 2026-11-10).
+// unreaped behind it, and a spec's teardown deleted the fake's folder under it (CI, 2026-11-10). The tie's SIGTERM
+// (lib/tied.ts) reaches this shell too, and its trap ends podman.
 const STDIN_RELAY = `trap 'ended=1; kill $! 2>/dev/null' TERM; exec 3<&0; cat <&3 | "$0" "$@" 3<&- & [ -z "$ended" ] || kill $!; wait $!; s=$?; until wait; do :; done; exit $s`
 
 /** Where Podman's own installers put it, for a daemon whose login shell does not have it on PATH yet. */
@@ -79,11 +80,14 @@ export function createPodman(deps: {
   exists?: (path: string) => boolean
   platform?: NodeJS.Platform
   now?: () => number
+  /** Bytes, for stdout and for stderr each. */
+  outputLimit?: number
 } = {}): Podman {
   const resolve = deps.resolve ?? resolveViaLoginShell
   const exists = deps.exists ?? existsSync
   const platform = deps.platform ?? process.platform
   const now = deps.now ?? Date.now
+  const outputLimit = deps.outputLimit ?? OUTPUT_LIMIT
   // Kept once found; looked for again while missing, since setup may have just installed it.
   let found: string | null = null
   let cached: { at: number; answer: Promise<Availability> } | null = null
@@ -100,11 +104,6 @@ export function createPodman(deps: {
     return found
   }
 
-  function argv(args: string[]): string[] {
-    if (!found) throw new PodmanError('needs_setup', 'Podman is not installed')
-    return [found, ...onConnection(args)]
-  }
-
   async function run(args: string[], opts: { timeoutMs?: number; stdin?: string } = {}): Promise<{ stdout: string; stderr: string }> {
     const file = await path()
     if (!file) throw new PodmanError('needs_setup', 'Podman is not installed')
@@ -114,19 +113,20 @@ export function createPodman(deps: {
     // macOS and Linux. `cat` relays the data into a pipe the shell makes. Windows' stdio is already a named pipe.
     const relay = opts.stdin !== undefined && platform !== 'win32'
     const [command, commandArgs] = relay ? ['/bin/sh', ['-c', STDIN_RELAY, file, ...onConnection(args)]] : [file, onConnection(args)]
-    return await new Promise((done, fail) => {
+    try {
       // The daemon was started by launchd or systemd, not a shell: the login shell's environment is what the
-      // person's own `podman` sees (its machine connections, its helpers on PATH).
-      const child = execFile(command, commandArgs, { env: oneShotParentEnv(), timeout: timeoutMs, maxBuffer: OUTPUT_LIMIT, ...ownProcessGroup() }, (error, stdout, stderr) => {
-        if (!error) return done({ stdout, stderr })
-        fail(new PodmanError('podman_failed', error.killed
-          ? `podman ${args[0]} timed out after ${timeoutMs} ms`
-          : `podman ${args[0]} failed: ${stderr.trim().slice(-MESSAGE_LIMIT)}`,
-          error.killed ? undefined : `${stdout.trimEnd()}\n${stderr.trimEnd()}`.trim()))
-      })
-      // Always closed, so a command that reads stdin never waits on it.
-      child.stdin?.end(opts.stdin)
-    })
+      // person's own `podman` sees (its machine connections, its helpers on PATH). In this process's group, as
+      // under execFile, which never applied a group of its own.
+      return await execFileTied(command, commandArgs,
+        { env: oneShotParentEnv(), windowsHide: true, platform, timeout: timeoutMs, maxBuffer: outputLimit, input: opts.stdin })
+    } catch (error) {
+      const failed = error as TiedExecError
+      if (failed.killed) {
+        const why = failed.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? `printed more than ${outputLimit / MiB} MiB` : `timed out after ${timeoutMs} ms`
+        throw new PodmanError('podman_failed', `podman ${args[0]} ${why}`)
+      }
+      throw new PodmanError('podman_failed', `podman ${args[0]} failed: ${failed.stderr.trim().slice(-MESSAGE_LIMIT)}`, `${failed.stdout.trimEnd()}\n${failed.stderr.trimEnd()}`.trim())
+    }
   }
 
   async function readInfo(): Promise<{ version: string; memTotal: number }> {
@@ -159,10 +159,10 @@ export function createPodman(deps: {
     path,
     run,
     spawn(args) {
-      const [file, ...rest] = argv(args)
-      return spawn(file, rest, { env: oneShotParentEnv(), stdio: 'pipe', ...ownProcessGroup() })
+      if (!found) throw new PodmanError('needs_setup', 'Podman is not installed')
+      // Tied to this process: a crash of it left its `podman events` running, one more per restart.
+      return spawnTied(found, onConnection(args), { env: oneShotParentEnv(), ...ownProcessGroup(platform), platform })
     },
-    argv,
     available() {
       if (cached && now() - cached.at < AVAILABLE_CACHE_MS) return cached.answer
       cached = { at: now(), answer: measure() }

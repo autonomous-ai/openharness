@@ -224,9 +224,9 @@ harness autonomous-device addon proposal <proposalId> --machine lamp-4ace --json
 ## Implementation and validation
 
 `cli/src/lib/autonomous-device/addons.ts` holds the contract and the bounded state;
-`service.ts` advertises and routes the two requests; `services/wifi.ts`, `core/wifiLink.ts` and
-`services/wifiProcess.ts` carry the agent-facing operation across the service process boundary as
-`harness device receipt` is carried; `lib/deviceManagementHttp.ts` validates the routes;
+`service.ts` advertises and routes the two requests; the core's door hands the agent-facing routes to
+`services/wifi.ts` in the devices' process as they came (`core/serviceRoutes.ts`), as it hands on
+`harness device receipt`; `lib/autonomous-device/localHttp.ts` validates the routes there;
 `addonCommand.ts` is the CLI. A device that is a Harness machine: `machineAddons.ts` beside them, served by
 `services/machineAddons.ts`. Unit tests cover each layer; `services/wifi.spec.ts` runs the real
 service and relay end to end with a fake core (publish, state, a proposal sealed to that device, its

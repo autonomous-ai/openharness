@@ -47,7 +47,7 @@ Code: `backend/src/lib/ssoSession.ts` (the rules below), `lib/harnessSession.ts`
 
 ## Design (docs/feature-design-rules.md)
 
-Reviewed revision: see the PR. Reviewer: two independent security reviews (Ken delegated sign-off to the Swarm).
+Reviewed revision: see the PR. Reviewer: two independent security reviews.
 
 1. **Growth.** One `harness_sessions` row per sign-in. Ending a session sets `expiresAt` to now, and a TTL index the
    worker creates (`harness_session_expiry`) deletes a row 30 days after `expiresAt`: ended, or idle past 90 days.

@@ -1,6 +1,6 @@
 import type { AgentEngine } from '../engines/types.js'
 
-/** Extra launch flags an owner adds to a Buddy: parsed into argv words and checked, never run through a shell. */
+/** Extra launch flags an owner adds to an agent: parsed into argv words and checked, never run through a shell. */
 
 export const LAUNCH_ARGS_MAX_CHARS = 1024
 export const LAUNCH_ARGS_MAX_WORDS = 20

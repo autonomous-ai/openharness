@@ -1,29 +1,36 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AgentCommandOwnershipSnapshot } from './engineBin.js'
 import type { ProcessRow } from './processTable.js'
 import type { TerminalBackend } from './terminalBackend.js'
-import type { TerminalRootObservation, TerminalRuntimeRef } from './terminalTypes.js'
+import type { ProcessIdentity, TerminalRootObservation, TerminalRuntimeRef } from './terminalTypes.js'
 
 /**
  * The Codex profile a process runs under rides the LIVE discovery path, pinned the same way `grid`
  * is in `terminalAgentDiscovery.grid.spec.ts`: a probe wired on the wrong function stays green while
  * every discovered codex row arrives with `codexHome` undefined — and its transcript then fails
- * validation against the default profile. `engines/kit/processFacts.spec.ts` covers what the probe reads.
+ * validation against the default profile. `engines/discoveries.spec.ts` covers what the probe makes of the rollout a
+ * process holds open, and `processTable.engineChildren.spec.ts` which children it may list.
  */
 
-const probeGatewayRuntime = vi.hoisted(() => vi.fn())
-const probeGridAssignment = vi.hoisted(() => vi.fn())
 const probeProfileHome = vi.hoisted(() => vi.fn())
 const processRows = vi.hoisted(() => vi.fn())
+const agentCommandOwnershipSnapshotAsync = vi.hoisted(() => vi.fn())
 
-vi.mock('./gatewayRuntime.js', () => ({ probeGatewayRuntime }))
-vi.mock('./gridAssignment.js', () => ({ probeGridAssignment }))
 vi.mock('../engines/discoveries.js', async (real) => ({ ...await real<object>(), probeProfileHome }))
+vi.mock('./engineBin.js', async (real) => ({ ...await real<typeof import('./engineBin.js')>(), agentCommandOwnershipSnapshotAsync }))
 vi.mock('./processTable.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('./processTable.js')>(),
   processRows,
+  enrichProcessRows: vi.fn(async (rows: unknown) => rows),
 }))
 
 const { probeTerminalAgents } = await import('./terminalAgentDiscovery.js')
+
+// No installed command is any engine's: each row is named by its argv alone, and nothing walks PATH (#3880).
+const OWNERSHIP: AgentCommandOwnershipSnapshot = {
+  cursorFileKeys: new Set(), grokFileKeys: new Set(), conflictingFileKeys: new Set(),
+  agentCandidates: [], cursorAgentCandidates: [], grokCandidates: [],
+}
 
 const START = 'Sat Aug 15 10:00:00 2026'
 const row = (pid: number, parentPid: number, executable: string, args = executable): ProcessRow =>
@@ -37,12 +44,10 @@ function backendWith(roots: TerminalRootObservation[]): TerminalBackend {
 }
 
 beforeEach(() => {
-  probeGatewayRuntime.mockReset()
-  probeGatewayRuntime.mockResolvedValue({ kind: null })
-  probeGridAssignment.mockReset()
-  probeGridAssignment.mockResolvedValue(null)
   probeProfileHome.mockReset()
   processRows.mockReset()
+  agentCommandOwnershipSnapshotAsync.mockReset()
+  agentCommandOwnershipSnapshotAsync.mockReturnValue(OWNERSHIP)
 })
 
 describe('Codex profile on the live terminal discovery path', () => {
@@ -56,8 +61,12 @@ describe('Codex profile on the live terminal discovery path', () => {
     )
     const byEngine = Object.fromEntries(probe.agents.map((agent) => [agent.engine, agent.codexHome]))
     expect(byEngine).toEqual({ codex: '/home/u/.codex-work', claude: null })
-    expect(probeProfileHome).toHaveBeenCalledTimes(2)
+    // Each agent's own selected process and engine, and a way to name that process's engine children.
+    expect(probeProfileHome.mock.calls.map(([identity, engine, children]) => [(identity as ProcessIdentity).pid, engine, typeof children]).sort())
+      .toEqual([[30, 'codex', 'function'], [40, 'claude', 'function']])
     for (const [identity] of probeProfileHome.mock.calls) expect(identity).toMatchObject({ startMarker: START })
+    // The pass's one ownership snapshot serves the walk and the children alike: building one walks PATH (#3880).
+    expect(agentCommandOwnershipSnapshotAsync).toHaveBeenCalledOnce()
   })
 
   it('passes an unreadable probe through as undefined, so the registry keeps what it knew', async () => {
@@ -65,5 +74,26 @@ describe('Codex profile on the live terminal discovery path', () => {
     probeProfileHome.mockResolvedValue(undefined)
     const probe = await probeTerminalAgents([backendWith([{ runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' }])], ['tmux'], 999)
     expect(probe.agents[0]).toHaveProperty('codexHome', undefined)
+    expect(agentCommandOwnershipSnapshotAsync).toHaveBeenCalledOnce()
+  })
+
+  it('names a launcher\'s Codex children, and no other process', async () => {
+    const named: ProcessIdentity[][] = []
+    probeProfileHome.mockImplementation(async (_identity: unknown, _engine: string, children: () => ProcessIdentity[]) => {
+      named.push(children())
+      return undefined
+    })
+    // npm's Codex 0.169.0: the launcher discovery selects, two `codex` processes right under it (given highest pid
+    // first), and a tool's shell beside them.
+    processRows.mockResolvedValue([row(10, 1, 'bash'), row(30, 10, 'codex'), row(33, 30, 'zsh', 'zsh -c git status'),
+      row(32, 30, 'codex', 'codex app-server'), row(31, 30, 'codex')])
+    await probeTerminalAgents([backendWith([{ runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' }])], ['tmux'], 999)
+    expect(named).toEqual([[{ pid: 31, executable: 'codex', startMarker: START }, { pid: 32, executable: 'codex', startMarker: START }]])
+
+    // The one `codex` under that shell instead, a level further down: none is named.
+    named.length = 0
+    processRows.mockResolvedValue([row(10, 1, 'bash'), row(30, 10, 'codex'), row(33, 30, 'zsh'), row(34, 33, 'codex', 'codex exec review')])
+    await probeTerminalAgents([backendWith([{ runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' }])], ['tmux'], 999)
+    expect(named).toEqual([[]])
   })
 })

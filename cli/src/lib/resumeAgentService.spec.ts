@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSyn
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createResumeAgentService, type ResumeAgentServiceDeps } from './resumeAgentService.js'
-import { RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
+import { RESUME_READINESS_BUDGET_MS, resumeChanged } from './resumeStoppedAgent.js'
 import { registry, type RegisteredSession } from './registry.js'
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { materializeResumeTranscript } from '../engines/resumeTranscript.js'
@@ -20,8 +20,6 @@ import { engineBin, enginePathOverride } from './engineBin.js'
 import { installedDsh } from '../dsh/installed.js'
 import { createLaunchHelpers } from '../core/agents/launch.js'
 import { createLaunchAuthority } from '../core/agents/launchAuthority.js'
-import { createSwarmSkillAdoption } from '../superTabs/inCore/adoption.js'
-import { RETENTION_LAPSE_MS, retainContributions, retainedHarnesses } from '../superTabs/retention.js'
 import type { NativeLaunch } from '../engines/nativeLaunch.js'
 import type { TerminalInventoryResult } from './terminalTypes.js'
 import { WindowsBatchLaunchRefused } from './windows/launch.js'
@@ -32,7 +30,9 @@ vi.mock('./windows/engineStart.js', async (original) => {
   return { ...actual, windowsPaneLaunch: vi.fn(actual.windowsPaneLaunch) }
 })
 vi.mock('./deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn() }))
-vi.mock('./paneEngineProcess.js', () => ({ checkSessionRuntime: vi.fn(), resolvePaneEngineProcess: vi.fn() }))
+// The engine this fake stands for never exits, so there is no settle time to wait out; the rule is tested in
+// `resumeStoppedAgent.spec.ts`.
+vi.mock('./paneEngineProcess.js', () => ({ checkSessionRuntime: vi.fn(), resolvePaneEngineProcess: vi.fn(), ENGINE_SETTLE_MS: 0 }))
 // `resumeCapability` reads the real flag table through this module; only the argv builder and the
 // capability gate are faked. The gate would otherwise spawn the tester's own login shell to ask
 // `<engine> --help` about a flag, which is neither this file's subject nor the same answer on two
@@ -212,6 +212,35 @@ describe('resuming a stopped harness with new launch words', () => {
   })
 })
 
+describe('the grid a resumed harness is on', () => {
+  // The saved API's endpoint as saved now: the record a relaunch refreshes (apiModels.ts `refreshApiLaunch`).
+  const override = { networkId: 'api', networkName: 'Saved', baseUrl: 'https://saved.example/now/v1', apiKey: 'k', model: 'm' }
+  const savedOnGrid = () => rewrite({ grid: { baseUrl: 'https://saved.example/then/v1', model: 'm' },
+    gridLaunch: { ...override, baseUrl: 'https://saved.example/then/v1' } })
+
+  it('is its launch record\'s, as this launch refreshed it, written with its process', async () => {
+    savedOnGrid()
+    vi.mocked(deps.relaunchOverrides).mockResolvedValueOnce({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [],
+      gridLaunchRecord: { override, webSearch: 'on' } } })
+    expect(await start()).toMatchObject({ ok: true })
+    expect(registry.byAgent(saved.agentId)?.grid).toEqual({ baseUrl: 'https://saved.example/now/v1', model: 'm' })
+  })
+
+  it('is none for a launch with no record, whatever grid the saved row had', async () => {
+    savedOnGrid()
+    expect(await start()).toMatchObject({ ok: true })
+    expect(registry.byAgent(saved.agentId)?.grid).toBeNull()
+  })
+
+  it('is the launch record\'s on the row when an allocation the launch left unconfirmed is checked again', async () => {
+    // The launch wrote its record on the row (`refreshGridWebSearch`), and its engine was not confirmed then.
+    live({ grid: { baseUrl: 'https://saved.example/then/v1', model: 'm' }, gridLaunch: override })
+    expect(await start()).toMatchObject({ ok: true })
+    expect(create).not.toHaveBeenCalled()
+    expect(registry.byAgent(saved.agentId)?.grid).toEqual({ baseUrl: 'https://saved.example/now/v1', model: 'm' })
+  })
+})
+
 describe('production resume handler', () => {
   it('holds the reservation and restores cold history before checking its control identity', async () => {
     const restored = join(dir, 'restored.jsonl')
@@ -252,7 +281,7 @@ describe('production resume handler', () => {
     const apiNotes = vi.fn()
     const helpers = createLaunchHelpers({
       authority: createLaunchAuthority({ byAgent: id => registry.byAgent(id), revision: id => deps.restartJobs.revision(id), cancelled: id => deps.stopJobs.has(id) }),
-      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), setTail: vi.fn(),
+      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
       launchOverridesDeps: { machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(),
         capabilities: async () => ({ sessionEnv: true }), writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(async () => true), readCodexConfig: () => null },
     })
@@ -261,32 +290,6 @@ describe('production resume handler', () => {
     expect(await start()).toMatchObject({ ok: true, resumed: true, session: { agentId: saved.agentId, sessionId: saved.sessionId } })
     expect(apiNotes).toHaveBeenCalledWith(dir, 'codex')
     expect(create).toHaveBeenCalledOnce()
-  })
-
-  it('persists an adopted old worker role in the resumed registry row', async () => {
-    const swarmSkill = { role: 'agent' as const, key: saved.agentId }
-    deps.adoptSwarmSkill = async row => ({ ...row, swarmSkill })
-    expect(await start()).toMatchObject({ ok: true, session: { swarmSkill } })
-    registry.load()
-    expect(registry.byAgent(saved.agentId)?.swarmSkill).toEqual(swarmSkill)
-  })
-
-  // Security review 2 of #2255: opening an old Swarm session after the Mac was offline over a week (a lapsed local roster) opened it
-  // without its role, with no role read at all.
-  it('opens an old Swarm session with its role after the local roster lapsed', async () => {
-    rewrite({ startedBy: 'agent' })
-    retainContributions(dir, 'machine', [{ tabId: 'tab', agent: { harnessId: saved.agentId, machineId: 'machine' } }], Date.now() - RETENTION_LAPSE_MS - 60_000)
-    const role = vi.fn(async () => ({ role: 'agent' as const }))
-    deps.adoptSwarmSkill = createSwarmSkillAdoption({ role, save: vi.fn(), candidate: id => retainedHarnesses(dir).has(id),
-      authority: createLaunchAuthority({ byAgent: id => registry.byAgent(id), revision: () => 0, cancelled: () => false }) })
-    expect(await start()).toMatchObject({ ok: true, session: { swarmSkill: { role: 'agent', key: saved.agentId } } })
-    expect(role).toHaveBeenCalledOnce()
-  })
-
-  it('does not resume a session that changed during role adoption', async () => {
-    deps.adoptSwarmSkill = async () => null
-    expect(await start()).toMatchObject({ error: 'AGENT_CHANGED' })
-    expect(create).not.toHaveBeenCalled()
   })
 
   it.each(['auto', 'ask'])('resumes the same conversation with an explicit %s permission choice', async permissionMode => {
@@ -306,26 +309,6 @@ describe('production resume handler', () => {
     })
     registry.load()
     expect(registry.byAgent(saved.agentId)?.permissionMode).toBe(permissionMode)
-  })
-
-  // An agent the Swarm started between task #4215 and 2026-11-12 was saved with no mode, and a stopped one is not in the
-  // registry the start-up sweep reads (lib/registry.ts `withSwarmAuto`): Open brings it back in Auto-approve. A person's own
-  // agent attached to a Swarm keeps its own default.
-  it('opens a stopped Swarm-started agent with no mode in Auto-approve', async () => {
-    const swarmSkill = { role: 'agent', key: 'swarm-dev' } as RegisteredSession['swarmSkill']
-    rewrite({ permissionMode: undefined, bypassPermission: false, swarmSkill, startedBy: 'agent' })
-    expect(await createResumeAgentService(deps)(saved.agentId)).toMatchObject({ ok: true, session: { permissionMode: 'auto', bypassPermission: true } })
-    expect(buildEngineLaunchArgv).toHaveBeenLastCalledWith('codex', expect.objectContaining({ permissionMode: 'auto', bypassPermission: true }))
-    registry.load()
-    expect(registry.byAgent(saved.agentId)?.permissionMode).toBe('auto')
-  })
-
-  it('opens a person\'s own agent attached to a Swarm, saved with no mode, in its own default', async () => {
-    const swarmSkill = { role: 'agent', key: 'swarm-dev' } as RegisteredSession['swarmSkill']
-    rewrite({ permissionMode: undefined, bypassPermission: false, swarmSkill, startedBy: undefined })
-    expect(await createResumeAgentService(deps)(saved.agentId)).toMatchObject({ ok: true })
-    const launched = vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1] as { permissionMode?: string | null; bypassPermission?: boolean }
-    expect([launched.permissionMode ?? null, launched.bypassPermission]).toEqual([null, false])
   })
 
   it('carries the captured native launch and token through permission, argv and registration', async () => {
@@ -391,7 +374,7 @@ describe('production resume handler', () => {
       // The pane is not allocated yet: the engine has written nothing of its own.
       expect(create).not.toHaveBeenCalled()
     })
-    vi.mocked(deps.prepareSessionResume).mockImplementation(() => { writeFileSync(saved.transcriptPath!, '{"type":"session_meta"}\n{"prepared":true}\n') })
+    vi.mocked(deps.prepareSessionResume).mockImplementation(async () => { writeFileSync(saved.transcriptPath!, '{"type":"session_meta"}\n{"prepared":true}\n'); return true })
     deps = { ...deps, relaunchMarks: { note } }
     expect(await start()).toMatchObject({ ok: true, resumed: true })
     // A resume always starts a new engine: a turn left open before it is over.
@@ -668,11 +651,55 @@ describe('production resume handler', () => {
 
   it.each(['provider', 'prepare', 'cancel', 'conversation'] as const)('releases the reservation before allocation after %s failure', async reason => {
     if (reason === 'provider') vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: false, error: 'PROVIDER_FAILED', detail: 'fixture' })
-    if (reason === 'prepare') vi.mocked(deps.prepareSessionResume).mockImplementation(() => { throw new Error('fixture') })
+    if (reason === 'prepare') vi.mocked(deps.prepareSessionResume).mockImplementation(async () => { throw new Error('fixture') })
     if (reason === 'cancel') vi.mocked(deps.relaunchOverrides).mockImplementation(async () => { deps.restartJobs.cancel(saved.agentId); return { ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } } })
-    if (reason === 'conversation') vi.mocked(deps.prepareSessionResume).mockImplementation(() => { registry.resumePendingAgent({ ...saved, agentId: 'other' }, [{ backend: 'tmux', paneId: '%101' }]) })
+    if (reason === 'conversation') vi.mocked(deps.prepareSessionResume).mockImplementation(async () => { registry.resumePendingAgent({ ...saved, agentId: 'other' }, [{ backend: 'tmux', paneId: '%101' }]); return false })
     expect(await start()).toMatchObject({ ok: false })
     expect(create).not.toHaveBeenCalled(); expect(deps.stoppedAgents.beginResume(saved.agentId)).not.toBeNull()
+  })
+  // The history is prepared a chunk at a time while the core goes on (engines/kit/resumeRepair.ts): it is replaced only
+  // while this resume holds, and no other live harness has the conversation.
+  it('prepares the history under the resume\'s own hold, which another live harness taking the conversation ends', async () => {
+    const holds: boolean[] = []
+    vi.mocked(deps.prepareSessionResume).mockImplementation(async (_session, current) => {
+      holds.push(current())
+      registry.resumePendingAgent({ ...saved, agentId: 'other' }, [{ backend: 'tmux', paneId: '%101' }])
+      holds.push(current())
+      return false
+    })
+    expect(await start()).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+    expect(holds).toEqual([true, false])
+    expect(create).not.toHaveBeenCalled()
+  })
+  // Preparing can take many seconds now. A history it left in place must still be the file proven before it; only one
+  // it replaced, checked byte for byte against that file, is proven anew (review of core-loop-1).
+  it.each([false, true])('holds the history to the proof taken before its preparation unless it replaced it: replaced %s', async replaced => {
+    const proofs: Array<ReturnType<typeof vi.fn>> = []
+    vi.mocked(controlTranscriptEvidence).mockImplementation((_engine, _id, path) => {
+      const verify = vi.fn()
+      proofs.push(verify)
+      return { path, verify }
+    })
+    vi.mocked(deps.prepareSessionResume).mockImplementation(async () => {
+      proofs[0]!.mockImplementation(() => { throw new IdentityReadUnavailable('the saved conversation file was replaced during the operation') })
+      return replaced
+    })
+    if (replaced) {
+      expect(await start()).toMatchObject({ ok: true })
+      expect(create).toHaveBeenCalled()
+    } else {
+      expect(await start()).toMatchObject({ ok: false, error: 'IDENTITY_UNAVAILABLE', detail: expect.stringContaining('replaced during the operation') })
+      expect(create).not.toHaveBeenCalled()
+    }
+  })
+  it('opens nothing for a resume cancelled while its history was prepared', async () => {
+    vi.mocked(deps.prepareSessionResume).mockImplementation(async (_session, current) => {
+      deps.restartJobs.cancel(saved.agentId)
+      expect(current()).toBe(false)
+      return false
+    })
+    expect(await start()).toMatchObject({ ok: false, error: resumeChanged.error })
+    expect(create).not.toHaveBeenCalled()
   })
   it.each(['tmux is unavailable', 'allocation reply lost'])('handles allocation error: %s', async reason => {
     create.mockResolvedValue({ state: 'failed', reason })

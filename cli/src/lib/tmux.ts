@@ -208,10 +208,14 @@ export async function tmuxPaneProcessTree(
   const byPid = new Map(rows.map((row) => [row.pid, row]))
   const found: Array<{ executable: string; args: string }> = []
   const queue = [rootPid]
+  const seen = new Set<number>()
   // Breadth-first for the same reason `selectEngineProcess` is: the shallowest processes are the
   // launch chain, and a deep child is the least likely to explain the failure.
   while (queue.length && found.length < limit) {
     const pid = queue.shift()!
+    // A root whose parent pid names its own descendant (a reused pid) would list it again (#4268).
+    if (seen.has(pid)) continue
+    seen.add(pid)
     const row = byPid.get(pid)
     if (row) found.push({ executable: row.executable, args: row.args })
     for (const child of children.get(pid) ?? []) queue.push(child.pid)

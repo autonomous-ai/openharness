@@ -18,7 +18,6 @@ import 'package:harness/devices/devices_screen.dart';
 import 'package:harness/devices/wifi_robots.dart';
 import 'package:harness/orchestrator/orchestrator_controller.dart';
 import 'package:harness/orchestrator/orchestrator_workspace.dart';
-import 'package:harness/settings/sections/tab_invites_section.dart';
 import 'package:harness/sharing/harness_comments.dart';
 import 'package:harness/sharing/share_harness_dialog.dart';
 import 'package:harness/sharing/shared_agent_location.dart';
@@ -30,7 +29,6 @@ import 'package:harness/state/swarm_search.dart';
 import 'package:harness/store/store_controller.dart';
 import 'package:harness/store/store_models.dart';
 import 'package:harness/store/store_screen.dart';
-import 'package:harness/super_tabs/client.dart';
 import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/swarm_resource_preview.dart';
@@ -39,7 +37,7 @@ import 'package:harness/widgets/workspace_welcome.dart';
 
 import 'session_search_rendering_test.dart' show TailConnection;
 import 'support/model_manager.dart';
-import 'swarm_state_test.dart' show MemoryStore, createApp;
+import 'swarm_state_test.dart' show createApp;
 
 AppNotifier _plainApp() => AppNotifier(
   config: AppConfig.dev,
@@ -153,27 +151,6 @@ class _StoreApi implements StoreApi {
     String? title,
     String? body,
   }) => throw UnimplementedError();
-}
-
-/// Its Swarm client answers from [paths] and counts every request.
-class _InvitesApp extends AppNotifier {
-  _InvitesApp()
-    : super(
-        config: AppConfig.dev,
-        authSession: AuthSession(),
-        configStore: null,
-      );
-  final paths = <String>[];
-  late final SuperTabClient _client = SuperTabClient(
-    transport: (method, path, {body}) async {
-      paths.add(path);
-      return path.endsWith('/invitations') ? <Object>[] : {'tabs': <Object>[]};
-    },
-    storage: MemoryStore(),
-    discoveryInterval: Duration.zero,
-  )..bind('account');
-  @override
-  SuperTabClient get superTabs => _client;
 }
 
 class _ResourcesApp extends ModelManagerTestApp {
@@ -345,25 +322,6 @@ void main() {
         tester,
         every: const Duration(seconds: 10),
         reads: () => reads,
-      );
-      await tester.pumpWidget(const SizedBox());
-    },
-  );
-
-  testWidgets(
-    'tab invites: hidden app — no request for 3 intervals; resumed — one read at once',
-    (tester) async {
-      final app = _InvitesApp();
-      addTearDown(app.dispose);
-      int reads() =>
-          app.paths.where((p) => p == '/api/super-tabs/invitations').length;
-      await tester.pumpWidget(_host(TabInvitesSection(notifier: app)));
-      await _soon(tester);
-      expect(reads(), 1);
-      await _expectQuietWhileHidden(
-        tester,
-        every: const Duration(seconds: 15),
-        reads: reads,
       );
       await tester.pumpWidget(const SizedBox());
     },

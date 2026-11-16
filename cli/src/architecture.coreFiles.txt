@@ -1,5 +1,5 @@
 # Every file the daemon core's process loads, one a line and in order: all that src/core/main.ts imports, wherever
-# the file lives, with the Swarm's, the other engines' and the services' doors shut (src/architecture.spec.ts walks it).
+# the file lives, with the other engines' and the services' doors shut (src/architecture.spec.ts walks it).
 # The core stays small. A file joins this list only when every session needs it, in a pull request that says why
 # (cli/AGENTS.md, Protect the core); a file that leaves the core's process leaves the list in the same change.
 backendSocket.ts
@@ -56,6 +56,7 @@ core/connectorsQueries.ts
 core/conversationQueries.ts
 core/daemonStopRoute.ts
 core/deliveries.ts
+core/deviceHookCalls.ts
 core/deviceInput.ts
 core/devicesLink.ts
 core/devicesWake.ts
@@ -63,7 +64,6 @@ core/engines/admissionOrder.ts
 core/engines/backgroundJobs.ts
 core/engines/controlTransport.ts
 core/engines/cursorDiscovery.ts
-core/engines/cursorTasks.ts
 core/engines/engineLinks.ts
 core/engines/homeAdoptions.ts
 core/engines/hooks.ts
@@ -72,10 +72,12 @@ core/engines/liveTransport.ts
 core/engines/liveWatcher.ts
 core/engines/modelControls.ts
 core/engines/nativeControls.ts
+core/engines/otherStreams.ts
 core/engines/pendingAdmission.ts
 core/engines/providerMoves.ts
 core/engines/questionControls.ts
 core/engines/readers.ts
+core/engines/resumeRepairs.ts
 core/engines/runtimeProfiles.ts
 core/engines/runtimeSessions.ts
 core/engines/runtimeTransport.ts
@@ -98,12 +100,13 @@ core/messagesLink.ts
 core/modelsLink.ts
 core/modelsWake.ts
 core/monitorLink.ts
+core/observedHook.ts
 core/orchestratorLink.ts
 core/questions.ts
 core/recapsLink.ts
-core/rfbShaper.ts
 core/serviceHost.ts
 core/serviceLinks.ts
+core/serviceRoutes.ts
 core/sharedMachinesLink.ts
 core/sharedMachinesQueries.ts
 core/sharingLink.ts
@@ -120,20 +123,18 @@ core/terminals/requests.ts
 core/terminals/sessions.ts
 core/toolWatches.ts
 core/transcripts/attach.ts
-core/transcripts/databaseHistory.ts
 core/transcripts/history.ts
 core/transcripts/ingest.ts
 core/transcripts/lastTurn.ts
 core/transcripts/normalizers.ts
 core/transcripts/readIdentity.ts
-core/transcripts/readerLoads.ts
 core/transcripts/relaunch.ts
 core/transcripts/sideReads.ts
+core/transcripts/stores.ts
 core/transcripts/turnReplacement.ts
 core/turns/activity.ts
 core/turns/agyBackstop.ts
 core/turns/cancel.ts
-core/turns/ends.ts
 core/turns/funnel.ts
 core/turns/heartbeats.ts
 core/turns/recaps.ts
@@ -143,6 +144,7 @@ core/turns/turnHooks.ts
 core/updateHandoff.ts
 core/updaterBeside.ts
 core/usageLink.ts
+core/usageOutcomes.ts
 core/viewerStreams.ts
 core/viewersLink.ts
 core/viewersWake.ts
@@ -158,7 +160,6 @@ dsh/installed.ts
 dsh/launch.ts
 dsh/launchWire.ts
 dsh/manifest.ts
-dsh/probe.ts
 engines/agy/contract.ts
 engines/amp/contract.ts
 engines/claude/backgroundCommands.ts
@@ -179,6 +180,7 @@ engines/devin/contract.ts
 engines/discoveries.ts
 engines/facets/hooks.ts
 engines/facets/modelControl.ts
+engines/facets/resumeRepair.ts
 engines/grok/contract.ts
 engines/hermes/contract.ts
 engines/hermesRecord.ts
@@ -226,11 +228,9 @@ engines/kit/notifyHooks.ts
 engines/kit/pane.ts
 engines/kit/pluginFetch.ts
 engines/kit/processFacts.ts
-engines/kit/processHome.ts
 engines/kit/processRecordEvidence.ts
 engines/kit/projectFolder.ts
 engines/kit/questionPane.ts
-engines/kit/resumeRepair.ts
 engines/kit/runtime.ts
 engines/kit/screen.ts
 engines/kit/sessionIdentity.ts
@@ -256,6 +256,7 @@ engines/nativeHooks.ts
 engines/nativeLaunch.ts
 engines/openclaw/contract.ts
 engines/opencode/contract.ts
+engines/otherEngines.ts
 engines/pi/contract.ts
 engines/prepareNativeLaunch.ts
 engines/repairIdentities.ts
@@ -273,10 +274,12 @@ engines/worker/modelControlHost.ts
 engines/worker/modelControlProtocol.ts
 engines/worker/nativeControlHost.ts
 engines/worker/nativeControlProtocol.ts
+engines/worker/otherStreamProtocol.ts
 engines/worker/protocol.ts
 engines/worker/providerMoveProtocol.ts
 engines/worker/questionControlHost.ts
 engines/worker/questionControlProtocol.ts
+engines/worker/resumeRepairProtocol.ts
 engines/worker/runtimeProtocol.ts
 engines/worker/screenProtocol.ts
 engines/worker/submissionProtocol.ts
@@ -284,7 +287,6 @@ harnessd/baseNode.ts
 harnessd/coreLink.ts
 harnessd/protocol.ts
 harnessd/services.ts
-harnessd/swarmSwitch.ts
 hookServer.ts
 lib/activitySummary.ts
 lib/agentAttribution.ts
@@ -300,11 +302,9 @@ lib/agentTmp.ts
 lib/agentUsageWire.ts
 lib/apiConnectionMetadata.ts
 lib/apiInstructions.ts
-lib/appProductUsageReport.ts
 lib/attachTracker.ts
 lib/attachTranscript.ts
 lib/authSession.ts
-lib/backendHttpBase.ts
 lib/backgroundCommands.ts
 lib/binaryOnPath.ts
 lib/bootId.ts
@@ -321,7 +321,6 @@ lib/computerIdentity.ts
 lib/connectors/vaultOps.ts
 lib/conversationIdentity.ts
 lib/createAgentPane.ts
-lib/creationObservation.ts
 lib/cwdRepair.ts
 lib/daemonCommand.ts
 lib/daemonRecord.ts
@@ -329,7 +328,6 @@ lib/daemonSafeMode.ts
 lib/daemonState.ts
 lib/deleteAgentFallback.ts
 lib/deletedSessions.ts
-lib/deviceManagementHttp.ts
 lib/dialogEnd.ts
 lib/engineBin.ts
 lib/engineExitOption.ts
@@ -420,8 +418,8 @@ lib/pathContainment.ts
 lib/patientExec.ts
 lib/peerAccount.ts
 lib/piSessionHome.ts
-lib/processEnv.ts
 lib/processEvidence.ts
+lib/processHeldFiles.ts
 lib/processLiveness.ts
 lib/processMounts.ts
 lib/processProof.ts
@@ -430,9 +428,7 @@ lib/processTable.ts
 lib/processTree.ts
 lib/productHealthContract.ts
 lib/productUsageContract.ts
-lib/productUsageSignals.ts
 lib/projectFolder.ts
-lib/promptIdentity.ts
 lib/ptyHost/client.ts
 lib/ptyHost/drain.ts
 lib/ptyHost/instance.ts
@@ -459,7 +455,6 @@ lib/runtimeActivity.ts
 lib/runtimeControl.ts
 lib/runtimeProfileState.ts
 lib/runtimeProfileWire.ts
-lib/savedSkill.ts
 lib/secureState.ts
 lib/sessionCheckpoint.ts
 lib/sessionGitContext.ts
@@ -486,7 +481,6 @@ lib/sqliteThread.ts
 lib/sshHosts.ts
 lib/stopAgentService.ts
 lib/stoppedAgents.ts
-lib/storeProxy.ts
 lib/subagentTranscript.ts
 lib/submitTiming.ts
 lib/subscriptionModel.ts
@@ -542,7 +536,6 @@ lib/windows/shell.ts
 lib/windows/storeAppAlias.ts
 lib/windows/treeKill.ts
 lib/workspaceCheck.ts
-lib/worktreeDeletion.ts
 lib/wsLiveness.ts
 localWsServer.ts
 scm/gitScmProject.ts

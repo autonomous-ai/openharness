@@ -266,7 +266,7 @@ export const PRODUCT_USAGE_METRICS = [
   'launch_late_failed',
   // A create turned down because the request was wrong, not because Harness failed (the Oct 26 report counted
   // opening a conversation that is already a harness, and a cloud agent with no task, as failures): never also
-  // a launch_failed. The agent twins count the launches an agent or a Swarm started (the create's `startedBy`),
+  // a launch_failed. The agent twins count the launches an agent started (the create's `startedBy`),
   // so a person's own launches are the total less those.
   'launch_refused', 'launch_agent_started', 'launch_agent_created', 'launch_agent_failed', 'launch_agent_refused',
   'launch_wait_install', 'launch_wait_model', 'launch_wait_native', 'launch_wait_other',

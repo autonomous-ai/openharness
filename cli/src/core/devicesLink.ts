@@ -19,7 +19,7 @@
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import type { ReviewedAnswer } from '../cable/questionInbox.js'
-import { DEVICES_FALLBACKS, readFallback, type CoreApi, type DeviceBridgeFrame, type DevicesPort, type DeviceWindowFrame, type RouteAnswer, type SendResult, type WindowFocus } from './api.js'
+import { DEVICES_FALLBACKS, readFallback, type CoreApi, type DeviceBridgeFrame, type DevicesPort, type DeviceWindowFrame, type InboxAnswer, type RouteAnswer, type SendResult, type WindowFocus } from './api.js'
 import { answerAccountQuery } from './accountQueries.js'
 import type { ServiceFrame } from './serviceLinks.js'
 
@@ -50,6 +50,8 @@ export interface DevicesLinkDeps {
 export const ROUTE_TASK_WAIT_MS = 25_000
 /** How long anything else waits for them: a send, a step along the desk. */
 export const DEVICES_WAIT_MS = 5_000
+/** The mod's poll, past the devices' own 25 s hold: a hold that runs out is their empty answer, which the mod follows at once. */
+export const INBOX_CALL_MS = 27_000
 
 const fallback = <T>(member: keyof typeof DEVICES_FALLBACKS): T => readFallback(DEVICES_FALLBACKS[member]).value as T
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
@@ -60,7 +62,7 @@ const isFrame = (value: unknown): value is { type: string; payload: Record<strin
 export function createDevicesLink(deps: DevicesLinkDeps) {
   const { core } = deps
   const log = deps.log ?? ((line: string) => console.warn(line))
-  const event = (kind: string, payload: Record<string, unknown> = {}): void => { deps.notify({ type: 'service_event', payload: { ...payload, kind } }) }
+  const event = (kind: string, payload: Record<string, unknown> = {}): boolean => deps.notify({ type: 'service_event', payload: { ...payload, kind } })
   /** An answer from the devices, or the port's fallback when there was none (down, slow, or failed). */
   const answered = <T>(answer: Record<string, unknown>, member: keyof typeof DEVICES_FALLBACKS, read: (answer: Record<string, unknown>) => T): T =>
     typeof answer.error === 'string' ? fallback<T>(member) : read(answer)
@@ -70,15 +72,12 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
     card: (frame) => event('card', { frame }),
     desk: (agentIds, foreground) => event('desk', { agentIds, foreground }),
     swarms: (swarms) => event('swarms', { swarms }),
-    swarmCards: (items) => event('swarmCards', { items }),
-    swarmCardRecap: (recap) => event('swarmCardRecap', { recap }),
     unread: (items) => event('unread', { items }),
     appFocus: (machineId, agentId) => event('appFocus', { machineId, agentId }),
     seen: (agentId, readToken) => event('seen', { agentId, ...(readToken === undefined ? {} : { readToken }) }),
     settings: (id, patch) => event('settings', { id, patch }),
     windowFocus: (focus) => event('windowFocus', { focus }),
     windowReply: (which, connId, machineId, reply) => event('windowReply', { which, connId, machineId, reply }),
-    voiceReply: (voiceId, reply) => event('voiceReply', { voiceId, reply }),
     windowGone: (connId) => event('windowGone', { connId }),
     routeTask: async (task) => answered(await deps.call('routeTask', { text: task }, ROUTE_TASK_WAIT_MS), 'routeTask', (answer) => answer as unknown as RouteAnswer),
     routeSend: async (agentId, task) => answered(await deps.call('routeSend', { agentId, text: task }, DEVICES_WAIT_MS), 'routeSend',
@@ -88,6 +87,13 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
     scroll: (phase, dy, velocity) => event('scroll', { phase, dy, velocity }),
     engines: (engines) => event('engines', { engines }),
     commanders: (connected) => event('commanders', { connected }),
+    observed: (observed) => event('observed', { ...observed }),
+    // The mod's poll, checked and bounded by the core (core/deviceHookCalls.ts). A client that goes first is told, since a
+    // request cannot be taken back: the devices end what they hold for it. Off is their inbox failing in their process:
+    // no device, never an empty hold.
+    inboxPoll: async (poll) => answered<InboxAnswer>(await deps.call('inboxPoll', { ...poll }, INBOX_CALL_MS), 'inboxPoll',
+      ({ text: said, off }) => (off === true ? { off } : typeof said === 'string' ? { text: said } : {})),
+    inboxGone: (pollId) => event('inbox.gone', { pollId }),
     // Their own process: the master stops it, and a core that restarts leaves it running with the dial.
     stop: async () => {},
   }
@@ -122,19 +128,6 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
     models: async ({ agentId }) => ({ models: await core.agents.runtimeModels(text(agentId)) }),
     fork: async ({ agentId }) => ({ ...await core.agents.fork(text(agentId)) }),
     machines: () => core.account.machines(),
-    // The Swarm cards' requests (core/main.ts `superTabRequest` allows those and no other action of the Super Tab service).
-    super_tabs: async (payload) => {
-      if (!core.superTabRequest) return { error: 'SERVICE_UNAVAILABLE' }
-      const { action, tabId, leadId, on, include, session, harnessId, machineId, text, focus } = payload
-      // A round dial that speaks swarmChat asks for the chat on the face (one that speaks swarmBuddy, 'buddy'), and the
-      // window's open conversation rides with the wish (superTabs/inCore/cards.ts checks them); absent, the request is today's.
-      const chat = payload.chat === true || payload.chat === 'buddy' ? { chat: payload.chat } : {}
-      return core.superTabRequest(action === 'cardsWanted' ? { action, on: on === true, include, ...(focus !== undefined ? { focus } : {}) }
-        : action === 'cardSay' ? { action, harnessId, text, ...chat, ...(typeof payload.chatId === 'string' ? { chatId: payload.chatId } : {}),
-          ...(payload.reviewed === true ? { reviewed: true } : {}) }
-        : action === 'cardWorker' ? { action, machineId, harnessId }
-        : { action, tabId, leadId, session, ...chat })
-    },
     // The transcriber's and the fleet's lane's sign-in, and the lane's sealing, asked of the core at every
     // use as every service in its own process asks them (core/accountQueries.ts): the devices hold no
     // credential and no E2EE identity.

@@ -28,10 +28,13 @@ outside Harness too. Multiple named connections to one provider are supported.
 ## Using a connection
 
 Harness adds a short **Saved APIs** instruction section when starting, restarting,
-or forking a local harness while connections exist. It preserves existing project
-instructions and appends the section only once, in `AGENTS.md` (`CLAUDE.md` for
-Claude, `GEMINI.md` for Gemini). The section contains commands, never credentials.
-Already running harnesses can use those commands immediately:
+or forking a local harness while connections exist, in a new project Harness made:
+a folder directly in `~/harnesses` (`~/projects` on Harness OS) that is not a Git
+repository. A folder you chose, a clone and a worktree are never changed. It
+preserves existing project instructions and appends the section only once, in
+`AGENTS.md` (`CLAUDE.md` for Claude, `GEMINI.md` for Gemini). The section contains
+commands, never credentials. Any harness, in any folder and already running, can
+use those commands at once:
 
 ```sh
 # Discover connection IDs and public settings. Keys are never listed.
@@ -90,7 +93,11 @@ is built for Anthropic models; others may not work fully through it
 The local CLI stores keys in `api-connections/connections.json` inside its data
 directory (`~/.harness/cli/data` by default), with owner-only directory/file permissions
 (`0700`/`0600`). This is a local credential file, not an OS keychain. Writes are
-atomic, and unreadable/corrupt storage is never silently replaced.
+atomic, and unreadable/corrupt storage is never silently replaced. Only the models
+service, `harness api` and the New dialog's engine check open it. Beside it,
+`api-connections/list.json` (also `0600`) lists the same APIs without their keys:
+that list is all a harness's start reads, to know whether to add the Saved APIs
+section. The store rewrites the list whenever it changes or finds it out of step.
 
 Management requests use the local daemon connection; remote requests are refused.
 Keys are not returned to the UI, included in connection lists, or copied into project

@@ -3,7 +3,6 @@
 #include "runtime.h"
 #include "scroll.h"
 #include "workspace.h"
-#include "supertab.h"
 #include "selection.h"
 #include "carry.h"
 #include "visit.h"
@@ -67,6 +66,9 @@
 #define SET_TEXT_W 300
 #define PANE_MEMORY_MAX 128
 #define PANE_RESULT_BYTES 1024
+// A turn heard nothing of for this long is over: the daemon renews a running one with turn.started, an agent outside
+// a pane every REMIND_MS (cli/src/services/devices.ts), which test_touch_ui.py keeps below this.
+#define BUSY_FUSE_MS 25000u
 typedef enum {
     HOME,
     AGENTS,
@@ -77,6 +79,7 @@ typedef enum {
     ANSWER_REVIEW,
     INBOX,
     TABS,
+    APPS,
     MACHINES,
     VOICE,
     SELECTION,
@@ -87,8 +90,7 @@ typedef enum {
     STOP,
     MODELS,
     MESSAGE,
-    OTA,
-    SWARM_PICK
+    OTA
 } view_t;
 typedef enum {
     A_NONE,
@@ -102,12 +104,10 @@ typedef enum {
     A_ANSWER, A_QUESTION_READ, A_QUESTION_CHOICES, A_QUESTION_REVIEW, A_QUESTION_BACK, A_QUESTION_SAY,
     A_TAB_LIST,
     A_INBOX,
-    A_PET_INBOX,   // a tap on a companion that wears the notice badge: the inbox, while a swipe from it still swipes
-    A_SIDE_PM, A_SIDE_BUDDY,
-    A_PICK_PERSONAL, A_PICK_TEAM,
     A_NOTICE,
     A_TABS,
     A_TAB, A_TAB_REFRESH, A_TAB_DONE,
+    A_APP, A_APP_DONE,   // a page of APPS, by app id; its Done
     A_MACHINES,
     A_MACHINE,
     A_VOICE,
@@ -129,9 +129,7 @@ typedef enum {
     A_SELECT_BEGIN, A_SELECT_FIND, A_SELECT_EXTEND, A_SELECT_SEND, A_RETURN, A_LATEST, A_VISIT_SEND,
     A_CARRY, A_CARRY_DROP, A_CARRY_SEND,
     A_DRAFT_EDIT, A_DRAFT_APPEND, A_DRAFT_UNDO, A_DRAFT_SEND, A_DRAFT_DISCARD,
-    A_DRAFT_STATE, A_DRAFT_OPTIONS, A_DRAFT_BACK, A_DRAFT_COMMAND, A_NOTICE_READ,
-    A_LEAD,       // a Swarm's project picked on PANES: value its place, id its Lead
-    A_SUPERTAB    // to the worker: value SUPERTAB_*, text the Swarm, id the Lead ("" only for an open)
+    A_DRAFT_STATE, A_DRAFT_OPTIONS, A_DRAFT_BACK, A_DRAFT_COMMAND, A_NOTICE_READ
 } action_kind_t;
 typedef struct {
     action_kind_t kind;
@@ -155,6 +153,10 @@ typedef struct {
 typedef struct {
     char id[ID_MAX], name[CABLE_NAME_MAX], engine[12], machine_id[ID_MAX], machine[CABLE_NAME_MAX], model[192],
         session[80];
+    // Where the agent runs, and the CABLE_CAP_* it LACKS. The missing set is stored, not the granted one,
+    // so a zeroed row (every new agent) can do everything, which is what an older daemon means.
+    char host[16];
+    uint8_t caps_off;
     // The row receives the same bounded result stored in pane memory. Keeping
     // an unused 4 KB tail here wasted RAM and enlarged every roster swap.
     char preview[240], full[PANE_RESULT_BYTES], tool[100];
@@ -222,6 +224,13 @@ static EXT_RAM_BSS_ATTR struct {
     char voice_target[CABLE_NAME_MAX];
     char voice_engine[12];   // the engine of whoever this voice turn is for; empty for Find, forms and drafts
     uint32_t voice_retry_until;
+    char hint[40];           // shown in the retry line's place while voice_retry_until runs; "" = "Try again"
+    bool machine_view;       // the roster is this computer's agents: each face names its host
+    cable_app_t apps[CABLE_MAX_APPS];   // the `apps` frame, memory only: the apps the machine view can show
+    int app_count;
+    char app_shown[CABLE_APP_ID_MAX];   // the app whose agents the roster holds; may be no entry's id
+    bool apps_known;         // an `apps` frame came this session: false from an older daemon
+    char app_landing[CABLE_APP_ID_MAX];   // an app picked here whose ring has not landed: its first agent goes on the face
     model_item_t models[48];
     int model_count;
     bool model_request;
@@ -230,14 +239,13 @@ static EXT_RAM_BSS_ATTR struct {
     int brightness;
     uint32_t voice_started;
     bool voice_open, voice_start_pending, voice_waiting, voice_carry;
-    bool voice_review, voice_review_preview, voice_draft_append, voice_search, voice_swarm;
+    bool voice_review, voice_review_preview, voice_draft_append, voice_search;
     uint32_t voice_draft_revision;
     int draft_drag;
     uint32_t voice_generation, voice_question_revision;
     int voice_question_index;
     uint32_t voice_wait_until;
     hit_t hits[24];
-    ht_rect_t recap_card;   // a Swarm face's recap on the glass (its card, padded), for a hold; empty on any other screen
     int hit_count, pressed;
     bool touch_down, touch_cancelled;
     bool touch_brake, coasting;
@@ -247,7 +255,6 @@ static EXT_RAM_BSS_ATTR struct {
     unsigned bell_unread;     // the bell's count at the last home render, to see a notice arrive
     uint32_t notice_ms;       // the face clock when it last went up, 0 = none since boot (the pet's alert bubble)
     ht_focus_working_pick_t working_pick;   // which working scene the shown agent's pet plays (Claude: chef or builder)
-    uint32_t pick_until;    // when the Personal | Team picker (SWARM_PICK) returns to the face for want of a touch (clock_ms), 0 = never
     uint32_t timer_at;      // when the working line's elapsed text next changes (ms() clock), 0 = never (elapsed.h)
     uint32_t pet_next_ms;   // when the pet's (or the voice screen's listening scene's) drawn frame next changes (clock_ms), 0 = never
     int start_x, start_y, last_x, last_y;
@@ -264,6 +271,7 @@ static ht_workspace_t workspace;
 static ht_tab_carousel_t tab_carousel;
 static ht_tab_carousel_t pane_carousel;   // Focus's pane picker, the same pages as the tabs (design 2026-10-06)
 static ht_tab_carousel_t inbox_carousel;  // Focus's inbox, paged the same way; it follows s.offset when at rest
+static ht_tab_carousel_t app_carousel;    // APPS, the tabs' pages again
 static ht_carry_t carry;
 static ht_visit_t visit;
 static ht_form_t form;
@@ -468,7 +476,7 @@ static pane_memory_t *pane_memory(const char *id, bool create)
 static void pane_memory_apply(agent_t *a, pane_memory_t *m)
 {
     if (!a || !m) return;
-    if (m->busy && ms() - m->last_busy > 25000) m->busy = false;
+    if (m->busy && ms() - m->last_busy > BUSY_FUSE_MS) m->busy = false;
     COPY(a->session, m->session);
     COPY(a->preview, m->preview);
     COPY(a->full, m->full);
@@ -501,6 +509,34 @@ static void activity_text(char *dst, size_t cap, const char *src)
     while (n && dst[n - 1] == ' ') dst[--n] = 0;
 }
 
+// The short name a person knows an app by, kept short for the face. Harness is there for its own agents in the
+// machine view; an unknown or missing host reads as "Terminal". The daemon's NAMES (cli/src/cable/hosts/hostDetect.ts)
+// less its "Terminal" rows; test_touch_ui.py keeps the two the same.
+static const char *host_name(const char *host)
+{
+    static const char *const table[][2] = {
+        {"orca", "Orca"}, {"herdr", "herdr"}, {"rex", "Rex"}, {"zellij", "Zellij"}, {"tmux", "tmux"},
+        {"kitty", "kitty"}, {"wezterm", "WezTerm"}, {"ghostty", "Ghostty"}, {"iterm", "iTerm2"}, {"vscode", "VS Code"},
+        {"cursor", "Cursor"}, {"warp", "Warp"}, {"claude", "Claude"}, {"harness", "Harness"},
+    };
+    for (unsigned i = 0; host && i < sizeof(table) / sizeof(table[0]); i++)
+        if (!strcmp(host, table[i][0])) return table[i][1];
+    return "Terminal";
+}
+// The face names the app the dial shows, the outermost one a person sees in front, as the daemon names it. An older
+// daemon sends no `apps`, and a shown app missing from the list names nothing: then the agent's nearest host.
+static const char *face_app(const char *host)
+{
+    for (int i = 0; s.apps_known && i < s.app_count; i++)
+        if (!strcmp(s.apps[i].id, s.app_shown)) return s.apps[i].name;
+    return host_name(host);
+}
+// An agent that is not on the roster is not restricted: the check guards what a row says it cannot take.
+static bool agent_allows(const char *id, uint8_t cap)
+{
+    int i = find(id);
+    return i < 0 || !(s.agents[i].caps_off & cap);
+}
 static int ensure(const char *id)
 {
     if (!id || !*id || strnlen(id, ID_MAX) >= ID_MAX) return -1;
@@ -560,311 +596,58 @@ static int workspace_index(const char *id)
     for (int i=0;i<s.tab_count;i++) if (!strcmp(id,s.tabs[i].id)) return i;
     return -1;
 }
-/*
- * THE SWARMS (Super Tabs; docs/superpowers/specs/2026-10-23-round-swarm-tab-design.md). A Swarm is one more tab: its
- * projects are panes, each showing its Lead, in the app's order. `swarm` holds what the daemon said (supertab.c), `sw`
- * where the dial is in it. A Lead id is not an agent id: it reaches the cable only in supertab.* requests (A_SUPERTAB),
- * never in focus, agent.open or voice.begin. Voice goes to the Lead's `local` harness id.
- */
-// SIDE: id "buddy" or "pm". SIDE_KEPT: the side a restart took off the face, told to the daemon without moving the window.
-enum { SUPERTAB_RECAP_GET, SUPERTAB_OPEN, SUPERTAB_SELECT, SUPERTAB_SIDE, SUPERTAB_SIDE_KEPT, SUPERTAB_THREAD_LEAVE };
-#define SWARM_WAITS 16
-#define SWARM_SAID 24   // one per inbox entry the Lead messages can fill (NOTICES)
-static EXT_RAM_BSS_ATTR ht_supertabs_t swarm;
-static EXT_RAM_BSS_ATTR struct {
-    char tab[ID_MAX], lead[ID_MAX];   // the Swarm the dial is in ("" in a desk tab) and the Lead on its face
-    char last_team[ID_MAX];           // the last non-Personal card on the face: where Team goes (spec 2026-11-05)
-    char desk[ID_MAX];                // the desk tab that Swarm is listed at, "" when none (entered from the inbox)
-    int at;                           // that Lead's place, where the face lands when the Lead goes
-    bool retried;                     // its recap was asked for a second time
-    struct { char tab[ID_MAX], lead[ID_MAX], root[ID_MAX]; uint32_t until; } left;   // the thread just swiped out of: a card still in flight naming it is refused
-    struct { char tab[ID_MAX], lead[ID_MAX]; } focus[HT_SUPERTABS_MAX];   // the Lead the desktop last showed, per Swarm
-    char pending[ID_MAX];             // a Swarm the desktop opened before its `swarms` frame said so (ui_supertab_focus)
-    // The Swarm, Lead and side a session down or an emptied list took off the face, not the person: stale until that
-    // Swarm's card returns, and it comes back then (swarm_regain). The person touching the dial, or a list that came back
-    // without that Swarm, ends it.
-    struct swarm_lost { char tab[ID_MAX], lead[ID_MAX]; bool buddy; } lost;
-    bool auto_tabs;                   // TABS opened by the dial itself, not touched since: it browses no desk tab
-    // Super Tab waits from this machine's harnesses, shown only through the Lead whose `local` names the harness.
-    struct { char agent[ID_MAX], request[80], swarm[HT_SUPERTAB_NAME], text[240]; bool stuck, shown; } waits[SWARM_WAITS];
-    // The chat each Lead's message entry (`swarm` 3) came from, so `supertab.notice.read` removes only that one.
-    struct { char lead[ID_MAX], chat[ID_MAX]; } said[SWARM_SAID];
-    // The side each Swarm is on (spec 2026-10-29-round-dial-pm-buddy): its PM's or the reader's Buddy's, kept across its
-    // projects. A swipe sets it, and so does the daemon when a face turns to or from its Buddy chat (newest wins).
-    struct { char tab[ID_MAX]; bool buddy; } side[HT_SUPERTABS_MAX];
-    // A Buddy's word not yet seen on the dial, per Lead, and the chat it came in: the PM side's quiet badge.
-    struct { char lead[ID_MAX], chat[ID_MAX]; } heard[SWARM_SAID];
-    // The voice turn on the face was started on the Buddy side: its ring and "Sending to your Buddy", pinned at the start as
-    // its chat and engine are, so a side change while it records or sends never says another chat (batch check, #2207).
-    bool voice_buddy;
-    // When the finger began its vertical drag on a Swarm's face (0: not yet): a drag that outlasts a flick scrolls.
-    uint32_t drag_at;
-    // The daemon was told the Lead on the face (supertab.open) on this link: one that came back is told again, or a drag
-    // scrolled the focused pane and no recap came (review of #2232).
-    bool opened;
-} sw;
-static bool swarm_mode(void)
-{
-    return sw.tab[0] != 0;
-}
-static const ht_supertab_t *swarm_here(void)
-{
-    return swarm_mode() ? ht_supertabs_find(&swarm, sw.tab) : NULL;
-}
-static int swarm_lead_index(const ht_supertab_t *t, const char *lead)
-{
-    for (int i = 0; t && lead && i < t->lead_n; i++) if (!strcmp(t->leads[i].id, lead)) return i;
-    return -1;
-}
-static const ht_lead_t *swarm_lead(void)
-{
-    const ht_supertab_t *t = swarm_here();
-    int i = swarm_lead_index(t, sw.lead);
-    return i >= 0 ? &t->leads[i] : NULL;
-}
-static const char *swarm_fixed_text(bool stuck)
-{
-    return stuck ? "Stuck. See the desktop." : "Needs you. Answer on the desktop.";
-}
-static int swarm_wait_of(const char *agent)
-{
-    for (int i = 0; agent && agent[0] && i < SWARM_WAITS; i++) if (!strcmp(sw.waits[i].agent, agent)) return i;
-    return -1;
-}
-static const char *swarm_wait_text(const ht_lead_t *l)
-{
-    int w = l ? swarm_wait_of(l->local) : -1;
-    return w < 0 ? NULL : sw.waits[w].text[0] ? sw.waits[w].text : swarm_fixed_text(sw.waits[w].stuck);
-}
-// Whose news the face already shows: the Lead in a Swarm, else the pane.
+// Whose news the face already shows: the pane's.
 static const char *face_id(void)
 {
-    if (swarm_mode()) return sw.lead[0] ? sw.lead : NULL;
     return active() ? active()->id : NULL;
 }
-static void swarm_send(int op, const char *tab, const char *lead)
-{
-    action_t a = {.kind = A_SUPERTAB, .value = op};
-    COPY(a.text, tab); COPY(a.id, lead);
-    queue(a);
-}
-static int swarm_side_slot(const char *tab, bool make)
-{
-    for (int i = 0; tab && i < HT_SUPERTABS_MAX; i++) if (sw.side[i].tab[0] && !strcmp(sw.side[i].tab, tab)) return i;
-    if (!make) return -1;
-    for (int i = 0; i < HT_SUPERTABS_MAX; i++) if (!sw.side[i].tab[0] || !ht_supertabs_find(&swarm, sw.side[i].tab)) return i;
-    return 0;   // ponytail: sixteen Swarms is the most the dial holds; a seventeenth takes the first slot
-}
-static bool swarm_side_buddy(const char *tab)
-{
-    int i = swarm_side_slot(tab, false);
-    return i >= 0 && sw.side[i].buddy;
-}
-static void swarm_side_put(const char *tab, bool buddy)
-{
-    int i = swarm_side_slot(tab, true);
-    COPY(sw.side[i].tab, tab); sw.side[i].buddy = buddy;
-}
-static void swarm_side_send(const char *tab)
-{
-    swarm_send(SUPERTAB_SIDE, tab, swarm_side_buddy(tab) ? "buddy" : "pm");
-}
-// The face shows the Buddy side: the Swarm on the face has Buddies on and is on that side.
-static bool swarm_on_buddy(const ht_lead_t *l)
-{
-    return l && l->buddies && swarm_mode() && swarm_side_buddy(sw.tab);
-}
-// Whose engine a voice turn to the face's Lead listens with: the Buddy's on its side.
-static const char *swarm_voice_engine(const ht_lead_t *l)
-{
-    return swarm_on_buddy(l) && l->buddy.has ? l->buddy.engine : l->engine;
-}
-static int swarm_heard_of(const char *lead)
-{
-    for (int i = 0; lead && i < SWARM_SAID; i++) if (sw.heard[i].lead[0] && !strcmp(sw.heard[i].lead, lead)) return i;
-    return -1;
-}
-// Showing the Buddy side reads its quiet badge.
-static void swarm_buddy_seen(void)
-{
-    const ht_lead_t *l = swarm_lead();
-    int i = swarm_on_buddy(l) ? swarm_heard_of(l->id) : -1;
-    if (i >= 0) sw.heard[i].lead[0] = 0;
-}
-// Tapping the other half of the pair shows that side (spec 2026-11-05 PM | Buddy pair): the side kept, told to the daemon,
-// its quiet badge read. The current half, a Lead without Buddies, or no link: nothing.
-static void swarm_side_set(bool buddy)
-{
-    const ht_lead_t *l = swarm_lead();
-    if (!l || !l->buddies || !s.connected || swarm_side_buddy(sw.tab) == buddy) return;
-    swarm_side_put(sw.tab, buddy);
-    swarm_side_send(sw.tab);
-    swarm_buddy_seen();
-    change();
-}
-// The Lead at `i` comes onto the face: its recap is asked for afresh. `select` moves the desktop there too; a
-// supertab.focus does not need it, the desktop is already there.
-static void swarm_show(const ht_supertab_t *t, int i, bool select)
-{
-    if (!t || i < 0 || i >= t->lead_n) {
-        sw.lead[0] = 0; sw.at = 0;
-        ht_supertabs_recap_open(&swarm, "", "", ms());
-        return;
-    }
-    COPY(sw.lead, t->leads[i].id); sw.at = i; sw.retried = false;
-    if (!t->personal) COPY(sw.last_team, t->id);
-    ht_supertabs_recap_open(&swarm, t->id, sw.lead, ms());
-    if (select) {
-        swarm_send(SUPERTAB_SELECT, t->id, sw.lead);
-        // The person moved here on the dial, which is newer than the desktop: the Swarm keeps the side the dial is on.
-        if (t->leads[i].buddies) swarm_side_send(t->id);
-    }
-    swarm_buddy_seen();
-    swarm_send(SUPERTAB_OPEN, t->id, sw.lead);
-    swarm_send(SUPERTAB_RECAP_GET, t->id, sw.lead);
-    sw.opened = true;
-    change();
-}
-static void swarm_leave(void)
-{
-    if (!swarm_mode()) return;
-    swarm_send(SUPERTAB_OPEN, sw.tab, "");
-    sw.tab[0] = sw.lead[0] = sw.desk[0] = 0; sw.at = 0; sw.opened = false;
-    ht_supertabs_recap_open(&swarm, "", "", ms());
-    change();
-}
-// A horizontal swipe on a thread face leaves the thread (spec 2026-11-03-dial-thread-face): the daemon is told, the face
-// shows the main chat at once and asks for its recap again. It changes no project and selects nothing; true when it was one.
-static bool swarm_thread_swipe(void)
-{
-    const ht_lead_t *l = swarm_lead();
-    if (!l || !l->thread_root[0] || !s.connected) return false;
-    COPY(sw.left.tab, sw.tab); COPY(sw.left.lead, sw.lead); COPY(sw.left.root, l->thread_root); sw.left.until = ms() + 3000;
-    swarm_send(SUPERTAB_THREAD_LEAVE, sw.tab, sw.lead);
-    ht_supertabs_thread_leave(&swarm, sw.tab, sw.lead);
-    sw.retried = false;
-    ht_supertabs_recap_open(&swarm, sw.tab, sw.lead, ms());
-    swarm_send(SUPERTAB_RECAP_GET, sw.tab, sw.lead);
-    change();
-    return true;
-}
-static void swarm_desk_note(void)
-{
-    const ht_supertab_t *t = swarm_here();
-    if (t && t->tab[0] && workspace_index(t->tab) >= 0) COPY(sw.desk, t->tab);
-}
-static const char *swarm_remembered(const char *tab)
-{
-    for (int i = 0; i < HT_SUPERTABS_MAX; i++) if (!strcmp(sw.focus[i].tab, tab)) return sw.focus[i].lead;
-    return NULL;
-}
-// Entered locally, never with the desk tab's workspace handshake: the dial already holds the Swarm. The face opens on
-// `lead`, else the Lead the desktop last showed, else the first project.
-static void swarm_enter(const ht_supertab_t *t, const char *lead, bool select)
-{
-    if (!t) return;
-    if (swarm_mode() && strcmp(sw.tab, t->id)) swarm_leave();
-    if (workspace.phase != HT_WORKSPACE_IDLE) ht_workspace_cancel_request(&workspace);
-    s.loading = false;
-    sw.lost.tab[0] = 0; sw.auto_tabs = false;   // this face supersedes the one a restart took, and the TABS it left
-    COPY(sw.tab, t->id);
-    sw.desk[0] = 0; swarm_desk_note();
-    int i = swarm_lead_index(t, lead);
-    if (i < 0) i = swarm_lead_index(t, swarm_remembered(t->id));
-    swarm_show(t, i < 0 ? 0 : i, select);
-    view(HOME);
-}
-/*
- * PERSONAL | TEAM (spec 2026-11-05): the picker opens from the project name only when the dial holds the reader's Personal
- * card and at least one other. Team is the last non-Personal card on the face, else the first in list order.
- */
-static bool swarm_pick_ok(void)
-{
-    bool personal = false, team = false;
-    if (!swarm_mode()) return false;
-    for (int i = 0; ht_supertabs_at(&swarm, i); i++) {
-        if (ht_supertabs_at(&swarm, i)->personal) personal = true; else team = true;
-    }
-    return personal && team;
-}
-static bool swarm_pick_open(void)
-{
-    if (s.view != HOME || !swarm_pick_ok()) return false;
-    s.pick_until = ms() + 5000; if (!s.pick_until) s.pick_until = 1;
-    view(SWARM_PICK);
-    return true;
-}
-static const ht_supertab_t *swarm_pick_target(bool team)
-{
-    const ht_supertab_t *first = NULL;
-    for (int i = 0; ht_supertabs_at(&swarm, i); i++) {
-        const ht_supertab_t *t = ht_supertabs_at(&swarm, i);
-        if (t->personal != !team) continue;
-        if (!team) return t;
-        if (!first) first = t;
-        if (!strcmp(t->id, sw.last_team)) return t;
-    }
-    return first;
-}
-// A half tapped: the other Swarm opens as a tab pick does (swarm_enter, the desktop follows); the filled half only returns.
-static void swarm_pick(bool team)
-{
-    const ht_supertab_t *t = swarm_pick_target(team), *here = swarm_here();
-    s.pick_until = 0;
-    if (!t || t == here) { view(HOME); return; }
-    swarm_enter(t, NULL, true);
-}
-/*
- * TABS lists exactly the desk tabs, as the desktop shows them (Diego, 2026-10-27). A desk tab linked to a Swarm keeps
- * its place and name and enters that Swarm. A Swarm with no desk tab is not listed, with or without a window: the
- * desktop opens a tab for every Super Tab its owner has not closed, so it is a closed one, and listing it kept a
- * closed tab on the dial ("PR merge").
- */
-static const ht_supertab_t *tab_swarm(int i)
-{
-    return i >= 0 && i < s.tab_count ? ht_supertabs_for_desk(&swarm, s.tabs[i].id) : NULL;
-}
-static int tabs_total(void)
-{
-    return s.tab_count;
-}
-// The page of a desk tab or the Swarm it is linked to, -1 when neither is listed.
-static int tab_index_of(const char *id)
-{
-    int i = workspace_index(id);
-    if (i >= 0 || !id || !*id) return i;
-    for (i = 0; i < s.tab_count; i++) {
-        const ht_supertab_t *t = tab_swarm(i);
-        if (t && !strcmp(t->id, id)) return i;
-    }
-    return -1;
-}
+// TABS lists exactly the desk tabs, as the desktop shows them (Diego, 2026-10-27).
 static const char *tab_id_at(int i)
 {
     return i >= 0 && i < s.tab_count ? s.tabs[i].id : "";
 }
-static int swarm_notice(const char *lead);
-static void swarm_notice_drop(const char *lead);
-// TABS opens on the Swarm the dial is in, else on the desktop's tab.
-static int tab_index_here(void)
-{
-    return swarm_mode() ? tab_index_of(sw.tab) : workspace_index(s.selected_tab);
-}
+// TABS opens on the desktop's tab.
 static void tabs_open(void)
 {
-    sw.auto_tabs = false;
     view(TABS);
     if (s.view != TABS) return;
-    ht_tab_carousel_reset(&tab_carousel, tabs_total(), tab_index_here());
+    ht_tab_carousel_reset(&tab_carousel, s.tab_count, workspace_index(s.selected_tab));
 }
-// A hold on the face: on a Swarm face's recap, the Personal | Team picker when the dial has both (Diego, 2026-11-06: the
-// name stays the project list); anywhere else, or with no picker, the tabs.
-static void face_hold(void)
+static int app_index(const char *id)
 {
-    ht_rect_t r = s.recap_card;
-    bool on_recap = r.w && s.start_x >= r.x && s.start_x < r.x + r.w && s.start_y >= r.y && s.start_y < r.y + r.h;
-    if (on_recap && swarm_pick_open()) return;
-    tabs_open();
+    for (int i = 0; id && i < s.app_count; i++)
+        if (!strcmp(s.apps[i].id, id)) return i;
+    return -1;
+}
+// APPS opens on the app the dial shows. No agents is no app: then nothing opens (an empty list shows nothing).
+static void apps_open(void)
+{
+    if (!s.app_count) return;
+    view(APPS);
+    if (s.view != APPS) return;
+    int i = app_index(s.app_shown);
+    ht_tab_carousel_reset(&app_carousel, s.app_count, i < 0 ? 0 : i);
+}
+// The machine view picks an app when the daemon names them; a window's list, and an older daemon's, picks a tab.
+static bool hold_picks_app(void)
+{
+    return s.machine_view && s.apps_known;
+}
+static void hold_open(void)
+{
+    if (hold_picks_app()) apps_open();
+    else tabs_open();
+}
+// A pick goes to the daemon, which answers with `apps` and that app's ring; the face lands on its first agent. The app
+// already shown is answered with nothing, so its face stays as it was.
+static void app_pick(int i)
+{
+    if (i < 0 || i >= s.app_count) return;
+    action_t a = {.kind = A_APP};
+    COPY(a.id, s.apps[i].id);
+    if (!queue(a)) return;
+    if (strcmp(a.id, s.app_shown)) COPY(s.app_landing, a.id);
+    view(HOME);
 }
 static void workspace_failed(const char *message)
 {
@@ -897,11 +680,8 @@ static void tab_request(const char *id, bool browsing)
 static void tabs_sync(void)
 {
     if (s.view!=TABS || (s.touch_down && s.touch_cancelled)) return;
-    // The list moving under a TABS nobody asked for switched the desktop's tab by itself (Diego, 2026-10-29).
-    if (sw.auto_tabs) return;
     int index=ht_tab_carousel_index(&tab_carousel);
-    // A Swarm's page waits for Done: it is entered with no workspace handshake.
-    if (index>=0 && index<s.tab_count && !tab_swarm(index)) tab_request(s.tabs[index].id,true);
+    if (index>=0 && index<s.tab_count) tab_request(s.tabs[index].id,true);
 }
 static int waiting(void)
 {
@@ -1143,11 +923,8 @@ static bool home_footer(action_kind_t action)
     // A_VOICE is the Focus face's [ say ]. It belongs here rather than on the A_PET path because a
     // bracket control is pressed and released like every other one, while A_PET reads a TAP as a boop
     // and only starts speech on a 650 ms hold — which is the pet's gesture, not a button's.
-    // The PM | Buddy and Personal | Team halves too (Diego's dial, 2026-11-05: a thumb's press on the pair drifted out of a
-    // tap and fell to the face, which started voice).
     return action == A_TABS || action == A_INBOX || action == A_AGENTS || action == A_RETURN ||
-           action == A_CARRY_DROP || action == A_VOICE || action == A_TAB_LIST ||
-           action == A_SIDE_PM || action == A_SIDE_BUDDY || action == A_PICK_PERSONAL || action == A_PICK_TEAM;
+           action == A_CARRY_DROP || action == A_VOICE || action == A_TAB_LIST;
 }
 static bool hit_contains(const hit_t *hit, int x, int y)
 {
@@ -1234,6 +1011,7 @@ static void surface_tick(uint32_t now)
         if (ht_tab_carousel_tick(&tab_carousel, now)) change();
         tabs_sync();
     }
+    if (s.view == APPS && !display_is_asleep() && ht_tab_carousel_tick(&app_carousel, now)) change();
     if (s.view == AGENTS && !display_is_asleep() &&
         ht_tab_carousel_tick(&pane_carousel, now)) change();
     if (s.view == INBOX && !display_is_asleep() &&
@@ -1241,19 +1019,12 @@ static void surface_tick(uint32_t now)
         s.offset = ht_tab_carousel_index(&inbox_carousel);   // the page it settles on, rendered or not
         change();
     }
-    // A recap lost on the way is asked for once more after 5 s; the daemon answers a repeat within 1 s from its first read.
-    if (swarm_mode() && swarm.recap.state == HT_RECAP_LOADING && !sw.retried &&
-        (int32_t)(now - swarm.recap.asked_ms) >= 5000) {
-        sw.retried = true;
-        swarm_send(SUPERTAB_RECAP_GET, swarm.recap.tab, swarm.recap.lead);
-    }
     uint8_t phase = status_animated() ? ht_shimmer_phase(now * status_speed()) : 0;
     if (phase != s.status_phase) { s.status_phase = phase; change(); }
     // The voice screen's listening scene runs while the finger is down (hold-to-talk); the pets do not.
     if (s.pet_next_ms && (((s.view == HOME || s.view == AGENT) && !s.touch_down) || s.view == VOICE) &&
         (int32_t)(now - s.pet_next_ms) >= 0) { s.pet_next_ms = 0; change(); }
     if (s.timer_at && (s.view == HOME || s.view == AGENT) && (int32_t)(now - s.timer_at) >= 0) { s.timer_at = 0; change(); }
-    if (s.view == SWARM_PICK && s.pick_until && !s.touch_down && (int32_t)(now - s.pick_until) >= 0) { s.pick_until = 0; view(HOME); }
     bool main = s.view == HOME || s.view == AGENT;
     bool visible = !display_is_asleep() &&
         ((main && s.connected && !s.loading) || s.view == VOICE);
@@ -1262,7 +1033,6 @@ static void surface_tick(uint32_t now)
         visible && s.view == VOICE && s.voice_open && !s.voice_search &&
         !s.voice_waiting && !s.voice_start_pending && audio_client_recording() &&
         (s.voice_return == HOME || s.voice_return == AGENT || s.voice_return == SELECTION) &&
-        (!s.voice_swarm || cable_client_supports(CABLE_FEATURE_SWARM_REVIEW)) &&
         s.touch_down && !s.touch_cancelled && gesture.live && !gesture.moved && !gesture.guarded &&
         pressed_action.kind == A_PET && held >= 650 && held <= 1800;
     if (review_preview != s.voice_review_preview) { s.voice_review_preview = review_preview; change(); }
@@ -1270,7 +1040,7 @@ static void surface_tick(uint32_t now)
         pressed_action.kind == A_PET && !gesture.moved && held >= 650 && held < 5000) {
         // Enter directly. The opening contact is consumed until a real release,
         // so lifting or sliding after the hold cannot also select a tab.
-        face_hold();
+        hold_open();
         return;
     }
     ht_character_mood_t mood = s.view == VOICE ?
@@ -1340,388 +1110,11 @@ static void focus_bell(ht_scene_t *f, unsigned count, int bell_y)
             HT_LV_BELL);
     ht_text(f, x + BELL_PAD_H + bw + BELL_GAP, bell_y + (h - cf->height) / 2, cw, cf, ink, blue, text);
 }
-static void render_agents(ht_scene_t *f);
-/*
- * THE BUDDY SIDE (spec 2026-10-29-round-dial-pm-buddy, mockup option A): the lilac ring at the glass edge, the Buddy's
- * avatar where the pet stands, and the two dots at the right edge, which every face of a Swarm with Buddies carries.
- * Colours are mixed over the black glass.
- */
-#define BUDDY_LILAC 0xc49bffu
-static unsigned mix_black(unsigned rgb, unsigned pct)
-{
-    unsigned out = 0;
-    for (int k = 0; k < 24; k += 8) out |= (((rgb >> k & 255u) * pct + 50) / 100) << k;
-    return out;
-}
-static void face_buddy_disc(ht_scene_t *f, int cx, int cy, int d, unsigned rgb)
-{
-    ht_box(f, cx - d / 2, cy - d / 2, d, d, d / 2, color(rgb), color(rgb));
-}
-static void face_buddy_ring(ht_scene_t *f)
-{
-    ht_ring_arc(f, 233 * 16, 233 * 16, 230 * 16, 3 * 16, 90, 180, color(mix_black(BUDDY_LILAC, 32)));
-}
-/*
- * THE NOTICE BADGE (Diego's dial, 2026-11-05, option B): the bell pill at y 346 sat on a long recap's last line, while the
- * space around the pet stood empty. So a face with a companion shows its unread count as a small blue badge on the
- * companion's top-right shoulder, and a tap on the companion opens the notices. A face with none (a thread) keeps the pill.
- */
-// The face's companion as drawn: the largest sprite or round disc centred in the upper middle of the glass (the pet,
-// the Buddy's disc). False when there is none.
-static bool companion_box(const ht_scene_t *f, ht_rect_t *out)
-{
-    long best = 0;
-    for (int i = 0; i < f->count; i++) {
-        const ht_run_t *r = &f->runs[i];
-        bool disc = r->box.h && r->w == r->box.h && r->box.radius * 2 >= r->box.h;
-        if (!r->sprite.width && !disc) continue;
-        ht_rect_t b = ht_run_bounds(r);
-        int cx = b.x + b.w / 2, cy = b.y + b.h / 2;
-        long area = (long)b.w * b.h;
-        if (cx < 153 || cx > 313 || cy < 60 || cy > 260 || area < 900 || area <= best) continue;
-        best = area; *out = b;
-    }
-    return best > 0;
-}
-static void notice_badge(ht_scene_t *f, const ht_rect_t *pet, unsigned count)
-{
-    enum { BADGE_D = 30, BADGE_RING = 3 };   // a 30 px disc in a 3 px black ring
-    int cx = pet->x + pet->w - 4, cy = pet->y + 4;
-    char text[4];
-    if (count > 9) snprintf(text, sizeof text, "9+"); else snprintf(text, sizeof text, "%u", count);
-    const ht_font_t *font = &ht_lv_inter_20.base;
-    int r = BADGE_D / 2 + BADGE_RING, tw = ht_measure(font, text);
-    uint16_t blue = color(0x006fff);
-    ht_box(f, cx - r, cy - r, 2 * r, 2 * r, r, BG, BG);   // a black ring, so it reads apart from the art under it
-    ht_box(f, cx - BADGE_D / 2, cy - BADGE_D / 2, BADGE_D, BADGE_D, BADGE_D / 2, blue, blue);
-    ht_text(f, cx - tw / 2, cy - font->height / 2, tw, font, color(0xffffff), blue, text);
-}
-/*
- * THE PM | BUDDY PAIR (spec 2026-11-05): a dark pill 180 x 44 px at y 388 with two equal halves, the current side's filled.
- * A tap on the other half shows that side. Four runs always (pill, current half, two labels), and the two hits.
- */
-// One dark pill of two equal halves, the `right_on` one filled: a pill, the filled half, two labels (four runs).
-static void pill2(ht_scene_t *f, int x, int y, int w, int h, const char *left, const char *right, bool right_on)
-{
-    enum { INSET = 3 };
-    const ht_font_t *font = &ht_lv_inter_20.base;
-    uint16_t pill = color(0x141518), edge = color(0x2e3035), on = color(0x2b2d33), white = color(0xffffff), grey = color(0x9a9ca3);
-    int half = w / 2;
-    ht_box(f, x, y, w, h, h / 2, pill, edge);
-    ht_box(f, x + (right_on ? half : 0) + INSET, y + INSET, half - 2 * INSET, h - 2 * INSET, (h - 2 * INSET) / 2, on, on);
-    const char *names[2] = {left, right};
-    for (int k = 0; k < 2; k++) {
-        int tw = ht_measure(font, names[k]), cur = (k == 1) == right_on;
-        ht_text(f, x + k * half + (half - tw) / 2, y + (h - font->height) / 2, tw, font, cur ? white : grey, cur ? on : pill, names[k]);
-    }
-}
-static void swarm_pair(ht_scene_t *f, bool buddy)
-{
-    enum { X = 143, Y = 388, W = 180, H = 44, HALF = W / 2 };
-    pill2(f, X, Y, W, H, "PM", "Buddy", buddy);
-    // A thumb's targets, wider than the pill: 40 px each side, from just under the bell (its pill ends at y 378) to the edge.
-    s.hits[s.hit_count++] = (hit_t){{X - 40, 382, HALF + 40, HT_HEIGHT - 382}, A_SIDE_PM, 0, true};
-    s.hits[s.hit_count++] = (hit_t){{X + HALF, 382, HALF + 40, HT_HEIGHT - 382}, A_SIDE_BUDDY, 0, true};
-}
-/*
- * The Personal | Team picker, option B (Diego, 2026-11-06: the 200 x 44 pill sat small in an empty glass). "Swarm" on the
- * top arc and two rows of 340 x 104 px: Personal over Team, each with its icon, its name in Inter 30 and where it lands in
- * Inter 20 (Personal: its project count; Team: the Swarm it opens), the one on the face filled with a green check.
- */
-// 12 x 12 cells of 3 px, '#' ink: one person for Personal, and two (the second smaller, behind) for Team.
-static const ht_cell_frame_t *pick_icon(int which, bool on)
-{
-    static const char *const ME[12] = {
-        "....####....", "...######...", "...######...", "...######...", "....####....", "............",
-        "..########..", ".##########.", ".##########.", ".##########.", ".##########.", "............"};
-    static const char *const TEAM[12] = {
-        "...##.......", "..####..##..", "..####.####.", "..####.####.", "...##...##..", "............",
-        ".######.###.", "########.###", "########.###", "########.###", "########....", "............"};
-    static uint8_t cells[2][12 * 12];
-    static uint16_t palette[2][2][2];
-    static ht_cell_frame_t frames[2][2];
-    const char *const *art = which ? TEAM : ME;
-    for (int y = 0; y < 12; y++) for (int x = 0; x < 12; x++) cells[which][y * 12 + x] = art[y][x] == '#';
-    uint16_t c = color(on ? 0xffffff : 0x9a9ca3);
-    palette[which][on][0] = 0; palette[which][on][1] = (uint16_t)(c << 8 | c >> 8);   // panel order
-    frames[which][on] = (ht_cell_frame_t){.cols = 12, .rows = 12, .cell = 3, .palette = palette[which][on], .cells = cells[which]};
-    return &frames[which][on];
-}
-static void pick_row(ht_scene_t *f, int y, int which, const char *name, const char *detail, bool on)
-{
-    enum { X = 63, W = 340, H = 104, R = 28, ICON = 36 };
-    uint16_t fill = color(on ? 0x2b2d33 : 0x141518), edge = color(on ? 0x2b2d33 : 0x2e3035);
-    ht_box(f, X, y, W, H, R, fill, edge);
-    ht_cell_sprite(f, X + 26, y + (H - ICON) / 2, pick_icon(which, on));
-    const ht_font_t *big = &ht_lv_inter_30.base, *small = &ht_lv_inter_20.base;
-    int tx = X + 26 + ICON + 18, tw = W - (tx - X) - 26 - (on ? ht_done_28.width + 10 : 0);
-    ht_text(f, tx, y + 18, tw, big, on ? color(0xffffff) : color(0x9a9ca3), fill, name);
-    ht_text(f, tx, y + 18 + big->height + 4, tw, small, on ? color(0xc9cbd1) : color(0x9a9ca3), fill, detail);
-    if (on) ht_text(f, X + W - 26 - ht_done_28.width, y + (H - ht_done_28.height) / 2, ht_done_28.width, &ht_done_28,
-                    color(0x1fd13c), fill, HT_DONE);
-}
-static void render_swarm_pick(ht_scene_t *f)
-{
-    const ht_supertab_t *t = swarm_here(), *mine = swarm_pick_target(false), *team = swarm_pick_target(true);
-    bool personal = t && t->personal;
-    ht_arc_title_face(f, FG, "Swarm", &ht_arc_inter_prop);
-    char projects[32];
-    int n = mine ? mine->lead_n : 0;
-    snprintf(projects, sizeof projects, "%d project%s", n, n == 1 ? "" : "s");
-    pick_row(f, 120, 0, "Personal", projects, personal);
-    pick_row(f, 242, 1, "Team", team ? team->name : "", !personal);
-    // A thumb's targets: each row and half the gaps around it, meeting at y 233.
-    s.hits[s.hit_count++] = (hit_t){{43, 96, 380, 137}, A_PICK_PERSONAL, 0, true};
-    s.hits[s.hit_count++] = (hit_t){{43, 233, 380, 137}, A_PICK_TEAM, 0, true};
-}
-/*
- * Desktop's agent pattern (avatar_art.dart superTabAgentPattern; the daemon sends its 15 half bits and colour): mirrored on
- * 5 x 5 cells of 10 px, each with its corner pixels cut for the rounding, as one 50 px sprite. Two frames in turn:
- * ht_damage compares a sprite by its cells, so a new pattern goes into the frame the last scene did not use.
- */
-static const ht_cell_frame_t *face_buddy_avatar(uint16_t bits, uint32_t rgb)
-{
-    static EXT_RAM_BSS_ATTR struct { uint8_t cells[50 * 50]; uint16_t palette[2]; ht_cell_frame_t frame; uint16_t bits; uint32_t rgb; bool made; } art[2];
-    static int last;
-    static const int mirror[5] = {0, 1, 2, 1, 0};
-    if (!(bits & 0x7fff)) bits = 1u << 7;   // as Desktop: never an empty pattern
-    for (int k = 0; k < 2; k++) if (art[k].made && art[k].bits == bits && art[k].rgb == rgb) return &art[last = k].frame;
-    int k = last = !last;
-    for (int y = 0; y < 50; y++) for (int x = 0; x < 50; x++) {
-        int px = x % 10, py = y % 10;
-        bool on = (bits >> ((y / 10) * 3 + mirror[x / 10])) & 1, corner = (px == 0 || px == 9) && (py == 0 || py == 9);
-        art[k].cells[y * 50 + x] = on && !corner;
-    }
-    uint16_t c = color(rgb);
-    art[k].palette[0] = 0; art[k].palette[1] = (uint16_t)(c << 8 | c >> 8);   // panel order
-    art[k].frame = (ht_cell_frame_t){.cols = 50, .rows = 50, .cell = 1, .palette = art[k].palette, .cells = art[k].cells};
-    art[k].bits = bits; art[k].rgb = rgb; art[k].made = true;
-    return &art[k].frame;
-}
-// The Buddy side of a project with no Buddy: a dashed circle with "+", and where to add one. Nothing here talks.
-static void render_buddy_empty(ht_scene_t *f, const ht_lead_t *l)
-{
-    ht_arc_title_face(f, FG, l->project[0] ? l->project : "Untitled", &ht_arc_inter_prop);
-    for (int k = 0; k < 12; k++) ht_ring_arc(f, 233 * 16, 168 * 16, 44 * 16, 3 * 16, k * 30, 7, color(0x3a3b44));
-    const ht_font_t *plus = &ht_lv_inter_44.base;
-    focus_put(f, 63, 168 - plus->height / 2, 340, plus, color(0x55565f), BG, "+", true);
-    focus_put(f, 63, 238, 340, &ht_lv_inter_28.base, color(0x8a8a99), BG, "No Buddy here yet", true);
-    focus_put(f, 63, 280, 340, &ht_lv_inter_20.base, color(0x6b6d78), BG, "Add one in the Harness app.", true);
-    face_buddy_ring(f);
-    swarm_pair(f, true);
-    s.hits[s.hit_count++] = (hit_t){{83, 0, 300, 66}, A_AGENTS, 0, true};
-}
-/*
- * THE THREAD FACE (spec 2026-11-03-dial-thread-face, mockup round-thread): a Lead whose face chat is a thread. The teal
- * ring at the glass edge, "Thread" (Buddy: "Thread · Buddy"), the thread's title on two lines, no pet, and the card of the
- * thread's last message with its meta line (who, how many replies) and up to three lines; "Waiting for ..." until one
- * comes. A sideways swipe leaves it. Inter has no hooked arrow, so the label leads with one drawn in boxes.
- */
-// The next line of `*cursor` in `w` px, copied to `out`.
-static void thread_line(const char **cursor, const ht_font_t *font, int w, char out[HT_TEXT_BYTES])
-{
-    const char *start = *cursor, *end = focus_take(cursor, font, w);
-    size_t n = (size_t)(end - start);
-    if (n >= HT_TEXT_BYTES) {
-        n = HT_TEXT_BYTES - 1;
-        while (n && ((unsigned char)start[n] & 0xC0) == 0x80) n--;   // on a character boundary
-    }
-    memcpy(out, start, n);
-    out[n] = 0;
-}
-// What is left of `*cursor` as one line (newlines as spaces); focus_put ends it "…" when it does not fit.
-static void thread_rest(const char *cursor, char out[HT_TEXT_BYTES])
-{
-    size_t n = strlen(cursor);
-    if (n >= HT_TEXT_BYTES) {
-        n = HT_TEXT_BYTES - 1;
-        while (n && ((unsigned char)cursor[n] & 0xC0) == 0x80) n--;
-    }
-    for (size_t i = 0; i < n; i++) out[i] = cursor[i] == '\n' ? ' ' : cursor[i];
-    out[n] = 0;
-}
-static void face_thread(ht_scene_t *f, const ht_lead_t *l, bool buddy, const char *recap, const char *wait, bool bell_above)
-{
-    // A Lead waiting on the person stays visible: the wait's text in the card, in the accent the main face writes it in.
-    if (wait) recap = wait;
-    ht_arc_title_face(f, FG, l->project[0] ? l->project : "Untitled", &ht_arc_inter_prop);
-    const unsigned TEAL = 0x2dd4bfu;
-    ht_ring_arc(f, 233 * 16, 233 * 16, 229 * 16, 5 * 16, 90, 180, color(mix_black(TEAL, 55)));
-    const ht_font_t *small = &ht_lv_inter_20.base, *body = &ht_lv_inter_25.base;
-    uint16_t teal = color(TEAL), bg = BG, card = color(0x1c1e26u);
-    char line[HT_TEXT_BYTES];
-    // "↳" is not in Inter: a hook arrow of boxes (a stroke down, a stroke right, a small head), 21 px wide, left of the label.
-    const char *label = buddy ? "Thread \u00b7 Buddy" : "Thread";
-    int lw = ht_measure(small, label), ax = 233 - (21 + 6 + lw) / 2;
-    ht_box(f, ax + 2, 100, 2, 12, 0, teal, teal);
-    ht_box(f, ax + 2, 110, 12, 2, 0, teal, teal);
-    for (int k = 0; k < 4; k++) ht_box(f, ax + 13 + 2 * k, 107 + k, 2, 9 - 2 * k, 0, teal, teal);
-    ht_text(f, ax + 27, 93, lw, small, teal, bg, label);
-    // The title on words: a first line, then the rest on a second that ends "…" when it runs long.
-    const char *cursor = l->thread_title;
-    thread_line(&cursor, body, 330, line);
-    focus_put(f, 63, 119, 340, body, FG, bg, line, true);
-    bool two = *cursor != 0;
-    if (two) { thread_rest(cursor, line); focus_put(f, 63, 119 + 29, 340, body, FG, bg, line, true); }
-    // The card, lower by a title line: the meta line (who, how many replies) above up to three lines, else what it waits for.
-    int top = 172 + (two ? 29 : 0);
-    char meta[40] = "";
-    if (recap && !wait && l->thread_replies >= 0)
-        snprintf(meta, sizeof meta, "%s · %ld repl%s", buddy ? "Buddy" : "PM", (long)l->thread_replies, l->thread_replies == 1 ? "y" : "ies");
-    // The bell at y 346 (pair and bell both showing) leaves the card two lines: it would end at y 369 with three.
-    int rows = recap ? 0 : 1, max_rows = bell_above ? 2 : 3;
-    char text[3][HT_TEXT_BYTES] = {{0}};
-    for (const char *p = recap; p && *p && rows < max_rows; rows++) {
-        if (rows == max_rows - 1) { thread_rest(p, text[rows++]); break; }
-        thread_line(&p, body, 304, text[rows]);
-    }
-    if (rows == 0) rows = 1;
-    int h = 26 + rows * 38 + (meta[0] ? 28 : 0);
-    // x 63..403, symmetric. Three lines under a two-line title end at y 369: its corners are 180 px from the centre at most,
-    // inside the ring's 226 px inner edge, so all three lines stay. No spine and no "chat" label (Diego, 2026-11-04).
-    ht_box(f, 63, top, 340, h, 28, card, color(mix_black(TEAL, 70)));
-    if (meta[0]) focus_put(f, 75, top + 13, 316, small, teal, card, meta, true);
-    if (!recap) focus_put(f, 75, top + 17, 316, body, DIM, card, buddy ? "Waiting for your Buddy…" : "Waiting for the PM…", true);
-    else for (int i = 0; i < rows; i++) focus_put(f, 75, top + (meta[0] ? 45 : 17) + i * 38, 316, body, wait ? ACCENT : FG, card, text[i], true);
-}
-/*
- * A SWARM PANE'S FACE (spec §4): the agent face, built from the Lead. The project on the upper arc; working: the pet
- * and the time since `since` (none for a remote Lead); asking or stuck: the asking pose and, in the recap's place, the
- * local wait's question, else the Lead's last message; done: that message, or the resting face. No Leads: PANES' own
- * "No panes in this tab.".
- */
-static void render_swarm_face(ht_scene_t *f)
-{
-    const ht_lead_t *l = swarm_lead();
-    if (!l) { render_agents(f); return; }
-    // The Buddy side: the Buddy's chat on the face, never working (spec 2026-10-29-round-dial-pm-buddy).
-    bool buddy = swarm_on_buddy(l);
-    if (buddy && !l->buddy.has) { render_buddy_empty(f, l); return; }
-    const char *wait = swarm_wait_text(l);
-    bool asking = l->state == HT_LEAD_ASK || l->state == HT_LEAD_STUCK || wait;
-    bool thread = l->thread_root[0] != 0;   // the face is a thread: no pet, no working time, its own recap card
-    bool working = l->state == HT_LEAD_WORK && !wait && !buddy && !thread;
-    // A swarmChat daemon's recap is that of the chat on the face: one read for a chat the desktop has since left is not
-    // shown (design 2026-10-28-round-dial-swarm-chat §3). An older daemon names no chat on either side.
-    const char *recap = wait && !thread ? wait : !working && swarm.recap.state == HT_RECAP_LOADED &&
-        !strcmp(swarm.recap.lead, l->id) && !strcmp(swarm.recap.chat_id, l->chat_id) && !strcmp(swarm.recap.thread, l->thread_root) &&
-        (l->chat == HT_CHAT_BUDDY) == buddy &&
-        !s.nap ? swarm.recap.text : NULL;
-    uint32_t since_ms = working && l->since_s >= 0 ? (uint32_t)l->since_s * 1000u + (ms() - l->since_at_ms) : 0;
-    uint32_t since = since_ms / 1000;
-    s.timer_at = 0;
-    if (since) {
-        uint32_t next = fmt_elapsed_next_ms(since), frac = since_ms % 1000;
-        if (next > frac) { s.timer_at = ms() + next - frac; if (!s.timer_at) s.timer_at = 1; }
-    }
-    unsigned unread = notice_unread(l->id);
-    bool bell = unread > 0;
-    uint32_t clock = ms() | 1;
-    bool again = unread > s.bell_unread && s.bell_unread && s.notice_ms;
-    if (unread > s.bell_unread) s.notice_ms = clock;
-    s.bell_unread = unread;
-    ht_character_face_t f_ = {.recipient = l->project[0] ? l->project : "Untitled", .status = "",
-        .engine = buddy ? "" : l->engine, .activity = working && !s.nap ? "Working" : "",
-        .chat = !buddy && l->chat != HT_CHAT_LEAD && l->chat != HT_CHAT_PM && l->chat != HT_CHAT_BUDDY ? l->chat_name : NULL,
-        .elapsed = since, .mood = character_mood(), .pose = character.motion.reaction.pose,
-        .asking = asking,
-        .clock_ms = (s.quiet || display_is_asleep()) ? 0 : clock,
-        .notice_ms = bell ? s.notice_ms : 0, .notices = bell ? (uint16_t)(unread > 65535 ? 65535 : unread) : 0,
-        .foreground = FG};
-    if (!thread) ht_focus_pick_working(&s.working_pick, &f_, recap, l->id, esp_random);
-    if (again && !thread) {
-        s.notice_ms = (clock - ht_focus_alert_pop_ms(&f_)) | 1;
-        f_.notice_ms = bell ? s.notice_ms : 0;
-    }
-    if (thread) face_thread(f, l, buddy, recap, wait, bell && l->buddies);
-    else ht_character_face(f, &character, &f_, ACCENT, recap);
-    s.pet_next_ms = !thread ? ht_focus_pet_next_ms(&f_, recap) : 0;
-    ht_rect_t bubble = {0};
-    bool told = bell && !thread && ht_focus_alert_shown(&f_, recap, &bubble);
-    int bell_y = l->buddies ? 346 : 400;   // clear of the pair
-    if (buddy && !thread) {
-        // The avatar stands where the pet does, at 233, 158 or higher: 8 px clear of the recap's card, which keeps
-        // today's place (it rises with its lines).
-        // And of any line the face writes under it instead: with no recap, "Tap the name to switch panes" stood under
-        // the disc (Diego's dial, 2026-10-29).
-        int cy = 158;
-        for (int i = 0; i < f->count; i++) {
-            const ht_run_t *r = &f->runs[i];
-            int top = r->y;
-            if (r->box.h && r->w >= 300) {}
-            else if (r->text[0] && !r->arc && r->y >= 90 && r->y <= 380) {
-                ht_rect_t b = ht_run_bounds(r);
-                if (b.x >= 279 || b.x + b.w <= 187) continue;
-                top = b.y;
-            } else continue;
-            if (top - 8 - 46 < cy) cy = top - 8 - 46;
-        }
-        face_buddy_disc(f, 233, cy, 92, mix_black(l->buddy.color, 16));
-        ht_cell_sprite(f, 208, cy - 25, face_buddy_avatar(l->buddy.cells, l->buddy.color));
-        face_buddy_ring(f);
-    }
-    // The count on the companion's shoulder; the pill only on a face with no companion (a thread).
-    ht_rect_t pet = {0};
-    bool badge = bell && !told && !thread && companion_box(f, &pet);
-    if (badge) notice_badge(f, &pet, unread);
-    else if (bell && !told) focus_bell(f, unread, bell_y);
-    if (l->buddies) {
-        // The pair stands at the bottom, so the lower arc is bare: the face's hint goes, and its working line (and the PM side's
-        // "Your Buddy replied") is one centred line at y 318 in its place. Empty runs where nothing is said, so the count holds.
-        char say[HT_TEXT_BYTES] = "";
-        uint16_t say_fg = color(BUDDY_LILAC);
-        for (int i = 0; i < f->count; i++) {
-            ht_run_t *r = &f->runs[i];
-            if (r->arc != 2 || !r->text[0]) continue;
-            if (working) { snprintf(say, sizeof say, "%s", r->text); say_fg = r->fg; }
-            uint8_t at = f->count;
-            f->count = (uint8_t)i;
-            ht_text(f, 0, 0, 1, &ht_lv_inter_20.base, BG, BG, "");
-            f->count = at;
-        }
-        if (!say[0] && !buddy && !thread && swarm_heard_of(l->id) >= 0) snprintf(say, sizeof say, "Your Buddy replied");
-        const ht_font_t *lf = &ht_lv_inter_20.base;
-        int w = say[0] ? ht_measure(lf, say) : 1;
-        if (w > 360) w = 360;
-        ht_text(f, 233 - w / 2, 318, w, lf, say_fg, BG, say);
-        swarm_pair(f, buddy);
-    }
-    // The same targets as a pane's face: the name opens PANES, the bell the inbox, the rest talks (to a local Lead).
-    s.hits[s.hit_count++] = (hit_t){{83, 0, 300, 66}, A_AGENTS, 0, true};
-    // The recap's place, for a hold (face_hold): its card, or with none the box of its lines.
-    if (recap && *recap) {
-        ht_rect_t u = {0};
-        for (int i = 0; i < f->count; i++) {
-            const ht_run_t *r = &f->runs[i];
-            if (r->box.h >= 40 && r->w >= 280 && r->y > 120 && r->y < 380) { u = (ht_rect_t){r->x, r->y, r->w, (int16_t)r->box.h}; break; }
-        }
-        for (int i = 0; !u.w && i < f->count; i++) {
-            const ht_run_t *r = &f->runs[i];
-            if (!r->text[0] || r->arc || r->box.h || r->y < 140 || r->y > 380) continue;
-            ht_rect_t b = ht_run_bounds(r);
-            for (int j = i; j < f->count; j++) {
-                const ht_run_t *q = &f->runs[j];
-                if (!q->text[0] || q->arc || q->box.h || q->y < 140 || q->y > 380) continue;
-                ht_rect_t c = ht_run_bounds(q);
-                int x0 = c.x < b.x ? c.x : b.x, y0 = c.y < b.y ? c.y : b.y;
-                int x1 = c.x + c.w > b.x + b.w ? c.x + c.w : b.x + b.w, y1 = c.y + c.h > b.y + b.h ? c.y + c.h : b.y + b.h;
-                b = (ht_rect_t){x0, y0, x1 - x0, y1 - y0};
-            }
-            u = b;
-        }
-        if (u.w) s.recap_card = (ht_rect_t){u.x - 12, u.y - 12, u.w + 24, u.h + 24};
-    }
-    // With the badge, the companion and its badge are the inbox's target; the rest of the face still talks.
-    if (badge) s.hits[s.hit_count++] = (hit_t){{pet.x - 16, pet.y - 24, pet.w + 48, pet.h + 40}, A_PET_INBOX, 0, true};
-    else if (bell && !told) s.hits[s.hit_count++] = (hit_t){{83, bell_y - 18, 300, 84}, A_INBOX, 0, true};
-    if (told && bubble.w) s.hits[s.hit_count++] = (hit_t){{bubble.x - 14, bubble.y - 14, bubble.w + 28, bubble.h + 28}, A_INBOX, 0, true};
-    s.hits[s.hit_count++] = (hit_t){{0, 66, HT_WIDTH, HT_HEIGHT - 66}, A_PET, 0, true};
-}
 static void render_home(ht_scene_t *f)
 {
     s.pet_next_ms = 0; s.timer_at = 0;
     if (!s.connected || s.loading) { render_brand(f); return; }
-    if (swarm_mode()) { render_swarm_face(f); return; }
+    ht_focus_set_hold_apps(hold_picks_app());   // the face's hint names what a hold opens
     if (workspace.touching && workspace.moved && !workspace.cancelled) { render_workspace_preview(f); return; }
     agent_t *a = active();
     // The top caption belongs to the current pane; only completed work gets
@@ -1744,16 +1137,18 @@ static void render_home(ht_scene_t *f)
     const char *activity = a && s.connected && !s.loading && !s.nap && is_question(a->id) ?
         "Needs your answer" : a && a->busy && s.connected && !s.loading && !s.nap ?
         (a->tool[0] ? a->tool : "Working") : "";
+    // The hint takes the activity's row too: a working agent would otherwise hide it behind its verb.
+    if (s.voice_retry_until && s.hint[0]) activity = "";
     // The face has a row for the name and one for `activity`, so the name stays still.
     const char *caption = a ? a->name : "Choose a pane";
     bool bell = !s.voice_retry_until && !carry.active && !carry.error[0] && !visit.available;
     unsigned unread = notice_unread(a ? a->id : NULL);
     bell = bell && unread > 0;
     char status[100];
-    if (s.voice_retry_until) COPY(status, "Try again");
+    if (s.voice_retry_until) snprintf(status, sizeof status, "%s", s.hint[0] ? s.hint : "Try again");
     else status[0] = 0;
     // Seconds since THIS DIAL heard about the turn, not since it began: turn.started carries no
-    // timestamp. The 25 s staleness fuse (ui_prune_stale_busy) is what keeps this from counting a
+    // timestamp. The staleness fuse (BUSY_FUSE_MS, ui_prune_stale_busy) is what keeps this from counting a
     // turn nobody is running any more.
     // 0 = unknown (not busy, no start stamp, or under a second): nothing is drawn. The same stamp sets the
     // redraw deadline: the text only changes when fmt_elapsed's displayed unit does (elapsed.h), not every tick.
@@ -1773,6 +1168,7 @@ static void render_home(ht_scene_t *f)
     ht_character_face_t f_ = {.recipient = caption, .status = bell ? "" : status,
         .engine = a ? a->engine : "",
         .activity = activity,
+        .chat = s.machine_view && a ? face_app(a->host) : NULL,   // the app under the name, grey on the curve
         .elapsed = since,
         .mood = character_mood(), .pose = character.motion.reaction.pose,
         .asking = a && is_question(a->id),
@@ -1788,6 +1184,8 @@ static void render_home(ht_scene_t *f)
         s.notice_ms = (clock - ht_focus_alert_pop_ms(&f_)) | 1;
         f_.notice_ms = bell ? s.notice_ms : 0;
     }
+    // A tap on an agent without V only says where it lives, so its resting face must not invite talking.
+    ht_focus_set_voice(!a || !(a->caps_off & CABLE_CAP_V));
     ht_character_face(f, &character, &f_, ACCENT, recap);
     s.pet_next_ms = ht_focus_pet_next_ms(&f_, recap);
     // The working face says it with the pet's bell bubble; the other faces keep the pill at 400.
@@ -1907,20 +1305,16 @@ static void focus_header(ht_scene_t *f, const char *title)
  * goes back. It replaced the column of cards (owner, 2026-10-01).
  */
 static void focus_carousel(ht_scene_t *f, const ht_tab_carousel_t *c, int count, const char *(*label)(int),
-                           action_kind_t pick);   // with the tabs, below
+                           action_kind_t pick, void (*under)(ht_scene_t *, int, int));   // with the tabs, below
 static const char *pane_label(int i)
 {
-    // In a Swarm the panes are its projects (decision 6: Leads only).
-    if (swarm_mode()) return swarm_here()->leads[i].project[0] ? swarm_here()->leads[i].project : "Untitled";
     return s.agents[i].name[0] ? s.agents[i].name : "Untitled";
 }
 static void render_agents(ht_scene_t *f)
 {
     uint16_t fg = color(0xeaeaf0), pressed_fill = color(0x30333f);   // the Choose-a-tab pill's ink and press
     focus_header(f, "PANES");
-    const ht_supertab_t *here = swarm_here();
-    int count = here ? here->lead_n : s.count, current = here ? sw.at : s.active;
-    action_kind_t pick = here ? A_LEAD : A_AGENT;
+    int count = s.count, current = s.active;
     if (!count) {
         /*
          * NO PANES (design 2026-10-06, focus-project.html "Panes, none"): "No panes in / this tab." on two Inter 44
@@ -1931,7 +1325,7 @@ static void render_agents(ht_scene_t *f)
         enum { LINE = 52, BUTTON_X = 103, BUTTON_Y = 333, BUTTON_W = 260, BUTTON_H = 64 };
         const ht_font_t *big = &ht_lv_inter_44.base, *pf = &ht_lv_inter_28.base;
         static const char *const empty[2] = {"No panes in", "this tab."};
-        bool loading = s.loading && !here;
+        bool loading = s.loading;
         int lines = loading ? 1 : 2, top = 233 - lines * LINE / 2;
         for (int n = 0; n < 2; n++) {
             const char *text = n >= lines ? "" : loading ? "Loading..." : empty[n];
@@ -1950,10 +1344,10 @@ static void render_agents(ht_scene_t *f)
     // that comes or goes keeps them in step. Done (green, at the foot) and a tap on the chosen page open it.
     if (pane_carousel.count != count)
         ht_tab_carousel_reset(&pane_carousel, count, current >= 0 && current < count ? current : 0);
-    focus_carousel(f, &pane_carousel, count, pane_label, pick);
+    focus_carousel(f, &pane_carousel, count, pane_label, A_AGENT, NULL);
     ht_text(f, (HT_WIDTH - ht_done_28.width) / 2, 400, ht_done_28.width, &ht_done_28,
             s.connected ? color(HT_THEME_VOICE) : DIM, BG, HT_DONE);
-    s.hits[s.hit_count++] = (hit_t){{83, 392, 300, 74}, pick, ht_tab_carousel_index(&pane_carousel), s.connected};
+    s.hits[s.hit_count++] = (hit_t){{83, 392, 300, 74}, A_AGENT, ht_tab_carousel_index(&pane_carousel), s.connected};
 }
 static void render_agent(ht_scene_t *f)
 {
@@ -2003,7 +1397,13 @@ static void render_question(ht_scene_t *f)
     text(f, FACE_CX(216), 109, 216, label, DIM);
     question_text(f, q->prompt);
     if (s.q.speech_error[0]) ui_wrap(f,FACE_CX(312),319,312,2,0,&ht_mono_20,ERROR,s.q.speech_error);
-    if (q->can_text) {
+    if (!agent_allows(s.q.agent, CABLE_CAP_A)) {
+        // Its app takes no answer from here, and the prompt names where to answer. The loading question's own
+        // [ later ], so it stays put when the question loads.
+        control(f, 122, 346, 187, "[ later ]", A_HOME, 0, true);
+        return;
+    }
+    if (q->can_text && agent_allows(s.q.agent, CABLE_CAP_V)) {
         /*
      * UP TO y=336, AND THE RIM IS WHY.
      *
@@ -2165,8 +1565,9 @@ static void tab_neighbour(ht_scene_t *f, const char *name, int edge, bool next)
     }
     for (; used < FADE_SLOTS; used++) ht_text(f, 0, LINE_Y, 1, font, BG, BG, "");
 }
+// `under`, when given, draws a line under the chosen page (its index, its left edge), and the name keeps to one line.
 static void focus_carousel(ht_scene_t *f, const ht_tab_carousel_t *c, int count, const char *(*label)(int),
-                           action_kind_t pick)
+                           action_kind_t pick, void (*under)(ht_scene_t *, int, int))
 {
     enum { TAB_PAGE = 320, TAB_PAGE_LEFT = 73, TAB_LINE_W = 300 };
     const ht_font_t *big = &ht_lv_inter_44.base;
@@ -2178,7 +1579,8 @@ static void focus_carousel(ht_scene_t *f, const ht_tab_carousel_t *c, int count,
         const char *name = here ? label(i) : "";
         if (i != current) { tab_neighbour(f, name, i > current ? left : left + TAB_PAGE, i > current); continue; }
         char one[HT_TEXT_BYTES], two[HT_TEXT_BYTES], fit[HT_TEXT_BYTES];
-        tab_split(name, one, two, sizeof one);
+        if (under) { snprintf(one, sizeof one, "%s", name); two[0] = 0; }
+        else tab_split(name, one, two, sizeof one);
         int lines = two[0] ? 2 : 1, top = lines == 2 ? 181 : 207;     // the design's 52 px lines, centred on 233
         uint16_t ink = s.connected ? color(HT_THEME_VOICE) : DIM;
         for (int n = 0; n < 2; n++) {
@@ -2189,6 +1591,7 @@ static void focus_carousel(ht_scene_t *f, const ht_tab_carousel_t *c, int count,
                           strlen(fit), 8, 458);
             if (f->count == before) ht_text(f, 0, 0, 1, big, BG, BG, "");   // off the glass: its slot stays
         }
+        if (under) under(f, i, left);
     }
     // Each page's half of the glass is its target: a tap on the chosen one picks it, on a neighbour picks that one.
     for (int n = 0; n < 3; n++) {
@@ -2201,7 +1604,6 @@ static void focus_carousel(ht_scene_t *f, const ht_tab_carousel_t *c, int count,
 }
 static const char *tab_label(int i)
 {
-    // A Swarm's page is drawn as any tab's (decision 1): its name, nothing else.
     const char *name = i >= 0 && i < s.tab_count ? s.tabs[i].name : "";
     return name[0] ? name : "Untitled";
 }
@@ -2212,7 +1614,7 @@ static void render_focus_tabs(ht_scene_t *f)
         focus_centred(f, 214, 348, &ht_lv_inter_30.base, DIM, BG, "No tabs yet.");
         return;
     }
-    focus_carousel(f, &tab_carousel, tabs_total(), tab_label, A_TAB);
+    focus_carousel(f, &tab_carousel, s.tab_count, tab_label, A_TAB, NULL);
 }
 static void render_tabs(ht_scene_t *f)
 {
@@ -2221,6 +1623,39 @@ static void render_tabs(ht_scene_t *f)
             color(HT_THEME_VOICE), BG, HT_DONE);
     render_focus_tabs(f);
     s.hits[s.hit_count++] = (hit_t){{83, 392, 300, 74}, A_TAB_DONE, 0, true};
+}
+/*
+ * APPS (mockup dial-app-filter, section 1): the tabs' screen with an app a page. The name in the tab page's type on one
+ * line, and under it "3 agents" in grey Inter 25 with " · 1 waiting" beside it in the accent, one line centred on the
+ * page, 48 px below the name's baseline as the mockup has it. Both runs are always drawn, so the count never moves.
+ */
+static const char *app_label(int i)
+{
+    return i >= 0 && i < s.app_count ? s.apps[i].name : "";
+}
+static void app_under(ht_scene_t *f, int i, int left)
+{
+    enum { TAB_PAGE = 320, LINE_Y = 272 };   // its baseline at y 300, the mockup's
+    const ht_font_t *small = &ht_lv_inter_25.base;
+    char agents[24], waits[24] = "";
+    unsigned n = s.apps[i].count, w = s.apps[i].waiting;
+    snprintf(agents, sizeof agents, "%u agent%s", n, n == 1 ? "" : "s");
+    if (w) snprintf(waits, sizeof waits, " \xc2\xb7 %u waiting", w);
+    int aw = ht_measure(small, agents), x = left + (TAB_PAGE - aw - (w ? ht_measure(small, waits) : 0)) / 2;
+    int before = f->count;
+    focus_clipped(f, x, LINE_Y, small, DIM, agents, strlen(agents), 8, 458);
+    if (f->count == before) ht_text(f, 0, 0, 1, small, BG, BG, "");
+    before = f->count;
+    if (w) focus_clipped(f, x + aw, LINE_Y, small, ACCENT, waits, strlen(waits), 8, 458);
+    if (f->count == before) ht_text(f, 0, 0, 1, small, BG, BG, "");
+}
+static void render_apps(ht_scene_t *f)
+{
+    ht_text(f, (HT_WIDTH-ht_done_28.width)/2, 400, ht_done_28.width, &ht_done_28,
+            color(HT_THEME_VOICE), BG, HT_DONE);
+    focus_header(f, "APPS");
+    focus_carousel(f, &app_carousel, s.app_count, app_label, A_APP, app_under);
+    s.hits[s.hit_count++] = (hit_t){{83, 392, 300, 74}, A_APP_DONE, 0, true};
 }
 /*
  * THE FOCUS INBOX (design 2026-10-06, focus-project.html "Inbox", "Inbox, empty"; owner, 2026-10-06: the message as
@@ -2270,13 +1705,6 @@ static void inbox_page(ht_scene_t *f, int i, int cx, uint8_t alpha)
     char name[HT_TEXT_BYTES], machine[HT_TEXT_BYTES] = "";
     if (n->machine[0]) ht_fit_width(machine, sizeof machine, n->machine, LINE_W, mid);
     int a = find(n->agent_id), engine = a >= 0 ? ht_focus_engine_index(s.agents[a].engine) : -1;
-    if (a < 0 && n->swarm) {
-        // A Swarm entry's engine is its Lead's.
-        for (int k = 0; k < swarm.n && engine < 0; k++) {
-            int l = swarm_lead_index(&swarm.tabs[k], n->agent_id);
-            if (l >= 0) engine = ht_focus_engine_index(swarm.tabs[k].leads[l].engine);
-        }
-    }
     int lead = engine >= 0 ? MARK : DOT;
     ht_fit_width(name, sizeof name, n->name[0] ? n->name : n->agent_id, LINE_W - lead - MARK_GAP, mid);
     int h = (machine[0] ? ROW + GAP : 0) + ROW + GAP + lines * PITCH, top = (HT_HEIGHT - h) / 2;
@@ -2358,6 +1786,7 @@ static void render_focus_inbox(ht_scene_t *f)
 static void render_list(ht_scene_t *f)
 {
     if (s.view == TABS) { render_tabs(f); return; }
+    if (s.view == APPS) { render_apps(f); return; }
     if (s.view == INBOX) { render_focus_inbox(f); return; }
     heading(f, "machines");
     int count = s.machine_count;
@@ -2393,13 +1822,6 @@ static void render_voice(ht_scene_t *f)
         .mood = !s.voice_start_pending && !s.voice_waiting && audio_client_recording() ? HT_CHARACTER_LISTENING : HT_CHARACTER_WORKING,
         .pose = character.motion.reaction.pose, .foreground = FG, .voice = true};
     ht_character_face(f, &character, &f_, ACCENT, NULL);
-    // Speaking to the Buddy side: the ring stays, and sending says to whom (spec 2026-10-29 Voice). The turn's side, not the
-    // Swarm's now: the words go where the turn started.
-    if (sw.voice_buddy) {
-        face_buddy_ring(f);
-        if (s.voice_waiting) ht_arc_status_face(f, color(BUDDY_LILAC), "Sending to your Buddy", &ht_arc_inter_lower);
-        else ht_text(f, 0, 0, 1, &ht_lv_inter_20.base, BG, BG, "");
-    }
     s.pet_next_ms = ht_focus_pet_next_ms(&f_, NULL);
     s.status_phase = status_animated() ? ht_shimmer_phase(ms() * status_speed()) : 0;
     for (int i = 0; i < f->count; i++)
@@ -2523,9 +1945,11 @@ static void render_settings(ht_scene_t *f)
         const char *label = settings_item(s.offset + row, &action);
         if (!label) break;
         if (action == A_NAP) label = s.nap ? "Wake" : "Nap";
+        // An agent without V lives in another app: the dial cannot stop its turn or change its model there.
         bool enabled = action == A_INBOX || action == A_NAP ||
             (s.connected && ((action != A_STOP && action != A_MODELS && action != A_SELECT_BEGIN && action != A_LATEST) ||
-                (active() && (action != A_STOP || active()->busy) && (action != A_LATEST || !visit.pending))));
+                (active() && (action != A_STOP || active()->busy) && (action != A_LATEST || !visit.pending) &&
+                 ((action != A_STOP && action != A_MODELS) || !(active()->caps_off & CABLE_CAP_V)))));
         int y = TAB_TOP + row * TAB_ROW_HEIGHT, hit = s.hit_count++;
         s.hits[hit] = (hit_t){{LIST_HIT_X, y, LIST_HIT_W, TAB_ROW_HEIGHT}, action, 0, enabled};
         // Inter, centred in the row it is tapped in
@@ -2553,7 +1977,6 @@ bool habitat_scene_take(ht_scene_t *f)
     s.dirty = false;
     s.notice_frame = 0;
     s.hit_count = 0;
-    s.recap_card = (ht_rect_t){0};
     // The custom pets' memory (pet_store.c): a pack dropped or replaced since the last scene was built is freed here.
     // The render task is the only caller, and it paints each scene before it takes the next (display_habitat.c), so
     // nothing drawn from those packs is still being rasterised. The scene it keeps as `front` (for the next damage
@@ -2576,9 +1999,6 @@ bool habitat_scene_take(ht_scene_t *f)
     case HOME:
         render_home(f);
         break;
-    case SWARM_PICK:
-        render_swarm_pick(f);
-        break;
     case AGENTS:
         render_agents(f);
         break;
@@ -2595,6 +2015,7 @@ bool habitat_scene_take(ht_scene_t *f)
         render_answer_review(f);
         break;
     case TABS:
+    case APPS:
     case MACHINES:
     case INBOX:
         render_list(f);
@@ -2719,16 +2140,6 @@ static bool carry_emit(const ht_carry_command_t *c, void *ctx)
     COPY(a.id,c->agent); copy(a.text,48,c->id); copy(a.text+48,48,c->selection);
     return xQueueSend(actions,&a,0)==pdPASS;
 }
-// Whom a voice turn on the Swarm face names: the Lead's harness here, or, for a Lead on another machine, its Swarm id,
-// whose chat the daemon posts the words in (Diego's dial, 2026-10-29: the openharness Lead ran on another Mac and a tap
-// on its face did nothing). An older daemon would hand that id to the pane focused in the window: then no one.
-static const char *swarm_voice_id(void)
-{
-    const ht_lead_t *l = swarm_lead();
-    if (!l) return "";
-    if (l->local[0]) return l->local;
-    return cable_client_supports(CABLE_FEATURE_SWARM_REMOTE) ? l->id : "";
-}
 static action_t make_action(hit_t h)
 {
     action_t a = {.kind = h.action, .value = h.value, .revision = s.q.revision};
@@ -2743,10 +2154,8 @@ static action_t make_action(hit_t h)
         COPY(a.id, selection.agent);
         copy(a.text, sizeof selection.id, selection.id);
         a.dy = (int)selection.revision;
-    } else if ((s.view == HOME || s.view == AGENT) && (h.action == A_PET || h.action == A_VOICE) && carry.active &&
-               !swarm_mode()) {
-        // Carried text goes with voice on a pane's face (the pet's A_PET, or the Focus face's A_VOICE). A Swarm's face
-        // talks to its Lead (swarm_voice_id) and does not show the carry, so it is left to its own path.
+    } else if ((s.view == HOME || s.view == AGENT) && (h.action == A_PET || h.action == A_VOICE) && carry.active) {
+        // Carried text goes with voice on a pane's face (the pet's A_PET, or the Focus face's A_VOICE).
         if (active()) COPY(a.id,active()->id);
         copy(a.text,sizeof carry.id,carry.id); a.value=3;
     } else if (h.action == A_RETURN) {
@@ -2757,10 +2166,10 @@ static action_t make_action(hit_t h)
         COPY(a.id, s.agents[h.value].id);
     else if (h.action == A_NOTICE && h.value < s.notice_count)
         COPY(a.id, s.notice[h.value].agent_id);
-    else if (h.action == A_TAB && h.value < tabs_total())
+    else if (h.action == A_TAB && h.value < s.tab_count)
         COPY(a.id, tab_id_at(h.value));
-    else if (h.action == A_LEAD && swarm_here() && h.value < swarm_here()->lead_n)
-        COPY(a.id, swarm_here()->leads[h.value].id);
+    else if (h.action == A_APP && h.value < s.app_count)
+        COPY(a.id, s.apps[h.value].id);
     else if (h.action == A_MACHINE && h.value < s.machine_count)
         COPY(a.id, s.machines[h.value].id);
     else if (h.action == A_MODEL && h.value < s.model_count) {
@@ -2770,8 +2179,6 @@ static action_t make_action(hit_t h)
         COPY(a.id,s.q.agent); a.dy=s.q.index;
     } else if (h.action == A_DESKTOP && h.value == 1)
         COPY(a.id, s.q.agent);
-    else if (swarm_mode())
-        COPY(a.id, swarm_voice_id());
     else if (active())
         COPY(a.id, active()->id);
     return a;
@@ -2853,13 +2260,6 @@ static void draft_move(int delta, uint32_t now)
         change();
     }
 }
-// The Lead a face voice turn goes to: the one on the face, when `id` is its local harness or, for a Lead on another
-// machine, its Swarm id.
-static const ht_lead_t *voice_lead(const char *id, int value)
-{
-    const ht_lead_t *l = value == 0 || value == 1 ? swarm_lead() : NULL;
-    return l && id[0] && (!strcmp(l->local, id) || (!l->local[0] && !strcmp(l->id, id))) ? l : NULL;
-}
 static void dispatch(action_t a)
 {
     switch (a.kind) {
@@ -2897,7 +2297,6 @@ static void dispatch(action_t a)
         break;
     case A_AGENTS: {
         view(AGENTS);
-        if (swarm_here()) { ht_tab_carousel_reset(&pane_carousel, swarm_here()->lead_n, sw.at); break; }
         ht_tab_carousel_reset(&pane_carousel, s.count, s.active >= 0 && s.active < s.count ? s.active : 0);
         int last = s.count > TAB_ROWS ? s.count - TAB_ROWS : 0;
         s.offset = s.active - TAB_ROWS / 2;
@@ -2909,18 +2308,11 @@ static void dispatch(action_t a)
         int i = find(a.id);
         if (i < 0)
             break;
-        swarm_leave();
         if (visit.available && strcmp(visit.agent, a.id)) ht_visit_close(&visit);
         s.active = i;
         view(AGENT);
         if (s.connected)
             queue(a);
-        break;
-    }
-    case A_LEAD: {
-        int i = swarm_lead_index(swarm_here(), a.id);
-        if (i >= 0 && i != sw.at) swarm_show(swarm_here(), i, true);
-        if (swarm_mode()) view(HOME);
         break;
     }
     case A_READER:
@@ -2938,7 +2330,9 @@ static void dispatch(action_t a)
     case A_ANSWER:
         if (!question_view(s.view) || a.revision!=s.q.revision || a.dy!=s.q.index ||
             !s.q.valid || s.q.loading || s.q.pending || s.q.error[0] || strcmp(a.id,s.q.agent)) break;
-        if (a.kind==A_QUESTION_SAY && s.q.item[s.q.index].can_text) {
+        // A choices screen opened before the agent lost A answers nothing; back still leaves it.
+        if (!agent_allows(s.q.agent, CABLE_CAP_A) && a.kind!=A_QUESTION_BACK && a.kind!=A_QUESTION_SAY) break;
+        if (a.kind==A_QUESTION_SAY && s.q.item[s.q.index].can_text && agent_allows(s.q.agent, CABLE_CAP_V)) {
             a.kind=A_VOICE; a.value=4; copy(a.text,sizeof s.q.token,s.q.token);
             ht_gesture_guard(&gesture,ms()); dispatch(a);
         } else if (a.kind==A_QUESTION_CHOICES && s.view==QUESTION) view(CHOICE);
@@ -2955,27 +2349,15 @@ static void dispatch(action_t a)
         else if (a.kind==A_ANSWER) send_answer();
         break;
     case A_INBOX:
-    case A_PET_INBOX:   // released on the badged companion (the touch path dispatches A_INBOX itself)
         notice_open();
         break;
-    case A_PICK_PERSONAL:
-    case A_PICK_TEAM:
-        if (s.view == SWARM_PICK) swarm_pick(a.kind == A_PICK_TEAM);
-        break;
-    case A_SIDE_PM:
-    case A_SIDE_BUDDY:
-        ESP_LOGI("habitat", "pair: %s", a.kind == A_SIDE_BUDDY ? "Buddy" : "PM");
-        swarm_side_set(a.kind == A_SIDE_BUDDY);
-        break;
     case A_NOTICE: {
-        if (s.connected && a.id[0] && swarm_notice(a.id) >= 0) {
-            // The dial's own entry: enter that Swarm at that Lead, read-only for a remote one (spec §5).
+        if (s.connected && a.id[0] && !agent_allows(a.id, CABLE_CAP_F)) {
+            // The agent lives in another app, so there is no window to open: go to its face, its recap still there.
             for (int i = 0; i < s.notice_count; i++)
                 if (!strcmp(s.notice[i].agent_id, a.id)) notice_mark_read(&s.notice[i]);
-            const ht_supertab_t *t = NULL;
-            for (int k = 0; k < swarm.n && !t; k++) if (swarm_lead_index(&swarm.tabs[k], a.id) >= 0) t = &swarm.tabs[k];
-            if (t) swarm_enter(t, a.id, true);
-            else swarm_notice_drop(a.id);
+            action_t face = {.kind = A_AGENT}; COPY(face.id, a.id);
+            dispatch(face);
             break;
         }
         if (s.connected && !visit.pending && a.id[0]) {
@@ -3039,32 +2421,29 @@ static void dispatch(action_t a)
         view(MACHINES);
         break;
     case A_TAB: {
-        int index = tab_index_of(a.id);
+        int index = workspace_index(a.id);
         if (s.view==TABS && index>=0)
-            ht_tab_carousel_reset(&tab_carousel,tabs_total(),index);
-        const ht_supertab_t *t = tab_swarm(index);
-        if (t) {
-            if (s.view!=TABS) swarm_enter(t,NULL,true);   // on TABS, Done enters it
-            break;
-        }
-        if (s.view!=TABS) swarm_leave();
+            ht_tab_carousel_reset(&tab_carousel,s.tab_count,index);
         tab_request(a.id,s.view==TABS);
         break;
     }
     case A_TAB_DONE:
         if (s.view!=TABS) break;
         ht_tab_carousel_cancel(&tab_carousel);
-        if (tab_swarm(ht_tab_carousel_index(&tab_carousel))) {
-            swarm_enter(tab_swarm(ht_tab_carousel_index(&tab_carousel)),NULL,true);
-            break;
-        }
-        swarm_leave();
         tabs_sync();
         if (s.view!=TABS) break; // preserve a queue failure shown by tabs_sync
         if (workspace.phase!=HT_WORKSPACE_IDLE) {
             COPY(s.title,"Switching tab"); COPY(s.message,"Opening your workspace...");
             view(MESSAGE);
         } else view(HOME);
+        break;
+    case A_APP:
+        if (s.view == APPS) app_pick(app_index(a.id));
+        break;
+    case A_APP_DONE:
+        if (s.view != APPS) break;
+        ht_tab_carousel_cancel(&app_carousel);
+        app_pick(ht_tab_carousel_index(&app_carousel));
         break;
     case A_MACHINE:
         if (s.connected && queue(a)) {
@@ -3125,17 +2504,13 @@ static void dispatch(action_t a)
             s.nap = false;
             s.voice_return = s.view;
             int target = find(a.id);
-            const ht_lead_t *lead = voice_lead(a.id, a.value);
-            s.voice_swarm = lead != NULL;
-            if (lead) target = -1;
             if (a.value == 2) snprintf(s.voice_target, sizeof s.voice_target, "Find %.48s",
                 !strcmp(form.page.title, "Find Harness") ? "Harness" :
                 !strcmp(form.page.title, "New Harness") ? form.page.label : form.page.title);
             else if (a.value == 7) COPY(s.voice_target, "Find in output");
             else if (a.value == 5 || a.value == 6) COPY(s.voice_target, draft.page.name);
-            else COPY(s.voice_target, lead ? lead->project : target >= 0 ? s.agents[target].name : "harness");
-            sw.voice_buddy = lead && swarm_on_buddy(lead) && lead->buddy.has;
-            COPY(s.voice_engine, lead ? swarm_voice_engine(lead) : target >= 0 && a.value != 2 && a.value != 5 && a.value != 6 && a.value != 7 ?
+            else COPY(s.voice_target, target >= 0 ? s.agents[target].name : "harness");
+            COPY(s.voice_engine, target >= 0 && a.value != 2 && a.value != 5 && a.value != 6 && a.value != 7 ?
                 s.agents[target].engine : "");
             s.voice_started = ms();
             view(VOICE);
@@ -3144,12 +2519,7 @@ static void dispatch(action_t a)
         break;
     case A_VOICE_STOP:
         if (s.voice_open && !s.voice_start_pending && !s.voice_waiting && audio_client_recording()) {
-            // Words for a Swarm chat go as any harness's do: reviewed only when held (Diego's dial, 2026-10-29: "like the
-            // other agents"; they were always reviewed). Only a daemon that posts a reviewed draft in the chat reviews them:
-            // an older one would type it into the Lead's terminal.
-            bool swarm_review = cable_client_supports(CABLE_FEATURE_DRAFT | CABLE_FEATURE_SWARM_REVIEW);
-            if (a.value == 1 && cable_client_supports(CABLE_FEATURE_DRAFT) && !s.voice_search && (s.voice_return == HOME || s.voice_return == AGENT || s.voice_return == SELECTION) &&
-                (!s.voice_swarm || swarm_review)) {
+            if (a.value == 1 && cable_client_supports(CABLE_FEATURE_DRAFT) && !s.voice_search && (s.voice_return == HOME || s.voice_return == AGENT || s.voice_return == SELECTION)) {
                 s.voice_review = true; audio_client_request_review();
             }
             audio_client_stop();
@@ -3259,12 +2629,8 @@ static void dispatch(action_t a)
         view(STOP);
         break;
     case A_STOP_YES:
-        if (s.connected && swarm_lead() && swarm_lead()->local[0] && !strcmp(swarm_lead()->local, s.stop_agent) &&
-            swarm_lead()->state == HT_LEAD_WORK) {
-            COPY(a.id, s.stop_agent);
-            queue(a);
-            view(HOME);
-        } else if (s.connected && find(s.stop_agent) >= 0 && s.agents[find(s.stop_agent)].busy) {
+        if (s.connected && find(s.stop_agent) >= 0 && s.agents[find(s.stop_agent)].busy &&
+            agent_allows(s.stop_agent, CABLE_CAP_V)) {   // its caps may have lost V since Stop opened
             COPY(a.id, s.stop_agent);
             queue(a);
             view(AGENT);
@@ -3308,7 +2674,6 @@ static void dispatch(action_t a)
         break;
     case A_SETTINGS_SAVE:
         break;   // the worker's alone: it is queued, never dispatched from a hit rect
-    case A_SUPERTAB:
     case A_QUESTION_READ:
     case A_NOTICE_READ:
     case A_TAB_REFRESH:
@@ -3370,14 +2735,6 @@ static void worker(void *unused)
         case A_DESKTOP:
             cable_client_send_open(a.id, NULL);
             break;
-        case A_SUPERTAB: {
-            static const char *ops[] = {"supertab.recap.get", "supertab.open", "supertab.select"};
-            if (a.value >= SUPERTAB_RECAP_GET && a.value <= SUPERTAB_SELECT) cable_client_supertab_send(ops[a.value], a.text, a.id);
-            else if (a.value == SUPERTAB_SIDE) cable_client_supertab_side(a.text, !strcmp(a.id, "buddy"));
-            else if (a.value == SUPERTAB_SIDE_KEPT) cable_client_supertab_side_kept(a.text);
-            else if (a.value == SUPERTAB_THREAD_LEAVE) cable_client_supertab_thread_leave(a.text, a.id);
-            break;
-        }
         case A_NOTICE_READ:
             cable_client_notification_read(a.id, a.text);
             break;
@@ -3404,6 +2761,9 @@ static void worker(void *unused)
         }
         case A_MACHINE:
             cable_client_select_machine(a.id);
+            break;
+        case A_APP:
+            cable_client_pick_app(a.id);
             break;
         case A_VOICE:
             display_lock();
@@ -3493,15 +2853,6 @@ static void worker(void *unused)
         }
     }
 }
-// A Swarm's face, with its Lead open on the daemon: what a drag there scrolls is that Swarm's chat on the desktop (Diego's
-// dial, 2026-10-29: scrolling the recap did not scroll the chat). Only once the drag has moved for 250 ms: a flick is
-// shorter, and stays the side's, after any rest before it (review of #2232).
-static bool swarm_scroll_reportable(uint32_t held)
-{
-    // And only once the daemon has the Lead open: before, it would hand the drag to the focused pane (review of #2232).
-    return held >= 250 && s.ready && s.connected && !s.loading && (s.view == HOME || s.view == AGENT) && swarm_mode() &&
-           swarm_lead() && sw.opened && !display_is_asleep() && !s.voice_open && !audio_client_active();
-}
 void habitat_touch(bool down, int x, int y, uint32_t now)
 {
     if (!s.ready)
@@ -3517,10 +2868,8 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
     }
     surface = s.view == HOME || s.view == AGENT;
     if (down && !s.touch_down) {
-        sw.auto_tabs = false; sw.lost.tab[0] = 0;   // the person's TABS from here on, and no Swarm comes back over it
         s.touch_cancelled = false;
         s.touch_brake = s.coasting && (int32_t)(now - s.coast_until) < 0;
-        sw.drag_at = 0;
         s.coasting = false;
         ht_scroll_cancel(&scroll);
         scroll = (ht_scroll_t){0};
@@ -3528,7 +2877,6 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         s.start_y = y;
         s.touch_far2 = 0;
         s.touch_started = now;
-        if (s.view == SWARM_PICK) { s.pick_until = now + 5000; if (!s.pick_until) s.pick_until = 1; }
         if (question_view(s.view)) s.q.drag=0;
         s.draft_drag = 0;
         s.tab_drag = 0;
@@ -3546,7 +2894,8 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         if (surface && pressed_action.kind==A_TABS && !s.touch_brake)
             ht_workspace_touch(&workspace,workspace_index(s.selected_tab),s.tab_count,x,y,now);
         if (s.view == TABS && pressed_action.kind == A_TAB) ht_tab_carousel_begin(&tab_carousel, x, now);
-        if (s.view == AGENTS && (pressed_action.kind == A_AGENT || pressed_action.kind == A_LEAD))
+        if (s.view == APPS && pressed_action.kind == A_APP) ht_tab_carousel_begin(&app_carousel, x, now);
+        if (s.view == AGENTS && pressed_action.kind == A_AGENT)
             ht_tab_carousel_begin(&pane_carousel, x, now);
         if (s.view == INBOX && pressed_action.kind == A_NOTICE)
             ht_tab_carousel_begin(&inbox_carousel, x, now);
@@ -3564,10 +2913,6 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                     ht_scroll_cancel(&scroll);
                 }
             } else ht_scroll_begin(&scroll, x, y, now, scroll_reversed, scroll_emit, NULL);
-        } else if (s.touch_brake && surface && swarm_scroll_reportable(250)) {
-            // A touch stops a Swarm chat's fling on the desktop, as it does a terminal's.
-            ht_scroll_begin(&scroll, x, y, now, scroll_reversed, scroll_emit, NULL);
-            ht_scroll_cancel(&scroll);
         }
     } else if (down && !s.touch_cancelled) {
         ht_gesture_move(&gesture, x, y);
@@ -3577,6 +2922,8 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             if (gesture.axis == 2 && ht_tab_carousel_move(&tab_carousel, x, now)) {
                 tabs_sync(); change();
             }
+        } else if (s.view == APPS) {
+            if (gesture.axis == 2 && ht_tab_carousel_move(&app_carousel, x, now)) change();
         } else if (s.view == AGENTS) {
             if (gesture.axis == 2 && ht_tab_carousel_move(&pane_carousel, x, now)) change();
         } else if (s.view == INBOX && inbox_carousel.touching) {
@@ -3594,12 +2941,6 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             ht_selection_move(&selection, travel, now);
             change();
         } else {
-            // A Swarm's face scrolls the Swarm chat the desktop has open (the daemon names its tab), once a vertical drag
-            // has outlasted a flick: a quick flick up or down is still the side's (the pair's taps now) and sends nothing.
-            if (gesture.axis == 1 && !sw.drag_at) sw.drag_at = now | 1;   // | 1: 0 is "not yet", so it may be now + 1
-            uint32_t dragged = sw.drag_at && (int32_t)(now - sw.drag_at) > 0 ? now - sw.drag_at : 0;
-            if (!scroll.live && surface && gesture.axis == 1 && swarm_scroll_reportable(dragged))
-                ht_scroll_begin(&scroll, x, y, now, scroll_reversed, scroll_emit, NULL);
             ht_scroll_move(&scroll, x, y, now);
         }
         if (gesture.moved && s.pressed >= 0) {
@@ -3619,6 +2960,8 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             tabs_move((s.last_y - y) * (scroll_reversed ? -1 : 1));
         bool tab_contact = s.view == TABS && tab_carousel.touching;
         bool tab_tap = tab_contact && ht_tab_carousel_end(&tab_carousel, x, gesture.axis == 2, now);
+        bool app_contact = s.view == APPS && app_carousel.touching;
+        bool app_tap = app_contact && ht_tab_carousel_end(&app_carousel, x, gesture.axis == 2, now);
         bool scrolled = ht_scroll_end(&scroll, x, y, now);
         if (scrolled) {
             uint32_t coast = ht_scroll_coast_ms(scroll.velocity);
@@ -3632,12 +2975,18 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         } else if (tab_contact) {
             int index = pressed_action.value;
             if (tab_tap && result == HT_TOUCH_TAP && pressed_action.kind == A_TAB && index >= 0 &&
-                index < tabs_total() && !strcmp(pressed_action.id, tab_id_at(index))) {
+                index < s.tab_count && !strcmp(pressed_action.id, tab_id_at(index))) {
                 dispatch(pressed_action);
                 // On Focus a tap on a name is the check too (owner, 2026-10-06), as on the panes.
                 if (s.view == TABS) dispatch((action_t){.kind = A_TAB_DONE});
             }
             tabs_sync();
+            change();
+        } else if (app_contact) {
+            // Browsing the apps changes nothing: a pick rebuilds the ring. A tap on a page picks that app.
+            int index = pressed_action.value;
+            if (app_tap && result == HT_TOUCH_TAP && pressed_action.kind == A_APP && index >= 0 &&
+                index < s.app_count && !strcmp(pressed_action.id, s.apps[index].id)) dispatch(pressed_action);
             change();
         } else if (notice_contact) {
             // Browsing the notices changes nothing but the page (and so s.offset); a tap on the page opens that agent.
@@ -3653,8 +3002,6 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             int index = pressed_action.value;
             if (pane_tap && result == HT_TOUCH_TAP && pressed_action.kind == A_AGENT && index >= 0 &&
                 index < s.count && !strcmp(pressed_action.id, s.agents[index].id)) dispatch(pressed_action);
-            if (pane_tap && result == HT_TOUCH_TAP && pressed_action.kind == A_LEAD && swarm_here() && index >= 0 &&
-                index < swarm_here()->lead_n && !strcmp(pressed_action.id, swarm_here()->leads[index].id)) dispatch(pressed_action);
             change();
         } else if (result == HT_TOUCH_TAP && s.touch_brake) {
             // DOWN already stopped desktop inertia. This entire tap is only a brake.
@@ -3667,7 +3014,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 } else if (result==HT_TOUCH_TAP || result==HT_TOUCH_HOLD) dispatch((action_t){.kind=A_TABS});
             }
             change();
-        } else if ((surface || s.view == SWARM_PICK) && home_footer(pressed_action.kind)) {
+        } else if (surface && home_footer(pressed_action.kind)) {
             /*
              * A BUTTON IS PRESSED AND RELEASED, not tapped within a tolerance.
              *
@@ -3689,10 +3036,6 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             if (result == HT_TOUCH_TAP || (on_target && now - s.touch_started < 1800))
                 dispatch(pressed_action);
             change();
-        } else if (surface && pressed_action.kind == A_PET_INBOX && s.touch_far2 < 24 * 24 && now - s.touch_started < 650) {
-            // The companion wears the notice badge: a touch on it, read as a thumb's (the face's talk rule below), opens the
-            // inbox. It is no footer button, so a swipe that starts on it still moves to the next project.
-            dispatch((action_t){.kind = A_INBOX});
         } else if (surface && pressed_action.kind == A_PET &&
                    !gesture.guarded && s.touch_far2 < 24 * 24 && now - s.touch_started < 650) {
             /*
@@ -3705,11 +3048,21 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
              * the tabs.
              */
             ht_gesture_guard(&gesture, now);
-            if (s.connected && !s.loading && (active() || swarm_mode())) {
-                ESP_LOGI("habitat", "focus touch: start voice");
-                // Built as the old microphone's was: make_action names the agent on the face, and
-                // main-surface voice without a recipient is dropped.
-                dispatch(make_action((hit_t){.action = A_VOICE}));
+            if (s.connected && !s.loading && active()) {
+                agent_t *talker = active();
+                if (talker->caps_off & CABLE_CAP_V) {
+                    // The agent lives in another app, so there is nobody here to hear the microphone. Say where to
+                    // go for two seconds instead, in the line "Try again" uses.
+                    snprintf(s.hint, sizeof s.hint, "See it in %s", host_name(talker->host));
+                    s.voice_retry_until = ms() + 2000;
+                    if (!s.voice_retry_until) s.voice_retry_until = 1;
+                    change();
+                } else {
+                    ESP_LOGI("habitat", "focus touch: start voice");
+                    // Built as the old microphone's was: make_action names the agent on the face, and
+                    // main-surface voice without a recipient is dropped.
+                    dispatch(make_action((hit_t){.action = A_VOICE}));
+                }
             }
         } else if (result == HT_TOUCH_TAP && pressed_action.kind == A_PET &&
                    (surface || s.view == VOICE || s.view == SELECTION)) {
@@ -3731,9 +3084,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             } else if (s.view == DRAFT && pressed_action.kind == A_DRAFT_EDIT) {
                 pressed_action.kind = A_DRAFT_OPTIONS; dispatch(pressed_action);
             } else if (surface && pressed_action.kind == A_PET)
-                face_hold();
-            else if (surface && pressed_action.kind == A_PET_INBOX)
-                tabs_open();
+                hold_open();
         } else if (result == HT_TOUCH_TAP) {
             if (pressed_action.kind == A_PET) {
                 if (surface) dispatch(pressed_action); // immediate, harmless acknowledgement
@@ -3742,7 +3093,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 dispatch(pressed_action);
             }
         } else if (gesture.axis == 1 && abs(dy) > 55 && abs(dy) > abs(dx)) {
-            if (s.view == TABS || s.view == AGENTS || s.view == SETTINGS) {
+            if (s.view == TABS || s.view == APPS || s.view == AGENTS || s.view == SETTINGS) {
                 // The list consumed the drag already, including its final sample.
             } else if (s.view == DRAFT || s.view == DRAFT_OPTIONS) {
                 // Reading a draft never submits or starts recording.
@@ -3752,8 +3103,6 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 // Reading/choosing consumed this contact; motion cannot submit an answer.
             } else if (s.view == SELECTION) {
                 // Its bounded reading cursor already consumed this vertical drag.
-            } else if (surface && swarm_mode()) {
-                // A Swarm face's vertical swipe does nothing (spec 2026-11-05): the pair switches sides, the bell opens the inbox.
             } else if (surface && dy > 0 && notice_unread(face_id())) {
                 // Pull down from the badge: it sits at the top edge and a pull is the gesture the rest of the
                 // world already means by it.
@@ -3778,7 +3127,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 if (next >= 0 && next < count) s.offset = next;
             }
         } else if (gesture.axis == 2 && abs(dx) > 60 && abs(dx) > abs(dy)) {
-            if (s.view == TABS) {
+            if (s.view == TABS || s.view == APPS) {
                 // The carousel owns horizontal motion, including contacts that began on its footer.
             } else if (s.view == DRAFT || s.view == DRAFT_OPTIONS) {
                 if (dx > 0) {
@@ -3791,16 +3140,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 if (dx>0 && !s.q.pending) view(s.view==ANSWER_REVIEW ? CHOICE : s.view==CHOICE ? QUESTION : HOME);
             } else if (s.view == INBOX && s.notice_count)
                 s.offset = (s.offset + (dx < 0 ? 1 : s.notice_count - 1)) % s.notice_count;
-            else if (surface && swarm_thread_swipe()) {
-                // A thread face: out of the thread, not to the next project.
-            } else if (surface && swarm_here() && swarm_here()->lead_n && s.connected) {
-                // A Swarm's next or previous project, by `order`, wrapping as the panes do (never `focus`).
-                // One project wraps onto itself: nothing to pick, ask or reopen on the desktop (Diego, 2026-10-29).
-                int n = swarm_here()->lead_n, i = (sw.at + (dx < 0 ? 1 : n - 1)) % n;
-                if (i != sw.at) swarm_show(swarm_here(), i, true);
-            } else if (surface && swarm_mode()) {
-                // A Swarm with no projects has nowhere to swipe to.
-            } else if (surface && s.count && s.connected && !s.loading) {
+            else if (surface && s.count && s.connected && !s.loading) {
                 int i = s.active < 0 ? 0 : (s.active + (dx < 0 ? 1 : s.count - 1)) % s.count;
                 action_t a = {.kind = A_AGENT};
                 COPY(a.id, s.agents[i].id);
@@ -3819,6 +3159,8 @@ void habitat_touch_cancel(void)
 {
     bool visible = s.touch_down || s.pressed >= 0;
     input_cancel();
+    // No release follows to settle APPS' pages (one cancelled any other way still ends them on its release).
+    ht_tab_carousel_cancel(&app_carousel);
     s.touch_down = false; // driver swallows the rest of this contact until a trustworthy UP
     if (visible) change();
 }
@@ -3830,15 +3172,11 @@ uint32_t habitat_next_wake_ms(void)
     if (s.voice_open)
         delay = 125;
     if (s.view == TABS && tab_carousel.animating && !display_is_asleep()) delay = 16;
+    if (s.view == APPS && app_carousel.animating && !display_is_asleep()) delay = 16;
     if (s.view == AGENTS && pane_carousel.animating && !display_is_asleep()) delay = 16;
     if (s.view == INBOX && inbox_carousel.animating && !display_is_asleep()) delay = 16;
     if (selection.pending && delay > 100) delay = 100;
     if (visit.pending && delay > 100) delay = 100;
-    if (swarm_mode() && swarm.recap.state == HT_RECAP_LOADING && !sw.retried) {
-        int32_t left = (int32_t)(swarm.recap.asked_ms + 5000 - now);
-        uint32_t due = left < 1 ? 1 : (uint32_t)left;
-        if (due < delay) delay = due;
-    }
     if (s.view == FORM && delay > 100) delay = 100;
     if (character.motion.next_ms && character.motion.next_ms < delay) delay = character.motion.next_ms;
     if (status_animated()) {
@@ -3862,8 +3200,7 @@ uint32_t habitat_next_wake_ms(void)
         uint32_t left = elapsed >= due ? 1 : due - elapsed;
         if (left < delay) delay = left;
     }
-    uint32_t deadlines[] = {s.pet_pose ? s.pet_until : 0, s.nap ? s.nap_until : 0, s.view == SWARM_PICK && !s.touch_down ? s.pick_until : 0,
-                            s.voice_retry_until};   // (the picker's idle waits for the lift: a held finger past it woke every pass)
+    uint32_t deadlines[] = {s.pet_pose ? s.pet_until : 0, s.nap ? s.nap_until : 0, s.voice_retry_until};
     for (unsigned i = 0; i < sizeof(deadlines) / sizeof(deadlines[0]); i++)
         if (deadlines[i]) {
             int32_t left = (int32_t)(deadlines[i] - now);
@@ -4075,7 +3412,6 @@ void ui_set_connected(bool value)
 {
     display_lock();
     if (!value) {
-        sw.opened = false;
         input_cancel();
         s.voice_retry_until = 0;
         s.pending_machine[0] = 0;
@@ -4129,6 +3465,65 @@ void ui_project_set_machine(const char *id, const char *machine_id, const char *
         COPY(s.agents[i].machine, name);
         change();
     }
+    display_unlock();
+}
+void ui_project_set_host_caps(const char *id, const char *host, uint8_t caps)
+{
+    display_lock();
+    int i = find(id);
+    if (i >= 0) {
+        uint8_t off = (uint8_t)(~caps & CABLE_CAPS_ALL);
+        if (strcmp(s.agents[i].host, host ? host : "") || s.agents[i].caps_off != off) {
+            COPY(s.agents[i].host, host);
+            s.agents[i].caps_off = off;
+            change();
+        }
+    }
+    display_unlock();
+}
+void ui_fleet_set_view(bool machine)
+{
+    display_lock();
+    if (s.machine_view != machine) {
+        s.machine_view = machine;
+        if (s.view == APPS) view(HOME);   // a window's list is picked by tab
+        change();
+    }
+    display_unlock();
+}
+void ui_apps_replace(const cable_app_t *rows, int count, const char *shown)
+{
+    display_lock();
+    // APPS stays on its app by id, never by place: a list that moved keeps the person on the same app, the page of an
+    // app that went closes up, and no app left closes the picker.
+    int at = ht_tab_carousel_index(&app_carousel);
+    char on[CABLE_APP_ID_MAX] = "";
+    if (s.view == APPS && at >= 0 && at < s.app_count) COPY(on, s.apps[at].id);
+    s.app_count = !rows || count < 0 ? 0 : count > CABLE_MAX_APPS ? CABLE_MAX_APPS : count;
+    if (s.app_count) memcpy(s.apps, rows, (size_t)s.app_count * sizeof *rows);
+    COPY(s.app_shown, shown);
+    s.apps_known = true;
+    // The host answers a pick with `apps` showing that app; one showing another means it ignored the pick, which must
+    // not land the face later, when that app is shown for another reason.
+    if (strcmp(s.app_landing, s.app_shown)) s.app_landing[0] = 0;
+    if (s.view == APPS) {
+        int i = app_index(on);
+        if (!s.app_count) view(HOME);
+        else if (i != at || app_carousel.count != s.app_count)   // the same page in the same list keeps a dragging finger
+            ht_tab_carousel_reset(&app_carousel, s.app_count, i < 0 ? at : i);
+    }
+    change();
+    display_unlock();
+}
+void ui_apps_forget(void)
+{
+    display_lock();
+    s.app_count = 0;
+    s.app_shown[0] = 0;
+    s.apps_known = false;
+    s.app_landing[0] = 0;
+    if (s.view == APPS) view(HOME);
+    change();
     display_unlock();
 }
 void ui_project_set_selected_model(const char *id, const char *model)
@@ -4241,7 +3636,7 @@ static void event(const char *id, const char *session, const char *kind, const c
     if (kind && !strcmp(kind, "activity")) {
         // Activity is a read of the current terminal, not a new turn or a recap.
         // A late read must never reanimate an idle pane.
-        if (m->busy && ms() - m->last_busy <= 25000) {
+        if (m->busy && ms() - m->last_busy <= BUSY_FUSE_MS) {
             activity_text(m->activity, sizeof m->activity, text_);
             if (a) { COPY(a->tool, m->activity); change(); }
         }
@@ -4329,7 +3724,7 @@ int ui_prune_stale_busy(void)
     int n = 0;
     uint32_t now = ms();
     for (int i = 0; i < s.count; i++)
-        if (s.agents[i].busy && now - s.agents[i].last_busy > 25000) {
+        if (s.agents[i].busy && now - s.agents[i].last_busy > BUSY_FUSE_MS) {
             s.agents[i].busy = false;
             pane_memory_t *m = pane_memory(s.agents[i].id, false);
             if (m) m->busy = false;
@@ -4407,6 +3802,12 @@ void ui_land_after_reload(void)
         s.loading = false;
         if (s.view != TABS) view(HOME);
     }
+    // The ring of an app picked here: the `apps` that names it came first, so this list is that app's.
+    if (s.app_landing[0] && !strcmp(s.app_landing, s.app_shown)) {
+        s.app_landing[0] = 0;
+        if (s.active != 0) input_cancel();
+        s.active = s.count ? 0 : -1;
+    }
     change();
     display_unlock();
 }
@@ -4418,8 +3819,7 @@ void ui_workspace_applied(const char *tab, uint32_t generation)
 }
 bool ui_scroll_reportable(void)
 {
-    // Not on a Swarm's face: it is no pane's terminal, and the pane still active behind it is not on the glass.
-    return s.ready && s.connected && !s.loading && (s.view == HOME || s.view == AGENT) && active() && !swarm_mode() &&
+    return s.ready && s.connected && !s.loading && (s.view == HOME || s.view == AGENT) && active() &&
            !display_is_asleep() && !s.voice_open && !audio_client_active();
 }
 void ui_notif_open(void)
@@ -4513,7 +3913,6 @@ static void notice_expire(uint32_t now)
 // The pane whose face is on the glass already shows its own news.
 static bool on_face(const char *id)
 {
-    if (swarm_mode()) return sw.lead[0] && !strcmp(sw.lead, id) && (s.view == HOME || s.view == AGENT) && !s.nap && !display_is_asleep();
     const agent_t *a = active();
     return a && !strcmp(a->id, id) && (s.view == HOME || s.view == AGENT) && !s.nap && !display_is_asleep();
 }
@@ -4615,10 +4014,6 @@ void ui_notif_replace(const cable_notif_t *rows, int count)
         held = s.notice[s.offset];
     if (!rows || count < 0) count = 0;
     if (count > NOTICES) count = NOTICES;
-    // The desktop's snapshot replaces its own rows only: the dial's Swarm entries go back in after it, first.
-    static EXT_RAM_BSS_ATTR cable_notif_t own[NOTICES];   // static: off the reader task's stack
-    int own_count = 0;
-    for (int i = 0; i < s.notice_count; i++) if (s.notice[i].swarm) own[own_count++] = s.notice[i];
     s.notice_count = 0;
     for (int i = count - 1; i >= 0; i--) {
         notice_add(rows[i].agent_id, rows[i].name, rows[i].machine, rows[i].summary,
@@ -4637,15 +4032,6 @@ void ui_notif_replace(const cable_notif_t *rows, int count)
             if (!strcmp(rows[j].agent_id, s.notice_reads[i].id) &&
                 !strcmp(rows[j].read_token, s.notice_reads[i].token)) present = true;
         if (!present) s.notice_reads[i].pending = false;
-    }
-    for (int i = own_count - 1; i >= 0; i--) {
-        // A wait stays pinned as a question; a Lead's message stays news (it would otherwise never expire).
-        notice_add(own[i].agent_id, own[i].name, own[i].machine, own[i].summary, own[i].question, false);
-        for (int j = 0; j < s.notice_count; j++) if (!strcmp(s.notice[j].agent_id, own[i].agent_id)) {
-            s.notice[j].swarm = own[i].swarm; s.notice[j].read_on_dial = own[i].read_on_dial;
-            s.notice[j].received_ms = own[i].received_ms;
-            break;
-        }
     }
     bool retained = false;
     for (int i = 0; i < s.notice_count; i++) if (!strcmp(s.notice[i].agent_id, selected)) retained = true;
@@ -4795,69 +4181,32 @@ void ui_service_model_picker(void)
     }
     display_unlock();
 }
-// The last `swarms` list as it came, so a Swarm's link arriving later can still list its desk tab.
-static EXT_RAM_BSS_ATTR cable_swarm_t desk_rows[SWARMS_MAX];
-static int desk_row_count;
-static char desk_selected[ID_MAX];
-// Whether a desktop focus may take the dial into a Swarm now: from HOME or an agent, never while talking, nor over a
-// question or a form.
-// A TABS the dial opened by itself is no screen of the person's: the app's focus and a returning Swarm take it over.
-static bool swarm_may_follow(void)
+void ui_swarms_replace(const cable_swarm_t *rows, int count, const char *selected)
 {
-    return !s.voice_open && !question_view(s.view) && (s.view == HOME || s.view == AGENT || (s.view == TABS && sw.auto_tabs));
-}
-static void swarms_apply(void)
-{
-    // A tab with no agent (only shells or viewers, or nothing) is not listed: nothing on the dial can drive it. A
-    // Swarm's desk tab is, whatever it counts: its project's Lead may run on another machine.
+    display_lock();
+    // A tab with no agent (only shells or viewers, or nothing) is not listed: nothing on the dial can drive it.
     static cable_swarm_t shown[SWARMS_MAX];   // static: too large for the reader task's stack; single writer
     int bounded=0;
-    for (int i=0;i<desk_row_count;i++)
-        if (desk_rows[i].agents>0 || ht_supertabs_for_desk(&swarm,desk_rows[i].id)) shown[bounded++]=desk_rows[i];
-    const cable_swarm_t *rows=shown;
-    const char *selected=desk_selected;
+    for (int i=0;rows && i<count && i<SWARMS_MAX;i++)
+        if (rows[i].agents>0) shown[bounded++]=rows[i];
     char focused[ID_MAX] = "";
     int focused_index = ht_tab_carousel_index(&tab_carousel);
     if (s.view == TABS && focused_index >= 0) COPY(focused, tab_id_at(focused_index));
-    int total_before = tabs_total();
+    int total_before = s.tab_count;
     bool selected_changed=strcmp(s.selected_tab,selected ? selected : "");
     bool browsing=workspace.phase!=HT_WORKSPACE_IDLE || tab_carousel.touching || tab_carousel.animating;
     bool changed=bounded!=s.tab_count;
     for (int i=0;!changed && i<bounded;i++) {
-        changed=strcmp(rows[i].id,s.tabs[i].id) || strcmp(rows[i].name,s.tabs[i].name);
+        changed=strcmp(shown[i].id,s.tabs[i].id) || strcmp(shown[i].name,s.tabs[i].name);
     }
     if (changed && (workspace.touching || s.view == TABS)) input_cancel();
     s.tab_count=bounded;
-    if (bounded) memcpy(s.tabs,rows,(size_t)bounded*sizeof *rows);
-    char was[ID_MAX];
-    COPY(was,s.selected_tab);
+    if (bounded) memcpy(s.tabs,shown,(size_t)bounded*sizeof *shown);
     COPY(s.selected_tab,selected);
-    // The desktop closed the desk tab of the Swarm on the face: the dial leaves it too, for TABS on the app's tab.
-    if (swarm_mode() && sw.desk[0] && workspace_index(sw.desk) < 0) {
-        swarm_leave();
-        if (s.view == HOME || s.view == AGENT || s.view == AGENTS) tabs_open();
-    } else if (swarm_mode() && sw.desk[0] && selected_changed && !strcmp(was, sw.desk) && s.selected_tab[0] &&
-               !s.voice_open && (s.view == HOME || s.view == AGENT || s.view == AGENTS)) {
-        // The desktop went from the Swarm's desk tab to another (Diego's dial, 2026-10-29): the dial follows it onto
-        // that tab's panes, as it follows the desktop in. It stayed on the Swarm face until that desk tab was closed;
-        // the daemon's focus for the new tab only moves `s.active`, which a Swarm face never shows. Only FROM the desk
-        // tab: right after the dial's own pick the desktop has not moved yet, and a frame naming its old tab is no move.
-        swarm_leave();
-        view(HOME);
-    } else {
-        swarm_desk_note();
-    }
-    // The focus came just before this frame (Diego's dial, 2026-10-28): the desktop has opened that Swarm's desk tab
-    // now. Spent by any change of tab, so a later visit to the tab does not replay it.
-    if (sw.pending[0] && selected_changed) {
-        const ht_supertab_t *t = ht_supertabs_find(&swarm, sw.pending);
-        if (t && t->tab[0] && !strcmp(t->tab, s.selected_tab) && !swarm_mode() && swarm_may_follow()) swarm_enter(t, "", false);
-        sw.pending[0] = 0;
-    }
-    changed = changed || total_before != tabs_total();
+    changed = changed || total_before != s.tab_count;
     if (s.view == TABS && (changed || (selected_changed && !browsing))) {
-        int index = browsing ? tab_index_of(focused) : tab_index_here();
-        ht_tab_carousel_reset(&tab_carousel, tabs_total(), index >= 0 ? index : tab_index_here());
+        int index = browsing ? workspace_index(focused) : workspace_index(s.selected_tab);
+        ht_tab_carousel_reset(&tab_carousel, s.tab_count, index >= 0 ? index : workspace_index(s.selected_tab));
     }
     if (workspace.phase!=HT_WORKSPACE_IDLE && workspace_index(workspace.pending)<0) {
         workspace_failed("That workspace is gone. Choose another.");
@@ -4867,367 +4216,6 @@ static void swarms_apply(void)
         if (!queue((action_t){.kind=A_TAB_REFRESH,.revision=workspace.serial}))
             workspace_failed("Device busy. Choose the tab again.");
     }
-    change();
-}
-void ui_swarms_replace(const cable_swarm_t *rows, int count, const char *selected)
-{
-    display_lock();
-    desk_row_count=!rows || count<0 ? 0 : count>SWARMS_MAX ? SWARMS_MAX : count;
-    if (desk_row_count) memcpy(desk_rows,rows,(size_t)desk_row_count*sizeof *rows);
-    COPY(desk_selected,selected);
-    swarms_apply();
-    display_unlock();
-}
-/*
- * A LEAD THAT NEEDS YOU (spec §5): one question-type inbox entry per Lead, keyed by its id and marked as the dial's own
- * (`swarm`: 1 needs you, 2 stuck) so the desktop's snapshot does not drop it. It beeps when it is new or changes kind,
- * so a wait and a state change, in either order, beep once. The text is the local wait's question when one is open,
- * else the approved fixed line; the grey line is the Swarm's name.
- */
-static void utf8_trim(char *text)
-{
-    // A name cut to its field may end inside a letter; drop the broken tail.
-    size_t n = strlen(text), k = n;
-    while (k && ((uint8_t)text[k - 1] & 0xc0) == 0x80) k--;
-    if (!k) return;
-    uint8_t lead = (uint8_t)text[k - 1];
-    size_t want = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1;
-    if (n - (k - 1) < want) text[k - 1] = 0;
-}
-static int swarm_notice(const char *lead)
-{
-    for (int i = 0; i < s.notice_count; i++) if (s.notice[i].swarm && !strcmp(s.notice[i].agent_id, lead)) return i;
-    return -1;
-}
-// notice_add files a plain entry; this marks it as the dial's own.
-static void swarm_notice_mark(const char *lead, uint8_t kind)
-{
-    for (int i = 0; i < s.notice_count; i++) if (!strcmp(s.notice[i].agent_id, lead)) {
-        s.notice[i].swarm = kind;
-        utf8_trim(s.notice[i].name); utf8_trim(s.notice[i].machine);
-        return;
-    }
-}
-static bool swarm_notice_raise(const ht_supertab_t *t, const ht_lead_t *l, bool stuck)
-{
-    uint8_t kind = stuck ? 2 : 1;
-    int i = swarm_notice(l->id), w = swarm_wait_of(l->local);
-    bool fresh = i < 0 || s.notice[i].swarm != kind;
-    if (fresh) notice_forget_read(l->id);
-    notice_add(l->id, l->project[0] ? l->project : "Untitled", w >= 0 && sw.waits[w].swarm[0] ? sw.waits[w].swarm : t->name,
-               w >= 0 ? swarm_wait_text(l) : swarm_fixed_text(stuck), true, false);
-    swarm_notice_mark(l->id, kind);
-    if (w >= 0) sw.waits[w].shown = true;
-    s.notice_sequence++;
-    bool face = on_face(l->id);
-    if (face) notice_read_now(l->id);
-    else if (fresh) display_wake();
-    change();
-    return fresh && !face;
-}
-static void swarm_notice_drop(const char *lead)
-{
-    if (swarm_notice(lead) < 0) return;
-    notice_remove(lead, true);
-    notice_sync_view();
-    change();
-}
-static bool swarm_events(const ht_lead_event_t *ev, int n)
-{
-    bool beep = false;
-    for (int k = 0; k < n; k++) {
-        const ht_supertab_t *t = ht_supertabs_find(&swarm, ev[k].tab);
-        int i = swarm_lead_index(t, ev[k].lead);
-        if (ev[k].kind == HT_LEAD_CLEARED || i < 0) swarm_notice_drop(ev[k].lead);
-        else beep |= swarm_notice_raise(t, &t->leads[i], ev[k].kind == HT_LEAD_RAISED_STUCK);
-    }
-    return beep;
-}
-// TABS follows the list when it is open, on the page it was showing.
-static void swarm_tabs_changed(void)
-{
-    if (s.view != TABS || tab_carousel.count == tabs_total()) return;
-    char focused[ID_MAX];
-    COPY(focused, tab_id_at(ht_tab_carousel_index(&tab_carousel)));
-    input_cancel();
-    int index = tab_index_of(focused);
-    ht_tab_carousel_reset(&tab_carousel, tabs_total(), index >= 0 ? index : tab_index_here());
-}
-// A daemon that restarts (each CLI update) drops the session and takes 5-40 s to resend the Swarm cards, and one that had
-// just started said "no Swarms" before it had read them (Diego's dial, 2026-10-29, 2026-11-02): the Swarm taken off the face
-// comes back on the Lead and side it showed, with no pick sent, however long that took, as long as the person has not moved
-// on. A daemon that remembers no side is told it, without moving the window. Only that Swarm; one that really went stays gone (ui_supertabs_ids).
-static bool swarm_regain(const ht_supertab_t *t)
-{
-    if (!t || !sw.lost.tab[0] || swarm_mode() || strcmp(t->id, sw.lost.tab) || !swarm_may_follow()) return false;
-    char lead[ID_MAX]; COPY(lead, sw.lost.lead);
-    bool buddies = false;
-    for (int i = 0; i < t->lead_n; i++) buddies |= t->leads[i].buddies;
-    if (sw.lost.buddy && buddies && !swarm_side_buddy(t->id)) { swarm_side_put(t->id, true); swarm_send(SUPERTAB_SIDE_KEPT, t->id, "buddy"); }
-    swarm_enter(t, lead, false);
-    return true;
-}
-void ui_supertabs_ids(const char ids[][ID_MAX], int n)
-{
-    static EXT_RAM_BSS_ATTR ht_lead_event_t ev[HT_SUPERTABS_MAX * HT_SUPERTAB_LEADS_MAX];   // static: off the reader task's stack
-    display_lock();
-    int count = ht_supertabs_ids(&swarm, ids, n, ev, (int)(sizeof ev / sizeof ev[0]));
-    swarm_events(ev, count);
-    if (swarm_mode() && !swarm_here()) {
-        // The Swarm on the face is gone: back to the list. Remembered, for a list that came empty before the real one.
-        COPY(sw.lost.tab, sw.tab); COPY(sw.lost.lead, sw.lead); sw.lost.buddy = swarm_side_buddy(sw.tab);
-        sw.tab[0] = sw.lead[0] = sw.desk[0] = 0;
-        ht_supertabs_recap_open(&swarm, "", "", ms());
-        if (s.view == HOME || s.view == AGENT || s.view == AGENTS) { tabs_open(); sw.auto_tabs = s.view == TABS; }
-    }
-    // The cards are back, without it: that Swarm really went. An empty list says nothing yet: it may not have read them.
-    if (n > 0 && sw.lost.tab[0]) {
-        bool listed = false;
-        for (int i = 0; i < n; i++) listed |= !strcmp(ids[i], sw.lost.tab);
-        if (!listed) sw.lost.tab[0] = 0;
-    }
-    swarms_apply();
-    swarm_tabs_changed();
-    change();
-    display_unlock();
-}
-bool ui_supertab(const ht_supertab_t *in)
-{
-    static EXT_RAM_BSS_ATTR ht_lead_event_t ev[HT_SUPERTAB_LEADS_MAX * 2];
-    if (!in) return false;
-    display_lock();
-    bool linked = in->tab[0] && !ht_supertabs_for_desk(&swarm, in->tab);
-    // The side follows the daemon, newest wins (spec 2026-10-29 Switching): a face that turns to its Buddy chat (a swipe
-    // the daemon took, the desktop opening it) is the Buddy side, one that turns away (the desktop opened another
-    // conversation) the PM side. Without Buddies there is no Buddy side.
-    const ht_supertab_t *was = ht_supertabs_find(&swarm, in->id);
-    int turn = 0;
-    bool buddies = false;
-    for (int k = 0; k < in->lead_n; k++) {
-        const ht_lead_t *l = &in->leads[k];
-        int j = swarm_lead_index(was, l->id);
-        bool before = j >= 0 && was->leads[j].chat == HT_CHAT_BUDDY, now = l->chat == HT_CHAT_BUDDY;
-        buddies |= l->buddies;
-        if (now && !before) turn = 1;
-        else if (before && !now && !turn) turn = -1;
-    }
-    int n = ht_supertabs_put(&swarm, in, ms(), ev, (int)(sizeof ev / sizeof ev[0]));
-    // A card made before the swipe out still names the thread left: it does not bring the face back, until a card without it
-    // comes or 3 s pass.
-    if (sw.left.root[0] && !strcmp(sw.left.tab, in->id)) {
-        const ht_supertab_t *now = ht_supertabs_find(&swarm, in->id);
-        int j = now ? swarm_lead_index(now, sw.left.lead) : -1;
-        if (j >= 0 && !strcmp(now->leads[j].thread_root, sw.left.root) && (int32_t)(ms() - sw.left.until) < 0)
-            ht_supertabs_thread_leave(&swarm, in->id, sw.left.lead);
-        else sw.left.root[0] = 0;
-    }
-    // A daemon that says the side is the truth: a face alone cannot tell it where no project has a Buddy chat (review of
-    // #2218). An older one says none, and the faces' turns tell it.
-    if (in->side != HT_SIDE_NONE) swarm_side_put(in->id, buddies && in->side == HT_SIDE_BUDDY);
-    else if ((!buddies || turn < 0) && swarm_side_buddy(in->id)) swarm_side_put(in->id, false);
-    else if (buddies && turn > 0) swarm_side_put(in->id, true);
-    bool beep = swarm_events(ev, n);
-    // A wait that came before any Lead named its harness shows now, once.
-    for (int w = 0; w < SWARM_WAITS; w++) {
-        const ht_supertab_t *t = NULL;
-        const ht_lead_t *l = sw.waits[w].agent[0] && !sw.waits[w].shown ?
-            ht_supertabs_lead_by_local(&swarm, sw.waits[w].agent, &t) : NULL;
-        if (l) beep |= swarm_notice_raise(t, l, sw.waits[w].stuck);
-    }
-    swarm_regain(ht_supertabs_find(&swarm, in->id));
-    const ht_supertab_t *t = swarm_here();
-    if (t && !strcmp(t->id, in->id)) {
-        // The face keeps its Lead; a Lead that went leaves the face on the one now at its place.
-        int i = swarm_lead_index(t, sw.lead);
-        if (i >= 0) {
-            sw.at = i;
-            if (!sw.opened) {
-                sw.retried = false;
-                ht_supertabs_recap_open(&swarm, t->id, sw.lead, ms());
-                swarm_send(SUPERTAB_OPEN, t->id, sw.lead);
-                swarm_send(SUPERTAB_RECAP_GET, t->id, sw.lead);
-                sw.opened = true;
-            } else
-            // The face's chat moved (a side the daemon took, the desktop) and what is held is another chat's: asked for
-            // again, and so is a thread entered or left. That chat's recap can come before this frame, and is refused as another chat's (a card is held 300 ms,
-            // a recap is not): the Buddy side showed no last message (Diego's dial, 2026-10-29).
-            if ((swarm.recap.state == HT_RECAP_LOADED || swarm.recap.state == HT_RECAP_EMPTY) && !strcmp(swarm.recap.lead, sw.lead) &&
-                (strcmp(swarm.recap.chat_id, t->leads[i].chat_id) || strcmp(swarm.recap.thread, t->leads[i].thread_root))) {
-                sw.retried = false;
-                ht_supertabs_recap_open(&swarm, t->id, sw.lead, ms());
-                swarm_send(SUPERTAB_RECAP_GET, t->id, sw.lead);
-            }
-        } else if (t->lead_n) swarm_show(t, sw.at < t->lead_n ? sw.at : t->lead_n - 1, false);
-        else swarm_show(t, -1, false);
-        swarm_buddy_seen();
-    }
-    if (linked) swarms_apply();
-    swarm_tabs_changed();
-    change();
-    display_unlock();
-    return beep;
-}
-void ui_supertab_recap(const char *tab, const char *lead, const char *chat_id, const char *thread, const char *text, uint32_t at, bool none)
-{
-    display_lock();
-    if (ht_supertabs_recap_put(&swarm, tab, lead, chat_id, thread, text, at, none)) change();
-    display_unlock();
-}
-// `lead` "" is the desktop on that Swarm's tab with no project open (its Chat with PM, a DM): the dial still goes in, on
-// the Lead it last showed there, and one already in keeps its face.
-void ui_supertab_focus(const char *tab, const char *lead)
-{
-    if (!tab || !lead) return;
-    display_lock();
-    int slot = -1;
-    for (int i = 0; i < HT_SUPERTABS_MAX && slot < 0 && lead[0]; i++) if (!strcmp(sw.focus[i].tab, tab)) slot = i;
-    for (int i = 0; i < HT_SUPERTABS_MAX && slot < 0 && lead[0]; i++) if (!sw.focus[i].tab[0] || !ht_supertabs_find(&swarm, sw.focus[i].tab)) slot = i;
-    if (slot >= 0) { COPY(sw.focus[slot].tab, tab); COPY(sw.focus[slot].lead, lead); }
-    const ht_supertab_t *t = ht_supertabs_find(&swarm, tab);
-    int i = swarm_lead_index(t, lead);
-    // As `focus` today: never while talking, nor over a question or a form.
-    // Nor over the Personal | Team picker: the desktop's focus closed it under a thumb, whose tap then talked (Diego's dial,
-    // 2026-11-06); the pick itself moves the desktop.
-    bool free = !s.voice_open && !question_view(s.view) && s.view != FORM && s.view != DRAFT && s.view != DRAFT_OPTIONS && s.view != SWARM_PICK;
-    sw.pending[0] = 0;
-    // The app is on another Lead of the Swarm coming back: the face comes back on that one.
-    if (i >= 0 && !strcmp(sw.lost.tab, tab)) COPY(sw.lost.lead, lead);
-    if (swarm_regain(t)) { change(); display_unlock(); return; }
-    if (t && (i >= 0 || !lead[0]) && free) {
-        if (swarm_mode() && !strcmp(sw.tab, tab)) {
-            if (i >= 0 && strcmp(sw.lead, lead)) swarm_show(t, i, false);
-        } else if (t->tab[0] && swarm_may_follow()) {
-            // The desktop opened this Swarm's tab: the dial goes in with it, or as soon as the `swarms` frame says so. From
-            // another Swarm too: that frame takes the dial out of the one it is in first (swarms_apply).
-            if (!strcmp(s.selected_tab, t->tab)) swarm_enter(t, lead, false);
-            else COPY(sw.pending, tab);
-        }
-    }
-    change();
-    display_unlock();
-}
-/*
- * A LEAD'S NOTICE (design 2026-10-28-round-dial-swarm-chat §3): the one alert a swarmChat daemon raises, a tag of the
- * person's in that Lead's project since #2965 (`chat` HT_CHAT_GROUP for a task chat's), the Lead's new message in its Lead
- * conversation or Chat with PM from a daemon before. It is that Lead's single entry, news rather than a question, the
- * message as its text and the Swarm's name (with " · PM" for Chat with PM) as its grey line. Each notice counts as unread
- * again; it is read at once only when that Lead's face shows that very chat, and for a reply inside a thread (`thread`, its
- * root) that very thread: the main chat shows it collapsed under its root, so the PM's answer in a task thread rang nowhere
- * (#2463). True when the caller should beep (the coalescing is the audio's).
- */
-_Static_assert(SWARM_SAID == NOTICES, "a chat for every inbox entry a Lead's message can take");
-static int swarm_said_of(const char *lead)
-{
-    for (int i = 0; lead && i < SWARM_SAID; i++) if (!strcmp(sw.said[i].lead, lead)) return i;
-    return -1;
-}
-bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, const char *chat_id, const char *thread, const char *text, uint32_t at)
-{
-    (void)at;
-    if (!tab || !lead || !chat_id || !thread || !text) return false;
-    display_lock();
-    const ht_supertab_t *t = ht_supertabs_find(&swarm, tab);
-    int i = swarm_lead_index(t, lead);
-    if (i < 0) { display_unlock(); return false; }
-    const ht_lead_t *l = &t->leads[i];
-    if (chat == HT_CHAT_BUDDY) {
-        // The Buddy's word is quiet (spec 2026-10-29 Alerts): no beep, no inbox entry, no wake. Read at once when its side
-        // is on the face, else the PM side's badge until that side is opened.
-        int k = swarm_heard_of(l->id);
-        for (int m = 0; m < SWARM_SAID && k < 0; m++) if (!sw.heard[m].lead[0]) k = m;
-        if (k < 0) k = 0;   // ponytail: 24 unseen Buddy words at once; the first slot gives way
-        COPY(sw.heard[k].lead, l->id); COPY(sw.heard[k].chat, chat_id);
-        if (on_face(l->id)) swarm_buddy_seen();
-        change();
-        display_unlock();
-        return false;
-    }
-    char grey[HT_SUPERTAB_NAME + 8];
-    snprintf(grey, sizeof grey, "%s%s", t->name, chat == HT_CHAT_PM ? " \xc2\xb7 PM" : "");
-    notice_forget_read(l->id);
-    notice_add(l->id, l->project[0] ? l->project : "Untitled", grey, text, false, false);
-    swarm_notice_mark(l->id, 3);
-    int slot = swarm_said_of(l->id);
-    for (int k = 0; k < SWARM_SAID && slot < 0; k++) if (!sw.said[k].lead[0] || swarm_notice(sw.said[k].lead) < 0) slot = k;
-    if (slot < 0) slot = 0;
-    COPY(sw.said[slot].lead, l->id); COPY(sw.said[slot].chat, chat_id);
-    s.notice_sequence++;
-    bool face = on_face(l->id) && !strcmp(l->chat_id, chat_id) && (!thread[0] || !strcmp(l->thread_root, thread));
-    if (face) notice_read_now(l->id);
-    else display_wake();
-    change();
-    display_unlock();
-    return !face;
-}
-// The desktop opened that chat: its message entry is read there, and goes from the dial.
-void ui_supertab_notice_read(const char *tab, const char *lead, const char *chat_id)
-{
-    if (!tab || !lead || !chat_id) return;
-    display_lock();
-    int h = swarm_heard_of(lead);
-    if (h >= 0 && !strcmp(sw.heard[h].chat, chat_id)) { sw.heard[h].lead[0] = 0; change(); }
-    int e = swarm_notice(lead), k = swarm_said_of(lead);
-    if (e >= 0 && s.notice[e].swarm == 3 && k >= 0 && !strcmp(sw.said[k].chat, chat_id)) {
-        sw.said[k].lead[0] = 0;
-        swarm_notice_drop(lead);
-    }
-    display_unlock();
-}
-bool ui_supertab_wait(const char *agent_id, const char *request, const char *swarm_name, bool stuck, const char *text)
-{
-    if (!agent_id || !agent_id[0] || strlen(agent_id) >= ID_MAX || !request) return false;
-    display_lock();
-    int w = swarm_wait_of(agent_id);
-    for (int i = 0; i < SWARM_WAITS && w < 0; i++) if (!sw.waits[i].agent[0]) w = i;
-    if (w < 0) w = 0;   // ponytail: sixteen open waits on one machine; the oldest slot gives way
-    bool same = !strcmp(sw.waits[w].agent, agent_id) && sw.waits[w].shown;
-    memset(&sw.waits[w], 0, sizeof sw.waits[w]);
-    COPY(sw.waits[w].agent, agent_id); COPY(sw.waits[w].request, request);
-    COPY(sw.waits[w].swarm, swarm_name); utf8_trim(sw.waits[w].swarm);
-    recap_preview(sw.waits[w].text, sizeof sw.waits[w].text, text);
-    sw.waits[w].stuck = stuck;
-    sw.waits[w].shown = same;
-    const ht_supertab_t *t = NULL;
-    const ht_lead_t *l = ht_supertabs_lead_by_local(&swarm, agent_id, &t);
-    bool beep = l && swarm_notice_raise(t, l, stuck);
-    change();
-    display_unlock();
-    return beep;
-}
-void ui_supertab_wait_close(const char *agent_id, const char *request)
-{
-    display_lock();
-    int w = swarm_wait_of(agent_id);
-    if (w >= 0 && request && !strcmp(sw.waits[w].request, request)) {
-        memset(&sw.waits[w], 0, sizeof sw.waits[w]);
-        const ht_supertab_t *t = NULL;
-        const ht_lead_t *l = ht_supertabs_lead_by_local(&swarm, agent_id, &t);
-        // Still asking: back to the fixed line, with no second beep. Otherwise the entry goes.
-        if (l && (l->state == HT_LEAD_ASK || l->state == HT_LEAD_STUCK) && swarm_notice(l->id) >= 0) {
-            int i = swarm_notice(l->id);
-            uint8_t kind = s.notice[i].swarm;
-            notice_add(l->id, l->project[0] ? l->project : "Untitled", t->name, swarm_fixed_text(kind == 2), true, false);
-            swarm_notice_mark(l->id, kind);
-            if (on_face(l->id)) notice_read_now(l->id);
-        } else if (l) swarm_notice_drop(l->id);
-        change();
-    }
-    display_unlock();
-}
-void ui_supertabs_clear(void)
-{
-    display_lock();
-    for (int i = s.notice_count - 1; i >= 0; i--) if (s.notice[i].swarm) notice_remove(s.notice[i].agent_id, true);
-    notice_sync_view();
-    ht_supertabs_reset(&swarm);
-    // What is on the face stays, stale, until its card returns (swarm_regain); a face already waiting for one keeps waiting.
-    struct swarm_lost lost = sw.lost;
-    bool auto_tabs = sw.auto_tabs;
-    if (swarm_mode()) { COPY(lost.tab, sw.tab); COPY(lost.lead, sw.lead); lost.buddy = swarm_side_buddy(sw.tab); }
-    memset(&sw, 0, sizeof sw);
-    sw.lost = lost; sw.auto_tabs = auto_tabs;
-    swarms_apply();
-    swarm_tabs_changed();
     change();
     display_unlock();
 }
@@ -5663,6 +4651,7 @@ void ui_voice_error(const char *message)
         // An empty transcript sent nothing. Keep the familiar voice surface
         // available for one-tap retry, then restore its previous result/status.
         view(HOME);
+        s.hint[0] = 0;
         s.voice_retry_until = ms() + 3000;
         if (!s.voice_retry_until) s.voice_retry_until = 1;
         change();
@@ -5728,13 +4717,6 @@ void ui_boot_pressed(void)
     display_lock();
     if (s.voice_open || audio_client_active()) {
         dispatch((action_t){.kind = A_VOICE_ABORT});
-    } else if (swarm_mode()) {
-        // Only a Lead on this computer can be stopped from here; a remote one goes home.
-        const ht_lead_t *l = swarm_lead();
-        if ((s.view == HOME || s.view == AGENT) && l && l->local[0] && l->state == HT_LEAD_WORK) {
-            COPY(s.stop_agent, l->local);
-            view(STOP);
-        } else view(HOME);
     } else if (s.view == AGENT && active() && active()->busy) {
         COPY(s.stop_agent, active()->id);
         view(STOP);

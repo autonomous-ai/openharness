@@ -15,6 +15,7 @@ import { createTurnHooks } from '../turns/turnHooks.js'
 import { createAttach } from './attach.js'
 import { createIngest } from './ingest.js'
 import { createSessionNormalizers } from './normalizers.js'
+import { inProcessOtherStreams } from '../../testing/otherStreamsInProcess.js'
 
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
@@ -35,7 +36,9 @@ function setup(mode: 'inline' | 'worker', content = prompt('T1')) {
   writeFileSync(file, content)
   const row = { agentId: 'agent', sessionId: 'session', engine: 'claude', transcriptPath: file,
     cwd: root, model: null, cliVersion: null, evidenceRevision: 0 } as RegisteredSession
-  const normalizers = createSessionNormalizers(), emit = vi.fn(), settled = vi.fn()
+  // The other engines' streams, their worker in this process (testing/otherStreamsInProcess.ts).
+  const others = inProcessOtherStreams({ bySession: () => row, frame: (session, frame) => ingest.acceptStreamFrame(session, frame) })
+  const normalizers = createSessionNormalizers(others.streams), emit = vi.fn(), settled = vi.fn()
   let worker = engineLiveRequests('claude')
   const transport = createLiveTransport({ call: async (_service, type, payload) =>
     await worker[type](payload, { owner: true, local: true }) as Record<string, unknown> })
@@ -43,38 +46,35 @@ function setup(mode: 'inline' | 'worker', content = prompt('T1')) {
   const local = new Watcher()
   const { watcher, live } = createLiveWatcher(local, { handles: () => mode === 'worker', transport,
     bySession: () => row, frame: (session, frame) => ingest.acceptFrame(session.sessionId, session.engine, frame),
-    reattach: session => attach.attachSession(session, true), hold: (session, reason) => attach.holdInterpretation(session, reason) })
+    reattach: session => attach.attachSession(session, true), hold: (session, reason) => attach.holdInterpretation(session, reason) }, others.streams)
   const profile = { ingest: vi.fn(), commit: vi.fn(), config: vi.fn(async () => {}) }
-  const attach = createAttach({ liveFor, normalizers, remoteLive: live, watcher, resolve: () => row,
-    setIdentityHold: () => false,
+  const attach = createAttach({ liveFor, normalizers, others: others.streams, remoteLive: live, watcher, resolve: () => row,
     setInterpretationHold: (_id, revision, reason, create) => {
       if (row.identityHold || row.evidenceRevision !== revision || (!row.interpretationHold && !(create && reason))) return false
       if (!row.interpretationHold) row.evidenceRevision = (row.evidenceRevision ?? 0) + 1
       if (reason) row.interpretationHold = reason; else delete row.interpretationHold
       return true
     }, announceSession: vi.fn(), terminalGone: async () => false,
-    runtimeProfiles: { transcriptFields: () => [], beginHydrate: () => profile, hydrate: vi.fn(), ingest: () => false,
+    runtimeProfiles: { transcriptFields: () => [], beginHydrate: () => profile, hydrate: vi.fn(), hydrateEvidence: vi.fn(), ingest: () => false,
       ingestConfig: async () => false, ingestPane: () => false, capturePane: async () => null },
     cursorDiscovery: { add: async () => {} }, device: () => undefined, captureTerminal: async () => null,
-    emit, settled, announceTurnAborted: vi.fn(), questionWatcher: { start: vi.fn() }, terminalLabel: () => 'private fixture',
-    dbs: { opencode: join(root, 'o.db'), kilo: join(root, 'k.db'), devin: join(root, 'd.db'), openclaw: async () => null },
-    devinHome: root, hermesDb: async () => join(root, 'h.db'), concurrency: 1 })
+    emit, settled, tokenUsage: { changed: () => {} }, questionWatcher: { start: vi.fn() }, terminalLabel: () => 'private fixture',
+    storeOf: async () => null, concurrency: 1 })
   const ingest = createIngest({ liveFor, has: () => true, bySession: () => row, normalizers,
-    tokenUsage: { changed: vi.fn() }, device: () => undefined, runtimeProfiles: { ingest: () => false },
-    announceTurnAborted: vi.fn(), emit, attachSession: attach.attachSession })
+    tokenUsage: { changed: vi.fn() }, device: () => undefined, runtimeProfiles: { ingest: () => false, evidence: () => false },
+    announceTurnAborted: vi.fn(), emit, attachSession: attach.attachSession, setIdentityHold: () => false, announceSession: vi.fn() })
   ingest.wireWatcher(watcher)
   const cancel = createCancel({ resolve: () => row, beforeCancel: attach.beforeCancel, normalizers,
-    cursorSubagents: { forget: vi.fn() }, input: { cancel: vi.fn(), cancelConfirmed: vi.fn(async () => true) },
+    input: { cancel: vi.fn(), cancelConfirmed: vi.fn(async () => true) },
     device: () => undefined, stopHeartbeat: vi.fn(), questionWatcher: { stop: vi.fn() }, mirror: { cancel: vi.fn() },
     turnActivity: { observe: vi.fn(), snapshot: vi.fn() }, turnStartedAt: new Map(), agentIdFor: () => row.agentId, clients: { send: vi.fn() } })
-  const hooks = createTurnHooks({ resolve: () => row, normalizers, holdStop: attach.holdStop, afterStop: attach.afterStop,
-    emit, drain: async () => watcher.pollSession(row.sessionId), onCursorTaskStart: vi.fn(),
-    cursorTaskHooks: { wait: async () => {} }, cursorSubagents: { closeParent: vi.fn() }, announceTurnAborted: vi.fn(),
-    armAgyIdleWatch: vi.fn(), clearAgyIdleWatch: vi.fn(), mirror: { noteEngineStopped: vi.fn() }, dataDir: root })
+  const hooks = createTurnHooks({ resolve: () => row, normalizers, others: others.streams, holdStop: attach.holdStop, afterStop: attach.afterStop,
+    emit, drain: async () => watcher.pollSession(row.sessionId), announceTurnAborted: vi.fn(),
+    armAgyIdleWatch: vi.fn(), clearAgyIdleWatch: vi.fn(), mirror: { noteEngineStopped: vi.fn() }, log: () => {} })
   const hold = () => { row.identityHold = 'native evidence unavailable'; row.evidenceRevision = (row.evidenceRevision ?? 0) + 1 }
   const recover = () => { delete row.identityHold; row.evidenceRevision = (row.evidenceRevision ?? 0) + 1; row.interpretationHold = 'recovering' }
-  cleanups.push(async () => { attach.forget(row.sessionId); await watcher.stop(); rmSync(root, { recursive: true, force: true }) })
-  return { row, file, normalizers, emit, settled, attach, cancel, hooks, profile, watcher, hold, recover,
+  cleanups.push(async () => { attach.forget(row.sessionId); await watcher.stop(); await others.stop(); rmSync(root, { recursive: true, force: true }) })
+  return { row, file, normalizers, emit, settled, attach, cancel, hooks, profile, watcher, hold, recover, others,
     restartWorker: () => { worker = engineLiveRequests('claude') } }
 }
 
@@ -299,14 +299,14 @@ it.each([false, true])('preserves the known legacy open turn through a held Stop
   const record = (text: string) => JSON.stringify({ type: 'user.message', data: { content: text }, id: text, parentId: '' })
   const t = setup('inline', record('T1') + '\n')
   t.row.engine = 'copilot'
-  const normalizer = new CopilotNormalizer()
-  normalizer.ingest(record('T1'))
-  t.normalizers.copilotNormalizers.set(t.row.sessionId, normalizer)
+  // Its stream, in its worker: the fold of T1 leaves its turn open, as Copilot's records do until its agentStop.
+  await t.attach.attachSession(t.row)
+  const normalizer = t.others.worker.all()[0].normalizer!
   if (retained) {
     t.hooks.onTurnStop({ sessionId: t.row.sessionId })
     await vi.waitFor(() => expect(normalizer.turnOpen).toBe(false), { timeout: 3_000 })
     appendFileSync(t.file, record('T2') + '\n')
-    normalizer.ingest(record('T2'))
+    await vi.waitFor(() => expect(t.normalizers.sessionTurnOpen(t.row.sessionId)).toBe(true), { timeout: 3_000 })
   }
   expect(t.normalizers.sessionTurnOpen(t.row.sessionId)).toBe(true)
   const sent = t.emit.mock.calls.length

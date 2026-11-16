@@ -18,7 +18,6 @@ import 'package:harness/widgets/workspace_welcome.dart';
 const _buttons = {
   'Open Harness': 'harnesses.list',
   'Machines': 'machines.list',
-  'New Swarm': 'super_tab.new',
   'Store': 'app.store',
 };
 
@@ -43,7 +42,6 @@ Future<void> _welcome(
   WidgetTester tester, {
   WorkspaceChrome? chrome,
   required List<String> ran,
-  bool swarmDraft = false,
 }) => tester.pumpWidget(
   MaterialApp(
     theme: grid.buildAppTheme(brightness: Brightness.dark),
@@ -51,7 +49,6 @@ Future<void> _welcome(
       chrome: chrome,
       child: WorkspaceWelcome(
         onCommand: ran.add,
-        swarmDraft: swarmDraft,
         composerBuilder: (recent) =>
             Column(children: [const Text('the box'), ?recent]),
       ),
@@ -108,20 +105,7 @@ void main() {
       ran.clear();
       await tester.tap(find.text(label));
       await tester.pump();
-      // New Swarm is super_tab.new, the command Alt+S is bound to
-      // (keymap_host_test), so the button and the key do one thing.
       expect(ran, [command], reason: label);
-    }
-  });
-
-  testWidgets('a Swarm draft leaves out New Swarm, the thing it starts', (
-    tester,
-  ) async {
-    final ran = <String>[];
-    await _welcome(tester, chrome: _web, ran: ran, swarmDraft: true);
-    expect(find.text('New Swarm'), findsNothing);
-    for (final label in ['Open Harness', 'Machines', 'Store']) {
-      expect(find.text(label), findsOneWidget, reason: label);
     }
   });
 
@@ -155,33 +139,6 @@ void main() {
           }
           await tester.pumpWidget(const SizedBox.shrink());
         }
-      });
-
-      testWidgets('New Swarm opens a new Swarm at ${size.width}', (
-        tester,
-      ) async {
-        final app = await _workspace(tester, size: size, newTabPage: true);
-        final tabs = app.swarms.length;
-        await tester.tap(
-          find.descendant(
-            of: find.byType(WorkspaceWelcome),
-            matching: find.text('New Swarm'),
-          ),
-        );
-        await tester.pump(const Duration(milliseconds: 200));
-        expect(app.swarms, hasLength(tabs + 1));
-        expect(app.activeSwarm.isSuperTab, isTrue);
-        // The draft's own page offers the other three, not New Swarm again.
-        Finder onPage(String label) => find.descendant(
-          of: find.byType(WorkspaceWelcome),
-          matching: find.text(label),
-        );
-        expect(onPage('New Swarm'), findsNothing);
-        for (final label in ['Open Harness', 'Machines', 'Store']) {
-          expect(onPage(label), findsOneWidget, reason: label);
-        }
-        expect(tester.takeException(), isNull);
-        await tester.pumpWidget(const SizedBox.shrink());
       });
     }
   });

@@ -8,6 +8,7 @@
  * relaunch in the old pane use that: nothing is asked of the grid or the Store again while the agent's input is held.
  */
 import { baseNode } from '../../harnessd/baseNode.js'
+import type { GridAssignment } from '../../lib/gridAssignmentWire.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { ProcessIdentity, TerminalRuntimeRef } from '../../lib/terminalTypes.js'
 import type { MoveGate } from '../../lib/hostMove/gate.js'
@@ -27,7 +28,8 @@ export interface HostMoveWiring {
     byAgent(agentId: string): RegisteredSession | undefined
     transaction<T>(apply: () => T | Promise<T>): Promise<T>
     updateRuntimes(agentId: string, runtimes: readonly TerminalRuntimeRef[], primaryRuntimeKey?: string): boolean
-    updateProcessIdentity(agentId: string, identity: ProcessIdentity, gateway?: 'ori' | null): boolean
+    /** A relaunch never says the gateway (the engine's hook or argv does); its grid is its launch's. */
+    updateProcessIdentity(agentId: string, identity: ProcessIdentity, gateway: undefined, grid: GridAssignment | null | undefined): boolean
     setActive(agentId: string, active: boolean): boolean
   }
   terminals: Pick<TerminalBackendCoordinator, 'backendFor' | 'capture'>
@@ -99,10 +101,10 @@ export function hostMoveDeps(session: RegisteredSession, current: () => boolean,
       return made.state === 'succeeded' ? { ok: true, runtime: made.runtime } : { ok: false, reason: made.reason }
     },
     respawn: (runtime, built) => w.restore.respawn(runtime, built, { current: () => current() && built.current?.() !== false }),
-    prepareResume: async () => {
+    prepareResume: async (_row, waiting) => {
       const deferred = launch?.deferred
       if (!deferred) throw new Error('the launch was not built for a move')
-      deferred.prepare()
+      await deferred.prepare(waiting)
       prepared = true
     },
     stopEngine: async () => {
@@ -125,7 +127,7 @@ export function hostMoveDeps(session: RegisteredSession, current: () => boolean,
       void w.registry.transaction(() => {
         if (!w.registry.updateRuntimes(id, [runtime], terminalRouteKey(runtime))) return
         switched = true
-        w.registry.updateProcessIdentity(id, identity)
+        w.registry.updateProcessIdentity(id, identity, undefined, launch?.grid)
       }).catch((error) => { w.log(`[terminal] move ${id}: saving the switch failed: ${message(error)}`) })
       if (!switched) throw new Error('the row is gone')
       // The row is switched: nothing after this may fail the move, which would relaunch the old engine beside the new.
@@ -152,6 +154,7 @@ export function hostMoveDeps(session: RegisteredSession, current: () => boolean,
     },
     relaunchOld: async (row) => {
       const deferred = launch?.deferred
+      const grid = launch?.grid
       const place = placeOf(recorded)
       if (!deferred || !place || !recorded.sessionId) return false
       // A restart in the old pane, as `agent_restart` runs it, with the overrides and permission the move's launch was
@@ -169,7 +172,7 @@ export function hostMoveDeps(session: RegisteredSession, current: () => boolean,
       // The row learns it as a restart's does (`commitRelaunchedEngine`, core/agents/restart.ts): shared, not copied.
       const committed = await commitRelaunchedEngine(
         { registry: w.registry, announceSession: w.announce, refreshGridAssignment: (refreshed) => w.refreshGridAssignment?.(refreshed) },
-        row.agentId, outcome.processIdentity, place, current)
+        row.agentId, outcome.processIdentity, grid, place, current)
       // Cancelled once the row had the engine: it runs in the old pane all the same, which is what a fallback is.
       return typeof committed !== 'string' || committed === 'changed after commit'
     },

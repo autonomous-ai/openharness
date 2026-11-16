@@ -1,16 +1,12 @@
 /**
- * What a launch prepares in the person's files before the engine starts: the folder trust an engine asks
- * about, and a conversation's history made resumable. Composed from each engine's launch contract (data,
- * engines/{claude,codex}/launch.ts) and the kit's mechanics (kit/folderTrust.ts, kit/resumeRepair.ts), so the
- * launch paths (core/agents/create.ts, launches.ts, launch.ts) name no engine. Both run in core, in line: a
- * launch is session control and waits on no engine worker (docs/design/2026-10-08-engine-launch.md).
+ * Folder trust before launch, from the engine's declared contract. History repair is prepared in the supervised
+ * worker; its explicit inline/older-master implementation lives in resumePreparation.ts, outside core's closure.
  */
 import { join } from 'node:path'
-import { homeRoots, launchHomeOf } from '../lib/engineHomes.js'
+import { launchHomeOf } from '../lib/engineHomes.js'
 import { homeIsNetworkOrDevice } from './kit/homeAdoption.js'
-import { acceptedIn, recordAcceptanceIn, recordSettingIn, recordTrustIn, trustsIn } from './kit/folderTrust.js'
+import { recordTrustIn, trustsIn } from './kit/folderTrust.js'
 import { recordInheritedMcp } from './kit/inheritedMcp.js'
-import { repairHistory } from './kit/resumeRepair.js'
 import { launchContract } from './launches.js'
 import type { AgentEngine } from './types.js'
 
@@ -52,62 +48,6 @@ export function folderTrust(engine: AgentEngine, profile?: string | null, enviro
       return recorded
     },
   }
-}
-
-/** Record that `engine`'s first-run screens are done, as finishing them would (`onboarding`); null for an engine with none.
- *  A network or device home is never opened, as for trust. */
-export function skipOnboarding(engine: AgentEngine, environment?: NodeJS.ProcessEnv): 'accepted' | 'already' | 'skipped' | null {
-  const contract = launchContract(engine)?.onboarding
-  if (!contract) return null
-  const home = launchHomeOf(contract.home, null, environment)
-  return homeIsNetworkOrDevice(home) ? 'skipped' : recordAcceptanceIn(join(home, contract.file), contract.key)
-}
-
-/** Whether `engine`'s questions before a Swarm agent's first turn are answered here: its first-run screens and full mode's
- *  warning (`onboarding`, `bypassAcceptance`). Null for an engine that asks neither; false in a network or device home. */
-export function firstRunAnswered(engine: AgentEngine, environment?: NodeJS.ProcessEnv): boolean | null {
-  const onboarding = launchContract(engine)?.onboarding
-  if (!onboarding) return null
-  const home = launchHomeOf(onboarding.home, null, environment)
-  return !homeIsNetworkOrDevice(home) && acceptedIn(join(home, onboarding.file), onboarding.key)
-}
-
-/**
- * The person's answers to `engine`'s first-run screens, given on the phone setting up this computer (owner, 2026-11-06): its
- * `theme`, one of the contract's, and the screens done. Recorded as the engine records its own; a `false` the person set
- * before stays. No permission setting: no Swarm agent starts in full mode (task #4215). Whether it is answered now
- * ([firstRunAnswered]).
- */
-export function answerFirstRun(engine: AgentEngine, answers: { theme: string }, environment?: NodeJS.ProcessEnv): boolean {
-  const onboarding = launchContract(engine)?.onboarding
-  if (!onboarding) return false
-  const home = launchHomeOf(onboarding.home, null, environment)
-  if (homeIsNetworkOrDevice(home)) return false
-  if (onboarding.theme?.values.includes(answers.theme)) recordSettingIn(join(home, onboarding.file), onboarding.theme.key, answers.theme)
-  skipOnboarding(engine, environment)
-  return firstRunAnswered(engine, environment) === true
-}
-
-/** The session a resume relaunches. `codexHome` is the agent's own engine home, the row's profile. */
-export interface ResumeSource {
-  engine: string
-  sessionId: string
-  transcriptPath?: string | null
-  codexHome?: string | null
-}
-
-/**
- * Make a stopped conversation's history resumable, before the engine is launched on it. `repairedBytes`,
- * set only when something was repaired, is the history's new length: a tail of that file moves there.
- */
-export function prepareResume(source: ResumeSource): { repairedItems: number; repairedBytes?: number; backupPath?: string } {
-  const contract = launchContract(source.engine)?.resumeRepair
-  if (!contract || !source.sessionId) return { repairedItems: 0 }
-  // The agent's own profile, else every home the person moved too (lib/engineHomes.ts): a rollout in a moved
-  // CODEX_HOME was refused as outside the profile, so a restart or reopen failed after Codex had stopped.
-  const { home, folder } = contract.sessions
-  const roots = (source.codexHome ? [source.codexHome] : homeRoots(home.setting)).map((root) => join(root, folder))
-  return repairHistory(contract, source.sessionId, source.transcriptPath, roots)
 }
 
 /** What `prepareResume` repairs in `engine`'s history, in the daemon's log's words. */

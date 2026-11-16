@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { emptyPorts, type WorkspacesPort } from '../core/api.js'
 import { forgetAgentProject } from '../lib/agentProject.js'
 import { nameBranchAfterSession } from '../lib/branchNaming.js'
+import { gitFolderAnswer } from '../lib/gitProjectFolder.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { cleanWorktrees, listLeftoverWorktrees } from '../lib/leftoverWorktrees.js'
 import { systemTrash } from '../lib/trash.js'
@@ -17,6 +18,13 @@ vi.mock('../lib/leftoverWorktrees.js', () => ({ listLeftoverWorktrees: vi.fn(asy
 // Never the person's real Trash.
 const theTrash = vi.hoisted(() => async () => {})
 vi.mock('../lib/trash.js', () => ({ systemTrash: vi.fn(() => theTrash) }))
+vi.mock('../lib/gitProjectFolder.js', () => ({ gitFolderAnswer: vi.fn(async () => ({ ok: true, cwd: '/h/harnesses/app' })) }))
+const worktrees = vi.hoisted(() => ({
+  describeWorkspace: vi.fn(async () => ({ kind: 'folder' as const, path: '/work/tree', canDelete: false, reason: 'Not a worktree.' })),
+  reviewWorktree: vi.fn(async () => ({ ok: false as const, reason: 'No separate worktree.' })),
+  removeWorktree: vi.fn(async () => ({ ok: true as const })),
+}))
+vi.mock('../lib/worktreeDeletion.js', () => ({ worktreeAnswers: () => worktrees }))
 vi.mock('../lib/registry.js', async (real) => ({
   ...await real<object>(),
   sessionDisplayTitle: vi.fn((s: { title?: string }) => s.title ?? null),
@@ -78,10 +86,28 @@ describe('the workspaces service', () => {
   })
 
   // #4166: it swept clean, week-idle worktrees twice a day when the core said, the ones their person chose to keep too.
-  it('removes no worktree: its one call names branches', () => {
+  it('removes no worktree on its own: only a purge the core asks for removes one', () => {
     const { core, port } = setup([agent({ cwd: '/h/live' })])
-    expect(Object.keys(port)).toEqual(['nameBranches'])
+    expect(Object.keys(port)).toEqual(['nameBranches', 'ready', 'prepareFolder', 'describeWorkspace', 'reviewWorktree', 'removeWorktree'])
     expect(core.agents.all).not.toHaveBeenCalled()
+    expect(worktrees.removeWorktree).not.toHaveBeenCalled()
+  })
+
+  // The audit of 2026-11-12: a clone ran git, ssh and their helpers as children of the core.
+  it('does the git of a create and a purge for the core, at once and always', async () => {
+    const { port } = setup()
+    expect(port.ready()).toBe(true)
+    const project = { source: 'worktree' as const, gitSource: '/work/repo' }
+    expect(await port.prepareFolder(project, { cloneFallback: true })).toEqual({ ok: true, cwd: '/h/harnesses/app' })
+    expect(gitFolderAnswer).toHaveBeenCalledWith(project, { cloneFallback: true })
+    const target = { cwd: '/work/tree' }
+    expect(await port.describeWorkspace(target, ['/work/other'])).toEqual({ kind: 'folder', path: '/work/tree', canDelete: false, reason: 'Not a worktree.' })
+    expect(worktrees.describeWorkspace).toHaveBeenCalledWith(target, ['/work/other'])
+    expect(await port.reviewWorktree(target, [])).toEqual({ ok: false, reason: 'No separate worktree.' })
+    expect(worktrees.reviewWorktree).toHaveBeenCalledWith(target, [])
+    const review = { path: '/work/tree' } as never
+    expect(await port.removeWorktree(review, target, [], true)).toEqual({ ok: true })
+    expect(worktrees.removeWorktree).toHaveBeenCalledWith(review, target, [], true)
   })
 
   describe('the leftover worktrees, for the person to choose from', () => {

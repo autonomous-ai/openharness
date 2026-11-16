@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { launchModelArgs, launchModelEngines, parseLaunchModel, pickedLaunchModel, storedLaunchModel } from './launchModel.js'
+import { launchModelArgs, parseLaunchModel, pickedLaunchModel, storedLaunchModel } from './launchModel.js'
 
 describe('parseLaunchModel', () => {
   it('is absent when neither field is sent, or both are null', () => {
@@ -60,10 +60,6 @@ describe('launchModelArgs', () => {
   it('names nothing for an engine without support', () => {
     expect(launchModelArgs('codex', { model: 'gpt-5', effort: 'high' })).toStrictEqual([])
   })
-})
-
-it('names the engines that take a launch model', () => {
-  expect(launchModelEngines()).toStrictEqual(['claude'])
 })
 
 // Task #3395: what a registry row keeps, and what a person's pick relaunches with.

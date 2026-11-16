@@ -37,11 +37,12 @@
  */
 
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
+import { launchedGrid, type GridAssignment } from './gridAssignmentWire.js'
 import type { LaunchOverrides } from './launchOverrides.js'
 import type { AgentLaunch, ProcessIdentity, RegisteredSession } from './registry.js'
 import type { TerminalDispatchControl, TerminalRuntimeRef } from './terminalTypes.js'
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
-import { sameTerminalPlacement, terminalInstanceId, terminalRouteKey } from './terminalRuntime.js'
+import { processAmong, sameTerminalPlacement, terminalInstanceId, terminalRouteKey } from './terminalRuntime.js'
 import { resumesConversation } from './resumeCapability.js'
 
 export interface RestoreLaunch {
@@ -59,12 +60,16 @@ export interface RestoreLaunch {
   /** The first task an engine takes typed, not in argv (engineLaunch.ts `typedFirstPrompt`): committed to the row with
    *  the dispatch (registry.ts `beginExternalDispatch`), so the bind pass types it once the pane is ready. */
   firstTask?: string
+  /** The grid this launch puts its engine on (`launchedGrid`), written on the row with the process it starts: null
+   *  on the engine's own login. Absent from a pane that only waits, which starts no engine. */
+  grid?: GridAssignment | null
 }
 
 export interface DeferredLaunch {
-  /** The conversation's resume preparation, when it resumes one, and the row's grid web search. Throws when the
-   *  conversation could not be prepared. */
-  prepare(): void
+  /** The conversation's resume preparation, when it resumes one, and the row's grid web search. Rejects when the
+   *  conversation could not be prepared. [waiting]: whether its caller still waits for it; once not, the history is left
+   *  as it is (a move's step is bounded, hostMove/moveAgent.ts). */
+  prepare(waiting?: () => boolean): Promise<void>
   /** The overrides (`relaunchOverrides`) and the permission (`downgradedPermission`) the launch was built with. */
   overrides: LaunchOverrides
   permission: { permissionMode?: string | null; bypassPermission?: boolean }
@@ -107,7 +112,8 @@ export interface RestoreAgentsDeps {
     updateRuntimes(agentId: string, runtimes: readonly TerminalRuntimeRef[], primaryRuntimeKey?: string): boolean
     setLaunch(agentId: string, launch: AgentLaunch): RegisteredSession | null
     beginExternalDispatch?(agentId: string, firstTask?: string): RegisteredSession | null
-    updateProcessIdentity(agentId: string, processIdentity: ProcessIdentity): boolean
+    /** A relaunch never says the gateway (the engine's hook or argv does); its grid is its launch's. */
+    updateProcessIdentity(agentId: string, processIdentity: ProcessIdentity, gateway?: undefined, grid?: GridAssignment | null): boolean
     unbindSession(sessionId: string): boolean
     inheritName(fromSessionId: string, toSessionId: string): void
     /** A terminal's adopted engine is gone: back to a shell (registry.ts). */
@@ -122,9 +128,9 @@ export interface RestoreAgentsDeps {
    */
   waitingPane?: (runtime: TerminalRuntimeRef, token: string) => Promise<boolean | 'unknown'>
   livePane?: (runtime: TerminalRuntimeRef) => Promise<boolean | 'unknown'>
-  /** The engine process still running in this row's pane, or null when tmux does not know the pane
-   *  at all — including when no tmux server is running — or the pane has become something else.
-   *  `'unknown'` when tmux or `ps` could not be asked. */
+  /** The engine process still running in this row's pane, or the process the row recorded when it still runs there
+   *  under another name (`terminalSurvey`); null when tmux does not know the pane at all — including when no tmux
+   *  server is running — or the pane has become something else. `'unknown'` when tmux or `ps` could not be asked. */
   liveProcess: (entry: RegisteredSession, runtime: TerminalRuntimeRef) => Promise<ProcessIdentity | null | 'unknown'>
   /** The pane's launch — engine argv plus whatever puts it back on its grid / profile. A grid the
    *  machine cannot honour (unsupported engine, tmux too old, config dir unwritable) is a refusal. */
@@ -215,10 +221,15 @@ export type SurveyListing = { ok: true; panes: readonly TerminalRuntimeRef[] } |
  * The survey's two questions, each asked of the runtime's own backend: one pane listing per backend for the whole
  * survey, read again only after a read that failed, and the engine in a pane as `lookupPaneEngineProcess` finds it.
  * A pane counts only on its own backend: `%3` on tmux is not `%3` on the pty host.
+ * A pane with no engine in it but the process the agent was bound to still counts as running: a wrapper that `exec`s
+ * keeps its pid and start under another name, and a daemon that restarted while the pane held only `unshare` would
+ * archive a running agent, as two passes of the reconciler did on lamp-9adf (2026-11-13, #4259).
  */
 export function terminalSurvey(
   listPanes: (runtime: TerminalRuntimeRef) => Promise<SurveyListing>,
-  lookup: (runtime: TerminalRuntimeRef, engine: AgentEngine) => Promise<{ ok: true; identity: ProcessIdentity } | { ok: false; unknown: boolean }>,
+  lookup: (runtime: TerminalRuntimeRef, engine: AgentEngine) => Promise<
+    { ok: true; identity: ProcessIdentity } | { ok: false; unknown: boolean; paneProcesses?: readonly ProcessIdentity[] }
+  >,
 ): Pick<RestoreAgentsDeps, 'livePane' | 'liveProcess'> {
   const inventories = new Map<string, Promise<SurveyListing>>()
   return {
@@ -236,7 +247,9 @@ export function terminalSurvey(
     },
     liveProcess: async (entry, runtime) => {
       const found = await lookup(runtime, entry.engine)
-      return found.ok ? found.identity : found.unknown ? 'unknown' : null
+      if (found.ok) return found.identity
+      if (found.unknown) return 'unknown'
+      return processAmong(entry.processIdentity, found.paneProcesses) ? entry.processIdentity : null
     },
   }
 }
@@ -479,7 +492,8 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
         } else {
           const route = terminalRouteKey(runtime)
           const release = deps.holdRoute(route, (deps.budgetMs ?? DEFAULT_BUDGET_MS) + HOLD_SLACK_MS) ?? (() => deps.releaseRoute(route))
-          void watchRestoredPane(deps, entry, runtime, !!entry.sessionId, deps.budgetMs ?? DEFAULT_BUDGET_MS, current, release)
+          void watchRestoredPane(deps, entry, runtime, !!entry.sessionId, deps.budgetMs ?? DEFAULT_BUDGET_MS, current, release,
+            launchedGrid(entry.gridLaunch))
         }
       } else if (entry.externalResume?.phase === 'admitted' && entry.launch?.state === 'starting') {
         // The dispatch journal precedes tmux. If its exact waiting shell remains, no engine ran;
@@ -493,7 +507,8 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
         } else {
           const route = terminalRouteKey(runtime)
           const release = deps.holdRoute(route, (deps.budgetMs ?? DEFAULT_BUDGET_MS) + HOLD_SLACK_MS) ?? (() => deps.releaseRoute(route))
-          void watchRestoredPane(deps, entry, runtime, true, deps.budgetMs ?? DEFAULT_BUDGET_MS, current, release)
+          void watchRestoredPane(deps, entry, runtime, true, deps.budgetMs ?? DEFAULT_BUDGET_MS, current, release,
+            launchedGrid(entry.gridLaunch))
         }
       } else if (!isTerminalEngine(entry.engine)) {
         if (deps.retainStopped) deps.retainStopped(entry, true)
@@ -688,7 +703,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
                   const currentWatch = restoreOwner(deps, deps.registry.byAgent(entry.agentId)!)
                   const releaseWatch = release!
                   watching = true
-                  watches.push(() => watchRestoredPane(deps, entry, pane, true, budgetMs, currentWatch, releaseWatch))
+                  watches.push(() => watchRestoredPane(deps, entry, pane, true, budgetMs, currentWatch, releaseWatch, launch.grid))
                 }
               }
             }
@@ -713,7 +728,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
           const currentWatch = restoreOwner(deps, deps.registry.byAgent(entry.agentId)!)
           const releaseWatch = release!
           watching = true
-          watches.push(() => watchRestoredPane(deps, entry, created.runtime, !!resumeSessionId, budgetMs, currentWatch, releaseWatch))
+          watches.push(() => watchRestoredPane(deps, entry, created.runtime, !!resumeSessionId, budgetMs, currentWatch, releaseWatch, launch.grid))
         } finally { if (!watching) release?.() }
       }, undefined)
     }
@@ -722,6 +737,8 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
   return summary
 }
 
+/** [launched]: the grid of the launch in [runtime]. For one an earlier daemon dispatched, its record is the row's: that
+ *  launch wrote it before it dispatched (`refreshGridWebSearch`). */
 async function watchRestoredPane(
   deps: RestoreAgentsDeps,
   entry: RegisteredSession,
@@ -730,8 +747,10 @@ async function watchRestoredPane(
   budgetMs: number,
   current: () => boolean,
   release: () => void,
+  launched: GridAssignment | null | undefined,
 ): Promise<void> {
   const { agentId, engine } = entry
+  let grid = launched
   const key = terminalRouteKey(runtime)
   const sleep = deps.sleep ?? defaultSleep
   const fail = (error: string, detail: string): void => {
@@ -834,6 +853,7 @@ async function watchRestoredPane(
         fail('ENGINE_DID_NOT_START', `${engine} could not be relaunched fresh: ${spawned.reason ?? 'unknown reason'}`)
         return false
       }
+      grid = launch.grid
       return true
     }, false)
   }
@@ -845,7 +865,7 @@ async function watchRestoredPane(
       const identity = await deps.probeProcess(runtime, engine)
       if (!current()) return
       if (identity) {
-        deps.registry.updateProcessIdentity(agentId, identity)
+        deps.registry.updateProcessIdentity(agentId, identity, undefined, grid)
         // A resume the engine rejects does not fail to start — it starts, prints why, and exits a
         // few seconds later. Keep the pane (and the fallback) for a settling window before handing
         // it over; a pane let go at first sight of the process vanished with the engine and took

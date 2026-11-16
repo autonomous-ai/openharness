@@ -23,22 +23,10 @@ The core stays small and secure, in the code and at run time: read
    attach that read an 803 MB transcript whole.
 5. **100% coverage, per file** (`npm run test:core`), and an end-to-end test (`../../e2e/`) for any
    behaviour a person can see. The end-to-end suite has found every race fixed here so far: run it.
-6. **The Swarm is a subsystem the core runs without.** `HARNESS_SWARM=off` (harnessd/swarmSwitch.ts, on by default)
-   leaves the Super Tab service off and loads none of the Swarm's code, in the core or any service. So no core file
-   imports anything of `../superTabs/` or `../lib/swarm*`, not even types. What the core needs of it is typed in
-   `api.ts` (`SuperTabsCore`, `SuperTabsPort`, `SwarmAgents`, `SwarmLaunch`, `AdoptSwarmSkill`) and handed in by
-   `main.ts` from `../superTabs/inCore.ts`; the services that act on it get their side from `../superTabs/inServices.ts`
-   (`serviceProcess.ts`, or `main.ts` when they run here). Its own service runs in its own process, and a core that
-   runs it instead loads it by an import of its own in `main.ts`, beside the doors and before the wiring: the first
-   door holds no service code, and `src/architecture.spec.ts` lists, file by file, what it loads beyond the core.
-   All are imported dynamically and only while it is on.
-   Every such dependency is optional, and absent is exactly the daemon without the Swarm. `src/architecture.spec.ts`
-   holds every import of its code to those doors and walks each process's imports; `src/leanEntry.spec.ts` checks the
-   shipped build, and `e2e/swarmSwitch.e2e.ts` what each process loads.
-7. **Evidence must be newer than the state it contradicts.** A scan, probe or read that began before
+6. **Evidence must be newer than the state it contradicts.** A scan, probe or read that began before
    a change must not be used to undo that change (see `terminalAgentReconciler.ts` `probedAs`,
    `routeTouched`, and `transcripts/relaunch.ts`). Most of the races found end to end were this.
-8. **The core meets the outside least.** It is the most trusted process: it types into every terminal. A core
+7. **The core meets the outside least.** It is the most trusted process: it types into every terminal. A core
    module opens no connection to another host, runs no command line a service handed it, signs no backend call
    a service did not declare, and parses nothing that someone other than this computer's owner can shape (a
    relay or backend frame, another account's message, a web page, a device, a third-party file). That is a
@@ -56,16 +44,12 @@ The core stays small and secure, in the code and at run time: read
   and immutable turn snapshots, never edits their engine state. Supervised Claude Code/Codex parsers
   run in workers through [the live transport](../../../docs/design/2026-10-07-engine-streams.md).
 - `turns/`: working/idle, the event funnel, cancel, heartbeats, hooks, and `recaps.ts`, the core's whole
-  side of the recaps: the turn lifecycle it tells them, and what it reads back. `ends.ts`: each live turn's
-  end (`CoreApi.turns.onEnd`), which names its turn by a hash of its prompt and a number, told by the funnel to listeners here
-  and to the services in their own processes that asked (`TURN_END_HEARERS`: the Swarm's host, which posts an
-  agent's answer into its person's chat); the funnel tells it each turn as it goes, so that once the Swarm's process has
-  connected it keeps what each of the last few turns of a session said (`CoreApi.turns.answerOf`), whatever the
-  transcript shows by the time it is asked.
+  side of the recaps: the turn lifecycle it tells them, and what it reads back.
 - `terminals/`: who controls a pane (the control lease), opening a terminal with a literal argv (`open.ts`),
   and the requests about a terminal itself (`requests.ts`: `terminal_info`, `theme_set`).
 - `engines/`: hook coordination, reader ports and live worker coordination. Claude Code/Codex
-  history, last-turn reads, live parsing, runtime profiles/catalogs and screen interpretation run in supervised workers; core passes snapshots,
+  history, last-turn reads, live parsing, runtime profiles/catalogs and screen interpretation run in supervised workers, and so do
+  the other fourteen engines' history and last turns, in one worker of their own (`engines/others/`); core passes snapshots,
   validates bounded replies, retains acknowledged cursors and owns binding/turn state. The explicit
   inline/older-master compatibility path is the only live parser or runtime profile implementation
   composition in core. Screen reads are bounded and fenced to the worker connection and session binding
@@ -82,18 +66,20 @@ The core stays small and secure, in the code and at run time: read
   master is too old to run it, still in its own process.
 - `stall.ts`: a test-only fault that holds the core's event loop still (`HARNESSD_TEST_FAULTS=core.stall:…`).
 - `main.ts`: the core's entry (`harness __run`) and composition root, `runForeground`: it builds these
-  modules, starts the services through `serviceHost` and wires the socket. While the Swarm is on it loads the Swarm's
-  side of this process from `../superTabs/inCore.ts` (and `../superTabs/inServices.ts` for the services that act on it,
-  when they run here) and hands it to the modules that take it; off, it leaves the
-  Super Tab service off (`serviceHost.leaveOff`), whose requests are then answered `SERVICE_UNAVAILABLE`. The one core file that imports
+  modules, starts the services through `serviceHost` and wires the socket. The one core file that imports
   services and the socket, and the one outside the 100% coverage: wiring only, run end to end. The
   services that run in their own processes by default it imports only dynamically, through
   `../services/inline.ts`, and only when one runs in this process instead.
 - `api.ts`: the contract with services, their ports, fallbacks and requests. `serviceHost.ts`: services
-  in this process. `serviceLinks.ts`: services in their own processes. `viewersLink.ts`: what the core
+  in this process. `serviceLinks.ts`: services in their own processes. `serviceRoutes.ts`: a route of the local
+  door a service answers (`SERVICE_HTTP_ROUTES`), handed on as it came once the door let it in, with the route's own
+  methods, its writes' local header, whether only the daemon's own socket may ask it (`door`), its wait, the headers its
+  answers carry, and its own answer while that service is down; and a window's frame a service answers
+  (`SERVICE_WS_FRAMES`: ⌘K's), its answer sent back as the frame its route names. `usageOutcomes.ts`: what the usage report counts of a request, told the gateway raw; the gateway names it. `viewersLink.ts`: what the core
   keeps of the viewers when they run in theirs. `viewerStreams.ts`: a client's viewer stream and rendered
-  frames, handed to the viewers, refused at once while they are down, and held while they first start. `workspacesLink.ts`: what the core tells workspaces in
-  theirs. `messagesLink.ts`: Agent Messages out of this process (the edge host): which of its deliveries may be
+  frames, handed to the viewers, refused at once while they are down, and held while they first start. `workspacesLink.ts`: workspaces in
+  theirs, which run the git the core runs none of: a create's folder and a purge's worktree, each asked with a deadline and
+  read as typed data, and the made-up branches they name. `messagesLink.ts`: Agent Messages out of this process (the edge host): which of its deliveries may be
   written, as it last said, the few things it may ask (`MESSAGES_QUERIES`: the agents, this daemon, the account
   signed in here, the account's backend, its log's notice for the windows, shared tabs' keys and relay, whether its
   harnesses work (`activity`, with a one-line summary of what each does when asked), and that a
@@ -121,14 +107,21 @@ The core stays small and secure, in the code and at run time: read
   change-agent handoff in the edge host asks for, one at a time.
   `gatewayLink.ts`: the relay and its E2EE in their own process (src/gateway/), as the core sees them:
   the link's state and the remote clients it reads in line, the frames it hands over in the clear, a
-  window's sessions to another machine or a shared harness, and the fleet's lane's sealing
-  (`core.account.lane`). `devicesLink.ts`: the devices in their own process (the dials, the window
+  window's sessions to another machine or a shared harness, the fleet's lane's sealing
+  (`core.account.lane`), the account's token, which the gateway renews and the core asks it for
+  (`core.account.accessToken`): the core calls no other host. `devicesLink.ts`: the devices in their own process (the dials, the window
   bridges, the fleet): what the core tells them, what it asks with a deadline and a fallback, and what it
-  answers them. `wifi.ts`: the Wi-Fi device, as the core keeps it wherever its service runs (who said
+  answers them. `observedHook.ts`: an agent outside a pane's hook event, checked, bounded and rate limited, then
+  handed to the devices and kept nowhere in the core. `wifi.ts`: the Wi-Fi device, as the core keeps it wherever its service runs (who said
   hello, which transcripts and streams it follows, the focus revision, and the check on every answer it
   sends a device); `wifiAgents.ts`: its doors into the core (the agents as it lists them, a prompt, an
   agent made for a Store harness); `wifiLink.ts`: its service in the devices' process. `devicesWake.ts`: when
   that process is asked for, once there is a device (a dial's port in /dev, a paired Wi-Fi device).
+  `agentBrowserLink.ts`: the agent browser in its own process: what the core tells it of agents, each browser's
+  state as it last said, and its viewers' streams passed on. `browserStreams.ts`: the core's side of a browser's
+  stream, and nothing of the stream itself: who may open one, whose each is, its own bounds (an open the service does
+  not answer, bytes a viewer has not read), and that it is closed when its service goes. The core starts no command
+  for a browser, reads none of a viewer's VNC bytes, and sends the service's screen frames on as they came.
   `modelsWake.ts`: when models' process is asked for as the core starts, once grid is in use here.
   `gatewayWake.ts`: when the gateway's process is asked for as the core starts, before it binds: signed in, or
   anything paired here. `viewersWake.ts`: when the viewers' process (the viewers and the Store) is asked for: a

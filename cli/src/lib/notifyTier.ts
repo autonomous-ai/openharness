@@ -1,7 +1,5 @@
 /**
- * How loudly a finished turn tells the devices, by fixed rules and no model: a harness agent's turn alerts, a Swarm
- * agent's is silent because the Swarm tells its news through chat cards
- * (docs/superpowers/specs/2026-11-02-device-notify-no-jev-design.md).
+ * How loudly a finished turn tells the devices, by fixed rules and no model: a harness agent's turn alerts.
  */
 
 export type Tier = 'alert' | 'list' | 'silent'
@@ -10,7 +8,6 @@ export interface TierInput {
   durationS: number | null // null: unknown start
   stats: { testsPassed?: number; testsFailed?: number; commits?: number }
   subagent: boolean; onScreen: boolean; failed: boolean
-  swarm: boolean // a Swarm agent (registry row with swarmSkill)
 }
 export interface TierDecision { tier: Tier; by: string; detail: string; ms: number }
 
@@ -52,6 +49,6 @@ export function createTierDecider(opts: {
     if (input.subagent) return rule('silent', 'subagent')
     if (input.onScreen) return rule('silent', 'onScreen')
     if (!input.recap.trim()) return rule('silent', 'empty')
-    return input.swarm ? rule('silent', 'swarm') : rule('alert', 'turn')
+    return rule('alert', 'turn')
   }
 }
