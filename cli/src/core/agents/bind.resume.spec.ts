@@ -142,7 +142,7 @@ function setup(boundary: 'terminal' | 'store' | 'open' | 'none', pauseConfirmati
     openclawPaneRead: () => false, openclawPaneDue: () => false, openclawStateDir: async () => null,
   })
   const observed = { engine: 'hermes' as const, processIdentity: nextProcess, runtimes: resumed.runtimes,
-    primaryRuntimeKey: resumed.primaryRuntimeKey, cwd: directory, args: 'hermes --resume fixture' }
+    primaryRuntimeKey: resumed.primaryRuntimeKey, cwd: directory, args: `hermes --resume ${sessionId}`, resumeSessionId: sessionId }
   const confirm = () => binding.bindObservedAgent(observed)
   const liveTurn = async () => {
     expect(events).toEqual([])

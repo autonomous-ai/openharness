@@ -527,10 +527,10 @@ export function createBinding({
           processIdentity: observed.processIdentity,
           hookEvent: 'HermesTerminal',
         })
-        // A new session is a switch, said once the registry took it: one it refuses (a resume that reopened another
-        // conversation) is tried again in the repair's rhythm, and is no switch; a resumed one confirmed is none either.
-        if (!rotated?.isNew) return
-        console.log(`[discovery] ${sid(agent.agentId)} switched hermes session ${sid(was)} → ${sid(answer.sessionId)}`)
+        if (!rotated) return
+        if (rotated.isNew) console.log(`[discovery] ${sid(agent.agentId)} switched hermes session ${sid(was)} → ${sid(answer.sessionId)}`)
+        // Same-conversation confirmation fills boundAt and revokes a Resume attach still reading. Follow its new
+        // identity too: the tracker waits for the obsolete attempt; later terminal passes settle to 'wait'.
         followRegistered(rotated.entry, rotated)
         return
       }

@@ -55,5 +55,7 @@ passed: confirmation before or after attachment, and late native replies after f
 Both the initial ignored diagnostic and the tracked real-reader version recorded this RED. The earlier native
 timeout remains evidence of a symptom, not proof of its precise schedule.
 
-Focused validation includes binding, attachment, Hermes terminal discovery and the attach tracker, with one worker,
-then TypeScript. Root reviews the frozen checkpoint before another native run or broad gates.
+Focused validation passed 365 tests across binding, attachment, Hermes terminal discovery and the attach tracker,
+with one worker. TypeScript found a missing required field in the test's observed-process fixture; after making
+that fixture explicit, its seven caller tests and TypeScript both passed. Root reviews the frozen checkpoint
+before another native run or broad gates.
