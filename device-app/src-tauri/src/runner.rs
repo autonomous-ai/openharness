@@ -1,10 +1,9 @@
 //! Runs the effects the reducer asks for, on threads.
 
 use crate::account::{self, Login, NO_RESULT};
-use crate::claude;
 use crate::cli::{self, Cli, HarnessCli, START_DEADLINE};
-use crate::codex;
 use crate::desktop;
+use crate::engine::{self, Engine};
 use crate::front::{FrontFeed, FrontSource};
 use crate::install::{self, NOT_SUPPORTED, Shell};
 use crate::loginitem::LoginItem;
@@ -194,8 +193,8 @@ impl Runner {
                 });
             }
             Effect::ReadAuth => shared.with_cli(|cli| Event::Auth(account::auth_status(cli))),
-            Effect::ReadClaude => shared.with_cli(|cli| Event::Claude(claude::status(cli))),
-            Effect::ReadCodex => shared.with_cli(|cli| Event::Codex(codex::status(cli))),
+            Effect::ReadClaude => shared.with_cli(|cli| Event::Claude(engine::status(cli, Engine::Claude))),
+            Effect::ReadCodex => shared.with_cli(|cli| Event::Codex(engine::status(cli, Engine::Codex))),
             Effect::RunLogin => shared.run_login(),
             Effect::CancelLogin => {
                 let login = shared.login.lock().unwrap().take();
@@ -206,7 +205,7 @@ impl Runner {
             Effect::SetClaude(on) => {
                 let log = shared.doors.log.clone();
                 shared.with_cli(move |cli| {
-                    let result = claude::set(cli, on);
+                    let result = engine::set(cli, Engine::Claude, on);
                     if let Err(message) = &result {
                         log.line(&format!("claude: {message}"));
                     }
@@ -216,7 +215,7 @@ impl Runner {
             Effect::SetCodex(on) => {
                 let log = shared.doors.log.clone();
                 shared.with_cli(move |cli| {
-                    let result = codex::set(cli, on);
+                    let result = engine::set(cli, Engine::Codex, on);
                     if let Err(message) = &result {
                         log.line(&format!("codex: {message}"));
                     }
