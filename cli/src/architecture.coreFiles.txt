@@ -292,7 +292,6 @@ lib/bootId.ts
 lib/browserShim.ts
 lib/captureResumeIdentity.ts
 lib/cardUpdate.ts
-lib/cellAdvance.ts
 lib/checkpointStages.ts
 lib/childLocale.ts
 lib/claudeHomes.ts
@@ -349,7 +348,6 @@ lib/harnessDefaults.ts
 lib/harnessMonitor.ts
 lib/harnessSessionLabel.ts
 lib/harnessdEnv.ts
-lib/historyRewrap.ts
 lib/hookAuth.ts
 lib/hookRoutes.ts
 lib/hostMove/gate.ts
@@ -440,7 +438,6 @@ lib/sessionSync.ts
 lib/sessionTitle.ts
 lib/sessionWorkWire.ts
 lib/setUpWithin.ts
-lib/sgrCarry.ts
 lib/sharedMachinesAccount.ts
 lib/shellProtocol.ts
 lib/shellQuote.ts
@@ -465,18 +462,15 @@ lib/terminalBackendCoordinator.ts
 lib/terminalBackendRecovery.ts
 lib/terminalBinary.ts
 lib/terminalHandoff.ts
-lib/terminalKeys.ts
 lib/terminalRuntime.ts
 lib/terminalStreamManager.ts
 lib/terminalTitle.ts
 lib/terminalTypes.ts
 lib/tmux.ts
 lib/tmuxAgentDiscovery.ts
-lib/tmuxBackend.ts
 lib/tmuxCapture.ts
 lib/tmuxControlGate.ts
 lib/tmuxOnPath.ts
-lib/tmuxStream.ts
 lib/tmuxVersion.ts
 lib/transcriptActivity.ts
 lib/transcriptBoundary.ts

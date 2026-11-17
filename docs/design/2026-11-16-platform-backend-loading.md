@@ -256,3 +256,38 @@ that file and the cold inventory loses it. This is an inventory correction with
 no further runtime change. The failed receipt is retained at
 `.harness/validation/20261117T233634.407396Z-47883/receipt.json`; only architecture
 needs a follow-up run.
+
+## Complete backend selection in both directions
+
+The combined default entry still evaluates `lib/tmuxBackend.ts` even when only
+PTY is configured. That implementation has one production value importer in
+core: `main.ts`. Use a second exact dynamic edge from that existing composition
+point to the backend module, opened only when the configured list includes
+`tmux`. Keep the same backend instance, preparation order, recovery callback and
+selected-backend test. Do not add a wrapper module, configuration flag or runtime
+factory. Existing shared tmux mechanics still used by core stay eager; this
+change does not claim that all tmux-related helpers disappear on Windows.
+
+This extends the existing design without storage, wire, audience, identity,
+retention or rollback changes. Import failure retains startup failure behavior;
+there is no fallback to an unselected backend. The platform and cost acceptance
+requirements above still apply. Add an actual module-evaluation RED for tmux
+before changing runtime, then extend exact source and shipping-bundle boundaries.
+
+The expanded real module-evaluation test failed before this change: the core
+entry evaluated `tmux` (one intended failure, actual exit 1, 13.0 seconds).
+Receipt: `.harness/validation/20261117T234109.225140Z-52390/receipt.json`.
+The runtime edit only selects the existing tmux module at configured startup;
+its backend implementation and shared helpers are unchanged. The cold closure
+now also omits the backend, stream, history rewrap and SGR carry modules. The
+PTY door retains the last three because it uses their shared snapshot helpers;
+this does not claim that the PTY implementation loads no tmux code. The final
+selected-backend checks are running; no new native or cost pass is implied.
+
+The selected-backend follow-up passed 77 caller/loading checks, all seven
+selected bundle boundaries and TypeScript. Three architecture assertions still
+omitted the terminal key table and cell-width helper from the newly lazy
+closure. Those exact two transitive files are now listed with both selected
+backends and removed from the cold inventory; runtime is unchanged. The failed
+receipt remains `.harness/validation/20261117T234312.940268Z-54184/receipt.json`.
+A final architecture run is pending the coordinated quiet benchmark slot.

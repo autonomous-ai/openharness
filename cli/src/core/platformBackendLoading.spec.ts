@@ -3,6 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // Forward every export to the real module. These probes observe evaluation, not
 // whether a stubbed backend happened to be called; importing core is the caller.
 const evaluated = vi.hoisted(() => new Set<string>())
+vi.mock('../lib/tmuxBackend.js', async (original) => {
+  evaluated.add('tmux')
+  return original<typeof import('../lib/tmuxBackend.js')>()
+})
 vi.mock('../lib/ptyHost/launch.js', async (original) => {
   evaluated.add('launch')
   return original<typeof import('../lib/ptyHost/launch.js')>()
@@ -28,7 +32,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllEnvs() })
 
 describe('platform backend loading', () => {
-  it('loads the callable core entry without evaluating an unused PTY host or mover, and observes explicit loading', async () => {
+  it('loads the callable core entry without evaluating either backend, and observes explicit loading', async () => {
     // The standard Vitest setup isolates home, data and runtime before imports.
     // Do not start a daemon: loading its entry must itself leave this door shut.
     const core = await import('./main.js')
@@ -41,6 +45,8 @@ describe('platform backend loading', () => {
     expect(host.ptyHostBackends).toBeTypeOf('function')
     expect(host.HostMover).toBeTypeOf('function')
     expect(host.createGuestHostBackend).toBeTypeOf('function')
-    expect([...evaluated].sort()).toEqual(['drain', 'guest', 'launch', 'mover'])
+    const tmux = await import('../lib/tmuxBackend.js')
+    expect(tmux.TmuxBackend).toBeTypeOf('function')
+    expect([...evaluated].sort()).toEqual(['drain', 'guest', 'launch', 'mover', 'tmux'])
   })
 })

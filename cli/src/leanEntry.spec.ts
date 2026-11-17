@@ -130,7 +130,7 @@ describe('the lean bundle a release carries', () => {
       expect([...loads('core')].some(name => files.get(name)!.includes(marker)), marker).toBe(false)
     }
   })
-  it.each(['PtyHostClient', 'HostMover', 'QuietClock', 'createGuestHostBackend', 'FrameReader'])(
+  it.each(['PtyHostClient', 'HostMover', 'QuietClock', 'createGuestHostBackend', 'FrameReader', 'TmuxBackend', 'TmuxControlStream'])(
     'loads the terminal host %s only after its backend is selected', (name) => {
       // The release build keeps these implementation names; both presence and absence are checked.
       const marker = JSON.stringify(name)

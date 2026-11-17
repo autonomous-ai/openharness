@@ -101,6 +101,7 @@ const IN_PROCESS_ONLY = 'services/inline.ts'
 const LAZY_LOADERS = new Set(['engines/inProcess.ts'])
 /** Only this edge opens the terminal host implementation: configured startup or a Windows guest. */
 const PTY_HOST_DOOR = { importer: 'core/main.ts', target: 'core/ptyHost.ts' }
+const TMUX_BACKEND_DOOR = { importer: 'core/main.ts', target: 'lib/tmuxBackend.ts' }
 
 /**
  * Every file the core's process loads, one a line and in order: the walk from `core/main.ts` with every door shut.
@@ -139,7 +140,8 @@ function closureOf(entry: string): Map<string, number> {
  *  `IN_PROCESS_ONLY`, or one written in a lazy loader. */
 function followed(importer: string, target: string, dynamic: boolean): boolean {
   return !dynamic || (target !== IN_PROCESS_ONLY && !LAZY_LOADERS.has(importer)
-    && !(importer === PTY_HOST_DOOR.importer && target === PTY_HOST_DOOR.target))
+    && !(importer === PTY_HOST_DOOR.importer && target === PTY_HOST_DOOR.target)
+    && !(importer === TMUX_BACKEND_DOOR.importer && target === TMUX_BACKEND_DOOR.target))
 }
 
 /** Each file read and parsed once, however many walks pass through it. */
@@ -658,6 +660,12 @@ describe('the daemon\'s shape', () => {
       'lib/terminalEnvironment.ts',
       'lib/windows/guestHostBackend.ts',
       'lib/windows/treeKill.ts',
+      // Both selected terminal backends use these snapshot mechanics.
+      'lib/cellAdvance.ts',
+      'lib/terminalKeys.ts',
+      'lib/historyRewrap.ts',
+      'lib/sgrCarry.ts',
+      'lib/tmuxStream.ts',
     ]
     const closure = closureOf('core/main.ts')
     expect(implementation.filter((file) => closure.has(file)),
@@ -673,6 +681,19 @@ describe('the daemon\'s shape', () => {
     expect(followed(PTY_HOST_DOOR.importer, PTY_HOST_DOOR.target, false)).toBe(true)
     expect(followed('core/agents/create.ts', PTY_HOST_DOOR.target, true)).toBe(true)
     expect(followed(PTY_HOST_DOOR.importer, 'lib/ptyHost/launch.ts', true)).toBe(true)
+  }, WALK_TIMEOUT_MS)
+
+  it('loads tmux implementation only through its selected-backend edge', () => {
+    const cold = closureOf('core/main.ts'), opened = closureOf(TMUX_BACKEND_DOOR.target)
+    const implementation = ['lib/tmuxBackend.ts', 'lib/tmuxStream.ts', 'lib/historyRewrap.ts', 'lib/sgrCarry.ts', 'lib/cellAdvance.ts', 'lib/terminalKeys.ts']
+    expect(implementation.filter(file => cold.has(file))).toEqual([])
+    expect([...opened.keys()].filter(file => !cold.has(file)).sort()).toEqual(implementation.sort())
+    expect(importsFor(TMUX_BACKEND_DOOR.importer, readFileSync(join(SRC, TMUX_BACKEND_DOOR.importer), 'utf8'))
+      .filter(({ from }) => from === '../lib/tmuxBackend.js')).toEqual([{ from: '../lib/tmuxBackend.js', dynamic: true }])
+    expect(followed(TMUX_BACKEND_DOOR.importer, TMUX_BACKEND_DOOR.target, true)).toBe(false)
+    expect(followed(TMUX_BACKEND_DOOR.importer, TMUX_BACKEND_DOOR.target, false)).toBe(true)
+    expect(followed('core/agents/create.ts', TMUX_BACKEND_DOOR.target, true)).toBe(true)
+    expect(followed(TMUX_BACKEND_DOOR.importer, 'lib/tmuxStream.ts', true)).toBe(true)
   }, WALK_TIMEOUT_MS)
 
   it('the core\'s process loads no edge file but those listed, and reports source size for review', () => {
@@ -800,7 +821,7 @@ describe('the daemon\'s shape', () => {
       return opens
     }
     // Opening a terminal backend does not exempt its pipe and launcher from the local-only network rule.
-    const loaded = new Set([...closureOf('core/main.ts').keys(), ...closureOf(PTY_HOST_DOOR.target).keys()])
+    const loaded = new Set([...closureOf('core/main.ts').keys(), ...closureOf(PTY_HOST_DOOR.target).keys(), ...closureOf(TMUX_BACKEND_DOOR.target).keys()])
     const opening = [...loaded].filter((file) => opensIn(readFileSync(join(SRC, file), 'utf8'))).sort()
     expect(opening.filter((file) => !OPENS[file]), 'A file the core\'s process loads can open a connection: the core calls no other host. Make the call in the component that faces it (the gateway, for the backend), or, for one on this computer only, list it here and say what it does.').toEqual([])
     expect(Object.keys(OPENS).filter((file) => !opening.includes(file)), 'Opens no connection, or is no longer loaded: remove it from the list.').toEqual([])

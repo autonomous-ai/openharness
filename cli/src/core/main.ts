@@ -85,7 +85,6 @@ import { findLiveSession, findResumedTranscript } from '../lib/sessionRepair.js'
 import { openclawStateDir } from '../lib/openclawStore.js'
 import { processSessionOf } from '../engines/sessionStores.js'
 import { createHandoffDependencies } from './handoffDependencies.js'
-import { TmuxBackend } from '../lib/tmuxBackend.js'
 import { tmuxAvailableNow } from '../lib/tmuxOnPath.js'
 import { createTerminalBackendRecovery } from '../lib/terminalBackendRecovery.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from '../lib/hostTheme.js'
@@ -514,6 +513,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // One door for configured hosts and Windows guests. tmux-only cores never evaluate the host implementation.
   const loadPtyHost = () => import('./ptyHost.js')
   const pty = terminalConfig.backends.includes('ptyhost') ? await loadPtyHost() : null
+  const tmux = terminalConfig.backends.includes('tmux') ? await import('../lib/tmuxBackend.js') : null
   // Moving agents off a drained pty host (lib/hostMove/): how long each has been idle and untouched, the one gate an
   // agent's input waits in while it changes host, and the agents a move a dead daemon left may still run beside
   // (`removeOrphanMovePanes` below), held this start: neither restored, nor discovered, nor moved.
@@ -614,7 +614,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // STATE the daemon runs on without, never a reason to refuse to start: it still serves its status, the
   // local socket and the backend link, leaves for an update, and says what is missing.
   const candidates: TerminalBackend[] = []
-  const configuredTmux = terminalConfig.backends.includes('tmux') ? new TmuxBackend(() => hostTheme) : null
+  const configuredTmux = tmux ? new tmux.TmuxBackend(() => hostTheme) : null
   if (configuredTmux) candidates.push(configuredTmux)
   // The Harness PTY host (pty/): reached, or started detached so its panes outlive this daemon. New panes go to the
   // target's host, the build this daemon would start; any other host, still running from before an update, is a
@@ -652,7 +652,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // A hook's tmux runtime hint is taken only while tmux is the backend new panes are made on
   // (core/engines/hooks.ts). Restart, retarget, restore and adoption reach each pane's own backend
   // through the coordinator, gated on what it can do (`canRestart`, `isHeld`, `killHeld`).
-  let tmuxBackend = createBackend instanceof TmuxBackend ? createBackend : null
+  let tmuxBackend = tmux && createBackend instanceof tmux.TmuxBackend ? createBackend : null
   const terminals = new TerminalBackendCoordinator(
     terminalBackends,
     terminalConfig.backends,

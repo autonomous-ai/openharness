@@ -39,7 +39,7 @@ function parsed(path, open) {
     if (!target || !target.startsWith(SRC + '/') || !target.endsWith('.ts') || /\.(spec|test|e2e)\.ts$/.test(target)) continue
     const importer = relative(SRC, path), t = relative(SRC, target)
     if (dynamic && (t === IN_PROCESS_ONLY || (!open && (LAZY.has(importer)
-      || (importer === 'core/main.ts' && t === 'core/ptyHost.ts'))))) continue
+      || (importer === 'core/main.ts' && (t === 'core/ptyHost.ts' || t === 'lib/tmuxBackend.ts')))))) continue
     imports.push(target)
   }
   const result = { lines: text.split('\n').length, imports }
