@@ -95,13 +95,16 @@ async function runClaude(s: Scenario, st: Staged, cfg: AgentConfig): Promise<Run
   }
   if (!cfg.claudeBin) throw new Error('claude was not found on PATH when the eval started')
   const exit = await spawnGroup(cfg.claudeBin, claudeArgs(cfg, st, s.prompt), st, cfg.timeoutMs)
-  if (exit.timedOut) throw failure(`claude ran past ${cfg.timeoutMs / 1000} s`, 'timeout')
   const run = parseClaudeStream(exit.stdout)
+  // A failed run was billed for what it did: its error carries what the stream reported to the errors sidecar. A stream
+  // cut before its result event has the model, and zero usage, which only that event gives.
+  const spent = (error: Error): Error => Object.assign(error, { model: run.model, usage: run.usage })
+  if (exit.timedOut) throw spent(failure(`claude ran past ${cfg.timeoutMs / 1000} s`, 'timeout'))
   // Worded without "rate limit": the runner retries those, and an account limit lasts hours.
-  if (run.limited) throw failure('the Claude account limit is reached', 'account_limited')
+  if (run.limited) throw spent(failure('the Claude account limit is reached', 'account_limited'))
   // A run cut at --max-turns is a result; any other failed exit is an error, never a silent run.
   if (exit.code !== 0 && run.status !== 'truncated') {
-    throw new Error(`claude exited ${exit.code ?? exit.signal}: ${(exit.stderr || run.answer).trim().slice(-500)}`)
+    throw spent(new Error(`claude exited ${exit.code ?? exit.signal}: ${(exit.stderr || run.answer).trim().slice(-500)}`))
   }
   return run
 }

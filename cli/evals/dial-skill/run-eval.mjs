@@ -692,7 +692,8 @@ async function main() {
           // Billed-but-failed spend stays countable: when the app call completed
           // before the failure (e.g. a served-model mismatch, a judge-stage
           // ceiling), carry its identity and usage on the error row.
-          model: lastRun?.model, usage: lastRun?.usage,
+          // dial skill eval: a run that failed itself carries its own (lib/agents.ts).
+          model: e?.model ?? lastRun?.model, usage: e?.usage ?? lastRun?.usage,
           judge_model: e?.judge_model ?? lastRun?.judge_model,
           judge_usage: e?.judge_usage ?? lastRun?.judge_usage,
           latency_s: (Date.now() - t0) / 1000,
