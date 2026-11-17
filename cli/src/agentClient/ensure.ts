@@ -45,7 +45,8 @@ type EnsureResult = 'live' | 'resumed' | 'new'
 /** What the engine resumes the conversation by: OpenClaw's `--session` key, Hermes's session id; null before it has one. */
 function engineSession(frame: Frame): string | null {
   if (frame.sessionId) return frame.sessionId
-  return frame.engine === 'openclaw' ? `harness-${frame.id}` : null
+  // The full key OpenClaw names it by (`--session harness-<id>` makes `agent:main:harness-<id>`), as the bound row says it.
+  return frame.engine === 'openclaw' ? `agent:main:harness-${frame.id}` : null
 }
 
 export function ensureCommand(argv: readonly string[], deps: EnsureDeps): Promise<number> {

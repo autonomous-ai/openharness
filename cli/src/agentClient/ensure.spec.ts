@@ -89,8 +89,20 @@ describe('harness ensure (#4393)', () => {
     const h = harness(d, { daemonUp: async () => ({ started: true, ms: 912 }) })
     expect(await ensureCommand(args(), h.deps)).toBe(EXIT.ok)
     expect(h.made).toEqual([['openclaw', '--name', 'lamp', '--program-token-file', token, '--json']])
-    expect(h.json()).toEqual({ result: 'new', id: 'new1', name: 'lamp', engine: 'openclaw', engineSession: 'harness-new1', state: 'starting',
+    expect(h.json()).toEqual({ result: 'new', id: 'new1', name: 'lamp', engine: 'openclaw', engineSession: 'agent:main:harness-new1', state: 'starting',
       daemonStarted: true, daemonStartMs: 912 })
+  })
+
+  it('names OpenClaw\'s session by its full key before it is bound, and Hermes\'s not before it has one', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('a1', { sessionId: '' })]
+    own('a1')
+    const h = harness(d)
+    await ensureCommand(args(), h.deps)
+    expect(h.json()).toMatchObject({ result: 'live', engineSession: 'agent:main:harness-a1' })
+    const hermes = harness(new FakeDaemon())
+    await ensureCommand(args([], 'hermes'), hermes.deps)
+    expect(hermes.json()).toMatchObject({ result: 'new', engine: 'hermes', engineSession: null })
   })
 
   it('passes a folder and --local on to harness new', async () => {
