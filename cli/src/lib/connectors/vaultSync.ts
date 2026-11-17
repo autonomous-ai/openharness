@@ -1,6 +1,4 @@
 /** Account connector synchronization belongs to the gateway; only metadata leaves that process. */
-import { stat } from 'node:fs/promises'
-import { join } from 'node:path'
 import type { Store } from './store.js'
 import { fingerprint, parseSnapshot, type Snapshot } from './vaultSnapshot.js'
 import { VaultStore, VaultStoreError } from './vaultStore.js'
@@ -144,14 +142,14 @@ export class VaultSync {
   private async look(): Promise<void> {
     if (this.checking || !this.current()) return
     this.checking = true
+    const before = this.filesAt
     try {
-      const stamps = await Promise.all(['tokens.json', 'clients.json', 'removed.json'].map(async name => {
-        try { const info = await stat(join(this.deps.vault.root, name)); return `${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}` }
-        catch { return '-' }
-      }))
-      if (!this.current()) return
-      const at = stamps.join('|')
-      if (at !== this.filesAt) { this.filesAt = at; void this.run() }
+      const at = await this.store.version()
+      // An exchange completed while these probes waited; its exact observed versions supersede this check.
+      if (!this.current() || this.filesAt !== before) return
+      if (at !== this.filesAt) void this.run()
+    } catch {
+      if (this.current()) this.say('[connectors] synchronization STORE_UNAVAILABLE')
     } finally { this.checking = false }
   }
 
@@ -183,14 +181,15 @@ export class VaultSync {
           theirs = parsed; complete = opened.complete
         }
       }
-      const merged = await this.store.merge(theirs, check, this.changedLocal)
+      const observed = await this.store.merge(theirs, check, this.changedLocal)
+      const merged = observed.snapshot
       // A previous gateway may have committed before its notice arrived. Never notify while a disk lock is held.
       if (!this.projected) this.changedLocal()
       check()
       this.revision = read.revision
       const empty = !Object.keys(merged.connections).length && !Object.keys(merged.removed).length
       const needed = read.envelope ? fingerprint(merged) !== fingerprint(theirs) || !complete : !empty
-      if (!needed) return 'synced'
+      if (!needed) { check(); this.filesAt = observed.version; return 'synced' }
       const plain = JSON.stringify(merged)
       // Backend ciphertext is capped at one million base64 characters, including the authentication tag.
       if (Buffer.byteLength(plain) > VAULT_PLAINTEXT_BYTES) return 'unavailable'
@@ -199,7 +198,7 @@ export class VaultSync {
       const written = await port.write(read.revision, envelope, left())
       check()
       if (!written) return 'unavailable'
-      if (written.written) { this.revision = written.revision; return 'synced' }
+      if (written.written) { this.revision = written.revision; this.filesAt = observed.version; return 'synced' }
       read = { revision: written.revision, envelope: written.envelope }
     }
     return 'unavailable'

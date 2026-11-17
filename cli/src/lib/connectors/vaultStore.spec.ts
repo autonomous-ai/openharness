@@ -66,7 +66,7 @@ describe('gateway connector storage under the legacy lock', () => {
     const writer = new VaultStore(root, { ...vaultStoreIo, wait })
     const result = await writer.merge(remote(), noGuard)
     expect(wait).toHaveBeenCalledTimes(1)
-    expect(result.connections.linear.token.access_token).toBe('synthetic-newest')
+    expect(result.snapshot.connections.linear.token.access_token).toBe('synthetic-newest')
     expect(vault.token('linear')?.access_token).toBe('synthetic-newest')
     expect(vault.token('notion')).toBeUndefined()
   })
@@ -83,7 +83,7 @@ describe('gateway connector storage under the legacy lock', () => {
       expect(existsSync(join(root, '.lock'))).toBe(false)
       fail = false
       const result = await writer.merge(remote(), noGuard)
-      expect(result).toEqual(remote())
+      expect(result.snapshot).toEqual(remote())
       expect(snapshotOf(vault)).toEqual(remote())
     })
   }
@@ -149,7 +149,7 @@ describe('gateway connector storage under the legacy lock', () => {
     expect(changed).not.toHaveBeenCalled()
     await expect(writer.merge(remote(), noGuard)).rejects.toMatchObject({ code: 'STORE_BUSY' })
     release.resolve()
-    expect(await running).toEqual(remote())
+    expect((await running).snapshot).toEqual(remote())
     expect(changed).toHaveBeenCalledTimes(1)
     expect(existsSync(join(root, '.lock'))).toBe(false)
   })
@@ -169,7 +169,7 @@ describe('gateway connector storage under the legacy lock', () => {
     await expect(writer.merge(remote(), noGuard)).rejects.toMatchObject({ code: 'STORE_WRITE_UNCONFIRMED' })
     expect(snapshotOf(vault)).toEqual(remote())
     fail = false
-    expect(await writer.merge(remote(), noGuard)).toEqual(remote())
+    expect((await writer.merge(remote(), noGuard)).snapshot).toEqual(remote())
     expect(syncs).toBe(2)
   })
 
@@ -200,7 +200,7 @@ describe('gateway connector storage under the legacy lock', () => {
     await expect(writer.merge(remote(), noGuard)).rejects.toMatchObject({ code: 'STORE_CLEANUP_UNCONFIRMED' })
     expect(readdirSync(root)).toEqual([])
     rmSync(root, { recursive: true }); renameSync(previous, root)
-    expect(await writer.merge(remote(), noGuard)).toEqual(remote())
+    expect((await writer.merge(remote(), noGuard)).snapshot).toEqual(remote())
     expect(syncedIdentity).toBe(expected)
     expect(existsSync(join(root, '.lock'))).toBe(false)
   })
@@ -247,7 +247,7 @@ describe('gateway connector storage under the legacy lock', () => {
     expect(changed).not.toHaveBeenCalled()
     await expect(writer.merge(remote(), noGuard)).rejects.toMatchObject({ code: 'STORE_CLEANUP_UNCONFIRMED' })
     rmSync(root, { recursive: true }); renameSync(previous, root)
-    expect(await writer.merge(remote(), noGuard, changed)).toEqual(remote())
+    expect((await writer.merge(remote(), noGuard, changed)).snapshot).toEqual(remote())
     expect(changed).toHaveBeenCalledTimes(1)
     expect(existsSync(join(root, '.lock'))).toBe(false)
   })
@@ -310,7 +310,7 @@ describe('gateway connector storage under the legacy lock', () => {
     await expect(writer.merge(remote(), noGuard)).rejects.toMatchObject({ code: 'STORE_CLEANUP_UNCONFIRMED' })
     expect(prepared).toBe(1)
     failWrite = false; failCleanup = false
-    expect(await writer.merge(remote(), noGuard)).toEqual(remote())
+    expect((await writer.merge(remote(), noGuard)).snapshot).toEqual(remote())
     expect(readdirSync(root).filter(name => name.startsWith('.incoming-'))).toEqual([])
     expect(existsSync(join(root, '.lock'))).toBe(false)
   })
@@ -329,7 +329,7 @@ describe('gateway connector storage under the legacy lock', () => {
     await expect(writer.merge(remote(), noGuard, changed)).rejects.toMatchObject({ code: 'STORE_CLEANUP_UNCONFIRMED' })
     expect(changed).not.toHaveBeenCalled()
     failCleanup = false
-    expect(await writer.merge(remote(), noGuard, changed)).toEqual(remote())
+    expect((await writer.merge(remote(), noGuard, changed)).snapshot).toEqual(remote())
     expect(changed).toHaveBeenCalledTimes(1)
   })
 
