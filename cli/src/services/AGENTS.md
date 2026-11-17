@@ -229,7 +229,8 @@ master too old to run it starts it beside itself, still in its own process (`src
   the Notifications setting (src/services/devices.ts). Where the listener does not run (Windows, and devices inside
   the core, as on Harness OS) `harness device notify` answers `no dial` and the dial's status carries no Notifications
   setting, which nothing could change: a known gap. A handler of a second kind holds a stream open,
-  one of its type across every connection, and is told when the stream can take a line (`onWritable`) and why it
+  one of its type across every connection (a keyed type keeps one per key up to its limit, a new key past it
+  answered 409), and is told when the stream can take a line (`onWritable`) and why it
   ended (`StreamEnd`): on `tabs` the devices tell the watch which terminal tab to select; on `dial` (`dialStream`),
   opened with `standby` so it never takes the stream from another Orca, they tell Orca's Harness Device plugin
   (plugins/harness-device-orca) whether a dial is attached and which agent it shows.
