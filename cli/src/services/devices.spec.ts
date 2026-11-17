@@ -6624,6 +6624,22 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       expect(scrollSaid()).toEqual([])
     })
 
+    it('a stroke Herdr took before the stop runs nothing more once the stop began', async () => {
+      const { core, port } = inHerdr()
+      shows(await listedId())
+      host().scrolled('down', 0, 0)
+      host().scrolled('move', 8, 0)
+      await vi.advanceTimersByTimeAsync(32)
+      expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1)])
+      const stopping = port.stop()
+      host().scrolled('move', 24, 0)
+      host().scrolled('up', 0, 0)
+      await stopping
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1)])
+      expect(dialScrolls(core)).toEqual([])
+    })
+
     // A window that heard the down before the stop hears the up during it: it never holds a drag.
     it('a stroke the windows took before the stop keeps its route to its up', async () => {
       const { core, port } = inHerdr()
