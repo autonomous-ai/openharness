@@ -45,6 +45,13 @@ describe('the door\'s routes a service answers', () => {
     expect(hosted.route).toHaveBeenCalledWith('thing_slow_http', { method: 'GET', target: '/api/thing/slow' }, { local: true, owner: true }, expect.any(Function))
   })
 
+  it('answers an unowned route without an inline host or a spurious request failure', async () => {
+    const log = vi.fn()
+    const doors = createServiceRoutes({ routes, linked: router([]), log })
+    expect(await doors.answer('/api/thing/save', read('/api/thing/save'))).toEqual(DOWN)
+    expect(log).not.toHaveBeenCalled()
+  })
+
   it('is not asked for a path no service answers', () => {
     const doors = createServiceRoutes({ routes, linked: router(['thing_http']), hosted: router([]) })
     expect(doors.answer('/api/other', read('/api/other'))).toBeNull()

@@ -15,14 +15,13 @@ import type { LiveEvent } from '../../engines/kit/events.js'
 import { builtinSqlite, closeSqliteHandles, type DatabaseLike } from '../../lib/sqliteBuiltin.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { SessionInputController } from '../../lib/sessionInput.js'
-import { TranscriptPager } from '../../lib/transcriptPages.js'
 import { readInlineScreen } from '../../testing/inlineScreen.js'
 import { inlineSubmission } from '../../testing/inlineSubmission.js'
 import { createAttach, type AttachDeps } from './attach.js'
 import { createHistory } from './history.js'
 import { createLastTurnReader } from './lastTurn.js'
 import { createStoreOf } from './stores.js'
-import { engineTranscriptFor } from '../../engines/transcripts.js'
+import { createInlineHistory, engineTranscriptFor } from '../../engines/transcripts.js'
 import { createSessionNormalizers } from './normalizers.js'
 import { createIngest } from './ingest.js'
 import { inProcessOtherStreams } from '../../testing/otherStreamsInProcess.js'
@@ -355,8 +354,9 @@ describe('an OpenClaw pane, through the core', () => {
     const row = pane('agent:main:reset')
     const opened = vi.fn(async () => path)
     const dbs = { opencode: '/db/opencode.db', kilo: '/db/kilo.db', devin: '/db/devin.db', openclaw: opened }
-    const history = createHistory({ resolve: (id) => (id === row.sessionId ? row : undefined), stopped: () => [], pages: new TranscriptPager(),
-      readerFor: engineTranscriptFor, storeOf: createStoreOf(dbs, async () => '/db/hermes.db') })
+    const inline = createInlineHistory()
+    const history = createHistory({ resolve: (id) => (id === row.sessionId ? row : undefined), stopped: () => [], lineCount: inline.lineCount,
+      readerFor: inline.forEngine, storeOf: createStoreOf(dbs, async () => '/db/hermes.db') })
     const users = (events: unknown) => (events as LiveEvent[]).filter((event) => event.type === 'user_message').map((event) => event.payload.content)
     const whole = await history.sessionGet({ sessionId: 'agent:main:reset' })
     expect(users(whole.events)).toEqual(['Reply with exactly: before', 'Reply with exactly: after'])
@@ -376,8 +376,9 @@ describe('an OpenClaw pane, through the core', () => {
     const row = { ...pane('not-a-key'), processIdentity: undefined } as unknown as RegisteredSession
     const opened = vi.fn(async () => null)
     const dbs = { opencode: '/db/opencode.db', kilo: '/db/kilo.db', devin: '/db/devin.db', openclaw: opened }
-    const history = createHistory({ resolve: (id) => (id === row.sessionId ? row : undefined), stopped: () => [], pages: new TranscriptPager(),
-      readerFor: engineTranscriptFor, storeOf: createStoreOf(dbs, async () => '/db/hermes.db') })
+    const inline = createInlineHistory()
+    const history = createHistory({ resolve: (id) => (id === row.sessionId ? row : undefined), stopped: () => [], lineCount: inline.lineCount,
+      readerFor: inline.forEngine, storeOf: createStoreOf(dbs, async () => '/db/hermes.db') })
     // Nothing but the end of the history.
     expect((await history.sessionGet({ sessionId: 'not-a-key' })).events).toEqual([{ type: 'done', payload: { result: 'success' } }])
     const lastTurn = createLastTurnReader({ bySession: () => row, readerFor: engineTranscriptFor, storeOf: createStoreOf(dbs, async () => '/db/hermes.db') })

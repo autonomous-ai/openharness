@@ -1,6 +1,7 @@
+import { UPDATER_HOST, serviceSpecs } from './servicePlan.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  ENGINE_LIVE_ENV, ENGINE_OTHERS_ENV, otherEnginesVersion, ENGINE_RUNTIME_ENV, ENGINE_SCREEN_ENV, ENGINE_MODEL_CONTROL_ENV, masterRunsEngineModelControl, ENGINE_QUESTION_CONTROL_ENV, masterRunsEngineQuestionControl, ENGINE_SUBMISSION_ENV, masterRunsEngineSubmission, ENGINE_NATIVE_CONTROL_ENV, masterRunsEngineNativeControl, ENGINE_BACKGROUND_JOB_ENV, masterRunsEngineBackgroundJob, ENGINE_PROVIDER_MOVE_ENV, masterRunsEngineProviderMove, ENGINE_RESUME_REPAIR_ENV, masterRunsEngineResumeRepair, heldAgentLife, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, UPDATER_HOST, masterRunsLiveEngines, masterRunsEngineRuntime, masterRunsEngineScreen, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns,
+  ENGINE_LIVE_ENV, ENGINE_OTHERS_ENV, otherEnginesVersion, ENGINE_RUNTIME_ENV, ENGINE_SCREEN_ENV, ENGINE_MODEL_CONTROL_ENV, masterRunsEngineModelControl, ENGINE_QUESTION_CONTROL_ENV, masterRunsEngineQuestionControl, ENGINE_SUBMISSION_ENV, masterRunsEngineSubmission, ENGINE_NATIVE_CONTROL_ENV, masterRunsEngineNativeControl, ENGINE_BACKGROUND_JOB_ENV, masterRunsEngineBackgroundJob, ENGINE_PROVIDER_MOVE_ENV, masterRunsEngineProviderMove, ENGINE_RESUME_REPAIR_ENV, masterRunsEngineResumeRepair, heldAgentLife, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, masterRunsLiveEngines, masterRunsEngineRuntime, masterRunsEngineScreen, serviceProcessesEnv, servicesTheMasterRuns,
   type ServiceSpec,
 } from './services.js'
 import { DEFAULT_SERVICE_OPTIONS, ServiceSupervisor, serviceOptions, type ServiceSupervisorDeps, type ServiceSupervisorOptions } from './serviceSupervisor.js'

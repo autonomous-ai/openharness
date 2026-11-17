@@ -13,7 +13,7 @@ export { questionControlFor } from '../engines/questionControls.js'
  * target, and its test"). The core still routes these services' requests and holds their fallbacks: both are
  * declared in core/api.ts, which it loads either way.
  */
-export { engineTranscriptFor } from '../engines/transcripts.js'
+export { createInlineHistory } from '../engines/transcripts.js'
 // A conversation kept in a database read whole, for a service in this process (core/api.ts `transcripts`): theirs, as
 // each service's own process reads it (lib/databaseHistory.ts), loaded only once one asks (engines/inProcess.ts).
 export { databaseHistory } from '../engines/storeHistory.js'
@@ -64,3 +64,5 @@ export { startEngineProbe } from './engineProbe.js'
 export { startWorkspaces } from './workspaces.js'
 
 export { createLocalNativeSetup } from './nativeSetup.js'
+export { createServiceHost } from './inlineHost.js'
+export { inlineSharedMachinesPort } from '../lib/sharedMachinesPort.js'

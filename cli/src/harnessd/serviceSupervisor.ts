@@ -10,7 +10,8 @@
  * system is injected, so every decision here is tested without one.
  */
 import { SERVICE_EXIT_RESTART, describeStaged, heartbeatGraceMs, isCoreMessage, isUpdaterMessage, type StagedUpdate } from './protocol.js'
-import { UPDATER_PROCESS, type ServiceSpec } from './services.js'
+import type { ServiceSpec } from './services.js'
+import { UPDATER_PROCESS } from './servicePlan.js'
 import { describeExit, type CoreHandle } from './supervisor.js'
 
 export interface ServiceSupervisorDeps {

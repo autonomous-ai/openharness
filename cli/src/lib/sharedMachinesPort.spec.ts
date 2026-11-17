@@ -1,5 +1,6 @@
+import { answerSharedMachinesOp, type SharedMachinesAccount } from './sharedMachinesAccount.js'
 import { describe, expect, it, vi } from 'vitest'
-import { answerSharedMachinesOp, failed, inlineSharedMachinesPort, sharedMachinesPortOf, type SharedMachinesAccount } from './sharedMachinesPort.js'
+import { failed, inlineSharedMachinesPort, sharedMachinesPortOf } from './sharedMachinesPort.js'
 
 const M = 'ab'.repeat(16)
 const pub = Buffer.alloc(32, 1).toString('base64')

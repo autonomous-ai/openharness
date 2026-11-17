@@ -31,8 +31,8 @@ describe('Claude Code and Codex readers in their own processes', () => {
   let daemon: IsolatedDaemon | undefined
   let client: LocalClient | undefined
   afterEach(async () => { client?.close(); await daemon?.close(); client = undefined; daemon = undefined })
-  async function fresh(env: Record<string, string> = {}) {
-    const d = daemon = await IsolatedDaemon.create({ env: { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000', ...env } })
+  async function fresh(env: Record<string, string> = {}, noMaster = false) {
+    const d = daemon = await IsolatedDaemon.create({ noMaster, env: { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000', ...env } })
     onTestFailed(() => console.log(d.log()))
     await d.start()
     client = await LocalClient.connect(d)
@@ -50,13 +50,37 @@ describe('Claude Code and Codex readers in their own processes', () => {
     const catalog = await c.request('models_list', { agentId: agent.id }, 15_000)
     expect(catalog.error, JSON.stringify(catalog)).toBeUndefined()
     expect(catalog.models.some((option: { id: string }) => option.id === selected)).toBe(true)
+    expect(JSON.stringify((await history(c, agent)).events)).toContain(`inline-profile-${engine}`)
+    const listed = await c.request('sessions_list', { agentId: agent.id }, 15_000)
+    expect(listed.sessions[0]).toMatchObject({ id: agent.sessionId })
+    expect(listed.sessions[0].messageCount).toBeGreaterThan(0)
     expect(readerPid(d, engine)).toBeUndefined()
     expect(d.coresStarted()).toBe(1)
   })
 
+  it.each<{ label: string; env: Record<string, string>; noMaster: boolean }>([
+    { label: 'one isolated reader with the other services inline', env: { HARNESSD_SERVICES: 'engine-claude' }, noMaster: false },
+    { label: 'the explicit no-master compatibility path', env: { HARNESS_NO_MASTER: '1', HARNESSD_SERVICES: 'none' }, noMaster: true },
+  ])('keeps history and line counts working with $label', async ({ env, noMaster }) => {
+    const { d, c } = await fresh(env, noMaster)
+    const core = d.corePid()
+    const agent = await create(d, c, 'claude')
+    await turn(c, agent, 'history-with-inline-components')
+    const answer = await history(c, agent)
+    expect(answer.error, JSON.stringify(answer)).toBeUndefined()
+    expect(JSON.stringify(answer.events)).toContain('history-with-inline-components')
+    const listed = await c.request('sessions_list', { agentId: agent.id }, 15_000)
+    expect(listed.sessions[0]).toMatchObject({ id: agent.sessionId })
+    expect(listed.sessions[0].messageCount).toBeGreaterThan(0)
+    if (noMaster) expect(readerPid(d, 'claude')).toBeUndefined()
+    else expect(alive(readerPid(d, 'claude')!)).toBe(true)
+    expect(d.corePid()).toBe(core)
+    await turn(c, agent, 'still-usable-after-history')
+  })
+
   // #4146: before a resume, the `claude agents --json` that finds a `claude --bg` job holding the session is run by Claude
   // Code's worker, never by the core; only explicit inline mode runs it in the core.
-  it.each([['its worker', {}], ['the core, in explicit inline mode', { HARNESSD_SERVICES: 'none' }]] as const)(
+  it.each<[string, Record<string, string>]>([['its worker', {}], ['the core, in explicit inline mode', { HARNESSD_SERVICES: 'none' }]])(
     'asks whether a background job holds a Claude Code session it resumes from %s', async (_where, env) => {
       const { d, c } = await fresh(env)
       const agent = await create(d, c, 'claude')

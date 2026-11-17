@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { emptyPorts, MODELS_FALLBACKS, type ModelsPort } from '../core/api.js'
-import { createServiceHost } from '../core/serviceHost.js'
+import { createServiceHost } from './inlineHost.js'
 import { installedDsh } from '../dsh/installed.js'
 import { appEngineOps, scanAppModels } from '../lib/appModels.js'
 import { createGridAccess, gridNamesLocal, reconcileGridAttach, type GridAttachResult } from '../lib/gridAttach.js'

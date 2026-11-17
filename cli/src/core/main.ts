@@ -204,7 +204,7 @@ import { paneReadIdentity } from './transcripts/readIdentity.js'
 import { isOtherEngine, OTHER_ENGINE_STATES, OTHER_ENGINES_SERVICE } from '../engines/otherEngines.js'
 import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, GOALS_REQUESTS, TURN_DELIVERERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, ENGINE_PROBE_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type WindowFocus } from './api.js'
 import { createFrameParts } from './frameParts.js'
-import { createServiceHost, testFaults } from './serviceHost.js'
+import { testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
 import { createServiceLinks, READER_START_MS, type ServiceLinks } from './serviceLinks.js'
 import { createViewerStreams } from './viewerStreams.js'
@@ -229,7 +229,6 @@ import { createAgentSettingsSync, createExperimentHooks, wakeExperiments } from 
 import { answerExperimentQuery, answerDaemonQuery, createForExperiment } from './experimentQueries.js'
 import { answerConnectorsQuery } from './connectorsQueries.js'
 import { answerSharedMachinesQuery } from './sharedMachinesQueries.js'
-import { inlineSharedMachinesPort } from '../lib/sharedMachinesPort.js'
 import { createOrchestratorLink } from './orchestratorLink.js'
 import { daemonCommand } from '../lib/daemonCommand.js'
 import { heldAgentLife, KNOWN_SERVICES, masterRunsEngineRuntime, masterRunsLiveEngines, otherEnginesVersion, servicesTheMasterRuns } from '../harnessd/services.js'
@@ -262,7 +261,7 @@ import { settleNodeMigration } from '../lib/nodeMigration.js'
 import { nodeStatus } from '../lib/nodeStatus.js'
 import { type ActivityFrame } from '../lib/turnActivity.js'
 import { cursorDataDir } from '../engines/cursor/contract.js'
-import { TranscriptPager } from '../lib/transcriptPages.js'
+import { TranscriptIndexes } from '../lib/transcriptIndex.js'
 import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
 import { agentFrame, lastActivityAt, type AgentFrame } from '../lib/agentFrame.js'
 import { transcriptActivityAt } from '../lib/transcriptActivity.js'
@@ -758,6 +757,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     registry.onEnter = engine => inline?.preloadEngine(engine)
     for (const session of registry.list()) inline?.preloadEngine(session.engine)
   }
+  const inlineHistory = inline?.createInlineHistory()
+  const lineCounts = inlineHistory ?? new TranscriptIndexes()
   let serviceLinksRef: ServiceLinks | null = null
   const engineStorage = createEngineStorage({ isolated: othersStorage, inline: inline?.hermesBackground, inlineExport: inline?.exportDatabase,
     serviceProcess: coreLink.serviceProcess,
@@ -1083,12 +1084,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
   })
   // Each service starts and is called through the host, so one that fails is logged and left off and
-  // the core carries on without it (core/serviceHost.ts).
-  const serviceHost = createServiceHost(ports, { faults: testFaults(harnessd.HARNESSD_TEST_FAULTS) })
+  // the core carries on without it (services/inlineHost.ts).
+  const serviceHost = inline?.createServiceHost(ports, { faults: testFaults(harnessd.HARNESSD_TEST_FAULTS) })
   // Services publish bounded display fields without putting their state or interpretation in the core.
-  const frameParts = createFrameParts({ core: coreApi, epoch: agentLife.frameEpoch, available: service => !serviceHost.isOff(service) })
+  const frameParts = createFrameParts({ core: coreApi, epoch: agentLife.frameEpoch, available: service => !serviceHost?.isOff(service) })
   framePartsRef = frameParts.forFrame
-  for (const service of frameParts.services) serviceHost.onOff(service, () => frameParts.disabled(service))
+  for (const service of frameParts.services) serviceHost?.onOff(service, () => frameParts.disabled(service))
   // Models (services/models.ts), started below: what an agent's frame says of its grid, from memory.
   gridAnnotationRef = (grid) => (ports.models ?? MODELS_OFF).annotation(grid)
   // A look at a live agent, for the services that follow agents (core/agentLife.ts): a create, a fork, a resume, a
@@ -1160,7 +1161,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     paneState: (runtime) => terminals.backendFor(runtime)?.paneState(runtime) ?? Promise.resolve('unknown'),
     processState: checkPidRuntime }))
   const account = (s = readAuthSession()): GatewayAccount => ({ machineId: s?.machineId ?? null, signIn: signInOf(s?.signInEpoch, s?.signInAcct), autonomousEnv: s?.autonomousEnv ?? env.AUTONOMOUS_ENV })
-  const engineReaders = createEngineReaders({ isolated: othersHosted ? outOfProcess : new Set([...outOfProcess].filter(name => name !== OTHER_ENGINES_SERVICE)), inline: inline?.engineTranscriptFor,
+  const engineReaders = createEngineReaders({ isolated: othersHosted ? outOfProcess : new Set([...outOfProcess].filter(name => name !== OTHER_ENGINES_SERVICE)), inline: inlineHistory?.forEngine,
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }) })
   const liveTransport = createLiveTransport({
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
@@ -1184,7 +1185,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   const gateway = gatewayLink ?? inlineGateway!
   // Its routes of the door, in this process; in its own, its link takes them (core/serviceRoutes.ts).
-  if (inlineGateway) serviceHost.serve('gateway', () => inlineGateway.requests, coreApi, GATEWAY_REQUESTS)
+  if (inlineGateway) serviceHost!.serve('gateway', () => inlineGateway.requests, coreApi, GATEWAY_REQUESTS)
   backend.useGateway(gateway.port)
   backend.useWifi(wifiCore.fromGateway)
   const gatewayOps = gateway.ops
@@ -1434,7 +1435,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const replayedFirstTurn = attach.replayedFirstTurn
   // A conversation's history, a page at a time, and how long it is (core/transcripts/history.ts).
   const history = createHistory({ readerFor: engineReaders.forEngine, resolve: (id) => registry.resolve(id), stopped: () => stoppedAgents.list(),
-    pages: new TranscriptPager(), storeOf })
+    lineCount: (path) => lineCounts.lineCount(path), storeOf })
   backend.historyProvider = history.sessionGet
   backend.sessionsProvider = history.sessionsList
   // An agent whose turns keep ending at once has its automatic writes held a while (core/turns/shortTurnGuard.ts).
@@ -1596,7 +1597,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // handler in this one.
   const messagesLink = createMessagesLink({ core: coreApi, notify: (frame) => serviceLinks.notify('messages', frame),
     share: (type, payload) => outOfProcess.has('sharing') ? serviceLinks.call('sharing', type, payload)
-      : new Promise((resolve) => { if (!serviceHost.route(type, payload, { local: true, owner: true }, resolve)) resolve({ error: 'SERVICE_UNAVAILABLE' }) }) })
+      : new Promise((resolve) => { if (!serviceHost?.route(type, payload, { local: true, owner: true }, resolve)) resolve({ error: 'SERVICE_UNAVAILABLE' }) }) })
   // An experiment asked for, and the account's notices for those that hear them (core/experiments.ts).
   const experimentHooks = createExperimentHooks({ want: (service) => coreLink.want(service), notify: (service, frame) => serviceLinks.notify(service, frame),
     outOfProcess, experiments })
@@ -1776,12 +1777,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
   })
   serviceLinksRef = serviceLinks
-  // A request a service declared goes to it: in its own process, or in this one (core/serviceHost.ts).
-  backend.serviceRouter = (type, payload, asker, reply) => serviceLinks.route(type, payload, asker, reply) || serviceHost.route(type, payload, asker, reply)
+  // A request a service declared goes to it: in its own process, or in this one (services/inlineHost.ts).
+  backend.serviceRouter = (type, payload, asker, reply) => serviceLinks.route(type, payload, asker, reply) || serviceHost?.route(type, payload, asker, reply) || false
   // And a route of the door a service answers, the same way (core/serviceRoutes.ts).
   const serviceRoutes = createServiceRoutes({ routes: SERVICE_HTTP_ROUTES, frames: SERVICE_WS_FRAMES, linked: serviceLinks, hosted: serviceHost })
   // The connection that asked closed: the services abort what it asked, wherever they run.
-  backend.onConnectionClosed = (connId) => { serviceLinks.closeConnection(connId); serviceHost.closeConnection(connId) }
+  backend.onConnectionClosed = (connId) => { serviceLinks.closeConnection(connId); serviceHost?.closeConnection(connId) }
   // Session search (services/search.ts): in this process, or in its own (services/searchProcess.ts),
   // where the core tells it what changed. A purge's forgetting it hears as it follows agents, held for it if it is down
   // (core/agentLife.ts).
@@ -1793,7 +1794,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       stop: () => {},
     }
   } else {
-    serviceHost.start('search', inline!.startSearch, coreApi, SEARCH_FALLBACKS, SEARCH_REQUESTS)
+    serviceHost!.start('search', inline!.startSearch, coreApi, SEARCH_FALLBACKS, SEARCH_REQUESTS)
   }
   // What the core calls search through: guarded, so it answers its fallbacks once search is switched off.
   const sessionSearch = ports.search
@@ -1801,38 +1802,38 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (outOfProcess.has('viewers')) {
     ports.viewers = viewersLink.port
     viewersLink.follow()
-  } else serviceHost.start('viewers', inline!.startViewers, frameParts.scope('viewers', coreApi), VIEWERS_FALLBACKS)
+  } else serviceHost!.start('viewers', inline!.startViewers, frameParts.scope('viewers', coreApi), VIEWERS_FALLBACKS)
   // Workspaces: in this process, or in the edge host (services/workspacesProcess.ts), told what to do and when.
   if (outOfProcess.has('workspaces')) ports.workspaces = workspacesLink.port
-  else serviceHost.start('workspaces', inline!.startWorkspaces, frameParts.scope('workspaces', coreApi), WORKSPACES_FALLBACKS)
+  else serviceHost!.start('workspaces', inline!.startWorkspaces, frameParts.scope('workspaces', coreApi), WORKSPACES_FALLBACKS)
   // The orchestrator, an experiment (services/orchestrator.ts): in this process, or in its own once it is on,
   // as the core sees it there (core/orchestratorLink.ts). It reads its Directors' turns from the frames sent.
   if (outOfProcess.has('orchestrator')) ports.orchestrator = orchestratorLink.port
-  else serviceHost.start('orchestrator', inline!.startOrchestrator, coreApi, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS)
+  else serviceHost!.start('orchestrator', inline!.startOrchestrator, coreApi, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS)
   // Cloud agents, an experiment (services/cloud.ts): in its own process once it is on, asked through its port
   // (core/cloudLink.ts), which starts it; or in this one behind the service host's guard.
   if (outOfProcess.has('cloud')) ports.cloud = createCloudLink((type, payload) => serviceLinks.call('cloud', type, payload))
-  else serviceHost.start('cloud', inline!.startCloud, coreApi, CLOUD_FALLBACKS, CLOUD_REQUESTS)
+  else serviceHost!.start('cloud', inline!.startCloud, coreApi, CLOUD_FALLBACKS, CLOUD_REQUESTS)
   backend.onFrameSent = (frame) => ports.orchestrator?.frame(frame)
   // Share (services/sharing.ts): in this process, or in its own once it is on (core/sharingLink.ts). Its
   // observers' frames reach it as the relay hands them over.
   if (outOfProcess.has('sharing')) ports.sharing = createSharingLink({ call: (type, payload) => serviceLinks.call('sharing', type, payload), notify: (frame) => serviceLinks.notify('sharing', frame) })
-  else serviceHost.start('sharing', (core, given) => inline!.startSharing(core, given), coreApi, SHARING_FALLBACKS, SHARE_REQUESTS)
+  else serviceHost!.start('sharing', (core, given) => inline!.startSharing(core, given), coreApi, SHARING_FALLBACKS, SHARE_REQUESTS)
   backend.observers = { receive: (connId, type, payload) => ports.sharing?.observer(connId, type, payload), closeAll: () => ports.sharing?.linkDown() }
   // Agent Messages (services/messages.ts): in the edge host, or in this process behind the service host's guard (a
   // fault there costs no message its write).
   if (outOfProcess.has('messages')) ports.messages = messagesLink.port
   // In this process it hears its shared tabs' frames from the same listeners the socket's `onTabFrame` feeds.
-  else serviceHost.start('messages', (core, started) => inline!.startMessagesInCore(core, started, { onTabFrame: messagesLink.onTabFrame,
+  else serviceHost!.start('messages', (core, started) => inline!.startMessagesInCore(core, started, { onTabFrame: messagesLink.onTabFrame,
     observers: () => { void Promise.resolve(messagesLink.answer('observers', {})).catch(() => {}) } }), coreApi, MESSAGES_FALLBACKS, MESSAGES_REQUESTS)
   // The harnesses installed here, and installing, updating and removing one (services/store.ts): in this
   // process, or beside the viewers in theirs (services/storeProcess.ts).
   if (outOfProcess.has('store')) ports.store = storeLink.port
-  else serviceHost.start('store', (core, installedPorts) => inline!.startStoreInCore(core, installedPorts, () => { void heldLaunches.restoreHeld('store') }), coreApi, STORE_FALLBACKS, STORE_REQUESTS)
+  else serviceHost!.start('store', (core, installedPorts) => inline!.startStoreInCore(core, installedPorts, () => { void heldLaunches.restoreHeld('store') }), coreApi, STORE_FALLBACKS, STORE_REQUESTS)
   // This machine's Claude and Codex rate limits, read with its own credentials (services/usage.ts): in this
   // process, or in the edge host (services/usageProcess.ts).
   if (outOfProcess.has('usage')) ports.usage = { read: target => serviceLinks.call('usage', 'agentUsage', { target }), stop: () => {} }
-  else serviceHost.start('usage', inline!.startUsageInCore, coreApi, USAGE_FALLBACKS, USAGE_REQUESTS)
+  else serviceHost!.start('usage', inline!.startUsageInCore, coreApi, USAGE_FALLBACKS, USAGE_REQUESTS)
   usagePortRef = usageLink.port
   backend.tokenUsageProvider = target => usageLink.port.get(target)
 
@@ -1840,50 +1841,50 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // This machine's and each agent's resources, for the Monitor and the list's readings (services/monitor.ts):
   // in this process, or in the edge host (services/monitorProcess.ts), asked through its port (core/monitorLink.ts).
   if (outOfProcess.has('monitor')) ports.monitor = createMonitorLink((type, payload) => serviceLinks.call('monitor', type, payload))
-  else serviceHost.start('monitor', inline!.startMonitor, coreApi, MONITOR_FALLBACKS, MONITOR_REQUESTS)
+  else serviceHost!.start('monitor', inline!.startMonitor, coreApi, MONITOR_FALLBACKS, MONITOR_REQUESTS)
   // An agent's branch and pull request, a project's repository and preview, a folder's subfolders and a
   // media file from an agent's project (services/projects.ts), and a window's name (services/windowNames.ts):
   // in this process, or in the edge host.
-  if (!outOfProcess.has('projects')) serviceHost.serve('projects', inline!.startProjects, coreApi, PROJECTS_REQUESTS)
-  if (!outOfProcess.has('windowNames')) serviceHost.serve('windowNames', inline!.startWindowNames, coreApi, WINDOW_NAMES_REQUESTS)
+  if (!outOfProcess.has('projects')) serviceHost!.serve('projects', inline!.startProjects, coreApi, PROJECTS_REQUESTS)
+  if (!outOfProcess.has('windowNames')) serviceHost!.serve('windowNames', inline!.startWindowNames, coreApi, WINDOW_NAMES_REQUESTS)
   // Which engines this machine has, asked before a create (services/engineProbe.ts): here, or in the edge host.
-  if (!outOfProcess.has('engineProbe')) serviceHost.serve('engineProbe', inline!.startEngineProbe, coreApi, ENGINE_PROBE_REQUESTS)
+  if (!outOfProcess.has('engineProbe')) serviceHost!.serve('engineProbe', inline!.startEngineProbe, coreApi, ENGINE_PROBE_REQUESTS)
   // Hachi's goals (services/goals.ts): here, or in the edge host.
-  if (!outOfProcess.has('goals')) serviceHost.serve('goals', inline!.startGoals, coreApi, GOALS_REQUESTS)
+  if (!outOfProcess.has('goals')) serviceHost!.serve('goals', inline!.startGoals, coreApi, GOALS_REQUESTS)
   // Hachi's wakes and its off path (services/hachi.ts): here, or in the edge host. The apps ask it nothing.
-  if (!outOfProcess.has('hachi')) serviceHost.serve('hachi', inline!.startHachiInCore, coreApi, [])
-  if (!outOfProcess.has('memory')) serviceHost.serve('memory', inline!.startMemory, coreApi, MEMORY_REQUESTS)
-  if (!outOfProcess.has('router')) serviceHost.serve('router', inline!.startRouter, coreApi, ROUTER_REQUESTS)
-  if (!outOfProcess.has('handoff')) serviceHost.serve('handoff', (core) => inline!.startHandoff(core), coreApi, HANDOFF_REQUESTS)
+  if (!outOfProcess.has('hachi')) serviceHost!.serve('hachi', inline!.startHachiInCore, coreApi, [])
+  if (!outOfProcess.has('memory')) serviceHost!.serve('memory', inline!.startMemory, coreApi, MEMORY_REQUESTS)
+  if (!outOfProcess.has('router')) serviceHost!.serve('router', inline!.startRouter, coreApi, ROUTER_REQUESTS)
+  if (!outOfProcess.has('handoff')) serviceHost!.serve('handoff', (core) => inline!.startHandoff(core), coreApi, HANDOFF_REQUESTS)
   // Connected services' MCP bridge and the Connectors screen (services/connectors.ts): here, or in the edge host
   // (services/connectorsProcess.ts), asked through its port (core/connectorsLink.ts) for a profile home's entries.
   if (outOfProcess.has('connectors')) ports.connectors = createConnectorsLink((type, payload, waitMs) => serviceLinks.call('connectors', type, payload, waitMs))
-  else serviceHost.start('connectors', inline!.startConnectors, coreApi, CONNECTORS_FALLBACKS, CONNECTORS_REQUESTS)
+  else serviceHost!.start('connectors', inline!.startConnectors, coreApi, CONNECTORS_FALLBACKS, CONNECTORS_REQUESTS)
   // Sharing this machine with other accounts, and the machines shared with this one (services/sharedMachines.ts).
   // Its port builds a guest's harness (core/agents/guestCreate.ts), asked of the edge host (core/sharedMachinesLink.ts).
   if (outOfProcess.has('sharedMachines')) ports.sharedMachines = createSharedMachinesLink((type, payload) => serviceLinks.call('sharedMachines', type, payload))
-  else serviceHost.start('sharedMachines', (core, staged) => inline!.startSharedMachines(core,
-    { port: inlineSharedMachinesPort(sharedMachinesAccount, core.account.signedIn()), ports: staged }), coreApi, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_REQUESTS)
+  else serviceHost!.start('sharedMachines', (core, staged) => inline!.startSharedMachines(core,
+    { port: inline!.inlineSharedMachinesPort(sharedMachinesAccount, core.account.signedIn()), ports: staged }), coreApi, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_REQUESTS)
   // A Harness OS computer managed from the owner's phone: its update and its Wi-Fi (services/osDevice.ts): here, or in the edge host.
-  if (!outOfProcess.has('osDevice')) serviceHost.serve('osDevice', inline!.startOsDevice, coreApi, OS_DEVICE_REQUESTS)
+  if (!outOfProcess.has('osDevice')) serviceHost!.serve('osDevice', inline!.startOsDevice, coreApi, OS_DEVICE_REQUESTS)
   // Add-ons of a device that is this machine (services/machineAddons.ts, openharness#1654): here, or in the edge host.
-  if (!outOfProcess.has('machineAddons')) serviceHost.serve('machineAddons', inline!.startMachineAddons, coreApi, MACHINE_ADDON_REQUESTS)
+  if (!outOfProcess.has('machineAddons')) serviceHost!.serve('machineAddons', inline!.startMachineAddons, coreApi, MACHINE_ADDON_REQUESTS)
   // The recaps: in this process, or in the edge host (services/recapsProcess.ts), told each turn's lifecycle.
-  if (outOfProcess.has('recaps')) ports.recaps = recapsLink.port; else serviceHost.start('recaps', inline!.startRecaps, coreApi, RECAPS_FALLBACKS)
+  if (outOfProcess.has('recaps')) ports.recaps = recapsLink.port; else serviceHost!.start('recaps', inline!.startRecaps, coreApi, RECAPS_FALLBACKS)
   // Cleaning up after agents: the harnesses a closed harness started, and those idle half an hour (services/agentCleanup.ts).
-  if (outOfProcess.has('agentCleanup')) ports.agentCleanup = agentCleanupLink.port; else serviceHost.start('agentCleanup', (core, given) => inline!.startAgentCleanup(core, given), coreApi, AGENT_CLEANUP_FALLBACKS)
-  if (!outOfProcess.has('shell')) serviceHost.serve('shell', inline!.startShell, coreApi, SHELL_REQUESTS)
+  if (outOfProcess.has('agentCleanup')) ports.agentCleanup = agentCleanupLink.port; else serviceHost!.start('agentCleanup', (core, given) => inline!.startAgentCleanup(core, given), coreApi, AGENT_CLEANUP_FALLBACKS)
+  if (!outOfProcess.has('shell')) serviceHost!.serve('shell', inline!.startShell, coreApi, SHELL_REQUESTS)
   // A sandboxed Chrome beside each agent whose Browser is on (services/agentBrowser.ts): in its own process, on
   // demand (services/agentBrowserProcess.ts), or in this one.
   if (outOfProcess.has('agentBrowser')) {
     ports.agentBrowser = agentBrowserLink.port
     agentBrowserLink.follow()
-  } else serviceHost.start('agentBrowser', inline!.startAgentBrowser, frameParts.scope('agentBrowser', coreApi), AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS)
+  } else serviceHost!.start('agentBrowser', inline!.startAgentBrowser, frameParts.scope('agentBrowser', coreApi), AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS)
   // Models: grid access and its pin, the model pictures on agents' frames, the keystroke prewarm, where an
   // agent on a grid model sends its inference, and the models requests the apps send (services/models.ts):
   // in this process, or in its own (services/modelsProcess.ts), reached through core/modelsLink.ts.
   if (outOfProcess.has('models')) ports.models = modelsLink.port
-  else serviceHost.start('models', (core, given) => inline!.startModels(core, given), coreApi, MODELS_FALLBACKS, MODELS_REQUESTS)
+  else serviceHost!.start('models', (core, given) => inline!.startModels(core, given), coreApi, MODELS_FALLBACKS, MODELS_REQUESTS)
   // What the socket asks of models: read on each use, so a models service switched off answers its fallbacks.
   backend.models = () => ports.models ?? MODELS_OFF
 
@@ -3352,7 +3353,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // said here too, it reached a dial still opening its port, before its greeting.
   if (outOfProcess.has('devices')) ports.devices = devicesLink.port
   else {
-    serviceHost.start('devices', (core, started) => inline!.startDevices(core, started, {
+    serviceHost!.start('devices', (core, started) => inline!.startDevices(core, started, {
       logsDir: env.HARNESS_LOGS_DIR, testDialPort: harnessd.HARNESSD_TEST_DIAL_PORT,
       dialSerials: process.env.HARNESS_DIAL_SERIALS?.split(',').map((serial) => serial.trim()).filter(Boolean),
       cableDisabled: env.CABLE_DISABLE, faults: testFaults(harnessd.HARNESSD_TEST_FAULTS),
@@ -3364,7 +3365,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The Wi-Fi device (services/wifi.ts), with the dials: in their process by default (core/wifiLink.ts,
   // resumed there as its link connects), or here.
   if (!outOfProcess.has('wifi')) {
-    serviceHost.start('wifi', inline!.startWifi, coreApi, WIFI_FALLBACKS, WIFI_REQUESTS)
+    serviceHost!.start('wifi', inline!.startWifi, coreApi, WIFI_FALLBACKS, WIFI_REQUESTS)
     if (ports.wifi) wifiCore.started(appVoiceFocus ?? null)
   }
 
