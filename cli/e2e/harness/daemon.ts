@@ -371,9 +371,10 @@ export class IsolatedDaemon {
     // never turned guest access on.
     await writeFile(join(dirs.bin, 'sudo'), '#!/bin/sh\necho "sudo: a password is required" >&2\nexit 1\n', { mode: 0o755 })
     // Nor does it ever reach the real Orca app on the Mac the tests run on, which every session here may be running
-    // inside: with no Orca launcher on its PATH a daemon runs the Orca app's own, and a listed Orca agent asks it for a
-    // list. A launcher is an `orca` whose real path is in Orca's install (devices/orcaHomes.ts), so the stub sits in
-    // one, linked from bin. Refused, until a test writes its own through the link (harness/fakeOrca.ts).
+    // inside: a listed Orca agent asks Orca for a list. A launcher is an `orca` whose real path is in Orca's install
+    // (devices/orcaHomes.ts), so the stub sits in one, linked from bin, and it is the Orca app's own too
+    // (HARNESS_ORCA_APP_BIN), which a daemon on a Mac runs with no launcher on its PATH: never /Applications'. Refused,
+    // until a test writes its own through the link (harness/fakeOrca.ts).
     const orcaLauncher = join(own, 'orca-app', 'resources', 'bin', 'orca')
     await mkdir(dirname(orcaLauncher), { recursive: true })
     await writeFile(orcaLauncher, '#!/bin/sh\nexit 1\n', { mode: 0o755 })
@@ -448,6 +449,7 @@ export class IsolatedDaemon {
       GRID_CONTROL_PLANE_URL: 'http://127.0.0.1:9',
       HARNESS_GRID_BIN: '',
       HARNESS_OPEN_BIN: fakeOpen,
+      HARNESS_ORCA_APP_BIN: orcaLauncher,
       // Claude Code's and Codex's hooks, installed as on a person's computer, into this home and CODEX_HOME
       // (assertHooksContained), and run by the fake engines. Every other engine's installer writes into
       // folders these tests have no engine for.

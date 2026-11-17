@@ -76,8 +76,8 @@ export class FakeOrca {
     writeFileSync(join(dir, 'help'), watchFocus ? HELP_WATCH : HELP)
     writeFileSync(join(dir, 'focus'), '')
     if (watchFocus) writeFileSync(join(dir, 'watches'), '')
-    // Through bin's link, into the launcher in Orca's install the harness made (harness/daemon.ts): an `orca` anywhere
-    // else is not Orca's, and the daemon would run the Orca app's own.
+    // Through bin's link, into the launcher in Orca's install the harness made, which is the Orca app's own too
+    // (harness/daemon.ts): an `orca` anywhere else is not Orca's, and the daemon would run the app's, the stub.
     writeFileSync(join(bin, 'orca'), script(dir), { mode: 0o755 })
     return new FakeOrca(dir)
   }

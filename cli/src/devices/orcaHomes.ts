@@ -7,6 +7,7 @@
  */
 import { type ChildProcess, spawn } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
 import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
 import { ownDirectory } from './dialSkill.js'
 import { listable, MAX_HOMES } from './dialSkillFiles.js'
@@ -51,9 +52,20 @@ function orcaLauncher(path: string): boolean {
   }
 }
 
+/**
+ * The Orca app's own launcher: /Applications', or the absolute path HARNESS_ORCA_APP_BIN names. That is for the
+ * end-to-end tests, whose daemons run inside the real Orca on a developer's Mac: their harness points it at a fake
+ * (e2e/harness/daemon.ts), so a daemon under test never runs the real app's. A relative one is never looked up on PATH.
+ */
+function orcaApp(): string {
+  const app = process.env.HARNESS_ORCA_APP_BIN
+  return app && isAbsolute(app) ? app : APP_ORCA
+}
+
 /** Orca's CLI: its launcher on PATH, else, on macOS, the app's own. */
 export function orcaBinary(deps: OrcaBinaryDeps): string | null {
-  return deps.onPath('orca', orcaLauncher) ?? (deps.platform === 'darwin' && deps.exists(APP_ORCA) ? APP_ORCA : null)
+  const app = orcaApp()
+  return deps.onPath('orca', orcaLauncher) ?? (deps.platform === 'darwin' && deps.exists(app) ? app : null)
 }
 
 /** This computer's real `orca`. */
