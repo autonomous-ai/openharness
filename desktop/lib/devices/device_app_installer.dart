@@ -21,7 +21,7 @@ typedef DeviceAppRun = Future<ProcessResult> Function(
 );
 typedef DeviceAppSignatureCheck = Future<bool> Function(String bundle);
 
-/// tar, ditto and open through [startHidden]; a tool still running after [timeout] is killed and throws.
+/// tar, ditto and open through [startHidden]; a tool still running after [timeout] is stopped and throws.
 Future<ProcessResult> runDeviceAppTool(
   String executable,
   List<String> arguments, {
@@ -35,7 +35,18 @@ Future<ProcessResult> runDeviceAppTool(
     final code = await process.exitCode.timeout(timeout);
     return ProcessResult(process.pid, code, await stdout, await stderr);
   } on TimeoutException {
-    process.kill();
+    // Ended before the throw, so the cleanup that follows does not race a
+    // tool still writing; one that outlasts TERM gets KILL. 5 s each, then
+    // the throw goes on without it.
+    for (final signal in const [ProcessSignal.sigterm, ProcessSignal.sigkill]) {
+      process.kill(signal);
+      try {
+        await process.exitCode.timeout(const Duration(seconds: 5));
+        break;
+      } on TimeoutException {
+        // Still running.
+      }
+    }
     rethrow;
   }
 }
@@ -232,7 +243,14 @@ class DeviceAppInstaller {
         }
         return target;
       } finally {
-        if (_exists(partial)) await Directory(partial).delete(recursive: true);
+        try {
+          if (_exists(partial)) {
+            await Directory(partial).delete(recursive: true);
+          }
+        } on FileSystemException {
+          // The outcome stands: what is left is hidden, never under the
+          // app's name.
+        }
       }
     }
     throw const _Refused();
