@@ -72,6 +72,13 @@ export function observedAgentId(engine: string, sessionId: string): string {
   return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20, 32)}`
 }
 
+/** An answer as the dial's card keeps it. By code point: a cut through an emoji's surrogate pair leaves a broken
+ *  character on the card. */
+function cutAnswer(text: string): string {
+  const chars = Array.from(text)
+  return chars.length > ANSWER_CHARS ? `${chars.slice(0, ANSWER_CHARS - 1).join('')}…` : text
+}
+
 /** The name of an agent with no title: its folder's, else its engine (a folder such as `/` has no name). */
 function folderName(cwd: string | undefined, engine: string): string {
   return (cwd && basename(cwd)) || engine
@@ -795,9 +802,7 @@ export class ObservedSource implements HostSource {
     if (!text || this.entries.get(entry.agent.id) !== entry) return
     // A newer turn began while the file was read; its answer is not this one's.
     if (entry.agent.state !== 'done') return
-    // By code point: a cut through an emoji's surrogate pair leaves a broken character on the card.
-    const chars = Array.from(text)
-    entry.agent.lastAnswer = chars.length > ANSWER_CHARS ? `${chars.slice(0, ANSWER_CHARS - 1).join('')}…` : text
+    entry.agent.lastAnswer = cutAnswer(text)
     this.emit()
   }
 
@@ -820,24 +825,31 @@ export class ObservedSource implements HostSource {
     }
     if (!open.size) return
     const rows = await this.deps.sessionRows.find(open)
-    // Asked once, as a session is first listed, for the ones this look is about to list: a listed session is never looked
-    // at again, and its next hook is the next word on where it runs and what it is called.
+    // The sessions this look lists, each read once as it is first listed: a listed session is never looked at again, and
+    // its next hook is the next word on where it runs and what it is called. No row, no folder to tell Harness's own from a
+    // person's (the voice router's transcript is a program's, in the data folder) or to name it by.
     const listing = [...open].filter(([sessionId, engine]) => rows.has(sessionId) && !this.entries.has(observedAgentId(engine, sessionId)))
       .slice(0, MAX_SESSIONS)
+    // Every read of the look runs before any session of it is listed, and nothing is awaited from the first entry to the
+    // emit: the dial reads list() every second and its restore marks an agent restored before reading its recap, so a
+    // session listed before its answer was read would never be restored. The loop's own check then sees a session a hook
+    // told of during the reads, which keeps what it said.
     const learning = this.deps.now()
     const apps = await this.appsOf(listing.map(([sessionId]) => owners.get(sessionId)!.pid))
-    const ms = this.deps.now() - learning
-    // Read before the loop: its own check then sees a session a hook told of during the reads, which keeps what it said.
     const names = await this.namesOf(listing, owners)
+    const busy = await this.busyOf(listing, owners)
+    const answers = await this.answersOf(listing, rows, busy)
+    // Every read of the look, so a slow one shows in the line.
+    const ms = this.deps.now() - learning
     let listed = 0
     let known = 0
     let named = 0
+    let answered = 0
     const now = this.deps.now()
-    for (const [sessionId, engine] of open) {
-      // No row, no folder to tell Harness's own from a person's (the voice router's transcript is a program's, in the data
-      // folder) or to name it by. A hook may also have told of it while the rows or the apps were read: it said more.
-      const row = rows.get(sessionId)
-      if (!row || this.entries.has(observedAgentId(engine, sessionId))) continue
+    for (const [sessionId, engine] of listing) {
+      // A hook may have told of it while the reads ran: it said more.
+      if (this.entries.has(observedAgentId(engine, sessionId))) continue
+      const row = rows.get(sessionId)!
       const owner = owners.get(sessionId)!
       const entry = this.entry(engine, sessionId, now, { cwd: row.cwd, transcriptPath: row.transcriptPath, pid: owner.pid })
       if (!entry) continue
@@ -859,13 +871,51 @@ export class ObservedSource implements HostSource {
       entry.agent.name = this.nameOf(entry)
       // A turn it is in when found reads working, as checkWorking reads it, which ends it once its owner reads idle: listed
       // idle, its compaction's SessionStart (which moves no state) would give a running turn a handle to type into.
-      if ((engine === 'claude' || engine === 'codex') && await this.deps.openSessions.busy(owner)
-        && entry.agent.state === 'idle' && this.live(entry)) this.setState(entry, 'working', this.deps.now())
+      if (busy.has(sessionId)) this.setState(entry, 'working', now)
+      // Its last turn's answer, from before the dial: history, not news, so it stays idle with nothing unseen, and the
+      // dial's restore shows it.
+      const answer = answers.get(sessionId)
+      if (answer) {
+        entry.agent.lastAnswer = cutAnswer(answer)
+        answered++
+      }
     }
     if (!listed) return
-    // Counts only: an app, a pid or a path would say whose session runs where, and a name is the person's own.
-    this.deps.log(`[observed] scan · ${listed} found · ${known} app known · ${named} named · ${ms} ms`)
+    // Counts only: an app, a pid or a path would say whose session runs where, and a name or an answer is the person's own.
+    this.deps.log(`[observed] scan · ${listed} found · ${known} app known · ${named} named · ${answered} answered · ${ms} ms`)
     this.emit()
+  }
+
+  /** The Claude Code and Codex sessions in a turn, by session id, read one at a time. One that cannot say counts as busy,
+   *  as OpenSessions.busy counts an engine whose store cannot say. */
+  private async busyOf(
+    listing: readonly [string, ExternalEngine][], owners: ReadonlyMap<string, SessionOwner>,
+  ): Promise<ReadonlySet<string>> {
+    const busy = new Set<string>()
+    for (const [sessionId, engine] of listing) {
+      if (engine !== 'claude' && engine !== 'codex') continue
+      if (await this.deps.openSessions.busy(owners.get(sessionId)!).catch(() => true)) busy.add(sessionId)
+    }
+    return busy
+  }
+
+  /** The last answer of each idle Claude Code or Codex session, by session id, with the Stop hook's reader, one at a time.
+   *  Harness's own session is not read: it is never listed. A read that fails gives none and logs nothing: its error can
+   *  hold a path. */
+  private async answersOf(
+    listing: readonly [string, ExternalEngine][],
+    rows: ReadonlyMap<string, { cwd?: string; transcriptPath?: string | null }>,
+    busy: ReadonlySet<string>,
+  ): Promise<ReadonlyMap<string, string>> {
+    const answers = new Map<string, string>()
+    for (const [sessionId, engine] of listing) {
+      const { cwd, transcriptPath } = rows.get(sessionId)!
+      if ((engine !== 'claude' && engine !== 'codex') || busy.has(sessionId) || !transcriptPath) continue
+      if (cwd && this.deps.excluded.some((dir) => within(dir, cwd))) continue
+      const answer = await this.deps.lastAnswer(engine, transcriptPath).catch(() => undefined)
+      if (answer) answers.set(sessionId, answer)
+    }
+    return answers
   }
 
   /** The name in each Claude Code session's own record, by session id, read one at a time; none when there is no reader.

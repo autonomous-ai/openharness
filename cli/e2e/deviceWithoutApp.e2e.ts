@@ -236,7 +236,7 @@ describe('the device without the app', () => {
     expect(roster.rows.find((r) => r.id === mine.id)).toMatchObject({ name: 'Tho 7f3a91c2' })
     expect(roster.rows.find((r) => r.id === made.id)).toMatchObject({ name: 'scratch-2016b' })
     // A count, and neither name.
-    expect(d.log()).toMatch(/\[observed\] scan · 2 found · \d+ app known · 1 named · \d+ ms/)
+    expect(d.log()).toMatch(/\[observed\] scan · 2 found · \d+ app known · 1 named · \d+ answered · \d+ ms/)
     expect(d.log()).not.toContain('7f3a91c2')
     expect(d.log()).not.toContain('5d2e8c41')
     // Its next prompt's hook says no name: the hook has the last word.

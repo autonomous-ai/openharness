@@ -28,7 +28,7 @@ import { FakeOrca } from './harness/fakeOrca.js'
 import { Outside } from './harness/outsideAgent.js'
 
 /** The open scan's report of the one session it found: counts and its time, nothing else. */
-const FOUND_ONE = /\[observed\] scan · 1 found · \d+ app known · \d+ named · \d+ ms/
+const FOUND_ONE = /\[observed\] scan · 1 found · \d+ app known · \d+ named · \d+ answered · \d+ ms/
 
 // The run's bundle when there is one (E2E_BUNDLE), as the daemon runs, as in deviceDialSkill.e2e.ts.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH
