@@ -119,9 +119,11 @@ All run `notify.mjs`. Only end and wait events are added; there is no hook per t
   measures Notification firing later than the dialog opens, PermissionRequest and Elicitation replace it instead.
   Add SubagentStart and SubagentStop (section 2, Subagents). No PostToolBatch or ElicitationResult: a wait ends on
   what follows it (section 3). Never PreCompact.
-- **Codex:** add Stop, PermissionRequest, PreToolUse with matcher `request_user_input`, Interrupt, SubagentStart and
-  SubagentStop. Each gets its review label (`stop`, `permission_request`, `pre_tool_use`, `interrupt`,
-  `subagent_start`, `subagent_stop`, as Codex names them), PreToolUse joins
+- **Codex:** add Stop, PermissionRequest, PreToolUse with matcher `request_user_input`, and Interrupt. No subagent
+  hooks for Codex (section 2, Subagents). Interrupt is written with a 3 s timeout: Codex caps it at 3 s and hashes
+  the capped value, so a 5 s entry would never match its review record and warns at every session start (measured
+  on Codex 0.169.0; the cap exists since 0.150.0). Each gets its review label (`stop`, `permission_request`,
+  `pre_tool_use`, `interrupt`, as Codex names them), PreToolUse joins
   `matcherEvents`, and the trusted hashes are checked against the Codex this release targets (`hooks/list`, as
   `engines/kit/hookReview.spec.ts` does today). A wrong hash makes Codex ask the person to review, and "Continue
   without trusting" turns every Harness hook off, so the hash test is a required test.
@@ -150,8 +152,9 @@ All run `notify.mjs`. Only end and wait events are added; there is no hook per t
 - **Closing.** For a hook-driven session the core keeps one record per session: whether the transcript has read the
   turn's end, and when the last end or wait hook came. `sessionTurnOpen` reads it for these sessions.
   - The parser's normal end of a turn is held in the core, not delivered, until the turn's Stop arrives.
-  - The engine worker marks an end that never has a Stop after it (a paused `/goal` pass, which ends with
-    `turn_duration` alone); that end is delivered at once, never held.
+  - The engine worker marks an end that never has a Stop after it; that end is delivered at once, never held. Claude:
+    a paused `/goal` pass, which ends with `turn_duration` alone. Codex: a turn that ended in an error or was stopped
+    by a prompt hook, for which Codex sends no Stop and has no StopFailure (measured on Codex 0.169.0).
   - Stop: drain; if the parser's end is held, deliver it now. If not, wait up to 1.5 s for it, then close as today's
     fallback does. The stale-Stop rules stay: a Stop run before the latest prompt hook, or before the open turn's
     opening record, closes nothing. A continued `/goal` pass is closed by its own Stop like any turn.
@@ -159,7 +162,10 @@ All run `notify.mjs`. Only end and wait events are added; there is no hook per t
   - An aborted end (Claude's interrupt line, Codex `turn_aborted`) closes at once as `aborted`, Stop or not.
   - Codex Interrupt closes as `aborted` at once.
   - Codex `turn_aborted` now emits `turn_ended {aborted: true}`, for every Codex session.
-- **Subagents.** The session's turn record holds one number: how many subagents run. Nothing else is kept about
+- **Subagents (Claude Code only).** Codex keeps today's behavior: its SubagentStart fires once per child but its
+  SubagentStop at the end of every child turn and never for an interrupted or failed one (measured on Codex 0.169.0),
+  so a count would stop early or hold Working for the full timeout, which is worse than none (Ken, 2026-11-17).
+  The session's turn record holds one number: how many subagents run. Nothing else is kept about
   them, no list or record (Ken, 2026-11-17: the smallest way to keep a lead working while its children run, as
   Orca does).
   - SubagentStart adds one, SubagentStop takes one away, never below zero (a child started before this daemon run
@@ -278,6 +284,9 @@ All run `notify.mjs`. Only end and wait events are added; there is no hook per t
   timed out; no list or record. (Ken, 2026-11-17)
 - A Codex update that changes how it hashes hooks asks the person to review Harness's hooks once again, as today.
   (Ken, 2026-11-17)
+- Codex facts answers (Ken, 2026-11-17): Interrupt written with a 3 s timeout, its hash tested against real Codex;
+  engine-codex marks an errored end as having no Stop after it, delivered at once, no core change; subagents counted
+  for Claude Code only, Codex as today, recorded in the pull request's Known gaps with the measured Codex behavior.
 - Plan review answers (Ken, 2026-11-17): `cancel.ts` is not split, Interrupt takes the keyless aborted path; oldest
   supported Claude Code 2.1.209 and Codex 0.144.0; no pane read at the hook; a wait also ends on two clear polls; a
   paused `/goal` end is never held; the lead's last Stop waits the grace and silence does not run while subagents

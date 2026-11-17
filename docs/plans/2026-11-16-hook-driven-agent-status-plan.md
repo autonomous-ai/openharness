@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use devcrew phase 3 to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** plan review answered (Ken, 2026-11-17) and folded in. One new question at the end.
+**Status:** plan review answered (Ken, 2026-11-17) and folded in; the Codex facts answers (Ken, 2026-11-17) folded in: Interrupt written with a 3 s timeout (Task 20), Codex ends with no Stop marked `over` (Task 25), subagents counted for Claude Code only (Tasks 13, 14, 19, 20, 22, R5).
 
 **Goal:** For Claude Code and Codex in Harness panes, a turn ends when the engine's own hook says so, a wait on the person stops reading as working at its hook and its question shows at the next poll, a lead stays working while its subagents run, and "Finished" is announced once, after 1.5 s of quiet.
 
@@ -32,7 +32,7 @@ Every addition to the core's process. No file is added: `cli/src/architecture.co
 |---|---|---|---|---|
 | `core/turns/turnHooks.ts` | the session's hook record; the pass every transcript read takes to the funnel; Interrupt (a Stop with `status: 'interrupted'`); the wait; the subagent count; the two timeouts | `Map<string, HookTurn>` in place of today's `promptFiredAt: Map<string, number>`, the same 512 kept. `HookTurn`: `promptAt: number` (today's value), `endsByHook: boolean`, `held: { identity?: string; openedAt?: number; at: number } \| null`, `awaiting: Array<(held: boolean) => void>` (Stops waiting at most 1.5 s), `hookAt: number`, `waitAt: number \| null`, `subagents: number`, `progressAt: number` | +180 | where a Claude Code or Codex turn ends and waits: the turn is the core's |
 | `engines/kit/stopHook.ts` | the Stop rule on the held end | none | +25 | the turn boundary |
-| `engines/facets/hooks.ts` | the Stop rule's context | none (types) | +10 | — |
+| `engines/facets/hooks.ts` | the Stop rule's context; a declared event's own timeout | none (types) | +11 | — |
 | `core/transcripts/normalizers.ts` | a turn reads open while its end is held; a cancel and a forget drop the record | none | +8 | "is its turn open" has one answer |
 | `core/transcripts/ingest.ts` | hands a read's `at`, `over` and `turn` on with its events | none | +6 | the boundary's and the wait's input |
 | `core/turns/heartbeats.ts` | one call a beat | none | +3 | the timeouts run only while a turn is open |
@@ -43,14 +43,14 @@ Every addition to the core's process. No file is added: `cli/src/architecture.co
 | `hookServer.ts` | two routes; an unbound hook said once a session | `Set<string>`, at most 512 session ids | +30 | the hooks' one door |
 | `engines/worker/liveProtocol.ts` | `at`, `over` on a frame, checked | none | +4 | what the workers say reaches the core as typed, bounded data |
 | `engines/claude/hookContract.ts`, `engines/codex/hookContract.ts` | the declared events, labels | data | +16 | — |
-| `engines/kit/hookSettings.ts`, `notifyHooks.ts`, `hookReview.ts` | the installer's prune (spec §1) | none | +35 | see below |
+| `engines/kit/hookSettings.ts`, `notifyHooks.ts`, `hookReview.ts` | the installer's prune (spec §1); a declared event's own timeout written | none | +36 | see below |
 | `core/main.ts` | wiring | one `let` reference | +14 | wiring only |
 
 About 365 lines, no new file. Cut since the draft (about 400): the pane read at the hook (`readNow`, its in-flight follow-up and its first read on `start`, and the core's `readQuestionNow` dependency), and the interrupt route with its handler and wiring.
 
 - **The subagent count** is `HookTurn.subagents`, one integer. The core has no per-session turn record today: the parser's turn is its worker's, and the core holds a cursor on it (the parser itself only under an older master). The nearest is `promptFiredAt` in `turnHooks.ts`, one number a session. The spec's record (§2) is that entry widened, in the same map with the same bound, and the count is one field of it: no second map, no list, no record of its own. It is the smallest place because the three hooks that write it and the Stop rule that reads it already meet in `turnHooks.ts`, which already makes and drops that entry.
 - **Not a boundary or a wait, and still in the core (Ken, 2026-11-17):** the installer's prune. `installHookSettings` runs in the core (launch waits for it) and is the one writer of the person's settings file; a prune anywhere else is a second writer of that file. It is the spec's §1 and about 35 lines in three files the core already loads. The other is the lease reading that subagents run (`atWork`, 6 lines in `core/turns/activity.ts`): the spec's §2 keeps the lead working from the count, and the lease is the core's.
-- **In a component, not the core:** when a record was written and whether the engine's own record ends the turn (engine-claude and engine-codex workers, Task 6); Codex's aborted end (engine-codex, Task 5); the quiet window (recaps service, Task 9); which event is which, and that nothing new is sent from outside a pane (the hook process, Task 13). The devices are untouched.
+- **In a component, not the core:** when a record was written and whether the engine's own record ends the turn (engine-claude and engine-codex workers, Task 6); Codex's aborted end (engine-codex, Task 5); a Codex end with no Stop after it (engine-codex, Task 25); the quiet window (recaps service, Task 9); which event is which, and that nothing new is sent from outside a pane (the hook process, Task 13). The devices are untouched.
 - **Measured, not estimated, in the pull request:** the core's line count at `e9670ffd23` (92 229, the sum of the files `architecture.coreFiles.txt` lists, measured 2026-11-17) and at the head (check 8).
 
 ## File structure
@@ -62,7 +62,7 @@ About 365 lines, no new file. Cut since the draft (about 400): the pane read at 
 | `cli/src/hookServer.ts` | core | the two new routes |
 | `cli/src/lib/turnActivity.ts`, `cli/src/core/turns/activity.ts` | core | the lease: withheld, at work |
 | `cli/src/lib/questionController.ts`, `cli/src/core/questions.ts` | core | a dialog is coming; the pane read clear |
-| `cli/src/engines/claude/normalize.ts`, `live.ts`, `cli/src/engines/codex/normalizer.ts`, `live.ts`, `cli/src/engines/worker/liveStreams.ts` | engine workers | a record's time, the engine's own end, Codex's aborted end |
+| `cli/src/engines/claude/normalize.ts`, `live.ts`, `cli/src/engines/codex/normalizer.ts`, `live.ts`, `cli/src/engines/worker/liveStreams.ts` | engine workers | a record's time, the engine's own end, Codex's aborted end, a Codex end with no Stop |
 | `cli/src/lib/agentNotifications.ts`, `cli/src/lib/commander.ts` | recaps service | the quiet window |
 | `cli/hook/notify.mjs` | the hook's own process | event to route, in a pane only |
 | `cli/src/engines/kit/hookSettings.ts`, `notifyHooks.ts`, `hookReview.ts`, the two `hookContract.ts` | core (installer) | the events installed, pruned, reviewed |
@@ -77,7 +77,7 @@ About 365 lines, no new file. Cut since the draft (about 400): the pane read at 
 - **Wire:** no new frame and no new field. `turn_ended.aborted` and `turn_summary.notification.id` carry it. No Desktop change.
 - **Hook bodies:** only fields `validHookBody` already takes (`hookEvent`, `toolName`). Never a tool's input, never a prompt. `notify.mjs` writes nothing on stdout for Claude Code and Codex and exits 0, so no hook of ours decides a permission or blocks a tool.
 - **Hooks installed:** end and wait events only. No hook per tool call, never PreCompact, no PostToolBatch or ElicitationResult.
-- **Events, final.** Codex: SessionStart (`startup|resume|clear|compact`), UserPromptSubmit, Stop, PermissionRequest, PreToolUse (`request_user_input`), Interrupt, SubagentStart, SubagentStop. Claude Code: today's six, PreToolUse (`AskUserQuestion`), SubagentStart, SubagentStop, and under Variant P (Task 1) PermissionRequest and Elicitation.
+- **Events, final.** Codex: SessionStart (`startup|resume|clear|compact`), UserPromptSubmit, Stop, PermissionRequest, PreToolUse (`request_user_input`), Interrupt (timeout 3 s: Codex caps it at 3 s and hashes the capped value, facts-codex §1). No subagent hooks for Codex (Ken, 2026-11-17): its subagents keep today's behaviour. Claude Code: today's six, PreToolUse (`AskUserQuestion`), SubagentStart, SubagentStop, and under Variant P (Task 1) PermissionRequest and Elicitation.
 - **The core:** no new file; no logic in `runForeground`; 100% a file for `src/core/` (`npm run test:core`).
 - **Tests:** a test that fails first, at the layer where the behaviour lives; fake timers, no fixed sleeps; comments say why.
 - **Logs:** a fixed line and the session's short id (`sid`). Never a tool's input, a prompt or a path.
@@ -91,21 +91,21 @@ The tasks cite these by number.
 - **R0 Ends by hook.** A session's turns end by hook from the first Stop, StopFailure or Interrupt it sends in this daemon run. Until then every read goes to the funnel as it came.
 - **R1 The pass** (a live read of a session whose turns end by hook):
   1. a replay goes on as it came; when it carries a turn's start or end, what is held is dropped (the transcript was read again);
-  2. an aborted end, or the end of a read the engine marked `over` (Claude Code's `turn_duration`: a paused `/goal` pass, which has no Stop), goes on at once;
+  2. an aborted end, or the end of a read the engine marked `over`, goes on at once. `over` is an end no Stop follows: Claude Code's `turn_duration` (a paused `/goal` pass, Task 6); Codex's turn that ended in an error or was stopped by a prompt hook (Codex runs no Stop for either and has no StopFailure, Task 25);
   3. any other end is held, with its turn's identity and opening time, and Stops waiting for it are answered;
   4. a turn's start with an end held sends the held end first, in the same batch, in order;
   5. everything else goes on, in order.
 - **R2 Stop.** Which turn it is about is taken before the first await: the turn whose end is held, else the parser's open turn. Then drain. A Stop its engine ran before the session's latest prompt hook, or before that turn's opening record, closes nothing. Otherwise: an end held → delivered; none held → wait up to 1 500 ms for it, deliver it the moment it is read; none by then → drain, then close as today's fallback does. A continued `/goal` pass is closed by its own Stop. A StopFailure closes whichever turn is open or held.
 - **R3 Interrupt** (Codex; it arrives on `/api/hook/turn-stop` with `status: 'interrupted'`). Closes the parser's open turn at once as `turn_ended { aborted: true }` through the funnel, the path Claude Code's interrupt line takes: no drain, no wait, no key. The same two stale rules as R2.
 - **R4 Wait.** Opens with the hook's `firedAt`, unless it ran before the latest prompt hook. At once: the Working claim is withdrawn and told, and the question watcher is told a dialog is coming. No pane is read at the hook (the engine draws its dialog after the hook returns): the question shows at the watcher's next 1.5 s poll, as today. Ends on: the watcher (a question closed, or two polls in a row read the pane with no dialog); any turn end; a turn start; progress of the lead (no `parentToolUseId`, not `subagent_finished`) whose record's `at` is after `firedAt`. A read with no `at` ends nothing.
-- **R5 Subagents.** Start +1 (not past 64, said once), stop −1 (not below 0), a prompt hook sets 0. A Stop while any runs leaves the end held. The first Stop with none running ends the turn; when its held end was read before an earlier hook, it waits 1 500 ms and drains again first (the lead's wrap-up lands after its Stop: `lib/commander.ts`, `SUBAGENT_TEXT_SETTLE_MS`). A StopFailure ignores the count. 600 000 ms with no hook and no progress while any runs: 0, one line, the held end delivered.
+- **R5 Subagents (Claude Code only).** Codex installs no SubagentStart or SubagentStop hook, so its count stays 0 and its subagents keep today's behaviour (its SubagentStop fires per child turn and never for an interrupted or failed one, facts-codex §2). Start +1 (not past 64, said once), stop −1 (not below 0), a prompt hook sets 0. A Stop while any runs leaves the end held. The first Stop with none running ends the turn; when its held end was read before an earlier hook, it waits 1 500 ms and drains again first (the lead's wrap-up lands after its Stop: `lib/commander.ts`, `SUBAGENT_TEXT_SETTLE_MS`). A StopFailure ignores the count. 600 000 ms with no hook and no progress while any runs: 0, one line, the held end delivered.
 - **R6 Silence.** An end held for 120 000 ms with no hook since (measured from the later of the last hook and when the end was read) is delivered, with one line. Not while subagents run: R5's timeout governs then.
 - **R7 Open.** A session's turn is open while its parser says so or its end is held.
 - **R8 Working.** `lib/turnActivity.ts` stays the one place. Working is withheld while a wait is open, and for a session whose turns end by hook with none open: progress read then claims nothing, a turn's start still does.
 
 ## Design (docs/feature-design-rules.md)
 
-The spec's §8 answers the checklist. What this plan adds to it: nothing is stored; the record's bound is in Global Constraints; the hot path gains one map lookup a transcript read for a session with no record; an old CLI after a rollback runs the new blocks through its own `notify.mjs` (Task 3 confirms; see the question at the end); each failure has its line (`ended by its transcript`, `subagent count reset`, `subagent not counted`, `refused · unbound`).
+The spec's §8 answers the checklist. What this plan adds to it: nothing is stored; the record's bound is in Global Constraints; the hot path gains one map lookup a transcript read for a session with no record; an old CLI after a rollback runs the new blocks through its own `notify.mjs` (Task 3: harmless in a pane; outside a pane a Known gap, Verification); each failure has its line (`ended by its transcript`, `subagent count reset`, `subagent not counted`, `refused · unbound`).
 
 ## Review Focus
 
@@ -140,11 +140,12 @@ The spec's §8 answers the checklist. What this plan adds to it: nothing is stor
 | 19 | Subagents | 10, 15, 17 | xhigh |
 | 20 | Codex: events, labels and hashes | 2 | xhigh |
 | 21 | Claude Code: events | 1 | high |
-| 22 | End to end | 5, 9, 13, 14, 16, 18, 19, 20, 21 | high |
+| 22 | End to end | 5, 9, 13, 14, 16, 18, 19, 20, 21, 25 | high |
 | 23 | Temporary workflow: the numbers before and after | 4, 22 | medium |
 | 24 | Real Claude Code check, opt-in | none | high |
+| 25 | Codex: an end with no Stop after it goes on at once | none (5, 6 landed) | high |
 
-Longest chain: 6 → 11 → 15 → 17 → 19 → 22 → 23 (seven). Files shared without a dependency, so those tasks run one at a time: 16 to 19 (`turnHooks.ts`; 17 to 19 also `core/main.ts`), each after 15; 5 and 6 (`codex/normalizer.ts`); 12, 20 and 21 (the installers' golden fixture, and 12 and 20 `hookReview.spec.ts`); 15, 20 and 21 (`engines/hooks.spec.ts`, and 15 and 20 `codex/hookContract.ts`).
+Longest chain: 6 → 11 → 15 → 17 → 19 → 22 → 23 (seven). Files shared without a dependency, so those tasks run one at a time: 16 to 19 (`turnHooks.ts`; 17 to 19 also `core/main.ts`), each after 15; 5, 6 and 25 (`codex/normalizer.ts`; 6 and 25 `codex/live.ts`, `codex/live.spec.ts`); 12, 20 and 21 (the installers' golden fixture, and 12 and 20 `hookReview.spec.ts`, `hookSettings.ts`, `hookSettings.spec.ts`); 15, 20 and 21 (`engines/hooks.spec.ts`, and 15 and 20 `codex/hookContract.ts`); 15, 19 and 20 (`engines/facets/hooks.ts`).
 
 ---
 
@@ -188,7 +189,7 @@ The targeted Codex is the newest stable `@openai/codex` on the day this task run
 
 - [ ] **Step 1:** `git show e9670ffd23:cli/hook/notify.mjs` into the scratchpad. Run it as `src/hookNotify.spec.ts` runs the hook (a stub server on a free port, a throwaway data folder, `TMUX_PANE` and the fixture tmux and ps), with the argv `hookArgv` gives, once for each new event and engine.
 - [ ] **Step 2: Record** the route each posts in a pane (expected: `/api/hook/session-start`; nothing for Claude Code's Notification in a pane), that stdout is empty and the exit 0, and the time taken. And from `e9670ffd23`'s `hookServer.ts`: that a registration carrying one of those `hookEvent` values takes UserPromptSubmit's path without the prompt credit, with the lines. Then run each once more with no `TMUX_PANE` (outside a pane) and record what reaches `/api/hook/observed` (expected from `observedEvent`: Codex's Stop as `turn-stop`, nothing for the others).
-- [ ] **Step 3:** The file's first line is `Rollback: harmless`, or what breaks. Not harmless: stop and report (spec §7: the prune then ships in a release first). The Codex Stop outside a pane of Step 2 is written down as found, not judged here: it is the question at the end of this plan.
+- [ ] **Step 3:** The file's first line is `Rollback: harmless`, or what breaks. Not harmless: stop and report (spec §7: the prune then ships in a release first). The Codex Stop outside a pane of Step 2 is written down as found, not judged here: it is a Known gap of the pull request (Verification).
 - [ ] **Step 4: Commit** `Docs: an older CLI with the new hook blocks`.
 
 ### Task 4: Perf: hook requests and the round trip in the report
@@ -565,11 +566,12 @@ In a pane, after the engine guards and before the registration that ends `main()
 | Codex | PermissionRequest; PreToolUse, `tool_name` `request_user_input` | `/api/hook/wait` |
 | Codex | Stop | `/api/hook/turn-stop` |
 | Codex | Interrupt | `/api/hook/turn-stop`, `status: 'interrupted'` |
-| both | SubagentStart, SubagentStop | `/api/hook/subagent`, with the lead's session id (Task 2 says which field for Codex) |
+| Claude Code | SubagentStart, SubagentStop | `/api/hook/subagent`, with the lead's session id |
 
 - A PreToolUse for any other tool posts nothing: a matcher edited by hand must not turn each tool call into a request.
+- Codex runs PermissionRequest and PreToolUse before its dialog and waits for them, and reads an empty stdout with exit 0 as no decision (facts-codex §2): for every Codex event the hook writes nothing on stdout and exits 0, whatever the post's answer, a failed or timed-out post included. Its time delays the dialog, so the wait's post is as bounded as today's posts (the 4.5 s budget). Codex's Interrupt is killed at 3 s: a post cut short there leaves the turn to the transcript's `turn_aborted` (R1.2).
 - Outside a pane none of the new events posts anything, Codex's Stop included (Ken, 2026-11-17): the devices see exactly what they see today, so the dial does not sound at every Codex turn. `observedEvent` returns null for Codex's Stop; Claude Code's Stop and every event outside a pane today post as they do.
-- A Codex child thread's own hooks still post nothing (`isCodexSubagent`), SubagentStart and SubagentStop as Task 2 found them.
+- A Codex child thread's own hooks still post nothing (`isCodexSubagent`), as today. Codex has no subagent hooks installed (Ken, 2026-11-17), so Task 2's finding on Codex's SubagentStart and `isCodexSubagent` does not apply.
 
 - [ ] **Step 1: Write the failing tests** (`runHook`, `collect`)
 
@@ -586,8 +588,9 @@ it.each([
 it('a PreToolUse for any other tool posts nothing', …)
 it('Claude Code\'s permission and elicitation waits post a wait', …)       // the events of Task 1's verdict
 it('codex Stop in a pane posts turn-stop; codex Interrupt posts turn-stop with status interrupted', …)
-it.each(['claude', 'codex'] as const)('%s SubagentStart and SubagentStop post /api/hook/subagent with the lead\'s session', …)
+it('claude SubagentStart and SubagentStop post /api/hook/subagent with the lead\'s session', …)
 it('writes nothing on stdout and exits 0 for each new event', …)
+it.each(['PermissionRequest', 'PreToolUse'])('codex %s: nothing on stdout and exit 0 when the daemon answers 403, 500 or never', …)   // Codex reads it as no decision
 it('outside a pane, a codex Stop posts nothing', async () => {
   const { port, requests } = await collect()
   await runHook({ port, engine: 'codex', input: { hook_event_name: 'Stop', session_id: 'sess-1', turn_id: 't1' } })   // no tmuxPane
@@ -601,7 +604,7 @@ it('a Codex child thread\'s hooks still post nothing', …)
 - [ ] **Step 2: Run** `cd cli && npx vitest run src/hookNotify.spec.ts`. Expected: FAIL (they post `/api/hook/session-start`, and the paneless Codex Stop posts `/api/hook/observed`).
 - [ ] **Step 3: Implement** the table. The comment over the Notification guard says what Task 1 found.
 - [ ] **Step 4: Run** the same. Expected: PASS.
-- [ ] **Step 5: Commit** `Hook: waits, Codex's Stop and Interrupt, and subagents reach the daemon from a pane`.
+- [ ] **Step 5: Commit** `Hook: waits, Codex's Stop and Interrupt, and Claude Code's subagents reach the daemon from a pane`.
 
 ### Task 14: Fake engines: the new events
 
@@ -612,12 +615,13 @@ it('a Codex child thread\'s hooks still post nothing', …)
 
 As the facts files say the real CLIs do; where they differ from the lines below, the facts win.
 
-- `HOOK_EVENTS`: Claude Code gains PreToolUse, SubagentStart, SubagentStop, and under Variant P PermissionRequest and Elicitation; Codex gains Stop, PermissionRequest, PreToolUse, Interrupt, SubagentStart, SubagentStop.
+- `HOOK_EVENTS`: Claude Code gains PreToolUse, SubagentStart, SubagentStop, and under Variant P PermissionRequest and Elicitation; Codex gains Stop, PermissionRequest, PreToolUse, Interrupt (no subagent events: Harness installs none for Codex).
 - `runHooks` honours a block's matcher for PreToolUse (the tool's name) and Notification (its type), as it does SessionStart's.
 - `!ask`, `!askmany`: PreToolUse (`AskUserQuestion`; Codex `request_user_input`), waited for, then the dialog.
 - `!permit`, `!permitnext`: PermissionRequest (Codex; Claude Code under Variant P), waited for, then the dialog. Claude Code's Notification after 6 s stays.
-- Codex: Stop after each finished turn's last record, waited for, none after an interrupt; Interrupt when Esc or Ctrl-C ends a turn.
-- `!spawn` and the background sub-agent: SubagentStart as the child starts and SubagentStop as it ends.
+- Codex: Stop after each finished turn's last record, waited for, none after an interrupt or an error; Interrupt when Esc or Ctrl-C ends a turn, waited for, before its `turn_aborted` record (facts-codex §2).
+- `!fail` (Codex): the turn ends with a `task_complete` carrying an `error`, as `codexTaskError` reads it, and no Stop.
+- `!spawn` and the background sub-agent (Claude Code): SubagentStart as the child starts and SubagentStop as it ends.
 - Config `withoutHooks: string[]`: the events this release does not have.
 - `!heldstop`: the turn's Stop reaches the daemon only once the test writes `held-stop.release` (`hookHeld`, as `!latestop` holds one).
 - Each interrupt key it takes is noted in `interrupts` under the test's root, with its pid.
@@ -748,7 +752,7 @@ it('Codex\'s Stop closes its turns too', () => { expect(Object.keys(engineHooks.
 
 **Interfaces — Consumes:** `onTurnStop` and the record (Task 15). **Produces:** nothing new: `onTurnStop({ sessionId, status: 'interrupted', firedAt? })` is R3. The route is today's `/api/hook/turn-stop` (Task 13 posts it), so no handler is added and `core/main.ts` does not change.
 
-R3. Only for an engine whose hooks have `onStop`. It marks the record as a Stop does. It closes through the existing `closeTurn(sessionId, identity)` and `emit`, and reaches no input: `createTurnHooks` has none. `cancel.ts` is not touched (Ken, 2026-11-17): no key is sent, so the engine never gets a second Ctrl-C.
+R3. Only for an engine whose hooks have `onStop`. It marks the record as a Stop does. It closes through the existing `closeTurn(sessionId, identity)` and `emit`, and reaches no input: `createTurnHooks` has none. It closes before the route answers: Codex runs Interrupt after the interrupted-turn marker and before it writes `turn_aborted`, and waits for the hook up to 3 s (facts-codex §2), so the close comes first and the parser, closed, emits nothing for that `turn_aborted` (Task 5: an abort with no turn open ends nothing). A hook Codex kills at 3 s leaves the turn to `turn_aborted` (R1.2), as before. `cancel.ts` is not touched (Ken, 2026-11-17): no key is sent, so the engine never gets a second Ctrl-C.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -760,6 +764,7 @@ it('an interrupt ends the open turn as aborted at once: no drain, no wait', asyn
   expect(run.deps.drain).not.toHaveBeenCalled()
 })
 it('with no turn open (the app cancelled it, or its abort was read first) says nothing', …)
+it('the transcript\'s turn_aborted, read after the interrupt closed the turn, sends nothing more', …)   // Codex writes it only after the hook returns
 it('run before the latest prompt hook, or before the open turn opened, closes nothing', …)   // Review Focus 5
 it('makes the session\'s turns end by hook', …)
 it('leaves an end that is held as it is', …)
@@ -897,7 +902,7 @@ subagentsRun(sessionId: string): boolean
 heldBeforeHook: boolean
 ```
 
-R5, and R6's last sentence. `onSubagent` sets `hookAt`. `onPromptHook` sets the count to 0. `transcript` sets `progressAt` on a progress event. `heldBeforeHook` is taken in `onTurnStop` before `hookAt` is set. The lines: `[turn] <sid> subagent not counted · 64 running`, `[turn] <sid> subagent count reset · no hook or progress in 10 min`, `[turn] <sid> Stop left its turn open · subagents run`.
+R5, and R6's last sentence. Claude Code only: Codex installs no subagent hooks (Task 20), so no Codex session's count leaves 0 and its Stop is never held for a subagent; the core adds no engine check for it. `onSubagent` sets `hookAt`. `onPromptHook` sets the count to 0. `transcript` sets `progressAt` on a progress event. `heldBeforeHook` is taken in `onTurnStop` before `hookAt` is set. The lines: `[turn] <sid> subagent not counted · 64 running`, `[turn] <sid> subagent count reset · no hook or progress in 10 min`, `[turn] <sid> Stop left its turn open · subagents run`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -926,45 +931,65 @@ it('atWork while any runs', …)
 - [ ] **Step 2: Run** `cd cli && npx vitest run src/core/turns/turnHooks.spec.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement.** `main.ts`: `onSubagent: turnHooks.onSubagent`, and `atWork` to `createTurnActivity`.
 - [ ] **Step 4: Run** the same with `$COV --coverage.include=src/core/turns/turnHooks.ts`, and `npm run typecheck`. Expected: PASS, 100%.
-- [ ] **Step 5: Commit** `CLI: a lead stays working while its subagents run`.
+- [ ] **Step 5: Commit** `CLI: a Claude Code lead stays working while its subagents run`.
 
 ### Task 20: Codex: events, labels and hashes
 
 **Depends on:** 2. **Effort:** xhigh.
 
 **Files:**
-- Modify: `cli/src/engines/codex/hookContract.ts`
-- Test: `cli/src/engines/kit/hookReview.spec.ts`, `cli/src/engines/kit/windowsHooks.spec.ts`, `cli/src/engines/hooks.spec.ts`, `cli/src/engines/hookInstallers.golden.spec.ts` (its `EVENTS`), `cli/src/engines/__fixtures__/hook-installers.golden.json` (recorded again)
+- Modify: `cli/src/engines/codex/hookContract.ts`, `cli/src/engines/facets/hooks.ts` (`HookSettings.events`' type), `cli/src/engines/kit/hookSettings.ts` (the line that writes our block)
+- Test: `cli/src/engines/kit/hookSettings.spec.ts`, `cli/src/engines/kit/hookReview.spec.ts`, `cli/src/engines/kit/windowsHooks.spec.ts`, `cli/src/engines/hooks.spec.ts`, `cli/src/engines/hookInstallers.golden.spec.ts` (its `EVENTS`), `cli/src/engines/__fixtures__/hook-installers.golden.json` (recorded again)
 
-- `settings.events`: Global Constraints' Codex list, in that order.
-- `reviewed.events` gains `Stop: 'stop'`, `PermissionRequest: 'permission_request'`, `PreToolUse: 'pre_tool_use'`, `Interrupt: 'interrupt'`, `SubagentStart: 'subagent_start'`, `SubagentStop: 'subagent_stop'`; `matcherEvents` is `['SessionStart', 'PreToolUse']`.
-- `messages.current` and `installed` say `Codex session and turn hooks`. The comment over `reviewed` names the Codex the hashes were matched against.
+**Interfaces — Produces:**
+
+```ts
+// engines/facets/hooks.ts, HookSettings
+/** One block of ours per event, in this order, with a matcher only where the engine honours one. */
+events: ReadonlyArray<{ event: string; matcher?: string; /** Seconds, where this event's own differs from `timeout`. */ timeout?: number }>
+// engines/kit/hookSettings.ts: our block's hook is written with `timeout ?? settings.timeout`
+```
+
+- `settings.events`: Global Constraints' Codex list, in that order: `{ event: 'Interrupt', timeout: 3 }` (Ken, 2026-11-17: Codex gives Interrupt and SessionEnd a cap of 3 s and hashes the capped value, `normalize_command_hook`, facts-codex §1; a 5 s entry never matches its record and warns at every session start). No SubagentStart or SubagentStop (Ken, 2026-11-17).
+- The review records need no change: `reviewRecords` hashes the timeout each hook in the file carries.
+- No release wrote an Interrupt block, so no block of ours is found with another timeout; the up-to-date check stays the command's and the matcher's.
+- `reviewed.events` gains `Stop: 'stop'`, `PermissionRequest: 'permission_request'`, `PreToolUse: 'pre_tool_use'`, `Interrupt: 'interrupt'`; `matcherEvents` is `['SessionStart', 'PreToolUse']`.
+- `messages.current` and `installed` say `Codex session and turn hooks`. The comment over `reviewed` names the Codex the hashes were matched against (codex-cli 0.169.0, `hooks/list`, facts-codex §1), and the comment over Interrupt says why 3.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-// The six hashes Task 2 recorded from `hooks/list`, as CODEX_0_162 is kept today.
+// The four hashes Task 2 read from the real Codex's `hooks/list` (codex-cli 0.169.0, facts-codex §1), as CODEX_0_162 is kept today.
+const CODEX_0_169 = {
+  stop: 'sha256:51ccf08c5abb298e3640ad1aa2a6d97a1e4c9aa50bf54769012a5f48e9819103',
+  permission_request: 'sha256:dea5f4e595e43e7116728901dbcbd71915be5be2b4159916d43d06d125ebe833',
+  pre_tool_use: 'sha256:6759b736f953bcb9cc9a47f366def174a2a3bf0394cc456d07494d3700dfc852',
+  interrupt: 'sha256:6168570fe3ae52db10c67e1abfa5d8743900a146979b56191e5c9a7e5f737d72',   // Codex lists it with timeoutSec 3
+}
 it('hashes each new hook exactly as the targeted Codex does', () => {
-  for (const [event, label] of [['Stop', 'stop'], ['PermissionRequest', 'permission_request'], ['Interrupt', 'interrupt'],
-    ['SubagentStart', 'subagent_start'], ['SubagentStop', 'subagent_stop']] as const) {
-    expect(reviewHash(record, event, undefined, { command: COMMAND, timeout: 5 })).toBe(CODEX_TARGET[label])
-  }
-  expect(reviewHash(record, 'PreToolUse', 'request_user_input', { command: COMMAND, timeout: 5 })).toBe(CODEX_TARGET.pre_tool_use)
-  expect(reviewHash(record, 'PreToolUse', 'other', { command: COMMAND, timeout: 5 })).not.toBe(CODEX_TARGET.pre_tool_use)
+  expect(reviewHash(record, 'Stop', undefined, { command: COMMAND, timeout: 5 })).toBe(CODEX_0_169.stop)
+  expect(reviewHash(record, 'PermissionRequest', undefined, { command: COMMAND, timeout: 5 })).toBe(CODEX_0_169.permission_request)
+  expect(reviewHash(record, 'PreToolUse', 'request_user_input', { command: COMMAND, timeout: 5 })).toBe(CODEX_0_169.pre_tool_use)
+  expect(reviewHash(record, 'PreToolUse', 'other', { command: COMMAND, timeout: 5 })).not.toBe(CODEX_0_169.pre_tool_use)
+  expect(reviewHash(record, 'Interrupt', undefined, { command: COMMAND, timeout: 3 })).toBe(CODEX_0_169.interrupt)
+  expect(reviewHash(record, 'Interrupt', undefined, { command: COMMAND, timeout: 5 })).not.toBe(CODEX_0_169.interrupt)   // why 3
 })
-it('installs every declared event and records each as reviewed, so Codex runs them without asking', …)   // 8 notify records and Agent Messages' one
+it('installs every declared event, Interrupt with a 3 s timeout, and records each as reviewed with the hash the targeted Codex lists', …)   // 6 notify records and Agent Messages' one; Interrupt's record is CODEX_0_169.interrupt
 // 'keys only Harness's blocks': its Stop block is now keyed
+// hookSettings.spec.ts
+it('writes a declared event\'s own timeout in place of the contract\'s, and the contract\'s for the others', …)
 // windowsHooks.spec.ts
-it('writes every Codex event the one PowerShell line, PreToolUse with its matcher', …)
+it('writes every Codex event the one PowerShell line, PreToolUse with its matcher, Interrupt with timeout 3', …)
 // engines/hooks.spec.ts
-it('declares Codex\'s events', () => { expect(hookContracts.codex.settings.events.map(({ event }) => event)).toEqual(
-  ['SessionStart', 'UserPromptSubmit', 'Stop', 'PermissionRequest', 'PreToolUse', 'Interrupt', 'SubagentStart', 'SubagentStop']) })
+it('declares Codex\'s events, and no subagent event', () => { expect(hookContracts.codex.settings.events).toEqual([
+  { event: 'SessionStart', matcher: 'startup|resume|clear|compact' }, { event: 'UserPromptSubmit' }, { event: 'Stop' },
+  { event: 'PermissionRequest' }, { event: 'PreToolUse', matcher: 'request_user_input' }, { event: 'Interrupt', timeout: 3 }]) })
 ```
 
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/engines/kit/hookReview.spec.ts src/engines/kit/windowsHooks.spec.ts src/engines/hooks.spec.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement** the contract. Then `RECORD_HOOK_GOLDEN=1 npx vitest run src/engines/hookInstallers.golden.spec.ts`, and read the fixture's diff: only the new events and the two log lines.
-- [ ] **Step 4: Run** `npx vitest run src/engines src/lib/hooks.spec.ts`. Expected: PASS.
-- [ ] **Step 5: Commit** `Codex: Stop, Interrupt, wait and subagent hooks, recorded as reviewed (the installers' golden recorded again)`.
+- [ ] **Step 2: Run** `cd cli && npx vitest run src/engines/kit/hookSettings.spec.ts src/engines/kit/hookReview.spec.ts src/engines/kit/windowsHooks.spec.ts src/engines/hooks.spec.ts`. Expected: FAIL.
+- [ ] **Step 3: Implement** the type, the one write in `hookSettings.ts`, and the contract. Then `RECORD_HOOK_GOLDEN=1 npx vitest run src/engines/hookInstallers.golden.spec.ts`, and read the fixture's diff: only the new events (Interrupt with `timeout: 3`) and the two log lines.
+- [ ] **Step 4: Run** `npx vitest run src/engines src/lib/hooks.spec.ts src/architecture.spec.ts`. Expected: PASS.
+- [ ] **Step 5: Commit** `Codex: Stop, Interrupt and wait hooks, recorded as reviewed (the installers' golden recorded again)`.
 
 ### Task 21: Claude Code: events
 
@@ -993,7 +1018,7 @@ it('installs Claude Code\'s wait and subagent hooks beside the person\'s own', a
 
 ### Task 22: End to end
 
-**Depends on:** 5, 9, 13, 14, 16, 18, 19, 20, 21. **Effort:** high. **Failing test:** the file itself, shown red against `main`'s daemon in Step 2; one commit.
+**Depends on:** 5, 9, 13, 14, 16, 18, 19, 20, 21, 25. **Effort:** high. **Failing test:** the file itself, shown red against `main`'s daemon in Step 2; one commit.
 
 **Files:**
 - Create: `cli/e2e/hookStatus.e2e.ts`
@@ -1006,15 +1031,17 @@ it.each(engines)('%s: Esc typed in the pane ends the turn as aborted, and nothin
 it.each(engines)('%s: a cancel from the app types one Ctrl-C, and the next message is a fresh turn', …)   // `interrupts` holds one line
 it.each(engines)('%s: a permission asked: the agent stops reading as working at the hook, the question is shown at the next poll, and an answer sets it working again', …)
 it('claude: AskUserQuestion, and codex: request_user_input, the same', …)
-it.each(engines)('%s: a lead whose subagent still runs stays working past its own Stop, and ends at its Stop after the subagent stops', …)
+it('claude: a lead whose subagent still runs stays working past its own Stop, and ends at its Stop after the subagent stops', …)
+it('codex: a lead with a subagent ends once, as today: no subagent hook is installed or waited for', …)   // `!spawn`; hooks.json holds no SubagentStart or SubagentStop
+it('codex: a turn that ends in an error is told at once, with no Stop and no 2-minute wait', …)   // `!fail` after a first plain turn (Task 25)
 it('claude: a /goal loop announces nothing between its passes, and Finished once at its end', …)   // turn_summary.notification, once
 it.each(engines)('%s: Finished comes once, no sooner than 1.5 s after the turn ends', …)
 it.each(engines)('%s: an engine that sends no Stop ends its turns from the transcript, as before', …)   // withoutHooks
-it('the oldest supported, Claude Code 2.1.209 and Codex 0.144.0: the events they lack are never waited for, and their turns end from the transcript as today', …)   // the fakes at those versions, withoutHooks as Tasks 1 and 2 found
+it('the oldest supported, Claude Code 2.1.209 and Codex 0.144.0: the events they lack are never waited for, and their turns end from the transcript as today', …)   // the fakes at those versions, withoutHooks as Tasks 1 and 2 found (Codex 0.144.0: ['Interrupt'], facts-codex §3)
 ```
 
 - [ ] **Step 1: Write the file.**
-- [ ] **Step 2: Show it red on `main`'s daemon.** `git worktree add "$SCRATCH/base" e9670ffd23`; in `"$SCRATCH/base/cli"`: `npm ci && BUNDLE_OUT_DIR="$SCRATCH/base-bundle" node build-bundle.mjs`; then in `cli`: `E2E_BUNDLE_PATH="$SCRATCH/base-bundle/cli.js" npx vitest run --config vitest.e2e.config.ts e2e/hookStatus.e2e.ts`. Expected: FAIL in every test but the two older-engine ones. Then `git worktree remove "$SCRATCH/base"`, that worktree and no other.
+- [ ] **Step 2: Show it red on `main`'s daemon.** `git worktree add "$SCRATCH/base" e9670ffd23`; in `"$SCRATCH/base/cli"`: `npm ci && BUNDLE_OUT_DIR="$SCRATCH/base-bundle" node build-bundle.mjs`; then in `cli`: `E2E_BUNDLE_PATH="$SCRATCH/base-bundle/cli.js" npx vitest run --config vitest.e2e.config.ts e2e/hookStatus.e2e.ts`. Expected: FAIL in every test but the older-engine ones, Codex's lead with a subagent and Codex's errored turn (today's behaviour, kept). Then `git worktree remove "$SCRATCH/base"`, that worktree and no other.
 - [ ] **Step 3: Run** `E2E_BUNDLE=1 npx vitest run --config vitest.e2e.config.ts e2e/hookStatus.e2e.ts e2e/turns.e2e.ts e2e/questions.e2e.ts e2e/subagents.e2e.ts`. Expected: PASS.
 - [ ] **Step 4: Commit** `Tests: hook-driven status, end to end`.
 
@@ -1149,6 +1176,41 @@ it('a background subagent keeps the lead working past its Stop, and the turn end
 - [ ] **Step 2: Run** `cd cli && npx vitest run --config vitest.e2e.config.ts e2e/hookStatusRealClaude.e2e.ts` with neither variable set. Expected: every case skipped. Then `npm run typecheck`. Expected: PASS. Do not run it with the variables: the tester does (check 7).
 - [ ] **Step 3: Commit** `Tests: an opt-in check of hook-driven status with the real Claude Code`.
 
+### Task 25: Codex: an end with no Stop after it goes on at once
+
+**Depends on:** none (Tasks 5 and 6, which changed these files, have landed). **Effort:** high. Must land before Task 22.
+
+**Files:**
+- Modify: `cli/src/engines/codex/normalizer.ts`, `cli/src/engines/codex/live.ts`, `docs/plans/2026-11-16-hook-driven-agent-status-facts-codex.md` (one line, Step 1)
+- Test: `cli/src/engines/codex/live.spec.ts`, `cli/src/engines/codex/normalizer.spec.ts`
+
+Codex runs no Stop for a turn that ends in an error (0.169.0 puts the error on its `task_complete`, 0.144.0 writes an `error` event before it) nor for one a UserPromptSubmit or SessionStart hook stops, and has no StopFailure (facts-codex §2). Under R1 such an end would be held until R6's 2 minutes. The engine-codex worker marks it `over`, as engine-claude marks a paused `/goal` end (Task 6), and R1.2 sends it on at once (Ken, 2026-11-17). Engine worker only: no core file changes, and no Stop the core takes changes.
+
+**Interfaces — Produces:** `live.ts`'s `ingest` returns `over: true` on the read whose plain (not aborted) `turn_ended` ends a turn that carried an error (`codexTaskError(line)` is not null, or the normalizer read an `error` record since the turn opened) or that a prompt hook stopped. `CodexNormalizer` keeps whether its open turn read such a record, reset when a turn opens. A replay marks nothing.
+
+- [ ] **Step 1: Establish** from the source at `rust-v0.169.0` and `rust-v0.144.0` (the prompt hook's stop path, `codex-rs/core/src/hook_runtime.rs` and the turn loop) what the rollout holds for a turn a UserPromptSubmit or SessionStart hook stopped, and add it to facts-codex §2 as one line with its source. If nothing in the rollout tells that turn apart from a finished one, stop and report, changing nothing else.
+- [ ] **Step 2: Write the failing tests**
+
+```ts
+// engines/codex/live.spec.ts
+it('an end that carries an error is marked over: no Stop follows it', () => {
+  const parser = live.create({ engine: 'codex', codexHome: undefined })
+  parser.ingest(line('2026-11-17T01:02:03.000Z', { type: 'user_message', message: 'go' }))
+  const read = parser.ingest(line('2026-11-17T01:02:04.000Z', { type: 'task_complete', turn_id: 't1', error: { message: 'usage limit' } }))
+  expect(read.events.at(-1)).toEqual({ type: 'turn_ended', payload: {} })
+  expect(read.over).toBe(true)
+})
+it('an end after an error record is marked over (Codex 0.144.0)', …)
+it('a turn a prompt hook stopped ends marked over', …)                 // the records Step 1 found
+it('a finished turn, an aborted one, and the next turn after an errored one are not marked', …)
+it('a replay marks nothing', …)
+```
+
+- [ ] **Step 3: Run** `cd cli && npx vitest run src/engines/codex/live.spec.ts src/engines/codex/normalizer.spec.ts`. Expected: FAIL (`over` undefined).
+- [ ] **Step 4: Implement.** `liveStreams.ts` already copies `over` onto the frame (Task 6).
+- [ ] **Step 5: Run** the same, and `npx vitest run src/engines/worker src/architecture.spec.ts`. Expected: PASS.
+- [ ] **Step 6: Commit** `Codex: a turn that ends with no Stop after it is told at once`.
+
 ---
 
 ## Verification
@@ -1162,7 +1224,7 @@ PR CI runs by itself on the pull request and needs no start: `cli-typecheck`, `c
 | 3 | **The same on real Windows**, by hand, once, at the final head: `gh workflow run windows.yml --ref feat/hook-driven-agent-status` (Actions → Windows → Run workflow, `release` off). Its step "Contract suite against the real host, and the Windows CLI specs" runs `windowsHooks.spec.ts`, `hookRemoval.spec.ts` and `removeHooks.spec.ts` | GitHub, `windows-latest` and `windows-11-arm` | the runner's own profile; nothing of a person's | both `windows-pty` jobs green |
 | 4 | **CLI end to end**, the whole suite once at the final head: `gh workflow run cli-e2e.yml --ref feat/hook-driven-agent-status` (Actions → CLI end to end → Run workflow) | GitHub, eight Linux shards and the macOS runner | each daemon under a throwaway root on its own port, a private tmux server, fake Claude Code and Codex; no backend, never port 18473 | every shard green; `e2e-summary` lists `e2e/hookStatus.e2e.ts` passed. Every file's daemon now installs the new hook blocks and every fake Codex sends a Stop: a file red here and green in `main`'s last nightly run is this change's |
 | 5 | **The numbers** (Task 23's temporary workflow, started by each push to the branch): the hook round trip, hooks a turn, and the core's CPU in `populated-idle` and `active`, before, before again, and after | GitHub, one Linux runner | isolated daemons, fake engines, no secret | the last step prints the three runs side by side. "After" is within the gap between the two "before" runs for CPU at rest; hooks a turn rises by Codex's Stop and by nothing a tool call. The printout goes into the pull request |
-| 6 | **Codex's new events through PowerShell, on the Windows VM** (`docs/testing/windows-cli-e2e.md`; test user `hxe2e`, `PORT=18474`, this branch's build from the fake CDN, `HARNESS_ALLOW_UNSIGNED=1`). (a) `%USERPROFILE%\.codex\hooks.json` holds a block for each of the eight events, each the PowerShell line. (b) `codex app-server` `hooks/list` reports each trusted: its `currentHash` is the `trusted_hash` in `config.toml`. No sign-in. (c) From a Harness pane, each line run as Codex runs it, `powershell.exe -NoProfile -Command "<line>"` with the event's JSON on stdin, exits 0 and leaves one line in the daemon's log | the VM, locally; no GitHub workflow starts a Codex on Windows | the test user's own profile and daemon on the VM | eight blocks; eight trusted; a log line an event |
+| 6 | **Codex's new events through PowerShell, on the Windows VM** (`docs/testing/windows-cli-e2e.md`; test user `hxe2e`, `PORT=18474`, this branch's build from the fake CDN, `HARNESS_ALLOW_UNSIGNED=1`). (a) `%USERPROFILE%\.codex\hooks.json` holds a block for each of the six events, each the PowerShell line, Interrupt with `timeout: 3`, and none for SubagentStart or SubagentStop. (b) `codex app-server` `hooks/list` reports each trusted: its `currentHash` is the `trusted_hash` in `config.toml`; Interrupt's `timeoutSec` is 3 and no `clamping Interrupt hook timeout` warning is listed. No sign-in. (c) From a Harness pane, each line run as Codex runs it, `powershell.exe -NoProfile -Command "<line>"` with the event's JSON on stdin, exits 0 and leaves one line in the daemon's log | the VM, locally; no GitHub workflow starts a Codex on Windows | the test user's own profile and daemon on the VM | six blocks; six trusted, no warning; a log line an event |
 | 7 | **Real Claude Code on an isolated daemon** (Task 24), run by the tester once at the final head: `cd cli && E2E_REAL_CLAUDE="$(command -v claude)" E2E_CLAUDE_PROFILE="$CLAUDE_CONFIG_DIR" E2E_BUNDLE=1 TMPDIR=/tmp npx vitest run --config vitest.e2e.config.ts e2e/hookStatusRealClaude.e2e.ts`. Before it, check that `$CLAUDE_CONFIG_DIR` is set and is not `~/.claude`, and that `claude --version` is 2.1.209 or later. **Needs the user's own sign-in:** it runs on this session's Claude profile, as the dial skill eval does; five short turns of model use | this Mac, locally: it needs the real engine and a signed-in profile; no runner has either | `IsolatedDaemon` (throwaway root, own port, private tmux, backend `127.0.0.1:9`, never port 18473); the profile is used for its sign-in only: `--setting-sources project` keeps its own hooks off, only the isolated daemon's hooks run (`--settings`), its `settings.json` is the same before and after, and `~/.claude`, `~/.codex` and `~/.harness` are never read or written | every case passes, or is reported skipped with its reason (a model that starts no background subagent), never as passed. The log line with the time from the dialog's first capture to the wait hook goes into the pull request |
 | 8 | **The core's lines, before and after**, at the final head, after the final review: `core_lines() { git show "$1:cli/src/architecture.coreFiles.txt" \| grep -v '^#' \| sed '/^[[:space:]]*$/d' \| while IFS= read -r f; do git show "$1:cli/src/$f"; done \| wc -l; }`, then `core_lines e9670ffd23` (92 229 on 2026-11-17) and `core_lines HEAD`; and `git diff --stat e9670ffd23 HEAD -- $(sed -e '/^#/d' -e '/^[[:space:]]*$/d' -e 's#^#cli/src/#' cli/src/architecture.coreFiles.txt)` for each file's share | anywhere, locally | none needed: it reads git only | both totals and their difference, and the per-file stat, in the pull request body; the difference is within the Core footprint's estimate (about 365) or the body says why |
 
@@ -1174,6 +1236,10 @@ No check runs against production: no daemon here signs in to a backend and nothi
 
 In the pull request: the red-then-green commits, checks 1 to 8 with their output or links, the three facts files, the core's line count before and after (check 8), the platforms (macOS, Linux, Windows), and that `architecture.coreFiles.txt` did not change.
 
+**Known gaps**, a section of the pull request body:
+1. **Codex subagents are not counted** (Ken, 2026-11-17): a Codex lead whose subagents run reads as today. Measured on Codex 0.169.0 (facts-codex §2): SubagentStart fires once a child, on its first turn; SubagentStop fires at the end of every turn the child finishes, a later message to a running child giving another and no start; an interrupted or failed child turn fires neither. A count would reach 0 while a child works again, or hold Working for the 10-minute timeout, which is worse than none. So Harness installs no Codex subagent hooks.
+2. **A rollback, outside panes** (facts-rollback.md): an older CLI does not prune the new Codex Stop block, and its `notify.mjs` tells the devices every Codex Stop outside a pane as `turn-stop` until the person updates again. In a pane a rollback is harmless.
+
 **After a release, by hand on Ken's Mac (a note, not this pull request's evidence):** his own Claude Code and Codex. (a) A turn shows Finished once, about 1.5 s after it ends, and not while it still works. (b) A permission prompt in each engine: the agent stops showing working at once, the question shows, and after the answer it works again. (c) Esc in a Codex pane: no Finished, no sound. (d) Claude Code with a background subagent: working until its wrap-up, then Finished once. (e) Codex starts with no "Hooks need review".
 
 **Proposals, not built here:** `hookSettings.spec.ts`, `hookReview.spec.ts` and `hookNotify.spec.ts` added to `windows.yml`'s spec list; a nightly check of the review hashes against the newest Codex (`hooks/list`), so a change in how it hashes is seen before a person is asked to review.
@@ -1182,6 +1248,6 @@ In the pull request: the red-then-green commits, checks 1 to 8 with their output
 
 Taken without a question: the 2 minutes of silence are counted from the later of the last hook and when the end was read (the spec's "never left waiting 2 minutes"); the targeted Codex is the newest stable on the day Task 2 runs; "a wait opens" in the quiet window is the recaps' own `asked`, with no new message from the core; Codex's Interrupt rides `/api/hook/turn-stop` as `status: 'interrupted'` (the spec leaves route names to the builder).
 
-## Open question
+## Open questions
 
-1. **A rollback to an older CLI, and Codex outside panes.** That CLI does not prune (spec §7), so the new Codex Stop block stays, and its `notify.mjs` tells the devices every Codex Stop outside a pane as `turn-stop` (`observedEvent` maps `Stop` for every engine): the dial would sound at each Codex turn outside a pane until the person updates again, which Ken declined for this change. Does that count as harmful under spec §7, so the prune ships in a release first and the rest waits for it? Draft: harmless, as a rollback is rare and short; Task 3 records it either way.
+None. The rollback outside panes is a Known gap of the pull request (Ken, 2026-11-17).
