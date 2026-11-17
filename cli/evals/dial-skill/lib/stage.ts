@@ -103,6 +103,11 @@ export function readRings(st: Staged): Ring[] {
 
 export function unstage(st: Staged): void {
   rmSync(st.root, { recursive: true, force: true })
+  const profile = st.env.CLAUDE_CONFIG_DIR
+  // `claude -p` makes <profile>/projects/<repo>/memory/ even with no session saved. The run's own folder goes with it,
+  // named exactly as Claude Code names it (every character but a letter or digit made '-'), never by a pattern, so
+  // nothing else in the person's profile is touched.
+  if (profile) rmSync(join(profile, 'projects', st.repo.replace(/[^a-zA-Z0-9]/g, '-')), { recursive: true, force: true })
 }
 
 /** Rows and traces are committed: no temp path, no user name. The run root goes first, for a temp folder under $HOME. */
