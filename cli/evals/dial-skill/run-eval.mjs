@@ -145,6 +145,13 @@ const AGENTS = ['claude', 'oracle', 'null', 'always'];
 const SPLITS = ['train', 'val', 'test'];
 const JUDGE_TIMEOUT_MS = 120_000;
 
+/** --timeout-s bounds the whole case, so the agent gets what the judge's two calls (the line and the answer) leave: 660 s
+ *  of 900. A ceiling too short for both judge calls is split in half. 0, no ceiling, leaves the agent unbounded too. */
+function agentTimeoutMs(timeoutS) {
+  const ceiling = timeoutS * 1000;
+  return ceiling - Math.min(2 * JUDGE_TIMEOUT_MS, ceiling / 2);
+}
+
 /** The session profile every claude call runs under, agent and judge alike. Unset, Claude would use the person's
  *  default ~/.claude, so the pass is refused before anything is spent. */
 function sessionProfile() {
@@ -198,7 +205,7 @@ async function runCase(input, ctx) {
   const st = stage(scenario, agent, { skill: ctx.skill });
   const clean = text => scrub(text, st);
   try {
-    const run = await runAgent(agent, scenario, st, AGENT_CONFIG);
+    const run = await runAgent(agent, scenario, st, { ...AGENT_CONFIG, timeoutMs: agentTimeoutMs(ctx.timeoutS) });
     // The skill the agent had leads the trace, so a trace reads on its own.
     const transcript = [{ role: 'system', content: st.skill ?? 'no skill' }, ...run.transcript]
       .map(turn => Object.fromEntries(Object.entries(turn).map(([key, value]) => [key, clean(value)])));

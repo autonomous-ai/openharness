@@ -10,14 +10,15 @@ import { parseClaudeStream, type RunResult } from './parse.js'
 import type { AgentKind, Scenario } from './scenarios.js'
 import type { Staged } from './stage.js'
 
+/** `timeoutMs` 0 leaves the run unbounded. */
 export interface AgentConfig { claudeBin: string; claudeModel: string; claudeEffort: string; maxTurns: number; timeoutMs: number }
 
-export const AGENT_CONFIG: AgentConfig = {
+// No timeoutMs: the run's bound is the runner's share of --timeout-s, so the case ceiling has one source.
+export const AGENT_CONFIG: Omit<AgentConfig, 'timeoutMs'> = {
   claudeBin: findClaude(),
   claudeModel: 'claude-opus-5-5',
   claudeEffort: 'high',
   maxTurns: 40,
-  timeoutMs: 600_000,
 }
 
 /**
@@ -44,7 +45,7 @@ export const CLAUDE_SANDBOX = {
 /** Between SIGTERM and SIGKILL for a timed-out agent's process group. */
 const KILL_GRACE_MS = 10_000
 
-export function claudeArgs(cfg: AgentConfig, st: Pick<Staged, 'root'>, prompt: string): string[] {
+export function claudeArgs(cfg: Omit<AgentConfig, 'timeoutMs'>, st: Pick<Staged, 'root'>, prompt: string): string[] {
   return [
     '-p', prompt,
     '--output-format', 'stream-json', '--verbose',
@@ -114,11 +115,11 @@ function spawnGroup(bin: string, args: string[], st: Staged, timeoutMs: number):
     let stderr = ''
     let timedOut = false
     let killTimer: NodeJS.Timeout | undefined
-    const termTimer = setTimeout(() => {
+    const termTimer = timeoutMs > 0 ? setTimeout(() => {
       timedOut = true
       signalGroup('SIGTERM')
       killTimer = setTimeout(() => signalGroup('SIGKILL'), KILL_GRACE_MS)
-    }, timeoutMs)
+    }, timeoutMs) : undefined
     child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk))
     child.stderr.on('data', (chunk: Buffer) => {
       stderr = (stderr + chunk.toString()).slice(-4096)
