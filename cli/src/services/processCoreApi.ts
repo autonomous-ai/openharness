@@ -14,7 +14,7 @@ import { usageTarget, usageTargetKey, usageSnapshot, validUsage, validUsageTarge
  * each asked of the core over its link (`ask`). The agents it reads come as the apps are shown them (`service_query shown`): each with its
  * name, whether its terminal is there and its harness's viewer.
  */
-import { CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_OFF, type AgentView, type CloudCore, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
+import { CONNECTOR_SYNC_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_OFF, type AgentView, type CloudCore, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { turnsLink } from './turnsLink.js'
 
@@ -175,7 +175,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       tabKey: TAB_KEY_OFF,
       tabRelay: TAB_RELAY_OFF,
       // The connectors service asks the core for these itself (core/connectorsQueries.ts); no other seals.
-      connectorVault: CONNECTOR_VAULT_OFF,
+      connectorSync: CONNECTOR_SYNC_OFF,
       privateGridName: async () => null,
       machineName: () => null,
       backend,

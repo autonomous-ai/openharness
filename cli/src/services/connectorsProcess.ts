@@ -1,17 +1,9 @@
-/**
- * Connected services in their own process (`harness __service connectors`, in the edge host): the same
- * bridge and `connectors` handler as in the core's process (services/connectors.ts). The bridge's listener
- * and the services' network calls are this process's alone. It asks the core one thing, `connector_vault`
- * (core/connectorsQueries.ts): the account's sealed connections, read and written through the core's
- * sign-in and sealed by the gateway, which holds the identity. The core tells it `connectors_changed` and
- * `device_keys_changed` (`service_event` kind `notice`), and asks it, as an agent launches on a profile home, to write
- * that home's entries (`syncProfileHome`, the port's member, sent by the core alone: core/connectorsLink.ts).
- */
+/** Connected-service bridge and profile projection in edge. Only sync/status metadata crosses the core. */
 import { emptyPorts, type BackendNotice } from '../core/api.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { processCoreApi } from './processCoreApi.js'
 import { startConnectors } from './connectors.js'
-import { vaultPortOf } from '../lib/connectors/vaultSync.js'
+
 
 export interface ConnectorsServiceOptions {
   dataDir: string
@@ -32,10 +24,13 @@ export function runConnectorsService(options: ConnectorsServiceOptions): Service
   const api = processCoreApi(options.dataDir, 'connectors', {
     onNotice: (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } },
   })
-  // A refusal or no core reads as the backend unreachable: the next notice or round tries again.
-  const vaultPort = vaultPortOf((op, payload = {}) => ask('connector_vault', { ...payload, op }).catch((error: unknown) => ({ error: String(error) })))
+  const connectorSync = async (refresh: boolean) => {
+    const answer = await ask('connector_vault', { op: 'sync', refresh })
+    if (typeof answer.shared !== 'boolean' || answer.error) throw new Error('CONNECTORS_SYNC_UNAVAILABLE')
+    return { shared: answer.shared }
+  }
   const ports = emptyPorts()
-  const answers = (options.start ?? startConnectors)(api, ports, { vaultPort })
+  const answers = (options.start ?? startConnectors)(api, ports, { connectorSync })
   if (!ports.connectors) throw new Error('connected services did not start')
   const connectors = ports.connectors
   return (options.run ?? runServiceProcess)({
@@ -55,7 +50,10 @@ export function runConnectorsService(options: ConnectorsServiceOptions): Service
       if (payload.kind !== 'notice' || !payload.notice || typeof payload.notice !== 'object') return
       for (const listener of listeners) listener(payload.notice as BackendNotice)
     },
-    onConnected: (connection) => { core = connection },
+    onConnected: (connection) => {
+      core = connection
+      for (const listener of listeners) listener({ type: 'connectors_changed', revision: 0 })
+    },
     onDisconnected: () => { core = null },
   })
 }

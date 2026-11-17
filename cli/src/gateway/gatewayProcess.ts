@@ -24,6 +24,8 @@ import { backendHttpBase } from '../lib/backendHttpBase.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from '../services/process.js'
 import { startGateway, type StartedGateway } from './start.js'
 import { sharedPeers } from './sharedTrust.js'
+import { VaultStore } from '../lib/connectors/vaultStore.js'
+import { connectorsDir } from '../lib/connectors/store.js'
 
 type Payload = Record<string, unknown>
 
@@ -81,6 +83,7 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
   /** This process renews the account's sign-in (lib/authRefresh.ts): one manager, so every start of the gateway and the
    *  core's asks share a renewal in flight. Until the core audit of 2026-11-12 the core renewed it, and this asked it. */
   const tokens = options.tokens ?? new AuthSessionManager(backendHttpBase())
+  const connectorStore = new VaultStore(connectorsDir())
 
   /** The gateway stopped: its link closed, its windows' sessions let go. Not waited on here: what comes after it
    *  on the link (a new `start`) must not wait for the old link's goodbye. The process's own stop waits for it. */
@@ -97,7 +100,7 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
   const begin = (payload: Payload): void => {
     void stop()
     const started = (options.start ?? startGateway)({
-      events,
+      events, connectorStore,
       machineId: text(payload.machineId),
       computerId: text(payload.computerId),
       autonomousEnv: text(payload.autonomousEnv) || 'prod',
@@ -276,8 +279,17 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     },
     // The account's connected services (lib/e2ee/connectorVault.ts): an envelope sealed, or one opened.
     [GATEWAY_CALLS.connectorVault]: async (p: Payload): Promise<Payload> => {
-      const vault = ops().connectorVault
       try {
+        if (p.op === 'sync') {
+          if (typeof p.refresh !== 'boolean'
+            || (p.requestId !== undefined && (typeof p.requestId !== 'string' || p.requestId.length > 128))
+            || Object.keys(p).some(key => !['op', 'refresh', 'requestId'].includes(key))) return { error: 'UNKNOWN_OP' }
+          const answer = await ops().connectorSync(p.refresh)
+          return { shared: answer.shared }
+        }
+        // Old cores only, until 2026-12-16. The new core exposes no secret-bearing vault operation.
+        if (!running) return { error: 'CONNECTORS_SYNC_UNAVAILABLE' }
+        const vault = running.legacyConnectorVault
         if (p.op === 'seal') return { envelope: await vault.seal(text(p.plaintext)) }
         if (p.op === 'open') { const opened = await vault.open(p.envelope); return opened === null ? {} : { ...opened } }
         return { error: 'UNKNOWN_OP' }

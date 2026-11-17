@@ -295,8 +295,8 @@ export interface CoreApi {
     /** Shared tabs' relay: a socket per shared tab, held by the gateway (`TabRelay`); what it hears is
      *  `GatewayEvents.tabFrame`, which the core hands to Agent Messages. */
     tabRelay: TabRelay
-    /** The account's connected services, sealed and opened by the gateway for its machines (`ConnectorVault`). */
-    connectorVault: ConnectorVault
+    /** Whether account connector sharing is enabled, and a bounded explicit synchronization. */
+    connectorSync: ConnectorSync
     /** Whether this computer holds an account: a sign-in or sign-out restarts the daemon. */
     signedIn(): boolean
     /** The account's environment (`prod`, …), which the backend checks every request against. */
@@ -528,22 +528,9 @@ export interface TabRelay {
 /** A process with no relay of the core's: it opens nothing and sends nothing. */
 export const TAB_RELAY_OFF: TabRelay = { open: async () => {}, send: async () => false, close: () => {} }
 
-/**
- * The account's connected services sealed for its machines (lib/e2ee/connectorVault.ts), by the gateway,
- * which holds this machine's identity and reads the device key log: `seal` makes an envelope for every
- * machine of the account's log (not suspended, not pending), `open` reads one only if such a machine
- * signed it, and answers null otherwise. `complete` says it was sealed for every such machine: one that
- * is not misses a machine added since, and is sealed again. The envelope is opaque JSON for the backend.
- */
-export interface ConnectorVault {
-  seal(plaintext: string): Promise<Record<string, unknown>>
-  open(envelope: unknown): Promise<{ plaintext: string, complete: boolean } | { stranded: true } | null>
-}
-/** A process with no key of the core's: it seals and opens nothing. */
-export const CONNECTOR_VAULT_OFF: ConnectorVault = {
-  seal: () => Promise.reject(new Error('no key: this process holds no E2EE identity')),
-  open: async () => null,
-}
+/** Metadata-only account synchronization; connector credentials remain inside the gateway. */
+export type ConnectorSync = (refresh: boolean) => Promise<{ shared: boolean }>
+export const CONNECTOR_SYNC_OFF: ConnectorSync = async () => { throw new Error('CONNECTORS_SYNC_UNAVAILABLE') }
 
 /** A service in its own process that acts on no agent: it creates none and reads no harness's frame. */
 export const AGENT_ACTIONS_OFF: Pick<CoreApi['agents'], 'create' | 'dsh'> = {
@@ -573,14 +560,14 @@ export function accountIdentity(backend: CoreApi['account']['backend']): () => P
 }
 
 /** The account as a service that reads no backend, hears no notice and signs nothing has it. */
-export const ACCOUNT_BACKEND_OFF: Pick<CoreApi['account'], 'backend' | 'identity' | 'onNotice' | 'observerKey' | 'tabKey' | 'tabRelay' | 'connectorVault'> = {
+export const ACCOUNT_BACKEND_OFF: Pick<CoreApi['account'], 'backend' | 'identity' | 'onNotice' | 'observerKey' | 'tabKey' | 'tabRelay' | 'connectorSync'> = {
   backend: async () => ({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } }),
   identity: async () => null,
   onNotice: () => () => {},
   observerKey: OBSERVER_KEY_OFF,
   tabKey: TAB_KEY_OFF,
   tabRelay: TAB_RELAY_OFF,
-  connectorVault: CONNECTOR_VAULT_OFF,
+  connectorSync: CONNECTOR_SYNC_OFF,
 }
 
 /** Where a service that was never told runs this daemon from: the installed CLI, on no port it knows. */
@@ -2098,8 +2085,8 @@ export interface GatewayOps {
   tabKey: TabKey
   /** Shared tabs' relay sockets (`core.account.tabRelay`); what they hear is `GatewayEvents.tabFrame`. */
   tabRelay: TabRelay
-  /** The account's connected services sealed for its machines (`core.account.connectorVault`). */
-  connectorVault: ConnectorVault
+  /** Metadata-only connector synchronization (`core.account.connectorSync`). */
+  connectorSync: ConnectorSync
   /** Machines shared across accounts, made to hold exactly what the shared-machines service says
    *  (gateway/sharedTrust.ts): the ones shared with this account pinned, the machines of the accounts this
    *  one is shared with trusted; a part left out stays as it is. Answers how many of each it holds. */
@@ -2197,7 +2184,7 @@ export interface CoreApiDeps {
   observerKey: CoreApi['account']['observerKey']
   tabKey: CoreApi['account']['tabKey']
   tabRelay: CoreApi['account']['tabRelay']
-  connectorVault: CoreApi['account']['connectorVault']
+  connectorSync: CoreApi['account']['connectorSync']
   observer: CoreApi['clients']['observer']
   privateGridName: CoreApi['account']['privateGridName']
   machineName: CoreApi['account']['machineName']
@@ -2257,7 +2244,7 @@ export interface CoreApiDeps {
 
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, syncSession, runtimeModels, viewerChanged,
-  gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, observer, privateGridName, machineName, backend, onNotice,
+  gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorSync, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, browserFrame, browserBytes, machine, activityText, activitySnapshot, activity, summaries,
   closeAgent, activityAt, follow, panePid,
   signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, cloudRows, lastTurn, turnCard, turnSummary,
@@ -2333,7 +2320,7 @@ export function createCoreApi({
     turns,
     questions,
     transcripts: { databaseHistory, lastTurn },
-    account: { mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, privateGridName, machineName, backend,
+    account: { mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorSync, privateGridName, machineName, backend,
       identity: accountIdentity(backend), onNotice, signedIn, environment, machines },
     clients: {
       viewerChanged, gridNamed, gridModelsChanged, dshInstallStatus, windows, observer, hasWindow, devicesChanged, dialWatching,

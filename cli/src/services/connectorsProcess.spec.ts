@@ -54,7 +54,7 @@ describe('connected services in their own process', () => {
     })).toThrow('connected services did not start')
   })
 
-  it('asks the core for the account\'s sealed connections, and hears the notices that change them', async () => {
+  it('asks only for sync metadata, and hears local projection notices', async () => {
     let options: ServiceProcessOptions | null = null
     let given: { api: CoreApi, overrides: Partial<ConnectorsDeps> } | null = null
     runConnectorsService({
@@ -62,19 +62,27 @@ describe('connected services in their own process', () => {
       run: (o) => { options = o; return { stop: vi.fn() } },
       start: (api, ports, overrides = {}) => { given = { api, overrides }; return startWith({ syncProfileHome: async () => [] })(api, ports) },
     })
-    const port = given!.overrides.vaultPort!
+    const port = given!.overrides.connectorSync!
     // No core yet: the backend reads as unreachable.
-    expect(await port.read()).toBeNull()
+    await expect(port(false)).rejects.toThrow()
     const query = vi.fn(async (_query: string, payload: Record<string, unknown>) =>
-      payload.op === 'read' ? { status: 200, body: { success: true, data: { revision: 2, envelope: null } } } : {})
+      payload.op === 'sync' ? { shared: true, plaintext: 'synthetic-extra' } : {})
     options!.onConnected!({ query } as never)
-    expect(await port.read()).toEqual({ revision: 2, envelope: null })
-    expect(query).toHaveBeenCalledWith('connector_vault', { op: 'read' })
+    expect(await port(false)).toEqual({ shared: true })
+    expect(query).toHaveBeenCalledWith('connector_vault', { op: 'sync', refresh: false })
+    query.mockResolvedValueOnce({ shared: 'invalid' } as never)
+    await expect(port(true)).rejects.toThrow('CONNECTORS_SYNC_UNAVAILABLE')
+    query.mockResolvedValueOnce({ shared: true, error: 'synthetic' } as never)
+    await expect(port(true)).rejects.toThrow('CONNECTORS_SYNC_UNAVAILABLE')
 
     const heard = vi.fn()
     const stop = given!.api.account.onNotice(heard)
+    options!.onConnected!({ query } as never)
+    expect(heard).toHaveBeenCalledWith({ type: 'connectors_changed', revision: 0 })
+    heard.mockClear()
     await options!.onEvent!({ kind: 'notice', notice: { type: 'connectors_changed', revision: 3 } })
     await options!.onEvent!({ kind: 'notice' })
+    await options!.onEvent!({ kind: 'notice', notice: 'invalid' })
     await options!.onEvent!({ kind: 'something_else', notice: { type: 'desk_changed', revision: 1 } })
     expect(heard).toHaveBeenCalledTimes(1)
     expect(heard).toHaveBeenCalledWith({ type: 'connectors_changed', revision: 3 })
@@ -83,7 +91,7 @@ describe('connected services in their own process', () => {
     expect(heard).toHaveBeenCalledTimes(1)
 
     options!.onDisconnected!()
-    expect(await port.read()).toBeNull()
+    await expect(port(false)).rejects.toThrow()
   })
 
   it('runs as a real service by default', () => {
