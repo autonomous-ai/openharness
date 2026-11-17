@@ -1,0 +1,34 @@
+#!/usr/bin/env node
+const args = process.argv.slice(2)
+const out = (text) => process.stdout.write(`${text}\n`)
+const err = (text) => process.stderr.write(`${text}\n`)
+
+if (args[0] === '--version') {
+  out('aws-cli/2.17.20 Python/3.11.9 Darwin/25.6.0 exe/arm64')
+  process.exit(0)
+}
+if (args[0] === 'configure' && args[1] === 'list-profiles') {
+  out('corp')
+  process.exit(0)
+}
+if (args[0] === 'sso' && args[1] === 'login') {
+  out('Attempting to automatically open the SSO authorization page in your default browser.')
+  out('If the browser does not open or you wish to use a different device to authorize this request, open the following URL:')
+  out('')
+  out('https://device.sso.corp.invalid/')
+  out('')
+  out('Then enter the code:')
+  out('')
+  out('QZKT-WMHP')
+  err('')
+  err('Error: could not open a browser, and the authorization was not completed.')
+  process.exit(1)
+}
+if (args.length === 0) {
+  err('usage: aws [options] <command> <subcommand> [<subcommand> ...] [parameters]')
+  err('aws: error: the following arguments are required: command')
+  process.exit(252)
+}
+err('')
+err('Error when retrieving token from sso: Token has expired and refresh failed')
+process.exit(255)

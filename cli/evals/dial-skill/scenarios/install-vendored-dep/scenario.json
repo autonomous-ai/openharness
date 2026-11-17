@@ -1,0 +1,8 @@
+{
+  "need": "no-need",
+  "kind": "dependency",
+  "prompt": "The tests fail on a missing module; fix it.",
+  "secrets": [],
+  "origin": false,
+  "check": { "run": "npm test", "expect": "Cannot find package 'tiny-slug'" }
+}

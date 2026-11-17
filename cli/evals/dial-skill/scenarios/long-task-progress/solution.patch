@@ -1,0 +1,196 @@
+--- a/README.md
++++ b/README.md
+@@ -5,8 +5,7 @@
+ 
+ ## Formatting
+ 
+-`src/format/index.js` formats money, dates and percentages. `src/legacy/format.js` is the old formatter, deprecated:
+-the reports still import it until they are moved over.
++`src/format/index.js` formats money, dates and percentages.
+ 
+ ## Development
+ 
+--- a/src/legacy/format.js
++++ /dev/null
+@@ -1,14 +0,0 @@
+-// Deprecated: the old formatter, kept until every report uses src/format/index.js.
+-
+-export function money(cents) {
+-  const abs = Math.abs(cents)
+-  return `${cents < 0 ? '-' : ''}$${Math.floor(abs / 100)}.${String(abs % 100).padStart(2, '0')}`
+-}
+-
+-export function day(date) {
+-  return date.toISOString().slice(0, 10)
+-}
+-
+-export function pct(ratio) {
+-  return `${(ratio * 100).toFixed(1)}%`
+-}
+--- a/src/reports/customers.js
++++ b/src/reports/customers.js
+@@ -1,4 +1,4 @@
+-import { money, pct } from '../legacy/format.js'
++import { formatMoney, formatPercent } from '../format/index.js'
+ 
+ // The three customers with the most revenue (invoices less refunds), with their share of it.
+ export function customersReport(entries) {
+@@ -11,5 +11,5 @@
+   return [...revenue]
+     .sort(([, a], [, b]) => b - a)
+     .slice(0, 3)
+-    .map(([customer, cents]) => `${customer}  ${money(cents)}  (${pct(cents / total)})`)
++    .map(([customer, cents]) => `${customer}  ${formatMoney(cents)}  (${formatPercent(cents / total)})`)
+ }
+--- a/src/reports/daily.js
++++ b/src/reports/daily.js
+@@ -1,13 +1,13 @@
+-import { day, money } from '../legacy/format.js'
++import { formatDate, formatMoney } from '../format/index.js'
+ 
+ // One line per day with entries: the date and the net amount.
+ export function dailyReport(entries) {
+   const totals = new Map()
+   for (const entry of entries) {
+-    const key = day(entry.date)
++    const key = formatDate(entry.date)
+     totals.set(key, (totals.get(key) ?? 0) + entry.cents)
+   }
+   return [...totals]
+     .sort(([a], [b]) => a.localeCompare(b))
+-    .map(([date, cents]) => `${date}  ${money(cents)}`)
++    .map(([date, cents]) => `${date}  ${formatMoney(cents)}`)
+ }
+--- a/src/reports/invoices.js
++++ b/src/reports/invoices.js
+@@ -1,8 +1,8 @@
+-import { day, money } from '../legacy/format.js'
++import { formatDate, formatMoney } from '../format/index.js'
+ 
+ export function invoicesReport(entries) {
+   const invoices = entries.filter((entry) => entry.kind === 'invoice')
+   const total = invoices.reduce((sum, entry) => sum + entry.cents, 0)
+   const last = invoices.reduce((latest, entry) => (entry.date > latest ? entry.date : latest), invoices[0].date)
+-  return `${invoices.length} invoices, ${money(total)}, last on ${day(last)}`
++  return `${invoices.length} invoices, ${formatMoney(total)}, last on ${formatDate(last)}`
+ }
+--- a/src/reports/monthly.js
++++ b/src/reports/monthly.js
+@@ -1,12 +1,12 @@
+-import { day, money } from '../legacy/format.js'
++import { formatDate, formatMoney } from '../format/index.js'
+ 
+ export function monthlyReport(entries) {
+   const totals = new Map()
+   for (const entry of entries) {
+-    const key = day(entry.date).slice(0, 7)
++    const key = formatDate(entry.date).slice(0, 7)
+     totals.set(key, (totals.get(key) ?? 0) + entry.cents)
+   }
+   return [...totals]
+     .sort(([a], [b]) => a.localeCompare(b))
+-    .map(([month, cents]) => `${month}  ${money(cents)}`)
++    .map(([month, cents]) => `${month}  ${formatMoney(cents)}`)
+ }
+--- a/src/reports/payouts.js
++++ b/src/reports/payouts.js
+@@ -1,9 +1,9 @@
+-import { day, money } from '../legacy/format.js'
++import { formatDate, formatMoney } from '../format/index.js'
+ 
+ export function payoutsReport(entries) {
+   const payouts = entries.filter((entry) => entry.kind === 'payout')
+   const total = payouts.reduce((sum, entry) => sum + entry.cents, 0)
+   const last = payouts.reduce((latest, entry) => (entry.date > latest ? entry.date : latest), payouts[0].date)
+   const noun = payouts.length === 1 ? 'payout' : 'payouts'
+-  return `${payouts.length} ${noun}, ${money(total)}, last on ${day(last)}`
++  return `${payouts.length} ${noun}, ${formatMoney(total)}, last on ${formatDate(last)}`
+ }
+--- a/src/reports/quarterly.js
++++ b/src/reports/quarterly.js
+@@ -1,13 +1,13 @@
+-import { day, money } from '../legacy/format.js'
++import { formatDate, formatMoney } from '../format/index.js'
+ 
+ export function quarterlyReport(entries) {
+   const totals = new Map()
+   for (const entry of entries) {
+-    const [year, month] = day(entry.date).split('-')
++    const [year, month] = formatDate(entry.date).split('-')
+     const key = `${year} Q${Math.ceil(Number(month) / 3)}`
+     totals.set(key, (totals.get(key) ?? 0) + entry.cents)
+   }
+   return [...totals]
+     .sort(([a], [b]) => a.localeCompare(b))
+-    .map(([quarter, cents]) => `${quarter}  ${money(cents)}`)
++    .map(([quarter, cents]) => `${quarter}  ${formatMoney(cents)}`)
+ }
+--- a/src/reports/refunds.js
++++ b/src/reports/refunds.js
+@@ -1,4 +1,4 @@
+-import { money, pct } from '../legacy/format.js'
++import { formatMoney, formatPercent } from '../format/index.js'
+ 
+ // Refunds are negative amounts; the rate compares them with what was invoiced.
+ export function refundsReport(entries) {
+@@ -6,5 +6,5 @@
+   const refunded = refunds.reduce((sum, entry) => sum + entry.cents, 0)
+   const invoiced = entries.filter((entry) => entry.kind === 'invoice').reduce((sum, entry) => sum + entry.cents, 0)
+   const noun = refunds.length === 1 ? 'refund' : 'refunds'
+-  return `${refunds.length} ${noun}, ${money(refunded)}, ${pct(-refunded / invoiced)} of invoiced`
++  return `${refunds.length} ${noun}, ${formatMoney(refunded)}, ${formatPercent(-refunded / invoiced)} of invoiced`
+ }
+--- a/src/reports/taxes.js
++++ b/src/reports/taxes.js
+@@ -1,4 +1,4 @@
+-import { money } from '../legacy/format.js'
++import { formatMoney } from '../format/index.js'
+ 
+ const SALES_TAX = 0.0825
+ 
+@@ -7,5 +7,5 @@
+   const taxable = entries
+     .filter((entry) => entry.kind === 'invoice' || entry.kind === 'refund')
+     .reduce((sum, entry) => sum + entry.cents, 0)
+-  return `Sales tax at 8.25% of ${money(taxable)}: ${money(Math.round(taxable * SALES_TAX))}`
++  return `Sales tax at 8.25% of ${formatMoney(taxable)}: ${formatMoney(Math.round(taxable * SALES_TAX))}`
+ }
+--- a/src/reports/weekly.js
++++ b/src/reports/weekly.js
+@@ -1,4 +1,4 @@
+-import { day, money } from '../legacy/format.js'
++import { formatDate, formatMoney } from '../format/index.js'
+ 
+ const DAY_MS = 24 * 60 * 60 * 1000
+ 
+@@ -10,10 +10,10 @@
+ export function weeklyReport(entries) {
+   const totals = new Map()
+   for (const entry of entries) {
+-    const key = day(monday(entry.date))
++    const key = formatDate(monday(entry.date))
+     totals.set(key, (totals.get(key) ?? 0) + entry.cents)
+   }
+   return [...totals]
+     .sort(([a], [b]) => a.localeCompare(b))
+-    .map(([week, cents]) => `week of ${week}  ${money(cents)}`)
++    .map(([week, cents]) => `week of ${week}  ${formatMoney(cents)}`)
+ }
+--- a/src/reports/yearly.js
++++ b/src/reports/yearly.js
+@@ -1,12 +1,12 @@
+-import { day, money } from '../legacy/format.js'
++import { formatDate, formatMoney } from '../format/index.js'
+ 
+ export function yearlyReport(entries) {
+   const totals = new Map()
+   for (const entry of entries) {
+-    const key = day(entry.date).slice(0, 4)
++    const key = formatDate(entry.date).slice(0, 4)
+     totals.set(key, (totals.get(key) ?? 0) + entry.cents)
+   }
+   return [...totals]
+     .sort(([a], [b]) => a.localeCompare(b))
+-    .map(([year, cents]) => `${year}  ${money(cents)}`)
++    .map(([year, cents]) => `${year}  ${formatMoney(cents)}`)
+ }
