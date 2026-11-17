@@ -49,6 +49,9 @@ describe('engine model-control workers', () => {
     await turn('after model control')
     expect(d.coresStarted()).toBe(1)
     expect(!!harnessdProcesses(d).get('engine-claude')).toBe(!inline)
+    // Since #4413 a Claude Code list read slower than the worker's 5 s deadline made engine-claude exit and be
+    // restarted on every models_list. Inline there is no engine-claude service, so this can only match out of it.
+    expect(d.log()).not.toMatch(/service engine-claude started \(pid \d+\) · restart/)
   })
 
   // Its endpoint is in its own environment, which only its hook reads: the hook says it is routed through OpenRouter,
