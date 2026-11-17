@@ -130,3 +130,13 @@ Final TypeScript validation passed, actual 0, 5.995 s, with zero owned process-g
 (`/tmp/core-launch-settings-types9.log` and `/tmp/core-launch-settings-types9-receipt.json`). The prior typecheck8
 log is empty but its terminal exit was lost across context compaction, so it is retained as exit-unknown and is not
 counted as a pass. No runtime source changed while typecheck9 ran.
+
+### Generic route contract review
+
+A mixed generic/alias regression confirms that public `setup_prepare` and `setup_commit` force installation kind and
+refuse the optional settings purpose; only the file aliases accept it. With seven unsettled alias renderers, generic
+settings are refused, another optional alias is busy, and required setup remains admitted. The settings service file
+passes 17/17, actual 0 (`/tmp/core-launch-settings-generic-guard-green.log`). No runtime correction was necessary.
+A separate negative control temporarily removed the two existing kind-forcing wrappers and failed the new generic
+commit assertion (`/tmp/core-launch-settings-generic-guard-red.log`); the original runtime was restored byte-for-byte.
+That result demonstrates the existing guard, not a new failing-product regression or implementation fix.

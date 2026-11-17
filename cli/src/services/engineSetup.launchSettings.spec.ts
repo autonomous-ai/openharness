@@ -136,3 +136,24 @@ it('refuses missing renderers and invalid settings inputs without preparing, and
     expect(warning).toHaveBeenCalledExactlyOnceWith('[engine-setup] SETTINGS_PREPARATION_FAILED')
   } finally { warning.mockRestore() }
 })
+
+it('refuses generic settings requests beside alias work without consuming the reserved required slot', async () => {
+  setup.prepareFiles = vi.fn(async () => candidate())
+  const ready = await request('setup_files_prepare', { request: 'alias-token', ...input() })
+  expect(ready.preparation).toBeTypeOf('string')
+  const commit = { ...ready, kind: 'files', purpose: 'launchSettings', engine: 'codex', request: 'alias-token', allowed: true }
+  expect(await request('setup_commit', commit)).toEqual({ installation: { complete: false, detail: 'Waiting for engine setup.' } })
+  expect(await request('setup_files_commit', commit)).toEqual({ files: candidate() })
+
+  const settle: ((value: null) => void)[] = []
+  setup.prepareFiles = vi.fn(() => new Promise<null>(resolve => settle.push(resolve)))
+  const pending = Array.from({ length: 7 }, (_, index) => request('setup_files_prepare', { request: `mixed-${index}`, ...input() }))
+  try {
+    expect(await request('setup_prepare', { kind: 'files', request: 'generic-overflow', ...input() }))
+      .toEqual({ installation: { complete: false, detail: 'Waiting for engine setup.' } })
+    expect(setup.prepareFiles).toHaveBeenCalledTimes(7)
+    expect(await request('setup_files_prepare', { request: 'alias-overflow', ...input() })).toMatchObject({ error: 'SETUP_BUSY' })
+    expect(await request('setup_download', { engine: 'codex' })).toEqual({ downloading: false })
+    expect(setup.downloading).toHaveBeenCalledOnce()
+  } finally { settle.forEach(done => done(null)); await Promise.all(pending) }
+})
