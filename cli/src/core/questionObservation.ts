@@ -22,18 +22,14 @@ export function questionFrameBytes(frame: unknown, limit: number): number | null
   let bytes = 0
   const add = (size: number): boolean => (bytes += size) <= limit
   const string = (value: string): boolean => {
-    if (!add(2)) return false
-    for (let i = 0; i < value.length; i++) {
-      const code = value.charCodeAt(i)
-      let size: number
-      if (code === 34 || code === 92 || code === 8 || code === 9 || code === 10 || code === 12 || code === 13) size = 2
-      else if (code < 32) size = 6
-      else if (code < 128) size = 1
-      else if (code < 2048) size = 2
-      else if (code >= 0xd800 && code <= 0xdbff && value.charCodeAt(i + 1) >= 0xdc00 && value.charCodeAt(i + 1) <= 0xdfff) { size = 4; i++ }
-      else if (code >= 0xd800 && code <= 0xdfff) size = 6
-      else size = 3
-      if (!add(size)) return false
+    // A maximum legal Cloud frame held the core for 101 ms; this count dominated its CPU profile.
+    // UTF-16 length is a lower bound, so even an unbounded inline value is refused before a native scan.
+    if (value.length > limit - bytes - 2 || !add(2 + Buffer.byteLength(value))) return false
+    const escapes = /(["\\\b\t\n\f\r]+)|([\u0000-\u0007\u000b\u000e-\u001f]+)|([\ud800-\udfff]+)/gu
+    for (let run = escapes.exec(value); run; run = escapes.exec(value)) {
+      // Unicode mode excludes valid surrogate pairs; JSON expands each lone surrogate from 3 to 6 bytes.
+      const extra = run[1] ? 1 : run[2] ? 5 : 3
+      if (!add(run[0].length * extra)) return false
     }
     return true
   }

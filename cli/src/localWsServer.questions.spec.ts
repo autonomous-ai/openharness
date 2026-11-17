@@ -83,6 +83,45 @@ it('refuses oversized JSON before serialization and closes only that observer', 
   expect(sinks[1].sendFrame({}, quota)).toBe(true)
 })
 
+it('refuses a string whose length exceeds the whole budget without scanning its content', async () => {
+  const sinks = await setup(2), settled = vi.fn(), text = 'x'.repeat(LIMIT + 1)
+  const charCodeAt = String.prototype.charCodeAt, byteLength = Buffer.byteLength
+  let scans = 0
+  const code = vi.spyOn(String.prototype, 'charCodeAt').mockImplementation(function(this: string, index) {
+    if (this === text) { scans++; throw new Error('OVERSIZED_STRING_SCANNED') }
+    return charCodeAt.call(this, index)
+  })
+  const size = vi.spyOn(Buffer, 'byteLength').mockImplementation((value, encoding) => {
+    if (value === text) { scans++; throw new Error('OVERSIZED_STRING_SCANNED') }
+    return byteLength(value, encoding)
+  })
+  const stringify = vi.spyOn(JSON, 'stringify')
+  const closed = new Promise<[number, string]>(resolve => clients[0].once('close', (code, reason) => resolve([code, reason.toString()])))
+  const sent = sinks[0].sendFrame({ data: text }, quota, settled)
+  const serialized = stringify.mock.calls.length
+  code.mockRestore(); size.mockRestore(); stringify.mockRestore()
+  expect(sent).toBe(false)
+  expect(scans).toBe(0)
+  expect(serialized).toBe(0)
+  expect(settled).toHaveBeenCalledExactlyOnceWith(false)
+  await expect(closed).resolves.toEqual([1013, 'QUESTION_OBSERVATION_TOO_LARGE'])
+  const received = new Promise<void>(resolve => clients[1].once('message', () => resolve()))
+  expect(sinks[1].sendFrame({}, quota)).toBe(true)
+  await received
+})
+
+it('accounts mixed escaped Unicode exactly at the physical frame and global byte boundary', async () => {
+  const sinks = await setup(2), held = holdWrites()
+  const frame = { text: 'a"中\u0000😀\\\ud800é\t\udc00'.repeat(32), padding: '' }
+  frame.padding = 'x'.repeat(LIMIT - Buffer.byteLength(JSON.stringify(frame)))
+  expect(Buffer.byteLength(JSON.stringify(frame))).toBe(LIMIT)
+  expect(sinks[0].sendFrame(frame, quota)).toBe(true)
+  expect(sinks[1].sendFrame({}, quota)).toBe(false)
+  held.callbacks[0]()
+  expect(sinks[0].sendFrame({}, quota)).toBe(true)
+  expect(sinks[0].sendFrame({ ...frame, padding: frame.padding + 'x' }, quota)).toBe(false)
+})
+
 it('bounds per-connection and global frame counts independently of bytes', async () => {
   const sinks = await setup(18), held = holdWrites()
   for (let connection = 0; connection < 16; connection++) {

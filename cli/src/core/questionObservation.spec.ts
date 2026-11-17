@@ -44,6 +44,28 @@ describe('question observation bytes', () => {
     stringify.mockRestore()
   })
 
+  it.each([
+    '"\\\b\t\n\f\r'.repeat(32),
+    '\u0000\u0007\u000b\u000e\u001f'.repeat(32),
+    '\ud800\ud801\udc00\udc01'.repeat(32),
+    'a"中\u0000😀\\\ud800é\t\udc00'.repeat(32),
+  ])('keeps exact budgets for escape runs and mixed Unicode %j', text => {
+    const frame = { [text]: [text, { notification: text }] }
+    const bytes = Buffer.byteLength(JSON.stringify(frame))
+    expect(questionFrameBytes(frame, bytes - 1)).toBeNull()
+    expect(questionFrameBytes(frame, bytes)).toBe(bytes)
+    expect(questionFrameBytes(frame, bytes + 1)).toBe(bytes)
+  })
+
+  it('counts every UTF-16 code unit, including surrogate pair boundaries, as JSON does', () => {
+    let text = ''
+    for (let code = 0; code <= 0xffff; code++) text += String.fromCharCode(code)
+    const frame = { text, pairs: ['\ud7ff\ud800\udc00\udfff\ue000', '\udbff\udfff', '\ud800\ud800\udc00'] }
+    const bytes = Buffer.byteLength(JSON.stringify(frame))
+    expect(questionFrameBytes(frame, bytes)).toBe(bytes)
+    expect(questionFrameBytes(frame, bytes - 1)).toBeNull()
+  })
+
   it('includes duplicated IDs, accepts the default service maximum and rejects unbounded inline content', () => {
     const requestId = `cloud_q_${'a'.repeat(6 * 1024 * 1024)}`
     const frame = { type: 'commander_question', agentId: 'cloud_a', dbSessionId: 'cloud_a', payload: {

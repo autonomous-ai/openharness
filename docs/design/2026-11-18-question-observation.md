@@ -120,3 +120,31 @@ Exact preflight counting rejects accessors and callable `toJSON` before they can
 value. A counting or serialization failure stays inside the physical sink and settles its callback once.
 The existing two-mode Wi-Fi e2e question case now closes its only window before asking from the device;
 its real-daemon run, merged stream accounting, full core gate and cost acceptance remain pending.
+
+## Maximum-frame responsiveness correction
+
+The frozen `787c737db6` / `bcd046627e` maximum-frame ABBA run retained all 60 measured samples,
+with one warmup and ten samples per route per worker. The matched legacy window's synchronous send
+median was 18.485 / 18.390 ms, with the same 18,886,467-byte complete-ID snapshot. The candidate-only
+observer's synchronous send median was 68.524 ms, maximum 92.606 ms; the core event-loop maximum was
+100.794 ms. This did not pass responsiveness acceptance, despite staying within the byte/frame budget.
+
+A separate bounded five-sample CPU diagnostic on the exact candidate traced 54.74% of non-idle sampled
+time to `questionFrameBytes`, including 44.15% in its character scan. Its emitted source locations and
+both live/snapshot stacks were checked, rather than attributing by minified function name. The diagnostic
+is not timing acceptance. Both runs proved actual zero outer/worker/receiver exits, physical socket closure,
+group/guardian/EOF cleanup, unchanged frozen hashes and private-root removal. The failed earlier fixture
+preparation remains separate evidence with zero measurement samples.
+
+The correction changes only string counting: refuse by UTF-16 length before any scan, count native UTF-8
+bytes, then scan runs requiring extra JSON escaping. Unicode regex mode excludes valid surrogate pairs;
+each lone surrogate needs three more bytes than native UTF-8 replacement. Only one bounded match is held
+at a time. Getter, `toJSON`, nesting, plain-object and exact pre-serialization refusal rules stay intact.
+Oracle tests cover repeated/alternating escape costs, every UTF-16 unit, valid pairs and orphan mixtures,
+and exact budget boundaries. The actual socket caller failed first because it scanned an already oversized
+string; the corrected path refuses it without a scan or serialization. Final frozen maximum-frame ABBA,
+ordinary cases and merged/native acceptance remain pending.
+
+The correction passes 35 focused counter/socket tests and TypeScript. Its 26 tests selected by the canonical
+core configuration independently give `questionObservation.ts` 100% in all four coverage measures, without
+relying on the socket spec that the core gate excludes.
