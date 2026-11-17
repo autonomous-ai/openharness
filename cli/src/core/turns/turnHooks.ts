@@ -104,12 +104,14 @@ export function createTurnHooks({
   }
   /** Each session's hook record. Bounded: a session's entry outlives it only until enough newer ones come. */
   const turns = new Map<string, HookTurn>()
-  /** The held end goes to the funnel, its turn closed before: what the funnel runs on it reads it closed. */
+  /** The person is no longer waited on (R4): its turn ended, a question closed, or the pane read clear. */
+  const waitOver = (sessionId: string): void => { const turn = turns.get(sessionId); if (turn) turn.waitAt = undefined }
+  /** The held end goes to the funnel, its turn closed and its wait over before: what the funnel runs on it reads so. */
   const deliver = (sessionId: string): boolean => {
     const turn = turns.get(sessionId)
     if (!turn?.held) return false
     const { end } = turn.held
-    turn.held = undefined
+    turn.held = turn.waitAt = undefined
     emit(sessionId, [end])
     return true
   }
@@ -172,6 +174,7 @@ export function createTurnHooks({
       const parser = liveParsers.get(sessionId)
       if (!parser || parser.engine !== resolve(sessionId)?.engine || parser.snapshot().identity !== identity) return false
       parser.closeTurn('hook')
+      waitOver(sessionId)
       afterStop?.(resolve(sessionId)!)
       return true
     },
@@ -319,12 +322,9 @@ export function createTurnHooks({
     /** The turn's own end is read and held for its Stop: the turn is still open (R7). */
     held: (sessionId: string): boolean => !!turns.get(sessionId)?.held,
     /** The turn was closed without its end (a cancel): what is held goes, unsent, and its wait ends. */
-    closed: (sessionId: string): void => {
-      const turn = turns.get(sessionId)
-      if (turn) { turn.held = undefined; turn.waitAt = undefined }
-    },
-    /** The watcher: a question closed, or the pane read clear (R4). */
-    waitOver: (sessionId: string): void => { const turn = turns.get(sessionId); if (turn) turn.waitAt = undefined },
+    closed: (sessionId: string): void => { const turn = turns.get(sessionId); if (turn) turn.held = turn.waitAt = undefined },
+    /** The watcher: a question closed, or the pane read clear. */
+    waitOver,
     forget: (sessionId: string): void => { turns.delete(sessionId) },
   }
 }
