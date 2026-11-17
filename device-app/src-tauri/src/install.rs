@@ -390,6 +390,26 @@ mod tests {
     }
 
     #[test]
+    fn a_logged_line_is_redacted_before_it_is_cut() {
+        // An address across each cut: cut first, `someone` no longer reads as an address and the log would keep it.
+        let step = format!("▸ {} someone@example.com", "a".repeat(STEP_LINE_CHARS - 10));
+        let failed = format!("{} someone@example.com", "a".repeat(LINE_CHARS - 8));
+        let ran = install_with(vec![ended(1, &format!("{step}\n"), &format!("{failed}\n"))], true);
+        let shown = [format!("▸ {}", "a".repeat(LINE_CHARS - 2)), format!("{} someone", "a".repeat(LINE_CHARS - 8))];
+        // The screen is the person's own: it keeps the cut lines as they are.
+        assert_eq!(ran.result, Err(shown.to_vec()));
+        assert_eq!(
+            ran.log,
+            [
+                format!("install: ▸ {} <email>", "a".repeat(STEP_LINE_CHARS - 10)),
+                "install: --host exit 1".to_string(),
+                format!("install: last: {}", shown[0]),
+                format!("install: last: {} <email>", "a".repeat(LINE_CHARS - 8)),
+            ]
+        );
+    }
+
+    #[test]
     fn the_system_shell_is_for_macos() {
         assert_eq!(system_shell().is_some(), cfg!(target_os = "macos"));
     }
