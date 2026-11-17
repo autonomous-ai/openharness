@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -234,5 +234,31 @@ describe('stage', () => {
     unstage(st)
 
     expect(existsSync(st.root)).toBe(false)
+  })
+
+  it('unstage removes the folder claude made for the run in the profile, by its exact name, and nothing else there', () => {
+    const profile = mkdtempSync(join(tmpdir(), 'dial-skill-profile-'))
+    const projects = mkdtempSync(join(tmpdir(), 'dial-skill-projects-'))
+    try {
+      // As in an Orca profile, projects/ links into ~/.claude/projects.
+      symlinkSync(projects, join(profile, 'projects'))
+      for (const dir of ['backups', 'seed-admin']) mkdirSync(join(profile, dir))
+      vi.stubEnv('CLAUDE_CONFIG_DIR', profile)
+      const st = staging('claude', { skill: true })
+      const other = staging('claude', { skill: true })
+      // Claude Code names a project's folder after its path, every character but a letter or digit made '-'.
+      const folder = (path: string) => path.replace(/[^a-zA-Z0-9]/g, '-')
+      const lookAlikes = [folder(other.repo), `${folder(st.repo)}-2`, folder(st.root), folder(dirname(st.root))]
+      for (const name of [folder(st.repo), ...lookAlikes]) mkdirSync(join(projects, name, 'memory'), { recursive: true })
+
+      unstage(st)
+
+      expect(readdirSync(projects).sort()).toEqual(lookAlikes.sort())
+      expect(readdirSync(profile).sort()).toEqual(['backups', 'projects', 'seed-admin'])
+      expect(lstatSync(join(profile, 'projects')).isSymbolicLink()).toBe(true)
+    } finally {
+      rmSync(profile, { recursive: true, force: true })
+      rmSync(projects, { recursive: true, force: true })
+    }
   })
 })
