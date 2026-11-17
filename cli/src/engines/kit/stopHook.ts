@@ -22,7 +22,8 @@ export async function closeTurnOnStop(
   // Stop reached the daemon 6 s late, after the next prompt's turn had opened, and force-closed that turn
   // with a question open in it, which was then never shown. So:
   // - a Stop its engine ran before the session's latest prompt hook is about an earlier turn, and closes
-  //   nothing (the time each hook was run comes with it, hook/notify.mjs);
+  //   nothing (the time each hook was run comes with it, hook/notify.mjs); the end held for its own turn still goes on,
+  //   as a hook of the person's can block that prompt, which then opens no turn;
   // - otherwise it is about the turn whose end is held, else the turn open as it arrives, and not one opened after
   //   that (read in the drain below), whose prompt hook has not come in yet; a StopFailure closes whichever turn is
   //   open or held.
@@ -39,15 +40,10 @@ export async function closeTurnOnStop(
   const openedAfter = (st: Turn): boolean => firedAt !== undefined && st.openedAt !== undefined && st.openedAt > firedAt
   const arrived = turnState(sessionId), held = heldEnd(sessionId)
   const about = held ? held.identity : arrived?.turnOpen ? arrived.identity : null
-  const itsTurn = (st: Turn): boolean => !stale && !openedAfter(st) && (status === 'error' || (about !== null && st.identity === about))
+  const ofIt = (st: Turn): boolean => !openedAfter(st) && (status === 'error' || st.identity === about)
   /** Says so when the open turn's own opening time is what kept the hook from closing it. */
   const leftAsLater = (st: LiveTurn | undefined): void => {
     if (st?.turnOpen && !stale && openedAfter(st)) console.log(`[turn] ${sid(sessionId)} ${hook} ran before the open turn opened: left open`)
-  }
-  /** The end the transcript read for this Stop's turn goes on. */
-  const delivered = (): boolean => {
-    const end = heldEnd(sessionId)
-    return !!end && itsTurn(end) && deliverHeldEnd(sessionId)
   }
   await drain(sessionId)
   // A Stop hook is the one precise "the engine stopped writing" signal we get. When the mirror is
@@ -58,16 +54,18 @@ export async function closeTurnOnStop(
   // The lead's wrap-up after its last subagent lands about 200 ms after this Stop (lib/commander.ts): an end held
   // since before an earlier hook of its turn comes before it.
   if (heldBeforeHook) { await new Promise(resolve => setTimeout(resolve, graceMs)); await drain(sessionId) }
-  if (delivered()) return
+  // The end the transcript read for this Stop's turn goes on.
+  const end = heldEnd(sessionId)
+  if (end && ofIt(end) && deliverHeldEnd(sessionId)) return
   const open = turnState(sessionId)
-  if (!open?.turnOpen || !itsTurn(open)) { leftAsLater(open); return } // its end already went on → nothing to do
+  if (!open?.turnOpen || stale || !ofIt(open)) { leftAsLater(open); return } // its end already went on → nothing to do
   // Still open: the Stop hook beats the transcript's final text by about 200 ms (lib/commander.ts). Its end goes on
   // the moment it is read; none within the grace and a re-poll, and only then a force-close of a wedged turn, whose
   // assistant text is on disk by now.
   awaitEnd(sessionId, open.identity)
   await new Promise(resolve => setTimeout(resolve, graceMs)); await drain(sessionId)
   const st = turnState(sessionId)
-  if (st?.turnOpen && itsTurn(st) && closeTurn(sessionId, st.identity)) {
+  if (st?.turnOpen && ofIt(st) && closeTurn(sessionId, st.identity)) {
     console.log(`[turn] ${sid(sessionId)} force-closed by ${hook} hook (after grace)`)
     emit(sessionId, [{ type: 'turn_ended', payload: {} }])
   } else leftAsLater(st)
