@@ -730,6 +730,8 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   the check, a label that never changes. Sound is the first.
 - A choice among named options in the menu is one native submenu of check items,
   the one in force checked. Notifications is the first.
+- A menu action that asks for more before it is done ends in `…`; one that acts at
+  once has none.
 - The dial line names no firmware version: only `Updating to <version>`
   while the dial updates. **About** opens macOS's standard About panel,
   brought to the front, with the app's name and version and one credits line,
