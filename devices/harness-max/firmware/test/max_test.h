@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "max_ui_draw.h"   // max_hit
 #include "max_ui_internal.h"
 #include "pro_canvas.h"
 #include "theme.h"
@@ -30,6 +31,25 @@ static inline void render(uint32_t now)
 {
     ht_scene_clear(&S, ht_rgb(HT_THEME_CANVAS));
     max_ui_render(&S, now);
+}
+// The middle of lane i as the last render drew it.
+static inline int lane_x(int i) { return max_m.lane_box[i].x + max_m.lane_box[i].w / 2; }
+static inline int lane_y(int i) { return max_m.lane_box[i].y + max_m.lane_box[i].h / 2; }
+// The room's card and buttons as the finger reads them, wherever a view draws them: the card is the room agent's as it
+// stands now, and each button asked for gets a box of its own along the top edge of the glass, above every lane.
+static inline void room_card(void)
+{
+    const max_agent_t *a = max_find(max_m.selected);
+    CHECK(a != NULL);
+    max_copy(max_m.card_id, sizeof max_m.card_id, a->id);
+    max_m.card_key = max_card_key(a);
+}
+static inline const max_hit_t *room_hit(max_hit_kind_t kind, int arg)
+{
+    const int i = max_m.hit_count;
+    max_hit(i * 100, 0, 90, 10, kind, arg);
+    CHECK(max_m.hit_count == i + 1);
+    return &max_m.hits[i];
 }
 // The first text run holding `t`, or NULL.
 static inline const ht_run_t *text_run(const char *t)

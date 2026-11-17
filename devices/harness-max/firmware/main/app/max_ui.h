@@ -17,7 +17,7 @@
 #include "pro_app_api.h"            // pro_agent_row_t
 #include "terminal.h"               // ht_scene_t
 
-// A fresh model: link down, no agents, nothing selected, no notice, no update.
+// A fresh model: link down, no agents, nobody in the room, no notice, no update.
 void max_ui_reset(void);
 
 // ---- feeds (the cable_link task, through max_app.c) ----
@@ -40,7 +40,7 @@ bool max_ui_answer_receipt(const char *id, const char *fetch, const char *token,
                            const char *error, uint32_t now_ms);
 bool max_ui_summary(const char *id, const char *text, const char *recap, bool restore, pod_tier_t tier,
                     uint32_t now_ms);
-// The computer's window moved to this agent: it becomes the selected lane, and its page is shown.
+// The computer's window moved to this agent: the room shows it. Not a person at the bar.
 bool max_ui_focus(const char *id);
 
 // ---- New Harness ----
@@ -112,11 +112,11 @@ void max_ui_render(ht_scene_t *scene, uint32_t now_ms);
 // ---- the finger (touch task), landscape glass coordinates ----
 typedef enum {
     MAX_ACT_NONE,
-    MAX_ACT_OPEN,    // a lane was tapped: it is now the selected one; send agent.open for agent_id
-    MAX_ACT_TALK,    // the Talk slot was tapped while idle: record for agent_id (the selected agent)
-    MAX_ACT_SEND,    // the Talk slot was tapped while recording: finish and send
+    MAX_ACT_OPEN,    // a lane was tapped: the room now shows it; send agent.open for agent_id
+    MAX_ACT_TALK,    // the room's pet was tapped: record for agent_id (the room's agent)
+    MAX_ACT_SEND,    // Send while recording: finish and send (agent_id: the recording's, "" for the form's)
     MAX_ACT_NEW,     // New on the rail: name a form and open it (max_ui_form_open)
-    MAX_ACT_SAY,     // the Talk slot while the form takes a spoken name: record one for form_id at revision
+    MAX_ACT_SAY,     // the form's Say: record a spoken name for form_id at revision
     MAX_ACT_CANCEL,  // Cancel while recording: stop and send nothing
 } max_act_kind_t;
 typedef struct {
@@ -127,9 +127,10 @@ typedef struct {
 } max_act_t;
 // One contact at a time: down with the first point, then moves, then up (down false). A tap acts on the lift; a
 // sideways swipe turns the page of lanes, or moves the form. Returns what the app must do (most calls: MAX_ACT_NONE);
-// a tap on a card's button or the form queues its message in the outbox instead.
+// a tap on a card's button or the form queues its message in the outbox instead. While a recording is up only its Send
+// and Cancel act. Every lift is a person at the bar: for MAX_QUIET_MS no question takes the room.
 max_act_t max_ui_touch(bool down, int x, int y, uint32_t now_ms);
 void max_ui_touch_cancel(void);
 
-// The selected agent's id, or NULL when no agent is selected.
+// The room's agent's id, or NULL when there are no agents.
 const char *max_ui_selected(void);
