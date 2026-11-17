@@ -961,12 +961,10 @@ describe('what the person removed stays removed, and Harness\'s own is kept curr
     expect(r.counted).toEqual([['codex', 'failed', 'write'], ['codex', 'set up']])
   })
 
-  it('a recorded folder whose skill cannot be brought current waits out its hour through an attach', () => {
+  it('a recorded folder whose skill cannot be brought current is tried once, and waits out its hour through an attach', () => {
     const r = rig()
-    const listedHome = folder()
-    // No default home: the recorded folder is the pass's one write.
-    rmSync(r.codexHome, { recursive: true })
-    const skills = skillsAt(listedHome)
+    // The default home's, so the pass's look at the record and at the home both meet it.
+    const skills = skillsAt(r.codexHome)
     oldSkillIn(skills)
     dialOnce(r.dataDir, { claude: [], codex: [skills] })
     // A dial folder that takes no new file.
@@ -974,12 +972,13 @@ describe('what the person removed stays removed, and Harness\'s own is kept curr
     r.writer.attached()
     r.clock.at = 120_000
     r.writer.attached()
+    r.writer.scanned([ownerIn(r.codexHome)])
     chmodSync(join(skills, 'dial'), 0o700)
     expect(r.counted).toEqual([['codex', 'failed', 'write']])
 
     r.clock.at = 3_600_000
     r.writer.attached()
-    expect(hasSkill(listedHome)).toBe(true)
+    expect(hasSkill(r.codexHome)).toBe(true)
     expect(r.counted).toEqual([['codex', 'failed', 'write'], ['codex', 'updated']])
   })
 })
