@@ -389,14 +389,16 @@ describe('VS Code\'s windows', () => {
     const one = h.open(W1)
     h.terminals.show({ window: W1, shell: 700 }, false)
     expect(one.lines).toEqual([{ show: 700 }])
-    // While a line drains, the tap that waits keeps its ask; a rest after it replaces both.
+    // While a line drains, the tap that waits keeps its ask, and so does a rest after it on the same shell.
     h.terminals.show({ window: W1, shell: 710 }, true)
+    h.terminals.show({ window: W1, shell: 710 }, false)
     one.drain()
     expect(one.lines).toEqual([{ show: 700 }, { show: 710, raise: true }])
+    // A rest on another shell replaces both.
     h.terminals.show({ window: W1, shell: 720 }, true)
-    h.terminals.show({ window: W1, shell: 720 }, false)
+    h.terminals.show({ window: W1, shell: 730 }, false)
     one.drain()
-    expect(one.lines).toEqual([{ show: 700 }, { show: 710, raise: true }, { show: 720 }])
+    expect(one.lines).toEqual([{ show: 700 }, { show: 710, raise: true }, { show: 730 }])
   })
 
   it('show answers false once the window\'s stream has ended', () => {
