@@ -5,7 +5,7 @@
  * the extension cli.js carries. It runs in the `harness` command's own process (`harness device vscode …`) and in the
  * devices' process, which brings an installed extension current; never in the core's.
  */
-import { execFile } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { closeSync, constants, existsSync, fstatSync, mkdtempSync, openSync, readSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
@@ -46,8 +46,6 @@ const APP = 'Visual Studio Code.app'
 const VSIX = 'harness-device.vsix'
 /** What a version in VS Code's record may be before it is printed or compared: no path, no markup, no line. */
 const VERSION = /^[0-9A-Za-z.+-]{1,64}$/
-/** `code --install-extension` says a line or two; past this it is not VS Code's CLI talking. */
-const MAX_OUTPUT_BYTES = 1024 * 1024
 const FAILED = { vscode: 'off', error: 'failed' } as const
 
 /** Where VS Code is: its app on a Mac, its `code` on Linux; null when it is not there and on any other platform. */
@@ -195,15 +193,27 @@ function readBounded(path: string, maxBytes: number): string | null {
   }
 }
 
-/** [file] run with no shell and its stdin closed. Its time ends it with SIGKILL: a `code` that does not end on TERM
- *  would hold the menu's click or the devices' update. */
+/** [file] run with no shell, reading and writing nothing: no output of its is used. Its time ends it with SIGKILL: a
+ *  `code` that does not end on TERM would hold the menu's click or the devices' update. */
 function runFile(file: string, args: readonly string[], timeoutMs: number): Promise<{ code: number | null; timedOut: boolean }> {
   return new Promise((resolve) => {
-    const child = execFile(file, args, { timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: MAX_OUTPUT_BYTES }, (error) => {
-      // Only the timeout's kill marks the error `killed`; a missing file or output past the bound has no exit code.
-      resolve({ code: !error ? 0 : typeof error.code === 'number' ? error.code : null, timedOut: error?.killed === true })
+    // A process group of its own, and the time kills the group: VS Code's `code` on macOS and Linux is a script that
+    // starts Electron as a child and waits for it, so a kill of the script alone would leave the install running.
+    const child = spawn(file, args, { detached: true, stdio: 'ignore' })
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      try { process.kill(-child.pid!, 'SIGKILL') } catch { /* the group ended as its time did */ }
+    }, timeoutMs)
+    // A file that could not start emits `error` and no `exit`.
+    child.on('error', () => {
+      clearTimeout(timer)
+      resolve({ code: null, timedOut: false })
     })
-    child.stdin?.end()
+    child.on('exit', (code) => {
+      clearTimeout(timer)
+      resolve({ code, timedOut })
+    })
   })
 }
 
