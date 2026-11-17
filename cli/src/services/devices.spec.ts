@@ -2,7 +2,7 @@
 // they say reaches the core through its API alone, and the fleet failing costs the dial nothing.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
 import { AppFilter, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
@@ -18,8 +18,9 @@ import { routeVoiceTask } from '../lib/voiceRouter.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, ServiceUnavailableError, type CoreApi, type CorePorts, type DevicesPort } from '../core/api.js'
 import type { ObservedAsked, ObservedHookEvent } from '../core/observedHook.js'
 import { createServiceHost } from '../core/serviceHost.js'
+import { claudeFound, type ClaudeRun } from '../devices/claudePlugin.js'
 import { DIAL_SKILL } from '../devices/dialSkill.js'
-import { writeAnswer } from '../devices/dialSkillFiles.js'
+import { readSetup, writeSetup } from '../devices/dialSkillFiles.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { STOP_HOOK_GRACE_MS } from '../core/turns/turnHooks.js'
 import type { FleetEvent } from '../cable/machineFleet.js'
@@ -314,7 +315,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty'] } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const ports: CorePorts = emptyPorts()
   const onExit = vi.fn()
@@ -340,6 +341,8 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     onCoreGone: (run) => { gone.push(run) },
     listen: over.listen,
     tty: over.tty,
+    // A `claude` that finds none unless the spec gives its own: no spec runs the developer's. null leaves it out.
+    claude: over.claude === null ? undefined : over.claude ?? (async () => null),
   })
   return { core, ports, port: ports.devices as DevicesPort, requests, onExit, gone }
 }
@@ -5604,7 +5607,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
   })
 })
 
-describe('the dial skill, written from the devices\' own process (cable/dialSkillWriter.ts)', () => {
+describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', () => {
   let homes: string
   let saved: { claude: string; codex: string }
   beforeEach(() => {
@@ -5613,7 +5616,6 @@ describe('the dial skill, written from the devices\' own process (cable/dialSkil
     env.CLAUDE_PROJECTS_DIR = join(homes, 'claude', 'projects')
     env.CODEX_HOME = join(homes, 'codex')
     mkdirSync(env.CODEX_HOME)
-    writeAnswer(dataDir, 'codex', true)
   })
   afterEach(() => {
     env.CLAUDE_PROJECTS_DIR = saved.claude
@@ -5624,13 +5626,59 @@ describe('the dial skill, written from the devices\' own process (cable/dialSkil
     const file = join(home, 'skills', 'dial', 'SKILL.md')
     return existsSync(file) ? readFileSync(file, 'utf8') : undefined
   }
+  const claudeHome = () => dirname(env.CLAUDE_PROJECTS_DIR)
+  /** A dial attached on this computer once. */
+  const dialOnce = () => writeSetup(dataDir, { dial: true, homes: { claude: [], codex: [] } })
+  /** A `claude` 2.1.287 with no plugin yet: each call recorded, and each home it was looked for in. */
+  const fakeClaude = () => {
+    const calls: string[] = []
+    const looked: string[] = []
+    const run: ClaudeRun = async (args) => {
+      calls.push(args.join(' '))
+      return { code: 0, stdout: args[0] === '--version' ? '2.1.287 (Claude Code)\n' : args.includes('--json') ? '[]' : '', stderr: '' }
+    }
+    const found: NonNullable<DevicesDeps['claude']> = async (home) => {
+      looked.push(home)
+      return run
+    }
+    return { calls, looked, found }
+  }
 
-  it('the dial skill is written as the devices start', () => {
+  it('a dial\'s first attach sets the agents up', async () => {
+    const claude = fakeClaude()
+    start({ faults: ['fleet'], listen: fakeListener().listen, claude: claude.found })
+    expect(held(env.CODEX_HOME)).toBeUndefined()
+
+    seen.host.watching!(true)
+
+    expect(held(env.CODEX_HOME)).toBe(DIAL_SKILL)
+    await vi.waitFor(() => expect(claude.calls).toContain('plugin install harness-device@openharness --scope user'))
+    expect(claude.looked).toEqual([claudeHome()])
+    expect(logs).toContain('[device] dial setup · codex · set up')
+    expect(logs).toContainEqual(expect.stringMatching(/^\[device\] dial setup · day \d{4}-\d\d-\d\d · claude set up 0 updated 0 failed 0 left removed 0 · codex set up 1 updated 0 failed 0 left removed 0$/))
+  })
+
+  it('the devices\' start on a computer that never had a dial writes nothing', () => {
+    // Claude Code's plugin already on, as a person may have turned it on by hand.
+    mkdirSync(claudeHome())
+    writeFileSync(join(claudeHome(), 'settings.json'), JSON.stringify({ enabledPlugins: { 'harness-device@openharness': true } }))
+    const claude = fakeClaude()
+
+    start({ faults: ['fleet'], listen: fakeListener().listen, claude: claude.found })
+
+    expect(held(env.CODEX_HOME)).toBeUndefined()
+    expect(held(claudeHome())).toBeUndefined()
+    expect(existsSync(join(dataDir, 'dial-setup.json'))).toBe(false)
+    expect(claude.looked).toEqual([])
+  })
+
+  it('once a dial attached, the devices\' start sets the homes up', () => {
+    dialOnce()
     start({ faults: ['fleet'], listen: fakeListener().listen })
     expect(held(env.CODEX_HOME)).toBe(DIAL_SKILL)
   })
 
-  it('a scan\'s owners reach the dial skill writer', async () => {
+  it('a scan\'s owners reach the dial setup', async () => {
     vi.useFakeTimers()
     // A Codex app-server: no terminal, and no row, in a home the daemon does not know.
     const other = join(homes, 'codex-other')
@@ -5644,30 +5692,53 @@ describe('the dial skill, written from the devices\' own process (cable/dialSkil
     await vi.waitFor(() => expect(held(other)).toBe(DIAL_SKILL))
   })
 
+  it('with no claude given, the daemon\'s own lookup is used and finds none', async () => {
+    // An empty PATH and home: no `claude` of the developer's is found, or run.
+    const empty = mkdtempSync(join(homes, 'path-'))
+    vi.stubEnv('PATH', empty)
+    vi.stubEnv('HOME', empty)
+    dialOnce()
+
+    start({ faults: ['fleet'], listen: fakeListener().listen, claude: null })
+
+    expect(held(env.CODEX_HOME)).toBe(DIAL_SKILL)
+    // One lookup pass at a time is shared (lib/engineBin.ts): once this one ends, the start's has, and only promises are
+    // left of its pass.
+    expect(await claudeFound(claudeHome())).toBeNull()
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(readSetup(dataDir).plugin).toBeUndefined()
+    expect(logs.filter((line) => line.startsWith('[device] dial setup · claude'))).toEqual([])
+  })
+
   it('a process with no uid writes the dial skill into no home', () => {
     // No uid owns a home, so none is taken as this user's.
     vi.spyOn(process, 'getuid').mockReturnValue(undefined as unknown as number)
     start({ faults: ['fleet'], listen: fakeListener().listen })
+    seen.host.watching!(true)
     expect(held(env.CODEX_HOME)).toBeUndefined()
   })
 
-  it('with the devices inside the core the dial skill is not written', () => {
-    start({ faults: ['fleet'] })
+  it('with the devices inside the core nothing is set up', () => {
+    const claude = fakeClaude()
+    start({ faults: ['fleet'], claude: claude.found })
+    seen.host.watching!(true)
     expect(held(env.CODEX_HOME)).toBeUndefined()
+    expect(existsSync(join(dataDir, 'dial-setup.json'))).toBe(false)
+    expect(claude.looked).toEqual([])
   })
 
-  it('a dial skill writer that fails costs the dial nothing', async () => {
+  it('a dial setup that fails costs the dial nothing', async () => {
     vi.useFakeTimers()
     readers.known.set('sess-9', 'terminal')
     readers.owners.set('sess-9', { engine: 'codex', pid: 77 })
     readers.rows.set('sess-9', { cwd: '/work/web', transcriptPath: null })
     readers.working.set('sess-9', false)
     start({ faults: ['fleet', 'skill'], listen: fakeListener().listen })
-    expect(held(env.CODEX_HOME)).toBeUndefined()
     expect(logs).toContain('[devices] skill failed · injected fault: skill')
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
-    // The scan goes on past the writer to list what it found.
+    // The scan goes on past the setup to list what it found.
     seen.host.watching!(true)
+    expect(held(env.CODEX_HOME)).toBeUndefined()
     await vi.waitFor(() => expect(readers.apps.mock.calls).toEqual([[[77]]]))
   })
 })
