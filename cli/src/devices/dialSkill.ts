@@ -1,8 +1,8 @@
 /**
  * The dial skill in one agent home's `skills/dial/SKILL.md`, the same for Claude Code and Codex (both read
- * `<home>/skills/<name>/SKILL.md`), so a session knows it can ring the dial. Harness writes and removes only its own
- * file, known by its marker line: anything else at that path is the person's. The `harness device` command and the
- * devices service both import it, so it loads nothing but Node's own modules.
+ * `<home>/skills/<name>/SKILL.md`), so a session knows it can ring the dial. Harness writes, refreshes and removes only
+ * its own file, known by its marker line: anything else at that path is the person's. The `harness device` command and
+ * the devices service both import it, so it loads nothing but Node's own modules.
  */
 import { randomUUID } from 'node:crypto'
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -10,9 +10,13 @@ import { join } from 'node:path'
 
 export const DIAL_SKILL_DESCRIPTION = 'The person has a Harness dial on their desk. Use it when you need them to do something you cannot: give information, act outside your reach (connect a VPN, sign in, plug in a device), or decide.'
 
-/** A YAML comment: both engines' front-matter parsers skip it, and Harness knows its own file by it, whatever the
- *  text around it, so a later release's text still reads as Harness's and is written over. */
-const DIAL_SKILL_MARKER = '# Written by Harness. Turn off the agent in Harness Device to remove it.'
+/** How every release's marker line opens, the one 0.6.58 wrote too: one rule knows them all, with no list of lines to
+ *  keep. The period tells it from Harness's other files (`# Written by Harness,`, `:` or ` (`), none of which sits at a
+ *  skill's path. */
+const MARKER_START = '# Written by Harness.'
+/** A YAML comment: both engines' front-matter parsers skip it, and Harness knows its own file by how it opens, whatever
+ *  the text around it, so a later release's text still reads as Harness's and is written over. */
+const DIAL_SKILL_MARKER = `${MARKER_START} Remove it with harness device claude disable or harness device codex disable.`
 
 /** The description is quoted: its `: ` ends a plain YAML scalar, and the engine would skip the skill without a word. */
 export const DIAL_SKILL = `---
@@ -80,8 +84,6 @@ export function skillsFolderOf(home: string, make: boolean, uid = ownUid()): str
   return ownDirectory(real, uid) === 'ok' ? real : null
 }
 
-/** A temp file, on disk before it is renamed into place: an engine, or a crash, never sees half a skill, which would read
- *  as the person's. */
 export function writeSkill(skills: string): 'written' | 'same' | 'theirs' | 'failed' {
   const now = held(skills)
   if (now === 'same' || now === 'theirs') return now
@@ -94,6 +96,23 @@ export function writeSkill(skills: string): 'written' | 'same' | 'theirs' | 'fai
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return 'failed'
   }
+  if (put(folder)) return 'written'
+  // Left empty, the folder this call made would be nobody's.
+  if (made) removeEmpty(folder)
+  return 'failed'
+}
+
+/** A recorded home: Harness's own file with other bytes is written again; one that is gone was removed by the person. */
+export function refreshSkill(skills: string): 'updated' | 'same' | 'gone' | 'theirs' | 'failed' {
+  const now = held(skills)
+  if (now === 'none') return 'gone'
+  if (now === 'same' || now === 'theirs') return now
+  return put(join(skills, 'dial')) ? 'updated' : 'failed'
+}
+
+/** DIAL_SKILL into [folder] through a temp file, on disk before it is renamed into place: an engine, or a crash, never
+ *  sees half a skill, which would read as the person's. */
+function put(folder: string): boolean {
   const temporary = join(folder, `.SKILL.md.${process.pid}.${randomUUID()}.tmp`)
   try {
     const fd = openSync(temporary, 'wx', 0o600)
@@ -104,12 +123,10 @@ export function writeSkill(skills: string): 'written' | 'same' | 'theirs' | 'fai
       closeSync(fd)
     }
     renameSync(temporary, join(folder, 'SKILL.md'))
-    return 'written'
+    return true
   } catch {
     rmSync(temporary, { force: true })
-    // Left empty, the folder this call made would be nobody's.
-    if (made) removeEmpty(folder)
-    return 'failed'
+    return false
   }
 }
 
@@ -174,7 +191,15 @@ export function skillOn(engine: 'claude' | 'codex', answer: boolean | undefined,
 }
 
 /**
- * Harness's own skill is a regular file, never a link to one, of at most 4 KiB whose front matter holds the marker line;
+ * Never once `disable` removed it; Codex otherwise; Claude Code while its plugin is on, so a plugin uninstalled through
+ * /plugin takes the skill away.
+ */
+export function skillWanted(engine: 'claude' | 'codex', removed: boolean, claudeSettings: string): boolean {
+  return !removed && (engine === 'codex' || claudePluginState(claudeSettings) === 'on')
+}
+
+/**
+ * Harness's own skill is a regular file, never a link to one, of at most 4 KiB whose front matter holds a marker line;
  * 'same' is that file holding exactly DIAL_SKILL. A `dial` that is a link or not a folder is the person's: nothing is
  * read or written through it.
  */
@@ -208,10 +233,10 @@ function held(skills: string): 'same' | 'ours' | 'none' | 'theirs' {
   }
 }
 
-/** The first line is `---`, and a line before the next `---` is the marker. Lines end with `\n`: a CRLF copy is the
- *  person's. */
+/** The first line is `---`, and a line before the next `---` starts with MARKER_START, so the line any release wrote is
+ *  Harness's. Lines end with `\n`: a CRLF copy is the person's. */
 function marked(text: string): boolean {
   const lines = text.split('\n')
   const end = lines.indexOf('---', 1)
-  return lines[0] === '---' && end > 0 && lines.slice(1, end).includes(DIAL_SKILL_MARKER)
+  return lines[0] === '---' && end > 0 && lines.slice(1, end).some((line) => line.startsWith(MARKER_START))
 }

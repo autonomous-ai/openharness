@@ -1,7 +1,9 @@
 // The dial skill's two files in the daemon's data folder, which outlive the devices' process. dial-skill.json says
 // whether each engine is On, and the skills folders the command wrote into; its one writer is the `harness device`
 // command. dial-skill-homes.json lists the skills folders the devices service wrote into; its one writer is that
-// service. A Turn off finds every folder in both.
+// service. A Turn off finds every folder in both. dial-setup.json is the devices service's own record of a dial's
+// setup: a dial attached here once, the CLI version that last set Claude Code's plugin up, and the skills folders it
+// wrote into. dial-skill.json also says what `harness device <engine> disable` removed, which that service leaves alone.
 import { closeSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
@@ -9,18 +11,29 @@ export type DialEngine = 'claude' | 'codex'
 
 export const DIAL_SKILL_FILE = 'dial-skill.json'
 export const DIAL_SKILL_HOMES_FILE = 'dial-skill-homes.json'
+export const DIAL_SETUP_FILE = 'dial-setup.json'
 /** Folders an engine's list holds at most: a few homes today, so ten times that still fits. */
 export const MAX_HOMES = 64
+/** What a day's tally counts of each engine's setup, in the order its line says them. */
+export const SETUP_COUNTS = ['set up', 'updated', 'failed', 'left removed'] as const
+export type SetupCount = typeof SETUP_COUNTS[number]
 
 /** Two full lists of the longest paths, with room for JSON's quotes and escapes: each file holds two lists. */
 const MAX_FILE_BYTES = 256 * 1024
 const MAX_PATH_BYTES = 1024
 const CONTROL = /\p{Cc}/u
+/** A CLI version: a value edited by hand is compared with this CLI's own, so nothing but a version is kept. */
+const VERSION = /^[0-9A-Za-z.+-]{1,64}$/
 
 /** A key is absent when the file gives that engine no answer. */
 export interface DialSkillAnswers { claude?: boolean; codex?: boolean }
 
 export interface DialSkillHomes { claude: string[]; codex: string[] }
+
+/** What `harness device <engine> disable` removed; a key is absent when it removed nothing. */
+export interface DialRemoved { claude?: true; codex?: true }
+
+export interface DialSetupRecord { dial: boolean; plugin?: string; homes: DialSkillHomes }
 
 /** [file] parsed as JSON; undefined when it is missing, unreadable, longer than [max] bytes or not JSON. */
 const readJson = (file: string, max: number): unknown => {
@@ -124,4 +137,55 @@ export function readHomes(dataDir: string): DialSkillHomes {
 /** Kept as a read keeps them, so the file never holds a folder a Turn off would not find. */
 export function writeHomes(dataDir: string, homes: DialSkillHomes): string | undefined {
   return writeJson(join(dataDir, DIAL_SKILL_HOMES_FILE), { claude: homesOf(homes.claude), codex: homesOf(homes.codex) })
+}
+
+/** Only true is a removal: the old menu's booleans at the top of the file are another thing and are not read. */
+const removedOf = (file: Record<string, unknown>): DialRemoved => {
+  const marks = fields(file.removed)
+  const removed: DialRemoved = {}
+  if (marks.claude === true) removed.claude = true
+  if (marks.codex === true) removed.codex = true
+  return removed
+}
+
+export function readRemoved(dataDir: string): DialRemoved {
+  return removedOf(settingOf(dataDir))
+}
+
+/**
+ * undefined once saved; else the error's code. [written], when given, becomes the folders the command wrote into for
+ * [engine]; else they stay. The old menu's answers are not carried, so they leave the file at its next write.
+ */
+export function writeRemoved(dataDir: string, engine: DialEngine, removed: boolean, written?: string[]): string | undefined {
+  // Read right before the write, so the other engine's removal and folders stay.
+  const file = settingOf(dataDir)
+  const marks = removedOf(file)
+  if (removed) marks[engine] = true
+  else delete marks[engine]
+  const homes = writtenOf(file)
+  if (written) homes[engine] = homesOf(written)
+  return writeJson(join(dataDir, DIAL_SKILL_FILE), {
+    ...(marks.claude || marks.codex ? { removed: marks } : {}),
+    ...(homes.claude.length || homes.codex.length ? { homes } : {}),
+  })
+}
+
+/** A record damaged or edited by hand keeps only what it may hold, and one is written as a read keeps it, so the file
+ *  never holds a folder a `disable` would not find. */
+const setupOf = (value: unknown): DialSetupRecord => {
+  const file = fields(value)
+  return {
+    dial: file.dial === true,
+    ...(typeof file.plugin === 'string' && VERSION.test(file.plugin) ? { plugin: file.plugin } : {}),
+    homes: writtenOf(file),
+  }
+}
+
+export function readSetup(dataDir: string): DialSetupRecord {
+  return setupOf(readJson(join(dataDir, DIAL_SETUP_FILE), MAX_FILE_BYTES))
+}
+
+/** undefined once saved; else the error's code. */
+export function writeSetup(dataDir: string, record: DialSetupRecord): string | undefined {
+  return writeJson(join(dataDir, DIAL_SETUP_FILE), setupOf(record))
 }
