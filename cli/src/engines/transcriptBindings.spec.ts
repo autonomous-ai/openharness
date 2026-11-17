@@ -241,7 +241,7 @@ it('retains absent and present roots in an explicit operation scope', () => {
 it('retains the original root identity with a fresh budget after an initialization yield', () => {
   const scope = bindings.transcriptRootEvidence('codex', home)
   const retained = scope.retain()
-  const time = vi.spyOn(performance, 'now').mockReturnValue(4_000)
+  const time = vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 4_000)
   try {
     expect(() => scope.verify()).toThrow('deadline')
     expect(retained).not.toThrow()
