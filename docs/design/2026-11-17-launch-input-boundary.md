@@ -158,3 +158,11 @@ Source-scoped checks before integration:
   in fixtures; native Windows execution remains for the Windows release gate.
   No real guest account was created or used. No timed cost run has been made;
   root coordinates that separately from other validation load.
+
+The final process-wire audit found that `gridLaunchRequestIn` discarded the native
+Grok home already present in `GridLaunchRequest`. A service in its own process
+therefore built the default-home symlink even when core captured a custom home.
+The service now preserves that bounded request field; the borrowed target itself
+also observes the text bound. Against `1c5b2c2497`, the actual request/reply wire
+case, malformed native-home cases and just-over-limit target case failed first
+(6 failed / 47 passed, exit 1; `/tmp/harness-launch-boundary-wire-red.log`).

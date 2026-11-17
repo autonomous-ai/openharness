@@ -1,3 +1,4 @@
+import { launchText } from '../lib/launchContribution.js'
 import { gridAssignmentProcessesIn } from '../lib/gridAssignmentWire.js'
 /**
  * Models in its own process (`harness __service models`, with `HARNESSD_SERVICES=models`).
@@ -52,12 +53,14 @@ export function gridLaunchRequestIn(payload: Record<string, unknown>): GridLaunc
   const machine = payload.machine as Record<string, unknown> | null | undefined
   if (parsed.state !== 'ok' || !(ENGINES as readonly string[]).includes(text(payload.engine))) return null
   if (!machine || typeof machine !== 'object' || typeof machine.hermesSystemManaged !== 'boolean') return null
+  const grokHome = machine.grokHome
+  if (grokHome !== undefined && !launchText(grokHome)) return null
   const major = machine.opencodeMajor
   if (major !== undefined && major !== null && !Number.isSafeInteger(major)) return null
   return {
     engine: payload.engine as AgentEngine,
     override: parsed.override,
-    machine: { hermesSystemManaged: machine.hermesSystemManaged, ...(major !== undefined ? { opencodeMajor: major as number | null } : {}) },
+    machine: { hermesSystemManaged: machine.hermesSystemManaged, ...(grokHome !== undefined ? { grokHome } : {}), ...(major !== undefined ? { opencodeMajor: major as number | null } : {}) },
     ...(payload.refresh === true ? { refresh: true } : {}),
   }
 }

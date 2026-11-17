@@ -111,7 +111,7 @@ function engineLaunchIn(value: unknown, request: GridLaunchRequest): GridEngineL
     if (dir.links !== undefined) {
       if (!policy.borrow || !Array.isArray(dir.links) || dir.links.length !== 1) return null
       const link = dir.links[0], target = join(request.machine.grokHome ?? join(homedir(), '.grok'), policy.borrow)
-      if (!isRecord(link) || link.name !== policy.borrow || link.target !== target) return null
+      if (!isRecord(link) || link.name !== policy.borrow || !launchText(link.target) || link.target !== target) return null
       links.push({ name: policy.borrow, target })
     }
     configDir = { [policy.pointer]: policy.value, files: [{ name: policy.file, content: file.content }],
