@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -248,6 +248,16 @@ describe('writeSummaries', () => {
   it('gives the warnings with the headline, for the command to show', () => {
     appendFileSync(join(flow, 'baseline', 'errors.jsonl'), 'not json\n')
     expect(writeSummaries(flow).warnings).toEqual([`${join(flow, 'baseline', 'errors.jsonl')}:2: not JSON, skipped`])
+  })
+
+  it.each(['baseline/table.md', 'narrative.md', 'metrics.md'])('refuses to write %s through a symlink', (path) => {
+    const target = join(flow, 'target.md')
+    const text = '<!-- status -->\n<!-- /status -->\n<!-- aggregate -->\n<!-- /aggregate -->\n'
+    writeFileSync(target, text)
+    rmSync(join(flow, path), { force: true })
+    symlinkSync(target, join(flow, path))
+    expect(() => writeSummaries(flow)).toThrow(/symlink/)
+    expect(readFileSync(target, 'utf8')).toBe(text)
   })
 
   it('refuses a file whose markers are missing', () => {
