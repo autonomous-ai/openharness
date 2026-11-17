@@ -599,8 +599,9 @@ export class ObservedSource implements HostSource {
     if (e.event === 'session-end') {
       entry.endAt = now
       // No turn goes on in an ended session: one whose Stop waits out the grace (`claude -p` ends at once), a lead's whose
-      // subagents ran, or one cut short, is over, told as nothing.
-      if (entry.agent.state === 'working') this.setState(entry, 'idle', now)
+      // subagents ran, or one cut short, at its prompt too, is over, told as nothing. One left waiting would read working
+      // once the interrupt reached its transcript (checkWorking).
+      if (entry.agent.state === 'working' || entry.agent.state === 'needs-you') this.setState(entry, 'idle', now)
       this.dropStop(entry)
       this.clearAsked(entry)
       this.emit()
