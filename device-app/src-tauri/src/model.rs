@@ -223,14 +223,46 @@ mod tests {
             vec![
                 text("Dial connected"),
                 text("Signed in"),
-                text("Claude Code: On"),
-                act(MenuAction::ClaudeOff, "Turn off"),
                 Separator,
                 act(MenuAction::OpenHarness, "Open Harness"),
                 act(MenuAction::About, "About"),
                 act(MenuAction::Quit, "Quit"),
             ]
         );
+    }
+
+    /// Every CliState × Daemon × dial (none, attached, with Sound and Notifications) × signed_in.
+    fn states() -> Vec<AppState> {
+        let dials = [None, Some(dial(true, Some("0.0.95"))), Some(notifying(NotifyMode::Full))];
+        let mut states = Vec::new();
+        for cli in [CliState::Found, CliState::Installing, CliState::InstallFailed, CliState::Removed] {
+            for daemon in [Daemon::Starting, Daemon::Up, Daemon::Stopped, Daemon::Updating] {
+                for dial in &dials {
+                    for signed_in in [Some(true), Some(false), None] {
+                        states.push(AppState {
+                            cli,
+                            daemon,
+                            dial: dial.clone(),
+                            signed_in,
+                            codex: codex(true, true, true),
+                            ..state()
+                        });
+                    }
+                }
+            }
+        }
+        states
+    }
+
+    #[test]
+    fn no_agent_rows_in_any_state() {
+        // The devices service sets Claude Code and Codex up: the menu has nothing to say about them.
+        for state in states() {
+            let line = menu_log(&menu(&state));
+            for word in ["Claude Code", "Codex", "Turn on", "Turn off", "Turning"] {
+                assert!(!line.contains(word), "{line}");
+            }
+        }
     }
 
     #[test]
@@ -587,23 +619,23 @@ mod tests {
     fn the_menu_as_a_log_line() {
         assert_eq!(
             menu_log(&menu(&state())),
-            "Dial connected | Signed in | Claude Code: On | Turn off | Open Harness | About | Quit"
+            "Dial connected | Signed in | Open Harness | About | Quit"
         );
         assert_eq!(
             menu_log(&menu(&AppState { dial: Some(sound(Some(false))), ..state() })),
-            "Dial connected | Signed in | Claude Code: On | Turn off | Sound ✓ | Open Harness | About | Quit"
+            "Dial connected | Signed in | Sound ✓ | Open Harness | About | Quit"
         );
         assert_eq!(
             menu_log(&menu(&AppState { dial: Some(sound(Some(true))), ..state() })),
-            "Dial connected | Signed in | Claude Code: On | Turn off | Sound | Open Harness | About | Quit"
+            "Dial connected | Signed in | Sound | Open Harness | About | Quit"
         );
         assert_eq!(
             menu_log(&menu(&AppState { dial: Some(notifying(NotifyMode::Full)), ..state() })),
-            "Dial connected | Signed in | Claude Code: On | Turn off | Sound ✓ | Notifications: All | Open Harness | About | Quit"
+            "Dial connected | Signed in | Sound ✓ | Notifications: All | Open Harness | About | Quit"
         );
         assert_eq!(
             menu_log(&menu(&AppState { dial: Some(notifying(NotifyMode::You)), ..state() })),
-            "Dial connected | Signed in | Claude Code: On | Turn off | Sound ✓ | Notifications: Needs you | Open Harness | About | Quit"
+            "Dial connected | Signed in | Sound ✓ | Notifications: Needs you | Open Harness | About | Quit"
         );
     }
 }

@@ -1510,18 +1510,10 @@ mod tests {
             version |= event == Event::CliVersion(Some("0.6.58".into()));
             effects = app.handle(event);
         }
+        assert!(w.fake.calls().iter().all(|call| !call.starts_with("device ")), "{:?}", w.fake.calls());
         let mut calls = w.fake.calls();
         calls.sort();
-        assert_eq!(
-            calls,
-            [
-                "--version",
-                "auth status --json",
-                "device claude status --json",
-                "device codex status --json",
-                "hardware watch --json"
-            ]
-        );
+        assert_eq!(calls, ["--version", "auth status --json", "hardware watch --json"]);
     }
 
     /// Runs the effects, and hands the app each event, until `last` has been handled; gives what came back for the

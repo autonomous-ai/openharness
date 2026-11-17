@@ -355,7 +355,7 @@ mod tests {
             assert_eq!(menu_action(menu_id(action)), Some(action));
         }
         let ids: std::collections::HashSet<_> = actions.into_iter().map(menu_id).collect();
-        assert_eq!(ids.len(), 14);
+        assert_eq!(ids.len(), 10);
         assert_eq!(menu_id(About), "about");
         assert_eq!(menu_id(CodexOn), "codex_on");
         assert_eq!(menu_id(CodexOff), "codex_off");
