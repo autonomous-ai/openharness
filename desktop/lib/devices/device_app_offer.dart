@@ -88,8 +88,9 @@ class DeviceAppOffer extends ChangeNotifier {
 
   Future<void> refresh() => _look();
 
-  /// Joins a running install.
+  /// Joins a running install. Unsupported, it does nothing: a test's AppNotifier may hold the real offer.
   Future<void> install() {
+    if (!_supported) return Future.value();
     final running = _installing;
     if (running != null) return running;
     _log?.call('device app: install started');
@@ -98,8 +99,9 @@ class DeviceAppOffer extends ChangeNotifier {
     return run;
   }
 
-  /// The bundle this run installed, else by bundle id.
+  /// The bundle this run installed, else by bundle id. Unsupported, it does nothing, as [install].
   Future<void> open() async {
+    if (!_supported) return;
     bool opened;
     try {
       opened = await _open(path: _installedAt);
