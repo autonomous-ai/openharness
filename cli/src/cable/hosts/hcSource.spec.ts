@@ -743,6 +743,20 @@ describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11
     expect(s.source.terminalOf(4242)).toBeUndefined()
   })
 
+  it('paneOf answers a listed agent\'s terminal, and none for another id or one that left', async () => {
+    server.terminals = [agent('t7'), agent('t8')]
+    const s = setup()
+    await live(s)
+    const left = row(s, 't7')!.id
+    expect(s.source.paneOf(left)).toBe('t7')
+    expect(s.source.paneOf(row(s, 't8')!.id)).toBe('t8')
+    expect(s.source.paneOf('nope')).toBeUndefined()
+
+    server.remove('t7')
+    await s.until(() => s.source.list().length === 1)
+    expect(s.source.paneOf(left)).toBeUndefined()
+  })
+
   it('no log line holds an address, a name, a folder or the words', async () => {
     server.terminals = Array.from({ length: 65 }, (_, at) => agent(`t${at + 1}`, { name: 'secret-name', cwd: '/work/secret-folder' }))
     const s = setup()
