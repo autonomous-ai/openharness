@@ -3129,6 +3129,7 @@ switch (cmd) {
       claude: claudeRun,
       orcaHomes: () => readOrcaHomes(orcaHomesDeps()).then((read) => read.homes.claude),
       claudeIn: claudeRunIn,
+      defaultClaudeHome: dirname(env.CLAUDE_PROJECTS_DIR),
       codexHome: env.CODEX_HOME,
       codex: () => installedEngineBin('codex') !== null,
       env: process.env,

@@ -68,10 +68,18 @@ export function claudeRun(): ClaudeRun | null {
   return bin ? claudeRunner(bin) : null
 }
 
-/** Claude Code as claudeRun() finds it, pointed at [home]: CLAUDE_CONFIG_DIR on this child alone. null: no `claude`. */
+/** Claude Code as claudeRun() finds it, pointed at [home] on this child alone. null: no `claude`. */
 export function claudeRunIn(home: string): ClaudeRun | null {
   const bin = installedEngineBin('claude')
-  return bin ? claudeRunner(bin, { ...process.env, CLAUDE_CONFIG_DIR: home }) : null
+  return bin ? claudeRunner(bin, pointedAt(home, process.env)) : null
+}
+
+/** [env] for a child pointed at [home]: ~/.claude is Claude Code's own default, which it reads with no CLAUDE_CONFIG_DIR. */
+function pointedAt(home: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const pointed = { ...env }
+  if (home === join(homedir(), '.claude')) delete pointed.CLAUDE_CONFIG_DIR
+  else pointed.CLAUDE_CONFIG_DIR = home
+  return pointed
 }
 
 /**
@@ -103,10 +111,7 @@ export async function claudeFound(home: string, shell: boolean): Promise<ClaudeR
     return null
   }
   if (!bin) return null
-  const env: NodeJS.ProcessEnv = { ...process.env, PATH:[dirname(bin), process.env.PATH].filter(Boolean).join(delimiter) }
-  if (home === join(homedir(), '.claude')) delete env.CLAUDE_CONFIG_DIR
-  else env.CLAUDE_CONFIG_DIR = home
-  return claudeRunner(bin, env)
+  return claudeRunner(bin, pointedAt(home, { ...process.env, PATH: [dirname(bin), process.env.PATH].filter(Boolean).join(delimiter) }))
 }
 
 const VERSION = /(\d+)\.(\d+)\.(\d+)/

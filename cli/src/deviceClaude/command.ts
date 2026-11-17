@@ -6,9 +6,10 @@
  * alone, and removes Harness's skill from the engine's default home, from each folder an enable wrote and from each the
  * service recorded in dial-setup.json. `enable` clears the mark and writes the skill into the engine's default home and
  * back into each folder the service recorded; a folder an earlier enable wrote with another home is not written again.
- * Claude Code's two cover each Orca account's Claude Code home as well, whose `plugins/` is the default home's: there the
- * plugin is only turned on or off. `disable` turns those off first and never uninstalls there: an uninstall takes the
- * files every home names, and an Orca home's entry would then stay on with nothing left to turn off (check 8).
+ * Claude Code's two cover each Orca account's Claude Code home as well, and the default home when the command runs with
+ * another (in an Orca terminal), all sharing the command's `plugins/`: there the plugin is only turned on or off.
+ * `disable` turns those off first and never uninstalls there: an uninstall takes the files every home names, and another
+ * home's entry would then stay on with nothing left to turn off (check 8).
  * `harness device orca link` is Orca's plugin's word, never typed either: whether the daemon is up and where the
  * devices' socket is, so the plugin builds no path. `harness device notify` is an agent's, from the dial skill (devices/notice.ts). This
  * runs only in the `harness` command's own process; nothing the core or a service loads imports this folder.
@@ -44,8 +45,11 @@ export interface DeviceDeps {
   claude(): ClaudeRun | null
   /** Orca's Claude Code account homes; none when Orca is not here or could not be read. Asked only by claude enable and disable. */
   orcaHomes(): Promise<string[]>
-  /** Claude Code pointed at [home], with CLAUDE_CONFIG_DIR on that child alone. */
+  /** Claude Code pointed at [home], on that child alone. */
   claudeIn(home: string): ClaudeRun | null
+  /** Claude Code's default home, dirname(env.CLAUDE_PROJECTS_DIR): the command's own, unless it runs with another
+   *  CLAUDE_CONFIG_DIR (an Orca terminal's). */
+  defaultClaudeHome: string
   /** The Codex home the person's Codex reads. */
   codexHome: string
   /** Whether Codex is on this computer: looked for only by `codex status` and `codex enable`. */
@@ -79,21 +83,21 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
         deps.err(result.error)
         return 1
       }
-      // The default home whole before any Orca home: their plugin is its files, and their skills folder links to its.
+      // The command's own home whole before the others: their plugin is its files, and their skills folder links to its.
       const code = turnOn('claude', claudeHome(), deps)
-      return code === 0 ? turnOnOrca(deps) : code
+      return code === 0 ? turnOnShared(deps) : code
     }
     case 'disable': {
-      let orcaLeftOn = false
+      let leftOn = false
       const code = await turnOff('claude', claudeHome(), deps, async () => {
         // Once the removal is saved, so the devices service turns no Orca home on again, and before the uninstall.
-        orcaLeftOn = await turnOffOrca(deps)
+        leftOn = await turnOffShared(deps)
         const run = deps.claude()
         // With no `claude` to uninstall it, a plugin on in these settings stays installed: the person is told.
         if (!run && claudePluginState(claudeSettingsPath()) === 'on') return { ok: false, error: PLUGIN_LEFT_ON, step: 'uninstall' }
         return claudeDisable({ run, platform: deps.platform })
       })
-      return orcaLeftOn ? 1 : code
+      return leftOn ? 1 : code
     }
     case 'asked': {
       // A session started before `disable` still runs the hook: with the plugin off or removed, its stdin is read and
@@ -152,6 +156,9 @@ const PLUGIN_LEFT_ON = 'Claude Code was not found, so its harness-device plugin 
 /** Said once for each Orca home that failed, never its path: Claude Code's own line names the account's folder. */
 const ORCA_ON_FAILED = 'Could not turn on Claude Code in one Orca account.'
 const ORCA_OFF_FAILED = 'Could not turn off Claude Code in one Orca account.'
+/** The default home's, from an Orca terminal: where Claude Code's sessions outside Orca run. */
+const DEFAULT_ON_FAILED = 'Could not turn on Claude Code outside Orca.'
+const DEFAULT_OFF_FAILED = 'Could not turn off Claude Code outside Orca.'
 
 /**
  * Whether the plugin's hook and mod act: its entry on in this command's Claude Code settings, and `disable` has not
@@ -176,50 +183,59 @@ function realPath(path: string): string | null {
 }
 
 /**
- * Orca's Claude Code homes by real path, each once: a home listed twice or through a link is one home. The command's
- * own home is left out, as one Orca lists when the command runs in an Orca terminal: it is the default home, set up or
- * removed already. One that does not resolve is not there to run in.
+ * The homes besides the command's own that share its `plugins/`: Claude Code's default home, as named, when the command
+ * runs with another (in an Orca terminal), and Orca's Claude Code homes by real path, each once (a home listed twice or
+ * through a link is one home). The command's own home is left out, as one Orca lists when the command runs in an Orca
+ * terminal: it is set up or removed already. One that does not resolve is not there to run in.
  */
-async function orcaClaudeHomes(deps: DeviceDeps): Promise<string[]> {
+async function sharedHomes(deps: DeviceDeps): Promise<{ defaultHome: string | null; orca: string[] }> {
   const own = realPath(claudeHome())
-  const homes = new Set<string>()
+  const defaultReal = realPath(deps.defaultClaudeHome)
+  const orca = new Set<string>()
   for (const home of await deps.orcaHomes()) {
     const real = realPath(home)
-    if (real !== null && real !== own) homes.add(real)
+    if (real !== null && real !== own && real !== defaultReal) orca.add(real)
   }
-  return [...homes]
+  return { defaultHome: defaultReal !== null && defaultReal !== own ? deps.defaultClaudeHome : null, orca: [...orca] }
 }
 
 /**
- * The plugin turned on in each Orca home, one after another; a failure is said and the next is still tried. The homes
- * it is on in then replace the command's own list in dial-skill.json, so the devices service leaves them alone: one the
- * person turns off afterwards stays off. dial-setup.json is the service's, never written here.
+ * The plugin turned on in the other homes, one after another; a failure is said and the next is still tried. The Orca
+ * homes it is on in then replace the command's own list in dial-skill.json, so the devices service leaves them alone:
+ * one the person turns off afterwards stays off. dial-setup.json is the service's, never written here. The default home
+ * left off fails the command: sessions outside Orca would not ring, and the devices turn on no Orca home.
  */
-async function turnOnOrca(deps: DeviceDeps): Promise<number> {
+async function turnOnShared(deps: DeviceDeps): Promise<number> {
+  const { defaultHome, orca } = await sharedHomes(deps)
+  const defaultOff = defaultHome !== null && !(await claudeHomeEnable({ run: deps.claudeIn(defaultHome), platform: deps.platform })).ok
+  if (defaultOff) deps.err(DEFAULT_ON_FAILED)
   const on: string[] = []
-  for (const home of await orcaClaudeHomes(deps)) {
+  for (const home of orca) {
     if ((await claudeHomeEnable({ run: deps.claudeIn(home), platform: deps.platform })).ok) on.push(home)
     else deps.err(ORCA_ON_FAILED)
   }
-  if (writePluginHomes(deps.dataDir, on) === undefined) return 0
-  deps.err(SAVE_FAILED)
-  return 1
+  if (writePluginHomes(deps.dataDir, on) !== undefined) {
+    deps.err(SAVE_FAILED)
+    return 1
+  }
+  return defaultOff ? 1 : 0
 }
 
 /**
- * The plugin turned off in each Orca home, one after another, each failure said; true when one was left on. With no
- * `claude` there, a home whose settings read it on is one left on, as the default home's is.
+ * The plugin turned off in the other homes, one after another, each failure said; true when one was left on. With no
+ * `claude` there, a home whose settings read it on is one left on, as the command's own is.
  */
-async function turnOffOrca(deps: DeviceDeps): Promise<boolean> {
+async function turnOffShared(deps: DeviceDeps): Promise<boolean> {
+  const { defaultHome, orca } = await sharedHomes(deps)
   let leftOn = false
-  for (const home of await orcaClaudeHomes(deps)) {
+  for (const home of defaultHome === null ? orca : [defaultHome, ...orca]) {
     const run = deps.claudeIn(home)
     const off = run
       ? (await claudeHomeDisable({ run, platform: deps.platform })).ok
       : claudePluginState(join(home, 'settings.json')) !== 'on'
     if (off) continue
     leftOn = true
-    deps.err(ORCA_OFF_FAILED)
+    deps.err(home === defaultHome ? DEFAULT_OFF_FAILED : ORCA_OFF_FAILED)
   }
   return leftOn
 }
