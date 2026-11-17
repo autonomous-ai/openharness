@@ -86,7 +86,14 @@ idle('fixture-cursor-ready');
         headers: { 'content-type': 'application/json', 'x-harness-hook-token': d.hookCredential() },
         body: JSON.stringify({ engine: 'cursor', sessionId: fake.sessionId, transcriptPath: fake.file, cwd, tmuxPane: pane,
           callerPid: fake.pid, runtimeHints: [{ backend: 'tmux', paneId: pane }] }) })
-      expect(hook.status).toBe(200)
+      const reply = await hook.json()
+      expect([200, 202]).toContain(hook.status)
+      if (hook.status === 202) expect(reply).toMatchObject({ pending: false, retry: true })
+      else expect(reply.ok === true || reply.pending === true).toBe(true)
+      // A live resolution may answer before it binds; the existing request continues without a repost.
+      await c.waitFor(frame => frame.type === 'agent_synced' && frame.payload?.agent?.id === id
+        && frame.payload.agent.sessionId === fake.sessionId,
+      30_000, 'Cursor bound to its native session')
       await until('Cursor profile from its pane', async () => (await row(c, id))?.selectedModel === profile(id) || null, 30_000, 100)
       return { id, pane }
     }

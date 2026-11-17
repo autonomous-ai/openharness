@@ -20,11 +20,16 @@ async function create(d: IsolatedDaemon, c: LocalClient, engine: 'terminal' | 'c
   const cwd = join(d.projectsDir, name); mkdirSync(cwd, { recursive: true })
   const result = await c.request('agent_create', { engine, cwd, bypassPermission: true }, 90_000)
   expect(result.error, JSON.stringify(result)).toBeUndefined()
+  if (engine !== 'terminal') {
+    // Creation opens a pending pane; input before its native process is bound can be refused.
+    await c.waitFor(frame => frame.type === 'agent_synced' && frame.payload?.agent?.id === result.agent.id
+      && frame.payload.agent.launch?.state === 'ready' && !!frame.payload.agent.sessionId,
+    30_000, 'the native engine ready and bound')
+  }
   return result.agent
 }
 async function turn(c: LocalClient, agentId: string, content: string) {
-  const ended = c.next(frame => frame.type === 'turn_ended' && frame.agentId === agentId, 30_000, content)
-  c.send('message', { agentId, content }); await ended
+  await c.turn(agentId, content, 30_000)
 }
 
 it('starts setup only for an engine launch and keeps every private setup route off the client router', async () => {
