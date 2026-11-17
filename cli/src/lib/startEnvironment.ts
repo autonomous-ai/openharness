@@ -106,10 +106,16 @@ export function startEnvironment(env: NodeJS.ProcessEnv, platform: NodeJS.Platfo
   return Object.fromEntries(Object.entries(env).filter(([name]) => isStartVariable(name)))
 }
 
-/** The daemon log's line on a start: how many variables it kept and left out, never which (code standard 7). */
+/**
+ * The daemon log's line on a start: how many variables the daemon has and how many of [given] it has not, never which
+ * (code standard 7). Counted once HARNESS_ENV_FILE is read into [kept], as every daemon process reads it as it starts
+ * (config/loadEnv.ts): a variable the file gives back is not missing, and counting it pointed a person at nothing.
+ */
 export function startEnvLine(given: NodeJS.ProcessEnv, kept: NodeJS.ProcessEnv): string {
-  const count = Object.keys(kept).length
-  return `[env] started with ${count} variables; ${Object.keys(given).length - count} left out (docs/cli.md#the-daemons-environment)`
+  const daemon = { ...kept }
+  loadEnvFile(daemon)
+  const leftOut = Object.keys(given).filter((name) => !(name in daemon)).length
+  return `[env] started with ${Object.keys(daemon).length} variables; ${leftOut} left out (docs/cli.md#the-daemons-environment)`
 }
 
 /**
