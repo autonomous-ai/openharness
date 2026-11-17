@@ -313,7 +313,8 @@ export class ObservedSource implements HostSource {
       this.forgetDialPrompt(e, record)
       if (typed === 'busy') return busy()
       if (typed === 'waiting') return waiting()
-      if (typed === false) return noAnswer()
+      // `false`, or an answer outside the type, says nothing: a refusal is read only off an object that holds one.
+      if (!typed || typeof typed !== 'object' || typeof typed.refused !== 'string') return noAnswer()
       actions.count({ refused: typer.adapter })
       return { ok: false, reason: typed.refused }
     }
