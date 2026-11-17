@@ -201,19 +201,22 @@ void main() {
     expect(fixture.offer.state, DeviceAppOfferState.offer);
   });
 
-  test('the lookup right after an install that opened the app keeps it running', () async {
-    final fixture = await _attached();
-    // Registered at once, but AppKit does not list the launch yet.
-    fixture.probe.presence = installedNotRunning;
-    await fixture.offer.install();
-    await pumpEventQueue();
-    expect(fixture.probe.lookups, 2);
-    expect(fixture.offer.state, DeviceAppOfferState.hidden);
+  test(
+    'the lookup right after an install that opened the app keeps it running',
+    () async {
+      final fixture = await _attached();
+      // Registered at once, but AppKit does not list the launch yet.
+      fixture.probe.presence = installedNotRunning;
+      await fixture.offer.install();
+      await pumpEventQueue();
+      expect(fixture.probe.lookups, 2);
+      expect(fixture.offer.state, DeviceAppOfferState.hidden);
 
-    // Only that answer: the next is believed.
-    await fixture.offer.refresh();
-    expect(fixture.offer.state, DeviceAppOfferState.notRunning);
-  });
+      // Only that answer: the next is believed.
+      await fixture.offer.refresh();
+      expect(fixture.offer.state, DeviceAppOfferState.notRunning);
+    },
+  );
 
   test('an answer asked before an install ended is not believed', () async {
     final fixture = await _attached();
@@ -355,6 +358,55 @@ void main() {
     expect(fixture.offer.bandVisible, isTrue);
   });
 
+  test('a refused Open, then the app gone: Install again', () async {
+    final fixture = await _attached(presence: installedNotRunning);
+    fixture.open.ok = false;
+    await fixture.offer.open();
+    expect(fixture.offer.failedStep, DeviceAppInstallStep.open);
+
+    // The person trashed the copy that would not open.
+    fixture.probe.presence = notInstalled;
+    await fixture.offer.refresh();
+    expect(fixture.offer.state, DeviceAppOfferState.offer);
+    expect(fixture.offer.bandVisible, isTrue);
+  });
+
+  test(
+    'an install whose open fails, then its copy gone: Install again',
+    () async {
+      final fixture = await _attached();
+      fixture.install.result = const DeviceAppInstallResult.failed(
+        DeviceAppInstallStep.open,
+        installedAt: _path,
+      );
+      await fixture.offer.install();
+      fixture.gone.add(_path);
+      fixture.open.ok = false;
+      await fixture.offer.open();
+      // No copy of this run left: by bundle id, and when nothing opens, the offer.
+      expect(fixture.open.paths, [null]);
+      expect(fixture.offer.state, DeviceAppOfferState.offer);
+      expect(fixture.offer.bandVisible, isTrue);
+
+      await fixture.offer.install();
+      expect(fixture.install.calls, 2);
+    },
+  );
+
+  test('Open goes by bundle id once this run’s copy is gone', () async {
+    final fixture = await _attached();
+    await fixture.offer.install();
+    await pumpEventQueue();
+    // Moved to another folder, where LaunchServices finds it.
+    fixture.probe.presence = installedNotRunning;
+    await fixture.offer.refresh();
+    expect(fixture.offer.state, DeviceAppOfferState.notRunning);
+    fixture.gone.add(_path);
+    await fixture.offer.open();
+    expect(fixture.open.paths, [null]);
+    expect(fixture.offer.state, DeviceAppOfferState.hidden);
+  });
+
   test('an opener that throws is a refusal', () async {
     final fixture = await _attached(presence: installedNotRunning);
     fixture.open.error = StateError('open timed out');
@@ -389,21 +441,24 @@ void main() {
     expect(fixture.lines.last, 'device app: install failed install');
   });
 
-  test('an installer that throws before its future is a failed install step', () async {
-    final probe = FakeDeviceAppProbe();
-    final offer = DeviceAppOffer(
-      supported: true,
-      probe: probe,
-      install: () => throw StateError('disk full'),
-      open: FakeDeviceAppOpen().call,
-    );
-    addTearDown(offer.dispose);
-    offer.dialChanged(true);
-    await pumpEventQueue();
-    await offer.install();
-    expect(offer.state, DeviceAppOfferState.failed);
-    expect(offer.failedStep, DeviceAppInstallStep.install);
-  });
+  test(
+    'an installer that throws before its future is a failed install step',
+    () async {
+      final probe = FakeDeviceAppProbe();
+      final offer = DeviceAppOffer(
+        supported: true,
+        probe: probe,
+        install: () => throw StateError('disk full'),
+        open: FakeDeviceAppOpen().call,
+      );
+      addTearDown(offer.dispose);
+      offer.dialChanged(true);
+      await pumpEventQueue();
+      await offer.install();
+      expect(offer.state, DeviceAppOfferState.failed);
+      expect(offer.failedStep, DeviceAppInstallStep.install);
+    },
+  );
 
   test('Not now hides the band for good and keeps the row', () async {
     final store = MemoryKeyValueStore();

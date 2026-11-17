@@ -84,6 +84,9 @@ class DeviceAppFixture {
   final probe = FakeDeviceAppProbe();
   final install = FakeDeviceAppInstall();
   final open = FakeDeviceAppOpen();
+
+  /// Bundles the offer finds gone from disk; every other path is there.
+  final gone = <String>{};
   final lines = <String>[];
   late final MemoryKeyValueStore store;
   late final DeviceAppOffer offer;
