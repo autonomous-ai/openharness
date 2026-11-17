@@ -43,6 +43,36 @@ describe('turn activity', () => {
     expect(await turn.probe('s2')).toBe('unknown')
   })
 
+  it('while withheld the probe answers unknown and reads no pane', async () => {
+    const { readers } = setup({ withheld: (sessionId) => sessionId === 's1' })
+    const turn = given(readers.turnActivity)
+    expect(turn.runtime('s1')).toEqual({ key: activityRuntimeKey(live), turnOpen: true, withheld: true })
+    const read = vi.spyOn(readers.runtimeActivity, 'read').mockResolvedValue('working')
+    expect(await turn.probe('s1')).toBe('unknown')
+    expect(read).not.toHaveBeenCalled()
+  })
+
+  it('while at work the probe answers working and reads no pane; withheld wins', async () => {
+    let withheld = false
+    const { readers } = setup({ withheld: () => withheld, atWork: (sessionId) => sessionId === 's1' })
+    const turn = given(readers.turnActivity)
+    const read = vi.spyOn(readers.runtimeActivity, 'read').mockResolvedValue('idle')
+    expect(await turn.probe('s1')).toBe('working')
+    expect(read).not.toHaveBeenCalled()
+    withheld = true
+    expect(await turn.probe('s1')).toBe('unknown')
+    expect(read).not.toHaveBeenCalled()
+  })
+
+  it('with neither given, the runtime and the probe are today\'s', async () => {
+    const { readers } = setup()
+    const turn = given(readers.turnActivity)
+    expect(turn.runtime('s1')).toEqual({ key: activityRuntimeKey(live), turnOpen: true })
+    const read = vi.spyOn(readers.runtimeActivity, 'read').mockResolvedValue('idle')
+    expect(await turn.probe('s1')).toBe('idle')
+    expect(read).toHaveBeenCalledWith(live)
+  })
+
   it('reads Codex\'s activity from its own server (through its worker), and every other runtime from what its pane shows', async () => {
     const { deps, readers } = setup()
     const runtime = given(readers.runtimeActivity)
