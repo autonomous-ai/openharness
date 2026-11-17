@@ -13,6 +13,7 @@ const CODEX_CONTROL_MIN_VERSION: [number, number, number] = [0, 144, 0]
 interface CodexCacheModel {
   slug?: unknown
   display_name?: unknown
+  description?: unknown
   visibility?: unknown
   supported_reasoning_levels?: Array<{ effort?: unknown }>
 }
@@ -105,10 +106,12 @@ async function models(session: RuntimeSession, state: RuntimeState | undefined):
     const model = text(item.slug)
     if (!model || item.visibility === 'hide') continue
     const label = text(item.display_name) || runtimeModelLabel(model)
-    addOption(output, seen, session, model, 'auto', label)
+    // Codex's own line under the model in its picker ("Fast and affordable agentic coding model."), cut to what a row shows.
+    const description = text(item.description).slice(0, 256) || undefined
+    addOption(output, seen, session, model, 'auto', label, description)
     const listed = catalog.find((entry) => entry.slug === model)?.efforts ?? []
     for (const effort of listed) {
-      if (effort !== 'auto' && codexEffortAllowed(model, effort, listed)) addOption(output, seen, session, model, effort, label)
+      if (effort !== 'auto' && codexEffortAllowed(model, effort, listed)) addOption(output, seen, session, model, effort, label, description)
     }
   }
   if (state?.model) {

@@ -13,12 +13,15 @@ import { modelsAssignments } from './modelsAssignments.js'
  */
 import { join } from 'node:path'
 import { baseNode } from '../harnessd/baseNode.js'
-import type { CoreApi, CorePorts, ModelsPort, ServiceRequest, ServiceRequests } from '../core/api.js'
+import type { AgentView, CoreApi, CorePorts, ModelsPort, ServiceRequest, ServiceRequests } from '../core/api.js'
 import { MODEL_MANAGER_ID } from '../dsh/builtinIds.js'
 import { installedDsh } from '../dsh/installed.js'
 import { ApiConnections, apiConnectionsRequest } from '../lib/apiConnections.js'
 import { apiModelsRequest, apiTargetAnswer, refreshApiFor, rememberSavedApis } from '../lib/apiModels.js'
 import { appEngineOps, scanAppModels } from '../lib/appModels.js'
+import { listClaudeCommands } from '../engines/claude/lists.js'
+import { CODEX_COMMANDS } from '../engines/codex/commandList.js'
+import { listOpencodeCommands } from '../engines/opencode/commandList.js'
 import { linkClaudeProfile } from '../lib/claudeProfiles.js'
 import { listClaudeProfiles, profileId } from '../lib/claudeHomes.js'
 import { defaultCodexHome, linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
@@ -338,7 +341,12 @@ function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => P
     models_list: async (payload) => {
       const sessionId = typeof payload.agentId === 'string' && payload.agentId ? payload.agentId : undefined
       try {
+        // The phone's `/` list: the commands the agent's engine itself offers, asked of the engine here, in this process.
+        if (payload.commands === true) return { commands: await agentCommands(core, sessionId) }
         const models = await core.agents.runtimeModels(sessionId)
+        // The phone's model sheet: one row per model with its name, the engine's line under it and its efforts,
+        // instead of every model-and-effort pair — the same 16 KiB cap, and the rows a person reads.
+        if (payload.catalog === true) return { catalog: runtimeModelCatalog(models, sessionId) }
         return {
           // The device derives labels from the opaque runtime-v1 id. Omitting the duplicate
           // displayName keeps the encrypted picker response below its 16 KiB decrypt cap.
@@ -464,6 +472,76 @@ export function launchTargetRequests(core: CoreApi): ServiceRequests {
  * unbounded and still gets everything.
  */
 const DEVICE_PICKER_MAX_MODELS = 24
+
+/** One model an agent's engine offers, for a sheet that lists models and sets effort apart. */
+export interface RuntimeCatalogRow {
+  /** What the runtime-v1 id carries: an alias (`opus`) or a model id (`claude-fable-5-1`). */
+  model: string
+  name: string
+  description?: string
+  /** The efforts it takes, `auto` first when it has one; empty for a model that takes none. */
+  efforts: string[]
+}
+
+/** One `/` command an agent's engine offers: what follows the `/`, its line, and the argument it takes. */
+export interface AgentCommandRow { name: string; description: string; argumentHint: string }
+
+/** The most bytes the commands take in one answer, kept under the 16 KiB a sealed answer may carry. */
+const COMMANDS_MAX_BYTES = 12_000
+
+/** Each engine that lists its own `/` commands, and how. */
+const COMMAND_LISTS: Record<string, (agent: AgentView) => Promise<AgentCommandRow[] | null>> = {
+  claude: listClaudeCommands,
+  codex: async () => [...CODEX_COMMANDS],
+  opencode: listOpencodeCommands,
+}
+
+/**
+ * [agentId]'s `/` commands, in the engine's own order: Claude Code's (engines/claude/lists.ts) and OpenCode's
+ * (engines/opencode/commandList.ts). Any other engine, an agent that is gone or an engine that could not be asked has
+ * none, and the phone shows no list. Rows past [COMMANDS_MAX_BYTES] are left out: a skill-heavy setup lists more than a
+ * phone reads anyway.
+ */
+export async function agentCommands(core: CoreApi, agentId: string | undefined): Promise<AgentCommandRow[]> {
+  const agent = agentId ? core.agents.resolve(agentId) : undefined
+  const list = agent && Object.hasOwn(COMMAND_LISTS, agent.engine) ? COMMAND_LISTS[agent.engine] : undefined
+  if (!agent || !list) return []
+  const rows: AgentCommandRow[] = []
+  let bytes = 0
+  for (const command of await list(agent) ?? []) {
+    bytes += Buffer.byteLength(JSON.stringify(command))
+    if (bytes > COMMANDS_MAX_BYTES) break
+    rows.push(command)
+  }
+  return rows
+}
+
+/** The most models one answer carries: a picker is read by a person, and the answer is sealed under a 16 KiB cap. */
+const CATALOG_MAX_MODELS = 40
+
+/**
+ * [agentId]'s choices folded by model, in the engine's own order. Its name is the option's label before ` / `, the
+ * effort after it being the option's own; a model listed only with `auto` takes no effort the person can set.
+ */
+export function runtimeModelCatalog(models: RuntimeModelOption[], agentId: string | undefined): RuntimeCatalogRow[] {
+  const rows = new Map<string, RuntimeCatalogRow>()
+  for (const option of models) {
+    const profile = parseRuntimeProfile(option.id)
+    if (!profile || (agentId && profile.sessionId !== agentId)) continue
+    let row = rows.get(profile.model)
+    if (!row) {
+      if (rows.size >= CATALOG_MAX_MODELS) continue
+      const name = option.displayName.split(' / ', 1)[0]!.trim() || profile.model
+      row = { model: profile.model, name, ...(option.description ? { description: option.description } : {}), efforts: [] }
+      rows.set(profile.model, row)
+    }
+    if (!row.efforts.includes(profile.effort)) row.efforts.push(profile.effort)
+  }
+  for (const row of rows.values()) {
+    if (row.efforts.length === 1 && row.efforts[0] === 'auto') row.efforts = []
+  }
+  return [...rows.values()]
+}
 
 export function compactRuntimePickerModels(
   models: RuntimeModelOption[],
