@@ -6,6 +6,7 @@ import { createSessionNormalizers } from '../transcripts/normalizers.js'
 import { noOtherStreams } from '../../testing/otherStreams.js'
 import { createTurnHooks, HOOK_SILENCE_MS, HOOKS_KEPT, STOP_HOOK_GRACE_MS, type TurnHookDeps } from './turnHooks.js'
 import { engineHooks } from '../../engines/hooks.js'
+import { live as codexLive } from '../../engines/codex/live.js'
 import type { HookTurnContext } from '../../engines/facets/hooks.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
 
@@ -797,6 +798,108 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     run.hooks.beat('s1')
     run.hooks.beat('nobody')
     expect(run.deps.emit).not.toHaveBeenCalled()
+  })
+
+  // Codex's Interrupt comes on the Stop's route as `status: 'interrupted'` (R3). Codex runs it after it marks the turn
+  // interrupted and before it writes turn_aborted, and waits for it up to 3 s (facts-codex §2).
+  describe.runIf(engine === 'codex')('Interrupt', () => {
+    const interrupt = (run: ReturnType<typeof setup>, firedAt?: number) =>
+      run.hooks.onTurnStop({ sessionId: 's1', status: 'interrupted', ...(firedAt === undefined ? {} : { firedAt }) })
+
+    it('an interrupt ends the open turn as aborted at once: no drain, no wait', async () => {
+      const run = await hookDriven()
+      vi.mocked(run.deps.drain).mockClear()
+      const turn = parse(run, 't1')
+      interrupt(run)
+      expect(turn.turnOpen).toBe(false)
+      expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', ABORT)
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
+      expect(run.deps.emit).toHaveBeenCalledOnce()
+      expect(run.deps.drain).not.toHaveBeenCalled()
+    })
+
+    it('with no turn open (the app cancelled it, or its abort was read first) says nothing', async () => {
+      const run = await hookDriven()
+      vi.mocked(run.deps.drain).mockClear()
+      interrupt(run)
+      parse(run, 't1')
+      run.normalizers.closeTurns('s1')
+      interrupt(run)
+      const turn = parse(run, 't2')
+      turn.turnOpen = false
+      run.hooks.transcript('s1', ABORT, { turn: { ...turn }, over: true })
+      interrupt(run)
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
+      expect(vi.mocked(run.deps.emit).mock.calls).toEqual([['s1', ABORT]])
+      expect(run.deps.drain).not.toHaveBeenCalled()
+    })
+
+    // Codex writes turn_aborted only after the hook returns: the turn is closed by then, so its parser ends nothing.
+    it('the transcript\'s turn_aborted, read after the interrupt closed the turn, sends nothing more', async () => {
+      const run = await hookDriven()
+      const parser = codexLive.create({ engine, codexHome: undefined })
+      run.normalizers.liveParsers.set('s1', parser)
+      const read = (payload: object): void => {
+        const { events, at, over } = parser.ingest(JSON.stringify({ timestamp: '2026-11-17T01:02:03.000Z', type: 'event_msg', payload }))
+        run.hooks.transcript('s1', events, { at, over, turn: parser.snapshot() })
+      }
+      read({ type: 'user_message', message: 'go' })
+      interrupt(run)
+      expect(run.deps.emit).toHaveBeenLastCalledWith('s1', ABORT)
+      read({ type: 'turn_aborted', reason: 'interrupted' })
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
+      expect(vi.mocked(run.deps.emit).mock.calls).toEqual([['s1', [{ type: 'turn_started', payload: { userMessage: 'go' } }]], ['s1', ABORT]])
+    })
+
+    // Review Focus 5: an interrupt that reaches the daemon after the next turn's start was read is about the turn before.
+    it('run before the latest prompt hook, or before the open turn opened, closes nothing', async () => {
+      const run = await hookDriven()
+      run.hooks.onPromptHook('s1', 3_000)
+      const turn = parse(run, 't1', 1_000)
+      interrupt(run, 2_000)
+      expect(turn.turnOpen).toBe(true)
+      const next = parse(run, 't2', 5_000)
+      interrupt(run, 4_000)
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
+      expect(next.turnOpen).toBe(true)
+      expect(run.deps.emit).not.toHaveBeenCalled()
+      // Its own interrupt closes it.
+      interrupt(run, 6_000)
+      expect(next.turnOpen).toBe(false)
+      expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', ABORT)
+    })
+
+    it('an interrupt, the first hook the session sends, makes its turns end by hook', () => {
+      const run = setup(engine)
+      parse(run, 't1')
+      interrupt(run, 1_000)
+      expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', ABORT)
+      expect(run.hooks.withheld('s1')).toBe(true)
+    })
+
+    it('leaves an end that is held as it is', async () => {
+      const run = await hookDriven()
+      run.hooks.transcript('s1', END, { turn: turnOf('t1') })
+      interrupt(run)
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
+      expect(run.deps.emit).not.toHaveBeenCalled()
+      expect(run.hooks.held('s1')).toBe(true)
+    })
+
+    it('an engine with no turn hooks, or a session it does not know, is left alone', async () => {
+      const pi = setup('pi')
+      const closeTurn = vi.fn()
+      pi.normalizers.liveParsers.set('s1', { engine: 'pi', turnOpen: true, snapshot: () => ({ ...turnOf('t1'), turnOpen: true }), closeTurn })
+      interrupt(pi)
+      const run = setup(engine)
+      run.hooks.onTurnStop({ sessionId: 'nobody', status: 'interrupted' })
+      await vi.runAllTimersAsync()
+      expect(closeTurn).not.toHaveBeenCalled()
+      expect(pi.deps.emit).not.toHaveBeenCalled()
+      expect(pi.hooks.withheld('s1')).toBe(false)
+      expect(run.deps.emit).not.toHaveBeenCalled()
+      expect(run.hooks.withheld('nobody')).toBe(false)
+    })
   })
 })
 
