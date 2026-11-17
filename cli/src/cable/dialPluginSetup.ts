@@ -62,6 +62,9 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
   /** Orca's list as last worked out, and its homes by real path. */
   let orcaList: readonly string[] | undefined
   let orcaHomes: string[] = []
+  /** The listed homes found in the command's own list, until Orca's list changes: one there would otherwise be due at
+   *  each scan, and cost it a read of dial-skill.json and the default home's settings. */
+  let byCommand = new Set<string>()
   /** When each listed Orca home last failed: each waits its own hour. */
   const failedAt = new Map<string, number>()
 
@@ -147,6 +150,7 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
     if (orca.homes !== orcaList) {
       orcaList = orca.homes
       orcaHomes = listOrca(orca.homes)
+      byCommand = new Set()
       for (const home of failedAt.keys()) if (!orcaHomes.includes(home)) failedAt.delete(home)
       // Only Orca's answer drops a home: a failed read lists none, and the next answer would turn on again a home the
       // person turned off.
@@ -154,14 +158,17 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
       if (orca.answered && kept.length < deps.pluginHomes().length && !deps.recordPluginHomes(kept)) deps.count('failed', 'save')
     }
     // In memory: a scan with every home recorded reads no file and runs no `claude`.
-    const due = orcaHomes.filter((home) => !deps.pluginHomes().includes(home) && !waiting(home))
+    const due = orcaHomes.filter((home) => !deps.pluginHomes().includes(home) && !byCommand.has(home) && !waiting(home))
     if (!due.length) return
     if (deps.recorded() === undefined || deps.wanted() !== true || claudePluginState(join(deps.home, 'settings.json')) !== 'on') return
     // The command's own list, so dial-setup.json keeps its one writer.
     const command = deps.enabledByCommand()
     if (command.unread) return
     for (const home of due) {
-      if (command.homes.includes(home)) continue
+      if (command.homes.includes(home)) {
+        byCommand.add(home)
+        continue
+      }
       // Turned on and not recorded, a home the person turns off afterwards would be turned on again.
       if (deps.pluginHomes().length >= MAX_HOMES) {
         homeFailed(home, 'full')
