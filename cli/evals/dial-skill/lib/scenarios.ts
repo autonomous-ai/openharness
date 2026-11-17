@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export type Need = 'need' | 'no-need'
-export type AgentKind = 'claude' | 'codex' | 'oracle' | 'null' | 'always'
+export type AgentKind = 'claude' | 'oracle' | 'null' | 'always'
 
 export interface Scenario {
   id: string

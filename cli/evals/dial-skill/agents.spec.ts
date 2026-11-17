@@ -52,6 +52,14 @@ function fake(name: string, body: string, interpreter = process.execPath): strin
   return file
 }
 
+/** A shell `claude` that runs `body` when given arguments. It is run once bare first: macOS checks a new executable on
+ *  its first exec, which can take longer than the 200 ms timeout, and the agent must be running when that fires. */
+function shellAgent(body: string): string {
+  const file = fake('claude', `[ $# -eq 0 ] && exit 0\n${body}`, '/bin/sh')
+  execFileSync(file)
+  return file
+}
+
 function config(claudeBin: string, timeoutMs = 10_000): AgentConfig {
   return { ...AGENT_CONFIG, claudeBin, timeoutMs }
 }
@@ -135,7 +143,7 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(SAMPLE)}))`)
 
   it('kills the agent and its child at the timeout and rejects with timeout', async () => {
     const line = lifeline()
-    const bin = fake('claude', `exec 3>${JSON.stringify(line.path)}\n/bin/sleep 600 3>&3 &\nwait`, '/bin/sh')
+    const bin = shellAgent(`exec 3>${JSON.stringify(line.path)}\n/bin/sleep 600 3>&3 &\nwait`)
 
     const error = await runAgent('claude', need, staged(), config(bin, 200)).catch((e: unknown) => e)
 
@@ -145,7 +153,7 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(SAMPLE)}))`)
 
   it('kills an agent that ignores SIGTERM 10 s later', async () => {
     const line = lifeline()
-    const bin = fake('claude', `trap '' TERM\nexec 3>${JSON.stringify(line.path)}\n/bin/sleep 600 3>&3 &\nwait`, '/bin/sh')
+    const bin = shellAgent(`trap '' TERM\nexec 3>${JSON.stringify(line.path)}\n/bin/sleep 600 3>&3 &\nwait`)
 
     const error = await runAgent('claude', need, staged(), config(bin, 200)).catch((e: unknown) => e)
 
@@ -155,7 +163,7 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(SAMPLE)}))`)
 
   it('kills what the agent left running once it exits', async () => {
     const line = lifeline()
-    const bin = fake('claude', `exec 3>${JSON.stringify(line.path)}\n/bin/sleep 600 3>&3 >/dev/null 2>&1 &\ncat ${JSON.stringify(SAMPLE)}`, '/bin/sh')
+    const bin = shellAgent(`exec 3>${JSON.stringify(line.path)}\n/bin/sleep 600 3>&3 >/dev/null 2>&1 &\ncat ${JSON.stringify(SAMPLE)}`)
 
     const run = await runAgent('claude', need, staged(), config(bin))
 
