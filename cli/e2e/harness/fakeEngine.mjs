@@ -171,21 +171,26 @@ const FAKE_PLUGIN_VERSION = 'e2e0c0de1234'
 /**
  * `claude plugin …` as Claude Code 2.1.326 answers the words devices/claudePlugin.ts runs: `list --json`, `marketplace
  * list --json`, `marketplace add`, `marketplace update`, `install`, `enable`, `uninstall` and `update`. What is added and
- * installed is kept in `claude-plugin-state.json` under the test's root; whether a plugin is on is Claude Code's own
- * record, `enabledPlugins` in the user settings of CLAUDE_CONFIG_DIR, else of ~/.claude, which install, enable and
- * uninstall write. Each call is noted in `claude-plugin-calls` under the root, one line of its words. A file outside the
- * root throws: it would be the person's own Claude Code.
+ * installed is kept per Claude Code home, as the real one keeps it, in `plugins/` of CLAUDE_CONFIG_DIR, else of
+ * ~/.claude: a plugin installed in one home is not in another. Whether a plugin is on is Claude Code's own record,
+ * `enabledPlugins` in that home's user settings, which install, enable and uninstall write. Each call is noted in
+ * `claude-plugin-calls` under the test's root, one line of its words. A home outside the root throws: it would be the
+ * person's own Claude Code.
  */
 function claudePlugin(config, argv) {
   if (!config.root) throw new Error('fake claude plugin: the wrapper names no test root')
-  const settingsFile = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'settings.json')
-  if (!within(config.root, settingsFile)) throw new Error('fake claude plugin outside its throwaway home')
+  const home = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')
+  if (!within(config.root, home)) throw new Error('fake claude plugin outside its throwaway home')
+  const settingsFile = join(home, 'settings.json')
   appendFileSync(join(config.root, 'claude-plugin-calls'), `${argv.join(' ')}\n`)
   const args = argv.slice(1)
-  const stateFile = join(config.root, 'claude-plugin-state.json')
+  const stateFile = join(home, 'plugins', 'fake-plugin-state.json')
   const state = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, 'utf8')) : { marketplaces: [], installed: [] }
   const settings = existsSync(settingsFile) ? JSON.parse(readFileSync(settingsFile, 'utf8')) : {}
-  const saveState = () => writeFileSync(stateFile, JSON.stringify(state))
+  const saveState = () => {
+    mkdirSync(dirname(stateFile), { recursive: true })
+    writeFileSync(stateFile, JSON.stringify(state))
+  }
   const turn = (id, on) => {
     const enabledPlugins = { ...settings.enabledPlugins }
     if (on) enabledPlugins[id] = true
