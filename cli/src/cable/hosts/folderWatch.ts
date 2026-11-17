@@ -1,7 +1,7 @@
 /**
  * One watch on the nearest existing folder of a list, as the devices process waits for another program's socket or file
- * to appear. The list is the caller's, and ends where that program's folders do: a watch above them is woken by every
- * write below it on macOS.
+ * to appear. The list is the caller's, and each caller ends it as low as it can: a watch on a high folder is woken by
+ * every write below it on macOS.
  */
 import { existsSync, watch, type FSWatcher } from 'node:fs'
 
