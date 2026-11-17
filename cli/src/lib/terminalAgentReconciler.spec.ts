@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
-import type { RegisteredSession } from './registry.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { RegistryOwnershipChanged, type RegisteredSession } from './registry.js'
+import { AtomicWriteUnconfirmed, RegistryPersistenceUnavailable } from './registryPersistence.js'
 import type { DiscoveredTerminalAgent, TerminalAgentProbe } from './terminalAgentDiscovery.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import { TerminalAgentReconciler } from './terminalAgentReconciler.js'
@@ -782,5 +783,62 @@ describe('a pass with a deadline', () => {
     release()
     await vi.waitFor(() => expect(probed).toHaveBeenCalledTimes(2))
     warn.mockRestore()
+  })
+})
+
+describe('a pass whose observations cannot be saved', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+  const live = (): TerminalAgentProbe => probe([{ instanceId: 'tmux:default', result: { state: 'available', roots: [{ runtime: tmux, rootPid: 1, cwd: '/work' }] } }])
+  /** `save` is what each batch's durable save answers, in turn; the last entry repeats. */
+  function outage(save: Array<Error | null>) {
+    let batch = 0
+    const onProbeStatus = vi.fn(), onTerminalAvailability = vi.fn()
+    const reconciler = new TerminalAgentReconciler({
+      current: () => [session()], backends: [], backendOrder: ['tmux'], probe: async () => live(),
+      onDiscovered: vi.fn(), onObserved: vi.fn(), onDormant: vi.fn(), onRemoved: vi.fn(), onTerminalAvailability, onProbeStatus,
+      transaction: async (apply) => {
+        const result = await apply()
+        const failure = save[Math.min(batch++, save.length - 1)]
+        if (failure) throw failure
+        return result
+      },
+    })
+    return { reconciler, onProbeStatus, onTerminalAvailability }
+  }
+  const full = () => new RegistryPersistenceUnavailable('registry storage has no available space (ENOSPC)')
+  const said = (warn: { mock: { calls: unknown[][] } }) => warn.mock.calls.filter(([line]) => String(line).startsWith('[discovery] observations not saved'))
+
+  it.each([
+    ['the registry', () => full()],
+    // What a refused rename leaves behind: the next batch tries the names first (e2e/diskfull.e2e.ts).
+    ['the names file', () => new RegistryPersistenceUnavailable('name storage has no available space (ENOSPC)')],
+    ['an unconfirmed write', () => new AtomicWriteUnconfirmed(full())],
+  ])('finishes and answers the hook that asked for it when %s cannot be saved', async (_what, failure) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const run = outage([failure()])
+    await expect(run.reconciler.triggerHint(tmux, 'claude')).resolves.toBe(true)
+    expect(run.onTerminalAvailability).toHaveBeenCalled()
+    expect(run.onProbeStatus).toHaveBeenLastCalledWith({ ready: true, error: null })
+    expect(said(warn)).toHaveLength(1)
+  })
+
+  it('says so once for an outage, and again for the next one', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // Two batches a pass. Three passes whose second batch is refused, as a pass with nothing of its own to save
+    // first is; one pass saved; one more refused.
+    const run = outage([null, full(), null, full(), null, full(), null, null, null, full()])
+    for (let pass = 0; pass < 3; pass++) await run.reconciler.trigger()
+    expect(said(warn)).toEqual([['[discovery] observations not saved, kept for the next pass · Registry persistence unavailable: registry storage has no available space (ENOSPC)']])
+    await run.reconciler.trigger()
+    await run.reconciler.trigger()
+    expect(said(warn)).toHaveLength(2)
+  })
+
+  it.each([
+    ['an owner that changed', () => new RegistryOwnershipChanged('the registry owner changed while its write was being prepared')],
+    ['any other failure', () => new Error('fixture')],
+  ])('still fails the pass for %s', async (_what, failure) => {
+    const error = failure()
+    await expect(outage([error]).reconciler.trigger()).rejects.toBe(error)
   })
 })
