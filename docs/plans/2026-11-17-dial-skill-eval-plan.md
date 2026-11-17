@@ -23,8 +23,7 @@ Claude Code 2.1.326, macOS.
 **Spec:** `docs/plans/2026-11-17-dial-skill-eval-design.md` (its "Decisions on the plan's open questions" overrides the
 sections above it). Method sources (read before any task): the claude-api skill's `shared/evals/build-eval.md`,
 `eval-audit.md`, `eval-hillclimb.md`, `report/SCHEMA.md`, `report/runner-scaffold.mjs`, `report/build-report-lite.mjs`
-(copies at
-`/private/tmp/claude-502/-Users-nqhieu84-orca-workspaces-openharness-dial-skill-eval/c6b8b4a3-d731-44ab-90ac-eb6048c0bb73/scratchpad/evals-guide/`).
+(read from a local copy of the claude-api skill's eval guides).
 
 ## Why the runner stays `.mjs`
 
@@ -716,5 +715,5 @@ The orchestrator's answers (spec, "Decisions on the plan's open questions", 2026
 7. Moot (Codex's served model).
 8. Moot (Codex cost).
 9. Judge `claude-opus-5-5` at effort `low` (`medium` if Task 11's agreement check fails); never Haiku or Sonnet.
-10. The person's own skills stay loaded in every run.
+10. The person's own skills are not loaded; hooks off.
 11. The command line in the skill body is off-limits to rounds.
