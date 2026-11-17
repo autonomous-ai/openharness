@@ -229,7 +229,7 @@ export class LiveStreams {
       const events = preparing && !ask.replay ? [] : result.events
       const frame = this.frame({ raw, profile: true, observe: fold, events, replay: offset < (ask.cursor?.historyUntil ?? 0), turn: { ...stream.turn },
         ...(!preparing && result.failure !== undefined ? { failure: result.failure } : {}),
-        ...(result.at === undefined ? {} : { at: result.at }), ...(result.over ? { over: true as const } : {}) })
+        ...(result.at === undefined ? {} : { at: result.at }), ...(!preparing && result.over ? { over: true as const } : {}) })
       frames.push(frame)
       // Account for normalized output as well as raw input. A large record occupies its own page;
       // the reply transport fragments it and enforces the independent hard result bound.
