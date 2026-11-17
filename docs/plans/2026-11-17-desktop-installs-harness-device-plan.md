@@ -950,8 +950,9 @@ class DeviceAppFixture {
     `notRunning`; else `hidden`.
   - **Lookups.** `dialChanged(true)` looks only when the dial was not attached before. `windowFronted()` and
     `refresh()` look only while a dial is attached. A lookup asked while one runs joins it. Not supported: never.
-    A lookup that throws keeps the last answer and logs `device app: lookup failed`. An answer that arrives while
-    an install runs is dropped.
+    A lookup that throws keeps the last answer and logs `device app: lookup failed`. An answer from a lookup asked
+    before an install or an open ended is dropped: it describes the computer before them. An answer that arrives
+    while an install runs changes nothing, because the install's result replaces it.
   - **An answer.** "Installed" clears `failedStep`. "Not installed" keeps it.
   - **Install.** Logs `device app: install started`. Done: the answer becomes installed and running at once, logs
     `device app: install done`, then one lookup. Failed at `open`: the answer becomes installed and not running,
