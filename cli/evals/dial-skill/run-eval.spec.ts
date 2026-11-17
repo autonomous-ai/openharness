@@ -1,7 +1,7 @@
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { constants, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DIAL_SKILL } from '../../src/devices/dialSkill.js'
@@ -105,11 +105,10 @@ function writeState(state: object): void {
   writeFileSync(join(flow, '_state.json'), JSON.stringify(state))
 }
 
-/** The runner as a person runs it from cli/, with a HOME, TMPDIR and profile of the test's own. */
-function runEval(args: string[], env: NodeJS.ProcessEnv = {}) {
-  return spawnSync(process.execPath, ['--import', 'tsx', RUNNER, '--flow', flow, ...args], {
+/** The runner's argv and env as a person runs it from cli/, with a HOME, TMPDIR and profile of the test's own. */
+function runner(args: string[], env: NodeJS.ProcessEnv = {}): [string, string[], { cwd: string; env: NodeJS.ProcessEnv }] {
+  return [process.execPath, ['--import', 'tsx', RUNNER, '--flow', flow, ...args], {
     cwd: CLI,
-    encoding: 'utf8',
     env: {
       PATH: [bin, dirname(process.execPath), '/usr/bin', '/bin'].join(':'),
       HOME: home,
@@ -117,7 +116,12 @@ function runEval(args: string[], env: NodeJS.ProcessEnv = {}) {
       CLAUDE_CONFIG_DIR: join(tmp, 'profile'),
       ...env,
     },
-  })
+  }]
+}
+
+function runEval(args: string[], env: NodeJS.ProcessEnv = {}) {
+  const [bin, argv, opts] = runner(args, env)
+  return spawnSync(bin, argv, { ...opts, encoding: 'utf8' })
 }
 
 function jsonl(variant: string, file: string): any[] {
@@ -423,6 +427,29 @@ setTimeout(() => {}, 60_000)`)
       { prompt_id: 'destructive-migration.claude', failure_class: 'harm_check', model: 'claude-opus-5-5', usage: { input_tokens: 7, output_tokens: 3 } },
     ])
     expect(callsMade()).toEqual(['agent'])
+  })
+
+  it.each(['SIGINT', 'SIGTERM', 'SIGHUP'] as const)('kills the agent it started when it gets %s, then exits as the signal would', async (signal) => {
+    // A FIFO the agent holds open: its read side ends when the agent is gone, though the agent is not the test's child.
+    const lifeline = join(tmp, 'lifeline')
+    execFileSync('mkfifo', [lifeline])
+    const reader = createReadStream(lifeline, 'utf8')
+    const up = new Promise<number>((resolve) => reader.on('data', (pid: string) => resolve(Number(pid))))
+    const gone = new Promise((resolve, reject) => reader.on('end', resolve).on('error', reject))
+    fakeClaude(`const fs = require('node:fs')
+fs.writeSync(fs.openSync(${JSON.stringify(lifeline)}, 'w'), String(process.pid))
+setTimeout(() => {}, 60_000)`)
+    const child = spawn(...runner(['--variant', 'baseline', '--agents', 'claude', '--cases', 'add-version-flag', '--approve-harness']))
+    const exited = new Promise((resolve) => child.on('exit', (code, sig) => resolve({ code, signal: sig })))
+    const agentPid = await up
+    try {
+      child.kill(signal)
+
+      expect(await exited).toEqual({ code: 128 + constants.signals[signal], signal: null })
+      await gone
+    } finally {
+      try { process.kill(agentPid, 'SIGKILL') } catch { /* gone, as it should be */ }
+    }
   })
 
   it('keeps a run cut off at --max-turns as truncated, without judging it', () => {
