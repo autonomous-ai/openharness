@@ -42,10 +42,11 @@ const MAX_OUTPUT_BYTES = 1024 * 1024
 const UNSUPPORTED: ClaudeFailure = { ok: false, error: `Claude Code ${MIN_CLAUDE} or later is needed.`, step: 'unsupported' }
 const NO_ANSWER = 'Claude Code did not answer.'
 
-/** [bin] run with no shell, its stdin closed; [env] the child's environment, the process's own by default. */
+/** [bin] run with no shell, its stdin closed; [env] the child's environment, the process's own by default. Its time
+ *  ends it with SIGKILL, as the engine lookup's shell: a `claude` that does not end on TERM would hold the pass. */
 export function claudeRunner(bin: string, env?: NodeJS.ProcessEnv): ClaudeRun {
   return (args, timeoutMs) => new Promise((resolve) => {
-    const child = execFile(bin, args, { encoding: 'utf8', timeout: timeoutMs, maxBuffer: MAX_OUTPUT_BYTES, env },
+    const child = execFile(bin, args, { encoding: 'utf8', timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: MAX_OUTPUT_BYTES, env },
       (error, stdout, stderr) => {
         // A kill (the timeout), a missing file or output past the bound has no exit code: it is no answer.
         const code = !error ? 0 : typeof error.code === 'number' ? error.code : null
