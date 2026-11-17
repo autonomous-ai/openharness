@@ -1,4 +1,5 @@
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -71,9 +72,14 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true })
 })
 
-/** The `claude` the runner finds on its PATH, for the agent and the judge alike; it logs each call to `calls`. */
+/** The `claude` the runner finds on its PATH, for the agent and the judge alike; it logs each call to `calls`, but not
+ *  `--version`, which spends nothing. */
 function fakeClaude(agentBody: string, judgeBody = JUDGE): void {
   writeFileSync(join(bin, 'claude'), `#!${process.execPath}
+if (process.argv[2] === '--version') {
+  console.log('2.1.326 (Claude Code)')
+  process.exit(0)
+}
 const judge = process.argv.includes('--json-schema')
 require('node:fs').appendFileSync(${JSON.stringify(calls)}, judge ? 'judge\\n' : 'agent\\n')
 if (judge) {
@@ -214,6 +220,62 @@ describe('run-eval.mjs pass', () => {
     expect(changed.stderr).toMatch(/harness changed/)
     expect(existsSync(join(flow, 'v1', 'results.jsonl'))).toBe(false)
     expect(runEval(['--variant', 'v1', ...args.slice(2), '--approve-harness']).status).toBe(0)
+  })
+})
+
+describe('run-eval.mjs summary.json', () => {
+  const summary = (variant: string) => JSON.parse(readFileSync(join(flow, variant, 'summary.json'), 'utf8'))
+
+  it('records the environment the pass runs under', () => {
+    const out = runEval(['--variant', 'baseline', '--agents', 'oracle', '--cases', 'board-unplugged', '--timeout-s', '900', '--approve-harness'])
+
+    expect(out.status, out.stderr).toBe(0)
+    const state = JSON.parse(readFileSync(join(flow, '_state.json'), 'utf8'))
+    expect(summary('baseline')).toEqual({
+      description: 'baseline',
+      label: 'baseline',
+      target: 'skill',
+      environment: {
+        commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: CLI, encoding: 'utf8' }).trim(),
+        lockfile: 'cli/package-lock.json',
+        lockfile_sha256: createHash('sha256').update(readFileSync(join(CLI, 'package-lock.json'))).digest('hex'),
+        claude_version: '2.1.326 (Claude Code)',
+        model: 'claude-opus-5-5',
+        effort: 'high',
+        max_turns: 40,
+        agent_timeout_s: 660,
+        case_timeout_s: 900,
+        judge_model: 'claude-opus-5-5',
+        judge_effort: 'low',
+        harness_sha: state.harness_sha,
+        rubric_sha: RUBRIC_SHA,
+        setting_sources: 'project',
+        date: new Date().toISOString().slice(0, 10),
+      },
+    })
+    expect(state.harness_sha).toMatch(/^[0-9a-f]{64}$/)
+    // Asking claude its version starts no agent or judge.
+    expect(callsMade()).toEqual(['judge', 'judge'])
+  })
+
+  it("keeps a round's description, label and target, and replaces its environment", () => {
+    mkdirSync(join(flow, 'v1'))
+    writeFileSync(join(flow, 'v1', 'summary.json'), JSON.stringify({
+      description: 'Says when to ring', label: 'ring rule', target: 'skill', environment: { commit: 'old' },
+    }))
+
+    const out = runEval(['--variant', 'v1', '--agents', 'null', '--cases', 'add-version-flag', '--approve-harness'])
+
+    expect(out.status, out.stderr).toBe(0)
+    expect(summary('v1')).toMatchObject({ description: 'Says when to ring', label: 'ring rule', target: 'skill' })
+    expect(summary('v1').environment.commit).not.toBe('old')
+  })
+
+  it('writes none when the pass is refused', () => {
+    const out = runEval(['--variant', 'baseline', '--agents', 'oracle', '--cases', 'no-such-scenario', '--approve-harness'])
+
+    expect(out.status).toBe(2)
+    expect(existsSync(join(flow, 'baseline', 'summary.json'))).toBe(false)
   })
 })
 
