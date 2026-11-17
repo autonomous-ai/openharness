@@ -698,8 +698,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
 
   /** One card for the dial, in its four calls. A remote machine's and this computer's are the same calls,
-   *  so a new kind of card lands on both the day it lands on either. */
-  const dispatch = (event: DialEvent): void | Promise<void> => {
+   *  so a new kind of card lands on both the day it lands on either. [notice]: its agent's notice was pending as the
+   *  card came (toDial). */
+  const dispatch = (event: DialEvent, notice: boolean): void | Promise<void> => {
     if (event.kind !== 'processing') latestUpdate.delete(event.agentId)
     if (event.kind === 'processing') {
       if (event.update) latestUpdate.set(event.agentId, event.update)
@@ -736,7 +737,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       ended.delete(agentId)
       // Its notice rang for this turn: the dial keeps one drawer row an agent, so a summary that rang or listed would
       // replace the notice's line. A failed turn still rings (docs/plans/2026-11-17-dial-one-ring-per-turn-design.md).
-      if (event.failed !== true && notices.pending(agentId)) { noted('silent', 'notice'); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, false); return }
+      if (event.failed !== true && notice) { noted('silent', 'notice'); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, false); return }
       const who = cableHost.describe(agentId)
       const needsYou = notifyMode.get() === 'you'
       // Decided once already, by the recaps (services/recaps.ts) or another machine, for the phone as well: the dial
@@ -812,7 +813,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const toDial = (event: DialEvent): void => {
     // The last streamed text goes out before the turn's end, in the same per-agent order.
     if (event.kind !== 'processing') endReplies(event.agentId, true)
-    inOrder(event.agentId, () => dispatch(event))
+    // Read as the card comes, not as its turn in the queue does: a summary can wait up to 2 s behind its turn's done
+    // (TOKENS_WAIT_MS), and the next turn's start, a message sent while the agent worked, ends the notice meanwhile.
+    const notice = event.kind === 'summary' && notices.pending(event.agentId)
+    inOrder(event.agentId, () => dispatch(event, notice))
   }
 
   // A remote machine's cards reach the dial through the same calls. The fleet has already noted which
