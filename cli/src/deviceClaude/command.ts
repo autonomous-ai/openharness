@@ -187,9 +187,10 @@ function realPath(path: string): string | null {
 
 /**
  * The homes besides the command's own that share its `plugins/`: Claude Code's default home, as named, when the command
- * runs with another (in an Orca terminal), and Orca's Claude Code homes by real path, each once (a home listed twice or
- * through a link is one home). The command's own home is left out, as one Orca lists when the command runs in an Orca
- * terminal: it is set up or removed already. One that does not resolve is not there to run in.
+ * runs with another whose `plugins/` is the default home's (an Orca terminal's: a home the person moved holds its own),
+ * and Orca's Claude Code homes by real path, each once (a home listed twice or through a link is one home). The command's
+ * own home is left out, as one Orca lists when the command runs in an Orca terminal: it is set up or removed already. One
+ * that does not resolve is not there to run in.
  */
 async function sharedHomes(deps: DeviceDeps): Promise<{ defaultHome: string | null; orca: string[] }> {
   const own = realPath(claudeHome())
@@ -199,7 +200,9 @@ async function sharedHomes(deps: DeviceDeps): Promise<{ defaultHome: string | nu
     const real = realPath(home)
     if (real !== null && real !== own && real !== defaultReal) orca.add(real)
   }
-  return { defaultHome: defaultReal !== null && defaultReal !== own ? deps.defaultClaudeHome : null, orca: [...orca] }
+  const plugins = realPath(join(deps.defaultClaudeHome, 'plugins'))
+  const shared = defaultReal !== own && plugins !== null && plugins === realPath(join(claudeHome(), 'plugins'))
+  return { defaultHome: shared ? deps.defaultClaudeHome : null, orca: [...orca] }
 }
 
 /**

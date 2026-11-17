@@ -426,8 +426,7 @@ describe('the dial skill', () => {
     const claudeThen = claudeHome
     expect(await device(['claude', 'enable'], { dataDir })).toEqual({ code: 0, out: [], err: [] })
     vi.stubEnv('CLAUDE_CONFIG_DIR', folder())
-    // The default home the enable ran with shares its plugin: turned off there too.
-    expect(await device(['claude', 'disable'], { dataDir, claudeIn: () => fakeClaude(INSTALLED) })).toEqual({ code: 0, out: [], err: [] })
+    expect(await device(['claude', 'disable'], { dataDir })).toEqual({ code: 0, out: [], err: [] })
     expect(existsSync(join(claudeThen, 'skills', 'dial'))).toBe(false)
     // Nothing is left to find: the record holds no folder.
     expect(answers(dataDir)).toEqual({ removed: { claude: true, codex: true } })
