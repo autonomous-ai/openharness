@@ -24,8 +24,9 @@ export interface HookTurnContext {
   graceMs: number
   /** The turn whose end the transcript has read and core holds for its Stop. */
   heldEnd(sessionId: string): { identity?: string; openedAt?: number } | undefined
-  /** A Stop came before the end of this open turn: that end goes on as it is read, not held. */
-  awaitEnd(sessionId: string, identity: string): void
+  /** A Stop came before its turn's end: the end of this open turn (its identity), or, when no turn of it was read yet,
+   *  of the turn opened by the time the Stop ran (its `firedAt`), goes on as it is read, not held. */
+  awaitEnd(sessionId: string, turn: string | number): void
   /** The held end goes to the funnel. False when none is held. */
   deliverHeldEnd(sessionId: string): boolean
   /** Subagents of the session run: a Stop leaves its turn open. */

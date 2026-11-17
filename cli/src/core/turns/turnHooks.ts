@@ -47,8 +47,9 @@ interface HookTurn {
   endsByHook: boolean
   /** The turn's own end, read and held for its Stop, and when it was read. */
   held?: { end: LiveEvent; identity?: string; openedAt?: number; at: number }
-  /** The turn a Stop came for before its end was read: that end goes on as it is read (R2). */
-  awaited?: string
+  /** The turn a Stop came for before its end was read, by identity, or by the time the Stop ran when none of its turn
+   *  was read yet: that end goes on as it is read (R2). */
+  awaited?: string | number
   /** When its latest end or wait hook reached the daemon: an engine still sending them has not lost the Stop. */
   hookAt: number
   /** When the hook of the wait on the person ran, while it is open (R4). */
@@ -149,7 +150,9 @@ export function createTurnHooks({
     if (turn?.subagents && events.some(event => isProgressEvent(event.type))) turn.progressAt = Date.now()
     if (!turn?.endsByHook || (!turn.held && !events.some(event => event.type === 'turn_ended'))) return emit(sessionId, events)
     // An aborted end, one no Stop follows (a paused /goal pass), and one its Stop came for already go on at once.
-    const atOnce = read.over || (read.turn && read.turn.identity === turn.awaited)
+    const { awaited } = turn, ofTurn = read.turn
+    const atOnce = read.over || (ofTurn && (ofTurn.identity === awaited
+      || (typeof awaited === 'number' && ofTurn.openedAt !== undefined && ofTurn.openedAt <= awaited)))
     const out: LiveEvent[] = []
     for (const event of events) {
       if (event.type === 'turn_started' && turn.held) { out.push(turn.held.end); turn.held = undefined }

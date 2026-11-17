@@ -45,6 +45,9 @@ export async function closeTurnOnStop(
   const leftAsLater = (st: LiveTurn | undefined): void => {
     if (st?.turnOpen && !stale && openedAfter(st)) console.log(`[turn] ${sid(sessionId)} ${hook} ran before the open turn opened: left open`)
   }
+  // None of its turn read yet (its tail lags, or an attach is reading the transcript): the turn opened by the time it
+  // ran is its own, and that turn's end goes on as it is read, in the drain below or after it.
+  if (!held && !arrived?.turnOpen && firedAt !== undefined) awaitEnd(sessionId, firedAt)
   await drain(sessionId)
   // A Stop hook is the one precise "the engine stopped writing" signal we get. When the mirror is
   // HOLDING a turn-end for finished async sub-agents, this is what tells it the wrap-up message is
