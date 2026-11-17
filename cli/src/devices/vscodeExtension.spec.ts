@@ -190,6 +190,13 @@ describe('vscodeEnable', () => {
     expect(existsSync(c.folders[0])).toBe(false)
   })
 
+  it('on at this build\'s version already, enable runs nothing and answers on', async () => {
+    const c = computer({ disk: { ...MAC, [RECORD]: record('1.2.3') } })
+    expect(await vscodeEnable(c.deps)).toEqual({ vscode: 'on', version: '1.2.3' })
+    expect(c.runs).toEqual([])
+    expect(c.folders).toEqual([])
+  })
+
   it('on Linux it is the code found on PATH that installs', async () => {
     const c = computer({ platform: 'linux', pathVar: '/usr/local/bin:/usr/bin', disk: { '/usr/bin/code': '' } })
     c.whenRun = () => c.disk.set(RECORD, record('1.2.3'))
