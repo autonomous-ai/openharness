@@ -1084,6 +1084,58 @@ describe('the record the plugin\'s setup reads', () => {
     expect(r.writer.plugin()).toBe('0.6.59')
   })
 
+  it('a record that cannot be read is not written over: an attach and a start write nothing, and say so', () => {
+    const r = rig()
+    r.writer.started()
+    expect(r.writer.recordPlugin('0.6.59')).toBe(true)
+    // The person removes it.
+    rmSync(skillFile(r.codexHome))
+    const file = join(r.dataDir, DIAL_SETUP_FILE)
+    const before = readFileSync(file, 'utf8')
+    r.lines.length = 0
+    // Stands for any read error: EACCES, EIO, EMFILE.
+    chmodSync(file, 0o000)
+
+    r.writer.attached()
+
+    chmodSync(file, 0o600)
+    expect(readFileSync(file, 'utf8')).toBe(before)
+    expect(r.writer.plugin()).toBe('0.6.59')
+    expect(existsSync(skillFile(r.codexHome))).toBe(false)
+    expect(r.lines).toEqual(['dial setup: record not read'])
+
+    // A start that cannot read it sets nothing up, and the plugin is not wanted.
+    const again = rig({ dataDir: r.dataDir, codexHome: r.codexHome })
+    chmodSync(file, 0o000)
+    again.writer.started()
+    chmodSync(file, 0o600)
+    expect(readFileSync(file, 'utf8')).toBe(before)
+    expect(again.writer.wanted('claude')).toBe(false)
+    expect(again.lines).toEqual(['dial setup: record not read'])
+  })
+
+  it('a dial-skill.json that cannot be read writes nothing that pass, and the plugin is not wanted', () => {
+    const r = rig()
+    pluginOn(r.claudeHome)
+    writeRemoved(r.dataDir, 'codex', true)
+    const file = join(r.dataDir, DIAL_SKILL_FILE)
+    // Stands for any read error: EACCES, EIO, EMFILE.
+    chmodSync(file, 0o000)
+
+    r.writer.started()
+    r.writer.scanned([ownerIn(folder())])
+
+    for (const home of [r.claudeHome, r.codexHome]) expect(existsSync(join(home, 'skills'))).toBe(false)
+    expect(r.writer.wanted('claude')).toBe(false)
+    expect(r.lines).toEqual(['dial skill: removals not read'])
+
+    // Read again at the next scan once it can be.
+    chmodSync(file, 0o600)
+    r.writer.scanned([])
+    expect(hasSkill(r.claudeHome)).toBe(true)
+    expect(existsSync(join(r.codexHome, 'skills'))).toBe(false)
+  })
+
   it('wanted: not before a dial, not after disable', () => {
     const r = rig({}, false)
     r.writer.started()

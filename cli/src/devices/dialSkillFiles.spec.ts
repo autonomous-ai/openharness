@@ -155,6 +155,26 @@ describe('the devices\' record of a dial\'s setup', () => {
     }
   })
 
+  it('a file that is there but cannot be read says so, and a removal is not written over it', () => {
+    const dataDir = aDataDir()
+    writeRemoved(dataDir, 'codex', true)
+    writeSetup(dataDir, { dial: true, plugin: '0.6.59', homes: { claude: [], codex: ['/a/skills'] } })
+    const files = [DIAL_SKILL_FILE, DIAL_SETUP_FILE].map((name) => join(dataDir, name))
+    // Stands for any read error: EACCES, EIO, EMFILE.
+    for (const file of files) chmodSync(file, 0o000)
+
+    expect(readSetup(dataDir)).toEqual({ ...empty, unread: true })
+    expect(readRemoved(dataDir)).toEqual({ unread: true })
+    // Codex's removal would be lost.
+    expect(writeRemoved(dataDir, 'claude', true)).toBe('EACCES')
+
+    for (const file of files) chmodSync(file, 0o600)
+    expect(readRemoved(dataDir)).toEqual({ codex: true })
+    // A missing file says nothing of the kind.
+    rmSync(files[1])
+    expect(readSetup(dataDir)).not.toHaveProperty('unread')
+  })
+
   it('a removal or a record that cannot be saved says its code and leaves the file', () => {
     const dataDir = aDataDir()
     writeRemoved(dataDir, 'codex', true)
