@@ -37,6 +37,7 @@ import {
   throwawayProcesses,
   unregister,
   VSCODE_PREFERENCES,
+  vscodeOutside,
   type Stamp,
 } from './throwawayApp.js'
 
@@ -199,7 +200,12 @@ describe('the extension in a real, throwaway VS Code', () => {
         if (app !== undefined) removeOwnFolders()
       }],
       ['the developer\'s VS Code\'s preferences', () => {
-        if (preferences !== undefined) assertUnchanged(VSCODE_PREFERENCES, preferences)
+        if (preferences === undefined) return
+        try {
+          assertUnchanged(VSCODE_PREFERENCES, preferences)
+        } catch (error) {
+          throw new Error(`${(error as Error).message}; ${vscodeOutside(root)}`)
+        }
       }],
     ], CLEAN_UP_MS)
   })

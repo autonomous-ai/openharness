@@ -147,6 +147,16 @@ export function throwawayProcesses(root: string): number[] {
   return carrying(processes(), root)
 }
 
+/** Whether a VS Code other than the throwaway runs, by its process's name alone: the developer's own writes its
+ *  preferences too, so a change seen while it runs may be its own. */
+export function vscodeOutside(root: string): string {
+  const own = new Set(throwawayProcesses(root))
+  const found = spawnSync('/usr/bin/pgrep', ['-x', 'Code'], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean)
+  return found.some((pid) => !own.has(Number(pid)))
+    ? 'a VS Code (Code) outside the gate\'s root is running'
+    : 'no VS Code (Code) outside the gate\'s root is running'
+}
+
 /** When the process started, as `ps` says: with its pid, it tells it from a later process given the same pid. */
 export function startedAt(pid: number): string | undefined {
   const read = spawnSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' })
