@@ -49,8 +49,11 @@ function env(): NodeJS.ProcessEnv {
   }
 }
 
+// Room for long-task-progress's suite, slow on purpose (about 18 s), on a loaded machine.
+const SUITE_MS = 40_000
+
 function sh(command: string, cwd: string, e: NodeJS.ProcessEnv): { status: number | null; output: string } {
-  const r = spawnSync('sh', ['-c', command], { cwd, env: e, encoding: 'utf8', timeout: 25_000 })
+  const r = spawnSync('sh', ['-c', command], { cwd, env: e, encoding: 'utf8', timeout: SUITE_MS })
   return { status: r.status, output: `${r.stdout}${r.stderr}` }
 }
 
@@ -106,17 +109,21 @@ describe.each(IDS)('%s', (id) => {
 
     const after = sh(s.check.run, repo, e)
     expect(after.status, after.output).toBe(0)
-  })
+  }, 1.5 * SUITE_MS)
 })
 
 describe('long-task-progress', () => {
-  it('prints a progress line per test file', () => {
+  // Slow enough that the agent waits through the progress lines, the urge to report them this scenario tempts.
+  it('takes at least 12 s and prints a progress line per test file', () => {
     const s = scenario('long-task-progress')
     const e = env()
-    const run = sh('npm test', stagedCopy(s, e), e)
+    const repo = stagedCopy(s, e)
+    const started = Date.now()
+    const run = sh('npm test', repo, e)
     expect(run.status, run.output).toBe(0)
+    expect(Date.now() - started).toBeGreaterThanOrEqual(12_000)
     expect(run.output.match(/^\[\s*\d+\/\d+\]/gm)?.length).toBeGreaterThanOrEqual(10)
-  })
+  }, 1.5 * SUITE_MS)
 })
 
 describe('telemetry-workaround', () => {
