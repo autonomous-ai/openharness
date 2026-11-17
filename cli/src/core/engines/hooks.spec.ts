@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import * as hooks from '../../engines/nativeHookSetup.js'
 import { engineHookInstallations as engineHooks } from '../../engines/nativeHookSetup.js'
-import type { RegisteredSession } from '../../lib/registry.js'
+import { RegistryOwnershipChanged, type RegisteredSession } from '../../lib/registry.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import { confirmHomes, recoverEngineHomes } from '../../lib/engineHomes.js'
 import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn, PROCESS_RECORD_WAIT_MS, type EngineHookDeps } from './hooks.js'
@@ -83,6 +83,43 @@ describe('which agent a hook belongs to', () => {
     expect(deps.agentReconciler.triggerHint).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%1' }, 'claude')
     expect(deps.registry.byRuntimeEngine).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%1' }, 'claude')
     expect(console.log).not.toHaveBeenCalled()
+  })
+
+  it.each(['claude', 'cursor'] as const)('matches current %s evidence after a reconciliation owner changed', async engine => {
+    const current = { ...agent('current', 100), engine } as RegisteredSession
+    const { deps, hooks } = setup({ '%1': current })
+    vi.mocked(processRows).mockResolvedValue(tree([300, 100], [100, 1]) as never)
+    vi.mocked(deps.agentReconciler.triggerHint).mockRejectedValueOnce(new RegistryOwnershipChanged('fixture changed'))
+    expect(await hooks.resolveHookAgent({ engine, runtimeHints: [hint('%1')], callerPid: 300 })).toEqual(current)
+  })
+
+  it.each(['committed', 'removed'] as const)('keeps Cursor resolution through a superseded reconciliation until pane %s', async outcome => {
+    const current = { ...agent('cursor-current'), engine: 'cursor' } as RegisteredSession
+    const panes: Record<string, RegisteredSession> = { '%1': current }
+    let finish!: () => void, held = true
+    const pending = new Promise<void>(resolve => { finish = resolve })
+    const { deps, hooks } = setup(panes, { panePending: () => held ? pending : undefined })
+    vi.mocked(processRows).mockResolvedValue(tree([300, 1]) as never)
+    vi.mocked(deps.agentReconciler.triggerHint).mockRejectedValueOnce(new RegistryOwnershipChanged('fixture changed'))
+    const onWait = vi.fn(), admitted = vi.fn()
+    const answer = hooks.resolveHookAgent({ engine: 'cursor', runtimeHints: [hint('%1')], callerPid: 300, onWait })
+      .then(result => { admitted(result); return { result } }, error => ({ error }))
+    try {
+      await vi.waitFor(() => expect(onWait).toHaveBeenCalledOnce())
+      expect(admitted).not.toHaveBeenCalled()
+    } finally {
+      if (outcome === 'removed') delete panes['%1']
+      held = false; finish()
+    }
+    expect(await answer).toEqual({ result: outcome === 'committed' ? current : null })
+  })
+
+  it('does not hide an unexpected hinted reconciliation failure', async () => {
+    const { deps, hooks } = setup({ '%1': agent('current', 100) })
+    const failure = new Error('fixture unexpected')
+    vi.mocked(processRows).mockResolvedValue(tree([300, 100], [100, 1]) as never)
+    vi.mocked(deps.agentReconciler.triggerHint).mockRejectedValueOnce(failure)
+    await expect(hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })).rejects.toBe(failure)
   })
 
   it('the agent on a hinted pty host pane, with no tmux to resolve tmux hints', async () => {
