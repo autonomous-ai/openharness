@@ -115,3 +115,28 @@ after the Store confirms removal, while unavailable Store replies stay unavailab
 It reads no installed index. The focused regression first failed one case with one
 unavailability control passing; after correction, all 38 fork and Store launch
 golden tests passed on macOS, and source types passed. Broad gates remain pending.
+
+## Store boundary acceptance cases, 17 November
+
+The integrated source `29a7ec4677` already returned the intended results, but its
+Store-off description fallback and readiness paths lacked full acceptance coverage.
+New assertions prove that an absent Store refuses package descriptions by name,
+that exempting disabled Hachi does not announce the other bundled packages ready,
+and that an unavailable description during partial preparation sends no `prepared`
+notice. Existing malformed-request, recovery and disconnected-core controls remain.
+No production code, data format or runtime behavior changes in this test slice.
+
+The initial three-file baseline passed all 63 behavior tests but exited 1 at the
+per-file coverage gate; this is coverage RED, not a claimed behavior failure.
+The selected nine-file boundary check passed 147/147 tests in 10.76 seconds, with
+`core/api.ts`, `services/store.ts` and `services/storeProcess.ts` each at 100% for
+statements, branches, functions and lines. Its extra existing specs exercise the
+other public API fallbacks and query contracts, rather than adding duplicate tests
+solely for coverage. Logs and coverage are retained under
+`/tmp/store-boundary-acceptance-{baseline,green}.log` and
+`/tmp/store-boundary-acceptance-coverage/`.
+
+Type checking also exited 0 (`/tmp/store-boundary-acceptance-types.log`).
+Validation is local macOS on pinned Node 24.22.2, using the existing private fixture
+setup. No native Windows/Linux or full-core acceptance is claimed here; the
+coordinator owns combined gates, integration and release.

@@ -580,6 +580,12 @@ describe('the core API services stand on', () => {
     expect(emptyPorts()).not.toBe(emptyPorts())
   })
 
+  it('refuses package descriptions while Store is absent instead of inventing package facts', async () => {
+    const ports = emptyPorts()
+    await expect((ports.store ?? STORE_OFF).dshDescribe({ dsh: 'test/draw', engine: 'claude' }))
+      .rejects.toMatchObject({ name: 'ServiceUnavailableError', service: 'store', message: 'the store service is unavailable' })
+  })
+
   it('answers models\' fallbacks while it is off: no set-up and no target, no note and no prewarm, no name of its own', async () => {
     const grid = { baseUrl: 'https://fixture.invalid/g/n1/relay/v1', model: 'm' }
     const launch = { networkId: 'n1', networkName: 'mine', baseUrl: grid.baseUrl, apiKey: 'k' }

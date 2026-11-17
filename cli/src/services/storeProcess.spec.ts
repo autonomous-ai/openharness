@@ -121,6 +121,18 @@ describe('the Store launch port on its process wire', () => {
     expect(await options.requests.dshDescribe!(request, ASKER)).toEqual(facts)
     await Promise.resolve()
   })
+  it('keeps a package unavailable without announcing readiness while bundled preparation is incomplete', async () => {
+    const { launch } = setup()
+    const unavailable = { ok: false as const, error: 'DSH_UNAVAILABLE', unavailable: 'store' as const, detail: 'Bundled preparation is incomplete' }
+    launch.dshDescribe.mockResolvedValueOnce(unavailable as never)
+    runStoreService({ dataDir: '/data', socketPath: '/socket', machineId: 'm', token: 't', start: () => ({}), launch,
+      prepare: Object.assign(() => false, { ready: () => false, invalidate: () => {} }) })
+    const options = vi.mocked(runServiceProcess).mock.calls.at(-1)![0]
+    const query = vi.fn(async () => ({}))
+    options.onConnected!({ query })
+    expect(await options.requests.dshDescribe!(request, ASKER)).toEqual(unavailable)
+    expect(query).not.toHaveBeenCalled()
+  })
   it('rejects malformed requests before package work starts', async () => {
     const { launch, requests } = setup()
     const bad = [{ dsh: '' }, { dsh: 1 }, { workspace: null }, { engine: 'terminal' }, { engine: 'unknown' },
