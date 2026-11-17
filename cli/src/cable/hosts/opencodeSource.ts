@@ -497,7 +497,8 @@ export class OpencodeSource implements HostSource {
     if (type === 'server.connected') return this.ask()
     const id = data.sessionID
     if (typeof id !== 'string' || !OPENCODE_SESSION.test(id)) return
-    // The list itself keeps only root sessions.
+    // The list itself keeps only root sessions: a sub-agent's new one, which names its parent, would cost a list for none.
+    if (type === 'session.created' && typeof data.parentID === 'string') return
     if (type === 'session.created' || type === 'session.unarchived') return this.ask()
     const row = this.rows.get(id)
     if (type === 'session.deleted' || type === 'session.archived') {
