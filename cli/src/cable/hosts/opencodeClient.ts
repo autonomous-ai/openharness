@@ -358,22 +358,25 @@ export function createOpencodeClient(deps: OpencodeClientDeps): OpencodeClient {
     if (!OPENCODE_SESSION.test(sessionId) || !OPENCODE_MESSAGE.test(messageId) || text.length > MAX_TEXT || words.trim() === '') {
       return 'failed'
     }
-    const active = await request('GET', '/api/session/active')
+    // The words go to the service whose reads said the session is free, whatever a find meanwhile holds.
+    const at = held
+    if (!at) return 'failed'
+    const active = await call(at, 'GET', '/api/session/active')
     if (!active.ok) return outcome(active.fault)
     const running = isObject(active.json) ? active.json.data : undefined
     if (!isObject(running)) return 'failed'
     if (Object.hasOwn(running, sessionId)) return 'busy'
     const session = `/api/session/${sessionId}`
-    const asked = await request('GET', `${session}/permission`)
+    const asked = await call(at, 'GET', `${session}/permission`)
     if (!asked.ok) return outcome(asked.fault)
     const pending = isObject(asked.json) ? asked.json.data : undefined
     if (!Array.isArray(pending)) return 'failed'
     if (pending.length > 0) return 'waiting'
     const body = { text: words, id: messageId, delivery: 'queue' }
-    let sent = await request('POST', `${session}/prompt`, body)
+    let sent = await call(at, 'POST', `${session}/prompt`, body)
     // With no answer the words may have landed or not. Posted once more under the same id, they land once: a 409 says the
     // first did. Any answer is opencode's own, and is never posted again.
-    if (!sent.ok && (sent.fault === 'refused' || sent.fault === 'timeout')) sent = await request('POST', `${session}/prompt`, body)
+    if (!sent.ok && (sent.fault === 'refused' || sent.fault === 'timeout')) sent = await call(at, 'POST', `${session}/prompt`, body)
     // A 409 is only ever our own id: an earlier post of these same words.
     return sent.ok || sent.fault === 'conflict' ? 'sent' : outcome(sent.fault)
   }
