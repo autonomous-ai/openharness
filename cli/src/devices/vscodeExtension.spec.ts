@@ -86,6 +86,7 @@ function computer(options: ComputerOptions = {}) {
       home: HOME,
       pathVar: options.pathVar ?? '/usr/bin:/bin',
       exists: (path) => disk.has(path),
+      executable: (path) => disk.has(path),
       read: (path, maxBytes) => {
         const text = disk.get(path)
         return text === undefined || Buffer.byteLength(text) > maxBytes ? null : text
@@ -194,6 +195,15 @@ describe('vscodeEnable', () => {
     c.whenRun = () => c.disk.set(RECORD, record('1.2.3'))
     expect(await vscodeEnable(c.deps)).toEqual({ vscode: 'on', version: '1.2.3' })
     expect(c.runs.map(([file]) => file)).toEqual(['/usr/bin/code'])
+  })
+
+  it('on Linux only PATH\'s absolute folders are looked in: a relative one is wherever Harness happens to run', async () => {
+    const disk = { 'rel/bin/code': '', code: '', '/usr/bin/code': '' }
+    const c = computer({ platform: 'linux', pathVar: 'rel/bin:.:/usr/bin', disk })
+    c.whenRun = () => c.disk.set(RECORD, record('1.2.3'))
+    expect(await vscodeEnable(c.deps)).toEqual({ vscode: 'on', version: '1.2.3' })
+    expect(c.runs.map(([file]) => file)).toEqual(['/usr/bin/code'])
+    expect(vscodeStatus(computer({ platform: 'linux', pathVar: 'rel/bin:.', disk }).deps)).toEqual({ vscode: 'absent' })
   })
 
   // Each starts on at an older version, so its answer shows a failure's `vscode` is off whatever was there before.
@@ -325,6 +335,20 @@ describe('the real dependencies, on the test\'s own files', () => {
     expect(await vscodeExtensionDeps().run('/bin/sh', [code], 300)).toEqual({ code: null, timedOut: true })
     const pid = Number(readFileSync(pidFile, 'utf8'))
     await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' })))
+  })
+
+  it('on Linux, PATH\'s `code` is a file this account may run: a folder or a file it may not run is passed over', async () => {
+    const real = vscodeExtensionDeps()
+    const [folder, plain, runnable] = ['a', 'b', 'c'].map((name) => join(scratch, name))
+    mkdirSync(join(folder, 'code'), { recursive: true })
+    mkdirSync(plain)
+    writeFileSync(join(plain, 'code'), '', { mode: 0o644 })
+    mkdirSync(runnable)
+    writeFileSync(join(runnable, 'code'), '', { mode: 0o755 })
+    const c = computer({ platform: 'linux', pathVar: [folder, plain, runnable].join(':') })
+    c.whenRun = () => c.disk.set(RECORD, record('1.2.3'))
+    expect(await vscodeEnable({ ...c.deps, exists: real.exists, executable: real.executable })).toEqual({ vscode: 'on', version: '1.2.3' })
+    expect(c.runs.map(([file]) => file)).toEqual([join(runnable, 'code')])
   })
 
   it('the temporary folder and the file are this account\'s alone, and removing never throws', () => {
