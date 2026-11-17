@@ -10,8 +10,8 @@
  * another (in an Orca terminal), all sharing the command's `plugins/`: there the plugin is only turned on or off.
  * `disable` turns those off first and never uninstalls there: an uninstall takes the files every home names, and another
  * home's entry would then stay on with nothing left to turn off (check 8).
- * `harness device orca link` is Orca's plugin's word, never typed either: whether the daemon is up and where the
- * devices' socket is, so the plugin builds no path. `harness device notify` is an agent's, from the dial skill (devices/notice.ts). This
+ * `harness device orca link` and `harness device vscode link` are Orca's plugin's word and Harness's VS Code extension's,
+ * never typed either: whether the daemon is up and where the devices' socket is, so neither builds a path. `harness device notify` is an agent's, from the dial skill (devices/notice.ts). This
  * runs only in the `harness` command's own process; nothing the core or a service loads imports this folder.
  */
 import { mkdirSync, realpathSync } from 'node:fs'
@@ -26,7 +26,7 @@ import { localSocketRoute, socketIsPrivate } from '../lib/localTransport.js'
 import { daemonPost, runAsked } from './asked.js'
 import { claudePluginOn, claudeSettingsPath } from './plugin.js'
 
-/** `asked`, `link` and `orca link` are left out: they are the plugins', and typed by hand they only wait on stdin or print a path. */
+/** `asked`, `link`, `orca link` and `vscode link` are left out: they are the plugins', and typed by hand they only wait on stdin or print a path. */
 export const DEVICE_USAGE = `Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it; disable takes that away, enable brings it back):
   harness device claude status [--json]  whether the dial is on for Claude Code (its harness-device plugin on, and not removed), and its version
   harness device claude enable           set Claude Code up again: the plugin and the dial skill (Claude Code 2.1.287 or later), in each Orca account too
@@ -66,7 +66,7 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
   if (argv[0] === 'notify') return runNotice(argv.slice(1), deps)
   const words = argv.filter((arg) => !arg.startsWith('-'))
   const json = argv.includes('--json')
-  if (words.length === 2 && words[0] === 'orca' && words[1] === 'link') return orcaLink(deps)
+  if (words.length === 2 && (words[0] === 'orca' || words[0] === 'vscode') && words[1] === 'link') return devicesLink(deps)
   if (words.length === 2 && words[0] === 'codex') return codexCommand(words[1], json, deps)
   const verb = words.length === 2 && words[0] === 'claude' ? words[1] : null
   switch (verb) {
@@ -339,11 +339,11 @@ async function turnOff(engine: DialEngine, home: string, deps: DeviceDeps, plugi
 }
 
 /**
- * Orca's plugin asks this before each pass. `daemon` connects only to a socket that is this account's own, since a socket
+ * Orca's plugin and the VS Code extension ask this before each pass. `daemon` connects only to a socket that is this account's own, since a socket
  * a crashed daemon left behind is still there and still private. `devicesReady` does not connect: a connection there
  * counts against that listener's own, and the plugin's open finds a stale socket itself.
  */
-async function orcaLink(deps: DeviceDeps): Promise<number> {
+async function devicesLink(deps: DeviceDeps): Promise<number> {
   const daemonSocket = localSocketRoute(deps.dataDir, deps.port, deps.platform)
   const daemon = daemonSocket !== null && socketIsPrivate(daemonSocket) && await takesConnect(daemonSocket)
   const devicesSocket = devicesListenerPath(deps.dataDir, deps.platform)
