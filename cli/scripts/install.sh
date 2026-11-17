@@ -25,12 +25,13 @@
 #
 # What the CLI RUNS is a short list — tmux (its only terminal backend), `ps`, and on a Linux desktop
 # the clipboard helper for the active display — and step 1 checks exactly that list. Everything else
-# here (Homebrew, apt, curl/tar/sed/awk/sha256sum) is only a way of obtaining one of those or of
-# downloading a runtime, and is looked at only when the thing it obtains is missing: a Mac with tmux
-# never hears about Homebrew, and the download tools are checked only when something is downloaded.
-# On a Mac without tmux, Homebrew is used if it is already there; otherwise tmux comes the way Node
-# does — a checksum-verified MANAGED build from our manifest into ~/.harness/runtime, no compiler,
-# no package manager and no password (see cli/scripts/build-managed-tmux.sh).
+# here (a Homebrew prefix, apt, curl/tar/sed/awk/sha256sum) is only a way of obtaining one of those or
+# of downloading a runtime, and is looked at only when the thing it obtains is missing: a Mac with tmux
+# on PATH never hears about Homebrew, and the download tools are checked only when something is
+# downloaded. On a Mac without tmux on PATH, a tmux Homebrew already installed is used from its
+# prefix's bin, and Homebrew itself is never run; otherwise tmux comes the way Node does — a
+# checksum-verified MANAGED build from our manifest into ~/.harness/runtime, no compiler, no package
+# manager and no password (see cli/scripts/build-managed-tmux.sh).
 # Desktop mode (`--desktop`) trusts the app's own host pre-flight and skips step 1; host mode
 # (`--host`) is the app handing step 1 to a real terminal for its password prompts and stops after it.
 # The runtime's absolute path is baked into the launcher, so a Finder launch — where PATH is
@@ -431,29 +432,17 @@ case "$(uname -s)" in
     if tmux_runs; then
       : # tmux runs. How it got here is nobody's business, and nothing else is looked at.
     else
-      # A Homebrew installed for a different shell is still installed — and if it is here at all,
-      # its tmux is preferred: it is what the owner already maintains. The prefixes are overridable
-      # so a test (or an unusual install) can say where, or that there is none.
-      if ! command -v brew >/dev/null 2>&1; then
-        for brew_prefix in ${HARNESS_HOMEBREW_PREFIXES:-/opt/homebrew /usr/local}; do
-          if [ -x "$brew_prefix/bin/brew" ]; then
-            eval "$("$brew_prefix/bin/brew" shellenv 2>/dev/null || true)"
-            break
-          fi
-        done
-      fi
-      if command -v brew >/dev/null 2>&1; then
-        echo "▸ Installing tmux via Homebrew"
-        # --force-bottle: use Homebrew's prebuilt bottle if there is one, and fail FAST if there is
-        # not, rather than dragging the person into a from-source build. Homebrew stopped shipping
-        # Intel (x86_64) bottles in 2025, so on an Intel Mac `brew install tmux` would otherwise
-        # compile tmux + its deps and demand the Command Line Tools — the exact slow, password-and-
-        # compiler path the managed build exists to avoid. When no bottle is available this returns
-        # non-zero and the managed download below takes over.
-        brew install --force-bottle tmux || echo "▸ No Homebrew tmux bottle for this Mac; using the managed build instead."
-      fi
-      # No Homebrew, or a Homebrew that could not (no bottle): the managed build. Nothing to compile,
-      # nothing to ask a password for — the same checksum-verified download Node gets in step 2.
+      # Homebrew is never run: on 2026-11-17 `brew install tmux` updated Homebrew, ran its cleanup and
+      # replaced openssl on a new user's Mac. A tmux Homebrew already installed is still used, found in
+      # its prefix's bin, which a Finder launch's PATH lacks; the prefixes are overridable so a test
+      # (or an unusual install) can say where, or that there is none.
+      for brew_prefix in ${HARNESS_HOMEBREW_PREFIXES:-/opt/homebrew /usr/local}; do
+        [ -x "$brew_prefix/bin/tmux" ] || continue
+        export PATH="$brew_prefix/bin:$PATH"
+        if tmux_runs; then break; fi
+      done
+      # No Homebrew tmux that runs: the managed build. Nothing to compile, nothing to ask a password
+      # for — the same checksum-verified download Node gets in step 2.
       tmux_runs || install_managed_tmux
     fi
     ;;
