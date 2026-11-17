@@ -12,6 +12,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DIAL_SKILL } from '../devices/dialSkill.js'
+import { readPluginHomes } from '../devices/dialSkillFiles.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { listenLocalSocket, unixSocketPath } from '../lib/localSocket.js'
 import { socketIsPrivate } from '../lib/localTransport.js'
@@ -87,8 +88,10 @@ async function devicesAt(dataDir: string): Promise<string> {
   return path
 }
 
+type Answers = Record<string, { code: number; stdout?: string; stderr?: string }>
+
 /** A `claude` 2.1.287 with nothing installed, whose calls answer from [answers] by their arguments. */
-function fakeClaude(answers: Record<string, { code: number; stdout?: string; stderr?: string }> = {}): ClaudeRun {
+function fakeClaude(answers: Answers = {}): ClaudeRun {
   const table: typeof answers = { '--version': { code: 0, stdout: '2.1.287 (Claude Code)\n' }, 'plugin list --json': { code: 0, stdout: '[]' }, ...answers }
   return async (args) => {
     const answer = table[args.join(' ')] ?? { code: 0 }
@@ -105,6 +108,7 @@ async function device(argv: string[], deps: Partial<DeviceDeps> = {}) {
   const err: string[] = []
   const code = await runDeviceCommand(argv, {
     dataDir: folder(), port: PORT, platform: 'darwin', stdin: chunks(), claude: () => fakeClaude(),
+    orcaHomes: async () => [], claudeIn: () => null,
     codexHome: folder(), codex: () => true, env: {}, cwd: '/',
     out: (line) => { out.push(line) }, err: (line) => { err.push(line) },
     ...deps,
@@ -310,8 +314,8 @@ describe('harness device claude', () => {
     for (const line of [
       'Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it; disable takes that away, enable brings it back):',
       'harness device claude status [--json]  whether the dial is on for Claude Code (its harness-device plugin on, and not removed), and its version',
-      'harness device claude enable           set Claude Code up again: the plugin and the dial skill (Claude Code 2.1.287 or later)',
-      'harness device claude disable          remove the plugin and the dial skill; Harness leaves them removed',
+      'harness device claude enable           set Claude Code up again: the plugin and the dial skill (Claude Code 2.1.287 or later), in each Orca account too',
+      'harness device claude disable          remove the plugin and the dial skill, in each Orca account too; Harness leaves them removed',
       'harness device codex status [--json]   whether the dial is on for Codex',
       'harness device codex enable            set Codex up again: the dial skill in its homes',
       'harness device codex disable           remove the dial skill Harness wrote; Harness leaves it removed',
@@ -634,6 +638,220 @@ describe('the dial skill', () => {
   })
 })
 
+describe('Orca\'s Claude Code homes', () => {
+  const ENABLE = 'plugin enable harness-device@openharness --scope user'
+  const DISABLE = 'plugin disable harness-device@openharness --scope user'
+  const ON_FAILED = 'Could not turn on Claude Code in one Orca account.'
+  const OFF_FAILED = 'Could not turn off Claude Code in one Orca account.'
+  const ok = { code: 0, out: [], err: [] }
+
+  /** The plugin as an Orca home lists it: installed, since its `plugins/` is the default home's, and on or off there. */
+  const listed = (enabled: boolean): Answers =>
+    ({ 'plugin list --json': { code: 0, stdout: JSON.stringify([{ id: 'harness-device@openharness', scope: 'user', enabled }]) } })
+
+  /** The command's `claude` (home null) and Claude Code pointed at an Orca home, each answering from [answersOf] its home;
+   *  every call is kept in order with the home it ran in. */
+  function claudes(answersOf: (home: string | null) => Answers) {
+    const calls: Array<{ home: string | null; args: string }> = []
+    const at = (home: string | null): ClaudeRun => {
+      const run = fakeClaude(answersOf(home))
+      return async (args, timeoutMs) => {
+        calls.push({ home, args: args.join(' ') })
+        return run(args, timeoutMs)
+      }
+    }
+    return { calls, claude: () => at(null), claudeIn: (home: string) => at(home) }
+  }
+
+  /** [claudeIn], with [first] run once, before an Orca home's first call. */
+  function before(claudeIn: (home: string) => ClaudeRun, first: () => void): (home: string) => ClaudeRun {
+    let ran = false
+    return (home) => {
+      const run = claudeIn(home)
+      return async (args, timeoutMs) => {
+        if (!ran) first()
+        ran = true
+        return run(args, timeoutMs)
+      }
+    }
+  }
+
+  it('enable turns the plugin on in each Orca home after the default home', async () => {
+    const dataDir = folder()
+    const homes = [folder(), folder()]
+    const real = homes.map((home) => realpathSync(home))
+    const { calls, claude, claudeIn } = claudes((home) => home === null ? {} : listed(false))
+    let atFirst: unknown
+    const watched = before(claudeIn, () => { atFirst = { answers: answers(dataDir), skill: existsSync(skillAt(claudeHome)) } })
+    expect(await device(['claude', 'enable'], { dataDir, claude, claudeIn: watched, orcaHomes: async () => homes })).toEqual(ok)
+    // The default home whole first: its plugin, its removal cleared and its skill.
+    expect(atFirst).toEqual({ answers: { homes: { claude: [realpathSync(join(claudeHome, 'skills'))], codex: [] } }, skill: true })
+    const first = calls.findIndex((call) => call.home !== null)
+    expect(calls.slice(0, first).map((call) => call.home)).toEqual(Array(first).fill(null))
+    expect(calls.slice(0, first).map((call) => call.args)).toContain('plugin install harness-device@openharness --scope user')
+    // Each by its real path, turned on alone: its files are the default home's.
+    expect(calls.slice(first)).toEqual(real.flatMap((home) => [
+      { home, args: '--version' }, { home, args: 'plugin list --json' }, { home, args: ENABLE },
+    ]))
+    expect(process.env.CLAUDE_CONFIG_DIR).toBe(claudeHome)
+    expect(readPluginHomes(dataDir)).toEqual({ homes: real })
+    // The devices' record has one writer, the devices service.
+    expect(existsSync(join(dataDir, 'dial-setup.json'))).toBe(false)
+  })
+
+  it('an Orca home already on is recorded with no enable', async () => {
+    const dataDir = folder()
+    const home = folder()
+    const { calls, claude, claudeIn } = claudes((at) => at === null ? {} : listed(true))
+    expect(await device(['claude', 'enable'], { dataDir, claude, claudeIn, orcaHomes: async () => [home] })).toEqual(ok)
+    expect(calls.filter((call) => call.home !== null).map((call) => call.args)).toEqual(['--version', 'plugin list --json'])
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [realpathSync(home)] })
+  })
+
+  it('a home that fails to turn on prints one line and the command still exits 0', async () => {
+    const dataDir = folder()
+    const [failing, next] = [folder(), folder()]
+    const { calls, claude, claudeIn } = claudes((home) => home === null ? {}
+      : home === realpathSync(failing) ? { ...listed(false), [ENABLE]: { code: 1, stderr: `Could not write ${failing}/settings.json\n` } }
+      : listed(false))
+    // Claude Code's own line names the account's folder: only the fixed line is said.
+    expect(await device(['claude', 'enable'], { dataDir, claude, claudeIn, orcaHomes: async () => [failing, next] }))
+      .toEqual({ code: 0, out: [], err: [ON_FAILED] })
+    expect(calls).toContainEqual({ home: realpathSync(next), args: ENABLE })
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [realpathSync(next)] })
+
+    // No Claude Code there either is that home's failure.
+    expect(await device(['claude', 'enable'], { dataDir, claude, claudeIn: () => null, orcaHomes: async () => [next] }))
+      .toEqual({ code: 0, out: [], err: [ON_FAILED] })
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [] })
+  })
+
+  it('a home whose real path no record could hold is turned on and not recorded', async () => {
+    const dataDir = folder()
+    // U+0085 is a control character the record refuses; the home Orca names links to it.
+    const odd = join(realpathSync(folder()), 'or\u0085ca')
+    mkdirSync(odd)
+    const named = join(folder(), 'home')
+    symlinkSync(odd, named)
+    const other = folder()
+    const { calls, claude, claudeIn } = claudes((home) => home === null ? {} : listed(false))
+    expect(await device(['claude', 'enable'], { dataDir, claude, claudeIn, orcaHomes: async () => [named, other] })).toEqual(ok)
+    expect(calls).toContainEqual({ home: odd, args: ENABLE })
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [realpathSync(other)] })
+  })
+
+  it('an enable that fails in the default home asks Orca nothing', async () => {
+    const failedInstall = fakeClaude({ 'plugin install harness-device@openharness --scope user': { code: 1, stderr: 'Plugin not found' } })
+    let asked = 0
+    const orca: Partial<DeviceDeps> = {
+      orcaHomes: async () => { asked++; return [folder()] },
+      claudeIn: () => { asked++; return fakeClaude(listed(false)) },
+    }
+    expect(await device(['claude', 'enable'], { claude: () => failedInstall, ...orca })).toEqual({ code: 1, out: [], err: ['Plugin not found'] })
+    const locked = folder()
+    readOnly(locked)
+    expect(await device(['claude', 'enable'], { dataDir: locked, ...orca })).toEqual({ code: 1, out: [], err: ['Could not save the dial setting.'] })
+    expect(asked).toBe(0)
+  })
+
+  it('an Orca record that cannot be saved says so and exits 1', async () => {
+    const dataDir = folder()
+    const { claude, claudeIn } = claudes((home) => home === null ? {} : listed(false))
+    // The data folder shut after the default home was set up, before the Orca homes are recorded.
+    const shutting = before(claudeIn, () => readOnly(dataDir))
+    expect(await device(['claude', 'enable'], { dataDir, claude, claudeIn: shutting, orcaHomes: async () => [folder()] }))
+      .toEqual({ code: 1, out: [], err: ['Could not save the dial setting.'] })
+  })
+
+  it('the command\'s own home is not run twice', async () => {
+    const dataDir = folder()
+    const home = folder()
+    const links = folder()
+    symlinkSync(claudeHome, join(links, 'own'))
+    symlinkSync(home, join(links, 'home'))
+    // The command run in an Orca terminal: its own home is one Orca lists, as itself and through a link. Another home is
+    // listed twice and through a link.
+    const listing = async () => [claudeHome, join(links, 'own'), home, join(links, 'home'), home]
+    for (const [verb, on] of [['enable', false], ['disable', true]] as const) {
+      const { calls, claude, claudeIn } = claudes((at) => at === null ? INSTALLED : listed(on))
+      expect(await device(['claude', verb], { dataDir, claude, claudeIn, orcaHomes: listing }), verb).toEqual(ok)
+      expect(new Set(calls.map((call) => call.home)), verb).toEqual(new Set([null, realpathSync(home)]))
+      expect(calls.filter((call) => call.args === (on ? DISABLE : ENABLE)), verb).toEqual([{ home: realpathSync(home), args: on ? DISABLE : ENABLE }])
+    }
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [realpathSync(home)] })
+  })
+
+  it('disable turns off each Orca home first, then the default home', async () => {
+    const dataDir = folder()
+    skillIn(claudeHome)
+    const homes = [folder(), folder()]
+    const real = homes.map((home) => realpathSync(home))
+    const { calls, claude, claudeIn } = claudes((home) => home === null ? INSTALLED : listed(true))
+    let atFirst: unknown
+    const watched = before(claudeIn, () => { atFirst = answers(dataDir) })
+    expect(await device(['claude', 'disable'], { dataDir, claude, claudeIn: watched, orcaHomes: async () => homes })).toEqual(ok)
+    expect(atFirst).toEqual({ removed: { claude: true } })
+    // Never an uninstall in an Orca home: it would take the files every home names. The default home's comes last.
+    expect(calls).toEqual([
+      ...real.flatMap((home) => [{ home, args: 'plugin list --json' }, { home, args: DISABLE }]),
+      { home: null, args: 'plugin list --json' }, { home: null, args: UNINSTALL },
+    ])
+    expect(existsSync(skillAt(claudeHome))).toBe(false)
+  })
+
+  it('a home that fails to turn off prints one line and the command exits 1', async () => {
+    const dataDir = folder()
+    skillIn(claudeHome)
+    const [failing, next] = [folder(), folder()]
+    const answersOf = (uninstall: Answers) => (home: string | null): Answers => home === null ? { ...INSTALLED, ...uninstall }
+      : home === realpathSync(failing) ? { ...listed(true), [DISABLE]: { code: 1, stderr: `${failing}/settings.json: denied` } }
+      : listed(true)
+    const { calls, claude, claudeIn } = claudes(answersOf({}))
+    expect(await device(['claude', 'disable'], { dataDir, claude, claudeIn, orcaHomes: async () => [failing, next] }))
+      .toEqual({ code: 1, out: [], err: [OFF_FAILED] })
+    expect(calls).toContainEqual({ home: realpathSync(next), args: DISABLE })
+    expect(calls.at(-1)).toEqual({ home: null, args: UNINSTALL })
+    expect(existsSync(skillAt(claudeHome))).toBe(false)
+    expect(answers(dataDir)).toEqual({ removed: { claude: true } })
+
+    // The default home's own failure is still said, after the Orca home's line.
+    const both = claudes(answersOf({ [UNINSTALL]: { code: 1, stderr: 'x' } }))
+    expect(await device(['claude', 'disable'], { dataDir, claude: both.claude, claudeIn: both.claudeIn, orcaHomes: async () => [failing, next] }))
+      .toEqual({ code: 1, out: [], err: [OFF_FAILED, 'x'] })
+  })
+
+  it('with no claude and an Orca home\'s settings on, disable says that home failed', async () => {
+    pluginOn(false)
+    const [on, off, none] = [folder(), folder(), folder()]
+    writeFileSync(join(on, 'settings.json'), JSON.stringify({ enabledPlugins: { 'harness-device@openharness': true } }))
+    writeFileSync(join(off, 'settings.json'), JSON.stringify({ enabledPlugins: { 'harness-device@openharness': false } }))
+    expect(await device(['claude', 'disable'], { claude: () => null, claudeIn: () => null, orcaHomes: async () => [on, off, none] }))
+      .toEqual({ code: 1, out: [], err: [OFF_FAILED] })
+  })
+
+  it('with no Orca home, or Orca not read, enable and disable are as before', async () => {
+    const dataDir = folder()
+    const { calls, claude, claudeIn } = claudes(() => INSTALLED)
+    expect(await device(['claude', 'enable'], { dataDir, claude, claudeIn, orcaHomes: async () => [] })).toEqual(ok)
+    expect(answers(dataDir)).toEqual({ homes: { claude: [realpathSync(join(claudeHome, 'skills'))], codex: [] } })
+    expect(await device(['claude', 'disable'], { dataDir, claude, claudeIn, orcaHomes: async () => [] })).toEqual(ok)
+    expect(answers(dataDir)).toEqual({ removed: { claude: true } })
+    expect(calls.every((call) => call.home === null)).toBe(true)
+  })
+
+  it('status and Codex\'s verbs ask Orca nothing', async () => {
+    let asked = 0
+    const orca: Partial<DeviceDeps> = {
+      orcaHomes: async () => { asked++; return [folder()] },
+      claudeIn: () => { asked++; return fakeClaude(listed(true)) },
+    }
+    for (const argv of [['claude', 'status', '--json'], ['codex', 'status', '--json'], ['codex', 'enable'], ['codex', 'disable']]) {
+      expect((await device(argv, orca)).code, argv.join(' ')).toBe(0)
+    }
+    expect(asked).toBe(0)
+  })
+})
+
 describe('harness device codex', () => {
   it('status without --json prints the same fields, indented', async () => {
     expect(await device(['codex', 'status'], { codex: () => false }))
@@ -770,7 +988,7 @@ describe('harness device orca link', () => {
     for (const argv of [['orca'], ['orca', 'status'], ['orca', 'link', 'extra']]) {
       expect(await device(argv), argv.join(' ')).toEqual({ code: 1, out: [], err: [DEVICE_USAGE] })
     }
-    expect(DEVICE_USAGE).not.toMatch(/orca/i)
+    expect(DEVICE_USAGE).not.toContain('device orca')
   })
 })
 
