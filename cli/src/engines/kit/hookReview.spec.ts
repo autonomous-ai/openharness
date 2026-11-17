@@ -25,8 +25,51 @@ const CODEX_0_162 = {
   session_start: 'sha256:7d719f8e2849620d0d2d81085877e79793c61d8b46ee15cc6251d2e0c69a1b41',
   user_prompt_submit: 'sha256:2aeba9ad1676fa3124e519bbcbb7602380bae087ba5345ce604bb12f5bb76199',
 }
+// The four hashes `hooks/list` of codex-cli 0.169.0 reported for the same command, each block as Harness writes it
+// (docs/plans/2026-11-16-hook-driven-agent-status-facts-codex.md §1, 2026-11-17). 0.169.0 lists the two above unchanged.
+const CODEX_0_169 = {
+  stop: 'sha256:51ccf08c5abb298e3640ad1aa2a6d97a1e4c9aa50bf54769012a5f48e9819103',
+  permission_request: 'sha256:dea5f4e595e43e7116728901dbcbd71915be5be2b4159916d43d06d125ebe833',
+  pre_tool_use: 'sha256:6759b736f953bcb9cc9a47f366def174a2a3bf0394cc456d07494d3700dfc852',
+  // Codex lists it with timeoutSec 3: it caps Interrupt at 3 s and hashes the capped value.
+  interrupt: 'sha256:6168570fe3ae52db10c67e1abfa5d8743900a146979b56191e5c9a7e5f737d72',
+}
 
 describe('Harness’s own Codex hooks, recorded as reviewed', () => {
+  it('hashes each new hook exactly as the targeted Codex does', () => {
+    expect(reviewHash(record, 'Stop', undefined, { command: COMMAND, timeout: 5 })).toBe(CODEX_0_169.stop)
+    expect(reviewHash(record, 'PermissionRequest', undefined, { command: COMMAND, timeout: 5 })).toBe(CODEX_0_169.permission_request)
+    expect(reviewHash(record, 'PreToolUse', 'request_user_input', { command: COMMAND, timeout: 5 })).toBe(CODEX_0_169.pre_tool_use)
+    // Codex keeps PreToolUse's matcher in the hash.
+    expect(reviewHash(record, 'PreToolUse', 'other', { command: COMMAND, timeout: 5 })).not.toBe(CODEX_0_169.pre_tool_use)
+    expect(reviewHash(record, 'Interrupt', undefined, { command: COMMAND, timeout: 3 })).toBe(CODEX_0_169.interrupt)
+    // Why Interrupt is written with 3: at 5 its record never matches, and Codex asks about it at every start.
+    expect(reviewHash(record, 'Interrupt', undefined, { command: COMMAND, timeout: 5 })).not.toBe(CODEX_0_169.interrupt)
+  })
+
+  it('installs every declared event, Interrupt with a 3 s timeout, and records each as reviewed with the hash the targeted Codex lists', async () => {
+    const codexHome = home(), file = join(codexHome, 'hooks.json')
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(await installHookSettings('codex', hooks.settings, 19473, codexHome)).toBe(true)
+    const installed = JSON.parse(readFileSync(file, 'utf8'))
+    const listed: Record<string, string> = { ...CODEX_0_162, ...CODEX_0_169 }
+    const notify = Object.entries(record.events).filter(([event]) => event !== 'PostToolUse')
+    expect(notify.map(([event]) => event)).toEqual(['SessionStart', 'UserPromptSubmit', 'Stop', 'PermissionRequest', 'PreToolUse', 'Interrupt'])
+    for (const [event, label] of notify) {
+      const [block] = installed.hooks[event]
+      expect(block.hooks[0].timeout, event).toBe(event === 'Interrupt' ? 3 : 5)
+      // The block as written, run by the command Codex listed: Codex's own hash.
+      expect(reviewHash(record, event, block.matcher, { ...block.hooks[0], command: COMMAND }), event).toBe(listed[label])
+    }
+    const config = readFileSync(join(codexHome, 'config.toml'), 'utf8')
+    const records = reviewRecords(record, file, installed)
+    // notify.mjs's six, and Agent Messages' one.
+    expect([...records.keys()].map((key) => key.slice(file.length))).toEqual([':session_start:0:0', ':user_prompt_submit:0:0', ':stop:0:0',
+      ':permission_request:0:0', ':pre_tool_use:0:0', ':interrupt:0:0', ':post_tool_use:0:0'])
+    for (const [key, hash] of records) expect(config).toContain(`[hooks.state.${JSON.stringify(key)}]\ntrusted_hash = ${JSON.stringify(hash)}\n`)
+    expect(records.get(`${file}:interrupt:0:0`)).toBe(reviewHash(record, 'Interrupt', undefined, { command: installed.hooks.Interrupt[0].hooks[0].command, timeout: 3 }))
+  })
+
   it('hashes a hook exactly as codex-cli 0.162.0 does', () => {
     expect(reviewHash(record, 'SessionStart', 'startup|resume|clear|compact', { command: COMMAND, timeout: 5 })).toBe(CODEX_0_162.session_start)
     // Codex ignores a UserPromptSubmit matcher, so it is not part of the hash either.
@@ -39,11 +82,12 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
     const settings = { hooks: {
       SessionStart: [{ matcher: 'mine', hooks: [{ type: 'command', command: 'echo theirs' }] }, { matcher: 'startup|resume|clear|compact', hooks: [{ type: 'command', command: COMMAND, timeout: 5 }] }],
       UserPromptSubmit: [{ hooks: [{ type: 'command', command: COMMAND, timeout: 5 }] }],
-      Stop: [{ hooks: [{ type: 'command', command: COMMAND }] }],
+      Stop: [{ hooks: [{ type: 'command', command: 'echo theirs' }] }, { hooks: [{ type: 'command', command: COMMAND, timeout: 5 }] }],
     } }
     expect([...reviewRecords(record, '/home/person/.codex/hooks.json', settings)]).toEqual([
       ['/home/person/.codex/hooks.json:session_start:1:0', CODEX_0_162.session_start],
       ['/home/person/.codex/hooks.json:user_prompt_submit:0:0', CODEX_0_162.user_prompt_submit],
+      ['/home/person/.codex/hooks.json:stop:1:0', CODEX_0_169.stop],
     ])
   })
 
@@ -72,8 +116,8 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
     // Another port: another command, so another hash, in the same tables.
     await installHookSettings('codex', hooks.settings, 18999, codexHome)
     const second = readFileSync(join(codexHome, 'config.toml'), 'utf8')
-    // Agent Messages' block makes three: notify.mjs's two, and its one. No other: the shell guard is gone.
-    expect(second.match(/^\[hooks\.state\./gm)).toHaveLength(3)
+    // Agent Messages' block makes seven: notify.mjs's six, and its one. No other: the shell guard is gone.
+    expect(second.match(/^\[hooks\.state\./gm)).toHaveLength(7)
     expect(second).not.toContain('session-flags')
     expect(second).not.toBe(first)
     const installed = JSON.parse(readFileSync(join(codexHome, 'hooks.json'), 'utf8'))
@@ -119,27 +163,29 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
   it('Codex: the review record of a pruned hook goes with it, and the others stay', async () => {
     const codexHome = home(), file = join(codexHome, 'hooks.json'), configFile = join(codexHome, 'config.toml')
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    // A release that installed Stop too. Its label stays among the reviewed events, so its records can be found.
-    const reviewed = { ...record, events: { ...record.events, Stop: 'stop' } }
+    // A release that installed SubagentStop too (Codex's label: subagent_stop). Its label stays among the reviewed
+    // events, so its records can be found.
+    const reviewed = { ...record, events: { ...record.events, SubagentStop: 'subagent_stop' } }
     const later = { ...hooks.settings, reviewed }
-    expect(await installHookSettings('codex', { ...later, events: [...later.events, { event: 'Stop' }] }, 19473, codexHome)).toBe(true)
+    expect(await installHookSettings('codex', { ...later, events: [...later.events, { event: 'SubagentStop' }] }, 19473, codexHome)).toBe(true)
     const installed = JSON.parse(readFileSync(file, 'utf8'))
     const theirs = { hooks: [{ type: 'command', command: 'echo theirs' }] }
-    installed.hooks.Stop.push(theirs)
+    installed.hooks.SubagentStop.push(theirs)
     writeFileSync(file, JSON.stringify(installed))
-    const theirRecord = `[hooks.state.${JSON.stringify(`${file}:stop:1:0`)}]\ntrusted_hash = "sha256:theirs"\n`
+    const theirRecord = `[hooks.state.${JSON.stringify(`${file}:subagent_stop:1:0`)}]\ntrusted_hash = "sha256:theirs"\n`
     writeFileSync(configFile, `${readFileSync(configFile, 'utf8')}\n${theirRecord}`)
-    expect(readFileSync(configFile, 'utf8')).toContain(`${file}:stop:0:0`)
+    expect(readFileSync(configFile, 'utf8')).toContain(`${file}:subagent_stop:0:0`)
     expect(await installHookSettings('codex', later, 19473, codexHome)).toBe(true)
     const now = JSON.parse(readFileSync(file, 'utf8'))
-    expect(now.hooks.Stop).toEqual([theirs])
+    expect(now.hooks.SubagentStop).toEqual([theirs])
     const config = readFileSync(configFile, 'utf8')
-    expect(config).not.toContain(`${file}:stop:0:0`)
+    expect(config).not.toContain(`${file}:subagent_stop:0:0`)
     expect(config).toContain(theirRecord)
     const records = reviewRecords(reviewed, file, now)
-    expect([...records.keys()].map((key) => key.slice(file.length))).toEqual([':session_start:0:0', ':user_prompt_submit:0:0', ':post_tool_use:0:0'])
+    expect([...records.keys()].map((key) => key.slice(file.length))).toEqual([':session_start:0:0', ':user_prompt_submit:0:0', ':stop:0:0',
+      ':permission_request:0:0', ':pre_tool_use:0:0', ':interrupt:0:0', ':post_tool_use:0:0'])
     for (const [key, hash] of records) expect(config).toContain(`[hooks.state.${JSON.stringify(key)}]\ntrusted_hash = ${JSON.stringify(hash)}\n`)
-    expect(config.match(/^\[hooks\.state\./gm)).toHaveLength(4)
+    expect(config.match(/^\[hooks\.state\./gm)).toHaveLength(8)
   })
 
   it('records nothing for hooks that never reached the file', async () => {

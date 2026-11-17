@@ -393,6 +393,16 @@ it.skipIf(process.getuid?.() === 0)('says only the allowance failed when a read-
 const declaring = (events: typeof claude.settings.events) => ({ ...claude.settings, events, inbox: undefined, allow: undefined })
 const oursAt = (port: number) => ({ hooks: [{ type: 'command', command: command(port, 'claude'), timeout: 5 }] })
 
+// Codex caps an Interrupt hook at 3 s and hashes the capped value (facts-codex §1): written with the contract's 5,
+// its review record would never match.
+it('writes a declared event\'s own timeout in place of the contract\'s, and the contract\'s for the others', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }, { event: 'Stop', timeout: 3 }]), 19473, home)).toBe(true)
+  const { hooks } = JSON.parse(readFileSync(file, 'utf8'))
+  expect(hooks).toEqual({ SessionStart: [oursAt(19473)], Stop: [{ hooks: [{ ...oursAt(19473).hooks[0], timeout: 3 }] }] })
+  expect(claude.settings.timeout).toBe(5)
+})
+
 it('takes Harness\'s block out of an event its engine no longer declares, and leaves the person\'s', async () => {
   const home = join(root, 'claude'), file = join(home, claude.settings.file)
   mkdirSync(home)

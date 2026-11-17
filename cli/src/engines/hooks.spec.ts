@@ -24,6 +24,14 @@ it('composes only what a contract declares: Claude Code corrects transcripts, Co
   expect(Object.keys(engineHooks.codex).sort()).toEqual(['admit', 'install', 'installIn', 'onStop'])
 })
 
+// The turn's end, its interrupt and its waits on the person (facts-codex §2). No SubagentStart or SubagentStop: Codex's
+// SubagentStop fires per child turn and never for an interrupted or failed one, so a count of them is not exact.
+it('declares Codex\'s events, and no subagent event', () => {
+  expect(hookContracts.codex.settings.events).toEqual([
+    { event: 'SessionStart', matcher: 'startup|resume|clear|compact' }, { event: 'UserPromptSubmit' }, { event: 'Stop' },
+    { event: 'PermissionRequest' }, { event: 'PreToolUse', matcher: 'request_user_input' }, { event: 'Interrupt', timeout: 3 }])
+})
+
 it('keeps every contract plain data: nothing in it runs', () => {
   const functions = (value: unknown): number => typeof value === 'function' ? 1
     : value && typeof value === 'object' ? Object.values(value).reduce<number>((sum, inner) => sum + functions(inner), 0) : 0

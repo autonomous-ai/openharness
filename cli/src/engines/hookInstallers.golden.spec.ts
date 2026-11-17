@@ -31,14 +31,16 @@ type Via = 'install' | 'installIn'
 interface Target { engine: Engine; via: Via; home: string; file: string; cmd: string; otherCmd: string; elsewhere: string }
 interface Case { name: string; setup?: (target: Target) => void; noHome?: boolean; permissions?: boolean }
 
-/** The events each former installer wrote, with their matchers, to build the files a current install leaves. */
-const EVENTS: Record<Engine, Array<{ event: string; matcher?: string }>> = {
+/** The events each installer writes, with their matchers and an event's own timeout, to build the files a current install leaves. */
+const EVENTS: Record<Engine, Array<{ event: string; matcher?: string; timeout?: number }>> = {
   claude: [...['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure'].map((event) => ({ event })),
     { event: 'Notification', matcher: 'permission_prompt|elicitation_dialog|elicitation_url_dialog|quota_auto_resume_stale' }],
-  codex: [{ event: 'SessionStart', matcher: 'startup|resume|clear|compact' }, { event: 'UserPromptSubmit' }],
+  codex: [{ event: 'SessionStart', matcher: 'startup|resume|clear|compact' }, { event: 'UserPromptSubmit' }, { event: 'Stop' },
+    { event: 'PermissionRequest' }, { event: 'PreToolUse', matcher: 'request_user_input' }, { event: 'Interrupt', timeout: 3 }],
 }
-const current = (engine: Engine, cmd: string, timeout = 5) => ({
-  hooks: Object.fromEntries(EVENTS[engine].map(({ event, matcher }) => [event, [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: cmd, timeout }] }]])),
+const current = (engine: Engine, cmd: string, timeout?: number) => ({
+  hooks: Object.fromEntries(EVENTS[engine].map(({ event, matcher, timeout: own }) =>
+    [event, [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: cmd, timeout: timeout ?? own ?? 5 }] }]])),
 })
 const pretty = (value: unknown): string => JSON.stringify(value, null, 2) + '\n'
 const write = (file: string, text: string, mode?: number): void => {
@@ -319,9 +321,9 @@ beforeAll(async () => {
   const { hooks: codex } = await import('./codex/hookContract.js')
   const hashes: Array<[string, string]> = []
   for (const [cmd, token] of commands.filter(([, token]) => token.startsWith('<command codex'))) {
-    for (const { event, matcher } of EVENTS.codex) {
+    for (const { event, matcher, timeout: own = 5 } of EVENTS.codex) {
       // 30: the case that finds Harness's hook current with a timeout of its own, recorded as the file has it.
-      for (const timeout of [5, 30]) hashes.push([reviewHash(codex.settings.reviewed!, event, matcher, { command: cmd, timeout }), `<hash ${event} ${token.slice(1, -1)}${timeout === 5 ? '' : ` timeout ${timeout}`}>`])
+      for (const timeout of [own, 30]) hashes.push([reviewHash(codex.settings.reviewed!, event, matcher, { command: cmd, timeout }), `<hash ${event} ${token.slice(1, -1)}${timeout === own ? '' : ` timeout ${timeout}`}>`])
     }
   }
   // Agent Messages' block (kit/messagesHook.ts), the same command in every case: its command and Codex's hash of it.
