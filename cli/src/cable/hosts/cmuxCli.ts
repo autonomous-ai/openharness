@@ -15,7 +15,6 @@
  */
 import { type ChildProcess, spawn } from 'node:child_process'
 import { existsSync, readdirSync, realpathSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
 import { MAX_CWD } from './herdrSource.js'
@@ -101,7 +100,6 @@ export interface CmuxClient {
 export interface CmuxClientDeps {
   /** The devices process's own environment, with no CMUX_* variable. */
   env: NodeJS.ProcessEnv
-  home: string
   platform: NodeJS.Platform
   onPath(name: string): string | null
   /** None when it cannot be resolved. */
@@ -114,7 +112,6 @@ export interface CmuxClientDeps {
 export function cmuxClientDeps(): CmuxClientDeps {
   return {
     env: Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('CMUX_'))),
-    home: homedir(),
     platform: process.platform,
     onPath: (name) => resolveBinaryOnPath(name),
     realpath: (path) => {

@@ -325,10 +325,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     inFront: () => cableHost.latestFront() === 'herdr', shows: (address) => hcSource?.shows(address) === true,
     reports: (address) => hcSource?.reports(address) === true })
   const hcPane = (address: string): Pane => ({ adapter: herdrApp.id, id: address })
-  /** Where cmux's stores are, from the daemon's own home: the client reads them through cmux, and the cmux source watches
-   *  their folder. */
-  const cmuxAt = cmuxClientDeps()
-  const cmuxClient = deps.cmux ?? createCmuxClient({ ...cmuxAt, platform: apps.platform })
+  const cmuxClient = deps.cmux ?? createCmuxClient({ ...cmuxClientDeps(), platform: apps.platform })
   /** cmux is installed, as the last attach found it: only then are a hooked agent's words offered to it. */
   let cmuxFound = false
   const cmuxApp = createCmuxAppAdapter({ ...apps, client: cmuxClient, bin: openBin, found: () => cmuxFound,
@@ -509,15 +506,19 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log,
     count: voiced,
   }) : null
+  /** cmux's stores' folder, ~/.cmuxterm in the daemon's own home: the one cmux reads for the client's runs, which carry
+   *  that home and no CMUX_* variable. */
+  const cmuxStoresAt = cmuxStoreDir(homedir())
   /** cmux's agents, hook or no hook, listed from cmux's own stores when one changes
    *  (docs/plans/2026-11-17-dial-cmux-design.md). It runs only while a dial is attached, behind the observed agents'
    *  switch, on macOS alone, where cmux runs, and only with cmux installed (dialAttached). */
   const cmuxSource = observed && apps.platform === 'darwin' ? new CmuxSource({
     client: cmuxClient,
-    // The stores sit in ~/.cmuxterm: the watch holds that folder, else its parent until it appears.
-    watch: (changed) => watchSocket({ socketPath: join(cmuxStoreDir(cmuxAt.home), 'stores'), home: cmuxAt.home }, changed),
-    folder: () => existsSync(cmuxStoreDir(cmuxAt.home)),
-    stores: () => cmuxStores(cmuxStoreDir(cmuxAt.home)),
+    // watchSocket holds the folder of the path it is given: a name in ~/.cmuxterm, none of cmux's, makes it hold that
+    // folder, else its parent until it appears.
+    watch: (changed) => watchSocket({ socketPath: join(cmuxStoresAt, 'stores'), home: homedir() }, changed),
+    folder: () => existsSync(cmuxStoresAt),
+    stores: () => cmuxStores(cmuxStoresAt),
     alive: pidAlive,
     after: timerIn('cmux'),
     prompt: cmuxApp.prompt,

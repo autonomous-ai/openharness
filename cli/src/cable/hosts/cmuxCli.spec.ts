@@ -32,7 +32,6 @@ function setup(over: Partial<CmuxClientDeps> = {}, state?: FakeCmuxState) {
   const deadlines = new Set<{ ms: number; run: () => void }>()
   const deps: CmuxClientDeps = {
     env: {},
-    home: '/nowhere',
     platform: 'darwin',
     onPath: (name) => resolveBinaryOnPath(name, { PATH: fake.dir }),
     realpath: (path) => { try { return realpathSync(path) } catch { return null } },
