@@ -15,8 +15,6 @@ import { harnessEnvToClear } from '../../dsh/sessionEnv.js'
 import { captureDshWorkspace, type DshThrough } from './dshThrough.js'
 import type { TurnRecaps } from '../turns/recaps.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
-import { enginePathOverride } from '../../lib/engineBin.js'
-import { engineInstallRecipe } from '../../lib/engineInstall.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, refusePermissionFlagIfUnsupported, supportsNamedAgent, typedFirstPrompt } from '../../lib/engineLaunch.js'
 import { forkName, planFork } from '../../lib/forkAgent.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
@@ -149,7 +147,6 @@ export function createAgentForker({ opencodeMajor,
     }
     if (!current()) return changed
     const dispatchCurrent = () => current() && built.overrides.native?.current() !== false
-    const installIfMissing = enginePathOverride(engine) ? undefined : engineInstallRecipe(engine)
     // Same guard as a relaunch (`buildLaunchOverrides`): an opencode agent recorded on v1 forks on v2
     // as a general session rather than handing the v2 TUI an `--agent` it exits on.
     const forkMajor = built.overrides.native ? built.overrides.native.opencodeMajor : engine === 'opencode' ? await opencodeMajor?.() ?? null : null
@@ -166,7 +163,6 @@ export function createAgentForker({ opencodeMajor,
       bypassPermission: source.bypassPermission ?? false,
       ...(source.permissionMode ? { permissionMode: source.permissionMode } : {}),
       extraArgs: extraArgs.length ? extraArgs : undefined,
-      installIfMissing,
       cwd: source.cwd,
       harnessNode: source.dsh ? true : undefined,
       ...(plan.level === 'native' ? { forkSessionId: plan.forkSessionId } : {}),
@@ -174,7 +170,7 @@ export function createAgentForker({ opencodeMajor,
     }
     // Same refusal as create: the clone inherits the source's permission mode, and an engine that
     // has since been downgraded would hand back a pane of help text instead of a harness.
-    const forkRefusal = await refusePermissionFlagIfUnsupported(engine, launchOptions, undefined, built.overrides.native)
+    const forkRefusal = await refusePermissionFlagIfUnsupported(engine, launchOptions, built.overrides.native)
     if (!dispatchCurrent()) return changed
     if (forkRefusal) {
       console.warn(`[agent] fork refused · ${engine} · ${forkRefusal.detail}`)
@@ -235,7 +231,7 @@ export function createAgentForker({ opencodeMajor,
     if (source.sessionId) pendingForkInherit.set(pending.agentId, source.sessionId)
     announceSession(pending)
     attach(pending)
-    void watchNewPane(engine, pending, spawned, command, installIfMissing)
+    void watchNewPane(engine, pending, spawned, command, built.overrides.native?.executable)
     console.log(`[agent] fork pane open · ${engine} · ${plan.level} · ${source.agentId} → ${pending.agentId}`)
     return { ok: true, session: pending, level: plan.level }
     } }

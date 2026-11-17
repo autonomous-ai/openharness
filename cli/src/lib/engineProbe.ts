@@ -32,7 +32,7 @@
 
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { engineBin, enginePathOverride } from './engineBin.js'
-import { commandAvailableInInteractiveShell, commandOutputInInteractiveShell } from './engineLaunch.js'
+import { commandAvailableInInteractiveShell, commandOutputInInteractiveShell } from '../engines/kit/interactiveProbe.js'
 import { OPENCLAW_RUNTIME_PROBE, openclawRuntimeState } from '../engines/openclaw/contract.js'
 import { engineInstallRecipe } from './engineInstall.js'
 import { engineAccount } from './engineAccount.js'

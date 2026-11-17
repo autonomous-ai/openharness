@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { inspectNativeLaunch as inspect } from './nativeLaunch.js'
+import { inspectNativeLaunch as inspect, unsupportedNativeLaunchModelFlag } from './nativeLaunch.js'
 import { nativeSetupProbes } from '../services/nativeSetup.js'
 const inspectNativeLaunch: typeof inspect = (engine, source, deps) => inspect(engine, source, { setup: nativeSetupProbes, ...deps })
 import { captureLaunchExecutable } from './kit/launchExecutable.js'
@@ -503,4 +503,40 @@ it('retains the inline executable values independently of the provider object', 
   if (!result.ok) throw Error('fixture was held')
   expect(result.launch.executable?.command).toBe('/fixture/approved'); expect(result.launch.executable?.identity).toBe('immutable-inline')
   expect(Object.isFrozen(result.launch.executable)).toBe(true)
+})
+
+
+describe('selected executable model preflight', () => {
+  it.each([
+    ['--model --effort', '', null],
+    ['', '--model --effort', null],
+    ['--model --effortful', '', '--effort'],
+    ['--models --effort', '', '--model'],
+  ] as const)('interprets exact declared flags from both output streams: %s %s', async (stdout, stderr, missing) => {
+    const probe = vi.fn(async () => ({ code: 0, stdout, stderr }))
+    expect(await unsupportedNativeLaunchModelFlag('claude', { model: 'opus', effort: 'high' }, { probe })).toBe(missing)
+    expect(probe).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ command: '/fixture/engine', current: expect.any(Function) }), 'help',
+      { HOME: '/fixture/home', PATH: '/fixture/bin', CODEX_HOME: '/fixture/codex', CLAUDE_CONFIG_DIR: '/fixture/claude', HERMES_HOME: '/fixture/hermes' })
+    expect(fixture.calls).toEqual([])
+  })
+
+  it('does not capture or probe a model with no declared flags', async () => {
+    const probe = vi.fn()
+    expect(await unsupportedNativeLaunchModelFlag('claude', { model: 'default', effort: 'default' }, { probe })).toBeNull()
+    expect(captureLaunchExecutable).not.toHaveBeenCalled()
+    expect(probe).not.toHaveBeenCalled()
+  })
+
+  it.each(['held', 'stale before', 'stale after', 'missing', 'empty', 'nonzero', 'rejected'] as const)('makes no unsupported claim on %s proof', async mode => {
+    if (mode === 'held') vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'held', detail: 'Unavailable' })
+    if (mode === 'stale before') fixture.current = false
+    const probe = vi.fn(async () => {
+      if (mode === 'rejected') throw Error('fixture unavailable')
+      if (mode === 'stale after') fixture.current = false
+      return mode === 'missing' ? null : { code: mode === 'nonzero' ? 1 : 0, stdout: mode === 'empty' ? '' : '--version', stderr: '' }
+    })
+    expect(await unsupportedNativeLaunchModelFlag('claude', { model: 'opus', effort: null }, { probe })).toBeNull()
+    if (mode === 'held' || mode === 'stale before') expect(probe).not.toHaveBeenCalled()
+    else expect(probe).toHaveBeenCalledOnce()
+  })
 })

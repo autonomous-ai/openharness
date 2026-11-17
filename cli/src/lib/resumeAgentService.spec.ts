@@ -608,7 +608,7 @@ describe('production resume handler', () => {
       return { state: 'succeeded', runtime: { backend: 'tmux', paneId: pane } }
     })
     expect(await start()).toMatchObject({ ok: true, resumed: true })
-    expect(dropPermissionFlagIfUnsupported).toHaveBeenCalledWith('codex', expect.any(Object), undefined, native)
+    expect(dropPermissionFlagIfUnsupported).toHaveBeenCalledWith('codex', expect.any(Object), native)
     expect(buildEngineLaunchArgv).toHaveBeenCalledWith('codex', expect.objectContaining({ native }))
     expect(starting).toHaveBeenCalledExactlyOnceWith(native.token)
   })
@@ -712,7 +712,7 @@ describe('production resume handler', () => {
     vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: true, overrides: { env: { CODEX_HOME: '/profile', HARNESS_DSH: 'fixture' }, extraArgs: ['--fixture'], clearEnv: ['OLD'] } })
     const result = await start()
     expect(result).toMatchObject({ ok: true, resumed: true, session: { agentId: saved.agentId, sessionId: saved.sessionId, tmuxPane: pane, launch: { state: 'ready' } } })
-    expect(buildEngineLaunchArgv).toHaveBeenCalledWith(engine, expect.objectContaining({ resumeSessionId: saved.sessionId, cwd: dir, permissionMode: 'plan', bypassPermission: true, extraArgs: ['--fixture'], clearEnv: ['OLD'], harnessNode: true, installIfMissing: undefined }))
+    expect(buildEngineLaunchArgv).toHaveBeenCalledWith(engine, expect.objectContaining({ resumeSessionId: saved.sessionId, cwd: dir, permissionMode: 'plan', bypassPermission: true, extraArgs: ['--fixture'], clearEnv: ['OLD'], harnessNode: true }))
     expect(create).toHaveBeenCalledTimes(1)
     expect(create.mock.calls[0][0].env).toEqual({ CODEX_HOME: '/profile', HARNESS_DSH: 'fixture' })
     expect(deps.attach).toHaveBeenCalledTimes(1)

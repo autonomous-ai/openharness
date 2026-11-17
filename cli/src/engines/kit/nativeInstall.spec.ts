@@ -9,7 +9,7 @@ import { ENUMERATION_ATTEMPTS } from './nativeFiles.js'
 import { createNativeInstallations, NATIVE_INSTALL_WORKER } from './nativeInstall.js'
 
 const fixture = vi.hoisted(() => ({ failSync: false, argv: [] as string[], onSync: undefined as undefined | (() => number | void), onDirectoryOpen: undefined as undefined | (() => void) }))
-vi.mock('../../lib/engineLaunch.js', () => ({ buildEngineInstallationArgv: () => fixture.argv }))
+vi.mock('./installationScript.js', () => ({ buildEngineInstallationArgv: () => fixture.argv }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
   return { ...actual,

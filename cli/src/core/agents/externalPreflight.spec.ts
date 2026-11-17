@@ -78,7 +78,7 @@ it('retains a checked native snapshot through takeover instead of starting anoth
   if (!ready || !('current' in ready)) throw Error('fixture held')
   expect(ready.current()).toBe(true)
   expect(run.deps.installOpencodePlugin).not.toHaveBeenCalled()
-  expect(refusePermissionFlagIfUnsupported).toHaveBeenCalledWith('opencode', expect.any(Object), undefined, launch)
+  expect(refusePermissionFlagIfUnsupported).toHaveBeenCalledWith('opencode', expect.any(Object), launch)
   expect(buildEngineCommandArgv).toHaveBeenCalledWith('opencode', expect.objectContaining({ native: launch }))
   current = false
   expect(ready.current()).toBe(false)

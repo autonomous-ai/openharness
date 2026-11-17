@@ -9,8 +9,7 @@
 import { OPENCLAW_LOCAL, openclawFolderInUse, readOpenclawScreen } from '../../engines/openclaw/contract.js'
 import type { AgentEngine } from '../../engines/types.js'
 import { describeAgentCreateFailure, summarizePaneOutput } from '../../lib/agentCreateDiagnosis.js'
-import type { engineInstallRecipe } from '../../lib/engineInstall.js'
-import { commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
+import type { NativeExecutableSnapshot } from '../../engines/kit/versionData.js'
 import { sid } from '../../lib/log.js'
 import { matchesLaunchReceipt, RegistryOwnershipChanged, type LaunchPublication, type registry, type RegisteredSession, type RegistryAuthority } from '../../lib/registry.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
@@ -44,7 +43,7 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
    * Watch a pane this daemon just opened until its engine process shows up (ready), dies (failed), or
    * ten minutes pass. Shared by create and fork: the two open panes the same way and wait the same way.
    */
-  const watchNewPane = async (engine: AgentEngine, pending: RegisteredSession, spawned: { runtime: TerminalRuntimeRef }, command: string[], installIfMissing: ReturnType<typeof engineInstallRecipe> | undefined, budgetMs = 10 * 60_000): Promise<void> => {
+  const watchNewPane = async (engine: AgentEngine, pending: RegisteredSession, spawned: { runtime: TerminalRuntimeRef }, command: string[], executable: NativeExecutableSnapshot | undefined, budgetMs = 10 * 60_000): Promise<void> => {
     const startedAt = Date.now()
     pending = structuredClone(pending)
     let delayMs = 50
@@ -155,12 +154,13 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
           return
         }
         if (paneState.dead) {
-          const installed = await commandAvailableInInteractiveShell(command[0], undefined, installIfMissing)
+          // The installer settled before this pane existed. Only its original executable can explain it.
+          const verified = executable?.current() === true
           if (!current()) return
-          const error = installed ? 'ENGINE_DID_NOT_START' : 'ENGINE_NOT_INSTALLED'
-          const detail = installed
+          const error = 'ENGINE_DID_NOT_START'
+          const detail = verified
             ? `${engine} exited before its engine process became ready. See the terminal output for details.`
-            : `${engine} is not installed, or its automatic install failed. See the terminal output for details.`
+            : `${engine} exited before its engine process became ready. Harness could not verify the prepared executable. See the terminal output for details.`
           const failed = registry.setLaunch(pending.agentId, { state: 'failed', error, detail })
           if (failed) announceSession(failed)
           console.warn(`[agent] create failed · ${engine} · ${detail}`)

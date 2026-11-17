@@ -6,11 +6,11 @@ import { installedDsh } from '../../dsh/installed.js'
 import { dshSupportedEngines } from '../../dsh/manifest.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import { opencodeMajorVersion } from '../../engines/opencode/version.js'
-import type { NativeLaunchResult } from '../../engines/nativeLaunch.js'
+import { unsupportedNativeLaunchModelFlag, type NativeLaunchResult } from '../../engines/nativeLaunch.js'
 import { createNativeLaunchPreparer } from '../../engines/prepareNativeLaunch.js'
 import { AgentCreationReceiptError, AgentCreationReceipts, creationFingerprint, type AgentCreationOutcome } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
-import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent, unsupportedLaunchModelFlag } from '../../lib/engineLaunch.js'
+import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent } from '../../lib/engineLaunch.js'
 import { parseGridLaunchOverride } from '../../lib/gridLaunchWire.js'
 import { parseNewAgentModel } from '../../lib/newAgentModel.js'
 import { parseProjectFolder, prepareNewFolder, ProjectFolderError, type GitProjectFolder } from '../../lib/projectFolder.js'
@@ -54,7 +54,6 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   supportsFirstPrompt: vi.fn(() => true), supportsNamedAgent: vi.fn(() => true),
   permissionModeFlags: vi.fn(() => ['--flag']), permissionModeApproves: vi.fn(() => false),
   // The engine's own --help is never run by a spec.
-  unsupportedLaunchModelFlag: vi.fn(async () => null),
 }))
 vi.mock('../../lib/projectFolder.js', async (real) => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
@@ -87,6 +86,8 @@ afterEach(() => {
   vi.resetAllMocks()
 })
 
+const probeLaunchModel = vi.fn<NonNullable<LaunchRequestDeps['probeLaunchModel']>>(async () => null)
+
 function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: CreateAgent | null; fork?: ForkAgent | null; resume?: ResumeAgent | null; restart?: RestartAgent | null } = {}) {
   const create = launches.create === undefined ? vi.fn(async () => ({ ok: true as const, session: session('new-agent') })) : launches.create
   const fork = launches.fork === undefined ? vi.fn(async () => ({ ok: true as const, session: session('forked'), level: 'native' as const })) : launches.fork
@@ -95,7 +96,7 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
   const known = new Map([['new-agent', session('new-agent')], ['forked', session('forked')], ['a1', session('a1')]])
   // Workspaces in the edge host, which make every folder git makes (services/workspaces.ts).
   const workspaces = { ...WORKSPACES_OFF, ready: vi.fn(() => true), prepareFolder: vi.fn(async (project: GitProjectFolder, _options: { cloneFallback: boolean }) => gitFolder(project)) }
-  const deps: LaunchRequestDeps = { opencodeMajor: opencodeMajorVersion,
+  const deps: LaunchRequestDeps = { probeLaunchModel, opencodeMajor: opencodeMajorVersion,
     receipts: new AgentCreationReceipts(join(dir, `receipts-${++stores}`)),
     createAgent: () => create, forkAgent: () => fork, resumeAgent: () => resume, restartAgent: () => restart,
     byAgent: (id) => known.get(id), toProject: vi.fn(async (s: RegisteredSession) => frameOf(s)),
@@ -496,18 +497,41 @@ describe('agent_create, launched', () => {
 
   it('refuses a launch model before any receipt when the installed engine lacks a flag, and proceeds when it has them', async () => {
     const { ask, create, deps } = setup()
-    vi.mocked(unsupportedLaunchModelFlag).mockResolvedValueOnce('--effort')
+    vi.mocked(probeLaunchModel).mockResolvedValueOnce('--effort')
     expect(await ask({ engine: 'claude', cwd: '/w', creationId: CREATION, model: 'opus', effort: 'high' }))
       .toMatchObject({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: expect.stringContaining('--effort') })
-    expect(unsupportedLaunchModelFlag).toHaveBeenCalledWith('claude', { model: 'opus', effort: 'high' })
+    expect(probeLaunchModel).toHaveBeenCalledWith('claude', { model: 'opus', effort: 'high' })
     expect(create).not.toHaveBeenCalled()
     expect(deps.receipts.has(CREATION, 'any')).toBe(false)
     expect(deps.receipts.pendingIntent(CREATION)).toBeFalsy()
     // The same creation id is then free to start the agent without them.
-    vi.mocked(unsupportedLaunchModelFlag).mockResolvedValueOnce(null)
+    vi.mocked(probeLaunchModel).mockResolvedValueOnce(null)
     await ask({ engine: 'claude', cwd: '/w', creationId: CREATION, model: 'opus', effort: 'high' })
     await vi.waitFor(() => expect(create).toHaveBeenCalledOnce())
     expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ launchModel: { model: 'opus', effort: 'high' } })
+  })
+
+  it('keeps an unavailable model preflight unknown instead of falsely refusing it', async () => {
+    const { ask, create } = setup({ probeLaunchModel: undefined })
+    await ask({ engine: 'claude', cwd: '/w', model: 'opus', effort: 'high' })
+    expect(create).toHaveBeenCalledOnce()
+  })
+
+  it.each(['no shell', 'Windows'] as const)('keeps the model preflight unknown for %s, so the request still reaches native creation', async mode => {
+    const launch = await import('../../lib/engineLaunch.js')
+    const shell = mode === 'no shell' ? vi.spyOn(launch, 'interactiveEngineShell').mockReturnValueOnce(null) : null
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    const probe = vi.fn(async () => ({ code: 0, stdout: '--version', stderr: '' }))
+    try {
+      const run = setup({ probeLaunchModel: async (engine, model) => {
+        if (mode === 'Windows') Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+        try { return await unsupportedNativeLaunchModelFlag(engine, model, { probe }) }
+        finally { Object.defineProperty(process, 'platform', platform) }
+      } })
+      await run.ask({ engine: 'claude', cwd: '/w', model: 'opus', effort: 'high' })
+      expect(run.create).toHaveBeenCalledOnce()
+      expect(probe).not.toHaveBeenCalled()
+    } finally { shell?.mockRestore(); Object.defineProperty(process, 'platform', platform) }
   })
 
   it('uses the selected-executable setup observation before claiming a model launch receipt', async () => {

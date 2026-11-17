@@ -13,14 +13,12 @@ import { buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeF
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { describeGridLaunch, type GridLaunchAnswer, type GridLaunchRequest } from '../../lib/gridLaunchWire.js'
-import { engineHookInstallations as engineHooks } from '../../engines/nativeHookSetup.js'
 import { ENUMERATION_ATTEMPTS } from '../../engines/kit/nativeFiles.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { SessionOwner } from '../../lib/sessionSearch/external.js'
 import { createAgentCreator, type CreateAgentDeps } from './create.js'
 import { opencodeMajorVersion } from '../../engines/opencode/version.js'
-import { installOpencodePlugin as installNativeOpencodePlugin } from '../../engines/nativeHooks.js'
 import { missingHookScript } from '../../engines/kit/hookScript.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
@@ -116,10 +114,6 @@ vi.mock('../../lib/gridLaunchWire.js', async (real) => ({
 const buildGridLaunch = vi.fn(async (request: GridLaunchRequest): Promise<GridLaunchAnswer> => ({
   ok: true, launch: { env: { GRID_KEY: 'k' }, args: ['--grid'], webSearch: 'unsupported' }, override: request.override,
 }))
-vi.mock('../../engines/nativeHookSetup.js', async (real) => {
-  const actual = await real<typeof import('../../engines/nativeHookSetup.js')>()
-  return { ...actual, engineHookInstallations: { ...actual.engineHookInstallations, codex: { ...actual.engineHookInstallations.codex, installIn: vi.fn(async () => true) } } }
-})
 // What the backend new panes are made on can do; every test's backend can give a session its own environment.
 const capabilities = vi.fn(async () => ({ sessionEnv: true }))
 
@@ -150,13 +144,14 @@ const request = (over: Record<string, unknown> = {}) => ({
 const pending = { agentId: 'a1', sessionId: '', engine: 'claude' } as RegisteredSession
 const owner = { pid: 7, engine: 'claude' } as SessionOwner
 
-// Hook installation consumes the same setup port as the supervised core; the fixture owns its version replies.
-const installOpencodePlugin = (port: number) => installNativeOpencodePlugin(port, undefined, {
-  setup: { opencodeMajor: opencodeMajorVersion, hermesKeepsRecord: async () => null },
-})
+function preparedNative(source: { codexHome?: string | null } = {}, over: Partial<NativeLaunch> = {}): NativeLaunch {
+  return { environment: { HOME: root, ...(source.codexHome ? { CODEX_HOME: source.codexHome } : {}) },
+    proofs: [], current: () => true, opencodeMajor: 2, permission: async () => 'supported', prepareHooks: vi.fn(async () => true), ...over }
+}
 
 function setup(over: Partial<CreateAgentDeps> = {}) {
-  const deps: CreateAgentDeps = { opencodeMajor: opencodeMajorVersion,
+  const deps: CreateAgentDeps = {
+    native: async (_engine, source) => ({ ok: true, launch: preparedNative(source) }),
     createBackend: { releaseHold: vi.fn(async () => {}), capabilities } as unknown as CreateAgentDeps['createBackend'],
     registry: { setLaunch: vi.fn(() => ({ ...pending, launch: { state: 'ready' } })) } as unknown as CreateAgentDeps['registry'],
     externalResume: vi.fn<CreateAgentDeps['externalResume']>(async () => ({ ok: true, session: pending })),
@@ -172,7 +167,6 @@ function setup(over: Partial<CreateAgentDeps> = {}) {
     },
     hookPort: 4242,
     hooksDisabled: false,
-    installOpencodePlugin: vi.fn(async () => true),
     gridLaunchMachine: vi.fn(() => ({}) as never),
     buildGridLaunch,
     terminalHintMachineName: () => 'this-mac',
@@ -195,6 +189,13 @@ describe('creating an agent', () => {
     expect(createAndRegisterPane).not.toHaveBeenCalled()
     expect(run.deps.prepareInstructions).not.toHaveBeenCalled()
   })
+  it('starts a plain terminal without a native preparation owner', async () => {
+    const run = setup({ native: undefined })
+    expect(await run.create(request({ engine: 'terminal' }))).toMatchObject({ ok: true })
+    expect(createAndRegisterPane).toHaveBeenCalledOnce()
+    expect(run.deps.watchNewPane).not.toHaveBeenCalled()
+  })
+
   beforeEach(() => {
     vi.mocked(projectsRoot).mockReset()
     vi.mocked(opendirSync).mockReset()
@@ -398,7 +399,7 @@ describe('creating an agent', () => {
     }
   })
 
-  it.each(['local', 'remote', 'nonempty', 'unreadable', 'unreadable before trust', 'revoked', 'revoked before trust', 'changed contents', 'replaced workspace', 'changed after enumeration', 'redirected during enumeration', 'error', 'thrown text', 'no trust contract', 'legacy'] as const)(
+  it.each(['local', 'remote', 'nonempty', 'unreadable', 'unreadable before trust', 'revoked', 'revoked before trust', 'changed contents', 'replaced workspace', 'changed after enumeration', 'redirected during enumeration', 'error', 'thrown text', 'no trust contract'] as const)(
     'decides local trust before workspace preparation and writes it before final proof: %s', async mode => {
       const parent = mode === 'redirected during enumeration' ? folder() : root
       vi.mocked(projectsRoot).mockReturnValueOnce(parent)
@@ -436,7 +437,7 @@ describe('creating an agent', () => {
           return true
         }),
       } as unknown as NativeLaunch
-      const run = setup(mode === 'legacy' ? {} : { native: async () => {
+      const run = setup({ native: async () => {
         if (mode === 'changed contents') writeFileSync(join(cwd, 'user-file'), 'user content')
         if (mode === 'replaced workspace') { renameSync(cwd, cwd + '-original'); mkdirSync(cwd) }
         return { ok: true, launch }
@@ -446,8 +447,21 @@ describe('creating an agent', () => {
       if (mode === 'revoked' || mode === 'revoked before trust' || mode === 'replaced workspace') expect(result).toMatchObject({ ok: false, unavailable: 'launch' })
       else expect(result.ok).toBe(true)
       expect(preTrustCodexProject, JSON.stringify(vi.mocked(console.warn).mock.calls)).toHaveBeenCalledTimes(expected ? 1 : 0)
-      if (expected) expect(preTrustCodexProject).toHaveBeenCalledWith(cwd, mode === 'legacy' ? null : '/fixture/selected')
+      if (expected) expect(preTrustCodexProject).toHaveBeenCalledWith(cwd, '/fixture/selected')
     })
+
+  it('keeps a local terminal independent of native engine configuration', async () => {
+    const cwd = folder()
+    vi.mocked(projectsRoot).mockReturnValueOnce(root)
+    const prepareFolderTrust = vi.fn(async () => true)
+    const run = setup({ native: undefined, prepareFolderTrust })
+    const prepared = await run.create.prepare(request({ engine: 'terminal', cwd }),
+      { id: 'terminal', label: 'harness-terminal-fixture', current: () => true, hold: () => {} }, { local: true })
+    expect(prepared.ok).toBe(true)
+    expect(prepareFolderTrust).toHaveBeenCalledWith(expect.objectContaining({ engine: 'terminal', environment: undefined }), expect.any(Function))
+    expect(preTrustClaudeProject).not.toHaveBeenCalled()
+    expect(preTrustCodexProject).not.toHaveBeenCalled()
+  })
 
   // A Claude Code agent in an empty project here is trusted as a Codex one is, in the profile it reads.
   it('trusts a Claude Code agent\'s empty local project before its launch', async () => {
@@ -564,7 +578,7 @@ describe('creating an agent', () => {
     it('a local create never starts on a launch that was not prepared for its folder', async () => {
       const local = folder()
       const unprepared = { ok: false, error: 'OPENCLAW_LOCAL_UNPREPARED', detail: 'This Harness could not prepare the --local folder. Nothing was started.' }
-      for (const native of [async () => prepared(), async () => prepared(folder()), undefined]) {
+      for (const native of [async () => prepared(), async () => prepared(folder())]) {
         expect(await setup({ native }).create.prepare(request({ engine: 'openclaw', openclawLocal: local }), authority)).toEqual(unprepared)
       }
       expect(createAndRegisterPane).not.toHaveBeenCalled()
@@ -634,11 +648,11 @@ describe('creating an agent', () => {
 
   it('does not open a Codex pane before its profile hooks are durably confirmed', async () => {
     let finish!: (installed: boolean) => void
-    vi.mocked(engineHooks.codex.installIn).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
-    const { create } = setup()
+    const prepareHooks = vi.fn(async () => true).mockImplementationOnce(() => new Promise<boolean>(resolve => { finish = resolve }))
+    const { create } = setup({ native: async (_engine, source) => ({ ok: true, launch: preparedNative(source, { prepareHooks }) }) })
     const input = request({ engine: 'codex', codexHome: '/profiles/work' })
     const first = create(input)
-    await vi.waitFor(() => expect(engineHooks.codex.installIn).toHaveBeenCalled())
+    await vi.waitFor(() => expect(prepareHooks).toHaveBeenCalled())
     expect(createAndRegisterPane).not.toHaveBeenCalled()
     finish(false)
     expect(await first).toMatchObject({ ok: false, error: 'NATIVE_LAUNCH_HELD' })
@@ -657,7 +671,7 @@ describe('creating an agent', () => {
     expect(await create(request({ engine: 'claude' }))).toMatchObject({ ok: true })
     expect(await create(request({ engine: 'codex' }))).toMatchObject({ ok: true })
     expect(await create(request({ engine: 'opencode', claudeHome: '/profiles/claude-work' }))).toMatchObject({ ok: true })
-    expect(syncProfileHome).not.toHaveBeenCalled()
+    expect(syncProfileHome).toHaveBeenCalledExactlyOnceWith('codex', join(root, '.codex'))
   })
 
   it('starts an agent on a profile home once its connections are there, which the engine reads as it starts', async () => {
@@ -671,12 +685,12 @@ describe('creating an agent', () => {
     expect(createAndRegisterPane).toHaveBeenCalledTimes(1)
   })
 
-  it('reaches the existing first-install pane route when OpenCode is absent', async () => {
-    vi.mocked(opencodeMajorVersion).mockResolvedValueOnce(null)
-    const { create } = setup({ installOpencodePlugin })
-    expect(await create(request({ engine: 'opencode' }))).toMatchObject({ ok: true })
-    expect(buildEngineLaunchArgv).toHaveBeenCalledWith('opencode', expect.objectContaining({ installIfMissing: { install: 'recipe' } }))
-    expect(createAndRegisterPane).toHaveBeenCalledTimes(1)
+  it('holds an absent OpenCode for native installation before opening a pane', async () => {
+    const held = { ok: false as const, error: 'NATIVE_LAUNCH_HELD' as const, unavailable: 'native' as const, detail: 'Installing OpenCode.', installing: true as const }
+    const { create } = setup({ native: async () => held })
+    expect(await create(request({ engine: 'opencode' }))).toEqual(held)
+    expect(buildEngineLaunchArgv).not.toHaveBeenCalled()
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
   })
 
   it('hands external resume to its durable controller before folder, instructions or engine preparation', async () => {
@@ -808,7 +822,7 @@ describe('creating an agent', () => {
       expect(deps.announceSession).toHaveBeenCalledWith(pending)
       // Every new agent is looked at for the services that follow agents, a harness or not (core/agentLife.ts).
       expect(deps.attach).toHaveBeenCalledWith(pending)
-      expect(deps.watchNewPane).toHaveBeenCalledWith('claude', pending, { runtime: { paneId: '%1' } }, ['claude'], { install: 'recipe' }, undefined)
+      expect(deps.watchNewPane).toHaveBeenCalledWith('claude', pending, { runtime: { paneId: '%1' } }, ['claude'], undefined)
       const pane = vi.mocked(createAndRegisterPane).mock.calls[0][0]
       expect(pane).toMatchObject({ engine: 'claude', sessionLabel: expect.any(String), grid: null, gridLaunchRecord: null, dsh: null, dshRuntime: null, defaultName: null })
     })
@@ -817,7 +831,7 @@ describe('creating an agent', () => {
       vi.mocked(engineLaunchEnv).mockReturnValueOnce({ HARNESS_NATIVE_FIXTURE: 'token' })
       expect(await setup().create(request())).toMatchObject({ ok: true })
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0].env).toMatchObject({ HARNESS_NATIVE_FIXTURE: 'token' })
-      expect(engineLaunchEnv).toHaveBeenCalledWith('claude', undefined)
+      expect(engineLaunchEnv).toHaveBeenCalledWith('claude', expect.objectContaining({ environment: { HOME: root } }))
     })
 
     it('starts a Windows engine in its workspace, its pane becoming the person\'s shell after it', async () => {
@@ -844,7 +858,7 @@ describe('creating an agent', () => {
     // the install step, whose recipe this spec stubs).
     const launchedFor = async (over: Record<string, unknown>) => {
       const real = await vi.importActual<typeof import('../../lib/engineLaunch.js')>('../../lib/engineLaunch.js')
-      vi.mocked(buildEngineLaunchArgv).mockImplementationOnce((engine, options) => real.buildEngineLaunchArgv(engine, { ...options, installIfMissing: undefined }))
+      vi.mocked(buildEngineLaunchArgv).mockImplementationOnce((engine, options) => real.buildEngineLaunchArgv(engine, options))
       expect(await setup().create(request(over))).toMatchObject({ ok: true })
       return vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
     }
@@ -1015,64 +1029,43 @@ describe('creating an agent', () => {
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0].paneLaunch).toMatchObject({ clearInherited: ['ANTHROPIC_API_KEY', 'HARNESS_OLD'] })
     })
 
-    it('installs the hooks a Codex profile and a new OpenCode need, unless hooks are off', async () => {
-      const on = setup()
+    it('uses native hook preparation for each engine, including hooks disabled', async () => {
+      const prepareHooks = vi.fn<NativeLaunch['prepareHooks']>(async () => true)
+      const native: NonNullable<CreateAgentDeps['native']> = async (_engine, source) => ({ ok: true, launch: preparedNative(source, { prepareHooks }) })
+      const on = setup({ native })
       await on.create(request({ engine: 'codex', codexHome: '/codex-work' }))
       await on.create(request({ engine: 'opencode' }))
-      expect(engineHooks.codex.installIn).toHaveBeenCalledWith(4242, '/codex-work')
-      expect(on.deps.installOpencodePlugin).toHaveBeenCalledWith(4242)
+      expect(prepareHooks.mock.calls.map(call => call[0])).toEqual([4242, 4242])
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ env: { CODEX_HOME: '/codex-work' }, codexHome: '/codex-work' })
-      const off = setup({ hooksDisabled: true })
+      const off = setup({ native, hooksDisabled: true })
       await off.create(request({ engine: 'codex', codexHome: '/codex-work' }))
       await off.create(request({ engine: 'opencode' }))
-      expect(engineHooks.codex.installIn).toHaveBeenCalledTimes(1)
-      expect(off.deps.installOpencodePlugin).not.toHaveBeenCalled()
+      expect(prepareHooks.mock.calls.map(call => call[0])).toEqual([4242, 4242, 0, 0])
     })
 
-    it('refuses an OpenCode create whose plugin installer could not be loaded, before any pane opens', async () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      const t = setup({ installOpencodePlugin: vi.fn(async () => false) })
-      expect(await t.create(request({ engine: 'opencode' }))).toEqual({ ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s plugin installer could not be loaded' })
-      expect(warn).toHaveBeenCalledWith('[agent] create opencode refused · OpenCode\'s plugin installer could not be loaded')
+    it('holds an OpenCode create whose native hooks are unverified before any pane opens', async () => {
+      const t = setup({ native: async () => ({ ok: true, launch: preparedNative({}, { prepareHooks: async () => false }) }) })
+      expect(await t.create(request({ engine: 'opencode' }))).toMatchObject({ ok: false, error: 'NATIVE_LAUNCH_HELD' })
       expect(createAndRegisterPane).not.toHaveBeenCalled()
-      warn.mockRestore()
     })
 
-    it('lets concurrent healthy OpenCode creates share the current native hook installation', async () => {
-      const completions: Array<(major: number) => void> = []
-      let entered!: () => void
-      const bothEntered = new Promise<void>(done => { entered = done })
-      const probe = () => new Promise<number>(done => {
-        completions.push(done)
-        if (completions.length === 2) entered()
-      })
-      vi.mocked(opencodeMajorVersion).mockImplementationOnce(probe).mockImplementationOnce(probe)
-      const test = setup({ installOpencodePlugin })
-      const first = test.create(request({ engine: 'opencode' }))
-      const second = test.create(request({ engine: 'opencode' }))
-      await bothEntered
-      completions[0]!(2); completions[1]!(2)
-      expect((await Promise.all([first, second])).map(result => result.ok)).toEqual([true, true])
-      expect(createAndRegisterPane).toHaveBeenCalledTimes(2)
+    it('uses an unknown prepared named-agent version without a second version lookup', async () => {
+      const run = setup({ native: async () => ({ ok: true, launch: preparedNative({}, { opencodeMajor: null }) }) })
+      expect(await run.create(request({ engine: 'opencode', agent: 'reviewer' }))).toMatchObject({ ok: true })
+      expect(namedAgentArgs).toHaveBeenCalledWith('opencode', 'reviewer', null)
+      expect(opencodeMajorVersion).not.toHaveBeenCalled()
     })
 
-    it('keeps the existing unknown-version launch behavior while setup is unavailable', async () => {
-      const t = setup({ opencodeMajor: async () => null })
-      expect(await t.create(request({ engine: 'opencode', agent: 'reviewer' }))).toMatchObject({ ok: true })
-      expect(namedAgentArgs).toHaveBeenLastCalledWith('opencode', 'reviewer', null)
-    })
-
-    it('creates OpenCode from eager facts when optional code cannot load', async () => {
+    it('creates OpenCode from prepared facts when optional code cannot load', async () => {
       vi.mocked(loadEngine).mockImplementation(() => new Promise(() => {}))
       const t = setup()
-      await t.create(request({ engine: 'opencode', agent: 'reviewer' }))
-      expect(namedAgentArgs).toHaveBeenLastCalledWith('opencode', 'reviewer', 2)
+      expect(await t.create(request({ engine: 'opencode' }))).toMatchObject({ ok: true })
+      expect(buildEngineLaunchArgv).toHaveBeenCalledWith('opencode', expect.objectContaining({ native: expect.objectContaining({ opencodeMajor: 2 }) }))
       expect(createAndRegisterPane).toHaveBeenCalledOnce()
-      expect(t.deps.installOpencodePlugin).toHaveBeenCalledWith(4242)
       expect(loadEngine).not.toHaveBeenCalled()
       buildGridLaunch.mockResolvedValueOnce({ ok: false, error: 'GRID_UNSUPPORTED', detail: 'no' })
-      await t.create(request({ engine: 'claude', agent: 'reviewer', grid: { networkName: 'g' } }))
-      expect(t.deps.gridLaunchMachine).toHaveBeenCalledWith('claude', undefined)
+      await t.create(request({ engine: 'claude', grid: { networkName: 'g' } }))
+      expect(t.deps.gridLaunchMachine).toHaveBeenCalledWith('claude', expect.objectContaining({ current: expect.any(Function) }))
     })
 
     // Task #3395: kept on the registry row too, so every relaunch passes the same flags again (lib/launchOverrides.ts);
@@ -1088,15 +1081,14 @@ describe('creating an agent', () => {
       expect(vi.mocked(createAndRegisterPane).mock.calls[1][0]).not.toHaveProperty('launchModel')
     })
 
-    it('opens as a named agent, with a first prompt, and does not install an engine with a path override', async () => {
-      vi.mocked(enginePathOverride).mockReturnValueOnce('/opt/claude' as never)
-      const { deps, create } = setup()
-      await create(request({ agent: 'reviewer', prompt: 'review the diff', name: 'Reviewer' }))
+    it('opens a prepared OpenCode v1 as a named agent, with a first prompt', async () => {
+      const { deps, create } = setup({ native: async () => ({ ok: true, launch: preparedNative({}, { opencodeMajor: 1 }) }) })
+      expect(await create(request({ engine: 'opencode', agent: 'reviewer', prompt: 'review the diff', name: 'Reviewer' }))).toMatchObject({ ok: true })
       const options = vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as Record<string, unknown>
-      expect(options).toMatchObject({ extraArgs: ['--agent', 'reviewer'], firstPrompt: 'review the diff', installIfMissing: undefined, cwd: expect.any(String) })
+      expect(options).toMatchObject({ extraArgs: ['--agent', 'reviewer'], firstPrompt: 'review the diff', cwd: expect.any(String) })
       expect(options.terminalHint).toEqual({ machineName: 'this-mac' })
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ agent: 'reviewer', defaultName: 'Reviewer' })
-      expect(deps.watchNewPane).toHaveBeenCalledWith('claude', pending, expect.anything(), ['claude'], undefined, undefined)
+      expect(deps.watchNewPane).toHaveBeenCalledWith('opencode', pending, expect.anything(), ['claude'], undefined)
     })
 
     it('carries the person\'s machine MCP servers before what Harness tells the agent (#1872)', async () => {
@@ -1106,9 +1098,9 @@ describe('creating an agent', () => {
       writeMachineMcp({ lamp: { command: 'lamp-mcp', args: [], engines: ['claude'], projects: [] } })
       try {
         const { create } = setup()
-        await create(request({ agent: 'reviewer', startedBy: 'agent' }))
+        await create(request({ startedBy: 'agent' }))
         expect((vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as Record<string, unknown>).extraArgs).toEqual([
-          '--agent', 'reviewer', `--mcp-config=${JSON.stringify({ mcpServers: { lamp: { type: 'stdio', command: 'lamp-mcp', args: [] } } })}`, '--settings', '{"attribution":{}}'])
+          `--mcp-config=${JSON.stringify({ mcpServers: { lamp: { type: 'stdio', command: 'lamp-mcp', args: [] } } })}`, '--settings', '{"attribution":{}}'])
       } finally { rmSync(join(env.ADAPTER_DATA_DIR, 'mcp-servers.json'), { force: true }) }
     })
 
@@ -1140,9 +1132,9 @@ describe('creating an agent', () => {
     it('started by another agent: its pull request line after every other argument, and who started it on the row', async () => {
       const { create } = setup()
       const cwd = folder()
-      await create(request({ cwd, agent: 'reviewer', startedBy: 'agent', parentAgentId: 'lead-1' }))
-      expect(vi.mocked(agentLaunchArgs)).toHaveBeenCalledWith('claude', 'agent', { cwd, profile: null, environment: undefined })
-      expect((vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as Record<string, unknown>).extraArgs).toEqual(['--agent', 'reviewer', '--settings', '{"attribution":{}}'])
+      await create(request({ cwd, startedBy: 'agent', parentAgentId: 'lead-1' }))
+      expect(vi.mocked(agentLaunchArgs)).toHaveBeenCalledWith('claude', 'agent', { cwd, profile: null, environment: { HOME: root } })
+      expect((vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as Record<string, unknown>).extraArgs).toEqual(['--settings', '{"attribution":{}}'])
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ startedBy: 'agent', parentAgentId: 'lead-1' })
       // The person's: no line, and nothing recorded.
       await create(request())

@@ -21,7 +21,6 @@ import { env } from '../config/env.js'
 import { isolatedTmux, type IsolatedTmux } from '../testing/isolatedTmux.js'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
 import { buildEngineLaunchArgv } from './engineLaunch.js'
-import type { EngineInstallRecipe } from './engineInstall.js'
 import { ENGINE_EXIT_PANE_OPTION } from './tmux.js'
 
 const tmuxBin = resolveBinaryOnPath('tmux')
@@ -161,11 +160,8 @@ async function open(shell: string, engine: 'claude' | 'codex', f: ReturnType<typ
   }
 }
 
-/** Most launches look for the engine first and install it when it is missing; here it is there. */
-const installIfMissing: EngineInstallRecipe = { command: 'false', source: 'test fixture', executable: { names: ['harness-no-such-engine'] } }
 const LAUNCHES = [
   { engine: 'claude', label: 'claude' },
-  { engine: 'claude', label: 'claude, looked for first', extra: { installIfMissing } },
   { engine: 'codex', label: 'codex, npm wrapper and all', wrapped: true },
 ] as const
 
@@ -174,7 +170,7 @@ real('a stopped engine in a real pane', () => {
     const engine = launch.engine
     it(`${shell}, ${launch.label}: comes back after Ctrl+Z and after a SIGSTOP, and its own exit still turns the pane into a shell`, async () => {
       const f = fixture('', 'wrapped' in launch)
-      const p = await open(shell, engine, f, 'extra' in launch ? launch.extra : {})
+      const p = await open(shell, engine, f, {})
       const up = await until('the engine to start', () => f.lines().find((line) => line.startsWith('up ')))
       const pid = Number(up.split(' ')[1])
       // Keep the native writer and inline transcript settings through the wrapper.

@@ -1,3 +1,4 @@
+import { shellAgentArgv, buildEngineInstallationArgv } from '../engines/kit/installationScript.js'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
@@ -18,20 +19,14 @@ import {
   terminalHintLines,
   buildEngineCommandArgv,
   buildEngineLaunchArgv,
-  shellAgentArgv,
   buildTerminalLaunchArgv,
   interactiveEngineShell,
   isPosixShell,
-  commandAvailableInInteractiveShell,
-  commandOutputInInteractiveShell,
-  commandSupportsFlagInInteractiveShell,
   dropPermissionFlagIfUnsupported,
   permissionFlagToVerify,
   permissionModeFlags,
   refusePermissionFlagIfUnsupported,
   engineUpdateCommand,
-  unsupportedLaunchModelFlag,
-  resetCommandFlagSupportCache,
   engineFallbackPrelude,
   ENGINE_INPUT_DRAIN_SH,
   firstPromptArgs,
@@ -45,7 +40,6 @@ import {
   ZSH_GUARD_ZSHENV,
   zshNewUserGuard,
   engineLaunchEnv,
-  buildEngineInstallationArgv,
 } from './engineLaunch.js'
 import { isHeldStartCommand, NATIVE_LAUNCH_MARKER } from './nativePaneHold.js'
 import { WindowsStartupUnverified } from './windows/engineStart.js'
@@ -213,7 +207,7 @@ describe('buildEngineLaunchArgv', () => {
         const cwd = '/Users/demo/projects/a project with a fairly long name'
         const command = buildEngineLaunchArgv(engine, {
           cwd, firstPrompt: '漢'.repeat(MAX_FIRST_PROMPT_CHARS), resumeSessionId: '019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b',
-          installIfMissing: engineInstallRecipe(engine), waitForPid: { pid: 4242, name: 'Codex' }, bypassPermission: true,
+          waitForPid: { pid: 4242, name: 'Codex' }, bypassPermission: true,
           extraArgs: built.launch.args, clearEnv: gridConflictingEnvToClear(built.launch), harnessNode: true,
         }, '/bin/zsh', '/opt/harness/runtime/node/bin/node', '/opt/harness/runtime/grid/grid', '/opt/homebrew/bin/tmux')
         const created = await new TmuxBackend(undefined, () => 'daemon-0000').create({ cwd, label: `harness-${engine}-1791200000000`, env: built.launch.env, command })
@@ -331,9 +325,7 @@ describe('buildEngineLaunchArgv', () => {
       ['claude', () => buildEngineLaunchArgv('claude', { cwd: '/work' }, '/bin/zsh', undefined, undefined, '/opt/homebrew/bin/tmux')],
       ['codex, run again after a failed startup', () => buildEngineLaunchArgv('codex', { cwd: '/work' }, '/bin/bash', undefined, undefined, '/opt/homebrew/bin/tmux')],
       ['codex without tmux', () => buildEngineLaunchArgv('codex', {}, '/bin/zsh', undefined, undefined, NO_TMUX)],
-      ['an engine installed when missing', () => buildEngineLaunchArgv('claude', { installIfMissing: npmRecipe }, '/bin/zsh', undefined, undefined, '/opt/homebrew/bin/tmux')],
-      ['codex installed when missing, after a take-over', () => buildEngineLaunchArgv('codex', { installIfMissing: { ...npmRecipe, executable: { names: ['codex'] } }, waitForPid: { pid: 2 ** 22 + 7, name: 'Codex' } }, '/bin/zsh', undefined, undefined, '/opt/homebrew/bin/tmux')],
-      ['an engine installed first', () => buildEngineLaunchArgv('opencode', { installFirst: "curl -fsSL 'https://example.invalid/install' | bash" }, '/bin/bash', undefined, undefined, NO_TMUX)],
+      ['codex installed when missing, after a take-over', () => buildEngineLaunchArgv('codex', { waitForPid: { pid: 2 ** 22 + 7, name: 'Codex' } }, '/bin/zsh', undefined, undefined, '/opt/homebrew/bin/tmux')],
     ]
     const scriptOf = launchScriptOf
 
@@ -699,7 +691,7 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
 
   // Windows has no /usr/bin/env: the variables it carried ride in the pane's env (engineLaunchEnv).
   it('never puts /usr/bin/env in front of a Windows launch, and gives its variables as env instead', () => {
-    const native = { token: 'native-token' } as NativeLaunch
+    const native = { token: 'native-token' } as unknown as NativeLaunch
     const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
     let windows: string[][]
     try {
@@ -738,7 +730,7 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
 
     it('starts a plain engine as itself: no script, no POSIX program', () => {
       for (const shell of ['/bin/zsh', 'c:\\windows\\system32\\cmd.exe', '']) {
-        const argv = onWindows(() => buildEngineLaunchArgv('claude', { cwd: '/work', installIfMissing: engineInstallRecipe('claude'), clearEnv: ['A'] }, shell))
+        const argv = onWindows(() => buildEngineLaunchArgv('claude', { cwd: '/work', clearEnv: ['A'] }, shell))
         expect(argv).toEqual(onWindows(() => buildEngineCommandArgv('claude', {})))
         expect(argv.filter((arg) => POSIX_ONLY.test(arg))).toEqual([])
       }
@@ -928,7 +920,7 @@ describe('a login shell that is not POSIX', () => {
   })
 
   it.skipIf(!existsSync('/bin/tcsh'))('runs that script for real under tcsh, with its arguments intact and the file gone', () => {
-    const argv = buildEngineLaunchArgv('claude', { cwd: dataDir, installFirst: undefined }, '/bin/tcsh', '/opt/node/bin/node', '/opt/grid/bin/grid', null)
+    const argv = buildEngineLaunchArgv('claude', { cwd: dataDir }, '/bin/tcsh', '/opt/node/bin/node', '/opt/grid/bin/grid', null)
     const file = /^exec \/bin\/(?:da)?sh '(.+)'$/.exec(argv[argv.length - 1])![1]
     // Run the file the way tcsh would hand it over, with the engine replaced by printf.
     writeFileSync(file, readFileSync(file, 'utf8').replace(RUN_LINE, 'printf "%s|" "$PWD" "$harness_engine_bin" "$@"'))
@@ -1129,120 +1121,24 @@ exec /bin/sh -c "$script" "$@"
   return shell
 }
 
-/** The real zsh, if this machine has one. macOS always does; a Linux CI box may not. */
-const ZSH = ['/bin/zsh', '/usr/bin/zsh'].find((path) => existsSync(path)) ?? null
-
-/**
- * A probe shell that hands the script to the REAL zsh. `bashProbeShell` runs everything through
- * `/bin/sh` and so cannot see a zsh-only parse rule — and zsh is what macOS defaults $SHELL to,
- * i.e. the shell the capability probe actually runs under for most users. Plain `-c` rather than
- * zsh's interactive form keeps the case hermetic: no developer's rc file gets a say in the result.
- */
-function zshProbeShell(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'harness-engine-zsh-shell-'))
-  dirs.push(dir)
-  // Named `zsh` so interactiveEngineShell hands it zsh's own `-lic`, exactly as it would $SHELL.
-  const shell = join(dir, 'zsh')
-  writeFileSync(shell, `#!/bin/sh
-[ "$1" = '-lic' ] || exit 97
-shift
-script="$1"
-shift
-PATH="$HARNESS_ENGINE_TEST_PATH"
-export PATH
-exec ${ZSH} -c "$script" "$@"
-`)
-  chmodSync(shell, 0o700)
-  return shell
-}
-
-describe('commandAvailableInInteractiveShell', () => {
-  it('reports a shell failure as unverified rather than a missing command', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'harness-failed-probe-'))
-    dirs.push(dir)
-    const shell = join(dir, 'bash')
-    writeFileSync(shell, '#!/bin/sh\nexit 9\n')
-    chmodSync(shell, 0o700)
-    const result = await commandAvailableInInteractiveShell('git', shell, undefined, true)
-    expect(result).toMatchObject({ status: 'unverified', detail: expect.stringContaining('9') })
-  })
-  it('bounds a hung shell probe and reports a timeout as unverified', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'harness-slow-probe-'))
-    dirs.push(dir)
-    const shell = join(dir, 'bash')
-    writeFileSync(shell, '#!/bin/sh\nexec /bin/sleep 30\n')
-    chmodSync(shell, 0o700)
-    const started = Date.now()
-    const result = await commandAvailableInInteractiveShell('git', shell, undefined, true)
-    expect(result).toEqual({ status: 'unverified', detail: 'Interactive shell tool probe timed out after 5 seconds.' })
-    expect(Date.now() - started).toBeLessThan(7_000)
-  }, 8_000)
-  it('uses the same bash interactive PATH that launches a new engine', async () => {
-    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-bin-'))
-    dirs.push(binDir)
-    executable(binDir, 'kilo')
-    process.env.HARNESS_ENGINE_TEST_PATH = binDir
-
-    const shell = bashProbeShell()
-    await expect(commandAvailableInInteractiveShell('kilo', shell)).resolves.toBe(true)
-    await expect(commandAvailableInInteractiveShell('missing-engine', shell)).resolves.toBe(false)
-    await expect(commandAvailableInInteractiveShell('kilo', shell, undefined, true)).resolves.toEqual({ status: 'available' })
-    await expect(commandAvailableInInteractiveShell('missing-engine', shell, undefined, true)).resolves.toEqual({ status: 'missing' })
-  })
-
-  it('recognizes an installed vendor path before the shell profile has it on PATH', async () => {
-    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-vendor-bin-'))
-    dirs.push(binDir)
-    const installed = executable(binDir, 'cursor-agent')
-    process.env.HARNESS_ENGINE_TEST_PATH = '/usr/bin:/bin'
-    const recipe: EngineInstallRecipe = {
-      command: 'false',
-      source: 'test fixture',
-      executable: { names: ['cursor-agent'], absolutePaths: [installed] },
-    }
-
-    await expect(
-      commandAvailableInInteractiveShell('cursor-agent', bashProbeShell(), recipe),
-    ).resolves.toBe(true)
-  })
-})
-
-describe('commandOutputInInteractiveShell', () => {
-  it('returns both streams and the exit status from the shell a launch uses, and nothing for a hung command', async () => {
-    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-output-'))
-    dirs.push(binDir)
-    writeFileSync(join(binDir, 'openclaw'), '#!/bin/sh\nprintf "%s\\n" "OpenClaw $1"\nprintf "%s\\n" "a warning" >&2\nexit 3\n')
-    chmodSync(join(binDir, 'openclaw'), 0o700)
-    writeFileSync(join(binDir, 'stuck'), '#!/bin/sh\nexec /bin/sleep 30\n')
-    chmodSync(join(binDir, 'stuck'), 0o700)
-    process.env.HARNESS_ENGINE_TEST_PATH = `${binDir}:/usr/bin:/bin`
-    const ran = await commandOutputInInteractiveShell('openclaw', 'openclaw', ['--version'], bashProbeShell())
-    expect(ran?.code).toBe(3)
-    expect(ran?.output).toContain('OpenClaw --version')
-    expect(ran?.output).toContain('a warning')
-    await expect(commandOutputInInteractiveShell('openclaw', 'stuck', [], bashProbeShell())).resolves.toBeNull()
-  }, 8_000)
-})
-
-/** A fake engine whose `--help` prints exactly `help`, and nothing else. */
-function fakeEngine(dir: string, name: string, help: string): void {
-  writeFileSync(join(dir, name), `#!/bin/sh\nif [ "$1" = "--help" ]; then printf "%s\\n" '${help}'; exit 0; fi\nexit 2\n`)
-  chmodSync(join(dir, name), 0o700)
-}
-
 describe('the permission gates', () => {
-  /** A fake opencode on the probe shell's PATH, and the shell that will find it. */
-  function withFakeOpencode(help: string): string {
-    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-gate-'))
-    dirs.push(binDir)
-    process.env.HARNESS_ENGINE_TEST_PATH = binDir
-    fakeEngine(binDir, 'opencode', help)
-    return bashProbeShell()
-  }
+  const supported = { permission: async () => 'supported' as const } as unknown as NativeLaunch
+  const unsupported = { permission: async () => 'unsupported' as const } as unknown as NativeLaunch
+  it('holds native creation and relaunch without preparation, even when no permission flag is requested', async () => {
+    expect(await refusePermissionFlagIfUnsupported('codex', { permissionMode: 'ask' })).toMatchObject({ error: 'NATIVE_LAUNCH_HELD' })
+    expect(await dropPermissionFlagIfUnsupported('codex', { permissionMode: 'ask' })).toMatchObject({ nativeHold: 'Waiting for engine setup.' })
+    expect(await refusePermissionFlagIfUnsupported('terminal', {})).toBeNull()
+    expect(await dropPermissionFlagIfUnsupported('terminal', {})).toEqual({ choice: {}, droppedFlag: null })
+  })
+
+  it('holds native permission uncertainty without guessing a supported flag', async () => {
+    const native = { permission: async () => 'unknown' } as unknown as NativeLaunch
+    expect(await refusePermissionFlagIfUnsupported('claude', { permissionMode: 'auto' }, native)).toMatchObject({ error: 'NATIVE_LAUNCH_HELD' })
+    expect(await dropPermissionFlagIfUnsupported('claude', { permissionMode: 'auto' }, native)).toMatchObject({ nativeHold: expect.stringContaining('permission flags') })
+  })
 
   it('refuses a create whose engine does not take the flag, naming the engine and the flag', async () => {
-    const shell = withFakeOpencode('--auto-update')
-    const refusal = await refusePermissionFlagIfUnsupported('opencode', { permissionMode: 'auto' }, shell)
+    const refusal = await refusePermissionFlagIfUnsupported('opencode', { permissionMode: 'auto' }, unsupported)
     expect(refusal?.error).toBe('CODEX_CLI_TOO_OLD')
     expect(refusal?.detail).toContain('opencode')
     expect(refusal?.detail).toContain('--auto')
@@ -1258,73 +1154,36 @@ describe('the permission gates', () => {
 
   // codex_cli_too_old, 2–4 a day: "Update opencode" did not say how.
   it('gives the command that updates the engine', async () => {
-    const shell = withFakeOpencode('--auto-update')
-    const refusal = await refusePermissionFlagIfUnsupported('opencode', { permissionMode: 'auto' }, shell)
+    const refusal = await refusePermissionFlagIfUnsupported('opencode', { permissionMode: 'auto' }, unsupported)
     expect(refusal?.detail).toBe('The opencode CLI on this machine does not support --auto, which Harness uses for this permission mode. '
       + 'Update opencode by running curl -fsSL https://opencode.ai/install | bash, then try again, or choose Ask permissions for this harness.')
   })
 
   it('lets a create through when the flag is there, and when there is no flag to check', async () => {
-    const shell = withFakeOpencode('--auto')
-    await expect(refusePermissionFlagIfUnsupported('opencode', { permissionMode: 'auto' }, shell)).resolves.toBeNull()
-    await expect(refusePermissionFlagIfUnsupported('opencode', { permissionMode: 'ask' }, shell)).resolves.toBeNull()
+    await expect(refusePermissionFlagIfUnsupported('opencode', { permissionMode: 'auto' }, supported)).resolves.toBeNull()
+    await expect(refusePermissionFlagIfUnsupported('opencode', { permissionMode: 'ask' }, supported)).resolves.toBeNull()
   })
 
   it('drops the flag for a relaunch instead of refusing it, leaving the launch in Ask', async () => {
-    const shell = withFakeOpencode('--auto-update')
-    const dropped = await dropPermissionFlagIfUnsupported('opencode', { permissionMode: 'auto', bypassPermission: true }, shell)
+    const dropped = await dropPermissionFlagIfUnsupported('opencode', { permissionMode: 'auto', bypassPermission: true }, unsupported)
     expect(dropped).toEqual({ choice: { permissionMode: 'ask', bypassPermission: false }, droppedFlag: '--auto' })
   })
 
   it('drops Claude Code\'s mode for a relaunch to no flag at all, since its Ask names a mode with that flag', async () => {
-    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-gate-'))
-    dirs.push(binDir)
-    process.env.HARNESS_ENGINE_TEST_PATH = binDir
-    fakeEngine(binDir, 'claude', '--resume')
-    const shell = bashProbeShell()
     for (const permissionMode of ['auto', 'ask']) {
-      const dropped = await dropPermissionFlagIfUnsupported('claude', { permissionMode, bypassPermission: permissionMode === 'auto' }, shell)
+      const dropped = await dropPermissionFlagIfUnsupported('claude', { permissionMode, bypassPermission: permissionMode === 'auto' }, unsupported)
       expect(dropped).toEqual({ choice: { permissionMode: null, bypassPermission: false }, droppedFlag: '--permission-mode' })
       expect(buildEngineCommandArgv('claude', { ...dropped.choice, permissionMode: dropped.choice.permissionMode ?? undefined })).toEqual([engineBin('claude')])
     }
     // A create in Ask is told to update, never to choose the Ask it chose.
-    const refusal = await refusePermissionFlagIfUnsupported('claude', { permissionMode: 'ask' }, shell)
+    const refusal = await refusePermissionFlagIfUnsupported('claude', { permissionMode: 'ask' }, unsupported)
     expect(refusal?.detail).toContain('Update claude by running npm install -g @anthropic-ai/claude-code, then try again.')
     expect(refusal?.detail).not.toContain('choose Ask')
   })
 
   it('leaves a relaunch alone when the flag is supported', async () => {
-    const shell = withFakeOpencode('--auto')
-    const kept = await dropPermissionFlagIfUnsupported('opencode', { permissionMode: 'auto', bypassPermission: true }, shell)
+    const kept = await dropPermissionFlagIfUnsupported('opencode', { permissionMode: 'auto', bypassPermission: true }, supported)
     expect(kept).toEqual({ choice: { permissionMode: 'auto', bypassPermission: true }, droppedFlag: null })
-  })
-})
-
-describe('the launch model gate', () => {
-  function withFakeClaude(help: string): string {
-    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-gate-'))
-    dirs.push(binDir)
-    process.env.HARNESS_ENGINE_TEST_PATH = binDir
-    fakeEngine(binDir, 'claude', help)
-    return bashProbeShell()
-  }
-
-  it('names the first flag a build of the engine lacks', async () => {
-    const shell = withFakeClaude('--model <model>')
-    await expect(unsupportedLaunchModelFlag('claude', { model: 'opus', effort: 'high' }, shell)).resolves.toBe('--effort')
-    await expect(unsupportedLaunchModelFlag('claude', { model: 'opus', effort: null }, shell)).resolves.toBeNull()
-  })
-
-  it('does not read a longer flag as the one it needs', async () => {
-    const shell = withFakeClaude('--model <model>\n--effort-hint')
-    await expect(unsupportedLaunchModelFlag('claude', { model: null, effort: 'high' }, shell)).resolves.toBe('--effort')
-  })
-
-  it('lets a build that has both flags through, and asks nothing for default or an engine without flags', async () => {
-    const shell = withFakeClaude('--model <model>\n--effort <level>')
-    await expect(unsupportedLaunchModelFlag('claude', { model: 'opus', effort: 'high' }, shell)).resolves.toBeNull()
-    await expect(unsupportedLaunchModelFlag('claude', { model: 'default', effort: 'default' }, shell)).resolves.toBeNull()
-    await expect(unsupportedLaunchModelFlag('codex', { model: 'x', effort: 'high' }, shell)).resolves.toBeNull()
   })
 })
 
@@ -1354,181 +1213,6 @@ describe('permissionFlagToVerify', () => {
     expect(permissionFlagToVerify('claude', { permissionMode: 'ask' })).toBe('--permission-mode')
     expect(permissionFlagToVerify('muse', { bypassPermission: true })).toBeNull()
     expect(permissionFlagToVerify('terminal', { bypassPermission: true })).toBeNull()
-  })
-})
-
-describe('commandSupportsFlagInInteractiveShell', () => {
-  it('distinguishes an older CLI help surface from a supported flag', async () => {
-    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-capability-'))
-    dirs.push(binDir)
-    const codex = join(binDir, 'codex')
-    writeFileSync(
-      codex,
-      '#!/bin/sh\nif [ "$1" = "--help" ]; then printf "%s\\n" "--sandbox"; exit 0; fi\nexit 2\n',
-    )
-    chmodSync(codex, 0o700)
-    process.env.HARNESS_ENGINE_TEST_PATH = binDir
-
-    await expect(
-      commandSupportsFlagInInteractiveShell('codex', '--approve-for-me', bashProbeShell()),
-    ).resolves.toBe('unsupported')
-
-    writeFileSync(
-      codex,
-      '#!/bin/sh\nif [ "$1" = "--help" ]; then printf "%s\\n" "--approve-for-me"; exit 0; fi\nexit 2\n',
-    )
-    await expect(
-      commandSupportsFlagInInteractiveShell('codex', '--approve-for-me', bashProbeShell()),
-    ).resolves.toBe('supported')
-  })
-
-  // openharness#285: opencode 1.14.51 has no `--auto`, prints its help and exits, and the wrapper
-  // hands the pane to a shell. A substring match reads `--auto-update` in a newer help as support
-  // for `--auto` and launches that very pane.
-  it('does not read a longer flag as the one it was asked about', async () => {
-    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-boundary-'))
-    dirs.push(binDir)
-    process.env.HARNESS_ENGINE_TEST_PATH = binDir
-
-    fakeEngine(binDir, 'opencode', '--auto-update   keep opencode current')
-    await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', bashProbeShell()))
-      .resolves.toBe('unsupported')
-
-    fakeEngine(binDir, 'opencode', '--auto   approve automatically')
-    await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', bashProbeShell()))
-      .resolves.toBe('supported')
-  })
-
-  it('answers a flag that ends the help text', async () => {
-    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-tail-'))
-    dirs.push(binDir)
-    process.env.HARNESS_ENGINE_TEST_PATH = binDir
-    fakeEngine(binDir, 'cursor-agent', '--force')
-    await expect(commandSupportsFlagInInteractiveShell('cursor-agent', '--force', bashProbeShell()))
-      .resolves.toBe('supported')
-  })
-
-  // Every relaunch asks, and a restore asks once per agent. Only the working answer is remembered:
-  // the cure for the other two is to change the engine on disk, and a remembered refusal would
-  // outlive the upgrade that fixed it — which is how openharness#285's reporter resolved theirs.
-  it('remembers that a flag IS supported, and keeps asking when it is not', async () => {
-    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-cache-'))
-    dirs.push(binDir)
-    process.env.HARNESS_ENGINE_TEST_PATH = binDir
-    const shell = bashProbeShell()
-
-    fakeEngine(binDir, 'opencode', '--auto')
-    await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
-    // Downgraded underneath us where the daemon cannot see the file (only the probe shell's PATH has
-    // it): remembered by name alone, the yes stands until the cache is reset.
-    fakeEngine(binDir, 'opencode', '--auto-update')
-    await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
-    resetCommandFlagSupportCache()
-    await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('unsupported')
-    // A refusal is never remembered, so the upgrade is seen at once.
-    fakeEngine(binDir, 'opencode', '--auto')
-    await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
-  })
-
-  // e2e/updates.e2e.ts: remembered by name alone, a yes outlived the update that dropped the flag,
-  // and the engine was launched with a flag it refused at once. A yes is kept for the file it was read from.
-  it('answers an unchanged engine from memory, and asks again once an update has changed its file', async () => {
-    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-update-'))
-    dirs.push(binDir)
-    process.env.HARNESS_ENGINE_TEST_PATH = binDir
-    const savedPath = process.env.PATH
-    process.env.PATH = `${binDir}:${savedPath ?? ''}`
-    try {
-      const shell = bashProbeShell()
-      const runs = join(binDir, 'runs')
-      const build = (path: string, help: string) => {
-        writeFileSync(path, `#!/bin/sh\necho run >> '${runs}'\nif [ "$1" = "--help" ]; then printf "%s\\n" '${help}'; exit 0; fi\nexit 2\n`)
-        chmodSync(path, 0o700)
-      }
-      const asked = () => existsSync(runs) ? readFileSync(runs, 'utf8').split('\n').filter(Boolean).length : 0
-      const opencode = join(binDir, 'opencode')
-
-      build(opencode, '--auto')
-      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
-      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
-      expect(asked()).toBe(1)
-      // Rewritten in place by an update that dropped the flag: asked again, and refused.
-      build(opencode, '--auto-update')
-      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('unsupported')
-      expect(asked()).toBe(2)
-
-      // Installed as versions and linked, the way Homebrew and native installs update: the same size,
-      // and only the link moves.
-      mkdirSync(join(binDir, 'v1')); mkdirSync(join(binDir, 'v2'))
-      build(join(binDir, 'v1', 'opencode'), '--auto')
-      build(join(binDir, 'v2', 'opencode'), '--nope')
-      rmSync(opencode)
-      symlinkSync(join(binDir, 'v1', 'opencode'), opencode)
-      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
-      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('supported')
-      expect(asked()).toBe(3)
-      rmSync(opencode)
-      symlinkSync(join(binDir, 'v2', 'opencode'), opencode)
-      await expect(commandSupportsFlagInInteractiveShell('opencode', '--auto', shell)).resolves.toBe('unsupported')
-      expect(asked()).toBe(4)
-    } finally {
-      process.env.PATH = savedPath
-    }
-  })
-
-  // A shell's own failure exits 1 — as zsh's read-only `status` did — and must not read as a missing
-  // flag: only the probe's own "not in the help" exit refuses an engine.
-  it('does not read a shell failure as a missing flag', async () => {
-    const shellDir = mkdtempSync(join(tmpdir(), 'harness-engine-shell-'))
-    dirs.push(shellDir)
-    const shell = join(shellDir, 'bash')
-    writeFileSync(shell, '#!/bin/sh\nexit 1\n')
-    chmodSync(shell, 0o700)
-
-    await expect(
-      commandSupportsFlagInInteractiveShell('codex', '--approve-for-me', shell),
-    ).resolves.toBe('unknown')
-  })
-
-  it('does not reject a CLI when its help command cannot be inspected', async () => {
-    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-capability-'))
-    dirs.push(binDir)
-    const codex = join(binDir, 'codex')
-    writeFileSync(codex, '#!/bin/sh\nexit 2\n')
-    chmodSync(codex, 0o700)
-    process.env.HARNESS_ENGINE_TEST_PATH = binDir
-
-    await expect(
-      commandSupportsFlagInInteractiveShell('codex', '--approve-for-me', bashProbeShell()),
-    ).resolves.toBe('unknown')
-  })
-
-  // zsh makes `status` a read-only alias of `$?`, so a bare `status=$?` in the probe script is a
-  // fatal error there: the shell dies with exit 1, which this function reads as `unsupported`.
-  // macOS defaults $SHELL to zsh, so that one name turned every Codex Auto launch on a Mac into
-  // "your installed Codex CLI does not support --approve-for-me" whatever version was installed.
-  it.skipIf(!ZSH)('answers from zsh too, where `status` is a read-only parameter', async () => {
-    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-capability-zsh-'))
-    dirs.push(binDir)
-    const codex = join(binDir, 'codex')
-    writeFileSync(
-      codex,
-      '#!/bin/sh\nif [ "$1" = "--help" ]; then printf "%s\\n" "--approve-for-me"; exit 0; fi\nexit 2\n',
-    )
-    chmodSync(codex, 0o700)
-    process.env.HARNESS_ENGINE_TEST_PATH = binDir
-
-    await expect(
-      commandSupportsFlagInInteractiveShell('codex', '--approve-for-me', zshProbeShell()),
-    ).resolves.toBe('supported')
-
-    writeFileSync(
-      codex,
-      '#!/bin/sh\nif [ "$1" = "--help" ]; then printf "%s\\n" "--sandbox"; exit 0; fi\nexit 2\n',
-    )
-    await expect(
-      commandSupportsFlagInInteractiveShell('codex', '--approve-for-me', zshProbeShell()),
-    ).resolves.toBe('unsupported')
   })
 })
 
@@ -1596,112 +1280,14 @@ describe('buildEngineLaunchArgv — the grid the pane finds', () => {
   })
 })
 
-describe('buildEngineLaunchArgv with installFirst', () => {
-  // Everything here is about ONE rule: the engine must not be exec'd after an install that failed.
-  // Doing so reproduces the `command not found` this feature exists to replace, with a screenful of
-  // installer output above it to bury the cause.
-  const script = (install: string): string =>
-    buildEngineLaunchArgv('opencode', { installFirst: install }, '/bin/zsh')[4]
-
-  it('leaves the plain launch alone when nothing has to be installed', () => {
-    expect(launchScriptOf(buildEngineLaunchArgv('opencode', {}, '/bin/zsh', undefined, undefined, NO_TMUX))).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('opencode', '/bin/zsh')}${GRID_PRELUDE}${BROWSER}${NO_DEVTOOLS}${RUN}`)
-  })
-
-  it('keeps the engine argv positional, so the shell never re-parses a path or a flag', () => {
-    const argv = buildEngineLaunchArgv('opencode', {
-      installFirst: 'npm install -g opencode-ai',
-      bypassPermission: true,
-    }, '/bin/zsh')
-    expect(argv.slice(0, 4)).toEqual(['/usr/bin/env', 'DISABLE_AUTO_UPDATE=true', '/bin/zsh', '-lic'])
-    expect(argv.slice(5)).toEqual(['harness-engine', ...buildEngineCommandArgv('opencode', { bypassPermission: true })])
-    expect(launchScriptOf(argv)).toContain(RUN_LINE)
-  })
-
-  it('runs the engine only when the install succeeded', async () => {
-    await expect(runPaneScript(script('true'))).resolves.toMatchObject({ code: 0, ranEngine: true })
-  })
-
-  it('does not run the engine when the install returns a failure', async () => {
-    const result = await runPaneScript(script('false'))
-    expect(result.ranEngine).toBe(false)
-    expect(result.code).toBe(1)
-    expect(result.stdout).toContain('the install failed')
-  })
-
-  it('does not run the engine when the install command is not there at all', async () => {
-    const result = await runPaneScript(script('harness-no-such-installer --please'))
-    expect(result.ranEngine).toBe(false)
-    expect(result.code).toBe(1)
-  })
-
-  it('prints the command before running it, so a long install is not a hung pane', () => {
-    expect(launchScriptOf(['-c', script('npm install -g opencode-ai')])).toContain('npm install -g opencode-ai')
-  })
-
-  it("survives an install line carrying a quote, rather than ending the shell's string", async () => {
-    // `curl … | bash` is already in the table; a quoted argument is the next shape to arrive, and an
-    // install line is a constant in our own source — so the failure mode is a broken pane, not an
-    // injection. It still must not break.
-    const result = await runPaneScript(script(`sh -c 'exit 3'`))
-    expect(result.ranEngine).toBe(false)
-    expect(result.code).toBe(1)
-  })
-})
-
-describe('buildEngineLaunchArgv with installIfMissing', () => {
+describe('shellAgentArgv installation', () => {
   const recipe = (
     command: string,
     executable: EngineInstallRecipe['executable'] = { names: ['harness-no-such-engine'] },
   ): EngineInstallRecipe => ({ command, source: 'test fixture', executable })
-  // No Harness Node unless a test names one: these check the plain install, which shows the installer
-  // itself. The friendly one, which needs Node for its progress, has its own tests below.
+  // The CLI installs in the shell that invoked it; these are its generated script and exit behavior.
   const script = (install: EngineInstallRecipe, runtimeNode = '/nonexistent/harness-node'): string =>
-    buildEngineLaunchArgv('opencode', { installIfMissing: install }, '/bin/zsh', runtimeNode)[4]
-
-  describe('the friendly install: plain lines and a bar on screen, the installer in a log', () => {
-    let home = ''
-    beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'harness-friendly-install-')); dirs.push(home) })
-    const friendly = (install: EngineInstallRecipe, firstPrompt?: string): string =>
-      buildEngineLaunchArgv('opencode', { installIfMissing: install, ...(firstPrompt ? { firstPrompt } : {}) }, '/bin/zsh', process.execPath)[4]
-    const run = (paneScript: string) => runPaneScript(paneScript, 'harness-no-such-engine', { ...process.env, HOME: home })
-    const log = () => readFileSync(join(home, '.harness', 'logs', 'install-opencode.log'), 'utf8')
-
-    it('shows what is happening without the installer, and keeps the installer\'s output in the log', async () => {
-      const result = await run(friendly(recipe("printf 'npm notice New major version of npm available!\\n'")))
-      expect(result.stdout).toContain('Installing OpenCode…')
-      expect(result.stdout).toMatch(/[█░]{24}/)
-      expect(result.stdout).not.toContain('npm notice')
-      expect(result.stdout).not.toContain('engine is missing')
-      expect(result.stdout).not.toContain('Your message goes as soon as it starts.')
-      expect(log()).toContain('npm notice New major version of npm available!')
-    })
-
-    it('says the first message is waiting when there is one', async () => {
-      const result = await run(friendly(recipe('true'), 'make a web page'))
-      expect(result.stdout).toContain('Your message goes as soon as it starts.')
-    })
-
-    it('a failed install says so, with the last of the log and where the rest is', async () => {
-      const result = await run(friendly(recipe("printf 'E404 not found: fixture\\n'; exit 3")))
-      expect(result).toMatchObject({ code: 1, ranEngine: false })
-      expect(result.stdout).toContain('OpenCode could not be installed.')
-      expect(result.stdout).toContain('E404 not found: fixture')
-      expect(result.stdout).toContain(`Full details: ${join(home, '.harness', 'logs', 'install-opencode.log')}`)
-      expect(result.stdout).not.toContain('The command is above')
-    })
-
-    it('runs the engine after an install that put it in place', async () => {
-      const dir = mkdtempSync(join(tmpdir(), 'harness-friendly-engine-'))
-      dirs.push(dir)
-      const source = join(dir, 'source-engine')
-      const installed = join(dir, 'new-engine')
-      writeFileSync(source, '#!/bin/sh\n/usr/bin/printf "%s" "$1"\n')
-      chmodSync(source, 0o700)
-      const result = await run(friendly(recipe(`cp ${JSON.stringify(source)} ${JSON.stringify(installed)}`, { names: ['harness-no-such-engine'], absolutePaths: [installed] })))
-      expect(result).toMatchObject({ code: 0, ranEngine: true })
-      expect(result.stdout).toContain('Installing OpenCode…')
-    })
-  })
+    shellAgentArgv('unused', [], install, runtimeNode)[2]
 
   it('execs an installed engine without running the installer', async () => {
     await expect(runPaneScript(script(recipe('false')))).resolves.toMatchObject({ code: 0, ranEngine: true })

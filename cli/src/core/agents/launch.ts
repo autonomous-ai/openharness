@@ -120,7 +120,7 @@ export function createLaunchHelpers({ authority, prepareInstructions, launchOver
     const { choice, droppedFlag, nativeHold } = await dropPermissionFlagIfUnsupported(session.engine, {
       permissionMode: session.permissionMode ?? null,
       bypassPermission,
-    }, undefined, native)
+    }, native)
     if (droppedFlag) {
       console.warn(`[agent] ${what} ${sid(session.agentId)} · ${session.engine} does not take ${droppedFlag}`
         + ` · starting in Ask · update ${session.engine} to get ${session.permissionMode ?? 'Auto'} back`)

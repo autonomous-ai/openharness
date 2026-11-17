@@ -4,7 +4,9 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
-import { buildEngineLaunchArgv, commandAvailableInInteractiveShell, shellSingleQuote } from './engineLaunch.js'
+import { shellSingleQuote } from './engineLaunch.js'
+import { shellAgentArgv, buildEngineInstallationArgv } from '../engines/kit/installationScript.js'
+import { commandAvailableInInteractiveShell } from '../engines/kit/interactiveProbe.js'
 import type { EngineInstallRecipe } from './engineInstall.js'
 
 // Use real npm against a local package, with networking and lifecycle scripts disabled.
@@ -17,8 +19,6 @@ afterEach(() => {
   for (const dir of locked.splice(0)) chmodSync(dir, 0o755)
   for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
-
-const installLog = (home: string) => readFileSync(join(home, '.harness/logs/install-codex.log'), 'utf8')
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'harness-user-engine-'))
@@ -54,23 +54,21 @@ function fixture() {
   }
   writeFileSync(join(home, '.npmrc'), `prefix=${shared}\n`)
   const run = (node: string, install = recipe, shell = '/bin/sh') => {
-    const argv = buildEngineLaunchArgv('codex', { installIfMissing: install }, shell, node, 'grid', null)
-    const script = argv[argv.indexOf('harness-engine') - 1]
+    const script = shellAgentArgv(name, ['argument with spaces'], install, node)[2]
     return spawnSync(shell, ['-c', script, 'harness-engine', name, 'argument with spaces'], {
       env, encoding: 'utf8', timeout: 20_000,
     })
   }
   // The same run without blocking the event loop, for a test that has a process of its own to keep going.
   // `watch` sees the output so far as it comes, with the script's process, the leader of its own group.
-  const runAsync = (node: string, install = recipe, shell = '/bin/sh', watch?: (output: string, pid: number) => void) => new Promise<{ status: number | null, stdout: string, stderr: string }>((resolve) => {
-    const argv = buildEngineLaunchArgv('codex', { installIfMissing: install }, shell, node, 'grid', null)
-    const script = argv[argv.indexOf('harness-engine') - 1]
-    const child = spawn(shell, ['-c', script, 'harness-engine', name, 'argument with spaces'], { env, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
+  const runAsync = (node: string, install = recipe, shell = '/bin/sh', watch?: (output: string, pid: number) => void) => new Promise<{ status: number | null, signal: NodeJS.Signals | null, stdout: string, stderr: string }>((resolve) => {
+    const script = buildEngineInstallationArgv('codex', install, { ...env, SHELL: shell }, node)[2]
+    const child = spawn(shell, ['-c', script, 'harness-native-install', name], { env, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
     let stdout = '', stderr = ''
     child.stdout.on('data', (chunk) => { stdout += chunk; watch?.(stdout + stderr, child.pid!) })
     child.stderr.on('data', (chunk) => { stderr += chunk; watch?.(stdout + stderr, child.pid!) })
-    const timer = setTimeout(() => child.kill('SIGKILL'), 30_000)
-    child.on('close', (status) => { clearTimeout(timer); resolve({ status, stdout, stderr }) })
+    const timer = setTimeout(() => { try { process.kill(-child.pid!, 'SIGKILL') } catch {} }, 30_000)
+    child.on('close', (status, signal) => { clearTimeout(timer); resolve({ status, signal, stdout, stderr }) })
   })
   return { home, shared, name, recipe, env, runtime, run, runAsync }
 }
@@ -113,11 +111,9 @@ describe('engine installation for a fresh OS user', () => {
       const f = fixture()
       const result = f.run(f.runtime('node-one'), { ...f.recipe, command, fallback: f.recipe.command })
       expect(result.status, result.stdout + result.stderr).toBe(0)
-      // The pane shows a bar while it installs; what happened is in the install log.
-      expect(installLog(f.home)).toContain('trying the npm package instead')
+      expect(result.stdout).toContain('trying the npm package instead')
       expect(result.stdout).toContain('ENGINE_READY:["argument with spaces"]')
       expect(existsSync(join(f.home, '.local/bin', f.name))).toBe(true)
-      expect(readdirSync(join(f.home, '.harness/logs')).filter((file) => file.endsWith('.rc'))).toEqual([])
     })
   }
 
@@ -125,8 +121,7 @@ describe('engine installation for a fresh OS user', () => {
     const f = fixture()
     const result = f.run(f.runtime('node-one'), { ...f.recipe, command: 'true', fallback: 'exit 9' })
     expect(result.status).toBe(1)
-    // The end of the log, under the friendly view's one-line verdict.
-    expect(result.stdout).toContain('Codex could not be installed.')
+    expect(result.stdout).toContain('the install failed, so the agent was not started.')
     expect(result.stdout).toContain('trying the npm package instead')
     expect(result.stdout).not.toContain('ENGINE_READY:')
   })
@@ -136,8 +131,8 @@ describe('engine installation for a fresh OS user', () => {
     const result = f.run(f.runtime('node-one'), { ...f.recipe, command: 'exit 130', fallback: f.recipe.command })
     expect(result.status).toBe(1)
     expect(result.stdout).not.toContain('trying the npm package instead')
-    expect(installLog(f.home)).not.toContain('trying the npm package instead')
-    expect(result.stdout).toContain('Codex could not be installed.')
+    expect(result.stdout).not.toContain('trying the npm package instead')
+    expect(result.stdout).toContain('the install failed, so the agent was not started.')
     expect(existsSync(join(f.home, '.local/bin', f.name))).toBe(false)
   })
 
@@ -150,53 +145,56 @@ describe('engine installation for a fresh OS user', () => {
   })
 
   // Desktop Harness downloads the agents beside a fresh computer's setup and names the process in
-  // ~/.harness/run/downloading-<engine>; a pane opened meanwhile must wait for it, never install twice.
+  // ~/.harness/run/downloading-<engine>; native setup waits for it instead of installing twice.
   it('waits for the download Desktop Harness has under way instead of installing a second time', async () => {
     const f = fixture()
     const node = f.runtime('node-one')
     const run = join(f.home, '.harness/run')
     mkdirSync(run, { recursive: true })
-    // The download: a while, then the same install the pane would have run, into the same prefix.
-    const install = `sleep 2; npm_config_prefix=${shellSingleQuote(join(f.home, '.local'))} NPM_CONFIG_PREFIX=${shellSingleQuote(join(f.home, '.local'))} ${f.recipe.command}`
+    // Release the download only when native setup has observed its identity and reports waiting.
+    const install = `read -r ready; npm_config_prefix=${shellSingleQuote(join(f.home, '.local'))} NPM_CONFIG_PREFIX=${shellSingleQuote(join(f.home, '.local'))} ${f.recipe.command}; exit $?`
     const download = spawn('/bin/sh', ['-c', install, 'harness-download'], {
-      env: { ...f.env, PATH: `${join(node, '..')}:${f.env.PATH}` }, stdio: 'ignore',
+      env: { ...f.env, PATH: `${join(node, '..')}:${f.env.PATH}` }, stdio: ['pipe', 'ignore', 'ignore'], detached: true,
     })
-    writeFileSync(join(run, 'downloading-codex'), String(download.pid))
-    const started = Date.now()
-    // The pane's own install would fail: only the download can have put the engine there.
-    const result = await f.runAsync(node, { ...f.recipe, command: 'exit 93' })
-    expect(result.status, result.stdout + result.stderr).toBe(0)
-    // The bar goes through standard error, out of a command substitution; both are the pane's terminal.
-    expect(result.stderr).toContain('Installing Codex')
-    expect(result.stdout).toContain('ENGINE_READY:["argument with spaces"]')
-    expect(Date.now() - started).toBeGreaterThanOrEqual(1500)
-  // A deliberate 2 s sleep plus a real npm install does not fit the default 5 s on a busy CI shard (timed out at 5030 ms).
+    const closed = new Promise<void>(resolve => download.once('close', () => resolve()))
+    try {
+      writeFileSync(join(run, 'downloading-codex'), String(download.pid))
+      let released = false
+      const result = await f.runAsync(node, { ...f.recipe, command: 'exit 93' }, '/bin/sh', output => {
+        if (released || !output.includes('Codex is downloading in the background')) return
+        released = true; download.stdin.end('ready\n')
+      })
+      expect(result.status, result.stdout + result.stderr).toBe(0)
+      expect(released).toBe(true)
+      expect(existsSync(join(f.home, '.local/bin', f.name))).toBe(true)
+    } finally {
+      try { process.kill(-download.pid!, 'SIGKILL') } catch {}
+      await closed
+    }
   }, 20_000)
 
-  it('ends the pane rather than install a second time when the wait for the download is interrupted', async () => {
+  it('ends native setup rather than installing again after interruption during a download', async () => {
     const f = fixture()
     const node = f.runtime('node-one')
     const run = join(f.home, '.harness/run')
     mkdirSync(run, { recursive: true })
-    // Two commands, so the shell stays the process and keeps its name.
-    const download = spawn('/bin/sh', ['-c', 'sleep 30; :', 'harness-download'], { stdio: 'ignore' })
+    const download = spawn('/bin/sh', ['-c', 'read -r finish; :', 'harness-download'], { stdio: ['pipe', 'ignore', 'ignore'], detached: true })
+    const closed = new Promise<void>(resolve => download.once('close', () => resolve()))
     try {
       writeFileSync(join(run, 'downloading-codex'), String(download.pid))
       const installed = join(f.home, 'installed-again')
       let interrupted = false
-      // Ctrl-C reaches the pane's whole process group; the pane's own install would leave a file.
       const result = await f.runAsync(node, { ...f.recipe, command: `touch ${shellSingleQuote(installed)}` }, '/bin/sh', (output, pid) => {
-        if (interrupted || !output.includes('Installing Codex')) return
+        if (interrupted || !output.includes('Codex is downloading in the background')) return
         interrupted = true
         process.kill(-pid, 'SIGINT')
       })
       expect(interrupted).toBe(true)
-      expect(result.status, result.stdout + result.stderr).toBe(1)
-      expect(result.stdout).toContain('Codex is still downloading. Try again in a minute.')
-      expect(result.stdout).not.toContain('ENGINE_READY')
+      expect(result).toMatchObject({ status: null, signal: 'SIGINT' })
       expect(existsSync(installed)).toBe(false)
     } finally {
-      download.kill('SIGKILL')
+      try { process.kill(-download.pid!, 'SIGKILL') } catch {}
+      await closed
     }
   })
 

@@ -10,8 +10,7 @@ import type { StoppedAgentStore } from './stoppedAgents.js'
 import { resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed, RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
 import { checkSessionRuntime, resolvePaneEngineProcess } from './paneEngineProcess.js'
-import { engineBin, enginePathOverride } from './engineBin.js'
-import { engineInstallRecipe } from './engineInstall.js'
+import { engineBin } from './engineBin.js'
 import type { ClearBackgroundJob } from '../engines/facets/backgroundJob.js'
 import { buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, engineLaunchEnv, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
 import { workspaceMissing } from './workspaceCheck.js'
@@ -326,7 +325,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         if (!current()) return resumeChanged
         if (permissionMode !== undefined) {
           const refusal = await refusePermissionFlagIfUnsupported(saved.engine,
-            { permissionMode, bypassPermission: permissionModeApproves(permissionMode) }, undefined, built.overrides.native)
+            { permissionMode, bypassPermission: permissionModeApproves(permissionMode) }, built.overrides.native)
           if (!sourceCurrent()) return resumeChanged
           if (refusal) return { ok: false, ...refusal }
         }
@@ -362,7 +361,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           bypassPermission: saved.bypassPermission === true,
         }
         const { choice: permission, droppedFlag, nativeHold } = permissionMode === undefined
-          ? await dropPermissionFlagIfUnsupported(saved.engine, savedPermission, undefined, built.overrides.native)
+          ? await dropPermissionFlagIfUnsupported(saved.engine, savedPermission, built.overrides.native)
           : { choice: savedPermission, droppedFlag: null }
         transcript?.verify()
         if (!current()) return resumeChanged
@@ -399,7 +398,6 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           ...(ownerArgs?.length ? { ownerArgs } : {}),
           ...(clearEnv.length ? { clearEnv } : {}),
           ...(launchEnv.HARNESS_DSH ? { harnessNode: true } : {}),
-          installIfMissing: enginePathOverride(saved.engine) ? undefined : engineInstallRecipe(saved.engine),
         }
         // Windows refuses a batch-file engine whose arguments cmd.exe would read (windows/launch.ts): this row alone.
         let argv: string[]

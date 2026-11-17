@@ -8,7 +8,7 @@ import { masterRunsEngineModelControl } from '../harnessd/services.js'
 import { createScreens } from './engines/screens.js'
 import { createScreenTransport } from './engines/screenTransport.js'
 import { terminalScreen } from '../engines/kit/screen.js'
-import { inspectNativeLaunch, type NativeLaunch } from '../engines/nativeLaunch.js'
+import { inspectNativeLaunch, unsupportedNativeLaunchModelFlag, type NativeLaunch } from '../engines/nativeLaunch.js'
 import { nativeHookLocations, type NativeHookOptions } from '../engines/kit/nativeLocations.js'
 import { createNativeLaunchPreparer } from '../engines/prepareNativeLaunch.js'
 import { createNativeSetupLink } from '../engines/kit/nativeSetupLink.js'
@@ -69,11 +69,10 @@ import { awakeTimeout } from '../lib/sleepAware.js'
 import { harnessdEnv, holdHarnessdEnv } from '../lib/harnessdEnv.js'
 import { dropAgentSessionEnv } from '../lib/agentSessionEnv.js'
 import { AUTH_DIR, AuthSessionError, ensureSignInEpoch, markSignedOut, readAuthSession, signInOf, type AuthSession } from '../lib/authSession.js'
-import { ENGINES, enginePathOverride } from '../lib/engineBin.js'
+import { ENGINES } from '../lib/engineBin.js'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { createObservedHook } from './observedHook.js'
 import { createDeviceHookCalls } from './deviceHookCalls.js'
-import { engineInstallRecipe } from '../lib/engineInstall.js'
 import { buildEngineLaunchArgv, engineLaunchEnv, supportsFirstPrompt, typedFirstPrompt } from '../lib/engineLaunch.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../lib/windows/engineStart.js'
 import { createGuestHostBackend } from '../lib/windows/guestHostBackend.js'
@@ -2643,7 +2642,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         ...(firstPrompt ? { firstPrompt } : {}),
         bypassPermission: permission.bypassPermission === true,
         ...(permission.permissionMode ? { permissionMode: permission.permissionMode } : {}),
-        installIfMissing: enginePathOverride(entry.engine) ? undefined : engineInstallRecipe(entry.engine),
         ...(entry.cwd ? { cwd: entry.cwd } : {}),
         ...(extraArgs.length ? { extraArgs } : {}),
         // The owner's own launch words, last on the command line (engineLaunch.ts `ownerArgs`).
@@ -2880,7 +2878,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
 
   // Creating an agent (core/agents/create.ts).
-  const creator = createAgentCreator({ opencodeMajor: nativeSetup.opencodeMajor,
+  const creator = createAgentCreator({
     prepareFolderTrust,
     publishConfig: publishGridConfigDir,
     native: prepareNativeLaunch,
@@ -2896,7 +2894,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     prepareInstructions,
     hookPort,
     hooksDisabled: env.DISABLE_HOOK_INSTALL,
-    installOpencodePlugin: (port) => installOpencodePluginBeforeSpawn(port, undefined, nativeSetup),
     gridLaunchMachine,
     buildGridLaunch: gridLaunch,
     terminalHintMachineName,
@@ -3173,6 +3170,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     receipts,
     createAgent: () => backend.onCreateAgent, forkAgent: () => backend.onForkAgent,
     prepareCreate: creator.prepare, prepareEngine: prepareNativeLaunch, opencodeMajor: nativeSetup.opencodeMajor,
+    probeLaunchModel: (engine, model) => unsupportedNativeLaunchModelFlag(engine, model, nativeSetup),
     resumeAgent: () => lifecycle.resumeAgent, restartAgent: () => restartAgent,
     byAgent: (id) => registry.byAgent(id), stoppedAgent: (id) => stoppedAgents.get(id) ?? undefined, toProject: (s) => backend.toProject(s),
     modelTarget: (selection) => (ports.models ?? MODELS_OFF).launchTarget(selection),

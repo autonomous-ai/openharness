@@ -18,7 +18,7 @@ vi.mock('node:child_process', async (real) => {
   }
 })
 
-const { commandOutputInInteractiveShell } = await import('./engineLaunch.js')
+const { commandOutputInInteractiveShell } = await import('../engines/kit/interactiveProbe.js')
 
 const dirs: string[] = []
 const platform = Object.getOwnPropertyDescriptor(process, 'platform')!

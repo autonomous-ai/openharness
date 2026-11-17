@@ -65,7 +65,6 @@ function creator(backend: PtyHostBackend) {
     prepareInstructions: async () => {},
     hookPort: 0,
     hooksDisabled: true,
-    installOpencodePlugin: async () => true,
     gridLaunchMachine: unused as unknown as CreateAgentDeps['gridLaunchMachine'],
     buildGridLaunch: unused,
     terminalHintMachineName: () => 'windows-vm',

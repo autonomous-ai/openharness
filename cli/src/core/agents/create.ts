@@ -21,8 +21,6 @@ import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { OPENCLAW_LOCAL } from '../../engines/openclaw/contract.js'
 import { engineLabel } from '../../lib/agentNames.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
-import { enginePathOverride } from '../../lib/engineBin.js'
-import { engineInstallRecipe } from '../../lib/engineInstall.js'
 import {
   buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeApproves, permissionModeFlags,
   refusePermissionFlagIfUnsupported, supportsFirstPrompt, supportsNamedAgent, typedFirstPrompt, NamedAgentUnsupportedError,
@@ -38,7 +36,6 @@ import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPreparation.js'
 import type { publishGridConfigDir } from '../../lib/publishedGridConfig.js'
 import { nativeHookLocations } from '../../engines/kit/nativeLocations.js'
-import { engineHookInstallations as engineHooks } from '../../engines/nativeHookSetup.js'
 import { hooksHeldDetail } from '../../engines/kit/hooksHeldDetail.js'
 import type { PrepareFolderTrust } from '../../engines/folderTrustPreparation.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
@@ -60,7 +57,6 @@ const MODEL_MANAGER_GRID_WAIT_MS = 8_000
 type CreateAgent = NonNullable<BackendSocket['onCreateAgent']>
 
 export interface CreateAgentDeps {
-  opencodeMajor?: () => Promise<number | null>
   publishConfig?: typeof publishGridConfigDir
   native?: (engine: AgentEngine, source: NativeLaunchSource, authority: LaunchAuthority) => Promise<NativeLaunchResult>
   /** The backend new panes are made on; null where none is configured or could be readied. */
@@ -82,9 +78,6 @@ export interface CreateAgentDeps {
   hookPort: number
   /** Whether engine hooks are installed at all (DISABLE_HOOK_INSTALL). */
   hooksDisabled: boolean
-  /** OpenCode's plugin, installed again before an OpenCode spawn (core/engines/hooks.ts
-   *  `installOpencodePluginBeforeSpawn`): eager, independent of optional interpretation. */
-  installOpencodePlugin: (port: number) => Promise<boolean>
   /** The facts about this machine a launch of `engine` needs (lib/gridLaunch.ts). */
   gridLaunchMachine: (engine: AgentEngine, native?: NativeLaunch) => GridLaunchMachine | Promise<GridLaunchMachine>
   /** A grid or saved-API launch, built by the models service (core/agents/launch.ts `gridLaunchThrough`): the core
@@ -114,7 +107,7 @@ function hooksHeld(engine: string, waiting: string) {
 
 export function createAgentCreator({
   native: inspectNative, publishConfig, createBackend: initialBackend, recoverBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, externalResume, watchNewPane, announceSession, attach,
-  prepareInstructions, prepareFolderTrust, hookPort, hooksDisabled, opencodeMajor, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
+  prepareInstructions, prepareFolderTrust, hookPort, hooksDisabled, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
   gridSetup, privateGridName, dshLaunch, syncProfileHome,
 }: CreateAgentDeps) {
   const prepare = async (input: Parameters<CreateAgent>[0], authority: LaunchAuthority,
@@ -158,6 +151,7 @@ export function createAgentCreator({
       permissionMode = pinnedMode
       bypassPermission = permissionModeApproves(pinnedMode)
     }
+    if (!inspectNative && !isTerminalEngine(engine)) return hooksHeld(engine, 'Waiting for engine setup.')
     const inspected = await inspectNative?.(engine, { ...input, permissionMode, bypassPermission }, authority)
     // An engine that ran and failed, or whose install for this request failed, is refused with its own
     // reason. Held, a creation retried every two seconds and could start, task and all, whenever the
@@ -180,7 +174,7 @@ export function createAgentCreator({
     // `--auto`). Refuse before opening a pane — this is a launch somebody is waiting on, and Ask
     // works today. Codex has been checked this way since it gained `--approve-for-me`; every other
     // engine with a permission flag was not, and carried the same failure.
-    const refusal = await refusePermissionFlagIfUnsupported(engine, { permissionMode, bypassPermission }, undefined, native)
+    const refusal = await refusePermissionFlagIfUnsupported(engine, { permissionMode, bypassPermission }, native)
     if (!current()) return stale()
     if (refusal) {
       console.warn(`[agent] create refused · ${engine} · ${refusal.detail}`)
@@ -290,7 +284,7 @@ export function createAgentCreator({
         } catch (error) {
           const detail = `could not write ${engine}'s grid configuration · ${error instanceof Error ? error.message : error}`
           console.warn(`[agent] create ${engine} refused · ${detail}`)
-          return { ok: false, error: 'GRID_CONFIG_FAILED', detail, ...(native ? { unavailable: 'native' } : {}) }
+          return { ok: false, error: 'GRID_CONFIG_FAILED', detail, unavailable: 'native' }
         }
       }
       // Named in the log because the pane itself gives nothing away: the engine looks exactly like a
@@ -323,27 +317,10 @@ export function createAgentCreator({
     // Harness configuration can change the profile after executable discovery. Binding and Resume
     // must retain the home the prepared child will actually use.
     if (engine === 'codex' && native) codexHome = nativeHookLocations(native.environment).CODEX_HOME
-    // A Codex agent pointed at a profile OTHER than this machine's default reads hooks.json from
-    // THAT folder, not the one `harness login` already installed into — without this, such an agent
-    // fires no hook at all (no SessionStart/UserPromptSubmit/Stop) and never streams a single event.
-    // Idempotent, so paying this on every create against an already-set-up profile is free.
-    if (!native && codexHome && !hooksDisabled && !await engineHooks.codex.installIn(hookPort, codexHome)) return hooksHeld('codex', 'Waiting to confirm Codex’s hooks in the selected profile.')
     // An agent on a profile home reads that home's MCP config, not the default's: it gets the connections there too,
     // before it starts. Written in the edge host; one that does not answer in time leaves the config as it is.
     const profileHome = engine === 'claude' ? claudeHome : engine === 'codex' ? codexHome : null
     if (profileHome && (engine === 'claude' || engine === 'codex')) await syncProfileHome(engine, profileHome)
-    // OpenCode may have upgraded from 1.x to 2.x while this daemon was running. Its new TUI must
-    // not discover our old server plugin; the cached version probe changes with the executable.
-    // Native installation is eager. A plugin is how this engine tells the daemon its session.
-    if (!native && engine === 'opencode' && !hooksDisabled && !await installOpencodePlugin(hookPort)) {
-      const detail = 'OpenCode\'s plugin installer could not be loaded'
-      console.warn(`[agent] create opencode refused · ${detail}`)
-      return { ok: false, error: 'ENGINE_UNAVAILABLE', detail }
-    }
-    // Do not start a second interactive login shell merely to ask whether the engine is installed.
-    // The pane's own shell performs the same check before exec, and installs only when necessary.
-    // This removes ~1s of shell startup from the click-to-terminal critical path.
-    const installIfMissing = enginePathOverride(engine) ? undefined : engineInstallRecipe(engine)
     // Clearing the vendor credentials this launch does NOT set is part of pointing an agent at a
     // grid, not an extra. An engine chooses its provider from whatever it can see, and an inherited
     // key wins on its own terms — OpenCode picked Anthropic over a grid it had been handed, and said
@@ -360,7 +337,7 @@ export function createAgentCreator({
     // The person's machine MCP servers (lib/machineMcp.ts, #1872), beside the grid's and their own: read at each launch,
     // as every relaunch reads them again (`buildLaunchOverrides`).
     const machineMcp = machineMcpLaunchArgs(engine, cwd)
-    const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : engine === 'opencode' ? await opencodeMajor?.() ?? null : null) : []), ...machineMcp, ...told])
+    const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native?.opencodeMajor ?? null) : []), ...machineMcp, ...told])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
     const firstPrompt = prompt
@@ -368,7 +345,7 @@ export function createAgentCreator({
     const firstTask = typedFirstPrompt(engine, firstPrompt ?? undefined)
     // Chosen before the pane, so the launch can name its session after the agent (engineLaunch.ts `agentId`).
     const agentId = randomUUID()
-    const launchOptions = { agentId, ...(native ? { native } : {}), bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, installIfMissing, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(firstPrompt ? { firstPrompt } : {}), ...(launchModel ? { launchModel } : {}), terminalHint: { machineName: terminalHintMachineName() } }
+    const launchOptions = { agentId, ...(native ? { native } : {}), bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(firstPrompt ? { firstPrompt } : {}), ...(launchModel ? { launchModel } : {}), terminalHint: { machineName: terminalHintMachineName() } }
     // Windows refuses a batch-file engine whose arguments cmd.exe would read (lib/windows/launch.ts), before any pane.
     let command: string[], argv: string[]
     try {
@@ -376,7 +353,7 @@ export function createAgentCreator({
       argv = buildEngineLaunchArgv(engine, launchOptions)
     } catch (error) { return windowsLaunchRefusal(error) }
     // A tmux route is enough to stream its screen. Register it before looking for a process so both
-    // loopback and relayed Desktop clients can attach while the login shell/installer is still busy.
+    // loopback and relayed Desktop clients can attach while the login shell is still busy.
     // `tmuxBackend` exists whenever the CONFIG lists tmux — it is never a probe of the binary, so a
     // daemon that cannot resolve `tmux` at all (a login context whose PATH lacks Homebrew's bin, the
     // usual shape after a reboot) is reported as `TMUX_UNAVAILABLE` too, distinctly from a tmux that
@@ -438,7 +415,7 @@ export function createAgentCreator({
     announceSession(pending)
     attach(pending)
 
-    void watchNewPane(engine, pending, spawned, command, installIfMissing, undefined)
+    void watchNewPane(engine, pending, spawned, command, native?.executable)
     console.log(`[agent] create pane open · ${engine} · agent ${pending.agentId}`)
     return { ok: true, session: pending }
     } }

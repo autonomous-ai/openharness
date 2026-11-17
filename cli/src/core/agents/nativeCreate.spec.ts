@@ -86,7 +86,7 @@ it.each([
     createBackend: {} as CreateAgentDeps['createBackend'], registry: {} as CreateAgentDeps['registry'],
     externalResume: async () => { throw Error('unexpected external resume') }, watchNewPane: async () => {},
     announceSession: () => {}, attach: () => {}, prepareInstructions: async () => {},
-    hookPort: 19473, hooksDisabled: false, installOpencodePlugin: async () => true,
+    hookPort: 19473, hooksDisabled: false,
     gridLaunchMachine: () => ({}) as never, buildGridLaunch: async () => { throw Error('unexpected grid') },
     terminalHintMachineName: () => 'Fixture', blocksFolder: () => false, gridSetup: () => null, privateGridName: async () => null,
     dshLaunch: { describe: async () => { throw Error('unused') }, launch: async () => { throw Error('unexpected DSH') }, materialize: async () => { throw Error('unexpected DSH') } },

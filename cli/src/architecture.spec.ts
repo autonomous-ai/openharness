@@ -179,7 +179,7 @@ const DECLARED = new Set(['engines/claude/hookAuthority.ts', 'engines/codex/hook
 const EDGE: RegExp[] = [
   /^dsh\/(installed|manifest|compatibility|launch)\.ts$/,
   // Setup owns installation and engine probes; trusted executable/location selection remains core launch authority.
-  /^engines\/kit\/(downloadMarker|nativeInstall|nativeVersion|nativeProbe|windowsInstall|setupProbe)\.ts$/,
+  /^engines\/kit\/(downloadMarker|nativeInstall|installationScript|interactiveProbe|nativeVersion|nativeProbe|windowsInstall|setupProbe)\.ts$/,
   /^engines\/hermesRecord\.ts$/, /^engines\/opencode\/version\.ts$/,
   /^engines\/(claude|codex)\/(screen|composer|activity|stoppedGoal|modelControl|modelPicker|questionControl|submission|nativeControl)\.ts$/,
   // Hook admission and Stop remain mandatory authority; installation parsing/templates belong to setup.
@@ -331,6 +331,16 @@ describe('the daemon\'s shape', () => {
       'harnessd/bundleFingerprint.ts', 'harnessd/childAdmission.ts', 'harnessd/childEntry.ts', 'harnessd/workerContract.ts',
     ])
   })
+  it('keeps installer scripts and interactive engine probes outside the core', () => {
+    const loaded = closureOf('core/main.ts')
+    for (const file of ['engines/kit/installationScript.ts', 'engines/kit/interactiveProbe.ts']) {
+      expect(loaded.has(file), file).toBe(false)
+    }
+    expect(closureOf('services/engineSetup.ts').has('engines/kit/installationScript.ts')).toBe(true)
+    expect(closureOf('shellLaunch.ts').has('engines/kit/installationScript.ts')).toBe(true)
+    expect(closureOf('lib/engineProbe.ts').has('engines/kit/interactiveProbe.ts')).toBe(true)
+  })
+
   it('keeps inline hosting, history paging and shared-machine reply parsing outside the default core', () => {
     const loaded = closureOf('core/main.ts')
     for (const file of ['services/inlineHost.ts', 'lib/transcriptPages.ts', 'lib/sharedMachinesPort.ts', 'harnessd/servicePlan.ts']) {

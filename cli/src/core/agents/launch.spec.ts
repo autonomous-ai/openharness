@@ -189,7 +189,7 @@ describe('relaunch helpers', () => {
     const { helpers } = setup()
     vi.mocked(dropPermissionFlagIfUnsupported).mockResolvedValueOnce({ choice: { bypassPermission: false }, droppedFlag: '--permission-mode' } as never)
     expect(await helpers.downgradedPermission(session({ permissionMode: 'plan' } as Partial<RegisteredSession>), true, 'restart')).toEqual({ bypassPermission: false })
-    expect(dropPermissionFlagIfUnsupported).toHaveBeenCalledWith('claude', { permissionMode: 'plan', bypassPermission: true }, undefined, undefined)
+    expect(dropPermissionFlagIfUnsupported).toHaveBeenCalledWith('claude', { permissionMode: 'plan', bypassPermission: true }, undefined)
     expect(String(warn.mock.calls[0][0])).toContain('does not take --permission-mode · starting in Ask · update claude to get plan back')
     vi.mocked(dropPermissionFlagIfUnsupported).mockResolvedValueOnce({ choice: { bypassPermission: true }, droppedFlag: '--dangerously-skip-permissions' } as never)
     await helpers.downgradedPermission(session(), true, 'retarget')

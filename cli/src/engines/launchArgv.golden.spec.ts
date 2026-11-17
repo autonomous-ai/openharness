@@ -6,7 +6,7 @@
  * (docs/design/2026-10-08-engine-launch.md): the Codex pane script's owned-process probe and startup retry,
  * its own-login provider, and the two engines' harness context and environment flags.
  *
- * The shapes are the callers': create (a first prompt, a harness, a grid, an install when missing), the
+ * The shapes are the callers': create (a first prompt, a harness, a grid; native installation already settled), the
  * adoption of a terminal's conversation (resume, waiting out its turn), fork, restart and its fresh fallback,
  * restore, resume, retarget onto a grid, every permission mode, a Codex profile (CODEX_HOME), a moved engine
  * home, an engine at an overridden path (npm's Codex wrapper), a remote Codex server's flag passed through,
@@ -33,7 +33,6 @@ import { env } from '../config/env.js'
 import { harnessAdapter, HARNESS_ADAPTERS } from '../dsh/adapters.js'
 import { DSH_SESSION_ENV, harnessEnvToClear } from '../dsh/launch.js'
 import { baseNode } from '../harnessd/baseNode.js'
-import { engineInstallRecipe } from '../lib/engineInstall.js'
 import {
   buildEngineCommandArgv, buildEngineLaunchArgv, PERMISSION_MODES, supportsFirstPrompt, type LaunchCommandOptions,
 } from '../lib/engineLaunch.js'
@@ -67,7 +66,6 @@ const CLEAR_GRID = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', ...harnessEnvToClear(
 /** A caller's options, as each one assembles them (core/agents/create.ts, fork.ts, restart.ts, swap.ts,
  *  lib/resumeAgentService.ts, the restore in core/main.ts). `null` for a shape this engine cannot take. */
 function shapes(engine: AgentEngine): Record<string, LaunchCommandOptions | null> {
-  const install = engineInstallRecipe(engine)
   const prompt = supportsFirstPrompt(engine)
   return {
     'new': { agentId: AGENT },
@@ -83,20 +81,19 @@ function shapes(engine: AgentEngine): Record<string, LaunchCommandOptions | null
     'fork with a prompt': prompt ? { forkSessionId: 'src-0001', firstPrompt: PROMPT } : null,
     'grid argv': { extraArgs: GRID_ARGS, clearEnv: CLEAR_GRID },
     'remote server argv passed through': { extraArgs: REMOTE_ARGS },
-    'install first': { installFirst: 'npm install -g example-engine' },
     'create': {
       agentId: AGENT, bypassPermission: true, permissionMode: Object.keys(PERMISSION_MODES[engine] ?? {})[0], extraArgs: GRID_ARGS,
-      installIfMissing: install, clearEnv: CLEAR_GRID, cwd: CWD, harnessNode: true,
+      clearEnv: CLEAR_GRID, cwd: CWD, harnessNode: true,
       ...(prompt ? { firstPrompt: PROMPT } : {}), terminalHint: { machineName: 'studio-mac' },
     },
-    'create, plain': { agentId: AGENT, bypassPermission: true, installIfMissing: install, clearEnv: harnessEnvToClear(undefined), cwd: CWD, terminalHint: { machineName: 'studio-mac' } },
+    'create, plain': { agentId: AGENT, bypassPermission: true, clearEnv: harnessEnvToClear(undefined), cwd: CWD, terminalHint: { machineName: 'studio-mac' } },
     'adopt, waiting out the turn': {
-      bypassPermission: true, resumeSessionId: 'sess-0001', installIfMissing: install, clearEnv: harnessEnvToClear(undefined), cwd: CWD,
+      bypassPermission: true, resumeSessionId: 'sess-0001', clearEnv: harnessEnvToClear(undefined), cwd: CWD,
       waitForPid: { pid: 4242, name: 'Codex "cli"; rm -rf' },
     },
     'adopt, now, carrying on': prompt ? { bypassPermission: true, resumeSessionId: 'sess-0001', firstPrompt: 'continue', cwd: CWD } : null,
     'fork shape': {
-      agentId: AGENT, clearEnv: harnessEnvToClear(undefined), bypassPermission: true, extraArgs: ['-c', 'model_provider="openai"'], installIfMissing: install,
+      agentId: AGENT, clearEnv: harnessEnvToClear(undefined), bypassPermission: true, extraArgs: ['-c', 'model_provider="openai"'],
       cwd: CWD, forkSessionId: 'src-0001', ...(prompt ? { firstPrompt: PROMPT } : {}),
     },
     'restart': {
@@ -104,12 +101,11 @@ function shapes(engine: AgentEngine): Record<string, LaunchCommandOptions | null
     },
     'restart, fresh fallback': { agentId: AGENT, bypassPermission: false, cwd: CWD, extraArgs: GRID_ARGS, clearEnv: CLEAR_GRID },
     'restore': {
-      agentId: AGENT, resumeSessionId: 'sess-0001', bypassPermission: true, installIfMissing: install, cwd: CWD,
+      agentId: AGENT, resumeSessionId: 'sess-0001', bypassPermission: true, cwd: CWD,
       extraArgs: ['-c', 'model_provider="openai"'], clearEnv: harnessEnvToClear(undefined), harnessNode: true,
     },
     'resume service': {
       agentId: AGENT, resumeSessionId: 'sess-0001', bypassPermission: false, permissionMode: 'ask', cwd: CWD, clearEnv: harnessEnvToClear(undefined),
-      installIfMissing: install,
     },
     'retarget onto a grid': { agentId: AGENT, bypassPermission: true, resumeSessionId: 'sess-0001', cwd: CWD, extraArgs: GRID_ARGS, clearEnv: CLEAR_GRID },
   }

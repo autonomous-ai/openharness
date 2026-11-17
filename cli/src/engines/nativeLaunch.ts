@@ -4,7 +4,8 @@ import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { engineName } from '../lib/agentNames.js'
 import { failureReason } from '../lib/failureReason.js'
-import { permissionFlagToVerify, type PermissionLaunchChoice } from '../lib/engineLaunch.js'
+import { launchModelArgs, type LaunchModel } from '../lib/launchModel.js'
+import { interactiveEngineShell, permissionFlagToVerify, type PermissionLaunchChoice } from '../lib/engineLaunch.js'
 import type { EngineInstallRecipe } from '../lib/engineInstall.js'
 import { engineHookInstallations as engineHooks } from './nativeHookSetup.js'
 import * as hooks from './nativeHookSetup.js'
@@ -277,4 +278,21 @@ const installers: Partial<Record<AgentEngine, (port: number, options: NativeHook
   cursor: hooks.installCursorHooks, commandcode: hooks.installCommandCodeHooks, devin: hooks.installDevinHooks,
   amp: hooks.installAmpPlugin, kilo: hooks.installKiloPlugin, grok: hooks.installGrokHooks, agy: hooks.installAgyHooks,
   copilot: hooks.installCopilotHooks, pi: hooks.installPiExtension,
+}
+
+/** Model selection is refused before receipt admission, using the same selected executable and setup owner as launch. */
+export async function unsupportedNativeLaunchModelFlag(engine: AgentEngine, model: LaunchModel,
+  setup: Pick<NativeSetupProbes, 'probe'>): Promise<string | null> {
+  const flags = [...new Set(launchModelArgs(engine, model).filter(arg => arg.startsWith('--')))]
+  // The former shell preflight was unknown on Windows and without a usable shell. Keep that admission behavior.
+  if (!flags.length || !interactiveEngineShell()) return null
+  const captured = await captureLaunchExecutable(engine)
+  if (captured.state !== 'ready' || !captured.executable.current()) return null
+  const environment = Object.freeze(Object.fromEntries(Object.entries(captured.environment)
+    .filter((entry): entry is [string, string] => entry[1] !== undefined)))
+  const result = await setup.probe(captured.executable, 'help', environment).catch(() => null)
+  if (!result || result.code !== 0 || !captured.executable.current()) return null
+  const help = `${result.stdout}\n${result.stderr}`
+  if (!help.trim()) return null
+  return flags.find(flag => !helpLists(help, flag)) ?? null
 }

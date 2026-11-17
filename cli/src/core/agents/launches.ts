@@ -26,10 +26,10 @@ import type { AgentFrame } from '../../lib/agentFrame.js'
 import { engineLabel } from '../../lib/agentNames.js'
 import {
   AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves,
-  permissionModeFlags, supportsFirstPrompt, supportsNamedAgent, unsupportedLaunchModelFlag,
+  permissionModeFlags, supportsFirstPrompt, supportsNamedAgent,
 } from '../../lib/engineLaunch.js'
 import { parseGridLaunchOverride, type GridLaunchOverride } from '../../lib/gridLaunchWire.js'
-import { parseLaunchModel } from '../../lib/launchModel.js'
+import { parseLaunchModel, type LaunchModel } from '../../lib/launchModel.js'
 import { parseNewAgentModel, type NewAgentModel } from '../../lib/newAgentModel.js'
 import { parseProjectFolder, prepareNewFolder, projectsRoot, ProjectFolderError, type ProjectFolder } from '../../lib/projectFolder.js'
 import type { ScmLaunchRecord } from '../../scm/types.js'
@@ -90,6 +90,8 @@ export interface LaunchRequestDeps {
    *  the core runs no git. Null while they are off. */
   workspaces: () => WorkspacesPort | null
   prepareFolderTrust?: PrepareFolderTrust
+  /** Existing setup observations of the core-selected executable; no receipt is admitted for an unsupported flag. */
+  probeLaunchModel?: (engine: AgentEngine, model: LaunchModel) => Promise<string | null>
 }
 
 type Reply = (result: Record<string, unknown>) => void
@@ -104,7 +106,7 @@ export const WORKSPACES_WAIT_MS = 10 * 60_000
 const WORKSPACES_GONE = { state: 'failed' as const, error: 'SERVICE_UNAVAILABLE',
   detail: 'Could not make the project folder: Harness\'s workspaces service was not available for 10 minutes. Try again, or restart Harness.' }
 
-export function createLaunchRequests({ describeDsh = async id => dshUnavailable(id), receipts, createAgent, prepareCreate, prepareEngine, opencodeMajor, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, claudeHomeListed, workspaces, prepareFolderTrust }: LaunchRequestDeps) {
+export function createLaunchRequests({ describeDsh = async id => dshUnavailable(id), receipts, createAgent, prepareCreate, prepareEngine, opencodeMajor, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, claudeHomeListed, workspaces, prepareFolderTrust, probeLaunchModel }: LaunchRequestDeps) {
   /** Since when each create has waited for workspaces, by its creation id: in memory, as its hold is retried in this
    *  core. An entry lasts only while its create waits: it goes when the create goes on, gives up or is cancelled. */
   const waitingSince = new Map<string, number>()
@@ -418,7 +420,7 @@ export function createLaunchRequests({ describeDsh = async id => dshUnavailable(
     // A Claude Code too old for the flags would print its help in the new pane. Refused here, before any receipt, so the
     // caller creates the agent without them and switches the model afterwards, as it did before the flags.
     if (launchModel.state === 'ok') {
-      const missing = await unsupportedLaunchModelFlag(engine, launchModel.launchModel)
+      const missing = await probeLaunchModel?.(engine, launchModel.launchModel)
       if (missing) { reply({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: `The ${engine} on this machine does not support ${missing}; update ${engine} to launch it with a model.` }); return }
     }
     // Checked here whatever the client checked (`Agent._safeCodexHome` in the desktop app), because a client's own check is

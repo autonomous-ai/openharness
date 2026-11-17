@@ -102,7 +102,7 @@ export function launchShapes(world: LaunchWorld) {
     setGridLaunch: world.setGridLaunch as never, prepareResume: async () => ({ repairedItems: 0 }),
   })
   return {
-    create: (rest: CreateRest) => createAgentCreator({ opencodeMajor: opencodeMajorVersion, ...rest, gridLaunchMachine: world.machine, buildGridLaunch: gridLaunch, prepareInstructions, dshLaunch }),
+    create: (rest: CreateRest) => createAgentCreator({ ...rest, gridLaunchMachine: world.machine, buildGridLaunch: gridLaunch, prepareInstructions, dshLaunch }),
     relaunch: (session: RegisteredSession, source?: LaunchSource) => helpers.relaunchOverrides(session, source),
     fork: (rest: ForkRest) => createAgentForker({ opencodeMajor: opencodeMajorVersion, ...rest, prepareInstructions, relaunchOverrides: helpers.relaunchOverrides, gridName, dshLaunch }),
     validate: (engine: AgentEngine, source: LaunchSource) => validateLaunchOverrides(launchOverridesDeps, engine, source),

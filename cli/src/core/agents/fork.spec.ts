@@ -357,7 +357,7 @@ describe('forking an agent', () => {
     expect(deps.pendingForkInherit.get('f1')).toBe('s1')
     expect(deps.prepareInstructions).toHaveBeenCalledWith(work, 'claude')
     expect(deps.announceSession).toHaveBeenCalledWith(pending)
-    expect(deps.watchNewPane).toHaveBeenCalledWith('claude', pending, { runtime: { paneId: '%3' } }, ['claude'], { install: 'recipe' })
+    expect(deps.watchNewPane).toHaveBeenCalledWith('claude', pending, { runtime: { paneId: '%3' } }, ['claude'], undefined)
   })
 
   it('hands off what it remembers to an engine that cannot fork, and names the fork as asked', async () => {
@@ -375,7 +375,7 @@ describe('forking an agent', () => {
     const realLaunch = await vi.importActual<typeof import('../../lib/engineLaunch.js')>('../../lib/engineLaunch.js')
     vi.mocked(planFork).mockImplementationOnce(realPlan.planFork)
     // The argv the pane really gets, without the install step whose recipe this spec stubs.
-    vi.mocked(buildEngineLaunchArgv).mockImplementationOnce((engine, options) => realLaunch.buildEngineLaunchArgv(engine, { ...options, installIfMissing: undefined }))
+    vi.mocked(buildEngineLaunchArgv).mockImplementationOnce((engine, options) => realLaunch.buildEngineLaunchArgv(engine, options))
     const { fork } = setup(source({ engine: 'openclaw', sessionId: 'agent:main:harness-a1' }))
     expect(await fork({ agentId: 'a1', name: null, prompt: 'next' })).toMatchObject({ level: 'handoff' })
     const pane = vi.mocked(createAndRegisterPane).mock.calls[0]![0]
@@ -447,7 +447,7 @@ describe('forking an agent', () => {
     vi.mocked(enginePathOverride).mockReturnValueOnce('/opt/claude' as never)
     const { deps, fork } = setup(source({ dsh: 'blender', dshRuntime: 'harness-claude-x', agent: 'reviewer' } as Partial<RegisteredSession>))
     await fork({ agentId: 'a1', name: null, prompt: null })
-    expect(vi.mocked(buildEngineLaunchArgv).mock.calls[0][1]).toMatchObject({ extraArgs: ['--dsh', '--agent', 'reviewer'], harnessNode: true, installIfMissing: undefined })
+    expect(vi.mocked(buildEngineLaunchArgv).mock.calls[0][1]).toMatchObject({ extraArgs: ['--dsh', '--agent', 'reviewer'], harnessNode: true })
     expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ dsh: 'blender', agent: 'reviewer', label: 'Blender', env: { HARNESS_DSH: 'blender' } })
     expect(deps.attach).toHaveBeenCalled()
     vi.mocked(supportsNamedAgent).mockReturnValueOnce(false)

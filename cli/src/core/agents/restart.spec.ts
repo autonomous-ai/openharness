@@ -1,8 +1,6 @@
 import { homedir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
-import { engineInstallRecipe } from '../../lib/engineInstall.js'
-import { buildEngineLaunchArgv, commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
+import { buildEngineLaunchArgv } from '../../lib/engineLaunch.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { AgentRestartCoordinator, bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
@@ -14,11 +12,9 @@ import type { RestartTarget } from '../../lib/terminalBackend.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 
-vi.mock('../../lib/engineBin.js', async (real) => ({ ...await real<object>(), enginePathOverride: vi.fn(() => undefined) }))
 vi.mock('../../lib/engineLaunch.js', async (real) => ({
   ...await real<object>(),
   buildEngineLaunchArgv: vi.fn(() => ['zsh', '-l']),
-  commandAvailableInInteractiveShell: vi.fn(async () => true),
 }))
 vi.mock('../../lib/restartAgent.js', async (real) => ({
   ...await real<object>(),
@@ -74,6 +70,7 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RestartDep
     liveBypassPermission: vi.fn(async () => true),
     paneSwapDeps: vi.fn(() => ({ swap: true })) as never,
     restartHeld: vi.fn(() => null),
+    native: vi.fn(async () => ({ ok: true, launch: { current: () => true } })) as never,
     ...over,
   }
   return { deps, state, tmuxBackend, restart: createAgentRestarter(deps) }
@@ -231,7 +228,6 @@ describe('restarting an agent', () => {
     const native = vi.fn(async () => ({ ok: false as const, error: 'NATIVE_LAUNCH_HELD' as const, unavailable: 'native' as const, detail: 'Waiting for installation' }))
     const run = setup(agent(), { native })
     expect(await run.restart('a1')).toMatchObject({ unavailable: 'native' })
-    expect(commandAvailableInInteractiveShell).not.toHaveBeenCalled()
     expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
     expect(restartAgent).not.toHaveBeenCalled()
   })
@@ -242,7 +238,6 @@ describe('restarting an agent', () => {
       relaunchOverrides: vi.fn(async () => ({ ok: true as const, overrides: { native: launch, env: {}, extraArgs: [], clearEnv: [] } })),
     })
     expect(await run.restart('a1')).toMatchObject({ ok: true })
-    expect(commandAvailableInInteractiveShell).not.toHaveBeenCalled()
     expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.any(Object), expect.any(Object), expect.any(Function), launch)
     expect(run.deps.downgradedPermission).toHaveBeenCalledWith(expect.any(Object), true, 'restart', launch)
   })
@@ -280,7 +275,7 @@ describe('restarting an agent', () => {
       vi.mocked(publish).mockImplementation(async (...args) => { order.push('save'); return implementation(...args) })
       vi.mocked(restartAgent).mockImplementationOnce(async () => { order.push('restart'); return { ok: true, resumed: true, processIdentity: newProcess } })
       expect(await run.restart('a1', WORDS)).toMatchObject({ ok: true })
-      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ agentId: 'a1', launchArgs: WORDS }), expect.any(Function), undefined)
+      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ agentId: 'a1', launchArgs: WORDS }), expect.any(Function), expect.objectContaining({ current: expect.any(Function) }))
       expect(order).toEqual(['build', 'restart', 'save'])
       expect(run.deps.registry.confirmLaunch).toHaveBeenCalledExactlyOnceWith('a1', expect.objectContaining({ launchArgs: WORDS }), expect.anything())
       // Asked as its own variant of a restart, so another ask with other words is not answered by this launch.
@@ -290,7 +285,7 @@ describe('restarting an agent', () => {
     it('clears them with an empty list: built without, and removed from the record once the engine is back', async () => {
       const run = setup(agent({ launchArgs: ['--old'] } as Partial<RegisteredSession>))
       expect(await run.restart('a1', [])).toMatchObject({ ok: true })
-      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ launchArgs: [] }), expect.any(Function), undefined)
+      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ launchArgs: [] }), expect.any(Function), expect.objectContaining({ current: expect.any(Function) }))
       expect(run.deps.registry.confirmLaunch).toHaveBeenCalledExactlyOnceWith('a1', expect.objectContaining({ launchArgs: [] }), expect.anything())
     })
 
@@ -298,7 +293,7 @@ describe('restarting an agent', () => {
       const row = agent({ launchArgs: ['--saved'] } as Partial<RegisteredSession>)
       const run = setup(row)
       expect(await run.restart('a1')).toMatchObject({ ok: true })
-      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ agentId: row.agentId }), expect.objectContaining({ launchArgs: ['--saved'] }), expect.any(Function), undefined)
+      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ agentId: row.agentId }), expect.objectContaining({ launchArgs: ['--saved'] }), expect.any(Function), expect.objectContaining({ current: expect.any(Function) }))
       expect(vi.mocked(run.deps.registry.confirmLaunch).mock.calls[0]![1].launchArgs).toBeUndefined()
       expect(run.deps.registry.byAgent('a1')?.launchArgs).toEqual(['--saved'])
       expect(run.deps.restartJobs.run).toHaveBeenCalledWith('a1', expect.any(Function), 'restart', undefined)
@@ -413,38 +408,21 @@ describe('restarting an agent', () => {
       expect(restartAgent).not.toHaveBeenCalled()
     })
 
-    it('for an engine uninstalled since the agent started, before anything is touched, and the agent goes on', async () => {
-      vi.spyOn(console, 'warn').mockImplementation(() => {})
-      vi.mocked(commandAvailableInInteractiveShell).mockResolvedValueOnce(false)
-      const run = setup()
-      expect(await run.restart('a1')).toEqual({
-        ok: false, error: 'ENGINE_NOT_INSTALLED', detail: 'claude is not installed. Install it, then restart again. Nothing was stopped.',
-      })
-      // Asked as create asks: the launch's own command, and the install recipe unless a path was set.
-      expect(commandAvailableInInteractiveShell).toHaveBeenCalledWith(engineBin('claude'), undefined, engineInstallRecipe('claude'))
-      expect(console.warn).toHaveBeenCalledWith('[restart] a1 refused · claude is not installed')
+    it.each(['missing executable', 'unknown executable'] as const)('holds a %s before touching the running agent', async detail => {
+      const held = { ok: false as const, error: 'NATIVE_LAUNCH_HELD' as const, unavailable: 'native' as const, detail }
+      const run = setup(agent(), { native: vi.fn(async () => held) })
+      expect(await run.restart('a1')).toEqual(held)
       expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
       expect(run.deps.agentReconciler.holdRoute).not.toHaveBeenCalled()
       expect(restartAgent).not.toHaveBeenCalled()
-
-      vi.mocked(enginePathOverride).mockReturnValueOnce('/opt/claude')
-      vi.mocked(commandAvailableInInteractiveShell).mockResolvedValueOnce(false)
-      expect(await setup().restart('a1')).toMatchObject({ ok: false, error: 'ENGINE_NOT_INSTALLED' })
-      expect(vi.mocked(commandAvailableInInteractiveShell).mock.calls[1][2]).toBeUndefined()
     })
 
-    it('but not on a no from a shell that gave up: a slow rc file is not a missing engine', async () => {
-      // The check starts at 0, and the shell's no comes at 5s, when the probe gives up waiting for it.
-      const clock = vi.spyOn(Date, 'now').mockReturnValue(0)
-      vi.mocked(commandAvailableInInteractiveShell).mockImplementationOnce(async () => { clock.mockReturnValue(5_000); return false })
+    it('stops touching the agent when preparation is overtaken', async () => {
       const run = setup()
-      expect(await run.restart('a1')).toEqual({ ok: true, session: expect.objectContaining({ agentId: 'a1', launch: { state: 'ready' }, processIdentity: newProcess }), resumed: true })
-      expect(restartAgent).toHaveBeenCalled()
-    })
-
-    it('and stops, touching nothing, when the operation is overtaken while the engine is looked for', async () => {
-      const run = setup()
-      vi.mocked(commandAvailableInInteractiveShell).mockImplementationOnce(async () => { run.state.live = false; return false })
+      vi.mocked(run.deps.native!).mockImplementationOnce(async () => {
+        run.state.live = false
+        return { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Unverified' }
+      })
       expect(await run.restart('a1')).toEqual(changed)
       expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
       expect(restartAgent).not.toHaveBeenCalled()
