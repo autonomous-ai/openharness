@@ -376,10 +376,12 @@ export class CodexNormalizer implements EngineNormalizer {
 
     if (type === 'task_complete' || type === 'turn_aborted') {
       this.pendingTask = false
-      const events = this.completeOutstanding(type === 'turn_aborted')
+      const aborted = type === 'turn_aborted'
+      const events = this.completeOutstanding(aborted)
       if (!this.open || this.mode === 'replay') return events
       this.open = false
-      return [...events, { type: 'turn_ended', payload: {} }]
+      // A stopped turn says so, as Claude Code's interrupt does: its end goes on at once, never held for a Stop.
+      return [...events, { type: 'turn_ended', payload: aborted ? { aborted: true } : {} }]
     }
 
     return []
