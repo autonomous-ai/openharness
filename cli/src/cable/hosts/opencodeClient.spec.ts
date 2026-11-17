@@ -295,6 +295,15 @@ describe('the opencode client (docs/plans/2026-11-17-dial-opencode-design.md)', 
     expect(await active()).toEqual({ ok: false, fault: 'refused' })
   })
 
+  it('a path http will not send is refused, sends nothing, and nothing throws at its deadline', async () => {
+    const server = await start()
+    const opencode = await found(server)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    expect(await opencode.request('GET', '/api/session/a b')).toEqual({ ok: false, fault: 'refused' })
+    expect(() => vi.advanceTimersByTime(RUN_TIMEOUT_MS)).not.toThrow()
+    expect(routes(server)).toEqual(['GET /api/info'])
+  })
+
   it('events asks for each kind as a types key, and tells server.connected then each event once, in order', async () => {
     const server = await start()
     server.session({ id: 'ses_a1' })
