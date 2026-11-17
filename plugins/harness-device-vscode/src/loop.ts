@@ -2,7 +2,7 @@
 // `vscode` stream open on it, reports the window's shells on connections of their own, and shows or scrolls the terminal
 // a line names, raising the window for a tap's show. Nothing of `vscode` is loaded here: the end to end test runs this
 // file outside VS Code.
-import { basename, dirname } from 'node:path'
+import { basename, delimiter, dirname, isAbsolute } from 'node:path'
 import { MISSING, type LoopInputs, type Ran } from './inputs'
 import type { WindowFacade } from './window'
 
@@ -219,11 +219,14 @@ export function startLoop(
     return false
   }
 
-  // The launcher in the home first, then one on PATH, as plugins/harness-device/hooks/device.js looks.
+  // The launcher in the home first, then one on PATH, as plugins/harness-device/hooks/device.js looks. Only absolute
+  // folders: a relative or empty one is the extension host's working folder, which can be the folder VS Code opened, in
+  // Restricted Mode an untrusted one.
+  const path = inputs.path.split(delimiter).filter((folder) => isAbsolute(folder)).join(delimiter)
   async function launch(signal: AbortSignal): Promise<Ran> {
-    const files = inputs.home ? [`${inputs.home}/.local/bin/harness`, 'harness'] : ['harness']
+    const files = isAbsolute(inputs.home) ? [`${inputs.home}/.local/bin/harness`, 'harness'] : ['harness']
     for (const file of files) {
-      const ran = await inputs.run(file, LINK_ARGS, { path: inputs.path, timeoutMs: LINK_TIMEOUT_MS, maxBytes: LINK_MAX_BYTES, signal })
+      const ran = await inputs.run(file, LINK_ARGS, { path, timeoutMs: LINK_TIMEOUT_MS, maxBytes: LINK_MAX_BYTES, signal })
       if (ran !== MISSING) return ran
     }
     return MISSING

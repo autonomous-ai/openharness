@@ -10,7 +10,7 @@ Lets the Harness dial reach Claude Code and Codex running in VS Code's integrate
 - **Scroll** on the dial while VS Code is in front: that terminal scrolls, line by line.
 
 Each window tells the devices process on this computer which shells its terminals run, and shows or scrolls the
-terminal the devices process names, raising itself when the show is a tap's. It asks `harness device vscode link` (`~/.local/bin/harness`, then `harness` on `PATH`) where
+terminal the devices process names, raising itself when the show is a tap's. It asks `harness device vscode link` (`~/.local/bin/harness`, then `harness` in an absolute `PATH` folder) where
 that process listens.
 
 ## What it never does

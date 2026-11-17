@@ -76,7 +76,8 @@ socket connector, folder watcher, clock and a narrow VS Code facade) so tests pa
 real ones.
 
 1. Windows, or a remote window: stop.
-2. Find the launcher (`~/.local/bin/harness`, then `harness` on `PATH`) and run `harness device vscode link` (5 s,
+2. Find the launcher (`~/.local/bin/harness`, then `harness` in an absolute `PATH` folder: a relative one is the
+   extension host's working folder, which can be the untrusted folder VS Code opened) and run `harness device vscode link` (5 s,
    4 KiB). As in the Orca plugin: no launcher is `noHarness`; a failed run or `daemon: false` is `notRunning`;
    `devicesReady: false` is `unplugged`, and the folder of `devicesSocket` is watched for `devices.sock` (at most once a
    second) plus a look every 5 min.
