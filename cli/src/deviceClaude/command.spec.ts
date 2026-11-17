@@ -846,25 +846,27 @@ describe('Orca\'s Claude Code homes', () => {
     expect(existsSync(skillAt(claudeHome))).toBe(false)
   })
 
-  it('a home that fails to turn off prints one line and the command exits 1', async () => {
+  // The uninstall would take the shared files that home still names: a second disable could then never turn it off there.
+  it('a home that fails to turn off prints one line, keeps the plugin installed and exits 1; the next disable finishes', async () => {
     const dataDir = folder()
     skillIn(claudeHome)
     const [failing, next] = [folder(), folder()]
-    const answersOf = (uninstall: Answers) => (home: string | null): Answers => home === null ? { ...INSTALLED, ...uninstall }
-      : home === realpathSync(failing) ? { ...listed(true), [DISABLE]: { code: 1, stderr: `${failing}/settings.json: denied` } }
-      : listed(true)
-    const { calls, claude, claudeIn } = claudes(answersOf({}))
-    expect(await device(['claude', 'disable'], { dataDir, claude, claudeIn, orcaHomes: async () => [failing, next] }))
+    const homes = async () => [failing, next]
+    const refused = { ...listed(true), [DISABLE]: { code: 1, stderr: `${failing}/settings.json: denied` } }
+    const first = claudes((home) => home === null ? INSTALLED : home === realpathSync(failing) ? refused : listed(true))
+    expect(await device(['claude', 'disable'], { dataDir, claude: first.claude, claudeIn: first.claudeIn, orcaHomes: homes }))
       .toEqual({ code: 1, out: [], err: [OFF_FAILED] })
-    expect(calls).toContainEqual({ home: realpathSync(next), args: DISABLE })
-    expect(calls.at(-1)).toEqual({ home: null, args: UNINSTALL })
+    expect(first.calls).toContainEqual({ home: realpathSync(next), args: DISABLE })
+    expect(first.calls.filter((call) => call.home === null)).toEqual([])
+    // The rest is done: the removal recorded, so the devices turn nothing on again, and the skill removed.
     expect(existsSync(skillAt(claudeHome))).toBe(false)
     expect(answers(dataDir)).toEqual({ removed: { claude: true } })
 
-    // The default home's own failure is still said, after the Orca home's line.
-    const both = claudes(answersOf({ [UNINSTALL]: { code: 1, stderr: 'x' } }))
-    expect(await device(['claude', 'disable'], { dataDir, claude: both.claude, claudeIn: both.claudeIn, orcaHomes: async () => [failing, next] }))
-      .toEqual({ code: 1, out: [], err: [OFF_FAILED, 'x'] })
+    // That home turns off now, and the other is off already.
+    const second = claudes((home) => home === null ? INSTALLED : listed(home === realpathSync(failing)))
+    expect(await device(['claude', 'disable'], { dataDir, claude: second.claude, claudeIn: second.claudeIn, orcaHomes: homes })).toEqual(ok)
+    expect(second.calls).toContainEqual({ home: realpathSync(failing), args: DISABLE })
+    expect(second.calls.at(-1)).toEqual({ home: null, args: UNINSTALL })
   })
 
   it('with no claude and an Orca home\'s settings on, disable says that home failed', async () => {
