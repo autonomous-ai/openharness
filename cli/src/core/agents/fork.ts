@@ -25,7 +25,7 @@ import { projectDisplayName, type registry, type RegisteredSession } from '../..
 import type { TerminalBackend } from '../../lib/terminalBackend.js'
 import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../../lib/windows/engineStart.js'
-import { prepareInstructionWrites, scmLaunchEnv } from '../../scm/launch.js'
+import { scmLaunchEnv } from '../../scm/launch.js'
 import type { createLaunchHelpers } from './launch.js'
 import { mergedLaunchEnv } from './launchEnv.js'
 import type { createPaneWatcher } from './newPane.js'
@@ -57,7 +57,7 @@ export interface ForkAgentDeps {
   announceSession: (session: RegisteredSession) => void
   /** A look at the new agent, for the services that follow agents (core/agentLife.ts `running`). */
   attach: (session: RegisteredSession) => void
-  prepareApiTools: (cwd: string | null | undefined, engine: string) => void
+  prepareInstructions: (cwd: string | null | undefined, engine: string) => Promise<void>
   /** What a restart or a resume relaunches the row with (launch.ts): its own login, model and profile. */
   relaunchOverrides: ReturnType<typeof createLaunchHelpers>['relaunchOverrides']
   /** This account's private grid, as the socket knows it (BackendSocket.gridName). */
@@ -67,7 +67,7 @@ export interface ForkAgentDeps {
 
 export function createAgentForker({
   native: inspectNative, prepareNative, authority: captureAuthority,
-  createBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, mirror, pendingForkInherit, watchNewPane, announceSession, attach, prepareApiTools, relaunchOverrides, gridName, dshLaunch,
+  createBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, mirror, pendingForkInherit, watchNewPane, announceSession, attach, prepareInstructions, relaunchOverrides, gridName, dshLaunch,
 }: ForkAgentDeps) {
   const prepare = async ({ agentId, name, prompt }: Parameters<ForkAgent>[0], authority: LaunchAuthority): Promise<LaunchPreparation<Awaited<ReturnType<ForkAgent>>>> => {
     const ownsSource = captureAuthority?.(agentId) ?? (() => true)
@@ -179,9 +179,8 @@ export function createAgentForker({
       console.warn(`[agent] fork refused · ${engine} · ${forkRefusal.detail}`)
       return { ok: false, ...forkRefusal }
     }
-    await prepareInstructionWrites(source.cwd)
+    await prepareInstructions(source.cwd, engine)
     if (!dispatchCurrent()) return changed
-    prepareApiTools(source.cwd, engine)
     // Windows refuses a batch-file engine whose arguments cmd.exe would read (lib/windows/launch.ts), before any pane.
     let command: string[], argv: string[]
     try {

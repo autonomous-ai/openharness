@@ -143,6 +143,10 @@ export function runWorkspacesService(options: WorkspacesServiceOptions): Service
     token: options.token,
     // The apps ask workspaces nothing: only the core does, for the git it runs none of (core/workspacesLink.ts).
     requests: {
+      prepareInstructions: async (payload, asker, closed) => {
+        if (!asker.local || !asker.owner || asker.connection !== undefined || closed?.aborted) return { prepared: false }
+        return { prepared: await workspaces.prepareInstructions(payload.workspace as string, payload.engine as string, closed) }
+      },
       prepareFolder: (payload) => {
         const project = gitProjectFolderOf(payload.project)
         return project ? workspaces.prepareFolder(project, { cloneFallback: payload.cloneFallback === true })
@@ -178,7 +182,7 @@ export function runWorkspacesService(options: WorkspacesServiceOptions): Service
       // Said on every connection: a core of this build asks a process for folders only once it has said it makes them.
       // The core reads it as it arrives, so only a connection that ends loses it, and the next one says it again; a
       // failure is still said, as creates that need git wait until it is heard.
-      void connection.query('folders').catch((error: unknown) => {
+      void connection.query('folders', { instructions: true }).catch((error: unknown) => {
         console.warn(`[workspaces] could not tell the core this process makes folders · ${error instanceof Error ? error.message : String(error)}`)
       })
     },

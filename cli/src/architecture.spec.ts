@@ -451,6 +451,14 @@ describe('the daemon\'s shape', () => {
     }
   })
 
+  it('saved API metadata and instruction writers stay outside the session process', () => {
+    for (const entry of ['core/main.ts', 'core/agents/create.ts', 'core/agents/fork.ts', 'core/agents/launch.ts', 'scm/launch.ts']) {
+      const closure = [...closureOf(entry).keys()]
+      for (const file of ['lib/apiConnectionMetadata.ts', 'lib/apiInstructions.ts', 'scm/instructionWrites.ts']) expect(closure, entry).not.toContain(file)
+    }
+    expect([...closureOf('scm/launch.ts').keys()]).not.toContain('dsh/adapters.ts')
+  })
+
   it('building a launch loads the engines\' declared launch contracts alone', () => {
     const contracts = new Set(['engines/claude/launch.ts', 'engines/codex/launch.ts'])
     // The builders: the argv and its script, a relaunch's overrides, a harness's flags. The homes they launch in

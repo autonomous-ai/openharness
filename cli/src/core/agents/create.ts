@@ -49,7 +49,7 @@ import type { TerminalBackend } from '../../lib/terminalBackend.js'
 import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../../lib/windows/engineStart.js'
 import { tmuxTooOldForSessionEnv } from '../../lib/tmuxVersion.js'
-import { prepareInstructionWrites, scmLaunchEnv } from '../../scm/launch.js'
+import { scmLaunchEnv } from '../../scm/launch.js'
 import { mergedLaunchEnv } from './launchEnv.js'
 import type { createPaneWatcher } from './newPane.js'
 
@@ -76,7 +76,7 @@ export interface CreateAgentDeps {
   announceSession: (session: RegisteredSession) => void
   /** A look at the new agent, for the services that follow agents (core/agentLife.ts `running`). */
   attach: (session: RegisteredSession) => void
-  prepareApiTools: (cwd: string | null | undefined, engine: string) => void
+  prepareInstructions: (cwd: string | null | undefined, engine: string) => Promise<void>
   /** The hook server's port, which installed engine hooks post to. */
   hookPort: number
   /** Whether engine hooks are installed at all (DISABLE_HOOK_INSTALL). */
@@ -113,7 +113,7 @@ function hooksHeld(engine: string, waiting: string) {
 
 export function createAgentCreator({
   native: inspectNative, publishConfig, createBackend: initialBackend, recoverBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, externalResume, watchNewPane, announceSession, attach,
-  prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
+  prepareInstructions, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
   gridSetup, privateGridName, dshLaunch, syncProfileHome,
 }: CreateAgentDeps) {
   const prepare = async (input: Parameters<CreateAgent>[0], authority: LaunchAuthority, context?: { local: boolean }): Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>> => {
@@ -385,9 +385,7 @@ export function createAgentCreator({
     // answered and refused (`SPAWN_FAILED`) — see createAgentPane.ts. Registration itself is retried
     // there: a stale registry entry from a previous tmux-server generation occasionally collides with
     // a freshly-minted pane id, and that collision clears on its own on the very next pane.
-    await prepareInstructionWrites(cwd)
-    if (!current()) return stale()
-    prepareApiTools(cwd, engine)
+    await prepareInstructions(cwd, engine)
     // Mutually exclusive with a grid (backendSocket.ts refuses the two together): a chosen Codex
     // profile becomes the new session's CODEX_HOME (its session store's variable, lib/engineHomes.ts
     // `profileEnvironment`), the same `-e` mechanism a grid's own env rides.

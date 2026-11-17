@@ -9,7 +9,6 @@ import { enginePathOverride } from '../../lib/engineBin.js'
 import { windowsAfterExit } from '../../lib/windows/engineStart.js'
 import { buildEngineLaunchArgv, engineLaunchEnv, refusePermissionFlagIfUnsupported, supportsNamedAgent } from '../../lib/engineLaunch.js'
 import { planFork } from '../../lib/forkAgent.js'
-import { prepareInstructionWrites } from '../../scm/launch.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createAgentForker, type ForkAgentDeps } from './fork.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
@@ -39,10 +38,6 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   refusePermissionFlagIfUnsupported: vi.fn(async () => null),
   supportsNamedAgent: vi.fn(() => true),
 }))
-vi.mock('../../scm/launch.js', async (real) => {
-  const actual = await real<typeof import('../../scm/launch.js')>()
-  return { ...actual, prepareInstructionWrites: vi.fn(actual.prepareInstructionWrites) }
-})
 vi.mock('../../engines/kit/notifyHooks.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
 vi.mock('../../lib/forkAgent.js', async (real) => ({ ...await real<object>(), planFork: vi.fn(() => ({ ok: true, level: 'native', forkSessionId: 's1' })) }))
 
@@ -78,7 +73,7 @@ function setup(row: RegisteredSession | null = source(), over: Partial<ForkAgent
     watchNewPane: vi.fn(async () => {}),
     announceSession: vi.fn(),
     attach: vi.fn(),
-    prepareApiTools: vi.fn(),
+    prepareInstructions: vi.fn(async () => {}),
     // What a restart or a resume relaunches the row with (launch.ts): a Codex profile's CODEX_HOME here.
     relaunchOverrides: vi.fn(async (session: RegisteredSession) => ({
       ok: true as const, overrides: { env: (session.codexHome ? { CODEX_HOME: session.codexHome } : {}) as Record<string, string>, extraArgs: [] as string[], clearEnv: [] as string[] },
@@ -99,6 +94,21 @@ describe('forking an agent', () => {
   // A launch or an installed harness one test queued and never used answers no other test.
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); launchDsh.mockReset(); vi.mocked(installedDsh).mockReset() })
 
+  it('waits for deferred workspace instructions and refuses a fork revoked during them', async () => {
+    let release!: () => void, entered!: () => void
+    const ready = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let current = true
+    const run = setup(source(), { prepareInstructions: async () => { entered(); await gate } })
+    const result = run.fork.prepare({ agentId: 'a1', name: null, prompt: null },
+      { id: 'instructions', label: 'harness-claude-instructions', current: () => current, hold: vi.fn() })
+    await ready
+    current = false
+    release()
+    expect(await result).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
+  })
+
   it.each(['initial', 'source', 'inspect', 'workspace', 'description', 'harness', 'overrides', 'hooks', 'permission', 'instructions'] as const)(
     'cannot dispatch a fork whose original owner is revoked during %s', async stage => {
       let current = stage !== 'initial'
@@ -106,13 +116,13 @@ describe('forking an agent', () => {
       const launch = { current: () => stage !== 'workspace', environment: { HOME: root }, opencodeMajor: 1 } as unknown as NativeLaunch
       vi.mocked(installedDsh).mockReturnValue({ manifest: { name: 'Fixture' } } as never)
       vi.mocked(refusePermissionFlagIfUnsupported).mockImplementation(async () => { revoke('permission'); return null })
-      vi.mocked(prepareInstructionWrites).mockImplementation(async () => revoke('instructions'))
       const run = setup(source({ dsh: 'fixture/tools' }), {
         authority: () => () => stage !== 'source',
         native: async (_engine, _source, authority) => { authority.hold({ service: 'native', detail: 'Checking fixture' }); revoke('inspect'); return { ok: true, launch } },
         dshLaunch: { describe: async dsh => { revoke('description'); return describeDsh(dsh) }, launch: async () => { revoke('harness'); return { ok: true, launch: { env: {}, args: [] } } } },
         relaunchOverrides: async () => { revoke('overrides'); return { ok: true, overrides: { native: launch, env: {}, extraArgs: [], clearEnv: [] } } },
         prepareNative: async () => { revoke('hooks'); return true },
+        prepareInstructions: async () => revoke('instructions'),
       })
       try {
         const result = await run.fork.prepare({ agentId: 'a1', name: null, prompt: 'original prompt' },
@@ -122,7 +132,6 @@ describe('forking an agent', () => {
       } finally {
         vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
         vi.mocked(refusePermissionFlagIfUnsupported).mockReset().mockResolvedValue(null)
-        vi.mocked(prepareInstructionWrites).mockReset().mockResolvedValue(undefined)
       }
     },
   )
@@ -206,7 +215,7 @@ describe('forking an agent', () => {
     })
     const { inspectNativeLaunch } = await import('../../engines/nativeLaunch.js')
     const prepareNative = (native: NativeLaunch, current: () => boolean, environment?: Readonly<Record<string, string>>, clear?: readonly string[]) => native.prepareHooks(0, current, environment, clear)
-    const helpers = createLaunchHelpers({ authority: () => () => true, prepareApiTools: vi.fn(), setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
+    const helpers = createLaunchHelpers({ authority: () => () => true, prepareInstructions: vi.fn(async () => {}), setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
       launchOverridesDeps: { native: (engine, source) => inspectNativeLaunch(engine, source), prepareNative,
         machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(), writeGridConfigDir: vi.fn(),
         capabilities: async () => ({ sessionEnv: true }), installCodexHooks: async () => true,
@@ -246,8 +255,7 @@ describe('forking an agent', () => {
     launchDsh.mockResolvedValueOnce({ ok: false, error: 'DSH_UNAVAILABLE', detail: 'Waiting for the Store.', unavailable: 'store' })
     const { fork, deps } = setup(source({ dsh: 'fixture/tools' }))
     expect(await fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ ok: false, error: 'DSH_UNAVAILABLE' })
-    expect(prepareInstructionWrites).not.toHaveBeenCalled()
-    expect(deps.prepareApiTools).not.toHaveBeenCalled()
+    expect(deps.prepareInstructions).not.toHaveBeenCalled()
     expect(createAndRegisterPane).not.toHaveBeenCalled()
   })
 
@@ -331,7 +339,7 @@ describe('forking an agent', () => {
       forkedFrom: { agentId: 'a1', sessionId: 's1', transcriptPath: '/t/s1.jsonl' },
     })
     expect(deps.pendingForkInherit.get('f1')).toBe('s1')
-    expect(deps.prepareApiTools).toHaveBeenCalledWith(work, 'claude')
+    expect(deps.prepareInstructions).toHaveBeenCalledWith(work, 'claude')
     expect(deps.announceSession).toHaveBeenCalledWith(pending)
     expect(deps.watchNewPane).toHaveBeenCalledWith('claude', pending, { runtime: { paneId: '%3' } }, ['claude'], { install: 'recipe' })
   })

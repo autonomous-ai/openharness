@@ -114,8 +114,6 @@ import { type LaunchOverridesDeps } from '../lib/launchOverrides.js'
 import { buildHarnessSessionLabel } from '../lib/harnessSessionLabel.js'
 import { listTmuxPanes } from '../lib/tmuxAgentDiscovery.js'
 import { dshThrough } from './agents/dshThrough.js'
-import { ApiConnectionMetadata } from '../lib/apiConnectionMetadata.js'
-import { prepareApiInstructions } from '../lib/apiInstructions.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
 import { confirmHomes, sessionCodexHome } from '../lib/engineHomes.js'
@@ -212,7 +210,7 @@ import { startStalls } from './stall.js'
 import { createServiceLinks, READER_START_MS, type ServiceLinks } from './serviceLinks.js'
 import { createViewerStreams } from './viewerStreams.js'
 import { createViewersLink } from './viewersLink.js'
-import { createWorkspacesLink } from './workspacesLink.js'
+import { createWorkspacesLink, prepareWorkspaceInstructions } from './workspacesLink.js'
 import { createMonitorLink } from './monitorLink.js'
 import { createConnectorsLink } from './connectorsLink.js'
 import { createSharedMachinesLink } from './sharedMachinesLink.js'
@@ -592,13 +590,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // master's updater runs on, and a published fix still lands (`enterSafeMode`).
   if (harnessd.HARNESSD_SAFE_MODE) throw new SafeModeRequest(harnessd.HARNESSD_SAFE_MODE)
 
-  const savedApis = new ApiConnectionMetadata(env.ADAPTER_DATA_DIR)
-  // Instructions read metadata locally; a models outage must not change a workspace's tool instructions.
-  const prepareApiTools = (cwd: string | null | undefined, engine: string): void => {
-    if (!cwd) return
-    try { prepareApiInstructions(savedApis, cwd, engine) }
-    catch { console.warn('[apis] Tool instructions could not be added. Saved connections remain available through harness api.') }
-  }
+  const prepareInstructions = (cwd: string | null | undefined, engine: string): Promise<void> =>
+    prepareWorkspaceInstructions(ports.workspaces, cwd, engine)
 
   // What a session of another engine reads starts loading as the session enters, from disk or later
   // (engines/inProcess.ts).
@@ -2525,7 +2518,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const launchAuthority = createLaunchAuthority({ byAgent: id => registry.byAgent(id), revision: restoreRevision, cancelled: id => launchCancelled(id) })
   const launchHelpers = createLaunchHelpers({
     authority: launchAuthority,
-    prepareApiTools,
+    prepareInstructions,
     launchOverridesDeps,
     setGridLaunch: (agentId, launch) => registry.setGridLaunch(agentId, launch),
     prepareResume: resumeRepairs.prepare,
@@ -2839,7 +2832,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     watchNewPane,
     announceSession,
     attach: agentHere,
-    prepareApiTools,
+    prepareInstructions,
     hookPort,
     hooksDisabled: env.DISABLE_HOOK_INSTALL,
     installOpencodePlugin: installOpencodePluginBeforeSpawn,
@@ -2871,7 +2864,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     watchNewPane,
     announceSession,
     attach: agentHere,
-    prepareApiTools,
+    prepareInstructions,
     relaunchOverrides,
     gridName: () => backend.gridName(),
   })

@@ -1334,6 +1334,9 @@ export interface WorkspacesPort {
    *  computer reaches GitHub (lib/gitProjectFolder.ts); a start whose address someone else chose never picks the owner's
    *  accounts. */
   prepareFolder(project: GitProjectFolder, options: { cloneFallback: boolean }): Promise<PreparedFolder>
+  /** Best-effort workspace instructions; false means unconfirmed, never a reason to hold an ordinary launch.
+   *  [closed] is the process request's cancellation signal, checked before file effects. */
+  prepareInstructions(workspace: string, engine: string, closed?: AbortSignal): Promise<boolean>
   /** Where a harness works, for Inspect: a worktree, the main checkout or a plain folder; null when nothing answered.
    *  [others]: the folders every other harness here works in, live or stopped. */
   describeWorkspace(target: WorkspaceTarget, others: readonly string[]): Promise<WorkspaceInspection | null>
@@ -1354,14 +1357,14 @@ const REMOVAL_UNAVAILABLE = { ok: false as const, reason: `The worktree was kept
  *  worktree is read or removed. */
 export const WORKSPACES_FALLBACKS: PortFallbacks<WorkspacesPort> = {
   stop: undefined,
-  nameBranches: undefined, ready: false, prepareFolder: later(FOLDER_UNAVAILABLE), describeWorkspace: later(null),
+  nameBranches: undefined, ready: false, prepareInstructions: later(false), prepareFolder: later(FOLDER_UNAVAILABLE), describeWorkspace: later(null),
   reviewWorktree: later(REVIEW_UNAVAILABLE), removeWorktree: later(REMOVAL_UNAVAILABLE),
 }
 
 /** What the core calls while `ports.workspaces` is null (workspaces off): its fallbacks' answers. */
 export const WORKSPACES_OFF: WorkspacesPort = {
   stop: () => {},
-  nameBranches: () => {}, ready: () => false, prepareFolder: async () => FOLDER_UNAVAILABLE, describeWorkspace: async () => null,
+  nameBranches: () => {}, ready: () => false, prepareInstructions: async () => false, prepareFolder: async () => FOLDER_UNAVAILABLE, describeWorkspace: async () => null,
   reviewWorktree: async () => REVIEW_UNAVAILABLE, removeWorktree: async () => REMOVAL_UNAVAILABLE,
 }
 

@@ -5,7 +5,6 @@ import type { GridLaunchAnswer, GridLaunchOverride, GridLaunchRequest } from '..
 import { dropPermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
 import { buildLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps } from '../../lib/launchOverrides.js'
 import { loadEngine } from '../../engines/inProcess.js'
-import { prepareInstructionWrites } from '../../scm/launch.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createLaunchHelpers, gridLaunchThrough, type LaunchHelperDeps } from './launch.js'
 
@@ -17,10 +16,6 @@ vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
-vi.mock('../../scm/launch.js', async (real) => {
-  const actual = await real<typeof import('../../scm/launch.js')>()
-  return { ...actual, prepareInstructionWrites: vi.fn(async () => {}) }
-})
 vi.mock('../../lib/launchOverrides.js', async (real) => ({ ...await real<object>(), buildLaunchOverrides: vi.fn(async () => ({ ok: true })) }))
 
 /** The operation's hold, which these cases never let go of. */
@@ -31,7 +26,7 @@ const session = (over: Partial<RegisteredSession> = {}): RegisteredSession =>
 function setup() {
   const deps: LaunchHelperDeps = {
     authority: () => () => true,
-    prepareApiTools: vi.fn(),
+    prepareInstructions: vi.fn(async () => {}),
     launchOverridesDeps: { marker: 'deps' } as unknown as LaunchOverridesDeps,
     setGridLaunch: vi.fn(() => true),
     prepareResume,
@@ -41,6 +36,23 @@ function setup() {
 
 describe('relaunch helpers', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
+
+  it('waits for deferred workspace instructions and refuses a relaunch revoked during them', async () => {
+    const { deps } = setup()
+    let release!: () => void, entered!: () => void
+    const ready = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let current = true
+    deps.authority = () => () => current
+    deps.prepareInstructions = async () => { entered(); await gate }
+    const row = session()
+    const result = createLaunchHelpers(deps).relaunchOverrides(row)
+    await ready
+    row.cwd = '/replacement'
+    current = false
+    release()
+    expect(await result).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+  })
 
   it('delegates repair to the injected coordinator without reading history in launch helpers', async () => {
     const { deps } = setup()
@@ -64,7 +76,6 @@ describe('relaunch helpers', () => {
     deps.authority = () => () => false
     expect(await createLaunchHelpers(deps).relaunchOverrides(session())).toMatchObject({ error: 'AGENT_CHANGED' })
     expect(buildLaunchOverrides).not.toHaveBeenCalled()
-    expect(prepareInstructionWrites).not.toHaveBeenCalled()
   })
 
   it('keeps the caller authority separate and does not write after a cancelled preparation reply', async () => {
@@ -73,11 +84,10 @@ describe('relaunch helpers', () => {
     expect(buildLaunchOverrides).not.toHaveBeenCalled()
     vi.mocked(buildLaunchOverrides).mockResolvedValueOnce({ ok: false, error: 'AGENT_CHANGED', detail: 'revoked' })
     expect(await helpers.relaunchOverrides(session())).toMatchObject({ error: 'AGENT_CHANGED' })
-    expect(prepareInstructionWrites).not.toHaveBeenCalled()
-    expect(deps.prepareApiTools).not.toHaveBeenCalled()
+    expect(deps.prepareInstructions).not.toHaveBeenCalled()
   })
 
-  it.each(['service', 'SCM'] as const)('a Stop or rebind during %s cannot redirect deferred instructions', async stage => {
+  it.each(['service', 'workspace'] as const)('a Stop or rebind during %s cannot redirect deferred instructions', async stage => {
     const { deps } = setup()
     let allowed = true
     deps.authority = () => () => allowed
@@ -85,16 +95,15 @@ describe('relaunch helpers', () => {
     let release!: () => void
     const gate = new Promise<void>(resolve => { release = resolve })
     if (stage === 'service') vi.mocked(buildLaunchOverrides).mockImplementationOnce(async () => { await gate; return { ok: true } as never })
-    else vi.mocked(prepareInstructionWrites).mockImplementationOnce(async () => { await gate })
+    else vi.mocked(deps.prepareInstructions).mockImplementationOnce(async () => { await gate })
     const result = createLaunchHelpers(deps).relaunchOverrides(row)
-    await vi.waitFor(() => expect(stage === 'service' ? buildLaunchOverrides : prepareInstructionWrites).toHaveBeenCalled())
+    await vi.waitFor(() => expect(stage === 'service' ? buildLaunchOverrides : deps.prepareInstructions).toHaveBeenCalled())
     row.cwd = '/replacement'; row.engine = 'codex'
     allowed = false
     release()
     expect(await result).toMatchObject({ error: 'AGENT_CHANGED' })
-    expect(deps.prepareApiTools).not.toHaveBeenCalled()
-    if (stage === 'service') expect(prepareInstructionWrites).not.toHaveBeenCalled()
-    else expect(prepareInstructionWrites).toHaveBeenCalledExactlyOnceWith('/work')
+    if (stage === 'service') expect(deps.prepareInstructions).not.toHaveBeenCalled()
+    else expect(deps.prepareInstructions).toHaveBeenCalledExactlyOnceWith('/work', 'claude')
   })
 
   it.each(['store', 'models'])('leaves instruction files alone while %s is unavailable', async unavailable => {
@@ -102,8 +111,7 @@ describe('relaunch helpers', () => {
     const refused = { ok: false as const, error: 'SERVICE_UNAVAILABLE', detail: 'Waiting for preparation.', unavailable }
     vi.mocked(buildLaunchOverrides).mockResolvedValueOnce(refused)
     expect(await helpers.relaunchOverrides(session())).toEqual(refused)
-    expect(prepareInstructionWrites).not.toHaveBeenCalled()
-    expect(deps.prepareApiTools).not.toHaveBeenCalled()
+    expect(deps.prepareInstructions).not.toHaveBeenCalled()
   })
 
   it('relaunches with eager control when optional OpenCode code cannot load', async () => {
@@ -111,15 +119,14 @@ describe('relaunch helpers', () => {
     vi.mocked(loadEngine).mockImplementation(() => new Promise(() => {}))
     expect(await helpers.relaunchOverrides(session({ engine: 'opencode' }))).toEqual({ ok: true })
     expect(await helpers.relaunchOverrides(session())).toEqual({ ok: true })
-    expect(prepareInstructionWrites).toHaveBeenCalledWith('/work')
-    expect(deps.prepareApiTools).toHaveBeenCalledWith('/work', 'opencode')
+    expect(deps.prepareInstructions).toHaveBeenCalledWith('/work', 'opencode')
     expect(loadEngine).not.toHaveBeenCalled()
   })
 
   it('rebuilds a launch from the row: its DSH, folder and named agent, whatever the source adds', async () => {
     const { deps, helpers } = setup()
     expect(await helpers.relaunchOverrides(session())).toEqual({ ok: true })
-    expect(deps.prepareApiTools).toHaveBeenCalledWith('/work', 'claude')
+    expect(deps.prepareInstructions).toHaveBeenCalledWith('/work', 'claude')
     expect(buildLaunchOverrides).toHaveBeenLastCalledWith(deps.launchOverridesDeps, 'claude', expect.objectContaining({
       dsh: 'blender', dshRuntime: null, cwd: '/work', agent: 'reviewer', gridLaunch: null,
     }), 'a1', expect.any(Function), undefined)

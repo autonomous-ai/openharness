@@ -296,15 +296,15 @@ async function otherCases(): Promise<Record<string, unknown>> {
   }
   for (const engine of ['claude', 'codex', 'opencode', 'gemini', 'terminal'] as const) {
     const cwd = work()
-    shapes(M1).apiTools(cwd, engine)
+    await shapes(M1).apiTools(cwd, engine)
     cases[`API tools · ${engine}`] = norm(tree(cwd))
   }
   const kept = work()
   writeFileSync(join(kept, 'AGENTS.md'), '# Ours\n')
-  shapes(M1).apiTools(kept, 'codex')
-  shapes(M1).apiTools(kept, 'codex')
+  await shapes(M1).apiTools(kept, 'codex')
+  await shapes(M1).apiTools(kept, 'codex')
   cases['API tools · an existing file, twice'] = norm(tree(kept))
-  shapes(M1).apiTools(null, 'codex')
+  await shapes(M1).apiTools(null, 'codex')
   return cases
 }
 

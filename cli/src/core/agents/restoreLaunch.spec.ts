@@ -139,10 +139,10 @@ describe('restore preparation keeps session authority in core', () => {
     if (projection === 'dead process') live.processIdentity = null
     if (projection === 'terminal fallback') { requested.engine = 'terminal'; requested.sessionId = '' }
     if (projection === 'fresh fallback') live.launch = { state: 'starting' }
-    const apiNotes = vi.fn()
+    const apiNotes = vi.fn(async () => {})
     const helpers = createLaunchHelpers({
       authority: createLaunchAuthority({ byAgent: () => live, revision: () => 1, cancelled: () => false }),
-      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
+      prepareInstructions: apiNotes, setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
       launchOverridesDeps: { machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(),
         capabilities: async () => ({ sessionEnv: true }), writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(async () => true), readCodexConfig: () => null },
     })
@@ -157,10 +157,10 @@ describe('restore preparation keeps session authority in core', () => {
     const live = { ...entry, engine: 'claude', dsh: 'fixture/tools', active: true, processIdentity: null,
       runtimes: [{ backend: 'tmux', paneId: '%7' }],
     } as RegisteredSession
-    const apiNotes = vi.fn()
+    const apiNotes = vi.fn(async () => {})
     const helpers = createLaunchHelpers({
       authority: createLaunchAuthority({ byAgent: () => live, revision: () => 1, cancelled: () => false }),
-      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
+      prepareInstructions: apiNotes, setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
       launchOverridesDeps: { machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(),
         capabilities: async () => ({ sessionEnv: true }), writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(async () => true), readCodexConfig: () => null,
         dshLaunch: async () => { live.permissionMode = 'ask'; return { ok: true, launch: { env: {}, args: [] } } } },

@@ -19,7 +19,6 @@ import { loadEngine } from '../../engines/inProcess.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { SessionOwner } from '../../lib/sessionSearch/external.js'
 import { createAgentCreator, type CreateAgentDeps } from './create.js'
-import { prepareInstructionWrites } from '../../scm/launch.js'
 import { opencodeMajorVersion } from '../../engines/launchControl.js'
 import { installOpencodePlugin } from '../../engines/nativeHooks.js'
 import { missingHookScript } from '../../engines/kit/notifyHooks.js'
@@ -36,7 +35,6 @@ vi.mock('../../lib/projectFolder.js', async real => {
   return { ...actual, projectsRoot: vi.fn(actual.projectsRoot) }
 })
 
-vi.mock('../../scm/launch.js', async real => ({ ...await real<object>(), prepareInstructionWrites: vi.fn(async () => {}) }))
 vi.mock('node:fs', async real => {
   const actual = await real<typeof import('node:fs')>()
   return { ...actual, opendirSync: vi.fn(actual.opendirSync) }
@@ -148,7 +146,7 @@ function setup(over: Partial<CreateAgentDeps> = {}) {
     watchNewPane: vi.fn(async () => {}),
     announceSession: vi.fn(),
     attach: vi.fn(),
-    prepareApiTools: vi.fn(),
+    prepareInstructions: vi.fn(async () => {}),
     hookPort: 4242,
     hooksDisabled: false,
     installOpencodePlugin: vi.fn(async () => true),
@@ -177,6 +175,20 @@ describe('creating an agent', () => {
   })
   // A launch or an installed harness one test queued and never used answers no other test.
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); launchDsh.mockReset(); vi.mocked(installedDsh).mockReset() })
+
+  it('waits for deferred workspace instructions and refuses a launch revoked during them', async () => {
+    let release!: () => void, entered!: () => void
+    const ready = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let current = true
+    const run = setup({ prepareInstructions: async () => { entered(); await gate } })
+    const result = run.create.prepare(request(), { id: 'instructions', label: 'harness-claude-instructions', current: () => current, hold: vi.fn() })
+    await ready
+    current = false
+    release()
+    expect(await result).toMatchObject({ ok: false, error: 'LAUNCH_AUTHORITY_CHANGED' })
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
+  })
 
   // No owner subscription relay (task #4137): Claude Code and Codex, a profile's own Codex home among them, launch on their
   // own settings, with nothing of a relay in the pane's environment or on the engine's command line.
@@ -268,7 +280,7 @@ describe('creating an agent', () => {
         { id: 'fixture', label: 'harness-claude-fixture', current: () => current, hold: vi.fn() }))
         .toMatchObject({ error: 'LAUNCH_AUTHORITY_CHANGED' })
       expect(createAndRegisterPane).not.toHaveBeenCalled()
-      expect(run.deps.prepareApiTools).not.toHaveBeenCalled()
+      expect(run.deps.prepareInstructions).not.toHaveBeenCalled()
     } finally {
       vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
       buildGridLaunch.mockReset().mockImplementation(async request => ({ ok: true, override: request.override,
@@ -287,7 +299,7 @@ describe('creating an agent', () => {
     expect(opencodeMajorVersion).not.toHaveBeenCalled()
   })
 
-  it.each(['initial', 'inspect', 'permission', 'models', 'account', 'materialize', 'harness', 'instructions', 'api', 'dispatch'] as const)(
+  it.each(['initial', 'inspect', 'permission', 'models', 'account', 'materialize', 'harness', 'instructions', 'dispatch'] as const)(
     'revokes preparation at %s before any native pane dispatch', async stage => {
       let current = stage !== 'initial'
       const revoke = (at: string) => { if (stage === at) current = false }
@@ -301,9 +313,8 @@ describe('creating an agent', () => {
           materialize: async () => { revoke('materialize'); return { ok: true, warnings: [], created: [], kept: [] } },
           launch: async () => { revoke('harness'); return { ok: true, launch: { env: {}, args: [] } } },
         },
-        prepareApiTools: () => revoke('api'),
+        prepareInstructions: async () => revoke('instructions'),
       })
-      vi.mocked(prepareInstructionWrites).mockImplementationOnce(async () => revoke('instructions'))
       try {
         const prepared = await run.create.prepare(request({ dsh: 'blender', grid: { networkName: 'fixture' } }),
           { id: 'fixture', label: 'harness-claude-fixture', current: () => current, hold: vi.fn() })
@@ -314,7 +325,6 @@ describe('creating an agent', () => {
       } finally {
         vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
         vi.mocked(refusePermissionFlagIfUnsupported).mockReset().mockResolvedValue(null)
-        vi.mocked(prepareInstructionWrites).mockReset().mockResolvedValue(undefined)
       }
     },
   )
@@ -479,7 +489,7 @@ describe('creating an agent', () => {
     expect(await test.create(input)).toEqual({ ok: true, session: pending })
     expect(externalResume).toHaveBeenCalledWith(input)
     expect(createAndRegisterPane).not.toHaveBeenCalled()
-    expect(test.deps.prepareApiTools).not.toHaveBeenCalled()
+    expect(test.deps.prepareInstructions).not.toHaveBeenCalled()
   })
 
   describe('refusals before any pane opens', () => {
@@ -561,12 +571,12 @@ describe('creating an agent', () => {
     it('for a harness on a grid models cannot build: asked first, so the folder is left as it was', async () => {
       vi.mocked(installedDsh).mockReturnValue(installed() as never)
       const grid = { networkId: 'g1', networkName: 'Home', baseUrl: 'http://g', model: 'm' }
-      const { create } = setup()
+      const { create, deps } = setup()
       buildGridLaunch.mockResolvedValueOnce({ ok: false, error: 'GRID_UNAVAILABLE', detail: 'models is down', unavailable: 'models' })
       expect(await create(request({ dsh: 'blender', grid }))).toEqual({ ok: false, error: 'GRID_UNAVAILABLE', detail: 'models is down', unavailable: 'models' })
       expect(materializeWorkspace).not.toHaveBeenCalled()
       expect(preTrustClaudeProject).not.toHaveBeenCalled()
-      expect(prepareInstructionWrites).not.toHaveBeenCalled()
+      expect(deps.prepareInstructions).not.toHaveBeenCalled()
       vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
     })
 
@@ -597,7 +607,7 @@ describe('creating an agent', () => {
       const { deps, create } = setup()
       const result = await create(request())
       expect(result).toEqual({ ok: true, session: pending })
-      expect(deps.prepareApiTools).toHaveBeenCalled()
+      expect(deps.prepareInstructions).toHaveBeenCalled()
       expect(deps.announceSession).toHaveBeenCalledWith(pending)
       // Every new agent is looked at for the services that follow agents, a harness or not (core/agentLife.ts).
       expect(deps.attach).toHaveBeenCalledWith(pending)

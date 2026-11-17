@@ -17,6 +17,7 @@ import { sessionDisplayTitle } from '../lib/registry.js'
 import { worktreeAnswers } from '../lib/worktreeDeletion.js'
 import { forgetScmProject, renameScmProject } from '../scm/scmProjects.js'
 import { startWorkspaceFrames } from './workspaceFrames.js'
+import { createWorkspaceInstructions } from './workspaceInstructions.js'
 
 export function startWorkspaces(core: CoreApi, ports: CorePorts): void {
   const frames = startWorkspaceFrames(core)
@@ -45,6 +46,7 @@ export function startWorkspaces(core: CoreApi, ports: CorePorts): void {
     nameBranches: nameSessionBranches,
     ready: () => true,
     prepareFolder: gitFolderAnswer,
+    prepareInstructions: createWorkspaceInstructions(core.dataDir, () => stopped),
     ...worktreeAnswers(),
   }
 }
