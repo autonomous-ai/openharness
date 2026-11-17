@@ -1,4 +1,5 @@
 import { ENV_FIELD_NAMES } from '../config/env.js'
+import { loadEnvFile } from '../config/loadEnv.js'
 import { isAgentSessionVariable } from './agentSessionEnv.js'
 
 /**
@@ -98,4 +99,21 @@ export function startEnvironment(env: NodeJS.ProcessEnv, platform: NodeJS.Platfo
 export function startEnvLine(given: NodeJS.ProcessEnv, kept: NodeJS.ProcessEnv): string {
   const count = Object.keys(kept).length
   return `[env] started with ${count} variables; ${Object.keys(given).length - count} left out (docs/cli.md#the-daemons-environment)`
+}
+
+/**
+ * Narrows [env] in place to what a start gives the daemon, and returns the log's line for it: for a start that becomes
+ * the daemon (`-f`, a dev run), which runs the master or the core in its own process. [env] must be that process's
+ * own, because the master's or core's children inherit it.
+ *
+ * The CLI read HARNESS_ENV_FILE into it as it loaded (config/loadEnv.ts), and the narrowing takes out whatever of the
+ * file the allowlist does not name; reading the file again gives the daemon what the person put there, as a background
+ * start's daemon has it (docs/plans/2026-11-17-daemon-minimal-env-design.md).
+ */
+export function narrowOwnEnvironment(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string {
+  const kept = startEnvironment(env, platform)
+  const line = startEnvLine(env, kept)
+  for (const name of Object.keys(env)) if (!(name in kept)) delete env[name]
+  loadEnvFile(env)
+  return line
 }
