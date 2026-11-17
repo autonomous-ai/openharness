@@ -92,6 +92,9 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
       const code = await turnOff('claude', claudeHome(), deps, async () => {
         // Once the removal is saved, so the devices service turns no Orca home on again, and before the uninstall.
         leftOn = await turnOffShared(deps)
+        // Installed while another home is on: the uninstall would take the shared files it names, and a later disable
+        // could then never turn it off. The removal stays saved, and the next disable finishes.
+        if (leftOn) return undefined
         const run = deps.claude()
         // With no `claude` to uninstall it, a plugin on in these settings stays installed: the person is told.
         if (!run && claudePluginState(claudeSettingsPath()) === 'on') return { ok: false, error: PLUGIN_LEFT_ON, step: 'uninstall' }
@@ -306,7 +309,7 @@ function madeFolder(folder: string): boolean {
  * failed, for the next disable. The service's record is only read: its one writer is the devices service, which empties
  * that engine's folders once it reads the mark; one that cannot be read names no folder, and is said.
  */
-async function turnOff(engine: DialEngine, home: string, deps: DeviceDeps, plugin?: () => Promise<ClaudeResult>): Promise<number> {
+async function turnOff(engine: DialEngine, home: string, deps: DeviceDeps, plugin?: () => Promise<ClaudeResult | undefined>): Promise<number> {
   let error = writeRemoved(deps.dataDir, engine, true) === undefined ? undefined : SAVE_FAILED
   const uninstalled = await plugin?.()
   if (uninstalled && !uninstalled.ok) error ??= uninstalled.error
