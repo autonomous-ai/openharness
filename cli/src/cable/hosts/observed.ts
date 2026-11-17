@@ -113,10 +113,17 @@ export interface ObservedActions {
   codexQueue: Pick<CodexQueue, 'can' | 'send'>
   /** The Codex home Harness reads (env.CODEX_HOME): `codex queue` loads its config, so a hook's path never chooses it. */
   codexHome: string
-  /** The route (`codex`, `mod`, or the adapter that typed, said by its fixed id) or the refusal, and a failed queue's
-   *  reason. Fixed words or an adapter only: a string from a hook, a pane's id, cannot reach the log line. */
+  /** The route (`codex`, `mod`, or the adapter that typed, said by its fixed id) or the refusal, the adapter that
+   *  refused in its own sentence, and a failed queue's reason. Fixed words or an adapter only: a string from a hook, a
+   *  pane's id, cannot reach the log line. */
   count(what: 'mod' | 'waiting' | 'busy' | 'pending' | 'too-long' | 'no-answer' | 'codex' | 'codex-timeout'
-    | `codex-failed (${CodexQueueFailure})` | HostAdapter): void
+    | `codex-failed (${CodexQueueFailure})` | HostAdapter | { refused: HostAdapter }): void
+}
+
+/** What a count says in the log: a fixed word, the adapter that typed by its id, or `refused (<its id>)`. */
+export function countWord(what: Parameters<ObservedActions['count']>[0]): string {
+  if (typeof what === 'string') return what
+  return 'refused' in what ? `refused (${what.refused.id})` : what.id
 }
 
 /** One of an agent's panes, beside the adapter whose it is. */
@@ -257,6 +264,8 @@ export class ObservedSource implements HostSource {
     const noAnswer = (): SendResult => refuse('no-answer', `${name} did not answer.`)
     // Its session ended: its terminal holds a shell now, where these words would run.
     if (!e || !actions || !this.live(e)) return noAnswer()
+    const waiting = (): SendResult => refuse('waiting', `${name} is waiting for your answer in ${hostDisplayName(e.agent.host)}.`)
+    const busy = (): SendResult => refuse('busy', `${name} is busy. Say it when it is done.`)
     const typer = this.first(e, words)
     if (this.queueable(e, actions)) {
       // Recorded first: an idle Codex starts the queued turn, and its hook can be heard, before `codex queue` has exited.
@@ -292,15 +301,21 @@ export class ObservedSource implements HostSource {
     if (!typer || !this.live(e) || still?.pane.adapter !== typer.pane.adapter || still.pane.id !== typer.pane.id) return noAnswer()
     // A prompt open in the terminal takes what is typed as its answer: Enter there would allow what the dial only shows,
     // as the core never types into a Harness pane that shows one (lib/messageHolds.ts `permission_open`).
-    if (e.agent.state === 'needs-you') return refuse('waiting', `${name} is waiting for your answer in ${hostDisplayName(e.agent.host)}.`)
+    if (e.agent.state === 'needs-you') return waiting()
     // A working turn may show a prompt not yet heard of: Codex's approval overlay, which takes `y` or Enter, has no hook, and
     // Claude Code's comes a few hundred ms after its prompt opens.
-    if (e.agent.state === 'working' || !this.idleKnown(e)) return refuse('busy', `${name} is busy. Say it when it is done.`)
+    if (e.agent.state === 'working' || !this.idleKnown(e)) return busy()
     // Recorded first: `orca terminal send` returns once the prompt is submitted, and its turn's hook can be heard before.
     const record = this.dialPrompt(e)
-    if (!await typer.adapter.type!(typer.pane, text, e.agent.engine)) {
+    const typed = await typer.adapter.type!(typer.pane, text, e.agent.engine)
+    // Only `true` was sent: a refusal is an object, and truthy.
+    if (typed !== true) {
       this.forgetDialPrompt(e, record)
-      return noAnswer()
+      if (typed === 'busy') return busy()
+      if (typed === 'waiting') return waiting()
+      if (typed === false) return noAnswer()
+      actions.count({ refused: typer.adapter })
+      return { ok: false, reason: typed.refused }
     }
     actions.count(typer.adapter)
     return { ok: true }
