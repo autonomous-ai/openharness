@@ -73,6 +73,9 @@ export class AgentNotifications {
     return { id: requestId, kind: 'needsYou' }
   }
 
+  /** A question waits on the person in this session. */
+  asking(sessionId: string): boolean { return this.questions.has(sessionId) }
+
   answered(sessionId: string, requestId: string): void {
     if (this.questions.get(sessionId) !== requestId) return
     this.questions.delete(sessionId)
