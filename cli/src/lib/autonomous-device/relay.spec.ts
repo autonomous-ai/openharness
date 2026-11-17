@@ -16,6 +16,33 @@ function fixture(store?: import('./store.js').AutonomousDeviceStore) {
   return { relay, request, send, submit, service, cancel, remoteRevoke, setRole: (r: string) => { role = r }, setIdentity: (id: string) => { identity = id }, revoke: () => { identity = null } }
 }
 describe('Autonomous device existing E2EE relay seam', () => {
+  it('holds one hello per actual client until observation is ready, replies first and fences a replaced identity', async () => {
+    const f = fixture()
+    let identity = 'trusted-device'
+    let ready!: () => void
+    const prepare = vi.fn(() => new Promise<void>(resolve => { ready = resolve }))
+    const relay = new AutonomousDeviceRelay({ sessionRole: () => 'device', sessionIdentity: () => identity,
+      unwrapDown: (_id, frame) => ({ payload: (frame.payload as { __e2e: Record<string, unknown> }).__e2e }),
+      wrapTarget: (_id, type, payload) => ({ type, payload }) }, f.send, f.service, 'machine', undefined, undefined, undefined, prepare)
+    const request = (id: string) => relay.handle('conn', { payload: { __e2e: { type: 'hello', proto: 1, requestId: id,
+      resume: { serverInstanceId: f.service.serverInstanceId, cursor: 0 } } } })
+    const first = request('first')
+    expect(f.send).not.toHaveBeenCalled()
+    await request('duplicate')
+    expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ payload: { requestId: 'duplicate', error: { code: 'HELLO_PENDING' } } })
+    expect(prepare).toHaveBeenCalledOnce()
+    f.send.mockClear()
+    f.service.commander({ type: 'commander_question', agentId: 'agent', payload: { requestId: 'q', questions: [] } })
+    ready(); await first
+    expect(f.send.mock.calls[0][1]).toMatchObject({ type: 'autonomous_device_result', payload: { type: 'hello_result', requestId: 'first' } })
+    expect(f.send.mock.calls[1][1]).toMatchObject({ type: 'autonomous_device_event', payload: { kind: 'question.open' } })
+    f.send.mockClear()
+    const replaced = request('replaced')
+    identity = 'different-device'
+    ready(); await replaced
+    expect(f.send).not.toHaveBeenCalled()
+  })
+
   it('requires existing device-role trust and encrypted payload before calling the service', async () => {
     const f = fixture(); f.setRole('web')
     await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })

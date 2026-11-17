@@ -22,8 +22,7 @@ function setup(over: Partial<QuestionDeps> = {}) {
     clients: { sendCommander: vi.fn(), sendLocal: vi.fn(), sendRemote: vi.fn() },
     agentIdFor: (sessionId) => agents.get(sessionId)?.agentId ?? sessionId,
     sessionTurnOpen: (sessionId) => sessionId === 'busy',
-    someoneCanAnswer: () => true,
-    followedByTool: () => false,
+    observed: () => true,
     input: { setUserAction: vi.fn() },
     waitOver: vi.fn(),
     ...over,
@@ -74,7 +73,7 @@ describe('questions', () => {
   // app here, its question was never looked for, and the wait read the screen itself every 3 s to see it.
   it('looks for a question on the screen of a harness a tool follows, though nobody else is here', () => {
     const followed = new Set<string>()
-    const { asking } = setup({ someoneCanAnswer: () => false, followedByTool: (agentId) => followed.has(agentId) })
+    const { asking } = setup({ observed: (agentId) => followed.has(agentId) })
     const watcher = given(asking.questionWatcher)
     expect(watcher.hasDevice('s1')).toBe(false)
     followed.add('a1')
@@ -202,6 +201,23 @@ describe('questions', () => {
     asking.openQuestions.set('cloud-a', { type: 'commander_question', agentId: 'cloud-a', payload: { requestId: 'cloud_q_1' } })
     asking.reannounceRemote()
     expect(vi.mocked(deps.clients.sendRemote).mock.calls).toEqual([[{ type: 'commander_questions_open', payload: { requestIds: [] } }]])
+  })
+
+  it('gives actual local and remote replay adapters the current owner iterator with their original audiences', () => {
+    const { asking } = setup()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    given(asking.questionWatcher).onQuestion('s1', 'pane', [{ q: 'Pane question', options: [] }])
+    const pane = asking.openQuestions.get('s1')
+    const cloud = { type: 'commander_question', agentId: 'cloud-a', payload: { requestId: 'cloud_q_1' } }
+    asking.openQuestions.set('cloud-a', cloud)
+    const local = asking.snapshot('local')
+    expect(local.next().value).toBe(pane)
+    // The iterator sees the current owner, not a copied array made before a close.
+    asking.openQuestions.delete('cloud-a')
+    expect(local.next().done).toBe(true)
+    asking.openQuestions.set('cloud-a', cloud)
+    expect([...asking.snapshot('local')]).toEqual([pane, cloud])
+    expect([...asking.snapshot('remote')]).toEqual([pane])
   })
 })
 

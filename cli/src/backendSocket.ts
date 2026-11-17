@@ -26,6 +26,7 @@ import type { WifiCore } from './core/wifi.js'
  */
 
 import { join } from 'path'
+import { randomUUID } from 'node:crypto'
 import { hostname } from 'os'
 import { env } from './config/env.js'
 import { registry, projectDisplayName, type RegisteredSession } from './lib/registry.js'
@@ -50,7 +51,8 @@ import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSaf
 import { sid, logFrame } from './lib/log.js'
 import { spreadNotice } from './lib/spreadNotice.js'
 import { eventAgentId, GUEST_REFUSALS, guestVerdict } from './core/guestPolicy.js'
-import { createToolWatches } from './core/toolWatches.js'
+import { createToolWatches, TOOL_WATCH_MAX_AGENTS } from './core/toolWatches.js'
+import { startQuestionSnapshot } from './core/questionObservation.js'
 
 export { isLocalClientId, type DownTransport }
 
@@ -81,10 +83,19 @@ const logged = (frame: Frame): boolean => env.LOG_FRAMES && !String(frame.type).
 
 export type Frame = Record<string, unknown>
 
+export type LocalSendQuota = ClientStreamQuota | { kind: 'questions' }
 export interface LocalClientSink {
-  sendFrame: (frame: Frame, quota?: ClientStreamQuota) => boolean
+  sendFrame: (frame: Frame, quota?: LocalSendQuota, settled?: (sent: boolean) => void) => boolean
   sendBinary: (frame: Uint8Array, quota?: ClientStreamQuota) => boolean
+  /** Physical transport close. Logical unregister must not retire pending sends. */
+  close?: (code: number, reason: string) => void
 }
+interface LocalQuestionObservation {
+  scope: 'all' | ReadonlySet<string>
+  generation: string
+  snapshot?: { cancel(): void }
+}
+interface LocalClient extends LocalClientSink { questionProtocol?: 1; questionObservation?: LocalQuestionObservation }
 
 export class BackendSocket {
   /** This machine's name as Harness shows it (Machines), from the backend's `machine_meta`. Null
@@ -114,7 +125,9 @@ export class BackendSocket {
   private requestGate: Promise<void> = Promise.resolve()
   /** Requests waiting at the gate, per connection: a client that floods a starting daemon is closed. */
   private readonly waitingAtGate = new Map<string, number>()
-  private readonly localClients = new Map<string, LocalClientSink>()
+  private readonly localClients = new Map<string, LocalClient>()
+  /** Exact count of implicit all-question windows, avoiding a scan of uncapped ordinary connections. */
+  private legacyQuestionWindows = 0
   /** The remote clients the gateway holds a session with, by connection: what the core reads of them
    *  synchronously (the label a terminal is named by), as the gateway last said. */
   private readonly remoteClients = new Map<string, RemoteClient>()
@@ -150,6 +163,8 @@ export class BackendSocket {
   /** An app away from this desk (the phone, a browser) gained an E2EE session: it is told again what is still
    *  being asked (core/questions.ts), as a window on this computer is when it attaches (localWsServer.ts). */
   onRemoteAppJoined: (() => void) | null = null
+  /** Current authoritative questions; a new iterator for each actual client, never a copied array. */
+  questionSnapshot: (() => IterableIterator<Frame>) | null = null
   /** Cancels an agent's turn, for the orchestrator (cli.ts binds core/turns/cancel.ts). */
   onCancel: ((sessionId: string) => void) | null = null
   /** Takes a `cancel` frame, a turn interrupted with C-c (cli.ts binds core/turns/cancel.ts). */
@@ -675,6 +690,17 @@ export class BackendSocket {
   /** One frame to every window on this computer — or, given a function, each window its own. */
   sendLocal(frame: Frame | ((connId: string) => Frame)): void {
     for (const [connId, sink] of this.localClients) {
+      if (typeof frame !== 'function' && sink.questionProtocol === 1 &&
+        (frame.type === 'commander_question' || frame.type === 'commander_question_close')) {
+        const observation = sink.questionObservation
+        if (observation && (observation.scope === 'all' || typeof frame.agentId === 'string' && observation.scope.has(frame.agentId))) {
+          this.sendQuestionObservation(connId, sink, observation, {
+            type: frame.type === 'commander_question' ? 'questions_row' : 'questions_close',
+            payload: { generation: observation.generation, question: frame },
+          })
+        }
+        continue
+      }
       if (this.toolClients.has(connId)) continue
       const sent = typeof frame === 'function' ? frame(connId) : frame
       if (logged(sent)) logFrame('→', 'local', sent)
@@ -772,14 +798,15 @@ export class BackendSocket {
   }
 
   /** Attach one authenticated loopback desktop client to the same RPC and event plane as cloud web. */
-  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean; surface?: WindowSurface; watch?: readonly 'dial'[] } = {}): boolean {
+  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean; surface?: WindowSurface; watch?: readonly 'dial'[]; questionProtocol?: 1 } = {}): boolean {
     if (!isLocalClientId(connId) || this.localClients.has(connId)) return false
     const surface = opts.surface ?? 'desktop'
     // The app holds a connection per machine and dials again on every reconnect and link retry:
     // an open is its surface going from no window to one, not each connection (5,675 "desktop opens"
     // across 68 active installations on the first measured day).
     const firstOfSurface = !opts.tool && this.localWindows()[surface] === 0
-    this.localClients.set(connId, sink)
+    this.localClients.set(connId, { ...sink, questionProtocol: opts.questionProtocol })
+    if (!opts.tool && opts.questionProtocol !== 1) this.legacyQuestionWindows++
     if (opts.tool) this.toolClients.add(connId)
     else if (opts.surface === 'tui') this.tuiClients.add(connId)
     // A window is sent every dial_status already: listed too, it would be sent each one twice.
@@ -800,6 +827,78 @@ export class BackendSocket {
 
   /** A tool here follows [agentId] by what is pushed it (core/toolWatches.ts). */
   followedByTool(agentId: string): boolean { return this.toolWatches.follows(agentId) }
+
+  /** The scope belongs to real connections: windows/remote apps all, tools only what they explicitly observe. */
+  questionsObserved(agentId: string): boolean {
+    if (this.legacyQuestionWindows > 0 || this.hasRemoteApp() || this.toolWatches.follows(agentId)) return true
+    // The existing explicit-tool table is bounded to 64, even when ordinary unwatching tools are numerous.
+    for (const connId of this.toolWatches.connections()) {
+      const scope = this.localClients.get(connId)?.questionObservation?.scope
+      if (scope === 'all' || scope?.has(agentId)) return true
+    }
+    return false
+  }
+
+  private sendQuestionObservation(connId: string, client: LocalClient, observation: LocalQuestionObservation, frame: Frame,
+    settled?: (sent: boolean) => void): boolean {
+    if (this.localClients.get(connId) !== client || client.questionObservation !== observation) return false
+    let done = false
+    const finish = (sent: boolean): void => {
+      if (done) return
+      done = true
+      settled?.(sent)
+      if (!sent && this.localClients.get(connId) === client && client.questionObservation === observation) {
+        observation.snapshot?.cancel()
+        client.questionObservation = undefined
+        this.toolWatches.content(connId, false)
+        client.close?.(1013, 'QUESTION_OBSERVATION_UNAVAILABLE')
+      }
+    }
+    try {
+      const sent = client.sendFrame(frame, { kind: 'questions' }, finish)
+      if (!sent) finish(false)
+      return sent
+    } catch { finish(false); return false }
+  }
+
+  private observeQuestions(connId: string, payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void): void {
+    const client = this.localClients.get(connId)
+    if (!client) { reply({ error: 'OWNER_REQUIRED' }); return }
+    const raw = payload.scope
+    let scope: LocalQuestionObservation['scope'] | null
+    if (raw === 'all') scope = 'all'
+    else if (raw === 'none') scope = null
+    else if (Array.isArray(raw) && raw.every(id => typeof id === 'string' && id.length > 0 && id.length <= 128)) {
+      const named = new Set(raw as string[])
+      if (named.size > TOOL_WATCH_MAX_AGENTS) { reply({ error: 'TOO_MANY' }); return }
+      scope = named.size ? named : null
+    } else { reply({ error: 'BAD_REQUEST' }); return }
+    if (scope && (!this.questionSnapshot || !client.close)) { reply({ error: 'UNSUPPORTED' }); return }
+    if (!this.toolWatches.content(connId, scope !== null)) { reply({ error: 'TOO_MANY' }); return }
+    if (client.questionProtocol !== 1) {
+      client.questionProtocol = 1
+      if (!this.toolClients.has(connId)) this.legacyQuestionWindows--
+    }
+    client.questionObservation?.snapshot?.cancel()
+    client.questionObservation = undefined
+    if (!scope) { reply({ ok: true }); return }
+    const observation: LocalQuestionObservation = { scope, generation: randomUUID() }
+    client.questionObservation = observation
+    reply({ ok: true, generation: observation.generation })
+    observation.snapshot = startQuestionSnapshot({
+      generation: observation.generation,
+      rows: this.questionSnapshot!(),
+      accepts: row => scope === 'all' || typeof row.agentId === 'string' && scope.has(row.agentId),
+      current: () => this.localClients.get(connId) === client && client.questionObservation === observation,
+      send: (frame, settled) => this.sendQuestionObservation(connId, client, observation, frame, settled),
+      close: reason => {
+        if (client.questionObservation !== observation) return
+        client.questionObservation = undefined
+        this.toolWatches.content(connId, false)
+        client.close!(1013, reason)
+      },
+    })
+  }
 
   /** A service's fixed-name product counter (core/api.ts `CoreApi.count`), into the gateway's report as the socket's own. */
   countUsage(metric: ProductUsageMetric): void { this.toGateway('usage', (gateway) => gateway.usageCounter?.(metric)) }
@@ -828,7 +927,11 @@ export class BackendSocket {
 
   /** Release all connection-scoped state when the loopback WebSocket closes. */
   async unregisterLocalClient(connId: string): Promise<void> {
+    const client = this.localClients.get(connId)
+    if (!client) return
+    client.questionObservation?.snapshot?.cancel()
     if (!this.localClients.delete(connId)) return
+    if (!this.toolClients.has(connId) && client.questionProtocol !== 1) this.legacyQuestionWindows--
     if (!this.toolClients.delete(connId)) this.onLocalClient?.(connId, false)
     this.toolWatches.closed(connId)
     this.dialWatchers.delete(connId)
@@ -1159,6 +1262,11 @@ export class BackendSocket {
         // A tool follows the harnesses it names by what is pushed it (core/toolWatches.ts).
         case 'agents_watch':
           reply(type, requestId, this.toolWatches.watch(connId, this.toolClients.has(connId), payload.agentIds))
+          return
+
+        case 'questions_observe':
+          if (!local) { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
+          this.observeQuestions(connId, payload, result => reply(type, requestId, result))
           return
 
         // The conversation an agent holds, and how long it is (core/transcripts/history.ts, bound by cli.ts).

@@ -103,6 +103,7 @@ core/modelsWake.ts
 core/monitorLink.ts
 core/observedHook.ts
 core/orchestratorLink.ts
+core/questionObservation.ts
 core/questions.ts
 core/recapsLink.ts
 core/serviceHost.ts

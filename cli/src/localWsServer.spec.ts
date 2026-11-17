@@ -381,6 +381,26 @@ describe('local CLI WebSocket', () => {
     ws.close()
   })
 
+  it.each([false, true])('preserves ordinary tool replay and lets a capable observer opt out (%s)', async capable => {
+    const asked = { type: 'commander_question', agentId: 'a1', payload: { requestId: 'q_1', questions: [] } }
+    const snapshot = vi.fn(() => [asked])
+    const ws = new WebSocket(await start(new FakeBackend(), { openQuestions: snapshot }))
+    await onceOpen(ws)
+    const frames: Frame[] = []
+    const got = new Promise<void>(resolve => ws.on('message', raw => {
+      const frame = JSON.parse(raw.toString()) as Frame
+      frames.push(frame)
+      if (capable ? frame.type === 'connected' : frame.type === 'commander_questions_open') resolve()
+    }))
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, tool: true,
+      ...(capable ? { questionProtocol: 1 } : {}) } }))
+    await got
+    expect(snapshot).toHaveBeenCalledTimes(capable ? 0 : 1)
+    expect((frames[0].payload as Record<string, unknown>).questionProtocol).toBe(capable ? 1 : undefined)
+    expect(frames.map(frame => frame.type)).toEqual(capable ? ['connected'] : ['connected', 'commander_question', 'commander_questions_open'])
+    ws.close()
+  })
+
   it('consumes validated preparation UI acknowledgements locally', async () => {
     const backend = new FakeBackend(), opened = vi.fn()
     const ws = new WebSocket(await start(backend, { onDevicePrepareOpened: opened }))

@@ -13,6 +13,7 @@ import { PIPE_PROOF_HEADER } from './lib/windows/pipeAuth.js'
 import { localCredentialMatches } from './lib/localCredential.js'
 import { peerIsThisAccount, type PeerAccount } from './lib/peerAccount.js'
 import type { Frame, LocalClientSink } from './backendSocket.js'
+import { replayLegacyQuestions, questionFrameBytes, QUESTION_OBSERVATION_BYTES, QUESTION_OBSERVATION_CONNECTION_FRAMES, QUESTION_OBSERVATION_FRAMES } from './core/questionObservation.js'
 import {
   clientStreamLocalFrame,
   decodeTerminalLocal,
@@ -44,7 +45,7 @@ import { LOCAL_JSON_MAX_BYTES } from './lib/localJsonLimit.js'
 export interface LocalWsBackend {
   /** `tool`: `harness pair` or the harnessd MCP server — answered like any local client, never presence.
    *  `watch`: what a tool asked to be sent as it changes; a window is sent it anyway. */
-  registerLocalClient: (connId: string, sink: LocalClientSink, opts?: { tool?: boolean; surface?: 'tui'; watch?: readonly 'dial'[] }) => boolean
+  registerLocalClient: (connId: string, sink: LocalClientSink, opts?: { tool?: boolean; surface?: 'tui'; watch?: readonly 'dial'[]; questionProtocol?: 1 }) => boolean
   unregisterLocalClient: (connId: string) => Promise<void>
   handleLocalFrame: (connId: string, frame: Frame) => void
   handleLocalBinary: (connId: string, frame: TerminalBinaryClear, raw?: Uint8Array) => Promise<void>
@@ -113,7 +114,7 @@ export interface LocalWsServerOptions {
   onDialSettings?: (id: string, patch: Record<string, unknown>) => void
   /** Questions still waiting on the user, as the `commander_question` frames that announced them. A window
    *  that connects after one was asked is handed them, so a terminal opened late still sees who is blocked. */
-  openQuestions?: () => Frame[]
+  openQuestions?: () => Iterable<Frame>
   /** The core's end of its out-of-process services (core/serviceLinks.ts): a `machine_select` with
    *  `role: "service"` is handed here, and the connection is the service's from then on. */
   services?: {
@@ -264,6 +265,8 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
   // background terminal attachments on ANY of those connections must not overwrite that selection.
   const explicitFocusClients = new Set<string>()
   const windowSinks = new Map<string, LocalClientSink>()
+  // A separate declared class on this physical send owner, shared by all observation connections.
+  const questionBudget = { bytes: 0, frames: 0, peakBytes: 0, peakFrames: 0 }
   // The desktop reports the same desk on one connection per machine. Losing a
   // remote relay must not erase the desk while another connection still holds it.
   // Map order records the latest announcement, including a replacement socket.
@@ -333,6 +336,13 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     let chain = Promise.resolve()
     /** Set when this connection is one of the core's services, not a window. */
     let serviceLink: { receive(frame: Frame): void; receiveBinary(bytes: Uint8Array): void; closed(): void } | null = null
+    // Ownership records only: ws owns each actual write. Logical unregister never clears these callbacks.
+    const questionSends = new Set<(sent: boolean) => void>()
+    let questionFrames = 0, questionBytes = 0, questionRefusals = 0
+    ws.once('close', () => {
+      for (const settled of questionSends) settled(false)
+      if (questionFrames || questionRefusals) console.log(`[question-observation] closed · frames=${questionFrames} bytes=${questionBytes} peakBytes=${questionBudget.peakBytes} peakFrames=${questionBudget.peakFrames} refused=${questionRefusals}`)
+    })
 
     const refusedStream = (quota: ClientStreamQuota): false => {
       if (quota.direction === 'service' || quota.final) {
@@ -346,18 +356,54 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     const queued = streamQueue.connection()
     ws.once('close', () => queued.close())
     const sink: LocalClientSink = {
-      sendFrame: (frame, quota) => {
-        if (ws.readyState !== WebSocket.OPEN) return false
+      sendFrame: (frame, quota, settled) => {
+        if (ws.readyState !== WebSocket.OPEN) { settled?.(false); return false }
+        if (quota && 'kind' in quota) {
+          let bytes: number | null
+          try { bytes = questionFrameBytes(frame, QUESTION_OBSERVATION_BYTES) } catch { bytes = null }
+          if (bytes === null || questionBudget.bytes + bytes > QUESTION_OBSERVATION_BYTES ||
+            questionSends.size >= QUESTION_OBSERVATION_CONNECTION_FRAMES || questionBudget.frames >= QUESTION_OBSERVATION_FRAMES) {
+            questionRefusals++
+            const reason = bytes === null ? 'QUESTION_OBSERVATION_TOO_LARGE' : 'QUESTION_OBSERVATION_BACKPRESSURE'
+            console.warn(`[question-observation] ${reason}`)
+            close(1013, reason)
+            settled?.(false)
+            return false
+          }
+          questionBudget.bytes += bytes
+          questionBudget.frames++
+          questionBudget.peakBytes = Math.max(questionBudget.peakBytes, questionBudget.bytes)
+          questionBudget.peakFrames = Math.max(questionBudget.peakFrames, questionBudget.frames)
+          questionFrames++; questionBytes += bytes
+          let done = false
+          const finish = (sent: boolean): void => {
+            if (done) return
+            done = true
+            questionSends.delete(finish)
+            questionBudget.bytes -= bytes
+            questionBudget.frames--
+            settled?.(sent)
+          }
+          questionSends.add(finish)
+          try {
+            ws.send(JSON.stringify(frame), error => { finish(!error); if (error) close(1013, 'QUESTION_OBSERVATION_UNAVAILABLE') })
+            return true
+          } catch { finish(false); close(1013, 'QUESTION_OBSERVATION_UNAVAILABLE'); return false }
+        }
         let release: (() => void) | null | undefined
         try {
           const serialized = JSON.stringify(frame)
-          if (!quota) { ws.send(serialized); return true }
-          if (ws.bufferedAmount > CLIENT_STREAM_QUEUE_BYTES) return refusedStream(quota)
+          if (!quota) {
+            if (settled) ws.send(serialized, error => settled(!error))
+            else ws.send(serialized)
+            return true
+          }
+          if (ws.bufferedAmount > CLIENT_STREAM_QUEUE_BYTES) { settled?.(false); return refusedStream(quota) }
           release = queued.reserve(quota, Buffer.byteLength(serialized))
-          if (release === null) return refusedStream(quota)
-          ws.send(serialized, (error) => { release!(); if (error) ws.terminate() })
+          if (release === null) { settled?.(false); return refusedStream(quota) }
+          ws.send(serialized, (error) => { release!(); settled?.(!error); if (error) ws.terminate() })
           return true
-        } catch { release?.(); return false }
+        } catch { release?.(); settled?.(false); return false }
       },
       sendBinary: (frame, quota) => {
         if (ws.readyState !== WebSocket.OPEN) return false
@@ -371,12 +417,16 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
           return true
         } catch { release?.(); return false }
       },
+      close: (code, reason) => close(code, reason),
     }
     // A reading cursor belongs to this physical desk. A terminal's upstream
     // event feed cannot manufacture device gestures; only sendToWindow can.
     const terminalSink: LocalClientSink = {
       ...sink,
-      sendFrame: (frame, quota) => frame.type === 'dial_selection' || frame.type === 'dial_visit' || frame.type === 'dial_form' || sink.sendFrame(frame, quota),
+      sendFrame: (frame, quota, settled) => {
+        if (frame.type === 'dial_selection' || frame.type === 'dial_visit' || frame.type === 'dial_form') { settled?.(false); return true }
+        return sink.sendFrame(frame, quota, settled)
+      },
     }
 
     const close = (code: number, reason: string): void => {
@@ -430,7 +480,9 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         // Outside text: only names this daemon knows are kept. A window's is never read: it is sent the dial anyway.
         const watch: readonly 'dial'[] = tool && Array.isArray(payload.watch) && payload.watch.includes('dial') ? ['dial'] : []
         // `harness tui` says so; every other window is the desktop app. Each is its own presence.
-        const registration = tool ? { tool: true, watch } : payload.client === 'tui' ? { surface: 'tui' as const } : {}
+        const registration = { ...(tool ? { tool: true, watch } : payload.client === 'tui' ? { surface: 'tui' as const } : {}),
+          ...(payload.questionProtocol === 1 ? { questionProtocol: 1 as const } : {}),
+        }
         if (!options.backend.registerLocalClient(connId, terminalSink, registration)) {
           close(1011, 'local registration failed')
           return
@@ -447,20 +499,14 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             e2ee: false,
             // A tool's frame only: the window's handshake parser is shared with the relay path (below).
             ...(tool ? { features: [...LOCAL_TOOL_FEATURES] } : {}),
+            ...(payload.questionProtocol === 1 ? { questionProtocol: 1 } : {}),
           },
         })
         // Right after, not inside `connected`: the window's handshake parser is shared with the
         // relay path, and a field it does not expect is a field it has to learn to ignore. A tool that did not
         // ask for the dial is not told it.
         if (options.dialStatus && (!tool || watch.includes('dial'))) sink.sendFrame({ type: 'dial_status', payload: options.dialStatus() })
-        if (options.openQuestions) {
-          const open = options.openQuestions()
-          for (const asked of open) sink.sendFrame(asked)
-          // Then which questions are open at all, so a window that was here before (its link
-          // dropped) lets go of one answered meanwhile. Sent even when there are none.
-          const requestIds = open.map((f) => (f.payload as { requestId?: unknown } | undefined)?.requestId).filter((id): id is string => typeof id === 'string')
-          sink.sendFrame({ type: 'commander_questions_open', payload: { requestIds } })
-        }
+        if (options.openQuestions && payload.questionProtocol !== 1) replayLegacyQuestions(options.openQuestions(), frame => { sink.sendFrame(frame) })
         return
       }
       // Not this daemon's own machine — relay to backend for the other machines this same

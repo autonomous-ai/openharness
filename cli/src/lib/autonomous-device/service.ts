@@ -8,6 +8,7 @@ import type { AutonomousDeviceStore } from './store.js'
 import { DEVICE_STORE_CAPABILITIES, DeviceStoreError } from './storeContract.js'
 import { DEVICE_ADDON_CAPABILITIES, DeviceAddonError, DeviceAddons } from './addons.js'
 import { createHash, randomUUID } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import type { LiveEvent } from '../normalize.js'
 import { AgentStreams, STREAM_KINDS, STREAM_TTL_DEFAULT_SEC, STREAM_TTL_MAX_SEC, StreamRequestError, type StreamKind } from './stream.js'
 
@@ -106,7 +107,9 @@ export class AutonomousDeviceService {
   private readonly ambiguousTurns = new Set<string>()
   private readonly openTurns = new Set<string>()
   private readonly pendingStarts = new Set<string>()
-  private readonly questions = new Map<string, { requestId: string; questions: unknown; permission?: { dialog: string; resolution: 'desktop' } }>()
+  private readonly questions = new Map<string, { requestId: string; questions: unknown; permission?: { dialog: string; resolution: 'desktop' }; generation?: string }>()
+  private questionGeneration: string | null = null
+  private questionsReady = true
   private events: AutonomousDeviceFrame[] = []
   private sequence = 0
   private readonly results = new Map<string, ResultRecord>()
@@ -602,14 +605,40 @@ export class AutonomousDeviceService {
     }
     this.event(aborted ? 'turn.error' : 'turn.done', agentId, entry ? { turnId: entry.receipt.turnId, idempotencyKey: entry.receipt.idempotencyKey } : {})
   }
-  commander(frame: Record<string, unknown>): void {
+  /** Reconcile in the existing owner; incomplete generations never remove questions that were missed. */
+  beginQuestions(generation: string): void { this.questionGeneration = generation; this.questionsReady = false }
+  questionsUnavailable(): void { this.questionGeneration = null; this.questionsReady = false }
+  observeQuestion(generation: string, frame: Record<string, unknown>): void {
+    if (this.questionGeneration !== generation) return
+    if (frame.type !== 'commander_question' && frame.type !== 'commander_question_close') return
+    const payload = object(frame.payload) ? frame.payload : {}
+    // The former device card route showed Cloud choices only. This display policy stays in the component.
+    if (frame.type === 'commander_question' && typeof payload.requestId === 'string' && payload.requestId.startsWith('cloud_q_') &&
+      (!Array.isArray(payload.questions) || !payload.questions.some(question => object(question) && Array.isArray(question.options) && question.options.length))) return
+    if (frame.type === 'commander_question_close' &&
+      (typeof frame.agentId !== 'string' || this.questions.get(frame.agentId)?.requestId !== payload.requestId)) return
+    this.commander(frame, generation)
+  }
+  endQuestions(generation: string): void {
+    if (this.questionGeneration !== generation) return
+    for (const [agentId, question] of this.questions) if (question.generation !== generation) {
+      this.questions.delete(agentId)
+      this.event('question.close', agentId, { questionRequestId: question.requestId })
+    }
+    this.questionsReady = true
+  }
+  commander(frame: Record<string, unknown>, generation?: string): void {
     const agentId = typeof frame.agentId === 'string' ? frame.agentId : undefined
     const p = object(frame.payload) ? frame.payload : {}
     if (frame.type === 'commander_question' && agentId && typeof p.requestId === 'string') {
       const permission = object(p.permission) && typeof p.permission.dialog === 'string' && p.permission.resolution === 'desktop'
         ? { dialog: p.permission.dialog, resolution: 'desktop' as const } : undefined
       const metadata = permission ? { permission } : {}
-      this.questions.set(agentId, { requestId: p.requestId, questions: p.questions, ...metadata })
+      const previous = this.questions.get(agentId)
+      const replayed = generation !== undefined && previous?.requestId === p.requestId &&
+        isDeepStrictEqual(previous.questions, p.questions) && isDeepStrictEqual(previous.permission, permission)
+      this.questions.set(agentId, { requestId: p.requestId, questions: p.questions, ...metadata, ...(generation === undefined ? {} : { generation }) })
+      if (replayed) return
       const candidates = [...this.entries.values()].filter(e => e.receipt.agentId === agentId && e.consumed
         && e.receipt.serverInstanceId === this.serverInstanceId
         && !['completed', 'rejected'].includes(e.receipt.state))
@@ -683,7 +712,12 @@ export class AutonomousDeviceService {
       }
       const agent = this.options.agents().find(a => a.agentId === agentId)
       if (!agent) fail('AGENT_NOT_FOUND', 'Agent is not available on the paired machine')
-      if (type === 'status') return response({ machineId: this.options.machineId, agentId, state: agent.state, openQuestion: this.questions.get(agentId) ?? null })
+      if ((type === 'status' || type === 'question.answer') && !this.questionsReady) fail('QUESTION_STATE_UNAVAILABLE', 'Question state is reconnecting')
+      if (type === 'status') {
+        const question = this.questions.get(agentId)
+        const openQuestion = question ? { requestId: question.requestId, questions: question.questions, ...(question.permission ? { permission: question.permission } : {}) } : null
+        return response({ machineId: this.options.machineId, agentId, state: agent.state, openQuestion })
+      }
       if (type === 'recap') {
         const n = req.n ?? 3
         if (!Number.isInteger(n) || Number(n) < 1 || Number(n) > 5) fail('INVALID_REQUEST', 'n must be from 1 to 5')

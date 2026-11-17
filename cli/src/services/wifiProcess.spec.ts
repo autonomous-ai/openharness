@@ -6,11 +6,14 @@ import type { CoreApi, CorePorts, ServiceRequests, WifiPort } from '../core/api.
 import type { CoreConnection, ServiceProcessOptions } from './process.js'
 import type { WifiDeps } from './wifi.js'
 import { runWifiService } from './wifiProcess.js'
+import { observeQuestions } from '../agentClient/questions.js'
+import { env } from '../config/env.js'
 
 // The real service and the real link, as a process started by the master runs them: stood in for here.
 const real = vi.hoisted(() => ({ started: 0, options: null as ServiceProcessOptions | null }))
 vi.mock('./wifi.js', () => ({ startWifi: () => { real.started++ } }))
 vi.mock('./process.js', () => ({ runServiceProcess: (options: ServiceProcessOptions) => { real.options = options; return { stop: () => {} } } }))
+vi.mock('../agentClient/questions.js', () => ({ observeQuestions: vi.fn(() => ({ ready: Promise.resolve(), close: vi.fn() })) }))
 
 /** A Wi-Fi port that records what reached it, in order. */
 function wifiPort(machineId: string, log: string[]) {
@@ -73,6 +76,17 @@ function setup(over: { startThrows?: boolean; leavesOff?: boolean } = {}) {
 afterEach(() => vi.restoreAllMocks())
 
 describe('the Wi-Fi device in the devices\' process', () => {
+  it('opens the ordinary observation socket with the selected account machine and existing startup address', async () => {
+    const f = setup()
+    f.connect(); f.event({ kind: 'resume' })
+    await f.options().requests!.wifi_http({}, { local: true, owner: true })
+    const listener = { begin: vi.fn(), question: vi.fn(), end: vi.fn(), unavailable: vi.fn() }
+    const observation = f.adapter().observeQuestions!(listener)
+    await observation.ready
+    expect(observeQuestions).toHaveBeenCalledWith({ dataDir: '/data', port: env.PORT, machineId: 'machine-1' }, listener)
+    observation.close()
+  })
+
   it('delivers only validated shared input facts and current agent lifecycle notices', async () => {
     const f = setup()
     f.answer('input_contract', { version: 1 }); f.answer('follow_agents', { agents: [] })

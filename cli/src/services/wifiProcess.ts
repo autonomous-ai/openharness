@@ -17,6 +17,8 @@ import { processCoreApi } from './processCoreApi.js'
 import { startWifi } from './wifi.js'
 import { inputIn } from './turnsLink.js'
 import { followLink } from './followLink.js'
+import { observeQuestions } from '../agentClient/questions.js'
+import { env } from '../config/env.js'
 
 export interface WifiServiceOptions {
   dataDir: string
@@ -153,7 +155,9 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     const ports: CorePorts = emptyPorts()
     let requests: ServiceRequests
     try {
-      requests = (options.start ?? startWifi)(api(machineId), ports, { submit, cancel })
+      requests = (options.start ?? startWifi)(api(machineId), ports, { submit, cancel,
+        observeQuestions: listener => observeQuestions({ dataDir: options.dataDir, port: env.PORT, machineId }, listener),
+      })
     } catch (error) {
       console.warn(`[wifi] did not start · ${error instanceof Error ? error.message : String(error)}`)
       return null

@@ -13,6 +13,48 @@ function fixture(now?: () => number, fullAnswer?: string) {
 }
 
 describe('Autonomous device local-agent service', () => {
+  it('reconciles question generations in place, deduplicates replay and refuses stale state while disconnected', async () => {
+    const f = fixture()
+    const status = () => f.service.request('device', { type: 'status', requestId: randomUUID(), machineId: 'machine', agentId: 'agent' })
+    const question = { type: 'commander_question', agentId: 'agent', payload: { requestId: 'q', questions: [{ q: 'Which?' }] } }
+    f.service.beginQuestions('first')
+    f.service.observeQuestion('first', question)
+    expect(await status()).toMatchObject({ error: { code: 'QUESTION_STATE_UNAVAILABLE' } })
+    f.service.endQuestions('first')
+    expect((await status()).openQuestion).toEqual({ requestId: 'q', questions: [{ q: 'Which?' }] })
+    f.service.beginQuestions('second')
+    f.service.observeQuestion('second', question)
+    f.service.observeQuestion('second', { type: 'commander_question_close', agentId: 'agent', payload: { requestId: 'old' } })
+    f.service.endQuestions('second')
+    expect(f.events.filter(event => event.kind === 'question.open')).toHaveLength(1)
+    expect((await status()).openQuestion).toMatchObject({ requestId: 'q' })
+    f.service.questionsUnavailable()
+    expect(await status()).toMatchObject({ error: { code: 'QUESTION_STATE_UNAVAILABLE' } })
+    f.service.beginQuestions('third')
+    f.service.endQuestions('second')
+    expect(await status()).toMatchObject({ error: { code: 'QUESTION_STATE_UNAVAILABLE' } })
+    f.service.endQuestions('third')
+    expect((await status()).openQuestion).toBeNull()
+    expect(f.events.filter(event => event.kind === 'question.close')).toHaveLength(1)
+  })
+
+  it('preserves live content changes under the same question ID and deduplicates only identical replay', () => {
+    const f = fixture()
+    const question = (options: string[], permission?: Record<string, unknown>) => ({ type: 'commander_question', agentId: 'agent', payload: {
+      requestId: 'cloud_q_same', questions: [{ q: 'Select', options }], ...(permission ? { permission } : {}),
+    } })
+    f.service.beginQuestions('g')
+    f.service.observeQuestion('g', question(['A']))
+    f.service.observeQuestion('g', question(['A']))
+    f.service.observeQuestion('g', question(['B']))
+    f.service.observeQuestion('g', question(['B'], { dialog: 'Confirm?', resolution: 'desktop' }))
+    f.service.endQuestions('g')
+    f.service.beginQuestions('reconnect')
+    f.service.observeQuestion('reconnect', question(['B'], { dialog: 'Confirm?', resolution: 'desktop' }))
+    f.service.endQuestions('reconnect')
+    expect(f.events.filter(event => event.kind === 'question.open')).toHaveLength(3)
+  })
+
   it('retains only the four binding facts needed by an input receipt', async () => {
     const f = fixture()
     await f.service.request('device', f.send())

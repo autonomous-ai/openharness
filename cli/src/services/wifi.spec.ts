@@ -9,6 +9,11 @@ import { createDeviceStore } from '../lib/autonomous-device/storeRuntime.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { startWifi } from './wifi.js'
+import { observeQuestions, type QuestionListener } from '../agentClient/questions.js'
+
+vi.mock('../agentClient/questions.js', () => ({ observeQuestions: vi.fn((_where, listener: QuestionListener) => ({
+  ready: Promise.resolve().then(() => { listener.begin('fixture'); listener.end('fixture') }), close: vi.fn(),
+})) }))
 
 let dataDir: string
 beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'wifi-service-')) })
@@ -53,6 +58,150 @@ function started(over: Parameters<typeof fakeCore>[0] = {}) {
 const KEY = Buffer.alloc(32, 7).toString('base64')
 
 describe('the Wi-Fi device, with the dials', () => {
+  it('bounds failed observation reconnects and never retries input effects', async () => {
+    vi.useFakeTimers()
+    const listeners: QuestionListener[] = []
+    const observe = vi.fn((listener: QuestionListener) => {
+      listeners.push(listener)
+      if (listeners.length > 1) return { ready: Promise.reject(new Error('connection lost')), close: vi.fn() }
+      listener.begin('initial'); listener.end('initial')
+      return { ready: Promise.resolve(), close: vi.fn() }
+    })
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    startWifi(core, ports, { observeQuestions: observe })
+    await ports.wifi!.resume({ sessions: [{ connId: 'c1', client }], helloed: [{ connId: 'c1', identity: client.identity }], focus: null })
+    listeners[0].unavailable('QUESTION_OBSERVATION_UNAVAILABLE')
+    await vi.advanceTimersByTimeAsync(250 + 500 + 1_000 + 2_000 + 5_000)
+    expect(observe).toHaveBeenCalledTimes(6)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(observe).toHaveBeenCalledTimes(6)
+    expect(core.turns.deliver).not.toHaveBeenCalled()
+    await ports.wifi!.stop()
+  })
+
+  it('cancels a pending reconnect on last departure and lets a real reconnect replace its timer', async () => {
+    vi.useFakeTimers()
+    const listeners: QuestionListener[] = [], close = vi.fn()
+    let service!: AutonomousDeviceService
+    const observe = vi.fn((listener: QuestionListener) => {
+      listeners.push(listener)
+      listener.begin(`g${listeners.length}`); listener.end(`g${listeners.length}`)
+      return { ready: Promise.resolve(), close }
+    })
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    startWifi(core, ports, { observeQuestions: observe, service: options => service = new AutonomousDeviceService(options) })
+    const state = { sessions: [{ connId: 'c1', client }], helloed: [{ connId: 'c1', identity: client.identity }], focus: null }
+    await ports.wifi!.resume(state)
+    listeners[0].unavailable('QUESTION_OBSERVATION_UNAVAILABLE')
+    ports.wifi!.dropped('c1')
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(observe).toHaveBeenCalledTimes(1)
+    const begin = vi.spyOn(service, 'beginQuestions'), question = vi.spyOn(service, 'observeQuestion'), end = vi.spyOn(service, 'endQuestions')
+    listeners[0].begin('stale'); listeners[0].question('stale', {}); listeners[0].end('stale'); listeners[0].unavailable('QUESTION_OBSERVATION_UNAVAILABLE')
+    expect(begin).not.toHaveBeenCalled(); expect(question).not.toHaveBeenCalled(); expect(end).not.toHaveBeenCalled()
+    await ports.wifi!.resume(state)
+    listeners[1].unavailable('QUESTION_OBSERVATION_BACKPRESSURE')
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(observe).toHaveBeenCalledTimes(2)
+    await ports.wifi!.resume(state)
+    listeners[2].unavailable('QUESTION_OBSERVATION_UNAVAILABLE')
+    await ports.wifi!.resume(state)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(observe).toHaveBeenCalledTimes(4)
+    await ports.wifi!.stop()
+  })
+
+  it('shares pending readiness across clients and ignores completion after the component stops', async () => {
+    let done!: () => void, listener!: QuestionListener, service!: AutonomousDeviceService
+    const close = vi.fn(), observe = vi.fn((heard: QuestionListener) => {
+      listener = heard
+      return { ready: new Promise<void>(resolve => { done = resolve }), close }
+    })
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    startWifi(core, ports, { observeQuestions: observe, service: options => service = new AutonomousDeviceService(options) })
+    for (const connId of ['c1', 'c2']) {
+      ports.wifi!.session(connId, client)
+      const [frame, opened] = sealed({ type: 'hello', proto: 1, requestId: connId })
+      await ports.wifi!.request(connId, frame, opened)
+    }
+    expect(observe).toHaveBeenCalledOnce()
+    await ports.wifi!.stop()
+    const end = vi.spyOn(service, 'endQuestions')
+    listener.end('late'); done()
+    await vi.waitFor(() => expect(sent(core).filter(frame => frame.error?.code === 'QUESTION_STATE_UNAVAILABLE')).toHaveLength(2))
+    expect(end).not.toHaveBeenCalled()
+    expect(close).toHaveBeenCalledOnce()
+    await expect(ports.wifi!.resume({ sessions: [{ connId: 'c1', client }], helloed: [{ connId: 'c1', identity: client.identity }], focus: null })).rejects.toThrow('unavailable')
+  })
+
+  it('closes observation when its only pending hello leaves and never restores that departed audience', async () => {
+    let done!: () => void, listener!: QuestionListener
+    const close = vi.fn(), observe = vi.fn((heard: QuestionListener) => {
+      listener = heard
+      return { ready: new Promise<void>(resolve => { done = resolve }), close }
+    })
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    startWifi(core, ports, { observeQuestions: observe })
+    ports.wifi!.session('pending', client)
+    const [frame, opened] = sealed({ type: 'hello', proto: 1, requestId: 'pending' })
+    await ports.wifi!.request('pending', frame, opened)
+    expect(observe).toHaveBeenCalledOnce()
+    ports.wifi!.dropped('pending')
+    expect(close).toHaveBeenCalledOnce()
+    listener.begin('late'); listener.end('late'); done()
+    // All promise continuations from this completed fake transport run before the next turn.
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(core.wifi.joined).not.toHaveBeenCalled()
+    expect(sent(core)).toEqual([])
+    expect(vi.mocked(core.wifi.hello).mock.calls).toEqual([['pending', null]])
+    await ports.wifi!.stop()
+  })
+
+  it('refuses observation while core is absent and closes a synchronously refused observer before readiness', async () => {
+    const close = vi.fn(), observe = vi.fn((listener: QuestionListener) => {
+      listener.unavailable('QUESTION_OBSERVATION_UNSUPPORTED')
+      return { ready: Promise.reject(new Error('unsupported')), close }
+    })
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    startWifi(core, ports, { observeQuestions: observe })
+    ports.wifi!.disconnected()
+    ports.wifi!.session('c1', client)
+    const [frame, opened] = sealed({ type: 'hello', proto: 1, requestId: 'absent' })
+    await ports.wifi!.request('c1', frame, opened)
+    await vi.waitFor(() => expect(sent(core).some(frame => frame.error?.code === 'QUESTION_STATE_UNAVAILABLE')).toBe(true))
+    expect(observe).not.toHaveBeenCalled()
+    await expect(ports.wifi!.resume({ sessions: [{ connId: 'c1', client }], helloed: [{ connId: 'c1', identity: client.identity }], focus: null })).rejects.toThrow('unsupported')
+    expect(close).toHaveBeenCalledOnce()
+    expect(core.wifi.ready).not.toHaveBeenCalled()
+    await ports.wifi!.stop()
+  })
+
+  it('owns one question observer for a real device, waits for its snapshot and replaces the former question card route', async () => {
+    let listener!: QuestionListener, done!: () => void
+    const close = vi.fn()
+    const observing = vi.mocked(observeQuestions).mockImplementationOnce((_where, heard) => {
+      listener = heard
+      return { ready: new Promise<void>(resolve => { done = resolve }), close }
+    })
+    const before = observing.mock.calls.length
+    const f = started({ wifi: { view: vi.fn(async () => ({ agents: [agent, { ...agent, agentId: 'unfocused' }], store: [], hasWindow: false })) } })
+    const hello = f.hello()
+    await vi.waitFor(() => expect(observing.mock.calls.length).toBe(before + 1))
+    expect(sent(f.core).some(frame => frame.type === 'hello_result')).toBe(false)
+    listener.begin('g')
+    const question = { type: 'commander_question', agentId: 'unfocused', payload: { requestId: 'q', questions: [{ q: 'Continue?' }] } }
+    listener.question('g', question)
+    listener.end('g'); done()
+    expect(await hello).toMatchObject({ type: 'hello_result', proto: 1 })
+    const status = await f.ask({ type: 'status', machineId: 'machine-1', agentId: 'unfocused' })
+    expect(status.openQuestion).toMatchObject({ requestId: 'q' })
+    f.port.card({ ...question, payload: { requestId: 'old-route', questions: [] } })
+    expect((await f.ask({ type: 'status', machineId: 'machine-1', agentId: 'unfocused' })).openQuestion).toMatchObject({ requestId: 'q' })
+    f.port.dropped('c1')
+    expect(close).toHaveBeenCalledOnce()
+    await f.port.stop()
+  })
+
   it.each([null, { agentId: 'other', sessionId: 's1', engine: 'claude' }])('refuses input when the fresh agent read is %j', async resolved => {
     const { core, port, hello, ask } = started({ conversations: { resolve: vi.fn(async () => resolved as never) } })
     await hello()

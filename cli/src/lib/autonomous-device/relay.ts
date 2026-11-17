@@ -6,7 +6,7 @@ import { type AutonomousDeviceService, type AutonomousDeviceFrame } from './serv
 type Frame = Record<string, unknown>
 /** Application RPC over the existing relay E2EE session. No socket, identity, PAKE or trust of its own. */
 export class AutonomousDeviceRelay {
-  private readonly clients = new Map<string, { identity: string; tokens: number; at: number; active: number }>()
+  private readonly clients = new Map<string, { identity: string; tokens: number; at: number; active: number; pending?: boolean }>()
   constructor(private readonly crypto: Pick<E2eeManager, 'sessionIdentity' | 'sessionRole' | 'unwrapDown' | 'wrapTarget'>,
     private readonly send: (connId: string, frame: Frame) => void,
     private readonly service: AutonomousDeviceService, private readonly machineId: string, private readonly onReady?: () => void,
@@ -14,7 +14,9 @@ export class AutonomousDeviceRelay {
     /** Which identity's app said hello on a session, and when it left: the gateway tells such a device it was
      *  unpaired while its session still stands, which an unpairing in the gateway's process cannot wait for
      *  this relay to do (gateway/gateway.ts). Observation only. */
-    private readonly onClient?: (connId: string, identity: string | null) => void) {}
+    private readonly onClient?: (connId: string, identity: string | null) => void,
+    /** One shared component snapshot; each existing authenticated client may wait once. */
+    private readonly beforeReady?: () => Promise<void>) {}
   count(include: (connId: string) => boolean = () => true): number { return [...this.clients].filter(([id, client]) => include(id) && this.crypto.sessionIdentity(id) === client.identity && this.crypto.sessionRole(id) === 'device').length }
   connected(): boolean { return this.count() > 0 }
   private sendTo(connId: string, identity: string, type: string, payload: Frame): void {
@@ -35,7 +37,24 @@ export class AutonomousDeviceRelay {
     if (req.type === 'hello') {
       if (req.proto !== 1 || typeof req.requestId !== 'string') { reply({ type: 'hello_result', requestId: req.requestId, error: { code: 'PROTO_UNSUPPORTED', message: 'Protocol 1 required' } }); return }
       const current = this.clients.get(connId)
-      this.clients.set(connId, current?.identity === identity ? current : { identity, tokens: 20, at: Date.now(), active: 0 })
+      if (current?.identity === identity && current.pending) {
+        reply({ type: 'hello_result', requestId: req.requestId, error: { code: 'HELLO_PENDING', message: 'Hello is still connecting' } }); return
+      }
+      const client = current?.identity === identity ? current : { identity, tokens: 20, at: Date.now(), active: 0 }
+      client.pending = true
+      this.clients.set(connId, client)
+      try { if (this.beforeReady) await this.beforeReady() } catch {
+        if (this.clients.get(connId) === client) {
+          reply({ type: 'hello_result', requestId: req.requestId, error: { code: 'QUESTION_STATE_UNAVAILABLE', message: 'Question state is reconnecting' } })
+          this.drop(connId)
+        }
+        return
+      }
+      if (this.clients.get(connId) !== client || this.crypto.sessionIdentity(connId) !== identity || this.crypto.sessionRole(connId) !== 'device') {
+        if (this.clients.get(connId) === client) this.drop(connId)
+        return
+      }
+      client.pending = false
       // What it published before is cleared: it publishes its whole set again after a hello (addons.ts).
       this.service.addons.hello(identity)
       this.onClient?.(connId, identity)
@@ -46,7 +65,7 @@ export class AutonomousDeviceRelay {
       return
     }
     const client = this.clients.get(connId)
-    if (!client || client.identity !== identity) { reply({ type: `${req.type}_result`, requestId: req.requestId, error: { code: 'HELLO_REQUIRED', message: 'Send application hello first' } }); return }
+    if (!client || client.identity !== identity || client.pending) { reply({ type: `${req.type}_result`, requestId: req.requestId, error: { code: 'HELLO_REQUIRED', message: 'Send application hello first' } }); return }
     // A device deleting its local trust must say so while the authenticated channel still exists.
     // A socket close alone is deliberately only an offline signal: treating it as revocation would
     // unpair users whenever their LAN briefly drops.
@@ -80,10 +99,10 @@ export class AutonomousDeviceRelay {
   }
   /** `deviceId` set: an agent stream frame, sent to that identity's links and no other. */
   emit(event: AutonomousDeviceFrame, deviceId?: string): void {
-    for (const [connId, client] of this.clients) if (!deviceId || client.identity === deviceId) this.sendEvent(connId, client.identity, event)
+    for (const [connId, client] of this.clients) if (!client.pending && (!deviceId || client.identity === deviceId)) this.sendEvent(connId, client.identity, event)
   }
   /** The sessions whose app said hello, by connection. */
-  helloed(): string[] { return [...this.clients.keys()] }
+  helloed(): string[] { return [...this.clients].filter(([, client]) => !client.pending).map(([connId]) => connId) }
   /**
    * A session whose app said hello to this service's previous run: its process restarted, and the gateway
    * kept the session (services/wifi.ts). It is served on, and told to resync, as a hello naming the previous

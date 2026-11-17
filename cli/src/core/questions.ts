@@ -12,6 +12,7 @@ import type { SessionInputController } from '../lib/sessionInput.js'
 import { preview, sid } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { TerminalControl } from './terminals/control.js'
+import { replayLegacyQuestions } from './questionObservation.js'
 
 type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Record<string, unknown> }
 
@@ -27,10 +28,8 @@ export interface QuestionDeps {
   clients: { sendCommander(frame: Frame): void; sendLocal(frame: Frame): void; sendRemote(frame: Frame): void }
   agentIdFor: (sessionId: string) => string
   sessionTurnOpen: (sessionId: string) => boolean
-  /** Whether anyone could answer right now: a device watching, a window on this computer, or an app away. */
-  someoneCanAnswer: () => boolean
-  /** Whether an agent's `harness wait` or `watch` follows [agentId] by what is pushed it (core/toolWatches.ts). */
-  followedByTool: (agentId: string) => boolean
+  /** Real app/tool observation scopes and the existing commander/cable audience. */
+  observed: (agentId: string) => boolean
   input: Pick<SessionInputController, 'setUserAction'>
   /** The person is no longer waited on there: a question closed, or the pane read clear after a wait hook
    *  (core/turns/turnHooks.ts). */
@@ -38,7 +37,7 @@ export interface QuestionDeps {
 }
 
 export function createQuestions({
-  questionControlFor, readQuestion, resolve, terminal, acquireTerminalControl, clients, agentIdFor, sessionTurnOpen, someoneCanAnswer, followedByTool, input,
+  questionControlFor, readQuestion, resolve, terminal, acquireTerminalControl, clients, agentIdFor, sessionTurnOpen, observed, input,
   waitOver,
 }: QuestionDeps) {
   const { captureTerminal, submitTerminal, keyTerminal } = terminal
@@ -96,7 +95,7 @@ export function createQuestions({
     readQuestion,
     // A tool cannot answer, but the agent waiting on this harness tells the person: with no window, dial or app here
     // the question was never looked for, and `harness wait` read the screen itself every 3 s to find it.
-    hasDevice: (sessionId) => someoneCanAnswer() || followedByTool(agentIdFor(sessionId)),
+    hasDevice: (sessionId) => observed(agentIdFor(sessionId)),
     isDriving: (sessionId) => questions.isDriving(sessionId),
     onQuestion: (sessionId, requestId, shaped, detail) => {
       input.setUserAction(agentIdFor(sessionId), true)
@@ -163,13 +162,11 @@ export function createQuestions({
    * this computer is when it attaches (localWsServer.ts). Over the relay this reaches every app connected,
    * and each takes a question it already holds as the same wait continuing, never as news.
    */
-  const reannounceRemote = (): void => {
-    for (const asked of askedRemotely.values()) clients.sendRemote(asked)
-    const requestIds = [...askedRemotely.values()].map((asked) => (asked.payload as { requestId: string }).requestId)
-    clients.sendRemote({ type: 'commander_questions_open', payload: { requestIds } })
-  }
+  const snapshot = (audience: 'local' | 'remote'): IterableIterator<Record<string, unknown>> =>
+    audience === 'remote' ? askedRemotely.values() : openQuestions.values()
+  const reannounceRemote = (): void => replayLegacyQuestions(snapshot('remote'), frame => clients.sendRemote(frame as Frame))
   const questionResponse = createQuestionResponse(answer)
-  return { questions, showAwaitingAnswer, answer, questionResponse, openQuestions, pendingQuestion, monitorActivity, hearQuestions, questionWatcher, reannounceRemote }
+  return { questions, showAwaitingAnswer, answer, questionResponse, openQuestions, pendingQuestion, monitorActivity, hearQuestions, questionWatcher, snapshot, reannounceRemote }
 }
 
 /**

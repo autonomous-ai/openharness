@@ -1229,9 +1229,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const cableWatchingLocal = (): boolean => dialWatching
 
   const deviceIsWatching = (): boolean => backend.hasCommander() || cableWatchingLocal() || wifiCore.connected()
-  /** Anyone who can DRAW a question: a device, a cabled dial, a desktop window on this computer, or an app away
-   *  from this desk (the phone), which is sent it over the relay (core/questions.ts). */
-  const someoneCanAnswer = (): boolean => deviceIsWatching() || backend.hasLocalClient() || backend.hasRemoteApp()
+  /** Actual app/tool observation scopes, plus the existing commander and cable audiences. */
+  const questionObserved = (agentId: string): boolean => backend.hasCommander() || cableWatchingLocal() || backend.questionsObserved(agentId)
   // A page a program in a harness's pane opens (Claude Code's `/login`) goes to the phone typing there, and the
   // sign-in the phone catches comes back to the program (core/terminals/browser.ts, lib/browserShim.ts).
   const browser = createBrowser({
@@ -1540,8 +1539,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Declared further down: read when a question is shown, never now.
     agentIdFor: (sessionId) => agentIdFor(sessionId),
     sessionTurnOpen,
-    someoneCanAnswer,
-    followedByTool: (agentId) => backend.followedByTool(agentId),
+    observed: questionObserved,
     input,
     waitOver: (sessionId) => turnHooksRef?.waitOver(sessionId),
   })
@@ -1553,6 +1551,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.questionProvider = createQuestionResponse((payload) => cloud.answer(payload) ?? asking.answer(payload))
   // An app away from this desk is told what is still being asked as it connects (core/questions.ts).
   backend.onRemoteAppJoined = () => asking.reannounceRemote()
+  backend.questionSnapshot = () => asking.snapshot('local')
   const openQuestions = asking.openQuestions
   // The agents on this machine (core/agents/list.ts), in the socket's frames, with its monitor readings.
   backend.agentsProvider = createAgentList({
@@ -2478,7 +2477,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
      * holds, and that reaches the window as an ordinary `dial_status`.
      */
     onDialSettings: (id, patch) => ports.devices?.settings(id, patch),
-    openQuestions: () => [...openQuestions.values()],
+    openQuestions: () => asking.snapshot('local'),
     machineId: backend.machineId,
     backend,
     relayPool: gateway.windowRelay,

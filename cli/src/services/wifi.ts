@@ -23,6 +23,7 @@ import { DeviceResultJournal } from '../lib/autonomous-device/resultJournal.js'
 import { AutonomousDeviceService, type AutonomousDeviceFrame } from '../lib/autonomous-device/service.js'
 import { deviceRefusal, deviceRoutes } from '../lib/autonomous-device/localHttp.js'
 import { createDeviceStore } from '../lib/autonomous-device/storeRuntime.js'
+import { observeQuestions, type QuestionListener, type QuestionObservation } from '../agentClient/questions.js'
 
 export { WIFI_FALLBACKS, WIFI_REQUESTS } from '../core/api.js'
 
@@ -33,6 +34,8 @@ export interface WifiDeps {
   /** Process adapter: captures one core connection through capability probe, read and submit. */
   submit?: (agentId: string, text: string, deliveryId: string, context: (agent: AgentView) => void, current?: () => boolean) => Promise<void>
   cancel?: (deliveryId: string) => void
+  /** Same authenticated local tool transport in an external process and explicit inline mode. */
+  observeQuestions?: (listener: QuestionListener) => QuestionObservation
 }
 
 const same = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((item, i) => item === b[i])
@@ -102,6 +105,59 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
     emit: (frame, deviceId) => emit(frame, deviceId),
   }))
   if (!service) throw new Error('the Wi-Fi device service could not be started')
+  let stopped = false, coreConnected = true, questionEpoch = 0, retries = 0
+  let observation: QuestionObservation | null = null
+  let reconnect: ReturnType<typeof setTimeout> | undefined
+  const stopQuestions = (): void => {
+    questionEpoch++
+    const previous = observation
+    observation = null
+    previous?.close()
+    if (reconnect) clearTimeout(reconnect)
+    reconnect = undefined
+    retries = 0
+    service.questionsUnavailable()
+  }
+  const unavailable = (epoch: number, code: string): void => {
+    if (questionEpoch !== epoch) return
+    questionEpoch++
+    const previous = observation
+    observation = null
+    previous?.close()
+    service.questionsUnavailable()
+    console.warn('[wifi] QUESTION_OBSERVATION_UNAVAILABLE')
+    // Reconnect a lost read connection, never a prompt effect. Contract/pressure refusal needs a new hello.
+    if (relay.connected() && code === 'QUESTION_OBSERVATION_UNAVAILABLE' && retries < 5) {
+      const delay = [250, 500, 1_000, 2_000, 5_000][retries++]
+      reconnect = setTimeout(() => { reconnect = undefined; void ensureQuestions().catch(() => {}) }, delay)
+      reconnect.unref?.()
+    }
+  }
+  const ensureQuestions = (): Promise<void> => {
+    if (stopped || !coreConnected) return Promise.reject(new Error('Question observation is unavailable'))
+    if (observation) return observation.ready
+    if (reconnect) clearTimeout(reconnect)
+    reconnect = undefined
+    const epoch = ++questionEpoch
+    service.questionsUnavailable()
+    const listener: QuestionListener = {
+      begin: generation => { if (questionEpoch === epoch) service.beginQuestions(generation) },
+      question: (generation, frame) => { if (questionEpoch === epoch) service.observeQuestion(generation, frame) },
+      end: generation => { if (questionEpoch === epoch) service.endQuestions(generation) },
+      unavailable: code => unavailable(epoch, code),
+    }
+    const next = deps.observeQuestions ? deps.observeQuestions(listener) : observeQuestions({
+      dataDir: core.dataDir, port: core.daemon.port, machineId: core.daemon.machineId(),
+    }, listener)
+    const ready = next.ready.then(() => {
+      if (questionEpoch !== epoch) throw new Error('The original question observation ended')
+      retries = 0
+    })
+    if (questionEpoch === epoch) observation = { ready, close: () => next.close() }
+    else next.close()
+    void ready.catch(() => unavailable(epoch, 'QUESTION_OBSERVATION_UNAVAILABLE'))
+    return ready
+  }
   // Inline composition hears the same facts directly; a process adapter feeds the port below.
   const stopInput = deps.submit ? undefined : core.turns.onInput?.(event => port.input?.(event))
   const stopDelivery = deps.submit ? undefined : core.turns.onDelivery(event => service.delivery(event))
@@ -129,7 +185,11 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
     service, machineId,
     onReady: () => core.wifi.joined(),
     onRemoteRevoke: (identity) => core.wifi.unpaired(identity),
-    onClient: (connId, identity) => core.wifi.hello(connId, identity),
+    onClient: (connId, identity) => {
+      core.wifi.hello(connId, identity)
+      if (identity === null && !relay.connected()) stopQuestions()
+    },
+    beforeReady: ensureQuestions,
   })
   function emit(frame: AutonomousDeviceFrame, deviceId?: string): void {
     // The revision a window's delayed selection is checked against, before anything that carries it.
@@ -146,7 +206,7 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
   const port: WifiPort = {
     session: (connId, client) => {
       if (client) sessions.set(connId, client)
-      else sessions.delete(connId)
+      else { sessions.delete(connId); relay.drop(connId) }
     },
     // Answered against the agents as they are now; taken (the relay opens it before its first wait) before
     // anything the core says after it, as it was in the core's process.
@@ -160,6 +220,7 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
     dropped: (connId) => relay.drop(connId),
     revoked: (identity) => relay.revoke(identity),
     resume: async ({ sessions: held, helloed, focus }) => {
+      coreConnected = true
       sessions.clear()
       for (const { connId, client } of held) sessions.set(connId, client)
       // A session this run served that the core no longer holds (the core restarted, and the relay with it).
@@ -173,11 +234,14 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       core.wifi.focus(service.focusSnapshot().focusRevision)
       if (focus) port.appFocus(focus.machineId, focus.agentId, focus.connId).catch(() => { /* said by the move itself */ })
       await refresh()
+      const returning = helloed.filter(({ connId, identity }) => sessions.get(connId)?.identity === identity && sessions.get(connId)?.role === 'device')
+      if (returning.length) await ensureQuestions()
       for (const { connId, identity } of helloed) relay.restore(connId, identity)
       if (helloed.length) core.wifi.joined()
       core.wifi.ready()
     },
     card: (frame, text) => {
+      if (frame.type === 'commander_question' || frame.type === 'commander_question_close') return
       fullText = text
       try { service.commander(frame) } finally { fullText = undefined }
     },
@@ -198,7 +262,7 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       if (!deps.submit && !watching && service.watchesTranscript(event.agentId)) core.wifi.watching(service.transcriptWatches())
       reportTranscript(event.agentId)
     },
-    disconnected: () => service.coreDisconnected(),
+    disconnected: () => { coreConnected = false; stopQuestions(); service.coreDisconnected() },
     stream: (agentId, events) => service.stream(agentId, events),
     transcript: (agentId, sessionId, engine, line) => {
       service.observeTranscript(agentId, sessionId, engine, line)
@@ -216,7 +280,7 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       return moved
     },
     revealed: (operationId, agentId) => store.acknowledgeReveal(operationId, agentId),
-    stop: async () => { stopInput?.(); stopDelivery?.(); stopAgents?.(); store.stopUiDelivery() },
+    stop: async () => { stopped = true; stopQuestions(); stopInput?.(); stopDelivery?.(); stopAgents?.(); store.stopUiDelivery() },
   }
   store.startUiDelivery()
   ports.wifi = port

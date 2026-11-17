@@ -37,6 +37,7 @@ export function deviceRelayOverGateway(deps: {
   onReady(): void
   onRemoteRevoke(identity: string): void
   onClient(connId: string, identity: string | null): void
+  beforeReady?(): Promise<void>
 }): DeviceRelayOverGateway {
   let opened: Record<string, unknown> | null = null
   const sessions = {
@@ -47,7 +48,7 @@ export function deviceRelayOverGateway(deps: {
     wrapTarget: (connId: string, type: string, payload: Record<string, unknown>) => (deps.client(connId) ? { type, payload } : null),
   }
   const relay = new AutonomousDeviceRelay(sessions, (connId, frame) => deps.send(connId, String(frame.type), frame.payload as Record<string, unknown>),
-    deps.service, deps.machineId, deps.onReady, deps.onRemoteRevoke, deps.onClient)
+    deps.service, deps.machineId, deps.onReady, deps.onRemoteRevoke, deps.onClient, deps.beforeReady)
   return {
     handle: async (connId, frame, frameOpened) => {
       opened = frameOpened

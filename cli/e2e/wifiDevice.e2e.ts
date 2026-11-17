@@ -137,9 +137,13 @@ describe('the Wi-Fi device with the dials', () => {
     const focus = await device.nextEvent((e) => e.kind === 'focus.changed' && e.payload?.focus?.agentId === agentId, 'focus.changed', since)
     expect(focus.payload.focus).toMatchObject({ machineId: machine.machineId, agentId })
     expect((await device.ask('focus.get')).focus).toMatchObject({ agentId })
+    // No window, remote app or dial may supply question interest for this device.
+    window.close()
+    await until('the only window to close', () => window.closed || null, 10_000)
     // A question the agent asks, answered from the device: through the core, into the pane.
     const asked = device.mark()
-    window.send('message', { agentId, content: '!ask' })
+    expect(await device.ask('turn.send', { machineId: machine.machineId, agentId,
+      idempotencyKey: 'ask-without-window', text: '!ask' })).toMatchObject({ status: 'accepted' })
     const open = await device.nextEvent((e) => e.kind === 'question.open' && e.agentId === agentId, 'question.open', asked)
     const question = (open.payload.questions as Array<Record<string, any>>)[0]
     const answered = await device.ask('question.answer', { machineId: machine.machineId, agentId, idempotencyKey: 'answer-1',
