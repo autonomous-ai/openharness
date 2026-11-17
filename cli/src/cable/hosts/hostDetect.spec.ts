@@ -239,6 +239,7 @@ describe('inCmux', () => {
     cmux,
     { ...cmux, TERM_PROGRAM: 'ghostty' },
     { ...cmux, __CFBundleIdentifier: 'com.cmuxterm.app' },
+    { ...cmux, __CFBundleIdentifier: 'com.mitchellh.ghostty' },
     { CMUX_SURFACE_ID: S.toLowerCase(), CMUX_WORKSPACE_ID: W.toLowerCase() },
   ])("cmux's own terminal: %j", (hints) => {
     expect(inCmux(hints)).toBe(true)
@@ -250,6 +251,7 @@ describe('inCmux', () => {
     { CMUX_WORKSPACE_ID: W },
     ...['--help', 'x; rm -rf /', `${S}0`].map((surface) => ({ CMUX_SURFACE_ID: surface, CMUX_WORKSPACE_ID: W })),
     ...['vscode', 'WezTerm', 'tmux', 'iTerm.app'].map((program) => ({ ...cmux, TERM_PROGRAM: program })),
+    ...['com.cmuxterm.app.nightly', 'com.googlecode.iterm2'].map((bundle) => ({ ...cmux, TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: bundle })),
     ...['HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE', 'HC_TERMINAL_ID', 'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_TERMINAL_HANDLE']
       .map((own) => ({ ...cmux, [own]: '1' })),
   ])("not cmux's own terminal: %j", (hints) => {
@@ -261,6 +263,13 @@ describe('inCmux', () => {
       expect(detectHost(hints)).toBe('cmux')
       expect(detectApp(hints)).toBe('cmux')
     }
+  })
+
+  // cmux NIGHTLY sets the same variables, and a tap's link goes to the release app alone, which has no such surface.
+  it("a cmux NIGHTLY terminal is not cmux's", () => {
+    const hints = { ...cmux, TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: 'com.cmuxterm.app.nightly' }
+    expect(detectHost(hints)).not.toBe('cmux')
+    expect(detectApp(hints)).not.toBe('cmux')
   })
 
   it('a program started from a cmux terminal is its own', () => {
