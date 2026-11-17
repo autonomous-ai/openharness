@@ -119,9 +119,8 @@ export function createLaunchRequests({ describeDsh = async id => dshUnavailable(
     authority.hold(WORKSPACES_HOLD)
     return null
   }
-  const validateInstalled = async (input: CreateInput, known?: DshDescribeAnswer): Promise<{ error: string; detail: string } | null> => {
-    if (input.dsh) {
-      const installed = known ?? await describeDsh(input.dsh, input.engine)
+  const validateInstalled = async (input: CreateInput, installed: DshDescribeAnswer | undefined): Promise<{ error: string; detail: string } | null> => {
+    if (installed) {
       if (!installed.ok) return { error: installed.error, detail: installed.detail }
       if (installed.refusal) return { error: 'INVALID_DSH', detail: installed.refusal }
     }
@@ -469,9 +468,9 @@ export function createLaunchRequests({ describeDsh = async id => dshUnavailable(
         reply({ error: 'INVALID_DSH', detail: 'dsh must be an owner/name id' }); return
       }
       installed = await describeDsh(payload.dsh, engine)
-      // Formerly-named packages used their canonical ID in both launch input
-      // and v1 fingerprints. Resolve aliases without refusing a known receipt
-      // merely because the package is no longer installed.
+      // Formerly-named packages used their canonical ID in launch input and v1 fingerprints.
+      // Without that identity, receipt admission below may only replay an existing exact match;
+      // it must not persist the unresolved alias as a new request's identity.
       dsh = installed.ok ? installed.id : payload.dsh
     }
     // A first prompt is refused BEFORE any pane exists: an engine with no way to take one would
@@ -580,11 +579,21 @@ export function createLaunchRequests({ describeDsh = async id => dshUnavailable(
       const create = onCreateAgent
       try {
         const fingerprint = creationFingerprint(projectFolder ? { ...fingerprintInput, projectFolder } : fingerprintInput)
+        let knownReceipt = false
+        if (installed && !installed.ok) {
+          // Without Store, a former package name cannot be compared with its canonical receipt.
+          // Replay only a proven match; neither admit an unstable identity nor invent a conflict.
+          try { knownReceipt = receipts.has(creationId, fingerprint) }
+          catch (error) {
+            if (!(error instanceof AgentCreationReceiptError && error.code === 'CREATION_CONFLICT')) throw error
+          }
+          if (!knownReceipt) { reply({ error: installed.error, detail: installed.detail }); return }
+        }
         // A new project too, which waits for its engine as any other create does (above).
         const durableNative = !!prepareCreate && !resumeSessionId
         // A new project is refused at once for a harness or named agent it cannot have, as it always was, rather than
         // after its engine is installed and its folder made.
-        if ((!durableNative || projectFolder) && model.state !== 'ok' && !receipts.has(creationId, fingerprint)) {
+        if ((!durableNative || projectFolder) && model.state !== 'ok' && !knownReceipt && !receipts.has(creationId, fingerprint)) {
           const refusal = await validateInstalled(input, installed)
           if (refusal) { reply(refusal); return }
         }

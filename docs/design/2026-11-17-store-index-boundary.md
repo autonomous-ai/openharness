@@ -38,8 +38,9 @@ Reviewed direction: root, 2026-11-17, before implementation.
    require a coordinated quiet window and are not inferred from source size.
 5. Compatibility: public create/resume/fork frames, receipt fingerprints and runtime
    snapshots retain their formats. Alias canonicalization still precedes new
-   receipt fingerprints. Missing packages do not prevent recovery of completed
-   receipts. A supported old Store lacking the new internal description answers
+   receipt fingerprints. Matching canonical-id receipts remain recoverable after
+   package removal; a former-name retry needs Store to resolve its identity, while
+   the independent creation-status request does not. A supported old Store lacking the new internal description answers
    unavailable for an affected package request, never a plain-engine launch.
    Inline/no-master mode supplies the same port from its dynamic component load.
 6. Migration/rollback: no disk migration. Existing installed.json and runtime.json
@@ -140,3 +141,53 @@ Type checking also exited 0 (`/tmp/store-boundary-acceptance-types.log`).
 Validation is local macOS on pinned Node 24.22.2, using the existing private fixture
 setup. No native Windows/Linux or full-core acceptance is claimed here; the
 coordinator owns combined gates, integration and release.
+
+## Design: stable receipt identity while Store is unavailable
+
+A package alias must be resolved before admitting a new durable create: the
+receipt fingerprint has always used the canonical package id. If Store cannot
+establish that identity, the caller may replay an existing receipt only when the
+unchanged request fingerprint already matches. Otherwise it returns the existing
+Store refusal without admitting a receipt or claiming a changed request. When
+Store recovers, the original alias resolves to the same fingerprint and replay
+returns the original result; a genuinely changed request still conflicts.
+
+This changes no persistent schema, fingerprint, authority, cache or migration.
+An old fingerprint alone cannot prove which former package name produced it, so
+legacy alias replay while Store is down conservatively returns Store unavailable;
+`agent_create_status` remains independent of Store. Canonical-id replay still
+works when its fingerprint matches, including pending and cancelled intents.
+No alias is inferred from a current agent or substituted into an old receipt.
+
+The extra point lookup is limited to a package request whose Store description
+failed; ordinary launches and healthy package requests keep their existing work.
+No new list, scan, timer, lock or fan-out is introduced. Existing authenticated
+caller/receipt ownership, guest routing, deadlines and named Store refusal remain.
+Shared TypeScript affects macOS, Linux and Windows; local fixtures use private
+receipt folders and synthetic package names. Rollback reads the unchanged records.
+Selected evidence: actual-create red/green cases for replay, unavailable admission,
+recovery, changed input, pending/cancelled receipts; the complete launches suite,
+changed-file coverage and CLI types. Broad/native checks remain root-owned.
+
+Correction evidence on macOS x64 / Node 24.22.2: the new actual-request matrix
+failed first in nine cases, with four controls passing and 111 unrelated cases
+skipped (`/tmp/store-alias-receipt-red.log`, actual exit 1). It covered completed
+legacy/native alias replay, new legacy/native/model admission, pending/cancelled
+receipts, absent Store ports and receipt-storage errors.
+
+The first complete launches run passed 123/124; its remaining fixture assumed a
+missing package could be admitted before model resolution. It now makes the
+package available at admission and removes it during model resolution, preserving
+the intended refusal check. The next launches/golden run passed 126/126 but failed
+coverage (99% statements, 99.2% branches). Actual project requests now also prove
+revocation after description/folder waits and incompatibility before receipt
+admission. The unreachable second-description fallback in validateInstalled was
+removed: all three callers already pass their captured description.
+
+Final launches plus request-golden validation passed 129/129, with launches.ts at
+100% statements (500), branches (628), functions (45) and lines (359), actual exit
+0. Types also exited 0. Final logs are `/tmp/store-alias-receipt-green-complete.log`
+and `/tmp/store-alias-receipt-types-complete.log`; coverage is retained under
+`/tmp/store-alias-receipt-coverage-complete`. This adds no Store lookup to a healthy
+request, and no new receipt on the unavailable-identity path. Broad integrated
+coverage, native platform checks and release remain coordinator-owned.
