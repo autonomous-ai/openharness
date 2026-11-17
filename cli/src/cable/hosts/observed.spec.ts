@@ -13,7 +13,7 @@ import type { OpenTarget } from './open.js'
 import { createOrcaAdapter, type OrcaDeps } from './orca.js'
 import { createTabsAdapter, type TabApp } from './tabs.js'
 import { createTmuxAdapter } from './tmux.js'
-import type { PaneSwitch, TypeResult } from './types.js'
+import type { HostAgent, PaneSwitch, TypeResult } from './types.js'
 import { createVscodeAdapter } from './vscode.js'
 import { createWeztermAdapter } from './wezterm.js'
 
@@ -37,6 +37,8 @@ function setup(over: Partial<ObservedDeps> = {}) {
   let looks = 0
   let held: Promise<void> | undefined
   const look = async (): Promise<void> => { looks++; await held }
+  // What each busy read waits on first, as a look waits on `held`.
+  let beforeBusy: () => Promise<void> = async () => {}
   const find = vi.fn(async (wanted: ReadonlyMap<string, string>) =>
     new Map([...wanted.keys()].flatMap((id) => (externals.has(id) ? [[id, externals.get(id)!] as const] : []))))
   const deps: ObservedDeps = {
@@ -54,7 +56,10 @@ function setup(over: Partial<ObservedDeps> = {}) {
         }))
       },
       // As OpenSessions says: busy unless the owner's record reads idle.
-      busy: async (owner: { record: string }) => working.get(owner.record) !== false,
+      busy: async (owner: { record: string }) => {
+        await beforeBusy()
+        return working.get(owner.record) !== false
+      },
     } as unknown as ObservedDeps['openSessions'],
     sessionRows: { find } as unknown as ObservedDeps['sessionRows'],
     lastAnswer: async (_engine, path) => answers.get(path),
@@ -72,6 +77,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
   return {
     src, clock, gens, procs, alive, open, owners, working, externals, answers, stamps, changes, ev, find, logs,
     looks: () => looks, hold: (until: Promise<void>) => { held = until },
+    holdBusy: (wait: () => Promise<void>) => { beforeBusy = wait },
   }
 }
 
@@ -899,7 +905,7 @@ describe('ObservedSource and the app the scan learns', () => {
     found(s, 'a', 11)
     found(s, 'b', 12)
     await s.src.scanOpen()
-    expect(s.logs).toEqual(['[observed] scan · 2 found · 1 app known · 0 named · 7 ms'])
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 1 app known · 0 named · 0 answered · 7 ms'])
     for (const word of ['ghostty', 'terminal', '11', '12', '/x/', '/t/']) expect(s.logs.join('\n')).not.toContain(word)
   })
 
@@ -1075,7 +1081,7 @@ describe('ObservedSource and the name in a session\'s own record', () => {
     found(s, 'a', 11)
     await s.src.scanOpen()
     expect(s.src.list()[0].name).toBe('a')
-    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 ms'])
+    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 answered · 0 ms'])
     expect(s.logs.join('\n')).not.toContain('someone')
   })
 
@@ -1138,7 +1144,7 @@ describe('ObservedSource and the name in a session\'s own record', () => {
     found(s, 'a', 11)
     found(s, 'b', 12)
     await s.src.scanOpen()
-    expect(s.logs).toEqual(['[observed] scan · 2 found · 0 app known · 1 named · 0 ms'])
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 0 app known · 1 named · 0 answered · 0 ms'])
   })
 
   it('with no reader the scan names by folder', async () => {
@@ -1146,11 +1152,168 @@ describe('ObservedSource and the name in a session\'s own record', () => {
     found(s, 'a', 11)
     await s.src.scanOpen()
     expect(s.src.list()[0].name).toBe('a')
-    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 ms'])
+    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 answered · 0 ms'])
   })
 })
 
-const HANDLE = 'term_0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b'
+describe('ObservedSource and the last answer the scan reads', () => {
+  /** A session found open in a terminal and idle, its owner `pid`, its record its session id. */
+  const found = (
+    s: ReturnType<typeof setup>, sessionId: string, pid: number, engine = 'claude',
+    transcriptPath: string | null = `/t/${sessionId}.jsonl`,
+  ): void => {
+    s.open.set(sessionId, 'terminal')
+    s.owners.set(sessionId, { pid, engine })
+    s.externals.set(sessionId, { cwd: `/x/${sessionId}`, transcriptPath })
+    s.working.set(sessionId, false)
+  }
+
+  it('a Claude session the scan lists idle reads its last answer, cut at 300 code points', async () => {
+    const s = setup()
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    s.answers.set('/t/a.jsonl', 'Done: 3 files')
+    s.answers.set('/t/b.jsonl', '😀'.repeat(301))
+    await s.src.scanOpen()
+    expect(s.src.list().map((a) => [a.sessionId, a.lastAnswer])).toEqual([['a', 'Done: 3 files'], ['b', `${'😀'.repeat(299)}…`]])
+  })
+
+  it('a Codex session the scan lists idle reads its last answer, once', async () => {
+    const lastAnswer = vi.fn(async (_engine: string, _path: string): Promise<string | undefined> => 'Codex says hi')
+    const s = setup({ lastAnswer })
+    found(s, 'c', 13, 'codex')
+    await s.src.scanOpen()
+    expect(lastAnswer.mock.calls).toEqual([['codex', '/t/c.jsonl']])
+    expect(s.src.list()[0]).toMatchObject({ engine: 'codex', state: 'idle', lastAnswer: 'Codex says hi' })
+    await s.src.scanOpen()
+    await s.src.scanOpen()
+    expect(lastAnswer).toHaveBeenCalledTimes(1)
+  })
+
+  it('one found in a turn is not read and reads working', async () => {
+    const lastAnswer = vi.fn(async (): Promise<string | undefined> => 'x')
+    const s = setup({ lastAnswer })
+    found(s, 'a', 11)
+    s.working.set('a', true)
+    await s.src.scanOpen()
+    expect(lastAnswer).not.toHaveBeenCalled()
+    expect(s.src.list()[0].state).toBe('working')
+    expect(s.src.list()[0].lastAnswer).toBeUndefined()
+  })
+
+  it('one with no transcript path, or of another engine, is not read', async () => {
+    const lastAnswer = vi.fn(async (): Promise<string | undefined> => 'x')
+    const s = setup({ lastAnswer })
+    found(s, 'a', 11, 'claude', null)
+    found(s, 'g', 12, 'grok')
+    await s.src.scanOpen()
+    expect(lastAnswer).not.toHaveBeenCalled()
+    expect(s.src.list().map((a) => [a.sessionId, a.state, a.lastAnswer])).toEqual([['a', 'idle', undefined], ['g', 'idle', undefined]])
+  })
+
+  it.each<[string, ObservedDeps['lastAnswer']]>([
+    ['finds no answer', async () => undefined],
+    ['finds an empty one', async () => ''],
+    ['fails', async () => { throw new Error('EACCES /Users/someone/.claude/projects/x.jsonl') }],
+  ])('a read that %s leaves no recap, still lists it, and logs no error text', async (_what, lastAnswer) => {
+    const s = setup({ lastAnswer })
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(s.src.list().map((a) => [a.sessionId, a.state, a.lastAnswer])).toEqual([['a', 'idle', undefined]])
+    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 answered · 0 ms'])
+    expect(s.logs.join('\n')).not.toContain('someone')
+  })
+
+  it('a hook heard while the answers are read wins', async () => {
+    let answer: (text: string | undefined) => void = () => {}
+    const lastAnswer = vi.fn(() => new Promise<string | undefined>((resolve) => { answer = resolve }))
+    const s = setup({ lastAnswer })
+    found(s, 'a', 11)
+    const scan = s.src.scanOpen()
+    await vi.waitFor(() => expect(lastAnswer).toHaveBeenCalled())
+    s.src.ingest(s.ev('turn-start', { sessionId: 'a', callerPid: 11, cwd: '/x/a' }))
+    answer('old answer')
+    await scan
+    expect(s.src.list()).toHaveLength(1)
+    expect(s.src.list()[0].state).toBe('working')
+    expect(s.src.list()[0].lastAnswer).toBeUndefined()
+  })
+
+  // The dial reads list() every second, and its restore marks an agent restored before reading its recap.
+  it('no reader of list() sees a session of the look half-read', async () => {
+    let releaseAnswers: () => void = () => {}
+    const answersHeld = new Promise<void>((resolve) => { releaseAnswers = resolve })
+    const lastAnswer = vi.fn(async (_engine: string, path: string): Promise<string | undefined> => {
+      await answersHeld
+      return path === '/t/a.jsonl' ? 'A done' : 'B done'
+    })
+    const s = setup({ lastAnswer })
+    let releaseBusy: () => void = () => {}
+    const busyHeld = new Promise<void>((resolve) => { releaseBusy = resolve })
+    const busy = vi.fn(() => busyHeld)
+    s.holdBusy(busy)
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    const seen: HostAgent[][] = []
+    s.changes.mockImplementation(() => { seen.push(s.src.list()) })
+    const scan = s.src.scanOpen()
+    await vi.waitFor(() => expect(busy).toHaveBeenCalled())
+    expect(s.src.list()).toEqual([])
+    releaseBusy()
+    await vi.waitFor(() => expect(lastAnswer).toHaveBeenCalled())
+    expect(s.src.list()).toEqual([])
+    releaseAnswers()
+    await scan
+    expect(s.changes).toHaveBeenCalledTimes(1)
+    expect(seen[0].map((a) => [a.sessionId, a.lastAnswer])).toEqual([['a', 'A done'], ['b', 'B done']])
+  })
+
+  it('a recap from before the dial is history: idle, not unseen, nothing told', async () => {
+    const s = setup()
+    found(s, 'a', 11)
+    s.answers.set('/t/a.jsonl', 'Done')
+    await s.src.scanOpen()
+    expect(s.src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false, lastAnswer: 'Done' })
+    expect(s.changes).toHaveBeenCalledTimes(1)
+  })
+
+  it('at most 50 answers are read a look, and none past them is listed', async () => {
+    const lastAnswer = vi.fn(async (_engine: string, path: string): Promise<string | undefined> => `answer of ${path}`)
+    const s = setup({ lastAnswer })
+    for (let i = 0; i < 51; i++) found(s, `s${i}`, 200 + i)
+    await s.src.scanOpen()
+    expect(lastAnswer).toHaveBeenCalledTimes(50)
+    expect(s.src.list()).toHaveLength(50)
+    for (const agent of s.src.list()) expect(agent.lastAnswer).toBe(`answer of /t/${agent.sessionId}.jsonl`)
+  })
+
+  it('Harness\'s own session is never read for an answer', async () => {
+    const lastAnswer = vi.fn(async (): Promise<string | undefined> => 'x')
+    const s = setup({ lastAnswer })
+    found(s, 'v', 21)
+    s.externals.set('v', { cwd: '/data/harness/voice', transcriptPath: '/t/v.jsonl' })
+    await s.src.scanOpen()
+    expect(lastAnswer).not.toHaveBeenCalled()
+    expect(s.src.list()).toEqual([])
+  })
+
+  it('the scan\'s line counts the answered ones and times every read of the look', async () => {
+    const s = setup({
+      apps: async () => { s.clock.t += 7; return new Map([[11, 'ghostty']]) },
+      recordName: async (owner) => { s.clock.t += 5; return owner.sessionId === 'a' ? 'Tho 7f3a91c2' : undefined },
+      lastAnswer: async (_engine, path) => { s.clock.t += 2; return path === '/t/a.jsonl' ? 'Done: 3 files' : undefined },
+    })
+    s.holdBusy(async () => { s.clock.t += 3 })
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    await s.src.scanOpen()
+    // 7 for the apps, 5 for each name, 3 for each busy check and 2 for each answer.
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 1 app known · 1 named · 1 answered · 27 ms'])
+    for (const word of ['Done', '/t/', 'Tho', '7f3a91c2']) expect(s.logs.join('\n')).not.toContain(word)
+  })
+})
+
+const HANDLE ='term_0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b'
 
 /** What the tests answer for the source's routes: its own, and the Orca, Claude app, Codex app and tab verbs its adapters run. */
 interface Fakes extends Omit<ObservedActions, 'adapters'> {
