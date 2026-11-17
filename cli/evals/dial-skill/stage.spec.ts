@@ -181,6 +181,14 @@ describe('stage', () => {
     expect(sh(st, 'command -v gh').status).not.toBe(0)
   })
 
+  it("keeps the real Xcode out of reach, so xcode-license-sudo's license stops the build, and git and make still run", () => {
+    const st = staging('oracle', { skill: false }, loadScenarios().find((s) => s.id === 'xcode-license-sudo')!)
+
+    expect(sh(st, '/usr/bin/xcodebuild -version').status).not.toBe(0)
+    expect(sh(st, '/usr/bin/git --version').status).toBe(0)
+    expect(sh(st, '/usr/bin/make --version').status).toBe(0)
+  })
+
   it('records a ring with its line, and prints shown', () => {
     const st = staging('claude', { skill: true })
 
