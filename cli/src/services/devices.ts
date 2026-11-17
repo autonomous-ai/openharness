@@ -745,8 +745,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (phase === 'up') stroke = undefined
     if (route === 'windows') toWindows(phase, dy, velocity)
     // Whole lines, and an up's velocity is not played: the scroll stops where the finger stops. An app that went takes
-    // nothing more of the stroke, which never turns to Harness's windows midway.
-    else route.adapter.scroll!(route.pane, route.lines.take(phase, dy))
+    // nothing more of the stroke, which never turns to Harness's windows midway, and none once the devices began to stop.
+    else if (!stopped) route.adapter.scroll!(route.pane, route.lines.take(phase, dy))
   }
 
   const cableHost = new DaemonCableHost({
