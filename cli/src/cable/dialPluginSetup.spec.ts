@@ -568,6 +568,27 @@ describe('the plugin in each Orca account\'s home', () => {
     expect(r.counted).toEqual([])
   })
 
+  // The person turned it off there before this setup reached it: theirs, as a recorded home turned off is. An entry
+  // gone is no choice: the files are shared, and a new account's settings have none.
+  it('an Orca home whose own settings turn the plugin off is recorded with no enable', async () => {
+    const [off, none] = [folder(), folder()]
+    writeFileSync(join(off, 'settings.json'), JSON.stringify({ enabledPlugins: { 'harness-device@openharness': false } }))
+    writeFileSync(join(none, 'settings.json'), JSON.stringify({ enabledPlugins: {} }))
+    const r = orcaRig([off, none])
+    await r.setup.pass()
+    expect(r.looked).toEqual([real(none)])
+    expect(r.fake.writes(real(none))).toEqual([ENABLE])
+    expect(r.state.pluginHomes).toEqual([real(off), real(none)])
+    expect(r.counted).toEqual([])
+
+    // Not saved, it waits its hour, and is still not turned on.
+    const unsaved = orcaRig([off])
+    unsaved.state.homesSave = false
+    await unsaved.setup.pass()
+    expect(unsaved.looked).toEqual([])
+    expect(unsaved.counted).toEqual([['failed', 'save']])
+  })
+
   it('an Orca home already on is recorded with no enable', async () => {
     const a = folder()
     const r = orcaRig([a])
