@@ -77,7 +77,7 @@ static const pro_ask_item_t PUSH[] = {
      true, true},
 };
 static const pro_ask_item_t DEPLOY = {"perm", "Approve Bash command: npm run deploy:staging",
-                                      {"Yes", "Yes, and don't ask again for npm run commands",
+                                      {"Yes", "Yes, and don't ask again for: npm run deploy:*",
                                        "No, and tell Claude what to do differently"}, 3, false, true};
 static const pro_ask_item_t SHOWN = {"shown", "Allow Edit of src/auth/session.ts?", {"In Orca"}, 1, false, true};
 static const pro_ask_item_t LONG_EN = {"plan", "The auth tests fail on the session table that the migration dropped. "

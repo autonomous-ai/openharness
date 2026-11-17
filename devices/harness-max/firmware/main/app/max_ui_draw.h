@@ -104,5 +104,11 @@ void max_motion(uint32_t now_ms, uint32_t ms);
 // The room: the agent `a` (NULL: an empty room that says so), its name and state, its pet over Tap to talk, its bubble
 // and its buttons. Records its buttons and Talk for the finger.
 void max_draw_room(ht_scene_t *s, const max_agent_t *a, uint32_t now_ms);
-// New Harness over the room and the lanes.
+// New Harness over the room and the lanes: its title row with Close at the right end, its choices under it. The toast
+// and the notice keep to the band above the choices, left of Close, while it is up.
+enum {
+    FORM_PAD = 26, FORM_CLOSE_W = 160,
+    FORM_HEAD_Y = MAX_CARD_Y + MAX_Y(16), FORM_CHOICES_Y = FORM_HEAD_Y + MAX_BUTTON_H + MAX_Y(16),
+    FORM_CLOSE_X = MAX_LANE_X + MAX_LANES_W - FORM_PAD - FORM_CLOSE_W,
+};
 void max_draw_form(ht_scene_t *s);

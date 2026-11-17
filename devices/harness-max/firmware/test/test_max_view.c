@@ -62,6 +62,26 @@ static bool veiled(max_box_t b)
     }
     return false;
 }
+// The navy card a word stands on (the toast's, the notice's): the smallest navy outline around it.
+static max_box_t navy_card(const ht_run_t *word)
+{
+    max_box_t best = {0, 0, 0, 0};
+    for (int i = 0; word && i < S.count; i++) {
+        const ht_run_t *r = &S.runs[i];
+        const max_box_t b = {r->x, r->y, r->w, r->pro_height};
+        if (r->pro_kind == K_RECT_AA && r->fg == ht_rgb(NAVY_EDGE) && within(ht_run_bounds(word), b) &&
+            (!best.w || b.w * b.h < best.w * best.h))
+            best = b;
+    }
+    return best;
+}
+// The box b clear of every button drawn but `except`.
+static bool clear_of_hits(max_box_t b, const max_hit_t *except)
+{
+    for (int i = 0; i < max_m.hit_count; i++)
+        if (&max_m.hits[i] != except && !apart(b, box_of(&max_m.hits[i]))) return false;
+    return true;
+}
 
 // Every run on the glass and in one column: the rail, the room (the form's sheet spans the lanes too), or the lanes.
 static void check_columns(void)
@@ -391,6 +411,66 @@ static void test_room_card(void)
     CHECK(S.count < HT_RUNS);
 }
 
+// The rows of words drawn inside the hit area h, and whether one is cut.
+static int label_rows_on(const max_hit_t *h, bool *cut)
+{
+    int n = 0;
+    for (int i = 0; i < S.count; i++) {
+        const ht_run_t *r = &S.runs[i];
+        if (r->pro_kind != K_TEXT || !within(ht_run_bounds(r), box_of(h))) continue;
+        n++;
+        if (cut && strstr(r->text, "\xe2\x80\xa6")) *cut = true;
+    }
+    return n;
+}
+
+// A permission prompt's three options, in the daemon's words at their length, on one row: its yes and its no narrow at
+// the ends, the lasting yes the widest between them, each label on at most two rows (cut when longer), all in the room.
+static void test_permission_row(void)
+{
+    static const pro_ask_item_t PROMPTS[] = {
+        {"perm", "Approve Bash command: npm run deploy:staging",
+         {"Yes", "Yes, and don't ask again for: npm run deploy:*", "No, and tell Claude what to do differently"}, 3,
+         false, true},
+        {"perm", "Approve Bash command: npm run deploy:staging",   // Claude's own words today
+         {"Yes", "Yes, and don't ask again for: npm run deploy:*", "No"}, 3, false, true},
+        {"perm", "Approve Bash command: cargo test",   // Codex's
+         {"Yes, proceed (y)", "Yes, and don't ask again for commands that start with `cargo test` (p)",
+          "No, and tell Codex what to do differently (esc)"}, 3, false, true}};
+    for (size_t p = 0; p < sizeof PROMPTS / sizeof PROMPTS[0]; p++) {
+        linked(ABCDE, 3);
+        asked("b", &PROMPTS[p], 1, true);
+        render(0);
+        const max_hit_t *yes = find_hit(MAX_HIT_OPTION, 0), *again = find_hit(MAX_HIT_OPTION, 1),
+                        *no = find_hit(MAX_HIT_OPTION, 2);
+        CHECK(yes && again && no && hits_of(MAX_HIT_OPTION) == 3);
+        CHECK(yes->y == again->y && again->y == no->y);
+        const ht_run_t *paper = NULL;   // the question's bubble over them: the row spans it
+        for (int i = 0; i < S.count; i++)
+            if (S.runs[i].pro_kind == K_RECT_AA && S.runs[i].fg == ht_rgb(PAPER) &&
+                S.runs[i].y + S.runs[i].pro_height <= yes->y)
+                paper = &S.runs[i];
+        CHECK(paper && yes->x == paper->x && no->x + no->w == paper->x + paper->w);
+        CHECK(yes->x + yes->w < again->x && again->x + again->w < no->x);
+        CHECK(again->w > yes->w && again->w > no->w);
+        check_hits(ROOM);
+        check_words();
+        CHECK(filled(box_of(yes), GREEN) && !filled(box_of(again), GREEN) && label_on(no)->fg == ht_rgb(NO_INK));
+        for (int j = 0; j < 3; j++) {
+            const int n = label_rows_on(find_hit(MAX_HIT_OPTION, j), NULL);
+            CHECK(n >= 1 && n <= 2);
+        }
+        CHECK(text_run("Permission") && text_run("Approve Bash command"));
+    }
+    // Claude's own words fit whole: Yes and No on a row each, the lasting yes on two.
+    bool cut = false;
+    linked(ABCDE, 3);
+    asked("b", &PROMPTS[1], 1, true);
+    render(0);
+    CHECK(label_rows_on(find_hit(MAX_HIT_OPTION, 0), &cut) == 1 && label_rows_on(find_hit(MAX_HIT_OPTION, 1), &cut) == 2);
+    CHECK(label_rows_on(find_hit(MAX_HIT_OPTION, 2), &cut) == 1 && !cut && text_run("npm run deploy:*"));
+}
+
 static void test_cards_without_answers(void)
 {
     linked(ABCDE, 3);
@@ -529,6 +609,15 @@ static void test_names_and_text_fit(void)
     check_words();
 }
 
+// A name the model cut ends in an ellipsis (max_copy_label); a cut right after it keeps that one, not two.
+static void test_cut_after_an_ellipsis(void)
+{
+    const char *name = "far-too-long-f\xe2\x80\xa6", *line = "far-too-long-f\xe2\x80\xa6 asks";
+    char out[ROW_BYTES];
+    max_cut(out, line, &ph_sb_22, ht_pro_width(&ph_sb_22, "far-too-long-f\xe2\x80\xa6\xe2\x80\xa6"), false);
+    CHECK(!strcmp(out, name));
+}
+
 static void test_empty_states(void)
 {
     max_ui_reset();
@@ -622,7 +711,7 @@ static void test_motion(void)
 }
 
 // New Harness: a button on the rail; the form on the toast's navy over the room and the lanes, with Say while its field
-// takes a spoken name, and Cancel and Send while one is recorded.
+// takes a spoken name, and Cancel and Send while one is recorded; a toast and a notice over none of its buttons.
 static void test_new_harness(void)
 {
     linked(ABCDE, 3);
@@ -670,12 +759,38 @@ static void test_new_harness(void)
     max_ui_voice_form("form-1", true, &page, 0);
     render(0);
     CHECK(!max_form_can_say() && !find_hit(MAX_HIT_FORM_SAY, 0) && !text_run("Say"));
-    // A question that waits: its toast over the form, the first hit, as it lies over Close.
+    // A question that waits: its toast left of Close and above the choices, over none of the form's buttons.
     touch_at(1000);
     max_ui_question("b", "r", "Deploy?", NULL, 0, false, false, 1000);
     render(1000);
-    CHECK(max_m.hits[0].kind == MAX_HIT_TOAST && find_hit(MAX_HIT_FORM_CLOSE, 0) && text_run("b asks"));
+    const max_hit_t *toast = find_hit(MAX_HIT_TOAST, 0);
+    CHECK(toast && find_hit(MAX_HIT_FORM_CLOSE, 0) && hits_of(MAX_HIT_FORM_MOVE) == 2 && text_run("b asks"));
+    const max_box_t toast_box = box_of(toast);
+    CHECK(toast_box.y >= 0 && clear_of_hits(toast_box, toast));
+    CHECK(within(ht_run_bounds(text_run("b asks")), toast_box) && within(ht_run_bounds(text_run("Deploy?")), toast_box));
     check_columns();
+    check_words();
+    // A spoken name meanwhile: the toast rests under a veil where it stands.
+    talk("", MAX_TALK_RECORDING);
+    render(1000);
+    bool veil = false;
+    for (int i = 0; i < S.count; i++)
+        veil |= S.runs[i].pro_kind == POD_VEIL && S.runs[i].x == toast_box.x && S.runs[i].y == toast_box.y &&
+                S.runs[i].w == toast_box.w && S.runs[i].pro_height == toast_box.h;
+    CHECK(veil && !find_hit(MAX_HIT_TOAST, 0));
+    talk("", MAX_TALK_IDLE);
+    // A notice too: beside the toast, over no button either; alone, in the toast's place.
+    max_ui_notice("Sent to backend", 3000, 1000);
+    render(1000);
+    const max_box_t sent = navy_card(text_run("Sent to backend"));
+    CHECK(sent.w > 0 && sent.y >= 0 && clear_of_hits(sent, NULL) && apart(sent, toast_box));
+    check_columns();
+    max_ui_notice("Not sent", 3000, 1000 + MAX_TOAST_MS);
+    render(1000 + MAX_TOAST_MS);
+    const max_box_t alone = navy_card(text_run("Not sent"));
+    CHECK(alone.w > 0 && !find_hit(MAX_HIT_TOAST, 0) && clear_of_hits(alone, NULL));
+    check_columns();
+    max_ui_notice("", 0, 0);
     // The desktop working: nothing but Close.
     take(0);
     max_form_command(MAX_FORM_ACTIVATE, 0, 0);
@@ -709,9 +824,11 @@ int main(void)
     test_talk();
     test_toast();
     test_room_card();
+    test_permission_row();
     test_cards_without_answers();
     test_lanes_say_their_state();
     test_names_and_text_fit();
+    test_cut_after_an_ellipsis();
     test_empty_states();
     test_pages_and_notice();
     test_update_screen();

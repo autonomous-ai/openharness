@@ -356,11 +356,14 @@ static void test_a_person_at_the_bar_keeps_the_room(void)
     CHECK(!strcmp(max_ui_selected(), "e"));
 }
 
+static bool ends_cut(const char *s) { const size_t n = strlen(s); return n >= 3 && !strcmp(s + n - 3, "\xe2\x80\xa6"); }
+
 static void test_caps(void)
 {
     max_ui_reset();
+    // A name longer than the cable allows ends in an ellipsis, so the screen never shows a cut word as if whole.
     max_ui_link(true, "A computer whose name is far longer than the cable allows", 0);
-    CHECK(strlen(max_m.computer) == CABLE_NAME_MAX - 1);
+    CHECK(!strcmp(max_m.computer, "A computer whose name is far longer\xe2\x80\xa6"));   // no space before the ellipsis
     // 100 x "ế" (3 bytes): every cut lands between letters.
     char viet[301];
     for (int i = 0; i < 100; i++) memcpy(viet + i * 3, "\xe1\xba\xbf", 3);
@@ -368,7 +371,7 @@ static void test_caps(void)
     const pro_agent_row_t row = {"v", viet, "claude", "m1", "MacBook Pro"};
     max_ui_agents(&row, 1, 0);
     max_agent_t *v = max_find("v");
-    CHECK(strlen(v->name) == 39 && utf8_valid(v->name));
+    CHECK(strlen(v->name) == 39 && utf8_valid(v->name) && ends_cut(v->name));
     max_ui_turn("v", "activity", viet, 1, 0);
     CHECK(strlen(v->activity) == 189 && utf8_valid(v->activity));
     max_ui_question("v", "r", viet, NULL, 0, false, false, 0);
@@ -385,11 +388,42 @@ static void test_caps(void)
     odd[sizeof odd - 1] = 0;
     const pro_agent_row_t row2 = {"w", odd, "codex", "m1", "Mac\nStudio\t1"};
     max_ui_agents(&row2, 1, 0);
-    CHECK(strlen(max_find("w")->name) == CABLE_NAME_MAX - 2 && utf8_valid(max_find("w")->name));
+    CHECK(strlen(max_find("w")->name) == CABLE_NAME_MAX - 1 && utf8_valid(max_find("w")->name) && ends_cut(max_find("w")->name));
     CHECK(!strcmp(max_find("w")->machine, "Mac Studio 1"));
+    // One that just fits is whole.
+    char fits[CABLE_NAME_MAX];
+    memset(fits, 'y', sizeof fits - 1);
+    fits[sizeof fits - 1] = 0;
+    const pro_agent_row_t row3 = {"y", fits, "codex", "m1", "Mac Studio"};
+    max_ui_agents(&row3, 1, 0);
+    CHECK(!strcmp(max_find("y")->name, fits));
+    const pro_agent_row_t row4 = {"z", "z", "codex", "m1", "A machine whose name is far longer than the cable allows"};
+    max_ui_agents(&row4, 1, 0);
+    CHECK(strlen(max_find("z")->machine) == CABLE_NAME_MAX - 1 && ends_cut(max_find("z")->machine));
     max_ui_notice("A notice far longer than the line it is shown on, which the model keeps only in part, "
                   "cut where a letter ends \xe1\xba\xbf", 1000, 0);
     CHECK(strlen(max_m.notice) < MAX_NOTICE_BYTES && utf8_valid(max_m.notice));
+}
+
+// The room's pet takes no voice while an answer is on its way or in and the computer has not closed the question.
+static void test_no_talk_while_an_answer_waits(void)
+{
+    max_ui_reset();
+    max_ui_link(true, "Mac", 0);
+    const pro_agent_row_t row = {"a", "a", "claude", "m1", "Mac"};
+    max_ui_agents(&row, 1, 0);
+    max_ui_question("a", "r1", "Which one?", NULL, 0, false, false, 0);
+    max_agent_t *a = max_find("a");
+    max_ask_t *k = max_ask_of("a");
+    CHECK(a->state == MAX_ASKING && k && max_can_talk(a));
+    k->phase = MAX_ASK_SENDING;
+    CHECK(!max_can_talk(a));
+    k->phase = MAX_ASK_SENT;
+    CHECK(!max_can_talk(a));
+    k->phase = MAX_ASK_FAILED;   // it did not go: the person may say it instead
+    CHECK(max_can_talk(a));
+    max_ui_question_close("a");
+    CHECK(max_can_talk(a));
 }
 
 static void test_elapsed_format(void)
@@ -443,6 +477,7 @@ int main(void)
     test_questions_take_the_room_oldest_first();
     test_a_person_at_the_bar_keeps_the_room();
     test_caps();
+    test_no_talk_while_an_answer_waits();
     test_elapsed_format();
     test_app_state();
     printf("test_max_model: %d checks passed\n", checks);

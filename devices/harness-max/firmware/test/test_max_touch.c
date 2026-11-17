@@ -218,6 +218,30 @@ static void test_toast_opens_its_agent(void)
     CHECK(act.kind == MAX_ACT_OPEN && !strcmp(max_ui_selected(), "b") && max_m.toast_id[0] == 0);
 }
 
+// The toast while New Harness is up: the person chose that question over the form, so the form closes (and the computer
+// is told) and the room opens the agent.
+static void test_toast_over_the_form(void)
+{
+    linked(ABCDE, 5);
+    max_ui_offers(true);
+    render(0);
+    CHECK(press(MAX_HIT_NEW, 0).kind == MAX_ACT_NEW && max_ui_form_open("form-1", 0) && take(0) == 1);
+    const pro_form_page_t page = {.title = "Project", .label = "harness-max-firmware", .detail = "", .previous = "backend",
+                                  .next = "website", .error = "", .status = "", .action = "choose", .query = "",
+                                  .revision = 7, .position = 2, .total = 5, .active = true, .enabled = true};
+    max_ui_form_state(OUT[0].fetch, "form-1", true, &page, 0);
+    max_ui_question("c", "r1", "Ok?", NULL, 0, false, false, 100);
+    CHECK(max_toast_shown(100) && !strcmp(max_ui_selected(), "a"));
+    render(100);
+    max_act_t act = press(MAX_HIT_TOAST, 0);
+    CHECK(act.kind == MAX_ACT_OPEN && !strcmp(act.agent_id, "c") && !strcmp(max_ui_selected(), "c"));
+    CHECK(!max_form_open() && max_m.toast_id[0] == 0 && max_ui_tick(100));
+    CHECK(take(100) == 1 && OUT[0].kind == MAX_OUT_FORM && OUT[0].op == MAX_FORM_CLOSE && !strcmp(OUT[0].form, "form-1"));
+    // The room shows it, its card's buttons at hand, and New Harness back on the rail.
+    render(100);
+    CHECK(!strcmp(max_m.card_id, "c") && max_m.lane_hits == 4 && find_hit(MAX_HIT_NEW, 0));
+}
+
 static void test_cancel(void)
 {
     linked(ABCDE, 5);
@@ -365,6 +389,7 @@ int main(void)
     test_talk_from_the_room();
     test_spoken_answer_moves_the_room();
     test_toast_opens_its_agent();
+    test_toast_over_the_form();
     test_cancel();
     test_drawn_lanes_are_what_a_tap_hits();
     test_card_buttons();

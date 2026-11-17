@@ -188,6 +188,8 @@ extern max_model_t max_m;
 
 // Copy src (NULL reads as "") into dst[cap]: cut on a UTF-8 code point, control characters as spaces.
 void max_copy(char *dst, size_t cap, const char *src);
+// max_copy for a name the screen shows: one that does not fit ends in an ellipsis, so a cut word never reads as whole.
+void max_copy_label(char *dst, size_t cap, const char *src);
 max_agent_t *max_find(const char *id);
 // The roster's indices in lane order: needs a person (asking, failed), then working, then the rest; roster order in
 // each group, so the order moves only when a state does. Returns the count.
@@ -226,7 +228,7 @@ void max_set_state(max_agent_t *, max_state_t st, uint32_t now_ms);
 // The toast is up: toast_id still asks, for MAX_TOAST_MS from toast_from.
 bool max_toast_shown(uint32_t now_ms);
 // The room's pet takes voice for this agent: the link is up, nothing is recorded or sent, no form is up, and the agent
-// is neither on a permission prompt (Yes or No only) nor waiting on an answer that is on its way.
+// is neither on a permission prompt (Yes or No only) nor waiting on an answer that is on its way or in.
 bool max_can_talk(const max_agent_t *);
 
 // ---- questions (max_ui_ask.c) ----

@@ -47,7 +47,12 @@ void max_cut(char out[ROW_BYTES], const char *t, const ht_pro_font_t *f, int wid
     size_t n = lo ? at[lo - 1] : 0, space = n;
     while (space && t[space] != ' ') space--;
     if (words && space > n / 2) n = space;
-    while (n && strchr(" ,;:", t[n - 1])) n--;
+    // Nor an ellipsis already there: a name the model cut ends in one (max_copy_label).
+    for (bool more = true; more;) {
+        while (n && strchr(" ,;:", t[n - 1])) n--;
+        more = n >= sizeof ELLIPSIS - 1 && !memcmp(t + n - (sizeof ELLIPSIS - 1), ELLIPSIS, sizeof ELLIPSIS - 1);
+        if (more) n -= sizeof ELLIPSIS - 1;
+    }
     memcpy(out, t, n);
     memcpy(out + n, ELLIPSIS, sizeof ELLIPSIS);
 }
@@ -409,29 +414,38 @@ static void dots(ht_scene_t *s)
 enum { TOAST_W = 680, TOAST_X = MAX_LANE_X + MAX_LANES_W - TOAST_W, TOAST_Y = 12, TOAST_H = 104, TOAST_R = 26,
        TOAST_PAD = 24, TOAST_STEP_MS = 100, BAR_H = 5, NOTICE_H = 60 };
 
-static void toast(ht_scene_t *s, uint32_t now_ms)
+// The toast's place: at the top right over the lanes; while New Harness is up, left of its Close and centred in the
+// band above its choices, so it covers none of the form's buttons.
+static max_box_t toast_box(bool form)
+{
+    if (!form) return (max_box_t){TOAST_X, TOAST_Y, TOAST_W, TOAST_H};
+    return (max_box_t){FORM_CLOSE_X - 16 - TOAST_W, (FORM_CHOICES_Y - TOAST_H) / 2, TOAST_W, TOAST_H};
+}
+
+static void toast(ht_scene_t *s, max_box_t t, uint32_t now_ms)
 {
     const max_agent_t *a = max_find(max_m.toast_id);
-    max_box(s, TOAST_X, TOAST_Y, TOAST_W, TOAST_H, TOAST_R, LINE_W, NAVY_EDGE, NAVY);
-    const int tx = TOAST_X + TOAST_PAD, tw = TOAST_W - 2 * TOAST_PAD, name_cy = TOAST_Y + 30;
+    max_box(s, t.x, t.y, t.w, t.h, TOAST_R, LINE_W, NAVY_EDGE, NAVY);
+    const int tx = t.x + TOAST_PAD, tw = t.w - 2 * TOAST_PAD, name_cy = t.y + 30;
     const int hint = max_text_right(s, tx + tw, name_cy, tw / 3, &ph_sb_22, NAVY_MUTED, "Tap to open");
     char who[CABLE_NAME_MAX + 8];
     snprintf(who, sizeof who, "%s asks", a->name);
     max_text(s, tx, name_cy, tw - hint - 24, &ph_sb_22, NAVY_NAME, who);
-    max_text(s, tx, TOAST_Y + 64, tw, &ph_sb_26, NAVY_INK, a->question);
+    max_text(s, tx, t.y + 64, tw, &ph_sb_26, NAVY_INK, a->question);
     // The bar runs out with the toast, a step every TOAST_STEP_MS.
     const uint32_t age = now_ms - max_m.toast_from, steps = (MAX_TOAST_MS - age + TOAST_STEP_MS - 1) / TOAST_STEP_MS;
     const int bw = (int)((uint32_t)tw * steps * TOAST_STEP_MS / MAX_TOAST_MS);
-    if (bw > 0) ht_pro_rect_aa(s, tx, TOAST_Y + TOAST_H - 9 - BAR_H, bw, BAR_H, BAR_H / 2, C(NAVY_BAR));
+    if (bw > 0) ht_pro_rect_aa(s, tx, t.y + t.h - 9 - BAR_H, bw, BAR_H, BAR_H / 2, C(NAVY_BAR));
     max_motion(now_ms, TOAST_STEP_MS - age % TOAST_STEP_MS);
 }
 
-static void notice(ht_scene_t *s, int y)
+// The notice ending at `right`, from y down.
+static void notice(ht_scene_t *s, int right, int y)
 {
     const ht_pro_font_t *f = &ph_sb_26;
     char row[ROW_BYTES];
     max_cut(row, max_m.notice, f, TOAST_W - 2 * TOAST_PAD, false);
-    const int tw = ht_pro_width(f, row), w = tw + 2 * TOAST_PAD, x = MAX_LANE_X + MAX_LANES_W - w;
+    const int tw = ht_pro_width(f, row), w = tw + 2 * TOAST_PAD, x = right - w;
     max_box(s, x, y, w, NOTICE_H, TOAST_R, LINE_W, NAVY_EDGE, NAVY);
     ht_pro_text(s, x + TOAST_PAD, max_top_of(f, y + NOTICE_H / 2), tw, f, C(NAVY_INK), row);
 }
@@ -475,7 +489,8 @@ void max_ui_render(ht_scene_t *s, uint32_t now_ms)
         // While a person talks the rest of the screen holds still under a veil: nothing there can change who listens.
         const bool live = max_m.talk == MAX_TALK_IDLE, form = max_form_open();
         const bool toasting = max_m.link && max_toast_shown(now_ms);
-        if (toasting && live) max_hit(TOAST_X, TOAST_Y, TOAST_W, TOAST_H, MAX_HIT_TOAST, 0);   // first: it lies over the form
+        const max_box_t t = toast_box(form);
+        if (toasting && live) max_hit(t.x, t.y, t.w, t.h, MAX_HIT_TOAST, 0);   // first: never dropped past MAX_HITS
         rail(s, live);
         if (form) {
             max_draw_form(s);
@@ -484,13 +499,17 @@ void max_ui_render(ht_scene_t *s, uint32_t now_ms)
             if (max_m.link) lanes(s, now_ms, live);
             dots(s);
         }
-        if (toasting) toast(s, now_ms);
+        if (toasting) toast(s, t, now_ms);
         if (!live) {
             dim(s, 0, 0, MAX_ROOM_X - 4, HT_HEIGHT);
             if (!form) dim(s, MAX_LANE_X - 4, 0, HT_WIDTH - MAX_LANE_X + 4, HT_HEIGHT);
-            else if (toasting) dim(s, TOAST_X, TOAST_Y, TOAST_W, TOAST_H);
+            else if (toasting) dim(s, t.x, t.y, t.w, t.h);
         }
-        if (max_notice_shown(now_ms)) notice(s, toasting ? TOAST_Y + TOAST_H + 10 : TOAST_Y);
+        if (max_notice_shown(now_ms)) {
+            // In the toast's place, or under it; while the form is up, in the band above its choices, left of the toast.
+            if (!form) notice(s, t.x + t.w, toasting ? t.y + t.h + 10 : t.y);
+            else notice(s, toasting ? t.x - 10 : t.x + t.w, t.y + (t.h - NOTICE_H) / 2);
+        }
     }
     max_m.drawn_key = max_time_key(now_ms);
 }

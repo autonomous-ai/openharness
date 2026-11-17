@@ -17,9 +17,10 @@ static max_act_t act_for(max_act_kind_t kind, const char *id)
 }
 
 // The person chose an agent (a lane, the toast): the room shows it and the computer opens it. What the toast announced
-// waits in its lane.
+// waits in its lane. New Harness, when up, closes first: it would cover the room they asked to see.
 static max_act_t open_in_room(const char *id)
 {
+    max_form_dismiss();
     max_m.toast_id[0] = 0;
     max_room_show(id);
     max_m.dirty = true;

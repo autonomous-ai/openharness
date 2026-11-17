@@ -17,8 +17,9 @@ enum {
     BODY_X = PET_X + PET_W + 22, BODY_W = MAX_ROOM_X + MAX_ROOM_W - PAD_X - BODY_X,   // 526..1036
     PILL_H = 40, PILL_Y = BODY_BOTTOM - PILL_H, PET_FOOT = PILL_Y - 16, PET_MAX_H = MAX_Y(200),
     ROOM_ROWS = 3, GRID_ROWS = 3, ONE_BUTTON_W = 200, LABEL_PAD = 12,
+    END_MIN_W = 90, END_MAX_W = 150,   // a permission prompt's yes and no: a finger's width, and the most they take
     STEP_GAP = 10,
-    SIDE_W = 280, CLOSE_W = 160, BACK_W = 180, ACTION_W = 240, SAY_W = 160, FORM_R = 34, FORM_PAD = 26,
+    SIDE_W = 280, BACK_W = 180, ACTION_W = 240, SAY_W = 160, FORM_R = 34,
 };
 static const char CHECK[] = "\xe2\x9c\x93 ";   // a chosen option of several (gen_fonts.py CONSOLE_EXTRA draws it)
 static const max_bubble_style_t SAY = {&ph_sb_32, 26, 18, 26, TAIL_LEFT};
@@ -141,8 +142,22 @@ typedef struct {
     char label[PRO_OPTION_BYTES + sizeof CHECK];
     max_style_t style;
     max_hit_kind_t kind;
-    int arg, slot;
+    int arg, x, w, row;   // where it stands: from x, w wide, in that row
 } cell_t;
+
+// A permission prompt's three options on one row (yes, the lasting yes "don't ask again for: …", no): the ends as wide
+// as their words on one row, END_MIN_W to END_MAX_W, the middle one the rest, the widest. A label longer than its
+// button takes two rows, cut after them.
+static void permission_row(cell_t c[3])
+{
+    for (int i = 0; i < 3; i += 2) {
+        const int w = ht_pro_width(LABEL, c[i].label) + 2 * LABEL_PAD;
+        c[i].w = w < END_MIN_W ? END_MIN_W : w > END_MAX_W ? END_MAX_W : w;
+    }
+    c[1].w = BODY_W - c[0].w - c[2].w - 2 * GAP;
+    c[1].x = BODY_X + c[0].w + GAP;
+    c[2].x = BODY_X + BODY_W - c[2].w;
+}
 
 static void question(ht_scene_t *s, const max_agent_t *a, const max_ask_t *k)
 {
@@ -174,14 +189,16 @@ static void question(ht_scene_t *s, const max_agent_t *a, const max_ask_t *k)
         c->arg = j;
     }
     const int options = n;
-    if (k->step) cells[n++] = (cell_t){"Back", ready ? STYLE_GHOST : STYLE_OFF, MAX_HIT_STEP_BACK, 0, 0};
+    if (k->step)
+        cells[n++] = (cell_t){.label = "Back", .style = ready ? STYLE_GHOST : STYLE_OFF, .kind = MAX_HIT_STEP_BACK};
     if (it->multi) {
-        cells[n] = (cell_t){"Send", ready && chosen ? STYLE_PRIMARY : STYLE_OFF, MAX_HIT_SEND, 0, 0};
+        cells[n] = (cell_t){.label = "Send", .style = ready && chosen ? STYLE_PRIMARY : STYLE_OFF, .kind = MAX_HIT_SEND};
         if (k->step + 1 < k->count) snprintf(cells[n].label, sizeof cells[n].label, "Next");
         n++;
     }
     // One row for up to four buttons, two for more; more rows while a label would be cut, as long as a line of the
-    // question stays over them.
+    // question stays over them. A permission prompt's three options keep one row.
+    const bool one_row = k->permission && options == 3 && n == 3;
     const int most = (BODY_BOTTOM - BODY_Y - STACK_GAP - max_bubble_h(&SAY, 1) + GAP_Y) / (MAX_BUTTON_H + GAP_Y);
     int rows = n <= 4 ? 1 : 2, cols, cell_w, label_rows;
     for (;; rows++) {
@@ -192,10 +209,14 @@ static void question(ht_scene_t *s, const max_agent_t *a, const max_ask_t *k)
             const int r = max_label_rows(cells[i].label, cell_w - 2 * LABEL_PAD);
             if (r > label_rows) label_rows = r;
         }
-        if (label_rows < 3 || rows >= GRID_ROWS || rows >= most || cols == 1) break;
+        if (one_row || label_rows < 3 || rows >= GRID_ROWS || rows >= most || cols == 1) break;
     }
     // The options from the first slot, Back and Send in the last ones: Send is always at the bottom right.
-    for (int i = 0; i < n; i++) cells[i].slot = i < options ? i : rows * cols - (n - i);
+    for (int i = 0; i < n; i++) {
+        const int slot = i < options ? i : rows * cols - (n - i);
+        cells[i].x = BODY_X + slot % cols * (cell_w + GAP), cells[i].w = cell_w, cells[i].row = slot / cols;
+    }
+    if (one_row) permission_row(cells);
     const int grid_h = rows * MAX_BUTTON_H + (rows - 1) * GAP_Y, note_h = k->note[0] ? LABEL->height : 0;
     int top = bubble(s, BUBBLE_SPEECH, prompt, grid_h + note_h, NULL);
     if (note_h) {   // what the daemon said of an answer already in
@@ -204,9 +225,9 @@ static void question(ht_scene_t *s, const max_agent_t *a, const max_ask_t *k)
     }
     for (int i = 0; i < n; i++) {
         const cell_t *c = &cells[i];
-        const int x = BODY_X + c->slot % cols * (cell_w + GAP), y = top + c->slot / cols * (MAX_BUTTON_H + GAP_Y);
-        max_button(s, x, y, cell_w, MAX_BUTTON_H, c->style, c->label);
-        if (ready && c->style != STYLE_OFF) max_hit(x, y, cell_w, MAX_BUTTON_H, c->kind, c->arg);
+        const int y = top + c->row * (MAX_BUTTON_H + GAP_Y);
+        max_button(s, c->x, y, c->w, MAX_BUTTON_H, c->style, c->label);
+        if (ready && c->style != STYLE_OFF) max_hit(c->x, y, c->w, MAX_BUTTON_H, c->kind, c->arg);
     }
 }
 
@@ -257,7 +278,10 @@ void max_draw_room(ht_scene_t *s, const max_agent_t *a, uint32_t now_ms)
     // The bubble and its buttons.
     if (talking) {
         char words[CABLE_NAME_MAX + 24];
-        snprintf(words, sizeof words, "Talking to %s\xe2\x80\xa6", a->name);
+        const size_t len = strlen(a->name);
+        // A name the model cut already ends in an ellipsis (max_copy_label): one is enough.
+        const bool cut = len >= 3 && !strcmp(a->name + len - 3, "\xe2\x80\xa6");
+        snprintf(words, sizeof words, "Talking to %s%s", a->name, cut ? "" : "\xe2\x80\xa6");
         const bool recording = max_m.talk == MAX_TALK_RECORDING;
         const int y = bubble(s, BUBBLE_YOU, words, recording ? MAX_BUTTON_H : 0, NULL);
         if (recording) pair(s, y, "Cancel", STYLE_GHOST, MAX_HIT_TALK_CANCEL, "Send", STYLE_PRIMARY, MAX_HIT_TALK_SEND);
@@ -334,17 +358,17 @@ void max_draw_form(ht_scene_t *s)
     const bool idle = live && !f->pending && !p->busy && !talking;      // and nothing in flight
 
     // The title, where in the form, and Close.
-    const int head_y = MAX_CARD_Y + MAX_Y(16), head_cy = head_y + MAX_BUTTON_H / 2;
-    max_button(s, tx + tw - CLOSE_W, head_y, CLOSE_W, MAX_BUTTON_H, talking ? STYLE_NAVY_OFF : STYLE_NAVY, "Close");
-    if (!talking) max_hit(tx + tw - CLOSE_W, head_y, CLOSE_W, MAX_BUTTON_H, MAX_HIT_FORM_CLOSE, 0);
-    const int title_w = max_text(s, tx, head_cy, tw - CLOSE_W - 240, &ph_sb_26, NAVY_INK, p->title[0] ? p->title : "New Harness");
+    const int head_y = FORM_HEAD_Y, head_cy = head_y + MAX_BUTTON_H / 2;
+    max_button(s, FORM_CLOSE_X, head_y, FORM_CLOSE_W, MAX_BUTTON_H, talking ? STYLE_NAVY_OFF : STYLE_NAVY, "Close");
+    if (!talking) max_hit(FORM_CLOSE_X, head_y, FORM_CLOSE_W, MAX_BUTTON_H, MAX_HIT_FORM_CLOSE, 0);
+    const int title_w = max_text(s, tx, head_cy, tw - FORM_CLOSE_W - 240, &ph_sb_26, NAVY_INK, p->title[0] ? p->title : "New Harness");
     char where[24] = "";
     if (p->total) snprintf(where, sizeof where, "%d / %d", (int)p->position, (int)p->total);
-    max_text(s, tx + title_w + 24, head_cy, tw - CLOSE_W - title_w - 48, LABEL, NAVY_MUTED, p->query[0] ? p->query : where);
+    max_text(s, tx + title_w + 24, head_cy, tw - FORM_CLOSE_W - title_w - 48, LABEL, NAVY_MUTED, p->query[0] ? p->query : where);
 
     // The choices: the one before, the focused one, the one after.
     const int foot_y = MAX_CARD_Y + MAX_CARD_H - MAX_Y(16) - MAX_BUTTON_H;
-    const int top = head_y + MAX_BUTTON_H + MAX_Y(16), h = foot_y - MAX_Y(16) - top;
+    const int top = FORM_CHOICES_Y, h = foot_y - MAX_Y(16) - top;
     const bool moves = live && !p->busy && !talking;
     side(s, tx, top, SIDE_W, h, "\xe2\x86\x90", p->previous, moves, -1);
     side(s, tx + tw - SIDE_W, top, SIDE_W, h, "\xe2\x86\x92", p->next, moves, 1);

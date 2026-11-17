@@ -29,6 +29,17 @@ void max_copy(char *dst, size_t cap, const char *src)
     dst[n] = 0;
 }
 
+void max_copy_label(char *dst, size_t cap, const char *src)
+{
+    static const char ELLIPSIS[] = "\xe2\x80\xa6";
+    max_copy(dst, cap, src);
+    if (!src || strlen(dst) == strlen(src) || cap <= sizeof ELLIPSIS) return;
+    max_copy(dst, cap - (sizeof ELLIPSIS - 1), src);
+    size_t n = strlen(dst);
+    while (n && dst[n - 1] == ' ') n--;
+    memcpy(dst + n, ELLIPSIS, sizeof ELLIPSIS);
+}
+
 static bool running(max_state_t st) { return st == MAX_WORKING || st == MAX_ASKING; }
 
 max_agent_t *max_find(const char *id)
@@ -254,7 +265,7 @@ bool max_ui_link(bool up, const char *machine, uint32_t now_ms)
     (void)now_ms;
     if (up) {
         char name[CABLE_NAME_MAX];
-        max_copy(name, sizeof name, machine);
+        max_copy_label(name, sizeof name, machine);
         const bool changed = !max_m.link || strcmp(max_m.computer, name);
         max_m.link = true;
         memcpy(max_m.computer, name, sizeof name);
@@ -294,10 +305,10 @@ bool max_ui_agents(const pro_agent_row_t *rows, int n, uint32_t now_ms)
             memset(a, 0, sizeof *a);
             max_copy(a->id, sizeof a->id, r->id);
         }
-        max_copy(a->name, sizeof a->name, r->name && r->name[0] ? r->name : r->id);
+        max_copy_label(a->name, sizeof a->name, r->name && r->name[0] ? r->name : r->id);
         max_copy(a->engine, sizeof a->engine, r->engine);
         max_copy(a->machine_id, sizeof a->machine_id, r->machine_id);
-        max_copy(a->machine, sizeof a->machine, r->machine);
+        max_copy_label(a->machine, sizeof a->machine, r->machine);
     }
     max_m.count = k;
     for (int i = 0; i < MAX_AGENTS; i++)   // a question goes with its agent
@@ -545,5 +556,5 @@ bool max_can_talk(const max_agent_t *a)
 {
     if (!a || !max_m.link || max_m.talk != MAX_TALK_IDLE || max_form_open()) return false;
     const max_ask_t *k = a->state == MAX_ASKING ? max_ask_of(a->id) : NULL;
-    return !k || (!k->permission && k->phase != MAX_ASK_SENDING);
+    return !k || (!k->permission && k->phase != MAX_ASK_SENDING && k->phase != MAX_ASK_SENT);
 }
