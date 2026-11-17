@@ -1,6 +1,6 @@
 import { workerEngine, workerService, workerPayload, WORKER_SERVICES, type WorkerEngine } from '../../engines/worker/protocol.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { sessionBinding } from './sessionBinding.js'
+import { captureSessionBinding } from './sessionBinding.js'
 
 export async function boundedControl<T>(work: Promise<T>, ms: number, unavailable: () => Error): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -30,10 +30,10 @@ export function createControlTransport(deps: ControlTransportDeps, contract: Con
   const bind = (registered: RegisteredSession) => {
     const engine = registered.engine
     if (!workerEngine(engine)) return undefined
-    const session = structuredClone(registered), binding = sessionBinding(registered), service = workerService(engine)
+    const session = structuredClone(registered), sameBinding = captureSessionBinding(registered), service = workerService(engine)
     const isolated = deps.handles(engine), state = states.get(service)!
     const generation = state.generation + (state.connected ? 0 : 1)
-    const sameSession = () => sessionBinding(deps.resolve(session.agentId)) === binding
+    const sameSession = () => sameBinding(deps.resolve(session.agentId))
     const current = () => sameSession() && (!isolated || (state.connected && state.generation === generation))
     const run = async <T>(ms: number, work: (allowed: () => boolean, call: (method: string, payload: Record<string, unknown>) => Promise<void>) => Promise<T>): Promise<T> => {
       if (!sameSession() || state.pending >= contract.inFlight) throw contract.unavailable()

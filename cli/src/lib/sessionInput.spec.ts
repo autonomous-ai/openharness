@@ -192,6 +192,67 @@ describe('SessionInputController', () => {
     expect(promises).toBeLessThanOrEqual(1_802)
   })
 
+  it('keeps repeated input authority checks from copying the whole binding into JSON', async () => {
+    const row = { ...session('claude'), transcriptPath: '/fixture/' + 'nested/'.repeat(250) + 'rollout.jsonl' }
+    const scope = new AsyncResource('input-binding-json-fixture'), owned = new Set([scope.asyncId()])
+    const hook = createHook({ init(id, _type, trigger) { if (owned.has(trigger)) owned.add(id) } })
+    const original = JSON.stringify
+    let bytes = 0, written = 0, taken = 0, resolveWrite!: () => void
+    const encode = vi.spyOn(JSON, 'stringify').mockImplementation((...args: Parameters<typeof JSON.stringify>) => {
+      const result = Reflect.apply(original, JSON, args) as string | undefined
+      if (result !== undefined && owned.has(executionAsyncId())) bytes += Buffer.byteLength(result)
+      return result as string
+    })
+    const input = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => row, validateRuntime: async () => true, inject: async () => true, sendKey: async () => true,
+      onError: (_id, message) => { throw new Error(message) },
+      onSubmitted: () => { written++; resolveWrite() },
+    })
+    hook.enable()
+    try {
+      await scope.runInAsyncScope(async () => {
+        for (let i = 0; i < 100; i++) {
+          const submitted = new Promise<void>(resolve => { resolveWrite = resolve })
+          input.submit('s1', 'binding fixture', undefined, outcome => { if (outcome === 'taken' || outcome === 'started') taken++ })
+          await submitted
+          input.onTurnStarted('s1', 'binding fixture')
+          input.onTurnEnded('s1')
+          await new Promise<void>(resolve => setImmediate(resolve))
+        }
+      })
+    } finally {
+      hook.disable(); encode.mockRestore(); scope.emitDestroy(); input.forget('s1')
+    }
+    expect({ written, taken }).toEqual({ written: 100, taken: 100 })
+    // The profile found repeated full-path serialization in otherwise unchanged writes. This measures
+    // public-call allocation work, not timing; the unchanged workload comparison measures CPU separately.
+    expect(bytes).toBeLessThanOrEqual(200_000)
+  })
+
+  it.each(['scalar', 'runtime', 'process', 'replacement'] as const)('refuses a pending ordinary write after a %s binding change', async change => {
+    let row = { ...session('claude'), processIdentity: { pid: 7, executable: '/fixture/claude', startMarker: 'born' } }
+    let validate!: (value: boolean) => void, checking!: () => void, rejected!: () => void
+    const started = new Promise<void>(resolve => { checking = resolve })
+    const refused = new Promise<void>(resolve => { rejected = resolve })
+    const inject = vi.fn(async () => true), onError = vi.fn(() => { rejected() })
+    const input = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => row, validateRuntime: () => { checking(); return new Promise(resolve => { validate = resolve }) },
+      inject, sendKey: async () => true, onError,
+    })
+    try {
+      input.submit('s1', 'never paste into the replacement')
+      await started
+      if (change === 'scalar') row.evidenceRevision = 1
+      else if (change === 'runtime') row.runtimes[0].paneId = '%2'
+      else if (change === 'process') row.processIdentity.startMarker = 'reused pid'
+      else row = { ...row, sessionId: 'replacement', boundAt: 9 }
+      validate(true)
+      await refused
+      expect(inject).not.toHaveBeenCalled()
+      expect(onError).toHaveBeenCalledWith('s1', 'This harness is no longer available.')
+    } finally { input.forget('s1') }
+  })
+
   it('holds a delivery while the agent works, and types it once the turn ends', async () => {
     vi.useFakeTimers()
     const typed: string[] = []

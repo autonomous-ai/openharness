@@ -2,7 +2,7 @@ import type { ScreenReader } from './screenReader.js'
 import type { SubmissionReader } from './submissionReader.js'
 import { createHash } from 'crypto'
 import { composerHolds, composerShown, normalizedTerminalText, visibleTerminal } from '../engines/kit/submission.js'
-import { launchBound, sessionBinding } from '../core/engines/sessionBinding.js'
+import { launchBound, captureSessionBinding } from '../core/engines/sessionBinding.js'
 import type { RegisteredSession } from './registry.js'
 import { sid } from './log.js'
 import { isMessageHold, messageHoldText, messageWithheldText, passingHold, type MessageHold } from './messageHolds.js'
@@ -939,13 +939,13 @@ export class SessionInputController {
       return
     }
     const typed = { ...session }
-    const binding = sessionBinding(typed)
+    const sameBinding = captureSessionBinding(typed)
     const operation: InputOperation = { request, session: typed, duringTurn: state.turnOpen,
       writing: false, dispatched: false, ...(release ? { release } : {}) }
     const current = (): boolean => {
       const now = this.controlSession(sessionId)
       return this.states.get(sessionId) === state && !(deliveryId && state.cancelled) && request.current?.() !== false && !!now
-        && (launchBound(typed, now) === now || sessionBinding(now) === binding)
+        && (launchBound(typed, now) === now || sameBinding(now))
     }
     const gone = (): void => {
       if (deliveryId && state.cancelled) return // cancellation already published its proven refusal
@@ -1153,7 +1153,7 @@ export class SessionInputController {
   private async verifyComposer(sessionId: string, state: InputState, operation: InputOperation, retry = true): Promise<void> {
     if (operation.writing) return
     const current = (): boolean => this.states.get(sessionId) === state && state.operation === operation
-      && sessionBinding(this.readingSession(operation.session)) === sessionBinding(this.controlSession(sessionId))
+      && captureSessionBinding(this.readingSession(operation.session))(this.controlSession(sessionId))
     try {
       operation.writing = true
       const capture = await this.deps.capture?.(sessionId)

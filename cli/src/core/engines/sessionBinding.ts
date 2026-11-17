@@ -1,9 +1,26 @@
 import type { RegisteredSession } from '../../lib/registry.js'
-/** Registry records can change in place while an engine answers. Retain scalar identity, never an alias. */
-export function sessionBinding(session: RegisteredSession | undefined): string {
-  return session ? JSON.stringify([session.agentId, session.sessionId, session.engine, session.active,
-    session.registeredAt, session.boundAt, session.transcriptPath, session.tmuxPane,
-    session.primaryRuntimeKey, session.runtimes, session.processIdentity, session.identityHold, session.evidenceRevision]) : ''
+
+const BINDING_FIELDS = ['agentId', 'sessionId', 'engine', 'active', 'registeredAt', 'boundAt',
+  'transcriptPath', 'tmuxPane', 'primaryRuntimeKey', 'identityHold', 'evidenceRevision'] as const
+
+/** Keep the equality of scalar values in the former JSON array, including absent and nonfinite values. */
+const scalar = (value: RegisteredSession[typeof BINDING_FIELDS[number]]) =>
+  value == null || typeof value === 'number' && !Number.isFinite(value) ? null : value
+
+/** Registry rows can change in place. Capture values once; freshly check every field at every effect.
+ * Repeated full JSON bindings copied long transcript paths on every input guard (2026-11-18 profile). */
+export function captureSessionBinding(session: RegisteredSession | undefined): (current: RegisteredSession | undefined) => boolean {
+  if (!session) return current => !current
+  const values = new Array<ReturnType<typeof scalar>>(BINDING_FIELDS.length)
+  for (let i = 0; i < BINDING_FIELDS.length; i++) values[i] = scalar(session[BINDING_FIELDS[i]])
+  const nested = JSON.stringify([session.runtimes, session.processIdentity])
+  return current => {
+    if (!current) return false
+    for (let i = 0; i < BINDING_FIELDS.length; i++) {
+      if (scalar(current[BINDING_FIELDS[i]]) !== values[i]) return false
+    }
+    return JSON.stringify([current.runtimes, current.processIdentity]) === nested
+  }
 }
 
 /**

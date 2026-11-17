@@ -3,7 +3,7 @@
  * it recorded it. Core passes plain text and keeps every verdict (lib/sessionInput.ts);
  * an answer is fenced to the session binding it was asked under and never cached.
  */
-import { sessionBinding as identity } from './sessionBinding.js'
+import { captureSessionBinding } from './sessionBinding.js'
 import type { EngineSubmission, SubmissionPolicy } from '../../engines/facets/submission.js'
 import type { AgentEngine } from '../../engines/types.js'
 import { submissionCapture, submissionText } from '../../engines/worker/submissionProtocol.js'
@@ -24,11 +24,11 @@ export interface SubmissionDeps {
 
 export function createSubmissions(deps: SubmissionDeps): SubmissionReader {
   const fenced = async <T>(session: RegisteredSession, ask: (engine: AgentEngine) => Promise<T> | T | undefined): Promise<T | null> => {
-    const key = identity(session), agentId = session.agentId
-    if (!agentId || identity(deps.resolve(agentId)) !== key) return null
+    const sameBinding = captureSessionBinding(session), agentId = session.agentId
+    if (!agentId || !sameBinding(deps.resolve(agentId))) return null
     try {
       const answer = await ask(session.engine)
-      return answer !== undefined && identity(deps.resolve(agentId)) === key ? answer : null
+      return answer !== undefined && sameBinding(deps.resolve(agentId)) ? answer : null
     } catch { return null }
   }
   return {
