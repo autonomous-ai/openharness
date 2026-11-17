@@ -94,6 +94,18 @@ void main() {
     expect(notRunning.offer.bandVisible, isFalse);
   });
 
+  // An AppNotifier built in a test without its own offer gets the real one, unsupported under test: a press must
+  // not reach the real installer or `open`.
+  test('unsupported: Install and Open do nothing', () async {
+    final fixture = _fixture(supported: false);
+    fixture.offer.dialChanged(true);
+    await fixture.offer.install();
+    await fixture.offer.open();
+    expect(fixture.install.calls, 0);
+    expect(fixture.open.paths, isEmpty);
+    expect(fixture.offer.state, DeviceAppOfferState.hidden);
+  });
+
   test('the dial coming looks once; later status frames do not', () async {
     final fixture = await _attached();
     fixture.offer
