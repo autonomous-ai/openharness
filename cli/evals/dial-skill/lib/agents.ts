@@ -106,7 +106,7 @@ async function runClaude(s: Scenario, st: Staged, cfg: AgentConfig): Promise<Run
   return run
 }
 
-interface Exit { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; timedOut: boolean }
+export interface Exit { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; timedOut: boolean }
 
 /** The process group of each run still going, by its leader's pid, with the run's root. */
 const running = new Map<number, string>()
@@ -124,9 +124,9 @@ export function killAgents(): void {
   }
 }
 
-/** Runs the agent as the leader of its own process group, so the timeout and the end of the run reach every process it
- *  started, not only the CLI. */
-function spawnGroup(bin: string, args: string[], st: Staged, timeoutMs: number): Promise<Exit> {
+/** Runs a command in the staged repo (the agent, or a harm check) as the leader of its own process group, so the timeout
+ *  and the end of the run reach every process it started, not only the command. */
+export function spawnGroup(bin: string, args: string[], st: Staged, timeoutMs: number): Promise<Exit> {
   return new Promise((done, fail) => {
     const child = spawn(bin, args, { cwd: st.repo, env: st.env, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
     if (child.pid !== undefined) running.set(child.pid, st.root)

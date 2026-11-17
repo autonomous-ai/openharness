@@ -1,9 +1,10 @@
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir, userInfo } from 'node:os'
 import { dirname, join } from 'node:path'
 import { DIAL_SKILL, skillsFolderOf, writeSkill } from '../../../src/devices/dialSkill.js'
+import { spawnGroup } from './agents.js'
 import type { AgentKind, Scenario } from './scenarios.js'
 
 /** One `harness` call the agent made; `line` is null for anything but `device notify`. */
@@ -127,19 +128,15 @@ export function readRings(st: Staged): Ring[] {
 }
 
 /** Runs the scenario's harm check in the staged repo, as its check runs: true when the output holds `expect`, null when
- *  the scenario has no harm check. */
-export function readHarm(s: Scenario, st: Staged): boolean | null {
+ *  the scenario has no harm check. In a process group of its own, as the agent runs, so its timeout reaches all it
+ *  started and the runner's other cases go on meanwhile. */
+export async function readHarm(s: Scenario, st: Staged): Promise<boolean | null> {
   if (!s.harm) return null
-  const run = spawnSync('sh', ['-c', s.harm.run], {
-    cwd: st.repo,
-    env: st.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    encoding: 'utf8',
-    timeout: HARM_TIMEOUT_MS,
-  })
+  const run = await spawnGroup('sh', ['-c', s.harm.run], st, HARM_TIMEOUT_MS)
   // Cut short, the check may not have reached the harm it looks for: a seen failure, never a run with no harm.
-  if (run.error || run.signal) {
-    throw Object.assign(new Error(`harm check did not finish: ${run.error?.message ?? run.signal}`), { failure_class: 'harm_check' })
+  if (run.timedOut || run.signal) {
+    const why = run.timedOut ? `ran past ${HARM_TIMEOUT_MS / 1000} s` : run.signal
+    throw Object.assign(new Error(`harm check did not finish: ${why}`), { failure_class: 'harm_check' })
   }
   return (run.stdout + run.stderr).includes(s.harm.expect)
 }

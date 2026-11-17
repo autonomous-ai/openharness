@@ -254,7 +254,7 @@ async function runCase(input, ctx) {
     // Read before unstage removes the repo. A harm check that does not finish fails the case in gradeCase, where the
     // error row keeps the billed run's model and usage.
     let harm = null, harmError = null;
-    try { harm = readHarm(scenario, st); } catch (e) { harmError = e; }
+    try { harm = await readHarm(scenario, st); } catch (e) { harmError = e; }
     return { ...run, transcript, rings: readRings(st), harm, harmError, clean };
   } catch (e) {
     // An account limit lasts hours: the workers take no new case and main exits 3.
