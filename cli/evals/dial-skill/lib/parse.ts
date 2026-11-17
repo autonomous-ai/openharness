@@ -29,6 +29,9 @@ interface Block { type: string; text?: string; thinking?: string; id?: string; n
 export function parseClaudeStream(jsonl: string): RunResult {
   const run: RunResult = { answer: '', transcript: [], model: null, usage: { input_tokens: 0, output_tokens: 0 }, stop_reason: null, status: 'ok', tool_calls: 0, limited: false }
   const toolNames = new Map<string, string>()
+  // The models that answered the main thread, in order: init echoes --model, not what served it, and a subagent may
+  // run on another model by design.
+  const served = new Set<string>()
   // The report shows thinking folded into the turn it led to, so it waits for that turn.
   let thinking: string | undefined
   const push = (turn: Turn): void => {
@@ -38,9 +41,10 @@ export function parseClaudeStream(jsonl: string): RunResult {
   }
 
   for (const event of events(jsonl)) {
-    if (event.type === 'system' && event.subtype === 'init') run.model = typeof event.model === 'string' ? event.model : null
-    else if (event.type === 'assistant' || event.type === 'user') {
-      const content = (event.message as { content?: unknown } | undefined)?.content
+    if (event.type === 'assistant' || event.type === 'user') {
+      const message = event.message as { content?: unknown; model?: unknown } | undefined
+      if (event.type === 'assistant' && event.parent_tool_use_id === null && typeof message?.model === 'string') served.add(message.model)
+      const content = message?.content
       const blocks: Block[] = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : []
       for (const block of blocks) {
         if (block.type === 'thinking') {
@@ -63,6 +67,8 @@ export function parseClaudeStream(jsonl: string): RunResult {
   }
   // Thinking with no turn after it still belongs in the transcript.
   if (thinking !== undefined) push({ role: 'assistant', content: '' })
+  // More than one is named so that no check of the model's prefix accepts it.
+  run.model = served.size > 1 ? `mixed: ${[...served].join(', ')}` : served.values().next().value ?? null
   return run
 }
 

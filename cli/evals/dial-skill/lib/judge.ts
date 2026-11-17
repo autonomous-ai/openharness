@@ -52,10 +52,15 @@ export function claudeJudge(cfg: { claudeBin: string; env: NodeJS.ProcessEnv; ti
     } catch {
       throw new Error(`judge printed no JSON (exit ${out.code})`)
     }
-    const model = Object.keys((result.modelUsage ?? {}) as object).join(',')
+    const models = Object.keys((result.modelUsage ?? {}) as object)
+    const model = models.join(',')
     const usage = usageOf(result.usage)
     // Worded without "rate limit", which the runner retries: an account limit lasts hours.
     if (limitedBy(result)) throw Object.assign(new Error('the Claude account limit is reached'), { failure_class: 'account_limited', judge_model: model, judge_usage: usage })
+    // Grading is Opus's judgement: a verdict any other model took part in is not one.
+    if (models.some((key) => !key.startsWith(JUDGE_MODEL))) {
+      throw Object.assign(new Error(`judge served by ${model}, not ${JUDGE_MODEL}`), { failure_class: 'serving_substitution', judge_model: model, judge_usage: usage })
+    }
     const verdict = result.structured_output as { pass?: unknown; reason?: unknown } | undefined
     if (typeof verdict?.pass !== 'boolean' || typeof verdict.reason !== 'string') {
       // The call was billed even though it gave no verdict; the errors sidecar counts this spend.
