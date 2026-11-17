@@ -48,3 +48,8 @@ tauri-build = { version = "2", features = [] }
 
 [dev-dependencies]
 tempfile = "3"
+
+# The tray's image drawn offscreen and read back (tray_macos.rs).
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSBitmapImageRep", "NSColor", "NSGraphicsContext", "NSImageRep", "objc2-core-foundation", "objc2-core-graphics"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSAffineTransform", "objc2-core-foundation"] }

@@ -10,6 +10,8 @@ use harness_device::loginitem::SystemLoginItem;
 use harness_device::runner::{Doors, Runner};
 use harness_device::state::{JsonStateFile, StateFile};
 use harness_device::tabs;
+#[cfg(target_os = "macos")]
+use harness_device::tray_macos;
 use harness_device::types::{Action, Clock, Effect, Event, Log, MenuAction, MenuItem, SystemClock, View};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -121,10 +123,15 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
             }
         })
         .build(handle)?;
+    // Desktop's dark artwork on a dark bar (tray_macos.rs).
     #[cfg(target_os = "macos")]
     tray.with_inner_tray_icon(|inner| {
-        if let Some(item) = inner.ns_status_item() {
-            draw_by_appearance(&item);
+        let button =
+            objc2::MainThreadMarker::new().zip(inner.ns_status_item()).and_then(|(main, item)| item.button(main));
+        if let Some(button) = button
+            && let Some(image) = tray_macos::image(objc2_foundation::NSSize::new(28.0, 18.0))
+        {
+            button.setImage(Some(&image));
         }
     })?;
 
@@ -246,38 +253,6 @@ fn show_about(credits: Option<&str>) {
     };
     // SAFETY: the one key is NSAboutPanelOptionCredits, with the NSAttributedString the panel takes for it.
     unsafe { app.orderFrontStandardAboutPanelWithOptions(&options) };
-}
-
-/// Desktop's status icon has a dark artwork, a solid tile with the face cut out, that AppKit picks as it draws: so on a
-/// dark bar, macOS 26's clear one too, it is a white tile. Tauri sets one image; this one picks the artwork the same
-/// way, by the appearance it is drawn in, at the size Tauri gives the light one.
-#[cfg(target_os = "macos")]
-fn draw_by_appearance(item: &objc2_app_kit::NSStatusItem) {
-    use block2::RcBlock;
-    use objc2::runtime::Bool;
-    use objc2::{AnyThread, MainThreadMarker};
-    use objc2_app_kit::{NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSImage};
-    use objc2_foundation::{NSArray, NSData, NSRect, NSSize};
-
-    let Some(button) = MainThreadMarker::new().and_then(|main| item.button(main)) else { return };
-    let artwork = |png: &[u8]| NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(png));
-    let (Some(light), Some(dark)) =
-        (artwork(include_bytes!("../icons/tray.png")), artwork(include_bytes!("../icons/tray-dark.png")))
-    else {
-        return;
-    };
-    let draw = RcBlock::new(move |rect: NSRect| {
-        // SAFETY: static names AppKit defines.
-        let (aqua, dark_aqua) = unsafe { (NSAppearanceNameAqua, NSAppearanceNameDarkAqua) };
-        let best = NSAppearance::currentDrawingAppearance()
-            .bestMatchFromAppearancesWithNames(&NSArray::from_slice(&[aqua, dark_aqua]));
-        let artwork = if best.is_some_and(|name| &*name == dark_aqua) { &dark } else { &light };
-        artwork.drawInRect(rect);
-        Bool::YES
-    });
-    let image = NSImage::imageWithSize_flipped_drawingHandler(NSSize::new(28.0, 18.0), false, &draw);
-    image.setTemplate(true);
-    button.setImage(Some(&image));
 }
 
 /// Only macOS is released.
