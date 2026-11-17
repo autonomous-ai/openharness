@@ -15,6 +15,8 @@ import { isDeepStrictEqual } from 'node:util'
 export const GATE_ID = 'ai.autonomous.harness.vscode-gate'
 const MICROSOFT = 'com.microsoft.VSCode'
 const LSREGISTER = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
+/** kLSApplicationNotFoundErr: `lsregister -u` fails with it for a bundle never registered, as a helper that never ran. */
+const NOT_REGISTERED = '-10814'
 
 /** The real home's, not $HOME's: the test setup points $HOME at a throwaway, and macOS does not. */
 export const VSCODE_PREFERENCES = join(userInfo().homedir, 'Library', 'Preferences', `${MICROSOFT}.plist`)
@@ -70,7 +72,10 @@ export function appBundles(app: string): string[] {
 /** LaunchServices keeps an app it saw launch after its folder is gone: this forgets this one, its helpers too, and
  *  nothing else. */
 export function unregister(app: string): void {
-  for (const bundle of appBundles(app)) execFileSync(LSREGISTER, ['-u', bundle])
+  for (const bundle of appBundles(app)) {
+    const run = spawnSync(LSREGISTER, ['-u', bundle], { encoding: 'utf8' })
+    if (run.status !== 0 && !run.stderr.includes(NOT_REGISTERED)) throw new Error(`lsregister -u ${bundle} failed: ${run.stderr.trim()}`)
+  }
 }
 
 export type Stamp = { mtimeMs: number; sha256: string } | null
