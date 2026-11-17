@@ -431,6 +431,7 @@ export class OpencodeSource implements HostSource {
     const before = JSON.stringify(this.list())
     const rows = new Map<string, Row>()
     const told: Array<[Row, OpencodeEvent[], boolean]> = []
+    const answers: Array<[Row, string]> = []
     for (const { entry, waits, answer } of listed) {
       if (heard.dropped.has(entry.id)) continue
       const events = heard.events.get(entry.id)
@@ -454,8 +455,12 @@ export class OpencodeSource implements HostSource {
         row.turn = restOf(entry)
         row.waits = new Set()
         row.agent.unseenDone = row.turn === 'done'
-        // An answer read before a turn heard starting is not that turn's.
-        if (answer !== undefined && !events?.some(begins)) row.agent.lastAnswer = answer
+        // An answer read before a turn heard starting is not that turn's. A row already shown takes it once its done
+        // is told, as at a turn heard ending: the devices tell a summary card for an answer that follows a done.
+        if (answer !== undefined && !events?.some(begins)) {
+          if (known) answers.push([row, answer])
+          else row.agent.lastAnswer = answer
+        }
       }
       row.idle = entry.idle
       // An end heard while the list was in flight may be newer than it: told again below, it counts as heard since.
@@ -477,6 +482,9 @@ export class OpencodeSource implements HostSource {
       if (over) this.deps.log(`[opencode] over · ${over} left out`)
     }
     if (JSON.stringify(this.list()) !== before) this.emit()
+    const later = answers.filter(([row, answer]) => answer !== row.agent.lastAnswer)
+    for (const [row, answer] of later) row.agent.lastAnswer = answer
+    if (later.length > 0) this.emit()
   }
 
   private event(event: OpencodeEvent): void {
