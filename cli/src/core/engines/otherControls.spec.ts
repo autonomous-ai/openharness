@@ -128,7 +128,7 @@ it.each(OTHER_ENGINES.filter(engine => engine !== 'opencode'))('keeps %s view-on
 })
 
 it('keeps unavailable OpenCode model information unknown instead of reporting view-only', async () => {
-  const row = { ...session(), engine: 'opencode' }
+  const row: RegisteredSession = { ...session(), engine: 'opencode' }
   const read = vi.fn(async () => { throw Error('ENGINE_UNAVAILABLE') })
   const profiles = createRuntimeProfiles({ handles: () => true, resolve: () => row,
     transport: { connected: vi.fn(), disconnected: vi.fn(), read } })
