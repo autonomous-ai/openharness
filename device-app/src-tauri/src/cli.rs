@@ -144,8 +144,18 @@ pub fn run(command: Command, deadline: Duration) -> io::Result<Output> {
 
 /// As `run`, and hands `sink` each line of stdout and stderr, without its newline, on the caller's thread, in the
 /// order the lines arrive. A line longer than LINE_MAX is not handed. Past the deadline no more lines are handed.
-pub fn run_lines(mut command: Command, deadline: Duration, sink: &mut dyn FnMut(&str)) -> io::Result<Output> {
-    let end = Instant::now() + deadline;
+pub fn run_lines(command: Command, deadline: Duration, sink: &mut dyn FnMut(&str)) -> io::Result<Output> {
+    run_until(command, Instant::now() + deadline, &Instant::now, sink)
+}
+
+/// As `run_lines`, until `end` on the clock `now` reads: a test moves its own clock past `end` instead of sleeping
+/// there.
+fn run_until(
+    mut command: Command,
+    end: Instant,
+    now: &dyn Fn() -> Instant,
+    sink: &mut dyn FnMut(&str),
+) -> io::Result<Output> {
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
     let mut child = {
         let _spawning = spawn_lock();
@@ -162,13 +172,13 @@ pub fn run_lines(mut command: Command, deadline: Duration, sink: &mut dyn FnMut(
         exited(pid);
         let _ = send_exit.send(());
     });
-    let left = || end.saturating_duration_since(Instant::now());
+    let left = || end.saturating_duration_since(now());
     // Both streams' ends, then its exit. The child is reaped only after this, so its group is still its own to kill.
     // The deadline is checked at each line too: recv_timeout hands a waiting line however late, and behind a slow sink
     // a child that never stops printing always has one waiting.
     let timed_out = loop {
         match lines.recv_timeout(left()) {
-            Ok(line) if Instant::now() < end => sink(&line),
+            Ok(line) if now() < end => sink(&line),
             Err(mpsc::RecvTimeoutError::Disconnected) => break exit.recv_timeout(left()).is_err(),
             _ => break true,
         }
@@ -580,6 +590,7 @@ mod tests {
     use super::*;
     use crate::testing::{Fake, wait_gone};
     use crate::types::MemoryLog;
+    use std::cell::Cell;
     use std::env;
     use std::fs;
     use std::time::Instant;
@@ -726,28 +737,40 @@ mod tests {
         assert_eq!(output, Output { code: Some(7), timed_out: false, stdout: "ok\n".into(), stderr: "bad\n".into() });
     }
 
+    /// Runs `sh -c script` in a folder of its own, its deadline WAIT away on a clock the sink moves: at the first line,
+    /// which the script prints once it has written `pid`, the sink reads that file and moves the clock to the deadline.
+    /// Gives whether the run timed out, the lines it handed and the pid read.
+    fn past_its_deadline(script: &str) -> (bool, usize, Option<i32>) {
+        let folder = tempfile::tempdir().unwrap();
+        let mut command = Command::new("sh");
+        command.args(["-c", script]).current_dir(folder.path());
+        let pid_file = folder.path().join("pid");
+        // On a thread, so a run that hands lines for ever fails the test instead of hanging it.
+        let (send, back) = mpsc::channel();
+        thread::spawn(move || {
+            let start = Instant::now();
+            let (clock, end) = (Cell::new(start), start + WAIT);
+            let (mut handed, mut pid) = (0, None);
+            let output = run_until(command, end, &|| clock.get(), &mut |_| {
+                handed += 1;
+                if handed == 1 {
+                    pid = fs::read_to_string(&pid_file).ok().and_then(|pid| pid.trim().parse().ok());
+                    clock.set(end);
+                }
+            });
+            send.send((output.map(|output| output.timed_out), handed, pid))
+        });
+        let (timed_out, handed, pid) = back.recv_timeout(WAIT * 2).expect("back within WAIT twice");
+        (timed_out.unwrap(), handed, pid)
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_run_past_its_deadline_dies_with_its_children() {
-        // Under load `sh` can take the whole deadline to start and die before it writes the pid: the deadline then
-        // doubles until a run got that far.
-        let mut deadline = Duration::from_millis(300);
-        loop {
-            let folder = tempfile::tempdir().unwrap();
-            let mut command = Command::new("sh");
-            command.args(["-c", "sleep 600 & echo $! > pid; wait"]).current_dir(folder.path());
-            let started = Instant::now();
-            let output = run(command, deadline).unwrap();
-            assert!(output.timed_out);
-            assert!(started.elapsed() < deadline + WAIT);
-            let pid = fs::read_to_string(folder.path().join("pid")).ok().and_then(|pid| pid.trim().parse().ok());
-            if let Some(pid) = pid {
-                assert!(wait_gone(pid));
-                return;
-            }
-            deadline *= 2;
-            assert!(deadline < Duration::from_secs(10), "sh never wrote the pid");
-        }
+        let (timed_out, handed, pid) = past_its_deadline("sleep 600 & echo $! > pid; echo started; wait");
+        assert!(timed_out);
+        assert_eq!(handed, 1);
+        assert!(wait_gone(pid.expect("the pid sh wrote")));
     }
 
     /// What `sh -c script` hands a sink, and its output. `args` are the script's `$1` on.
@@ -844,38 +867,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_run_past_its_deadline_stops_handing_lines_and_dies_with_its_children() {
-        // As a_run_past_its_deadline_dies_with_its_children, and the child never stops printing.
-        let mut deadline = Duration::from_millis(300);
-        loop {
-            let folder = tempfile::tempdir().unwrap();
-            let mut command = Command::new("sh");
-            command.args(["-c", "sleep 600 & echo $! > pid; while :; do echo x; done"]).current_dir(folder.path());
-            // On a thread, so a run that hands lines for ever fails the test instead of hanging it.
-            let (send, back) = mpsc::channel();
-            thread::spawn(move || {
-                let mut handed = 0;
-                let output = run_lines(command, deadline, &mut |_| {
-                    handed += 1;
-                    // A sink slower than the deadline, so lines are queued behind it once it has passed. Not a wait
-                    // for something to happen: the run hands at most this one line however long the child takes.
-                    if handed == 1 {
-                        thread::sleep(deadline);
-                    }
-                });
-                send.send((output.map(|output| output.timed_out), handed))
-            });
-            let (timed_out, handed) =
-                back.recv_timeout(deadline * 2 + WAIT).expect("back within the deadline and WAIT");
-            assert!(timed_out.unwrap());
-            assert!(handed <= 1, "{handed} lines handed");
-            let pid = fs::read_to_string(folder.path().join("pid")).ok().and_then(|pid| pid.trim().parse().ok());
-            if let Some(pid) = pid {
-                assert!(wait_gone(pid));
-                return;
-            }
-            deadline *= 2;
-            assert!(deadline < Duration::from_secs(10), "sh never wrote the pid");
-        }
+        // A child that never stops printing: lines wait behind the sink when the deadline passes, and none is handed.
+        let (timed_out, handed, pid) = past_its_deadline("sleep 600 & echo $! > pid; while :; do echo x; done");
+        assert!(timed_out);
+        assert_eq!(handed, 1);
+        assert!(wait_gone(pid.expect("the pid sh wrote")));
     }
 
     #[cfg(unix)]
