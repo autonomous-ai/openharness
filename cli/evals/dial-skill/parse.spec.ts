@@ -62,6 +62,13 @@ describe('parseClaudeStream', () => {
     expect(parseClaudeStream([...lines.slice(0, 2), sub, ...lines.slice(2)].join('\n')).model).toBe('claude-opus-5-5')
   })
 
+  it('leaves out the message Claude Code writes itself, as for an API error, which no model served', () => {
+    const lines = sample.trimEnd().split('\n')
+    const own = JSON.stringify({ type: 'assistant', parent_tool_use_id: null,
+      message: { model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text: 'API Error: 500' }] } })
+    expect(parseClaudeStream([...lines.slice(0, -1), own, lines[lines.length - 1]].join('\n')).model).toBe('claude-opus-5-5')
+  })
+
   it('names every model, under a name no served-model check accepts, when the main thread was served by more than one', () => {
     const { model } = parseClaudeStream(servedBy((n) => (n < 3 ? 'claude-opus-5-5' : 'claude-sonnet-5')))
     expect(model).toBe('mixed: claude-opus-5-5, claude-sonnet-5')
