@@ -11,7 +11,7 @@
  */
 import { downloadAndUnzipVSCode, resolveCliPathFromVSCodeExecutablePath, runTests } from '@vscode/test-electron'
 import { execFile } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, watch, writeFileSync, type FSWatcher } from 'node:fs'
 import { createServer, type Server, type Socket } from 'node:net'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -48,6 +48,7 @@ let control: Server | undefined
 let driver: Socket | undefined
 let launched: Promise<number> | undefined
 let exited: number | Error | undefined
+let logsWatch: FSWatcher | undefined
 const answers: ((line: Record<string, unknown>) => void)[] = []
 const opened: { window: string; stream: ListenerStream }[] = []
 const states: { terminals: number[]; active: number | null }[] = []
@@ -94,6 +95,27 @@ function ask(what: 'terminals' | 'active'): Promise<Record<string, unknown>> {
 
 const inside = (path: string): boolean => !relative(root, path).startsWith('..')
 
+const MINUTE_LINE = /in the last minute: .*, (\d+) scroll lines, (\d+) dropped$/gm
+
+/** The extension's output channel, which VS Code writes to a file under the user data's logs. */
+function channelFile(): string {
+  const logs = join(userData, 'logs')
+  const named = readdirSync(logs, { recursive: true, encoding: 'utf8' }).filter((path) => path.endsWith('Harness Device.log'))
+  if (named.length !== 1) throw new Error(`${named.length} Harness Device output files`)
+  return join(logs, named[0]!)
+}
+
+/** The extension's own counts, summed over every minute line of its output channel. */
+function scrollCounts(file: string): { lines: number; dropped: number } {
+  const sums = { lines: 0, dropped: 0 }
+  const text = readFileSync(file, 'utf8')
+  for (const [, lines, dropped] of text.matchAll(MINUTE_LINE)) {
+    sums.lines += Number(lines)
+    sums.dropped += Number(dropped)
+  }
+  return sums
+}
+
 /** @vscode/test-electron 2.5 names the Mac binary `Electron`: VS Code 1.110 renamed it to the product's name, and later
  *  releases dropped the old name's link. The bundle's Info.plist names it, as macOS reads it. */
 function macExecutable(named: string): string {
@@ -125,6 +147,7 @@ describe('the extension in a real, throwaway VS Code', () => {
   afterAll(async () => {
     // The driver's run ends with its connection, and VS Code with it.
     driver?.destroy()
+    logsWatch?.close()
     control?.close()
     await launched?.catch(() => {})
     await listener?.close()
@@ -245,6 +268,25 @@ describe('the extension in a real, throwaway VS Code', () => {
       await until(`a state whose active is the shown shell`, () => (states.at(-1)?.active === shell ? true : undefined))
       expect((await ask('active')).active).toBe(shell)
     }
+  })
+
+  // VS Code's API does not say where a terminal is scrolled: the extension's count says whether its scroll command ran.
+  // Each sum comes a minute after that minute's first event, so the two steps take up to two minutes.
+  it('a scroll line runs VS Code\'s scroll command on the active terminal, and nothing on one not active', async () => {
+    // The last show made shells[0] active.
+    const [active, inactive] = [shells[0]!, shells[1]!]
+    const file = channelFile()
+    // The file, not its folder: a recursive watch of the logs heard none of the extension's writes on a Mac.
+    logsWatch = watch(file, changed)
+    const counted = (lines: number, dropped: number): true | undefined => {
+      const sums = scrollCounts(file)
+      return sums.lines === lines && sums.dropped === dropped ? true : undefined
+    }
+    expect(streams.scroll({ window: opened[0]!.window, shell: active }, -3)).toBe(true)
+    await until('3 scroll lines and 0 dropped', () => counted(3, 0))
+    // After the first line ran: the devices replace a line that waits with one for another shell.
+    expect(streams.scroll({ window: opened[0]!.window, shell: inactive }, 2)).toBe(true)
+    await until('3 scroll lines and 1 dropped', () => counted(3, 1))
   })
 
   it('VS Code exits with code 0, and the stream ends gone', async () => {
