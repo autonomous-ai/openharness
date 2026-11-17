@@ -17,19 +17,30 @@ export function replayLegacyQuestions(rows: Iterable<Record<string, unknown>>, s
 }
 
 /** Count before serialization: inline questions and old Registry identities have no source byte bound.
- * Only the core's plain JSON question records enter here. No string copies, key arrays or toJSON calls. */
+ * Only plain JSON question records enter here. String copies stay within one scan chunk; no key arrays or toJSON calls. */
 export function questionFrameBytes(frame: unknown, limit: number): number | null {
   let bytes = 0
   const add = (size: number): boolean => (bytes += size) <= limit
   const string = (value: string): boolean => {
-    // A maximum legal Cloud frame held the core for 101 ms; this count dominated its CPU profile.
+    // A legal escaped Cloud frame held the core for 215 ms; the per-escape loop dominated its profile.
     // UTF-16 length is a lower bound, so even an unbounded inline value is refused before a native scan.
     if (value.length > limit - bytes - 2 || !add(2 + Buffer.byteLength(value))) return false
-    const escapes = /(["\\\b\t\n\f\r]+)|([\u0000-\u0007\u000b\u000e-\u001f]+)|([\ud800-\udfff]+)/gu
-    for (let run = escapes.exec(value); run; run = escapes.exec(value)) {
-      // Unicode mode excludes valid surrogate pairs; JSON expands each lone surrogate from 3 to 6 bytes.
-      const extra = run[1] ? 1 : run[2] ? 5 : 3
-      if (!add(run[0].length * extra)) return false
+    if (!/["\\\u0000-\u001f\ud800-\udfff]/.test(value)) return true
+    for (let start = 0; start < value.length;) {
+      let end = Math.min(start + 4096, value.length)
+      const high = value.charCodeAt(end - 1)
+      if (high >= 0xd800 && high <= 0xdbff) {
+        const low = value.charCodeAt(end)
+        if (low >= 0xdc00 && low <= 0xdfff) end--
+      }
+      // Native replacements hold at most one small chunk; no JS iteration or callback per escape.
+      const chunk = value.slice(start, end)
+      const short = chunk.length - chunk.replace(/["\\\b\t\n\f\r]/g, '').length
+      const control = chunk.length - chunk.replace(/[\u0000-\u0007\u000b\u000e-\u001f]/g, '').length
+      // Do not split pairs above: Unicode mode then matches only lone surrogates (3 UTF-8 / 6 JSON bytes).
+      const lone = chunk.length - chunk.replace(/[\ud800-\udfff]/gu, '').length
+      if (!add(short + control * 5 + lone * 3)) return false
+      start = end
     }
     return true
   }

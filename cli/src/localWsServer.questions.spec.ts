@@ -122,6 +122,36 @@ it('accounts mixed escaped Unicode exactly at the physical frame and global byte
   expect(sinks[0].sendFrame({ ...frame, padding: frame.padding + 'x' }, quota)).toBe(false)
 })
 
+it('delivers escaped Unicode using bounded scan and copy calls instead of a whole-string escape loop', async () => {
+  const sinks = await setup(1)
+  const text = 'x'.repeat(4095) + '😀\ud800"\u0000'.repeat(1024), frame = { data: text }
+  const exec = RegExp.prototype.exec, replace = String.prototype.replace, slice = String.prototype.slice
+  const copies: number[] = [], scans: number[] = []
+  const scan = vi.spyOn(RegExp.prototype, 'exec').mockImplementation(function(this: RegExp, value) {
+    if (this.global && value.length > 4096) throw new Error('UNBOUNDED_ESCAPE_SCAN')
+    return exec.call(this, value)
+  })
+  const copy = vi.spyOn(String.prototype, 'slice').mockImplementation(function(this: string, start, end) {
+    const copied = slice.call(this, start, end)
+    if (this === text) { copies.push(copied.length); if (copied.length > 4096) throw new Error('UNBOUNDED_COPY') }
+    return copied
+  })
+  const replacement = vi.spyOn(String.prototype, 'replace').mockImplementation(function(this: string, pattern, value) {
+    if (this.length > 4096 || typeof value !== 'string') throw new Error('UNBOUNDED_REPLACEMENT')
+    scans.push(this.length)
+    return replace.call(this, pattern, value)
+  })
+  const received = new Promise<Record<string, unknown>>(resolve => clients[0].once('message', raw => resolve(JSON.parse(raw.toString()))))
+  const sent = sinks[0].sendFrame(frame, quota)
+  scan.mockRestore(); copy.mockRestore(); replacement.mockRestore()
+  expect(sent).toBe(true)
+  await expect(received).resolves.toEqual(frame)
+  expect(copies.length).toBeGreaterThan(0)
+  expect(copies.length).toBeLessThanOrEqual(Math.ceil(text.length / 4095))
+  expect(Math.max(...copies, ...scans)).toBeLessThanOrEqual(4096)
+  expect(scans.length).toBeLessThanOrEqual(3 * Math.ceil(text.length / 4095))
+})
+
 it('bounds per-connection and global frame counts independently of bytes', async () => {
   const sinks = await setup(18), held = holdWrites()
   for (let connection = 0; connection < 16; connection++) {

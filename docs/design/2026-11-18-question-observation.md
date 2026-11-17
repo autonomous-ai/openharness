@@ -136,7 +136,7 @@ is not timing acceptance. Both runs proved actual zero outer/worker/receiver exi
 group/guardian/EOF cleanup, unchanged frozen hashes and private-root removal. The failed earlier fixture
 preparation remains separate evidence with zero measurement samples.
 
-The correction changes only string counting: refuse by UTF-16 length before any scan, count native UTF-8
+The first correction changed only string counting: refuse by UTF-16 length before any scan, count native UTF-8
 bytes, then scan runs requiring extra JSON escaping. Unicode regex mode excludes valid surrogate pairs;
 each lone surrogate needs three more bytes than native UTF-8 replacement. Only one bounded match is held
 at a time. Getter, `toJSON`, nesting, plain-object and exact pre-serialization refusal rules stay intact.
@@ -145,6 +145,24 @@ and exact budget boundaries. The actual socket caller failed first because it sc
 string; the corrected path refuses it without a scan or serialization. Final frozen maximum-frame ABBA,
 ordinary cases and merged/native acceptance remain pending.
 
-The correction passes 35 focused counter/socket tests and TypeScript. Its 26 tests selected by the canonical
-core configuration independently give `questionObservation.ts` 100% in all four coverage measures, without
-relying on the socket spec that the core gate excludes.
+The unchanged maximum-frame ABBA at `363fbf5276` retained all 60 samples: candidate observer synchronous
+send median/max 47.831/50.112 ms and loop maximum 66.290 ms. Matched legacy synchronous medians were
+18.741/18.326 ms, with unchanged complete-ID wire output. A separate ten-sample candidate-only probe used
+the same legal service byte limit with alternating quote/NUL characters in the accepted question ID. It
+preserved semantics but exposed synchronous median/max 185.973/196.369 ms and loop maximum 215.089 ms.
+That is failed responsiveness evidence, not a baseline improvement comparison. A bounded CPU diagnostic
+on the exact source attributed 71.69% of non-idle samples to counting, 70.87% to the per-escape loop itself.
+All three runs proved actual exits, physical sockets, groups/guardians/EOF, hashes and root cleanup.
+
+The subsequent correction retains the UTF-16 lower-bound refusal and native UTF-8 count, with a native
+no-escape test. When escaping is present, native replacements count three escape classes in chunks of at
+most 4,096 UTF-16 code units. A boundary between a valid surrogate pair moves back one unit. No full-string
+copy, match array or callback per escape is made; only bounded chunk copies are held. Exact preflight limits
+and the caller's JSON/depth/getter/`toJSON` rules are unchanged. The physical caller failed first under an
+explicit bounded scan/copy guard; the corrected caller delivers the same Unicode content. Oracle tests
+cover pairs and orphan surrogates across each chunk boundary, as well as the previous byte boundaries.
+
+The final correction passes 39 focused counter/socket tests and TypeScript. Its 29 tests selected by the
+canonical core configuration independently give `questionObservation.ts` 100% in all four coverage measures,
+without relying on the socket spec that the core gate excludes. Frozen maximum-frame/escaped probes,
+ordinary cases, merged/native acceptance and shared string-primitive extraction remain pending.

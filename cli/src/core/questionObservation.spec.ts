@@ -66,6 +66,16 @@ describe('question observation bytes', () => {
     expect(questionFrameBytes(frame, bytes - 1)).toBeNull()
   })
 
+  it.each([4094, 4095, 4096])('preserves pairs and orphan surrogates across scan boundary %i', offset => {
+    for (const suffix of ['😀\ud800x\udc00', '\ud800😀\udc00', '\ud800x', '\ud800\ue000', '\ud800']) {
+      const text = 'x'.repeat(offset) + suffix + '\u0000"'.repeat(16)
+      const frame = { text }
+      const bytes = Buffer.byteLength(JSON.stringify(frame))
+      expect(questionFrameBytes(frame, bytes)).toBe(bytes)
+      expect(questionFrameBytes(frame, bytes - 1)).toBeNull()
+    }
+  })
+
   it('includes duplicated IDs, accepts the default service maximum and rejects unbounded inline content', () => {
     const requestId = `cloud_q_${'a'.repeat(6 * 1024 * 1024)}`
     const frame = { type: 'commander_question', agentId: 'cloud_a', dbSessionId: 'cloud_a', payload: {
