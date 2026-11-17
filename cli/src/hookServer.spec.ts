@@ -1077,6 +1077,24 @@ describe('requests must name this server', () => {
     expect(onStatus).not.toHaveBeenCalled()
   })
 
+  // Each is said at most once a minute, on a minute of its own: a pane whose binding went stale, refused every turn,
+  // never hides a page refused for its Host, nor such a page the pane.
+  it('says a refused Host in the same minute an unbound hook was said, and the other way round', async () => {
+    const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { base, headers } = await start()
+    const evil = { host: 'rebind.evil.example:' + new URL(base).port }
+    const unbound = () => fetch(`${base}/api/hook/wait`, { method: 'POST', headers,
+      body: JSON.stringify({ engine: 'claude', sessionId: 'gone0001', tmuxPane: '%1', callerPid: 123 }) })
+    expect((await unbound()).status).toBe(403)
+    expect(await send(base, 'GET', '/api/status', evil)).toBe(403)
+    expect(await send(base, 'GET', '/api/status', evil)).toBe(403)
+    expect((await unbound()).status).toBe(403)
+    expect(said.mock.calls.map(([line]) => String(line).split(' · ')[0]).filter(line => line.includes('refused'))).toEqual([
+      '[hooks] gone0001 wait refused',
+      '[hooks] refused GET /api/status',
+    ])
+  })
+
   it('serves no web dashboard: its page, log tail and stop button are gone', async () => {
     // Nothing opened the page (no app, website, script or the backend), and the web client that linked to
     // it retired with the browser setup links (#348). `harness stop` stops the daemon by its pid.
