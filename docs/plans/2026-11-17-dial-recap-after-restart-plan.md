@@ -22,7 +22,7 @@
 
 ## Base
 
-- Branch `fix/dial-recap-after-restart` (PR #4391), at `ca2087458c`, in the worktree `/Users/duynguyen/orca/workspaces/autonomous-harness/dial-recap-restart`. Tasks 1-5 and the review fixes are landed there (below). Nothing else has to merge first.
+- Branch `fix/dial-recap-after-restart` (PR #4391), in the worktree `/Users/duynguyen/orca/workspaces/autonomous-harness/dial-recap-restart`. Tasks 6-10 started at `ca2087458c`; the branch head is now `4d0add5641` (or later), with Tasks 1-10, the review fixes and the final review fix landed (below). Nothing else has to merge first.
 - `cli/node_modules` is installed. If a task finds it missing: `cd cli && npm ci --no-audit --no-fund`, once, never two tasks at once.
 - Names at `ca2087458c` for Tasks 6-10 (line numbers are hints, the tasks name functions):
   - `cable/hosts/hcClient.ts`: `HcTerminal`, `hcTerminal`, `READ`, `factsOf`, `TAKES`, `same`, `HC_MAX_TERMINALS` (1,024), `hcPaneKey`.
@@ -41,7 +41,7 @@
   - `recordName.spec.ts`: `record`, `named`, `read`.
   - `e2e/harness/fakeEngine.mjs`: `announceProcess`, `finish`, `open`, `procStart`, the `goalpause` and `latestop` directives, the Esc interrupt. `e2e/harness/outsideAgent.ts`: `Outside.start`, `named`, `ran`. `e2e/deviceWithoutApp.e2e.ts`: `fresh`, `startOutside`, `showing`, `heard`, `rosters`, `ids`. `e2e/harness/daemon.ts`: `until`.
 - If a name differs at the base, the implementer follows the code and says so in its report.
-- The spec and this plan are tracked (`290c808870`); the addendum and this update are uncommitted. The main session commits them; no task does.
+- The spec and this plan are tracked (`290c808870`), the addendum with them (`907ea59256`); this update is uncommitted. The main session commits it; no task does.
 
 ## Tasks at a glance
 
@@ -53,13 +53,14 @@
 | 4 The fake Claude Code says busy and idle in its record | **done** `9ba52c911b` | `cli/e2e/harness/fakeEngine.mjs`, `cli/e2e/harness/outsideAgent.ts`, `cli/e2e/deviceWithoutApp.e2e.ts` (the two `named` calls only) | none | high | none: test harness only, one commit |
 | 5 End to end: restored recap and Claude app name | **done** `07723fd328` | `cli/e2e/deviceWithoutApp.e2e.ts` | 1, 3, 4 | high | none: the end-to-end test of Tasks 1, 3 and 4, one commit |
 | Review fixes | **done** `09567e50c3`, `b55b4551a0`, `634f81af54`, `ca2087458c` | `cli/src/cable/hosts/observed.ts`, `observed.spec.ts` | — | — | `observed.spec.ts` (a busy check that fails counts as busy; a last answer that cannot be read logs no error text) |
-| 6 The hc client keeps each terminal's foreground pid | to do | `cli/src/cable/hosts/hcClient.ts`, `hcClient.spec.ts` | none | high | `hcClient.spec.ts` |
-| 7 The hc source answers which terminal a pid runs in | to do | `cli/src/cable/hosts/hcSource.ts`, `hcSource.spec.ts` | 6 | high | `hcSource.spec.ts` |
-| 8 A session the scan found is placed in the Herdr terminal running it | to do | `cli/src/cable/hosts/observed.ts`, `observed.spec.ts` | none | xhigh | `observed.spec.ts` |
-| 9 The devices pair what the scan found with Herdr's terminals | to do | `cli/src/services/devices.ts`, `devices.spec.ts` | 7, 8 | high | `devices.spec.ts` |
-| 10 End to end: a Herdr session found by the scan | to do | `cli/e2e/harness/hcCore.ts`, `cli/e2e/deviceHerdrApp.e2e.ts` | 9 | high | none: the end-to-end test of Tasks 6-9, one commit |
+| 6 The hc client keeps each terminal's foreground pid | **done** `4acb23fef5`, `bea85d57a8` | `cli/src/cable/hosts/hcClient.ts`, `hcClient.spec.ts` | none | high | `hcClient.spec.ts` |
+| 7 The hc source answers which terminal a pid runs in | **done** `d89b242b4a`, `d6848c5b4d` | `cli/src/cable/hosts/hcSource.ts`, `hcSource.spec.ts` | 6 | high | `hcSource.spec.ts` |
+| 8 A session the scan found is placed in the Herdr terminal running it | **done** `450f81465d`, `7a418dd164` | `cli/src/cable/hosts/observed.ts`, `observed.spec.ts` | none | xhigh | `observed.spec.ts` |
+| 9 The devices pair what the scan found with Herdr's terminals | **done** `690f601366`, `3592330029` | `cli/src/services/devices.ts`, `devices.spec.ts` | 7, 8 | high | `devices.spec.ts` |
+| 10 End to end: a Herdr session found by the scan | **done** `28533450fb` | `cli/e2e/harness/hcCore.ts`, `cli/e2e/deviceHerdrApp.e2e.ts` | 9 | high | none: the end-to-end test of Tasks 6-9, one commit |
+| Final review fix | **done** `b3cfe7023e`, `4d0add5641` | `cli/src/cable/hosts/observed.ts`, `observed.spec.ts` | — | — | `observed.spec.ts` (a hook whose hints name no app keeps the app the scan gave it while its caller is walked, not the pairing's) |
 
-Longest chain of what is left: 6 → 7 → 9 → 10, four tasks (8 runs beside 6 and 7).
+Every task is landed. The chain was 6 → 7 → 9 → 10, four tasks (8 ran beside 6 and 7).
 
 - Task 6 and Task 8 share no file and start at once. Task 8 tests through its own `ObservedDeps.herdrTerminal` stub, so it needs nothing of Tasks 6 and 7.
 - Task 7 needs Task 6's `HcTerminal.foregroundPid`.
@@ -259,7 +260,11 @@ Not changed, and a diff in any is a finding:
 
 ### Task 6: The hc client keeps each terminal's foreground pid
 
-**Status:** to do. **Layer:** devices service process. **Depends on:** none. **Effort:** `high` (a field of another program's data, checked at the door).
+**Status: done** (`4acb23fef5` red, `bea85d57a8`).
+
+**Layer:** devices service process. **Depends on:** none. **Effort:** `high` (a field of another program's data, checked at the door).
+
+**Landed as** planned.
 
 **Red test:** `cli/src/cable/hosts/hcClient.spec.ts`.
 
@@ -271,20 +276,24 @@ Not changed, and a diff in any is a finding:
 - Produces: `HcTerminal.foregroundPid?: number`: `foreground.pid` of hc's terminal (in a snapshot, a `missed` snapshot, `created` / `lost` / `restarted` data, and each `foreground` event), set only when `Number.isSafeInteger(pid) && pid > 0`. No fallback to the terminal's own `pid` (a shell holds that one; only the foreground is the program running now).
 - `READ.foreground` becomes `['cwd', 'pid']`: `argv` and `name` of the foreground stay in the line they came in. `same` compares `foregroundPid`, so a `foreground` line that changes only the pid is told and one that repeats it tells nothing.
 
-- [ ] **Step 1: Write the tests.**
+- [x] **Step 1: Write the tests.**
   - `hcTerminal reads its foreground's pid when it is a positive safe integer, and none else`: `hcTerminal({ address: 't7', state: 'live', foreground: { argv: ['node'], cwd: '/w', name: 'node', pid: 4242 } })` has `foregroundPid: 4242`. `it.each` over `pid` values `0`, `-1`, `1.5`, `'4242'`, `2 ** 53`, `null`, over `foreground: 7`, and over no `foreground` with the terminal's own `pid: 4242`: no `foregroundPid` key (`not.toHaveProperty('foregroundPid')`).
   - `a subscription tells the foreground's pid and keeps nothing else new of it`: the fake server's recorded snapshot tells `t1` with `foregroundPid: 4242`, and the told object's keys are exactly `hcTerminal`'s fields (no `argv`, no `title`, no foreground `name`).
   - `a foreground line that changes only its pid is told; the same pid again tells nothing`: beside `a foreground's folder is the terminal's once hc tells it…`, two `server.event('foreground', { data: { argv: ['/usr/local/bin/node'], cwd: '/work/api', name: 'node', pid: 5000 }, terminal: 't7' })`; `changed` is told once, with `foregroundPid: 5000`.
   - Every existing exact expectation of a told terminal whose recording carries `foreground.pid` gains `foregroundPid` with that pid, and nothing else; the report lists them by test name.
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/hcClient.spec.ts`. Expected: FAIL in the three new tests and in the existing expectations that gained `foregroundPid`.
-- [ ] **Step 3: Commit** `test(dial): the hc client keeps each terminal's foreground pid (red)`.
-- [ ] **Step 4: Implement** the Interfaces above. The comment at `READ` says why the pid is kept: the devices pair a session the scan found with the terminal running it by this pid (the spec's addendum, decision 5); it is an id, never logged or sent.
-- [ ] **Step 5: Run** the step 2 command, then `cd cli && npx vitest run src/cable/hosts/hcSource.spec.ts src/cable/hosts/herdrApp.spec.ts src/services/devices.spec.ts && npm run typecheck`. Expected: PASS.
-- [ ] **Step 6: Commit** `dial: the hc client keeps each terminal's foreground pid`.
+- [x] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/hcClient.spec.ts`. Expected: FAIL in the three new tests and in the existing expectations that gained `foregroundPid`.
+- [x] **Step 3: Commit** `test(dial): the hc client keeps each terminal's foreground pid (red)`.
+- [x] **Step 4: Implement** the Interfaces above. The comment at `READ` says why the pid is kept: the devices pair a session the scan found with the terminal running it by this pid (the spec's addendum, decision 5); it is an id, never logged or sent.
+- [x] **Step 5: Run** the step 2 command, then `cd cli && npx vitest run src/cable/hosts/hcSource.spec.ts src/cable/hosts/herdrApp.spec.ts src/services/devices.spec.ts && npm run typecheck`. Expected: PASS.
+- [x] **Step 6: Commit** `dial: the hc client keeps each terminal's foreground pid`.
 
 ### Task 7: The hc source answers which terminal a pid runs in
 
-**Status:** to do. **Layer:** devices service process. **Depends on:** 6 (`HcTerminal.foregroundPid`). **Effort:** `high`.
+**Status: done** (`d89b242b4a` red, `d6848c5b4d`).
+
+**Layer:** devices service process. **Depends on:** 6 (`HcTerminal.foregroundPid`). **Effort:** `high`.
+
+**Landed as** planned.
 
 **Red test:** `cli/src/cable/hosts/hcSource.spec.ts`.
 
@@ -298,21 +307,30 @@ Not changed, and a diff in any is a finding:
 - Private `foregrounds: Map<string, number>` (address → pid), kept by `note()` beside `shown` and `reported` (a live terminal with a `foregroundPid` is set, any other deleted), cleared with them in `snapshot` and `clear`. Bounded by the client's 1,024 terminals.
 - `onChange` is also told when that index changes and no listed row did (in `told`), and `clear()` tells a change when it cleared rows or foregrounds. No log line changes.
 
-- [ ] **Step 1: Write the tests**, in the source's `describe`, setting a foreground pid through `FakeHcTerminal`'s `more` (`more: { foreground: { argv: [...], cwd, name: 'node', pid } }`); the fake's default is `4242 + n`:
+- [x] **Step 1: Write the tests**, in the source's `describe`, setting a foreground pid through `FakeHcTerminal`'s `more` (`more: { foreground: { argv: [...], cwd, name: 'node', pid } }`); the fake's default is `4242 + n`:
   - `terminalOf answers the one live terminal whose foreground is that pid, shown or not, reporting or not`: `t1` (default 4242), `t2` with `labels: {}` and `status: null` (pid 4243) → `terminalOf(4242) === 't1'`, `terminalOf(4243) === 't2'`, `terminalOf(1) === undefined`.
   - `two terminals whose foreground is the same pid answer none`: `t1` and `t2` both at 4242 → `undefined`; once `t2`'s foreground moves to 5000, `t1` again.
   - `a terminal that finished or was removed answers none; a missed snapshot replaces every answer`.
   - `a foreground that moves tells one change though no listed row changed; nothing else is logged`: `t1`'s foreground to 5000 → the `onChange` listener is called once, `list()` is the same, the log gains no line.
   - `stopped, it answers none and tells the change, though it listed no row`: one terminal with `labels: {}` (no row), `stop()` → the listener called once, `terminalOf(4242) === undefined`.
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/hcSource.spec.ts`. Expected: FAIL in the five new tests.
-- [ ] **Step 3: Commit** `test(dial): the hc source says which terminal a pid runs in (red)`.
-- [ ] **Step 4: Implement** the Interfaces above. The comment at `terminalOf` says why only a unique answer counts: two terminals naming one pid leave no certain terminal, and a wrong one would take that session's words (the addendum, Design 9).
-- [ ] **Step 5: Run** the step 2 command, then `cd cli && npx vitest run src/cable src/services/devices.spec.ts && npm run typecheck`. Expected: PASS.
-- [ ] **Step 6: Commit** `dial: the hc source says which terminal a pid runs in`.
+- [x] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/hcSource.spec.ts`. Expected: FAIL in the five new tests.
+- [x] **Step 3: Commit** `test(dial): the hc source says which terminal a pid runs in (red)`.
+- [x] **Step 4: Implement** the Interfaces above. The comment at `terminalOf` says why only a unique answer counts: two terminals naming one pid leave no certain terminal, and a wrong one would take that session's words (the addendum, Design 9).
+- [x] **Step 5: Run** the step 2 command, then `cd cli && npx vitest run src/cable src/services/devices.spec.ts && npm run typecheck`. Expected: PASS.
+- [x] **Step 6: Commit** `dial: the hc source says which terminal a pid runs in`.
 
 ### Task 8: A session the scan found is placed in the Herdr terminal running it
 
-**Status:** to do. **Layer:** devices service process. **Depends on:** none (its own `ObservedDeps.herdrTerminal`, stubbed in its tests). **Effort:** `xhigh` (who places an entry, a hook or a pairing; taking a pairing back; the scan's one emit).
+**Status: done** (`450f81465d` red, `7a418dd164`). Final review fix after it: `b3cfe7023e` red and `4d0add5641` (below).
+
+**Layer:** devices service process. **Depends on:** none (its own `ObservedDeps.herdrTerminal`, stubbed in its tests). **Effort:** `xhigh` (who places an entry, a hook or a pairing; taking a pairing back; the scan's one emit).
+
+**Landed as** planned, with three deviations:
+- `no lookup, or one that answers none…` also calls `placeHerdr()` and checks no change is told, so it failed red (Step 2 expected it might pass).
+- The take-back test moves a pairing straight from `t7` to `t8`, then removes its terminal: back to the scan's app `vscode`, no `appPending`; a second session `b` with no known app shows `appPending: true` coming back.
+- A private `logPaired(n)` writes the `[observed] herdr · <n> paired` line for both the scan and `placeHerdr()`.
+
+**Final review fix** (`b3cfe7023e` red, `4d0add5641`): `ingest` puts back the scan's app (and `appPending`) from `paired` before `learnApp`, so a hook whose hints name no app does not keep the pairing's `herdr` while its caller is walked. Test: `a hook whose hints name no app keeps the app the scan gave it while its caller is walked, not the pairing's`.
 
 **Red test:** `cli/src/cable/hosts/observed.spec.ts`.
 
@@ -331,7 +349,7 @@ Not changed, and a diff in any is a finding:
   - `scanOnce`'s loop: `pair(entry)` after the scan's app is set and before `learnTty`, counted; after the scan's line, `[observed] herdr · <n> paired` when `<n>` > 0; still one `emit()` and no `await` in the loop.
 - `fakeActions`: the real `createHerdrAppAdapter` after tmux (as `devices.ts` orders them), `hookIds: true`, on `deps`' platform, with fakes `hcPrompt` (answers `{ outcome: 'sent' }`), `hcShows` (true), `hcReports` (true), `herdrInFront` (false). No existing test sends `HC_TERMINAL_ID`, so none should change; one that does is a finding for the report.
 
-- [ ] **Step 1: Write the tests**, in a new `describe('ObservedSource and the Herdr terminal a session the scan found runs in')`, with a `found` helper as in the last-answer `describe` (idle, transcript `/t/<id>.jsonl`, answer `Done`) and `herdrTerminal` read from a `Map<number, string>` the test sets:
+- [x] **Step 1: Write the tests**, in a new `describe('ObservedSource and the Herdr terminal a session the scan found runs in')`, with a `found` helper as in the last-answer `describe` (idle, transcript `/t/<id>.jsonl`, answer `Done`) and `herdrTerminal` read from a `Map<number, string>` the test sets:
   - `paired by its pid, it is placed as its hook would place it, on Herdr's page, with its pane, words and tap there`: `a` (pid 11), the map `11 → 't7'`; after `scanOpen`, its row has `host: 'herdr'`, `app: 'herdr'`, no `appPending`, `paneKeys: ['herdr-app:t7']`, `state: 'idle'`, `lastAnswer: 'Done'`; its `{ host, app, paneKeys }`, `capabilities()` and `focus`'s target equal those of the same session in a second `setup` after `ingest(ev('session-start', { sessionId: 'a', callerPid: 11, hostHints: { HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty' } }))`. `send(agent, 'next')` is `{ ok: true }`, `hcPrompt` was called with `['t7', 'claude', 'next']`, `counted(count)` ends `'herdr-app'`; `focus(agent)` opens `{ bundle: 'dev.herdr.app', pane: { adapter: 'herdr-app', id: 't7' } }`. `changes` was called once; `logs` is the scan's line then `'[observed] herdr · 1 paired'`.
   - `a terminal hc reports no agent in takes no words, as for a hooked agent`: `hcReports` false: `capabilities().voice` false, `send` refused with `did not answer`, `hcPrompt` never called.
   - `no lookup, or one that answers none, pairs nothing and logs no herdr line`: host `terminal`, app `terminal` with `appPending: true`, no `paneKeys`; no log line starts `[observed] herdr`.
@@ -340,15 +358,19 @@ Not changed, and a diff in any is a finding:
   - `a hook heard after the pairing places it by its own hints, and no later placeHerdr pairs it again`: paired at `t7`, then `ingest(ev('turn-stop', { sessionId: 'a', callerPid: 11, hostHints: { TERM_PROGRAM: 'iTerm.app' } }))` → app `iterm`, no Herdr pane key; `placeHerdr()` with the map still `11 → 't7'` changes nothing, and the lookup spy is not called for 11. A hook with `{ HC_TERMINAL_ID: 't9', TERM_PROGRAM: 'ghostty' }` gives `paneKeys: ['herdr-app:t9']`.
   - `a hook heard while the scan's reads ran keeps its own place`: `lastAnswer` held; `ingest(ev('session-start', { sessionId: 'a', callerPid: 11, hostHints: { TERM_PROGRAM: 'ghostty' } }))`; released: no Herdr pane key, the lookup never called.
   - `the herdr line counts only: two paired in one look, and no pid, address or name in any line`: `a` (11 → `t7`), `b` (12 → `t8`) → `'[observed] herdr · 2 paired'`; no log line holds `t7`, `t8`, `11`, `12` as a word, or a session's name.
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/observed.spec.ts`. Expected: FAIL in the new tests but `no lookup…` and `a hook heard while…`, which may pass already; every existing test passes.
-- [ ] **Step 3: Commit** `test(dial): a session the scan found is placed in the Herdr terminal running it (red)`.
-- [ ] **Step 4: Implement** the Interfaces above. The comment at `pair` says why it is a certain place: hc's own foreground pid equal to the session's pid, unique (the addendum, decision 5, and the PM's decision of 2026-11-17), so it is placed as a hook from that terminal would place it; and why it writes no hook state: a hook's own hints and caller are what later code and the next hook read, and the next hook wins.
-- [ ] **Step 5: Run** the step 2 command, then `cd cli && npx vitest run src/cable src/services/devices.spec.ts src/architecture.spec.ts && npm run typecheck`. Expected: PASS.
-- [ ] **Step 6: Commit** `dial: a session the scan found is placed in the Herdr terminal running it`.
+- [x] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/observed.spec.ts`. Expected: FAIL in the new tests but `no lookup…` and `a hook heard while…`, which may pass already; every existing test passes.
+- [x] **Step 3: Commit** `test(dial): a session the scan found is placed in the Herdr terminal running it (red)`.
+- [x] **Step 4: Implement** the Interfaces above. The comment at `pair` says why it is a certain place: hc's own foreground pid equal to the session's pid, unique (the addendum, decision 5, and the PM's decision of 2026-11-17), so it is placed as a hook from that terminal would place it; and why it writes no hook state: a hook's own hints and caller are what later code and the next hook read, and the next hook wins.
+- [x] **Step 5: Run** the step 2 command, then `cd cli && npx vitest run src/cable src/services/devices.spec.ts src/architecture.spec.ts && npm run typecheck`. Expected: PASS.
+- [x] **Step 6: Commit** `dial: a session the scan found is placed in the Herdr terminal running it`.
 
 ### Task 9: The devices pair what the scan found with Herdr's terminals
 
-**Status:** to do. **Layer:** devices service process (its composition). **Depends on:** 7 (`HcSource.terminalOf`, its change told), 8 (`ObservedDeps.herdrTerminal`, `placeHerdr`). **Effort:** `high`.
+**Status: done** (`690f601366` red, `3592330029`).
+
+**Layer:** devices service process (its composition). **Depends on:** 7 (`HcSource.terminalOf`, its change told), 8 (`ObservedDeps.herdrTerminal`, `placeHerdr`). **Effort:** `high`.
+
+**Landed as** planned; the lookup needs an explicit `: string | undefined` return type (`(pid): string | undefined => hcSource?.terminalOf(pid)`), else TypeScript infers it circularly (TS7022/TS7024).
 
 **Red test:** `cli/src/services/devices.spec.ts`.
 
@@ -362,20 +384,27 @@ Not changed, and a diff in any is a finding:
 - `startDevices` passes `hookIds ? (pid) => hcSource?.terminalOf(pid) : undefined` (Open question 1): a daemon that follows another hc session takes no hook's address, and `herdrApp.paneOf` gives no pane there, so a pairing would list the session twice on Herdr's page.
 - `hcSource?.onChange(() => part.call('observed', () => observed!.placeHerdr()))`, registered before the hc source's `part.call('dial', outsideTurn)` line, so the dial's look after an hc change already sees the fold. No branch the coverage gate cannot reach.
 
-- [ ] **Step 1: Write the tests**, with the scan's readers: `sess-1` known `terminal`, owner `{ engine: 'claude', pid: 4242 }`, row `{ cwd: '/work/api', transcriptPath: '/t/sess-1.jsonl' }`, `working` false.
+- [x] **Step 1: Write the tests**, with the scan's readers: `sess-1` known `terminal`, owner `{ engine: 'claude', pid: 4242 }`, row `{ cwd: '/work/api', transcriptPath: '/t/sess-1.jsonl' }`, `working` false.
   - `a session the scan found in an hc terminal is listed once, by its own copy, and takes words and a tap there`: `live([terminal('t7', { foregroundPid: 4242 })])`; `listed()` settles to `[{ id: ID, name: 'api', caps: 'svf' }]`; `sendTurn(ID, 'run the tests')` is `{ ok: true }` and `hc.prompted` is `[['t7', 'claude', 'run the tests']]`; `openAgent(ID)` runs `[openHerdr, switchTo('t7')]`; `logs` holds `'[observed] herdr · 1 paired'` and no line holds `t7` or `4242`.
   - `Herdr's list after the scan pairs it; a foreground that moves away takes it back`: `live([terminal('t7')])` (no pid): two rows, `ID` and Herdr's own; `changed({ foregroundPid: 4242 })`: one row, `ID`; `changed({ foregroundPid: 999 })`: two again.
   - `it.each` `with %j the devices pair a session the scan found: %s`: `{}` true, `{ HC_SESSION: 'other' }` false (two rows), as the hook test's table.
   - `detached, the pairing is taken back`: paired, then `seen.host.watching!(false)`; the observed copy no longer has Herdr's pane (`host` is `terminal` in its snapshot row) and takes no words through hc.
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/services/devices.spec.ts`. Expected: FAIL in the new tests (two rows where one is wanted, no pairing line).
-- [ ] **Step 3: Commit** `test(dial): the devices pair a session the scan found with its Herdr terminal (red)`.
-- [ ] **Step 4: Implement** the Interfaces above. The comment at the lookup says why it is passed only with `hookIds`.
-- [ ] **Step 5: Run** the step 2 command, then `cd cli && npm run typecheck && npx vitest run src/cable src/services/devicesListener.spec.ts src/architecture.spec.ts && npm run test:core`. Expected: PASS, `src/services/devices.ts` at 100% on every measure.
-- [ ] **Step 6: Commit** `dial: the devices pair a session the scan found with its Herdr terminal`.
+- [x] **Step 2: Run** `cd cli && npx vitest run src/services/devices.spec.ts`. Expected: FAIL in the new tests (two rows where one is wanted, no pairing line).
+- [x] **Step 3: Commit** `test(dial): the devices pair a session the scan found with its Herdr terminal (red)`.
+- [x] **Step 4: Implement** the Interfaces above. The comment at the lookup says why it is passed only with `hookIds`.
+- [x] **Step 5: Run** the step 2 command, then `cd cli && npm run typecheck && npx vitest run src/cable src/services/devicesListener.spec.ts src/architecture.spec.ts && npm run test:core`. Expected: PASS, `src/services/devices.ts` at 100% on every measure.
+- [x] **Step 6: Commit** `dial: the devices pair a session the scan found with its Herdr terminal`.
 
 ### Task 10: End to end: a Herdr session found by the scan
 
-**Status:** to do. **Layer:** test: the real daemon, a private Herdr Core (`e2e/harness/hcCore.ts`), a fake dial. **Depends on:** 9 (and through it 6, 7, 8). **Effort:** `high`.
+**Status: done** (`28533450fb`).
+
+**Layer:** test: the real daemon, a private Herdr Core (`e2e/harness/hcCore.ts`), a fake dial. **Depends on:** 9 (and through it 6, 7, 8). **Effort:** `high`.
+
+**Landed as** planned, with these deviations:
+- The existing `fresh()` gave the daemon `HC_SOCKET` at `<root>/c.sock`, so `hookIds` was false and nothing could pair (Open question 1). `PrivateHc.planDefault()` was added: its socket is `<root>/herdr-core/default.sock`, the default session's path under `XDG_RUNTIME_DIR=<root>`. `fresh()` now gives every test daemon `XDG_RUNTIME_DIR=<private root>` beside `HC_SOCKET`. The four existing tests keep `plan()` (`<root>/c.sock`, `hookIds` false, unchanged); only the new test uses `planDefault()`, where `HC_SOCKET` equals the default session's path and `hookIds` is true.
+- The fake agent's script is `<root>/claude` (extensionless, ESM), since the scan only accepts a process that looks like Claude Code.
+- Herdr settled in front alone; no watch was needed.
 
 **Red test:** none. No production file changes. One commit.
 
@@ -387,16 +416,16 @@ Not changed, and a diff in any is a finding:
 - `PrivateHc.agent(folder: string, claude?: { projectsDir: string; sessionId: string; answer: string }): Promise<string>`. Without `claude`, as today (the four existing tests). With it, the agent, before it reports `idle`, writes what Claude Code leaves on disk, at paths it is given as arguments (hc's environment is built from nothing): its process record `<dirname(projectsDir)>/sessions/<its own pid>.json`, `{ pid, sessionId, cwd, procStart, status: 'idle' }` as `fakeEngine.mjs` `announceProcess` writes it (`procStart` from `/bin/ps -o lstart= -p <pid>`), and its transcript `<projectsDir>/<cwd with every non-alphanumeric as ->/<sessionId>.jsonl` with one turn: the user's line and the assistant's text `answer`, in the shapes `fakeEngine.mjs`'s `claude()` writes (`entrypoint: 'cli'`, `cwd`, `sessionId`, `parentUuid`, `uuid`, `timestamp`). Each written beside and renamed over.
 - The header says why: on Diego's Mac each hc terminal's foreground pid is a live Claude Code record's pid (the addendum), and this is Claude Code as hc runs it, with no hook heard by the devices (none runs before a dial is plugged).
 
-- [ ] **Step 1: Extend the harness** as above.
-- [ ] **Step 2: Write the test** `a session started in a Herdr terminal before the dial is listed once, on Herdr's page, with its last answer, and takes words there`:
+- [x] **Step 1: Extend the harness** as above.
+- [x] **Step 2: Write the test** `a session started in a Herdr terminal before the dial is listed once, on Herdr's page, with its last answer, and takes words there`:
   - `fresh(planned)`; `hc = await coreFor(planned)`; `sessionId = randomUUID()`; `t = await hc.agent('api', { projectsDir: d.env.CLAUDE_PROJECTS_DIR!, sessionId, answer: 'answer 1: before the dial' })`; `id = observedAgentId('claude', sessionId)`.
   - The fact the pairing rests on, from the real hc: `(await hc.rpc('terminal.get', { terminal: t })).foreground.pid` equals the `pid` of the one record in the sessions folder.
   - `desk.plug('E2E-A', 'e2:e0:00:00:00:0a', FILTER)`; within 45 s a `summary` with `agentId === id`, `restore === true` and `text` containing `answer 1: before the dial`; no `turn.done` and no `summary` without `restore` for `id`.
   - The session counted once: the latest `apps` message counts `herdr` 1 and no other app; Herdr's ring (put in front through the watch as the swipe test does, if the ring does not settle on it alone) holds exactly one row with `host === 'herdr'`, and it is `{ id, name: 'api', caps: 'svf' }`.
   - `speak(dial, relay, id, 'run the paired words', 'paired-1')` is a `voice.transcript`; the terminal shows `GOT[run the paired words]`; `said(d, '[device] voice · herdr-app')`.
   - The log holds `[observed] herdr · 1 paired` and matches `/\[observed\] scan · 1 found · \d+ app known · 0 named · 1 answered · \d+ ms/`; it holds no `t` as a word (the existing regex), no `planned.root`, no `sessionId`, no `answer 1`, no `run the paired words`.
-- [ ] **Step 3: Run** on this Mac (Herdr Core installed at `~/.local/bin/herdr-core`), `cd cli && env -u TMUX -u TMUX_PANE TMPDIR=/tmp npx vitest run --config vitest.e2e.config.ts e2e/deviceHerdrApp.e2e.ts`. Expected: PASS, all five tests, none skipped, and none of `hcCore.ts`'s safety checks refused.
-- [ ] **Step 4: Commit** `test(e2e): a session found by the scan in a Herdr terminal is listed once, with its last answer`.
+- [x] **Step 3: Run** on this Mac (Herdr Core installed at `~/.local/bin/herdr-core`), `cd cli && env -u TMUX -u TMUX_PANE TMPDIR=/tmp npx vitest run --config vitest.e2e.config.ts e2e/deviceHerdrApp.e2e.ts`. Expected: PASS, all five tests, none skipped, and none of `hcCore.ts`'s safety checks refused.
+- [x] **Step 4: Commit** `test(e2e): a session found by the scan in a Herdr terminal is listed once, with its last answer`.
 
 ---
 
@@ -422,14 +451,14 @@ Not changed, and a diff in any is a finding:
 **2. Herdr's agents, end to end, with a private Herdr Core (tester, this Mac)**
 - Run at the final head: `cd cli && env -u TMUX -u TMUX_PANE TMPDIR=/tmp E2E_BUNDLE=1 npx vitest run --config vitest.e2e.config.ts e2e/deviceHerdrApp.e2e.ts`. All five tests: the four existing ones (Tasks 6 and 7 change what the hc client and source keep and tell) and Task 10's.
 - Needs Herdr Core installed for the account that runs the tests (`~/.local/bin/herdr-core`, present on this Mac); the file is skipped without it, so a skip is a failure of this check, not a pass.
-- Isolation, `e2e/harness/hcCore.ts`'s own: a private core in session `harness-<random>`, its HOME and every `XDG_*` under a fresh `/tmp/hh-<random>` root, its socket there (`HC_SOCKET` for the daemon, which inherits no `HC_*` or `XDG_*`), every run of hc in an environment built from nothing; before and after each start and stop it checks that launchd holds no `dev.herdr.core.*` job and that the person's own Herdr (their cores, holders, Herdr.app and its connections) are the same processes. The daemon's `herdr-app` and `open` are fakes that record their arguments. The fake dial and fake backend as in item 1.
+- Isolation, `e2e/harness/hcCore.ts`'s own: a private core in session `harness-<random>`, its HOME and every `XDG_*` under a fresh `/tmp/hh-<random>` root, its socket there. The daemon inherits no `HC_*` or `XDG_*` of the person's; each test daemon is given `HC_SOCKET` (the planned core's socket) and `XDG_RUNTIME_DIR=<private root>`: for the four existing tests `HC_SOCKET` is `<root>/c.sock` (`hookIds` false, as before), and for Task 10's it is `<root>/herdr-core/default.sock`, the default session's path under that `XDG_RUNTIME_DIR`, so the daemon's default hc socket is the private core's and `hookIds` is true. Every run of hc in an environment built from nothing; before and after each start and stop it checks that launchd holds no `dev.herdr.core.*` job and that the person's own Herdr (their cores, holders, Herdr.app and its connections) are the same processes. The daemon's `herdr-app` and `open` are fakes that record their arguments. The fake dial and fake backend as in item 1.
 - A person sees: five passes, none skipped, no safety check refused; in Task 10's test, one row on Herdr's page with the observed id, a `summary` with `restore: true` carrying `answer 1: before the dial`, the words typed in the private terminal, and the log's `[observed] herdr · 1 paired` with no address, folder, session id or words.
 
 **3. The whole e2e suite on GitHub: not run again.** It ran by hand at `ca2087458c` (Actions → CLI end to end, `.github/workflows/cli-e2e.yml`, eight Linux shards). What changed since does not change a Linux run: the hc source is macOS only, so on Linux the lookup is absent and `pair` and `placeHerdr` change nothing; `deviceHerdrApp.e2e.ts` is skipped on every runner (no Herdr Core); `fakeEngine.mjs` is unchanged. PR CI's unit specs (item 4) cover the new code on Linux. Its link stays in the pull request. Later pull requests: the nightly run has these files; no workflow change, no proposal.
 
 **4. In PR CI, by itself:** `cli-typecheck` and `cli-tests` run `observed.spec.ts`, `recordName.spec.ts`, `hcClient.spec.ts`, `hcSource.spec.ts` and `devices.spec.ts` on Linux.
 
-**5. Numbers:** the scan's line (`answered`, `ms` over every read) and the new `[observed] herdr · <n> paired`. No new read and no timer: the pid rides hc's existing events; each hc change costs one lookup per unhooked entry (at most 50) over at most 1,024 terminals. No hot path gains work.
+**5. Numbers:** the scan's line (`answered`, `ms` over every read) and the new `[observed] herdr · <n> paired`. No new read and no timer: the pid rides hc's existing events. The hc path does gain work: each hc foreground change now costs one `placeHerdr()` (one `terminalOf` lookup per unhooked entry, at most 50, each over at most 1,024 terminals) and one dial update. The scan's look gains the same lookups in its loop.
 
 **6. Diego's own check, on his Mac and his dial (the owner's, not a tester's).** Needs his login, his Claude app, Herdr.app and Orca sessions, his dial and his eye; the PM asks him once the pull request is ready. With the build from the pull request's head installed (`make install-cli` in that checkout) and the daemon restarted, before any prompt: the dial shows each idle session's recap, the Claude app's sessions by their titles, and each Herdr.app session once, on Herdr's page, with its recap; a word spoken to a Herdr.app session reaches its terminal. The log shows `[observed] herdr · <n> paired` with `<n>` his live Herdr sessions.
 
