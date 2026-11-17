@@ -377,7 +377,7 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
     it('a failed or too-big run keeps the rows, and says so once until that agent\'s next good run', async () => {
       const s = setup()
       await started(s, [record()])
-      const lists = () => s.log.filter((line) => line.startsWith('[cmux] list'))
+      const lists = () => s.log.filter((line) => line.startsWith('[cmux] list ·'))
       s.change('claude-hook-sessions.json')
       await s.reply(1, { ok: false, fault: 'failed' })
       s.change('claude-hook-sessions.json')
