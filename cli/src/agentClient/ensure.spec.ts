@@ -133,7 +133,7 @@ describe('harness ensure (#4393)', () => {
     }
     d.extra.agent_resume = (p) => ({ state: 'created', resumed: true, agent: frame(String(p.agentId), { tmuxPane: '%7' }) })
     const checked: Frame[] = []
-    const h = harness(d, { engineAlive: async (f) => { checked.push(f); return false } })
+    const h = harness(d, { engineAlive: async (f) => { checked.push(f); return 'pane-gone' } })
     expect(await ensureCommand(args(), h.deps)).toBe(EXIT.ok)
     expect(h.json()).toMatchObject({ result: 'resumed', id: 'a1', engineSession: 'agent:main:harness-a1', state: 'starting' })
     expect(checked.map((f) => f.id)).toEqual(['a1'])
@@ -143,15 +143,43 @@ describe('harness ensure (#4393)', () => {
     expect(h.made).toEqual([])
   })
 
-  it('resumes a live row whose engine was killed in a pane that survives (Claude), even when the close is refused', async () => {
+  it('resumes an idle row whose engine was killed in a pane that survives (Claude)', async () => {
     const d = new FakeDaemon()
     d.frames = [frame('c1', { engine: 'claude', sessionId: 'sess-1' })]
     own('c1', 'lamp', 'claude')
-    d.extra.agent_close = (p) => p.mode === 'inspect' ? { activity: 'idle' } : { error: 'IDENTITY_UNAVAILABLE' }
+    d.extra.agent_close = (p) => {
+      if (p.mode === 'inspect') return { activity: 'idle' }
+      d.frames = [frame('c1', { engine: 'claude', sessionId: 'sess-1', status: 'stopped' })]
+      return { closed: true }
+    }
     d.extra.agent_resume = (p) => ({ state: 'created', resumed: true, agent: frame(String(p.agentId), { engine: 'claude', sessionId: 'sess-1' }) })
     const h = harness(d, { engineAlive: async () => false })
     expect(await ensureCommand(args([], 'claude'), h.deps)).toBe(EXIT.ok)
     expect(h.json()).toMatchObject({ result: 'resumed', id: 'c1', engine: 'claude', engineSession: 'sess-1' })
+  })
+
+  it('never closes a working row for an engine it cannot see in a pane still there (another namespace, hidepid)', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('c1', { engine: 'claude', sessionId: 'sess-1', activity: { state: 'working' } })]
+    own('c1', 'lamp', 'claude')
+    const h = harness(d, { engineAlive: async () => false })
+    expect(await ensureCommand(args([], 'claude'), h.deps)).toBe(EXIT.ok)
+    expect(h.json()).toMatchObject({ result: 'live', id: 'c1' })
+    expect(d.requests.filter((r) => r.type === 'agent_close' && r.payload.mode === 'now')).toEqual([])
+    expect(d.types()).not.toContain('agent_resume')
+  })
+
+  it('says ENGINE_NOT_READY, exit 5, and starts nothing when the dead row cannot be closed', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('c1', { engine: 'claude', sessionId: 'sess-1' })]
+    own('c1', 'lamp', 'claude')
+    d.extra.agent_close = (p) => p.mode === 'inspect' ? { activity: 'idle' } : { error: 'IDENTITY_UNAVAILABLE' }
+    const h = harness(d, { engineAlive: async () => 'pane-gone' })
+    expect(await ensureCommand(args([], 'claude'), h.deps)).toBe(EXIT.refused)
+    expect(h.json()).toMatchObject({ error: 'ENGINE_NOT_READY', detail: expect.stringContaining('IDENTITY_UNAVAILABLE') })
+    expect(d.types()).not.toContain('agent_resume')
+    expect(h.made).toEqual([])
+    expect(new ProgramRecords(dir).get('c1')).not.toBeNull()
   })
 
   it('believes the row when the engine cannot be checked, and never checks one still starting', async () => {
@@ -200,6 +228,28 @@ describe('harness ensure (#4393)', () => {
     const h = harness(d)
     await ensureCommand(args(), h.deps)
     expect(h.json()).toMatchObject({ result: 'new', id: 'new1', why: expect.stringContaining('could not be opened again') })
+    expect(new ProgramRecords(dir).get('c1')).toBeNull()
+  })
+
+  it('keeps a record whose harness one list left out, and resumes it rather than start another', async () => {
+    const d = new FakeDaemon()
+    own('c1')
+    d.extra.agent_resume = (p) => ({ state: 'created', resumed: true, agent: frame(String(p.agentId)) })
+    const h = harness(d)
+    expect(await ensureCommand(args(), h.deps)).toBe(EXIT.ok)
+    expect(h.json()).toMatchObject({ result: 'resumed', id: 'c1' })
+    expect(d.requests.find((r) => r.type === 'agent_resume')?.payload).toMatchObject({ agentId: 'c1' })
+    expect(new ProgramRecords(dir).get('c1')).not.toBeNull()
+    expect(h.made).toEqual([])
+  })
+
+  it('forgets a record the daemon no longer knows only on its AGENT_NOT_FOUND', async () => {
+    const d = new FakeDaemon()
+    own('c1')
+    d.extra.agent_resume = () => ({ state: 'failed', failure: { code: 'AGENT_NOT_FOUND' } })
+    const h = harness(d)
+    expect(await ensureCommand(args(), h.deps)).toBe(EXIT.ok)
+    expect(h.json()).toMatchObject({ result: 'new', id: 'new1' })
     expect(new ProgramRecords(dir).get('c1')).toBeNull()
   })
 
@@ -256,7 +306,7 @@ describe('harness ensure (#4393)', () => {
     let busy = 2
     d.extra.agent_resume = (p) => busy-- > 0 ? { state: 'failed', failure: { code: 'AGENT_BUSY' } }
       : { state: 'created', resumed: true, agent: frame(String(p.agentId), { engine: 'claude', sessionId: 'sess-k' }) }
-    const h = harness(d, { engineAlive: async () => false })
+    const h = harness(d, { engineAlive: async () => 'pane-gone' })
     expect(await ensureCommand(args([], 'claude'), h.deps)).toBe(EXIT.ok)
     expect(h.json()).toMatchObject({ result: 'resumed', id: 'k1', engineSession: 'sess-k' })
     expect(h.made).toEqual([])
@@ -292,10 +342,33 @@ describe('harness ensure (#4393)', () => {
     expect(h.json()).toMatchObject({ error: 'NAME_TAKEN' })
   })
 
-  it('refuses an agent, token or not', async () => {
-    const h = harness(new FakeDaemon(), { env: { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's1' } })
+  it('refuses an agent, token or not, before it starts the daemon for one', async () => {
+    let up = 0
+    const h = harness(new FakeDaemon(), { env: { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's1' }, daemonUp: async () => { up++; return { started: true, ms: 1 } } })
     expect(await ensureCommand(args(), h.deps)).toBe(EXIT.refused)
     expect(h.json()).toMatchObject({ error: 'NOT_YOURS' })
+    expect(up).toBe(0)
+  })
+
+  it('reads the token before it starts the daemon', async () => {
+    let up = 0
+    const h = harness(new FakeDaemon(), { daemonUp: async () => { up++; return { started: true, ms: 1 } } })
+    expect(await ensureCommand(['openclaw', '--name', 'lamp', '--program-token-file', join(dir, 'missing'), '--json'], h.deps)).not.toBe(EXIT.ok)
+    expect(up).toBe(0)
+  })
+
+  it('keeps the harness it just made the program\'s when harness new could not record it', async () => {
+    const d = new FakeDaemon()
+    const h = harness(d, { create: async () => {
+      d.frames.push(frame('new1'))
+      return { code: 0, lines: [JSON.stringify({ ok: true, machineId: 'computer-1', agent: { id: 'new1', name: 'lamp', engine: 'openclaw' } })] }
+    } })
+    expect(await ensureCommand(args(), h.deps)).toBe(EXIT.ok)
+    expect(h.json()).toMatchObject({ result: 'new', id: 'new1' })
+    expect(new ProgramRecords(dir).get('new1')).toMatchObject({ tokenHash: HASH, name: 'lamp' })
+    const again = harness(d)
+    await ensureCommand(args(), again.deps)
+    expect(again.json()).toMatchObject({ result: 'live', id: 'new1' })
   })
 
   it('says why harness new did not start it', async () => {
