@@ -27,14 +27,15 @@ const run: Run = (file, args) => spawnSync(file, args, { encoding: 'utf8' })
 
 /** Removes the throwaway's own preferences, which macOS keeps under GATE_ID after the run: through `defaults`, as
  *  cfprefsd holds a domain and would write a removed file back, and after the kill, as a quitting app writes its domain
- *  again. GATE_ID's domain and no other: it takes none. */
+ *  again. Then the file: cfprefsd keeps an empty one after the delete (2026-11-17). GATE_ID's domain and no other: it
+ *  takes none. */
 export function forgetPreferences(library = LIBRARY, defaults: Run = run): void {
   const deleted = defaults('/usr/bin/defaults', ['delete', GATE_ID])
-  // Exit 1 with "Domain (…) not found": nothing to remove.
+  // Exit 1 with "Domain (…) not found": the domain is empty, or never was.
   if (deleted.status !== 0 && !/Domain \(.*\) not found/.test(deleted.stderr)) {
     throw new Error(`defaults delete ${GATE_ID} failed: ${deleted.stderr.trim()}`)
   }
-  if (existsSync(join(library, 'Preferences', `${GATE_ID}.plist`))) throw new Error(`~/Library/Preferences/${GATE_ID}.plist is still there`)
+  rmSync(join(library, 'Preferences', `${GATE_ID}.plist`), { force: true })
 }
 
 /** Removes the throwaway's caches and HTTP storage, which macOS files by GATE_ID: each folder named the id, or the id
