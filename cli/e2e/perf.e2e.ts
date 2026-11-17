@@ -1,5 +1,7 @@
 /**
- * PERF=1 E2E_BUNDLE=1: an isolated signed-in core, 25 agents, four turning and two windows.
+ * PERF=1 E2E_BUNDLE=1: an isolated signed-in core, 25 agents, four turning and two windows. A turning Claude Code
+ * agent's every fourth turn starts a background subagent that finishes inside it (`!bgagent`), so the hooks it waits
+ * for are measured too. Each phase reports the hook processes the fake engines ran, by event.
  * PERF_SECONDS=60, PERF_AGENTS=25, PERF_ACTIVE=4, PERF_WARMUP_SECONDS=20, PERF_HISTORY_MIB=1.
  * PERF_PROFILE=1 adds node --cpu-prof; PERF_HEAP=1 writes snapshots AFTER measurement windows.
  * PERF_REPORT=<file> writes JSON; raw artifacts stay in its recorded private temporary directory.
@@ -61,22 +63,31 @@ function sampleProcess(pid: number) {
       memory: { rssMean: rss.length ? rss.reduce((a, b) => a + b, 0) / rss.length : null, rssMax: rss.length ? Math.max(...rss) : null, samples: rss.length } }
   }
 }
-const HOOK_RAN = /^(\S+) \S+ pid=\d+ (\w+)(?:\([^)]*\))? session=\S* ran in (\d+) ms · exit=/
-/** The hooks the fake engines ran inside [from, to] (epoch ms), from their log (fakeEngine.mjs `runHookCommand`):
- *  each line is stamped when its hook exited, so a round trip is the hook's request to the daemon and back. */
-function hookRequests(log: string, from: number, to: number, completedTurns: number) {
-  const ms: number[] = []
-  const byEvent: Record<string, number> = {}
+const HOOK_ENDED = /^(\S+) \S+ pid=\d+ (\w+)(?:\([^)]*\))? session=\S* (ran|ended after it was killed) in (\d+) ms · exit=/
+type HookRun = { ms: number; killed: boolean }
+const hookSpread = (runs: HookRun[]) => {
+  const ms = runs.map(run => run.ms).sort((a, b) => a - b)
+  return { count: ms.length, killed: runs.filter(run => run.killed).length,
+    p50Ms: ms[Math.floor(ms.length * .5)] ?? null, p95Ms: ms[Math.floor(ms.length * .95)] ?? null }
+}
+/** The hook processes the fake engines ran inside [from, to] (epoch ms), from their log (fakeEngine.mjs
+ *  `runHookCommand`): each line is stamped when its process exited, with how long it ran from its spawn, a hook killed
+ *  at its timeout included and counted apart. That is what the engine waits for each hook it waits on, by event: Codex's
+ *  PermissionRequest and PreToolUse before a dialog (with PERF_QUESTIONS), Claude Code's SubagentStart before a
+ *  subagent runs. */
+function hookProcesses(log: string, from: number, to: number, completedTurns: number) {
+  const all: HookRun[] = []
+  const byEvent: Record<string, HookRun[]> = {}
   for (const line of log.split('\n')) {
-    const [, at, event, took] = HOOK_RAN.exec(line) ?? []
+    const [, at, event, how, took] = HOOK_ENDED.exec(line) ?? []
     const time = at ? Date.parse(at) : NaN
     if (!(time >= from && time <= to)) continue
-    ms.push(Number(took))
-    byEvent[event] = (byEvent[event] ?? 0) + 1
+    const run = { ms: Number(took), killed: how !== 'ran' }
+    all.push(run)
+    ;(byEvent[event] ??= []).push(run)
   }
-  ms.sort((a, b) => a - b)
-  return { count: ms.length, perTurn: completedTurns ? ms.length / completedTurns : null,
-    roundTripMs: { p50: ms[Math.floor(ms.length * .5)] ?? null, p95: ms[Math.floor(ms.length * .95)] ?? null }, byEvent }
+  return { ...hookSpread(all), perTurn: completedTurns ? all.length / completedTurns : null,
+    byEvent: Object.fromEntries(Object.entries(byEvent).map(([event, runs]) => [event, hookSpread(runs)])) }
 }
 function knob(name: string, fallback: number, min: number, max: number): number {
   const n = Number(process.env[name] ?? fallback)
@@ -173,7 +184,7 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
       workload: { modelControls: measureControls,
         questions: measureQuestions ? { agents: questionAgents, seconds: questionSeconds, kinds: QUESTION_KINDS, answeredThrough: 'question_response from a local window, as the desktop app answers', retries: 0 } : null,
         readerPageEveryMs: measureReaders ? 2000 : null, agents, active, windows: 2, terminalStreams: 4, seconds, warmup, historyMiB,
-        turnDelayMs: '5000 + a unique round offset', inventoryEveryMs: 60_000, heartbeatEveryMs: 5_000, ackEveryMs: 16 },
+        turnDelayMs: '5000 + a unique round offset; none for a Claude Code agent\'s every fourth turn, which starts and finishes a background subagent (!bgagent)', inventoryEveryMs: 60_000, heartbeatEveryMs: 5_000, ackEveryMs: 16 },
       instrumentation: { profile, heaps, delayResolutionMs: 10, rssSampleEveryMs: 1_000, cpuPercentBasis: 'one logical CPU',
         scope: measureWorkers ? 'core PID and both engine worker PIDs (engine-claude, engine-codex) by in-process probe; the master by ps, reported separately; excludes other services, engines and tmux' : 'core PID only; the master by ps, reported separately; excludes services, engines and tmux', heapPausesOutsideWindows: true },
       loadAverage: { start: loadavg() },
@@ -268,7 +279,9 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
         const workers = turns.map(async (_, i) => {
           while (running) {
             const began = performance.now()
-            try { await turn(saved[i].id, `!slow ${5000 + i + turns[i] * 17}`) }
+            // A Claude Code subagent's SubagentStart is a hook its engine waits for before the subagent runs.
+            const content = saved[i].engine === 'claude' && turns[i] % 4 === 0 ? '!bgagent' : `!slow ${5000 + i + turns[i] * 17}`
+            try { await turn(saved[i].id, content) }
             catch (error) { problem ??= error; return }
             if (running) { turns[i]++; latencies.push(performance.now() - began) }
           }
@@ -339,7 +352,7 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
         }
         const completedTurns = turns.reduce((a, b) => a + b, 0)
         report.phases.push({ ...metrics!, readers: readerMetrics, master, loadAverage: { start: loadStart, end: loadEnd }, questions,
-          hooks: hookRequests(d.hookLog(), windowStartedAt, performance.timeOrigin + windowEndedAt, completedTurns),
+          hooks: hookProcesses(d.hookLog(), windowStartedAt, performance.timeOrigin + windowEndedAt, completedTurns),
           modelControls: Object.fromEntries(Object.entries(controlLatencies).map(([engine, values]) => {
             values.sort((a, b) => a - b)
             return [engine, { count: values.length, p50Ms: values[Math.floor(values.length * .5)] ?? null, p95Ms: values[Math.floor(values.length * .95)] ?? null }]
