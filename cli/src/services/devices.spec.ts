@@ -11,7 +11,7 @@ import { CMUX_APP_BINARY, type CmuxClient, type CmuxInputState, type CmuxSession
 import { hcClientDeps, type HcClient, type HcPrompt, type HcSubscriber, type HcTerminal } from '../cable/hosts/hcClient.js'
 import { herdrClientDeps, type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrPrompt, type HerdrSubscriber } from '../cable/hosts/herdrClient.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
-import { observedAgentId } from '../cable/hosts/observed.js'
+import { observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
 import type { OrcaChild, OrcaReads, OrcaTabs, OrcaTerminal } from '../cable/hosts/orca.js'
 import { AppRings } from '../cable/hosts/select.js'
 import { env } from '../config/env.js'
@@ -5882,6 +5882,15 @@ describe('cmux\'s agents, from cmux\'s own stores (docs/plans/2026-11-17-dial-cm
     expect(orcaRuns).toEqual([link()])
     expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'Turn on Automation mode in cmux.' })
     expect(fake.calls).toContainEqual(['mode'])
+  })
+
+  it('with cmux stopped, an observed agent\'s changes place nothing in cmux', () => {
+    const places = vi.spyOn(ObservedSource.prototype, 'setPaneNames')
+    onTestFinished(() => places.mockRestore())
+    const { port } = withCmux()
+    port.observed(hook('session-start', { TERM_PROGRAM: 'ghostty' }))
+    port.observed(hook('turn-stop', { TERM_PROGRAM: 'ghostty' }))
+    expect(places.mock.calls.filter(([adapter]) => adapter === 'cmux')).toEqual([])
   })
 
   // tmux comes before cmux: its pane is the nearer, and cmux's place of the same agent is its surface, which holds tmux.
