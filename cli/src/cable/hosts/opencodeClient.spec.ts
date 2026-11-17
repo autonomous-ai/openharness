@@ -595,6 +595,21 @@ describe('the opencode client (docs/plans/2026-11-17-dial-opencode-design.md)', 
     expect(posts()).toHaveLength(7)
   })
 
+  it('a 2xx to the post is sent and never posted again, its body whole JSON or not', async () => {
+    const server = await start()
+    server.session({ id: 'ses_a1' })
+    const opencode = await found(server)
+    const posts = () => routes(server).filter((route) => route === POST)
+    server.answer(POST, { raw: 'ok' })
+    expect(await opencode.prompt('ses_a1', 'run the tests', opencodeMessageId())).toBe('sent')
+    expect(posts()).toHaveLength(1)
+
+    // Its status has come, and its connection closes before the body's end.
+    server.answer(POST, { status: 200, headers: { 'content-length': '100' }, json: {} })
+    expect(await opencode.prompt('ses_a1', 'run the tests', opencodeMessageId())).toBe('sent')
+    expect(posts()).toHaveLength(2)
+  })
+
   it('control characters become spaces', async () => {
     const server = await start()
     server.session({ id: 'ses_a1' })
