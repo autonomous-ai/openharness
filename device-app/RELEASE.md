@@ -70,7 +70,8 @@ The scripts the jobs run: `scripts/release-setup.sh` (the runner's tools), `scri
 ## The manifest
 
 `https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/metadata.json`, read from the bucket, never
-through the CDN. Tauri's static update format, plus `dmg`:
+through the CDN. Tauri's static update format, plus entries for the archive and the dmg in the shape of Desktop's
+manifest:
 
 ```json
 {
@@ -81,11 +82,15 @@ through the CDN. Tauri's static update format, plus `dmg`:
     "darwin-aarch64": { "url": "https://cdn.autonomous.ai/harness/device/0.1.0/Harness-Device.app.tar.gz", "signature": "<.sig contents>" },
     "darwin-x86_64": { "url": "https://cdn.autonomous.ai/harness/device/0.1.0/Harness-Device.app.tar.gz", "signature": "<.sig contents>" }
   },
-  "dmg": { "url": "https://cdn.autonomous.ai/harness/device/0.1.0/Harness-Device.dmg", "sha256": "<64 hex>", "size": 12345678 }
+  "device-macos": { "version": "0.1.0", "url": "https://cdn.autonomous.ai/harness/device/0.1.0/Harness-Device.app.tar.gz", "sha256": "<64 hex>", "size": 12000000 },
+  "device-macos-dmg": { "version": "0.1.0", "url": "https://cdn.autonomous.ai/harness/device/0.1.0/Harness-Device.dmg", "sha256": "<64 hex>", "size": 12345678 },
+  "device-macos-arm64": { "version": "0.1.0", "url": "https://cdn.autonomous.ai/harness/device/0.1.0/Harness-Device.app.tar.gz", "sha256": "<64 hex>", "size": 12000000 },
+  "device-macos-arm64-dmg": { "version": "0.1.0", "url": "https://cdn.autonomous.ai/harness/device/0.1.0/Harness-Device.dmg", "sha256": "<64 hex>", "size": 12345678 }
 }
 ```
 
-The app reads `platforms` (its updater ignores `dmg`); the website's download link reads `dmg`.
+The app is universal, so the arm64 pair names the same files as the other pair. The app reads `platforms` (its
+updater ignores the rest); the website's download link reads `device-macos-dmg`.
 
 ## Keys
 
@@ -124,16 +129,17 @@ A red run names its step.
 ## How an installed app updates
 
 A build the release stamped with its version checks the manifest on macOS on its first tick after launch, then every
-6 hours, but never while the CLI installs or a sign-in runs. A local `cargo tauri build` is version 0.0.0 and never
-checks. A newer version is downloaded, its signature checked against the public key and the version signed into it
-against the manifest's, installed over the running bundle, and the app relaunches. The relaunch waits while the window
-is open, `harness start` runs, or the CLI installs or a sign-in runs. While it updates, the
-menu's row reads `Updating Harness Device…`. Timeouts: check 30 s, download 5 min. A failure changes nothing on disk;
-the next check tries again.
+minute, as the CLI does, but never while the CLI installs or a sign-in runs. A local `cargo tauri build` is version
+0.0.0 and never checks. A newer version is downloaded, its signature checked against the public key and the version
+signed into it against the manifest's, installed over the running bundle, and the app relaunches. The relaunch waits
+while the window is open, `harness start` runs, or the CLI installs or a sign-in runs. While it updates, the menu's row
+reads `Updating Harness…`. Timeouts: check 30 s, download 5 min. A failure changes nothing on disk; the next check
+tries again, but a version whose download, signature or install failed waits 2 minutes, then 4, 8, up to an hour, and
+a newer version is tried at once.
 
 Its log (`~/Library/Logs/ai.autonomous.harness.device/`) has one line per step, never a URL:
 
-- `update: found 0.1.3`
+- `update: found 0.1.3`, once per version
 - `update: installed 0.1.3`
 - `update: failed check|download|signature|install`
 - `update: skipped not-writable`

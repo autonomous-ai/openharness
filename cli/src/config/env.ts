@@ -405,6 +405,10 @@ const fields = {
   HARNESS_DEVICE_OBSERVED: (raw): boolean => raw !== 'off',
 } satisfies Record<string, EnvField<unknown>>
 
+// The allowlist a start gives the daemon (lib/startEnvironment.ts) keeps every variable this file reads, so a new
+// setting here reaches the daemon without a second list to update.
+export const ENV_FIELD_NAMES: readonly string[] = Object.keys(fields)
+
 export type Env = EnvOf<typeof fields>
 
 function validateEnv(): Env {

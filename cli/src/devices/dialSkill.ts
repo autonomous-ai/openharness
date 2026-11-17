@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto'
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-export const DIAL_SKILL_DESCRIPTION = 'The person has a Harness dial on their desk. Use it when you need them to do something you cannot: give information, act outside your reach (connect a VPN, sign in, plug in a device), or decide.'
+export const DIAL_SKILL_DESCRIPTION = 'The person has a Harness dial on their desk. Use it when the task stops on a step only they can take: give information, act outside your reach (connect a VPN, sign in, plug in a device, get another person to sign off), or decide.'
 
 /** How every release's marker line opens, the one 0.6.58 wrote too: one rule knows them all, with no list of lines to
  *  keep. The period tells it from Harness's other files (`# Written by Harness,`, `:` or ` (`), none of which sits at a
@@ -25,7 +25,7 @@ description: ${JSON.stringify(DIAL_SKILL_DESCRIPTION)}
 ${DIAL_SKILL_MARKER}
 ---
 
-When you need the person to act, ring their dial:
+When the task stops on a step only the person can take, ring their dial before you hand it to them:
 
     harness device notify "<what you need, in one line>"
 

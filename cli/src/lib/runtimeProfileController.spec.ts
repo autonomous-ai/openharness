@@ -1070,7 +1070,7 @@ describe('RuntimeProfileController', () => {
     const manager = new RuntimeProfileManager()
     manager.hydrate(value, [])
     const target = encodeRuntimeProfile({ sessionId: 'h1', engine: 'opencode', model: 'vibe/minimax-m3', effort: 'auto' })
-    vi.spyOn(manager, 'supportsControl').mockReturnValue(true)
+    vi.spyOn(manager, 'supportsControl').mockResolvedValue(true)
     vi.spyOn(manager, 'modelsForSession').mockResolvedValue([{ id: target, displayName: 'MiniMax M3' }])
     vi.mocked(loadEngine).mockResolvedValueOnce(null as never)
     const sendKey = vi.fn().mockResolvedValue(true)

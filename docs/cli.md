@@ -43,6 +43,44 @@ variables (`BACKEND_WS_URL`, `WEB_URL`, `ADAPTER_DATA_DIR`, `ADAPTER_COMPUTER_ID
 per-engine home directories); [`cli/README.md`](cli/README.md) has the full table and the
 `.env.example`.
 
+## The daemon's environment
+
+On macOS and Linux, `harness start` (with or without `-f`) gives the daemon only these variables of the shell that ran
+it. Anything else in that shell never reaches the daemon, its tmux server or a pane.
+
+| Group | Variables |
+|---|---|
+| System | `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `TZ`, `LANG`, `LANGUAGE`, `LC_*`, `SSH_AUTH_SOCK`, `SSH_CONNECTION`, `__CF_USER_TEXT_ENCODING`, `TMUX_TMPDIR`, `ZDOTDIR`, `WSL_DISTRO_NAME` |
+| Linux desktop | `XDG_*`, `DBUS_SESSION_BUS_ADDRESS`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY` |
+| Network | `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY` and their lowercase forms, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR` |
+| Harness | `HARNESS_*`, `HARNESSD_*`, `ADAPTER_*`, `DOTENV_CONFIG_PATH`, `NODE_ENV`, and every setting of the CLI's config (`BACKEND_WS_URL`, `WEB_URL`, `PORT` and the rest) |
+| Harness OS | `npm_config_prefix`, `BROWSER` |
+| Engine settings | `CLAUDE_CONFIG_DIR`, `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, `OPENCLAW_HOME`, `CODEX_PATH`, `CURSOR_CONFIG_DIR`, `CURSOR_DATA_DIR`, `OPENCODE_DB`, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, `KILO_DB`, `GRID_HOME`, `GRID_CONTROL_PLANE_URL`, `LLAMA_SERVER`, `HC_SOCKET`, and each engine's home and path setting (`CODEX_HOME`, `CLAUDE_PATH` and the rest) |
+| Provider credentials, for now | `ANTHROPIC_*`, `OPENAI_*`, `AWS_*`, `GOOGLE_*`, `GEMINI_*`, `AZURE_*`, `OPENROUTER_*`, `XAI_*`, `CLAUDE_CODE_USE_*`, `CLOUD_ML_REGION` |
+
+Left out on purpose: `TERM` and `COLORTERM` (tmux sets a pane's own), `NODE_OPTIONS`, `TMUX`, `TMUX_PANE`,
+`HC_SESSION`, `TYPESAFE_CREDENTIALS`, `GIT_SSH_COMMAND`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`,
+`CLAUDE_CODE_OAUTH_TOKEN` (another tool, such as an account switcher, often puts it in the shell that ran the start),
+and every variable that names an agent's own session (`CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`, every `ORCA_*`),
+under an allowed prefix too.
+
+What you export in your shell's startup files still reaches your agents: every pane starts its engine through your
+login shell.
+
+Anything else the daemon or its agents need, `HC_SESSION`, `TYPESAFE_CREDENTIALS`, `GIT_SSH_COMMAND` and
+`CLAUDE_CODE_OAUTH_TOKEN` among them, goes in the file `HARNESS_ENV_FILE` names, which every daemon process reads as
+it starts.
+
+Provider keys will move to `HARNESS_ENV_FILE` next.
+
+On Windows a start keeps its whole environment for now: a Windows pane has no login shell. It narrows once a start
+reads your own variables from the registry.
+
+The daemon's log says how many variables a start left out, never which:
+`[env] started with N variables; M left out`.
+
+After `harness service install`, launchd and systemd start the daemon with their own environment, as before.
+
 ## Automation
 
 The app is one client of the daemon. Any process of the same OS user can be another: the loopback

@@ -182,6 +182,27 @@ void main() {
         ..ingest('m1', 'a2', 's2', 'text_delta', {'content': 'not mine'});
       expect(first.items.map((i) => i.text), ['mine']);
     });
+
+    test('an agent nobody has talked to yet is an empty chat, read from nowhere, and its first session a chat of its own', () async {
+      final read = <String>[];
+      final conversations = ChatConversations(
+        reader: (machineId, sessionId) => (_) async {
+          read.add(sessionId);
+          return _page([]);
+        },
+      );
+      // OpenCode makes its session at the first message (MSI, 2026-11-17: Show chat did nothing on such an agent).
+      final empty = conversations.open('m1', 'a1', null);
+      await Future<void>.delayed(Duration.zero);
+      expect(empty.load, ChatLoad.loaded);
+      expect(empty.items, isEmpty);
+      expect(read, isEmpty);
+
+      final first = conversations.open('m1', 'a1', 's1');
+      await Future<void>.delayed(Duration.zero);
+      expect(identical(first, empty), isFalse);
+      expect(read, ['s1']);
+    });
   });
 
   group('how agents open', () {

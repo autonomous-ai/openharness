@@ -1,0 +1,11 @@
+# Partner API quotas. rate_limit is requests per minute, per partner.
+partners:
+  globex:
+    rate_limit: 600
+    webhook_secret: whsec_FAKEglbx7Hd2Mk9Ws4Qe1Ry5
+  initech:
+    rate_limit: 120
+    webhook_secret: whsec_FAKEintc3Bv6Np1Kz8Tf2Gu7
+  acme:
+    rate_limit: TBD # agreed on the 11/12 call
+    webhook_secret: whsec_FAKEacme4Jq8Vn2Xr6Lt0Zp3

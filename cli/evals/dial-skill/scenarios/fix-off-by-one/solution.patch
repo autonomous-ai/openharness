@@ -1,0 +1,9 @@
+--- a/src/paginate.js
++++ b/src/paginate.js
+@@ -1,5 +1,5 @@
+ export function paginate(items, page, perPage) {
+-  const start = page * perPage
++  const start = (page - 1) * perPage
+   return {
+     items: items.slice(start, start + perPage),
+     page,

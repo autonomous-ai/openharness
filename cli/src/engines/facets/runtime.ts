@@ -9,7 +9,9 @@ export interface RuntimeProfile {
   effort: string
 }
 
-export interface RuntimeModelOption { id: string; displayName: string }
+/** One model-and-effort choice. [description] is the engine's own line under the model ("For complex work and everyday
+ * tasks"), where the engine gives one. */
+export interface RuntimeModelOption { id: string; displayName: string; description?: string }
 
 export interface RuntimeState {
   model: string | null

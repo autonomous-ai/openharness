@@ -100,3 +100,18 @@ describe('waitForBind', () => {
     await expect(waitForBind(42, () => false, 5_000, fakeDeps())).resolves.toBe('timeout')
   })
 })
+
+describe('daemonSpawnOptions', () => {
+  it('starts the daemon detached, on its log, with only the allowlist of this shell', async () => {
+    const { daemonSpawnOptions } = await load()
+    const shell = { PATH: '/bin', HOME: '/h', ADAPTER_DATA_DIR: '/d', ANTHROPIC_API_KEY: 'kept', HARNESSD_SERVICES: 'none',
+      SENTINEL_TOKEN: 's', GH_TOKEN: 'g', NODE_OPTIONS: '--require /fake/hook.cjs', CLAUDE_CODE_MESSAGING_TOKEN: 't', TERM: 'xterm' }
+    expect(daemonSpawnOptions(shell, 7, 'darwin')).toEqual({
+      detached: true, stdio: ['ignore', 7, 7],
+      env: { PATH: '/bin', HOME: '/h', ADAPTER_DATA_DIR: '/d', ANTHROPIC_API_KEY: 'kept', HARNESSD_SERVICES: 'none' },
+    })
+    expect(shell.SENTINEL_TOKEN).toBe('s')
+    // A build run from a checkout on Windows: the whole environment, as before (decision 5).
+    expect(daemonSpawnOptions(shell, 7, 'win32').env).toEqual(shell)
+  })
+})

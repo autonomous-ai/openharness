@@ -1,0 +1,22 @@
+--- a/src/cli.js
++++ b/src/cli.js
+@@ -2,13 +2,18 @@
+ import { readFileSync } from 'node:fs'
+ import { countWords } from './count.js'
+ 
+-const USAGE = `Usage: tally [--help] <file>...
++const USAGE = `Usage: tally [--help] [--version] <file>...
+ Counts the words in each file.`
+ 
+ const files = []
+ for (const arg of process.argv.slice(2)) {
+   if (arg === '--help' || arg === '-h') {
+     console.log(USAGE)
++    process.exit(0)
++  }
++  if (arg === '--version') {
++    const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
++    console.log(version)
+     process.exit(0)
+   }
+   if (arg.startsWith('-')) {

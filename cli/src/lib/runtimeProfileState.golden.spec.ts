@@ -68,8 +68,8 @@ describe('former runtime manager state and control golden', () => {
       m.finishControl(s)
       await vi.advanceTimersByTimeAsync(120)
       states.finished = snapshot()
-      states.supported = m.supportsControl(s)
-      states.gatewaySupported = m.supportsControl({ ...s, gateway: {} } as RegisteredSession)
+      states.supported = await m.supportsControl(s)
+      states.gatewaySupported = await m.supportsControl({ ...s, gateway: {} } as RegisteredSession)
       const other = { ...target, id: `${target.id}-other`, model: 'other-model', effort: 'low' }
       m.beginControl(s, other)
       const cancelled = m.waitForProfile(s.sessionId, 100)

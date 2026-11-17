@@ -832,7 +832,7 @@ mod tests {
         }
     }
 
-    /// macOS shows this sentence when it asks the person to let Harness Device control a terminal app.
+    /// macOS shows this sentence when it asks the person to let Harness control a terminal app.
     #[test]
     fn the_bundle_says_why_it_sends_apple_events() {
         // One line per tag, so the plist's indentation does not matter.

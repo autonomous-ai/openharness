@@ -27,7 +27,7 @@ showPane and its ObservedActions members". Those two pull requests also conflict
 | Source interface | `HostSource`: `list`, `capabilities`, `send?`, `focus?`, `markSeen?`; `hasPane?`, `showPane?` from #4311 | `cable/hosts/types.ts:57-68` |
 | Sources | `HarnessSource` (Harness agents, tmux and pty panes included: a pane's hook registers with the core, `hook/notify.mjs` paneless branch) and `ObservedSource` (every agent outside a pane, from its hooks and the open-session scan) | `hosts/harness.ts:28`, `hosts/observed.ts:106`, `services/devices.ts:352` |
 | Apps inside `ObservedSource` | Orca terminal (type, switch), Claude app session (link), terminal tab by tty (watch select), WezTerm and herdr pane (focus), any app by bundle id (`open -b`), Claude Code mod (words) | `observed.ts:148-201`, `open.ts:34-110`, `orca.ts`, #4326 `claudeShow`, #4331 `tabs.ts` |
-| De-duplication | Merged list keyed by engine + session id, else by caller pid; Harness beats a host adapter beats observed. A Harness agent carries its bound session id, and the scan skips Harness's own sessions. Now Harness, then observed, then a listing source ([herdr](2026-11-16-device-herdr.md#one-agent-one-row-the-merge-key-4341-left-to-this-pull-request)) | `hosts/registry.ts:4-42` and its spec; `cableHost.ts:690-698`; `observed.ts:386` |
+| De-duplication | Merged list keyed by engine + session id, else by caller pid; Harness beats a host adapter beats observed. A Harness agent carries its bound session id, and the scan skips Harness's own sessions. Now Harness, then observed, then a listing source ([herdr](2026-11-16-device-herdr.md#one-agent-one-row-the-merge-key-4341-left-to-this-pull-request), opencode) | `hosts/registry.ts:4-42` and its spec; `cableHost.ts:690-698`; `observed.ts:386` |
 | Capabilities to the dial | Per agent, not through `cable_features`: `caps` letters `svfa` on each machine-view row. The daemon refuses what an agent lacks; firmware parses them and hides or refuses voice and focus | `types.ts:70`, `cableHost.ts:562,698`, `cableSession.ts:1431,1470,1616`, firmware `cable_client.c:951,993`, `ui_habitat.c:1188,1400,2347,2625,3045` |
 | Answer on the dial | Firmware never reads `CABLE_CAP_A`. A shown-only prompt of an outside agent offers [choices], "In Orca", [send]; the daemon then refuses with "Answer it in Orca." | `ui_habitat.c:1400-1418,2232`; `cableSession.ts:1616-1623`; `services/devices.ts` `showWaits` |
 
@@ -87,8 +87,11 @@ export interface HostAdapter {
   /** Whether a rest can show the pane inside its app now (the app in front, a watch open): asked at each look. */
   canShow?(pane: Pane): boolean
   show?(pane: Pane, agentId: string): Promise<PaneSwitch>
-  /** Types a line at the agent's prompt and submits it. Only the source decides that the prompt is free. */
-  type?(pane: Pane, text: string): Promise<boolean>
+  /** Types a line at the agent's prompt and submits it. The source decides that the agent is free; an adapter that can
+   *  read the prompt checks it again before it types (cmux's: an idle, empty prompt). A `TypeResult` is `true` when sent,
+   *  `false` when it failed, `'busy'` or `'waiting'` as the app says now, or `{ refused }` with a fixed sentence the
+   *  dial shows. */
+  type?(pane: Pane, text: string): Promise<TypeResult>
   /** A tap's order with the app's own `open -b`: the pane first (Orca, WezTerm, herdr), the pane alone (the Claude
    *  app's link and Herdr's focus bring the app themselves), or the app first (a tab is selected once its app is in
    *  front). */
@@ -99,8 +102,10 @@ export interface HostAdapter {
 The adapter id is the name today's log lines use (`[device] open · claude · fallback`), so the Claude app's is `claude`
 (PM, 2026-11-15).
 
-`ObservedSource` keeps every pane an adapter recognises for an entry, in a fixed order: herdr, WezTerm, Orca, the
-Claude app, then a tab by tty. That is today's precedence: `open.ts` `paneOf` for a tap, then `shownPane`'s tab.
+`ObservedSource` keeps every pane an adapter recognises for an entry, in a fixed order (`adapters` in
+`services/devices.ts`): herdr, tmux, Herdr (`herdr-app`), cmux, WezTerm, Orca, the Claude app, the Codex app, VS Code,
+then a tab by tty. The nearest host first: a multiplexer keeps the environment it started in, and Herdr and cmux tell
+their programs they run in Ghostty, whose tabs hold none of them.
 
 Each verb uses the first pane in that order whose adapter can do it:
 - words: the first with `type` (Orca);
@@ -129,10 +134,19 @@ pane it left (PM, 2026-11-15).
 | `wezterm` | `hosts/wezterm.ts` (new, from `open.ts`) | `WEZTERM_PANE` | none | `wezterm cli activate-pane` | none |
 | `herdr` | `hosts/herdr.ts` (new, from `open.ts`) | `HERDR_PANE_ID` | none | `herdr agent focus` | none |
 | `herdr-app` | `hosts/herdrApp.ts` | `HC_TERMINAL_ID` | Herdr Core's `terminal.send` | `open -b dev.herdr.app`, then `herdr-app do agent.focus`, macOS only | `herdr-app do agent.focus`, while Herdr is in front |
+| `cmux` | `hosts/cmuxApp.ts` | `CMUX_SURFACE_ID` and `CMUX_WORKSPACE_ID` in a cmux terminal | `cmux paste --submit`, only with Automation mode, an idle empty prompt and the same agent | the `cmux://workspace/<w>/surface/<s>` link to cmux alone (`open -b com.cmuxterm.app <url>`) through `hosts/appLink.ts`, macOS only | the link, while cmux is in front |
 
 herdr's adapter now types, over herdr's socket, and its focus is still `herdr agent focus` ([herdr](2026-11-16-device-herdr.md#the-herdr-adapter-hostsherdrts)).
 
 `herdr-app` is the Herdr app over Herdr Core, a different program from herdr 0.8.0; its tap brings Herdr itself, as the Claude app's link does ([Herdr Core](../plans/2026-11-16-herdr-app-design.md#the-herdr-adapter-herdrappts)).
+
+cmux needs nothing set for the list, the state, a tap or a rest: `cmux sessions list` and the link use no socket. Only
+the dial's words need Automation mode, as they go over cmux's socket ([cmux](../plans/2026-11-17-dial-cmux-design.md)).
+
+To turn it on, in cmux: Settings ▸ Automation ▸ Socket Control Mode ▸ Automation mode.
+Only the dial's words need it; Harness never changes it.
+
+opencode's sessions come from a listing source alone, with no adapter ([opencode](../plans/2026-11-17-dial-opencode-design.md)).
 
 `open.ts` keeps only what every app shares:
 

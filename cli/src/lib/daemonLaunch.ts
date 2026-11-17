@@ -15,6 +15,18 @@
 
 import { readFileSync } from 'fs'
 import { isAlive, readPid } from './daemonState.js'
+import { startEnvironment } from './startEnvironment.js'
+
+/** How `harness start` spawns the daemon: in its own group, writing to its log, with only the allowlist of the
+ *  shell it was started from, so another program's session tokens never reach the daemon, its tmux server or a pane
+ *  (docs/plans/2026-11-17-daemon-minimal-env-design.md). */
+export function daemonSpawnOptions(
+  given: NodeJS.ProcessEnv,
+  logFd: number,
+  platform: NodeJS.Platform = process.platform,
+): { detached: true; env: NodeJS.ProcessEnv; stdio: ['ignore', number, number] } {
+  return { detached: true, env: startEnvironment(given, platform), stdio: ['ignore', logFd, logFd] }
+}
 
 export interface LaunchDeps {
   readPid: () => number | null

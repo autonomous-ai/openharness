@@ -23,7 +23,7 @@ import { LAUNCHD_LABEL, SYSTEMD_UNIT, launchdPlist, systemdUnit } from '../src/h
 import { savedDaemonPort } from '../src/lib/daemonRecord.js'
 import { assertNodeAlone } from '../src/testing/testNode.js'
 import { LocalClient } from './harness/client.js'
-import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { CLI_ROOT, IsolatedDaemon, until, type DaemonOptions } from './harness/daemon.js'
 
 type Platform = 'launchd' | 'systemd'
 const uid = process.getuid!()
@@ -96,6 +96,17 @@ async function create(m: Machine, client: LocalClient, folder: string): Promise<
     return agent?.sessionId && agent.status === 'active' ? agent : null
   }, 60_000, 500)
 }
+/** A terminal tile in [folder], once it has its pane. */
+async function tile(m: Machine, client: LocalClient, folder: string): Promise<Record<string, any>> {
+  const cwd = join(m.daemon.projectsDir, folder)
+  mkdirSync(cwd, { recursive: true })
+  const created = await client.request('agent_create', { engine: 'terminal', cwd }, 90_000)
+  expect(created.error, JSON.stringify(created)).toBeUndefined()
+  return until(`${folder} to have its pane`, async () => {
+    const agent = await row(client, created.agent.id)
+    return agent?.tmuxPane ? agent : null
+  }, 60_000, 500)
+}
 const back = (client: LocalClient, agent: Record<string, any>) =>
   until(`${agent.id.slice(0, 8)} to be back`, async () => {
     const now = await row(client, agent.id)
@@ -130,8 +141,8 @@ describe('harness start, stop and status from the installed bundle', () => {
     await m.daemon.close()
   })
 
-  async function install(platform: Platform = process.platform === 'darwin' ? 'launchd' : 'systemd'): Promise<Machine> {
-    const daemon = await IsolatedDaemon.create()
+  async function install(platform: Platform = process.platform === 'darwin' ? 'launchd' : 'systemd', options: DaemonOptions = {}): Promise<Machine> {
+    const daemon = await IsolatedDaemon.create(options)
     const home = daemon.env.HOME!
     // The bundle where the installer puts it, beside its hook script.
     const cliDir = join(home, '.harness', 'cli')
@@ -155,7 +166,7 @@ describe('harness start, stop and status from the installed bundle', () => {
       writeFileSync(join(fakes, name), `#!${process.execPath}\nimport(${JSON.stringify(fake)}).then((m) => m.run(${JSON.stringify(name)}))\n`, { mode: 0o755 })
     }
     const env: NodeJS.ProcessEnv = {
-      ...daemon.env, PATH: `${fakes}:${daemon.env.PATH}`, XDG_CONFIG_HOME: join(home, '.config'), HARNESSD_TEST_PLATFORM: platform,
+      ...(await daemon.shellEnv()), PATH: `${fakes}:${daemon.env.PATH}`, XDG_CONFIG_HOME: join(home, '.config'), HARNESSD_TEST_PLATFORM: platform,
     }
     const definition = platform === 'launchd'
       ? join(home, 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`)
@@ -249,6 +260,29 @@ describe('harness start, stop and status from the installed bundle', () => {
     expect(await panes(m)).toBe(before)
     expect((await harness(m, 'stop')).status).toBe(0)
     expect(calls(m), 'no platform tool was asked anything').toEqual([])
+  })
+
+  // Another program's token, an agent's session and a provider key, as the shell that runs `harness start` may hold
+  // them: made-up values (docs/plans/2026-11-17-daemon-minimal-env-design.md).
+  it('starts the daemon with only the allowlist of the shell: a pane has none of its tokens, and the env file\'s variables', async () => {
+    const m = await install(undefined, { envFile: { E2E_FROM_ENV_FILE: 'reaches-the-pane' } })
+    const shell = { ...m.env, SENTINEL_TOKEN: 'sentinel-from-the-shell', CLAUDE_CODE_MESSAGING_TOKEN: 'agent-token', ANTHROPIC_API_KEY: 'kept-sentinel' }
+    const started = await harness({ ...m, env: shell }, 'start')
+    expect(started.status, said(started)).toBe(0)
+    seen.add(pidOf(m)!)
+    const client = await LocalClient.connect(m.daemon)
+    const pane = (await tile(m, client, 'shell-env')).tmuxPane
+    const env = await m.daemon.paneEnvironment(pane, 'shell-env')
+    client.close()
+    expect(env.SENTINEL_TOKEN).toBeUndefined()
+    expect(env.CLAUDE_CODE_MESSAGING_TOKEN).toBeUndefined()
+    expect(env.ANTHROPIC_API_KEY).toBe('kept-sentinel')
+    expect(env.PATH).toContain(join(m.daemon.root, 'bin'))
+    expect(env.E2E_FROM_ENV_FILE).toBe('reaches-the-pane')
+    const log = readFileSync(join(m.daemon.dataDir, 'harness.log'), 'utf8')
+    expect(log).toMatch(/\[env\] started with \d+ variables; [1-9]\d* left out \(docs\/cli\.md#the-daemons-environment\)/)
+    expect(log.includes('SENTINEL_TOKEN') || log.includes('sentinel-from-the-shell'), 'the log names no variable').toBe(false)
+    expect((await harness(m, 'stop')).status).toBe(0)
   })
 
   it.each(['launchd', 'systemd'] as const)('with the service installed for this data folder: start and stop go through %s, and status names it', async (platform) => {

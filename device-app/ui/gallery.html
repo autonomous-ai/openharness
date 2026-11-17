@@ -1,10 +1,10 @@
 <!doctype html>
-<!-- Every Harness Device screen in every state, both themes. Build it with `npm run gallery`, then open this file. -->
+<!-- Every Harness screen in every state, both themes. Build it with `npm run gallery`, then open this file. -->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="color-scheme" content="light dark" />
-    <title>Harness Device gallery</title>
+    <title>Harness gallery</title>
     <link rel="stylesheet" href="src/styles.css" />
     <style>
       html,
@@ -29,9 +29,10 @@
         border-radius: 6px;
       }
 
+      /* The size the menu bar draws it: 28 by 18 points, tray.png at the height Tauri gives every tray icon. */
       .tray {
-        width: 22px;
-        height: 22px;
+        width: 28px;
+        height: 18px;
       }
 
       /* A template image: macOS draws it white on a dark menu bar. */

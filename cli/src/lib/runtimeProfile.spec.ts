@@ -1,7 +1,8 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { listClaudeModels } from '../engines/claude/lists.js'
 import type { RegisteredSession } from './registry.js'
 import { loadEngine, OTHER_ENGINES } from '../engines/inProcess.js'
 import { transcriptEvidence as cursorEvidence } from '../engines/cursor/profileReader.js'
@@ -141,11 +142,13 @@ describe('RuntimeProfileManager', () => {
     ])
   })
 
-  it('offers no switching outside Claude and Codex', async () => {
+  it('offers no switching outside Claude, Codex and OpenCode', async () => {
     // View-only engines still SHOW what they run (the ingest paths do that); they just have nothing to
     // pick and nothing to drive. Both gates are asserted: an empty catalogue, and a refusal to control.
     const manager = new RuntimeProfileManager()
-    for (const engine of ['cursor', 'commandcode', 'devin', 'pi', 'opencode', 'hermes', 'grok'] as const) {
+    // OpenCode drives its own pickers (engines/opencode/profileReader.ts), and is left to its own specs: its list is
+    // `opencode` itself, which no spec may run.
+    for (const engine of ['cursor', 'commandcode', 'devin', 'pi', 'hermes', 'grok'] as const) {
       const value = { ...session('cursor'), engine }
       expect(supportsNativeRuntimeControl(value)).toBe(false)
       await expect(manager.modelsForSession(value)).resolves.toEqual([])
@@ -529,6 +532,27 @@ describe('RuntimeProfileManager', () => {
       .map((option) => parseRuntimeProfile(option.id))
       .filter((profile): profile is NonNullable<typeof profile> => profile !== null)
     expect(olderProfiles.map((profile) => profile.effort)).not.toContain('ultracode')
+  })
+
+  it('publishes the models Claude Code itself lists, with their names, lines and efforts, ultracode where it takes it', async () => {
+    vi.mocked(listClaudeModels).mockResolvedValueOnce([
+      { value: 'opus', displayName: 'Opus 5.5', description: 'For complex work and everyday tasks', efforts: ['low', 'high'] },
+      { value: 'claude-fable-5-1', displayName: 'Fable 5.1', description: 'Most capable for your hardest tasks', efforts: ['low'] },
+      { value: 'haiku', displayName: 'Haiku 4.5', description: 'Fastest for quick answers', efforts: [] },
+    ])
+    const manager = new RuntimeProfileManager()
+    const value = session('claude')
+    value.cliVersion = '2.1.283'
+    manager.hydrate(value, [])
+
+    const options = await manager.modelsForSession(value)
+    const rows = options.map((option) => ({ ...parseRuntimeProfile(option.id), displayName: option.displayName, description: option.description }))
+    expect([...new Set(rows.map((row) => row.model))]).toEqual(['opus', 'claude-fable-5-1', 'haiku'])
+    expect(rows.filter((row) => row.model === 'opus').map((row) => row.effort)).toEqual(['auto', 'low', 'high', 'ultracode'])
+    expect(rows.filter((row) => row.model === 'haiku').map((row) => row.effort)).toEqual(['auto'])
+    expect(rows.find((row) => row.model === 'claude-fable-5-1')).toMatchObject({
+      displayName: 'Fable 5.1 / Auto', description: 'Most capable for your hardest tasks',
+    })
   })
 
   it('observes Claude ultracode effort from JSONL and the live footer', () => {

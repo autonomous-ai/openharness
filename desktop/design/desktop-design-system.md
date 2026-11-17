@@ -695,7 +695,9 @@ Off (Settings ▸ Experimental ▸ Hachi), none of them is drawn and ⇧⌘H is 
 
 ## Harness Device
 
-Harness Device is the menu-bar app for the dial (`device-app/`). It sets up
+Harness Device is the menu-bar app for the dial (`device-app/`), named
+**Harness** wherever a person sees it; only its file stays
+`Harness Device.app`. It sets up
 Harness, keeps it running and shows the dial's state; sign-in is the one
 thing it offers. Claude Code and Codex need no setting: Harness sets them up
 once a dial is plugged in.
@@ -724,8 +726,11 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
 - Geometry: dialog content inset 24; group / control gap 16 / 8; buttons are
   capsules, 32 high at least, trailing: secondary first, primary last, as the
   desktop's dialogs. The spinner stands still under Reduce Motion.
-- The menu-bar icon is Lucide `circle-dot`, a template image
-  (`device-app/src-tauri/icons/tray.png`): black on a light bar, white on a dark one.
+- The menu-bar icon is the Harness symbol (`HarnessStatusIcon.svg`), 17 points
+  in a 28-point width, a template image (`device-app/src-tauri/icons/tray.png`):
+  black on a light bar, white on a dark one. A dark bar shows the dark artwork
+  (`HarnessStatusIconDark.svg`, `tray-dark.png`), a solid tile with the face cut
+  out, as the desktop app's status icon does. The app icon is the desktop app's.
 - An on/off setting in the menu is one native check item: one row, its state in
   the check, a label that never changes. Sound is the first.
 - A choice among named options in the menu is one native submenu of check items,

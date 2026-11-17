@@ -72,6 +72,9 @@ export interface EngineConfig {
 export interface DaemonOptions {
   /** Extra environment for the daemon. */
   env?: Record<string, string>
+  /** More lines for the env file a start through `harness start` reads (`shellEnv`): what reaches that daemon only
+   *  through the file, as it does on a person's computer. */
+  envFile?: Record<string, string>
   /** V8 heap ceiling for the daemon process, MiB. Defaults to Node's own. */
   heapMiB?: number
   /** Models the fake engines report. */
@@ -296,6 +299,8 @@ export class IsolatedDaemon {
     readonly engineConfig: EngineConfig,
     /** Where the fake open notes each run's arguments. */
     private readonly opensLog: string,
+    /** The names of the settings the harness gives every daemon, before a test's own (`shellEnv`). */
+    private readonly settingNames: readonly string[],
   ) {}
 
   static async create(options: DaemonOptions = {}): Promise<IsolatedDaemon> {
@@ -373,7 +378,7 @@ export class IsolatedDaemon {
     const fakeOpen = join(own, 'fake-open')
     const opensLog = join(own, 'opens.log')
     await writeFile(fakeOpen, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${opensLog}'\n`, { mode: 0o755 })
-    const env = daemonEnvironment(tmux.env, {
+    const settings = {
       NODE_ENV: 'test',
       HOME: dirs.home,
       // Its profile, under that home too. On Windows os.homedir() follows USERPROFILE, not HOME, so every default
@@ -454,9 +459,9 @@ export class IsolatedDaemon {
       TERMINAL_BACKENDS: 'tmux',
       TMUX_REAP_INTERVAL_MS: '5000',
       TERMINAL_RECONCILE_INTERVAL_MS: '5000',
-      ...options.env,
-    })
-    return new IsolatedDaemon(root, tmux, port, env, options, config, opensLog)
+    }
+    const env = daemonEnvironment(tmux.env, { ...settings, ...options.env })
+    return new IsolatedDaemon(root, tmux, port, env, options, config, opensLog, Object.keys(settings))
   }
 
   /** What the fake engines noted of every hook they ran (fakeEngine.mjs `hookLog`); kept once the root is gone. */
@@ -532,8 +537,9 @@ export class IsolatedDaemon {
     const script = bundle ? [bundle] : ['--import', 'tsx', 'src/cli.ts']
     // A process group of its own, which the core and the services join: one signal reaches all of them, whether or
     // not the master is still there, and the worker's reaper (reaper.ts) ends it should the worker go without closing it.
+    const env = this.options.foreground ? await this.shellEnv() : this.env
     const child = spawn(node, this.options.launch ?? [...heap, ...script, ...entry], {
-      cwd: CLI_ROOT, env: this.env, stdio: ['ignore', 'pipe', 'pipe'], ...ownProcessGroup(),
+      cwd: CLI_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], ...ownProcessGroup(),
     })
     this.child = child
     if (child.pid) {
@@ -576,6 +582,36 @@ export class IsolatedDaemon {
         this.assertHooksStayedInside()
       }
     })()])
+  }
+
+  /**
+   * The environment of a shell that runs `harness start` or `harness start -f` for this daemon. Such a start keeps only
+   * an allowlist of it (docs/plans/2026-11-17-daemon-minimal-env-design.md), so the harness's settings the allowlist
+   * leaves out, and the test's `envFile`, go in the file HARNESS_ENV_FILE names, as a person's would. A test's `env`
+   * never does: a variable it sets to see a start drop it stays dropped.
+   */
+  async shellEnv(): Promise<NodeJS.ProcessEnv> {
+    // Loaded here, not at the top: lib/startEnvironment.ts loads config/env.ts, which reads and checks the worker's
+    // environment as it loads, and the files that never start a daemon this way keep loading only what they did.
+    const { startEnvFile } = await import('../../src/testing/startEnvFile.js')
+    const file = join(dirname(this.engineConfig.hookLog), 'start.env')
+    await writeFile(file, startEnvFile(this.env, this.settingNames, this.options.envFile))
+    return { ...this.env, HARNESS_ENV_FILE: file }
+  }
+
+  /** The environment of the shell [pane] runs, as that shell sees it, written to `<root>/<name>.env`. */
+  async paneEnvironment(pane: string, name: string): Promise<Record<string, string>> {
+    const file = join(this.root, `${name}.env`)
+    // The shell creates the file before env writes it, so it shows up empty first: written aside and moved into place whole.
+    await this.tmux.run('send-keys', '-t', pane, `env > ${file}.tmp && mv ${file}.tmp ${file}`, 'Enter')
+    await until(`${name}'s shell to write its environment`, () => existsSync(file) || null, 20_000, 100)
+    const env: Record<string, string> = {}
+    // A line with no `=` is the rest of a value that spans lines: not a variable of its own.
+    for (const line of readFileSync(file, 'utf8').split('\n')) {
+      const at = line.indexOf('=')
+      if (at > 0) env[line.slice(0, at)] = line.slice(at + 1)
+    }
+    return env
   }
 
   /** SIGTERM, then SIGKILL to its whole process group after `ms`. Resolves when the process is gone. */

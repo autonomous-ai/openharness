@@ -5,9 +5,10 @@
  *
  * Nothing here parses a line or logs: what a line means is its client's, and a socket's lines name people's folders.
  */
-import { existsSync, lstatSync, watch, type FSWatcher } from 'node:fs'
+import { lstatSync } from 'node:fs'
 import { createConnection, type Socket } from 'node:net'
 import { dirname } from 'node:path'
+import { watchNearest } from './folderWatch.js'
 
 /** Why a connection ended: it never opened, it closed, or a line was past its bound. */
 export type LineEnd = 'refused' | 'ended' | 'oversize'
@@ -74,41 +75,11 @@ export function socketStampOf(path: string, uid: number): string | undefined {
   }
 }
 
-/** Calls `changed` on each change in the nearest existing folder of the socket's folder, its parent and `home`, moving
- *  to a nearer one as it appears, and out of one that is removed. Returns its stop. Never throws: a watch that cannot be
- *  held tells nothing. */
-export function watchSocket(where: { socketPath: string; home: string }, changed: () => void): () => void {
-  const folders = [dirname(where.socketPath), dirname(dirname(where.socketPath)), where.home]
-  let held: { watcher: FSWatcher; at: number } | undefined
-  const hold = () => {
-    // inotify ends the watch of a folder that is removed, so a program that made it again would never be seen.
-    if (held && !existsSync(folders[held.at])) {
-      held.watcher.close()
-      held = undefined
-    }
-    for (let at = 0; at < (held?.at ?? folders.length); at++) {
-      let watcher: FSWatcher
-      try {
-        watcher = watch(folders[at], { persistent: false }, () => {
-          hold()
-          changed()
-        })
-      } catch {
-        continue
-      }
-      // A watch that fails tells nothing more, and throws nothing into the devices process. Its folder gone, it moves out.
-      watcher.on('error', () => {
-        watcher.close()
-        hold()
-      })
-      held?.watcher.close()
-      held = { watcher, at }
-      return
-    }
-  }
-  hold()
-  return () => {
-    held?.watcher.close()
-    held = undefined
-  }
+/** Calls `changed` on each change in the nearest existing folder of the socket's folder, its parent and `home`, with
+ *  the name of what changed (folderWatch.ts): cmuxSource.ts, which watches cmux's stores' folder through a path in it,
+ *  reads only the store that changed. */
+export function watchSocket(
+  where: { socketPath: string; home: string }, changed: (file?: string) => void,
+): () => void {
+  return watchNearest([dirname(where.socketPath), dirname(dirname(where.socketPath)), where.home], changed)
 }
