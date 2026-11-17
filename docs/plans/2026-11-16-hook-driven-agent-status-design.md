@@ -158,7 +158,10 @@ All run `notify.mjs`. Only end and wait events are added; there is no hook per t
     reads the same as a finished one. Holding a Codex end would only delay those. A fake-engine test pins the order.
   - Stop (Claude): drain; if the parser's end is held, deliver it now. If not, wait up to 1.5 s for it, then close as
     today's fallback does. The stale-Stop rules stay: a Stop run before the latest prompt hook, or before the open
-    turn's opening record, closes nothing. A continued `/goal` pass is closed by its own Stop like any turn.
+    turn's opening record, closes nothing. A continued `/goal` pass is closed by its own Stop like any turn. A Stop
+    that comes before any of its turn is read (a transcript or tail that lags, an attach still reading) keeps when it
+    ran: the end of a turn opened by then goes on as it is read. A recorded time later than now was taken before the
+    wall clock was set back, and orders nothing: the hook is taken as one that came with no time.
   - A Codex Stop never waits and never closes a turn: it only marks the session as ending by hook. Its turn ends at
     the end Codex writes after it, delivered at once. A blocking Stop hook of someone else's continues the turn, and
     post-turn compaction can run between the Stop and `task_complete`: neither reads as an early end.
@@ -198,7 +201,8 @@ All run `notify.mjs`. Only end and wait events are added; there is no hook per t
     So a lost SubagentStop can never keep an agent working for more than 10 minutes.
 - **Hook silence.** A hook-driven turn whose end the transcript has read, with no hook for 2 minutes, is closed by the
   transcript's held end. This covers a Stop that failed to run, as Orca's 2-minute rule does. The check runs on the
-  existing heartbeat, which runs only while a turn is open; nothing new runs at rest.
+  existing heartbeat, which runs only while a turn is open; nothing new runs at rest. It is timed on the monotonic
+  clock, as the 10-minute subagent timeout is, so a wall clock set back does not stretch it.
 - **Working.** The lease in `turnActivity.ts` stays the one place that says working, idle or unknown. A Stop or
   aborted end sets idle through the existing `turn_ended`. Wait hooks do not renew the lease (section 3). A late text
   or tool event read after the turn closed does not renew it either, so the final text landing after Stop cannot
@@ -213,7 +217,8 @@ All run `notify.mjs`. Only end and wait events are added; there is no hook per t
   race the drawing. The `commander_question` frame is unchanged. No question is built from the hook's
   payload, so there is never a second question, a second notification, or an answer refused as stale.
 - While the wait is open the lease's working claim is withdrawn (read as `unknown` while the turn is open, as an
-  expired lease is), and progress does not renew it.
+  expired lease is), and progress does not renew it. The dial's card stays busy while a question is open, as the dial
+  keeps its tile working under it: the recaps count an open question as the turn at work.
 - The wait ends on any of these: the question watcher closing the question; two polls in a row reading the pane with
   no dialog (a dialog answered before it was read, by the dial or a fast key); the next turn end; a progress event whose
   record time is after the hook's `firedAt` (the waited tool's own `tool_start`, read later, does not end it); a
