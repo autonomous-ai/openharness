@@ -17,7 +17,7 @@ The causes are unrelated across PRs, so three pull requests:
 
 | PR | Branch | Scope |
 |---|---|---|
-| PR1 | `fix/main-e2e-regressions` | #4356 registry persistence: causes A, B, C, D, E below |
+| PR1 | `fix/main-e2e-regressions` | #4356 registry persistence: causes A, A2, B, C, D, E below |
 | PR2 | `fix/viewers-core-restart` (from main) | #4390: viewers across a core restart, the workspacesProcess test race |
 | PR3 | later, only if needed | macOS-only: sandbox (#4181), serviceProcesses memory budget, handoff `IDENTITY_UNAVAILABLE` |
 
@@ -48,6 +48,14 @@ rule where it compares launches. `register` is not changed: discovery treats abs
 Red test: `cli/src/lib/registry.launchCallers.spec.ts`, a restart queued behind another keeps its target when
 the first restart's engine re-registers its conversation (`confirmLaunch`, capture, `register` same session and
 process, `matchesLaunchReceipt` still true), and the same for a retarget's launch authority.
+
+### A2. A resume that discovery confirmed first answers RESUME_UNCONFIRMED (eagerOpenCode): product bug
+
+`confirmLaunch` captures the owner and launch when called and checks them again at its turn in the write queue.
+Under load, discovery's pass confirms the resumed engine first, so the resume sees the same process as a new owner
+and answers `RESUME_UNCONFIRMED` over its running engine. Fix: a row a peer wrote with this same process reads as
+unchanged when each field it wrote is the value this confirmation writes (process, active and ready, its grid);
+any other process or field still ends the write. Red test: `cli/src/lib/registry.launchCallers.spec.ts`.
 
 ### B. Restore publishes the probed engine only after settle (adopt): product bug
 
@@ -161,5 +169,5 @@ Platforms: shared TypeScript; viewers run on macOS and Linux.
 - Each task's red-then-green unit test; `npm run test:core` and the other local gates AGENTS.md names for the
   touched areas.
 - `cli-e2e.yml` on each branch (workflow_dispatch, one heavy run at a time, slot from the PM): all Linux shards
-  and the macOS full-disk job green. PR1 must turn races, modelSwitch, adopt, hookclient, diskfull and
+  and the macOS full-disk job green. PR1 must turn races, modelSwitch, eagerOpenCode, adopt, hookclient, diskfull and
   updateHostile green; PR2 workspacesProcess and viewersProcess.
