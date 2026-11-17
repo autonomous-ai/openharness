@@ -1,16 +1,14 @@
-// The dial skill's two files in the daemon's data folder, which outlive the devices' process. dial-skill.json says
-// whether each engine is On, and the skills folders the command wrote into; its one writer is the `harness device`
-// command. dial-skill-homes.json lists the skills folders the devices service wrote into; its one writer is that
-// service. A Turn off finds every folder in both. dial-setup.json is the devices service's own record of a dial's
-// setup: a dial attached here once, the CLI version that last set Claude Code's plugin up, and the skills folders it
-// wrote into. dial-skill.json also says what `harness device <engine> disable` removed, which that service leaves alone.
+// The dial skill's two files in the daemon's data folder, which outlive the devices' process. dial-skill.json says what
+// `harness device <engine> disable` removed, and the skills folders the command wrote into; its one writer is that
+// command, and the devices service leaves what it removed alone. dial-setup.json is the devices service's own record of
+// a dial's setup: a dial attached here once, the CLI version that last set Claude Code's plugin up, and the skills
+// folders it wrote into; its one writer is that service. A `disable` finds every folder in both.
 import { closeSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 export type DialEngine = 'claude' | 'codex'
 
 export const DIAL_SKILL_FILE = 'dial-skill.json'
-export const DIAL_SKILL_HOMES_FILE = 'dial-skill-homes.json'
 export const DIAL_SETUP_FILE = 'dial-setup.json'
 /** Folders an engine's list holds at most: a few homes today, so ten times that still fits. */
 export const MAX_HOMES = 64
@@ -24,9 +22,6 @@ const MAX_PATH_BYTES = 1024
 const CONTROL = /\p{Cc}/u
 /** A CLI version: a value edited by hand is compared with this CLI's own, so nothing but a version is kept. */
 const VERSION = /^[0-9A-Za-z.+-]{1,64}$/
-
-/** A key is absent when the file gives that engine no answer. */
-export interface DialSkillAnswers { claude?: boolean; codex?: boolean }
 
 export interface DialSkillHomes { claude: string[]; codex: string[] }
 
@@ -74,7 +69,7 @@ const fields = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {}
 
 /**
- * A path a list holds: Turn off removes from every folder a list holds, so only a path that names one folder exactly
+ * A path a list holds: a `disable` removes from every folder a list holds, so only a path that names one folder exactly
  * is kept. Equal to its own resolve(): absolute, with no `..`, `.`, `//` or trailing `/`; no control character; at most
  * 1024 bytes. A skill goes only into a folder that passes, so none is written that a list would drop.
  */
@@ -94,49 +89,15 @@ const homesOf = (value: unknown): string[] => {
 
 const settingOf = (dataDir: string): Record<string, unknown> => fields(readJson(join(dataDir, DIAL_SKILL_FILE), MAX_FILE_BYTES))
 
-const answersOf = (file: Record<string, unknown>): DialSkillAnswers => {
-  const answers: DialSkillAnswers = {}
-  if (typeof file.claude === 'boolean') answers.claude = file.claude
-  if (typeof file.codex === 'boolean') answers.codex = file.codex
-  return answers
-}
-
 const writtenOf = (file: Record<string, unknown>): DialSkillHomes => {
   const homes = fields(file.homes)
   return { claude: homesOf(homes.claude), codex: homesOf(homes.codex) }
 }
 
-export function readAnswers(dataDir: string): DialSkillAnswers {
-  return answersOf(settingOf(dataDir))
-}
-
-/** The skills folders the command wrote into: a Turn off removes from them too, whatever home the command that runs it
+/** The skills folders the command wrote into: a `disable` removes from them too, whatever home the command that runs it
  *  has (its own CODEX_HOME or CLAUDE_CONFIG_DIR). */
 export function readWritten(dataDir: string): DialSkillHomes {
   return writtenOf(settingOf(dataDir))
-}
-
-/**
- * undefined once saved; else the error's code (EACCES), never its message, which names the path. [written], when given,
- * becomes the folders the command wrote into for [engine]; else they stay.
- */
-export function writeAnswer(dataDir: string, engine: DialEngine, on: boolean, written?: string[]): string | undefined {
-  // Read right before the write, so the other engine's answer and folders stay.
-  const file = settingOf(dataDir)
-  const homes = writtenOf(file)
-  if (written) homes[engine] = homesOf(written)
-  const setting = { ...answersOf(file), [engine]: on, ...(homes.claude.length || homes.codex.length ? { homes } : {}) }
-  return writeJson(join(dataDir, DIAL_SKILL_FILE), setting)
-}
-
-export function readHomes(dataDir: string): DialSkillHomes {
-  const file = fields(readJson(join(dataDir, DIAL_SKILL_HOMES_FILE), MAX_FILE_BYTES))
-  return { claude: homesOf(file.claude), codex: homesOf(file.codex) }
-}
-
-/** Kept as a read keeps them, so the file never holds a folder a Turn off would not find. */
-export function writeHomes(dataDir: string, homes: DialSkillHomes): string | undefined {
-  return writeJson(join(dataDir, DIAL_SKILL_HOMES_FILE), { claude: homesOf(homes.claude), codex: homesOf(homes.codex) })
 }
 
 /** Only true is a removal: the old menu's booleans at the top of the file are another thing and are not read. */
@@ -153,8 +114,8 @@ export function readRemoved(dataDir: string): DialRemoved {
 }
 
 /**
- * undefined once saved; else the error's code. [written], when given, becomes the folders the command wrote into for
- * [engine]; else they stay. The old menu's answers are not carried, so they leave the file at its next write.
+ * undefined once saved; else the error's code (EACCES), never its message, which names the path. [written], when given,
+ * becomes the folders the command wrote into for [engine]; else they stay. The old menu's answers are not carried, so they leave the file at its next write.
  */
 export function writeRemoved(dataDir: string, engine: DialEngine, removed: boolean, written?: string[]): string | undefined {
   // Read right before the write, so the other engine's removal and folders stay.

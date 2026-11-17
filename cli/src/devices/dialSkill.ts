@@ -182,15 +182,6 @@ export function claudePluginState(settingsPath: string): 'on' | 'off' | 'unknown
 }
 
 /**
- * Whether an engine's homes get the dial skill: Codex by its answer in dial-skill.json alone; Claude Code when that
- * answer is not Off and its own record says the plugin is on, so a plugin turned on before that file existed brings the
- * skill, and one uninstalled through /plugin takes it away.
- */
-export function skillOn(engine: 'claude' | 'codex', answer: boolean | undefined, claudeSettings: string): boolean {
-  return engine === 'codex' ? answer === true : answer !== false && claudePluginState(claudeSettings) === 'on'
-}
-
-/**
  * Never once `disable` removed it; Codex otherwise; Claude Code while its plugin is on, so a plugin uninstalled through
  * /plugin takes the skill away.
  */
