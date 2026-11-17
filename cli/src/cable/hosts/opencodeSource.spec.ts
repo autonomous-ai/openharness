@@ -845,6 +845,27 @@ describe("the opencode source (docs/plans/2026-11-17-dial-opencode-design.md)", 
       expect(gate.calls.filter((path) => path.startsWith('/api/session/ses_b/message'))).toHaveLength(1)
     })
 
+    it('while a list is in flight, events of 64 sessions not listed leave a listed one\'s kept, and winning', async () => {
+      server.session({ id: 'ses_a', title: 'A', updated: WALL - 1000 })
+      server.session({ id: 'ses_b', title: 'B', updated: WALL - 2000 })
+      const gate = gated(opencode())
+      const s = setup({ client: gate.client })
+      await live(s, 2)
+      server.session({ id: 'ses_b', title: 'B', updated: WALL - 500 })
+      const held = gate.hold((path) => path === '/api/session/active')
+      server.event('session.created', { sessionID: 'ses_c' })
+      await s.until(() => s.timers.length === 1)
+      s.advance(1000)
+      await held
+      for (let i = 1; i <= 64; i++) server.event('session.renamed', { sessionID: `ses_x${i}`, title: 'X' })
+      // The list says ses_a is at rest: it was answered before.
+      server.start('ses_a')
+      await heard(s, 'ses_a')
+      gate.release()
+      await s.until(() => row(s, 'ses_b')?.lastActivityAt === WALL - 500)
+      expect(row(s, 'ses_a')?.state).toBe('working')
+    })
+
     it('done is unseen until the dial turns to it; markSeen tells once and asks opencode nothing', async () => {
       server.session(API)
       const gate = gated(opencode())
