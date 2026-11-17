@@ -19,14 +19,15 @@ function emitter<T>(): { on(listener: (value: T) => void): Disposable; fire(valu
   }
 }
 
-export function fakeVscode(options: { remoteName?: string } = {}): {
+/** `missing`: commands this VS Code does not have, whose run rejects as VS Code's does. */
+export function fakeVscode(options: { remoteName?: string; missing?: readonly string[] } = {}): {
   api: VscodeApi
   /** A terminal whose shell's pid resolves, or whose ask fails, when the test says. */
   open(): { terminal: ApiTerminal; resolve(pid: number | undefined): void; reject(): void; shown: boolean[] }
   close(terminal: ApiTerminal): void
   activate(terminal: ApiTerminal | undefined): void
   focus(focused: boolean): void
-  /** Each command run, in order. */
+  /** Each command run, in order, a missing one too. */
   commands: string[]
   /** Each channel made: its name, its lines, whether it was disposed. */
   channels: Array<{ name: string; lines: string[]; disposed: boolean }>
@@ -47,6 +48,7 @@ export function fakeVscode(options: { remoteName?: string } = {}): {
     commands: {
       executeCommand(command) {
         commands.push(command)
+        if (options.missing?.includes(command)) return Promise.reject(new Error(`command '${command}' not found`))
         return Promise.resolve(undefined)
       },
     },

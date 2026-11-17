@@ -98,6 +98,21 @@ describe('windowFacade', () => {
     expect(w.vscode.commands).toEqual(['workbench.action.terminal.scrollUp', 'workbench.action.terminal.scrollDown'])
   })
 
+  it('raise runs workbench.action.focusWindow, once', () => {
+    const w = watched()
+    w.facade.raise()
+    expect(w.vscode.commands).toEqual(['workbench.action.focusWindow'])
+  })
+
+  it('on a VS Code without workbench.action.focusWindow, raise throws nothing and rejects nothing', async () => {
+    const vscode = fakeVscode({ missing: ['workbench.action.focusWindow'] })
+    const facade = windowFacade(vscode.api)
+    expect(() => facade.raise()).not.toThrow()
+    // A rejection left unhandled would fail the run.
+    await flush()
+    expect(vscode.commands).toEqual(['workbench.action.focusWindow'])
+  })
+
   it('a processId that rejects lists nothing and throws nothing', async () => {
     const w = watched()
     w.vscode.open().reject()

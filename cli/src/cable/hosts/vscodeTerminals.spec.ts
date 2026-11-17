@@ -374,14 +374,29 @@ describe('VS Code\'s windows', () => {
     const h = harness()
     const one = h.open(W1)
     expect(h.terminals.show({ window: W1, shell: 700 }, true)).toBe(true)
-    expect(one.lines).toEqual([{ show: 700 }])
+    expect(one.lines).toEqual([{ show: 700, raise: true }])
     expect(h.terminals.show({ window: W1, shell: 710 }, false)).toBe(true)
     expect(h.terminals.show({ window: W1, shell: 720 }, false)).toBe(true)
+    expect(one.lines).toEqual([{ show: 700, raise: true }])
+    one.drain()
+    expect(one.lines).toEqual([{ show: 700, raise: true }, { show: 720 }])
+    one.drain()
+    expect(one.lines).toEqual([{ show: 700, raise: true }, { show: 720 }])
+  })
+
+  it('a tap\'s show asks for the window, a rest\'s does not', () => {
+    const h = harness()
+    const one = h.open(W1)
+    h.terminals.show({ window: W1, shell: 700 }, false)
     expect(one.lines).toEqual([{ show: 700 }])
+    // While a line drains, the tap that waits keeps its ask; a rest after it replaces both.
+    h.terminals.show({ window: W1, shell: 710 }, true)
     one.drain()
-    expect(one.lines).toEqual([{ show: 700 }, { show: 720 }])
+    expect(one.lines).toEqual([{ show: 700 }, { show: 710, raise: true }])
+    h.terminals.show({ window: W1, shell: 720 }, true)
+    h.terminals.show({ window: W1, shell: 720 }, false)
     one.drain()
-    expect(one.lines).toEqual([{ show: 700 }, { show: 720 }])
+    expect(one.lines).toEqual([{ show: 700 }, { show: 710, raise: true }, { show: 720 }])
   })
 
   it('show answers false once the window\'s stream has ended', () => {
@@ -440,9 +455,9 @@ describe('VS Code\'s windows', () => {
     h.terminals.scroll({ window: W1, shell: 710 }, 2)
     h.terminals.show({ window: W1, shell: 710 }, false)
     one.drain()
-    expect(one.lines).toEqual([{ show: 700 }, { show: 710 }])
+    expect(one.lines).toEqual([{ show: 700, raise: true }, { show: 710 }])
     one.drain()
-    expect(one.lines).toEqual([{ show: 700 }, { show: 710 }, { scroll: 2, pid: 710 }])
+    expect(one.lines).toEqual([{ show: 700, raise: true }, { show: 710 }, { scroll: 2, pid: 710 }])
   })
 
   it('lines for another shell replace what waits, and that is counted dropped', () => {

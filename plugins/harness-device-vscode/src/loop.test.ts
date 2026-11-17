@@ -150,6 +150,10 @@ function world(answers: (Ran | Promise<Ran>)[], win = fakeWindow(), over: Partia
       called()
       return shown
     },
+    raise() {
+      win.window.raise()
+      called()
+    },
     scrollLine(up) {
       const scrolled = win.window.scrollLine(up)
       called()
@@ -479,6 +483,18 @@ describe('startLoop', () => {
     expect(win.shows).toEqual([202, 303])
     await w.to(60_000)
     expect(w.logs).toEqual(['state: connected', 'in the last minute: 1 shows, 1 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 scroll lines, 0 dropped'])
+  })
+
+  it('a show that asks for the window raises it after the terminal is shown; one that does not, does not', async () => {
+    const win = fakeWindow({ terminals: [101, 202] })
+    const { w, stream } = await connected(win)
+    stream.send('{"show":202,"raise":true}\n{"show":101}\n{"show":101,"raise":"yes"}\n{"show":303,"raise":true}\n')
+    await w.until(() => win.shows.length === 4)
+    expect(win.shows).toEqual([202, 101, 101, 303])
+    // The first only: "yes" is not true, and a show that found no terminal raises nothing.
+    expect(win.raised).toEqual([1])
+    await w.to(60_000)
+    expect(w.logs.at(-1)).toBe('in the last minute: 3 shows, 1 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 scroll lines, 0 dropped')
   })
 
   it('a line it does not know is skipped and counted', async () => {
