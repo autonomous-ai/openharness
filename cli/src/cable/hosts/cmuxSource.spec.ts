@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { CMUX_AUTOMATION_OFF, type CmuxPrompt, type CmuxSession, type CmuxSessions } from './cmuxCli.js'
 import { CmuxSource, type CmuxSourceDeps } from './cmuxSource.js'
 import type { HostAgent, PaneSwitch } from './types.js'
@@ -322,6 +322,22 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
       s.change('claude-hook-sessions.json')
       s.change('codex-hook-sessions.json')
       expect(s.asked()).toEqual(['all', 'claude', 'codex'])
+    })
+
+    it('a listener that throws stops no later run, and leaves no unhandled rejection', async () => {
+      const rejected: unknown[] = []
+      const note = (reason: unknown) => { rejected.push(reason) }
+      process.on('unhandledRejection', note)
+      onTestFinished(() => { process.off('unhandledRejection', note) })
+      const s = setup()
+      s.source.onChange(() => { throw new Error('listener') })
+      await started(s, [record()])
+      s.change('claude-hook-sessions.json')
+      await s.reply(1, ok([record({ lifecycle: 'running' })]))
+      s.change('claude-hook-sessions.json')
+      expect(s.asked()).toEqual(['all', 'claude', 'claude'])
+      await turn()
+      expect(rejected).toEqual([])
     })
 
     it('a run that ends after stop() changes nothing, and after a new start its answer is still dropped', async () => {
