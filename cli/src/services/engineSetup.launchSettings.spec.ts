@@ -1,7 +1,11 @@
+import { EventEmitter } from 'node:events'
+import WebSocket from 'ws'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { startEngineSetup } from './engineSetup.js'
 import { createNativeSetupLink } from '../engines/kit/nativeSetupLink.js'
 import type { NativeSetup } from '../engines/kit/nativeSetup.js'
+import { createServiceLinks, type ServiceFrame, type ServiceLink } from '../core/serviceLinks.js'
+import { runServiceProcess } from './process.js'
 
 const owner = { local: true, owner: true }
 let setup: NativeSetup, service: ReturnType<typeof startEngineSetup>
@@ -34,6 +38,50 @@ describe('optional launch values on existing file preparation', () => {
       .toEqual({ files: prepared })
     expect(setup.prepareFiles).toHaveBeenCalledExactlyOnceWith(given, 'optional', expect.any(Function))
     expect(setup.installations.ensure).not.toHaveBeenCalled()
+  })
+
+  it.each(['codex', 'claude'] as const)('preserves %s settings across the real routed service envelope', async engine => {
+    const given = input(engine), prepared = candidate(engine), routed: ServiceFrame[] = []
+    setup.prepareFiles = vi.fn(async () => prepared) as never
+    const links = createServiceLinks({ token: 'fixture-token', owned: { engineSetup: ['setup_files_prepare', 'setup_files_commit', 'setup_prepare'] },
+      answer: () => ({}), log: () => {} })
+    let accepted: ServiceLink | null = null
+    // Only the socket is in memory: both production routers parse their real serialized envelopes.
+    class Socket extends EventEmitter {
+      readyState: number = WebSocket.CONNECTING
+      receive(frame: ServiceFrame): void { this.emit('message', Buffer.from(JSON.stringify(frame)), false) }
+      send(text: string): void {
+        const frame = JSON.parse(text) as ServiceFrame
+        if (frame.type === 'machine_select') {
+          expect(frame.payload).toMatchObject({ role: 'service', service: 'engineSetup', token: 'fixture-token' })
+          accepted = links.accept('engineSetup', 'fixture-token', { sendFrame: message => {
+            routed.push(message); this.receive(message); return true
+          } }, () => this.close(), () => this.receive({ type: 'connected' }))
+          expect(accepted).not.toBeNull()
+        } else accepted!.receive(frame)
+      }
+      close(): void { this.readyState = WebSocket.CLOSED; this.emit('close', 1000); accepted?.closed() }
+      terminate(): void { this.close() }
+    }
+    const socket = new Socket()
+    const transport = runServiceProcess({ name: 'engineSetup', socketPath: '/fixture/socket', machineId: 'fixture-machine',
+      token: 'fixture-token', requests: service.requests, onDisconnected: service.disconnect, env: {}, log: () => {},
+      connect: () => socket as unknown as WebSocket })
+    socket.readyState = WebSocket.OPEN; socket.emit('open')
+    try {
+      const link = createNativeSetupLink((type, payload, wait) => links.call('engineSetup', type, payload, wait))
+      expect(await link.prepareFiles!(given, 'routed-optional', () => true)).toEqual(prepared)
+      expect(routed.map(frame => frame.type)).toEqual(['setup_files_prepare', 'setup_files_commit'])
+      expect(routed.map(frame => frame.payload?.requestId)).toEqual([expect.any(String), expect.any(String)])
+      expect(routed[0].payload!.requestId).not.toBe(routed[1].payload!.requestId)
+      expect(setup.prepareFiles).toHaveBeenCalledExactlyOnceWith(given, 'routed-optional', expect.any(Function))
+      expect(await links.call('engineSetup', 'setup_files_prepare', { ...given, request: 'unknown-field', argv: ['outside'] }))
+        .toEqual({ files: null })
+      expect(await links.call('engineSetup', 'setup_prepare', { ...given, request: 'generic', kind: 'files' }))
+        .toEqual({ installation: { complete: false, detail: 'Waiting for engine setup.' } })
+      expect(setup.prepareFiles).toHaveBeenCalledOnce()
+      expect(setup.installations.ensure).not.toHaveBeenCalled()
+    } finally { await transport.stop() }
   })
 
   it('carries a settings-only candidate through the core link without inventing a publication file', async () => {

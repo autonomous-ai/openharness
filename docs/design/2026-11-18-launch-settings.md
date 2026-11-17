@@ -63,7 +63,7 @@ Native preparation revision, selected environment object and non-secret sign-in 
 optional proof. Final dispatch selects that proof once for command and terminal argv, after instruction and receipt
 awaits. Added capture, IPC and proof cost remains to be measured after caller migration/source freeze.
 
-### Final dispatch selection
+### Earlier dispatch selection (superseded by the publication correction below)
 
 The caller audit found two later waits: registration retry after pane cleanup, and terminal backends awaiting
 `onDispatch` receipt publication. Optional values cannot change identity, cwd, env, Windows handoff or held-token
@@ -190,3 +190,34 @@ Windows tests preserve the exact held array and token, omit engine afterExit for
 cwd/env/afterExit unchanged. The superseded callback-return command mechanism has been removed. The next cost
 packet must use this corrected runtime and explicitly exclude permission-probe runtime from its untimed native
 inspection fixture; the measured optional service prepare/commit and final publication remain real production paths.
+
+
+### Routed envelope correction
+
+The v3 real-process semantic smoke exposed a product integration failure before any timed candidate sample:
+`serviceLinks` adds `requestId` to every routed payload, and `runServiceProcess` passes that envelope to the handler.
+The settings handler stripped its operation `kind` and `request` but validated the remaining envelope as a strict
+settings DTO, rejecting the transport ID. The existing direct handler tests had omitted that metadata.
+
+The correction strips only the documented transport `requestId`, alongside `kind` and the operation request, before
+validating the settings DTO. No settings key, output, authority, timeout or admission rule changes. A regression will
+join the actual native setup link, service router, serialized service-process envelope and setup handlers through an
+in-memory socket, for both zero-file Codex and one-file Claude results. It also keeps unknown settings fields rejected
+and generic installation handlers unable to accept settings work. RED must be collected before the runtime edit.
+
+v2 remains failed output-framing evidence: its baseline child completed three operations and full custody, but its
+outer parser did not allow the existing terminal availability log. v3 declared that exact log and one marked JSON
+result without changing product logging. v3 baseline passed; candidate's first optional preparation returned null.
+Outer actual 1, 11.314 s; both groups, guardians and EOFs settled and both private roots/node copies were removed.
+The candidate worker was drained by the guardian after caller failure, so no successful worker shutdown receipt is
+claimed. Frozen v2/v3 inputs and failed smoke receipts remain unchanged; no timed measurement ran.
+
+
+Routed-envelope RED: both Claude and Codex returned null through the actual production routers, 2 failures and
+17 skipped, actual 1, 0.928 s (`/tmp/core-launch-settings-transport-red.log`). After stripping only requestId at the
+settings boundary, those same two cases pass, actual 0, 0.908 s (`/tmp/core-launch-settings-transport-green.log`).
+All three affected engineSetup suites pass 49/49, actual 0, 1.684 s; engineSetup.ts remains 100% statements
+(171), branches (196), functions (35) and lines (104), including the unknown-field and generic reservation controls
+(`/tmp/core-launch-settings-transport-coverage-run.log`, `/tmp/core-launch-settings-transport-coverage/`). Final types
+pass, actual 0, 7.243 s (`/tmp/core-launch-settings-transport-types.log`). Every command has a persisted receipt
+with actual exit and no remaining owned-group members. No new semantic smoke or timing has run on this correction.

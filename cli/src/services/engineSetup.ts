@@ -95,7 +95,7 @@ export function startEngineSetup(directory: string, given?: NativeSetup) {
       const trustInput = { engine, cwd: payload.cwd, home: payload.home, files: payload.files,
         ...(payload.userHome === undefined ? {} : { userHome: payload.userHome }),
         ...(payload.source === undefined ? {} : { source: payload.source }) } as NativeTrustInput
-      const { kind: _kind, request: _request, ...settingsPayload } = payload
+      const { kind: _kind, request: _request, requestId: _transport, ...settingsPayload } = payload
       const settingsInput = kind === 'settings' && boundedLaunchSettingsInput(settingsPayload) ? settingsPayload : null
       if (kind === 'trust' ? !setup.prepareTrust || !boundedTrustInput(trustInput)
         : kind === 'settings' ? !setup.prepareFiles || !settingsInput
