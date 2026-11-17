@@ -172,9 +172,9 @@ All run `notify.mjs`. Only end and wait events are added; there is no hook per t
   Orca does).
   - The hook script filters before anything reaches the daemon, so the core keeps one integer and no rule about
     versions: it drops a SubagentStop with an empty `agent_type` (Claude Code's own helpers, prompt suggestions and
-    `/btw`, stop with no start), and sends no subagent event at all from a Claude Code older than 2.1.311 or one whose
-    payload names no version (from 2.1.209 to 2.1.310 a running background subagent also sends a SubagentStop about
-    every 30 s, which would end the lead's turn early; measured from Claude Code's code and changelog, facts file).
+    `/btw`, stop with no start). Claude Code's hook payload names no version, so there is no version filter: from
+    2.1.209 to 2.1.310 a running background subagent also sends a SubagentStop about every 30 s, so on those releases
+    a lead can stop reading as working about 30 s early (a Known gap; Claude Code updates itself, so they fade out).
     A resumed subagent or a teammate's message sends a start with its own stop, so the count stays even.
   - SubagentStart adds one, SubagentStop takes one away, never below zero (a child started before this daemon run
     can stop in it). The count is capped at 64; past that, a start is not counted, with one log line.
@@ -293,9 +293,9 @@ All run `notify.mjs`. Only end and wait events are added; there is no hook per t
 - A Codex update that changes how it hashes hooks asks the person to review Harness's hooks once again, as today.
   (Ken, 2026-11-17)
 - Claude subagent answer (Ken, 2026-11-17): keep the count; `notify.mjs` drops a SubagentStop with an empty
-  `agent_type` and every subagent event from Claude Code older than 2.1.311 or with no version; core unchanged; a
-  test per filter rule and one that a resume or teammate start-with-stop keeps the count even; older Claude Code is a
-  Known gap.
+  `agent_type`; no version filter, since the payload names no version (Claude Code before 2.1.311 can stop reading
+  as working about 30 s early: a Known gap); core unchanged; a test per filter rule and one that a resume or teammate
+  start-with-stop keeps the count even.
 - Codex facts answers (Ken, 2026-11-17): Interrupt written with a 3 s timeout, its hash tested against real Codex;
   every Codex end is delivered at once, never held, on the assumption that Codex runs and waits for Stop before
   `task_complete` (pinned by a fake-engine test), no core change; subagents counted
