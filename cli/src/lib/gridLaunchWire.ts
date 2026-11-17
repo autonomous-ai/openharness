@@ -487,6 +487,28 @@ export const GRID_ENV_VAR_NAMES: Readonly<Partial<Record<AgentEngine, readonly s
   copilot: ['COPILOT_PROVIDER_BASE_URL', 'COPILOT_PROVIDER_API_KEY', 'COPILOT_MODEL', GRID_KEY_VAR],
 }
 
+/** The fields a Models launch may contribute. Its producer matrix is checked against this declaration. */
+export const GRID_LAUNCH_FIELDS: Readonly<Partial<Record<AgentEngine, {
+  flags: readonly string[]
+  literals?: readonly string[]
+  assignments?: readonly string[]
+  config?: { pointer: 'envVar' | 'arg' | 'cliConfigKey'; value: string; file: string; pointAt?: string; borrow?: string }
+}>>> = {
+  claude: { flags: ['--mcp-config', '--system-prompt-snapshot', '--append-system-prompt'],
+    literals: ['--disallowedTools=WebSearch,WebFetch', '--allowedTools=mcp__harness__web_search,mcp__harness__web_read'] },
+  codex: { flags: ['-m'], assignments: ['model_provider', 'model_providers.grid.name', 'model_providers.grid.base_url',
+    'model_providers.grid.env_key', 'model_providers.grid.wire_api', 'model_providers.grid.supports_websockets',
+    'web_search', 'mcp_servers.harness.url', 'mcp_servers.harness.env_http_headers.Authorization',
+    'model_context_window', 'model_auto_compact_token_limit'],
+    config: { pointer: 'cliConfigKey', value: 'model_catalog_json', file: 'model-catalog.json', pointAt: 'model-catalog.json' } },
+  opencode: { flags: ['-m'], literals: ['--standalone'],
+    config: { pointer: 'envVar', value: 'OPENCODE_CONFIG', file: 'opencode.json', pointAt: 'opencode.json' } },
+  pi: { flags: ['--model'], config: { pointer: 'arg', value: '-e', file: 'grid-provider.ts', pointAt: 'grid-provider.ts' } },
+  hermes: { flags: ['-m'], config: { pointer: 'envVar', value: HERMES_MANAGED_DIR_VAR, file: 'config.yaml' } },
+  grok: { flags: ['-m'], config: { pointer: 'envVar', value: GROK_HOME_VAR, file: 'config.toml', borrow: 'sessions' } },
+  copilot: { flags: ['--additional-mcp-config'] },
+}
+
 /** The variables a grid launch of `engine` sets; empty for an engine that has no contract. */
 export function gridEnvVarNames(engine: AgentEngine): string[] {
   return [...(GRID_ENV_VAR_NAMES[engine] ?? [])]

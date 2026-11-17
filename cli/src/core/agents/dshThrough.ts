@@ -3,7 +3,7 @@ import type { DshAccount } from '../../dsh/launch.js'
 import { dshUnavailable, type DshLaunchRequest, type DshMaterializeRequest } from '../../dsh/launchWire.js'
 import type { AgentEngine } from '../../engines/types.js'
 import type { StorePort } from '../api.js'
-import { dshLaunchAnswerIn, dshMaterializeAnswerIn } from '../storeLink.js'
+import { dshLaunchAnswerIn, dshMaterializeAnswerIn, type DshLaunchIdentity } from '../storeLink.js'
 
 export function dshThrough({ store, nameOf, account }: {
   store: () => StorePort
@@ -15,8 +15,14 @@ export function dshThrough({ store, nameOf, account }: {
     try { return dshMaterializeAnswerIn(await store().dshMaterialize(request)) ?? unavailable(request.dsh) }
     catch { return unavailable(request.dsh) }
   }
-  const launch = async (request: DshLaunchRequest) => {
-    try { return dshLaunchAnswerIn(await store().dshLaunch(request)) ?? unavailable(request.dsh) }
+  const launch = async (request: DshLaunchRequest, identity?: DshLaunchIdentity) => {
+    const captured = { ...request, account: { ...request.account } }
+    const trusted = identity ? { workspace: identity.workspace, ids: [...identity.ids] } : undefined
+    try {
+      const answer = dshLaunchAnswerIn(await store().dshLaunch(request), captured, trusted)
+      if (!answer) console.warn('[store] LAUNCH_CONTRIBUTION_REFUSED')
+      return answer ?? unavailable(request.dsh)
+    }
     catch { return unavailable(request.dsh) }
   }
   const relaunch = async (dsh: string, workspace: string, engine: AgentEngine, key: string) => {

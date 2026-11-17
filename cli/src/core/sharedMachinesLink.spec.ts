@@ -1,14 +1,23 @@
 import { describe, expect, it, vi } from 'vitest'
 import { GUEST_LAUNCH_UNAVAILABLE } from './api.js'
+import { guestPaneCommand } from '../lib/guestPaneCommand.js'
+import { guestUserFor, guestWorkspaceFor } from '../lib/guestUser.js'
 import { createSharedMachinesLink } from './sharedMachinesLink.js'
 
 describe('a guest\'s launch, asked of shared machines\' process', () => {
   const input = { email: 'kim@acme.io', engine: 'claude', bypassPermission: true }
 
+  const reply = (platform: NodeJS.Platform = process.platform) => {
+    const user = guestUserFor(input.email), workspace = guestWorkspaceFor(input.email, platform)
+    return { ok: true as const, workspace, ...guestPaneCommand({ ...input, engine: 'claude', platform, account: { user, workspace, home: workspace } }),
+      ...(platform === 'win32' ? { guestHostUser: user } : {}) }
+  }
+
   it('asks under the port\'s member name, and takes a launch as it came', async () => {
-    const call = vi.fn(async () => ({ ok: true, workspace: '/g/work', argv: ['/bin/sh', '-c', 'x'], env: { TERM: 'xterm' } }))
+    const answer = reply()
+    const call = vi.fn(async () => answer)
     const link = createSharedMachinesLink(call)
-    expect(await link.guestLaunch(input)).toEqual({ ok: true, workspace: '/g/work', argv: ['/bin/sh', '-c', 'x'], env: { TERM: 'xterm' } })
+    expect(await link.guestLaunch(input)).toEqual(answer)
     expect(call).toHaveBeenCalledWith('guestLaunch', input)
     link.stop()
   })
@@ -20,10 +29,8 @@ describe('a guest\'s launch, asked of shared machines\' process', () => {
   })
 
   it('passes on the guest\'s own host when the launch names one, and nothing else', async () => {
-    const answer = { ok: true, workspace: 'C:\\Users\\hg_0123456789ab\\work', argv: ['claude'], env: {},
-      guestHostUser: 'hg_0123456789ab' }
-    expect(await createSharedMachinesLink(async () => answer).guestLaunch(input))
-      .toEqual({ ok: true, workspace: answer.workspace, argv: ['claude'], env: {}, guestHostUser: 'hg_0123456789ab' })
+    const answer = reply('win32')
+    expect(await createSharedMachinesLink(async () => answer).guestLaunch(input)).toEqual(answer)
     // A name that is not a guest's is not a host this core may start a pane on.
     for (const guestHostUser of ['DELL', 'hg_x', '', 7, null]) {
       expect(await createSharedMachinesLink(async () => ({ ...answer, guestHostUser })).guestLaunch(input), String(guestHostUser))

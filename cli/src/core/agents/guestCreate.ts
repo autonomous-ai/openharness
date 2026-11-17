@@ -10,7 +10,8 @@
  * conversation to resume, an engine's named agent — is refused before anything starts, rather than
  * half-applied. A first message goes to the engine as its first prompt. A grid or a saved API never reaches here (the policy refuses it).
  */
-import type { GuestLaunch, GuestLaunchInput } from '../api.js'
+import { GUEST_LAUNCH_UNAVAILABLE, type GuestLaunch, type GuestLaunchInput } from '../api.js'
+import { guestLaunchIn } from '../sharedMachinesLink.js'
 import type { AgentEngine } from '../../engines/types.js'
 import { createAndRegisterPane, type CreateAgentPaneDeps } from '../../lib/createAgentPane.js'
 import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags } from '../../lib/engineLaunch.js'
@@ -96,8 +97,12 @@ export function createGuestCreate(deps: GuestCreateDeps) {
     // A folder the owner shares, to start in (shared machines checks it is shared; the helper, that it may be). Both
     // platforms' absolute forms: `/Users/...` and `C:\Users\...`.
     const cwd = typeof payload.cwd === 'string' && payload.cwd.trim() ? payload.cwd : null
-    const launch = await deps.launch({ email: guest, engine, bypassPermission, permissionFlags: [...permissionFlags],
-      ...(prompt ? { prompt } : {}), ...(cwd ? { cwd } : {}) })
+    const input = { email: guest, engine, bypassPermission, permissionFlags: [...permissionFlags],
+      ...(prompt ? { prompt } : {}), ...(cwd ? { cwd } : {}) }
+    const captured = { ...input, permissionFlags: [...input.permissionFlags] }
+    const checked = guestLaunchIn(await deps.launch(input), captured)
+    if (!checked) console.warn('[shared-machines] LAUNCH_CONTRIBUTION_REFUSED')
+    const launch = checked ?? GUEST_LAUNCH_UNAVAILABLE
     if (!launch.ok) return { ok: false, error: launch.error, ...(launch.detail ? { detail: launch.detail } : {}) }
     // Where the pane must be made by the guest's own host (Windows), never by this account: the owner's tmux or
     // pty host has no pane there, and a fallback to it would run the guest's harness as the owner.

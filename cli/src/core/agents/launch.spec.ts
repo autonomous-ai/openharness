@@ -279,9 +279,9 @@ describe('a grid launch, as the core asks the models service for it', () => {
 
   it("hands back models' answer as it is, including saved API details owned by models", async () => {
     const built: GridLaunchAnswer = { ok: true, launch: { env: {}, args: [], webSearch: 'on' }, override: grid }
-    expect(await gridLaunchThrough(() => ({ gridLaunch: async () => built }))(request())).toBe(built)
+    expect(await gridLaunchThrough(() => ({ gridLaunch: async () => built }))(request())).toEqual(built)
     const refused: GridLaunchAnswer = { ok: false, error: 'API_UNAVAILABLE', detail: 'OpenRouter was removed.', apiBase: 'https://openrouter.ai/api/v1' }
-    expect(await gridLaunchThrough(() => ({ gridLaunch: async () => refused }))(request(api))).toBe(refused)
+    expect(await gridLaunchThrough(() => ({ gridLaunch: async () => refused }))(request(api))).toEqual(refused)
   })
 
   it('refuses at once, naming the grid or the API, when models is down or answers nothing usable', async () => {

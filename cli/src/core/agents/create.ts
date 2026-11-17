@@ -133,8 +133,8 @@ export function createAgentCreator({
     }
     if (!createBackend) return { ok: false, error: noBackendCode }
     if (blocksFolder(cwd)) return { ok: false, error: 'WORKTREE_BUSY' }
-    const workspaceIdentity = () => { const info = statSync(cwd); return `${info.dev}:${info.ino}:${realpathSync(cwd)}` }
-    let originalWorkspace: string
+    const workspaceIdentity = () => { const info = statSync(cwd), directory = realpathSync(cwd); return { identity: `${info.dev}:${info.ino}:${directory}`, directory } }
+    let originalWorkspace: ReturnType<typeof workspaceIdentity>
     try {
       if (!statSync(cwd).isDirectory()) return { ok: false, error: 'CWD_NOT_FOUND' }
       originalWorkspace = workspaceIdentity()
@@ -200,7 +200,7 @@ export function createAgentCreator({
     let dshLabel: string | undefined
     /** What the harness is told about the signed-in account (its private grid), not left to guess. */
     let dshAccount: DshAccount = {}
-    const installed = dsh ? installedDsh(dsh) : undefined
+    const installed = pinnedDsh
     if (dsh) {
       if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is not installed on this machine` }
       if (installed.manifest.kind === 'viewer') return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is a viewer package, not an agent` }
@@ -265,7 +265,8 @@ export function createAgentCreator({
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
         return { ok: false, error: 'DSH_MATERIALIZE_FAILED', detail }
       }
-      const prepared = await dshLaunch.launch({ dsh, workspace: cwd, engine, key: label, account: dshAccount })
+      const prepared = await dshLaunch.launch({ dsh, workspace: cwd, engine, key: label, account: dshAccount },
+        { ids: [harness.id, ...harness.manifest.formerly ?? []], workspace: originalWorkspace.directory })
       if (!current()) return stale()
       if (!prepared.ok) return { ok: false, error: prepared.error, detail: prepared.detail,
         ...(prepared.unavailable ? { unavailable: prepared.unavailable } : {}) }
@@ -312,7 +313,7 @@ export function createAgentCreator({
         const files = new NativeFiles()
         const empty = files.entries(cwd).length === 0
         if (!current()) return stale()
-        if (empty && workspaceIdentity() === originalWorkspace) {
+        if (empty && workspaceIdentity().identity === originalWorkspace.identity) {
           files.verify()
           const environment = native ? { ...native.environment, ...gridLaunch?.env, ...dshEnv } : undefined
           const profile = engine === 'codex' && environment ? nativeHookLocations(environment).CODEX_HOME : engine === 'claude' ? claudeHome : codexHome

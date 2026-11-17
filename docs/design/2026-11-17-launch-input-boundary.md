@@ -24,9 +24,14 @@ It adds no feature, queue, cache, process, setting or runtime dependency.
   supplies Codex hook commands; four packages use `PYTHONPATH`. These remain
   supported package authority, not an accidental service-wide engine allowlist.
   Only the six existing `HARNESS_*` session fields belong to Harness itself.
+  The published contract also permits package-defined `PATH`, `HOME`, `NODE_OPTIONS`,
+  `BASH_ENV` and loader variables; these are not newly granted by this guard.
+  Installed packages are trusted executable code, and sandboxing their commands or
+  interpreting nested vendor configuration is outside this boundary task.
 - Shared machines emits one fixed POSIX helper wrapper, with the guest identity
   derived from the requested email, the requested engine/permission flags/prompt,
-  and TERM/COLORTERM/LANG. Windows emits the same requested engine argv directly,
+  and TERM/COLORTERM/LANG. An unshared requested folder deliberately falls back
+  to the derived guest workspace; a shared folder uses its normalized request path. Windows emits the same requested engine argv directly,
   with an empty environment and the derived guest host user. No arbitrary shell
   program from the reply is part of this contract.
 - Inline callers require the same checks. Models passes through `gridLaunchThrough`,
@@ -39,8 +44,8 @@ It adds no feature, queue, cache, process, setting or runtime dependency.
   256 environment entries and 1,024 argv items; a string is at most 64 KiB and
   contains no NUL. The argument bound includes Codex's two arguments per package
   variable plus the manifest's 64 arguments. Models' much smaller declarations
-  further constrain its keys, flags and one generated file. Oversized arrays/maps
-  are refused before copying or iterating their contents. No value is truncated.
+  further constrain its keys, flags and one generated file. Oversized arrays are refused before copying; map inspection stops at the first
+  exceeded bound, without allocating an unbounded entry list. No value is truncated.
 - Concurrency: no new lock or state. Request authority is captured before a service
   await, and existing launch owner/workspace checks still fence the subsequent
   publication and pane creation. Accepted arrays/maps are copied so a later
@@ -109,3 +114,40 @@ proves anything. Bounds and reserved-key restrictions can still cover every path
 6. Same-source/workload cost of admitted and refused contributions, scheduled by
    root after other execution settles. No performance result is inferred from
    source size. Root owns independent review, integration, CI and release.
+
+## Implemented scope and acceptance
+
+Create reuses its single installed-package lookup and the canonical directory from
+its existing workspace observation. The captured package ID/former IDs, canonical
+workspace and label-derived runtime paths bind Store's reserved identity fields.
+The existing current-authority check remains immediately after the Store await.
+Models and guest guards retain a detached pre-await request snapshot. Every
+accepted launch contribution is detached before the inline caller can reuse it.
+
+**Incomplete prerequisite:** Restore and fork do not yet provide independently
+captured installed-package/workspace identity. They receive the same bounds,
+reserved-name restrictions and request account check, but exact package/workspace/
+runtime identity is not claimed there. Existing snapshots may retain an older
+`HARNESS_DSH_DIR` after a package update; that field remains bounded Store/package
+authority instead of being falsely equated with the current install directory.
+Installed-index extraction must supply these facts before package 6 is complete.
+No identity is inferred from aliases supplied in a launch reply.
+
+Source-scoped checks before integration:
+
+- Test-only source `f6cdab09e3`: 36 failing, 11 passing caller tests against the
+  pre-implementation runtime; actual exit 1. Log `/tmp/harness-launch-boundary-red.log`.
+- Selected implementation checks: 341 tests across 14 files; affected boundary
+  files have 100% statements, branches, functions and lines (691/791/103/521).
+  This includes all real Store adapters, rename/symlink snapshots, all seven
+  Models producers, request identity, exact/over-limit sizes, guest no-effects
+  refusal, native create composition and the real POSIX bootstrap shell fixture.
+- Source TypeScript completed with exit 0. Architecture and Store launch goldens
+  passed. Grid launch golden setup requires a private loopback server and was
+  blocked by sandbox `listen EPERM`; rerun outside that restriction is required.
+- The changed-path mapper selects `npm run test:core`. Full core acceptance and
+  the loopback-dependent golden rerun are pending on the implementation commit.
+- macOS execution is recorded here. Windows guest command/host forms are covered
+  in fixtures; native Windows execution remains for the Windows release gate.
+  No real guest account was created or used. No timed cost run has been made;
+  root coordinates that separately from other validation load.
