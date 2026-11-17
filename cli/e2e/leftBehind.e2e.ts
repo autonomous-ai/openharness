@@ -192,6 +192,7 @@ describe('a daemon under test', () => {
     const tmux = tmuxServer(started.socket)
     expect(tmux, 'the daemon\'s tmux server').not.toBeNull()
     expect(started.escaped, 'the hung read\'s Codex, its watcher and its child').toHaveLength(3)
+    expect(daemonProcesses(started.master).length, 'the master and a service process at the least').toBeGreaterThanOrEqual(2)
     watched = [...new Set([...daemonProcesses(started.master), started.core, tmux!, ...started.escaped])]
     expect(watched.length, 'master, core, edge and tmux at the least').toBeGreaterThanOrEqual(4)
     end(child)
