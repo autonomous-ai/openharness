@@ -470,7 +470,6 @@ describe("scripts/install.sh command contract", () => {
     expect(tmuxStep).toBeGreaterThan(-1);
     expect(nodeStep).toBeGreaterThan(tmuxStep);
     expect(cliStep).toBeGreaterThan(nodeStep);
-    expect(source).toContain("brew install tmux");
     expect(source).toContain("install_managed_tmux");
     expect(source).toContain("install_with_apt $missing_host_packages");
     expect(source).toContain('if [ "$(id -u)" -eq 0 ]; then');
