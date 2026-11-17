@@ -227,7 +227,7 @@ while the desktop app runs (it has its own `HarnessStatusMenu`).
 
 | Row | Shown |
 |---|---|
-| Dial line (disabled) | "Dial connected" (· fw), "No dial", "Updating to X", the `problem` text, "Starting Harness", "Harness stopped", "Updating Harness", "Setting up Harness", "Harness removed" |
+| Dial line (disabled) | "Dial connected" (no firmware version: About has it), "No dial", "Updating to X", the `problem` text, "Starting Harness", "Harness stopped", "Updating Harness", "Setting up Harness", "Harness removed" |
 | **Install** | when "Harness removed", or when an install failed and its window was closed (the dial line then stays "Setting up Harness") |
 | Account | "Signed in" (disabled), or **Sign in…** |
 | Claude Code | as above; absent when not supported ([the dial skill design](2026-11-16-dial-skill-every-home-design.md)) |
@@ -238,6 +238,7 @@ while the desktop app runs (it has its own `HarnessStatusMenu`).
 | **Update X…** | when the app cannot replace its bundle; opens `harness.autonomous.ai/device` ([design](2026-11-16-device-app-release-design.md)) |
 | separator | |
 | **Open Harness** | when the desktop app is installed (`open -b ai.autonomous.harness`) |
+| **About** | macOS's standard About panel, brought to the front: the app's name and version, and one credits line `Dial 0.1.0 · Harness 0.6.58` (`harness --version`, read when the menu opens, at most once a minute), a version the app does not know left out |
 | **Quit** | quits the app; the daemon keeps running |
 
 Copy is short, buttons 1-2 words. An empty state shows nothing extra.

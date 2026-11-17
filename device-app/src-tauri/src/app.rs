@@ -1,13 +1,13 @@
 //! The app's rules: a pure reducer from an event to the effects it asks for.
 
 use crate::keepalive::{Keep, KeepAlive};
-use crate::model::{due, menu, menu_log};
+use crate::model::{about_credits, due, menu, menu_log};
 use crate::types::{
     Action, AppState, AppUpdate, CliState, Daemon, Effect, EngineChange, Event, LoginEvent, MenuAction, MenuItem,
     NotifyMode, Phase, Saved, Screen, UpdateFailure, View,
 };
 
-/// The menu reads the account, Claude Code and Codex again at most this often.
+/// The menu reads the account, Claude Code, Codex and the CLI's version again at most this often.
 const READ_EVERY_SECS: u64 = 60;
 
 /// The app asks for its own update at most this often.
@@ -66,6 +66,7 @@ impl App {
             app_update: AppUpdate::None,
             claude_change: EngineChange::None,
             codex_change: EngineChange::None,
+            cli_version: None,
         };
         let mut app = App {
             state,
@@ -166,6 +167,7 @@ impl App {
                 self.state.signed_in = None;
                 self.state.claude = None;
                 self.state.codex = None;
+                self.state.cli_version = None;
                 self.awaiting_account = false;
                 if self.window.is_some() {
                     self.show(None, effects);
@@ -220,8 +222,11 @@ impl App {
             Event::Codex(status) if self.state.cli == CliState::Found => {
                 self.state.codex = status.or(self.state.codex.take());
             }
+            Event::CliVersion(version) if self.state.cli == CliState::Found => {
+                self.state.cli_version = version.or(self.state.cli_version.take());
+            }
             // A read of a CLI that went away answers late: nothing reads it.
-            Event::Auth(_) | Event::Claude(_) | Event::Codex(_) => {}
+            Event::Auth(_) | Event::Claude(_) | Event::Codex(_) | Event::CliVersion(_) => {}
             Event::Login(event) => self.login_event(event, effects),
             Event::ClaudeSet(made) => {
                 // A change that no longer runs (its CLI went away) answers late: nothing reads it.
@@ -279,6 +284,7 @@ impl App {
                 }
                 MenuAction::Update => effects.push(Effect::OpenUrl(DEVICE_PAGE.into())),
                 MenuAction::OpenHarness => effects.push(Effect::OpenDesktop),
+                MenuAction::About => effects.push(Effect::ShowAbout(about_credits(&self.state))),
                 MenuAction::Quit => {
                     self.stop_watch(effects);
                     effects.push(Effect::Quit);
@@ -455,7 +461,7 @@ impl App {
     }
 
     fn read(&mut self, effects: &mut Vec<Effect>) {
-        effects.extend([Effect::ReadAuth, Effect::ReadClaude, Effect::ReadCodex]);
+        effects.extend([Effect::ReadAuth, Effect::ReadClaude, Effect::ReadCodex, Effect::ReadVersion]);
         self.last_read = self.now;
     }
 
@@ -696,6 +702,7 @@ mod tests {
             Effect::ReadAuth,
             Effect::ReadClaude,
             Effect::ReadCodex,
+            Effect::ReadVersion,
             Effect::Save(seen),
             Effect::RegisterLoginItem,
         ];
@@ -724,14 +731,14 @@ mod tests {
     fn a_cli_that_was_seen_and_is_gone_is_never_reinstalled() {
         let (app, effects) = App::new(SEEN, false, false, B);
         assert!(effects.iter().all(|effect| matches!(effect, Effect::Menu(_) | Effect::Log(_))), "{effects:?}");
-        assert_eq!(rows(&effects), ["Harness removed", "Install", "Quit"]);
+        assert_eq!(rows(&effects), ["Harness removed", "Install", "About", "Quit"]);
         assert_eq!(app.view(), None);
 
         let mut app = found();
         let effects = app.handle(Event::Cli(false));
         assert!(has(&effects, &Effect::StopWatch));
         assert!(!has(&effects, &Effect::RunInstall));
-        assert_eq!(rows(&effects), ["Harness removed", "Install", "Quit"]);
+        assert_eq!(rows(&effects), ["Harness removed", "Install", "About", "Quit"]);
     }
 
     #[test]
@@ -741,7 +748,7 @@ mod tests {
         let effects = app.handle(Event::Cli(false));
         assert!(has(&effects, &Effect::StopWatch));
         assert_eq!(shows(&effects), [None]);
-        assert_eq!(rows(&effects), ["Harness removed", "Install", "Quit"]);
+        assert_eq!(rows(&effects), ["Harness removed", "Install", "About", "Quit"]);
 
         // The sign-in it was running is gone with it: a CLI that comes back can sign in again.
         app.handle(Event::Cli(true));
@@ -753,7 +760,7 @@ mod tests {
         answer_all(&mut app, true, claude(true), codex(true));
         app.handle(Event::Menu(MenuAction::CodexOff));
         let effects = app.handle(Event::Cli(false));
-        assert_eq!(rows(&effects), ["Harness removed", "Install", "Quit"]);
+        assert_eq!(rows(&effects), ["Harness removed", "Install", "About", "Quit"]);
         app.handle(Event::Cli(true));
         answer_all(&mut app, true, claude(true), codex(true));
         assert!(has(&app.handle(Event::Menu(MenuAction::CodexOff)), &Effect::SetCodex(false)));
@@ -775,7 +782,7 @@ mod tests {
         effects.extend(app.handle(Event::Auth(Some(true))));
         effects.extend(app.handle(Event::Claude(claude(true))));
         effects.extend(app.handle(Event::Codex(codex(true))));
-        assert_eq!(rows(&effects), ["Harness removed", "Install", "Quit"]);
+        assert_eq!(rows(&effects), ["Harness removed", "Install", "About", "Quit"]);
     }
 
     #[test]
@@ -974,7 +981,7 @@ mod tests {
         let effects = app.handle(Event::Menu(MenuAction::CodexOn));
         assert!(has(&effects, &Effect::SetCodex(true)));
         assert!(shows(&effects).is_empty());
-        assert_eq!(rows(&effects)[4..6], ["Codex: Turning on…", "Quit"]);
+        assert_eq!(rows(&effects)[4..6], ["Codex: Turning on…", "About"]);
         let effects = app.handle(Event::CodexSet(true));
         assert!(has(&effects, &Effect::ReadCodex));
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_) | Effect::Show(_))), "{effects:?}");
@@ -1053,7 +1060,7 @@ mod tests {
 
         let effects = app.handle(Event::Menu(MenuAction::CodexOff));
         assert!(has(&effects, &Effect::SetCodex(false)));
-        assert_eq!(rows(&effects)[4..6], ["Codex: Turning off…", "Quit"]);
+        assert_eq!(rows(&effects)[4..6], ["Codex: Turning off…", "About"]);
         let effects = app.handle(Event::CodexSet(true));
         assert!(has(&effects, &Effect::ReadCodex));
         assert_eq!(rows(&effects)[4..6], ["Codex: Off", "Turn on"]);
@@ -1108,7 +1115,7 @@ mod tests {
     fn no_claude_row_or_screen_without_the_command() {
         let mut app = found();
         let effects = answer(&mut app, true, None);
-        assert_eq!(rows(&effects), ["Starting Harness", "Signed in", "Quit"]);
+        assert_eq!(rows(&effects), ["Starting Harness", "Signed in", "About", "Quit"]);
         assert!(shows(&effects).is_empty());
 
         let mut app = found();
@@ -1119,19 +1126,20 @@ mod tests {
     #[test]
     fn the_menu_reads_again_at_most_once_a_minute() {
         let reads = |effects: &[Effect]| {
-            (has(effects, &Effect::ReadAuth), has(effects, &Effect::ReadClaude), has(effects, &Effect::ReadCodex))
+            [Effect::ReadAuth, Effect::ReadClaude, Effect::ReadCodex, Effect::ReadVersion]
+                .map(|read| has(effects, &read))
         };
         let opened = |now: u64, desktop_installed: bool| Event::MenuOpened { now, desktop_installed };
         let mut app = found();
-        assert_eq!(reads(&app.handle(opened(B + 10, false))), (false, false, false));
-        assert_eq!(reads(&app.handle(opened(B + 60, false))), (true, true, true));
-        assert_eq!(reads(&app.handle(opened(B + 70, false))), (false, false, false));
+        assert_eq!(reads(&app.handle(opened(B + 10, false))), [false; 4]);
+        assert_eq!(reads(&app.handle(opened(B + 60, false))), [true; 4]);
+        assert_eq!(reads(&app.handle(opened(B + 70, false))), [false; 4]);
 
         let effects = app.handle(opened(B + 80, true));
-        assert_eq!(rows(&effects), ["Starting Harness", "Open Harness", "Quit"]);
-        assert_eq!(rows(&app.handle(opened(B + 90, false))), ["Starting Harness", "Quit"]);
+        assert_eq!(rows(&effects), ["Starting Harness", "Open Harness", "About", "Quit"]);
+        assert_eq!(rows(&app.handle(opened(B + 90, false))), ["Starting Harness", "About", "Quit"]);
 
-        assert_eq!(reads(&removed().handle(opened(B + 120, false))), (false, false, false));
+        assert_eq!(reads(&removed().handle(opened(B + 120, false))), [false; 4]);
     }
 
     #[test]
@@ -1217,7 +1225,7 @@ mod tests {
 
         let effects = app.handle(line(false));
         assert_eq!(checks(&effects), vec![on.clone()]);
-        assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Sound ✓ | Quit".into())));
+        assert!(has(&effects, &Effect::Log("menu: Dial connected | Sound ✓ | About | Quit".into())));
 
         // The click's own check flipped natively: the menu drawn again puts it back where the dial is.
         let effects = app.handle(Event::Menu(MenuAction::SoundOff));
@@ -1226,7 +1234,7 @@ mod tests {
 
         let effects = app.handle(line(true));
         assert_eq!(checks(&effects), [off]);
-        assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Sound | Quit".into())));
+        assert!(has(&effects, &Effect::Log("menu: Dial connected | Sound | About | Quit".into())));
 
         assert!(checks(&app.handle(Event::WatchExit(Some(3)))).is_empty());
     }
@@ -1275,7 +1283,7 @@ mod tests {
 
         let effects = app.handle(notifying(NotifyMode::Full));
         assert_eq!(submenus(&effects), [checked(true, false)]);
-        assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Notifications: All | Quit".into())));
+        assert!(has(&effects, &Effect::Log("menu: Dial connected | Notifications: All | About | Quit".into())));
 
         // The click's own check flipped natively: the menu drawn again puts it back where the watch says.
         let effects = app.handle(Event::Menu(MenuAction::NotifyYou));
@@ -1284,7 +1292,7 @@ mod tests {
 
         let effects = app.handle(notifying(NotifyMode::You));
         assert_eq!(submenus(&effects), [checked(false, true)]);
-        assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Notifications: Needs you | Quit".into())));
+        assert!(has(&effects, &Effect::Log("menu: Dial connected | Notifications: Needs you | About | Quit".into())));
 
         assert!(submenus(&app.handle(Event::WatchExit(Some(3)))).is_empty());
     }
@@ -1303,8 +1311,8 @@ mod tests {
             notify: None,
         };
         let effects = app.handle(Event::WatchLine(line.clone()));
-        assert_eq!(rows(&effects)[0], "Dial connected · 0.0.95");
-        assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Quit".into())));
+        assert_eq!(rows(&effects)[0], "Dial connected");
+        assert!(has(&effects, &Effect::Log("menu: Dial connected | About | Quit".into())));
         assert!(app.handle(Event::WatchLine(line)).is_empty());
 
         assert_eq!(rows(&app.handle(Event::WatchExit(Some(3))))[0], "Starting Harness");
@@ -1358,10 +1366,11 @@ mod tests {
         let mut app = removed();
         assert_eq!(app.handle(tick(B + 5)), [Effect::FindCli, Effect::CheckUpdate]);
         let effects = app.handle(Event::Cli(true));
-        for effect in [Effect::SpawnWatch, Effect::ReadAuth, Effect::ReadClaude, Effect::ReadCodex] {
+        let asked = [Effect::SpawnWatch, Effect::ReadAuth, Effect::ReadClaude, Effect::ReadCodex, Effect::ReadVersion];
+        for effect in asked {
             assert!(has(&effects, &effect), "{effect:?}");
         }
-        assert_eq!(rows(&effects), ["Starting Harness", "Quit"]);
+        assert_eq!(rows(&effects), ["Starting Harness", "About", "Quit"]);
 
         // An install under way is not looked past.
         assert!(!has(&fresh().handle(tick(B + 5)), &Effect::FindCli));
@@ -1423,8 +1432,29 @@ mod tests {
         let mut app = fresh();
         assert_eq!(app.handle(Event::WindowClosed), [Effect::Show(None)]);
         let effects = app.handle(Event::InstallDone(Err(vec!["x".into()])));
-        assert_eq!(rows(&effects), ["Setting up Harness", "Install", "Quit"]);
+        assert_eq!(rows(&effects), ["Setting up Harness", "Install", "About", "Quit"]);
         assert!(shows(&effects).is_empty());
+    }
+
+    #[test]
+    fn about_shows_the_versions_it_knows() {
+        let about = |app: &mut App| app.handle(Event::Menu(MenuAction::About));
+        let mut app = found();
+        assert_eq!(about(&mut app), [Effect::ShowAbout(None)]);
+        assert!(app.handle(Event::CliVersion(Some("0.6.58".into()))).is_empty());
+        assert_eq!(about(&mut app), [Effect::ShowAbout(Some("Harness 0.6.58".into()))]);
+        app.handle(notifying(NotifyMode::Full));
+        assert_eq!(about(&mut app), [Effect::ShowAbout(Some("Dial 0.0.95 · Harness 0.6.58".into()))]);
+        // A read that failed keeps the last answer.
+        app.handle(Event::CliVersion(None));
+        assert_eq!(about(&mut app), [Effect::ShowAbout(Some("Dial 0.0.95 · Harness 0.6.58".into()))]);
+
+        // A CLI that went away takes its version with it, and its read that answers late is not heard.
+        let mut app = found();
+        app.handle(Event::CliVersion(Some("0.6.58".into())));
+        app.handle(Event::Cli(false));
+        app.handle(Event::CliVersion(Some("0.6.58".into())));
+        assert_eq!(about(&mut app), [Effect::ShowAbout(None)]);
     }
 
     #[test]
