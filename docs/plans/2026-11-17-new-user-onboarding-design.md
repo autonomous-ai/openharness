@@ -161,7 +161,7 @@ Every line still passes `log::redact`. brew's output, a script's source text, an
 never logged.
 
 Tests (red first): `install.rs` (the steps a streamed run yields, the log of a long run, the failure's lines, arrival
-order across stdout and stderr), `app.rs` (the step shown, kept across a retry), `ui/src/screens.test.ts` (the step
+order across stdout and stderr), `app.rs` (the step shown; a retry starts again at "Getting ready…"), `ui/src/screens.test.ts` (the step
 under the spinner), the gallery with the step in both themes.
 
 ### Docs
