@@ -1207,14 +1207,14 @@ mod tests {
         assert!(has(&effects, &Effect::InstallUpdate));
         assert_eq!(logs(&effects), ["update: found 0.1.3"]);
         let menu = menu_of(&effects);
-        let row = MenuItem::Text("Updating Harness Device…".into());
+        let row = MenuItem::Text("Updating Harness…".into());
         let at = menu.iter().position(|item| *item == row).expect("the row");
         assert_eq!(menu[at + 1], MenuItem::Separator);
         assert!(!has(&app.handle(tick(B + 5 + H6)), &Effect::CheckUpdate));
 
         let effects = app.handle(Event::UpdateInstalled);
         assert_eq!(logs(&effects), ["update: installed 0.1.3"]);
-        assert!(!rows(&effects).contains(&"Updating Harness Device…".to_string()));
+        assert!(!rows(&effects).contains(&"Updating Harness…".to_string()));
         assert!(!has(&effects, &Effect::Relaunch));
         assert_eq!(app.handle(tick(B + 10 + H6)), [Effect::StopWatch, Effect::Relaunch]);
     }
@@ -1293,7 +1293,7 @@ mod tests {
             assert_eq!(logs(&effects), [format!("update: failed {word}")]);
             assert!(!has(&effects, &Effect::InstallUpdate) && !has(&effects, &Effect::Relaunch), "{kind:?}");
             sent.extend(effects);
-            assert!(!rows(&sent).contains(&"Updating Harness Device…".to_string()), "{kind:?}");
+            assert!(!rows(&sent).contains(&"Updating Harness…".to_string()), "{kind:?}");
             let effects = app.handle(tick(B + 10));
             assert!(!has(&effects, &Effect::CheckUpdate) && !has(&effects, &Effect::Relaunch), "{kind:?}");
             assert!(has(&app.handle(tick(B + 5 + H6)), &Effect::CheckUpdate), "{kind:?}");

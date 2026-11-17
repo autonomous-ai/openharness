@@ -321,7 +321,7 @@ mod tests {
     fn the_update_rows() {
         let rows = [
             // No version: the dial's own update reads "Updating to X".
-            (AppUpdate::Installing, text("Updating Harness Device…")),
+            (AppUpdate::Installing, text("Updating Harness…")),
             (AppUpdate::Blocked("0.1.3".into()), act(MenuAction::Update, "Update 0.1.3…")),
         ];
         for (app_update, row) in rows {
