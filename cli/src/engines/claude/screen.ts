@@ -13,8 +13,12 @@ export function questionPane(capture: string): PaneView {
 export const inspectRuntimePane = (capture: string) => inspectPane('claude', capture, takeover)
 export const paneModal = (capture: string) => readModal('claude', capture, takeover)
 export const screen: EngineScreen = {
-  inspect: capture => assembleScreen('claude', capture, inspectRuntimePane(capture), questionPane(capture),
-    paneModal(capture), composerState(capture), activity(capture)),
+  inspect: capture => {
+    const taken = takeover(capture)
+    const readTakeover = () => taken
+    return assembleScreen('claude', capture, inspectPane('claude', capture, readTakeover), questionPane(capture),
+      readModal('claude', capture, readTakeover), composerState(capture), activity(capture))
+  },
 }
 
 function takeover(capture: string): PaneTakeover | null {
@@ -25,7 +29,7 @@ function takeover(capture: string): PaneTakeover | null {
   const composer = lines.findLastIndex((line, index) => /^\s*❯/.test(line) && index > 0
     && (/^\s*[─━]{8,}\s*$/.test(lines[index - 1]) || CLAUDE_RULE.test(lines[index - 1].trim())))
   const shown = (...patterns: RegExp[]) => patterns.every(pattern => lines.findLastIndex(line => pattern.test(line)) > composer)
-  if (claudeRewindMenuOpen(capture)) return 'rewind'
+  if (claudeRewindMenuOpen(lines)) return 'rewind'
   if (bottom.some((line) => CLAUDE_TRANSCRIPT_FOOTER.test(line))) return 'transcript'
   if (bottom.some((line) => CLAUDE_HISTORY_SEARCH.test(line))) return 'search'
   if (shown(/Quick safety check: Is this a project you created or one you trust\?/, /^\s*(?:❯\s*)?Yes, I trust this folder\s*$/)) return 'trust'
@@ -50,8 +54,8 @@ const CLAUDE_HISTORY_SEARCH = /^\s*(?:search prompts|no matching prompt): /
 
 const CLAUDE_REWIND_BODY = /^(?:Restore the code\b|Restore and fork\b|Confirm you want to restore\b|Nothing to rewind to\b)/
 
-function claudeRewindMenuOpen(capture: string): boolean {
-  const lines = stripAnsi(capture).replace(/\u00a0/g, ' ').split('\n').map((line) => line.trim())
+function claudeRewindMenuOpen(normalizedLines: readonly string[]): boolean {
+  const lines = normalizedLines.map((line) => line.trim())
   // The title, with its body a blank line under it, and no rule after it: the prompt the menu hides
   // comes back between two rules once it closes.
   return lines.some((line, index) => line === 'Rewind'
