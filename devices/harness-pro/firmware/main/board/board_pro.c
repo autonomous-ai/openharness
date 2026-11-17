@@ -10,6 +10,7 @@
 
 static const board_t s_pro = {
     .name = "harness-pro",
+    .kind = "pro",
     .lcd_rst = BSP_LCD_RST,
     .touch_rst = BSP_TOUCH_RST,
     .touch = TOUCH_GT911,

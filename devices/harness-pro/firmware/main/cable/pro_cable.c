@@ -222,7 +222,7 @@ static void send_hello(void)
     msg_string(&root, "product", CABLE_PRODUCT);
     msg_number(&root, "proto", CABLE_PROTO_VERSION);
     msg_string(&root, "hw", board()->name);
-    msg_string(&root, "board", "pro");
+    msg_string(&root, "board", board()->kind);
     msg_string(&root, "swarms", "members-v1");
     msg_string(&root, "recap", "long-v1");
     msg_string(&root, "activity", "steps-v1");

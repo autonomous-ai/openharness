@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "app/pod_glue.h"
+#include "app/pro_app_hooks.h"   // the finger, the screen's power and the notice line
 #include "terminal.h"
 
 // Bring Pod up and start the render task (24 KB stack, core 1, priority 5). Needs pro_display_init() to have run.
@@ -18,25 +19,12 @@ void pro_app_start(void);
 void pro_app_lock(void);
 void pro_app_unlock(void);
 
-// ---- the finger (touch task). x, y are upright glass coordinates; `down` is the contact state. ----
-// False when the screen is asleep: the contact was cancelled instead and the caller swallows the rest of it.
-bool pro_app_touch(bool down, int x, int y);
-void pro_app_touch_cancel(void);
-
-// ---- the screen's power. Idle for 300 s sleeps it; a touch or the power key wakes it. ----
-bool pro_app_asleep(void);
-void pro_app_sleep(void);
-void pro_app_wake(void);
-void pro_app_bump_activity(void);
-
 // ---- the side button (board/ptt_pro.c, its own task). A press wakes a sleeping screen, else abandons a recording or
 // goes home to Tabs; a 0.8 s hold puts an awake screen to sleep (it does nothing after a press that just woke it). ----
 void pro_app_button_press(void);
 void pro_app_button_hold(void);
 
 // ---- the voice side (Task 7). Safe from any task. ----
-// Pod's notice line under the status bar, 3 s.
-void pro_app_notice(const char *text);
 // Leave the Talk frame whose recording is over (pod_ui_talk_over), redrawing.
 void pro_app_talk_over(void);
 // Why a recording for this agent must not start (the copy is the screen's), or NULL when it may.
