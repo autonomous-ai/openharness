@@ -16,16 +16,20 @@ export function replayLegacyQuestions(rows: Iterable<Record<string, unknown>>, s
   send({ type: 'commander_questions_open', payload: { requestIds } })
 }
 
-/** Count before serialization: inline questions and old Registry identities have no source byte bound.
- * Only plain JSON question records enter here. String copies stay within one scan chunk; no key arrays or toJSON calls. */
+/** Count before full-frame serialization: inline questions and old Registry identities have no source byte bound.
+ * Only plain JSON records enter here. Primitive fragments stay bounded; no object serialization, key arrays or toJSON calls. */
 export function questionFrameBytes(frame: unknown, limit: number): number | null {
   let bytes = 0
   const add = (size: number): boolean => (bytes += size) <= limit
   const string = (value: string): boolean => {
-    // A legal escaped Cloud frame held the core for 215 ms; the per-escape loop dominated its profile.
+    // Counting dominated legal maximum-frame profiles; one native string codec avoids repeated escape scans.
     // UTF-16 length is a lower bound, so even an unbounded inline value is refused before a native scan.
-    if (value.length > limit - bytes - 2 || !add(2 + Buffer.byteLength(value))) return false
-    if (!/["\\\u0000-\u001f\ud800-\udfff]/.test(value)) return true
+    const remaining = limit - bytes - 2
+    if (value.length > remaining) return false
+    const utf8 = Buffer.byteLength(value)
+    if (utf8 > remaining) return false
+    bytes += 2
+    if (!/["\\\u0000-\u001f\ud800-\udfff]/.test(value)) return add(utf8)
     for (let start = 0; start < value.length;) {
       let end = Math.min(start + 4096, value.length)
       const high = value.charCodeAt(end - 1)
@@ -33,13 +37,9 @@ export function questionFrameBytes(frame: unknown, limit: number): number | null
         const low = value.charCodeAt(end)
         if (low >= 0xdc00 && low <= 0xdfff) end--
       }
-      // Native replacements hold at most one small chunk; no JS iteration or callback per escape.
-      const chunk = value.slice(start, end)
-      const short = chunk.length - chunk.replace(/["\\\b\t\n\f\r]/g, '').length
-      const control = chunk.length - chunk.replace(/[\u0000-\u0007\u000b\u000e-\u001f]/g, '').length
-      // Do not split pairs above: Unicode mode then matches only lone surrogates (3 UTF-8 / 6 JSON bytes).
-      const lone = chunk.length - chunk.replace(/[\ud800-\udfff]/gu, '').length
-      if (!add(short + control * 5 + lone * 3)) return false
+      // Only a primitive string reaches stringify: at most 6 * 4096 + 2 bytes, with no toJSON lookup.
+      // Keeping pairs together makes concatenated fragment contents equal the whole JSON string.
+      if (!add(Buffer.byteLength(JSON.stringify(value.slice(start, end))) - 2)) return false
       start = end
     }
     return true

@@ -44,6 +44,17 @@ describe('question observation bytes', () => {
     stringify.mockRestore()
   })
 
+  it('refuses a UTF-8 lower bound before fragment encoding even when UTF-16 length fits', () => {
+    const frame = { text: '中'.repeat(16) }
+    const limit = Buffer.byteLength(JSON.stringify({ text: '' })) + 16
+    const stringify = vi.spyOn(JSON, 'stringify')
+    const bytes = questionFrameBytes(frame, limit)
+    const calls = stringify.mock.calls.length
+    stringify.mockRestore()
+    expect(bytes).toBeNull()
+    expect(calls).toBe(0)
+  })
+
   it.each([
     '"\\\b\t\n\f\r'.repeat(32),
     '\u0000\u0007\u000b\u000e\u001f'.repeat(32),

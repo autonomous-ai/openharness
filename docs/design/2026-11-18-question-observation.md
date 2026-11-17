@@ -49,8 +49,10 @@ is duplicated in the output. Including both outer agent/session IDs and envelope
 
 Inline Cloud and legacy admitted Registry IDs have no production aggregate length bound. Their new observation
 frame may therefore be refused visibly while the legacy behavior remains intact. Count the exact JSON bytes
-before allocating its serialized string, including escapes and lone surrogates, stopping as soon as the limit
-is exceeded and without unbounded temporary arrays or strings. Never silently trim those fields.
+before full-frame serialization, including escapes and lone surrogates, stopping as soon as the limit is
+exceeded. Preflight may encode primitive string fragments of at most 4,096 UTF-16 code units, never an object;
+each temporary serialized fragment is at most 24,578 bytes. No unbounded temporary arrays or strings, and no
+silent trimming of those fields.
 
 **Compatibility.** Real existing windows/remote apps and named tools must use the shared interest contract in
 this slice; the device component cannot be its sole consumer. Metadata `agents_watch` behavior stays intact,
@@ -154,7 +156,7 @@ That is failed responsiveness evidence, not a baseline improvement comparison. A
 on the exact source attributed 71.69% of non-idle samples to counting, 70.87% to the per-escape loop itself.
 All three runs proved actual exits, physical sockets, groups/guardians/EOF, hashes and root cleanup.
 
-The subsequent correction retains the UTF-16 lower-bound refusal and native UTF-8 count, with a native
+The second correction retained the UTF-16 lower-bound refusal and native UTF-8 count, with a native
 no-escape test. When escaping is present, native replacements count three escape classes in chunks of at
 most 4,096 UTF-16 code units. A boundary between a valid surrogate pair moves back one unit. No full-string
 copy, match array or callback per escape is made; only bounded chunk copies are held. Exact preflight limits
@@ -162,7 +164,27 @@ and the caller's JSON/depth/getter/`toJSON` rules are unchanged. The physical ca
 explicit bounded scan/copy guard; the corrected caller delivers the same Unicode content. Oracle tests
 cover pairs and orphan surrogates across each chunk boundary, as well as the previous byte boundaries.
 
-The final correction passes 39 focused counter/socket tests and TypeScript. Its 29 tests selected by the
+That correction passed 39 focused counter/socket tests and TypeScript. Its 29 tests selected by the
 canonical core configuration independently give `questionObservation.ts` 100% in all four coverage measures,
 without relying on the socket spec that the core gate excludes. Frozen maximum-frame/escaped probes,
 ordinary cases, merged/native acceptance and shared string-primitive extraction remain pending.
+
+At `197f6938cb`, the unchanged maximum-frame ABBA retained all 60 samples: matched legacy sync medians
+18.843/18.067 ms; candidate observer sync median/max 32.689/36.624 ms and loop maximum 48.103 ms. The
+separate same-input escaped probe retained all ten samples: sync median/max 76.251/89.006 ms, loop maximum
+100.008 ms, server CPU median 210.659 ms and snapshot median 209.071 ms. Its bounded exact-source profile
+still attributed 40.08% of non-idle samples to counting, 38.90% to the string chunk body. Physical send self
+was 26.87%; V8 did not isolate stringify from bookkeeping/inlined work, so this is not claimed as pure
+serialization time. Custody, actual exits, hashes and cleanup passed; responsiveness acceptance stayed open.
+
+The final correction replaces those three native replacements with `JSON.stringify` of each bounded
+primitive string fragment and `Buffer.byteLength`. It preserves the two lower-bound refusals, no-escape
+fast path and unsplit surrogate pairs. Only the complete frame waits for admission; the explicitly bounded
+fragments cannot invoke object or `String.prototype.toJSON` behavior. The prior measured escaped-input hold
+and profile are the performance failure. A preliminary codec-specific test also failed, but is recorded
+separately and is not evidence of caller misdelivery. Final physical caller tests enforce only resource and
+behavior contracts: bounded temporary inputs/outputs and calls, no prototype getter/method or object effects,
+unchanged Unicode delivery and full-frame admission/refusal. They do not require one codec API or a positive
+fragment/copy count. Forty focused tests and TypeScript pass; thirty tests
+under the canonical core configuration independently cover all four measures at 100%. Its same frozen
+maximum/escaped probes and shared string-primitive extraction remain pending.

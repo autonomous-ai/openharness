@@ -70,14 +70,16 @@ it('releases actual UTF-8 bytes on callback and keeps uncounted legacy sends unc
   expect(sinks[0].sendFrame({}, quota)).toBe(false)
 })
 
-it('refuses oversized JSON before serialization and closes only that observer', async () => {
+it('refuses oversized JSON before full-frame serialization and closes only that observer', async () => {
   const sinks = await setup(2), held = holdWrites(), settled = vi.fn()
   const stringify = vi.spyOn(JSON, 'stringify')
   const accepted = sinks[0].sendFrame({ data: '\u0000'.repeat(Math.ceil(LIMIT / 6)) }, quota, settled)
-  const calls = stringify.mock.calls.length
+  const fragments = stringify.mock.calls.map(([value]) => value)
+  const outputs = stringify.mock.results.map(result => result.value)
   stringify.mockRestore()
   expect(accepted).toBe(false)
-  expect(calls).toBe(0)
+  expect(fragments.every(value => typeof value === 'string' && value.length <= 4096)).toBe(true)
+  expect(outputs.every(value => typeof value === 'string' && Buffer.byteLength(value) <= 6 * 4096 + 2)).toBe(true)
   expect(settled).toHaveBeenCalledExactlyOnceWith(false)
   expect(held.callbacks).toHaveLength(0)
   expect(sinks[1].sendFrame({}, quota)).toBe(true)
@@ -122,11 +124,14 @@ it('accounts mixed escaped Unicode exactly at the physical frame and global byte
   expect(sinks[0].sendFrame({ ...frame, padding: frame.padding + 'x' }, quota)).toBe(false)
 })
 
-it('delivers escaped Unicode using bounded scan and copy calls instead of a whole-string escape loop', async () => {
+it('delivers escaped Unicode within bounded preflight work without object or prototype effects', async () => {
   const sinks = await setup(1)
   const text = 'x'.repeat(4095) + '😀\ud800"\u0000'.repeat(1024), frame = { data: text }
-  const exec = RegExp.prototype.exec, replace = String.prototype.replace, slice = String.prototype.slice
-  const copies: number[] = [], scans: number[] = []
+  const exec = RegExp.prototype.exec, slice = String.prototype.slice, encode = JSON.stringify
+  const copies: number[] = [], fragments: number[] = [], outputs: number[] = [], objects: unknown[] = []
+  const toJSON = vi.fn(() => 'changed'), readToJSON = vi.fn(() => toJSON)
+  const originalToJSON = Object.getOwnPropertyDescriptor(String.prototype, 'toJSON')
+  Object.defineProperty(String.prototype, 'toJSON', { get: readToJSON, configurable: true })
   const scan = vi.spyOn(RegExp.prototype, 'exec').mockImplementation(function(this: RegExp, value) {
     if (this.global && value.length > 4096) throw new Error('UNBOUNDED_ESCAPE_SCAN')
     return exec.call(this, value)
@@ -136,20 +141,32 @@ it('delivers escaped Unicode using bounded scan and copy calls instead of a whol
     if (this === text) { copies.push(copied.length); if (copied.length > 4096) throw new Error('UNBOUNDED_COPY') }
     return copied
   })
-  const replacement = vi.spyOn(String.prototype, 'replace').mockImplementation(function(this: string, pattern, value) {
-    if (this.length > 4096 || typeof value !== 'string') throw new Error('UNBOUNDED_REPLACEMENT')
-    scans.push(this.length)
-    return replace.call(this, pattern, value)
+  let fullFrames = 0
+  const serialized = vi.spyOn(JSON, 'stringify').mockImplementation(value => {
+    const output = encode(value)
+    if (typeof value === 'string') { fragments.push(value.length); outputs.push(Buffer.byteLength(output)) }
+    else if (value === frame) fullFrames++
+    else objects.push(value)
+    return output
   })
   const received = new Promise<Record<string, unknown>>(resolve => clients[0].once('message', raw => resolve(JSON.parse(raw.toString()))))
-  const sent = sinks[0].sendFrame(frame, quota)
-  scan.mockRestore(); copy.mockRestore(); replacement.mockRestore()
+  let sent: boolean
+  try { sent = sinks[0].sendFrame(frame, quota) }
+  finally {
+    scan.mockRestore(); copy.mockRestore(); serialized.mockRestore()
+    if (originalToJSON) Object.defineProperty(String.prototype, 'toJSON', originalToJSON)
+    else Reflect.deleteProperty(String.prototype, 'toJSON')
+  }
   expect(sent).toBe(true)
   await expect(received).resolves.toEqual(frame)
-  expect(copies.length).toBeGreaterThan(0)
+  expect(readToJSON).not.toHaveBeenCalled()
+  expect(toJSON).not.toHaveBeenCalled()
+  expect(fullFrames).toBe(1)
+  expect(objects).toEqual([])
   expect(copies.length).toBeLessThanOrEqual(Math.ceil(text.length / 4095))
-  expect(Math.max(...copies, ...scans)).toBeLessThanOrEqual(4096)
-  expect(scans.length).toBeLessThanOrEqual(3 * Math.ceil(text.length / 4095))
+  expect([...copies, ...fragments].every(size => size <= 4096)).toBe(true)
+  expect(outputs.every(size => size <= 6 * 4096 + 2)).toBe(true)
+  expect(fragments.length).toBeLessThanOrEqual(Math.ceil(text.length / 4095))
 })
 
 it('bounds per-connection and global frame counts independently of bytes', async () => {
