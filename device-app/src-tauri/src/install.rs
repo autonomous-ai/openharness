@@ -113,17 +113,24 @@ mod tests {
     }
 
     impl Shell for Answers {
-        fn run(&self, line: &str, deadline: Duration) -> io::Result<Output> {
+        /// Hands the sink each line of the answer's stdout, then of its stderr, as a run hands them before it ends.
+        fn run(&self, line: &str, deadline: Duration, sink: &mut dyn FnMut(&str)) -> io::Result<Output> {
             self.journal.lock().unwrap().push(format!("{line} ({} s)", deadline.as_secs()));
-            self.answers.lock().unwrap().pop_front().expect("an answer for each run")
+            let answer = self.answers.lock().unwrap().pop_front().expect("an answer for each run");
+            if let Ok(output) = &answer {
+                output.stdout.lines().chain(output.stderr.lines()).for_each(&mut *sink);
+            }
+            answer
         }
     }
 
-    /// What one install did. `journal` holds each line the shell ran, and `cli?` where the CLI was looked for.
+    /// What one install did. `journal` holds each line the shell ran, and `cli?` where the CLI was looked for; `steps`
+    /// each step `on_step` was told.
     struct Ran {
         result: Result<(), Vec<String>>,
         journal: Vec<String>,
         log: Vec<String>,
+        steps: Vec<&'static str>,
     }
 
     fn install_with(answers: Vec<io::Result<Output>>, cli: bool) -> Ran {
@@ -134,9 +141,10 @@ mod tests {
             journal.lock().unwrap().push("cli?".to_string());
             cli
         };
-        let result = install(&shell, &log, &cli_there);
+        let mut steps = Vec::new();
+        let result = install(&shell, &log, &cli_there, &mut |step| steps.push(step));
         let journal = journal.lock().unwrap().clone();
-        Ran { result, journal, log: log.lines() }
+        Ran { result, journal, log: log.lines(), steps }
     }
 
     fn ended(code: i32, stdout: &str, stderr: &str) -> io::Result<Output> {
@@ -172,7 +180,6 @@ mod tests {
         let ran = install_with(runs, false);
         assert_eq!(ran.result, Err(texts(&[no_network])));
         assert_eq!(ran.journal.last().unwrap(), "cli?");
-        assert_eq!(ran.log.last().unwrap(), "install: harness not found after it");
         let ran = install_with(vec![ended(0, "", ""), ended(0, "", "")], false);
         assert_eq!(ran.result, Err(texts(&[NOT_INSTALLED])));
     }
@@ -184,7 +191,40 @@ mod tests {
         assert_eq!(ran.result, Err(texts(&["line 7", "line 8", "line 9", "line 10"])));
         // A CLI may well be there: a failed run is a failure all the same, and nothing runs after it.
         assert_eq!(ran.journal, [within_ten_minutes(HOST)]);
-        assert_eq!(ran.log.last().unwrap(), "install: --host exit 6");
+    }
+
+    #[test]
+    fn a_failure_logs_the_lines_the_screen_shows() {
+        let stderr: String = (1..=10).map(|n| format!("line {n}\n")).collect();
+        let ran = install_with(vec![ended(6, "", &stderr)], true);
+        assert_eq!(ran.result, Err(texts(&["line 7", "line 8", "line 9", "line 10"])));
+        assert_eq!(
+            ran.log,
+            [
+                "install: --host exit 6",
+                "install: last: line 7",
+                "install: last: line 8",
+                "install: last: line 9",
+                "install: last: line 10",
+            ]
+        );
+    }
+
+    #[test]
+    fn no_cli_after_both_runs_logs_what_the_screen_shows() {
+        let no_network = "curl: (6) Could not resolve host: cdn.autonomous.ai";
+        let runs = vec![ended(0, "Setting up the host\n", ""), ended(0, "", &format!("{no_network}\n"))];
+        let ran = install_with(runs, false);
+        assert_eq!(ran.result, Err(texts(&[no_network])));
+        assert_eq!(
+            ran.log,
+            [
+                "install: --host exit 0",
+                "install: --desktop exit 0",
+                "install: harness not found after it",
+                &format!("install: last: {no_network}"),
+            ]
+        );
     }
 
     #[test]
@@ -204,7 +244,7 @@ mod tests {
         let ran = install_with(vec![late("Downloading Node\n")], true);
         assert_eq!(ran.result, Err(texts(&["Downloading Node"])));
         assert_eq!(ran.journal, [within_ten_minutes(HOST)]);
-        assert_eq!(ran.log.last().unwrap(), "install: --host timed out after 600 s");
+        assert_eq!(ran.log, ["install: --host timed out after 600 s", "install: last: Downloading Node"]);
         let ran = install_with(vec![late("")], true);
         assert_eq!(ran.result, Err(texts(&[TIMED_OUT])));
     }
@@ -231,26 +271,52 @@ mod tests {
             assert!(!line.is_empty() && line.chars().count() <= LINE_CHARS, "{line:?}");
             assert!(!line.chars().any(char::is_control), "{line:?}");
         }
-        // The log has each line whole, and no control character either.
-        assert!(ran.log.contains(&format!("install: {long}")));
+        // The log has the lines shown, never the whole one, and no control character either.
+        assert!(!ran.log.iter().any(|line| line.contains(&long)), "{:?}", ran.log);
         assert!(ran.log.iter().all(|line| !line.chars().any(char::is_control)), "{:?}", ran.log);
     }
 
     #[test]
-    fn the_whole_output_goes_to_the_log() {
-        let host = ended(0, "Installing Harness\nHarness 0.5.8\n", "warning: slow mirror\n");
-        let ran = install_with(vec![host, ended(0, "The desktop app is ready\n", "")], true);
+    fn the_steps_a_streamed_run_yields() {
+        let host = "▸ Installing the managed tmux into /x\n  ▸ downloading tmux 3.7c (darwin-arm64)…\nnoise\n\
+                    ✓ tmux ready (tmux 3.7c)\n";
+        let desktop = "▸ Installing the Harness Node runtime into /x\n▸ Installing harness from https://x/y.json\n";
+        let ran = install_with(vec![ended(0, host, ""), ended(0, desktop, "")], true);
+        assert_eq!(ran.steps, [INSTALLING_TMUX, DOWNLOADING_HARNESS]);
+
+        // A step is a line the script marks: the same words with no `▸`, or other words after it, name none.
+        let ran = install_with(vec![ended(0, "Installing harness now\n▸ Installing hn\n", ""), ended(0, "", "")], true);
+        assert!(ran.steps.is_empty(), "{:?}", ran.steps);
+        assert_eq!(step_of("▸ downloading Node 24.1.0 (darwin-arm64)…"), Some(DOWNLOADING_HARNESS));
+        assert_eq!(step_of("Installing harness now"), None);
+        assert_eq!(step_of("▸ Installing hn"), None);
+    }
+
+    #[test]
+    fn only_step_lines_and_results_reach_the_log() {
+        let host =
+            "▸ Installing harness from https://x/y.json\n==> Pouring openssl@4\n#!/bin/sh\nset -eu\n✓ harness ready\n";
+        let ran = install_with(vec![ended(0, host, ""), ended(0, "", "✗ No desktop app here\n")], true);
+        assert_eq!(ran.result, Ok(()));
         assert_eq!(
             ran.log,
             [
-                "install: Installing Harness",
-                "install: Harness 0.5.8",
-                "install: warning: slow mirror",
+                "install: ▸ Installing harness from https://x/y.json",
+                "install: ✓ harness ready",
                 "install: --host exit 0",
-                "install: The desktop app is ready",
+                "install: ✗ No desktop app here",
                 "install: --desktop exit 0",
             ]
         );
+    }
+
+    #[test]
+    fn a_run_logs_at_most_200_step_lines() {
+        let ran = install_with(vec![ended(0, &"▸ x\n".repeat(10_000), ""), ended(0, "", "")], true);
+        let count = |wanted: &str| ran.log.iter().filter(|line| *line == wanted).count();
+        assert_eq!(count("install: ▸ x"), 200);
+        assert_eq!(count("install: --host more step lines not logged"), 1);
+        assert_eq!(ran.log.len(), 200 + 1 + 2);
     }
 
     #[test]
@@ -261,7 +327,15 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_system_shell_runs_through_sh() {
-        let output = SystemShell.run("printf hi; exit 3", Duration::from_secs(5)).unwrap();
+        let output = SystemShell.run("printf hi; exit 3", Duration::from_secs(5), &mut |_| {}).unwrap();
         assert_eq!((output.code, output.stdout.as_str()), (Some(3), "hi"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_system_shell_hands_its_lines() {
+        let mut lines = Vec::new();
+        SystemShell.run(r"printf 'a\nb\n'", Duration::from_secs(5), &mut |line| lines.push(line.to_string())).unwrap();
+        assert_eq!(lines, ["a", "b"]);
     }
 }

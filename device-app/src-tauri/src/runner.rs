@@ -440,7 +440,7 @@ mod tests {
     use crate::account::NO_RESULT;
     use crate::app::App;
     use crate::front::{FrontSource, NoFront};
-    use crate::install::{DESKTOP, HOST, NOT_INSTALLED, NOT_SUPPORTED, Shell};
+    use crate::install::{DESKTOP, HOST, INSTALLING_TMUX, NOT_INSTALLED, NOT_SUPPORTED, Shell};
     use crate::loginitem::LoginItem;
     use crate::state::StateFile;
     use crate::tabs::{NoTabs, Selected, TabApp, TabError, TabScripts};
@@ -485,6 +485,8 @@ mod tests {
         failing: AtomicBool,
         /// The home the host script puts a `harness` launcher in; None: the shell installs nothing.
         installs_into: Mutex<Option<PathBuf>>,
+        /// The lines each shell run hands its sink.
+        prints: Mutex<Vec<String>>,
         ran: Mutex<Vec<String>>,
         opened: Mutex<Vec<Vec<String>>>,
         saved: Mutex<Vec<Saved>>,
@@ -502,11 +504,12 @@ mod tests {
     }
 
     impl Shell for Doubles {
-        fn run(&self, line: &str, _deadline: Duration) -> io::Result<Output> {
+        fn run(&self, line: &str, _deadline: Duration, sink: &mut dyn FnMut(&str)) -> io::Result<Output> {
             self.ran.lock().unwrap().push(line.to_string());
             if let Some(home) = self.installs_into.lock().unwrap().as_deref().filter(|_| line == HOST) {
                 put_launcher(home);
             }
+            self.prints.lock().unwrap().iter().for_each(|printed| sink(printed));
             Ok(Output { code: Some(0), ..Output::default() })
         }
     }
@@ -925,6 +928,15 @@ mod tests {
         assert_eq!(*w.doubles.ran.lock().unwrap(), [HOST, DESKTOP, HOST, DESKTOP]);
         // The CLI the install found is the one the runs after it use.
         assert_eq!(w.answer(Effect::ReadAuth), Event::Auth(Some(true)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_install_tells_its_steps() {
+        let w = world();
+        *w.doubles.prints.lock().unwrap() = vec!["▸ Installing the managed tmux into /x".into()];
+        assert_eq!(w.answer(Effect::RunInstall), Event::InstallStep(INSTALLING_TMUX));
+        assert_eq!(w.next(), Event::InstallDone(Ok(())));
     }
 
     #[cfg(unix)]
