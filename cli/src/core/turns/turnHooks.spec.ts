@@ -9,6 +9,8 @@ import { engineHooks } from '../../engines/hooks.js'
 import { live as codexLive } from '../../engines/codex/live.js'
 import type { HookTurnContext } from '../../engines/facets/hooks.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
+import { correlateAgentEvent } from '../../lib/agentEvent.js'
+import { TurnActivity } from '../../lib/turnActivity.js'
 
 const END: LiveEvent[] = [{ type: 'turn_ended', payload: {} }]
 const ABORT: LiveEvent[] = [{ type: 'turn_ended', payload: { aborted: true } }]
@@ -46,6 +48,10 @@ function setup(engine: string, over: Partial<TurnHookDeps> = {}) {
     armAgyIdleWatch: vi.fn(),
     clearAgyIdleWatch: vi.fn(),
     mirror: { noteEngineStopped: vi.fn() },
+    turnActivity: { withdraw: vi.fn(), snapshot: vi.fn() },
+    clients: { send: vi.fn() },
+    agentIdFor: (id) => id === 's1' ? 'a1' : id,
+    awaitDialog: vi.fn(),
     ...over,
   }
   return { deps, normalizers, others, states, hooks: createTurnHooks(deps) }
@@ -798,6 +804,158 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     run.hooks.beat('s1')
     run.hooks.beat('nobody')
     expect(run.deps.emit).not.toHaveBeenCalled()
+  })
+
+  // A wait on the person: a permission or a question (R4). Its dialog is drawn after the hook returns, so no pane is
+  // read at it: the question watcher shows it at its next poll and says when it is over.
+  describe('waits', () => {
+    const SUBAGENT: LiveEvent[] = [{ type: 'tool_start', payload: { id: 'sub', tool: 'Read', input: {}, parentToolUseId: 'task' } },
+      { type: 'subagent_finished', payload: { id: 'task', status: 'completed' } }]
+    /** A session in its first turn (no Stop sent yet), with the work lease main.ts gives it: it reads the turn hooks. */
+    const waiting = () => {
+      let withheld = (_: string): boolean => false
+      const lease = new TurnActivity({ runtime: id => id === 's1' ? { key: 'pane', turnOpen: true, withheld: withheld(id) } : undefined,
+        probe: async () => 'unknown', drain: async () => {} })
+      const run = setup(engine, { turnActivity: lease })
+      withheld = run.hooks.withheld
+      lease.observe('s1', 'text_delta')
+      return { ...run, lease }
+    }
+
+    it('a permission wait: Working is withdrawn and told at once, and the watcher is told a dialog is coming', () => {
+      const run = waiting()
+      expect(run.lease.snapshot('s1')!.state).toBe('working')
+      run.hooks.onWait({ sessionId: 's1', firedAt: 5_000 })
+      const activity = run.lease.snapshot('s1')!
+      expect(activity.state).toBe('unknown')
+      expect(run.deps.clients.send).toHaveBeenCalledExactlyOnceWith(correlateAgentEvent({ type: 'agent_activity', payload: { activity } }, 's1', 'a1'))
+      expect(run.deps.awaitDialog).toHaveBeenCalledExactlyOnceWith('s1')
+      expect(run.hooks.withheld('s1')).toBe(true)
+      // What is read while it waits claims no work.
+      run.lease.observe('s1', 'tool_end')
+      expect(run.lease.snapshot('s1')!.state).toBe('unknown')
+    })
+
+    // The transcript lags the engine: a record written before the hook ran can be read after it.
+    it('the waited tool\'s own start, or its turn\'s, read later with an earlier time, does not end the wait', () => {
+      const run = waiting()
+      run.hooks.onWait({ sessionId: 's1', firedAt: 5_000 })
+      run.hooks.transcript('s1', [...START, ...TOOL_START], { at: 4_900 })
+      expect(run.hooks.withheld('s1')).toBe(true)
+      expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', [...START, ...TOOL_START])
+    })
+
+    it('progress written after the hook ends it', () => {
+      const run = waiting()
+      run.hooks.onWait({ sessionId: 's1', firedAt: 5_000 })
+      run.hooks.transcript('s1', TEXT, { at: 5_001 })
+      expect(run.hooks.withheld('s1')).toBe(false)
+      run.lease.observe('s1', 'text_delta')
+      expect(run.lease.snapshot('s1')!.state).toBe('working')
+    })
+
+    it('a read with no time ends nothing', () => {
+      const run = waiting()
+      run.hooks.onWait({ sessionId: 's1', firedAt: 5_000 })
+      run.hooks.transcript('s1', [...TEXT, ...END], {})
+      expect(run.hooks.withheld('s1')).toBe(true)
+    })
+
+    it('a subagent\'s progress never ends it', () => {
+      const run = waiting()
+      run.hooks.onWait({ sessionId: 's1', firedAt: 5_000 })
+      run.hooks.transcript('s1', SUBAGENT, { at: 6_000 })
+      expect(run.hooks.withheld('s1')).toBe(true)
+    })
+
+    // Review Focus 4: a dialog answered before any poll found it leaves the watcher's two clear polls to end the wait.
+    it('the watcher ends it: a question closed, or two polls read the pane clear; a session with no record is left alone', () => {
+      const run = waiting()
+      run.hooks.onWait({ sessionId: 's1', firedAt: 5_000 })
+      run.hooks.waitOver('s1')
+      run.hooks.waitOver('nobody')
+      expect(run.hooks.withheld('s1')).toBe(false)
+      expect(run.hooks.withheld('nobody')).toBe(false)
+    })
+
+    it.each([['its end', END], ['an aborted end', ABORT], ['the next turn\'s start', START]])('%s, written after the hook, ends it', (_, events) => {
+      const run = waiting()
+      run.hooks.onWait({ sessionId: 's1', firedAt: 5_000 })
+      run.hooks.transcript('s1', events, { at: 5_001 })
+      expect(run.hooks.withheld('s1')).toBe(false)
+    })
+
+    it('an end held for its Stop ends it as it is read', async () => {
+      const run = await hookDriven()
+      parse(run, 't1')
+      run.hooks.onWait({ sessionId: 's1', firedAt: 5_000 })
+      expect(run.hooks.withheld('s1')).toBe(true)
+      run.hooks.transcript('s1', END, { at: 5_001, turn: turnOf('t1') })
+      expect(run.hooks.held('s1')).toBe(true)
+      expect(run.hooks.withheld('s1')).toBe(false)
+    })
+
+    it('a cancel ends it', () => {
+      const run = waiting()
+      run.hooks.onWait({ sessionId: 's1', firedAt: 5_000 })
+      run.hooks.closed('s1')
+      expect(run.hooks.withheld('s1')).toBe(false)
+    })
+
+    it('a wait hook run before the latest prompt hook opens nothing', () => {
+      const run = waiting()
+      run.hooks.onPromptHook('s1', 3_000)
+      run.hooks.onWait({ sessionId: 's1', firedAt: 2_000 })
+      expect(run.lease.snapshot('s1')!.state).toBe('working')
+      expect(run.deps.clients.send).not.toHaveBeenCalled()
+      expect(run.deps.awaitDialog).not.toHaveBeenCalled()
+      expect(run.hooks.withheld('s1')).toBe(false)
+    })
+
+    it('an agent the lease no longer knows is told nothing', () => {
+      const run = waiting()
+      run.hooks.onWait({ sessionId: 's2', firedAt: 5_000 })
+      expect(run.deps.clients.send).not.toHaveBeenCalled()
+      expect(run.deps.awaitDialog).toHaveBeenCalledExactlyOnceWith('s2')
+      expect(run.hooks.withheld('s2')).toBe(true)
+    })
+
+    // Claude Code runs PreToolUse(AskUserQuestion), then PermissionRequest, for one dialog.
+    it('one dialog posting its wait twice is one wait, said the same, open from the later hook', () => {
+      const run = waiting()
+      run.hooks.onWait({ sessionId: 's1', firedAt: 5_000 })
+      run.hooks.onWait({ sessionId: 's1', firedAt: 5_010 })
+      const [[first], [second]] = vi.mocked(run.deps.clients.send).mock.calls
+      expect(second).toEqual(first)
+      expect(run.lease.snapshot('s1')!.state).toBe('unknown')
+      run.hooks.transcript('s1', TEXT, { at: 5_005 })
+      expect(run.hooks.withheld('s1')).toBe(true)
+      run.hooks.transcript('s1', TEXT, { at: 5_011 })
+      expect(run.hooks.withheld('s1')).toBe(false)
+    })
+
+    it('a wait whose hook time did not come opens when it arrives', () => {
+      vi.setSystemTime(10_000)
+      const run = waiting()
+      run.hooks.onWait({ sessionId: 's1' })
+      run.hooks.transcript('s1', TEXT, { at: 9_999 })
+      expect(run.hooks.withheld('s1')).toBe(true)
+      run.hooks.transcript('s1', TEXT, { at: 10_001 })
+      expect(run.hooks.withheld('s1')).toBe(false)
+    })
+
+    // A subagent's permission while the lead's end is held: the engine is still sending hooks (R6).
+    it('a wait hook starts the 2 minutes of silence again', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const run = await hookDriven()
+      run.hooks.transcript('s1', END, { turn: turnOf('t1') })
+      vi.advanceTimersByTime(60_000)
+      run.hooks.onWait({ sessionId: 's1' })
+      vi.advanceTimersByTime(HOOK_SILENCE_MS - 1); run.hooks.beat('s1')
+      expect(run.deps.emit).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(1); run.hooks.beat('s1')
+      expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', END)
+    })
   })
 
   // Codex's Interrupt comes on the Stop's route as `status: 'interrupted'` (R3). Codex runs it after it marks the turn
