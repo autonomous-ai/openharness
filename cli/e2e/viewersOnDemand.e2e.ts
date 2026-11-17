@@ -140,7 +140,7 @@ describe('the viewers\' process, once something needs it', () => {
     expect((await closed).payload).toMatchObject({ streamId, error: 'Viewer is no longer available' })
     await until('the viewers to have connected', () => connections(d, from) >= 1 || null, 10_000, 100)
     expect(starts(d, from)).toBe(1)
-    expect(since(d, from)).toContain(`[viewers] a viewer stream: ${ASKING}`)
+    expect(d.coresStarted()).toBe(1)
     phone.close()
   })
 
