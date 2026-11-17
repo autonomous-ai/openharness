@@ -38,8 +38,9 @@ export const CLAUDE_SANDBOX = {
   // The profile's claude.ai connectors and push reach the person's real mail, calendar, documents and phone, and
   // SendMessage their other live Claude sessions: an eval run must not email, schedule, notify or message anyone. Only
   // the fake harness reaches the person here.
-  // The agent's ~ is the run's own home (lib/stage.ts), so the person's real ~/.harness (the real harness and its
-  // sign-in) and gh's sign-in are denied by absolute path ('//'), for the sandboxed shell as for the Read tool.
+  // The agent's HOME is the person's (lib/stage.ts: Claude finds its sign-in in their keychain through it), so their
+  // ~/.harness (the real harness and its sign-in) and gh's sign-in are denied, by absolute path ('//'), for the
+  // sandboxed shell as for the Read tool.
   permissions: {
     deny: ['PushNotification', 'RemoteTrigger', 'DesignSync', 'SendMessage', 'ListAgents',
       `Read(/${join(homedir(), '.harness')}/**)`, `Read(/${join(homedir(), '.config', 'gh')}/**)`],
