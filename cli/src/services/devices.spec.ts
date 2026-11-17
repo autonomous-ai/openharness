@@ -2,7 +2,7 @@
 // they say reaches the core through its API alone, and the fleet failing costs the dial nothing.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { delimiter, dirname, join } from 'node:path'
+import { delimiter, dirname, join, parse } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
 import { AppFilter, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
@@ -6242,6 +6242,16 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
     // A state folder made while neither was there is watched from the next attach.
     attach(port)
     expect(watchedFolders.calls.map(([watched]) => watched)).toEqual([folders, folders])
+  })
+
+  it('a state folder that is the home folder or a disk\'s root is not watched', () => {
+    onTestFinished(() => { vi.unstubAllEnvs() })
+    for (const state of [homedir(), parse(homedir()).root]) {
+      vi.stubEnv('XDG_STATE_HOME', state)
+      watchedFolders.calls.length = 0
+      attach(withOpencode().port)
+      expect(watchedFolders.calls).toEqual([[[join(state, 'opencode')], expect.any(Function)]])
+    }
   })
 
   it('the devices stopping stops the source', async () => {
