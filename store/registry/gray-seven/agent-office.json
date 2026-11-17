@@ -1,0 +1,38 @@
+{
+  "id": "gray-seven/agent-office",
+  "name": "Agent Office",
+  "category": "Essentials",
+  "description": "Your harnesses and Swarms as little people in a pixel office, in 2.5D or 3D: who is typing, reading, browsing, who is waiting on you, and how each Swarm task is going. Click someone for their card and tasks, double-click to jump to them in Harness, or turn on Chat. Read only.",
+  "tagline": "Your agents at work, as a pixel office",
+  "author": "gray-seven",
+  "repo": "https://github.com/gray-seven/agent-office",
+  "ref": "847b2fac75e58ca0336e39a382620f68df203f4c",
+  "homepage": "https://github.com/gray-seven/agent-office",
+  "license": "MIT",
+  "engine": "claude",
+  "tier": 2,
+  "runsScripts": true,
+  "verified": false,
+  "screenshots": [
+    "https://raw.githubusercontent.com/gray-seven/agent-office/847b2fac75e58ca0336e39a382620f68df203f4c/assets/demo.png",
+    "https://raw.githubusercontent.com/gray-seven/agent-office/847b2fac75e58ca0336e39a382620f68df203f4c/assets/demo-3d.png",
+    "https://raw.githubusercontent.com/gray-seven/agent-office/847b2fac75e58ca0336e39a382620f68df203f4c/assets/demo-chat.png"
+  ],
+  "examples": [
+    {
+      "prompt": "Who is waiting on me, and what is everyone else doing?",
+      "image": "https://raw.githubusercontent.com/gray-seven/agent-office/847b2fac75e58ca0336e39a382620f68df203f4c/assets/demo.png",
+      "caption": "Two computers, sixteen harnesses: reading, running commands, helpers on a hand-off."
+    },
+    {
+      "prompt": "Show my Swarm in 3D at night.",
+      "image": "https://raw.githubusercontent.com/gray-seven/agent-office/847b2fac75e58ca0336e39a382620f68df203f4c/assets/demo-3d.png",
+      "caption": "A Swarm project: the coordinator's glass office, workgroups under their numbers."
+    },
+    {
+      "prompt": "What is Ben working on right now?",
+      "image": "https://raw.githubusercontent.com/gray-seven/agent-office/847b2fac75e58ca0336e39a382620f68df203f4c/assets/demo-chat.png",
+      "caption": "Chat on: a click shows what a harness was asked and the reply it is writing."
+    }
+  ]
+}
