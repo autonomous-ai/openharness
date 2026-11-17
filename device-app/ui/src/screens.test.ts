@@ -72,6 +72,20 @@ describe('screens', () => {
     expect(page().querySelectorAll('.content > *')).toHaveLength(2)
   })
 
+  it('install: the spinner is named by the heading and the step', async () => {
+    // The text of each element the spinner's aria-labelledby names, as a screen reader reads it.
+    const name = () =>
+      (spinner()?.getAttribute('aria-labelledby') ?? '')
+        .split(' ')
+        .map((id) => document.getElementById(id)?.textContent)
+        .join(' ')
+    await mount(at('install', 'working', ['Installing tmux…']))
+    expect(name()).toBe('Setting up Harness Installing tmux…')
+
+    push(at('install', 'working'))
+    expect(name()).toBe('Setting up Harness')
+  })
+
   it('sign-in: offer, browser, done', async () => {
     await mount(at('sign_in', 'offer'))
     expect(heading()).toBe('Sign in')
