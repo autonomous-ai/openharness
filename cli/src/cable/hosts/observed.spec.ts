@@ -1640,6 +1640,26 @@ describe('ObservedSource actions', () => {
     expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true, focus: true })
   })
 
+  // Each hook is a process of its own, and a subagent stopped as its lead exits still sends SubagentStop: one that comes
+  // after the lead's SessionEnd is no resume.
+  it.each(['subagent-start', 'subagent-stop'] as const)('%s after its lead\'s session-end does not bring it back', async (event) => {
+    const { actions, ready } = fakeActions()
+    const { src, clock, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-start', withHandle))
+    src.ingest(ev('subagent-start', withHandle))
+    src.ingest(ev('session-end', withHandle))
+    src.ingest(ev(event, withHandle))
+    const agent = src.list()[0]
+    expect(src.capabilities(agent)).toEqual({ status: true, voice: false, focus: false, answer: false })
+    expect(await src.send(agent, 'git push --force')).toEqual({ ok: false, reason: 'proj did not answer.' })
+    expect(actions.toMod).not.toHaveBeenCalled()
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    clock.t += 10_000
+    await src.tick()
+    expect(src.list()).toEqual([])
+  })
+
   it('focus opens what its last event names, as the agent\'s own, and is false when nothing can open it', async () => {
     const { actions } = fakeActions({ open: vi.fn(async () => false) })
     const { src, ev } = setup({ actions })
