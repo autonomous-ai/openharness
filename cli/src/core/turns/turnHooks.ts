@@ -192,13 +192,21 @@ export function createTurnHooks({
     deliverHeldEnd: deliver,
     subagentsRun: atWork,
   }
+  /** A hook's time, unless its session holds a time later than now: one taken before the wall clock was set back (an NTP
+   *  correction: e2e/clockjump.e2e.ts), which it orders nothing against, so the hook goes on as one that came with none. */
+  const ordered = (sessionId: string, firedAt: number | undefined): number | undefined => {
+    const turn = turns.get(sessionId), now = Date.now()
+    return [turn?.promptAt, turn?.held?.openedAt, hookTurns.turnState(sessionId)?.openedAt]
+      .some(at => at !== undefined && at > now) ? undefined : firedAt
+  }
   // Cursor's Task tool start: the sub-agent it starts is followed in Cursor's stream, behind a drain of its transcript.
   const onToolStart = ({ sessionId, toolUseId, toolName, input: toolInput }: { sessionId: string; toolUseId: string; toolName: string; input: unknown }): void => {
     if (toolName === 'Task' && resolve(sessionId)?.engine === 'cursor') others.task(sessionId, toolUseId, toolInput)
   }
-  const onTurnStop = ({ sessionId, status, firedAt }: { sessionId: string; status?: string; firedAt?: number }): void => {
+  const onTurnStop = ({ sessionId, status, firedAt: ran }: { sessionId: string; status?: string; firedAt?: number }): void => {
     const session = resolve(sessionId)
     if (!session) return
+    const firedAt = ordered(sessionId, ran)
     const authority = JSON.stringify([session.agentId, session.sessionId, session.engine, session.transcriptPath,
       session.evidenceRevision, session.identityHold])
     const binding = JSON.stringify([session.agentId, session.sessionId, session.engine])
@@ -284,8 +292,8 @@ export function createTurnHooks({
    * after this hook returns, so no pane is read here: the watcher reads it at its next poll. One dialog can post twice
    * (Claude Code's PreToolUse, then its PermissionRequest): the same wait, open from the later.
    */
-  const onWait = ({ sessionId, firedAt }: { sessionId: string; firedAt?: number }): void => {
-    const turn = record(sessionId)
+  const onWait = ({ sessionId, firedAt: ran }: { sessionId: string; firedAt?: number }): void => {
+    const firedAt = ordered(sessionId, ran), turn = record(sessionId)
     turn.hookAt = Date.now()
     // One run before the latest prompt hook is about an earlier turn.
     if (firedAt !== undefined && (turn.promptAt ?? 0) > firedAt) return
