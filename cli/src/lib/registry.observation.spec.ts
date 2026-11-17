@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  chmodSync, fsyncSync, mkdirSync, mkdtempSync, readFileSync, renameSync,
+  chmodSync, fsync, fsyncSync, mkdirSync, mkdtempSync, readFileSync, renameSync,
   rmSync, statSync, symlinkSync, utimesSync, writeFileSync,
 } from 'fs'
 import { tmpdir } from 'os'
@@ -10,7 +10,7 @@ import type { registry as Registry } from './registry.js'
 // Count actual writes; the registry, locks, permission checks and fsyncs still use real files.
 vi.mock('fs', async (importOriginal) => {
   const fs = await importOriginal<typeof import('fs')>()
-  return { ...fs, fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync), mkdirSync: vi.fn(fs.mkdirSync) }
+  return { ...fs, fsync: vi.fn(fs.fsync), fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync), mkdirSync: vi.fn(fs.mkdirSync) }
 })
 
 const asyncSync = vi.hoisted(() => vi.fn((sync: () => Promise<void>) => sync()))
@@ -33,7 +33,7 @@ vi.mock('node:fs/promises', async original => {
     return handle
   } }
 })
-const fsyncs = () => vi.mocked(fsyncSync).mock.calls.length + asyncSync.mock.calls.length
+const fsyncs = () => vi.mocked(fsyncSync).mock.calls.length + vi.mocked(fsync).mock.calls.length + asyncSync.mock.calls.length
 
 let directory: string
 let file: string
@@ -77,6 +77,7 @@ beforeEach(async () => {
 afterEach(async () => {
   reads.afterRegistryRead = undefined
   vi.mocked(fsyncSync).mockReset()
+  vi.mocked(fsync).mockReset()
   asyncSync.mockReset()
   // Failure tests deliberately leave unsafe or corrupt state; settle the final barrier before cleanup.
   await registry.flush().catch(() => {})

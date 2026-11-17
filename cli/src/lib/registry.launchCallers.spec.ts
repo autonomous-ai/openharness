@@ -30,13 +30,14 @@ const image = vi.hoisted(() => ({
   match: undefined as undefined | ((rows: RegisteredSession[]) => boolean),
   wait: undefined as undefined | (() => Promise<void>), release: undefined as undefined | (() => void),
   failSync: 0, renamed: false, afterFailure: undefined as undefined | (() => void),
-  names: false,
+  names: false, directory: false, directoryPending: false, selectedTemporary: '',
 }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
   return { ...actual, renameSync: (...args: Parameters<typeof actual.renameSync>) => {
     actual.renameSync(...args)
     if (String(args[1]).endsWith(image.names ? '/agent-names.json' : '/registry.json')) image.renamed = true
+    if (image.directory && String(args[0]) === image.selectedTemporary) image.directoryPending = true
   }, fsyncSync: (fd: number) => {
     if (image.renamed && image.failSync > 0) {
       image.renamed = false; image.failSync--
@@ -44,6 +45,19 @@ vi.mock('node:fs', async original => {
       throw Object.assign(new Error('fixture directory sync failed'), { code: 'EIO' })
     }
     return actual.fsyncSync(fd)
+  }, fsync: (fd: number, callback: (error: NodeJS.ErrnoException | null) => void) => {
+    const waiting = image.directoryPending
+    image.directoryPending = false
+    actual.fsync(fd, error => {
+      const complete = () => {
+        if (image.renamed && image.failSync > 0) {
+          image.renamed = false; image.failSync--
+          queueMicrotask(() => image.afterFailure?.())
+          callback(Object.assign(new Error('fixture directory sync failed'), { code: 'EIO' }))
+        } else callback(error)
+      }
+      void (waiting ? image.wait?.() ?? Promise.resolve() : Promise.resolve()).then(complete, callback)
+    })
   } }
 })
 vi.mock('node:fs/promises', async original => {
@@ -54,11 +68,11 @@ vi.mock('node:fs/promises', async original => {
     handle.writeFile = async (...values) => {
       if (String(args[0]).includes(image.names ? 'names.json.' : 'registry.json.') && String(args[0]).endsWith('.tmp')) {
         selected = image.names || image.match?.(JSON.parse(String(values[0]))) === true
-        if (selected) image.match = undefined
+        if (selected) { image.match = undefined; image.selectedTemporary = String(args[0]) }
       }
       return write(...values)
     }
-    handle.sync = async () => { await sync(); if (selected) await image.wait?.() }
+    handle.sync = async () => { await sync(); if (selected && !image.directory) await image.wait?.() }
     return handle
   } }
 })
@@ -87,9 +101,9 @@ const terminal = { name: 'tmux', holdOpen: async () => ({ state: 'succeeded' }),
 let row: RegisteredSession
 let directory: string
 const deferred = () => { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done }); return { promise, resolve } }
-function holdImage(match: (rows: RegisteredSession[]) => boolean) {
+function holdImage(match: (rows: RegisteredSession[]) => boolean, phase: 'prepare' | 'directory' = 'prepare') {
   const entered = deferred(), held = deferred()
-  image.match = match; image.release = held.resolve
+  image.match = match; image.release = held.resolve; image.directory = phase === 'directory'
   image.wait = async () => { image.wait = undefined; entered.resolve(); await held.promise }
   return { entered: entered.promise, release: held.resolve }
 }
@@ -107,9 +121,10 @@ beforeEach(async () => {
   row = registry.byAgent(row.agentId)!
 })
 afterEach(async () => {
+  vi.useRealTimers()
   image.match = undefined; image.wait = undefined; image.release?.(); image.release = undefined
   image.failSync = 0; image.renamed = false; image.afterFailure = undefined
-  image.names = false
+  image.names = false; image.directory = false; image.directoryPending = false; image.selectedTemporary = ''
   for (const entry of registry.list()) (await removeRegistryAgent(registry, entry.agentId))
   await registry.flush()
   rmSync(directory, { recursive: true, force: true })
@@ -130,7 +145,7 @@ it('confirms one immutable launch candidate after a single lost directory sync',
   const refresh = vi.fn(async () => {})
   const publication = await registry.confirmLaunch(row.agentId, { processIdentity: newProcess, runtimes: [destination], launchArgs: ['--fixture'] }, { refresh })
   expect(publication).toMatchObject({ state: 'confirmed', entry: { processIdentity: newProcess, runtimes: [destination], launchArgs: ['--fixture'] } })
-  expect(refresh).toHaveBeenCalledTimes(2)
+  expect(refresh).toHaveBeenCalledTimes(3)
   expect(persisted().find(entry => entry.agentId === row.agentId)).toMatchObject({ processIdentity: newProcess, runtimes: [destination] })
 })
 
@@ -236,7 +251,7 @@ it('host swap does not announce or claim completion before its destination route
   expect(persisted().find(entry => entry.agentId === row.agentId)?.runtimes).toEqual([destination])
 })
 
-it.each(['restart', 'new pane', 'restore', 'host move'] as const)('revokes prepared %s readiness when its operation is cancelled', async caller => {
+async function cancelledReadiness(caller: 'restart' | 'new pane' | 'restore' | 'host move', phase: 'prepare' | 'directory') {
   let cancelled = false
   if (caller === 'new pane' || caller === 'restore') {
     registry.clearProcessIdentity(row.agentId)
@@ -244,7 +259,7 @@ it.each(['restart', 'new pane', 'restore', 'host move'] as const)('revokes prepa
     await registry.flush()
   }
   const selected = structuredClone(registry.byAgent(row.agentId)!)
-  const held = holdImage(rows => rows.some(entry => entry.agentId === row.agentId && entry.processIdentity?.pid === newProcess.pid))
+  const held = holdImage(rows => rows.some(entry => entry.agentId === row.agentId && entry.processIdentity?.pid === newProcess.pid), phase)
   let pending: Promise<unknown>
   if (caller === 'restart') pending = commitRelaunchedEngine({ registry, announceSession: announce, refreshGridAssignment: vi.fn() },
     row.agentId, newProcess, null, { backend: terminal, runtime } as never, () => !cancelled)
@@ -268,8 +283,14 @@ it.each(['restart', 'new pane', 'restore', 'host move'] as const)('revokes prepa
   cancelled = true
   held.release(); await settled
   expect(releaseHold).not.toHaveBeenCalled(); expect(announce).not.toHaveBeenCalled()
-  expect(persisted().find(entry => entry.agentId === row.agentId)?.processIdentity?.pid).not.toBe(newProcess.pid)
-})
+  expect(registry.byAgent(row.agentId)?.processIdentity?.pid).not.toBe(newProcess.pid)
+  if (phase === 'prepare') expect(persisted().find(entry => entry.agentId === row.agentId)?.processIdentity?.pid).not.toBe(newProcess.pid)
+  else expect(persisted().find(entry => entry.agentId === row.agentId)?.processIdentity?.pid).toBe(newProcess.pid)
+}
+it.each(['restart', 'new pane', 'restore', 'host move'] as const)('revokes prepared %s readiness when its operation is cancelled',
+  caller => cancelledReadiness(caller, 'prepare'))
+it.skipIf(process.platform === 'win32').each(['restart', 'new pane', 'restore', 'host move'] as const)(
+  'holds the renamed %s readiness when its operation is cancelled during directory durability', caller => cancelledReadiness(caller, 'directory'))
 
 function restoreDeps(done: () => void): RestoreAgentsDeps {
   return {
@@ -322,7 +343,9 @@ it('binding revalidation cannot change Stop evidence while its prepared image wa
   expect(persisted().some(entry => entry.agentId === row.agentId)).toBe(false)
 })
 
-it('Stop keeps its reply, deletion and resume reservation pending until removal is durable', async () => {
+it.each(process.platform === 'win32' ? [['prepare', false]] as const
+  : [['prepare', false], ['directory', false], ['directory', true]] as const)(
+  'Stop keeps its reply, deletion and resume reservation pending at %s (expires=%s)', async (phase, expires) => {
   ;(await releaseRegistryEngine(registry, row.agentId))
   await registry.flush()
   row = registry.byAgent(row.agentId)!
@@ -338,19 +361,33 @@ it('Stop keeps its reply, deletion and resume reservation pending until removal 
     backendFor: () => ({ kill: async () => ({ state: 'succeeded', dispatch: 'executed' }) }),
     agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: async () => {} },
     forgetSession, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: async () => {} })
-  const held = holdImage(rows => !rows.some(entry => entry.agentId === row.agentId))
+  const held = holdImage(rows => !rows.some(entry => entry.agentId === row.agentId), phase)
   let replied = false
-  const stopping = stop(row.agentId).then(() => { replied = true; nextDeletion() })
-  await held.entered
+  if (expires) vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  const stopping = stop(row.agentId).then(() => { replied = true; nextDeletion(); return null }, error => error)
+  expect(await Promise.race([held.entered.then(() => 'held'), stopping.then(() => 'settled')])).toBe('held')
   try {
     expect(replied).toBe(false)
     expect(send).not.toHaveBeenCalled()
     expect(store.resumeReservedAt(row.agentId)).not.toBeNull()
     expect(nextDeletion).not.toHaveBeenCalled()
     expect(store.get(row.agentId)).not.toBeNull()
-  } finally { held.release(); await stopping }
-  expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'agent_deleted' }))
-  expect(persisted().some(entry => entry.agentId === row.agentId)).toBe(false)
+    if (expires) {
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(await stopping).toMatchObject({ code: 'STOP_UNCONFIRMED' })
+    }
+  } finally { held.release(); vi.useRealTimers(); await stopping }
+  await registry.flush()
+  if (expires) {
+    expect(send).not.toHaveBeenCalled()
+    expect(nextDeletion).not.toHaveBeenCalled()
+    expect(store.resumeReservedAt(row.agentId)).not.toBeNull()
+    expect(store.get(row.agentId)).not.toBeNull()
+    expect(registry.byAgent(row.agentId)).toBeDefined()
+  } else {
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'agent_deleted' }))
+    expect(persisted().some(entry => entry.agentId === row.agentId)).toBe(false)
+  }
 })
 
 it.each(['prepare', 'directory sync'] as const)('Stop keeps a failed %s removal unconfirmed with its archive and reservation retained', async phase => {
@@ -515,8 +552,9 @@ it('explicit model update keeps the owner selected before live control waits', a
   expect(registry.byAgent(row.agentId)?.launchModel).toBeUndefined()
 })
 
-it('a prepared rename preserves a later queued deletion of the same name', async () => {
-  const held = holdImage(() => false)
+it.each(process.platform === 'win32' ? ['prepare'] as const : ['prepare', 'directory'] as const)(
+  'a rename at %s preserves a later queued deletion of the same name', async phase => {
+  const held = holdImage(() => false, phase)
   image.names = true
   const renamed = registry.rename(row.agentId, 'Deleted after rename')
   await held.entered
@@ -719,4 +757,39 @@ it('restore publishes an exited adopted engine as a shell before releasing its f
   try { expect(releaseHold).not.toHaveBeenCalled() }
   finally { held.release(); await done.promise }
   expect(persisted().find(entry => entry.agentId === row.agentId)).toMatchObject({ engine: 'terminal', launch: { state: 'ready' } })
+})
+
+it.skipIf(process.platform === 'win32')('the actual restore caller never dispatches an external engine after its renamed dispatch expires', async () => {
+  Object.assign(row, { sessionId: 'external-fixture', boundAt: Date.now(), transcriptPath: null, resumeOnly: true,
+    processIdentity: null, externalResume: { token: startingToken,
+      request: { engine: 'claude', sessionId: 'external-fixture' }, takeOver: null, phase: 'admitted',
+      session: { engine: 'claude', sessionId: 'external-fixture', aliases: [], cwd: directory,
+        origin: 'terminal', title: 'Fixture', mtime: 1, transcriptPath: null } },
+    launch: { state: 'held', service: 'search', detail: 'Fixture waiting' } })
+  await registry.flush()
+  const held = holdImage(rows => rows.some(entry => entry.agentId === row.agentId && entry.externalResume?.dispatched), 'directory')
+  const deps = restoreDeps(() => {})
+  deps.waitingPane = async () => true
+  deps.buildLaunch = async () => ({ argv: ['fixture-engine'], firstTask: 'Fixture continue' })
+  const dispatch = vi.fn(), started = vi.fn()
+  deps.engineStarted = started
+  deps.respawn = async (_runtime, _launch, control) => {
+    await control?.onDispatch?.(); dispatch()
+    // The baseline reaches dispatch; stop there so its readiness watcher cannot outlive this fixture.
+    return { ok: false, reason: 'fixture dispatch recorded' }
+  }
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  const result = restoreAgents(deps)
+  expect(await Promise.race([held.entered.then(() => 'held'), result.then(() => 'settled')])).toBe('held')
+  expect(dispatch).not.toHaveBeenCalled()
+  expect(started).not.toHaveBeenCalled()
+  await vi.advanceTimersByTimeAsync(5_000)
+  expect((await result).restored).toEqual([])
+  held.release(); vi.useRealTimers()
+  await registry.flush()
+  expect(dispatch).not.toHaveBeenCalled()
+  expect(started).not.toHaveBeenCalled()
+  expect(releaseHold).not.toHaveBeenCalled()
+  expect(registry.byAgent(row.agentId)?.externalResume?.dispatched).not.toBe(true)
+  expect(registry.byAgent(row.agentId)?.firstTask).toBeUndefined()
 })

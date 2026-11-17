@@ -1,7 +1,6 @@
 // A real writer is killed at a reported persistence boundary; no application acknowledgement is sent.
 import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { join } from 'node:path'
-import { performance } from 'node:perf_hooks'
 const require = createRequire(import.meta.url)
 const fs = require('node:fs') as typeof import('node:fs')
 const io = require('node:fs/promises') as typeof import('node:fs/promises')
@@ -21,15 +20,22 @@ io.mkdir = (async (...args: Parameters<typeof io.mkdir>) => {
 }) as typeof io.mkdir
 const sync = fs.fsyncSync
 fs.fsyncSync = fd => { if (phase === 'published' && fs.fstatSync(fd).isDirectory()) halt(phase); sync(fd) }
+const asyncSync = fs.fsync
+fs.fsync = ((fd: number, callback: (error: NodeJS.ErrnoException | null) => void) => {
+  if (phase === 'published' && fs.fstatSync(fd).isDirectory()) halt(phase)
+  asyncSync(fd, callback)
+}) as typeof fs.fsync
 syncBuiltinESMExports()
-const { registryFileLock, prepareRegistryImage } = await import('../registryPersistence.js')
-const expires = performance.now() + 10_000
-const deadline = { expires, check: () => { if (performance.now() >= expires) throw new Error('fixture expired') } }
-await registryFileLock(directory, deadline, async checkOwner => {
+const { RegistryWriteQueue, registryFileLock, prepareRegistryImage } = await import('../registryPersistence.js')
+await new RegistryWriteQueue().run(deadline => registryFileLock(directory, deadline, async checkOwner => {
   const rows = JSON.parse(fs.readFileSync(file, 'utf8'))
   rows[0].title = 'peer crash metadata'
   const prepared = await prepareRegistryImage(file, JSON.stringify(rows, null, 2), deadline)
   if (phase === 'prepared') halt(phase)
-  checkOwner(); prepared.publish()
+  checkOwner(); prepared.publish(() => {})
+  const syncing = prepared.sync()
+  if (syncing) await syncing
+  prepared.finish(); deadline.markAdmitted()
+  if (phase === 'confirmed') halt(phase)
   throw new Error('crash checkpoint was not reached')
-})
+}))

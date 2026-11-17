@@ -252,7 +252,7 @@ it('publishes a resumed owner only after durability and rejects cancelled resume
   expect(rows()).toEqual([])
 })
 
-it.each(['ownerless', 'prepared', 'published'])('recovers a real writer killed at %s without losing peer metadata', async phase => {
+it.each(['ownerless', 'prepared', 'published', 'confirmed'])('recovers a real writer killed at %s without losing peer metadata', async phase => {
   holder = fork(fileURLToPath(new URL('./__fixtures__/registryCrashWriter.ts', import.meta.url)), [directory, phase], {
     ...ownProcessGroup(), execArgv: ['--import', fileURLToPath(new URL('../../node_modules/tsx/dist/loader.mjs', import.meta.url))], stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
     env: { ...process.env, ADAPTER_DATA_DIR: directory },
@@ -269,10 +269,11 @@ it.each(['ownerless', 'prepared', 'published'])('recovers a real writer killed a
     const stale = new Date(Date.now() - 6_000)
     utimesSync(join(directory, 'registry.json.lock'), stale, stale)
   }
-  expect(rows()[0].title).toBe(phase === 'published' ? 'peer crash metadata' : null)
+  const published = phase === 'published' || phase === 'confirmed'
+  expect(rows()[0].title).toBe(published ? 'peer crash metadata' : null)
   const committed = await registry.setClosePlan(input.agentId, plan)
   expect(committed?.closePlan).toEqual(plan)
-  expect(rows()[0].title).toBe(phase === 'published' ? 'peer crash metadata' : null)
+  expect(rows()[0].title).toBe(published ? 'peer crash metadata' : null)
   expect(rows()[0].closePlan).toEqual(plan)
 })
 

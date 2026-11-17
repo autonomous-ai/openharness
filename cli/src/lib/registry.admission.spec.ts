@@ -23,6 +23,10 @@ vi.mock('fs', async original => {
   }, fsyncSync: (fd: number) => {
     if (fault.directorySync && fault.renamed && actual.fstatSync(fd).isDirectory()) throw new Error('fixture directory sync failure')
     return actual.fsyncSync(fd)
+  }, fsync: (fd: number, callback: (error: NodeJS.ErrnoException | null) => void) => {
+    if (fault.directorySync && fault.renamed && actual.fstatSync(fd).isDirectory()) {
+      queueMicrotask(() => callback(new Error('fixture directory sync failure')))
+    } else actual.fsync(fd, callback)
   } }
 })
 vi.mock('./bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'fixture-boot', bootChanged: () => false }))
@@ -394,13 +398,21 @@ async function httpFixture(blocked: (agentId: string) => boolean = () => false, 
   const { startHookServer } = await import('../hookServer.js')
   const { readHookCredential } = await import('./hookAuth.js')
   const prompts: string[] = [], registered = vi.fn(), reasons: Array<string | undefined> = []
+  let holdReplyGrace = false
   const started = await startHookServer(0, { onRegistered: registered, onSessionEnd: () => {},
     hookAdmissionBlocked: blocked,
     onPromptSubmitted: (_id, text) => prompts.push(text),
     onAdmissionHeld: (_id, reason) => reasons.push(reason),
     ...overrides,
   // The order of concurrent retries is what this file pins; each real lookup of who is calling takes its own time.
-  }, { admissionReceiptCapacity, admissionBytesCapacity, peerAccount: async () => true })
+  }, { admissionReceiptCapacity, admissionBytesCapacity, peerAccount: async () => true,
+    replyClock: { after: (milliseconds, callback) => {
+      if (holdReplyGrace) return () => {}
+      const timer = setTimeout(callback, milliseconds)
+      timer.unref()
+      return () => clearTimeout(timer)
+    } },
+  })
   server = started.server
   const post = async (override: Record<string, unknown> = {}, order: { id?: string; firedAt?: number } = {}, path = 'session-start') => {
     const response = await fetch(`http://127.0.0.1:${started.port}/api/hook/${path}`, {
@@ -414,7 +426,13 @@ async function httpFixture(blocked: (agentId: string) => boolean = () => false, 
     })
     return { status: response.status, body: await response.json() }
   }
-  return { post, prompts, registered, reasons }
+  const postBeforeReplyGrace: typeof post = async (...args) => {
+    // These cases need an accepted initial delivery, before testing a later conflict/Stop.
+    // Pause its reply clock while real disk I/O completes; dedicated hook tests exercise pending replies.
+    holdReplyGrace = true
+    try { return await post(...args) } finally { holdReplyGrace = false }
+  }
+  return { post, postBeforeReplyGrace, prompts, registered, reasons }
 }
 
 it('keeps each prompt through an HTTP registration write failure and credits it only after recovery', async () => {
@@ -448,7 +466,7 @@ it.each(['commandcode', 'grok', 'agy', 'copilot'] as const)('admits the %s Sessi
   const agent = (await registry.openProcessAgent({ engine, tmuxPane: '%3', cwd: root,
     processIdentity: { pid: 5103, startMarker: 'fixture-start', executable: `<${engine}>` } }))!.entry
   const f = await httpFixture()
-  expect(await f.post({ engine, tmuxPane: '%3', transcriptPath: undefined, hookEvent: 'SessionStart', prompt: undefined }))
+  expect(await f.postBeforeReplyGrace({ engine, tmuxPane: '%3', transcriptPath: undefined, hookEvent: 'SessionStart', prompt: undefined }))
     .toEqual({ status: 200, body: { ok: true } })
   expect(registry.byAgent(agent.agentId)?.sessionId).toBe(A)
   expect(registry.byAgent(agent.agentId)?.transcriptPath).toContain(join(root, engine))
@@ -577,7 +595,7 @@ it('does not let a delayed older ordinary hook replace a newer accepted conversa
   const f = await httpFixture()
   const other = join(home, 'sessions', `rollout-${B}.jsonl`); writeFileSync(other, header(B))
   const time = Date.now() + 10_000
-  expect((await f.post({ sessionId: B, transcriptPath: other, prompt: 'newer' }, { firedAt: time + 1 })).body).toEqual({ ok: true })
+  expect((await f.postBeforeReplyGrace({ sessionId: B, transcriptPath: other, prompt: 'newer' }, { firedAt: time + 1 })).body).toEqual({ ok: true })
   expect((await f.post({ prompt: 'older' }, { firedAt: time })).body).toEqual({ ignored: true, reason: 'stale_hook' })
   expect(registry.byAgent(source)?.sessionId).toBe(B)
   expect(f.prompts).toEqual(['newer'])
@@ -694,7 +712,7 @@ it('claims an immediate already-bound linked Stop once, including concurrent ret
   } })
   const delivery = { id: 'fixture-stop-delivery-02', firedAt: Date.now() }
   const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
-  expect((await f.post(body, delivery)).body).toEqual({ ok: true })
+  expect((await f.postBeforeReplyGrace(body, delivery)).body).toEqual({ ok: true })
   expect((await Promise.all([f.post(body, delivery, 'turn-stop'), f.post(body, delivery, 'turn-stop')])).map(value => value.body))
     .toEqual([{ ok: true }, { ok: true, duplicate: true }])
   expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ ok: true, duplicate: true })
@@ -753,7 +771,7 @@ it('holds a same-owner linked Stop after interpretation recovered, without closi
   } })
   const delivery = { id: 'fixture-stop-recovered-01', firedAt: Date.now() }
   const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
-  expect((await f.post(body, delivery)).body).toEqual({ ok: true })
+  expect((await f.postBeforeReplyGrace(body, delivery)).body).toEqual({ ok: true })
   const row = registry.byAgent(owner.agentId)!
   row.identityHold = 'native source unavailable'
   row.evidenceRevision = (row.evidenceRevision ?? 0) + 1
@@ -796,7 +814,8 @@ it.each(['before-followup', 'during-followup', 'during-registration', 'during-in
   const delivery = { id: 'fixture-stop-cancelled-01', firedAt: Date.now() }
   const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
   if (phase === 'during-registration') fault.rename = true
-  const registration = f.post(body, delivery)
+  const registration = phase === 'before-followup' || phase === 'during-followup'
+    ? f.postBeforeReplyGrace(body, delivery) : f.post(body, delivery)
   if (phase === 'during-initial-resolution') await vi.waitFor(() => expect(finish).toBeDefined())
   else expect((await registration).body).toEqual(phase === 'during-registration' ? { pending: true } : { ok: true })
   const followup = phase === 'during-followup' ? f.post(body, delivery, 'turn-stop') : undefined
@@ -838,7 +857,7 @@ it('rechecks the completion claim after a concurrent duplicate waits across reco
     } })
   const delivery = { id: 'fixture-stop-concurrent-01', firedAt: Date.now() }
   const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
-  expect((await f.post(body, delivery)).body).toEqual({ ok: true })
+  expect((await f.postBeforeReplyGrace(body, delivery)).body).toEqual({ ok: true })
   const first = f.post(body, delivery, 'turn-stop')
   await vi.waitFor(() => expect(finishes).toHaveLength(1))
   const duplicate = f.post(body, delivery, 'turn-stop')

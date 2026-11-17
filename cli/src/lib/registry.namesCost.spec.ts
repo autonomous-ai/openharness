@@ -24,6 +24,13 @@ vi.mock('node:fs', async original => {
       }
       actual.fsyncSync(fd)
     },
+    fsync: (fd: number, callback: (error: NodeJS.ErrnoException | null) => void) => {
+      if (io.namesPublished && actual.fstatSync(fd).isDirectory()) {
+        io.namesPublished = false
+        if (io.failDirectorySync) { queueMicrotask(() => callback(new Error('fixture names directory durability unavailable'))); return }
+      }
+      actual.fsync(fd, callback)
+    },
   }
 })
 vi.mock('node:fs/promises', async original => {

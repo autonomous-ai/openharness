@@ -193,6 +193,16 @@ it('admits at most 64 queued operations behind the unsettled writer', async () =
   expect(await Promise.all(queued)).toEqual(Array(64).fill('accepted'))
 })
 
+it('cannot acknowledge a writer after a caller catches its terminal close failure', async () => {
+  const queue = new RegistryWriteQueue()
+  const result = queue.run(async deadline => {
+    try { deadline.failClosed() } catch { /* Ordinary observation writes log their own failures. */ }
+    return 'must not acknowledge'
+  })
+  await expect(result).rejects.toThrow('restart required')
+  await expect(queue.run(async () => 'must not run')).rejects.toThrow('restart required')
+})
+
 it.each(['mkdir', 'write', 'sync'])('does not publish after the deadline expires during owner %s', async phase => {
   const entered = deferred(), release = deferred()
   let expired = false

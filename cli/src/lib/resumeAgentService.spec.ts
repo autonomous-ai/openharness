@@ -30,7 +30,7 @@ import { AtomicWriteUnconfirmed } from './registryPersistence.js'
 const publication = vi.hoisted(() => ({
   agent: '', wait: undefined as undefined | (() => Promise<void>), release: undefined as undefined | (() => void),
   temporary: '', published: false, failSync: 0, cleanupWait: undefined as undefined | (() => Promise<void>),
-  retire: false,
+  retire: false, pending: false, directoryWait: undefined as undefined | (() => Promise<void>),
 }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
@@ -43,6 +43,16 @@ vi.mock('node:fs', async original => {
       throw Object.assign(Error('fixture directory sync failed'), { code: 'EIO' })
     }
     return actual.fsyncSync(fd)
+  }, fsync: (fd: number, callback: (error: NodeJS.ErrnoException | null) => void) => {
+    const selected = publication.published && actual.fstatSync(fd).isDirectory()
+    const wait = selected ? publication.directoryWait : undefined
+    if (wait) publication.directoryWait = undefined
+    actual.fsync(fd, error => { void (wait?.() ?? Promise.resolve()).then(() => {
+      if (selected && publication.failSync) {
+        publication.failSync--
+        callback(Object.assign(Error('fixture directory sync failed'), { code: 'EIO' }))
+      } else callback(error)
+    }, callback) })
   } }
 })
 vi.mock('node:fs/promises', async original => {
@@ -54,7 +64,7 @@ vi.mock('node:fs/promises', async original => {
       if (String(args[0]).includes('registry.json.') && String(args[0]).endsWith('.tmp')) {
         const rows = JSON.parse(String(values[0])) as RegisteredSession[]
         ready = !!publication.agent && (publication.retire ? !rows.some(row => row.agentId === publication.agent)
-          : rows.some(row => row.agentId === publication.agent && row.launch?.state === 'ready'))
+          : rows.some(row => row.agentId === publication.agent && row.launch?.state === (publication.pending ? 'starting' : 'ready')))
         if (ready) publication.temporary = String(args[0])
       }
       return write(...values)
@@ -334,7 +344,7 @@ beforeEach(async () => {
     attachSession: vi.fn(async () => true),
   }
 })
-afterEach(async () => { publication.wait = undefined; publication.release?.(); publication.release = undefined; publication.agent = ''; publication.temporary = ''; publication.published = false; publication.failSync = 0; publication.cleanupWait = undefined; publication.retire = false; vi.useRealTimers(); for (const row of registry.list()) (await removeRegistryAgent(registry, row.agentId)); await registry.flush(); rmSync(dir, { recursive: true, force: true }) })
+afterEach(async () => { publication.wait = undefined; publication.release?.(); publication.release = undefined; publication.agent = ''; publication.temporary = ''; publication.published = false; publication.failSync = 0; publication.cleanupWait = undefined; publication.retire = false; publication.pending = false; publication.directoryWait = undefined; vi.useRealTimers(); for (const row of registry.list()) (await removeRegistryAgent(registry, row.agentId)); await registry.flush(); rmSync(dir, { recursive: true, force: true }) })
 
 it.each(['stop', 'binding'] as const)('keeps the terminal hold when %s revokes Resume during backend release', async change => {
   const entered = deferred<void>(), waiting = deferred<void>()
@@ -1218,8 +1228,8 @@ describe('existing runtime and readiness verification', () => {
     await inspected.promise
     expect(replied).toBe(false)
     expect(await result).toMatchObject({ ok: true })
-    // No process, then ready, then the fresh proof at durable publication.
-    expect(resolvePaneEngineProcess).toHaveBeenCalledTimes(3)
+    // No process, then ready, and fresh proof at both sides of asynchronous durability.
+    expect(resolvePaneEngineProcess).toHaveBeenCalledTimes(process.platform === 'win32' ? 3 : 4)
   })
   it('honors a stop requested as the newly allocated runtime is announced', async () => {
     vi.mocked(deps.announceSession).mockImplementation(() => deps.restartJobs.cancel(saved.agentId))
@@ -1516,4 +1526,29 @@ it('preserves unrelated observations made while resumed authority waits in the q
   registry.updateTitle(saved.sessionId, 'New title while queued')
   try { held.resolve(); await first; expect(await confirmation).toMatchObject({ state: 'confirmed', entry: { title: 'New title while queued' } }) }
   finally { held.resolve(); await first; await confirmation }
+})
+
+it.skipIf(process.platform === 'win32')('keeps the actual pending Resume pane and reservation after its renamed allocation expires', async () => {
+  const arrived = deferred<void>(), held = deferred<void>()
+  publication.agent = saved.agentId; publication.pending = true
+  publication.release = () => held.resolve()
+  publication.directoryWait = async () => { arrived.resolve(); await held.promise }
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  const result = start().catch(error => error)
+  expect(await Promise.race([arrived.promise.then(() => 'directory'), result.then(() => 'settled')])).toBe('directory')
+  expect(create).toHaveBeenCalledOnce()
+  expect(kill).not.toHaveBeenCalled()
+  expect(releaseHold).not.toHaveBeenCalled()
+  expect(deps.announceSession).not.toHaveBeenCalled()
+  expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).not.toBeNull()
+  await vi.advanceTimersByTimeAsync(5_000)
+  expect((await result).constructor.name).toBe('AtomicWriteUnconfirmed')
+  expect(await result).toMatchObject({ retryable: false })
+  held.resolve(); vi.useRealTimers()
+  await registry.flush()
+  expect(create).toHaveBeenCalledOnce()
+  expect(kill).not.toHaveBeenCalled()
+  expect(releaseHold).not.toHaveBeenCalled()
+  expect(deps.announceSession).not.toHaveBeenCalled()
+  expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).not.toBeNull()
 })

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fsyncSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
+import { fsync, fsyncSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { registry as Registry } from './registry.js'
@@ -8,7 +8,7 @@ import type { registry as Registry } from './registry.js'
 // another writer's real changes still land, local real changes still write, and the file keeps its format.
 vi.mock('fs', async (importOriginal) => {
   const fs = await importOriginal<typeof import('fs')>()
-  return { ...fs, fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync), mkdirSync: vi.fn(fs.mkdirSync) }
+  return { ...fs, fsync: vi.fn(fs.fsync), fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync), mkdirSync: vi.fn(fs.mkdirSync) }
 })
 
 type Row = Record<string, unknown>
@@ -73,6 +73,7 @@ beforeEach(async () => {
 afterEach(async () => {
   const writes = await Promise.allSettled(loaded.map(current => current.flush({ exiting: true })))
   vi.mocked(fsyncSync).mockReset()
+  vi.mocked(fsync).mockReset()
   vi.useRealTimers()
   vi.unstubAllEnvs()
   vi.restoreAllMocks()
@@ -223,6 +224,7 @@ describe('key-order-insensitive row comparison', () => {
     expect(registryWrites()).toBe(0)
     expect(lockAttempts()).toBe(0)
     expect(fsyncSync).not.toHaveBeenCalled()
+    expect(fsync).not.toHaveBeenCalled()
     const expected = { gateway: 'ori', grid: { baseUrl: 'https://relay.example/v1', model: null } }
     expect(readRows()[0]).toMatchObject(expected)
     expect(first.byAgent(input.agentId)).toMatchObject(expected)

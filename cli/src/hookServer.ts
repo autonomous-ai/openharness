@@ -417,6 +417,8 @@ async function hermesSessionHint(sessionId: string, capture?: (verify: () => voi
 }
 
 export interface HookServerOptions {
+  /** Controls only the HTTP reply grace; persistence and request deadlines retain their own clocks. */
+  replyClock?: { after: (milliseconds: number, callback: () => void) => () => void }
   /** Whether a TCP caller runs as this OS account (lib/peerAccount.ts). A test's stand-in for another account. */
   peerAccount?: PeerAccount
   /** Also serve on this Unix socket, or with pipeToken the Windows pipe (see lib/localSocket.ts). Null or absent: TCP only. */
@@ -450,6 +452,11 @@ export function startHookServer(
   const hookCredential = loadOrCreateHookCredential(env.ADAPTER_DATA_DIR)
   const hookToken = loadOrCreateHookToken(env.ADAPTER_DATA_DIR)
   const peerAccount: PeerAccount = options.peerAccount ?? peerIsThisAccount
+  const replyClock = options.replyClock ?? { after: (milliseconds: number, callback: () => void) => {
+    const timer = setTimeout(callback, milliseconds)
+    timer.unref()
+    return () => clearTimeout(timer)
+  } }
   const admissions = createPendingAdmissions({ isProcessCurrent: (key, scope) => admissionProcessScope(registry.byAgent(key)) === scope })
   let admissionArrival = 0
   const admissionHolds = new Map<string, Map<string, string>>()
@@ -715,7 +722,7 @@ export function startHookServer(
         let inspectionIdentity: string | undefined
         let prepared: RegisterInput = body
         let committed: Awaited<ReturnType<typeof registry.register>> = null
-        let replyTimer: ReturnType<typeof setTimeout> | undefined
+        let cancelReplyTimer: (() => void) | undefined
         let committing = false, settled = false, stopRetained = false, stopUnmatched = false, stopInvocationClaimed = false
         const stopCurrent = processAgent.sessionId === body.sessionId && stopScope === scope ? stopWitness : undefined
         let followupFingerprint: string | undefined, committedIdentity: string | undefined
@@ -728,7 +735,7 @@ export function startHookServer(
           catch (error) { console.warn('[hooks] admission status notification failed', error) }
         }
         const held = (reason: string) => {
-          clearTimeout(replyTimer)
+          cancelReplyTimer?.()
           deferred = true
           const holds = admissionHolds.get(processAgent.agentId) ?? new Map<string, string>()
           holds.set(deliveryId, reason); admissionHolds.set(processAgent.agentId, holds)
@@ -743,7 +750,7 @@ export function startHookServer(
           publishHold()
         }
         const completedReply = (status: number, reply: unknown) => {
-          clearTimeout(replyTimer)
+          cancelReplyTimer?.()
           // A pruned old process cannot reinsert its receipts from a late callback.
           if (admissionReceipts.get(processAgent.agentId) === history) saveReceipt(history.records, deliveryId,
             { ...history.records.get(deliveryId)!, status, reply, pending: false, bytes: carriesStop ? retainedBytes : 0 })
@@ -900,8 +907,7 @@ export function startHookServer(
               if (committing) {
                 // The hook process itself has a five-second timeout. Slow durable
                 // preparation retains the delivery while its caller leaves promptly.
-                replyTimer = setTimeout(pending, 250)
-                replyTimer.unref()
+                cancelReplyTimer = replyClock.after(250, pending)
               } else pending()
             })
           } else {

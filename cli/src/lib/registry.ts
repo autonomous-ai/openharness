@@ -575,7 +575,7 @@ function persistenceFailure(error: unknown, names = false): Error {
         : code === 'ENOENT' ? 'is unavailable'
           : code === 'ELOOP' ? 'has an unsafe file type' : 'write failed'
   const failure = new RegistryPersistenceUnavailable(`${subject} ${category}`)
-  return error instanceof AtomicWriteUnconfirmed ? new AtomicWriteUnconfirmed(failure) : failure
+  return error instanceof AtomicWriteUnconfirmed ? new AtomicWriteUnconfirmed(failure, error.retryable) : failure
 }
 
 export function atomicWriteJson(file: string, value: unknown, exclusive = false): void {
@@ -1105,7 +1105,7 @@ export function mergedForSave(
     const intended = intents.get(agentId)
     // An intent on a row this view otherwise left alone never brings back a row another process
     // removed: that agent is gone, and its close plan with it.
-    if (baseline === fingerprint(current) && (!intended || !latest.has(agentId))) continue
+    if (baseline !== undefined && baseline === fingerprint(current) && (!intended || !latest.has(agentId))) continue
     let candidate = latest.has(agentId)
       ? threeWayRow(baseline, current, latest.get(agentId)!)
       : current
@@ -1943,7 +1943,11 @@ class Registry {
       this.terminalAvailableAgents.add(entry.agentId)
       if (entry.firstTask) firstTaskKept(agentId)
       return structuredClone(committed)
-    }).catch(() => { console.error('[registry] pending admission failed'); return null })
+    }).catch(error => {
+      console.error('[registry] pending admission failed')
+      if (error instanceof AtomicWriteUnconfirmed) throw error
+      return null
+    })
   }
 
   /** A stopped agent gets a new terminal route while keeping its saved conversation and identity.
@@ -1976,7 +1980,11 @@ class Registry {
       if (!committed) return null
       this.terminalAvailableAgents.add(entry.agentId)
       return structuredClone(committed)
-    }).catch(() => { console.error('[registry] resume admission failed'); return null })
+    }).catch(error => {
+      console.error('[registry] resume admission failed')
+      if (error instanceof AtomicWriteUnconfirmed) throw error
+      return null
+    })
   }
 
   /** Readiness, its native process and the launch words are one durable authority change. */
@@ -2039,8 +2047,8 @@ class Registry {
       } catch (error) {
         if (error instanceof AtomicWriteUnconfirmed) uncertain = true
         else if (!uncertain) throw error
-        if (attempt === 1 || !(error instanceof AtomicWriteUnconfirmed)) {
-          throw new AtomicWriteUnconfirmed(new Error('launch publication remains unconfirmed'))
+        if (attempt === 1 || !(error instanceof AtomicWriteUnconfirmed) || !error.retryable) {
+          throw new AtomicWriteUnconfirmed(new Error('launch publication remains unconfirmed'), error instanceof AtomicWriteUnconfirmed && error.retryable)
         }
       }
     }
@@ -3216,22 +3224,26 @@ class Registry {
     return pending
   }
 
-  private verifyPreparedOwners(before: Map<string, RegisteredSession>, candidates: Map<string, Record<string, unknown>>,
-    changed: Set<string>, target?: string): void {
-    const affected = new Set(changed)
-    if (target) affected.add(target)
+  private preparedOwnerGuard(before: Map<string, RegisteredSession>, candidates: Map<string, Record<string, unknown>>,
+    changed: Set<string>, target?: string): () => void {
+    const selected = new Set(changed)
+    if (target) selected.add(target)
     const claims = (row: RegisteredSession): string[] => [
       ...(row.processIdentity ? [`p:${processIdentityKey(row.engine, row.processIdentity)}`] : []),
       ...row.runtimes.map(runtime => `r:${terminalRouteKey(runtime)}`),
       ...externalReservations(row).map(id => `s:${id}`),
     ]
-    const wanted = new Set([...affected].flatMap(id => {
+    const wanted = new Set([...selected].flatMap(id => {
       const row = strictPersistedRow(candidates.get(id))
       return row ? claims(row) : []
     }))
-    for (const row of this.list()) if (claims(row).some(claim => wanted.has(claim))) affected.add(row.agentId)
-    for (const id of affected) if (ownershipIdentity(this.byAgent(id)) !== ownershipIdentity(before.get(id))) {
-      throw new RegistryOwnershipChanged('the registry ownership group changed while its write was being prepared')
+    return () => {
+      // Candidate claims are private snapshots; every live claimant is read again at each fence.
+      const affected = new Set(selected)
+      for (const row of this.list()) if (claims(row).some(claim => wanted.has(claim))) affected.add(row.agentId)
+      for (const id of affected) if (ownershipIdentity(this.byAgent(id)) !== ownershipIdentity(before.get(id))) {
+        throw new RegistryOwnershipChanged('the registry ownership group changed while its write was being prepared')
+      }
     }
   }
 
@@ -3397,7 +3409,7 @@ class Registry {
 
         if (unconfirmed && [...unconfirmed.affected].some(id => {
           const written = unconfirmed!.image.find(row => rowId(row) === id)
-          return (latest.has(id) ? rowFingerprint(latest.get(id)) : undefined)
+          return (latest.has(id) ? snapshotFingerprint(latest.get(id)!) : undefined)
             !== (written ? rowFingerprint(written) : undefined)
         })) {
           // A peer changed part of our unpublished ownership group. Its complete
@@ -3445,14 +3457,14 @@ class Registry {
         // yielding; the post-refresh live merge must construct its own index.
         let identities: MergeIdentities | undefined
         if (bindingCommit && !bindingCommit.metadata && !confirming) {
-          if ((latest.has(bindingCommit.agentId) ? rowFingerprint(latest.get(bindingCommit.agentId)) : undefined)
+          if ((latest.has(bindingCommit.agentId) ? snapshotFingerprint(latest.get(bindingCommit.agentId)!) : undefined)
             !== this.persistedBaseline.get(bindingCommit.agentId)) {
             throw externalAgentId ? new RegistryOwnershipChanged('The durable adoption changed while it was being prepared')
               : new IdentityReadUnavailable('the saved binding changed while its evidence was being read')
           }
           const displacedIds = new Set(bindingCommit.displaced?.map(row => row.agentId))
           for (const displaced of bindingCommit.displaced ?? []) {
-            if ((latest.has(displaced.agentId) ? rowFingerprint(latest.get(displaced.agentId)) : undefined)
+            if ((latest.has(displaced.agentId) ? snapshotFingerprint(latest.get(displaced.agentId)!) : undefined)
               !== this.persistedBaseline.get(displaced.agentId)) {
               throw new IdentityReadUnavailable('the displaced binding changed while its evidence was being read')
             }
@@ -3471,7 +3483,7 @@ class Registry {
             }
           }
         }
-        if (externalAgentId && (latest.has(externalAgentId) ? rowFingerprint(latest.get(externalAgentId)) : undefined)
+        if (externalAgentId && (latest.has(externalAgentId) ? snapshotFingerprint(latest.get(externalAgentId)!) : undefined)
           !== this.persistedBaseline.get(externalAgentId)) {
           throw new RegistryOwnershipChanged('The durable adoption changed while it was being prepared')
         }
@@ -3495,14 +3507,14 @@ class Registry {
         // must still own what the observation claims, not only the hook's own row.
         const changed = new Set(strict || bindingCommit
           ? [...new Set([...this.persistedBaseline.keys(), ...currentRows.keys()])].filter(id =>
-            this.persistedBaseline.get(id) !== (currentRows.has(id) ? snapshotFingerprint(currentRows.get(id)!) : undefined))
+            !this.persistedBaseline.has(id) || this.persistedBaseline.get(id) !== (currentRows.has(id) ? snapshotFingerprint(currentRows.get(id)!) : undefined))
           : [])
         if (bindingCommit) {
           identities ??= new MergeIdentities(latest)
           for (const id of changed) {
             if (bindingCommit.metadata && id === bindingCommit.agentId) continue
             if (confirming && unconfirmed!.affected.has(id)) continue
-            if ((latest.has(id) ? rowFingerprint(latest.get(id)) : undefined) !== this.persistedBaseline.get(id)) {
+            if ((latest.has(id) ? snapshotFingerprint(latest.get(id)!) : undefined) !== this.persistedBaseline.get(id)) {
               throw new IdentityReadUnavailable('a staged registry observation has a different durable owner')
             }
             const candidate = currentRows.has(id) ? strictPersistedRow(currentRows.get(id)) : null
@@ -3524,53 +3536,73 @@ class Registry {
         // Exact prepared objects may survive the fresh live rebase unchanged; their normalized rows
         // are still private. Changed/live-derived objects must be parsed again after refresh.
         const preparedRows = new Map<object, RegisteredSession>()
+        const preparedImages = new Map<RegisteredSession, Record<string, unknown>>()
         const serialized = rows.map(row => {
           const saved = persistedRow(row)
           preparedRows.set(saved, row)
+          preparedImages.set(row, saved as unknown as Record<string, unknown>)
           return saved
         })
         const contents = JSON.stringify(serialized, null, 2)
+        // Recovery must already exist when an asynchronous directory flush lets the reply timer run.
+        const recovery = (() => {
+          if (!bindingCommit && !unconfirmed) return null
+          const prior = new Map(latest)
+          if (unconfirmed) for (const id of unconfirmed.affected) {
+            const original = unconfirmed.prior.find(row => rowId(row) === id)
+            if (original) prior.set(id, original as Record<string, unknown>)
+            else prior.delete(id)
+          }
+          const image = new Map(serialized.map(row => [rowId(row), row]))
+          const affected = new Set([...new Set([...prior.keys(), ...image.keys()])].filter(id =>
+            (prior.has(id) ? snapshotFingerprint(prior.get(id)!) : undefined)
+              !== (image.has(id) ? snapshotFingerprint(image.get(id)! as unknown as Record<string, unknown>) : undefined)))
+          return {
+            image: JSON.parse(JSON.stringify(serialized)), prior: JSON.parse(JSON.stringify([...prior.values()])),
+            agentId: bindingCommit?.agentId ?? unconfirmed!.agentId, intent: intent ?? null,
+            before: beforeCommit, affected,
+          }
+        })()
+        const verifyOwners = strict ? this.preparedOwnerGuard(beforeOwners, currentRows, changed, mutationAgentId) : undefined
         const prepared = await prepareRegistryImage(FILE, contents, deadline)
         let rebased: RegisteredSession[]
-        try {
-          await bindingCommit?.refresh?.()
+        const rebase = () => {
           deadline.check()
           checkOwner()
-          if (strict) this.verifyPreparedOwners(beforeOwners, currentRows, changed, mutationAgentId)
+          verifyOwners?.()
           bindingCommit?.verify()
-          // This rebase and installation never yield; only the earlier preparation needs deep copies.
+          // Ordinary observations can advance during durability; never install the pre-rename rebase.
           const liveRows = new Map(this.list().map(row => [row.agentId, persistedRow(row) as unknown as Record<string, unknown>]))
           const committed = new Map(serialized.map(row => [row.agentId, row as unknown as Record<string, unknown>]))
           const remainingIntents = new Map([...this.intended].filter(([id, intent]) => capturedIntents.get(id) !== intent))
-          rebased = [...mergedForSave(committed, liveRows, beforeCommit, remainingIntents).values()].map(value => {
+          return [...mergedForSave(committed, liveRows, beforeCommit, remainingIntents).values()].map(value => {
             const row = preparedRows.get(value) ?? strictPersistedRow(value)
             if (!row) throw new IdentityReadUnavailable('a live registry observation changed to an invalid row')
             return row
           })
-          prepared.publish()
+        }
+        try {
+          await bindingCommit?.refresh?.()
+          rebased = rebase()
+          prepared.publish(() => { this.unconfirmedBinding = recovery })
+          const syncing = prepared.sync()
+          if (syncing) {
+            await syncing
+            deadline.check()
+            await bindingCommit?.refresh?.()
+            rebased = rebase()
+          }
+          prepared.finish()
         }
         catch (error) {
-          if ((bindingCommit || unconfirmed) && error instanceof AtomicWriteUnconfirmed) {
-            const prior = new Map(latest)
-            if (unconfirmed) for (const id of unconfirmed.affected) {
-              const original = unconfirmed.prior.find(row => rowId(row) === id)
-              if (original) prior.set(id, original as Record<string, unknown>)
-              else prior.delete(id)
-            }
-            const image = new Map(serialized.map(row => [rowId(row), row]))
-            const affected = new Set([...new Set([...prior.keys(), ...image.keys()])].filter(id =>
-              (prior.has(id) ? rowFingerprint(prior.get(id)) : undefined)
-                !== (image.has(id) ? rowFingerprint(image.get(id)) : undefined)))
-            this.unconfirmedBinding = {
-              // Own the actual serialized values, never nested objects a later
-              // controller or caller can mutate through its live row/input.
-              image: JSON.parse(JSON.stringify(serialized)), prior: JSON.parse(JSON.stringify([...prior.values()])),
-              agentId: bindingCommit?.agentId ?? unconfirmed!.agentId, intent: intent ?? null,
-              before: beforeCommit, affected,
-            }
+          let failure = prepared.published && !(error instanceof AtomicWriteUnconfirmed)
+            ? new AtomicWriteUnconfirmed(error, false) : error
+          if (prepared.published && failure instanceof AtomicWriteUnconfirmed && failure.retryable) {
+            // An I/O error does not excuse losing this lock or the operation's original authority.
+            try { rebase() } catch (error) { failure = new AtomicWriteUnconfirmed(error, false) }
           }
           await prepared.discard()
-          throw error
+          throw failure
         }
         this.unconfirmedBinding = null
         this.persistedContents = contents
@@ -3608,8 +3640,10 @@ class Registry {
           entered.push(entry.engine)
         }
         committedOwner = bindingCommit ? ownershipIdentity(this.byAgent(bindingCommit.agentId)) : undefined
-        this.persistedBaseline = new Map(serialized.map((row) => [rowId(row), rowFingerprint(row)]))
-        if (rebased.length !== serialized.length || rebased.some(row => this.persistedBaseline.get(row.agentId) !== rowFingerprint(persistedRow(row)))) void this.save()
+        this.persistedBaseline = new Map(serialized.map(row => [rowId(row), snapshotFingerprint(row as unknown as Record<string, unknown>)]))
+        deadline.markAdmitted()
+        if (rebased.length !== serialized.length || rebased.some(row => this.persistedBaseline.get(row.agentId) !== (preparedImages.has(row)
+          ? snapshotFingerprint(preparedImages.get(row)!) : rowFingerprint(persistedRow(row))))) void this.save()
       })
     } catch (err) {
       if (strict) throw persistenceFailure(err)
@@ -3666,8 +3700,25 @@ class Registry {
         && contents === JSON.stringify(names, null, 2)) return
       for (const id of deleted) delete existing[id]
       const prepared = await prepareRegistryImage(NAMES_FILE, JSON.stringify({ ...existing, ...names }, null, 2), deadline)
-      try { intent?.verify(); prepared.publish() }
-      catch (error) { await prepared.discard(); throw error }
+      try {
+        intent?.verify()
+        prepared.publish(() => {})
+        const syncing = prepared.sync()
+        if (syncing) {
+          await syncing
+          deadline.check()
+          intent?.verify()
+        }
+        prepared.finish()
+      } catch (error) {
+        let failure = prepared.published && !(error instanceof AtomicWriteUnconfirmed)
+          ? new AtomicWriteUnconfirmed(error, false) : error
+        if (prepared.published && failure instanceof AtomicWriteUnconfirmed && failure.retryable) {
+          try { intent?.verify() } catch (error) { failure = new AtomicWriteUnconfirmed(error, false) }
+        }
+        await prepared.discard()
+        throw failure
+      }
       // A deletion admitted while this image waited is later intent. Installing the
       // older rename must not resurrect its name before that queued deletion runs.
       if (intent && (revision === this.namesRevision || !this.deletedNames.has(intent.key))) {
@@ -3678,6 +3729,7 @@ class Registry {
         this.namesUnsaved = false
         for (const id of deleted) this.deletedNames.delete(id)
       }
+      deadline.markAdmitted()
     } catch (error) { this.namesUnsaved = true; throw persistenceFailure(error, true) }
   }
 
