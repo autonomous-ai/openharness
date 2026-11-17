@@ -673,6 +673,23 @@ describe('ObservedSource and a turn\'s end by hook', () => {
     expect(src.list()[0]).toMatchObject({ state: 'working', unseenDone: false })
   })
 
+  // Its wrap-up after its last subagent is still to come: its own Stop ends the turn (engines/kit/stopHook.ts).
+  it('a lead\'s Stop while its subagent runs is not done though the subagent stops within the 1.5 s', async () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('subagent-start'))
+    src.ingest(ev('turn-stop'))
+    const states = told(src)
+    await vi.advanceTimersByTimeAsync(1_000)
+    src.ingest(ev('subagent-stop'))
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state: 'working', unseenDone: false })
+    expect(states).not.toContain('done')
+    src.ingest(ev('turn-stop'))
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
+  })
+
   it('a lead whose subagents all stopped is done 1.5 s after its Stop', async () => {
     const { src, ev } = setup()
     src.ingest(ev('turn-start'))
