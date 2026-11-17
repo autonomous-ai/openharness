@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { limitedBy, type Usage } from './parse.js'
+import { limitedBy, type Usage, usageOf } from './parse.js'
 
 // Grading is judgement, so the judge is Opus; low effort keeps a two-line rubric cheap.
 export const JUDGE_MODEL = 'claude-opus-5-5'
@@ -99,13 +99,4 @@ function run(bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, t
       else resolve({ code, stdout })
     })
   })
-}
-
-function usageOf(raw: unknown): Usage {
-  const u = (raw ?? {}) as Record<string, unknown>
-  const n = (key: string): number => (typeof u[key] === 'number' ? u[key] : 0)
-  const usage: Usage = { input_tokens: n('input_tokens'), output_tokens: n('output_tokens') }
-  if (typeof u.cache_read_input_tokens === 'number') usage.cache_read_input_tokens = u.cache_read_input_tokens
-  if (typeof u.cache_creation_input_tokens === 'number') usage.cache_creation_input_tokens = u.cache_creation_input_tokens
-  return usage
 }

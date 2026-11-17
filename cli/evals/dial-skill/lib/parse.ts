@@ -96,7 +96,8 @@ function resultText(content: unknown): string {
   return content.map((part: Block) => (part.type === 'text' ? part.text ?? '' : `[${part.type}]`)).join('\n')
 }
 
-function usageOf(raw: unknown): Usage {
+/** The token counts of a `usage` object, from stream-json and json output alike. */
+export function usageOf(raw: unknown): Usage {
   const u = (raw ?? {}) as Record<string, unknown>
   const n = (key: string): number => (typeof u[key] === 'number' ? u[key] : 0)
   const usage: Usage = { input_tokens: n('input_tokens'), output_tokens: n('output_tokens') }
