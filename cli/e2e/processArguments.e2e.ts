@@ -62,7 +62,12 @@ describe('the daemon\'s processes', () => {
         ['-e', 'process.title = "control"; process.stdout.write("up\\n"); setTimeout(() => {}, 30_000)'],
         { env: d.env, stdio: ['ignore', 'pipe', 'ignore'], detached: true })
       try {
-        await new Promise((up) => control.stdout!.once('data', up))
+        // Up, or gone by name: a control that ended first would otherwise hold the test to its own timeout.
+        await new Promise<void>((up, failed) => {
+          control.stdout!.once('data', () => up())
+          control.once('error', failed)
+          control.once('exit', (code, signal) => failed(new Error(`the control process ended before it was up (${signal ?? code})`)))
+        })
         expect(shownArguments(control.pid!).get(control.pid!)?.includes(SENTINEL),
           'the reader sees the environment of a process that sets a title').toBe(true)
       } finally { try { process.kill(-control.pid!, 'SIGKILL') } catch { /* gone */ } }
