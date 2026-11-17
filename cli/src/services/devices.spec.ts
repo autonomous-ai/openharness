@@ -531,12 +531,15 @@ function fakeListener() {
     })).toBeUndefined()
     return { lines, writable: () => writable(), end: (reason: string) => ended.abort(reason), break: () => { broken = true } }
   }
-  /** A VS Code window's stream, as Harness's extension holds one open: the lines the devices write on it, and its end. */
+  /** A VS Code window's stream, as Harness's extension holds one open: the lines the devices write on it, its end, and its
+   *  writes throwing from then on. */
   const vscode = (window: string) => {
     const lines: unknown[] = []
     const ended = new AbortController()
+    let broken = false
     expect((given[0].handlers.vscode as ListenerStreamHandler).open({ type: 'vscode', window }, {
       write: (line) => {
+        if (broken) throw new Error('write broken')
         if (ended.signal.aborted) return false
         lines.push(line)
         return true
@@ -544,7 +547,7 @@ function fakeListener() {
       onWritable: () => {},
       ended: ended.signal,
     })).toBeUndefined()
-    return { lines, end: (reason: string) => ended.abort(reason) }
+    return { lines, end: (reason: string) => ended.abort(reason), break: () => { broken = true } }
   }
   /** A window's shells, as its extension reports them, the first one active. */
   const vscodeState = (window: string, terminals: number[]): unknown => (given[0].handlers['vscode-state'] as ListenerHandler)
@@ -3417,6 +3420,104 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     attach(port)
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
     expect(logs).toContain('[devices] vscode failed · injected fault: vscode')
+  })
+
+  // The dial's scroll scrolls that terminal, line by line, while VS Code is in front and the dial shows its agent
+  // (docs/plans/2026-11-17-dial-vscode-extension-design.md, §4).
+  const DIAL = {}
+  /** The agent the dial shows, as its cable session tells the host; null for none. */
+  const shows = (agentId: string | null) => host().dialShows(DIAL, agentId ? { name: 'api', app: 'VS Code' } : null, agentId)
+  /** A finger on the glass: a down, its moves, and an up that leaves at that velocity. */
+  const stroke = (moves: number[], velocity = 0) => {
+    host().scrolled('down', 0, 0)
+    for (const dy of moves) host().scrolled('move', dy, 0)
+    host().scrolled('up', 0, velocity)
+  }
+  const dialScrolls = (core: CoreApi) => vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame)
+    .filter(({ type }) => type === 'dial_scroll')
+  const toWindows = (phase: string, dy: number, velocity: number) => ({ type: 'dial_scroll', payload: { phase, dy, velocity } })
+
+  it('with VS Code in front and the dial on an agent whose terminal a window holds, a stroke\'s lines go to that window and the windows hear no dial_scroll', async () => {
+    const { core, reported, front } = await inVscodeTerminal()
+    const window = await reported()
+    front('vscode')
+    shows(ID)
+    // 20 px toward older lines twice (one line each, 8 px kept), then 60 px toward newer: 52 px, three lines.
+    stroke([8, 8, -24])
+    expect(window.lines).toEqual([{ scroll: -1, pid: SHELL }, { scroll: -1, pid: SHELL }, { scroll: 3, pid: SHELL }])
+    expect(dialScrolls(core)).toEqual([])
+  })
+
+  it.each<[string, (started: Awaited<ReturnType<typeof inVscodeTerminal>>) => Promise<{ lines: unknown[] } | undefined>]>([
+    ['another app in front', async ({ reported, front }) => { const window = await reported(); front('ghostty'); shows(ID); return window }],
+    // Its window never reported the shell.
+    ['an agent with no terminal', async ({ front }) => { front('vscode'); shows(ID); return undefined }],
+    ['a Harness agent', async ({ reported, front }) => { const window = await reported(); front('vscode'); shows('h1'); return window }],
+    ['no agent shown', async ({ reported, front }) => { const window = await reported(); front('vscode'); shows(ID); shows(null); return window }],
+  ])('with %s the stroke goes to the windows as before, velocity and all', async (_, situation) => {
+    const started = await inVscodeTerminal({ core: harnessAgent() })
+    const window = await situation(started)
+    stroke([8], 300)
+    expect(dialScrolls(started.core)).toEqual([toWindows('down', 0, 0), toWindows('move', 8, 0), toWindows('up', 0, 300)])
+    expect(window?.lines ?? []).toEqual([])
+  })
+
+  it('a stroke keeps the route its down chose: the front changing in its middle moves neither its moves nor its up', async () => {
+    const { core, reported, front } = await inVscodeTerminal()
+    const window = await reported()
+    shows(ID)
+    front('vscode')
+    host().scrolled('down', 0, 0)
+    front('ghostty')
+    host().scrolled('move', 8, 0)
+    host().scrolled('up', 8, 0)
+    expect(window.lines).toEqual([{ scroll: -1, pid: SHELL }, { scroll: -1, pid: SHELL }])
+    expect(dialScrolls(core)).toEqual([])
+    host().scrolled('down', 0, 0)
+    front('vscode')
+    host().scrolled('move', 8, 0)
+    host().scrolled('up', 0, 120)
+    expect(dialScrolls(core)).toEqual([toWindows('down', 0, 0), toWindows('move', 8, 0), toWindows('up', 0, 120)])
+    expect(window.lines).toHaveLength(2)
+    // The up ended that stroke: a move with no down before it chooses by the front it finds.
+    host().scrolled('move', 8, 0)
+    expect(window.lines).toEqual([{ scroll: -1, pid: SHELL }, { scroll: -1, pid: SHELL }, { scroll: -1, pid: SHELL }])
+  })
+
+  it('a fling is not played: an up with a velocity writes its own travel and no more', async () => {
+    const { core, reported, front } = await inVscodeTerminal()
+    const window = await reported()
+    front('vscode')
+    shows(ID)
+    host().scrolled('down', 0, 0)
+    host().scrolled('up', 8, 900)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(window.lines).toEqual([{ scroll: -1, pid: SHELL }])
+    expect(dialScrolls(core)).toEqual([])
+  })
+
+  it('a stroke whose window went writes nothing and never turns to the windows mid-stroke', async () => {
+    const { core, reported, front } = await inVscodeTerminal()
+    const window = await reported()
+    front('vscode')
+    shows(ID)
+    host().scrolled('down', 0, 0)
+    host().scrolled('move', 8, 0)
+    window.end('gone')
+    host().scrolled('move', 8, 0)
+    host().scrolled('up', 8, 300)
+    expect(window.lines).toEqual([{ scroll: -1, pid: SHELL }])
+    expect(dialScrolls(core)).toEqual([])
+  })
+
+  it('a throw on the scroll path is the part\'s, not the dial\'s', async () => {
+    const { reported, front } = await inVscodeTerminal()
+    const window = await reported()
+    front('vscode')
+    shows(ID)
+    window.break()
+    expect(() => host().scrolled('move', 8, 0)).not.toThrow()
+    expect(logs).toContain('[devices] dial failed · write broken')
   })
 
   it('no swipe line carries a handle, a session or an agent', async () => {
