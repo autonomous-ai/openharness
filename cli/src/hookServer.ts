@@ -474,6 +474,8 @@ export function startHookServer(
   // Filled in once the port is bound: the Host a request must name is the port actually taken.
   let hosts: ReadonlySet<string> = new Set()
   let lastRefusalLogAt = 0
+  /** Apart from a refused host's minute: a pane whose binding went stale, refused every turn, never hides one. */
+  let lastUnboundLogAt = 0
   const handle: http.RequestListener = (req, res) => {
     void (async () => {
       const url = (req.url ?? '').split('?')[0]
@@ -919,11 +921,11 @@ export function startHookServer(
         return
       }
 
-      /** 403 to a hook its session's process did not send. Said at most once a minute, as a refused host is: a pane whose
-       *  binding went stale sends one every turn. */
+      /** 403 to a hook its session's process did not send. Said at most once a minute, as a refused host is, in a minute
+       *  of its own: a pane whose binding went stale sends one every turn. */
       const refuseUnbound = (sessionId: string | undefined, route: string): void => {
-        if (Date.now() - lastRefusalLogAt > 60_000) {
-          lastRefusalLogAt = Date.now()
+        if (Date.now() - lastUnboundLogAt > 60_000) {
+          lastUnboundLogAt = Date.now()
           console.warn(`[hooks] ${sid(sessionId ?? '?')} ${route} refused · unbound`)
         }
         json(403, { error: 'UNBOUND_HOOK' })
