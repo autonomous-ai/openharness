@@ -5169,10 +5169,18 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1', folder: 'secret-folder' })
     ;(seen.cable as unknown as { connected: boolean }).connected = false
     listener.notice({ text: LINE, engine: 'codex', sessionId: 'sess-2', folder: 'secret-folder' })
-    expect(logs.filter((line) => line.startsWith('[device] notify'))).toEqual([
+    expect(logs.filter((line) => line.startsWith('[device] notify') && !line.includes(' · day '))).toEqual([
       '[device] notify · claude · shown', '[device] notify · claude · limited', '[device] notify · codex · no dial',
     ])
     expect(logs.filter((line) => ['VPN', 'sess-1', 'sess-2', 'secret-folder'].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  it('a notice is counted in the day\'s tally, by engine', () => {
+    const { listener } = devices()
+    ;(seen.cable as unknown as { connected: boolean }).connected = false
+    expect(listener.notice({ text: LINE })).toEqual({ result: 'no dial' })
+    expect(logs).toContain('[device] notify · agent · no dial')
+    expect(logs).toContainEqual(expect.stringMatching(/^\[device\] notify · day \d{4}-\d\d-\d\d · claude shown 0 no dial 0 limited 0 · codex shown 0 no dial 0 limited 0 · agent shown 0 no dial 1 limited 0$/))
   })
 })
 
