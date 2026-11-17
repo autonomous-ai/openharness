@@ -1,7 +1,9 @@
 # TEMPORARY: removed before this branch merges (docs/plans/2026-11-16-hook-driven-agent-status-plan.md, Task 23).
-# The hook round trip and the core's CPU at rest and while agents turn, before (main at e9670ffd23, the branch's
-# merge-base) and after (this commit), on one runner: cli/e2e/perf.e2e.ts, isolated daemons, fake engines, no
-# backend, no secret. Both builds run this commit's perf.e2e.ts and fake engines, so the workload is the same.
+# The hook processes (by event, the ones an engine waits for among them) and the core's CPU at rest, while agents turn
+# and while they ask, before (main at e9670ffd23, the branch's merge-base) and after (this commit), on one runner:
+# cli/e2e/perf.e2e.ts, isolated daemons, fake engines, no backend, no secret. Both builds run this commit's perf.e2e.ts
+# and fake engines, so the workload is the same. Run before, after, before, after: each pair is compared on its own, so
+# a runner that warms up over the job does not always favour the build run last.
 name: tmp hook-driven agent status
 on:
   push:
@@ -17,8 +19,8 @@ env:
 jobs:
   perf:
     runs-on: ubuntu-latest
-    # Three perf runs (three 60-second phases each, after a warm-up), two installs and two bundles.
-    timeout-minutes: 50
+    # Four perf runs (four 60-second phases each, after a warm-up), two installs and two bundles.
+    timeout-minutes: 75
     defaults:
       run:
         working-directory: cli
@@ -29,6 +31,8 @@ jobs:
       PERF_AGENTS: '8'
       PERF_ACTIVE: '4'
       PERF_SECONDS: '60'
+      # The questions window: Codex's PermissionRequest and PreToolUse, hooks it waits for before its dialog.
+      PERF_QUESTIONS: '1'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -61,25 +65,38 @@ jobs:
           PERF_BUNDLE_SOURCE: e9670ffd23
           PERF_REPORT: ${{ runner.temp }}/perf/before.json
         run: npx vitest run --config vitest.e2e.config.ts e2e/perf.e2e.ts
+      - name: After
+        env:
+          E2E_BUNDLE: '1'
+          PERF_REPORT: ${{ runner.temp }}/perf/after.json
+        run: npx vitest run --config vitest.e2e.config.ts e2e/perf.e2e.ts
       - name: Before, again (the noise between two runs of one build)
         env:
           E2E_BUNDLE_PATH: ${{ runner.temp }}/base-bundle/cli.js
           PERF_BUNDLE_SOURCE: e9670ffd23
           PERF_REPORT: ${{ runner.temp }}/perf/before-again.json
         run: npx vitest run --config vitest.e2e.config.ts e2e/perf.e2e.ts
-      - name: After
+      - name: After, again
         env:
           E2E_BUNDLE: '1'
-          PERF_REPORT: ${{ runner.temp }}/perf/after.json
+          PERF_REPORT: ${{ runner.temp }}/perf/after-again.json
         run: npx vitest run --config vitest.e2e.config.ts e2e/perf.e2e.ts
-      - name: The numbers, side by side
+      - name: The numbers, each pair side by side
         run: |
           node -e '
             const fs = require("fs"), path = require("path"), dir = process.argv[1]
-            for (const name of ["before", "before-again", "after"]) {
-              const report = JSON.parse(fs.readFileSync(path.join(dir, name + ".json"), "utf8"))
-              for (const phase of report.phases) console.log(name, phase.label ?? "", "cpu%", phase.cpu.percent.toFixed(2),
-                "hooks/turn", phase.hooks?.perTurn, "round trip p50/p95 ms", phase.hooks?.roundTripMs.p50, phase.hooks?.roundTripMs.p95)
+            const ms = (spread) => spread ? spread.count + "x p50 " + spread.p50Ms + " p95 " + spread.p95Ms + (spread.killed ? " killed " + spread.killed : "") : "-"
+            for (const pair of [["before", "after"], ["before-again", "after-again"]]) {
+              for (const name of pair) {
+                const report = JSON.parse(fs.readFileSync(path.join(dir, name + ".json"), "utf8"))
+                for (const phase of report.phases) {
+                  const hooks = phase.hooks ?? {}
+                  console.log(name, phase.label ?? "", "cpu%", phase.cpu.percent.toFixed(2), "hooks/turn", hooks.perTurn,
+                    "hook ms", ms(hooks), "| waited for:", ["PermissionRequest", "PreToolUse", "SubagentStart"]
+                      .map((event) => event + " " + ms(hooks.byEvent?.[event])).join(", "))
+                }
+              }
+              console.log("")
             }' "$RUNNER_TEMP/perf"
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
