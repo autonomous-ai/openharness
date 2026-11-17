@@ -285,6 +285,7 @@
     "evals/dial-skill/scenarios/vpn-internal-host/scenario.json",
     "evals/dial-skill/scenarios/xcode-license-sudo/bin/sudo",
     "evals/dial-skill/scenarios/xcode-license-sudo/bin/xcodebuild",
+    "evals/dial-skill/scenarios/xcode-license-sudo/bin/xcrun",
     "evals/dial-skill/scenarios/xcode-license-sudo/repo/Makefile",
     "evals/dial-skill/scenarios/xcode-license-sudo/repo/README.md",
     "evals/dial-skill/scenarios/xcode-license-sudo/repo/ios/Pocket.xcodeproj/project.pbxproj",
