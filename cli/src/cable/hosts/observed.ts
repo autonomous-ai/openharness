@@ -795,8 +795,9 @@ export class ObservedSource implements HostSource {
     let text: string | undefined
     try {
       text = await this.deps.lastAnswer(entry.agent.engine, entry.transcriptPath)
-    } catch (error) {
-      this.deps.log(`[observed] last answer not read: ${error instanceof Error ? error.message : error}`)
+    } catch {
+      // A count only, as the scan's read logs none: its error can hold the transcript's path, and so the account's name.
+      this.deps.log('[observed] last answer · not read')
       return
     }
     if (!text || this.entries.get(entry.agent.id) !== entry) return
