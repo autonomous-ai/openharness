@@ -27,6 +27,9 @@ pub const LINE_CHARS: usize = 120;
 /// A run's step lines past these go unlogged: the script prints about 15, and one that prints without end must not
 /// fill the log.
 const STEP_LINES_LOGGED: usize = 200;
+/// Each step line logged is cut to this many characters, so a run logs at most 200 × 512 of them. Not LINE_CHARS: a
+/// checksum line runs about 185.
+const STEP_LINE_CHARS: usize = 512;
 
 /// The Install screen's step before the script names one.
 pub const GETTING_READY: &str = "Getting ready…";
@@ -34,7 +37,8 @@ pub const INSTALLING_TMUX: &str = "Installing tmux…";
 pub const DOWNLOADING_HARNESS: &str = "Downloading Harness…";
 
 /// How a script step line begins, after its `▸`, and the step it shows. A line not here changes nothing, so a step
-/// the script adds shows the one before it.
+/// the script adds shows the one before it. cli/src/scripts/install.spec.ts's "keeps the step lines Harness Device
+/// names" test pins these beginnings in the script.
 const STEPS: [(&str, &str); 5] = [
     ("Installing the managed tmux", INSTALLING_TMUX),
     ("downloading tmux", INSTALLING_TMUX),
@@ -83,7 +87,7 @@ pub fn install(
             if line.starts_with(['▸', '✓', '✗']) {
                 step_lines = step_lines.saturating_add(1);
                 if step_lines <= STEP_LINES_LOGGED {
-                    log.line(&format!("install: {line}"));
+                    log.line(&format!("install: {}", line.chars().take(STEP_LINE_CHARS).collect::<String>()));
                 } else if step_lines == STEP_LINES_LOGGED + 1 {
                     log.line(&format!("install: {flag} more step lines not logged"));
                 }

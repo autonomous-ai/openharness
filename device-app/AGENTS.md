@@ -47,8 +47,8 @@ plain TypeScript in `ui/`.
   key: without it a build signed with the hardened runtime sends no Apple Event.
 - **One plugin.** `tauri-plugin-updater`, called from Rust only; the capability gives the webview none of it.
 - **One log, redacted.** Every line passes `log::redact`; no email, token, URL query or path of the person's. An
-  install logs its step lines (`▸`, `✓`, `✗`, at most 200 a run), each run's result and, after a failure, the lines
-  the screen shows; never the rest of what a run prints (`install.rs`).
+  install logs its step lines (`▸`, `✓`, `✗`, at most 200 a run, each cut to 512 characters), each run's result
+  and, after a failure, the lines the screen shows; never the rest of what a run prints (`install.rs`).
 - **No other component's path in a string.** `scripts/ci-plan.py` reads a quoted path of another component as a
   read of that folder: join path segments one by one, and name other components only in comments.
 - **`HARNESS_DEVICE_CLI`** (the fake CLI for tests) is read by debug builds only.
