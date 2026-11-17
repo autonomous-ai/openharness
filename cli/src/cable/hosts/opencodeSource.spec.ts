@@ -990,6 +990,43 @@ describe("the opencode source (docs/plans/2026-11-17-dial-opencode-design.md)", 
       expect(count(server, message('ses_a1'))).toBe(1)
       expect(count(server, message('ses_run'))).toBe(1)
     })
+
+    it('a session at rest whose whole turn ran while the stream was down is done after the reconnect, with that turn\'s answer', async () => {
+      server.session(API)
+      const s = setup()
+      await live(s)
+      server.drop()
+      await s.until(() => s.log.at(-1) === '[opencode] retry · 1')
+      // No stream hears it: opencode's time.idle moves past the one listed, and past the last view.
+      server.session({ ...API, updated: WALL - 10_000, idle: WALL - 10_000, answer: 'Shipped.' })
+      s.advance(1000)
+      await s.until(() => row(s, 'ses_a1')?.lastActivityAt === WALL - 10_000)
+      expect(row(s, 'ses_a1')).toMatchObject({ state: 'done', unseenDone: true, lastAnswer: 'Shipped.' })
+      expect(count(server, message('ses_a1'))).toBe(2)
+    })
+
+    it('a session working at the drop whose turn ended unheard is done after the reconnect, though an event of it came while the list was in flight', async () => {
+      server.session(API)
+      server.session({ id: 'ses_run', title: 'Run', updated: WALL - 1000 })
+      server.start('ses_run')
+      const gate = gated(opencode())
+      const s = setup({ client: gate.client })
+      await live(s, 2)
+      server.drop()
+      await s.until(() => s.log.at(-1) === '[opencode] retry · 1')
+      server.end('ses_run', 'succeeded', 'Shipped.')
+      server.session({ ...API, updated: API.updated! + 1 })
+      const held = gate.hold((path) => path === '/api/session/active')
+      s.advance(1000)
+      await held
+      // A rename, heard while the list is in flight.
+      await heard(s, 'ses_run')
+      gate.release()
+      await s.until(() => row(s, 'ses_a1')?.lastActivityAt === API.updated! + 1)
+      expect(row(s, 'ses_run')).toMatchObject({ state: 'done', unseenDone: true, lastAnswer: 'Shipped.' })
+      expect(row(s, 'ses_run')?.name).toMatch(/^Fence \d+$/)
+      expect(count(server, message('ses_run'))).toBe(1)
+    })
   })
 
   describe('voice', () => {
