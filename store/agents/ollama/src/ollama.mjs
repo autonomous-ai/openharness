@@ -1,6 +1,6 @@
 import { access, mkdir, open, statfs } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { homedir, totalmem } from 'node:os';
+import { homedir, totalmem, platform as osPlatform } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -9,6 +9,15 @@ import { performance } from 'node:perf_hooks';
 export const OLLAMA_URL = 'http://127.0.0.1:11434';
 export const DEFAULT_CONTEXT = 4096;
 let starting;
+
+export function isWindows() { return osPlatform() === 'win32'; }
+export function isMac() { return osPlatform() === 'darwin'; }
+export function isLinux() { return osPlatform() === 'linux'; }
+export function isWSL() {
+  if (!isLinux()) return false;
+  try { return /microsoft|Microsoft/i.test(require('fs').readFileSync('/proc/version', 'utf8')); }
+  catch { return false; }
+}
 
 export function validateModel(model) {
   if (typeof model !== 'string' || model.length > 180 || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*(?:\/[a-zA-Z0-9][a-zA-Z0-9._-]*)?(?::[a-zA-Z0-9][a-zA-Z0-9._-]*)?$/.test(model) || model.includes('..')) throw new Error('Use an Ollama model name, such as qwen3:0.6b.');
@@ -47,11 +56,11 @@ export async function ensureRunning(dataDir, { signal, onProgress = () => {} } =
   starting = (async () => {
     const binary = await findOllama();
     if (!binary) throw new Error('Ollama is not installed. Install the official Ollama app from ollama.com, then try again.');
-    onProgress('Starting Ollama on this Mac');
+    onProgress(`Starting Ollama on this ${isMac() ? 'Mac' : isWindows() ? 'Windows PC' : 'Linux system'}`);
     await mkdir(dataDir, { recursive: true });
     const log = await open(join(dataDir, 'ollama.log'), 'a', 0o600);
     let failure;
-    const child = spawn(binary, ['serve'], { env: { ...process.env, OLLAMA_HOST: '127.0.0.1:11434', OLLAMA_NO_CLOUD: '1' }, detached: true, stdio: ['ignore', log.fd, log.fd] });
+    const child = spawn(binary, ['serve'], { env: { ...process.env, OLLAMA_HOST: '127.0.0.1:11434', OLLAMA_NO_CLOUD: '1' }, detached: !isWindows(), stdio: ['ignore', log.fd, log.fd] });
     child.on('error', error => { failure = error; });
     child.unref();
     await log.close();
@@ -84,7 +93,7 @@ export async function modelManifest(model, { signal } = {}) {
 export async function pullModel(model, options = {}) {
   model = validateModel(model);
   const manifest = await modelManifest(model, options);
-  if (manifest.bytes > totalmem() * 0.8) throw new Error(`This model download is ${(manifest.bytes / 1024 ** 3).toFixed(1)} GiB, too large for the pilot's memory budget on this Mac. Choose a smaller quantization or model.`);
+  if (manifest.bytes > totalmem() * 0.8) throw new Error(`This model download is ${(manifest.bytes / 1024 ** 3).toFixed(1)} GiB, too large for the pilot's memory budget on this ${isMac() ? 'Mac' : isWindows() ? 'Windows PC' : 'Linux system'}. Choose a smaller quantization or model.`);
   try {
     const disk = await statfs(process.env.OLLAMA_MODELS || join(homedir(), '.ollama'));
     if (disk.bavail * disk.bsize < manifest.bytes + 2 * 1024 ** 3) throw new Error('There is not enough free disk space for this download plus 2 GiB of headroom.');
@@ -150,10 +159,61 @@ export function responseMetrics(last) {
 }
 
 export async function findOllama() {
-  const candidates = [process.env.OLLAMA_BIN, '/usr/local/bin/ollama', '/opt/homebrew/bin/ollama', '/Applications/Ollama.app/Contents/Resources/ollama', ...String(process.env.PATH || '').split(':').map(p => join(p, 'ollama'))].filter(Boolean);
-  for (const candidate of candidates) {
+  // Check for custom binary via environment variable first
+  if (process.env.OLLAMA_BIN) {
+    try { await access(process.env.OLLAMA_BIN, constants.X_OK); return process.env.OLLAMA_BIN; } catch {}
+  }
+  
+  const candidates = [];
+  
+  // Platform-specific binary locations
+  if (isWindows()) {
+    // Windows native Ollama locations
+    candidates.push(
+      join(process.env.LOCALAPPDATA || '', 'Programs', 'Ollama', 'ollama.exe'),
+      join(process.env.PROGRAMFILES || '', 'Ollama', 'ollama.exe'),
+      join(process.env.PROGRAMFILES(X86) || '', 'Ollama', 'ollama.exe'),
+      join(homedir(), 'AppData', 'Local', 'Programs', 'Ollama', 'ollama.exe')
+    );
+  } else if (isWSL()) {
+    // WSL - check both Linux paths and Windows paths via /mnt/
+    candidates.push(
+      '/usr/local/bin/ollama',
+      '/usr/bin/ollama',
+      '/opt/homebrew/bin/ollama', // Homebrew on Linux (rare but possible)
+      '/Applications/Ollama.app/Contents/Resources/ollama' // macOS app in WSL2
+    );
+    // Also check Windows Ollama installation via /mnt/
+    const programFiles = process.env.PROGRAMFILES || '/mnt/c/Program Files';
+    const localAppData = process.env.LOCALAPPDATA || '/mnt/c/Users/Default/AppData/Local';
+    candidates.push(
+      join(programFiles, 'Ollama', 'ollama.exe'),
+      join(localAppData, 'Programs', 'Ollama', 'ollama.exe')
+    );
+  } else {
+    // macOS and Linux (non-WSL)
+    candidates.push(
+      '/usr/local/bin/ollama',
+      '/opt/homebrew/bin/ollama',
+      '/Applications/Ollama.app/Contents/Resources/ollama'
+    );
+  }
+  
+  // Add PATH-based lookup for all platforms
+  const pathDirs = String(process.env.PATH || '').split(isWindows() ? ';' : ':');
+  for (const p of pathDirs) {
+    if (p) {
+      const binaryName = isWindows() ? 'ollama.exe' : 'ollama';
+      candidates.push(join(p, binaryName));
+    }
+  }
+  
+  // Filter out empty/null candidates and try each one
+  const filteredCandidates = candidates.filter(Boolean);
+  for (const candidate of filteredCandidates) {
     try { await access(candidate, constants.X_OK); return candidate; } catch {}
   }
+  
   return null;
 }
 
