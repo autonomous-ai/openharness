@@ -1146,7 +1146,7 @@ describe('restoreAgents — waiting for the engine', () => {
     expect(h.respawns).toBe(2)
     expect(h.launches.map((l) => l.resumeSessionId ?? 'fresh')).toEqual(['session-a', 'fresh'])
     const tail = h.calls.slice(7)
-    expect(tail.slice(0, 6)).toEqual(['updateIdentity:agent-a:7', 'clearIdentity:agent-a',
+    expect(tail.slice(0, 7)).toEqual(['updateIdentity:agent-a:7', 'clearIdentity:agent-a', 'setLaunch:agent-a:starting',
       'inheritName:session-a->agent-a', 'unbind:session-a', 'hold:tmux\u0000%0', 'respawn:%0:claude'])
     expect(tail).toContain('updateIdentity:agent-a:8')
     expect(tail).toContain('clearRemainOnExit:%0')

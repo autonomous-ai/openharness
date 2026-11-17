@@ -968,10 +968,12 @@ async function watchRestoredPane(
         const settled = await waitForSettle(deps, runtime, settleMs)
         if (!current() && !selectFirstHook(identity)) return
         if (settled === 'gone') {
-          current = restoreOwner(deps, deps.registry.byAgent(agentId)!)
-          // Left on the row, the guard above took the fresh engine for a stranger's: the row kept a dead
-          // process, no conversation and its pane held.
+          // The row goes back to how it read before this engine was seen. Its process left on it, the guard above
+          // took the fresh engine for a stranger's: the row kept a dead process, no conversation and its pane held.
+          // Its `ready` left on it, the desk read the fresh launch as up before any engine was.
           deps.registry.clearProcessIdentity(agentId)
+          deps.registry.setLaunch(agentId, { state: 'starting' })
+          current = restoreOwner(deps, deps.registry.byAgent(agentId)!)
           if (!await relaunchFresh()) return
           delayMs = 50
           continue
