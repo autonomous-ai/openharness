@@ -9,12 +9,13 @@ import { observedTitle } from './observedTitle.js'
 export const MAX_RECORD_BYTES = 16 * 1024
 
 const { live } = sessionStoreContracts.claude
-/** Claude Code's process record, `<folder>/<pid><suffix>` beside each projects folder, as its store declares it. */
+/** Claude Code's process record, `<folder>/<pid><suffix>`, as its store declares it. */
 const declared = 'record' in live ? live.record : undefined
 
 export interface RecordNameOptions {
-  /** Claude Code's projects folders (claudeProjectsRoots); its process records are in `sessions` beside each. */
-  roots: readonly string[]
+  /** Claude Code's records folders (observedPlaces.ts `claude.records()`): `sessions` beside each projects folder, and
+   *  each Orca account home's. */
+  records: readonly string[]
 }
 
 /**
@@ -26,11 +27,10 @@ export interface RecordNameOptions {
 export async function readRecordName(
   owner: Pick<SessionOwner, 'pid' | 'record'> & { sessionId: string }, opts: RecordNameOptions,
 ): Promise<string | undefined> {
-  // The very string recordOwners (engines/kit/adoption.ts) builds for this pid, from the same declaration: any other
+  // The very string recordOwners (engines/kit/adoption.ts) builds for this pid in one of the folders it reads: any other
   // path is not this session's own record, so it is never opened.
   if (!declared) return undefined
-  const { folder, suffix } = declared
-  if (!opts.roots.some((root) => owner.record === join(root, '..', folder, `${owner.pid}${suffix}`))) return undefined
+  if (!opts.records.some((folder) => owner.record === join(folder, `${owner.pid}${declared.suffix}`))) return undefined
   let text: string
   try {
     const file = await open(owner.record, 'r')

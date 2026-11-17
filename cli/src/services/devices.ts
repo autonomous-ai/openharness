@@ -44,6 +44,7 @@ import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
 import { askedLine, countWord, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type ObservedDeps, type PromptSource } from '../cable/hosts/observed.js'
+import { observedPlaces } from '../cable/hosts/observedPlaces.js'
 import { createOpenActions } from '../cable/hosts/open.js'
 import { createOpencodeClient, opencodeClientDeps, opencodeMessageId, type OpencodeClient } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
@@ -66,6 +67,7 @@ import { DialVerdicts } from '../cable/dialPortVerdicts.js'
 import { createDialSetup } from '../cable/dialSetup.js'
 import { claudeFound, type ClaudeRun } from '../devices/claudePlugin.js'
 import { readRemoved, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
+import { createOrcaHomesCache, orcaHomesDeps, readOrcaHomes, type OrcaHomesCache } from '../devices/orcaHomes.js'
 import { WindowForm } from '../cable/windowForm.js'
 import { createWindowRouter } from '../cable/windowRoute.js'
 import { WindowSelection } from '../cable/windowSelection.js'
@@ -143,6 +145,8 @@ export interface DevicesDeps {
   /** For this service's tests: how Claude Code is found for a Claude Code home; the daemon's own lookup by default
    *  (devices/claudePlugin.ts claudeFound). */
   claude?: (home: string, shell: boolean) => Promise<ClaudeRun | null>
+  /** For this service's tests: Orca's account homes (devices/orcaHomes.ts); read with this computer's `orca` when unset. */
+  orcaHomes?: OrcaHomesCache
 }
 
 /** ⌘K's answer while the fleet is not running: it never started, so there is no list to weigh. */
@@ -183,10 +187,22 @@ const LISTENER_WAIT_MS = 1_000
  *  the session it shows within about a second. Also how long any move of the dial sets the Claude app's settle aside. */
 const ATTACH_ECHO_MS = 2_000
 
-/** This computer's agents outside a pane, read with ⌘P's readers (services/externalSessions.ts), and how the dial's voice
- *  and tap reach them. */
-function observedSource(dataDir: string, log: (line: string) => void, actions: ObservedActions, tty: ObservedDeps['tty'], scanned: ObservedDeps['scanned']): ObservedSource {
-  const providers = externalProviders()
+/** Orca's account homes on this computer, read with its own `orca` (devices/orcaHomes.ts). */
+function orcaHomesCache(now: () => number, log: (line: string) => void): OrcaHomesCache {
+  const system = orcaHomesDeps()
+  return createOrcaHomesCache({ read: () => readOrcaHomes(system), now, platform: system.platform, log })
+}
+
+/** This computer's agents outside a pane, read with ⌘P's readers (services/externalSessions.ts) in the daemon's own homes
+ *  and Orca's account homes, and how the dial's voice and tap reach them. */
+function observedSource(dataDir: string, log: (line: string) => void, orcaHomes: Pick<OrcaHomesCache, 'get'>, actions: ObservedActions, tty: ObservedDeps['tty'], scanned: ObservedDeps['scanned']): ObservedSource {
+  // Worked out at each read: a home the person moved is adopted while the daemon runs, and Orca's follow its last read.
+  const places = observedPlaces({
+    claudeRoots: () => claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR),
+    codexRoots: () => codexHomeRoots(env.CODEX_HOME),
+    orca: () => orcaHomes.get(),
+  })
+  const providers = externalProviders(undefined, places)
   return new ObservedSource({
     now: Date.now,
     processes: listProcesses,
@@ -196,16 +212,15 @@ function observedSource(dataDir: string, log: (line: string) => void, actions: O
     excluded: [dataDir],
     // Asked for Claude Code's and Codex's alone (observed.ts), and read only inside their own folders: a hook can name any path.
     lastAnswer: (engine, path) => readLastAnswer(engine as 'claude' | 'codex', path, {
-      roots: engine === 'claude' ? claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR) : codexHomeRoots(env.CODEX_HOME).map((home) => join(home, 'sessions')),
+      roots: engine === 'claude' ? places.claude.roots() : places.codex.roots().map((home) => join(home, 'sessions')),
       maxBytes: LAST_ANSWER_MAX_BYTES, deadlineMs: LAST_ANSWER_DEADLINE_MS,
     }),
     fileStamp,
     log,
     actions,
     apps: learnApps,
-    // Asked for Claude Code's sessions alone (observed.ts), and read only inside its own folders, worked out at each read:
-    // a home the person moved is adopted while the daemon runs.
-    recordName: (owner) => readRecordName(owner, { roots: claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR) }),
+    // Asked for Claude Code's sessions alone (observed.ts), and read only inside its own records folders.
+    recordName: (owner) => readRecordName(owner, { records: places.claude.records() }),
     tty,
     scanned,
   })
@@ -439,6 +454,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The route or the refusal of the dial's words, and why a queue failed: never the words, the session, the terminal or a
    *  path. */
   const voiced = (what: string): void => log(`[device] voice · ${what}`)
+  /** The Claude Code and Codex homes Orca's accounts run in, which Harness has not adopted: the open scan and the dial
+   *  skill reach them too (docs/plans/2026-11-17-new-user-onboarding-design.md, "C. Orca homes"). */
+  const orcaHomes = deps.orcaHomes ?? orcaHomesCache(monotonic, log)
   // The dial skill in each home an engine's sessions use and Claude Code's plugin, set up once a dial has attached on this
   // computer (cable/dialSetup.ts), in the devices' own process alone: inside the core's (`HARNESSD_SERVICES=none`) there
   // is no listener, so a skill would name a `harness device notify` that cannot ring. A part of its own, so a throw in a
@@ -449,7 +467,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     uid: process.getuid?.() ?? -1,
     claudeHome: dirname(env.CLAUDE_PROJECTS_DIR),
     codexHome: env.CODEX_HOME,
-    adopted: movedEngineHomes,
+    // Read at each start pass: the adopted homes, and Orca's as its last read gave them.
+    adopted: () => {
+      const moved = movedEngineHomes()
+      const orca = orcaHomes.get()
+      return { claude: [...moved.claude, ...orca.claude], codex: [...moved.codex, ...orca.codex] }
+    },
     removed: () => readRemoved(core.dataDir),
     now: monotonic,
     count: createEngineTally('[device] dial setup', ['claude', 'codex'], SETUP_COUNTS, log),
@@ -457,8 +480,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     claude: deps.claude ?? claudeFound,
     version: VERSION,
   }) : null
-  if (skill) part.call('skill', () => skill.started())
-  const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, {
+  /** The dial setup's start pass, after a read of Orca's homes: the first, and each that changes them. A read that lands
+   *  once the devices stopped starts none. */
+  const skillPass = (): void => {
+    if (skill && !stopped) part.call('skill', () => skill.started())
+  }
+  const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, orcaHomes, {
     adapters,
     modReady: (sessionId) => inbox.ready(sessionId),
     toMod: (sessionId, text) => inbox.deliver(sessionId, text),
@@ -474,6 +501,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     codexHome: env.CODEX_HOME,
     count: (what) => voiced(countWord(what)),
   }, ttyOf, skill ? (owners) => part.call('skill', () => skill.scanned(owners.values())) : undefined) : null
+  // Orca is asked only for the parts that use its homes, the first time as the devices start: the start pass waits for
+  // that read (at most its 5 s), so an Orca home gets the skill with the default one.
+  if (skill || observed) void orcaHomes.refresh().then(skillPass)
+  /** An open scan, once Orca's homes are read again where the last read is old (at most its 5 s): a session in an account
+   *  added since is found by this scan. */
+  const scanOpen = async (source: ObservedSource): Promise<void> => {
+    if (await orcaHomes.refresh()) skillPass()
+    await source.scanOpen()
+  }
   /** herdr's agents, hook or no hook, listed and followed over herdr's own socket (docs/specs/2026-11-16-device-herdr.md).
    *  It runs only while a dial is attached, as the open scan does, behind the observed agents' switch, and never on
    *  Windows, where herdr's socket is a named pipe (herdrSource.ts). */
@@ -1345,7 +1381,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return
     }
     // Agents already running when the dial came are listed now, idle until their next hook event.
-    part.call('observed', () => observed.scanOpen())
+    part.call('observed', () => scanOpen(observed))
     part.call('orca', () => orcaMembers(observed))
     // A dial plugged in while Orca is already in front: a front told again starts no settle, so none would come until the
     // person left Orca and came back.
@@ -1355,7 +1391,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     part.call('dial', showWaits)
     part.call('dial', remind)
     attached = [
-      every(OPEN_SCAN_MS, () => observed.scanOpen()),
+      every(OPEN_SCAN_MS, () => scanOpen(observed)),
       // A person can take minutes to come to an agent that waits on them.
       every(REMIND_MS, remind),
     ]
