@@ -36,7 +36,8 @@ for h in "${heights[@]}"; do
     exe="$out/max_render-$h" base="$(baseline "$h")" now="$out/now-$h.txt"
     cc -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -O1 -g -DHT_WIDTH=1920 -DHT_HEIGHT="$h" \
        -I"$fw/main/app" -I"$pro/main" -I"$disp" -o "$exe" "$here/max_render.c" "$fw"/main/app/max_ui_*.c \
-       "$disp/terminal.c" "$disp/pro_canvas.c" "$pro/main/pod/pod_draw.c" "$out/pro_fonts.c"
+       "$disp/terminal.c" "$disp/pro_canvas.c" "$pro"/main/pod/{pod_draw,pod_pet,pets,pets_ask,pets_codex,engine_logos}.c \
+       "$out/pro_fonts.c"
     for s in $("$exe" --list); do
         "$exe" "$s" "$out/r.ppm" >/dev/null
         echo "$(shasum -a 256 < "$out/r.ppm" | cut -d' ' -f1)  $s"

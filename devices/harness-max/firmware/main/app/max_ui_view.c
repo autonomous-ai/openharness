@@ -1,20 +1,17 @@
-// The screen (max_ui.h), 1920 x 480 (or 415) in the Pro's light theme: the rail, three lanes and the Talk slot, with
-// the page dots or a notice under the lanes. A lane with a question, a failure or an alert opens into a card and its
-// neighbours narrow (max_ui_card.c); New Harness covers the lanes. Inter faces (gen_fonts.py ph_*): at the Max's
-// 225 ppi they come out a little larger than on the Pro's 258.
+// The screen (max_ui.h), 1920 x 480 (or 415) in the Pro's dark Pets look: the rail of machines, the room (one agent,
+// large: max_ui_card.c) and the other agents as lanes on their engine's gradient, the page dots under them, and over
+// the lanes the toast of a question that waits and the notice line. New Harness covers the room and the lanes. While a
+// person talks, everything but the room rests: dimmed, and nothing to tap. Inter faces (gen_fonts.py ph_*): at the
+// Max's 225 ppi they come out a little larger than on the Pro's 258.
 #include <stdio.h>
 #include <string.h>
 
 #include "max_ui_draw.h"
+#include "max_ui_motion.h"
 
-enum {
-    ACTIVITY_ROWS = 3, STEP_GAP = 10, NARROW_PAD = 16,
-    RAIL_X = 24, RAIL_TEXT_X = 46, RAIL_PITCH = MAX_Y(78), RAIL_SUB = MAX_Y(34), RAIL_ROW_H = MAX_Y(52),
-    BAND_CY = (MAX_BAND_Y + HT_HEIGHT) / 2, PAGE_DOT = 10, PAGE_PITCH = 22,
-    CARD_CY = MAX_CARD_Y + MAX_CARD_H / 2,
-};
 static const char ELLIPSIS[] = "\xe2\x80\xa6";   // the Inter faces draw it (gen_fonts.py CONSOLE_EXTRA)
-static const int LANES_CX = MAX_LANE_X + MAX_LANES * MAX_LANE_W / 2;
+
+// ---- text ----
 
 // Whether t's first n bytes and an ellipsis fit `width` px (out: scratch).
 static bool fits_cut(char out[ROW_BYTES], const char *t, size_t n, const ht_pro_font_t *f, int width)
@@ -72,6 +69,15 @@ int max_text(ht_scene_t *s, int x, int cy, int w, const ht_pro_font_t *f, unsign
     ht_pro_text(s, x, max_top_of(f, cy), tw, f, C(rgb), row);
     return tw;
 }
+int max_text_right(ht_scene_t *s, int x, int cy, int w, const ht_pro_font_t *f, unsigned rgb, const char *t)
+{
+    char row[ROW_BYTES];
+    if (!t || !t[0] || w <= 0) return 0;
+    max_cut(row, t, f, w, false);
+    const int tw = ht_pro_width(f, row);
+    ht_pro_text(s, x - tw, max_top_of(f, cy), tw, f, C(rgb), row);
+    return tw;
+}
 void max_text_centered(ht_scene_t *s, int cx, int cy, int w, const ht_pro_font_t *f, unsigned rgb, const char *t)
 {
     char row[ROW_BYTES];
@@ -111,105 +117,87 @@ size_t max_fit(const char *t, const ht_pro_font_t *f, int width)
     }
     return n;
 }
-// t word-wrapped from y down in at most max_rows rows, the last one taking the rest (cut with an ellipsis). Returns the
-// y under the last row.
-int max_paragraph(ht_scene_t *s, int x, int y, int w, const ht_pro_font_t *f, unsigned rgb, const char *t, int max_rows)
+int max_wrap(char rows[][ROW_BYTES], int max_rows, const char *t, const ht_pro_font_t *f, int w)
 {
-    char row[ROW_BYTES];
-    while (*t == ' ') t++;
-    for (int i = 0; i < max_rows && *t; i++, y += f->height) {
-        if (i == max_rows - 1) {
-            max_line(s, x, y, w, f, rgb, t, true);
-            continue;
+    if (max_rows > MAX_ROWS) max_rows = MAX_ROWS;
+    int n = 0;
+    for (; n < max_rows && t; n++) {
+        while (*t == ' ') t++;
+        if (!*t) break;
+        if (n == max_rows - 1) {   // the last row takes the rest
+            max_cut(rows[n++], t, f, w, true);
+            break;
         }
         const size_t len = max_fit(t, f, w);
-        memcpy(row, t, len);
-        row[len] = 0;
-        ht_pro_text(s, x, y, w, f, C(rgb), row);
+        memcpy(rows[n], t, len);
+        rows[n][len] = 0;
         t += len;
-        while (*t == ' ') t++;
     }
-    return y;
+    return n;
 }
-
-void max_card_frame(ht_scene_t *s, int x, int y, int w, int h, unsigned fill, unsigned edge, bool selected)
+int max_paragraph(ht_scene_t *s, int x, int y, int w, const ht_pro_font_t *f, unsigned rgb, const char *t, int max_rows)
 {
-    if (selected) {
-        ht_pro_rect_aa(s, x, y, w, h, CARD_R, C(HT_THEME_ACCENT));
-        ht_pro_rect_aa(s, x + SELECT_W, y + SELECT_W, w - 2 * SELECT_W, h - 2 * SELECT_W, CARD_R - SELECT_W, C(fill));
-    } else {
-        ht_pro_rect_aa_stroke(s, x, y, w, h, CARD_R, C(edge), C(fill));
-    }
+    char rows[MAX_ROWS][ROW_BYTES];
+    const int n = max_wrap(rows, max_rows, t, f, w);
+    for (int i = 0; i < n; i++) ht_pro_text(s, x, y + i * f->height, w, f, C(rgb), rows[i]);
+    return y + n * f->height;
 }
 
+// ---- shapes ----
+
+void max_box(ht_scene_t *s, int x, int y, int w, int h, int r, int line, unsigned edge, unsigned fill)
+{
+    if (line) {
+        ht_pro_rect_aa(s, x, y, w, h, r, C(edge));
+        x += line, y += line, w -= 2 * line, h -= 2 * line, r -= line;
+    }
+    ht_pro_rect_aa(s, x, y, w, h, r, C(fill));
+}
+unsigned max_mix(unsigned a, unsigned b, unsigned pct)
+{
+    unsigned out = 0;
+    for (int sh = 0; sh <= 16; sh += 8) out |= ((((a >> sh) & 0xff) * pct + ((b >> sh) & 0xff) * (100 - pct)) / 100) << sh;
+    return out;
+}
 void max_hit(int x, int y, int w, int h, max_hit_kind_t kind, int arg)
 {
     if (max_m.hit_count >= MAX_HITS) return;
     max_m.hits[max_m.hit_count++] = (max_hit_t){(int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h, (uint8_t)kind, (int8_t)arg};
 }
 
-// ---- the rail: the cabled computer and the machines, with their agents, and New Harness ----
+// ---- bubbles: ph_bubble.c's papers, at the prototype's sizes ----
 
-typedef struct {
-    const char *name;
-    int agents;   // -1: no count to show
-    bool link, offline;
-} rail_row_t;
+static const struct { unsigned fill, ink; } PAPERS[] = {
+    [BUBBLE_SPEECH] = {PAPER, PAPER_INK}, [BUBBLE_BAD] = {BAD, BAD_INK}, [BUBBLE_LETTER] = {LETTER, LETTER_INK},
+    [BUBBLE_YOU] = {YOU, YOU_INK}, [BUBBLE_THOUGHT] = {RAISED, INK},
+};
+int max_bubble_h(const max_bubble_style_t *st, int n) { return 2 * st->pad_y + n * st->f->height; }
 
-static int agents_on(const char *machine_id)
+// A thought's trail: a circle d across in the thought's fill inside its edge.
+static void puff(ht_scene_t *s, int cx, int cy, int d) { max_box(s, cx - d / 2, cy - d / 2, d, d, d / 2, LINE_W, EDGE, RAISED); }
+static void tri(ht_scene_t *s, int x0, int y0, int x1, int y1, int x2, int y2, unsigned rgb)
 {
-    int n = 0;
-    for (int i = 0; i < max_m.count; i++) n += !strcmp(max_m.agents[i].machine_id, machine_id);
-    return n;
+    pod_tri(s, x0 * 16, y0 * 16, x1 * 16, y1 * 16, x2 * 16, y2 * 16, C(rgb));
 }
-static void rail_row(ht_scene_t *s, int cy, const rail_row_t *r)
+void max_bubble(ht_scene_t *s, max_bubble_kind_t kind, const max_bubble_style_t *st, int x, int y, int w,
+                char rows[][ROW_BYTES], int n)
 {
-    if (r->link) max_dot(s, RAIL_X, cy, 12, HT_THEME_DONE);
-    const int w = MAX_RAIL_W - RAIL_TEXT_X - 20;
-    max_text(s, RAIL_TEXT_X, cy, w, &ph_sb_26, r->offline ? HT_THEME_SECONDARY : HT_THEME_TEXT, r->name);
-    char sub[24];
-    if (r->offline) snprintf(sub, sizeof sub, "Offline");
-    else if (r->agents >= 0) snprintf(sub, sizeof sub, "%d agent%s", r->agents, r->agents == 1 ? "" : "s");
-    else sub[0] = 0;
-    max_text(s, RAIL_TEXT_X, cy + RAIL_SUB, w, &ph_rg_24, HT_THEME_SECONDARY, sub);
-}
-// New Harness, at the foot of the rail: always in reach, whatever lane is selected. Returns its top.
-static int new_button(ht_scene_t *s)
-{
-    const int w = MAX_RAIL_W - 2 * RAIL_X, h = MAX_BUTTON_H, y = MAX_BAND_Y - h;
-    const bool open = max_form_open();
-    max_card_frame(s, RAIL_X, y, w, h, BUTTON_FILL, LANE_EDGE, open);
-    max_text_centered(s, RAIL_X + w / 2, y + h / 2, w - 2 * MAX_PAD, &ph_sb_26, HT_THEME_TEXT, "New Harness");
-    if (!open) max_hit(RAIL_X, y, w, h, MAX_HIT_NEW, 0);
-    return y;
-}
-static void rail(ht_scene_t *s)
-{
-    rail_row_t rows[CABLE_MAX_MACHINES + 1];
-    int n = 0;
-    bool local = false;
-    for (int i = 0; i < max_m.machine_count; i++) local |= max_m.machines[i].local;
-    // The cabled computer leads. With no machine list it holds every agent; a list without it counts none.
-    if (!local) rows[n++] = (rail_row_t){max_m.computer, max_m.machine_count ? -1 : max_m.count, true, false};
-    for (int pass = 0; pass < 2; pass++)
-        for (int i = 0; i < max_m.machine_count; i++) {
-            const cable_machine_t *m = &max_m.machines[i];
-            if (m->local != (pass == 0)) continue;
-            rows[n++] = (rail_row_t){m->name, agents_on(m->id), m->local, !strcmp(m->state, "offline")};
-        }
-    const int bottom = (max_m.offers_form ? new_button(s) : MAX_BAND_Y) - 8;
-    const int fit = (bottom - NAME_CY - RAIL_ROW_H) / RAIL_PITCH + 1;   // the rows whose two lines end above it
-    const int shown = n > fit ? fit - 1 : n;
-    for (int i = 0; i < shown; i++) rail_row(s, NAME_CY + i * RAIL_PITCH, &rows[i]);
-    if (shown < n) {
-        char more[24];
-        snprintf(more, sizeof more, "+%d more", n - shown);
-        max_text(s, RAIL_TEXT_X, NAME_CY + shown * RAIL_PITCH, MAX_RAIL_W - RAIL_TEXT_X - 20, &ph_rg_24, HT_THEME_SECONDARY,
-                 more);
+    const int h = max_bubble_h(st, n), bottom = y + h, cx = x + w / 2;
+    const unsigned fill = PAPERS[kind].fill;
+    // The tail towards the pet: from the left edge 34 px over the bottom (the room's), or down from the middle (a lane's).
+    // A thought trails two puffs instead.
+    if (kind == BUBBLE_THOUGHT && st->tail == TAIL_LEFT) puff(s, x - 14, bottom - 38, 24), puff(s, x - 36, bottom - 22, 15);
+    else if (kind == BUBBLE_THOUGHT) puff(s, cx, bottom + 18, 24), puff(s, cx + 14, bottom + 38, 15);
+    else if (st->tail == TAIL_LEFT) tri(s, x + 1, bottom - 46, x + 1, bottom - 22, x - 15, bottom - 34, fill);
+    else tri(s, cx - 14, bottom - 1, cx + 14, bottom - 1, cx, bottom + 16, fill);
+    max_box(s, x, y, w, h, st->radius, kind == BUBBLE_THOUGHT ? LINE_W : 0, EDGE, fill);
+    for (int i = 0; i < n; i++) {
+        const int tw = ht_pro_width(st->f, rows[i]), top = y + st->pad_y + i * st->f->height;
+        ht_pro_text(s, st->tail == TAIL_DOWN ? cx - tw / 2 : x + st->pad_x, top, tw, st->f, C(PAPERS[kind].ink), rows[i]);
     }
 }
 
-// ---- a lane ----
+// ---- the state line ----
 
 const char *max_state_word(const max_agent_t *a)
 {
@@ -221,200 +209,288 @@ const char *max_state_word(const max_agent_t *a)
     default: return "Idle";
     }
 }
-unsigned max_state_dot(max_state_t st)
+void max_state_line(char *out, size_t cap, const max_agent_t *a, const char *word, uint32_t now_ms)
 {
-    switch (st) {
-    case MAX_WORKING: return WORKING_INK;
-    case MAX_ASKING: return ASK_DOT;
-    case MAX_DONE: return HT_THEME_DONE;
-    case MAX_FAILED: return HT_THEME_FAILED;
-    default: return IDLE_DOT;
-    }
-}
-static unsigned word_ink(max_state_t st)
-{
-    return st == MAX_FAILED ? HT_THEME_FAILED : st == MAX_IDLE ? HT_THEME_SECONDARY : HT_THEME_TEXT;
-}
-
-static void lane_frame(ht_scene_t *s, int x, int w, const max_agent_t *a)
-{
-    unsigned fill = LANE_FILL, edge = LANE_EDGE;
-    if (a->state == MAX_ASKING) fill = ASK_FILL, edge = ASK_EDGE;
-    if (a->state == MAX_FAILED) fill = FAIL_FILL, edge = FAIL_EDGE;
-    max_card_frame(s, x, MAX_CARD_Y, w, MAX_CARD_H, fill, edge, !strcmp(max_m.selected, a->id));
-}
-
-static void lane(ht_scene_t *s, int col_x, int col_w, const max_agent_t *a, uint32_t now_ms)
-{
-    const int x = col_x + MAX_INSET, w = col_w - 2 * MAX_INSET, tw = w - 2 * MAX_PAD;
-    lane_frame(s, x, w, a);
-    const int tx = x + MAX_PAD;
-    max_text(s, tx, NAME_CY, tw, &ph_sb_32, HT_THEME_TEXT, a->name);
-    char meta[64];
-    snprintf(meta, sizeof meta, "%s%s%s", a->engine, a->engine[0] && a->machine[0] ? " \xc2\xb7 " : "", a->machine);
-    max_text(s, tx, META_CY, tw, &ph_rg_24, HT_THEME_SECONDARY, meta);
-
-    max_dot(s, tx, STATE_CY, DOT, max_state_dot(a->state));
+    const bool running = a->state == MAX_WORKING || a->state == MAX_ASKING;
     char clock[24];
-    max_fmt_elapsed(clock, sizeof clock, max_secs(a, now_ms));
-    const int cw = clock[0] ? ht_pro_width(&ph_mono_26, clock) : 0;
-    const int word_x = tx + DOT + 10;
-    max_text(s, word_x, STATE_CY, tx + tw - word_x - (cw ? cw + 16 : 0), &ph_sb_26, word_ink(a->state), max_state_word(a));
-    if (cw) max_text(s, tx + tw - cw, STATE_CY, cw, &ph_mono_26, HT_THEME_SECONDARY, clock);
-
-    const int rows = (CARD_BOTTOM - BODY_Y) / ph_rg_28.height;
-    switch (a->state) {
-    case MAX_WORKING: {
-        int by = max_paragraph(s, tx, BODY_Y, tw, &ph_rg_28, HT_THEME_TEXT, a->activity, ACTIVITY_ROWS);
-        if (a->activity[0]) by += STEP_GAP;
-        for (int i = 0; i < a->step_count && by + ph_mono_22.height <= CARD_BOTTOM; i++, by += ph_mono_22.height)
-            max_line(s, tx, by, tw, &ph_mono_22, HT_THEME_SECONDARY, a->steps[i], false);
-        break;
-    }
-    case MAX_ASKING:
-        max_paragraph(s, tx, BODY_Y, tw, &ph_rg_28, HT_THEME_TEXT, a->question, rows);
-        break;
-    case MAX_FAILED:
-    case MAX_DONE:
-        if (max_note_shown(a, now_ms))
-            max_paragraph(s, tx, BODY_Y, tw, &ph_rg_28, a->state == MAX_FAILED ? HT_THEME_ERROR : HT_THEME_TEXT, a->note,
-                          rows);
-        break;
-    default:
-        break;
-    }
+    max_fmt_elapsed(clock, sizeof clock, running ? max_secs(a, now_ms) : -1);
+    snprintf(out, cap, "%s%s%s%s", word, a->state == MAX_WORKING ? ELLIPSIS : "", clock[0] ? " " : "", clock);
 }
 
-// A lane beside an open card: who, and how it is doing.
-static void narrow_lane(ht_scene_t *s, int col_x, int col_w, const max_agent_t *a, uint32_t now_ms)
+// ---- what moves by the clock ----
+
+static bool s_moving;   // something the last render drew moves on by the clock alone
+static uint32_t s_due;  // and when it next does
+void max_motion(uint32_t now_ms, uint32_t ms)
 {
-    const int x = col_x + MAX_INSET, w = col_w - 2 * MAX_INSET, tx = x + NARROW_PAD, tw = w - 2 * NARROW_PAD;
-    lane_frame(s, x, w, a);
-    max_text(s, tx, NAME_CY, tw, &ph_sb_26, HT_THEME_TEXT, a->name);
-    max_text(s, tx, META_CY, tw, &ph_rg_24, HT_THEME_SECONDARY, a->engine);
-    max_dot(s, tx, STATE_CY, DOT, max_state_dot(a->state));
-    max_text(s, tx + DOT + 8, STATE_CY, tw - DOT - 8, &ph_sb_22, word_ink(a->state), max_state_word(a));
-    char clock[24];
-    max_fmt_elapsed(clock, sizeof clock, max_secs(a, now_ms));
-    max_text(s, tx, STATE_CY + MAX_Y(40), tw, &ph_mono_22, HT_THEME_SECONDARY, clock);
+    const uint32_t due = now_ms + ms;
+    if (!s_moving || (int32_t)(due - s_due) < 0) s_due = due;
+    s_moving = true;
+}
+uint32_t max_motion_ms(uint32_t now_ms)
+{
+    if (!s_moving) return MAX_WAKE_MS;
+    const int32_t left = (int32_t)(s_due - now_ms);
+    return left > 0 ? (uint32_t)left : 0;
 }
 
-// ---- the Talk slot ----
+// ---- the rail: the link, the machines with their agents, and New Harness ----
 
-// A microphone: the capsule in its cradle on a stand, top at y. ground: the card's fill, which hollows the cradle.
-static void mic(ht_scene_t *s, int cx, int y, unsigned ink, unsigned ground)
+enum { RAIL_DOT = 12, RAIL_TEXT_X = MAX_RAIL_X + RAIL_DOT + 12, RAIL_TEXT_W = MAX_RAIL_X + MAX_RAIL_W - RAIL_TEXT_X,
+       RAIL_NAME_CY = MAX_CARD_Y + 20, RAIL_SUB = 28, RAIL_PITCH = 72, NEW_R = 22 };
+typedef struct {
+    const char *name;
+    int agents;   // -1: no count to show
+    bool offline;
+} rail_row_t;
+
+static int agents_on(const char *machine_id)
 {
-    ht_pro_rect_aa(s, cx - 27, y + 16, 54, 58, 27, C(ink));
-    ht_pro_rect_aa(s, cx - 22, y + 6, 44, 63, 22, C(ground));
-    ht_pro_rect_aa(s, cx - 15, y, 30, 56, 15, C(ink));
-    ht_pro_rect(s, cx - 3, y + 74, 6, 14, 0, C(ink));
-    ht_pro_rect_aa(s, cx - 18, y + 88, 36, 6, 3, C(ink));
+    int n = 0;
+    for (int i = 0; i < max_m.count; i++) n += !strcmp(max_m.agents[i].machine_id, machine_id);
+    return n;
 }
-static void talk_slot(ht_scene_t *s)
+static void rail_row(ht_scene_t *s, int cy, const rail_row_t *r)
 {
-    const int x = MAX_TALK_X + MAX_INSET, w = MAX_TALK_W - 2 * MAX_INSET, cx = x + w / 2;
-    const bool form = max_form_open();
-    const max_agent_t *who = max_find(max_m.talk == MAX_TALK_IDLE ? max_m.selected : max_m.talk_id);
-    unsigned fill = HT_THEME_ACCENT, ink = HT_THEME_CANVAS, sub = TALK_SUB;
-    const char *label = form ? "Say" : "Talk", *line = who ? who->name : NULL;
-    char find[64];
-    if (form) {   // a spoken name for the field, as the Dial says it
-        const max_page_t *p = &max_m.form.page;
-        snprintf(find, sizeof find, "Find %.48s", !strcmp(p->title, "New Harness") ? p->label : p->title);
-        line = find;
-    }
-    if (max_m.talk == MAX_TALK_RECORDING) fill = HT_THEME_FAILED, ink = 0xffffff, sub = 0xf6d5d2, label = "Listening";
-    else if (max_m.talk == MAX_TALK_SENDING) fill = HT_THEME_SECONDARY, sub = 0xd8d7cf, label = "Sending";
-    else if (form ? !max_form_can_say() : !who) fill = LANE_FILL, ink = sub = HT_THEME_SECONDARY, line = form ? NULL : "Tap a lane";
-    if (fill == LANE_FILL) ht_pro_rect_aa_stroke(s, x, MAX_CARD_Y, w, MAX_CARD_H, CARD_R, C(LANE_EDGE), C(fill));
-    else ht_pro_rect_aa(s, x, MAX_CARD_Y, w, MAX_CARD_H, CARD_R, C(fill));
-    mic(s, cx, CARD_CY - 92, ink, fill);
-    max_text_centered(s, cx, CARD_CY + 58, w - 2 * MAX_PAD, &ph_sb_34, ink, label);
-    max_text_centered(s, cx, CARD_CY + 102, w - 2 * MAX_PAD, &ph_rg_24, sub, line);
-    max_m.talk_box = (max_box_t){(int16_t)x, MAX_CARD_Y, (int16_t)w, MAX_CARD_H};
-    max_m.talk_hit = true;
+    max_dot(s, MAX_RAIL_X, cy, RAIL_DOT, r->offline ? MUTED : GREEN);
+    max_text(s, RAIL_TEXT_X, cy, RAIL_TEXT_W, &ph_sb_26, r->offline ? MUTED : INK, r->name);
+    char sub[24];
+    if (r->offline) snprintf(sub, sizeof sub, "Offline");
+    else if (r->agents >= 0) snprintf(sub, sizeof sub, "%d agent%s", r->agents, r->agents == 1 ? "" : "s");
+    else sub[0] = 0;
+    max_text(s, RAIL_TEXT_X, cy + RAIL_SUB, RAIL_TEXT_W, &ph_sb_22, MUTED, sub);
 }
-
-// ---- the band under the lanes: a notice, else the page dots ----
-
-static void band(ht_scene_t *s, uint32_t now_ms)
+// New Harness, at the foot of the rail: always in reach, whatever the room shows. Returns its top.
+static int new_button(ht_scene_t *s, bool live)
 {
-    if (max_notice_shown(now_ms)) {
-        const ht_pro_font_t *f = &ph_sb_22;
-        char row[ROW_BYTES];
-        max_cut(row, max_m.notice, f, MAX_LANES * MAX_LANE_W - 2 * MAX_INSET - 40, false);
-        const int tw = ht_pro_width(f, row);
-        ht_pro_rect_aa(s, LANES_CX - tw / 2 - 20, BAND_CY - 18, tw + 40, 36, 18, C(HT_THEME_ACCENT));
-        ht_pro_text(s, LANES_CX - tw / 2, max_top_of(f, BAND_CY), tw, f, C(HT_THEME_CANVAS), row);
+    const int h = MAX_BUTTON_H, y = MAX_BAND_Y - h;
+    const bool open = max_form_open();
+    max_box(s, MAX_RAIL_X, y, MAX_RAIL_W, h, NEW_R, LINE_W, open ? INK : EDGE, GROUND);
+    max_text_centered(s, MAX_RAIL_X + MAX_RAIL_W / 2, y + h / 2, MAX_RAIL_W - 32, &ph_sb_22, INK, "New Harness");
+    if (!open && live) max_hit(MAX_RAIL_X, y, MAX_RAIL_W, h, MAX_HIT_NEW, 0);
+    return y;
+}
+static void rail(ht_scene_t *s, bool live)
+{
+    if (!max_m.link) {
+        max_text(s, MAX_RAIL_X, RAIL_NAME_CY, MAX_RAIL_W, &ph_sb_26, MUTED, "Not connected");
         return;
     }
-    const int pages = max_pages();
-    if (pages < 2 || max_form_open()) return;
-    const int x0 = LANES_CX - ((pages - 1) * PAGE_PITCH + PAGE_DOT) / 2;
-    for (int p = 0; p < pages; p++)
-        max_dot(s, x0 + p * PAGE_PITCH, BAND_CY, PAGE_DOT, p == max_m.page ? HT_THEME_ACCENT : IDLE_DOT);
+    rail_row_t rows[CABLE_MAX_MACHINES + 1];
+    int n = 0;
+    bool local = false;
+    for (int i = 0; i < max_m.machine_count; i++) local |= max_m.machines[i].local;
+    // The cabled computer leads. With no machine list it holds every agent; a list without it counts none.
+    if (!local) rows[n++] = (rail_row_t){max_m.computer, max_m.machine_count ? -1 : max_m.count, false};
+    for (int pass = 0; pass < 2; pass++)
+        for (int i = 0; i < max_m.machine_count; i++) {
+            const cable_machine_t *m = &max_m.machines[i];
+            if (m->local != (pass == 0)) continue;
+            rows[n++] = (rail_row_t){m->name, agents_on(m->id), !strcmp(m->state, "offline")};
+        }
+    const int bottom = (max_m.offers_form ? new_button(s, live) : MAX_BAND_Y) - 8;
+    const int fit = (bottom - ph_sb_22.height / 2 - RAIL_SUB - RAIL_NAME_CY) / RAIL_PITCH + 1;   // two lines above it
+    const int shown = n > fit ? fit - 1 : n;
+    for (int i = 0; i < shown; i++) rail_row(s, RAIL_NAME_CY + i * RAIL_PITCH, &rows[i]);
+    if (shown < n) {
+        char more[24];
+        snprintf(more, sizeof more, "+%d more", n - shown);
+        max_text(s, RAIL_TEXT_X, RAIL_NAME_CY + shown * RAIL_PITCH, RAIL_TEXT_W, &ph_sb_22, MUTED, more);
+    }
 }
+
+// ---- a lane: the agent on its engine's gradient, a short bubble, its pet and its state ----
+
+enum {
+    LANE_PAD = 14, RING = 4,
+    LANE_NAME_CY = MAX_CARD_Y + 36, LANE_META_CY = LANE_NAME_CY + 28, LANE_BUBBLE_Y = LANE_META_CY + 29,
+    LANE_STATE_CY = MAX_CARD_Y + MAX_CARD_H - 31, LANE_FOOT = LANE_STATE_CY - 27,
+    LANE_ROWS = 3, LANE_PET_MIN = MAX_Y(80), LANE_PET_MAX = MAX_Y(130),
+    TAIL_H = 16, PUFFS_H = 46,   // under a speech bubble, under a thought
+};
+static const max_bubble_style_t LANE_SAY = {&ph_sb_22, 14, 10, 16, TAIL_DOWN};
+static const max_bubble_style_t LANE_THINK = {&ph_sb_22, 12, 10, 22, TAIL_DOWN};
+
+// The engine's card colours, as the Pro's ph_engine_tint (PH_TINT_*): the gradient's top and bottom.
+static void tint(const char *engine, unsigned *top, unsigned *bottom)
+{
+    static const struct { const char *engine; unsigned top, bottom; } TINTS[] = {
+        {"codex", 0x4F6CF2, 0x1C2A78}, {"claude", 0xE0805A, 0x7A3420}, {"muse", 0xC2A684, 0x56442F},
+        {"kilo", 0x8F8A2A, 0x2C2A0C}};
+    *top = 0x55555C, *bottom = 0x1D1D21;   // PH_TINT_OTHER
+    for (size_t i = 0; i < sizeof TINTS / sizeof TINTS[0]; i++)
+        if (!strcmp(engine, TINTS[i].engine)) *top = TINTS[i].top, *bottom = TINTS[i].bottom;
+}
+
+static void lane(ht_scene_t *s, int x, int w, const max_agent_t *a, uint32_t now_ms)
+{
+    unsigned top, bottom;
+    tint(a->engine, &top, &bottom);
+    const int y = MAX_CARD_Y, h = MAX_CARD_H, cx = x + w / 2, tw = w - 2 * LANE_PAD;
+    const bool asks = a->state == MAX_ASKING;
+    if (asks) {   // a peach ring: it waits for a person
+        ht_pro_rect_aa(s, x, y, w, h, CARD_R, C(PEACH));
+        pod_grad_aa_dither(s, x + RING, y + RING, w - 2 * RING, h - 2 * RING, CARD_R - RING, C(top), C(bottom));
+    } else {
+        pod_grad_aa_dither(s, x, y, w, h, CARD_R, C(top), C(bottom));
+    }
+    max_text_centered(s, cx, LANE_NAME_CY, tw, &ph_sb_26, LANE_INK, a->name);
+    max_text_centered(s, cx, LANE_META_CY, tw, &ph_sb_22, max_mix(LANE_INK, top, 78), a->machine);
+
+    const max_ask_t *k = asks ? max_ask_of(a->id) : NULL;
+    char line[MAX_VERB_BYTES + 32];
+    const char *word = k && k->permission ? "Permission" : max_state_word(a);
+    max_state_line(line, sizeof line, a, word, now_ms);
+    // Too wide with its clock (a long spinner word in a narrow lane): the word alone, rather than cut after it.
+    if (ht_pro_width(&ph_sb_22, line) > tw)
+        snprintf(line, sizeof line, "%s%s", word, a->state == MAX_WORKING ? ELLIPSIS : "");
+    const unsigned ink = asks ? PEACH : a->state == MAX_WORKING ? MINT : a->state == MAX_FAILED ? LANE_FAIL
+                       : max_mix(LANE_INK, bottom, 80);
+    max_text_centered(s, cx, LANE_STATE_CY, tw, &ph_sb_22, ink, line);
+
+    // What it says: the question on paper, what it does in a thought, a failure or a summary; rows while the pet keeps
+    // its least height.
+    max_bubble_kind_t kind = BUBBLE_SPEECH;
+    const char *say = NULL;
+    if (asks) say = a->question;
+    else if (a->state == MAX_WORKING) kind = BUBBLE_THOUGHT, say = a->activity[0] ? a->activity : max_state_word(a);
+    else if (a->state == MAX_FAILED) kind = BUBBLE_BAD, say = a->note[0] ? a->note : "Failed";
+    else if (a->state == MAX_DONE && max_note_shown(a, now_ms)) kind = BUBBLE_LETTER, say = a->note;
+    const max_bubble_style_t *st = kind == BUBBLE_THOUGHT ? &LANE_THINK : &LANE_SAY;
+    const int under = kind == BUBBLE_THOUGHT ? PUFFS_H : TAIL_H;
+    const int room = LANE_FOOT - LANE_PET_MIN - 8 - under - LANE_BUBBLE_Y - 2 * st->pad_y;
+    int rows = room / st->f->height;
+    if (rows > LANE_ROWS) rows = LANE_ROWS;
+    char text[LANE_ROWS][ROW_BYTES];
+    const int n = say && rows > 0 ? max_wrap(text, rows, say, st->f, tw - 2 * st->pad_x) : 0;
+    int pet_top = LANE_BUBBLE_Y;
+    if (n) {
+        max_bubble(s, kind, st, x + LANE_PAD, LANE_BUBBLE_Y, tw, text, n);
+        pet_top += max_bubble_h(st, n) + under + 8;
+    }
+    int max_h = LANE_FOOT - pet_top;
+    if (max_h > LANE_PET_MAX) max_h = LANE_PET_MAX;
+    // On the gradient's colour at the pet's middle: the player keeps one frame drawn on one colour.
+    const int mid = LANE_FOOT - max_h / 2 - y;
+    max_pet(s, a, max_pet_scene(a, false), cx, LANE_FOOT, (w - 2 * LANE_PAD) / 2, max_h,
+            max_mix(top, bottom, (unsigned)(100 - mid * 100 / (h - 1))), now_ms, true);
+}
+
+// The lanes of the page, sharing its width. `live`: their boxes go to the finger.
+static void lanes(ht_scene_t *s, uint32_t now_ms, bool live)
+{
+    int v[MAX_LANES];
+    const int n = max_visible(v);
+    if (!n) return;
+    // Across pages every lane keeps a full page's width: a lane does not change size as the page turns.
+    const int slots = max_pages() > 1 ? MAX_LANES : n, w = (MAX_LANES_W - (slots - 1) * MAX_LANE_GAP) / slots;
+    for (int i = 0; i < n; i++) {
+        const int x = MAX_LANE_X + i * (w + MAX_LANE_GAP);
+        lane(s, x, w, &max_m.agents[v[i]], now_ms);
+        if (!live) continue;
+        max_m.lane_box[i] = (max_box_t){(int16_t)x, MAX_CARD_Y, (int16_t)w, MAX_CARD_H};
+        max_copy(max_m.lane_id[i], sizeof max_m.lane_id[i], max_m.agents[v[i]].id);
+        max_m.lane_hits = i + 1;
+    }
+}
+
+// The page dots, under the lanes.
+static void dots(ht_scene_t *s)
+{
+    enum { DOT = 10, PITCH = 22, CY = (MAX_BAND_Y + HT_HEIGHT) / 2 };
+    const int pages = max_pages();
+    if (pages < 2) return;
+    const int x0 = MAX_LANE_X + MAX_LANES_W / 2 - ((pages - 1) * PITCH + DOT) / 2;
+    for (int p = 0; p < pages; p++) max_dot(s, x0 + p * PITCH, CY, DOT, p == max_m.page ? INK : EDGE);
+}
+
+// ---- over the lanes: the toast of a question that waits, and the notice line, on the Pro's toast navy ----
+
+enum { TOAST_W = 680, TOAST_X = MAX_LANE_X + MAX_LANES_W - TOAST_W, TOAST_Y = 12, TOAST_H = 104, TOAST_R = 26,
+       TOAST_PAD = 24, TOAST_STEP_MS = 100, BAR_H = 5, NOTICE_H = 60 };
+
+static void toast(ht_scene_t *s, uint32_t now_ms)
+{
+    const max_agent_t *a = max_find(max_m.toast_id);
+    max_box(s, TOAST_X, TOAST_Y, TOAST_W, TOAST_H, TOAST_R, LINE_W, NAVY_EDGE, NAVY);
+    const int tx = TOAST_X + TOAST_PAD, tw = TOAST_W - 2 * TOAST_PAD, name_cy = TOAST_Y + 30;
+    const int hint = max_text_right(s, tx + tw, name_cy, tw / 3, &ph_sb_22, NAVY_MUTED, "Tap to open");
+    char who[CABLE_NAME_MAX + 8];
+    snprintf(who, sizeof who, "%s asks", a->name);
+    max_text(s, tx, name_cy, tw - hint - 24, &ph_sb_22, NAVY_NAME, who);
+    max_text(s, tx, TOAST_Y + 64, tw, &ph_sb_26, NAVY_INK, a->question);
+    // The bar runs out with the toast, a step every TOAST_STEP_MS.
+    const uint32_t age = now_ms - max_m.toast_from, steps = (MAX_TOAST_MS - age + TOAST_STEP_MS - 1) / TOAST_STEP_MS;
+    const int bw = (int)((uint32_t)tw * steps * TOAST_STEP_MS / MAX_TOAST_MS);
+    if (bw > 0) ht_pro_rect_aa(s, tx, TOAST_Y + TOAST_H - 9 - BAR_H, bw, BAR_H, BAR_H / 2, C(NAVY_BAR));
+    max_motion(now_ms, TOAST_STEP_MS - age % TOAST_STEP_MS);
+}
+
+static void notice(ht_scene_t *s, int y)
+{
+    const ht_pro_font_t *f = &ph_sb_26;
+    char row[ROW_BYTES];
+    max_cut(row, max_m.notice, f, TOAST_W - 2 * TOAST_PAD, false);
+    const int tw = ht_pro_width(f, row), w = tw + 2 * TOAST_PAD, x = MAX_LANE_X + MAX_LANES_W - w;
+    max_box(s, x, y, w, NOTICE_H, TOAST_R, LINE_W, NAVY_EDGE, NAVY);
+    ht_pro_text(s, x + TOAST_PAD, max_top_of(f, y + NOTICE_H / 2), tw, f, C(NAVY_INK), row);
+}
+
+// ---- the whole screen ----
 
 static void update_screen(ht_scene_t *s)
 {
     const int cx = HT_WIDTH / 2, bar_w = 800;
     char pct[16], version[MAX_VERSION_BYTES + 8];
     snprintf(pct, sizeof pct, "%d%%", max_m.update_pct);
-    max_text_centered(s, cx, MAX_Y(140), 600, &ph_sb_34, HT_THEME_TEXT, "Updating");
-    max_text_centered(s, cx, MAX_Y(214), 400, &ph_sb_48, HT_THEME_TEXT, pct);
-    ht_pro_rect_aa(s, cx - bar_w / 2, MAX_Y(276), bar_w, 14, 7, C(HT_THEME_SELECTION));
+    max_text_centered(s, cx, MAX_Y(140), 600, &ph_sb_34, INK, "Updating");
+    max_text_centered(s, cx, MAX_Y(214), 400, &ph_sb_48, INK, pct);
+    ht_pro_rect_aa(s, cx - bar_w / 2, MAX_Y(276), bar_w, 14, 7, C(TRACK));
     if (max_m.update_pct > 0)
-        ht_pro_rect_aa(s, cx - bar_w / 2, MAX_Y(276), bar_w * max_m.update_pct / 100, 14, 7, C(HT_THEME_ACCENT));
+        ht_pro_rect_aa(s, cx - bar_w / 2, MAX_Y(276), bar_w * max_m.update_pct / 100, 14, 7, C(GREEN));
     if (max_m.update_to[0]) {
         snprintf(version, sizeof version, "Version %s", max_m.update_to);
-        max_text_centered(s, cx, MAX_Y(334), 600, &ph_rg_24, HT_THEME_SECONDARY, version);
+        max_text_centered(s, cx, MAX_Y(334), 600, &ph_sb_22, MUTED, version);
     }
 }
 
-// The lanes of the page: three equal columns, or the open card's wide one with its neighbours narrow beside it.
-static void lanes(ht_scene_t *s, uint32_t now_ms)
+// A veil over what rests while a person talks: 65 % of the way to the ground.
+static void dim(ht_scene_t *s, int x, int y, int w, int h)
 {
-    int v[MAX_LANES];
-    const int n = max_visible(v), open = max_open_card(v, n, now_ms);
-    for (int col = 0, x = MAX_LANE_X; col < n; col++) {
-        const max_agent_t *a = &max_m.agents[v[col]];
-        int w = MAX_LANE_W;
-        if (open >= 0) w = col == open ? MAX_TALK_X - MAX_LANE_X - (n - 1) * MAX_NARROW_W : MAX_NARROW_W;
-        if (col == open) max_draw_card(s, x, w, a, now_ms);
-        else if (open >= 0) narrow_lane(s, x, w, a, now_ms);
-        else lane(s, x, w, a, now_ms);
-        max_m.lane_box[col] = (max_box_t){(int16_t)(x + MAX_INSET), MAX_CARD_Y, (int16_t)(w - 2 * MAX_INSET), MAX_CARD_H};
-        max_copy(max_m.lane_id[col], sizeof max_m.lane_id[col], a->id);
-        max_m.lane_hits = col + 1;
-        x += w;
-    }
+    const uint16_t g = C(GROUND);
+    pod_veil(s, x, y, w, h, x, false, y, h, g, g, g, DIM_K);
 }
 
 void max_ui_render(ht_scene_t *s, uint32_t now_ms)
 {
-    s->background = C(HT_THEME_CANVAS);
+    s->background = C(GROUND);
     max_m.lane_hits = 0;
-    max_m.talk_hit = false;
     max_m.hit_count = 0;
     max_m.card_id[0] = 0;
     max_m.dirty = false;
+    s_moving = false;
     if (max_m.update_pct >= 0) {
         update_screen(s);
-    } else if (!max_m.link) {
-        max_text_centered(s, HT_WIDTH / 2, CARD_CY, 800, &ph_sb_34, HT_THEME_SECONDARY, "Not connected");
-        band(s, now_ms);
     } else {
-        rail(s);
-        if (max_form_open()) {
+        // While a person talks the rest of the screen holds still under a veil: nothing there can change who listens.
+        const bool live = max_m.talk == MAX_TALK_IDLE, form = max_form_open();
+        const bool toasting = max_m.link && max_toast_shown(now_ms);
+        if (toasting && live) max_hit(TOAST_X, TOAST_Y, TOAST_W, TOAST_H, MAX_HIT_TOAST, 0);   // first: it lies over the form
+        rail(s, live);
+        if (form) {
             max_draw_form(s);
-            talk_slot(s);
-        } else if (!max_m.count) {
-            max_text_centered(s, LANES_CX, CARD_CY, 800, &ph_sb_34, HT_THEME_SECONDARY, "No agents");
         } else {
-            lanes(s, now_ms);
-            talk_slot(s);
+            max_draw_room(s, max_m.link ? max_find(max_m.selected) : NULL, now_ms);
+            if (max_m.link) lanes(s, now_ms, live);
+            dots(s);
         }
-        band(s, now_ms);
+        if (toasting) toast(s, now_ms);
+        if (!live) {
+            dim(s, 0, 0, MAX_ROOM_X - 4, HT_HEIGHT);
+            if (!form) dim(s, MAX_LANE_X - 4, 0, HT_WIDTH - MAX_LANE_X + 4, HT_HEIGHT);
+            else if (toasting) dim(s, TOAST_X, TOAST_Y, TOAST_W, TOAST_H);
+        }
+        if (max_notice_shown(now_ms)) notice(s, toasting ? TOAST_Y + TOAST_H + 10 : TOAST_Y);
     }
     max_m.drawn_key = max_time_key(now_ms);
 }

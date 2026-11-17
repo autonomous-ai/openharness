@@ -42,7 +42,9 @@ def main() -> int:
         subprocess.run(["cc", "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Wextra", "-Werror", "-O1", "-g",
                         "-DHT_WIDTH=1920", f"-DHT_HEIGHT={h}", f"-I{app}", f"-I{pro / 'main'}", f"-I{disp}",
                         "-o", str(exe), str(here / "max_render.c"), *sorted(str(p) for p in app.glob("max_ui*.c")),
-                        str(disp / "terminal.c"), str(disp / "pro_canvas.c"), str(pro / "main" / "pod" / "pod_draw.c"),
+                        str(disp / "terminal.c"), str(disp / "pro_canvas.c"),
+                        *(str(pro / "main" / "pod" / f"{name}.c")
+                          for name in ("pod_draw", "pod_pet", "pets", "pets_ask", "pets_codex", "engine_logos")),
                         str(fonts)],
                        check=True)
         screens = args or subprocess.run([str(exe), "--list"], check=True, capture_output=True, text=True).stdout.split()

@@ -110,24 +110,29 @@ static void swipe_left(void)
     max_ui_touch(true, 1250, 244, T0 + 40);
     max_ui_touch(false, 1150, 246, T0 + 80);
 }
-static void tap(int x, int y)
+// A person talks to `id` (NULL: says a name for the form's field), as the app sets it when the pet is tapped.
+static void talk(const char *id, max_talk_t state)
 {
-    ht_scene_clear(&S, ht_rgb(HT_THEME_CANVAS));
-    max_ui_render(&S, T0);
-    max_ui_touch(true, x, y, T0);
-    max_act_t act = max_ui_touch(false, x, y, T0 + 60);
-    if (act.kind == MAX_ACT_TALK) max_ui_talk(MAX_TALK_RECORDING);
+    max_copy(max_m.talk_id, sizeof max_m.talk_id, id);
+    max_ui_talk(state);
+}
+// A question that arrived while a person was at the bar: the toast, `age_ms` into its time.
+static void toast(const char *id, uint32_t age_ms)
+{
+    max_copy(max_m.toast_id, sizeof max_m.toast_id, id);
+    max_m.toast_from = T0 - age_ms;
 }
 
 static void s_linkdown(void) { max_ui_reset(); }
 static void s_noagents(void) { cable(0); }
-static void s_working(void) { three_working(); }
+static void s_working(void) { three_working(); max_ui_focus("fw"); }
 // A question the daemon's inbox cannot hold: only the computer answers it.
 static void s_asking(void)
 {
     three_working();
     max_ui_question("be", "q1", "Run the migration on the dev database now? It drops the sessions table and rebuilds it "
                     "from the audit log, which takes about four minutes.", NULL, 0, false, true, T0);
+    max_ui_focus("be");
 }
 static void s_failed(void)
 {
@@ -135,16 +140,25 @@ static void s_failed(void)
     max_ui_turn("be", "error", "pnpm test exited with 1: 3 tests failed in auth/session.spec.ts", 0, T0);
     max_ui_summary("web", "The pricing cards now match the design, and the footer links work again.", NULL, false,
                    POD_TIER_ALERT, T0);
+    max_ui_focus("be");
 }
-static void s_five_p1(void) { five(); }
-static void s_five_p2(void) { five(); swipe_left(); }
-static void s_listening(void)
+static void s_five_p1(void) { five(); max_ui_focus("be"); }
+static void s_five_p2(void) { five(); max_ui_focus("be"); swipe_left(); }
+// The room on an agent at work, the others beside it: one asks, one waits for a permission, one failed, one is done.
+static void watching(void)
 {
-    three_working();
-    tap(MAX_LANE_X + MAX_LANE_W + 200, MAX_Y(240));             // select backend
-    tap(MAX_TALK_X + MAX_TALK_W / 2, MAX_CARD_Y + MAX_CARD_H / 2);   // Talk: recording for it
+    five();
+    ask("docs", "q2", &DEPLOY, 1, true, true);
+    max_ui_turn("cli", "error", "flutter test failed: 2 golden snapshots out of date", 0, T0);
+    max_ui_focus("fw");
 }
-static void s_sending(void) { s_listening(); max_ui_talk(MAX_TALK_SENDING); }
+static void s_watching(void) { watching(); }
+static void s_toast(void) { watching(); toast("be", 1200); }
+static void s_toast_notice(void) { watching(); toast("be", 3900); max_ui_notice("Sent", 3000, T0); }
+static void s_listening(void) { three_working(); max_ui_focus("be"); talk("be", MAX_TALK_RECORDING); }
+static void s_sending(void) { three_working(); max_ui_focus("be"); talk("be", MAX_TALK_SENDING); }
+// Talking while a question waits: everything but the room rests, the toast too.
+static void s_talk_toast(void) { watching(); toast("be", 600); talk("fw", MAX_TALK_RECORDING); }
 static void s_update(void) { three_working(); max_ui_update(40, "0.9.0"); }
 static void s_long(void)
 {
@@ -163,11 +177,29 @@ static void s_long(void)
     max_ui_turn("vq", "step", "Bash \xc2\xb7 chạy lại toàn bộ bài kiểm thử trên máy build", -1, T0);
     max_ui_focus("vi");
 }
-static void s_notice(void) { three_working(); max_ui_notice("Sent to backend", 3000, T0); }
+static void s_notice(void) { three_working(); max_ui_focus("fw"); max_ui_notice("Sent to backend", 3000, T0); }
+// More agents than a page of lanes holds: the dots under them.
+static void s_pages(void)
+{
+    static const pro_agent_row_t more[] = {{"a1", "landing-page", "claude", "m1", "MacBook Pro"},
+                                           {"a2", "billing", "codex", "m2", "Mac Studio"},
+                                           {"a3", "search", "gemini", "m2", "Mac Studio"},
+                                           {"a4", "mobile", "muse", "m1", "MacBook Pro"}};
+    pro_agent_row_t rows[9];
+    memcpy(rows, AGENTS, sizeof AGENTS);
+    memcpy(rows + 5, more, sizeof more);
+    cable(0);
+    max_ui_agents(rows, 9, T0);
+    work("fw", "Infusing...", "Turning each 24-line strip into the portrait framebuffer", 134, FW_STEPS, 3);
+    work("a2", "Billing", "Moving the invoices to the new tax table", 45, NULL, 0);
+    work("a3", "Searching", "Reindexing the docs", 12, NULL, 0);
+    ask("a4", "q3", &MIGRATE, 1, false, true);
+    max_ui_focus("fw");
+}
 
 // ---- answering and New Harness ----
-static void s_q_two(void) { three_working(); ask("be", "q1", &DATABASE, 1, false, true); }
-static void s_q_six(void) { three_working(); ask("fw", "q1", &BOARD, 1, false, true); }
+static void s_q_two(void) { three_working(); ask("be", "q1", &DATABASE, 1, false, true); max_ui_focus("be"); }
+static void s_q_six(void) { three_working(); ask("fw", "q1", &BOARD, 1, false, true); max_ui_focus("fw"); }
 static void s_q_multi(void)
 {
     three_working();
@@ -175,9 +207,10 @@ static void s_q_multi(void)
     hit("web", MAX_HIT_OPTION, 1);   // release/0.9: on to the checks
     hit("web", MAX_HIT_OPTION, 0);
     hit("web", MAX_HIT_OPTION, 2);
+    max_ui_focus("web");
 }
-static void s_q_permission(void) { three_working(); ask("be", "q1", &DEPLOY, 1, true, true); }
-static void s_q_shown(void) { three_working(); ask("be", "shown:toolu_7", &SHOWN, 1, true, true); }
+static void s_q_permission(void) { three_working(); ask("be", "q1", &DEPLOY, 1, true, true); max_ui_focus("be"); }
+static void s_q_shown(void) { three_working(); ask("be", "shown:toolu_7", &SHOWN, 1, true, true); max_ui_focus("be"); }
 static void s_q_error(void)
 {
     three_working();
@@ -186,6 +219,7 @@ static void s_q_error(void)
     take();
     max_ui_answer_receipt("be", max_ask_of("be")->fetch, "tok-1", false, false,
                           "Permission prompts cannot be answered from here.", T0);
+    max_ui_focus("be");
 }
 static void s_q_sent(void)
 {
@@ -194,12 +228,14 @@ static void s_q_sent(void)
     hit("be", MAX_HIT_OPTION, 0);
     take();
     max_ui_answer_receipt("be", max_ask_of("be")->fetch, "tok-1", true, true, NULL, T0);
+    max_ui_focus("be");
 }
-static void s_q_long(void) { three_working(); ask("fw", "q1", &LONG_EN, 1, false, true); }
+static void s_q_long(void) { three_working(); ask("fw", "q1", &LONG_EN, 1, false, true); max_ui_focus("fw"); }
 static void s_q_long_vi(void)
 {
     s_long();
     ask("vq", "q", &LONG_VI, 1, false, true);
+    max_ui_focus("vq");
 }
 static void s_done(void)
 {
@@ -207,6 +243,7 @@ static void s_done(void)
     max_ui_summary("web", "The pricing cards now match the design, and the footer links work again. I also moved the "
                    "price table into its own component so the annual toggle can share it.", NULL, false,
                    POD_TIER_ALERT, T0);
+    max_ui_focus("web");
 }
 
 // ---- New Harness, as the demo daemon's form answers ----
@@ -246,22 +283,20 @@ static void s_form_busy(void)
     form_page(&busy);
 }
 static void s_form_failed(void) { form_open(); max_form_due(T0 + MAX_FORM_WAIT_MS); }
-static void s_form_say(void)
-{
-    s_form_page();
-    tap(MAX_TALK_X + MAX_TALK_W / 2, MAX_CARD_Y + MAX_CARD_H / 2);   // Say: a name for the field
-    max_ui_talk(MAX_TALK_RECORDING);
-}
+static void s_form_say(void) { s_form_page(); talk(NULL, MAX_TALK_RECORDING); }   // a name for the field
+static void s_form_toast(void) { s_form_page(); max_ui_question("be", "q1", MIGRATE.q, &MIGRATE, 1, false, false, T0); toast("be", 2000); }
 
 typedef struct { const char *name; void (*setup)(void); } screen_t;
 static const screen_t SCREENS[] = {
     {"linkdown", s_linkdown}, {"noagents", s_noagents}, {"working", s_working}, {"asking", s_asking},
-    {"failed", s_failed}, {"five-p1", s_five_p1}, {"five-p2", s_five_p2}, {"listening", s_listening},
-    {"sending", s_sending}, {"update", s_update}, {"long", s_long}, {"notice", s_notice},
+    {"failed", s_failed}, {"five-p1", s_five_p1}, {"five-p2", s_five_p2}, {"watching", s_watching},
+    {"toast", s_toast}, {"toast-notice", s_toast_notice}, {"listening", s_listening}, {"sending", s_sending},
+    {"talk-toast", s_talk_toast}, {"update", s_update}, {"long", s_long}, {"notice", s_notice}, {"pages", s_pages},
     {"q-two", s_q_two}, {"q-six", s_q_six}, {"q-multi", s_q_multi}, {"q-permission", s_q_permission},
     {"q-shown", s_q_shown}, {"q-error", s_q_error}, {"q-sent", s_q_sent}, {"q-long", s_q_long},
     {"q-long-vi", s_q_long_vi}, {"done", s_done}, {"form-opening", s_form_opening}, {"form-page", s_form_page},
     {"form-start", s_form_start}, {"form-busy", s_form_busy}, {"form-failed", s_form_failed}, {"form-say", s_form_say},
+    {"form-toast", s_form_toast},
 };
 enum { SCREEN_COUNT = sizeof SCREENS / sizeof SCREENS[0] };
 

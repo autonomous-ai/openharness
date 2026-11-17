@@ -23,21 +23,19 @@
 #define MAX_TOAST_MS 5000u          // a question that waits is announced this long, as the Pro's toast
 
 // The glass, 1920 x 480 at about 225 ppi (8.86 px a mm), or the demo bar's 1920 x 415. Columns, left to right: the
-// rail, three lanes, the Talk slot. Cards are inset in their column so neighbours stand 16 px apart; the band under the
-// cards holds the page dots or the notice. Heights are drawn for 480 and scaled by MAX_Y; the text keeps its size.
+// rail (the machines), the room (one agent, large) and the lanes (the others, up to four a page sharing their width,
+// MAX_LANE_GAP apart). The room and the lanes stand on one row; the band under the lanes holds the page dots. Heights
+// are drawn for 480 and scaled by MAX_Y; the text keeps its size.
 #define MAX_Y(px) ((px) * HT_HEIGHT / 480)
 enum {
-    MAX_RAIL_W = 300,
-    MAX_LANES = 3,
-    MAX_TALK_W = 264, MAX_TALK_X = HT_WIDTH - MAX_TALK_W,                // Talk 1656..1920
-    MAX_LANE_X = MAX_RAIL_W, MAX_LANE_W = (MAX_TALK_X - MAX_LANE_X) / MAX_LANES,   // lanes 300..1656, 452 each
-    MAX_INSET = 8,
-    MAX_CARD_Y = MAX_Y(14), MAX_CARD_H = MAX_Y(420),                    // cards 14..434 (12..375 at 415)
-    MAX_BAND_Y = MAX_CARD_Y + MAX_CARD_H,                               // dots and notice under them
-    MAX_PAD = 24,                            // text inside a card
+    MAX_RAIL_X = 22, MAX_RAIL_W = 220,                                  // rail 22..242
+    MAX_ROOM_X = 260, MAX_ROOM_W = 800,                                 // room 260..1060
+    MAX_LANE_X = 1074, MAX_LANES_W = HT_WIDTH - MAX_RAIL_X - MAX_LANE_X,   // lanes 1074..1898
+    MAX_LANES = 4, MAX_LANE_GAP = 14,
+    MAX_CARD_Y = MAX_Y(20), MAX_CARD_H = MAX_Y(440),                    // the room and the lanes: 20..460 (17..397 at 415)
+    MAX_BAND_Y = MAX_CARD_Y + MAX_CARD_H,                               // the page dots under the lanes
     MAX_TAP_SLOP = 24,                       // px, as the Pro's POD_TAP_SLOP: farther from the DOWN is a drag
     MAX_SWIPE_PX = 80,                       // a sideways drag this long turns the page
-    MAX_NARROW_W = 180,                      // a lane's column beside an open card
     MAX_BUTTON_H = MAX_Y(80),                // a button: 80 px at 480 (9 mm), 69 at 415
 };
 

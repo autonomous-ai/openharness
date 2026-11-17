@@ -40,7 +40,12 @@ set(MAX_PORTABLE_SRCS
     ${PRO_MAIN}/display/pro_frame.c
     ${PRO_MAIN}/display/scroll.c
     ${PRO_MAIN}/display/terminal.c
+    ${PRO_MAIN}/pod/engine_logos.c
+    ${PRO_MAIN}/pod/pets.c
+    ${PRO_MAIN}/pod/pets_ask.c
+    ${PRO_MAIN}/pod/pets_codex.c
     ${PRO_MAIN}/pod/pod_draw.c
+    ${PRO_MAIN}/pod/pod_pet.c
     ${PRO_MAIN}/sys/config_store.c
     ${PRO_MAIN}/sys/crash_record.c
     ${PRO_MAIN}/sys/device_mac.c
