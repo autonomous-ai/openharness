@@ -389,6 +389,20 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
       expect(listed(s)).toEqual([key(S1)])
     })
 
+    it('a failure is said once per start: after a stop and a start, the same failure is said again', async () => {
+      const s = setup()
+      const lists = () => s.log.filter((line) => line.startsWith('[cmux] list ·'))
+      await started(s, [record()])
+      s.change('claude-hook-sessions.json')
+      await s.reply(1, { ok: false, fault: 'failed' })
+      s.source.stop()
+      s.source.start()
+      await s.reply(2, ok([record()]))
+      s.change('claude-hook-sessions.json')
+      await s.reply(3, { ok: false, fault: 'failed' })
+      expect(lists()).toEqual(['[cmux] list · failed · claude', '[cmux] list · failed · claude'])
+    })
+
     it('onChange is told only when a listed row changed', async () => {
       const s = setup()
       await started(s, [record()])
