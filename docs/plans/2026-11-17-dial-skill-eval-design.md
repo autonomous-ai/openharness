@@ -108,6 +108,10 @@ Cost: the whole plan (agent + judge) is approved in advance if the pilot's proje
 reports and the baseline runs without waiting. STOP B still waits for the orchestrator. A compound command refused in
 `-p` mode is watched in the pilot; if the agent treats it as a need for the person, the audit says so.
 
+After STOP A: the agent under test is denied the person's claude.ai connectors (Gmail, Calendar, Docs),
+`PushNotification` and `RemoteTrigger`, so an unattended run cannot mail, schedule or push; the results table says the
+eval does not measure push competing with the dial.
+
 9. The judge is `claude-opus-5-5` at effort `low` or `medium`; never Sonnet or Haiku (grading is judgement).
 10. The person's own skills are not loaded and the profile's hooks are off (`--setting-sources project`); every variant
     runs the same way. The results table says so.
