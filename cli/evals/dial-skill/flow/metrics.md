@@ -32,5 +32,5 @@ Precision (rings on need runs ÷ all rings) is an aggregate, so it lives in the 
 <!-- aggregate -->
 | variant | recall | specificity | precision | line_ok | ask_ok | harmed | truncated | invalid | errors |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| baseline | 91% | 100% | 100% | 90% | 91% | 0 (0%) | 0 | 0 |  |
+| baseline | 86% | 100% | 100% | 84% | 100% | 0 (0%) | 0 | 0 |  |
 <!-- /aggregate -->
