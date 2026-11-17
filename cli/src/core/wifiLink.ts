@@ -118,7 +118,7 @@ export function createWifiLink(deps: WifiLinkDeps) {
         const answer = deps.deliveries.answer('wifi', 'input', { version: 1, agentId: payload.agentId,
           text: payload.text, deliveryId: payload.deliveryId, when: 'composer' }, authority)!
         // Old submit ignores error payloads: refusal must reach its receipt consumer too.
-        if (answer.error) event('delivery', { event: { sessionId: text(payload.agentId), deliveryId: text(payload.deliveryId),
+        if (answer.error && authority?.current?.() !== false) event('delivery', { event: { sessionId: text(payload.agentId), deliveryId: text(payload.deliveryId),
           state: 'rejected', reason: answer.error } })
         return answer
       }

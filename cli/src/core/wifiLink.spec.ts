@@ -24,6 +24,14 @@ describe('the Wi-Fi device in the devices\' process, as the core sees it', () =>
     expect(sent).toEqual([{ type: 'service_event', payload: { kind: 'delivery', event: { sessionId: 'a', deliveryId: 'd', state: 'rejected', reason: 'INVALID_INPUT' } } }])
   })
 
+  it('does not translate a stale legacy refusal into a replacement connection', async () => {
+    const { wifi, deliveries, sent } = link()
+    deliveries.answer.mockReturnValueOnce({ error: 'SERVICE_UNAVAILABLE' })
+    expect(await wifi.answer('submit', { agentId: 'a', deliveryId: 'd', text: 'hello' }, { current: () => false, ownsRequest: () => false }))
+      .toEqual({ error: 'SERVICE_UNAVAILABLE' })
+    expect(sent).toEqual([])
+  })
+
   it.each(['claude', 'codex', 'commandcode'])('translates %s batches for retained workers without changing the shared batch', engine => {
     const { wifi, core, sent, kinds } = link()
     vi.mocked(core.agents.byAgent).mockReturnValue({ agentId: 'a', sessionId: 's', engine } as never)
