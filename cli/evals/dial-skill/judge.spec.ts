@@ -7,10 +7,12 @@ import { claudeJudge, JUDGE_MODEL, RUBRICS } from './lib/judge.js'
 let dir: string
 let out: string
 
-/** Stands in for `claude`: records its argv, cwd and the cwd's listing, then prints FAKE_REPLY (or never exits). */
+/** Stands in for `claude`: records its argv, cwd and the cwd's listing, then prints FAKE_STDERR to stderr and
+ *  FAKE_REPLY to stdout (or never exits). */
 const FAKE = `#!${process.execPath}
 const fs = require('node:fs')
 fs.writeFileSync(process.env.FAKE_OUT, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), files: fs.readdirSync('.') }))
+if (process.env.FAKE_STDERR) process.stderr.write(process.env.FAKE_STDERR)
 if (process.env.FAKE_HANG) setInterval(() => {}, 1000)
 else { process.stdout.write(process.env.FAKE_REPLY); process.exitCode = Number(process.env.FAKE_CODE ?? 0) }
 `
@@ -89,8 +91,11 @@ describe('claudeJudge', () => {
     expect((err as Error).message).not.toMatch(/rate.?limit|overloaded/i)
   })
 
-  it('throws, naming the exit code, when the judge prints no JSON', async () => {
-    await expect(judgeWith({ FAKE_REPLY: 'oops', FAKE_CODE: '1' })('actionable', { ask: 'a', line: 'b' })).rejects.toThrow(/exit 1/)
+  it('throws, naming the exit code and the end of its stderr, when the judge prints no JSON', async () => {
+    const stderr = `${'x'.repeat(5000)}\nError: Invalid API key · Please run /login\n`
+    const err = await judgeWith({ FAKE_REPLY: 'oops', FAKE_CODE: '1', FAKE_STDERR: stderr })('actionable', { ask: 'a', line: 'b' }).catch((e: unknown) => e)
+    expect((err as Error).message).toMatch(/^judge printed no JSON \(exit 1\): x+\nError: Invalid API key · Please run \/login$/)
+    expect((err as Error).message.length).toBeLessThan(300)
   })
 
   it('kills a judge that runs past its time and throws a timeout', async () => {
