@@ -71,20 +71,23 @@ describe('the master re-executing itself on an update', () => {
   }
 
   /**
-   * Every process running a build of this machine, from the process table. Each core must be the
-   * master's child: one left behind by a master that replaced itself would be an orphan holding the
-   * port, re-parented to launchd or init.
+   * Every process running a build of this machine, from the process table: the master, its core and its
+   * services, which show their own arguments. Each core and service must be the master's child: one left
+   * behind by a master that replaced itself would be an orphan holding the port, re-parented to launchd
+   * or init.
    */
   const daemonProcesses = (): Array<{ pid: number; ppid: number; command: string }> =>
     execFileSync('ps', ['-axo', 'pid=,ppid=,command='], { encoding: 'utf8' }).split('\n')
       .map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line))
-      // The core and the services from the lean bundle in the data folder, or from cli.js.
+      // The master, the core and the services from the lean bundle in the data folder, or from cli.js.
       .filter((match): match is RegExpExecArray => !!match && (match[3].includes(join(cliDir(), 'cli.js')) || (!!daemon && match[3].includes(join(daemon.dataDir, 'lean')))))
       .map((match) => ({ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] }))
   const nothingOrphaned = async (masterPid: number) => {
     // A probe is over within the update; give one a moment to end.
-    await until('only the master\'s own children', () => daemonProcesses().every((process) => process.ppid === masterPid && process.command.endsWith(' __run')), 10_000, 200)
-    expect(daemonProcesses().filter((process) => process.command.endsWith(' __run'))).toHaveLength(1)
+    const own = (one: { pid: number; ppid: number; command: string }) =>
+      one.pid === masterPid || (one.ppid === masterPid && / __(?:run|service \S+)$/.test(one.command))
+    await until('only the master and its own children', () => daemonProcesses().every(own), 10_000, 200)
+    expect(daemonProcesses().filter((one) => one.command.endsWith(' __run'))).toHaveLength(1)
   }
 
   beforeAll(async () => {
@@ -227,8 +230,9 @@ describe('the master re-executing itself on an update', () => {
     await until('the master that re-executed on 42.0.5 to die', () => !IsolatedDaemon.alive(master), 90_000, 200)
     expect(readFileSync(marker(), 'utf8')).toContain(`"pid":${master}`)
     expect(installed()).toEqual(releases.get('42.0.5'))
-    // The core it replaced had exited for the update; nothing was left running in its name.
-    expect(daemonProcesses()).toEqual([])
+    // The core it replaced had exited for the update; nothing was left running in its name. A service
+    // the master had stopped can still be on its way out.
+    await until('nothing left running in its name', () => daemonProcesses().length === 0 || null, 10_000, 200)
 
     // What the desktop app's `harness start`, or launchd restarting the master, would do.
     const from = daemon!.log().length
