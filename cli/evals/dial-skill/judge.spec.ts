@@ -74,6 +74,13 @@ describe('claudeJudge', () => {
     expect(err).toMatchObject({ judge_model: JUDGE_MODEL, judge_usage: usage })
   })
 
+  it('throws account_limited at the account limit, worded so the runner never retries it', async () => {
+    const limited = reply({ is_error: true, result: "You've hit your limit · resets 6pm" })
+    const err = await judgeWith({ FAKE_REPLY: limited, FAKE_CODE: '1' })('actionable', { ask: 'a', line: 'b' }).catch((e: unknown) => e)
+    expect(err).toMatchObject({ failure_class: 'account_limited', judge_model: JUDGE_MODEL, judge_usage: usage })
+    expect((err as Error).message).not.toMatch(/rate.?limit|overloaded/i)
+  })
+
   it('throws, naming the exit code, when the judge prints no JSON', async () => {
     await expect(judgeWith({ FAKE_REPLY: 'oops', FAKE_CODE: '1' })('actionable', { ask: 'a', line: 'b' })).rejects.toThrow(/exit 1/)
   })

@@ -109,6 +109,13 @@ describe('gradeRun', () => {
     },
   )
 
+  it.each([[need], [noNeed]])('does not judge a run cut off at --max-turns (%#)', async (s) => {
+    const judge = fakeJudge()
+    const g = await gradeRun(s, { ...run('a'), status: 'truncated' }, [ring('Set WEATHER_API_KEY')], judge)
+    expect(g.grade).toEqual({})
+    expect(judge.calls).toEqual([])
+  })
+
   it('attaches the spend of the calls before a judge call that throws', async () => {
     let calls = 0
     const judge: Judge = async () => {

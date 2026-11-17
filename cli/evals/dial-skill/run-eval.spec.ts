@@ -38,6 +38,19 @@ const LIMITED = String.raw`console.log(JSON.stringify({ type: 'result', subtype:
   result: "You've hit your limit · resets 6pm", usage: { input_tokens: 0, output_tokens: 0 } }))
 process.exitCode = 1`
 
+/** The judge's reply at the account limit: `claude -p --output-format json` with no verdict. */
+const JUDGE_LIMITED = String.raw`console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: true,
+  result: "You've hit your limit · resets 6pm", usage: { input_tokens: 0, output_tokens: 0 }, modelUsage: {} }))
+process.exitCode = 1`
+
+/** A claude run cut off at --max-turns, after a ring. */
+const TRUNCATED = String.raw`require('node:child_process').execFileSync('harness', ['device', 'notify', 'Set WEATHER_API_KEY'])
+for (const event of [
+  { type: 'system', subtype: 'init', model: 'claude-opus-5-5' },
+  { type: 'result', subtype: 'error_max_turns', is_error: true, usage: { input_tokens: 7, output_tokens: 3 } },
+]) console.log(JSON.stringify(event))
+process.exitCode = 1`
+
 let tmp: string
 let flow: string
 let home: string
@@ -59,12 +72,12 @@ afterEach(() => {
 })
 
 /** The `claude` the runner finds on its PATH, for the agent and the judge alike; it logs each call to `calls`. */
-function fakeClaude(agentBody: string): void {
+function fakeClaude(agentBody: string, judgeBody = JUDGE): void {
   writeFileSync(join(bin, 'claude'), `#!${process.execPath}
 const judge = process.argv.includes('--json-schema')
 require('node:fs').appendFileSync(${JSON.stringify(calls)}, judge ? 'judge\\n' : 'agent\\n')
 if (judge) {
-${JUDGE}
+${judgeBody}
 } else {
 ${agentBody}
 }
@@ -271,6 +284,30 @@ describe('run-eval.mjs with claude', () => {
     expect(jsonl('baseline', 'errors.jsonl')).toMatchObject([{ failure_class: 'account_limited' }])
     expect(jsonl('baseline', 'errors.jsonl')).toHaveLength(1)
     expect(jsonl('baseline', 'results.jsonl')).toEqual([])
+    expect(callsMade()).toEqual(['agent'])
+  })
+
+  it('stops the pass when the judge hits the account limit: exit 3, one account_limited error and no further case', () => {
+    fakeClaude(agent('claude-opus-5-5'), JUDGE_LIMITED)
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'oracle', '--cases', 'api-key-missing,board-unplugged,deploy-2fa-code',
+      '--concurrency', '1', '--approve-harness'])
+
+    expect(out.status).toBe(3)
+    expect(out.stderr).toContain('account limit reached: pass stopped; report it, do not switch accounts')
+    expect(jsonl('baseline', 'errors.jsonl')).toMatchObject([{ failure_class: 'account_limited', judge_retries: 0 }])
+    expect(jsonl('baseline', 'errors.jsonl')).toHaveLength(1)
+    expect(jsonl('baseline', 'results.jsonl')).toEqual([])
+    expect(callsMade()).toEqual(['judge'])
+  })
+
+  it('keeps a run cut off at --max-turns as truncated, without judging it', () => {
+    fakeClaude(TRUNCATED)
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'api-key-missing', '--approve-harness'])
+
+    expect(out.status, out.stderr).toBe(0)
+    expect(jsonl('baseline', 'results.jsonl')).toMatchObject([{ prompt_id: 'api-key-missing.claude', status: 'truncated', grade: {} }])
     expect(callsMade()).toEqual(['agent'])
   })
 })
