@@ -1,4 +1,4 @@
-// One protocol session per USB dial, sharing the desktop's event source.
+// One protocol session per USB dial, and per device over TCP (development alone), sharing the desktop's event source.
 // Voice buffers, decoding, firmware transfers and disconnects remain per dial.
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -6,13 +6,15 @@ import { resetBoard } from './boardReset.js'
 import { DialVerdicts } from './dialPortVerdicts.js'
 import { isP4Board } from './fwPush.js'
 import { findDialPorts, portInUse, SerialLink, type DialPort } from './serial.js'
+import { tcpOpener, tcpPortPath, type CableTcpAddress, type TcpOpenerOptions } from './cableTcp.js'
 import { isUsbConsoleUser } from './usbConsoleUser.js'
 import type { CableSession, CableHost, CablePort, DialStatus, PortOpener } from './cableSession.js'
 import type { DialLog } from './dialLog.js'
 
 type Surface = Pick<CableSession, keyof CableSession>
-type SessionConstructor = new (host: CableHost, log: DialLog, open: PortOpener) => Surface
-type Entry = { port: DialPort; session: Surface; attached: boolean; status: DialStatus; faults: number[] }
+type SessionConstructor = new (host: CableHost, log: DialLog, open: PortOpener, options?: { allowPermissions?: boolean }) => Surface
+/** `tcp`: a device over TCP (`CableFleetOptions.tcp`), whose `port` is only its name: no USB port, verdict or lsof. */
+type Entry = { port: DialPort; session: Surface; attached: boolean; status: DialStatus; faults: number[]; tcp?: CableTcpAddress }
 type OpenPort = (path: string, onData: (chunk: Buffer) => void, onClosed: (why: string) => void) => Promise<CablePort>
 /** A known Harness Pro or Max (`board`) that has been silent since its port opened: being reset, reset and looked at
  *  again, or the person told. */
@@ -38,6 +40,11 @@ export interface CableFleetOptions {
   dropBackoffMs?: number
   /** Reset a board over its cable; false when it cannot be done here (boardReset.ts). */
   reset?: (path: string) => Promise<boolean>
+  /** Devices over TCP (`HARNESS_CABLE_TCP`, development alone; cableTcp.ts), each dialed beside the USB dials. Nothing
+   *  proves who listens at an address, so their sessions answer no permission prompt. */
+  tcp?: CableTcpAddress[]
+  /** How a device over TCP is connected: `SerialLink.connect` unless a test gives its own. */
+  connectTcp?: TcpOpenerOptions['connect']
 }
 
 /** Faults within a minute that drop one dial; a hostile stream drops it at once. */
@@ -198,7 +205,7 @@ export class CableFleet {
     }
     let removed = false
     for (const [id, entry] of this.entries) {
-      if (present.get(id)?.path === entry.port.path) continue
+      if (entry.tcp || present.get(id)?.path === entry.port.path) continue
       await entry.session.stop()
       this.entries.delete(id)
       removed = true
@@ -230,72 +237,93 @@ export class CableFleet {
       }
       this.heldNotes.delete(port.path)
       if (this.stopped) return
-      const entry: Entry = { port, attached: false, status: { attached: false }, session: undefined!, faults: [] }
-      const attached = () => {
-        this.verdicts.markDial(port, entry.status.board)
-        this.unanswered.delete(id)
-        if (entry.attached) return
-        const sibling = [...this.entries.values()].find(e => e.attached)
-        entry.attached = true
-        if (!sibling) { this.host.onDialAttached?.(); return }
-        // The host asks again only as the first dial arrives, so this one is given what its sibling would be asked again.
-        // Mid-greeting: the session only takes them in here, and asks each once as its greeting's push ends.
-        const failed = (error: unknown) => this.host.log(`cable: ${port.path} open questions: ${String(error)} [usb ${id}]`)
-        for (const open of sibling.session.owedQuestions()) entry.session.question(open.agentId, open.id, open.questions).catch(failed)
-      }
-      const gone = () => {
-        if (!entry.attached) return
-        entry.attached = false
-        // The session's own {attached:false} carried the mac and the last settings; keep them so the
-        // pane can show this device's rows read-only instead of dropping it off the desk.
-        entry.status = { ...entry.status, id, attached: false, fw: undefined, updating: undefined }
-        if (![...this.entries.values()].some(e => e.attached)) this.host.onDialGone?.()
-        this.publish()
-      }
-      // Bind ordinary host methods to the shared desktop. Only connection life
-      // cycle and status are aggregated: losing one dial cannot tear down the
-      // remaining dial's cloud lane, selection or active voice context.
-      const host = new Proxy(this.host, {
-        get: (target, key) => {
-          if (key === 'onDialAttached') return attached
-          if (key === 'onDialGone') return gone
-          if (key === 'onForeignPort') return (path: string, why: string) => {
-            const board = why === 'silent' ? this.knownP4Board(port) : undefined
-            if (board) return this.silentP4Board(id, entry, board)
-            this.verdicts.markForeign(port)
-            this.host.log(`cable: ${path} is not a Harness dial (${why}) — leaving it alone until it is unplugged or reset [usb ${id}]`)
-            // Off this call stack: the session is in the middle of deciding this, and stop() waits on it.
-            setTimeout(() => {
-              if (this.entries.get(id) !== entry) return
-              this.entries.delete(id)
-              void entry.session.stop()
-            }, 0)
-          }
-          if (key === 'onDialStatus') return (status: DialStatus) => {
-            entry.status = { ...status, id }
-            this.publish()
-          }
-          if (key === 'log') return (line: string) => this.host.log(`${line} [usb ${id}]`)
-          if (key === 'onFault') return (error: unknown, hostile?: boolean) => this.faulted(id, entry, error, hostile === true)
-          const value = Reflect.get(target, key, target)
-          if (typeof value !== 'function') return value
-          if (this.options.faults?.has(`dial.${id}`)) return () => { throw new Error(`injected fault: dial.${id}`) }
-          return value.bind(target)
-        },
-      })
-      const opener: PortOpener = async (onData, onClosed) => {
-        if (this.stopped || this.entries.get(id) !== entry || !this.canUseUsb()) return null
-        const opened = await this.open(port.path, onData, onClosed)
-        if (this.stopped || this.entries.get(id) !== entry || !this.canUseUsb()) {
-          await opened.close('USB dial ownership changed while opening')
-          return null
-        }
-        return opened
-      }
-      entry.session = new this.Session(host, new this.Log(join(this.logs, logFolder(id))), opener)
-      this.entries.set(id, entry)
-      entry.session.start()
+      this.begin(id, port)
     }
+    // Beside the USB dials, never instead of them: a device over TCP is not on the bus, so nothing above removes it.
+    for (const address of this.options.tcp ?? []) {
+      const id = tcpPortPath(address)
+      if (this.stopped) return
+      if (this.entries.has(id) || (this.dropped.get(id)?.until ?? 0) > Date.now()) continue
+      this.begin(id, { path: id, vendorId: 0, productId: 0 }, address)
+    }
+  }
+
+  /** One device's session, started: a USB dial at its port, or a device over TCP at its address (`tcp`). */
+  private begin(id: string, port: DialPort, tcp?: CableTcpAddress): void {
+    const entry: Entry = { port, attached: false, status: { attached: false }, session: undefined!, faults: [], ...(tcp ? { tcp } : {}) }
+    const attached = () => {
+      if (!tcp) this.verdicts.markDial(port, entry.status.board)
+      this.unanswered.delete(id)
+      if (entry.attached) return
+      const sibling = [...this.entries.values()].find(e => e.attached)
+      entry.attached = true
+      if (!sibling) { this.host.onDialAttached?.(); return }
+      // The host asks again only as the first dial arrives, so this one is given what its sibling would be asked again.
+      // Mid-greeting: the session only takes them in here, and asks each once as its greeting's push ends.
+      const failed = (error: unknown) => this.host.log(`cable: ${port.path} open questions: ${String(error)} [usb ${id}]`)
+      // With its permission mark: a device over TCP answers no permission prompt, so it must know which one is.
+      for (const open of sibling.session.owedQuestions()) entry.session.question(open.agentId, open.id, open.questions, open.permission).catch(failed)
+    }
+    const gone = () => {
+      if (!entry.attached) return
+      entry.attached = false
+      // The session's own {attached:false} carried the mac and the last settings; keep them so the
+      // pane can show this device's rows read-only instead of dropping it off the desk.
+      entry.status = { ...entry.status, id, attached: false, fw: undefined, updating: undefined }
+      if (![...this.entries.values()].some(e => e.attached)) this.host.onDialGone?.()
+      this.publish()
+    }
+    // Bind ordinary host methods to the shared desktop. Only connection life
+    // cycle and status are aggregated: losing one dial cannot tear down the
+    // remaining dial's cloud lane, selection or active voice context.
+    const host = new Proxy(this.host, {
+      get: (target, key) => {
+        if (key === 'onDialAttached') return attached
+        if (key === 'onDialGone') return gone
+        if (key === 'onForeignPort') return (path: string, why: string) => {
+          // A device over TCP has no board to write off or reset: it is let go, and dialed again after the drop's wait.
+          if (tcp) return this.drop(id, entry, `not a Harness device: ${why}`)
+          const board = why === 'silent' ? this.knownP4Board(port) : undefined
+          if (board) return this.silentP4Board(id, entry, board)
+          this.verdicts.markForeign(port)
+          this.host.log(`cable: ${path} is not a Harness dial (${why}) — leaving it alone until it is unplugged or reset [usb ${id}]`)
+          // Off this call stack: the session is in the middle of deciding this, and stop() waits on it.
+          setTimeout(() => {
+            if (this.entries.get(id) !== entry) return
+            this.entries.delete(id)
+            void entry.session.stop()
+          }, 0)
+        }
+        if (key === 'onDialStatus') return (status: DialStatus) => {
+          entry.status = { ...status, id }
+          this.publish()
+        }
+        if (key === 'log') return (line: string) => this.host.log(`${line} [usb ${id}]`)
+        if (key === 'onFault') return (error: unknown, hostile?: boolean) => this.faulted(id, entry, error, hostile === true)
+        const value = Reflect.get(target, key, target)
+        if (typeof value !== 'function') return value
+        if (this.options.faults?.has(`dial.${id}`)) return () => { throw new Error(`injected fault: dial.${id}`) }
+        return value.bind(target)
+      },
+    })
+    // A device over TCP is dialed with a backoff of its own: no port while it is not reachable (cableTcp.ts).
+    const open: PortOpener = tcp
+      ? tcpOpener(tcp, { log: (line) => this.host.log(`${line} [usb ${id}]`), connect: this.options.connectTcp })
+      : (onData, onClosed) => this.open(port.path, onData, onClosed)
+    const opener: PortOpener = async (onData, onClosed) => {
+      if (this.stopped || this.entries.get(id) !== entry || !this.canUseUsb()) return null
+      const opened = await open(onData, onClosed)
+      if (!opened) return null
+      if (this.stopped || this.entries.get(id) !== entry || !this.canUseUsb()) {
+        await opened.close('USB dial ownership changed while opening')
+        return null
+      }
+      return opened
+    }
+    entry.session = tcp ? new this.Session(host, new this.Log(join(this.logs, logFolder(id))), opener, { allowPermissions: false })
+      : new this.Session(host, new this.Log(join(this.logs, logFolder(id))), opener)
+    this.entries.set(id, entry)
+    entry.session.start()
   }
 
   /**
@@ -362,12 +390,18 @@ export class CableFleet {
     const now = Date.now()
     entry.faults = [...entry.faults.filter((at) => now - at < 60_000), now]
     if (!hostile && entry.faults.length < FAULTS_TO_DROP) return
+    this.drop(id, entry, `${hostile ? 'flooding the port' : `${entry.faults.length} faults in a minute`}: ${String(error instanceof Error ? error.message : error)}`)
+  }
+
+  /** One device let go, alone, and looked at again after a wait that doubles while it keeps being let go. */
+  private drop(id: string, entry: Entry, why: string): void {
     if (this.entries.get(id) !== entry) return
+    const now = Date.now()
     const last = this.dropped.get(id)
     const first = this.options.dropBackoffMs ?? DROP_BACKOFF_MS
     const backoffMs = !last || now - last.at > DROP_FORGIVEN_MS ? first : Math.min(last.backoffMs * 2, DROP_BACKOFF_MAX_MS)
     this.dropped.set(id, { until: now + backoffMs, backoffMs, at: now })
-    this.host.log(`cable: ${entry.port.path} dropped (${hostile ? 'flooding the port' : `${entry.faults.length} faults in a minute`}: ${String(error instanceof Error ? error.message : error)}) — this dial alone; its port is looked at again in ${Math.round(backoffMs / 1000)} s [usb ${id}]`)
+    this.host.log(`cable: ${entry.port.path} dropped (${why}) — this dial alone; its port is looked at again in ${Math.round(backoffMs / 1000)} s [usb ${id}]`)
     // Off this call stack: the session is in the middle of the call that failed, and stop() waits on it.
     setTimeout(() => {
       if (this.entries.get(id) !== entry) return

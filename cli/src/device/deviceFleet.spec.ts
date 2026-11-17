@@ -340,6 +340,20 @@ describe('DeviceFleet', () => {
     expect(seen.map((e) => e.kind)).toEqual(['question', 'state'])
   })
 
+  // A dial on a link with no authentication (HARNESS_CABLE_TCP) must not answer a permission prompt: that machine's mark
+  // has to reach it, or its prompt would pass for a plain question there.
+  it('marks a question that machine asks as a permission prompt', () => {
+    const { fleet, say } = make()
+    const seen: FleetEvent[] = []
+    fleet.onEvent((e) => seen.push(e))
+    say({ type: 'commander_question', machineId: 'm1', agentId: 'a1', payload: { requestId: 'r1', questions: [{ key: 'k' }], permission: { dialog: 'Bash', resolution: 'desktop' } } })
+    say({ type: 'commander_question', machineId: 'm1', agentId: 'a1', payload: { requestId: 'r2', questions: [{ key: 'k' }], permission: true } })
+    expect(seen).toEqual([
+      { machineId: 'm1', kind: 'question', agentId: 'a1', requestId: 'r1', questions: [{ key: 'k' }], permission: true },
+      { machineId: 'm1', kind: 'question', agentId: 'a1', requestId: 'r2', questions: [{ key: 'k' }] },
+    ])
+  })
+
   it('caches recaps so a redraw does not re-ask the far machine for every tile', async () => {
     const rpc = vi.fn(async () => ({ events: [{ kind: 'summary', recap: 'r', text: 't' }] }))
     const { fleet } = make({ rpc })

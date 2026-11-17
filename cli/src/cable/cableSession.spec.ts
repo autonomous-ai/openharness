@@ -6071,3 +6071,121 @@ describe('the agent the dial shows (docs/specs/2026-11-16-orca-device-plugin.md)
     } finally { await session.stop() }
   })
 })
+
+describe('a permission prompt over a link with no authentication (HARNESS_CABLE_TCP)', () => {
+  const PERMISSION = [{ key: 'Approve Bash command: npm run deploy', q: 'Approve Bash command: npm run deploy', options: ['Yes', 'No'], multi: false }]
+  const QUESTION = [{ key: 'scope', q: 'Which scope?', options: ['File', 'Project'], multi: false }]
+
+  async function over(allowPermissions?: boolean) {
+    const answerReviewed = vi.fn<NonNullable<CableHost['answerReviewed']>>(async () => ({ ok: true as const }))
+    const host = makeHost({ answerReviewed })
+    let port!: LoopbackPort
+    const session = new CableSession(host, tmpLog(), async (onData, onClosed) => {
+      port = new LoopbackPort(onData, onClosed)
+      return port
+    }, allowPermissions === undefined ? undefined : { allowPermissions })
+    session.start()
+    await vi.waitFor(() => expect(port).toBeDefined())
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', board: 'max' })
+    await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+    /** The receipt the dial gets for a reviewed answer to that agent's open question. */
+    const reviewed = async (agentId: string, choice: number) => {
+      port.say({ t: 'question.read', agentId, requestId: `read-${agentId}` })
+      await vi.waitFor(() => expect(port.sent.some((m) => m.t === 'question.state' && m.agentId === agentId)).toBe(true))
+      const state = port.sent.find((m) => m.t === 'question.state' && m.agentId === agentId)!
+      port.say({ t: 'answer.reviewed', agentId, requestId: `send-${agentId}`, token: state.token, choices: [choice] })
+      await vi.waitFor(() => expect(port.sent.some((m) => m.t === 'answer.receipt' && m.agentId === agentId)).toBe(true))
+      return port.sent.find((m) => m.t === 'answer.receipt' && m.agentId === agentId)
+    }
+    return { session, port: () => port, host, answerReviewed, reviewed }
+  }
+
+  it('is refused, by an answer and by a reviewed one, while a question is answered as before', async () => {
+    const { session, port, host, answerReviewed, reviewed } = await over(false)
+    try {
+      await session.question('a1', 'perm-1', PERMISSION, true)
+      await session.question('a2', 'ask-1', QUESTION)
+      port().say({ t: 'answer', agentId: 'a1', requestId: 'perm-1', answers: { [PERMISSION[0].key]: 'Yes' } })
+      await vi.waitFor(() => expect(port().sent.at(-1)).toEqual({ t: 'toast', text: 'Permission prompts cannot be answered from here.' }))
+      expect(await reviewed('a1', 1)).toEqual({ t: 'answer.receipt', agentId: 'a1', token: expect.any(String), requestId: 'send-a1',
+        ok: false, error: 'Permission prompts cannot be answered from here.' })
+      expect(host.answer).not.toHaveBeenCalled()
+      expect(answerReviewed).not.toHaveBeenCalled()
+      // The plain question goes through both ways.
+      port().say({ t: 'answer', agentId: 'a2', requestId: 'ask-1', answers: { scope: 'File' } })
+      await vi.waitFor(() => expect(host.answer).toHaveBeenCalledWith('a2', 'ask-1', { scope: 'File' }))
+      expect(await reviewed('a2', 2)).toMatchObject({ ok: true })
+      expect(answerReviewed).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a2', requestId: 'ask-1', answers: { scope: 'Project' } }))
+    } finally { await session.stop() }
+  })
+
+  it('is answered on a USB dial, as before', async () => {
+    const { session, port, host, answerReviewed, reviewed } = await over()
+    try {
+      await session.question('a1', 'perm-1', PERMISSION, true)
+      port().say({ t: 'answer', agentId: 'a1', requestId: 'perm-1', answers: { [PERMISSION[0].key]: 'Yes' } })
+      await vi.waitFor(() => expect(host.answer).toHaveBeenCalledWith('a1', 'perm-1', { [PERMISSION[0].key]: 'Yes' }))
+      expect(await reviewed('a1', 1)).toMatchObject({ ok: true })
+      expect(answerReviewed).toHaveBeenCalledTimes(1)
+      expect(port().types()).not.toContain('toast')
+    } finally { await session.stop() }
+  })
+
+  it('lets through only a question it was asked as one: a prompt under its id, a stranger, a forgotten or closed one are refused', async () => {
+    const { session, port, host } = await over(false)
+    const refusals = () => port().sent.filter((m) => m.t === 'toast').length
+    try {
+      // Asked as a question, then as a permission prompt under the same id: the newer ask is what is on screen.
+      await session.question('a1', 'ask-1', QUESTION)
+      await session.question('a1', 'ask-1', PERMISSION, true)
+      port().say({ t: 'answer', agentId: 'a1', requestId: 'ask-1', answers: { scope: 'File' } })
+      port().say({ t: 'answer', agentId: 'a2', requestId: 'never-asked', answers: { scope: 'File' } })
+      await vi.waitFor(() => expect(refusals()).toBe(2))
+      // What it holds is bounded, and what falls out of it is refused, never let through.
+      for (let i = 0; i <= 64; i++) await session.question(`b${i}`, `q${i}`, QUESTION)
+      port().say({ t: 'answer', agentId: 'b0', requestId: 'q0', answers: { scope: 'File' } })
+      port().say({ t: 'answer', agentId: 'b64', requestId: 'q64', answers: { scope: 'File' } })
+      await vi.waitFor(() => expect(host.answer).toHaveBeenCalledWith('b64', 'q64', { scope: 'File' }))
+      await vi.waitFor(() => expect(refusals()).toBe(3))
+      await session.questionClose('b64', 'q64')
+      port().say({ t: 'answer', agentId: 'b64', requestId: 'q64', answers: { scope: 'File' } })
+      await vi.waitFor(() => expect(refusals()).toBe(4))
+      expect(host.answer).toHaveBeenCalledTimes(1)
+    } finally { await session.stop() }
+  })
+
+  // The device draws a permission prompt as approve/deny, so the frame says which it is; a plain question carries no key.
+  it('marks the question frame the device is sent, as asked and as asked again, and leaves a plain one unmarked', async () => {
+    const { session, port } = await over()
+    const asked = () => port().sent.filter((m) => m.t === 'question')
+    try {
+      await session.question('a1', 'perm-1', PERMISSION, true)
+      await session.question('a2', 'ask-1', QUESTION)
+      expect(asked()).toEqual([
+        { t: 'question', agentId: 'a1', name: expect.any(String), engine: expect.any(String), machine: expect.any(String),
+          id: 'perm-1', questions: PERMISSION, permission: true },
+        { t: 'question', agentId: 'a2', name: expect.any(String), engine: expect.any(String), machine: expect.any(String),
+          id: 'ask-1', questions: QUESTION },
+      ])
+      // A device that lost its place is asked both again, each as it was.
+      port().sent.length = 0
+      port().say({ t: 'resync' })
+      await vi.waitFor(() => expect(asked()).toHaveLength(2))
+      expect(asked().find((m) => m.id === 'perm-1')).toMatchObject({ permission: true })
+      expect(asked().find((m) => m.id === 'ask-1')).not.toHaveProperty('permission')
+    } finally { await session.stop() }
+  })
+
+  it('stays marked in what a dial plugged in later is asked again', async () => {
+    const { session } = await over()
+    try {
+      await session.question('a1', 'perm-1', PERMISSION, true)
+      await session.question('a2', 'ask-1', QUESTION)
+      // Owed only while the turn is waiting on it, as the session's own rule says.
+      expect(session.owedQuestions()).toEqual([
+        { agentId: 'a1', id: 'perm-1', questions: PERMISSION, permission: true },
+        { agentId: 'a2', id: 'ask-1', questions: QUESTION },
+      ])
+    } finally { await session.stop() }
+  })
+})

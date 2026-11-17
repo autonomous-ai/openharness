@@ -158,6 +158,13 @@ frame for each question still open. It does not replay recent `summary` history 
 `summary` is not repaired by a resync. The welcome of a Pro lists `resync` in `features`; a Pro whose welcome does not (an older daemon) sends the old
 `swarms.list` and `agents.list` instead. A welcome without `seq` turns the gap check off for that session.
 
+## 8. The cable over TCP, for development only
+
+`HARNESS_CABLE_TCP=host:port[,…]` makes the devices' process also dial each address (the Max's Linux build listens on 7531)
+with USB's frames, retrying with a wait that doubles up to 30 s. Nothing proves who is at the far end, so a TCP session
+answers no permission prompt (`answer`/`answer.reviewed` get `Permission prompts cannot be answered from here.`).
+A `question` that is a permission prompt carries `permission: true` (absent otherwise) so a device can draw approve/deny.
+
 ## `summary.tier`
 
 `summary` carries `tier`: `"alert"` (beep, wake, toast, Notices entry), `"list"` (Notices entry only: no beep,

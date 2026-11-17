@@ -23,6 +23,7 @@ import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, type CoreApi, type CorePorts, type DeviceHookPort, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/cableFleet.js'
+import { parseCableTcp, tcpPortPath } from '../cable/cableTcp.js'
 import { isLocalOnly } from '../lib/cardUpdate.js'
 import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
 import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost } from '../cable/cableHost.js'
@@ -92,6 +93,8 @@ export interface DevicesDeps {
   testDialPort?: string
   /** Leave the serial ports alone altogether (`CABLE_DISABLE`). */
   cableDisabled?: boolean
+  /** `HARNESS_CABLE_TCP`, development alone: devices over TCP to dial beside the USB dials, `host:port,…` (cable/cableTcp.ts). */
+  cableTcp?: string
   /** `HARNESSD_TEST_FAULTS`: parts to fail, for the end-to-end suite. */
   faults?: ReadonlySet<string>
   log?: (line: string) => void
@@ -138,6 +141,9 @@ export interface DevicesDeps {
 const NO_AGENT_LIST = 'no agent list yet'
 const unrouted = (reason: string): RouteAnswer => ({ agentId: '', machineId: '', name: '', confidence: 0, reason, candidates: [], weighed: 0, machines: 0, via: '' })
 const sid = (id: string): string => id.slice(0, 8)
+/** A question's permission mark, as `CableFleet.question`'s last argument: none for a plain question, which is asked as
+ *  it always was. */
+const permissionOf = (question: { permission?: true }): [] | [true] => question.permission ? [true] : []
 /** A card for the dial, and the machine it came from when another machine sent it (services/fleet.ts). */
 type DialEvent = NonNullable<ReturnType<typeof cableEventFor>> & { machineId?: string }
 /** What a dial made of a local follow, by its cause, or the settle's that asked it as an attach: the outcome only, never
@@ -665,11 +671,21 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   if (existsSync(legacyDialLog)) {
     try { writeFileSync(legacyDialLog, `moved to ${join(deps.logsDir, 'dial-YYYYMMDD.log')}\n`) } catch { /* best effort */ }
   }
+  // Said as the devices start: a typo is not dropped unseen, and a device that answers no permission prompt is not taken
+  // for a broken one.
+  const cableTcp = parseCableTcp(deps.cableTcp)
+  if (!deps.cableDisabled) {
+    for (const entry of cableTcp.rejected) log(`[cable] HARNESS_CABLE_TCP: left out, not host:port: ${entry}`)
+    for (const address of cableTcp.addresses) {
+      log(`[cable] HARNESS_CABLE_TCP: dials ${tcpPortPath(address)}, a dev-only link with no authentication that answers no permission prompt`)
+    }
+  }
   const cable = new CableFleet(deps.Session ?? CableSession, cableHost, deps.logsDir, DialLog, {
     serials: deps.dialSerials,
     verdicts: new DialVerdicts(join(core.dataDir, 'dial-ports.json')),
     faults: deps.faults,
     ...testDialDiscovery(deps.testDialPort),
+    ...(cableTcp.addresses.length ? { tcp: cableTcp.addresses } : {}),
     ...deps.cable,
   })
 
@@ -841,7 +857,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // "Working…" looks like from the outside.
     if (event.kind === 'state') { void cable.syncMachines(); return }
     if (event.kind === 'questionClosed') { inOrder(event.agentId, () => { void cable.questionClose(event.agentId, event.requestId) }); return }
-    if (event.kind === 'question') { tally('alert', 'rule:question', 'question', 0); inOrder(event.agentId, () => { void cable.question(event.agentId, event.requestId, event.questions) }); return }
+    if (event.kind === 'question') { tally('alert', 'rule:question', 'question', 0); inOrder(event.agentId, () => { void cable.question(event.agentId, event.requestId, event.questions, ...permissionOf(event)) }); return }
     toDial({ ...event, subagent: event.subagent === true })
   }))
 
@@ -1303,7 +1319,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return
     }
     const question = cableQuestionFor(frame as Parameters<typeof cableQuestionFor>[0])
-    if (question) { questionsOpen.set(question.agentId, question.requestId); cableHost.harness.noteCard(question.agentId, 'question'); tally('alert', 'rule:question', 'question', 0); inOrder(question.agentId, () => { void cable.question(question.agentId, question.requestId, question.questions) }); return }
+    if (question) { questionsOpen.set(question.agentId, question.requestId); cableHost.harness.noteCard(question.agentId, 'question'); tally('alert', 'rule:question', 'question', 0); inOrder(question.agentId, () => { void cable.question(question.agentId, question.requestId, question.questions, ...permissionOf(question)) }); return }
     // A shell result is only the stats' input: the dial is told the sums when the turn ends.
     const ran = frame as { type?: string; agentId?: string; payload?: { kind?: string; id?: string; command?: string; isError?: boolean; outputTail?: string } }
     if (ran.payload?.kind === 'reply_text' && ran.agentId) {

@@ -1,7 +1,7 @@
 // How the wheel's rows are composed: the local row, and the fleet's rows around it.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { DaemonCableHost, HARNESS_OPEN_WAIT_MS, cableEventFor, cableStepFor, type CableHostWiring } from './cableHost.js'
+import { DaemonCableHost, HARNESS_OPEN_WAIT_MS, cableEventFor, cableQuestionFor, cableStepFor, type CableHostWiring } from './cableHost.js'
 import { FleetError, type FleetMachine, type MachineFleet } from './machineFleet.js'
 import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
@@ -1919,6 +1919,19 @@ describe('cableEventFor', () => {
     }
     expect(cableEventFor({ ...base, payload: { ...base.payload, tier: 'loud' } })).not.toHaveProperty('tier')
     expect(cableEventFor({ ...base, payload: { kind: 'done', text: 'done', tier: 'alert' } })).not.toHaveProperty('tier')
+  })
+})
+
+describe('cableQuestionFor', () => {
+  // The core marks a permission prompt (core/questions.ts): a dial on a link with no authentication (HARNESS_CABLE_TCP)
+  // must know it, to refuse its answer.
+  it('carries the core\'s permission mark, and no mark on a plain question', () => {
+    const base = { type: 'commander_question', agentId: 'a1', payload: { requestId: 'r1', questions: [{ key: 'k' }] } }
+    expect(cableQuestionFor(base)).toEqual({ agentId: 'a1', requestId: 'r1', questions: [{ key: 'k' }] })
+    expect(cableQuestionFor({ ...base, payload: { ...base.payload, permission: { dialog: 'Bash', resolution: 'desktop' } } }))
+      .toEqual({ agentId: 'a1', requestId: 'r1', questions: [{ key: 'k' }], permission: true })
+    expect(cableQuestionFor({ ...base, payload: { ...base.payload, permission: null } })).not.toHaveProperty('permission')
+    expect(cableQuestionFor({ ...base, payload: { ...base.payload, permission: true } })).not.toHaveProperty('permission')
   })
 })
 

@@ -214,6 +214,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     dialSerials: processEnv.HARNESS_DIAL_SERIALS?.split(',').map((serial) => serial.trim()).filter(Boolean),
     testDialPort: processEnv.HARNESSD_TEST_DIAL_PORT,
     cableDisabled: env.CABLE_DISABLE,
+    cableTcp: processEnv.HARNESS_CABLE_TCP,
     faults: faultsOf(processEnv.HARNESSD_TEST_FAULTS),
     refresh,
     onCoreGone: (run) => { coreGone = run },

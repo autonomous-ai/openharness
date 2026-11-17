@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -1111,6 +1111,88 @@ describe('which apps the dials want', () => {
       expect(f.fleet.wantsApps()).toBe(true)
       await f.ports[0].close()
       await vi.waitFor(() => expect(f.fleet.wantsApps()).toBe(false))
+    } finally { await f.fleet.stop() }
+  })
+})
+
+describe('a device over TCP (HARNESS_CABLE_TCP)', () => {
+  const BOARD = { host: '127.0.0.1', port: 7000 }
+  const PERMISSION = [{ key: 'Approve Bash command: rm -rf build', q: 'Approve Bash command: rm -rf build', options: ['Yes', 'No'], multi: false }]
+
+  function tcpFixture(extra: Partial<CableFleetOptions> = {}) {
+    const file = join(mkdtempSync(join(tmpdir(), 'fleet-tcp-')), 'dial-ports.json')
+    const tcpPorts: Peer[] = []
+    const connectTcp = vi.fn(async (address: { host: string; port: number }, onData: (chunk: Buffer) => void, onClosed: (why: string) => void) => {
+      const port = new Peer(`tcp:${address.host}:${address.port}`, onData, onClosed); tcpPorts.push(port); return port
+    })
+    const f = fixture({ tcp: [BOARD], connectTcp, verdicts: new DialVerdicts(file), ...extra })
+    return { ...f, file, tcpPorts, connectTcp, scan: () => (f.fleet as unknown as { scan(): Promise<void> }).scan() }
+  }
+  const hello = (p: Peer) => p.say({ t: 'hello', product: 'harness', mac: 'aa:max', fw: 'fixture', proto: 3, board: 'max' })
+
+  it('is opened beside the USB dials, and USB discovery, lsof and the port verdicts leave it alone', async () => {
+    const f = tcpFixture()
+    try {
+      f.fleet.start()
+      await vi.waitFor(() => expect(f.tcpPorts).toHaveLength(1))
+      await vi.waitFor(() => expect(f.ports).toHaveLength(2))
+      hello(f.tcpPorts[0])
+      await vi.waitFor(() => expect(f.tcpPorts[0].sent.some(m => m.t === 'agents.end')).toBe(true))
+      expect(f.tcpPorts[0].sent[0]).toMatchObject({ t: 'welcome', seq: 0 })
+      await f.greet(f.ports)
+      expect(f.fleet.devices()).toContainEqual(expect.objectContaining({ id: 'tcp:127.0.0.1:7000', attached: true, board: 'max' }))
+      // The USB dials unplugged: the TCP device stays.
+      f.setPorts([])
+      await f.scan()
+      expect(f.tcpPorts[0].isOpen).toBe(true)
+      expect(f.connectTcp).toHaveBeenCalledTimes(1)
+      expect((f.options.inUse.mock.calls as unknown[][]).map(([path]) => path)).not.toContainEqual(expect.stringMatching(/^tcp:/))
+      expect(readFileSync(f.file, 'utf8')).not.toContain('tcp:')
+    } finally { await f.fleet.stop() }
+  })
+
+  it('answers questions but no permission prompt, while a USB dial still does: also one it is asked again as it attaches', async () => {
+    const f = tcpFixture({ dropBackoffMs: 100 })
+    try {
+      f.fleet.start()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(2))
+      await f.greet(f.ports)
+      // The TCP device is away (dropped) while the prompt is asked: its next session is given it by a sibling as it
+      // attaches (owedQuestions), and the mark must come along.
+      await vi.waitFor(() => expect(f.tcpPorts).toHaveLength(1))
+      f.tcpPorts[0].say({ t: 'hello', product: 'other', mac: 'aa:max' })
+      await vi.waitFor(() => expect(f.tcpPorts[0].isOpen).toBe(false))
+      await f.fleet.question('a', 'perm-1', PERMISSION, true)
+      await f.fleet.question('b', 'ask-1', [{ key: 'scope', q: 'Which scope?', options: ['File', 'Project'], multi: false }])
+      await vi.waitFor(async () => { await f.scan(); expect(f.tcpPorts).toHaveLength(2) })
+      const tcp = f.tcpPorts[1]
+      hello(tcp)
+      await vi.waitFor(() => expect(tcp.sent.filter(m => m.t === 'question').map(m => m.id)).toEqual(['perm-1', 'ask-1']))
+      const answer = { t: 'answer', agentId: 'a', requestId: 'perm-1', answers: { [PERMISSION[0].key]: 'Yes' } }
+      tcp.say(answer)
+      tcp.say({ t: 'answer', agentId: 'b', requestId: 'ask-1', answers: { scope: 'File' } })
+      await vi.waitFor(() => expect(f.host.answer).toHaveBeenCalledWith('b', 'ask-1', { scope: 'File' }))
+      expect(tcp.sent.filter(m => m.t === 'toast')).toEqual([{ t: 'toast', text: 'Permission prompts cannot be answered from here.', seq: expect.any(Number) }])
+      expect(f.host.answer).toHaveBeenCalledTimes(1)
+      f.ports[0].say(answer)
+      await vi.waitFor(() => expect(f.host.answer).toHaveBeenCalledWith('a', 'perm-1', { [PERMISSION[0].key]: 'Yes' }))
+    } finally { await f.fleet.stop() }
+  })
+
+  it('is let go and looked at again after the drop wait when it is not a Harness device, never written off', async () => {
+    const f = tcpFixture({ dropBackoffMs: 100 })
+    try {
+      f.fleet.start()
+      await vi.waitFor(() => expect(f.tcpPorts).toHaveLength(1))
+      f.tcpPorts[0].say({ t: 'hello', product: 'other', mac: 'aa:max' })
+      await vi.waitFor(() => expect(f.tcpPorts[0].isOpen).toBe(false))
+      await vi.waitFor(() => expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/cable: tcp:127\.0\.0\.1:7000 dropped \(not a Harness device: greeted as 'other'\) — this dial alone; its port is looked at again in 0 s \[usb tcp:127\.0\.0\.1:7000\]/)))
+      await f.scan()
+      expect(f.connectTcp).toHaveBeenCalledTimes(1)
+      await vi.waitFor(async () => { await f.scan(); expect(f.tcpPorts).toHaveLength(2) })
+      hello(f.tcpPorts[1])
+      await vi.waitFor(() => expect(f.tcpPorts[1].sent.some(m => m.t === 'agents.end')).toBe(true))
+      expect(existsSync(f.file) ? readFileSync(f.file, 'utf8') : '').not.toContain('tcp:')
     } finally { await f.fleet.stop() }
   })
 })

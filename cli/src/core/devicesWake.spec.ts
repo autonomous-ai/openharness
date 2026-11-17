@@ -147,6 +147,24 @@ describe('when the devices\' process is asked for', () => {
     expect(early.want.mock.calls).toEqual([['wifi']])
   })
 
+  // A device over TCP (HARNESS_CABLE_TCP) has no node in /dev: nothing else would ever start the process that dials it.
+  it('asks at once when HARNESS_CABLE_TCP names a device, with no look at /dev, unless the cable is off or runs inline', () => {
+    const listDev = vi.fn(() => [])
+    const tcp = wake({ cableTcp: true, listDev })
+    tcp.devices.start(both)
+    tcp.devices.start(both)
+    expect(tcp.want.mock.calls).toEqual([['devices']])
+    expect(tcp.log).toHaveBeenCalledWith('[devices] HARNESS_CABLE_TCP names a device: asking for the devices\' process')
+    expect(listDev).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+    const disabled = wake({ cableTcp: true, cableDisabled: true })
+    disabled.devices.start(both)
+    const inline = wake({ cableTcp: true })
+    inline.devices.start(new Set(['wifi']))
+    expect(disabled.want).not.toHaveBeenCalled()
+    expect(inline.want).not.toHaveBeenCalled()
+  })
+
   it('looks for nothing with the devices in the core\'s process or the serial ports left alone', () => {
     const inCore = wake()
     inCore.devices.start(new Set(['search']))

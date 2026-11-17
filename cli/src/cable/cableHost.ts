@@ -1495,13 +1495,15 @@ export function cableEventFor(
  * question screen was complete, wired and unreachable: nothing on this side ever produced the message.
  */
 export function cableQuestionFor(
-  frame: { type?: string; agentId?: string; payload?: { requestId?: string; questions?: unknown } },
-): { agentId: string; requestId: string; questions: unknown } | null {
+  frame: { type?: string; agentId?: string; payload?: { requestId?: string; questions?: unknown; permission?: unknown } },
+): { agentId: string; requestId: string; questions: unknown; permission?: true } | null {
   if (frame.type !== 'commander_question' || !frame.agentId) return null
   const requestId = frame.payload?.requestId
   const questions = frame.payload?.questions
   if (typeof requestId !== 'string' || !requestId || !Array.isArray(questions)) return null
-  return { agentId: frame.agentId, requestId, questions }
+  // The core's mark of a permission prompt (core/questions.ts): a dial over TCP refuses to answer one (cableSession.ts).
+  const permission = typeof frame.payload?.permission === 'object' && frame.payload.permission !== null
+  return { agentId: frame.agentId, requestId, questions, ...(permission ? { permission: true as const } : {}) }
 }
 
 /**

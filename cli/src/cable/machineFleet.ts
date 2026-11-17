@@ -49,7 +49,9 @@ export type FleetEvent =
       tier?: Tier
       /** A summary of a failed turn: a card with no tier (a cloud harness's) is decided here, where it rings. */
       failed?: boolean }
-  | { machineId: string; kind: 'question'; agentId: string; requestId: string; questions: unknown }
+  | { machineId: string; kind: 'question'; agentId: string; requestId: string; questions: unknown
+      /** A permission prompt, as that machine's core marks it: a dial over TCP refuses to answer one (cableSession.ts). */
+      permission?: true }
   | { machineId: string; kind: 'questionClosed'; agentId: string; requestId: string }
   | { machineId: string; kind: 'state'; state: FleetMachine['state'] }
 

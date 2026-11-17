@@ -42,6 +42,11 @@ export const CABLE_PROTO_VERSION = 3   // 3: + question.close (a question answer
 /** The id of a question the dial only shows: a permission prompt waiting in its agent's own app (services/devices.ts),
  *  which is where it is answered. Nothing the dial sends for it reaches its host. */
 export const SHOWN_ONLY_PREFIX = 'shown:'
+/** A dial on a link that proves nothing of who is at its far end (`allowPermissions` false) answers no permission
+ *  prompt: in the core's own words for that refusal (lib/questionController.ts), so either says the same. */
+export const PERMISSION_REFUSED = 'Permission prompts cannot be answered from here.'
+/** The questions a session remembers asking, and whether each was a permission prompt (`CableSession.asked`). */
+const ASKED_KEPT = 64
 
 const PING_EVERY_MS = 5_000
 /** No bytes of any kind for this long → the handle is dead. Longer than the dial's own 15 s window, so a
@@ -868,12 +873,25 @@ export class CableSession {
    *  error that arrives before the person lets go. Any later turn, abort or close moves the generation on and drops it. */
   private voiceRefusal?: { generation: number; message: string }
 
+  /** False for a link that proves nothing of who is at its far end (cableTcp.ts): its dial answers no permission
+   *  prompt. A USB dial is one the person plugged in, and answers both. */
+  private readonly allowPermissions: boolean
+  /**
+   * Each question asked through this session lately, by agent and id: whether it was a permission prompt. Bounded, and
+   * read so that a dial that answers no permission prompt answers only a question known as a plain one: one never
+   * asked here, forgotten, or closed is refused, never taken for plain.
+   */
+  private readonly asked = new Map<string, boolean>()
+
   constructor(
     private readonly host: CableHost,
     /** The dial's console, as a file: framed device logs and this side's `cable:` events, one day each. */
     private readonly dialLog: DialLog,
     private readonly openPort: PortOpener = openDialPort,
-  ) {}
+    options: { allowPermissions?: boolean } = {},
+  ) {
+    this.allowPermissions = options.allowPermissions ?? true
+  }
 
   /**
    * Every `cable:` event goes two ways: to the daemon's console as before, and into the dial's log with a
@@ -1671,6 +1689,7 @@ export class CableSession {
         const open = this.questionInbox.read(agentId)
         const receipt = open.ok && open.id.startsWith(SHOWN_ONLY_PREFIX)
           ? { ok: false as const, error: `Answer it in ${this.hostName(agentId)}.` }
+          : open.ok && !this.answerable(agentId, open.id) ? { ok: false as const, error: PERMISSION_REFUSED }
           : await this.questionInbox.submit(agentId, token, msg.choices,
             answer => this.host.answerReviewed?.(answer) ?? Promise.resolve({ ok: false,
               error: 'Update Harness to answer this question.' }), msg.drafts)
@@ -1689,6 +1708,7 @@ export class CableSession {
           for (const [k, v] of Object.entries(answers as Record<string, unknown>)) {
             if (typeof v === 'string') flat[k] = v
           }
+          if (!this.answerable(agentId, requestId)) { await this.toast(PERMISSION_REFUSED); return }
           if (this.lacks(agentId, 'a')) {
             // A shown question is answered in its app for good, as the reviewed path says: no update changes that.
             await this.toast(requestId.startsWith(SHOWN_ONLY_PREFIX) ? `Answer it in ${this.hostName(agentId)}.`
@@ -2798,7 +2818,7 @@ export class CableSession {
     this.greeting = false
     for (const { agentId, id, questions } of this.questionInbox.open()) {
       if (this.owed(agentId, id) && this.questionInbox.ask(agentId, id)) {
-        await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
+        await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions, ...this.permissionMark(agentId, id) })
       }
     }
   }
@@ -3273,18 +3293,34 @@ export class CableSession {
    * forward, so by the time anyone could answer "is it on screen" the answer was yes — every question
    * came through quiet, no row was ever recorded, and looking away later left nothing behind.
    */
-  async question(agentId: string, id: string, questions: unknown): Promise<void> {
+  async question(agentId: string, id: string, questions: unknown, permission = false): Promise<void> {
+    // The newest ask under an id is what is on screen: it moves to the end, and the oldest beyond the bound goes.
+    const key = `${agentId}\0${id}`
+    this.asked.delete(key)
+    this.asked.set(key, permission)
+    if (this.asked.size > ASKED_KEPT) this.asked.delete(this.asked.keys().next().value!)
     this.questionInbox.set(agentId, id, questions)
     this.liveTurns.set(agentId, 'question')
     // The dial beeps at each ask, and the devices and the core ask again what a dial should hold as it arrives or they
     // reconnect: one the inbox holds is asked once until the dial loses it. One it cannot hold is sent as it comes.
     if (this.questionInbox.read(agentId).ok && (this.greeting || !this.questionInbox.ask(agentId, id))) return
-    await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
+    await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions, ...this.permissionMark(agentId, id) })
+  }
+  /** `permission: true` on the device's `question` for a prompt the core marked, so it can draw approve/deny; a plain
+   *  question carries no key, which is also all older firmware reads (it ignores keys it does not know). */
+  private permissionMark(agentId: string, id: string): { permission?: true } {
+    return this.asked.get(`${agentId}\0${id}`) === true ? { permission: true } : {}
   }
   /** What this dial would be asked again had it lost its questions, by the same rule: for a dial plugged in beside this
    *  one, which nothing else asks. */
-  owedQuestions(): ReturnType<QuestionInbox['open']> {
+  owedQuestions(): Array<ReturnType<QuestionInbox['open']>[number] & { permission?: true }> {
+    // Marked a permission prompt unless known as a plain question: a dial that answers none must not take one for plain.
     return this.questionInbox.open().filter(({ agentId, id }) => this.owed(agentId, id))
+      .map((open) => this.asked.get(`${open.agentId}\0${open.id}`) === false ? open : { ...open, permission: true as const })
+  }
+  /** Whether this dial may answer that question: any, unless it answers no permission prompt (`allowPermissions`). */
+  private answerable(agentId: string, id: string): boolean {
+    return this.allowPermissions || this.asked.get(`${agentId}\0${id}`) === false
   }
   /** A turn ended: its agent is no longer live. */
   private endLive(agentId: string): void {
@@ -3299,6 +3335,7 @@ export class CableSession {
    * halfway through giving.
    */
   async questionClose(agentId: string, id: string): Promise<void> {
+    this.asked.delete(`${agentId}\0${id}`)
     if (!this.questionInbox.close(agentId, id)) return
     // Answered: the turn goes on (its end clears it).
     if (this.liveTurns.get(agentId) === 'question') this.liveTurns.set(agentId, 'working')

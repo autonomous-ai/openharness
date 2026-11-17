@@ -9,7 +9,7 @@
 import { execFile } from 'node:child_process'
 import { closeSync, constants, existsSync, lstatSync, openSync, readFileSync, readSync, readdirSync } from 'node:fs'
 import { basename } from 'node:path'
-import type { Socket } from 'node:net'
+import { createConnection, type Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
 import { promisify } from 'node:util'
 import { portStream } from './portStream.js'
@@ -374,6 +374,42 @@ export class SerialLink {
     const open = (command ?? windowsSerialCommand)(['open', path])
     if (!open) throw Object.assign(new Error('harness-serial is not installed'), { code: 'ENOENT' })
     return new SerialLink(path, await openWindowsPort(open), onData, onClosed)
+  }
+
+  /**
+   * A device over TCP (cableTcp.ts, `HARNESS_CABLE_TCP`, development alone): the socket is the stream. It needs no stty
+   * and no claim; the write queue and close() below are the same. It rejects plainly when nothing listens, or when
+   * nothing answers within `timeoutMs`: a host that drops the connect would otherwise hold the opener for the system's
+   * own timeout, a minute or more.
+   */
+  static connect(
+    path: string,
+    host: string,
+    port: number,
+    onData: (chunk: Buffer) => void,
+    onClosed: (why: string) => void,
+    timeoutMs = 5_000,
+  ): Promise<SerialLink> {
+    return new Promise((resolve, reject) => {
+      const socket = createConnection({ host, port })
+      const fail = (error: Error): void => {
+        socket.off('timeout', late)
+        socket.destroy()
+        reject(error)
+      }
+      const late = (): void => fail(Object.assign(new Error(`connect to ${host}:${port} timed out`), { code: 'ETIMEDOUT' }))
+      socket.setTimeout(timeoutMs)
+      socket.once('timeout', late)
+      socket.once('error', fail)
+      socket.once('connect', () => {
+        socket.off('timeout', late)
+        socket.off('error', fail)
+        socket.setTimeout(0)
+        // Frames are small, and the far end waits on each one: Nagle's delay would hold a reply back.
+        socket.setNoDelay(true)
+        resolve(new SerialLink(path, socket, onData, onClosed))
+      })
+    })
   }
 
   /**

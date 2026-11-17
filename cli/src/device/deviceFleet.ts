@@ -442,7 +442,9 @@ export class DeviceFleet implements MachineFleet {
     if (frame.type === 'commander_question' && frame.agentId) {
       const requestId = payload.requestId
       if (typeof requestId !== 'string' || !Array.isArray(payload.questions)) return
-      this.emit({ machineId: from, kind: 'question', agentId: frame.agentId, requestId, questions: payload.questions })
+      // That machine's mark of a permission prompt (core/questions.ts): a dial over TCP refuses to answer one.
+      const permission = typeof payload.permission === 'object' && payload.permission !== null
+      this.emit({ machineId: from, kind: 'question', agentId: frame.agentId, requestId, questions: payload.questions, ...(permission ? { permission: true } : {}) })
 
       return
     }

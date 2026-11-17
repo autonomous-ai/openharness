@@ -390,7 +390,8 @@ function startMasterHere(): void {
 const coreLink = connectToMaster()
 /** When the devices' process starts: once there is a device, a dial's port, a Wi-Fi device or a request for one
  *  (core/devicesWake.ts). Asked of the master through the channel above. */
-const devicesWake = createDevicesWake({ want: (service) => coreLink.want(service), dataDir: env.ADAPTER_DATA_DIR, cableDisabled: env.CABLE_DISABLE, testDialPort: harnessdEnv().HARNESSD_TEST_DIAL_PORT })
+const devicesWake = createDevicesWake({ want: (service) => coreLink.want(service), dataDir: env.ADAPTER_DATA_DIR, cableDisabled: env.CABLE_DISABLE, testDialPort: harnessdEnv().HARNESSD_TEST_DIAL_PORT,
+  cableTcp: !!process.env.HARNESS_CABLE_TCP?.trim() })
 
 const daemonBoot: {
   /** Stops the updater this core runs beside itself under a master too old to run it (core/updaterBeside.ts). */
@@ -3339,7 +3340,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     serviceHost.start('devices', (core, started) => inline!.startDevices(core, started, {
       logsDir: env.HARNESS_LOGS_DIR, testDialPort: harnessd.HARNESSD_TEST_DIAL_PORT,
       dialSerials: process.env.HARNESS_DIAL_SERIALS?.split(',').map((serial) => serial.trim()).filter(Boolean),
-      cableDisabled: env.CABLE_DISABLE, faults: testFaults(harnessd.HARNESSD_TEST_FAULTS),
+      cableDisabled: env.CABLE_DISABLE, cableTcp: process.env.HARNESS_CABLE_TCP, faults: testFaults(harnessd.HARNESSD_TEST_FAULTS),
     }), coreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS)
     // Everything the windows said while the devices were being built, and what the machine runs.
     if (ports.devices) devicesLink.started(ports.devices)

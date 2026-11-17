@@ -318,7 +318,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; cableTcp?: string; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const ports: CorePorts = emptyPorts()
   const onExit = vi.fn()
@@ -329,6 +329,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     dialSerials: ['E2E'],
     testDialPort: over.testDialPort,
     cableDisabled: over.cableDisabled,
+    cableTcp: over.cableTcp,
     readUsage: over.readUsage,
     now: over.now,
     refresh: over.refresh,
@@ -454,6 +455,17 @@ describe('the devices, as the core starts them', () => {
     expect(logs).toContain('[cable] disabled (CABLE_DISABLE=true) — the serial port is left alone')
     const options = seen.cable.args[4] as { discover: () => Promise<unknown[]> }
     expect(await options.discover()).toEqual([expect.objectContaining({ path: '/dev/ttys042' })])
+  })
+
+  it('dial the devices HARNESS_CABLE_TCP names, say it is a link that answers no permission prompt, and leave out what is not one', () => {
+    start({ cableTcp: ' 127.0.0.1:7000 , bad ' })
+    expect((seen.cable.args[4] as { tcp?: unknown }).tcp).toEqual([{ host: '127.0.0.1', port: 7000 }])
+    expect(logs).toContain('[cable] HARNESS_CABLE_TCP: left out, not host:port: bad')
+    expect(logs).toContain('[cable] HARNESS_CABLE_TCP: dials tcp:127.0.0.1:7000, a dev-only link with no authentication that answers no permission prompt')
+    logs.length = 0
+    start()
+    expect(seen.cable.args[4]).not.toHaveProperty('tcp')
+    expect(logs.filter((line) => line.includes('HARNESS_CABLE_TCP'))).toEqual([])
   })
 
   it('cut an old dial log down to a pointer, and carry on when it cannot be written', () => {
@@ -997,6 +1009,14 @@ describe('what the windows say, reaching the dial', () => {
     expect(seen.cable.calls.map(([name]) => name)).toEqual(['start', 'turnStarted', 'turnDone', 'turnError', 'turnStep', 'question', 'questionClose'])
   })
 
+  // A dial over TCP (HARNESS_CABLE_TCP) refuses to answer a permission prompt: the core's mark must reach its session.
+  it('tells the dial which question is a permission prompt, as the core marks it', () => {
+    const { port } = start()
+    port.card({ type: 'commander_question', agentId: 'a1', payload: { requestId: 'r1', questions: [], permission: { dialog: 'Bash', resolution: 'desktop' } } })
+    port.card({ type: 'commander_question', agentId: 'a2', payload: { requestId: 'r2', questions: [] } })
+    expect(calls('question')).toEqual([['a1', 'r1', [], true], ['a2', 'r2', []]])
+  })
+
   it('hands the dial a tool card as a step, and a processing card\'s latest sentence beside the status', () => {
     const { port } = start()
     port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'tool', text: 'Read', recap: '/work/cli/src/cable/cableSession.ts' } })
@@ -1355,6 +1375,14 @@ describe('the other machines\' cards', () => {
     await vi.waitFor(() => expect(calls('summary')).toHaveLength(2))
     expect(seen.cable.calls.map(([name]) => name)).toEqual(['start', 'syncMachines', 'questionClose', 'question', 'turnStarted', 'summary', 'summary'])
     expect(calls('summary')).toEqual([['b1', 'fixed', 'done', 'silent', undefined, true], ['b1', 'done', 'done', 'alert', undefined, false]])
+  })
+  it('carry the permission mark of that machine\'s question to the dial', async () => {
+    start()
+    const tell = seen.fleet!.events!
+    tell({ machineId: 'm2', kind: 'question', agentId: 'b1', requestId: 'r1', questions: [], permission: true })
+    tell({ machineId: 'm2', kind: 'question', agentId: 'b2', requestId: 'r2', questions: [] })
+    await vi.waitFor(() => expect(calls('question')).toHaveLength(2))
+    expect(calls('question')).toEqual([['b1', 'r1', [], true], ['b2', 'r2', []]])
   })
 })
 
