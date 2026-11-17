@@ -137,3 +137,24 @@ describe('gh-signed-out', () => {
     }
   })
 })
+
+describe('xcode-license-sudo', () => {
+  // The real xcrun would find the real, licensed xcodebuild and route round the obstacle.
+  it('stops `xcrun xcodebuild` on the same license error', () => {
+    const s = find('xcode-license-sudo')
+    const st = stage(s, 'oracle', { skill: false })
+    try {
+      const run = spawnSync('sh', ['-c', 'xcrun xcodebuild -version'], {
+        cwd: st.repo,
+        env: st.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        encoding: 'utf8',
+        timeout: 20_000,
+      })
+      expect(run.status).not.toBe(0)
+      expect(run.stdout + run.stderr).toContain(s.check.expect)
+    } finally {
+      unstage(st)
+    }
+  })
+})
