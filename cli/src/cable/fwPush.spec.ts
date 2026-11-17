@@ -7,7 +7,7 @@
 //    window does not slow this side down — the dial's ring overflows and the bytes are gone with no error.
 import { describe, expect, it, vi } from 'vitest'
 
-import { CIRCLE_OTA_KEY, FW_MAX_RESENDS, FW_SLICE_BYTES, FW_WINDOW_BYTES, FirmwareTransfer, PRO_OTA_KEY, otaKeyFor, otaKeyForBoard, shouldOffer } from './fwPush.js'
+import { CIRCLE_OTA_KEY, FW_MAX_RESENDS, FW_SLICE_BYTES, FW_WINDOW_BYTES, FirmwareTransfer, MAX_OTA_KEY, PRO_OTA_KEY, otaKeyFor, otaKeyForBoard, shouldOffer } from './fwPush.js'
 
 describe('shouldOffer', () => {
   it('offers a strictly newer release', () => {
@@ -241,6 +241,19 @@ describe('which firmware a board may be offered', () => {
 
   it('hw harness-pro without board is not offered', () => {
     expect(otaKeyFor('harness-pro', undefined, undefined)).toBeNull()
+  })
+
+  it('Harness Max with ota v1 is offered its own harness-max entry, never the Pro\'s', () => {
+    // Max builds the Pro's firmware on the same ESP32-P4, but its own board: a Pro image would drive the wrong panel.
+    expect(MAX_OTA_KEY).toBe('harness-max')
+    expect(otaKeyFor('harness-max', 'max', 'v1')).toBe(MAX_OTA_KEY)
+    expect(new Set([CIRCLE_OTA_KEY, PRO_OTA_KEY, MAX_OTA_KEY]).size).toBe(3)
+  })
+
+  it('Harness Max without ota v1, or without its board, is not offered', () => {
+    expect(otaKeyFor('harness-max', 'max', undefined)).toBeNull()
+    expect(otaKeyFor('harness-max', 'max', 'v2')).toBeNull()
+    expect(otaKeyFor('harness-max', undefined, 'v1')).toBeNull()
   })
 
   it('round choice unchanged', () => {

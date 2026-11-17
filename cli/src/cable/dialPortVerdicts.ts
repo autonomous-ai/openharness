@@ -18,7 +18,7 @@ const KNOWN_FOR_MS = 6 * 60 * 60_000
 /** A verdict about a port with no attachment identity is only a pause, since nothing says when it changes. */
 const UNKNOWN_FOR_MS = 10 * 60_000
 
-/** `board`: what a dial's greeting named it (`hello.board`), "pro" for a Harness Pro; absent for a round dial. */
+/** `board`: what a dial's greeting named it (`hello.board`), "pro" or "max"; absent for a round dial. */
 interface Verdict { session?: string; at: number; dial?: true; board?: string }
 
 const keyOf = (port: DialPort) => (port.serialNumber ?? port.path).toUpperCase()
@@ -61,10 +61,10 @@ export class DialVerdicts {
     this.save()
   }
 
-  /** Did this board greet as a Harness Pro? The one board the fleet may reset over the cable (cableFleet.ts). */
-  isPro(port: DialPort): boolean {
+  /** What this board's greeting named it (`hello.board`), or undefined: the fleet resets only a Pro or Max (cableFleet.ts). */
+  boardOf(port: DialPort): string | undefined {
     const known = this.foreign.get(keyOf(port))
-    return known?.dial === true && known.board === 'pro'
+    return known?.dial ? known.board : undefined
   }
 
   markForeign(port: DialPort): void {

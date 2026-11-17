@@ -1084,6 +1084,36 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  it.each([['pro', 'harness-pro'], ['max', 'harness-max']])('a %s ota v1 session is offered its own entry, every slice led by its offset', async (board, hw) => {
+    // Harness Max builds the Pro's firmware on the same ESP32-P4 and its USB, so its transfer is the Pro's: the
+    // device asks for a resend from an offset, which it can only do when each slice says where it starts.
+    const image = Buffer.alloc(100_000, 9)
+    const firmwareFor = vi.fn(async (_v: string, _key: string) => ({ version: '9.9.9', image, sha256: 'x'.repeat(64) }))
+    const { session, port } = await connect(makeHost({ firmwareFor }))
+    port.say({ t: 'hello', product: 'harness', fw: '0.0.1', proto: 2, mac: 'aa:bb', hw, board, ota: 'v1' })
+    await settle()
+    expect(firmwareFor).toHaveBeenCalledWith('0.0.1', hw)
+    port.say({ t: 'fw.accept' })
+    const offsets = () => {
+      const slices: Buffer[] = []
+      const decoder = new CableDecoder()
+      for (const frame of port.frames) decoder.feed(Buffer.from(frame), (f) => { if (f.type === CableType.Fw) slices.push(Buffer.from(f.payload)) })
+      return slices.map((slice) => slice.readUInt32LE(0))
+    }
+    // The first window: three slices of 8188 bytes each, before the device acknowledges any.
+    await vi.waitFor(() => expect(offsets()).toEqual([0, 8188, 16376]))
+    await session.stop()
+  })
+
+  it('a Harness Max without ota v1 gets no firmware offer', async () => {
+    const firmwareFor = vi.fn(async () => null)
+    const { session, port } = await connect(makeHost({ firmwareFor }))
+    port.say({ t: 'hello', product: 'harness', fw: '0.0.1', proto: 2, mac: 'aa:bb', hw: 'harness-max', board: 'max' })
+    await settle()
+    expect(firmwareFor).not.toHaveBeenCalled()
+    await session.stop()
+  })
+
   it('hw harness-pro without board is not offered', async () => {
     const firmwareFor = vi.fn(async () => null)
     const { session, port } = await connect(makeHost({ firmwareFor }))
@@ -3564,6 +3594,17 @@ describe('hello capabilities', () => {
       await session.question('a1', 'q1', ask)
       await session.question('a2', 'q2', ask)
       expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a2', id: 'q2' }])
+    } finally { await session.stop() }
+  })
+
+  it('numbers every frame to a Harness Max and advertises resync, as to a Pro: the same USB loses bytes on its way', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ ...PRO_HELLO, hw: 'harness-max', board: 'max' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      expect(ofType(port, 'welcome')[0].features).toContain('resync')
+      expect(port.seqs.length).toBeGreaterThan(1)
+      expect(port.seqs).toEqual(port.seqs.map((_, i) => i))
     } finally { await session.stop() }
   })
 
