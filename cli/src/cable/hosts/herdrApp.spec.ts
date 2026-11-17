@@ -3,6 +3,7 @@ import type { Place } from './adapter.js'
 import type { HcPrompt } from './hcClient.js'
 import { createHerdrAppAdapter, type HerdrAppDeps } from './herdrApp.js'
 import { detectApp, detectHost } from './hostDetect.js'
+import { herdrAppStatus } from '../../testing/herdrAppStatus.js'
 
 const FAKE_PATH_HERDR_APP = '/fake/bin/herdr-app'
 /** Herdr.app's own binary, written out: the adapter's own constant would agree with itself. */
@@ -13,17 +14,17 @@ const FORGED = ['vps/t7', 'T7', 't', ' t7', 't7\n', '--help', 't7; rm -rf /', `t
 interface Call { file: string; args: string[]; timeoutMs: number }
 
 /** A recording runner that runs nothing, so no spec opens Herdr or moves its window: each call answers the next of
- *  [codes], then exit 0. Beside it a recording client that opens no socket (its `prompt` answers `sent` unless the test
+ *  [codes], then exit 0, with [stdout] (what `herdr-app status` printed). Beside it a recording client that opens no socket (its `prompt` answers `sent` unless the test
  *  sets another answer), Herdr in front, every terminal shown and reporting an agent, and the default hc session
  *  followed unless the test says otherwise, and the log's lines kept. */
-function recorder(over: Partial<HerdrAppDeps> = {}, codes: Array<number | null> = []) {
+function recorder(over: Partial<HerdrAppDeps> = {}, codes: Array<number | null> = [], stdout = '') {
   const calls: Call[] = []
   const log: string[] = []
   const prompt = vi.fn(async (_address: string, _kind: string, _text: string): Promise<HcPrompt> => ({ outcome: 'sent' }))
   const deps: HerdrAppDeps = {
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
-      return { code: codes.length ? codes.shift()! : 0, stdout: '' }
+      return { code: codes.length ? codes.shift()! : 0, stdout }
     },
     onPath: (name) => (name === 'herdr-app' ? FAKE_PATH_HERDR_APP : null),
     exists: () => false,
@@ -45,16 +46,16 @@ const turn = () => new Promise((resolve) => setImmediate(resolve))
 /** The recorder, each command held until the test answers it, so a run can be caught under way. */
 function holding() {
   const calls: Call[] = []
-  const waiting: Array<(code: number | null) => void> = []
+  const waiting: Array<(code: number | null, stdout: string) => void> = []
   const rest = recorder({
     run: (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
-      return new Promise((resolve) => waiting.push((code) => resolve({ code, stdout: '' })))
+      return new Promise((resolve) => waiting.push((code, stdout) => resolve({ code, stdout })))
     },
   })
-  /** Answers the oldest command still held, and lets what follows it run. */
-  const answer = async (code: number | null) => {
-    waiting.shift()!(code)
+  /** Answers the oldest command still held, with what it printed, and lets what follows it run. */
+  const answer = async (code: number | null, stdout = '') => {
+    waiting.shift()!(code, stdout)
     await turn()
   }
   return { ...rest, calls, answer }
@@ -82,6 +83,10 @@ const SCROLL_FAILED = '[herdr-app] scroll · failed'
 const drained = (lines: number, runs: number, failed: number) =>
   `[herdr-app] scroll · ${lines} lines · ${runs} runs · ${failed} failed`
 const scrollFailures = (log: string[]) => log.filter((line) => line === SCROLL_FAILED).length
+const statusCall: Call = { file: FAKE_PATH_HERDR_APP, args: ['status'], timeoutMs: 2_000 }
+const STATUS_FAILED = '[herdr-app] status · failed'
+/** The fixture with its keys changed, as a Herdr that printed other values would. */
+const statusWith = (change: Record<string, unknown>) => JSON.stringify({ ...JSON.parse(herdrAppStatus()), ...change })
 
 describe('the Herdr adapter', () => {
   it('its id is herdr-app, and a tap is its own', () => {
@@ -552,6 +557,108 @@ describe('the Herdr adapter', () => {
         await turn()
         expect(calls, platform).toEqual([])
         expect(log, platform).toEqual([])
+      }
+    })
+  })
+
+  describe('onScreen', () => {
+    it('onScreen runs herdr-app status within 2 s, and is true when its agent is the pane\'s terminal', async () => {
+      const { calls, log, adapter } = recorder({}, [], herdrAppStatus('t7'))
+      expect(await adapter.onScreen(pane('t7'))).toBe(true)
+      expect(calls).toEqual([statusCall])
+      expect(log).toEqual([])
+    })
+
+    // A layout with no agent block has no agent; another address is another terminal on screen.
+    it.each([
+      ['another terminal', herdrAppStatus('t8')],
+      ['a null agent', herdrAppStatus(null)],
+      ['no agent', herdrAppStatus()],
+      ['an agent that is no string', statusWith({ agent: 7 })],
+    ])('%s is false, with one run and no line', async (_, stdout) => {
+      const { calls, log, adapter } = recorder({}, [], stdout)
+      expect(await adapter.onScreen(pane('t7'))).toBe(false)
+      expect(calls).toEqual([statusCall])
+      expect(log).toEqual([])
+    })
+
+    // A Herdr that changes what status prints must be seen.
+    it.each([
+      ['a stdout that is no JSON', {}, [], 'not json', 1],
+      ['an array', {}, [], '[]', 1],
+      ['null', {}, [], 'null', 1],
+      ['a string', {}, [], '"t7"', 1],
+      ['exit 1', {}, [1], herdrAppStatus('t7'), 1],
+      ['no exit code', {}, [null], herdrAppStatus('t7'), 1],
+      ['no binary', { onPath: () => null }, [], herdrAppStatus('t7'), 0],
+    ] as Array<[string, Partial<HerdrAppDeps>, Array<number | null>, string, number]>)('%s is false, with the failed line', async (_, over, codes, stdout, runs) => {
+      const { calls, log, adapter } = recorder(over, codes, stdout)
+      expect(await adapter.onScreen(pane('t7'))).toBe(false)
+      expect(calls).toEqual(Array(runs).fill(statusCall))
+      expect(log).toEqual([STATUS_FAILED])
+    })
+
+    it('status · failed is said once until a read succeeds', async () => {
+      const { log, adapter } = recorder({}, [1, 1, 0, 1], herdrAppStatus('t7'))
+      expect(await adapter.onScreen(pane('t7'))).toBe(false)
+      expect(await adapter.onScreen(pane('t7'))).toBe(false)
+      expect(log).toEqual([STATUS_FAILED])
+      expect(await adapter.onScreen(pane('t7'))).toBe(true)
+      expect(await adapter.onScreen(pane('t7'))).toBe(false)
+      expect(log).toEqual([STATUS_FAILED, STATUS_FAILED])
+    })
+
+    // The rest names the person's spaces and layouts.
+    it('nothing but agent is read', async () => {
+      const others = { space: 7, layout: null, overlays: 'x' }
+      expect(await recorder({}, [], statusWith({ ...others, agent: 't7' })).adapter.onScreen(pane('t7'))).toBe(true)
+      const { log, adapter } = recorder({}, [], statusWith({ ...others, agent: 't8' }))
+      expect(await adapter.onScreen(pane('t7'))).toBe(false)
+      expect(log).toEqual([])
+    })
+
+    // Review Focus 2: a dial may send down after down faster than status answers.
+    it('asks while a read is under way are that one read, each answered for its own pane', async () => {
+      const { calls, adapter, answer } = holding()
+      const seven = adapter.onScreen(pane('t7'))
+      const eight = adapter.onScreen(pane('t8'))
+      await turn()
+      expect(calls).toEqual([statusCall])
+      await answer(0, herdrAppStatus('t7'))
+      expect(await seven).toBe(true)
+      expect(await eight).toBe(false)
+      const again = adapter.onScreen(pane('t8'))
+      await turn()
+      expect(calls).toEqual([statusCall, statusCall])
+      await answer(0, herdrAppStatus('t8'))
+      expect(await again).toBe(true)
+    })
+
+    // Review Focus 5.
+    it('a read that rejects is false', async () => {
+      const unhandled = vi.fn()
+      process.on('unhandledRejection', unhandled)
+      try {
+        const { log, adapter } = recorder({ run: async () => { throw new Error('spawn failed') } })
+        expect(await adapter.onScreen(pane('t7'))).toBe(false)
+        expect(log).toEqual([STATUS_FAILED])
+        await turn()
+        expect(unhandled).not.toHaveBeenCalled()
+      } finally {
+        process.off('unhandledRejection', unhandled)
+      }
+    })
+
+    it('a bad id asks nothing; off macOS nothing is asked', async () => {
+      const { calls, log, adapter } = recorder({}, [], herdrAppStatus('t7'))
+      for (const id of FORGED) expect(await adapter.onScreen(pane(id)), id).toBe(false)
+      expect(calls).toEqual([])
+      expect(log).toEqual([])
+      for (const platform of ['linux', 'win32'] as const) {
+        const other = recorder({ platform }, [], herdrAppStatus('t7'))
+        expect(await other.adapter.onScreen(pane('t7')), platform).toBe(false)
+        expect(other.calls, platform).toEqual([])
+        expect(other.log, platform).toEqual([])
       }
     })
   })
