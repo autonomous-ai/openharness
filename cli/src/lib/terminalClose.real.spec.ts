@@ -63,7 +63,7 @@ it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('saves and closes an inact
     })
     const stop = createStopAgentService({ registry, stoppedAgents,
       restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), backendFor: () => backend,
-      agentReconciler: { suppress() {}, holdRoute() {}, releaseRoute() {}, trigger: async () => {} },
+      agentReconciler: { suppress() {}, holdRoute() {}, releaseRoute() {}, nudge: () => {} },
       forgetSession: async id => { await registry.confirmEngineExit(id, 'remove') }, markDeleted() {}, clearDeleted() {}, stopNative: inlineNativeControls().stop,
     })
     close = new CloseAgentService({ registry, stop, changed() {},

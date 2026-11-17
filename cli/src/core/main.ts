@@ -1293,7 +1293,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       saveHostTheme(theme)
       console.log(`[theme] panes now bg=${theme.background} fg=${theme.foreground}`)
       // Existing sessions pick it up on the next scan (TmuxBackend.inventory restyles); nudge one now.
-      void agentReconciler.trigger()
+      agentReconciler.nudge()
     },
   })
   backend.terminalInfoProvider = terminalRequests.terminalInfo

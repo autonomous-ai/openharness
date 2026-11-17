@@ -149,7 +149,7 @@ real('a guest\'s harness against an owner\'s', () => {
     const stop = createStopAgentService({
       registry, stoppedAgents, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
       backendFor: (runtime) => runtime.backend === 'tmux' ? backend : undefined,
-      agentReconciler: { suppress: () => {}, holdRoute: () => {}, releaseRoute: () => {}, trigger: async () => {} },
+      agentReconciler: { suppress: () => {}, holdRoute: () => {}, releaseRoute: () => {}, nudge: () => {} },
       forgetSession: async (id) => { (await removeRegistryAgent(registry, id)) }, markDeleted: () => {}, clearDeleted: () => {},
       stopNative: async () => { throw new Error('a guest\'s engine is not this daemon\'s to unload') },
     })

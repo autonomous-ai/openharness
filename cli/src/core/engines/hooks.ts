@@ -31,7 +31,7 @@ export interface EngineHookDeps {
   tmuxBackend: unknown
   /** A ptyhost hint names a pane of the Harness PTY host; without that backend there is nothing it can point at. */
   ptyHostBackend?: unknown
-  agentReconciler: Pick<TerminalAgentReconciler, 'triggerHint' | 'trigger'>
+  agentReconciler: Pick<TerminalAgentReconciler, 'triggerHint' | 'nudge'>
   registry: Pick<typeof registry, 'byRuntimeEngine' | 'byAgent'>
   syncSession: (row: RegisteredSession) => void
 }
@@ -239,7 +239,7 @@ export function createEngineHooks(deps: EngineHookDeps) {
   // SessionEnd describes the mutable engine session, never process lifetime. Reconcile now; discovery
   // decides whether the agent still exists from terminal inventory + ps.
   const onSessionEnd = (_sessionId: string, _reason: string | undefined): void => {
-    void agentReconciler.trigger()
+    agentReconciler.nudge()
   }
   const onAdmissionHeld = (id: string, reason: string | undefined): void => {
     const row = registry.byAgent(id)

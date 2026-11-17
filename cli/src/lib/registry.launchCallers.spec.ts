@@ -303,7 +303,7 @@ it('binding revalidation cannot change Stop evidence while its prepared image wa
   const nativeEntered = deferred(), nativeDone = deferred(), deleted = vi.fn()
   const stop = createStopAgentService({ registry, stoppedAgents: store, restartJobs: new AgentRestartCoordinator(), stopJobs: jobs,
     backendFor: () => ({ kill: async () => ({ state: 'succeeded', dispatch: 'executed' }) }),
-    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: async () => {} },
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: () => {} },
     forgetSession: async (_id, options) => { await registry.confirmEngineExit(row.agentId, 'remove', options?.authority); deleted() },
     markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: async () => { nativeEntered.resolve(); await nativeDone.promise } })
   const held = holdImage(rows => rows.some(entry => entry.agentId === row.agentId && entry.title === row.title))
@@ -336,7 +336,7 @@ it('Stop keeps its reply, deletion and resume reservation pending until removal 
     ended: vi.fn(), mirror: { forget: vi.fn() }, clients: { send, sendCommander: vi.fn() } })
   const stop = createStopAgentService({ registry, stoppedAgents: store, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
     backendFor: () => ({ kill: async () => ({ state: 'succeeded', dispatch: 'executed' }) }),
-    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: async () => {} },
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: () => {} },
     forgetSession, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: async () => {} })
   const held = holdImage(rows => !rows.some(entry => entry.agentId === row.agentId))
   let replied = false
@@ -366,7 +366,7 @@ it.each(['prepare', 'directory sync'] as const)('Stop keeps a failed %s removal 
     ended: vi.fn(), mirror: { forget: vi.fn() }, clients: { send, sendCommander: vi.fn() } })
   const stop = createStopAgentService({ registry, stoppedAgents: store, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
     backendFor: () => ({ kill: async () => ({ state: 'succeeded', dispatch: 'executed' }) }),
-    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: async () => {} },
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: () => {} },
     forgetSession, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: async () => {} })
   if (phase === 'prepare') {
     image.match = rows => !rows.some(entry => entry.agentId === row.agentId)

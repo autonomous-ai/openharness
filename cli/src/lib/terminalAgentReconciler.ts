@@ -168,7 +168,7 @@ export class TerminalAgentReconciler {
    */
   async start(intervalMs: number): Promise<void> {
     this.waitingForStart = false
-    this.timer = setInterval(() => { void this.trigger() }, intervalMs)
+    this.timer = setInterval(() => this.nudge(), intervalMs)
     this.timer.unref?.()
     await this.trigger().catch((error) => {
       console.warn(`[discovery] first pass failed, retrying on the interval · ${error instanceof Error ? error.message : error}`)
@@ -246,6 +246,17 @@ export class TerminalAgentReconciler {
     if (this.waitingForStart) return Promise.resolve(true)
     if (!this.inFlight) this.inFlight = this.drain().finally(() => { this.inFlight = null })
     return this.waitFor(this.inFlight)
+  }
+
+  /**
+   * Asks for a pass nobody waits on. Callers that dropped such a pass left its rejection — an owner that
+   * changed, an identity read that could not be made — unhandled for the fatal guard (e2e/diskfull.e2e.ts).
+   * Logged by its kind only, as its message may quote a path; the next pass tries again.
+   */
+  nudge(): void {
+    this.trigger().catch((error: unknown) => {
+      console.warn(`[discovery] a pass failed, the next one tries again · ${error instanceof Error ? error.constructor.name : typeof error}`)
+    })
   }
 
   /** A pass, waited for until the pass deadline and no longer: see [RECONCILE_PASS_DEADLINE_MS]. */
