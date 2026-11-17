@@ -86,6 +86,7 @@ core/engines/screenTransport.ts
 core/engines/screens.ts
 core/engines/sessionBinding.ts
 core/engines/snapshotTransport.ts
+core/engines/storage.ts
 core/engines/submissionTransport.ts
 core/engines/submissions.ts
 core/experimentQueries.ts
@@ -184,7 +185,6 @@ engines/grok/contract.ts
 engines/hermes/contract.ts
 engines/hooks.ts
 engines/identities.ts
-engines/inProcess.ts
 engines/kit/attribution.ts
 engines/kit/continuation.ts
 engines/kit/controlIdentity.ts
@@ -207,6 +207,7 @@ engines/kit/launchStartup.ts
 engines/kit/nativeDescriptors.ts
 engines/kit/nativeEvidence.ts
 engines/kit/nativeExecutable.ts
+engines/kit/nativeFileObservation.ts
 engines/kit/nativeFiles.ts
 engines/kit/nativeHeader.ts
 engines/kit/nativeHookFiles.ts
@@ -274,6 +275,7 @@ engines/worker/questionControlProtocol.ts
 engines/worker/resumeRepairProtocol.ts
 engines/worker/runtimeProtocol.ts
 engines/worker/screenProtocol.ts
+engines/worker/storageProtocol.ts
 engines/worker/submissionProtocol.ts
 harnessd/baseNode.ts
 harnessd/coreLink.ts
@@ -302,6 +304,7 @@ lib/browserShim.ts
 lib/captureResumeIdentity.ts
 lib/cardUpdate.ts
 lib/cellAdvance.ts
+lib/checkpointStages.ts
 lib/childLocale.ts
 lib/claudeHomes.ts
 lib/closeAgentService.ts
@@ -315,6 +318,7 @@ lib/daemonCommand.ts
 lib/daemonRecord.ts
 lib/daemonSafeMode.ts
 lib/daemonState.ts
+lib/databaseCheckpoint.ts
 lib/deleteAgentFallback.ts
 lib/deletedSessions.ts
 lib/dialogEnd.ts
@@ -462,7 +466,6 @@ lib/slimForRelay.ts
 lib/spreadNotice.ts
 lib/sqliteAvailability.ts
 lib/sqliteBuiltin.ts
-lib/sqlitePage.ts
 lib/sqliteRead.ts
 lib/sqliteThread.ts
 lib/stopAgentService.ts
@@ -513,6 +516,7 @@ lib/windows/guestTree.ts
 lib/windows/hermesLaunch.ts
 lib/windows/installNames.ts
 lib/windows/launch.ts
+lib/windows/noWindow.ts
 lib/windows/pipeAuth.ts
 lib/windows/pipeClient.ts
 lib/windows/powershell.ts

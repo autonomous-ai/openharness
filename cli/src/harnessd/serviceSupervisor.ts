@@ -14,6 +14,7 @@ import { UPDATER_PROCESS, type ServiceSpec } from './services.js'
 import { describeExit, type CoreHandle } from './supervisor.js'
 
 export interface ServiceSupervisorDeps {
+  changed?(): void
   /** Start a process with these extra environment variables, running every service its spec names. */
   spawnService(spec: ServiceSpec, env: Record<string, string>): CoreHandle
   /** A monotonic clock, in ms. */
@@ -273,6 +274,7 @@ class Service {
   private setState(state: ServiceState): void {
     this.state = state
     this.since = this.deps.wallClock()
+    this.deps.changed?.()
   }
 
   private armTimer(name: 'heartbeatTimer' | 'killTimer' | 'restartTimer', run: () => void, ms: number): void {

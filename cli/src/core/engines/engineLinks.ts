@@ -3,7 +3,7 @@
  * refused because its worker restarted under it (`ENGINE_STALE_REPLY`, `ENGINE_UNAVAILABLE`) can wait here for
  * the new link and be made again: a read is idempotent. A write is never retried this way.
  */
-import { readerEngine, READER_SERVICES } from '../../engines/worker/protocol.js'
+import { workerEngine, workerService } from '../../engines/worker/protocol.js'
 
 export function createEngineLinks() {
   const linked = new Set<string>()
@@ -16,11 +16,17 @@ export function createEngineLinks() {
     disconnected(service: string): void { linked.delete(service) },
     /** Once the engine's worker is linked, or after `ms`, whichever comes first. */
     ready(engine: string, ms: number): Promise<void> {
-      if (!readerEngine(engine) || linked.has(READER_SERVICES[engine])) return Promise.resolve()
-      const service = READER_SERVICES[engine]
+      if (!workerEngine(engine) || linked.has(workerService(engine))) return Promise.resolve()
+      const service = workerService(engine)
       return new Promise<void>(resolve => {
         const timer = setTimeout(wake, ms)
-        function wake() { clearTimeout(timer); resolve() }
+        function wake() {
+          clearTimeout(timer)
+          const pending = waiting.get(service), index = pending?.indexOf(wake) ?? -1
+          if (index >= 0) pending!.splice(index, 1)
+          if (!pending?.length) waiting.delete(service)
+          resolve()
+        }
         waiting.set(service, [...waiting.get(service) ?? [], wake])
       })
     },

@@ -32,6 +32,34 @@ export async function nativeOpenFiles(pid: number): Promise<string[]> {
   return evidence.descriptors.map(row => row.path).filter(path => path.startsWith('/'))
 }
 
+/** Core location authority retains only declared matching files, including their aliases and ancestors. */
+export async function nativeHeldFiles(expected: ProcessIdentity, matches: (path: string) => boolean): Promise<{ paths: string[]; verify(): void }> {
+  const pid = expected.pid
+  if (!Number.isSafeInteger(pid) || pid <= 0) return nativeUnavailable('the native file owner is invalid')
+  const budget = new NativeEvidenceBudget()
+  const owner = await readProcessEvidence(pid, budget, undefined, expected)
+  if (!owner.parent) return nativeUnavailable('the native file owner is unavailable')
+  const evidence = await readDescriptorEvidence(pid, budget)
+  const routes = new NativePaths(budget), selected: string[] = []
+  for (const descriptor of evidence.descriptors) {
+    const name = descriptor.path.replace(/ \(deleted\)$/, '')
+    if (!matches(name)) continue
+    if (selected.length >= 64) return nativeUnavailable('the held native location limit was reached')
+    if (descriptor.path !== name || descriptor.kind !== 'REG' || !/^\d+$/.test(descriptor.fd)
+      || descriptor.device === undefined || descriptor.inode === undefined) return nativeUnavailable('a held native location has no regular file identity')
+    let found: string | undefined
+    for (const spelling of process.platform === 'linux' ? [name] : descriptorPaths(name)) {
+      const location = routes.resolveSync(spelling, true)
+      if (location?.info.isFile() && nativeFileKey(location.info) === descriptorKey(descriptor)) found ??= spelling
+    }
+    if (!found) return nativeUnavailable('the held native pathname does not match its descriptor')
+    selected.push(found)
+  }
+  await evidence.verify()
+  await owner.verifyDescriptors(new Map([[pid, evidence.descriptors]]))
+  return { paths: [...new Set(selected)], verify: routes.retain() }
+}
+
 async function conversationDescriptors(engine: AgentEngine, pid: number, budget: NativeEvidenceBudget,
   { expected, sources = nativeSources }: NativeConversationOptions = {}) {
   const live = sessionStoreOf(engine)?.live

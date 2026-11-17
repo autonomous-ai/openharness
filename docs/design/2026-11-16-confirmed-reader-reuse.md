@@ -182,3 +182,17 @@ portability. They will run on the clean reviewed head; the earlier broad
 receipts do not cover these fixes. Native reader-loss/Close/Resume acceptance
 and a fresh matched comparison against the same main remain required. Earlier
 cost failures are not superseded by the focused passing tests.
+
+## Async Registry integration correction (2026-11-17)
+
+The combined caller run exposed three real recovery failures: Registry now returns a detached
+committed row, so clearing the worker-owned identity hold changed the live row but left the old
+return snapshot held. Passing that snapshot to attachment correctly failed its current-identity
+check and prevented recovery. Before clearing the existing hold, compare the live row's complete
+pane identity with the committed snapshot. Refuse a missing or newer owner. Clear only that
+verified worker hold synchronously, then capture the resulting row for announcement and follow.
+No await lies between the comparison, clear and capture. Healthy-reader reuse and every prior
+cancellation/route/process/hold check remain intact. There is no new state, capacity, protocol,
+persistent format or migration; the change affects all platforms' shared binding logic.
+The existing real Registry/reader recovery caller is the RED; all three failure cases and the
+separate stale-owner controls must pass on the combined source before native/cost acceptance.

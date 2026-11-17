@@ -8,6 +8,9 @@
 import { constants } from 'node:fs'
 import { lstat, open } from 'node:fs/promises'
 import { join } from 'node:path'
+import { observeNativeFile } from './nativeFileObservation.js'
+import { NativeEvidenceBudget, nativeUnavailable } from './nativeEvidence.js'
+import { NativePaths } from './nativePaths.js'
 
 export interface TerminalRecordRule {
   directory: string
@@ -91,6 +94,10 @@ async function readOne(rule: TerminalRecordRule, file: string, sinceMs: number):
   } catch (error) {
     return ABSENT.has((error as NodeJS.ErrnoException).code ?? '') ? NONE : ignored('unreadable')
   }
+  return terminalRecordValue(rule, bytes, sinceMs)
+}
+
+function terminalRecordValue(rule: TerminalRecordRule, bytes: Buffer, sinceMs: number): TerminalRecordRead {
   let value: unknown
   try { value = JSON.parse(UTF8.decode(bytes)) } catch { return ignored('malformed') }
   if (!value || typeof value !== 'object' || Array.isArray(value)) return ignored('malformed')
@@ -99,6 +106,38 @@ async function readOne(rule: TerminalRecordRule, file: string, sinceMs: number):
   // A tty is used again: a record an earlier process left in it is not this process's.
   if (time * 1000 < sinceMs) return ignored('stale')
   return { state: 'record', sessionId: session, at: time * 1000 }
+}
+
+/** Retained exact records before Stop; after its first signal only a current conflicting claim revokes escalation. */
+export function terminalRecordEvidence(rule: TerminalRecordRule, home: string, names: readonly string[], sinceMs: number, sessionId: string) {
+  if (names.length > rule.names.length || !Number.isFinite(sinceMs)) return nativeUnavailable('the native terminal identity is unavailable')
+  const paths = new NativePaths(new NativeEvidenceBudget())
+  paths.resolveSync(join(home, rule.directory), true)
+  const verifyRoute = paths.retain()
+  const capture = () => {
+    const files = []
+    for (const name of names) {
+      const file = observeNativeFile(join(home, rule.directory, name), { maxBytes: rule.maxBytes, missingOkay: true })
+      files.push(file)
+      if (file.bytes !== undefined) break // Lower-priority names cannot override the terminal's preferred record.
+    }
+    return files
+  }
+  const matches = (files: ReturnType<typeof capture>) => {
+    for (const file of files) {
+      if (!file.bytes) continue // Older Hermes and its TUI need not keep a terminal record.
+      const read = terminalRecordValue(rule, file.bytes, sinceMs)
+      if (read.state !== 'record') return nativeUnavailable('the native terminal record is unavailable')
+      if (read.sessionId !== sessionId) nativeUnavailable('the native terminal changed conversations')
+    }
+  }
+  const files = capture()
+  matches(files)
+  return { verify(afterEffect = false): void {
+    verifyRoute()
+    if (afterEffect) { matches(capture()); verifyRoute() }
+    else for (const file of files) file.verify()
+  } }
 }
 
 function ignored(reason: Extract<TerminalRecordRead, { state: 'ignored' }>['reason']): TerminalRecordRead {

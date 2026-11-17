@@ -390,6 +390,7 @@ export function runMaster(config: MasterConfig): Supervisor {
   const processes = config.updater ? [...specs, { name: UPDATER_PROCESS, ...UPDATER_HOST }] : specs
   let supervisor: Supervisor | null = null
   const services = new ServiceSupervisor(processes, {
+    changed: () => supervisor!.servicesChanged(),
     spawnService: (spec, extra) => {
       // From the lean bundle when it can be (./leanServices.ts); with a current build (Windows), from that.
       const file = config.currentScript ? script() : lean.scriptFor(spec.name)
@@ -484,6 +485,7 @@ export function runMaster(config: MasterConfig): Supervisor {
     log,
     // A process on demand, started once the core asks (./services.ts `onDemand`), or as a core too old to ask binds.
     want: (service) => services.want(service),
+    serviceProcesses: () => services.status().map(({ name, pid }) => ({ name, pid })),
     unasked: (protocol) => services.unasked(protocol),
     stopByMessage: config.stopByMessage,
     stopRequested: stopAll,

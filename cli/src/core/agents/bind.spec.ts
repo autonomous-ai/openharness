@@ -1066,7 +1066,7 @@ describe('binding a running process to its session', () => {
       vi.mocked(run.deps.followsLive).mockReturnValue(true)
       follow.mockResolvedValue({ sessionId: 'new' })
       await run.binding.bindObservedAgent(hermes())
-      expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'new', source: 'hermes-terminal' }))
+      expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'new', source: 'hermes-terminal' }), { current: expect.any(Function) })
       expect(run.deps.attachSession).toHaveBeenCalledOnce()
     })
 

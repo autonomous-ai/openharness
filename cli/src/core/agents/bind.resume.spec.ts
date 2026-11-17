@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../../testing/registryFixtures.js'
 /** A same-conversation terminal confirmation must follow the identity that supersedes Resume's in-flight attach. */
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -72,12 +73,12 @@ afterEach(async () => {
   vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(directory, { recursive: true, force: true })
 })
 
-function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none', pauseConfirmation = false, readerHolds = false, retryMs?: number) {
-  registry.openProcessAgent({ engine: 'hermes', agentId, tmuxPane: '%41', cwd: directory, processIdentity: firstProcess })
-  const saved = { ...registry.register({ engine: 'hermes', sessionId, tmuxPane: '%41', cwd: directory, processIdentity: firstProcess })!.entry }
-  registry.removeAgent(agentId)
+async function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none', pauseConfirmation = false, readerHolds = false, retryMs?: number) {
+  ;(await registry.openProcessAgent({ engine: 'hermes', agentId, tmuxPane: '%41', cwd: directory, processIdentity: firstProcess }))
+  const saved = { ...(await registry.register({ engine: 'hermes', sessionId, tmuxPane: '%41', cwd: directory, processIdentity: firstProcess }))!.entry }
+  await removeRegistryAgent(registry, agentId)
   // The exact registry sequence used by Resume after its new process is confirmed, with no hook.
-  registry.resumePendingAgent(saved, [{ backend: 'tmux', paneId: '%42' }])
+  ;(await registry.resumePendingAgent(saved, [{ backend: 'tmux', paneId: '%42' }]))
   registry.updateProcessIdentity(agentId, nextProcess)
   const resumed = registry.setLaunch(agentId, { state: 'ready' })!
   expect(resumed.boundAt).toBeNull(); expect(resumed.lastHookAt).toBe(0)
@@ -163,7 +164,7 @@ function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none', paus
   const forget = (id: string) => { normalizers.forget(id); attach.forget(id) }
   const binding = createBinding({ registry, attachSession: requestAttach, captureReader: attach.captureReader, hermesTerminal,
     followsLive: id => others.follows(id),
-    mirror: { inheritSummary: vi.fn() }, forgetSession: forget, clients: { send }, announceSession: vi.fn(),
+    mirror: { inheritSummary: vi.fn() }, forgetSession: async id => { forget(id) }, clients: { send }, announceSession: vi.fn(),
     stoppedAgents, syncRecapPool: vi.fn(),
     input: { forget: vi.fn(), awaitingConfirmation: () => false }, submitAgent: vi.fn(), deviceInput: { forget: vi.fn() },
     homes: { copilot: directory, grok: directory, agy: directory }, capturePane: async () => null,
@@ -194,7 +195,7 @@ function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none', paus
 }
 
 it.each(['terminal', 'store', 'open'] as const)('follows the confirmed same conversation after native evidence supersedes its %s read', async boundary => {
-  const t = setup(boundary), before = paneReadIdentity(t.resumed)
+  const t = await setup(boundary), before = paneReadIdentity(t.resumed)
   const first = t.requestAttach(t.resumed)
   await t.entered.promise
   await t.confirm()
@@ -218,7 +219,7 @@ it.each(['terminal', 'store', 'open'] as const)('follows the confirmed same conv
 })
 
 it('can attach when native confirmation precedes the request', async () => {
-  const t = setup('none')
+  const t = await setup('none')
   await t.confirm()
   expect(await t.requestAttach(registry.byAgent(agentId)!)).toBe(true)
   expect(t.installed()).toBe(paneReadIdentity(registry.byAgent(agentId)))
@@ -227,7 +228,7 @@ it('can attach when native confirmation precedes the request', async () => {
 })
 
 it('keeps a completed stream without repeating its saved record or terminal probe on native confirmation', async () => {
-  const t = setup('none')
+  const t = await setup('none')
   expect(await t.requestAttach(t.resumed)).toBe(true)
   expect(t.installed()).toBeDefined()
   t.terminalGone.mockClear()
@@ -245,7 +246,7 @@ it('keeps a completed stream without repeating its saved record or terminal prob
 })
 
 it('follows a reader installed while its attachment has not completed', async () => {
-  const t = setup('config'), first = t.requestAttach(t.resumed)
+  const t = await setup('config'), first = t.requestAttach(t.resumed)
   await t.entered.promise
   expect(t.others.ready(sessionId)).toBe(true)
   await t.confirm(); t.release.resolve()
@@ -257,7 +258,7 @@ it('follows a reader installed while its attachment has not completed', async ()
 })
 
 it('keeps the current successor behind queued work even with a prior reader', async () => {
-  const t = setup('none')
+  const t = await setup('none')
   expect(await t.requestAttach(t.resumed)).toBe(true)
   t.pause()
   const running = t.requestAttach(t.resumed, true); await t.entered.promise
@@ -270,7 +271,7 @@ it('keeps the current successor behind queued work even with a prior reader', as
 })
 
 it.each(['missing', 'disconnected'] as const)('follows a %s reader instead of trusting its retained state', async state => {
-  const t = setup('none')
+  const t = await setup('none')
   expect(await t.requestAttach(t.resumed)).toBe(true)
   if (state === 'missing') t.others.forget(sessionId)
   else t.others.disconnected()
@@ -286,7 +287,7 @@ it.each(['missing', 'disconnected'] as const)('follows a %s reader instead of tr
 })
 
 it.each(['disconnected', 'recovering'] as const)('leaves native confirmation to the next pass while its reader is %s', async state => {
-  const t = setup('none', false, true)
+  const t = await setup('none', false, true)
   expect(await t.requestAttach(t.resumed)).toBe(true)
   t.disconnect()
   expect(t.others.follows(sessionId)).toBe(true)
@@ -316,8 +317,29 @@ it.each(['disconnected', 'recovering'] as const)('leaves native confirmation to 
   await t.liveTurn()
 })
 
+it.each(['gone', 'new hold'] as const)('does not clear a recovered reader hold after committed ownership is %s', async change => {
+  const t = await setup('none', false, true)
+  expect(await t.requestAttach(t.resumed)).toBe(true)
+  t.disconnect()
+  t.workerOpen.mockResolvedValueOnce({ version: STREAM_VERSION, error: 'ENGINE_TRANSCRIPT_TOO_LARGE' })
+  t.others.connected()
+  await vi.waitFor(() => expect(t.others.follows(sessionId)).toBe(false))
+  const commit = registry.register.bind(registry)
+  vi.spyOn(registry, 'register').mockImplementationOnce(async (...args) => {
+    const result = await commit(...args)
+    if (change === 'gone') await removeRegistryAgent(registry, agentId)
+    else registry.setIdentityHold(agentId, 'independent newer authority')
+    return result
+  })
+  await t.confirm(); await Promise.all(t.attempts)
+  expect(t.requestAttach).toHaveBeenCalledTimes(1)
+  expect(t.others.ready(sessionId)).toBe(false)
+  if (change === 'gone') expect(registry.byAgent(agentId)).toBeUndefined()
+  else expect(registry.byAgent(agentId)?.identityHold).toBe('independent newer authority')
+})
+
 it.each([false, true])('replaces a given-up reader on native confirmation while its worker stays connected (already confirmed: %s)', async confirmed => {
-  const t = setup('none', false, true)
+  const t = await setup('none', false, true)
   expect(await t.requestAttach(t.resumed)).toBe(true)
   if (confirmed) {
     await t.confirm(); await t.confirm()
@@ -346,7 +368,7 @@ it.each([false, true])('replaces a given-up reader on native confirmation while 
 })
 
 it.each(['new', 'already working', 'completed offline'] as const)('reconciles only the current Hermes turn after worker loss: %s', async state => {
-  const t = setup('none', false, true)
+  const t = await setup('none', false, true)
   if (state === 'already working') writeTurn('acknowledged working turn', false)
   expect(await t.requestAttach(t.resumed)).toBe(true)
   await t.confirm(); await t.confirm()
@@ -377,7 +399,7 @@ it.each(['new', 'already working', 'completed offline'] as const)('reconciles on
 })
 
 it('rescues a confirmed Hermes after all five connected recovery retries are exhausted', async () => {
-  const t = setup('none', false, true, 1)
+  const t = await setup('none', false, true, 1)
   expect(await t.requestAttach(t.resumed)).toBe(true)
   await t.confirm(); await t.confirm()
   t.disconnect()
@@ -397,7 +419,7 @@ it('rescues a confirmed Hermes after all five connected recovery retries are exh
 })
 
 it('refuses a stale native record while rescuing an already confirmed Hermes reader', async () => {
-  const t = setup('none', false, true)
+  const t = await setup('none', false, true)
   expect(await t.requestAttach(t.resumed)).toBe(true)
   await t.confirm(); await t.confirm()
   t.disconnect()
@@ -416,7 +438,7 @@ it('refuses a stale native record while rescuing an already confirmed Hermes rea
 })
 
 it('discards a recovered current-turn snapshot when its owner leaves before the reader reply', async () => {
-  const t = setup('none', false, true)
+  const t = await setup('none', false, true)
   expect(await t.requestAttach(t.resumed)).toBe(true)
   await t.confirm(); await t.confirm()
   t.disconnect(); writeTurn('new turn for the former owner', false)
@@ -427,7 +449,7 @@ it('discards a recovered current-turn snapshot when its owner leaves before the 
     return result
   })
   t.others.connected(); await entered.promise
-  t.forget(sessionId); registry.removeAgent(agentId)
+  t.forget(sessionId); await removeRegistryAgent(registry, agentId)
   release.resolve()
   await t.workerOpen.mock.results[1].value
   await vi.waitFor(() => expect(t.activeStreams()).toBe(0))
@@ -437,7 +459,7 @@ it('discards a recovered current-turn snapshot when its owner leaves before the 
 })
 
 it('does not release unrelated identity evidence when a confirmed reader has given up', async () => {
-  const t = setup('none', false, true)
+  const t = await setup('none', false, true)
   expect(await t.requestAttach(t.resumed)).toBe(true)
   await t.confirm(); await t.confirm()
   t.disconnect()
@@ -453,15 +475,15 @@ it('does not release unrelated identity evidence when a confirmed reader has giv
 })
 
 it.each(['forgotten', 'different conversation'] as const)('discards a recovering reader after its owner is %s', async change => {
-  const t = setup('none', false, true)
+  const t = await setup('none', false, true)
   expect(await t.requestAttach(t.resumed)).toBe(true)
   t.disconnect(); t.pauseOpen(); t.others.connected()
   await t.entered.promise
   await t.confirm()
-  t.forget(sessionId); registry.removeAgent(agentId)
+  t.forget(sessionId); await removeRegistryAgent(registry, agentId)
   if (change === 'different conversation') {
-    registry.openProcessAgent({ engine: 'hermes', agentId, tmuxPane: '%42', cwd: directory, processIdentity: nextProcess })
-    registry.register({ engine: 'hermes', sessionId: '20261116_100001_abcdef', tmuxPane: '%42', cwd: directory, processIdentity: nextProcess })
+    ;(await registry.openProcessAgent({ engine: 'hermes', agentId, tmuxPane: '%42', cwd: directory, processIdentity: nextProcess }))
+    ;(await registry.register({ engine: 'hermes', sessionId: '20261116_100001_abcdef', tmuxPane: '%42', cwd: directory, processIdentity: nextProcess }))
   }
   t.release.resolve()
   await vi.waitFor(() => expect(t.workerOpen).toHaveBeenCalledTimes(2))
@@ -474,7 +496,7 @@ it.each(['forgotten', 'different conversation'] as const)('discards a recovering
 })
 
 it('follows native confirmation that also changes its route', async () => {
-  const t = setup('none')
+  const t = await setup('none')
   expect(await t.requestAttach(t.resumed)).toBe(true)
   t.observed.runtimes = [{ backend: 'tmux', paneId: '%43' }]; t.observed.primaryRuntimeKey = 'tmux:%43'
   await t.confirm(); await Promise.all(t.attempts)
@@ -484,7 +506,7 @@ it('follows native confirmation that also changes its route', async () => {
 
 it.each(['home', 'process', 'cwd', 'evidence', 'forgotten lifetime', 'retained turn', 'relaunch', 'identity hold', 'interpretation hold'] as const)(
   'revokes a captured completed reader after %s changes', async change => {
-    const t = setup('none')
+    const t = await setup('none')
     expect(await t.requestAttach(t.resumed)).toBe(true)
     const keep = t.attach.captureReader(registry.byAgent(agentId)!)
     if (change === 'home') registry.setHermesHome(agentId, join(directory, 'profile'))
@@ -500,20 +522,20 @@ it.each(['home', 'process', 'cwd', 'evidence', 'forgotten lifetime', 'retained t
       else row.evidenceRevision = (row.evidenceRevision ?? 0) + 1
     }
     const row = registry.byAgent(agentId)!
-    const confirmed = registry.register({ engine: 'hermes', sessionId, runtimes: row.runtimes,
-      primaryRuntimeKey: row.primaryRuntimeKey, cwd: row.cwd ?? undefined, processIdentity: row.processIdentity!, hookEvent: 'HermesTerminal' })!.entry
+    const confirmed = (await registry.register({ engine: 'hermes', sessionId, runtimes: row.runtimes,
+      primaryRuntimeKey: row.primaryRuntimeKey, cwd: row.cwd ?? undefined, processIdentity: row.processIdentity!, hookEvent: 'HermesTerminal' }))!.entry
     expect(keep(confirmed)).toBe(false)
   },
 )
 
 it.each(['forgotten', 'different conversation'] as const)('does not follow stale native confirmation after the row is %s', async change => {
-  const t = setup('store', true)
+  const t = await setup('store', true)
   const first = t.requestAttach(t.resumed); await t.entered.promise
   const confirming = t.confirm(); await t.recordEntered.promise
-  t.attach.forget(sessionId); registry.removeAgent(agentId)
+  t.attach.forget(sessionId); await removeRegistryAgent(registry, agentId)
   if (change === 'different conversation') {
-    registry.openProcessAgent({ engine: 'hermes', agentId, tmuxPane: '%42', cwd: directory, processIdentity: nextProcess })
-    registry.register({ engine: 'hermes', sessionId: '20261116_100001_abcdef', tmuxPane: '%42', cwd: directory, processIdentity: nextProcess })
+    ;(await registry.openProcessAgent({ engine: 'hermes', agentId, tmuxPane: '%42', cwd: directory, processIdentity: nextProcess }))
+    ;(await registry.register({ engine: 'hermes', sessionId: '20261116_100001_abcdef', tmuxPane: '%42', cwd: directory, processIdentity: nextProcess }))
   }
   t.recordRelease.resolve(); await confirming
   t.release.resolve()

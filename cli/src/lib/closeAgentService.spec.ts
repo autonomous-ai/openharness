@@ -395,8 +395,8 @@ it.each(['claude', 'codex'] as const)('closes an unused %s chat only after savin
   })
   expect(await service.request(request('inspect'))).toEqual({ activity: 'idle' })
   expect(await service.request(request('idle'))).toEqual({ closed: true, withoutConversation: true })
-  expect(deps.checkpoint).toHaveBeenNthCalledWith(1, row, 'before')
-  expect(deps.checkpoint).toHaveBeenNthCalledWith(2, row, 'after')
+  expect(deps.checkpoint).toHaveBeenNthCalledWith(1, row, 'before', expect.any(Function), undefined)
+  expect(deps.checkpoint).toHaveBeenNthCalledWith(2, row, 'after', expect.any(Function), undefined)
   expect(registry.byAgent(row.agentId)).toBeUndefined()
 })
 

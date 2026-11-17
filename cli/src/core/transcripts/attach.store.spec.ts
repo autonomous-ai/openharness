@@ -44,9 +44,9 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true })
 })
 
-function setup(home: string | null = null) {
-  registry.openProcessAgent({ ...native, agentId: 'hermes-agent' })
-  const row = registry.register({ ...native, sessionId, ...(home ? { hermesHome: home } : {}) })!.entry
+async function setup(home: string | null = null) {
+  ;(await registry.openProcessAgent({ ...native, agentId: 'hermes-agent' }))
+  const row = (await registry.register({ ...native, sessionId, ...(home ? { hermesHome: home } : {}) }))!.entry
   let finish!: (location: { store: string | null; home?: string }) => void
   let locating!: () => void
   const locatingStore = new Promise<void>(resolve => { locating = resolve })
@@ -82,7 +82,7 @@ function setup(home: string | null = null) {
 it.each(['default', 'discovered profile', 'explicit profile'] as const)(
   'attaches the %s store without changing the native home that authorized the read', async kind => {
     const home = kind === 'default' ? directory : join(directory, 'profiles/work')
-    const p = setup(kind === 'explicit profile' ? home : null)
+    const p = await setup(kind === 'explicit profile' ? home : null)
     const nativeHome = p.row.hermesHome
     const saved = readFileSync(join(directory, 'registry.json'), 'utf8')
     const attaching = p.attach.attachSession(p.row)
@@ -99,14 +99,14 @@ it.each(['default', 'discovered profile', 'explicit profile'] as const)(
 
 it.each(['forgotten', 'conversation', 'process', 'home', 'source'] as const)(
   'does not attach an old store after its %s authority changes', async change => {
-    const p = setup()
+    const p = await setup()
     const attaching = p.attach.attachSession(p.row)
     await p.locatingStore
     if (change === 'forgotten') p.attach.forget(sessionId)
-    if (change === 'conversation') registry.register({ ...native, sessionId: '20261116_100001_bbbbbb' })
-    if (change === 'process') p.row.processIdentity = { ...processIdentity, startMarker: 'replacement-process' }
+    if (change === 'conversation') (await registry.register({ ...native, sessionId: '20261116_100001_bbbbbb' }))
+    if (change === 'process') registry.updateProcessIdentity(p.row.agentId, { ...processIdentity, startMarker: 'replacement-process' })
     if (change === 'home') registry.setHermesHome(p.row.agentId, join(directory, 'replacement-home'))
-    if (change === 'source') p.row.transcriptPath = join(directory, 'replacement.jsonl')
+    if (change === 'source') registry.byAgent(p.row.agentId)!.transcriptPath = join(directory, 'replacement.jsonl')
     const current = registry.byAgent(p.row.agentId)
     const nativeHome = current?.hermesHome
     p.finish({ store: join(directory, 'state.db'), home: directory })
@@ -120,7 +120,7 @@ it.each(['forgotten', 'conversation', 'process', 'home', 'source'] as const)(
 
 it('keeps an unavailable store visible without changing the native binding', async () => {
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-  const p = setup()
+  const p = await setup()
   const attaching = p.attach.attachSession(p.row)
   await p.locatingStore
   p.finish({ store: null })

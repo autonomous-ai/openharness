@@ -21,6 +21,7 @@ import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 export interface LifecycleDeps {
   settlePane?: StopAgentServiceDeps['settlePane']
   cancelExternal?: StopAgentServiceDeps['cancelExternal']
+  paneInfo?: StopAgentServiceDeps['paneInfo']
   registry: typeof registry
   stoppedAgents: StoppedAgentStore
   restartJobs: StopAgentServiceDeps['restartJobs']
@@ -82,7 +83,7 @@ export interface LifecycleDeps {
 export const TOLD_NOT_ERASED = 'Harness could not erase what this harness was told, so nothing was deleted.'
 
 export function createAgentLifecycle({
-  registry, stoppedAgents, restartJobs, createBackend, noBackendCode, backendFor, agentReconciler, forgetSession, markDeleted, clearDeleted, stopNative, settlePane, cancelExternal,
+  registry, stoppedAgents, restartJobs, createBackend, noBackendCode, backendFor, agentReconciler, forgetSession, markDeleted, clearDeleted, stopNative, settlePane, cancelExternal, paneInfo,
   sessionCheckpoints, mirror, forgetTold, scrubCreated, workspaces, send, pinnedControls, retainExitedSession, announceSession,
   relaunchOverrides, prepareSessionResume, stopBackgroundJob, refreshGridWebSearch, attach, attachSession, relaunchMarks, stopped, purged, atFolderTrust, atEmptyComposer, moveHeld,
 }: LifecycleDeps) {
@@ -93,7 +94,7 @@ export function createAgentLifecycle({
    */
   const stopJobs = new Map<string, Promise<void>>()
   const stop = createStopAgentService({
-    registry, stoppedAgents, restartJobs, stopJobs, backendFor, agentReconciler,
+    registry, stoppedAgents, restartJobs, stopJobs, backendFor, agentReconciler, paneInfo,
     forgetSession, markDeleted, clearDeleted, stopNative, settlePane, cancelExternal,
   })
   /**

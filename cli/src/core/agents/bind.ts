@@ -572,7 +572,11 @@ export function createBinding({
         const recovered = !!rotated.entry.identityHold && OTHER_ENGINE_HOLDS.has(rotated.entry.identityHold)
           && !followsLive(rotated.entry.sessionId)
         if (recovered) {
-          registry.setIdentityHold(rotated.entry.agentId, undefined)
+          const latest = registry.byAgent(rotated.entry.agentId)
+          if (!latest || paneReadIdentity(latest) !== paneReadIdentity(rotated.entry)) return
+          registry.setIdentityHold(latest.agentId, undefined)
+          // Registry's commit reply is detached. Follow the exact identity after clearing our own hold.
+          rotated.entry = structuredClone(latest)
           announceSession(rotated.entry)
         }
         if (rotated.isNew) console.log(`[discovery] ${sid(agent.agentId)} switched hermes session ${sid(was)} → ${sid(answer.sessionId)}`)
