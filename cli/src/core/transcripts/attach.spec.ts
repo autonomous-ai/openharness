@@ -1802,7 +1802,7 @@ it.each(['inline', 'worker'] as const)('preserves eager cancel while the %s reco
   const cancel = createCancel({ resolve: () => row, normalizers: run.normalizers,
     input: { cancel: vi.fn(), cancelConfirmed: vi.fn(async () => true) },
     device: () => undefined, stopHeartbeat: vi.fn(), questionWatcher: { stop: vi.fn() }, mirror: { cancel: vi.fn() },
-    turnActivity: { observe: vi.fn(), snapshot: vi.fn() }, turnStartedAt: new Map(), agentIdFor: () => row.agentId, clients: { send: vi.fn() },
+    turnActivity: { observe: vi.fn() }, turnStartedAt: new Map(), tell: vi.fn(),
   })
   await cancel(row.agentId)
   finish(); await pending

@@ -22,7 +22,6 @@ import type { LiveEvent } from '../../engines/kit/events.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { SessionNormalizers } from '../transcripts/normalizers.js'
 import type { TranscriptRead } from '../transcripts/ingest.js'
-import { correlateAgentEvent } from '../../lib/agentEvent.js'
 import { isProgressEvent, type TurnActivity } from '../../lib/turnActivity.js'
 
 // Claude's Stop hook fires when the agent finishes, but the transcript can lag a moment behind
@@ -80,11 +79,9 @@ export interface TurnHookDeps {
   armAgyIdleWatch: (sessionId: string) => void
   clearAgyIdleWatch: (sessionId: string) => void
   mirror: Pick<TurnRecaps, 'noteEngineStopped'>
-  /** A wait withdraws the Working claim, and every window is told, as a cancel tells it (core/turns/cancel.ts). */
-  turnActivity: Pick<TurnActivity, 'withdraw' | 'snapshot'>
-  /** The app. */
-  clients: { send(frame: ReturnType<typeof correlateAgentEvent>): void }
-  agentIdFor: (sessionId: string) => string
+  /** A wait withdraws the Working claim, and every window is told, as a cancel tells it (core/turns/heartbeats.ts). */
+  turnActivity: Pick<TurnActivity, 'withdraw'>
+  tell: (sessionId: string) => void
   /** QuestionWatcher.awaitDialog: no pane is read at the hook. */
   awaitDialog: (sessionId: string) => void
   log?: (line: string) => void
@@ -92,7 +89,7 @@ export interface TurnHookDeps {
 
 export function createTurnHooks({
   resolve, normalizers, others, emit, drain, announceTurnAborted, armAgyIdleWatch, clearAgyIdleWatch, mirror, holdStop, afterStop,
-  turnActivity, clients, agentIdFor, awaitDialog, log = (line) => console.log(line),
+  turnActivity, tell, awaitDialog, log = (line) => console.log(line),
 }: TurnHookDeps) {
   const { liveParsers } = normalizers
   // Command Code's PreToolUse — the one live "a turn is running" signal this engine has. Without it the
@@ -291,8 +288,7 @@ export function createTurnHooks({
     if (firedAt !== undefined && (turn.promptAt ?? 0) > firedAt) return
     turn.waitAt = firedAt ?? turn.hookAt
     turnActivity.withdraw(sessionId)
-    const activity = turnActivity.snapshot(sessionId)
-    if (activity) clients.send(correlateAgentEvent({ type: 'agent_activity', payload: { activity } }, sessionId, agentIdFor(sessionId)))
+    tell(sessionId)
     awaitDialog(sessionId)
   }
   /** Claude Code's SubagentStart and SubagentStop (R5). One started before this daemon run can stop in it. Each hook is

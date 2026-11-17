@@ -9,7 +9,6 @@ import { engineHooks } from '../../engines/hooks.js'
 import { live as codexLive } from '../../engines/codex/live.js'
 import type { HookTurnContext } from '../../engines/facets/hooks.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
-import { correlateAgentEvent } from '../../lib/agentEvent.js'
 import { TurnActivity } from '../../lib/turnActivity.js'
 
 const END: LiveEvent[] = [{ type: 'turn_ended', payload: {} }]
@@ -48,9 +47,8 @@ function setup(engine: string, over: Partial<TurnHookDeps> = {}) {
     armAgyIdleWatch: vi.fn(),
     clearAgyIdleWatch: vi.fn(),
     mirror: { noteEngineStopped: vi.fn() },
-    turnActivity: { withdraw: vi.fn(), snapshot: vi.fn() },
-    clients: { send: vi.fn() },
-    agentIdFor: (id) => id === 's1' ? 'a1' : id,
+    turnActivity: { withdraw: vi.fn() },
+    tell: vi.fn(),
     awaitDialog: vi.fn(),
     ...over,
   }
@@ -840,19 +838,19 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
       let withheld = (_: string): boolean => false
       const lease = new TurnActivity({ runtime: id => id === 's1' ? { key: 'pane', turnOpen: true, withheld: withheld(id) } : undefined,
         probe: async () => 'unknown', drain: async () => {} })
-      const run = setup(engine, { turnActivity: lease })
+      /** What every window was told, as the heartbeats tell it: the lease as it reads then (core/turns/heartbeats.ts). */
+      const told: unknown[] = []
+      const run = setup(engine, { turnActivity: lease, tell: vi.fn((id: string) => { told.push(lease.snapshot(id)?.state) }) })
       withheld = run.hooks.withheld
       lease.observe('s1', 'text_delta')
-      return { ...run, lease }
+      return { ...run, lease, told }
     }
 
     it('a permission wait: Working is withdrawn and told at once, and the watcher is told a dialog is coming', () => {
       const run = waiting()
       expect(run.lease.snapshot('s1')!.state).toBe('working')
       run.hooks.onWait({ sessionId: 's1', firedAt: 5_000 })
-      const activity = run.lease.snapshot('s1')!
-      expect(activity.state).toBe('unknown')
-      expect(run.deps.clients.send).toHaveBeenCalledExactlyOnceWith(correlateAgentEvent({ type: 'agent_activity', payload: { activity } }, 's1', 'a1'))
+      expect(run.told).toEqual(['unknown'])
       expect(run.deps.awaitDialog).toHaveBeenCalledExactlyOnceWith('s1')
       expect(run.hooks.withheld('s1')).toBe(true)
       // What is read while it waits claims no work.
@@ -949,15 +947,14 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
       run.hooks.onPromptHook('s1', 3_000)
       run.hooks.onWait({ sessionId: 's1', firedAt: 2_000 })
       expect(run.lease.snapshot('s1')!.state).toBe('working')
-      expect(run.deps.clients.send).not.toHaveBeenCalled()
+      expect(run.deps.tell).not.toHaveBeenCalled()
       expect(run.deps.awaitDialog).not.toHaveBeenCalled()
       expect(run.hooks.withheld('s1')).toBe(false)
     })
 
-    it('an agent the lease no longer knows is told nothing', () => {
+    it('an agent the lease no longer knows waits all the same', () => {
       const run = waiting()
       run.hooks.onWait({ sessionId: 's2', firedAt: 5_000 })
-      expect(run.deps.clients.send).not.toHaveBeenCalled()
       expect(run.deps.awaitDialog).toHaveBeenCalledExactlyOnceWith('s2')
       expect(run.hooks.withheld('s2')).toBe(true)
     })
@@ -967,9 +964,7 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
       const run = waiting()
       run.hooks.onWait({ sessionId: 's1', firedAt: 5_000 })
       run.hooks.onWait({ sessionId: 's1', firedAt: 5_010 })
-      const [[first], [second]] = vi.mocked(run.deps.clients.send).mock.calls
-      expect(second).toEqual(first)
-      expect(run.lease.snapshot('s1')!.state).toBe('unknown')
+      expect(run.told).toEqual(['unknown', 'unknown'])
       run.hooks.transcript('s1', TEXT, { at: 5_005 })
       expect(run.hooks.withheld('s1')).toBe(true)
       run.hooks.transcript('s1', TEXT, { at: 5_011 })

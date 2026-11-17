@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { correlateAgentEvent } from '../../lib/agentEvent.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { ActivityFrame } from '../../lib/turnActivity.js'
 import { createHeartbeats, type HeartbeatDeps } from './heartbeats.js'
@@ -152,5 +153,17 @@ describe('turn heartbeats', () => {
     expect(error).toHaveBeenCalledWith('[activity] probe failed:', 'Error: pane gone')
     beats.stopHeartbeat('s1')
     beats.stopHeartbeat('never-started')
+  })
+
+  // A cancel and a wait on the person (core/turns/cancel.ts, core/turns/turnHooks.ts): told now, with or without a beat.
+  it('tells every window the activity as it reads now, and nothing for an agent the lease no longer knows', () => {
+    const { deps, beats, set } = setup()
+    const activity = { state: 'idle' } as ActivityFrame
+    set({ activity })
+    beats.tell('s1')
+    expect(deps.clients.send).toHaveBeenCalledExactlyOnceWith(correlateAgentEvent({ type: 'agent_activity', payload: { activity } }, 's1', 'a1'))
+    set({ activity: undefined })
+    beats.tell('s1')
+    expect(deps.clients.send).toHaveBeenCalledOnce()
   })
 })

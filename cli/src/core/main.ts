@@ -2243,8 +2243,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     clearAgyIdleWatch,
     mirror,
     turnActivity,
-    clients: backend,
-    agentIdFor,
+    tell: turnBeats.tell,
     awaitDialog: (sessionId) => questionWatcher.awaitDialog(sessionId),
   })
   turnHooksRef = turnHooks
@@ -2798,8 +2797,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     mirror,
     turnActivity,
     turnStartedAt,
-    agentIdFor,
-    clients: backend,
+    tell: turnBeats.tell,
   })
   backend.onCancel = id => { void cancelAgent(id) }
   backend.cancelProvider = createCancelRequest((id) => { void cancelAgent(id) })
