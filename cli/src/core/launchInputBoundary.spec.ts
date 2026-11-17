@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { createModelsLink } from './modelsLink.js'
 import { createStoreLink } from './storeLink.js'
 import { createSharedMachinesLink } from './sharedMachinesLink.js'
@@ -11,6 +13,10 @@ import { guestPaneCommand } from '../lib/guestPaneCommand.js'
 import { guestUserFor, guestWorkspaceFor } from '../lib/guestAccounts.js'
 import type { GridLaunchRequest } from '../lib/gridLaunchWire.js'
 import type { AgentEngine } from '../engines/types.js'
+import { prepareHarnessLaunch } from '../dsh/runtime.js'
+import type { InstalledDsh } from '../dsh/installed.js'
+import { PROCESS_ENGINES } from '../engines/types.js'
+import { createGuestCreate } from './agents/guestCreate.js'
 import { GUEST_LAUNCH_UNAVAILABLE } from './api.js'
 
 const override = { networkId: 'test-grid', networkName: 'Test', baseUrl: 'https://fixture.invalid/relay/v1', apiKey: 'synthetic-key', model: 'test-model' }
@@ -28,7 +34,8 @@ const guestReply = (platform: NodeJS.Platform = process.platform) => {
     ...(platform === 'win32' ? { guestHostUser: account.user } : {}) }
 }
 
-afterEach(() => vi.restoreAllMocks())
+const roots: string[] = []
+afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 
 describe('Models launch authority', () => {
   it.each(['claude', 'codex', 'opencode', 'pi', 'hermes', 'grok', 'copilot'] as const)('preserves the real %s producer across its supported shapes', async engine => {
@@ -83,6 +90,26 @@ describe('Models launch authority', () => {
     await expect(models(answer).gridLaunch(input)).rejects.toThrow('the models service is unavailable')
   })
 
+  it('retains request identity while allowing the saved API producer to refresh its endpoint and key', async () => {
+    const input = { ...request('codex'), override: { ...override, networkId: 'api:saved' }, refresh: true }
+    const refreshed = answerGridLaunch(input, value => ({ override: { ...value, networkName: 'Changed name', baseUrl: 'https://updated.invalid/v1', apiKey: 'synthetic-new' }, apiBase: 'https://updated.invalid/v1' }))
+    expect(await models(refreshed).gridLaunch(input)).toEqual(refreshed)
+    if (!refreshed.ok) throw Error('fixture launch failed')
+    refreshed.override.networkId = 'api:another'
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await expect(models(refreshed).gridLaunch(input)).rejects.toThrow('the models service is unavailable')
+  })
+
+  it('keeps the pre-await native directory when an inline producer changes the request object', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const input = request('grok')
+    const answer = await gridLaunchThrough(() => ({ gridLaunch: async original => {
+      original.machine.grokHome = '/outside'
+      return built(original)
+    } }))(input)
+    expect(answer).toMatchObject({ ok: false, error: 'GRID_UNAVAILABLE' })
+  })
+
   it('detaches admitted environment, args and generated files from a later inline mutation', async () => {
     const input = request('opencode'), answer = built(input)
     if (!answer.ok) throw Error('fixture launch failed')
@@ -97,6 +124,34 @@ describe('Store contribution bounds preserve the installed package contract', ()
   it('keeps manifest-defined variables and arguments, including the catalog’s Codex hook and Python path use', async () => {
     const answer = storeReply({ PYTHONPATH: '/package/toolchain', PACKAGE_CUSTOM: 'value' }, ['-c', 'hooks.Stop=[{hooks=[{type="command",command="tool"}]}]'])
     expect(await store(answer).dshLaunch(storeRequest)).toEqual(answer)
+  })
+
+  it('keeps every real Store adapter, canonical workspace and former package snapshot identity', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'launch-boundary-'))); roots.push(root)
+    const workspace = join(root, 'work'), alias = join(root, 'alias'), directory = join(root, 'package')
+    mkdirSync(workspace); mkdirSync(directory); symlinkSync(workspace, alias, 'junction')
+    const pkg: InstalledDsh = { id: 'test/old', dir: directory, realDir: directory, source: directory, ref: null, commit: null, linked: true, installedAt: 1,
+      manifest: { spec: 1, id: 'test/old', name: 'Drawing', engine: 'codex', agent: { env: { PYTHONPATH: '${dsh}/python', PACKAGE_CUSTOM: 'x' },
+        args: ['-c', 'approval_policy=never', '-c', 'sandbox_mode=danger-full-access', '-c', 'hooks.Stop=[{hooks=[{type="command",command="tool"}]}]'] } } }
+    for (const engine of PROCESS_ENGINES) {
+      const input = { ...storeRequest, dsh: pkg.id, workspace: alias, engine, key: engine }
+      const answer = { ok: true as const, launch: prepareHarnessLaunch(pkg, alias, engine, input.key) }
+      const through = dshThrough({ store: () => store(answer), nameOf: () => 'Drawing', account: () => ({}) })
+      expect(await through.launch(input, { ids: [pkg.id], workspace })).toEqual(answer)
+      const renamed = { ...pkg, id: 'test/new', manifest: { ...pkg.manifest, id: 'test/new', formerly: [pkg.id] } }
+      const resumed = { ok: true as const, launch: prepareHarnessLaunch(renamed, alias, engine, input.key) }
+      expect(resumed.launch.env.HARNESS_DSH).toBe(pkg.id)
+      const resumedThrough = dshThrough({ store: () => store(resumed), nameOf: () => 'Drawing', account: () => ({}) })
+      expect(await resumedThrough.launch({ ...input, dsh: renamed.id }, { ids: [renamed.id, pkg.id], workspace })).toEqual(resumed)
+    }
+  })
+
+  it.each(['HARNESS_DSH', 'HARNESS_WORKSPACE', 'HARNESS_CONTEXT_FILE', 'HARNESS_SKILLS_DIR', 'HARNESS_PRIVATE_GRID'])('refuses a forged reserved %s against captured create identity', async field => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const answer = storeReply({ [field]: 'another-session' })
+    const through = dshThrough({ store: () => store(answer), nameOf: () => 'Drawing', account: () => ({}) })
+    expect(await through.launch(storeRequest, { ids: [storeRequest.dsh], workspace: storeRequest.workspace }))
+      .toMatchObject({ ok: false, error: 'DSH_UNAVAILABLE' })
   })
 
   it.each([
@@ -129,6 +184,23 @@ describe('Guest launch contribution authority', () => {
   it('keeps the exact requested guest, permission and literal prompt on the real producer', async () => {
     const answer = guestReply()
     expect(await createSharedMachinesLink(async () => answer).guestLaunch(guestRequest)).toEqual(answer)
+  })
+
+  it('keeps the Windows guest host and the default when a requested folder is not shared', async () => {
+    const answer = guestReply('win32')
+    expect(await createSharedMachinesLink(async () => answer).guestLaunch(guestRequest)).toEqual(answer)
+    const fallback = guestReply()
+    expect(await createSharedMachinesLink(async () => fallback).guestLaunch({ ...guestRequest, cwd: '/not-shared' })).toEqual(fallback)
+  })
+
+  it('refuses an inline substituted command before selecting a backend or installing an engine', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const answer = { ...guestReply(), argv: ['/bin/sh', '-c', 'outside'] }
+    const tmuxBackend = vi.fn(), guestBackend = vi.fn(), ensureEngine = vi.fn(), register = vi.fn()
+    const create = createGuestCreate({ launch: async () => answer, tmuxBackend, guestBackend, ensureEngine,
+      registry: { openPendingAgent: register }, announceSession: vi.fn(), watchNewPane: vi.fn() })
+    expect(await create({ engine: 'claude' }, guestRequest.email)).toMatchObject({ ok: false, error: 'GUEST_UNAVAILABLE' })
+    for (const effect of [tmuxBackend, guestBackend, ensureEngine, register]) expect(effect).not.toHaveBeenCalled()
   })
 
   it.each([
