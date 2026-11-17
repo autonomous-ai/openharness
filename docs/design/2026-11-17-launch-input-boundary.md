@@ -137,16 +137,23 @@ Source-scoped checks before integration:
 
 - Test-only source `f6cdab09e3`: 36 failing, 11 passing caller tests against the
   pre-implementation runtime; actual exit 1. Log `/tmp/harness-launch-boundary-red.log`.
-- Selected implementation checks: 341 tests across 14 files; affected boundary
+- Selected implementation checks on runtime `52c83e73ec`: 341 tests across 14 files; affected boundary
   files have 100% statements, branches, functions and lines (691/791/103/521).
   This includes all real Store adapters, rename/symlink snapshots, all seven
   Models producers, request identity, exact/over-limit sizes, guest no-effects
   refusal, native create composition and the real POSIX bootstrap shell fixture.
 - Source TypeScript completed with exit 0. Architecture and Store launch goldens
-  passed. Grid launch golden setup requires a private loopback server and was
-  blocked by sandbox `listen EPERM`; rerun outside that restriction is required.
-- The changed-path mapper selects `npm run test:core`. Full core acceptance and
-  the loopback-dependent golden rerun are pending on the implementation commit.
+  passed. The sandbox initially refused Grid golden setup with `listen EPERM`.
+  With its private loopback server allowed, Grid/Store/native compatibility goldens
+  passed all 6 tests in 3 files, exit 0, on `52c83e73ec`.
+- The changed-path mapper selects `npm run test:core`. On `52c83e73ec`, that gate
+  passed 5,023 tests in 258 files with 100% statements, branches, functions and
+  lines in every core/service file, exit 0. Logs are
+  `/tmp/harness-launch-boundary-core-52c83e73ec.log` and
+  `/tmp/harness-launch-boundary-native-golden-52c83e73ec.log`.
+- Subsequent test tightening mutates each reserved field in an otherwise valid
+  real Store reply (including the current account private grid), so a different
+  missing field cannot accidentally prove its rejection. Runtime source is unchanged.
 - macOS execution is recorded here. Windows guest command/host forms are covered
   in fixtures; native Windows execution remains for the Windows release gate.
   No real guest account was created or used. No timed cost run has been made;
