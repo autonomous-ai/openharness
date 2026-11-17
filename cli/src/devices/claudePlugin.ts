@@ -30,7 +30,9 @@ export interface ClaudeStatus {
 /** Which call failed: a fixed word the devices count, where Claude Code's own line could name a path. */
 export type ClaudeStep = 'unsupported' | 'list' | 'marketplace' | 'install' | 'enable' | 'uninstall' | 'update'
 export type ClaudeResult = { ok: true } | { ok: false; error: string; step: ClaudeStep }
-export type ClaudeUpdate = { ok: true; outcome: 'updated' | 'current' | 'absent' } | { ok: false; error: string; step: ClaudeStep }
+/** What the devices' setup did: installed or updated the plugin; found it current, on as it should be; or found it absent,
+ *  not on, which the person made it, and ran nothing for it. */
+export type ClaudeSetup = { ok: true; outcome: 'installed' | 'updated' | 'current' | 'absent' } | { ok: false; error: string; step: ClaudeStep }
 type ClaudeFailure = Extract<ClaudeResult, { ok: false }>
 
 /** The marketplace add, its update, the install and the plugin's update fetch the repository; every other call only
@@ -147,15 +149,8 @@ async function change(run: ClaudeRun, args: string[], timeoutMs: number, step: C
   return code === 0 ? null : failure(stderr, step)
 }
 
-export async function claudeEnable(deps: ClaudeDeps): Promise<ClaudeResult> {
-  const run = await supportedRun(deps)
-  if (!run) return UNSUPPORTED
-  const listed = await userEntry(run)
-  if (!listed.ok) return listed
-  if (listed.entry) {
-    if (listed.entry.enabled === true) return { ok: true }
-    return await change(run, ['plugin', 'enable', DIAL_PLUGIN_ID, '--scope', 'user'], LOCAL_MS, 'enable') ?? { ok: true }
-  }
+/** Adds the marketplace when it is not there, then installs the plugin. */
+async function install(run: ClaudeRun): Promise<ClaudeFailure | null> {
   // Marketplaces that cannot be read are taken as none: at worst the add runs again, and its own failure is counted.
   const marketplaces = await jsonList(run, ['plugin', 'marketplace', 'list', '--json'])
   const cloned = Array.isArray(marketplaces) && marketplaces.some((marketplace) => marketplace.name === MARKETPLACE)
@@ -164,11 +159,32 @@ export async function claudeEnable(deps: ClaudeDeps): Promise<ClaudeResult> {
     const failed = await change(run, ['plugin', 'marketplace', 'add', 'autonomous-ai/openharness', '--sparse', '.claude-plugin', 'plugins'], FETCH_MS, 'marketplace')
     if (failed) return failed
   }
-  const install = () => change(run, ['plugin', 'install', DIAL_PLUGIN_ID, '--scope', 'user'], FETCH_MS, 'install')
-  let failed = await install()
+  const tryInstall = () => change(run, ['plugin', 'install', DIAL_PLUGIN_ID, '--scope', 'user'], FETCH_MS, 'install')
+  let failed = await tryInstall()
   // A clone made before harness-device was in the marketplace does not list it: pulled once, the install is tried again.
-  if (failed && cloned) failed = await change(run, ['plugin', 'marketplace', 'update', MARKETPLACE], FETCH_MS, 'marketplace') ?? await install()
-  return failed ?? { ok: true }
+  if (failed && cloned) failed = await change(run, ['plugin', 'marketplace', 'update', MARKETPLACE], FETCH_MS, 'marketplace') ?? await tryInstall()
+  return failed
+}
+
+export async function claudeEnable(deps: ClaudeDeps): Promise<ClaudeResult> {
+  const run = await supportedRun(deps)
+  if (!run) return UNSUPPORTED
+  const listed = await userEntry(run)
+  if (!listed.ok) return listed
+  if (!listed.entry) return await install(run) ?? { ok: true }
+  if (listed.entry.enabled === true) return { ok: true }
+  return await change(run, ['plugin', 'enable', DIAL_PLUGIN_ID, '--scope', 'user'], LOCAL_MS, 'enable') ?? { ok: true }
+}
+
+/** The devices' first setup: the plugin installed as enable installs it, and one already there left as it is. One the
+ *  person turned off is theirs: only `harness device claude enable` turns it back on. */
+export async function claudeSetUp(deps: ClaudeDeps): Promise<ClaudeSetup> {
+  const run = await supportedRun(deps)
+  if (!run) return UNSUPPORTED
+  const listed = await userEntry(run)
+  if (!listed.ok) return listed
+  if (listed.entry) return { ok: true, outcome: listed.entry.enabled === true ? 'current' : 'absent' }
+  return await install(run) ?? { ok: true, outcome: 'installed' }
 }
 
 /** Uninstalls the plugin and keeps the marketplace, which the harness plugin may come from too. */
@@ -185,7 +201,7 @@ export async function claudeDisable({ run }: ClaudeDeps): Promise<ClaudeResult> 
  * changes with what was pulled: a new one is an update. A plugin the person uninstalled or turned off is theirs, and
  * nothing is run for it.
  */
-export async function claudeUpdate(deps: ClaudeDeps): Promise<ClaudeUpdate> {
+export async function claudeUpdate(deps: ClaudeDeps): Promise<ClaudeSetup> {
   const run = await supportedRun(deps)
   if (!run) return UNSUPPORTED
   const before = await userEntry(run)
