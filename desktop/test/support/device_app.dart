@@ -78,6 +78,7 @@ class DeviceAppFixture {
       open: open.call,
       store: this.store,
       log: lines.add,
+      exists: (path) async => !gone.contains(path),
     );
   }
 

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../core/local_key_value_store.dart';
 import 'device_app.dart';
+import 'device_app_probe.dart';
 
 enum DeviceAppOfferState { hidden, offer, installing, failed, notRunning }
 
@@ -16,6 +17,7 @@ class DeviceAppOffer extends ChangeNotifier {
     required this._open,
     this._store,
     this._log,
+    this._exists,
   }) {
     _restored = _restore();
   }
@@ -28,6 +30,9 @@ class DeviceAppOffer extends ChangeNotifier {
   final DeviceAppOpen _open;
   final LocalKeyValueStore? _store;
   final void Function(String line)? _log;
+
+  /// Passed to [deviceAppInstalledAt], which [open] asks whether this run's copy is still there.
+  final Future<bool> Function(String path)? _exists;
 
   late final Future<void> _restored;
   bool _restoredDone = false;
@@ -101,9 +106,19 @@ class DeviceAppOffer extends ChangeNotifier {
     return run;
   }
 
-  /// The bundle this run installed, else by bundle id. Unsupported, it does nothing, as [install].
+  /// The bundle this run installed while it is still there, else by bundle id. Unsupported, it does nothing, as
+  /// [install].
   Future<void> open() async {
     if (!_supported) return;
+    final installedAt = _installedAt;
+    final gone =
+        installedAt != null &&
+        !await deviceAppInstalledAt([installedAt], exists: _exists);
+    if (gone) {
+      // Moved or trashed: no registration of it to wait for, and whichever copy LaunchServices knows is opened.
+      _installedAt = null;
+      _awaitingRegistration = false;
+    }
     bool opened;
     try {
       opened = await _open(path: _installedAt);
@@ -117,8 +132,15 @@ class DeviceAppOffer extends ChangeNotifier {
       _failedStep = null;
       _installFailed = false;
     } else {
-      _failedStep = DeviceAppInstallStep.open;
       _log?.call('device app: open failed');
+      if (gone) {
+        // This run's copy is gone and no other opens: a Retry that only opens would fail for good.
+        _presence = const DeviceAppPresence(installed: false, running: false);
+        _failedStep = null;
+        _installFailed = false;
+      } else {
+        _failedStep = DeviceAppInstallStep.open;
+      }
     }
     _notify();
   }
@@ -211,6 +233,10 @@ class DeviceAppOffer extends ChangeNotifier {
       _installFailed = false;
     } else if (_awaitingRegistration) {
       return;
+    } else if (_failedStep == DeviceAppInstallStep.open) {
+      // The copy that would not open is gone: Install, not an Open that fails for good.
+      _failedStep = null;
+      _installFailed = false;
     }
     // AppKit may not list the launch the install just made yet: its running stands.
     _presence = afterInstall && answer.installed
