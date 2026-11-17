@@ -35,12 +35,14 @@ describe('the Wi-Fi device with the dials', () => {
   let world: PhoneMachine | undefined
   let device: FakeWifiDevice | undefined
   let window: LocalClient | undefined
+  let control: LocalClient | undefined
   let desk: Desk | undefined
   let dialsRoot: string | undefined
   afterEach(async () => {
     try {
       device?.close()
       window?.close()
+      control?.close()
     } finally {
       try {
         await desk?.close()
@@ -48,11 +50,20 @@ describe('the Wi-Fi device with the dials', () => {
         try { await world?.close() }
         finally {
           if (dialsRoot) rmSync(dialsRoot, { recursive: true, force: true })
-          world = undefined; device = undefined; window = undefined; desk = undefined; dialsRoot = undefined
+          world = undefined; device = undefined; window = undefined; control = undefined; desk = undefined; dialsRoot = undefined
         }
       }
     }
   })
+
+  const createAgent = async (w: PhoneMachine, client: LocalClient, name: string) => {
+    const cwd = join(w.machine.daemon.projectsDir, name)
+    mkdirSync(cwd, { recursive: true })
+    const created = await client.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 60_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    await until('the agent to bind its conversation', async () => (await row(client, created.agent.id))?.sessionId || null, 45_000, 500)
+    return created.agent as { id: string; tmuxPane: string }
+  }
 
   const fresh = async (env: Record<string, string> = {}) => {
     // Owned before startup: startPhoneMachine cleans its resources if it fails, then this test removes ours.
@@ -74,15 +85,10 @@ describe('the Wi-Fi device with the dials', () => {
       console.log(`---- the device heard\n${JSON.stringify(device?.events().slice(-20))}`)
     })
     window = await LocalClient.connect(machine.daemon, { machineId: machine.machineId })
-    const cwd = join(machine.daemon.projectsDir, 'wifi')
-    mkdirSync(cwd, { recursive: true })
-    const created = await window.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 60_000)
-    expect(created.error, JSON.stringify(created)).toBeUndefined()
-    const agentId: string = created.agent.id
-    await until('the agent to bind its conversation', async () => (await row(window!, agentId))?.sessionId || null, 45_000, 500)
+    const agent = await createAgent(w, window, 'wifi'), agentId = agent.id
     device = new FakeWifiDevice({ backend, machineId: machine.machineId, identity: w.wifi.identity, machinePub: machine.identity.pub, token: w.wifi.token })
     await until('the machine to be on the relay', () => backend.nodeUp(machine.machineId) || null, 30_000)
-    return { w, machine, window, agentId, device, desk: desk! }
+    return { w, machine, window, agent, agentId, device, desk: desk! }
   }
   /** The device's session and its application hello, retried until the service answers it. */
   const connect = async (d: FakeWifiDevice) => {
@@ -112,16 +118,31 @@ describe('the Wi-Fi device with the dials', () => {
     await d.nextEvent((e) => (e.kind === 'turn.done' || e.kind === 'turn.summary') && e.agentId === agentId, `the turn's end (${text})`, since)
     return sent
   }
+  const askQuestion = async (d: FakeWifiDevice, machineId: string, agentId: string, key: string) => {
+    const since = d.mark()
+    expect(await d.ask('turn.send', { machineId, agentId, idempotencyKey: key, text: '!ask' })).toMatchObject({ status: 'accepted' })
+    return d.nextEvent(e => e.kind === 'question.open' && e.agentId === agentId, 'nonfocused question.open', since)
+  }
+  const answerQuestion = async (d: FakeWifiDevice, machineId: string, open: Record<string, any>, key: string) => {
+    const since = d.mark(), question = open.payload.questions[0]
+    const answer = await d.ask('question.answer', { machineId, agentId: open.agentId, idempotencyKey: key,
+      questionRequestId: open.payload.questionRequestId, answers: { [question.key ?? question.q]: 'Coffee' } })
+    expect(answer).toMatchObject({ status: 'accepted', receipt: { state: 'completed' } })
+    await d.nextEvent(e => e.kind === 'question.close' && e.agentId === open.agentId, 'question.close', since)
+  }
 
   // In the core's process too, with every service (`HARNESSD_SERVICES=none`): the same doors, called.
   it.each([['from the devices\' process', {}], ['from the core\'s own, with every service there', { HARNESSD_SERVICES: 'none' }]] as const)(
     'is answered %s as it was: its hello, its agents, a prompt and its receipt, a question, a window\'s focus', async (_where, env) => {
     const { w, machine, window, agentId, device } = await fresh(env)
+    const others = [await createAgent(w, window, 'question-b'), await createAgent(w, window, 'question-c')]
     const hello = await connect(device)
     expect(hello).toMatchObject({ type: 'hello_result', proto: 1, machineId: machine.machineId })
     expect(hello.capabilities).toEqual(expect.arrayContaining(['agents.list', 'turn.send', 'receipt.get', 'focus.step', 'agent.subscribe']))
     const listed = await device.ask('agents.list')
-    expect(listed.agents).toEqual([expect.objectContaining({ agentId, machineId: machine.machineId, engine: 'claude', state: 'idle' })])
+    expect(listed.agents).toHaveLength(3)
+    expect(listed.agents).toEqual(expect.arrayContaining([agentId, ...others.map(agent => agent.id)]
+      .map(agentId => expect.objectContaining({ agentId, machineId: machine.machineId, engine: 'claude', state: 'idle' }))))
     // A prompt from the device: typed into the pane, its turn's events, and its receipt.
     await deviceTurn(device, machine.machineId, agentId, 'first', 'hello from the device')
     const receipt = await until('the prompt\'s receipt to settle', async () => {
@@ -140,16 +161,15 @@ describe('the Wi-Fi device with the dials', () => {
     // No window, remote app or dial may supply question interest for this device.
     window.close()
     await until('the only window to close', () => window.closed || null, 10_000)
-    // A question the agent asks, answered from the device: through the core, into the pane.
-    const asked = device.mark()
-    expect(await device.ask('turn.send', { machineId: machine.machineId, agentId,
-      idempotencyKey: 'ask-without-window', text: '!ask' })).toMatchObject({ status: 'accepted' })
-    const open = await device.nextEvent((e) => e.kind === 'question.open' && e.agentId === agentId, 'question.open', asked)
-    const question = (open.payload.questions as Array<Record<string, any>>)[0]
-    const answered = await device.ask('question.answer', { machineId: machine.machineId, agentId, idempotencyKey: 'answer-1',
-      questionRequestId: open.payload.questionRequestId, answers: { [question.key ?? question.q]: 'Coffee' } })
-    expect(answered).toMatchObject({ status: 'accepted', receipt: { state: 'completed' } })
-    await device.nextEvent((e) => e.kind === 'question.close' && e.agentId === agentId, 'question.close', asked)
+    // Both other agents ask together: observing only the former focus cannot satisfy this.
+    const pending = []
+    for (const [index, other] of others.entries()) pending.push(await askQuestion(device, machine.machineId, other.id, `ask-${index}`))
+    expect(others.map(agent => agent.id)).not.toContain((await device.ask('focus.get')).focus?.agentId)
+    for (const [index, open] of pending.entries()) {
+      await answerQuestion(device, machine.machineId, open, `answer-${index}`)
+      await until('the engine to show its chosen answer', async () =>
+        (await machine.daemon.capture(others[index].tmuxPane)).includes('you chose Coffee') || null, 15_000, 100)
+    }
     // `harness device receipt`, through the core's hook server, asks the service in its process.
     const credential = readFileSync(join(machine.daemon.dataDir, 'hook-credential'), 'utf8').trim()
     const deviceId = (await device.ask('receipt.get', { idempotencyKey: 'first' })).receipt
@@ -159,15 +179,46 @@ describe('the Wi-Fi device with the dials', () => {
     expect(w.machine.daemon.coresStarted()).toBe(1)
   })
 
-  it('the devices\' process killed: its session stays, it is told to resync and served on, its receipts kept, and the core never restarts', async () => {
-    const { w, machine, window, agentId, device } = await fresh()
+  it('the devices\' process killed: both nonfocused questions return without a window, its receipts stay, and core sessions keep working', async () => {
+    const { w, machine, window, agent, agentId, device } = await fresh({
+      HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '20000', HARNESSD_SERVICE_MAX_BACKOFF_MS: '20000',
+    })
+    const others = [await createAgent(w, window, 'question-b'), await createAgent(w, window, 'question-c')]
     const hello = await connect(device)
     await deviceTurn(device, machine.machineId, agentId, 'before', 'before the kill')
+    const focused = device.mark()
+    window.send('app_focus', { agentId })
+    await device.nextEvent(e => e.kind === 'focus.changed' && e.payload?.focus?.agentId === agentId, 'focus A', focused)
+    window.close()
+    await until('the only window to close', () => window.closed || null, 10_000)
+    const pending = []
+    for (const [index, other] of others.entries()) pending.push(await askQuestion(device, machine.machineId, other.id, `pending-${index}`))
+    expect(others.map(agent => agent.id)).not.toContain((await device.ask('focus.get')).focus?.agentId)
+    const corePid = machine.daemon.corePid()
+    // An ordinary local tool does not observe questions or register an agents_watch interest.
+    control = await LocalClient.connect(machine.daemon, { machineId: machine.machineId, tool: true })
     const sessions = device.link.sessions
     const since = device.mark()
-    for (const pid of devicesPids(machine.daemon)) process.kill(pid, 'SIGKILL')
-    // Every agent and window goes on meanwhile.
-    await windowTurn(window, agentId, 'while the devices are down')
+    const before = devicesPids(machine.daemon)
+    expect(before).toHaveLength(1)
+    for (const pid of before) process.kill(pid, 'SIGKILL')
+    await until('the devices process to end', () => devicesPids(machine.daemon).length === 0 || null, 10_000, 50)
+    // The restart backoff leaves a bounded window for a real core input, with no component available.
+    const absentDeadline = Date.now() + 15_000
+    const remainingAbsentTime = (): number => {
+      const remaining = absentDeadline - Date.now()
+      expect(remaining, 'the full absent-component core check must finish within 15s').toBeGreaterThan(0)
+      expect(devicesPids(machine.daemon), 'the component must not have restarted during the core check').toEqual([])
+      return remaining
+    }
+    expect((await control.request('agents_list', {}, remainingAbsentTime())).agents).toHaveLength(3)
+    control.send('message', { agentId, content: 'core input while devices are down' })
+    await until('the core input to reach its agent while the component is down', async () =>
+      /answer \d+: core input while devices are down/.test(await machine.daemon.capture(agent.tmuxPane)) || null, remainingAbsentTime(), 100)
+    remainingAbsentTime()
+    expect(machine.daemon.corePid()).toBe(corePid)
+    control.close()
+    await until('the ordinary tool to close', () => control!.closed || null, 10_000)
     await until('the master to restart the devices', () => restarts(w) >= 1 || null, 30_000, 200)
     await until('the Wi-Fi device to connect again', () => wifiConnections(w) >= 2 || null, 30_000, 200)
     // Told to resync on the session it had: the documented way back after the daemon's own restart.
@@ -176,10 +227,23 @@ describe('the Wi-Fi device with the dials', () => {
     expect(resync.serverInstanceId).not.toBe(hello.serverInstanceId)
     expect(device.link.sessions).toBe(sessions)
     // Served on without a new hello: its agents, the receipt of the prompt it sent before, a new prompt.
-    expect((await device.ask('agents.list')).agents).toEqual([expect.objectContaining({ agentId })])
+    expect((await device.ask('agents.list')).agents).toHaveLength(3)
+    // A resync means re-read status; it does not promise repeated question.open events to the device.
+    for (const open of pending) {
+      expect(await device.ask('status', { machineId: machine.machineId, agentId: open.agentId })).toMatchObject({
+        openQuestion: { requestId: open.payload.questionRequestId, questions: open.payload.questions },
+      })
+    }
+    for (const [index, open] of pending.entries()) {
+      await answerQuestion(device, machine.machineId, open, `restored-answer-${index}`)
+      await until('the engine to show its restored answer', async () =>
+        (await machine.daemon.capture(others[index].tmuxPane)).includes('you chose Coffee') || null, 15_000, 100)
+      expect(await device.ask('status', { machineId: machine.machineId, agentId: open.agentId })).toMatchObject({ openQuestion: null })
+    }
     expect((await device.ask('receipt.get', { idempotencyKey: 'before' })).receipt).toMatchObject({ idempotencyKey: 'before', agentId })
     await deviceTurn(device, machine.machineId, agentId, 'after', 'after the kill')
     expect(machine.daemon.coresStarted()).toBe(1)
+    expect(machine.daemon.corePid()).toBe(corePid)
   })
 
   it('paired, it starts the devices\' process with the daemon, and a hello it sends once while that process starts again is held and answered', async () => {
