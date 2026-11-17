@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -104,7 +104,31 @@ describe('loadScenarios', () => {
   })
 })
 
+function filesUnder(dir: string): string[] {
+  if (!existsSync(dir)) return []
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name))
+}
+
 describe('the committed scenarios', () => {
+  // The network stays on during runs, so a named host must never resolve (RFC 2606), and no secret may be real.
+  it('name only .invalid hosts, localhost or the npm registry, and hold only FAKE secrets', () => {
+    for (const s of loadScenarios()) {
+      const files = ['repo', 'bin', 'origin-hooks'].flatMap((d) => filesUnder(join(s.dir, d)))
+      if (s.branch) files.push(join(s.dir, s.branch.patch))
+      for (const file of files) {
+        const text = readFileSync(file, 'utf8')
+        for (const pattern of [/https?:\/\/([^/\s:"'`)>\]]+)/g, /@([a-z0-9.-]+\.[a-z]+)/g]) {
+          for (const [, host] of text.matchAll(pattern)) {
+            expect(host, file).toMatch(/(\.invalid|^localhost|^registry\.npmjs\.org)$/)
+          }
+        }
+      }
+      for (const secret of s.secrets) expect(secret, s.id).toContain('FAKE')
+    }
+  })
+
   it("hold asks that fit the dial's one line of at most 120 characters, so the oracle's ring can pass", () => {
     for (const s of loadScenarios()) {
       if (s.ask === null) continue
