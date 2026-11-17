@@ -52,8 +52,12 @@ const UNTIL_MS = 120_000
 const CLEAN_UP_MS = 30_000
 
 // Run from a VS Code terminal, these name that VS Code's own handles, and a launch or CLI that inherits them could
-// reach it.
-for (const name of Object.keys(process.env)) if (name.startsWith('VSCODE_') || name.startsWith('ELECTRON_')) delete process.env[name]
+// reach it. `__CFBundleIdentifier` names the app the gate was started from, and `TERM_PROGRAM*` the terminal: the
+// throwaway is neither.
+const INHERITED = ['VSCODE_', 'ELECTRON_', 'TERM_PROGRAM']
+for (const name of Object.keys(process.env)) {
+  if (name === '__CFBundleIdentifier' || INHERITED.some((prefix) => name.startsWith(prefix))) delete process.env[name]
+}
 
 let root: string
 let executable: string
