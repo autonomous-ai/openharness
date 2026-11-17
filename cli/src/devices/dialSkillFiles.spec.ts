@@ -7,7 +7,7 @@ import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, wr
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { DIAL_SKILL_FILE, DIAL_SKILL_HOMES_FILE, MAX_HOMES, listable, readAnswers, readHomes, readWritten, writeAnswer, writeHomes } from './dialSkillFiles.js'
+import { DIAL_SETUP_FILE, DIAL_SKILL_FILE, DIAL_SKILL_HOMES_FILE, MAX_HOMES, listable, readAnswers, readHomes, readRemoved, readSetup, readWritten, writeAnswer, writeHomes, writeRemoved, writeSetup } from './dialSkillFiles.js'
 
 const folders: string[] = []
 afterEach(() => {
@@ -165,5 +165,95 @@ describe('the skills folders Harness wrote into', () => {
     expect(writeHomes(dataDir, { claude: many, codex: [] })).toBeUndefined()
     expect(readHomes(dataDir)).toEqual({ claude: many.slice(0, MAX_HOMES), codex: [] })
     expect(JSON.parse(readFileSync(join(dataDir, DIAL_SKILL_HOMES_FILE), 'utf8')).claude).toHaveLength(MAX_HOMES)
+  })
+})
+
+describe('what disable removed', () => {
+  it('the old menu\'s answers are not read', () => {
+    const dataDir = aDataDir()
+    expect(readRemoved(dataDir)).toEqual({})
+    writeFileSync(join(dataDir, DIAL_SKILL_FILE), '{"claude":false,"codex":true}')
+    expect(readRemoved(dataDir)).toEqual({})
+    // Only true is a removal.
+    writeFileSync(join(dataDir, DIAL_SKILL_FILE), '{"removed":{"claude":"yes","codex":true}}')
+    expect(readRemoved(dataDir)).toEqual({ codex: true })
+    for (const text of ['not json', '[]', '{"removed":[true]}']) {
+      writeFileSync(join(dataDir, DIAL_SKILL_FILE), text)
+      expect(readRemoved(dataDir), text).toEqual({})
+    }
+  })
+
+  it('a removal is saved, cleared, and keeps the folders the command wrote; the old answers leave the file', () => {
+    const dataDir = aDataDir()
+    const file = (): unknown => JSON.parse(readFileSync(join(dataDir, DIAL_SKILL_FILE), 'utf8'))
+    writeFileSync(join(dataDir, DIAL_SKILL_FILE), '{"codex":false,"homes":{"claude":[],"codex":["/a/skills"]}}')
+    expect(writeRemoved(dataDir, 'codex', true)).toBeUndefined()
+    expect(file()).toEqual({ removed: { codex: true }, homes: { claude: [], codex: ['/a/skills'] } })
+    expect(statSync(join(dataDir, DIAL_SKILL_FILE)).mode & 0o777).toBe(0o600)
+    // The other engine's removal stays, and [written] becomes that engine's folders.
+    expect(writeRemoved(dataDir, 'claude', true, ['/b/skills', 'relative/skills'])).toBeUndefined()
+    expect(readRemoved(dataDir)).toEqual({ claude: true, codex: true })
+    expect(readWritten(dataDir)).toEqual({ claude: ['/b/skills'], codex: ['/a/skills'] })
+    writeRemoved(dataDir, 'claude', false, [])
+    writeRemoved(dataDir, 'codex', false, [])
+    expect(file()).toEqual({})
+    expect(readdirSync(dataDir)).toEqual([DIAL_SKILL_FILE])
+  })
+})
+
+describe('the devices\' record of a dial\'s setup', () => {
+  const empty = { dial: false, homes: { claude: [], codex: [] } }
+
+  it('a missing, damaged or oversized dial-setup.json is an empty record', () => {
+    const dataDir = aDataDir()
+    expect(readSetup(dataDir)).toEqual(empty)
+    for (const text of ['not json', '[]', 'null', '{"dial":"true","homes":"/Users/someone/skills"}']) {
+      writeFileSync(join(dataDir, DIAL_SETUP_FILE), text)
+      expect(readSetup(dataDir), text).toEqual(empty)
+    }
+    // A good record, padded past 256 KiB.
+    writeFileSync(join(dataDir, DIAL_SETUP_FILE), JSON.stringify({ dial: true, plugin: '0.6.59', homes: { claude: goodHomes(1), codex: [] }, pad: 'x'.repeat(256 * 1024) }))
+    expect(readSetup(dataDir)).toEqual(empty)
+  })
+
+  it('the record is written whole, 0600: the dial, the plugin\'s version, 64 listable folders an engine at most', () => {
+    const dataDir = aDataDir()
+    const many = goodHomes(70)
+    expect(writeSetup(dataDir, { dial: true, plugin: '0.6.59', homes: { claude: ['relative/skills', ...many], codex: ['/Users/someone/.codex/skills'] } })).toBeUndefined()
+    const record = { dial: true, plugin: '0.6.59', homes: { claude: many.slice(0, MAX_HOMES), codex: ['/Users/someone/.codex/skills'] } }
+    expect(readSetup(dataDir)).toEqual(record)
+    // The file holds no more than a read keeps.
+    expect(JSON.parse(readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8'))).toEqual(record)
+    expect(statSync(join(dataDir, DIAL_SETUP_FILE)).mode & 0o777).toBe(0o600)
+    expect(readdirSync(dataDir)).toEqual([DIAL_SETUP_FILE])
+    // A record with no plugin holds none.
+    writeSetup(dataDir, { dial: true, homes: { claude: [], codex: [] } })
+    expect(JSON.parse(readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8'))).toEqual({ dial: true, homes: { claude: [], codex: [] } })
+  })
+
+  it('a plugin value that is no version is dropped', () => {
+    const dataDir = aDataDir()
+    for (const plugin of [true, 659, '', '../x', '0.6.59 beta', 'v'.repeat(65)]) {
+      writeFileSync(join(dataDir, DIAL_SETUP_FILE), JSON.stringify({ dial: true, plugin }))
+      expect(readSetup(dataDir), String(plugin)).toEqual({ dial: true, homes: { claude: [], codex: [] } })
+    }
+    for (const plugin of ['0.6.59', '0.6.59-dev.3+1a2b', 'v'.repeat(64)]) {
+      writeFileSync(join(dataDir, DIAL_SETUP_FILE), JSON.stringify({ dial: true, plugin }))
+      expect(readSetup(dataDir).plugin, plugin).toBe(plugin)
+    }
+  })
+
+  it('a removal or a record that cannot be saved says its code and leaves the file', () => {
+    const dataDir = aDataDir()
+    writeRemoved(dataDir, 'codex', true)
+    writeSetup(dataDir, { dial: true, homes: { claude: [], codex: [] } })
+    const removed = readFileSync(join(dataDir, DIAL_SKILL_FILE), 'utf8')
+    const record = readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8')
+    chmodSync(dataDir, 0o500)
+    expect(writeRemoved(dataDir, 'codex', false)).toBe('EACCES')
+    expect(writeSetup(dataDir, { dial: true, plugin: '0.6.59', homes: { claude: [], codex: [] } })).toBe('EACCES')
+    expect(readFileSync(join(dataDir, DIAL_SKILL_FILE), 'utf8')).toBe(removed)
+    expect(readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8')).toBe(record)
+    expect(readdirSync(dataDir).sort()).toEqual([DIAL_SETUP_FILE, DIAL_SKILL_FILE].sort())
   })
 })

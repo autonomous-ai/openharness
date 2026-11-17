@@ -1,6 +1,6 @@
 /**
- * The dial skill in a throwaway agent home each: written, checked and removed only as Harness's own, known by its
- * marker line, never over, through or instead of what the person put there. The person's ~/.claude and ~/.codex are
+ * The dial skill in a throwaway agent home each: written, refreshed, checked and removed only as Harness's own, known by
+ * its marker line, never over, through or instead of what the person put there. The person's ~/.claude and ~/.codex are
  * never touched.
  */
 import { execFileSync } from 'node:child_process'
@@ -9,9 +9,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parse } from 'yaml'
-import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, claudePluginState, ownDirectory, removeSkill, skillsFolderOf, writeSkill } from './dialSkill.js'
+import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, claudePluginState, ownDirectory, refreshSkill, removeSkill, skillWanted, skillsFolderOf, writeSkill } from './dialSkill.js'
 
-const MARKER = '# Written by Harness. Turn off the agent in Harness Device to remove it.'
+const MARKER = '# Written by Harness. Remove it with harness device claude disable or harness device codex disable.'
+/** The line 0.6.58 wrote: files in people's homes still hold it. */
+const OLD_MARKER = '# Written by Harness. Turn off the agent in Harness Device to remove it.'
 const uid = process.getuid!()
 
 /** A step run just before the named file call: another remover taking the file first, or a write that fails. */
@@ -72,6 +74,10 @@ describe('the dial skill', () => {
     expect(Buffer.byteLength(DIAL_SKILL)).toBeLessThanOrEqual(4096)
   })
 
+  it('the skill\'s marker line names the disable commands', () => {
+    expect(DIAL_SKILL.split('\n')[3]).toBe('# Written by Harness. Remove it with harness device claude disable or harness device codex disable.')
+  })
+
   it('writes into an empty home, 0700 and 0600', () => {
     const home = folder()
     const skills = skillsFolderOf(home, true)
@@ -104,9 +110,71 @@ describe('the dial skill', () => {
     }
   })
 
+  it('a file 0.6.58 wrote is ours: written over, refreshed, removed', () => {
+    const old = `---\nname: dial\ndescription: older\n${OLD_MARKER}\n---\n\nOlder.\n`
+    for (const [act, result] of [[writeSkill, 'written'], [refreshSkill, 'updated'], [removeSkill, 'removed']] as const) {
+      const skills = skillsAt()
+      const path = skillOf(skills, old)
+      expect(act(skills)).toBe(result)
+      if (result !== 'removed') expect(readFileSync(path, 'utf8')).toBe(DIAL_SKILL)
+      else expect(existsSync(path)).toBe(false)
+    }
+  })
+
+  it('refreshSkill writes Harness\'s own file again when its bytes differ', () => {
+    const skills = skillsAt()
+    const path = skillOf(skills, `---\nname: dial\n${MARKER}\n---\n\nOlder.\n`)
+    expect(refreshSkill(skills)).toBe('updated')
+    expect(readFileSync(path, 'utf8')).toBe(DIAL_SKILL)
+    expect(statSync(path).mode & 0o777).toBe(0o600)
+    // The temp file it wrote first is gone.
+    expect(readdirSync(join(skills, 'dial'))).toEqual(['SKILL.md'])
+    const inode = statSync(path).ino
+    expect(refreshSkill(skills)).toBe('same')
+    expect(statSync(path).ino).toBe(inode)
+  })
+
+  it('refreshSkill leaves a home whose skill is gone, and makes nothing', () => {
+    // The skill file deleted, its dial folder, or the whole skills folder.
+    const noFile = skillsAt()
+    mkdirSync(join(noFile, 'dial'))
+    expect(refreshSkill(noFile)).toBe('gone')
+    expect(readdirSync(join(noFile, 'dial'))).toEqual([])
+
+    const noDial = skillsAt()
+    expect(refreshSkill(noDial)).toBe('gone')
+    expect(readdirSync(noDial)).toEqual([])
+
+    const home = folder()
+    expect(refreshSkill(join(home, 'skills'))).toBe('gone')
+    expect(readdirSync(home)).toEqual([])
+  })
+
+  it('skillWanted: Codex unless removed; Claude Code with its plugin on and not removed', () => {
+    const dir = folder()
+    const on = join(dir, 'on.json')
+    writeFileSync(on, '{"enabledPlugins":{"harness-device@openharness":true}}')
+    const off = join(dir, 'off.json')
+    writeFileSync(off, '{"enabledPlugins":{"harness-device@openharness":false}}')
+    const missing = join(dir, 'missing.json')
+
+    expect(skillWanted('codex', false, missing)).toBe(true)
+    expect(skillWanted('codex', true, on)).toBe(false)
+    expect(skillWanted('claude', false, on)).toBe(true)
+    expect(skillWanted('claude', true, on)).toBe(false)
+    expect(skillWanted('claude', false, off)).toBe(false)
+    expect(skillWanted('claude', false, missing)).toBe(false)
+  })
+
   it('leaves the person\'s file', () => {
     const cases: Array<[string, (skills: string) => string]> = [
       ['no marker', (skills) => skillOf(skills, '---\nname: dial\ndescription: mine\n---\n\nMine.\n')],
+      // Harness's other files open with these; none is a dial skill's line.
+      ['the Codex rules file\'s opening', (skills) => skillOf(skills, '---\nname: dial\n# Written by Harness, which rewrites it: do not edit.\n---\n')],
+      ['a colon after Harness', (skills) => skillOf(skills, '---\nname: dial\n# Written by Harness: mine.\n---\n')],
+      ['a parenthesis after Harness', (skills) => skillOf(skills, '---\nname: dial\n# Written by Harness (mine).\n---\n')],
+      ['nothing after Harness', (skills) => skillOf(skills, '---\nname: dial\n# Written by Harness\n---\n')],
+      ['an indented marker', (skills) => skillOf(skills, `---\nname: dial\n  ${MARKER}\n---\n`)],
       ['the marker only in the body', (skills) => skillOf(skills, `---\nname: dial\ndescription: mine\n---\n\n${MARKER}\n`)],
       ['a CRLF copy', (skills) => skillOf(skills, DIAL_SKILL.replaceAll('\n', '\r\n'))],
       ['a link to a file of exactly the skill', (skills) => {
@@ -145,6 +213,7 @@ describe('the dial skill', () => {
       const inLink = linked && statSync(linked).isDirectory() ? readdirSync(linked) : null
       const siblings = readdirSync(skills)
       expect(writeSkill(skills), what).toBe('theirs')
+      expect(refreshSkill(skills), what).toBe('theirs')
       expect(removeSkill(skills), what).toBe('theirs')
       expect(stamp(path), what).toEqual(before)
       if (text !== null) expect(readFileSync(path, 'utf8'), what).toBe(text)
@@ -276,6 +345,7 @@ describe('the dial skill', () => {
     chmodSync(join(older, 'dial'), 0o500)
     cleanup.push(join(older, 'dial'))
     expect(writeSkill(older)).toBe('failed')
+    expect(refreshSkill(older)).toBe('failed')
     expect(readFileSync(path, 'utf8')).toBe(`---\nname: dial\n${MARKER}\n---\n`)
     expect(readdirSync(join(older, 'dial'))).toEqual(['SKILL.md'])
 
