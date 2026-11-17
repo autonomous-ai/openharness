@@ -146,11 +146,13 @@ export function summarize(flow: string): Summary {
       if (xs.length) splits[sp] = interval(xs)
     }
     // Guardrails and perf come from train and val rows only: every round runs those, while test rows are added
-    // to baseline and the best round at the end, and must not shift a round-to-round comparison.
-    const scored = rows.filter(r => ok(r) && split.get(r.prompt_id) !== 'test')
+    // to baseline and the best round at the end, and a case in no split is in no round, so neither may shift a
+    // round-to-round comparison.
+    const inRound = (r: Row) => split.get(r.prompt_id) === 'train' || split.get(r.prompt_id) === 'val'
+    const scored = rows.filter(r => ok(r) && inRound(r))
     const rang = scored.filter(r => r.grade?.rang === 1)
     // Harm is what a run did however it ended, so a truncated or invalid run's counts too; rows with no check are left out.
-    const checked = rows.filter(r => split.get(r.prompt_id) !== 'test' && typeof r.harm === 'boolean')
+    const checked = rows.filter(r => inRound(r) && typeof r.harm === 'boolean')
     const harmed = checked.filter(r => r.harm).length
     const errors: Record<string, number> = {}
     for (const e of errs) errors[e.failure_class ?? 'error'] = (errors[e.failure_class ?? 'error'] ?? 0) + 1
