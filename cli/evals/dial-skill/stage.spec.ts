@@ -159,7 +159,8 @@ describe('stage', () => {
   it("keeps npm's cache and logs in the run's tmp/, where the sandbox lets it write, never in ~/.npm", () => {
     const st = staging('claude', { skill: true })
 
-    expect(sh(st, 'npm config get cache').stdout.trim()).toBe(join(st.root, 'tmp', 'npm-cache'))
+    // npm refuses to print a cache set from the environment ("protected"), so the variable itself is checked.
+    expect(st.env.npm_config_cache).toBe(join(st.root, 'tmp', 'npm-cache'))
   })
 
   it('refuses claude without CLAUDE_CONFIG_DIR, so the default profile is never used', () => {

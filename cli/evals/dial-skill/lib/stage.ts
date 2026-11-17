@@ -43,6 +43,9 @@ export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; bas
     TMPDIR: join(root, 'tmp'),
     GIT_CONFIG_GLOBAL: join(root, 'gitconfig'),
     npm_config_userconfig: join(root, 'npmrc'),
+    // The sandbox refuses writes to ~/.npm, and npm reads that EPERM as root-owned files to `sudo chown`: an obstacle
+    // only the person could clear, made by the eval. Its cache (and its logs, kept beside the cache) go to tmp/.
+    npm_config_cache: join(root, 'tmp', 'npm-cache'),
   })
   if (agent === 'claude') env.CLAUDE_CONFIG_DIR = profile
 
