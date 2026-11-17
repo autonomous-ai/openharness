@@ -1338,9 +1338,9 @@ it.each(['create', 'respawn'] as const)('selects the final owner command after t
   let release!: () => void, optionalCurrent = true
   const journal = new Promise<void>(resolve => { release = resolve })
   const finalCommand = vi.fn(() => optionalCurrent ? ['stale-optional'] : ['current-base', 'owner-word'])
-  const request = { command: ['stale-preflight'], cwd: '/owner/work', env: { OWNER_VALUE: 'private-fixture' },
+  const request = { command: finalCommand, cwd: '/owner/work', env: { OWNER_VALUE: 'private-fixture' },
     clearInherited: ['OLD_VALUE'], afterExit: { command: ['owner-shell'] }, current: () => true,
-    onDispatch: () => journal.then(() => finalCommand) }
+    onDispatch: () => journal }
   const pending = operation === 'create' ? backend.create(request as never) : backend.respawn(PANE, request as never)
   optionalCurrent = false; release()
   await pending
@@ -1355,7 +1355,7 @@ it.each(['create', 'respawn'] as const)('refuses %s when the final command facto
     const { backend, calls } = await ready()
     let current = true
     const finalCommand = vi.fn(() => { if (failure === 'throws') throw Error('owner preparation failed'); current = false; return ['never-executed'] })
-    const request = { command: ['never-preflight'], current: () => current, onDispatch: () => finalCommand }
+    const request = { command: finalCommand, current: () => current }
     const result = operation === 'create' ? await backend.create(request as never) : await backend.respawn(PANE, request as never)
     expect(result).toMatchObject({ state: 'failed', dispatch: 'not_started' })
     expect(finalCommand).toHaveBeenCalledTimes(1)
@@ -1372,16 +1372,15 @@ it.each(['create', 'respawn'] as const)('selects restore or moved %s commands on
     const preparing = new Promise<void>(resolve => { entered = resolve })
     const publish = vi.fn(() => { entered(); return receipt.then(() => { if (changed === 'receipt throws') throw Error('fixture receipt refused') }) })
     const command = vi.fn(() => { if (changed === 'factory throws') throw Error('fixture owner command refused'); return ['owner-command', ...(optional ? ['optional'] : [])] })
-    const select = vi.fn(() => command)
     const terminals = restoreTerminals({ backendFor: () => backend, newPanesOn: () => backend,
       listTmuxPanes: vi.fn(), cwd: '/owner', label: () => 'owner-label' })
-    const launch = { argv: ['preflight'], onDispatch: select, env: { OWNER_VALUE: 'fixture' },
+    const launch = { argv: command, env: { OWNER_VALUE: 'fixture' },
       paneLaunch: { cwd: '/owner/work', afterExit: { command: ['owner-shell'] }, clearInherited: ['OLD'] } }
     const control = { current: () => required, onDispatch: publish, expectedHeldToken: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }
     const row = { engine: 'claude', runtimes: [{ ...PANE, instance: 'old' }] } as RegisteredSession
     const pending = operation === 'create' ? terminals.createPane(row, launch, control) : terminals.respawn(PANE, launch, control)
     await preparing
-    expect(select).not.toHaveBeenCalled(); expect(command).not.toHaveBeenCalled()
+    expect(command).not.toHaveBeenCalled()
     if (changed === 'optional') optional = false; else if (changed === 'required') required = false
     release()
     const result = await pending
@@ -1394,7 +1393,6 @@ it.each(['create', 'respawn'] as const)('selects restore or moved %s commands on
     } else {
       expect(result.ok).toBe(false)
       expect(command).toHaveBeenCalledTimes(changed === 'factory throws' ? 1 : 0)
-      if (changed === 'receipt throws') expect(select).not.toHaveBeenCalled()
       expect(calls.some(call => call.op === operation)).toBe(false)
     }
     backend.dispose()

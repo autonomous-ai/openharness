@@ -596,11 +596,13 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     // A pre-G host drops `seed` silently, which would look like a pane that kept its scrollback: refuse instead.
     if (request.seed !== undefined && !client.features.includes(SEED_FEATURE)) return terminalActionNotStarted('this host cannot seed a pane')
     if (request.current?.() === false) return terminalActionNotStarted('The harness changed before pane dispatch')
-    let command = request.command
+    const initialCommand = request.command
+    let command: string[] | undefined
     try {
-      const pending = request.onDispatch?.(), final = pending ? await pending : undefined
+      const pending = request.onDispatch?.()
+      if (pending) await pending
       if (request.current?.() === false || this.disposed || this.draining || this.client !== client) return terminalActionNotStarted('The harness changed before pane dispatch')
-      if (final) command = final()
+      command = typeof initialCommand === 'function' ? initialCommand() : initialCommand
     }
     catch (error) { return terminalActionNotStarted(error instanceof Error ? error.message : 'Pane dispatch could not be committed') }
     if (request.current?.() === false || this.disposed || this.draining || this.client !== client) return terminalActionNotStarted('The harness changed before pane dispatch')
@@ -831,11 +833,13 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     if (!client) return terminalActionNotStarted(UNAVAILABLE)
     if (request.expectedHeldToken && !/^[a-f0-9-]{36}$/.test(request.expectedHeldToken)) return terminalActionNotStarted('invalid waiting pane identity')
     if (request.current?.() === false) return terminalActionNotStarted('The harness changed before pane dispatch')
-    let command = request.command
+    const initialCommand = request.command
+    let command: string[]
     try {
-      const pending = request.onDispatch?.(), final = pending ? await pending : undefined
+      const pending = request.onDispatch?.()
+      if (pending) await pending
       if (request.current?.() === false || this.disposed || this.clientFor(runtime) !== client) return terminalActionNotStarted('The harness changed before pane dispatch')
-      if (final) command = final()
+      command = typeof initialCommand === 'function' ? initialCommand() : initialCommand
     }
     catch (error) { return terminalActionNotStarted(error instanceof Error ? error.message : 'Pane dispatch could not be committed') }
     if (request.current?.() === false || this.disposed || this.clientFor(runtime) !== client) return terminalActionNotStarted('The harness changed before pane dispatch')

@@ -8,7 +8,7 @@ import { dshPinnedPermissionMode } from '../../dsh/manifest.js'
 import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
-import { windowsAfterExit } from '../../lib/windows/engineStart.js'
+import { windowsAfterExit, windowsHeldPaneArgv } from '../../lib/windows/engineStart.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from '../../lib/engineLaunch.js'
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
@@ -222,11 +222,43 @@ describe('creating an agent', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.mocked(createAndRegisterPane).mockReset().mockImplementation(async request => {
-      const command = await request.onDispatch?.()
-      command?.()
+      await request.onDispatch?.()
+      if (typeof request.argv === 'function') request.argv()
       return { ok: true, spawned: { runtime: { paneId: '%1' } }, pending } as never
     })
   })
+  it('preserves the exact Windows held command and its handoff metadata', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    const held = windowsHeldPaneArgv('fixture waiting', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+      vi.mocked(buildEngineLaunchArgv).mockReturnValueOnce(held)
+      expect(await setup().create(request())).toMatchObject({ ok: true })
+      const pane = vi.mocked(createAndRegisterPane).mock.calls[0]![0]
+      expect(pane.argv).toBe(held)
+      expect(pane.paneLaunch).not.toHaveProperty('afterExit')
+      expect(buildEngineLaunchArgv).toHaveBeenCalledOnce()
+    } finally { Object.defineProperty(process, 'platform', platform) }
+  })
+
+  it('publishes no launch script before the terminal accepts dispatch', async () => {
+    vi.mocked(createAndRegisterPane).mockImplementationOnce(async pane => {
+      expect(buildEngineLaunchArgv).not.toHaveBeenCalled()
+      expect(typeof pane.argv).toBe('function')
+      const command = pane.argv as unknown as () => string[]
+      command()
+      expect(buildEngineLaunchArgv).toHaveBeenCalledTimes(1)
+      return { ok: true, spawned: { runtime: { paneId: '%1' } }, pending } as never
+    })
+    expect(await setup().create(request())).toMatchObject({ ok: true })
+  })
+
+  it('publishes no launch script when the terminal refuses before dispatch', async () => {
+    vi.mocked(createAndRegisterPane).mockResolvedValueOnce({ ok: false, error: 'SPAWN_FAILED', detail: 'fixture backend refused' })
+    expect(await setup().create(request())).toMatchObject({ ok: false })
+    expect(buildEngineLaunchArgv).not.toHaveBeenCalled()
+  })
+
   // A launch or an installed harness one test queued and never used answers no other test.
   afterEach(() => { workspaceRead.afterStat = undefined; vi.restoreAllMocks(); vi.clearAllMocks(); launchDsh.mockReset(); vi.mocked(installedDsh).mockReset() })
 
@@ -750,6 +782,9 @@ describe('creating an agent', () => {
     })
 
     it.each([['preflight', buildEngineCommandArgv], ['dispatch', buildEngineLaunchArgv]] as const)('refuses a Windows batch-file engine during %s before opening a pane', async (_phase, builder) => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
       vi.mocked(builder).mockImplementationOnce(() => { throw new WindowsBatchLaunchRefused('claude', 'C:\\tools\\claude.cmd') })
       expect(await setup().create(request({ prompt: 'fix&calc' }))).toEqual({
         ok: false, error: 'ENGINE_LAUNCH_REFUSED', detail: expect.stringMatching(/^Harness cannot start claude on Windows .*claude\.cmd is a batch file/),
@@ -757,6 +792,7 @@ describe('creating an agent', () => {
       expect(createAndRegisterPane).not.toHaveBeenCalled()
       vi.mocked(builder).mockImplementationOnce(() => { throw new Error('fixture') })
       await expect(setup().create(request())).rejects.toThrow('fixture')
+    } finally { Object.defineProperty(process, 'platform', platform) }
     })
 
     it('without tmux, in a folder being purged, or in a folder that is not one', async () => {
@@ -884,7 +920,7 @@ describe('creating an agent', () => {
       const real = await vi.importActual<typeof import('../../lib/engineLaunch.js')>('../../lib/engineLaunch.js')
       vi.mocked(buildEngineLaunchArgv).mockImplementationOnce((engine, options) => real.buildEngineLaunchArgv(engine, options))
       expect(await setup().create(request(over))).toMatchObject({ ok: true })
-      return vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
+      return { ...vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0], argv: vi.mocked(buildEngineLaunchArgv).mock.results.at(-1)!.value as string[] }
     }
 
     it('an OpenClaw first task is kept for typing, not launched with', async () => {

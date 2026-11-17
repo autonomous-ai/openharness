@@ -81,7 +81,7 @@ it.each(['linux', 'darwin'])('keeps healthy native resume composition on %s', as
       const stopped = new StoppedAgentStore(join(root, 'saved', engine)); stopped.save(saved)
       const events: unknown[] = []
       const terminal: ResumeAgentServiceDeps['createBackend'] & ReturnType<ResumeAgentServiceDeps['backendFor']> = {
-          create: async request => { events.push(['create', request.command]); return { state: 'succeeded', dispatch: 'executed',
+          create: async request => { await request.onDispatch?.(); const command = typeof request.command === 'function' ? request.command() : request.command; events.push(['create', command]); return { state: 'succeeded', dispatch: 'executed',
             runtime: { backend: 'tmux', paneId: `%${++pane}` } } },
           kill: async () => { throw Error('A healthy resume must not kill a pane') },
           releaseHold: async () => {}, paneState: async () => ({ dead: false, exitStatus: null, command: '<engine>', engineExit: null }),

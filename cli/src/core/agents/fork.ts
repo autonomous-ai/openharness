@@ -188,19 +188,22 @@ export function createAgentForker({ opencodeMajor,
     return { ok: true, dispatch: async () => {
     if (!dispatchCurrent()) return changed
     const launchOptions = baseOptions
-    let command: string[], argv: string[]
+    let command: string[], windowsArgv: string[] | undefined
     try {
       command = buildEngineCommandArgv(engine, launchOptions)
-      argv = buildEngineLaunchArgv(engine, launchOptions)
+      // Windows has no launch script: preserve its pure preflight and exact held-command identity.
+      if (process.platform === 'win32') windowsArgv = buildEngineLaunchArgv(engine,
+        { ...launchOptions, extraArgs: launchSettingsArgs(engine, extraArgs, settings) })
     } catch (error) { return windowsLaunchRefusal(error) }
+    const held = windowsArgv !== undefined && isWindowsHeldPane(windowsArgv)
+    const argv = held ? windowsArgv! : () => {
+      const selectedArgs = launchSettingsArgs(engine, extraArgs, settings)
+      const selected = { ...baseOptions, extraArgs: selectedArgs.length ? selectedArgs : undefined }
+      command = buildEngineCommandArgv(engine, selected)
+      return buildEngineLaunchArgv(engine, selected)
+    }
     const result = await createAndRegisterPane({
       current: dispatchCurrent, agentId: forkId, ...(built.overrides.native ? { nativeToken: built.overrides.native.token } : {}),
-      onDispatch: () => () => {
-        const selectedArgs = launchSettingsArgs(engine, extraArgs, settings)
-        const selected = { ...baseOptions, extraArgs: selectedArgs.length ? selectedArgs : undefined }
-        command = buildEngineCommandArgv(engine, selected)
-        return buildEngineLaunchArgv(engine, selected)
-      },
       tmuxBackend: createBackend,
       registry,
       engine,
@@ -208,7 +211,7 @@ export function createAgentForker({ opencodeMajor,
       sessionLabel: label,
       argv,
       // Windows: the workspace to start in and the shell the pane becomes after the engine (lib/windows/engineStart.ts).
-      paneLaunch: windowsPaneLaunch(engine, { ...launchOptions, held: isWindowsHeldPane(argv) }),
+      paneLaunch: windowsPaneLaunch(engine, { ...launchOptions, held }),
       // The SCM's environment last, after the harness context's, as at create and relaunch.
       // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
       env: mergedLaunchEnv(mergedLaunchEnv(mergedLaunchEnv(Object.keys(built.overrides.env).length ? built.overrides.env : undefined, dshEnv),

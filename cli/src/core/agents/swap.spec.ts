@@ -1,5 +1,5 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { windowsAfterExit } from '../../lib/windows/engineStart.js'
+import { windowsAfterExit, windowsHeldPaneArgv } from '../../lib/windows/engineStart.js'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -56,12 +56,27 @@ function setup(row: RegisteredSession | null = session()) {
 }
 
 describe('the pane-process swap', () => {
-  it('forwards the owner command factory through the original respawn dispatch control', async () => {
+  it('retains a Windows preflight held command without invoking another final builder', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    const held = windowsHeldPaneArgv('fixture waiting', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')
+    const command = vi.fn(() => held)
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+      const { swap, tmuxBackend } = setup()
+      await swap.paneSwapDeps(session(), place()).respawn(command)
+      const request = (tmuxBackend.respawn.mock.lastCall as unknown[])[1] as { command: unknown }
+      expect(request.command).toBe(held)
+      expect(request).not.toHaveProperty('afterExit')
+      expect(command).toHaveBeenCalledOnce()
+    } finally { Object.defineProperty(process, 'platform', platform) }
+  })
+
+  it('forwards the owner command factory through the respawn command field', async () => {
     const { swap, tmuxBackend } = setup()
     const command = vi.fn(() => ['current-owner-command'])
-    await swap.paneSwapDeps(session(), place()).respawn(['preflight'], command)
-    const request = (tmuxBackend.respawn.mock.lastCall as unknown[])[1] as { onDispatch?: () => unknown }
-    expect(await request.onDispatch?.()).toBe(command)
+    await swap.paneSwapDeps(session(), place()).respawn(command)
+    const request = (tmuxBackend.respawn.mock.lastCall as unknown[])[1] as { command: unknown }
+    expect(request.command).toBe(command)
     expect(command).not.toHaveBeenCalled()
   })
   it('passes the prepared native snapshot into the final argv builder', () => {
@@ -150,23 +165,23 @@ describe('the pane-process swap', () => {
       Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
       const { swap, tmuxBackend } = setup()
       const native = { token: 'prepared-native' } as NativeLaunch
-      await swap.paneSwapDeps(session(), place(), { native, env: { GRID: '1' } }).respawn(['claude'], () => ['claude'])
+      await swap.paneSwapDeps(session(), place(), { native, env: { GRID: '1' } }).respawn(() => ['claude'])
       expect(tmuxBackend.respawn).toHaveBeenLastCalledWith(runtime, expect.objectContaining({
-        command: ['claude'], env: { GRID: '1', [NATIVE_LAUNCH_MARKER]: 'prepared-native' },
+        command: expect.any(Function), env: { GRID: '1', [NATIVE_LAUNCH_MARKER]: 'prepared-native' },
       }))
       // In the agent's folder, which no launch script enters there, and the pane a shell after the engine.
       expect(tmuxBackend.respawn).toHaveBeenLastCalledWith(runtime, expect.objectContaining({ cwd: '/work', afterExit: windowsAfterExit('claude') }))
       // A grid swap's vendor keys: this launch alone does not inherit them from the host.
-      await swap.paneSwapDeps(session(), place(), { clearEnv: ['ANTHROPIC_API_KEY'] }).respawn(['claude'], () => ['claude'])
+      await swap.paneSwapDeps(session(), place(), { clearEnv: ['ANTHROPIC_API_KEY'] }).respawn(() => ['claude'])
       expect(tmuxBackend.respawn).toHaveBeenLastCalledWith(runtime, expect.objectContaining({ clearInherited: ['ANTHROPIC_API_KEY'] }))
       expect((tmuxBackend.respawn.mock.lastCall as unknown[])[1]).not.toHaveProperty('clearEnv')
       // A retarget home (retarget.ts: `clearPaneEnv` = the grid's own variables) clears the pane's create env alone,
       // never the person's own variables the host inherited: no provider key, and its list sent apart.
-      await swap.paneSwapDeps(session(), place(), { clearPaneEnv: ['ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN'] }).respawn(['claude'], () => ['claude'])
+      await swap.paneSwapDeps(session(), place(), { clearPaneEnv: ['ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN'] }).respawn(() => ['claude'])
       expect(tmuxBackend.respawn).toHaveBeenLastCalledWith(runtime, expect.objectContaining({ clearEnv: ['ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN'] }))
       expect((tmuxBackend.respawn.mock.lastCall as unknown[])[1]).not.toHaveProperty('clearInherited')
       Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
-      await swap.paneSwapDeps(session(), place(), { native }).respawn(['claude'], () => ['claude'])
+      await swap.paneSwapDeps(session(), place(), { native }).respawn(() => ['claude'])
       expect((tmuxBackend.respawn.mock.lastCall as unknown[] | undefined)?.[1]).not.toHaveProperty('env')
       expect((tmuxBackend.respawn.mock.lastCall as unknown[] | undefined)?.[1]).toMatchObject({ cwd: homedir() })
       expect((tmuxBackend.respawn.mock.lastCall as unknown[] | undefined)?.[1]).not.toHaveProperty('afterExit')
@@ -201,7 +216,7 @@ describe('the pane-process swap', () => {
     expect(signalCurrent?.()).toBe(true)
     allowed = false
     expect(signalCurrent?.()).toBe(false)
-    await prepared.respawn(['fixture-engine'], () => ['fixture-engine'])
+    await prepared.respawn(() => ['fixture-engine'])
     expect(tmuxBackend.respawn).toHaveBeenCalledWith(runtime, expect.objectContaining({ current }))
   })
 
@@ -230,13 +245,13 @@ describe('the pane-process swap', () => {
     tmuxBackend.holdOpen.mockResolvedValueOnce({ state: 'failed', reason: 'pane gone' } as never).mockResolvedValueOnce({ state: 'unknown' } as never)
     expect(await swapDeps.holdOpen()).toEqual({ ok: false, reason: 'pane gone' })
     expect(await swapDeps.holdOpen()).toEqual({ ok: false, reason: 'could not re-arm remain-on-exit' })
-    expect(await swapDeps.respawn(['claude', '--resume', 's1'], () => ['claude', '--resume', 's1'])).toEqual({ ok: true })
-    expect(tmuxBackend.respawn).toHaveBeenCalledWith(runtime, { command: ['claude', '--resume', 's1'], onDispatch: expect.any(Function), cwd: homedir(), env: { GRID_KEY: 'k' } })
+    expect(await swapDeps.respawn(() => ['claude', '--resume', 's1'])).toEqual({ ok: true })
+    expect(tmuxBackend.respawn).toHaveBeenCalledWith(runtime, { command: expect.any(Function), cwd: homedir(), env: { GRID_KEY: 'k' } })
     tmuxBackend.respawn.mockResolvedValueOnce({ state: 'failed', reason: 'busy' } as never).mockResolvedValueOnce({ state: 'unknown' } as never)
-    expect(await swapDeps.respawn(['claude'], () => ['claude'])).toEqual({ ok: false, reason: 'busy' })
-    expect(await swapDeps.respawn(['claude'], () => ['claude'])).toEqual({ ok: false, reason: 'tmux respawn-pane did not complete' })
-    await swap.paneSwapDeps(session(), place()).respawn(['claude'], () => ['claude'])
-    expect(tmuxBackend.respawn).toHaveBeenLastCalledWith(runtime, { command: ['claude'], onDispatch: expect.any(Function), cwd: homedir() })
+    expect(await swapDeps.respawn(() => ['claude'])).toEqual({ ok: false, reason: 'busy' })
+    expect(await swapDeps.respawn(() => ['claude'])).toEqual({ ok: false, reason: 'tmux respawn-pane did not complete' })
+    await swap.paneSwapDeps(session(), place()).respawn(() => ['claude'])
+    expect(tmuxBackend.respawn).toHaveBeenLastCalledWith(runtime, { command: expect.any(Function), cwd: homedir() })
   })
 
   it('swaps a ptyhost pane through its own backend, which refuses no environment', async () => {
@@ -248,9 +263,9 @@ describe('the pane-process swap', () => {
     expect(swapDeps.respawnRefusal).toBeUndefined()
     expect(await swapDeps.holdOpen()).toEqual({ ok: true })
     expect(ptyBackend.holdOpen).toHaveBeenCalledWith(pty, current)
-    expect(await swapDeps.respawn(['claude'], () => ['claude'])).toEqual({ ok: true })
+    expect(await swapDeps.respawn(() => ['claude'])).toEqual({ ok: true })
     // The grid's names leave what the pane was created with (tmux clears its session env instead).
-    expect(ptyBackend.respawn).toHaveBeenCalledWith(pty, { command: ['claude'], onDispatch: expect.any(Function), current, cwd: homedir(), env: { GRID_KEY: 'k' }, clearEnv: ['ANTHROPIC_BASE_URL'] })
+    expect(ptyBackend.respawn).toHaveBeenCalledWith(pty, { command: expect.any(Function), current, cwd: homedir(), env: { GRID_KEY: 'k' }, clearEnv: ['ANTHROPIC_BASE_URL'] })
     vi.useFakeTimers()
     vi.mocked(resolvePaneEngineProcess).mockResolvedValue({ pid: 9, startMarker: 'm' } as never)
     const waiting = swapDeps.waitForProcess()

@@ -17,7 +17,7 @@ import type { GridLaunchRecord } from './gridLaunchWire.js'
 import type { ScmLaunchRecord } from '../scm/types.js'
 import type { ForkOrigin, RegisteredSession } from './registry.js'
 import type { TerminalBackend } from './terminalBackend.js'
-import type { TerminalCreateResult, TerminalRuntimeRef, TerminalDispatchControl } from './terminalTypes.js'
+import type { TerminalCreateResult, TerminalRuntimeRef, TerminalDispatchControl, TerminalCommand } from './terminalTypes.js'
 import { terminalRouteKey } from './terminalRuntime.js'
 import type { ExternalResumeIntent } from './externalResume.js'
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
@@ -71,7 +71,7 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
   label?: string | null
   /** Base tmux session name (`-s`). Retries append `-r<attempt>` — see module doc. */
   sessionLabel: string
-  argv: string[]
+  argv: TerminalCommand
   /** Explicit-argv terminals start here; engine wrappers still enter cwd after rc files. */
   spawnCwd?: string
   /** Windows: the folder the engine starts in (it has no wrapper to enter one) and the shell the pane becomes when it

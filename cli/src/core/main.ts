@@ -73,7 +73,7 @@ import { ENGINES } from '../lib/engineBin.js'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { createObservedHook } from './observedHook.js'
 import { createDeviceHookCalls } from './deviceHookCalls.js'
-import { buildEngineLaunchArgv, engineLaunchEnv, supportsFirstPrompt, typedFirstPrompt } from '../lib/engineLaunch.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, supportsFirstPrompt, typedFirstPrompt } from '../lib/engineLaunch.js'
 import { launchSettingsArgs } from '../engines/kit/launchValues.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../lib/windows/engineStart.js'
 import type { createGuestHostBackend } from '../lib/windows/guestHostBackend.js'
@@ -2652,16 +2652,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         ...(clearEnv.length ? { clearEnv } : {}),
         ...(launchEnv.HARNESS_DSH ? { harnessNode: true } : {}),
       }
-      const argv = buildEngineLaunchArgv(entry.engine, launchOptions)
-      // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
-      const paneEnv = { ...launchEnv, ...engineLaunchEnv(entry.engine, overrides.native) }
-      return { argv, onDispatch: () => () => {
+      buildEngineCommandArgv(entry.engine, launchOptions)
+      const windowsArgv = process.platform === 'win32' ? buildEngineLaunchArgv(entry.engine, launchOptions) : undefined
+      const held = windowsArgv !== undefined && isWindowsHeldPane(windowsArgv)
+      const argv = held ? windowsArgv! : () => {
         const selectedArgs = launchSettingsArgs(entry.engine, extraArgs, overrides.settings)
         return buildEngineLaunchArgv(entry.engine, { ...launchOptions, extraArgs: selectedArgs.length ? selectedArgs : undefined })
-      }, ...(overrides.native ? { nativeToken: overrides.native.token, current: overrides.native.current } : {}), ...(Object.keys(paneEnv).length ? { env: paneEnv } : {}),
+      }
+      // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
+      const paneEnv = { ...launchEnv, ...engineLaunchEnv(entry.engine, overrides.native) }
+      return { argv, ...(overrides.native ? { nativeToken: overrides.native.token, current: overrides.native.current } : {}), ...(Object.keys(paneEnv).length ? { env: paneEnv } : {}),
         ...(firstTask ? { firstTask } : {}),
         // Windows: the workspace to start in and the shell the pane becomes after the engine (lib/windows/engineStart.ts).
-        paneLaunch: windowsPaneLaunch(entry.engine, { cwd: entry.cwd, clearEnv, native: overrides.native, held: isWindowsHeldPane(argv) }) }
+        paneLaunch: windowsPaneLaunch(entry.engine, { cwd: entry.cwd, clearEnv, native: overrides.native, held }) }
     },
   })
   // A move a dead daemon left before its switch left a pane marked as that move's, which no row names: closed now,

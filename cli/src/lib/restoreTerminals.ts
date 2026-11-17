@@ -16,8 +16,7 @@ import { lookupPaneEngineProcess, resolvePaneEngineProcess } from './paneEngineP
 import { restoreRuntimeOf, terminalSurvey, type RestoreAgentsDeps, type SurveyListing } from './restoreAgents.js'
 import { canRestart, type RestartableBackend, type TerminalBackend } from './terminalBackend.js'
 import { terminalRuntimeLabel } from './terminalRuntime.js'
-import type { TerminalRuntimeRef, TerminalDispatchControl } from './terminalTypes.js'
-import type { RestoreLaunch } from './restoreAgents.js'
+import type { TerminalRuntimeRef } from './terminalTypes.js'
 
 export interface RestoreTerminalsOptions {
   /** Each runtime's own backend (`TerminalBackendCoordinator.backendFor`). */
@@ -37,14 +36,6 @@ export type RestoreTerminals = Required<Pick<RestoreAgentsDeps,
   | 'clearRemainOnExit' | 'killPane'>>
 
 export function restoreTerminals(options: RestoreTerminalsOptions): RestoreTerminals {
-  // Restore's control publishes receipts only; the selected launch owns the final command after that publication.
-  const dispatch = (launch: RestoreLaunch, control?: TerminalDispatchControl): TerminalDispatchControl => ({
-    ...control,
-    ...(launch.onDispatch ? { onDispatch: async () => {
-      await control?.onDispatch?.()
-      return launch.onDispatch!()
-    } } : {}),
-  })
   const restoring = (runtime: TerminalRuntimeRef): RestartableBackend | undefined => {
     const backend = options.backendFor(runtime)
     return canRestart(backend) ? backend : undefined
@@ -86,7 +77,7 @@ export function restoreTerminals(options: RestoreTerminalsOptions): RestoreTermi
         cwd: options.cwd,
         label: options.label(entry.engine),
         command: launch.argv,
-        ...dispatch(launch, control),
+        ...control,
         ...(launch.env ? { env: launch.env } : {}),
         ...launch.paneLaunch,
       })
@@ -95,7 +86,7 @@ export function restoreTerminals(options: RestoreTerminalsOptions): RestoreTermi
     respawn: async (runtime, launch, control) => {
       const result = await backendOf(runtime).respawn(runtime, {
         command: launch.argv,
-        ...dispatch(launch, control),
+        ...control,
         cwd: options.cwd,
         ...(launch.env ? { env: launch.env } : {}),
         ...launch.paneLaunch,

@@ -263,7 +263,7 @@ function harness(rows: RegisteredSession[], opts: { livePanes?: string[]; aliveP
       return { ok: true, runtime: { backend: 'tmux', paneId: h.nextPane.shift() ?? '%99' } }
     },
     respawn: async (runtime, launch, control) => {
-      note(`respawn:${runtime.paneId}:${launch.argv.join(' ')}`)
+      note(`respawn:${runtime.paneId}:${(typeof launch.argv === 'function' ? launch.argv() : launch.argv).join(' ')}`)
       h.launched.push({ agentId: 'respawn', launch })
       h.respawns++
       await control?.onDispatch?.()
@@ -927,7 +927,7 @@ describe('restoreAgents — held until the service a launch asks is ready', () =
     expect(summary.restored).toEqual(['own'])
     // One ask of models, for the first; the second waits without one, in a new pane since its own went.
     expect(h.launches.filter((l) => l.agentId !== 'own')).toEqual([{ agentId: 'first' }])
-    expect(h.launched.find((l) => l.agentId === 'second')?.launch.argv[0]).toBe('wait')
+    expect(h.launched.find((l) => l.agentId === 'second')?.launch.argv).toMatchObject({ 0: 'wait' })
     expect(h.rows.get('first')?.launch).toEqual(HELD)
     expect(h.rows.get('second')?.launch).toEqual(HELD)
   })
@@ -1292,7 +1292,7 @@ describe('restoreAgents — terminals', () => {
     expect(summary).toEqual({ restored: ['term-1'], skipped: [], failed: [], held: [], unsurveyed: [] })
     expect(h.calls[0]).toBe('releaseEngine:term-1')
     expect(h.launches).toEqual([{ agentId: 'term-1' }])
-    expect(h.launched[1].launch.argv[0]).toBe('terminal')
+    expect(h.launched[1].launch.argv).toMatchObject({ 0: 'terminal' })
     expect(h.rows.get('term-1')).toMatchObject({ engine: 'terminal', launch: { state: 'ready' } })
   })
 

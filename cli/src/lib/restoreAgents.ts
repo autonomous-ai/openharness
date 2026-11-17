@@ -40,7 +40,7 @@ import { launchedGrid, type GridAssignment } from './gridAssignmentWire.js'
 import type { LaunchOverrides } from './launchOverrides.js'
 import { matchesLaunchReceipt, RegistryOwnershipChanged, type AgentLaunch, type LaunchPublication, type ProcessIdentity, type RegisteredSession, type RegistryAuthority, type registry } from './registry.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
-import type { TerminalDispatchControl, TerminalRuntimeRef } from './terminalTypes.js'
+import type { TerminalDispatchControl, TerminalRuntimeRef, TerminalCommand } from './terminalTypes.js'
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
 import { processAmong, sameProcessIdentity, sameTerminalPlacement, terminalInstanceId, terminalRouteKey } from './terminalRuntime.js'
 import { resumesConversation } from './resumeCapability.js'
@@ -48,8 +48,7 @@ import { resumesConversation } from './resumeCapability.js'
 export interface RestoreLaunch {
   nativeToken?: string
   current?(): boolean
-  onDispatch?: TerminalDispatchControl['onDispatch']
-  argv: string[]
+  argv: TerminalCommand
   env?: Record<string, string>
   /** Windows: the folder the engine starts in and the shell its pane becomes after it (lib/windows/engineStart.ts
    *  `windowsPaneLaunch`); elsewhere the launch script enters the folder and hands the pane on itself. */

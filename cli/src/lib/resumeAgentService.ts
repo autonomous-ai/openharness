@@ -12,7 +12,7 @@ import { checkPidRuntime } from './deleteAgentFallback.js'
 import { checkSessionRuntime, resolvePaneEngineProcess } from './paneEngineProcess.js'
 import { engineBin } from './engineBin.js'
 import type { ClearBackgroundJob } from '../engines/facets/backgroundJob.js'
-import { buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, engineLaunchEnv, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, engineLaunchEnv, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
 import { launchSettingsArgs } from '../engines/kit/launchValues.js'
 import { workspaceMissing } from './workspaceCheck.js'
 import { buildHarnessSessionLabel } from './harnessSessionLabel.js'
@@ -403,8 +403,16 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           ...(launchEnv.HARNESS_DSH ? { harnessNode: true } : {}),
         }
         // Windows refuses a batch-file engine whose arguments cmd.exe would read (windows/launch.ts): this row alone.
-        let argv: string[]
-        try { argv = buildEngineLaunchArgv(saved.engine, options) } catch (error) { return windowsLaunchRefusal(error) }
+        let windowsArgv: string[] | undefined
+        try {
+          buildEngineCommandArgv(saved.engine, options)
+          if (process.platform === 'win32') windowsArgv = buildEngineLaunchArgv(saved.engine, options)
+        } catch (error) { return windowsLaunchRefusal(error) }
+        const held = windowsArgv !== undefined && isWindowsHeldPane(windowsArgv)
+        const argv = held ? windowsArgv! : () => {
+          const selectedArgs = launchSettingsArgs(saved.engine, extraArgs, settings)
+          return buildEngineLaunchArgv(saved.engine, { ...options, extraArgs: selectedArgs.length ? selectedArgs : undefined })
+        }
         // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
         const paneEnv = { ...launchEnv, ...engineLaunchEnv(saved.engine, built.overrides.native) }
         transcript?.verify()
@@ -416,13 +424,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         const result = await createAndRegisterPane({
           current: () => sourceCurrent() && built.overrides.native?.current() !== false,
           ...(built.overrides.native ? { nativeToken: built.overrides.native.token } : {}),
-          onDispatch: () => {
-            allocationAttempted = true
-            return () => {
-              const selectedArgs = launchSettingsArgs(saved.engine, extraArgs, settings)
-              return buildEngineLaunchArgv(saved.engine, { ...options, extraArgs: selectedArgs.length ? selectedArgs : undefined })
-            }
-          },
+          onDispatch: () => { allocationAttempted = true },
           tmuxBackend: { ...createBackend, create: async request => {
             const result = await createBackend.create(request)
             if (result.dispatch !== 'not_started') allocationAttempted = true
@@ -435,7 +437,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           sessionLabel: buildHarnessSessionLabel(saved.engine),
           argv,
           // Windows: the workspace to start in and the shell the pane becomes after the engine (windows/engineStart.ts).
-          paneLaunch: windowsPaneLaunch(saved.engine, { ...options, held: isWindowsHeldPane(argv) }),
+          paneLaunch: windowsPaneLaunch(saved.engine, { ...options, held }),
           ...(Object.keys(paneEnv).length ? { env: paneEnv } : {}),
         })
         if (sourceError) throw sourceError

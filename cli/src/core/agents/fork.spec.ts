@@ -7,7 +7,7 @@ import { installedDsh } from '../../dsh/installed.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
-import { windowsAfterExit } from '../../lib/windows/engineStart.js'
+import { windowsAfterExit, windowsHeldPaneArgv } from '../../lib/windows/engineStart.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, refusePermissionFlagIfUnsupported, supportsNamedAgent } from '../../lib/engineLaunch.js'
 import { planFork } from '../../lib/forkAgent.js'
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -91,11 +91,43 @@ describe('forking an agent', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.mocked(createAndRegisterPane).mockReset().mockImplementation(async request => {
-      const command = await request.onDispatch?.()
-      command?.()
+      await request.onDispatch?.()
+      if (typeof request.argv === 'function') request.argv()
       return { ok: true, spawned: { runtime: { paneId: '%3' } }, pending } as never
     })
   })
+  it('preserves the exact Windows held command and its handoff metadata', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    const held = windowsHeldPaneArgv('fixture waiting', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+      vi.mocked(buildEngineLaunchArgv).mockReturnValueOnce(held)
+      expect(await setup(source()).fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ ok: true })
+      const pane = vi.mocked(createAndRegisterPane).mock.calls[0]![0]
+      expect(pane.argv).toBe(held)
+      expect(pane.paneLaunch).not.toHaveProperty('afterExit')
+      expect(buildEngineLaunchArgv).toHaveBeenCalledOnce()
+    } finally { Object.defineProperty(process, 'platform', platform) }
+  })
+
+  it('publishes no launch script before the terminal accepts dispatch', async () => {
+    vi.mocked(createAndRegisterPane).mockImplementationOnce(async pane => {
+      expect(buildEngineLaunchArgv).not.toHaveBeenCalled()
+      expect(typeof pane.argv).toBe('function')
+      const command = pane.argv as unknown as () => string[]
+      command()
+      expect(buildEngineLaunchArgv).toHaveBeenCalledTimes(1)
+      return { ok: true, spawned: { runtime: { paneId: '%1' } }, pending } as never
+    })
+    expect(await setup(source()).fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ ok: true })
+  })
+
+  it('publishes no launch script when the terminal refuses before dispatch', async () => {
+    vi.mocked(createAndRegisterPane).mockResolvedValueOnce({ ok: false, error: 'SPAWN_FAILED', detail: 'fixture backend refused' })
+    expect(await setup(source()).fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ ok: false })
+    expect(buildEngineLaunchArgv).not.toHaveBeenCalled()
+  })
+
   // A launch or an installed harness one test queued and never used answers no other test.
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); launchDsh.mockReset(); vi.mocked(installedDsh).mockReset() })
 
@@ -284,11 +316,15 @@ describe('forking an agent', () => {
   })
 
   it.each([['preflight', buildEngineCommandArgv], ['dispatch', buildEngineLaunchArgv]] as const)('refuses a Windows batch-file fork during %s before opening a pane', async (_phase, builder) => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
     vi.mocked(builder).mockImplementationOnce(() => { throw new WindowsBatchLaunchRefused('claude', 'C:\\tools\\claude.cmd') })
     expect(await setup(source()).fork({ agentId: 'a1', name: null, prompt: 'a & b' })).toMatchObject({ ok: false, error: 'ENGINE_LAUNCH_REFUSED', detail: expect.stringContaining('claude.cmd') })
     expect(createAndRegisterPane).not.toHaveBeenCalled()
     vi.mocked(builder).mockImplementationOnce(() => { throw new Error('fixture') })
     await expect(setup(source()).fork({ agentId: 'a1', name: null, prompt: null })).rejects.toThrow('fixture')
+    } finally { Object.defineProperty(process, 'platform', platform) }
   })
 
   it('refuses without tmux, an agent, a folder, or with a grid or a turn in progress', async () => {
@@ -386,7 +422,8 @@ describe('forking an agent', () => {
     expect(await fork({ agentId: 'a1', name: null, prompt: 'next' })).toMatchObject({ level: 'handoff' })
     const pane = vi.mocked(createAndRegisterPane).mock.calls[0]![0]
     expect(pane.firstTask).toEqual(expect.stringContaining('next'))
-    expect(pane.argv.some(arg => arg.includes(pane.firstTask!))).toBe(false)
+    const argv = vi.mocked(buildEngineLaunchArgv).mock.results.at(-1)!.value as string[]
+    expect(argv.some(arg => arg.includes(pane.firstTask!))).toBe(false)
   })
 
   it('forks an agent with no session from what little it has, and opens a native fork with no first prompt', async () => {
@@ -449,7 +486,7 @@ describe('forking an agent', () => {
 
   it('carries the harness and the named agent over, when the engine still takes it', async () => {
     vi.mocked(installedDsh).mockReturnValue({ manifest: { name: 'Blender' } } as never)
-    vi.mocked(createAndRegisterPane).mockResolvedValue({ ok: true, spawned: { runtime: { paneId: '%3' } }, pending: { ...pending, dsh: 'blender' } } as never)
+    vi.mocked(createAndRegisterPane).mockImplementation(async request => { if (typeof request.argv === 'function') request.argv(); return { ok: true, spawned: { runtime: { paneId: '%3' } }, pending: { ...pending, dsh: 'blender' } } as never })
     vi.mocked(enginePathOverride).mockReturnValueOnce('/opt/claude' as never)
     const { deps, fork } = setup(source({ dsh: 'blender', dshRuntime: 'harness-claude-x', agent: 'reviewer' } as Partial<RegisteredSession>))
     await fork({ agentId: 'a1', name: null, prompt: null })

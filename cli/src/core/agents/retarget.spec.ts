@@ -262,14 +262,16 @@ describe('retargeting an agent', () => {
   it('keeps an admitted external conversation when its retarget resume fails', async () => {
     const actual = await vi.importActual<typeof import('../../lib/restartAgent.js')>('../../lib/restartAgent.js')
     vi.mocked(restartAgent).mockImplementationOnce(actual.restartAgent)
-    const respawn = vi.fn(async () => ({ ok: true }))
+    const dispatched: string[][] = []
+    const respawn = vi.fn(async (command: () => string[]) => { dispatched.push(command()); return { ok: true } })
     const keepAbandoned = vi.fn(), buildArgv = vi.fn(options => ['fixture-engine', options.resumeSessionId ?? 'fresh'])
     const run = setup(agent({ resumeOnly: true }), { paneSwapDeps: () => ({
       holdOpen: async () => ({ ok: true }), terminate: async () => 'gone', respawn,
       waitForProcess: async () => null, buildArgv, keepAbandoned, log: () => {},
     }) })
     expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'RESPAWN_FAILED' })
-    expect(respawn).toHaveBeenCalledExactlyOnceWith(['fixture-engine', 's1'], expect.any(Function))
+    expect(respawn).toHaveBeenCalledExactlyOnceWith(expect.any(Function))
+    expect(dispatched).toEqual([['fixture-engine', 's1']])
     expect(keepAbandoned).not.toHaveBeenCalled()
     expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
   })

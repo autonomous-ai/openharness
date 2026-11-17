@@ -125,19 +125,20 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
           current: ownsOriginal,
         }, checkAfterMs)
       },
-      respawn: async (argv, command) => {
+      respawn: async command => {
+        const windowsArgv = process.platform === 'win32' ? command() : undefined
+        const held = windowsArgv !== undefined && isWindowsHeldPane(windowsArgv)
         // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
         const env = mergedLaunchEnv(launch.env, engineLaunchEnv(session.engine, launch.native))
         const result = await backend.respawn(runtime, {
-          command: argv,
-          onDispatch: () => command,
+          command: held ? windowsArgv! : command,
           ...(current ? { current } : {}),
           cwd: homedir(),
           // Windows: the workspace to start in, what this launch alone must not inherit from the host (its own
           // `clearEnv`, a grid's keys: none for a swap that sets no grid), and the shell the pane becomes after the
           // engine (lib/windows/engineStart.ts). Never merged with `clearPaneEnv`, which only takes names out of
           // what the pane was created with, as tmux's `set-environment -u` does.
-          ...windowsPaneLaunch(session.engine, { ...relaunchOptions({ bypassPermission: false }), held: isWindowsHeldPane(argv) }),
+          ...windowsPaneLaunch(session.engine, { ...relaunchOptions({ bypassPermission: false }), held }),
           ...(env ? { env } : {}),
           ...(launch.clearPaneEnv?.length ? { clearEnv: launch.clearPaneEnv } : {}),
         })

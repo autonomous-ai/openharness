@@ -1176,12 +1176,13 @@ it.each(['create', 'respawn'] as const)('selects the final owner command after t
   const journal = new Promise<void>(resolve => { release = resolve })
   const preparing = new Promise<void>(resolve => { entered = resolve })
   const finalCommand = vi.fn(() => optionalCurrent ? ['stale-optional'] : ['current-base', 'owner-word'])
-  const request = { command: ['stale-preflight'], label: 'owner-final', env: { OWNER_VALUE: 'private-fixture' }, current: () => true,
-    onDispatch: () => { entered(); return journal.then(() => finalCommand) } }
+  const request = { command: finalCommand, label: 'owner-final', env: { OWNER_VALUE: 'private-fixture' }, current: () => true,
+    onDispatch: () => { entered(); return journal } }
   const backend = new TmuxBackend(undefined, () => 'private-test-owner', () => {})
   const pending = operation === 'create' ? backend.create(request as never) : backend.respawn({ backend: 'tmux', paneId: '%42' }, request as never)
+  const settled = pending.catch(error => { entered(); return { state: 'fixture-exception', error } })
   await preparing; optionalCurrent = false; release()
-  expect(await pending).toMatchObject({ state: 'succeeded', dispatch: 'executed' })
+  expect(await settled).toMatchObject({ state: 'succeeded', dispatch: 'executed' })
   expect(finalCommand).toHaveBeenCalledTimes(1)
   expect(tmux.calls()[0]).toBe('start-server ; source-file -')
   const dispatch = tmux.stdin()
@@ -1197,7 +1198,7 @@ it.each(['create', 'respawn'] as const)('refuses %s when the final command facto
     const calls = recordingTmux()
     let current = true
     const finalCommand = vi.fn(() => { if (failure === 'throws') throw Error('owner preparation failed'); current = false; return ['never-executed'] })
-    const request = { command: ['never-preflight'], current: () => current, onDispatch: () => finalCommand }
+    const request = { command: finalCommand, current: () => current }
     const backend = new TmuxBackend(undefined, () => 'private-test-owner', () => {})
     const result = operation === 'create' ? await backend.create(request as never) : await backend.respawn({ backend: 'tmux', paneId: '%42' }, request as never)
     expect(result).toMatchObject({ state: 'failed', dispatch: 'not_started' })

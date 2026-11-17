@@ -89,12 +89,12 @@ export type TerminalActionResult =
   | { state: 'unknown'; dispatch: 'possibly_executed'; reason: string }
 
 /** Synchronous owner-built command selected after receipt publication; never supplied by a service. */
-export type TerminalDispatchCommand = () => string[]
+export type TerminalCommand = string[] | (() => string[])
 /** Core authority is rechecked after backend waits immediately before a command is sent. */
 export interface TerminalDispatchControl {
   current?: () => boolean
-  /** The owner may return its final command builder, selected after this publication wait and before dispatch. */
-  onDispatch?: () => void | TerminalDispatchCommand | Promise<void | TerminalDispatchCommand>
+  /** Publish the dispatch receipt before a command is selected or sent. */
+  onDispatch?: () => void | Promise<void>
   /** A held adoption may replace only its exact inert shell, checked inside tmux. */
   expectedHeldToken?: string
 }
@@ -114,7 +114,7 @@ export interface TerminalCreateRequest extends TerminalDispatchControl {
   cwd?: string
   label?: string
   /** argv (binary first) to run instead of the backend's default shell, e.g. an engine CLI launch. */
-  command?: string[]
+  command?: TerminalCommand
   /**
    * Extra environment for the created terminal, layered over whatever it would otherwise inherit.
    *
@@ -142,7 +142,7 @@ export interface TerminalCreateRequest extends TerminalDispatchControl {
  */
 export interface TerminalRespawnRequest extends TerminalDispatchControl {
   cwd?: string
-  command: string[]
+  command: TerminalCommand
   /** This child's own variables, on top of what the pane was created with (tmux's session environment, the pty
    *  host's stored create env), which a respawn inherits. */
   env?: Record<string, string>

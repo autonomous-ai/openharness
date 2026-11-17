@@ -15,8 +15,8 @@ import { StoppedAgentStore } from './stoppedAgents.js'
 import { AgentRestartCoordinator } from './restartAgent.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
 import { checkSessionRuntime, resolvePaneEngineProcess } from './paneEngineProcess.js'
-import { windowsAfterExit, windowsPaneLaunch } from './windows/engineStart.js'
-import { buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, engineLaunchEnv, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
+import { windowsAfterExit, windowsPaneLaunch, windowsHeldPaneArgv } from './windows/engineStart.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, engineLaunchEnv, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
 import { engineBin, enginePathOverride } from './engineBin.js'
 import { installedDsh } from '../dsh/installed.js'
 import { createLaunchHelpers } from '../core/agents/launch.js'
@@ -97,6 +97,7 @@ vi.mock('./paneEngineProcess.js', () => ({ checkSessionRuntime: vi.fn(), resolve
 // machines. Its own behaviour is covered in `engineLaunch.spec.ts`.
 vi.mock('./engineLaunch.js', async importOriginal => ({
   ...(await importOriginal<typeof import('./engineLaunch.js')>()),
+  buildEngineCommandArgv: vi.fn(() => ['fixture-engine']),
   buildEngineLaunchArgv: vi.fn(() => ['fixture-engine']),
   engineLaunchEnv: vi.fn(() => undefined),
   dropPermissionFlagIfUnsupported: vi.fn(async (_engine: unknown, choice: unknown) => ({ choice, droppedFlag: null })),
@@ -312,7 +313,7 @@ beforeEach(async () => {
   ;(await removeRegistryAgent(registry, original.agentId))
   const store = new StoppedAgentStore(join(dir, 'saved'))
   store.save(saved)
-  create.mockReset().mockResolvedValue({ state: 'succeeded', runtime: { backend: 'tmux', paneId: pane } })
+  create.mockReset().mockImplementation(async request => { await request.onDispatch?.(); if (typeof request.command === 'function') request.command(); return { state: 'succeeded', runtime: { backend: 'tmux', paneId: pane } } })
   kill.mockReset().mockResolvedValue({ state: 'succeeded' })
   vi.mocked(controlTranscriptEvidence).mockImplementation((_engine, _id, path) => ({ path, verify: vi.fn() }))
   vi.mocked(materializeResumeTranscript).mockReset().mockImplementation(async (_engine, _id, path) => path)
@@ -320,7 +321,7 @@ beforeEach(async () => {
   vi.mocked(refusePermissionFlagIfUnsupported).mockReset().mockResolvedValue(null)
   vi.mocked(installedDsh).mockReturnValue(undefined)
   inventory.mockReset().mockResolvedValue(listed(pane))
-  ptyCreate.mockReset().mockResolvedValue({ state: 'succeeded', runtime: pty })
+  ptyCreate.mockReset().mockImplementation(async request => { await request.onDispatch?.(); if (typeof request.command === 'function') request.command(); return { state: 'succeeded', runtime: pty } })
   ptyKill.mockReset().mockResolvedValue({ state: 'succeeded' })
   ptyPaneState.mockReset().mockResolvedValue({ dead: false })
   ptyReleaseHold.mockReset().mockResolvedValue(undefined)
@@ -593,6 +594,41 @@ describe('production resume handler', () => {
     expect(registry.byAgent(saved.agentId)?.permissionMode).toBe(permissionMode)
   })
 
+  it('keeps the exact Windows held argv and omits an engine handoff on Resume', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    const held = windowsHeldPaneArgv('fixture waiting', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')
+    try {
+      // Keep the real fixture registry on this OS; only the pure launch/metadata turn uses Windows rules.
+      vi.mocked(buildEngineCommandArgv).mockImplementationOnce(() => {
+        Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+        return ['fixture-engine']
+      })
+      vi.mocked(buildEngineLaunchArgv).mockReturnValueOnce(held)
+      create.mockImplementationOnce(async request => {
+        Object.defineProperty(process, 'platform', platform)
+        await request.onDispatch?.()
+        return { state: 'succeeded', runtime: { backend: 'tmux', paneId: pane } }
+      })
+      expect(await start()).toMatchObject({ ok: true })
+      expect(create.mock.calls[0][0].command).toBe(held)
+      expect(create.mock.calls[0][0]).not.toHaveProperty('afterExit')
+      expect(buildEngineLaunchArgv).toHaveBeenCalledOnce()
+    } finally { Object.defineProperty(process, 'platform', platform) }
+  })
+
+  it.each(['dispatch', 'refusal'] as const)('publishes no Resume script before backend %s', async outcome => {
+    create.mockImplementationOnce(async request => {
+      expect(buildEngineLaunchArgv).not.toHaveBeenCalled()
+      expect(typeof request.command).toBe('function')
+      if (outcome === 'refusal') return { state: 'failed', dispatch: 'not_started', reason: 'fixture refusal' }
+      await request.onDispatch?.()
+      request.command()
+      return { state: 'succeeded', dispatch: 'executed', runtime: { backend: 'tmux', paneId: pane } }
+    })
+    expect(await start()).toMatchObject({ ok: outcome === 'dispatch' })
+    expect(buildEngineLaunchArgv).toHaveBeenCalledTimes(outcome === 'dispatch' ? 1 : 0)
+  })
+
   it('carries the captured native launch and token through permission, argv and registration', async () => {
     const prepareSettings = vi.fn(async () => ({ values: { instructions: 'owner optional', settings: null }, current: () => true }))
     const native: NativeLaunch = { token: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', opencodeMajor: null,
@@ -607,8 +643,8 @@ describe('production resume handler', () => {
     create.mockImplementationOnce(async request => {
       expect(request.current()).toBe(true)
       expect(prepareSettings).toHaveBeenCalledOnce()
-      const command = await request.onDispatch?.()
-      command?.()
+      await request.onDispatch?.()
+      if (typeof request.command === 'function') request.command()
       return { state: 'succeeded', runtime: { backend: 'tmux', paneId: pane } }
     })
     expect(await start()).toMatchObject({ ok: true, resumed: true })
@@ -889,7 +925,7 @@ describe('production resume handler', () => {
     expect(deps.stoppedAgents.get(saved.agentId)?.agentId).toBe(saved.agentId)
   })
   it('answers a launch Windows refuses by its reason, opening nothing and keeping the stopped harness', async () => {
-    vi.mocked(buildEngineLaunchArgv).mockImplementationOnce(() => { throw new WindowsBatchLaunchRefused('codex', 'C:\\tools\\codex.cmd') })
+    vi.mocked(buildEngineCommandArgv).mockImplementationOnce(() => { throw new WindowsBatchLaunchRefused('codex', 'C:\\tools\\codex.cmd') })
     expect(await start()).toEqual({ ok: false, error: 'ENGINE_LAUNCH_REFUSED', detail: expect.stringContaining('codex.cmd is a batch file') })
     expect(create).not.toHaveBeenCalled()
     expect(deps.stoppedAgents.get(saved.agentId)?.agentId).toBe(saved.agentId)
@@ -1045,12 +1081,12 @@ describe('production resume handler', () => {
     expect(deps.stoppedAgents.get(saved.agentId)?.sessionId).toBe(saved.sessionId)
   })
 
-  it.each(['permission', 'argv'] as const)('checks cancellation after %s preparation before allocating a pane', async phase => {
+  it.each(['permission', 'command preflight'] as const)('checks cancellation after %s preparation before allocating a pane', async phase => {
     if (phase === 'permission') vi.mocked(dropPermissionFlagIfUnsupported).mockImplementationOnce(async (_engine, choice) => {
       deps.restartJobs.cancel(saved.agentId)
       return { choice, droppedFlag: null }
     })
-    else vi.mocked(buildEngineLaunchArgv).mockImplementationOnce(() => { deps.restartJobs.cancel(saved.agentId); return ['fixture-engine'] })
+    else vi.mocked(buildEngineCommandArgv).mockImplementationOnce(() => { deps.restartJobs.cancel(saved.agentId); return ['fixture-engine'] })
     expect(await start()).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
     expect(create).not.toHaveBeenCalled()
     expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).toBeNull()
@@ -1349,7 +1385,8 @@ describe('resume on the pty host', () => {
     expect(await start()).toMatchObject({ ok: true, resumed: true, session: { agentId: saved.agentId, runtimes: [pty] } })
     expect(ptyCreate).toHaveBeenCalledOnce()
     expect(buildEngineLaunchArgv).toHaveBeenCalledWith('codex', expect.objectContaining({ resumeSessionId: saved.sessionId }))
-    expect(ptyCreate.mock.calls[0][0].command).toEqual(['fixture-engine'])
+    expect(ptyCreate.mock.calls[0][0].command).toBeTypeOf('function')
+    expect(vi.mocked(buildEngineLaunchArgv).mock.results.at(-1)!.value).toEqual(['fixture-engine'])
     expect(resolvePaneEngineProcess).toHaveBeenCalledWith(ptyTerminal, pty, 'codex')
     expect(ptyReleaseHold).toHaveBeenCalledWith(pty, expect.any(Function))
     tmuxUntouched()

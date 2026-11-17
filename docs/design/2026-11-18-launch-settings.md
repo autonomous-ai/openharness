@@ -140,3 +140,53 @@ passes 17/17, actual 0 (`/tmp/core-launch-settings-generic-guard-green.log`). No
 A separate negative control temporarily removed the two existing kind-forcing wrappers and failed the new generic
 commit assertion (`/tmp/core-launch-settings-generic-guard-red.log`); the original runtime was restored byte-for-byte.
 That result demonstrates the existing guard, not a new failing-product regression or implementation fix.
+
+### Dispatch publication correction (approved before runtime edits)
+
+Cost-packet source review found that the initial literal launch argv publishes a one-time POSIX script, while the
+new callback publishes a second final script. The first is never executable by that dispatch. The correction keeps
+one command mechanism: `TerminalCreateRequest.command` and `TerminalRespawnRequest.command` accept either literal
+argv or an owner-only synchronous argv factory. `onDispatch` returns to publication-only void. Backends preserve the
+existing literal snapshot, await receipt publication, recheck required authority and host identity, then invoke a
+factory once, recheck and serialize/send without another await. Workers cannot supply a function or command.
+
+Create/fork/Resume/restore/restart pass their final argv builder through that command field instead of publishing a
+POSIX script before dispatch. CreateAgentPane and RestoreLaunch forward the same type; restore has no other argv
+reader. Windows uses the existing pure Windows launch branch for refusal and held identity before any pane; an exact
+held literal remains literal, including its token and afterExit facts. No preview flag, placeholder command or generic
+suppression option is added. Required checks and cwd/env/afterExit stay where they were. Every registration retry
+selects a fresh command only after its own gates. RED coverage will assert zero files on pre-dispatch refusal, one
+script per dispatch, and no unused script per retry, through actual publication and terminal backend code.
+
+The first real-IPC semantic smoke remains failed fixture evidence, with zero completed/timed samples. Its router
+omitted the existing setup_probe route used during untimed NativeLaunch inspection. Receipt
+`/tmp/core-launch-settings-cost-v1-smoke-outer.json`: actual 1, 6.779 s; child actual 1, both EOFs, guardian/group gone,
+private home/node roots removed. No timing was performed on the superseded publication behavior.
+
+Correction RED: 19 failures, 2 existing refusal passes, 531 skipped, actual 1, 4.332 s, no remaining owned processes
+(`/tmp/core-launch-settings-lazy-red.log` and its receipt). The same focused packet passed 21/21, actual 0, 5.407 s
+(`/tmp/core-launch-settings-lazy-green1.log`). Real one-time script publication is exercised through
+PtyHostBackend, createAndRegisterPane and buildEngineLaunchArgv: no script before selection on refusal/cancellation,
+one per executable attempt, and only the two selected scripts on a registration retry. A required-authority change
+inside a synchronous builder still refuses the terminal effect at the final check.
+
+Final coverage: 433/433 across the same 14 files, actual 0, 9.34 s; all nine covered runtime modules remain at 100%
+statements/branches/functions/lines (`/tmp/core-launch-settings-lazy-coverage2.log` and coverage output folder).
+Literal/factory backend, retry, external-held, architecture and launch-golden compatibility passed 293 tests, with
+16 separately coordinated native connection cases excluded, actual 0, 53.64 s
+(`/tmp/core-launch-settings-lazy-compat1.log`). No launch or control golden bytes were changed.
+
+The combined Resume/restore/control-golden run had 285 passes and two old eager-argv fixture assertions fail
+(`/tmp/core-launch-settings-lazy-resume-restore1.log`); restore and control golden completed successfully. After those
+assertions were corrected, the full Resume file passed 177 cases and failed only a new Windows test whose global
+platform seam had incorrectly selected Windows ACL checks for its real Mac fixture registry
+(`/tmp/core-launch-settings-lazy-resume-final.log`, actual 1). The platform seam now covers only the pure command and
+metadata turn. That single corrected case passes, actual 0, 1.862 s, with 177 unchanged cases skipped
+(`/tmp/core-launch-settings-lazy-resume-held.log`); the unchanged 177 passes are reused, not represented as a new full
+file actual-0 run. Every owned group in these receipts is clean. Final typecheck passes, actual 0, 6.582 s
+(`/tmp/core-launch-settings-lazy-types4.log` and its receipt).
+
+Windows tests preserve the exact held array and token, omit engine afterExit for that held command, and keep ordinary
+cwd/env/afterExit unchanged. The superseded callback-return command mechanism has been removed. The next cost
+packet must use this corrected runtime and explicitly exclude permission-probe runtime from its untimed native
+inspection fixture; the measured optional service prepare/commit and final publication remain real production paths.
