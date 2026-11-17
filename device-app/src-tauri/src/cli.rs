@@ -138,7 +138,13 @@ pub(crate) fn spawn_lock() -> MutexGuard<'static, ()> {
 
 /// Runs `command` in its own process group to its end, stdin empty. Past `deadline` the whole group is killed and
 /// `timed_out` is true. Each stream keeps its last 256 KiB.
-pub fn run(mut command: Command, deadline: Duration) -> io::Result<Output> {
+pub fn run(command: Command, deadline: Duration) -> io::Result<Output> {
+    run_lines(command, deadline, &mut |_| {})
+}
+
+/// As `run`, and hands `sink` each line of stdout and stderr, without its newline, on the caller's thread, in the
+/// order the lines arrive. A line longer than LINE_MAX is not handed. Past the deadline no more lines are handed.
+pub fn run_lines(mut command: Command, deadline: Duration, sink: &mut dyn FnMut(&str)) -> io::Result<Output> {
     let end = Instant::now() + deadline;
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
     let mut child = {
@@ -146,15 +152,27 @@ pub fn run(mut command: Command, deadline: Duration) -> io::Result<Output> {
         command.spawn()?
     };
     let pid = child.id() as libc::pid_t;
-    let (done, finished) = mpsc::channel();
-    let stdout = tail(child.stdout.take().expect("stdout is piped"), done.clone(), |_| {});
-    let stderr = tail(child.stderr.take().expect("stderr is piped"), done.clone(), |_| {});
+    // One queue for both streams, so their lines come in the order they were read; bounded, so a slow sink makes the
+    // child wait on its pipe instead of lines piling up here.
+    let (send, lines) = mpsc::sync_channel(LINES_QUEUED);
+    let stdout = tailed_lines(child.stdout.take().expect("stdout is piped"), send.clone());
+    let stderr = tailed_lines(child.stderr.take().expect("stderr is piped"), send);
+    let (send_exit, exit) = mpsc::channel();
     thread::spawn(move || {
         exited(pid);
-        let _ = done.send(());
+        let _ = send_exit.send(());
     });
-    // Its exit and both streams' ends. The child is reaped only after this, so its group is still its own to kill.
-    let timed_out = (0..3).any(|_| finished.recv_timeout(end.saturating_duration_since(Instant::now())).is_err());
+    let left = || end.saturating_duration_since(Instant::now());
+    // Both streams' ends, then its exit. The child is reaped only after this, so its group is still its own to kill.
+    // The deadline is checked at each line too: recv_timeout hands a waiting line however late, and behind a slow sink
+    // a child that never stops printing always has one waiting.
+    let timed_out = loop {
+        match lines.recv_timeout(left()) {
+            Ok(line) if Instant::now() < end => sink(&line),
+            Err(mpsc::RecvTimeoutError::Disconnected) => break exit.recv_timeout(left()).is_err(),
+            _ => break true,
+        }
+    };
     if timed_out {
         kill_group(pid);
     }
@@ -458,10 +476,7 @@ fn tail(
                             line.push(byte);
                         }
                     }
-                    let mut kept = writer.lock().unwrap();
-                    kept.extend(&chunk[..read]);
-                    let over = kept.len().saturating_sub(TAIL_MAX);
-                    kept.drain(..over);
+                    keep(&writer, &chunk[..read]);
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(_) => break,
@@ -469,6 +484,38 @@ fn tail(
         }
         let _ = done.send(());
     });
+    kept
+}
+
+/// Adds `bytes` to `tail`, which keeps its last TAIL_MAX.
+fn keep(tail: &Tail, bytes: &[u8]) {
+    let mut kept = tail.lock().unwrap();
+    kept.extend(bytes);
+    let over = kept.len().saturating_sub(TAIL_MAX);
+    kept.drain(..over);
+}
+
+/// A stream that keeps what is read of it in a Tail.
+struct Tailed<R> {
+    stream: R,
+    kept: Tail,
+}
+
+impl<R: Read> Read for Tailed<R> {
+    fn read(&mut self, into: &mut [u8]) -> io::Result<usize> {
+        let read = self.stream.read(into)?;
+        keep(&self.kept, &into[..read]);
+        Ok(read)
+    }
+}
+
+/// Reads `stream` on a thread, keeping its last TAIL_MAX bytes and sending its lines as `read_lines` splits them,
+/// until it ends or nobody receives. `send` is dropped only once the tail is whole, so a queue that has ended means
+/// both tails are.
+fn tailed_lines(stream: impl Read + Send + 'static, send: mpsc::SyncSender<String>) -> Tail {
+    let kept = Tail::default();
+    let stream = Tailed { stream, kept: kept.clone() };
+    thread::spawn(move || read_lines(stream, |line| send.send(line).is_ok()));
     kept
 }
 
