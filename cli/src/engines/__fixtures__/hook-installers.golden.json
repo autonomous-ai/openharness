@@ -1488,7 +1488,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
@@ -1497,7 +1497,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -1514,12 +1514,12 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "moved/codex-work/rules": {
     "type": "dir",
@@ -1536,7 +1536,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
@@ -1545,7 +1545,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -1562,12 +1562,12 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "moved/codex-work/rules": {
     "type": "dir",
@@ -1962,7 +1962,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
     ],
@@ -1970,7 +1970,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -1987,12 +1987,12 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "moved/codex-work/rules": {
     "type": "dir",
@@ -2009,7 +2009,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
@@ -2018,7 +2018,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -2035,12 +2035,12 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:1:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      },\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "moved/codex-work/rules": {
     "type": "dir",
@@ -2057,7 +2057,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
@@ -2066,7 +2066,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -2083,12 +2083,12 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:1:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:1:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:1:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:1:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 3\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "moved/codex-work/rules": {
     "type": "dir",
@@ -2105,7 +2105,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
@@ -2114,7 +2114,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -2131,12 +2131,12 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:2:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:2:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:2:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:2:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:1:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:1:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:2:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:1:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "moved/codex-work/rules": {
     "type": "dir",
@@ -2153,7 +2153,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
@@ -2162,7 +2162,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -2179,12 +2179,12 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "moved/codex-work/rules": {
     "type": "dir",
@@ -2201,7 +2201,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
     ],
@@ -2209,7 +2209,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -2226,12 +2226,12 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "moved/codex-work/rules": {
     "type": "dir",
@@ -2248,7 +2248,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
     ],
@@ -2256,7 +2256,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -2273,12 +2273,12 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "moved/codex-work/rules": {
     "type": "dir",
@@ -2295,7 +2295,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
     ],
@@ -2303,7 +2303,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -2320,12 +2320,12 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-after\"\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-after\"\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-after\"\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-after\"\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-after\"\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-after\"\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-after\"\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-after\"\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "moved/codex-work/rules": {
     "type": "dir",
@@ -2342,7 +2342,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
     ],
@@ -2350,7 +2350,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -2367,12 +2367,12 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn timeout 30>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn timeout 30>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn timeout 30>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn timeout 30>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn timeout 30>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn timeout 30>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn timeout 30>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn timeout 30>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 30\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 30\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 30\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 30\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 30\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 30\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 30\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 30\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "moved/codex-work/rules": {
     "type": "dir",
@@ -2389,7 +2389,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
@@ -2398,7 +2398,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -2415,12 +2415,12 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "moved/codex-work/rules": {
     "type": "dir",
@@ -2437,7 +2437,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
     ],
@@ -2445,7 +2445,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -2462,12 +2462,12 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "moved/codex-work/rules": {
     "type": "dir",
@@ -2484,7 +2484,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
@@ -2493,7 +2493,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -2510,12 +2510,12 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:1:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:1:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:1:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:1:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-first\"\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-first\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-first\"\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-first\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-first\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-first\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-first\"\n          }\n        ]\n      },\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-first\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "moved/codex-work/rules": {
     "type": "dir",
@@ -2532,7 +2532,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
@@ -2541,7 +2541,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -2558,12 +2558,12 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "moved/codex-work/rules": {
     "type": "dir",
@@ -2580,7 +2580,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
@@ -2589,7 +2589,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -2606,12 +2606,12 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "moved/codex-work/rules": {
     "type": "dir",
@@ -2628,7 +2628,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
@@ -2637,7 +2637,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -2654,12 +2654,12 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "moved/codex-work/rules": {
     "type": "dir",
@@ -2676,7 +2676,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
@@ -2685,7 +2685,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -2702,7 +2702,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:1:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "link",
@@ -2720,7 +2720,7 @@
    "elsewhere/real.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      },\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    }
   }
  },
@@ -2728,7 +2728,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
     ],
@@ -2736,7 +2736,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -2753,7 +2753,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "link",
@@ -2771,7 +2771,7 @@
    "elsewhere/real.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    }
   }
  },
@@ -2858,7 +2858,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "warn [hooks] Agent Messages' hook not installed in <root>/moved/codex-work/hooks.json (messages reach its agents once they are idle): Hook preparation is waiting: the settings file is read-only"
     ],
@@ -2866,7 +2866,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json",
      "warn [hooks] Agent Messages' hook not installed in <root>/moved/codex-work/hooks.json (messages reach its agents once they are idle): Hook preparation is waiting: the settings file is read-only"
     ],
     "threw": null
@@ -2880,12 +2880,12 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "444",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "moved/codex-work/rules": {
     "type": "dir",
@@ -2978,7 +2978,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
@@ -2987,7 +2987,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -3004,12 +3004,12 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:1:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "600",
-    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      },\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "moved/codex-work/rules": {
     "type": "dir",
@@ -3052,7 +3052,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] installed Codex session and turn hooks → <root>/moved/codex-work/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
@@ -3061,7 +3061,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json"
     ],
     "threw": null
    }
@@ -3078,12 +3078,12 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:pre_tool_use:1:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      },\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "moved/codex-work/hooks.json.<pid>.tmp": {
     "type": "file",
@@ -3105,7 +3105,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/home/.codex/hooks.json",
+     "log [hooks] installed Codex session and turn hooks → <root>/home/.codex/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml"
@@ -3114,7 +3114,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/home/.codex/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/home/.codex/hooks.json"
     ],
     "threw": null
    }
@@ -3127,12 +3127,12 @@
    "home/.codex/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "home/.codex/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "home/.codex/rules": {
     "type": "dir",
@@ -3153,7 +3153,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/home/.codex/hooks.json",
+     "log [hooks] installed Codex session and turn hooks → <root>/home/.codex/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml"
@@ -3162,7 +3162,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/home/.codex/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/home/.codex/hooks.json"
     ],
     "threw": null
    }
@@ -3175,12 +3175,12 @@
    "home/.codex/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "home/.codex/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "home/.codex/rules": {
     "type": "dir",
@@ -3228,7 +3228,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/home/.codex/hooks.json",
+     "log [hooks] installed Codex session and turn hooks → <root>/home/.codex/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml"
@@ -3237,7 +3237,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/home/.codex/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/home/.codex/hooks.json"
     ],
     "threw": null
    }
@@ -3250,12 +3250,12 @@
    "home/.codex/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:pre_tool_use:1:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "home/.codex/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      },\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "home/.codex/rules": {
     "type": "dir",
@@ -3276,7 +3276,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/home/.codex/hooks.json",
+     "log [hooks] installed Codex session and turn hooks → <root>/home/.codex/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml"
@@ -3285,7 +3285,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/home/.codex/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/home/.codex/hooks.json"
     ],
     "threw": null
    }
@@ -3298,12 +3298,12 @@
    "home/.codex/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:stop:1:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:permission_request:1:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:pre_tool_use:1:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:interrupt:1:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "home/.codex/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"node '/opt/old/notify.mjs' --port 18473\",\n            \"timeout\": 3\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "home/.codex/rules": {
     "type": "dir",
@@ -3324,7 +3324,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/home/.codex/hooks.json",
+     "log [hooks] Codex session and turn hooks already installed → <root>/home/.codex/hooks.json",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml"
     ],
@@ -3332,7 +3332,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/home/.codex/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/home/.codex/hooks.json"
     ],
     "threw": null
    }
@@ -3345,12 +3345,12 @@
    "home/.codex/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "home/.codex/hooks.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    },
    "home/.codex/rules": {
     "type": "dir",
@@ -3371,7 +3371,7 @@
   "runs": [
    {
     "logs": [
-     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/home/.codex/hooks.json",
+     "log [hooks] installed Codex session and turn hooks → <root>/home/.codex/hooks.json",
      "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/home/.codex/config.toml"
@@ -3380,7 +3380,7 @@
    },
    {
     "logs": [
-     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/home/.codex/hooks.json"
+     "log [hooks] Codex session and turn hooks already installed → <root>/home/.codex/hooks.json"
     ],
     "threw": null
    }
@@ -3393,7 +3393,7 @@
    "home/.codex/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:stop:0:0\"]\ntrusted_hash = \"<hash Stop command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:permission_request:0:0\"]\ntrusted_hash = \"<hash PermissionRequest command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:pre_tool_use:1:0\"]\ntrusted_hash = \"<hash PreToolUse command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:interrupt:0:0\"]\ntrusted_hash = \"<hash Interrupt command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "home/.codex/hooks.json": {
     "type": "link",
@@ -3415,7 +3415,7 @@
    "elsewhere/real.json": {
     "type": "file",
     "mode": "644",
-    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      },\n      {\n        \"matcher\": \"request_user_input\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 3\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"p='<root>/home/.harness/agent-messages/inbox'/\\\"${TMUX_PANE#%}\\\"; [ -n \\\"${TMUX_PANE:-}\\\" ] && [ -d \\\"$p\\\" ] || exit 0; '<node>' '<root>/home/.harness/agent-messages/hook.mjs' --root '<root>/home/.harness/agent-messages'; exit 0 # harness-agent-messages\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
    }
   }
  }

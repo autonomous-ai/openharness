@@ -46,7 +46,7 @@ export interface HookSettings {
   /** The settings file, in that home. */
   file: string
   /** One block of ours per event, in this order, with a matcher only where the engine honours one. */
-  events: ReadonlyArray<{ event: string; matcher?: string }>
+  events: ReadonlyArray<{ event: string; matcher?: string; /** Seconds, where this event's own differs from `timeout`. */ timeout?: number }>
   /** Seconds the engine gives the hook. */
   timeout: number
   /**

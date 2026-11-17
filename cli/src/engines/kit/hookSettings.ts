@@ -240,7 +240,7 @@ async function installNotifyHooks(settings: HookSettings, port: number, home: st
   let changed = false
   let updated = false // true when an EXISTING block's command changed (path/port drift)
 
-  for (const { event, matcher } of settings.events) {
+  for (const { event, matcher, timeout } of settings.events) {
     if (current.hooks[event] !== undefined && !Array.isArray(current.hooks[event])) throw new HookPreparationHeld('a hook event is not a list')
     const blocks = current.hooks[event] ?? []
     // Collapse any duplicate "ours" blocks (e.g. from an earlier path) down to a single one, and keep every
@@ -258,7 +258,7 @@ async function installNotifyHooks(settings: HookSettings, port: number, home: st
       if (!sameHook(existingHook)) { changed = true; updated = true }
       if (settings.upToDate.matcher && existing.matcher !== matcher) changed = true
     }
-    current.hooks[event] = [...foreign, { ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: entry.command, ...(entry.args ? { args: entry.args } : {}), timeout: settings.timeout }] }]
+    current.hooks[event] = [...foreign, { ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: entry.command, ...(entry.args ? { args: entry.args } : {}), timeout: timeout ?? settings.timeout }] }]
   }
   // Ours out of every event this release does not declare: one it dropped, or one a newer release added before a
   // rollback. Everyone else's blocks stay, Agent Messages' too. The lists as they were find the review records by place.
