@@ -598,7 +598,7 @@ describe('process-owned hook server', () => {
         const handlers = { onWait: vi.fn(), onSubagent: vi.fn(), onTurnStop: vi.fn(), onSessionEnd: vi.fn(), onToolStart: vi.fn(),
           onTurnStart: vi.fn() }
         const { base, headers } = await start(handlers)
-        const unbound = async (path: string, sessionId: string) => {
+        const unbound = async (path: string, sessionId?: string) => {
           const refused = await hook(base, headers, path, { sessionId, hookEvent: 'SubagentStart', toolUseId: 'tool-1', toolName: 'Read' })
           expect(refused.status).toBe(403)
           expect(await refused.json()).toEqual({ error: 'UNBOUND_HOOK' })
@@ -606,7 +606,7 @@ describe('process-owned hook server', () => {
         await unbound('/api/hook/session-end', 'gone0001')
         await unbound('/api/hook/wait', 'gone0002')
         for (const [path, sessionId] of [['/api/hook/tool-start', 'gone0001'], ['/api/hook/turn-start', 'gone0002'],
-          ['/api/hook/turn-stop', 'gone0001'], ['/api/hook/subagent', 'gone0003'], ['/api/hook/wait', 'gone0003']]) {
+          ['/api/hook/turn-stop', 'gone0001'], ['/api/hook/subagent', 'gone0003'], ['/api/hook/wait', undefined]] as const) {
           vi.setSystemTime(Date.now() + 60_001)
           await unbound(path, sessionId)
         }
@@ -616,7 +616,7 @@ describe('process-owned hook server', () => {
           ['[hooks] gone0002 turn-start refused · unbound'],
           ['[hooks] gone0001 turn-stop refused · unbound'],
           ['[hooks] gone0003 subagent refused · unbound'],
-          ['[hooks] gone0003 wait refused · unbound'],
+          ['[hooks] ? wait refused · unbound'],
         ])
         for (const handler of Object.values(handlers)) expect(handler).not.toHaveBeenCalled()
       } finally { vi.useRealTimers() }
@@ -631,6 +631,15 @@ describe('process-owned hook server', () => {
         expect(await refused.json()).toEqual({ error: 'UNAUTHORIZED' })
       }
       for (const handler of Object.values(handlers)) expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('answers 400 to a body that is not JSON on every bound route', async () => {
+      const { base, headers } = await start({ resolveHookAgent: bound() })
+      for (const path of ['/api/hook/session-end', '/api/hook/tool-start', '/api/hook/turn-start', '/api/hook/wait', '/api/hook/subagent']) {
+        const refused = await fetch(`${base}${path}`, { method: 'POST', headers, body: '{' })
+        expect(refused.status).toBe(400)
+        expect(await refused.json()).toEqual({ error: 'bad json' })
+      }
     })
   })
 

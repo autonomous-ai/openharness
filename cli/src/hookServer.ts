@@ -163,8 +163,6 @@ export interface HookServerHandlers {
 }
 
 const MAX_HOOK_BODY_BYTES = 256 * 1024
-/** The sessions an unbound hook was said for: a pane whose binding went stale sends one every turn. */
-const UNBOUND_SAID_KEPT = 512
 const HOOK_BODY_FIELDS = new Set([
   'engine', 'launcherId', 'sessionId', 'transcriptPath', 'cwd', 'source', 'tmuxPane', 'title', 'model',
   'cliVersion', 'runtimeHints', 'callerPid', 'hookEvent', 'pluginVersion', 'reason', 'status', 'toolUseId',
@@ -473,7 +471,6 @@ export function startHookServer(
   }
   const receiptCapacity = options.admissionReceiptCapacity ?? 65_536
   const bytesCapacity = options.admissionBytesCapacity ?? 16 * 1024 * 1024
-  const unboundSaid = new Set<string>()
   // Filled in once the port is bound: the Host a request must name is the port actually taken.
   let hosts: ReadonlySet<string> = new Set()
   let lastRefusalLogAt = 0
@@ -922,19 +919,17 @@ export function startHookServer(
         return
       }
 
-      /** 403 to a hook its session's process did not send, said once a session. */
+      /** 403 to a hook its session's process did not send. Said at most once a minute, as a refused host is: a pane whose
+       *  binding went stale sends one every turn. */
       const refuseUnbound = (sessionId: string | undefined, route: string): void => {
-        const key = sessionId ?? '?'
-        if (!unboundSaid.has(key)) {
-          unboundSaid.add(key)
-          if (unboundSaid.size > UNBOUND_SAID_KEPT) unboundSaid.delete(unboundSaid.values().next().value!)
-          console.warn(`[hooks] ${sid(key)} ${route} refused · unbound`)
+        if (Date.now() - lastRefusalLogAt > 60_000) {
+          lastRefusalLogAt = Date.now()
+          console.warn(`[hooks] ${sid(sessionId ?? '?')} ${route} refused · unbound`)
         }
         json(403, { error: 'UNBOUND_HOOK' })
       }
-      /** A hook read, checked and bound as `/api/hook/turn-start`'s is, and what `takes` says of its body: null once
-       *  refused. */
-      const boundHook = async (route: string, takes: (body: BoundHookBody) => boolean): Promise<BoundHookBody & { sessionId: string } | null> => {
+      /** A hook read, checked and bound to its session's process, and what `takes` says of its body: null once refused. */
+      const boundHook = async (route: string, takes = (_: BoundHookBody) => true): Promise<BoundHookBody & { sessionId: string } | null> => {
         if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return null }
         let body: BoundHookBody
         try {
@@ -948,54 +943,29 @@ export function startHookServer(
       }
 
       if (req.method === 'POST' && url === '/api/hook/session-end') {
-        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
-        let body: BoundHookBody
-        try {
-          const parsed = JSON.parse(await readBody(req)) as unknown
-          if (!validHookBody(parsed)) { json(400, { error: 'invalid hook body' }); return }
-          body = parsed
-        } catch { json(400, { error: 'bad json' }); return }
-        if (!await verifiedBoundMutation(body, handlers)) { json(403, { error: 'UNBOUND_HOOK' }); return }
-        if (body.sessionId) {
-          console.log(`[hooks] ${sid(body.sessionId)} session-end${body.reason ? ` · reason=${body.reason}` : ''}`)
-          handlers.onSessionEnd(body.sessionId, body.reason)
-        }
+        const hook = await boundHook('session-end')
+        if (!hook) return
+        console.log(`[hooks] ${sid(hook.sessionId)} session-end${hook.reason ? ` · reason=${hook.reason}` : ''}`)
+        handlers.onSessionEnd(hook.sessionId, hook.reason)
         json(200, { ok: true })
         return
       }
 
       if (req.method === 'POST' && url === '/api/hook/tool-start') {
-        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
-        let body: BoundHookBody
-        try {
-          const parsed = JSON.parse(await readBody(req)) as unknown
-          if (!validHookBody(parsed)) { json(400, { error: 'invalid hook body' }); return }
-          body = parsed
-        } catch { json(400, { error: 'bad json' }); return }
-        if (!await verifiedBoundMutation(body, handlers)) { json(403, { error: 'UNBOUND_HOOK' }); return }
-        if (body.sessionId && body.toolUseId && body.toolName) {
-          console.log(`[hooks] ${sid(body.sessionId)} tool-start · tool=${body.toolName}`)
-          handlers.onToolStart?.({
-            sessionId: body.sessionId,
-            toolUseId: body.toolUseId,
-            toolName: body.toolName,
-            input: body.input,
-          })
+        const hook = await boundHook('tool-start')
+        if (!hook) return
+        if (hook.toolUseId && hook.toolName) {
+          console.log(`[hooks] ${sid(hook.sessionId)} tool-start · tool=${hook.toolName}`)
+          handlers.onToolStart?.({ sessionId: hook.sessionId, toolUseId: hook.toolUseId, toolName: hook.toolName, input: hook.input })
         }
         json(200, { ok: true })
         return
       }
 
       if (req.method === 'POST' && url === '/api/hook/turn-start') {
-        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
-        let body: BoundHookBody
-        try {
-          const parsed = JSON.parse(await readBody(req)) as unknown
-          if (!validHookBody(parsed)) { json(400, { error: 'invalid hook body' }); return }
-          body = parsed
-        } catch { json(400, { error: 'bad json' }); return }
-        if (!await verifiedBoundMutation(body, handlers)) { json(403, { error: 'UNBOUND_HOOK' }); return }
-        if (body.sessionId) handlers.onTurnStart?.({ sessionId: body.sessionId })
+        const hook = await boundHook('turn-start')
+        if (!hook) return
+        handlers.onTurnStart?.({ sessionId: hook.sessionId })
         json(200, { ok: true })
         return
       }
