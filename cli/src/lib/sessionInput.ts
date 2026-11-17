@@ -707,11 +707,13 @@ export class SessionInputController {
     // An exact echo of the typed prompt needs no reading. Anything else is, for an engine whose worker
     // reads its submissions, that engine's to unwrap (Claude Code 2.1.283 records a bracketed paste inside
     // an envelope of its own), and is settled once it has; every other engine's record is compared whole.
-    const observedFingerprint = fingerprint(userMessage)
+    // Callbacks below can reenter; compute at each actual comparison, sharing only this call's hash.
+    let observedFingerprint: string | undefined
     const engineReads = !!session && !!this.deps.submission.policy(session.engine)
     if (state.deliveryId && state.writing) state.observedStart = userMessage
     else if (state.deliveryId && state.deliveryFingerprint) {
       const expected = state.deliveryFingerprint
+      observedFingerprint ??= fingerprint(userMessage)
       if (expected === observedFingerprint || !engineReads) {
         this.finishDelivery(sessionId, state, expected === observedFingerprint ? 'started' : 'unknown',
           expected === observedFingerprint ? undefined : 'prompt_mismatch')
@@ -740,6 +742,7 @@ export class SessionInputController {
       const expected = state.awaitingFingerprint
       const receipt = state.awaitingReceipt
       state.awaitingReceipt = undefined
+      observedFingerprint ??= fingerprint(userMessage)
       if (expected !== observedFingerprint) {
         if (engineReads) void this.echoes(session, userMessage, expected).then(matched => { if (!matched) warn(); receipt?.(matched ? 'started' : 'prompt_mismatch') })
         else { warn(); receipt?.('prompt_mismatch') }
@@ -1410,7 +1413,8 @@ export class SessionInputController {
   }
 
   private drainOne(sessionId: string, state: InputState): void {
-    if (this.states.get(sessionId) !== state) return
+    // Lifecycle and writer releases can arrive after the last queued item is gone.
+    if (this.states.get(sessionId) !== state || state.queue.length === 0) return
     // A queued message whose turn is due while the agent changes host goes behind what the gate holds.
     const agentId = this.controlSession(sessionId)?.agentId
     const gate = this.deps.moveGate
@@ -1423,7 +1427,7 @@ export class SessionInputController {
   }
 
   private async drainNow(sessionId: string, state: InputState): Promise<void> {
-    if (this.states.get(sessionId) !== state) return
+    if (this.states.get(sessionId) !== state || state.queue.length === 0) return
     const agentId = this.controlSession(sessionId)?.agentId
     if (agentId && this.deps.moveGate?.refused(agentId)) { this.rejectHeldQueue(sessionId, state); return }
     this.dropExpired(sessionId, state)
@@ -1501,6 +1505,7 @@ export class SessionInputController {
   }
 
   private dropExpired(sessionId: string, state: InputState): void {
+    if (state.queue.length === 0) return
     const now = Date.now()
     const expiredLocalInput = state.queue.some(item => item.expiresAt <= now && !item.deliveryId?.startsWith('team:'))
     for (const item of state.queue) {
