@@ -3,7 +3,7 @@ import { chmodSync, createReadStream, existsSync, mkdirSync, mkdtempSync, readFi
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AGENT_CONFIG, CLAUDE_SANDBOX, claudeArgs, runAgent, type AgentConfig } from './lib/agents.js'
+import { AGENT_CONFIG, CLAUDE_SANDBOX, claudeArgs, killAgents, runAgent, spawnGroup, type AgentConfig } from './lib/agents.js'
 import { parseClaudeStream } from './lib/parse.js'
 import type { Scenario } from './lib/scenarios.js'
 import type { Staged } from './lib/stage.js'
@@ -282,5 +282,31 @@ console.log('shown')`)
     expect(recorded).toEqual(rings)
     expect(run.answer).toBe(answer)
     expect(run.status).toBe('ok')
+  })
+})
+
+describe('killAgents', () => {
+  it('kills every run still going, even when an earlier run\'s root is already gone', async () => {
+    const gone = mkdtempSync(join(tmpdir(), 'dial-skill-agents-'))
+    mkdirSync(join(gone, 'repo'))
+    const first = spawnGroup('/bin/sleep', ['60'], { ...staged(), root: gone, repo: join(gone, 'repo') }, 0)
+    // The second run holds a FIFO open and writes its pid down it once it runs.
+    const path = join(root, 'lifeline')
+    execFileSync('mkfifo', [path])
+    const reader = createReadStream(path, 'utf8')
+    const up = new Promise<number>((resolve) => reader.on('data', (pid: string) => resolve(Number(pid))))
+    const ended = new Promise((resolve, reject) => reader.on('end', resolve).on('error', reject))
+    const second = spawnGroup('/bin/sh', ['-c', `exec 3>${path}; echo $$ >&3; exec /bin/sleep 60`], staged(), 0)
+    const pid = await up
+    rmSync(gone, { recursive: true, force: true })
+    try {
+      expect(() => killAgents()).not.toThrow()
+
+      await ended
+      await expect(second).resolves.toMatchObject({ signal: 'SIGKILL' })
+    } finally {
+      try { process.kill(pid, 'SIGKILL') } catch { /* gone, as it should be */ }
+      await Promise.allSettled([first, second])
+    }
   })
 })
