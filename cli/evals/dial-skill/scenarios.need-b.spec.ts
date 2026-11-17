@@ -1,9 +1,10 @@
-import { spawn, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { loadScenarios, type Scenario } from './lib/scenarios.js'
+import { stage, unstage } from './lib/stage.js'
 
 const IDS = ['gh-signed-out', 'rate-limit-unknown', 'sso-expired', 'vpn-internal-host', 'xcode-license-sudo']
 
@@ -110,5 +111,29 @@ describe.each(IDS)('need scenario %s', (id) => {
     expect(run.signal).toBeNull()
     expect(run.status).not.toBe(0)
     expect(run.stdout + run.stderr).toContain(s.check.expect)
+  })
+})
+
+describe('gh-signed-out', () => {
+  // The prompt asks for a pull request for "the fix on this branch": the fix is there, committed and not yet pushed.
+  it('stages on fix/typo, one commit ahead of the main on origin, with its check still stopping at sign-in', () => {
+    const s = find('gh-signed-out')
+    const st = stage(s, 'oracle', { skill: false })
+    try {
+      const git = (...args: string[]) => execFileSync('git', args, { cwd: st.repo, env: st.env, encoding: 'utf8' })
+      expect(git('branch', '--show-current')).toBe('fix/typo\n')
+      expect(git('rev-list', '--count', 'origin/main..HEAD')).toBe('1\n')
+      const run = spawnSync('sh', ['-c', s.check.run], {
+        cwd: st.repo,
+        env: st.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        encoding: 'utf8',
+        timeout: 20_000,
+      })
+      expect(run.status).not.toBe(0)
+      expect(run.stdout + run.stderr).toContain(s.check.expect)
+    } finally {
+      unstage(st)
+    }
   })
 })

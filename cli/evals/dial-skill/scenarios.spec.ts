@@ -67,6 +67,25 @@ describe('loadScenarios', () => {
     expect(() => loadScenarios(root)).toThrow(/Bad_Id/)
   })
 
+  it('loads a branch whose patch is a file in the scenario folder', () => {
+    const branch = { name: 'fix/typo', patch: 'branch.patch', message: 'Fix the README' }
+    scenario('with-branch', { ...noNeedJson, branch })
+    writeFileSync(join(root, 'with-branch', 'branch.patch'), '')
+
+    expect(loadScenarios(root)[0].branch).toEqual(branch)
+  })
+
+  it('rejects a branch patch that is missing or not directly in the scenario folder', () => {
+    const branch = { name: 'fix/typo', patch: 'repo/branch.patch', message: 'Fix the README' }
+    scenario('nested-patch', { ...noNeedJson, branch })
+    writeFileSync(join(root, 'nested-patch', 'repo', 'branch.patch'), '')
+    expect(() => loadScenarios(root)).toThrow(/nested-patch/)
+
+    rmSync(join(root, 'nested-patch'), { recursive: true })
+    scenario('missing-patch', { ...noNeedJson, branch: { ...branch, patch: 'branch.patch' } })
+    expect(() => loadScenarios(root)).toThrow(/missing-patch/)
+  })
+
   it('rejects a scenario without repo/', () => {
     scenario('no-repo', needJson, false)
     expect(() => loadScenarios(root)).toThrow(/no-repo/)

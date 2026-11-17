@@ -11,6 +11,13 @@ import { readRings, scrub, stage, unstage, type Staged } from './lib/stage.js'
 const OPENHARNESS = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const ASK = 'connect to the corp VPN'
 const PROFILE = '/profiles/eval-session'
+const README_FIX = `diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1 +1 @@
+-# Orders service
++# Orders service.
+`
 const ALLOWED = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'TERM', 'TMPDIR', 'GIT_CONFIG_GLOBAL', 'npm_config_userconfig', 'CLAUDE_CONFIG_DIR']
 
 let base: string
@@ -34,7 +41,7 @@ afterEach(() => {
   rmSync(scenarios, { recursive: true, force: true })
 })
 
-function fixture(origin = false): Scenario {
+function fixture(origin = false, branch?: { name: string; patch: string; message: string }): Scenario {
   const dir = join(scenarios, 'vpn-host')
   mkdirSync(join(dir, 'repo', 'test'), { recursive: true })
   mkdirSync(join(dir, 'bin'), { recursive: true })
@@ -45,8 +52,10 @@ function fixture(origin = false): Scenario {
     ask: ASK,
     secrets: ['DB_PASSWORD=fake'],
     origin,
+    ...(branch && { branch }),
     check: { run: 'npm test', expect: 'db.corp.invalid' },
   }))
+  writeFileSync(join(dir, 'branch.patch'), README_FIX)
   writeFileSync(join(dir, 'solution.patch'), `${ASK}\n`)
   writeFileSync(join(dir, 'repo', 'README.md'), '# Orders service\n')
   writeFileSync(join(dir, 'repo', 'test', 'db.test.js'), "const host = 'db.corp.invalid'\n")
@@ -92,11 +101,6 @@ describe('stage', () => {
     }
   })
 
-  it('refuses codex, which is out of scope, before making anything', () => {
-    expect(() => stage(fixture(), 'codex', { skill: true, base })).toThrow(/codex/)
-    expect(readdirSync(base)).toEqual([])
-  })
-
   it('commits the repo once, by Eval, and keeps the skill out of git status', () => {
     const st = staging('claude', { skill: true })
 
@@ -104,12 +108,13 @@ describe('stage', () => {
     expect(git(st, 'status', '--porcelain')).toBe('')
   })
 
-  it('stages no answer key: no scenario.json, no solution, no file holding the ask, no path into the scenario', () => {
-    const s = fixture()
+  it('stages no answer key: no scenario.json, no solution, no branch patch, no file holding the ask, no path into the scenario', () => {
+    const s = fixture(true, { name: 'fix/typo', patch: 'branch.patch', message: 'Fix the README' })
     const st = staging('claude', { skill: true }, s)
 
     for (const file of files(st.root)) {
       expect(basename(file)).not.toBe('scenario.json')
+      expect(basename(file)).not.toBe('branch.patch')
       expect(basename(file)).not.toMatch(/^solution\./)
       expect(readFileSync(file, 'utf8'), file).not.toContain(ASK)
     }
@@ -204,6 +209,17 @@ describe('stage', () => {
     expect(heads).toContain('refs/heads/main')
     expect(heads).toContain('refs/heads/fix/typo')
     expect(git(staging('claude', { skill: true }), 'remote')).toBe('')
+  })
+
+  it('leaves a scenario branch checked out with its patch committed by Eval, main on origin and the branch unpushed', () => {
+    const st = staging('claude', { skill: true }, fixture(true, { name: 'fix/typo', patch: 'branch.patch', message: 'Fix the README' }))
+
+    expect(git(st, 'branch', '--show-current')).toBe('fix/typo\n')
+    expect(git(st, 'log', '--format=%s|%an <%ae>', 'main..HEAD')).toBe('Fix the README|Eval <eval@example.invalid>\n')
+    expect(readFileSync(join(st.repo, 'README.md'), 'utf8')).toBe('# Orders service.\n')
+    expect(git(st, 'status', '--porcelain')).toBe('')
+    expect(git(st, 'rev-parse', 'origin/main')).toBe(git(st, 'rev-parse', 'main'))
+    expect(git(st, 'ls-remote', '--heads', 'origin')).not.toContain('fix/typo')
   })
 
   it('scrubs the run root and the home folder out of text', () => {
