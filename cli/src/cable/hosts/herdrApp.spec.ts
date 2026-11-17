@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Place } from './adapter.js'
 import type { HcPrompt } from './hcClient.js'
 import { createHerdrAppAdapter, type HerdrAppDeps } from './herdrApp.js'
@@ -79,7 +79,7 @@ const FAILED_LINE = '[herdr-app] focus · failed'
 const scrollCall = (address: string, lines: number, file = FAKE_PATH_HERDR_APP): Call =>
   ({ file, args: ['do', 'terminal.scroll', '--terminal', address, '--lines', String(lines)], timeoutMs: 2_000 })
 const SCROLL_FAILED = '[herdr-app] scroll · failed'
-/** The line a terminal's scroll queue says once it drains. */
+/** The line a terminal's scroll queue says once it has been quiet for 1 s. */
 const drained = (lines: number, runs: number, failed: number) =>
   `[herdr-app] scroll · ${lines} lines · ${runs} runs · ${failed} failed`
 const scrollFailures = (log: string[]) => log.filter((line) => line === SCROLL_FAILED).length
@@ -365,6 +365,10 @@ describe('the Herdr adapter', () => {
   })
 
   describe('scroll', () => {
+    // The tally waits for a terminal's quiet second: the test moves the clock, never waits it out.
+    beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
+    afterEach(() => { vi.useRealTimers() })
+
     it('canScroll needs macOS, hc\'s form of address, Herdr in front, a terminal its window shows, and herdr-app found', () => {
       expect(recorder().adapter.canScroll(pane('t7'))).toBe(true)
       expect(recorder({ platform: 'linux' }).adapter.canScroll(pane('t7'))).toBe(false)
@@ -422,6 +426,7 @@ describe('the Herdr adapter', () => {
       adapter.scroll(pane('t7'), 2)
       await answer(0)
       expect(calls).toEqual([scrollCall('t7', -3)])
+      vi.advanceTimersByTime(1_000)
       expect(log).toEqual([drained(3, 1, 0)])
       adapter.scroll(pane('t7'), -1)
       expect(calls).toEqual([scrollCall('t7', -3), scrollCall('t7', -1)])
@@ -493,6 +498,7 @@ describe('the Herdr adapter', () => {
         })
         adapter.scroll(pane('t7'), -3)
         await turn()
+        vi.advanceTimersByTime(1_000)
         expect(log).toEqual([SCROLL_FAILED, drained(0, 1, 3)])
         adapter.scroll(pane('t7'), -2)
         await turn()
@@ -508,6 +514,7 @@ describe('the Herdr adapter', () => {
       const one = recorder()
       one.adapter.scroll(pane('t7'), -3)
       await turn()
+      vi.advanceTimersByTime(1_000)
       expect(one.log).toEqual([drained(3, 1, 0)])
 
       const carried = holding()
@@ -515,20 +522,60 @@ describe('the Herdr adapter', () => {
       carried.adapter.scroll(pane('t7'), -6)
       await carried.answer(0)
       await carried.answer(0)
+      vi.advanceTimersByTime(1_000)
       expect(carried.log).toEqual([drained(9, 2, 0)])
 
       const failing = holding()
       failing.adapter.scroll(pane('t7'), -3)
       failing.adapter.scroll(pane('t7'), -2)
       await failing.answer(1)
+      vi.advanceTimersByTime(1_000)
       expect(failing.log).toEqual([SCROLL_FAILED, drained(0, 1, 5)])
 
       const none = recorder({ onPath: () => null })
       none.adapter.scroll(pane('t7'), -3)
       await turn()
+      vi.advanceTimersByTime(1_000)
       expect(none.log).toEqual([SCROLL_FAILED, drained(0, 0, 3)])
 
       for (const line of [...one.log, ...carried.log, ...failing.log, ...none.log]) expect(line).not.toContain('t7')
+    })
+
+    // Final review: a run is faster than the dial's ~32 ms a line, so a queue drains after almost every line, and a line
+    // said at each drain would be up to ~30 a second while scrolling.
+    it('the drain line waits for the terminal\'s quiet second: a stroke that drains after every line says one', async () => {
+      const { calls, log, adapter } = recorder()
+      for (let move = 0; move < 30; move++) {
+        adapter.scroll(pane('t7'), -1)
+        await turn()
+        vi.advanceTimersByTime(32)
+      }
+      expect(calls).toHaveLength(30)
+      vi.advanceTimersByTime(1_000 - 32 - 1)
+      expect(log).toEqual([])
+      vi.advanceTimersByTime(1)
+      expect(log).toEqual([drained(30, 30, 0)])
+      // The next stroke counts from 0.
+      adapter.scroll(pane('t7'), 2)
+      await turn()
+      vi.advanceTimersByTime(1_000)
+      expect(log).toEqual([drained(30, 30, 0), drained(2, 1, 0)])
+    })
+
+    it('a run under way is no quiet, and each terminal has its own second', async () => {
+      const { log, adapter, answer } = holding()
+      adapter.scroll(pane('t7'), -3)
+      vi.advanceTimersByTime(5_000)
+      expect(log).toEqual([])
+      await answer(0)
+      adapter.scroll(pane('t8'), 2)
+      vi.advanceTimersByTime(999)
+      expect(log).toEqual([])
+      vi.advanceTimersByTime(1)
+      expect(log).toEqual([drained(3, 1, 0)])
+      await answer(0)
+      vi.advanceTimersByTime(1_000)
+      expect(log).toEqual([drained(3, 1, 0), drained(2, 1, 0)])
     })
 
     it('a bad id or 0 lines runs nothing', async () => {
