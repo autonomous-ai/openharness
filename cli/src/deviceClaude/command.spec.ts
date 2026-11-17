@@ -4,13 +4,14 @@
  * home a throwaway folder, and a daemon and the devices' listener on sockets in a throwaway folder. The real `claude`,
  * ~/.claude, ~/.codex and the daemon are never touched.
  */
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { Socket } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { DIAL_SKILL } from '../devices/dialSkill.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { listenLocalSocket, unixSocketPath } from '../lib/localSocket.js'
 import { socketIsPrivate } from '../lib/localTransport.js'
@@ -35,11 +36,13 @@ function folder(): string {
 
 /** Claude Code's user settings as `claude plugin` leaves them: the entry true once enabled, gone once uninstalled. */
 let settings: string
+/** Claude Code's default home, the throwaway CLAUDE_CONFIG_DIR. */
+let claudeHome: string
 function pluginOn(on: boolean): void {
   writeFileSync(settings, JSON.stringify({ enabledPlugins: on ? { 'harness-device@openharness': true } : {} }))
 }
 beforeEach(() => {
-  const claudeHome = folder()
+  claudeHome = folder()
   vi.stubEnv('CLAUDE_CONFIG_DIR', claudeHome)
   settings = join(claudeHome, 'settings.json')
   pluginOn(true)
@@ -107,6 +110,34 @@ async function device(argv: string[], deps: Partial<DeviceDeps> = {}) {
     ...deps,
   })
   return { code, out, err }
+}
+
+/** The plugin installed at user scope and on, as `claude plugin list --json` prints it. */
+const INSTALLED = { 'plugin list --json': { code: 0, stdout: JSON.stringify([{ id: 'harness-device@openharness', scope: 'user', enabled: true }]) } }
+const UNINSTALL = 'plugin uninstall harness-device@openharness --scope user'
+/** A person's own dial skill: no marker line. */
+const PERSONS = '---\nname: dial\ndescription: mine\n---\n\nMine.\n'
+
+const skillAt = (home: string) => join(home, 'skills', 'dial', 'SKILL.md')
+const answers = (dataDir: string): unknown => JSON.parse(readFileSync(join(dataDir, 'dial-skill.json'), 'utf8'))
+
+/** [text] at the dial skill's path in [home]; returns the resolved skills folder, as the devices service lists it. */
+function skillIn(home: string, text = DIAL_SKILL): string {
+  mkdirSync(dirname(skillAt(home)), { recursive: true })
+  writeFileSync(skillAt(home), text)
+  return realpathSync(join(home, 'skills'))
+}
+
+/** The homes list as the devices service leaves it; returns its bytes. */
+function listed(dataDir: string, homes: { claude?: string[]; codex?: string[] }): Buffer {
+  writeFileSync(join(dataDir, 'dial-skill-homes.json'), JSON.stringify({ claude: homes.claude ?? [], codex: homes.codex ?? [] }))
+  return readFileSync(join(dataDir, 'dial-skill-homes.json'))
+}
+
+/** A folder the test makes read-only, opened again before its home is removed. */
+function readOnly(dir: string): void {
+  chmodSync(dir, 0o500)
+  cleanup.push(() => chmodSync(dir, 0o700))
 }
 
 describe('harness device claude', () => {
@@ -240,6 +271,17 @@ describe('harness device claude', () => {
     expect(DEVICE_USAGE).not.toMatch(/asked|approve|link|answers/)
   })
 
+  it('the usage names the dial skill', () => {
+    for (const line of [
+      'harness device claude status [--json]  whether the dial is on for Claude Code (its harness-device plugin on, and not turned off), and its version',
+      'harness device claude enable           install the plugin, or turn it on, and write the dial skill (Claude Code 2.1.287 or later)',
+      'harness device claude disable          uninstall the plugin and remove the dial skill',
+      'harness device codex status [--json]   whether the dial is on for Codex',
+      'harness device codex enable            write the dial skill into Codex\'s home',
+      'harness device codex disable           remove the dial skill Harness wrote into Codex\'s homes',
+    ]) expect(DEVICE_USAGE.split('\n').map((usage) => usage.trim())).toContain(line)
+  })
+
   it('no file under core/, services/ or cable/ imports deviceClaude/', () => {
     const importsDevice = /(?:from|import\s*\()\s*['"][^'"]*deviceClaude\//
     // The pattern catches a static and a dynamic import, or an empty list would prove nothing.
@@ -253,18 +295,207 @@ describe('harness device claude', () => {
   })
 })
 
-describe('harness device codex', () => {
-  it('status --json, enable and disable write and remove the skill in Codex\'s home', async () => {
-    const codexHome = folder()
-    const status = (enabled: boolean) => ({ code: 0, err: [], out: [`{"supported":true,"installed":true,"enabled":${enabled}}`] })
-    expect(await device(['codex', 'status', '--json'], { codexHome })).toEqual(status(false))
-    expect(await device(['codex', 'enable'], { codexHome })).toEqual({ code: 0, out: [], err: [] })
-    expect(readFileSync(join(codexHome, 'skills', 'dial', 'SKILL.md'), 'utf8')).toContain('harness device notify')
-    expect(await device(['codex', 'status', '--json'], { codexHome })).toEqual(status(true))
-    expect(await device(['codex', 'disable'], { codexHome })).toEqual({ code: 0, out: [], err: [] })
-    expect(await device(['codex', 'status', '--json'], { codexHome })).toEqual(status(false))
+describe('the dial skill', () => {
+  it('claude enable writes the skill into the default home and sets On, with the folder it wrote', async () => {
+    const dataDir = folder()
+    expect(await device(['claude', 'enable'], { dataDir })).toEqual({ code: 0, out: [], err: [] })
+    expect(readFileSync(skillAt(claudeHome), 'utf8')).toBe(DIAL_SKILL)
+    expect(answers(dataDir)).toEqual({ claude: true, homes: { claude: [realpathSync(join(claudeHome, 'skills'))], codex: [] } })
   })
 
+  it('disable removes the skill an enable run with another home wrote', async () => {
+    // The menu-bar app runs the command with neither CODEX_HOME nor CLAUDE_CONFIG_DIR; a person may run it with one.
+    const dataDir = folder()
+    const [codexThen, codexNow] = [folder(), folder()]
+    expect(await device(['codex', 'enable'], { dataDir, codexHome: codexThen })).toEqual({ code: 0, out: [], err: [] })
+    expect(await device(['codex', 'disable'], { dataDir, codexHome: codexNow })).toEqual({ code: 0, out: [], err: [] })
+    expect(existsSync(join(codexThen, 'skills', 'dial'))).toBe(false)
+
+    const claudeThen = claudeHome
+    expect(await device(['claude', 'enable'], { dataDir })).toEqual({ code: 0, out: [], err: [] })
+    vi.stubEnv('CLAUDE_CONFIG_DIR', folder())
+    expect(await device(['claude', 'disable'], { dataDir })).toEqual({ code: 0, out: [], err: [] })
+    expect(existsSync(join(claudeThen, 'skills', 'dial'))).toBe(false)
+    // Nothing is left to find: the record holds no folder.
+    expect(answers(dataDir)).toEqual({ claude: false, codex: false })
+  })
+
+  it('an enable whose setting cannot be saved makes nothing', async () => {
+    for (const engine of ['claude', 'codex'] as const) {
+      const dataDir = folder()
+      readOnly(dataDir)
+      const codexHome = join(folder(), 'codex')
+      expect(await device([engine, 'enable'], { dataDir, codexHome }), engine).toEqual({ code: 1, out: [], err: ['Could not save the dial setting.'] })
+      expect(existsSync(codexHome), engine).toBe(false)
+      expect(readdirSync(claudeHome), engine).toEqual(['settings.json'])
+    }
+  })
+
+  it('an enable into a home no record could hold writes no skill', async () => {
+    const dataDir = folder()
+    // U+0085 is a control character the record refuses: written, the skill would be one a Turn off never finds.
+    const codexHome = join(folder(), 'co\u0085dex')
+    expect(await device(['codex', 'enable'], { dataDir, codexHome })).toEqual({ code: 1, out: [], err: ['Could not write the Codex skill.'] })
+    expect(existsSync(join(codexHome, 'skills', 'dial'))).toBe(false)
+    expect(answers(dataDir)).toEqual({ codex: true })
+  })
+
+  it('an enable that fails writes nothing', async () => {
+    const failedInstall = fakeClaude({ 'plugin install harness-device@openharness --scope user': { code: 1, stderr: 'Plugin not found' } })
+    const cases: Array<[string, string[], Partial<DeviceDeps>]> = [
+      ['a failed install', ['claude', 'enable'], { claude: () => failedInstall }],
+      ['Claude Code on Windows', ['claude', 'enable'], { platform: 'win32' }],
+      ['Codex on Windows', ['codex', 'enable'], { platform: 'win32' }],
+      ['Codex not installed', ['codex', 'enable'], { codex: () => false }],
+    ]
+    for (const [what, argv, deps] of cases) {
+      const dataDir = folder()
+      const codexHome = folder()
+      expect((await device(argv, { dataDir, codexHome, ...deps })).code, what).toBe(1)
+      expect(readdirSync(dataDir), what).toEqual([])
+      expect(readdirSync(codexHome), what).toEqual([])
+      expect(readdirSync(claudeHome), what).toEqual(['settings.json'])
+    }
+  })
+
+  it('enable over a person\'s skill sets On, skips that home and exits 0', async () => {
+    for (const [engine, name] of [['claude', 'Claude Code'], ['codex', 'Codex']]) {
+      const dataDir = folder()
+      const codexHome = folder()
+      skillIn(engine === 'claude' ? claudeHome : codexHome, PERSONS)
+      const path = skillAt(engine === 'claude' ? claudeHome : codexHome)
+      const before = lstatSync(path)
+      expect(await device([engine, 'enable'], { dataDir, codexHome }), engine)
+        .toEqual({ code: 0, out: [], err: [`${name} already has a skill named dial that Harness did not write; it stays.`] })
+      const after = lstatSync(path)
+      expect([after.ino, after.mode, after.mtimeMs], engine).toEqual([before.ino, before.mode, before.mtimeMs])
+      expect(readFileSync(path, 'utf8'), engine).toBe(PERSONS)
+      const homes = { claude: [], codex: [], [engine]: [realpathSync(dirname(dirname(path)))] }
+      expect(answers(dataDir), engine).toEqual({ [engine]: true, homes })
+    }
+  })
+
+  it('claude disable writes Off first, then uninstalls, then removes, and keeps a person\'s skill', async () => {
+    const dataDir = folder()
+    writeFileSync(join(dataDir, 'dial-skill.json'), '{"claude":true,"codex":true}')
+    skillIn(claudeHome)
+    const ours = [folder(), folder()]
+    const persons = folder()
+    const homes = listed(dataDir, { claude: [...ours.map((home) => skillIn(home)), skillIn(persons, PERSONS)] })
+    const atUninstall: unknown[] = []
+    const installed = fakeClaude(INSTALLED)
+    const claude: ClaudeRun = async (args, timeoutMs) => {
+      if (args.join(' ') === UNINSTALL) atUninstall.push({ answers: answers(dataDir), skill: existsSync(skillAt(claudeHome)) })
+      return installed(args, timeoutMs)
+    }
+    expect(await device(['claude', 'disable'], { dataDir, claude: () => claude })).toEqual({ code: 0, out: [], err: [] })
+    expect(atUninstall).toEqual([{ answers: { claude: false, codex: true }, skill: true }])
+    for (const home of [claudeHome, ...ours]) {
+      expect(existsSync(join(home, 'skills', 'dial')), home).toBe(false)
+      expect(existsSync(join(home, 'skills')), home).toBe(true)
+    }
+    expect(readFileSync(skillAt(persons), 'utf8')).toBe(PERSONS)
+    expect(readFileSync(join(dataDir, 'dial-skill-homes.json'))).toEqual(homes)
+  })
+
+  it('disable keeps the skill in a folder the other engine shares while it is On', async () => {
+    const dataDir = folder()
+    const codexHome = folder()
+    writeFileSync(join(dataDir, 'dial-skill.json'), '{"claude":true,"codex":true}')
+    // Codex's skills linked to Claude Code's, as a person may link them.
+    symlinkSync(skillIn(claudeHome), join(codexHome, 'skills'))
+    expect(await device(['codex', 'disable'], { dataDir, codexHome })).toEqual({ code: 0, out: [], err: [] })
+    expect(readFileSync(skillAt(claudeHome), 'utf8')).toBe(DIAL_SKILL)
+
+    // With Codex off as well, the last disable takes it.
+    expect(await device(['claude', 'disable'], { dataDir, codexHome })).toEqual({ code: 0, out: [], err: [] })
+    expect(existsSync(skillAt(claudeHome))).toBe(false)
+  })
+
+  it('a failing step still runs the rest', async () => {
+    const dataDir = folder()
+    skillIn(claudeHome)
+    const other = folder()
+    listed(dataDir, { claude: [skillIn(other)] })
+    const failing = fakeClaude({ ...INSTALLED, [UNINSTALL]: { code: 1, stderr: 'x' } })
+    expect(await device(['claude', 'disable'], { dataDir, claude: () => failing })).toEqual({ code: 1, out: [], err: ['x'] })
+    expect(answers(dataDir)).toEqual({ claude: false })
+    for (const home of [claudeHome, other]) expect(existsSync(skillAt(home)), home).toBe(false)
+
+    const locked = folder()
+    skillIn(claudeHome)
+    const another = folder()
+    listed(locked, { claude: [skillIn(another)] })
+    readOnly(locked)
+    const uninstalls: string[] = []
+    const installed = fakeClaude(INSTALLED)
+    const claude: ClaudeRun = async (args, timeoutMs) => {
+      if (args.join(' ') === UNINSTALL) uninstalls.push(UNINSTALL)
+      return installed(args, timeoutMs)
+    }
+    expect(await device(['claude', 'disable'], { dataDir: locked, claude: () => claude }))
+      .toEqual({ code: 1, out: [], err: ['Could not save the dial setting.'] })
+    expect(uninstalls).toEqual([UNINSTALL])
+    for (const home of [claudeHome, another]) expect(existsSync(skillAt(home)), home).toBe(false)
+
+    // A skill that cannot be removed is the error, and the next folder is still cleared.
+    const codexHome = folder()
+    const stuck = folder()
+    const next = folder()
+    listed(dataDir, { codex: [skillIn(stuck), skillIn(next)] })
+    readOnly(join(stuck, 'skills', 'dial'))
+    expect(await device(['codex', 'disable'], { dataDir, codexHome })).toEqual({ code: 1, out: [], err: ['Could not remove the Codex skill.'] })
+    expect(readFileSync(skillAt(stuck), 'utf8')).toBe(DIAL_SKILL)
+    expect(existsSync(skillAt(next))).toBe(false)
+    expect(answers(dataDir)).toEqual({ claude: false, codex: false })
+  })
+
+  it('claude status is enabled only with the plugin on and the dial not turned off', async () => {
+    const enabled = async (plugin: boolean, file: string | null) => {
+      const dataDir = folder()
+      if (file !== null) writeFileSync(join(dataDir, 'dial-skill.json'), file)
+      const list = JSON.stringify([{ id: 'harness-device@openharness', scope: 'user', enabled: plugin }])
+      const { out } = await device(['claude', 'status', '--json'], { dataDir, claude: () => fakeClaude({ 'plugin list --json': { code: 0, stdout: list } }) })
+      return (JSON.parse(out[0]) as { enabled: boolean }).enabled
+    }
+    expect(await enabled(true, null)).toBe(true)
+    expect(await enabled(true, '{"claude":true}')).toBe(true)
+    expect(await enabled(true, '{"claude":false}')).toBe(false)
+    expect(await enabled(false, '{"claude":true}')).toBe(false)
+  })
+
+  it('codex: status follows the dial setting, enable sets On and writes, disable sets Off and removes every copy', async () => {
+    const dataDir = folder()
+    const status = (enabled: boolean) => ({ code: 0, err: [], out: [`{"supported":true,"installed":true,"enabled":${enabled}}`] })
+    // Harness's own skill in the home is not On: only the setting says so.
+    const holding = folder()
+    skillIn(holding)
+    expect(await device(['codex', 'status', '--json'], { dataDir, codexHome: holding })).toEqual(status(false))
+
+    const codexHome = join(folder(), 'codex')
+    expect(await device(['codex', 'enable'], { dataDir, codexHome })).toEqual({ code: 0, out: [], err: [] })
+    expect(readFileSync(skillAt(codexHome), 'utf8')).toBe(DIAL_SKILL)
+    expect(answers(dataDir)).toEqual({ codex: true, homes: { claude: [], codex: [realpathSync(join(codexHome, 'skills'))] } })
+    expect(await device(['codex', 'status', '--json'], { dataDir, codexHome })).toEqual(status(true))
+
+    const others = [folder(), folder()]
+    listed(dataDir, { codex: others.map((home) => skillIn(home)) })
+    expect(await device(['codex', 'disable'], { dataDir, codexHome })).toEqual({ code: 0, out: [], err: [] })
+    expect(answers(dataDir)).toEqual({ codex: false })
+    for (const home of [codexHome, ...others]) expect(existsSync(join(home, 'skills', 'dial')), home).toBe(false)
+    expect(await device(['codex', 'status', '--json'], { dataDir, codexHome })).toEqual(status(false))
+  })
+
+  it('an enable whose skill cannot be written exits 1', async () => {
+    const codexHome = folder()
+    for (const home of [claudeHome, codexHome]) writeFileSync(join(home, 'skills'), 'mine')
+    expect(await device(['claude', 'enable'])).toEqual({ code: 1, out: [], err: ['Could not write the Claude Code skill.'] })
+    expect(await device(['codex', 'enable'], { codexHome })).toEqual({ code: 1, out: [], err: ['Could not write the Codex skill.'] })
+    for (const home of [claudeHome, codexHome]) expect(readFileSync(join(home, 'skills'), 'utf8'), home).toBe('mine')
+  })
+})
+
+describe('harness device codex', () => {
   it('status without --json prints the same fields, indented', async () => {
     expect(await device(['codex', 'status'], { codex: () => false }))
       .toEqual({ code: 0, err: [], out: [JSON.stringify({ supported: true, installed: false, enabled: false }, null, 2)] })

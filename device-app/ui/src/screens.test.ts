@@ -93,56 +93,12 @@ describe('screens', () => {
     expect(act).toHaveBeenCalledWith('retry')
   })
 
-  it('Claude Code: Turn on, Not now, a failure', async () => {
-    await mount(at('claude', 'offer'))
-    expect(heading()).toBe('Claude Code')
-    expect(text()).toContain("The dial speaks Claude Code's answers and asks its approvals.")
-    expect(text()).toContain("Harness adds hooks to Claude Code's settings.")
-    expect(buttons()).toEqual(['Not now', 'Turn on'])
-    click('Turn on')
-    expect(act).toHaveBeenCalledWith('turn_on')
-
-    push(at('claude', 'working'))
-    expect(spinner()).not.toBeNull()
-    expect(buttons()).toEqual([])
-
-    push(at('claude', 'failed', ['Claude Code is too old.']))
-    expect(text()).toContain('Claude Code is too old.')
-    expect(buttons()).toEqual(['Retry'])
-    click('Retry')
-    expect(act).toHaveBeenLastCalledWith('retry')
-
-    push(at('claude', 'offer'))
-    click('Not now')
-    expect(act).toHaveBeenLastCalledWith('not_now')
-  })
-
-  it('codex: Turn on, a failure, Retry; Not now', async () => {
-    await mount(at('codex', 'offer'))
-    expect(heading()).toBe('Let Codex reach your dial?')
-    expect(text()).toContain('Codex can ring the dial when it needs you: a VPN, a sign-in, a decision.')
-    expect(buttons()).toEqual(['Not now', 'Turn on'])
-    click('Turn on')
-    expect(act).toHaveBeenCalledWith('turn_on')
-
-    push(at('codex', 'working'))
-    expect(heading()).toBe('Codex')
-    expect(spinner()).not.toBeNull()
-    expect(buttons()).toEqual([])
-
-    push(at('codex', 'failed', ['Could not change Codex.']))
-    expect(heading()).toBe('Codex')
-    expect(text()).toContain('Could not change Codex.')
-    expect(buttons()).toEqual(['Retry'])
-    click('Retry')
-    expect(act).toHaveBeenLastCalledWith('retry')
-
-    push(at('codex', 'offer'))
-    click('Not now')
-    expect(act).toHaveBeenLastCalledWith('not_now')
-
-    push(null)
-    expect(page().childNodes).toHaveLength(0)
+  it('a screen Rust no longer sends draws nothing', async () => {
+    await mount(at('sign_in', 'offer'))
+    for (const screen of ['claude', 'codex']) {
+      push(at(screen as Screen, 'offer'))
+      expect(page().childNodes).toHaveLength(0)
+    }
   })
 
   it('the install shows its last four lines; a note or an error shows its first', async () => {
@@ -153,11 +109,9 @@ describe('screens', () => {
     expect(text()).toContain('first')
     expect(text()).not.toContain('second')
 
-    for (const screen of ['sign_in', 'claude'] as const) {
-      push(at(screen, 'failed', ['first', 'second']))
-      expect(text()).toContain('first')
-      expect(text()).not.toContain('second')
-    }
+    push(at('sign_in', 'failed', ['first', 'second']))
+    expect(text()).toContain('first')
+    expect(text()).not.toContain('second')
   })
 
   it('the primary button is the one the contract names', async () => {
@@ -169,9 +123,6 @@ describe('screens', () => {
       ['sign_in', 'working', null],
       ['sign_in', 'browser', null],
       ['sign_in', 'failed', 'Retry'],
-      ['claude', 'offer', 'Turn on'],
-      ['claude', 'working', null],
-      ['claude', 'failed', 'Retry'],
     ]
     await mount(null)
     for (const [screen, phase, label] of table) {
@@ -190,7 +141,7 @@ describe('screens', () => {
     expect(page().querySelector('img')).toBeNull()
     expect(text()).toContain(outside)
 
-    push(at('claude', 'failed', [outside]))
+    push(at('sign_in', 'failed', [outside]))
     expect(page().querySelector('img')).toBeNull()
     expect(text()).toContain(outside)
   })
@@ -211,21 +162,17 @@ describe('screens', () => {
     expect(alert()).toBe('Sign-in did not finish.')
     expect(described()).toBe('Sign-in did not finish.')
 
-    push(at('claude', 'failed', ['Claude Code is too old.']))
-    expect(alert()).toBe('Claude Code is too old.')
-    expect(described()).toBe('Claude Code is too old.')
-
-    push(at('claude', 'offer'))
+    push(at('sign_in', 'offer'))
     expect(alert()).toBeNull()
-    expect(described()).toBe("The dial speaks Claude Code's answers and asks its approvals. Harness adds hooks to Claude Code's settings.")
+    expect(described()).toBe('Add your other computers to the dial.')
   })
 
   it('the primary button has the focus, and no other', async () => {
     await mount(at('sign_in', 'offer'))
     expect(document.activeElement?.textContent).toBe('Sign in')
 
-    push(at('claude', 'offer'))
-    expect(document.activeElement?.textContent).toBe('Turn on')
+    push(at('sign_in', 'failed', ['Sign-in did not finish.']))
+    expect(document.activeElement?.textContent).toBe('Retry')
 
     // The window comes up while the person types in the browser: Return must not cancel the sign-in.
     push(at('sign_in', 'working'))
