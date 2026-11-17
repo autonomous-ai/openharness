@@ -37,6 +37,11 @@ it('composes bounded file rendering without loading installers or publishing nat
   expect(candidate!.files[1].content).toContain('Agent Messages')
   expect(await setup.prepareFiles!(input, 'cancelled-files', () => false)).toBeNull()
   expect(existsSync(input.files[0].file)).toBe(false)
+  const trust = { engine: 'codex' as const, cwd: home, home,
+    files: [{ file: join(home, 'config.toml'), directory: home, content: 'model = "fixture"\n' }] }
+  expect((await setup.prepareTrust!(trust, 'fixture-trust', () => true))!.files[0].content).toContain('trust_level = "trusted"')
+  expect(await setup.prepareTrust!(trust, 'cancelled-trust', () => false)).toBeNull()
+  expect(existsSync(trust.files[0].file)).toBe(false)
   expect(createNativeInstallations).not.toHaveBeenCalled(); expect(createWindowsInstallations).not.toHaveBeenCalled()
 })
 

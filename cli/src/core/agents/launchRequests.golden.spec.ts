@@ -16,10 +16,6 @@ vi.mock('node:child_process', () => {
 vi.mock('../../engines/inProcess.js', async original => ({ ...await original<object>(),
   loadEngine: () => { throw Error('Launch requests cannot load an optional interpreter') },
 }))
-vi.mock('../../engines/launchPrep.js', () => ({ folderTrust: (engine: string, profile: string | null) => ({
-  trusts: () => false,
-  record: (path: string) => fixture.events.push(['trust', engine, profile, path]),
-}) }))
 vi.mock('../../lib/projectFolder.js', async original => ({ ...await original<object>(),
   projectsRoot: () => join(fixture.root, 'projects'),
   // A new project's empty folder, the one the core still makes itself (git's folders are the workspaces service's).
@@ -79,6 +75,9 @@ it.each(['linux', 'darwin'])('preserves healthy launch requests and durable rece
           return { networkId: 'fixture-grid', networkName: 'Fixture', baseUrl: 'http://fixture.invalid/v1', apiKey: 'fixture-key', model: 'fixture-model' }
         },
         workspaces: () => null,
+        prepareFolderTrust: async ({ engine, profile, cwd }) => {
+          fixture.events.push(['trust', engine, profile, cwd]); return true
+        },
       }
       const requests = createLaunchRequests(deps)
       const payload: Record<string, unknown> = kind === 'fork'

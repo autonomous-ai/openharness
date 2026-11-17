@@ -67,15 +67,12 @@ vi.mock('../../engines/kit/nativeHookFiles.js', () => ({
   runHookPreparation: async (_files: string[], work: () => Promise<unknown>) => work(),
   hookPreparationRoutes: () => ({ verify: () => {}, keys: [] }),
 }))
-// The engines' folder trust (engines/launchPrep.ts), one spy per engine: never the person's own config.
+// The optional trust preparation port, one spy per engine: never the person's own config.
 const trust = vi.hoisted(() => ({
   claudeTrusts: vi.fn((_path: string) => false), codexTrusts: vi.fn((_path: string, _profile?: string | null) => false),
   preTrustClaudeProject: vi.fn((_path: string): unknown => undefined), preTrustCodexProject: vi.fn((_path: string, _profile?: string | null): unknown => undefined),
 }))
 const { preTrustClaudeProject, preTrustCodexProject } = trust
-vi.mock('../../engines/launchPrep.js', () => ({ folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
-    ? { trusts: (path: string) => trust.claudeTrusts(path), record: (path: string) => trust.preTrustClaudeProject(path) }
-    : engine === 'codex' ? { trusts: (path: string) => trust.codexTrusts(path, profile), record: (path: string) => trust.preTrustCodexProject(path, profile) } : null }))
 vi.mock('../../lib/createAgentPane.js', () => ({ createAndRegisterPane: vi.fn() }))
 // The pull request line (lib/agentAttribution.ts) reads the person's engine settings: never this machine's here.
 vi.mock('../../lib/agentAttribution.js', () => ({
@@ -147,6 +144,12 @@ function setup(over: Partial<CreateAgentDeps> = {}) {
     announceSession: vi.fn(),
     attach: vi.fn(),
     prepareApiTools: vi.fn(),
+    prepareFolderTrust: async ({ engine, cwd, profile }, current) => {
+      if (!current()) return false
+      if (engine === 'claude') preTrustClaudeProject(cwd)
+      if (engine === 'codex') preTrustCodexProject(cwd, profile)
+      return true
+    },
     hookPort: 4242,
     hooksDisabled: false,
     installOpencodePlugin: vi.fn(async () => true),
@@ -175,6 +178,58 @@ describe('creating an agent', () => {
   })
   // A launch or an installed harness one test queued and never used answers no other test.
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); launchDsh.mockReset(); vi.mocked(installedDsh).mockReset() })
+
+  it.each([false, true])('awaits optional folder-trust preparation and rechecks launch authority: revoked=%s', async revoked => {
+    const cwd = folder()
+    vi.mocked(projectsRoot).mockReturnValue(root)
+    let current = true
+    const prepareFolderTrust = vi.fn(async () => {
+      // Yield inside the optional owner: launch authority may change while it prepares bytes.
+      await Promise.resolve()
+      if (revoked) current = false
+      return true
+    })
+    const prepareHooks = vi.fn(async () => {
+      expect(prepareFolderTrust).toHaveBeenCalledOnce()
+      expect(preTrustCodexProject).not.toHaveBeenCalled()
+      return true
+    })
+    const launch = { current: () => current, environment: { HOME: '/fixture/home', CODEX_HOME: '/fixture/selected' },
+      permission: async () => 'supported', prepareHooks,
+    } as unknown as NativeLaunch
+    const run = setup({ prepareFolderTrust, native: async () => ({ ok: true, launch }) } as Partial<CreateAgentDeps>)
+    const result = await run.create.prepare(request({ cwd, engine: 'codex' }),
+      { id: 'fixture', label: 'harness-codex-fixture', current: () => current, hold: () => {} }, { local: true })
+    expect(prepareFolderTrust).toHaveBeenCalledOnce()
+    expect(preTrustCodexProject).not.toHaveBeenCalled()
+    if (revoked) {
+      expect(result).toMatchObject({ ok: false, unavailable: 'launch' })
+      expect(prepareHooks).not.toHaveBeenCalled()
+    } else expect(result.ok).toBe(true)
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
+  })
+
+  it.each(['replaced', 'removed'] as const)('holds a workspace %s while optional trust is awaiting its owner', async change => {
+    const cwd = folder()
+    vi.mocked(projectsRoot).mockReturnValue(root)
+    const prepareFolderTrust = vi.fn<NonNullable<CreateAgentDeps['prepareFolderTrust']>>(async (_input, current) => {
+      await Promise.resolve()
+      renameSync(cwd, cwd + '-original')
+      if (change === 'replaced') mkdirSync(cwd)
+      expect(current()).toBe(false)
+      return false
+    })
+    const prepareHooks = vi.fn(async () => true)
+    const launch = { current: () => true, environment: { HOME: '/fixture/home', CODEX_HOME: '/fixture/selected' },
+      permission: async () => 'supported', prepareHooks,
+    } as unknown as NativeLaunch
+    const run = setup({ prepareFolderTrust, native: async () => ({ ok: true, launch }) })
+    expect(await run.create.prepare(request({ cwd, engine: 'codex' }),
+      { id: 'fixture', label: 'harness-codex-fixture', current: () => true, hold: () => {} }, { local: true }))
+      .toMatchObject({ ok: false, unavailable: 'launch' })
+    expect(prepareHooks).not.toHaveBeenCalled()
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
+  })
 
   // No owner subscription relay (task #4137): Claude Code and Codex, a profile's own Codex home among them, launch on their
   // own settings, with nothing of a relay in the pane's environment or on the engine's command line.
@@ -232,7 +287,7 @@ describe('creating an agent', () => {
       } })
       const result = await run.create.prepare(request({ cwd, engine: mode === 'no trust contract' ? 'opencode' : 'codex' }),
         { id: 'fixture', label: 'harness-codex-fixture', current: () => current, hold: () => {} }, { local: mode !== 'remote' })
-      if (mode === 'revoked' || mode === 'revoked before trust') expect(result).toMatchObject({ ok: false, unavailable: 'launch' })
+      if (mode === 'revoked' || mode === 'revoked before trust' || mode === 'replaced workspace') expect(result).toMatchObject({ ok: false, unavailable: 'launch' })
       else expect(result.ok).toBe(true)
       expect(preTrustCodexProject, JSON.stringify(vi.mocked(console.warn).mock.calls)).toHaveBeenCalledTimes(expected ? 1 : 0)
       if (expected) expect(preTrustCodexProject).toHaveBeenCalledWith(cwd, mode === 'legacy' ? null : '/fixture/selected')
@@ -251,18 +306,18 @@ describe('creating an agent', () => {
     expect(preTrustClaudeProject).toHaveBeenCalledExactlyOnceWith(cwd)
   })
 
-  it.each(['folder inspection', 'tmux capabilities', 'config publication'] as const)('holds a create revoked during %s before launch side effects', async stage => {
+  it.each(['workspace materialization', 'tmux capabilities', 'config publication'] as const)('holds a create revoked during %s before launch side effects', async stage => {
     let current = true
     vi.mocked(installedDsh).mockReturnValue(installed() as never)
     const run = setup()
-    if (stage === 'folder inspection') vi.mocked(readdir).mockImplementationOnce(async () => { current = false; return [] })
+    if (stage === 'workspace materialization') materializeWorkspace.mockImplementationOnce(async () => { current = false; return { warnings: [], created: [], kept: [] } })
     if (stage === 'tmux capabilities') capabilities.mockImplementationOnce(async () => { current = false; return { sessionEnv: true } })
     if (stage === 'config publication') vi.mocked(writeGridConfigDir).mockImplementationOnce(async () => { current = false; return '/fixture/config' })
     buildGridLaunch.mockResolvedValueOnce({ ok: true, override: { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'http://fixture.invalid', apiKey: 'fixture' }, launch: {
       env: {}, args: [], webSearch: 'unsupported', configDir: { envVar: 'PI_CONFIG', files: [] },
     } })
     try {
-      expect(await run.create.prepare(request(stage === 'folder inspection' ? { dsh: 'blender' } : { grid: { networkName: 'Fixture' } }),
+      expect(await run.create.prepare(request(stage === 'workspace materialization' ? { dsh: 'blender' } : { grid: { networkName: 'Fixture' } }),
         { id: 'fixture', label: 'harness-claude-fixture', current: () => current, hold: vi.fn() }))
         .toMatchObject({ error: 'LAUNCH_AUTHORITY_CHANGED' })
       expect(createAndRegisterPane).not.toHaveBeenCalled()
@@ -664,6 +719,31 @@ describe('creating an agent', () => {
       expect(await create(request({ engine: 'terminal' }))).toMatchObject({ ok: true, session: { engine: 'terminal' } })
     })
 
+    it('leaves a materialized template at the native prompt when foreign work arrives during materialization', async () => {
+      const cwd = folder()
+      vi.mocked(installedDsh).mockReturnValue(installed() as never)
+      const prepareFolderTrust = vi.fn(async () => true)
+      const launch = { current: () => true, environment: { HOME: '/fixture/home', CODEX_HOME: '/fixture/selected' },
+        permission: async () => 'supported', prepareHooks: async () => true,
+      } as unknown as NativeLaunch
+      const run = setup({ prepareFolderTrust, native: async () => ({ ok: true, launch }),
+        dshLaunch: {
+          materialize: async () => {
+            await Promise.resolve()
+            writeFileSync(join(cwd, 'user-repository'), 'arrived during init')
+            return { ok: true, created: ['template → workspace'], kept: [], warnings: [] }
+          },
+          launch: async () => ({ ok: true, launch: { env: {}, args: [] } }),
+        },
+      })
+      expect(await run.create.prepare(request({ cwd, engine: 'codex', dsh: 'blender' }),
+        { id: 'fixture-template', label: 'harness-codex-fixture', current: () => true, hold: () => {} }, { local: true }))
+        .toMatchObject({ ok: true })
+      expect(prepareFolderTrust).not.toHaveBeenCalled()
+      expect(preTrustCodexProject).not.toHaveBeenCalled()
+      expect(console.warn).toHaveBeenCalledWith('[trust] TEMPLATE_TRUST_UNCONFIRMED')
+    })
+
     it('does not trust, configure or launch a workspace when the Store cannot prepare it', async () => {
       vi.mocked(installedDsh).mockReturnValue(installed() as never)
       const refused = { ok: false as const, error: 'DSH_UNAVAILABLE', detail: 'Store unavailable', unavailable: 'store' as const }
@@ -690,38 +770,35 @@ describe('creating an agent', () => {
       expect(deps.attach).toHaveBeenLastCalledWith(pending)
     })
 
-    it('as a DSH: its workspace prepared, trusted when it went into an empty folder, and its launch layered on', async () => {
+    it('as a DSH: prepares its workspace and launch while leaving materialized-template trust to the engine', async () => {
       vi.mocked(installedDsh).mockReturnValue(installed() as never)
       vi.mocked(materializeWorkspace).mockResolvedValue({ warnings: ['kept AGENTS.md'], created: ['template/scene.blend'], kept: [] } as never)
       vi.mocked(createAndRegisterPane).mockResolvedValue({ ok: true, spawned: { runtime: { paneId: '%1' } }, pending: { ...pending, dsh: 'blender' } } as never)
       const { deps, create } = setup()
       await create(request({ dsh: 'blender' }))
-      expect(preTrustClaudeProject).toHaveBeenCalled()
+      expect(preTrustClaudeProject).not.toHaveBeenCalled()
       expect(deps.attach).toHaveBeenCalledWith(expect.objectContaining({ dsh: 'blender' }))
       const pane = vi.mocked(createAndRegisterPane).mock.calls[0][0]
       expect(pane).toMatchObject({ dsh: 'blender', dshRuntime: expect.any(String), label: 'Blender', env: expect.objectContaining({ HARNESS_DSH: 'blender' }) })
       await create(request({ dsh: 'blender', engine: 'codex' }))
-      expect(preTrustCodexProject).toHaveBeenLastCalledWith(expect.any(String), null)
-      // A Codex agent on its own profile is trusted in that profile's config.toml, which it reads.
+      expect(preTrustCodexProject).not.toHaveBeenCalled()
+      // A profile launch keeps the same native trust question.
       await create(request({ dsh: 'blender', engine: 'codex', codexHome: '/profiles/work' }))
-      expect(preTrustCodexProject).toHaveBeenLastCalledWith(expect.any(String), '/profiles/work')
+      expect(preTrustCodexProject).not.toHaveBeenCalled()
       // A folder that already held something, or could not be read: trust stays the person's call.
       await create(request({ dsh: 'blender', cwd: folder(['README.md']) }))
       await create(request({ dsh: 'blender', engine: 'pi' }))
-      expect(preTrustClaudeProject).toHaveBeenCalledTimes(1)
-      vi.mocked(preTrustClaudeProject).mockImplementationOnce(() => { throw new Error('settings locked') }).mockImplementationOnce(() => { throw 'worse' })
-      expect(await create(request({ dsh: 'blender' }))).toMatchObject({ ok: true })
-      expect(await create(request({ dsh: 'blender' }))).toMatchObject({ ok: true })
+      expect(preTrustClaudeProject).not.toHaveBeenCalled()
       vi.mocked(materializeWorkspace).mockResolvedValueOnce({ warnings: [], created: ['AGENTS.md'], kept: [] } as never)
       await create(request({ dsh: 'blender' }))
-      expect(preTrustClaudeProject).toHaveBeenCalledTimes(3)
+      expect(preTrustClaudeProject).not.toHaveBeenCalled()
       // A folder it cannot read is not an empty one.
       const unreadable = folder()
       chmodSync(unreadable, 0o000)
       try {
         await create(request({ dsh: 'blender', cwd: unreadable }))
       } finally { chmodSync(unreadable, 0o755) }
-      expect(preTrustClaudeProject).toHaveBeenCalledTimes(3)
+      expect(preTrustClaudeProject).not.toHaveBeenCalled()
       vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
       vi.mocked(materializeWorkspace).mockReset().mockResolvedValue({ warnings: [], created: [], kept: [] } as never)
     })

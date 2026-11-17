@@ -11,6 +11,7 @@ import { engineInstallRecipe } from '../lib/engineInstall.js'
 import { createLocalNativeSetup } from './nativeSetup.js'
 import { HookScriptMissing } from '../engines/kit/hookHeld.js'
 import { boundedHookInput, hookCandidate, type NativeHookInput } from '../engines/kit/nativeHookWire.js'
+import { boundedTrustInput, type NativeTrustInput } from '../engines/kit/nativeTrustWire.js'
 
 const MAX_PREPARED = 8
 const MAX_REQUESTS = 8
@@ -31,7 +32,7 @@ export function startEngineSetup(directory: string, given?: NativeSetup) {
   const probes = given ? undefined : createSetupProbeExecutor()
   let setup = given ?? createLocalNativeSetup(directory, probes!.execute), stopped = false
   interface Preparation {
-    kind: 'installation' | 'files'
+    kind: 'installation' | 'files' | 'trust'
     engine: AgentEngine; request: string; expiresAt: number; live: boolean; committed: boolean; finished: boolean
     decide(allowed: boolean): void
     result: Promise<Record<string, unknown>>
@@ -77,9 +78,9 @@ export function startEngineSetup(directory: string, given?: NativeSetup) {
       return { installation: engine && string(payload.request) ? await setup.installations.status(engine, payload.request, () => !closed?.aborted) : held() }
     },
     setup_prepare: async (payload, _asker, closed) => {
-      const engine = engineOf(payload.engine), environment = locations(payload.environment)
-      const kind = payload.kind === 'files' ? 'files' : 'installation'
-      const unavailable = () => kind === 'files' ? { files: null } : { installation: held() }
+      const kind = payload.kind === 'trust' ? 'trust' : payload.kind === 'files' ? 'files' : 'installation'
+      const engine = engineOf(payload.engine), environment = kind === 'trust' ? {} : locations(payload.environment)
+      const unavailable = () => kind !== 'installation' ? { files: null } : { installation: held() }
       if (!engine || !string(payload.request) || !environment || closed?.aborted) return unavailable()
       const recipe = engineInstallRecipe(engine)
       const input = { engine, environment, port: payload.port, files: payload.files,
@@ -89,22 +90,28 @@ export function startEngineSetup(directory: string, given?: NativeSetup) {
         ...(payload.createMissing === undefined ? {} : { createMissing: payload.createMissing }),
         ...(payload.directories === undefined ? {} : { directories: payload.directories }),
       } as NativeHookInput
-      if (kind === 'files' ? !setup.prepareFiles || !boundedHookInput(input) : !recipe) return unavailable()
+      const trustInput = { engine, cwd: payload.cwd, home: payload.home, files: payload.files,
+        ...(payload.userHome === undefined ? {} : { userHome: payload.userHome }),
+        ...(payload.source === undefined ? {} : { source: payload.source }) } as NativeTrustInput
+      if (kind === 'trust' ? !setup.prepareTrust || !boundedTrustInput(trustInput)
+        : kind === 'files' ? !setup.prepareFiles || !boundedHookInput(input) : !recipe) return unavailable()
       for (const [token, entry] of prepared) if (entry.finished) { clearTimeout(entry.timer); prepared.delete(token) }
       if (prepared.size >= MAX_PREPARED) return busy()
       const token = randomUUID(), request = payload.request
       let decide!: (allowed: boolean) => void, ready!: (value: Record<string, unknown>) => void
       const decision = new Promise<boolean>(resolve => { decide = resolve })
       const readiness = new Promise<Record<string, unknown>>(resolve => { ready = resolve })
-      const entry: Preparation = { kind, engine, request, expiresAt: Date.now() + PREPARATION_MS, live: true, committed: false, finished: false, decide,
+      const duration = kind === 'trust' ? 5000 : PREPARATION_MS
+      const entry: Preparation = { kind, engine, request, expiresAt: Date.now() + duration, live: true, committed: false, finished: false, decide,
         result: Promise.resolve(unavailable()), timer: setTimeout(() => {
           entry.live = false; entry.decide(false)
-        }, PREPARATION_MS) }
+        }, duration) }
       entry.timer.unref?.()
       prepared.set(token, entry)
       const current = () => entry.live && Date.now() < entry.expiresAt && !closed?.aborted
-      entry.result = (kind === 'files'
-        ? setup.prepareFiles!(input, request, current).then(async candidate => {
+      entry.result = (kind !== 'installation'
+        ? (kind === 'trust' ? setup.prepareTrust!(trustInput, request, current)
+          : setup.prepareFiles!(input, request, current)).then(async candidate => {
           const files = hookCandidate(candidate, input.files.length)
           if (!files || !current()) return { files: null }
           ready({ preparation: token })
@@ -117,14 +124,14 @@ export function startEngineSetup(directory: string, given?: NativeSetup) {
           if (kind === 'files' && error instanceof HookScriptMissing) {
             console.warn('[engine-setup] HOOK_SCRIPT_MISSING'); return { files: null, error: 'HOOK_SCRIPT_MISSING' }
           }
-          console.warn(`[engine-setup] ${kind === 'files' ? 'FILE' : 'INSTALLATION'}_PREPARATION_FAILED`); return unavailable()
+          console.warn(`[engine-setup] ${kind === 'trust' ? 'TRUST' : kind === 'files' ? 'FILE' : 'INSTALLATION'}_PREPARATION_FAILED`); return unavailable()
         })
         .then(result => { entry.finished = true; return result })
       return Promise.race([readiness, entry.result])
     },
     setup_commit: async payload => {
-      const kind = payload.kind === 'files' ? 'files' : 'installation'
-      const unavailable = () => kind === 'files' ? { files: null } : { installation: held() }
+      const kind = payload.kind === 'trust' ? 'trust' : payload.kind === 'files' ? 'files' : 'installation'
+      const unavailable = () => kind !== 'installation' ? { files: null } : { installation: held() }
       const entry = typeof payload.preparation === 'string' ? prepared.get(payload.preparation) : undefined
       if (!entry || !entry.live || entry.kind !== kind || entry.engine !== payload.engine || entry.request !== payload.request) return unavailable()
       if (Date.now() >= entry.expiresAt) {
@@ -141,6 +148,8 @@ export function startEngineSetup(directory: string, given?: NativeSetup) {
   requests.setup_commit = (payload, asker, closed) => commit({ ...payload, kind: 'installation' }, asker, closed)
   requests.setup_files_prepare = (payload, asker, closed) => prepare({ ...payload, kind: 'files' }, asker, closed)
   requests.setup_files_commit = (payload, asker, closed) => commit({ ...payload, kind: 'files' }, asker, closed)
+  requests.setup_trust_prepare = (payload, asker, closed) => prepare({ ...payload, kind: 'trust' }, asker, closed)
+  requests.setup_trust_commit = (payload, asker, closed) => commit({ ...payload, kind: 'trust' }, asker, closed)
   // Actual settlement releases request admission: timeouts/disconnects cannot free stuck reads or duplicate commits.
   let answering = 0
   // These handlers are private core calls, never client routes. Keep this check even for explicit inline composition.

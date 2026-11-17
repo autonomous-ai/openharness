@@ -41,31 +41,48 @@ afterEach(() => {
 })
 
 it('records Claude trust at its captured shell home when that shell omitted CLAUDE_CONFIG_DIR', async () => {
-  const { folderTrust } = await import('../../engines/launchPrep.js')
+  const { createFolderTrustPreparation } = await import('../../engines/folderTrustPreparation.js')
+  const { prepareNativeTrust } = await import('../../services/nativeSetupTrust.js')
   const selected = join(root, 'selected-home'); mkdirSync(selected)
   const config = join(selected, '.claude.json'); writeFileSync(config, '{}\n')
   const ambient = join(process.env.HOME!, '.claude.json'); writeFileSync(ambient, '{}\n')
-  expect(folderTrust('claude', null, { HOME: selected })!.record('/fixture/work')).toBe('trusted')
-  expect(JSON.parse(readFileSync(config, 'utf8')).projects['/fixture/work'].hasTrustDialogAccepted).toBe(true)
+  const cwd = join(root, 'workspace'); mkdirSync(cwd)
+  const prepare = createFolderTrustPreparation({ prepareTrust: async (input, _request, current) => prepareNativeTrust(input, current) })
+  expect(await prepare({ engine: 'claude', cwd, environment: { HOME: selected }, empty: true }, () => true)).toBe(true)
+  expect(JSON.parse(readFileSync(config, 'utf8')).projects[cwd].hasTrustDialogAccepted).toBe(true)
   expect(readFileSync(ambient, 'utf8')).toBe('{}\n')
 }, 30_000) // As the core gate gives every test: with each fsync 100 ms slower this took up to 6.5 s, past the default 5 s.
 
-it.each([true, false])('completes native Codex preparation before its dispatch claim with saved local authority %s', async local => {
+it.each([
+  { local: true, project: false, trust: 'ready' }, { local: false, project: false, trust: 'ready' },
+  { local: true, project: true, trust: 'ready' }, { local: false, project: true, trust: 'ready' },
+  { local: true, project: true, trust: 'unavailable' }, { local: true, project: true, trust: 'delayed' },
+])('completes native Codex preparation once before dispatch (local $local, project $project, trust $trust)', async ({ local, project, trust }) => {
   const { createAgentCreator } = await import('./create.js')
   const { createLaunchRequests } = await import('./launches.js')
   const { AgentCreationReceipts } = await import('../../lib/agentCreationReceipt.js')
   const { inspectNativeLaunch } = await import('../../testing/nativeSetupInProcess.js')
   const { projectsRoot } = await import('../../lib/projectFolder.js')
+  const { createFolderTrustPreparation } = await import('../../engines/folderTrustPreparation.js')
+  const { prepareNativeTrust } = await import('../../services/nativeSetupTrust.js')
   const cwd = join(projectsRoot(), 'workspace'); mkdirSync(cwd, { recursive: true })
   const config = join(process.env.CODEX_HOME!, 'config.toml')
   const pending = { agentId: 'fixture-agent', engine: 'codex', cwd, sessionId: '', runtimes: [] } as unknown as RegisteredSession
   spawn.mockImplementation(async (options: { current(): boolean; argv: string[] }) => {
     expect(options.current()).toBe(true)
-    expect(readFileSync(config, 'utf8').includes('trust_level = "trusted"')).toBe(local)
+    expect(readFileSync(config, 'utf8').includes('trust_level = "trusted"')).toBe((local || project) && trust === 'ready')
     expect(options.argv.join(' ')).toContain('original prompt')
     return { ok: true, pending, spawned: { runtime: { backend: 'tmux', paneId: '%fixture' } } }
   })
-  const creator = createAgentCreator({ native: (engine, source) => inspectNativeLaunch(engine, source),
+  const prepare = createFolderTrustPreparation({ prepareTrust: async (input, _request, current) => prepareNativeTrust(input, current) })
+  let release!: () => void
+  const delayed = new Promise<void>(resolve => { release = resolve })
+  const prepareFolderTrust = vi.fn<typeof prepare>(async (...args) => {
+    if (trust === 'ready') return prepare(...args)
+    if (trust === 'delayed') await delayed
+    return false
+  })
+  const creator = createAgentCreator({ native: (engine, source) => inspectNativeLaunch(engine, source), prepareFolderTrust,
     createBackend: {} as CreateAgentDeps['createBackend'], registry: {} as CreateAgentDeps['registry'],
     externalResume: async () => { throw Error('unexpected external resume') }, watchNewPane: async () => {},
     announceSession: () => {}, attach: () => {}, prepareApiTools: () => {},
@@ -79,11 +96,19 @@ it.each([true, false])('completes native Codex preparation before its dispatch c
   const requests = createLaunchRequests({ receipts, createAgent: () => creator, prepareCreate: creator.prepare,
     forkAgent: () => null, resumeAgent: () => null, restartAgent: () => null,
     byAgent: () => pending, stoppedAgent: () => undefined, toProject: async () => ({ agentId: pending.agentId }) as never, modelTarget: async () => null,
-    workspaces: () => null })
+    workspaces: () => null, prepareFolderTrust })
   stop = requests.stop
   const replies: Record<string, unknown>[] = []
-  const input = { creationId: 'native_trust_fixture_1', engine: 'codex', cwd, bypassPermission: false, prompt: 'original prompt' }
-  await requests.create(input, { local }, result => { replies.push(result) })
+  const input = { creationId: 'native_trust_fixture_1', engine: 'codex',
+    ...(project ? { projectSource: 'new', projectName: 'fresh-project' } : { cwd }), bypassPermission: false, prompt: 'original prompt',
+    folderTrustAttempted: true } // Public input cannot suppress the core's own preparation.
+  const creating = requests.create(input, { local }, result => { replies.push(result) })
+  if (trust === 'delayed') {
+    await vi.waitFor(() => expect(prepareFolderTrust).toHaveBeenCalledOnce())
+    expect(spawn).not.toHaveBeenCalled()
+    release()
+  }
+  await creating
   // Past five seconds the receipt answers pending while the same preparation goes on (agentCreationReceipt.ts runIntent), as it
   // did in those runs; the client then asks what became of it.
   const status = async () => {
@@ -99,8 +124,9 @@ it.each([true, false])('completes native Codex preparation before its dispatch c
   expect(settled).toMatchObject({ state: 'created' })
   await vi.waitFor(() => expect(['created', 'pending']).toContain(replies[0]?.state))
   expect(spawn).toHaveBeenCalledOnce()
+  expect(prepareFolderTrust).toHaveBeenCalledTimes(local || project ? 1 : 0)
   await requests.create(input, { local: !local }, result => { replies.push(result) })
   await vi.waitFor(() => expect(replies[1]).toMatchObject({ state: 'created' }))
   expect(spawn).toHaveBeenCalledOnce()
-  expect(readFileSync(config, 'utf8').includes('trust_level = "trusted"')).toBe(local)
+  expect(readFileSync(config, 'utf8').includes('trust_level = "trusted"')).toBe((local || project) && trust === 'ready')
 }, 90_000) // Cold, this file's imports alone took up to 22.6 s in those runs.

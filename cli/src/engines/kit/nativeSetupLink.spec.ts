@@ -13,6 +13,45 @@ afterEach(() => { vi.useRealTimers(); rmSync(root, { recursive: true, force: tru
 const environment = { HOME: '/fixture', PATH: '/fixture/bin' }
 const recipe = { command: 'fixture', source: 'fixture', executable: { names: ['fixture'] } }
 
+it('uses trust-specific bounded requests and refuses revoked, old or malformed replies', async () => {
+  const input = { engine: 'codex' as const, cwd: root, home: root,
+    files: [{ file: join(root, 'config.toml'), directory: root, content: '' }] }
+  const candidate = { version: 1, files: [{ index: 0, content: 'prepared' }] }
+  const call = vi.fn().mockResolvedValue({ error: 'UNSUPPORTED' }), link = createNativeSetupLink(call)
+  expect(await link.prepareTrust!(input, 'r', () => false)).toBeNull()
+  expect(call).not.toHaveBeenCalled()
+  expect(await link.prepareTrust!({ ...input, home: 'relative' }, 'r', () => true)).toBeNull()
+  expect(await link.prepareTrust!(input, 'r', () => true)).toBeNull()
+  call.mockResolvedValueOnce({ preparation: 'trust-token' }).mockResolvedValue({ files: candidate })
+  expect(await link.prepareTrust!(input, 'r', () => true)).toEqual(candidate)
+  expect(call).toHaveBeenLastCalledWith('setup_trust_commit', { preparation: 'trust-token', engine: 'codex', request: 'r', allowed: true }, expect.any(Number))
+  let current = true
+  call.mockImplementationOnce(async () => { current = false; return { preparation: 'cancelled' } })
+  expect(await link.prepareTrust!(input, 'r', () => current)).toBeNull()
+  expect(call).toHaveBeenLastCalledWith('setup_trust_commit', { preparation: 'cancelled', engine: 'codex', request: 'r', allowed: false }, expect.any(Number))
+  call.mockResolvedValueOnce({ preparation: 'wrong' }).mockResolvedValue({ files: { version: 1, files: [{ index: 4, content: 'unowned' }] } })
+  expect(await link.prepareTrust!(input, 'r', () => true)).toBeNull()
+})
+
+it.each(['remaining', 'prepare expired', 'commit expired'] as const)('uses one five-second trust deadline: %s', async mode => {
+  let now = 0
+  const time = vi.spyOn(performance, 'now').mockImplementation(() => now)
+  const input = { engine: 'codex' as const, cwd: root, home: root,
+    files: [{ file: join(root, 'config.toml'), directory: root, content: '' }] }
+  const candidate = { version: 1, files: [{ index: 0, content: 'prepared' }] }
+  let resolve!: (answer: Record<string, unknown>) => void
+  const call = vi.fn().mockImplementationOnce(() => new Promise<Record<string, unknown>>(done => { resolve = done }))
+    .mockImplementationOnce(async () => { if (mode === 'commit expired') now = 5001; return { files: candidate } })
+  try {
+    const pending = createNativeSetupLink(call).prepareTrust!(input, 'deadline', () => true)
+    now = mode === 'prepare expired' ? 5000 : 4900
+    resolve({ preparation: 'token' })
+    expect(await pending).toEqual(mode === 'remaining' ? candidate : null)
+    if (mode === 'prepare expired') expect(call).toHaveBeenCalledOnce()
+    else expect(call).toHaveBeenLastCalledWith('setup_trust_commit', { preparation: 'token', engine: 'codex', request: 'deadline', allowed: true }, 100)
+  } finally { time.mockRestore() }
+})
+
 it('accepts bounded probe data only while its exact executable remains current', async () => {
   const call = vi.fn(), link = createNativeSetupLink(call)
   const executable = retainedExecutable(file, executableIdentity(file)!)

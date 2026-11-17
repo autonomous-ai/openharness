@@ -138,7 +138,7 @@ export type TrustContract = { home: LaunchHome; file: string } & (
    * A JSON object whose `projects` map a folder to its entry, trusted where `accepted` is true. A trusted
    * folder's trust covers every folder below it. A new entry starts as `entry`.
    */
-  | { format: 'json'; projects: string; accepted: string; entry: Readonly<Record<string, unknown>> }
+  | { format: 'json'; projects: string; accepted: string; entry: Readonly<Record<string, unknown>>; repositoryBoundary: string }
   /** A TOML table per folder, `[<table>."<folder>"]`, trusted where its `key` is `value`. Exact folders only. */
   | { format: 'toml'; table: string; key: string; value: string }
 )

@@ -12,6 +12,7 @@ import { inspectNativeLaunch, type NativeLaunch } from '../engines/nativeLaunch.
 import { nativeHookLocations, type NativeHookOptions } from '../engines/kit/nativeLocations.js'
 import { createNativeLaunchPreparer } from '../engines/prepareNativeLaunch.js'
 import { createNativeSetupLink } from '../engines/kit/nativeSetupLink.js'
+import { createFolderTrustPreparation } from '../engines/folderTrustPreparation.js'
 import { publishGridConfigDir } from '../lib/publishedGridConfig.js'
 import { masterRunsEngineScreen } from '../harnessd/services.js'
 import { createSubmissions } from './engines/submissions.js'
@@ -2516,9 +2517,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Old-master compatibility through 2026-12-15; explicit debug/no-master composition shares this door.
   // A failed advertised worker never selects the inline implementation.
   const nativeSetup = outOfProcess.has('engineSetup')
-    ? createNativeSetupLink((type, payload) => serviceLinks.call('engineSetup', type, payload))
+    ? createNativeSetupLink((type, payload, waitMs) => serviceLinks.call('engineSetup', type, payload, waitMs))
     : inline!.createLocalNativeSetup(join(env.ADAPTER_DATA_DIR, 'native-installations'))
   hookSetup = nativeSetup
+  const prepareFolderTrust = createFolderTrustPreparation(nativeSetup)
   const prepareNativeLaunch = createNativeLaunchPreparer({
     installations: nativeSetup.installations,
     inspect: (engine, source) => inspectNativeLaunch(engine, source, {
@@ -2847,6 +2849,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Creating an agent (core/agents/create.ts).
   const creator = createAgentCreator({ opencodeMajor: nativeSetup.opencodeMajor,
+    prepareFolderTrust,
     publishConfig: publishGridConfigDir,
     native: prepareNativeLaunch,
     dshLaunch,
@@ -3132,6 +3135,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The requests that start an agent's process, and the receipts of those asked with a creationId
   // (core/agents/launches.ts). The orchestrator and the cable create and fork through the socket's slots.
   const launches = createLaunchRequests({
+    prepareFolderTrust,
     claudeHomeListed: (home) => claudeHomeListed(home, machineIdNow()),
     receipts,
     createAgent: () => backend.onCreateAgent, forkAgent: () => backend.onForkAgent,

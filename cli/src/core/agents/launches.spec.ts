@@ -31,15 +31,12 @@ vi.mock('../../engines/kit/windowsFiles.js', async (real) => {
   const actual = await real<typeof import('../../engines/kit/windowsFiles.js')>()
   return { ...actual, hostPlatform: () => host.win32 ? 'win32' : actual.hostPlatform() }
 })
-// The engines' folder trust (engines/launchPrep.ts), one spy per engine.
+// The optional trust preparation port, one spy per engine.
 const trust = vi.hoisted(() => ({
   claudeTrusts: vi.fn((_path: string) => false), codexTrusts: vi.fn((_path: string, _profile?: string | null) => false),
   preTrustClaudeProject: vi.fn((_path: string): unknown => undefined), preTrustCodexProject: vi.fn((_path: string, _profile?: string | null): unknown => undefined),
 }))
 const { claudeTrusts, codexTrusts, preTrustClaudeProject, preTrustCodexProject } = trust
-vi.mock('../../engines/launchPrep.js', () => ({ folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
-    ? { trusts: (path: string) => trust.claudeTrusts(path), record: (path: string) => trust.preTrustClaudeProject(path) }
-    : engine === 'codex' ? { trusts: (path: string) => trust.codexTrusts(path, profile), record: (path: string) => trust.preTrustCodexProject(path, profile) } : null }))
 // OpenCode's version probe is its own code, loaded for an OpenCode launch alone; a test may say it could not be.
 vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
@@ -105,6 +102,11 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
     modelTarget: resolveNewAgentModel,
     stoppedAgent: () => undefined,
     workspaces: () => workspaces,
+    prepareFolderTrust: async ({ engine, cwd, profile, source }) => {
+      if (engine === 'claude' && (!source || claudeTrusts(source))) preTrustClaudeProject(cwd)
+      if (engine === 'codex' && (!source || codexTrusts(source, profile))) preTrustCodexProject(cwd, profile)
+      return true
+    },
     ...over,
   }
   const requests = createLaunchRequests(deps)
@@ -735,7 +737,7 @@ describe('agent_create with a receipt', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => clock)
     const dispatch = vi.fn(async () => ({ ok: true as const, session: session('new-agent') }))
     const prepareCreate = vi.fn<NonNullable<LaunchRequestDeps['prepareCreate']>>(async () => ({ ok: true, dispatch }))
-    const prepareEngine = vi.fn<NonNullable<LaunchRequestDeps['prepareEngine']>>(async () => ({ ok: true, launch: {} as never }))
+    const prepareEngine = vi.fn<NonNullable<LaunchRequestDeps['prepareEngine']>>(async () => ({ ok: true, launch: { current: () => true, environment: {} } as never }))
     const { ask, replies, requests, deps, workspaces } = setup({ prepareCreate, prepareEngine })
     workspaces.ready.mockReturnValue(false)
     await ask({ engine: 'claude', projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main', creationId: CREATION })
@@ -751,7 +753,7 @@ describe('agent_create with a receipt', () => {
     clock += 3_000; await requests.recover()
     await vi.waitFor(() => expect(deps.receipts.status(CREATION)).toEqual({ state: 'created', agentId: 'new-agent' }))
     expect(workspaces.prepareFolder).toHaveBeenCalledOnce()
-    expect(prepareCreate).toHaveBeenCalledWith(expect.objectContaining({ cwd: join(root.projects, 'worktrees', 'repo', 'feature') }), expect.anything(), { local: true })
+    expect(prepareCreate).toHaveBeenCalledWith(expect.objectContaining({ cwd: join(root.projects, 'worktrees', 'repo', 'feature') }), expect.anything(), { local: true, folderTrustAttempted: true })
     // A new empty folder is the core's own, and never waits for them.
     workspaces.ready.mockReturnValue(false)
     await ask({ engine: 'claude', projectSource: 'new', creationId: `${CREATION}-new` })
@@ -764,7 +766,7 @@ describe('agent_create with a receipt', () => {
     let clock = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => clock)
     const prepareCreate = vi.fn<NonNullable<LaunchRequestDeps['prepareCreate']>>(async () => ({ ok: true, dispatch: vi.fn() }))
-    const prepareEngine = vi.fn<NonNullable<LaunchRequestDeps['prepareEngine']>>(async () => ({ ok: true, launch: {} as never }))
+    const prepareEngine = vi.fn<NonNullable<LaunchRequestDeps['prepareEngine']>>(async () => ({ ok: true, launch: { current: () => true, environment: {} } as never }))
     const { ask, requests, deps, workspaces } = setup({ prepareCreate, prepareEngine })
     workspaces.ready.mockReturnValue(false)
     await ask({ engine: 'claude', projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main', creationId: CREATION })
@@ -818,7 +820,7 @@ describe('agent_create with a receipt', () => {
     const installing = { ok: false as const, error: 'NATIVE_LAUNCH_HELD' as const, unavailable: 'native' as const, installing: true as const,
       detail: 'Installing Codex. The harness starts once it is installed.' }
     const prepareEngine = vi.fn<NonNullable<LaunchRequestDeps['prepareEngine']>>().mockResolvedValueOnce(installing)
-      .mockResolvedValue({ ok: true, launch: {} as never })
+      .mockResolvedValue({ ok: true, launch: { current: () => true, environment: {} } as never })
     const dispatch = vi.fn(async () => ({ ok: true as const, session: session('new-agent') }))
     const prepareCreate = vi.fn<NonNullable<LaunchRequestDeps['prepareCreate']>>(async () => ({ ok: true, dispatch }))
     const { ask, replies, create, deps } = setup({ prepareCreate, prepareEngine })
@@ -832,9 +834,29 @@ describe('agent_create with a receipt', () => {
     expect(prepareEngine).toHaveBeenCalledWith('codex', expect.objectContaining({ prompt: 'Reply with pong' }), expect.objectContaining({ id: CREATION }))
     expect(prepareNewFolder).toHaveBeenCalledOnce()
     expect(prepareCreate).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/projects/prepared', prompt: 'Reply with pong' }),
-      expect.objectContaining({ id: CREATION, label: expect.stringMatching(/^harness-codex-/) }), { local: true })
+      expect.objectContaining({ id: CREATION, label: expect.stringMatching(/^harness-codex-/) }), { local: true, folderTrustAttempted: true })
     expect(dispatch).toHaveBeenCalledOnce()
     expect(create).not.toHaveBeenCalled()
+  })
+
+  it('awaits project trust and does not launch when the claimed authority changes during it', async () => {
+    let prepare!: Parameters<typeof pendingLaunches.createPendingLaunches>[0]['prepare']
+    const factory = pendingLaunches.createPendingLaunches
+    vi.spyOn(pendingLaunches, 'createPendingLaunches').mockImplementation(deps => { prepare = deps.prepare; return factory(deps) })
+    let current = true
+    const prepareCreate = vi.fn()
+    const prepareFolderTrust = vi.fn<NonNullable<LaunchRequestDeps['prepareFolderTrust']>>(async (_input, active) => {
+      expect(active()).toBe(true)
+      await Promise.resolve(); current = false; return false
+    })
+    setup({ prepareCreate, prepareFolderTrust })
+    const ready = await prepare({ kind: 'native-create-v1', input: { engine: 'codex', cwd: '' },
+      projectFolder: { source: 'new', name: 'scratch1' }, label: 'harness-codex-fixture', local: true },
+      { id: CREATION, current: () => current, hold: vi.fn() })
+    expect(typeof ready).toBe('function')
+    expect(await (ready as () => Promise<AgentCreationOutcome>)()).toEqual({ state: 'unconfirmed' })
+    expect(prepareFolderTrust).toHaveBeenCalledWith(expect.objectContaining({ engine: 'codex', cwd: '/projects/prepared', empty: true }), expect.any(Function))
+    expect(prepareCreate).not.toHaveBeenCalled()
   })
 
   it('makes no folder for a new project cancelled while its engine was being made ready', async () => {
@@ -842,7 +864,7 @@ describe('agent_create with a receipt', () => {
     const factory = pendingLaunches.createPendingLaunches
     vi.spyOn(pendingLaunches, 'createPendingLaunches').mockImplementation(deps => { prepare = deps.prepare; return factory(deps) })
     let current = true
-    const prepareEngine = vi.fn<NonNullable<LaunchRequestDeps['prepareEngine']>>(async () => { current = false; return { ok: true, launch: {} as never } })
+    const prepareEngine = vi.fn<NonNullable<LaunchRequestDeps['prepareEngine']>>(async () => { current = false; return { ok: true, launch: { current: () => true, environment: {} } as never } })
     setup({ prepareCreate: vi.fn(), prepareEngine })
     expect(await prepare({ kind: 'native-create-v1', input: { engine: 'codex', cwd: '' }, projectFolder: { source: 'new', name: 'scratch1' },
       label: 'harness-codex-fixture', local: true }, { id: CREATION, current: () => current, hold: vi.fn() })).toBeNull()
@@ -901,7 +923,7 @@ describe('agent_create with a receipt', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => clock)
     const missing: NativeLaunchResult = { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Not installed',
       install: { command: 'fixture-installer', source: 'fixture', executable: { names: ['codex'] } }, environment: { HOME: '/fixture/home' } }
-    const inspect = vi.fn(async (): Promise<NativeLaunchResult> => downloading ? missing : { ok: true, launch: {} as never })
+    const inspect = vi.fn(async (): Promise<NativeLaunchResult> => downloading ? missing : { ok: true, launch: { current: () => true, environment: {} } as never })
     const ensure = vi.fn()
     // Read as it is asked: an attempt keeps the answer it was given, whatever the test says after.
     const downloadingNow = vi.fn(async () => downloading)
@@ -951,8 +973,7 @@ describe('agent_create with a receipt', () => {
     vi.mocked(preTrustClaudeProject).mockImplementationOnce(() => { throw new Error('config locked') }).mockImplementationOnce(() => { throw 'busy' })
     await launch({ engine: 'claude', projectSource: 'new' }, 6)
     await launch({ engine: 'claude', projectSource: 'new' }, 7)
-    expect(console.warn).toHaveBeenCalledWith('[agent] pre-trust /projects/prepared · config locked')
-    expect(console.warn).toHaveBeenCalledWith('[agent] pre-trust /projects/prepared · busy')
+    expect(console.warn).toHaveBeenCalledWith('[trust] FOLDER_TRUST_UNAVAILABLE')
     expect(claudeTrusts).toHaveBeenCalledWith('/repo')
     // A worktree workspaces answered anywhere but where Harness makes worktrees is not trusted, its repository trusted or
     // not: the folder is their word, and a trust above it would cover every repository there.
@@ -1004,8 +1025,7 @@ describe('agent_create with a receipt', () => {
     vi.mocked(preTrustCodexProject).mockImplementationOnce(() => { throw new Error('config locked') }).mockImplementationOnce(() => { throw 'busy' })
     await launch({ engine: 'codex', cwd: empty }, true, 9)
     await launch({ engine: 'codex', cwd: empty }, true, 10)
-    expect(warn).toHaveBeenCalledWith(`[agent] pre-trust ${empty} · config locked`)
-    expect(warn).toHaveBeenCalledWith(`[agent] pre-trust ${empty} · busy`)
+    expect(warn).toHaveBeenCalledWith('[trust] FOLDER_TRUST_UNAVAILABLE')
   })
 
   it('resolves a model picked by name inside the receipt, and holds it when it cannot be read', async () => {

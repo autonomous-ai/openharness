@@ -487,6 +487,13 @@ describe('the daemon\'s shape', () => {
     }
   })
 
+  it('core launch callers load no folder trust or inherited MCP implementation', () => {
+    for (const entry of ['core/main.ts', 'core/agents/create.ts', 'core/agents/launches.ts', 'core/agents/launch.ts', 'engines/folderTrustPreparation.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => ['engines/launchPrep.ts', 'engines/kit/folderTrust.ts',
+        'engines/kit/inheritedMcp.ts', 'services/nativeSetupTrust.ts'].includes(file)), entry).toEqual([])
+    }
+  })
+
   it('resume publication loads no history repair implementation in the default core', () => {
     const implementations = new Set(['engines/kit/resumeRepair.ts', 'engines/resumePreparation.ts', 'engines/resumeRepairs.ts'])
     for (const entry of ['core/main.ts', 'core/agents/launch.ts', 'lib/resumeAgentService.ts']) {

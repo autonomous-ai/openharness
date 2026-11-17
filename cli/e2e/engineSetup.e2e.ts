@@ -1,4 +1,5 @@
 /** Optional setup cannot hold terminal launches or input; every process/home/socket here is disposable. */
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -31,11 +32,25 @@ async function create(d: IsolatedDaemon, c: LocalClient, engine: 'terminal' | 'c
 async function turn(c: LocalClient, agentId: string, content: string) {
   await c.turn(agentId, content, 30_000)
 }
+async function project(c: LocalClient, input: Record<string, unknown> & { creationId: string }) {
+  const first = await c.request('agent_create', { bypassPermission: false, ...input }, 90_000)
+  expect(first.error, JSON.stringify(first)).toBeUndefined()
+  const made = first.agent ? first : await until('the project pane', async () => {
+    const answer = await c.request('agent_create_status', { creationId: input.creationId }, 30_000)
+    expect(answer.error, JSON.stringify(answer)).toBeUndefined()
+    return answer.agent ? answer : null
+  }, 60_000, 100)
+  return made.agent
+}
+async function bound(c: LocalClient, id: string) {
+  await c.waitFor(frame => frame.type === 'agent_synced' && frame.payload?.agent?.id === id
+    && !!frame.payload.agent.sessionId && frame.payload.agent.launch?.state === 'ready', 30_000, 'the accepted native session')
+}
 
 it('starts setup only for an engine launch and keeps every private setup route off the client router', async () => {
   const { d, c } = await fresh({ DISABLE_HOOK_INSTALL: 'true' })
   expect(setupPid(d)).toBeUndefined()
-  for (const type of ['setup_capture', 'setup_probe', 'setup_download', 'setup_version', 'setup_status', 'setup_prepare', 'setup_commit', 'setup_files_prepare', 'setup_files_commit']) {
+  for (const type of ['setup_capture', 'setup_probe', 'setup_download', 'setup_version', 'setup_status', 'setup_prepare', 'setup_commit', 'setup_files_prepare', 'setup_files_commit', 'setup_trust_prepare', 'setup_trust_commit']) {
     expect((await c.request(type, { engine: 'claude', allowed: true })).error).toBe('UNSUPPORTED')
   }
   await create(d, c, 'terminal', 'shell')
@@ -43,6 +58,81 @@ it('starts setup only for an engine launch and keeps every private setup route o
   const agent = await create(d, c, 'claude', 'native')
   expect(setupPid(d)).toBeGreaterThan(1)
   await turn(c, agent.id, 'setup-on-demand')
+  expect(d.coresStarted()).toBe(1)
+})
+
+it.each(['claude', 'codex'] as const)('keeps a materialized template’s %s trust prompt usable through a real terminal', async engine => {
+  const d = daemon = await IsolatedDaemon.create({ trustPrompt: true })
+  onTestFailed(() => console.log(d.log()))
+  const id = 'e2e/trust-template', directory = join(d.env.DSH_DIR!, id)
+  mkdirSync(join(directory, 'template'), { recursive: true })
+  writeFileSync(join(directory, 'harness.json'), JSON.stringify({ spec: 1, id, name: 'Trust Template', engine,
+    workspace: { template: 'template', marker: 'README.md' } }))
+  writeFileSync(join(directory, 'template/README.md'), 'Private template fixture\n')
+  writeFileSync(join(d.env.DSH_DIR!, 'installed.json'), JSON.stringify([
+    { id, dir: directory, source: directory, ref: null, commit: null, linked: false, installedAt: Date.now() },
+  ]))
+  writeFileSync(join(d.env.HOME!, '.claude.json'), '{}')
+  await d.start(); const c = client = await LocalClient.connect(d)
+  const creationId = `trust-template-${engine}`
+  const agent = await project(c, { engine, dsh: id, projectSource: 'new', projectName: `template-${engine}`, creationId })
+  const pane = agent.tmuxPane as string, cwd = (agent.project?.cwd ?? agent.cwd) as string
+  await until('the native folder question', async () => {
+    const screen = await d.capture(pane)
+    return screen.includes(engine === 'claude' ? 'Yes, I trust this folder' : 'Trust and continue') ? screen : null
+  }, 30_000, 100)
+  expect(readFileSync(join(cwd, 'README.md'), 'utf8')).toBe('Private template fixture\n')
+  expect(d.log()).toContain('TEMPLATE_TRUST_UNCONFIRMED')
+  await d.tmux.run('send-keys', '-t', pane, 'Enter')
+  await bound(c, agent.id)
+  await turn(c, agent.id, 'after-template-trust')
+  expect(d.coresStarted()).toBe(1)
+})
+
+it.each(['claude', 'codex'] as const)('inherits a trusted source for a %s worktree through setup and a real terminal', async engine => {
+  const d = daemon = await IsolatedDaemon.create({ trustPrompt: true })
+  onTestFailed(() => console.log(d.log()))
+  const source = join(d.projectsDir, 'trusted-source'); mkdirSync(source)
+  const git = (...args: string[]) => execFileSync('git', ['-c', 'gc.auto=0', '-C', source, ...args],
+    { env: { ...d.env, GIT_CONFIG_NOSYSTEM: '1' }, stdio: 'pipe' })
+  git('init', '-q', '-b', 'main')
+  writeFileSync(join(source, 'README.md'), 'Private source fixture\n')
+  git('add', '.')
+  git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '-m', 'fixture')
+  const config = engine === 'claude' ? join(d.env.HOME!, '.claude.json') : join(d.env.CODEX_HOME!, 'config.toml')
+  writeFileSync(config, engine === 'claude' ? JSON.stringify({ projects: { [source]: { hasTrustDialogAccepted: true } } })
+    : `model = "fixture"\n[projects.${JSON.stringify(source)}]\ntrust_level = "trusted"\n`)
+  await d.start(); const c = client = await LocalClient.connect(d)
+  const agent = await project(c, { engine, projectSource: 'worktree', gitSource: source, branchRef: 'refs/heads/main',
+    creationId: `trust-worktree-${engine}` })
+  await bound(c, agent.id)
+  const cwd = (agent.project?.cwd ?? agent.cwd) as string
+  expect(cwd).not.toBe(source)
+  expect(readFileSync(config, 'utf8')).toContain(JSON.stringify(cwd))
+  await turn(c, agent.id, 'after-inherited-trust')
+  expect(d.coresStarted()).toBe(1)
+})
+
+it.each(['unavailable', 'late', 'malformed'] as const)('keeps the native trust prompt usable when optional setup replies are %s', async mode => {
+  const d = daemon = await IsolatedDaemon.create({ trustPrompt: true })
+  onTestFailed(() => console.log(d.log()))
+  d.env.NODE_OPTIONS = `--import=${pathToFileURL(join(CLI_ROOT, 'e2e/harness/setupTrustFault.mjs')).href}`
+  d.env.HARNESS_E2E_SETUP_TRUST_ROOT = d.root
+  writeFileSync(join(d.root, 'setup-trust-fault'), mode, { mode: 0o600 })
+  const config = join(d.env.HOME!, '.claude.json'); writeFileSync(config, '{}')
+  await d.start(); const c = client = await LocalClient.connect(d)
+  const agent = await project(c, { engine: 'claude', projectSource: 'new', projectName: `trust-${mode}`,
+    creationId: `trust-fallback-${mode}` })
+  expect(readFileSync(join(d.root, 'setup-trust-fault.observed'), 'utf8')).toBe(mode)
+  expect(readFileSync(join(d.root, 'setup-trust-operations'), 'utf8').trim().split('\n')).toEqual([
+    'setup_trust_prepare_result', ...(mode === 'malformed' ? ['setup_trust_commit_result'] : []),
+  ])
+  expect(readFileSync(config, 'utf8')).toBe('{}')
+  expect(d.log()).toContain('FOLDER_TRUST_UNAVAILABLE')
+  await until('the fallback trust prompt', async () => (await d.capture(agent.tmuxPane)).includes('Yes, I trust this folder') || null, 30_000, 100)
+  await d.tmux.run('send-keys', '-t', agent.tmuxPane, 'Enter')
+  await bound(c, agent.id)
+  await turn(c, agent.id, `after-${mode}-trust`)
   expect(d.coresStarted()).toBe(1)
 })
 

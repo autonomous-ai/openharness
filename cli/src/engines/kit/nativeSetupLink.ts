@@ -2,6 +2,7 @@
 import type { NativeInstallation } from './nativeInstall.js'
 import type { NativeSetup, NativeProbeOutput } from './nativeSetup.js'
 import { boundedHookInput, hookCandidate } from './nativeHookWire.js'
+import { boundedTrustInput } from './nativeTrustWire.js'
 import { noteMissingHookScript } from './hookScript.js'
 
 type Payload = Record<string, unknown>
@@ -16,8 +17,21 @@ const installation = (value: unknown): NativeInstallation => {
   return { complete: false, detail: value.detail, ...(value.running ? { running: true } : {}), ...(value.failed ? { failed: true } : {}) }
 }
 
-export function createNativeSetupLink(call: (type: string, payload: Payload) => Promise<Payload>): NativeSetup {
+export function createNativeSetupLink(call: (type: string, payload: Payload, waitMs?: number) => Promise<Payload>): NativeSetup {
   return {
+    async prepareTrust(input, request, current) {
+      if (!current() || !boundedTrustInput(input)) return null
+      const captured = { ...input, files: input.files.map(file => ({ ...file })) }
+      const deadline = performance.now() + 5000
+      const answer = await call('setup_trust_prepare', { request, ...captured }, 5000)
+      if (!text(answer.preparation, 128) || !answer.preparation) return null
+      const allowed = current()
+      const remaining = Math.floor(deadline - performance.now())
+      if (remaining <= 0) return null
+      const result = await call('setup_trust_commit', { preparation: answer.preparation,
+        engine: captured.engine, request, allowed }, remaining)
+      return allowed && current() && performance.now() < deadline ? hookCandidate(result.files, captured.files.length, result) : null
+    },
     async prepareFiles(input, request, current) {
       if (!current() || !boundedHookInput(input)) return null
       const captured = { ...input, environment: { ...input.environment }, files: input.files.map(file => ({ ...file })) }

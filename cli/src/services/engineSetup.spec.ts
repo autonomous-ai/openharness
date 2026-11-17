@@ -28,6 +28,61 @@ afterEach(() => { service.stop(); vi.useRealTimers(); rmSync(root, { recursive: 
 const request = (type: string, payload: Record<string, unknown> = {}, closed?: AbortSignal) => Promise.resolve(service.requests[type]!(payload, owner, closed))
 const prepare = (id = 'r1') => request('setup_prepare', { engine: 'codex', environment, request: id })
 
+it('uses a separate trust operation, shares admission, and releases one candidate for duplicate commits', async () => {
+  const input = { engine: 'codex' as const, home: root, cwd: root,
+    files: [{ file: join(root, 'config.toml'), directory: root, content: 'model = "kept"\n' }] }
+  const candidate = { version: 1 as const, files: [{ index: 0, content: 'model = "kept"\n# prepared trust' }] }
+  expect(await request('setup_trust_prepare', { request: 'old', ...input })).toEqual({ files: null })
+  setup.prepareTrust = vi.fn(async () => candidate)
+  const pending = await request('setup_trust_prepare', { request: 'trust', ...input })
+  expect(pending.preparation).toBeTypeOf('string')
+  expect(await request('setup_files_commit', { ...pending, engine: 'codex', request: 'trust', allowed: true })).toEqual({ files: null })
+  expect(await request('setup_commit', { ...pending, engine: 'codex', request: 'trust', allowed: true })).toMatchObject({ installation: { complete: false } })
+  const commit = () => request('setup_trust_commit', { ...pending, engine: 'codex', request: 'trust', allowed: true })
+  expect(await Promise.all([commit(), commit()])).toEqual([{ files: candidate }, { files: candidate }])
+  expect(setup.prepareTrust).toHaveBeenCalledOnce()
+  expect(setup.installations.ensure).not.toHaveBeenCalled()
+  const cancelled = await request('setup_trust_prepare', { request: 'cancelled', ...input })
+  service.disconnect()
+  expect(await request('setup_trust_commit', { ...cancelled, engine: 'codex', request: 'cancelled', allowed: true })).toEqual({ files: null })
+})
+
+it('refuses bounded trust input and expires its uncommitted candidate in five seconds', async () => {
+  vi.useFakeTimers()
+  const input = { engine: 'codex' as const, home: root, cwd: root,
+    files: [{ file: join(root, 'config.toml'), directory: root, content: '' }] }
+  setup.prepareTrust = vi.fn(async () => ({ version: 1 as const, files: [{ index: 0, content: 'prepared' }] }))
+  expect(await request('setup_trust_prepare', { request: 'invalid', ...input, cwd: 'relative' })).toEqual({ files: null })
+  expect(setup.prepareTrust).not.toHaveBeenCalled()
+  const pending = await request('setup_trust_prepare', { request: 'expires', ...input })
+  await vi.advanceTimersByTimeAsync(5000)
+  expect(await request('setup_trust_commit', { ...pending, engine: 'codex', request: 'expires', allowed: true })).toEqual({ files: null })
+})
+
+it('passes Claude source and user homes to trust preparation and reports failures without their contents', async () => {
+  const input = { engine: 'claude' as const, home: root, userHome: root, cwd: root, source: join(root, 'source'),
+    files: [{ file: join(root, '.claude.json'), directory: root, content: '{}' },
+      { file: join(root, '.claude/settings.local.json'), directory: join(root, '.claude'), content: null }] }
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  setup.prepareTrust = vi.fn(async () => { throw Error('private fixture content') })
+  try {
+    expect(await request('setup_trust_prepare', { request: 'source', ...input })).toEqual({ files: null })
+    expect(setup.prepareTrust).toHaveBeenCalledWith(input, 'source', expect.any(Function))
+    expect(warning).toHaveBeenCalledExactlyOnceWith('[engine-setup] TRUST_PREPARATION_FAILED')
+  } finally { warning.mockRestore() }
+})
+
+it('shares the eight preparation slots between optional trust and installations', async () => {
+  const input = { engine: 'codex' as const, home: root, cwd: root,
+    files: [{ file: join(root, 'config.toml'), directory: root, content: '' }] }
+  setup.prepareTrust = vi.fn(async () => ({ version: 1 as const, files: [{ index: 0, content: '' }] }))
+  const pending = await Promise.all(Array.from({ length: 8 }, (_, index) => request('setup_trust_prepare', { request: `trust-${index}`, ...input })))
+  expect(await prepare('installation')).toMatchObject({ error: 'SETUP_BUSY' })
+  expect(setup.installations.ensure).not.toHaveBeenCalled()
+  await Promise.all(pending.map((token, index) => request('setup_trust_commit', { ...token, engine: 'codex', request: `trust-${index}`, allowed: false })))
+  expect(await prepare('installation')).toHaveProperty('preparation')
+})
+
 it('preserves bounded file semantics and requires a positive commit before releasing candidates', async () => {
   const input = { engine: 'hermes' as const, environment, port: 1234, major: null, keepsRecord: true,
     remove: false, createMissing: true, directories: [{ path: '/fixture/sessions', mode: 0o700 }],
@@ -166,6 +221,7 @@ it('prepares without installing and binds once-only commit to its request and wo
   expect(setup.installations.ensure).toHaveBeenCalledOnce()
   service.stop()
   expect(await request('setup_commit', commit)).toMatchObject({ installation: { complete: false } })
+  service.disconnect()
 })
 
 it('cancels a delayed preparation before commit and fences a launch cancelled after commit', async () => {

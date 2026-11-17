@@ -53,6 +53,7 @@ export function createLocalNativeSetup(directory: string, execute?: typeof execF
   const preload = () => { void installations().catch(() => {}) }
   return { ...setupProbes(execute, preload), downloading: engine => engineDownloading(engine, undefined, undefined, execute),
     prepareFiles: async (input, _request, current) => (await import('./nativeSetupFiles.js')).prepareNativeHookFiles(input, current),
+    prepareTrust: async (input, _request, current) => (await import('./nativeSetupTrust.js')).prepareNativeTrust(input, current),
     installations: {
       ensure: async (...args) => (await installations()).ensure(...args),
       status: async (...args) => (await installations()).status(...args),
