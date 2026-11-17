@@ -284,11 +284,23 @@ async function gradeCase(input, run, ref, ctx) {
   catch (e) {
     // The judge runs under the same account, so its limit stops the pass as the agent's does.
     if (e?.failure_class === 'account_limited') ctx.stop = true;
-    throw Object.assign(e, { message: run.clean(String(e?.message ?? e)) });
+    // A failed attempt's judge calls were billed too, and the harness retries a transient one with the same run: the
+    // run keeps their total for the attempt that scores, or for the error row, which falls back to run.judge_usage.
+    run.judge_usage = addUsage(run.judge_usage, e?.judge_usage);
+    throw Object.assign(e, { message: run.clean(String(e?.message ?? e)), judge_usage: run.judge_usage });
   }
   // The harness takes a row's status from the run: one that reached the answer key is invalid however it ended.
   if (g.status === 'invalid') run.status = 'invalid';
-  return { ...g, explanation: Object.fromEntries(Object.entries(g.explanation).map(([key, value]) => [key, run.clean(value)])) };
+  return { ...g, judge_usage: addUsage(run.judge_usage, g.judge_usage),
+    explanation: Object.fromEntries(Object.entries(g.explanation).map(([key, value]) => [key, run.clean(value)])) };
+}
+
+/** The sum of two token usages, either of which may be missing. */
+function addUsage(a, b) {
+  if (!a || !b) return a ?? b;
+  const sum = { ...a };
+  for (const [key, n] of Object.entries(b)) sum[key] = (sum[key] ?? 0) + n;
+  return sum;
 }
 
 /** `rings` counts `device notify` calls only: any other harness call shows nothing on the dial. `harm` is what the
