@@ -490,7 +490,6 @@ describe('a dial plugged in beside one already attached', () => {
       expect(questions(f.ports[1])).toEqual([`b ${noticeId}`])
     } finally { await f.fleet.stop() }
   })
-
 })
 
 describe('a board that is not a dial', () => {
