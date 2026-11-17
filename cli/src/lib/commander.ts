@@ -869,11 +869,16 @@ export class CommanderMirror {
           this.notifications.decide(sessionId, body || recap, silent, (notification) => {
             // One decision feeds both clients. A silent recap still updates the
             // device's tile; only real completed results create inbox entries.
+            // Told from the window's timer or a tier's promise, where a throw would take the whole host down.
             const tell = (tier: Tier | null): void => {
-              this.emit(sessionId, { kind: 'summary', text: body || recap, recap,
-                notification, ...(!notification ? { subagent: true } : {}), ...(tier ? { tier } : {}) })
-              this.opts.sendWeb({ type: 'turn_summary', agentId: this.opts.agentIdFor?.(sessionId) ?? sessionId,
-                dbSessionId: sessionId, payload: { summary, sessionId, notification, ...(tier ? { tier } : {}) } })
+              try {
+                this.emit(sessionId, { kind: 'summary', text: body || recap, recap,
+                  notification, ...(!notification ? { subagent: true } : {}), ...(tier ? { tier } : {}) })
+                this.opts.sendWeb({ type: 'turn_summary', agentId: this.opts.agentIdFor?.(sessionId) ?? sessionId,
+                  dbSessionId: sessionId, payload: { summary, sessionId, notification, ...(tier ? { tier } : {}) } })
+              } catch (err) {
+                this.trace(sessionId, `${sid} recap not sent: ${err instanceof Error ? err.message : String(err)}`, true)
+              }
             }
             const decide = this.opts.decideTier
             if (!decide) tell(null)
