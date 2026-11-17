@@ -5,6 +5,18 @@ import { join } from 'path'
 import type { TerminalCreateResult, TmuxRuntimeRef } from './terminalTypes.js'
 import { createAndRegisterPane } from './createAgentPane.js'
 
+// A full disk, for the registry's own files only: the save's temporary file cannot be created.
+const refuse = vi.hoisted(() => ({ code: undefined as string | undefined }))
+vi.mock('node:fs/promises', async original => {
+  const actual = await original<typeof import('node:fs/promises')>()
+  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
+    if (refuse.code && /\/registry\.json\..*\.tmp$/.test(String(args[0]))) {
+      throw Object.assign(new Error(`${refuse.code}: fixture, open '${String(args[0])}'`), { code: refuse.code })
+    }
+    return actual.open(...args)
+  } }
+})
+
 let dataDir = ''
 
 // Mirrors lib/registry.spec.ts's loadRegistryModule(): a fresh registry module per test, backed by
@@ -36,6 +48,7 @@ describe('createAndRegisterPane', () => {
   })
 
   afterEach(() => {
+    refuse.code = undefined
     rmSync(dataDir, { recursive: true, force: true })
     delete process.env.ADAPTER_DATA_DIR
     delete process.env.CLAUDE_PROJECTS_DIR
@@ -124,6 +137,35 @@ describe('createAndRegisterPane', () => {
     }
     expect(tmuxBackend.create).toHaveBeenCalledTimes(3)
     expect(tmuxBackend.kill).toHaveBeenCalledTimes(3)
+  })
+
+  it('a create whose pending row cannot be saved closes its one pane and says the registry could not be written', async () => {
+    const { registry } = await loadRegistryModule()
+    // Loaded after the reset, so it tells a storage refusal by the registry's own copy of the error classes.
+    const { createAndRegisterPane } = await import('./createAgentPane.js')
+    registry.load()
+    refuse.code = 'ENOSPC'
+    const tmuxBackend = fakeTmux([succeeded('%1'), succeeded('%2'), succeeded('%3')])
+
+    const result = await createAndRegisterPane({
+      tmuxBackend, registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1', argv: ['claude'],
+    })
+
+    expect(result).toEqual({ ok: false, error: 'PERSISTENCE_UNCONFIRMED',
+      detail: 'Registry persistence unavailable: registry storage has no available space (ENOSPC)' })
+    expect(tmuxBackend.create).toHaveBeenCalledTimes(1)
+    expect(tmuxBackend.kill).toHaveBeenCalledTimes(1)
+    expect(tmuxBackend.kill).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%1' })
+  })
+
+  it('a pending admission the storage refuses rejects with the storage category, and a taken route still answers null', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    ;(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/other' }))
+    expect(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }] })).toBeNull()
+    refuse.code = 'ENOSPC'
+    await expect(registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%2' }] }))
+      .rejects.toThrow('registry storage has no available space (ENOSPC)')
   })
 
   it('records the named agent and the requested name on the row it opens', async () => {
