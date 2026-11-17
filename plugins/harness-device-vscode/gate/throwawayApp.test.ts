@@ -13,7 +13,7 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { tmpdir, userInfo } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest'
 import {
@@ -30,6 +30,7 @@ import {
   startedAt,
   sweepLeftovers,
   unregister,
+  VSCODE_PREFERENCES,
 } from './throwawayApp.js'
 
 let root: string
@@ -246,5 +247,15 @@ describe('the developer\'s VS Code preferences, before and after', () => {
     expect(() => assertUnchanged(file, before)).toThrow(/VS Code's preferences changed/)
     writeFileSync(file, contents)
     expect(() => assertUnchanged(file, null)).toThrow(/VS Code's preferences changed/)
+  })
+
+  it('names the developer\'s preferences from ~, never by the account\'s home', () => {
+    // It only reads the file, and fails on a stamp no file has.
+    expect(() => assertUnchanged(VSCODE_PREFERENCES, { mtimeMs: -1, sha256: '' })).toThrow(/~\/Library\/Preferences\/com\.microsoft\.VSCode\.plist/)
+    try {
+      assertUnchanged(VSCODE_PREFERENCES, { mtimeMs: -1, sha256: '' })
+    } catch (error) {
+      expect((error as Error).message).not.toContain(userInfo().homedir)
+    }
   })
 })
