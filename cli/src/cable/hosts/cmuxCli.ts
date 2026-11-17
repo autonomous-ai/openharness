@@ -14,7 +14,7 @@
  * or logs: cmux's answers name people's folders and agents, and its callers say what happened in their own fixed words.
  */
 import { type ChildProcess, spawn } from 'node:child_process'
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, readdirSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
@@ -47,6 +47,15 @@ const KINDS: Record<string, string> = { 'hermes-agent': 'hermes', antigravity: '
 /** Whether an agent of that kind takes the dial's words in cmux: cmux v0.65.2.2 reads only Claude Code's and Codex's
  *  prompts (AgentPromptInputState.swift), and every other agent's is `unknown`. */
 export const cmuxTakesWords = (kind: string): boolean => kind === 'claude' || kind === 'codex'
+
+/** cmux's word of each store in that folder, by its file's name; none when the folder cannot be read. */
+export function cmuxStores(folder: string): string[] {
+  try {
+    return readdirSync(folder).flatMap((name) => CMUX_STORE.exec(name)?.[1] ?? [])
+  } catch {
+    return []
+  }
+}
 
 /** A pane id's two ids, each in its form; else none. */
 export function cmuxPaneOf(id: string): { workspace: string; surface: string } | undefined {

@@ -29,7 +29,7 @@ import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, D
 import { CableSession, SHOWN_ONLY_PREFIX, type DialStatus, type FollowCause } from '../cable/cableSession.js'
 import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
 import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
-import { cmuxClientDeps, cmuxStoreDir, createCmuxClient, type CmuxClient } from '../cable/hosts/cmuxCli.js'
+import { cmuxClientDeps, cmuxStoreDir, cmuxStores, createCmuxClient, type CmuxClient } from '../cable/hosts/cmuxCli.js'
 import { createCmuxAppAdapter } from '../cable/hosts/cmuxApp.js'
 import { CmuxSource } from '../cable/hosts/cmuxSource.js'
 import { createCodexAppAdapter } from '../cable/hosts/codexApp.js'
@@ -517,6 +517,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // The stores sit in ~/.cmuxterm: the watch holds that folder, else its parent until it appears.
     watch: (changed) => watchSocket({ socketPath: join(cmuxStoreDir(cmuxAt.home), 'stores'), home: cmuxAt.home }, changed),
     folder: () => existsSync(cmuxStoreDir(cmuxAt.home)),
+    stores: () => cmuxStores(cmuxStoreDir(cmuxAt.home)),
     alive: pidAlive,
     after: timerIn('cmux'),
     prompt: cmuxApp.prompt,

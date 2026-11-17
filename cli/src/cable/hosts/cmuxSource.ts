@@ -36,6 +36,8 @@ export interface CmuxSourceDeps {
   watch(changed: (file?: string) => void): () => void
   /** Whether the stores' folder is there now. */
   folder(): boolean
+  /** cmux's word of each store in that folder now (cmuxCli.ts cmuxStores). */
+  stores(): string[]
   /** Whether that process is alive, asked of the OS alone. */
   alive(pid: number): boolean
   /** A timer; its cancel is returned. */
@@ -297,9 +299,13 @@ export class CmuxSource implements HostSource {
   /** A run with no answer keeps the rows, and says so once until a run of that word answers. */
   private answered(word: string | undefined, order: number, ms: number, answer: CmuxSessions): void {
     if (!answer.ok) {
-      if (this.failing.has(word)) return
-      this.failing.add(word)
-      this.deps.log(`[cmux] list · ${answer.fault} · ${word ?? 'all'}`)
+      if (!this.failing.has(word)) {
+        this.failing.add(word)
+        this.deps.log(`[cmux] list · ${answer.fault} · ${word ?? 'all'}`)
+      }
+      // One store cmux cannot read fails every agent's run: a run per store hides only that store's agent. Only the runs
+      // free start, so no all-agents run waits behind them to fail again.
+      if (word === undefined) for (const store of this.deps.stores().slice(0, MAX_RUNS - this.active)) this.read(store)
       return
     }
     this.failing.delete(word)
