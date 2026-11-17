@@ -1455,6 +1455,16 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_on_of_vs_code_delays_the_relaunch() {
+        let mut app = vscode_off();
+        app.handle(Event::Menu(MenuAction::TurnOnVscode));
+        app.handle(Event::UpdateInstalled);
+        assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
+        app.handle(Event::VscodeTurnedOn(Ok(())));
+        assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
+    }
+
+    #[test]
     fn an_install_waiting_to_relaunch_checks_no_more() {
         let mut app = on_sign_in();
         installed(&mut app);
