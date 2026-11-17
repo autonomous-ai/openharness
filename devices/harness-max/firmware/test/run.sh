@@ -63,4 +63,7 @@ if [[ -f "$here/test_max_turn.c" ]]; then
     cc "${cflags[@]}" -I"$fw/main/display" -o "$out/test_max_turn" "$fw/main/display/max_turn.c" "$here/test_max_turn.c"
     "$out/test_max_turn"
 fi
+
+# The scripted demo daemon (main/demo/), under its own sanitizers.
+bash "$here/test_max_demo.sh"
 echo "max run.sh: all host tests passed"

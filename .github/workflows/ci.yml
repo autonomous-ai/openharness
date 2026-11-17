@@ -568,7 +568,11 @@ jobs:
       - name: Run the Harness Max host contracts
         env:
           PRO_FONT: ${{ github.workspace }}/devices/harness-pro/firmware/fonts/LiberationSans-Regular.ttf
-        run: bash devices/harness-max/firmware/test/run.sh
+          CJSON_DIR: ${{ runner.temp }}/cJSON
+        run: |
+          # The demo daemon parses with cJSON: the release ESP-IDF 5.5.4 carries, as this job has no ESP-IDF.
+          git clone --quiet --depth 1 --branch v1.7.19 https://github.com/DaveGamble/cJSON.git "$CJSON_DIR"
+          bash devices/harness-max/firmware/test/run.sh
 
   pro-firmware-build:
     concurrency:
