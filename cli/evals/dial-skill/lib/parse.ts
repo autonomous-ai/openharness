@@ -28,13 +28,16 @@ export function limitedBy(result: Record<string, unknown>): boolean {
   return result.is_error === true && typeof result.result === 'string' && LIMIT.test(result.result)
 }
 
+const SYNTHETIC = '<synthetic>'
+
 interface Block { type: string; text?: string; thinking?: string; id?: string; name?: string; input?: unknown; tool_use_id?: string; content?: unknown }
 
 export function parseClaudeStream(jsonl: string): RunResult {
   const run: RunResult = { answer: '', transcript: [], model: null, usage: { input_tokens: 0, output_tokens: 0 }, stop_reason: null, status: 'ok', tool_calls: 0, limited: false }
   const toolNames = new Map<string, string>()
   // The models that answered the main thread, in order: init echoes --model, not what served it, and a subagent may
-  // run on another model by design.
+  // run on another model by design. Claude Code gives its own messages (an API error, the account limit) the model
+  // '<synthetic>': no model served them.
   const served = new Set<string>()
   // The report shows thinking folded into the turn it led to, so it waits for that turn.
   let thinking: string | undefined
@@ -47,7 +50,7 @@ export function parseClaudeStream(jsonl: string): RunResult {
   for (const event of events(jsonl)) {
     if (event.type === 'assistant' || event.type === 'user') {
       const message = event.message as { content?: unknown; model?: unknown } | undefined
-      if (event.type === 'assistant' && event.parent_tool_use_id === null && typeof message?.model === 'string') served.add(message.model)
+      if (event.type === 'assistant' && event.parent_tool_use_id === null && typeof message?.model === 'string' && message.model !== SYNTHETIC) served.add(message.model)
       const content = message?.content
       const blocks: Block[] = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : []
       for (const block of blocks) {
