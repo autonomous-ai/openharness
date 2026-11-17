@@ -2,9 +2,9 @@
  * never an empty configuration, and a completed write includes its directory. */
 import { randomUUID } from 'node:crypto'
 import { accessSync, closeSync, constants, fchmodSync, fstatSync, fsync, linkSync, lstatSync, mkdirSync, openSync, readSync, statSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
-import { NativeEvidenceBudget } from './nativeEvidence.js'
-import { NativePaths, verifyNativePathFacts } from './nativePaths.js'
+import { basename, dirname, isAbsolute, join } from 'node:path'
+import { NativeEvidenceBudget, nativeUnavailable } from './nativeEvidence.js'
+import { NativePaths, verifyNativePathFacts, withoutDevice, type NativePathFact } from './nativePaths.js'
 import { directorySyncSupported } from '../../lib/secureState.js'
 import { isRoot, renameReplacing, unchangedFlushFlags } from './windowsFiles.js'
 import { HookPreparationHeld } from './hookHeld.js'
@@ -111,6 +111,31 @@ function directoryPath(path: string): string {
   throw new HookPreparationHeld('the configuration directory exceeds its path limit')
 }
 
+/** The fresh snapshot has verified its own walk. Compare it with the original route too:
+ * an ancestor can be replaced between an independent old-fact pass and that walk. */
+function verifyRetainedPathSnapshot(expected: readonly NativePathFact[], fresh: readonly NativePathFact[]): void {
+  const budget = new NativeEvidenceBudget()
+  if (!expected.length || expected.length > 256) return nativeUnavailable('the retained route exceeds its limit')
+  // Bound the map by the retained set; a Windows snapshot also includes its writable leaf.
+  const current = new Map(expected.map(fact => [fact.path, undefined as NativePathFact | undefined]))
+  for (const fact of fresh) {
+    budget.step()
+    if (current.has(fact.path)) current.set(fact.path, fact)
+  }
+  for (const fact of expected) {
+    budget.step()
+    if (!isAbsolute(fact.path) || fact.path.includes('\0') || Buffer.byteLength(fact.path) > 4096) {
+      return nativeUnavailable('the retained route is invalid')
+    }
+    const now = current.get(fact.path)
+    if (!now || withoutDevice(now.identity) !== withoutDevice(fact.identity)
+      || (fact.alias && (!now.alias || withoutDevice(now.alias.version) !== withoutDevice(fact.alias.version)
+        || now.alias.target !== fact.alias.target))) {
+      return nativeUnavailable('the retained route changed during preparation')
+    }
+  }
+}
+
 /** The result is local to one preparation attempt, not a settings cache.
  * A changed alias, owner, file or contents invalidates the whole observation. */
 export function inspectHookFile(file: string, defaultMode = 0o666) {
@@ -141,15 +166,17 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
       content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
     } finally { closeSync(fd) }
   }
+  const retained = facts.filter(fact => fact.identity !== null)
+  const knownAliases = new Set(facts.filter(fact => fact.alias).map(fact => fact.path))
   const verify = () => {
-    verifyNativePathFacts(facts.filter(fact => fact.identity !== null))
     // Another destination in the same preparation may have created a shared
     // absent directory. New ordinary directories are fine; a newly inserted
     // alias is not authority to write at a different location.
     const fresh = new NativePaths(new NativeEvidenceBudget())
     fresh.resolveSync(file, true)
-    const knownAliases = new Set(facts.filter(fact => fact.alias).map(fact => fact.path))
-    if (fresh.snapshot().some(fact => fact.alias && !knownAliases.has(fact.path))) {
+    const snapshot = fresh.snapshot()
+    verifyRetainedPathSnapshot(retained, snapshot)
+    if (snapshot.some(fact => fact.alias && !knownAliases.has(fact.path))) {
       throw new HookPreparationHeld('the settings route gained an unconfirmed alias')
     }
     let now: BigIntStats | null
@@ -402,10 +429,11 @@ export function hookPreparationRoutes(files: readonly string[]): { verify(): voi
   })
   const verifyRoutes = () => {
     for (const { file, key, facts, aliases } of reservations) {
-      if (facts.length) verifyNativePathFacts(facts)
       const fresh = new NativePaths(new NativeEvidenceBudget()), located = fresh.resolveSync(file, true)
       const target = located?.path ?? join(directoryPath(dirname(file)), basename(file))
-      if (target !== key || fresh.snapshot().some(fact => fact.alias && !aliases.has(fact.path))) {
+      const snapshot = fresh.snapshot()
+      if (facts.length) verifyRetainedPathSnapshot(facts, snapshot)
+      if (target !== key || snapshot.some(fact => fact.alias && !aliases.has(fact.path))) {
         throw new HookPreparationHeld('the reserved destination route changed')
       }
     }

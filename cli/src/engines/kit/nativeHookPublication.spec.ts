@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -6,19 +6,28 @@ import { publishNativeHookFiles } from './nativeHookPublication.js'
 import type { NativeHookInput } from './nativeHookWire.js'
 import * as nativeFiles from './nativeHookFiles.js'
 
-const filesystem = vi.hoisted(() => ({ reads: undefined as Map<string, number> | undefined }))
+const filesystem = vi.hoisted(() => ({ reads: undefined as Map<string, number> | undefined,
+  total: undefined as Map<string, number> | undefined, onStat: undefined as ((path: string) => void) | undefined }))
 vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>()
   return { ...fs, lstatSync: (...args: Parameters<typeof fs.lstatSync>) => {
     const path = String(args[0])
     if (filesystem.reads) filesystem.reads.set(path, (filesystem.reads.get(path) ?? 0) + 1)
+    if (filesystem.total) filesystem.total.set(path, (filesystem.total.get(path) ?? 0) + 1)
+    filesystem.onStat?.(path)
     return fs.lstatSync(...args)
   } }
 })
 
-let root: string, file: string
-beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'hook-publication-')); file = join(root, 'settings.json'); writeFileSync(file, '{}') })
-afterEach(() => { filesystem.reads = undefined; rmSync(root, { recursive: true, force: true }) })
+let fixtureRoot: string, root: string, file: string
+beforeEach(() => {
+  // Keep the measured macOS flush workload at a fixed depth even when another suite changes TMPDIR.
+  fixtureRoot = mkdtempSync(join(process.platform === 'darwin' ? '/tmp' : tmpdir(), 'hook-publication-'))
+  root = process.platform === 'darwin' ? join(fixtureRoot, 'profile', 'config') : fixtureRoot
+  mkdirSync(root, { recursive: true })
+  file = join(root, 'settings.json'); writeFileSync(file, '{}')
+})
+afterEach(() => { filesystem.reads = undefined; filesystem.total = undefined; filesystem.onStat = undefined; rmSync(fixtureRoot, { recursive: true, force: true }) })
 const prepared = (input: NativeHookInput) => ({ version: 1 as const, files: input.files.map((entry, index) => ({ index, content: `${entry.content ?? ''} prepared` })) })
 
 it('bounds filesystem reads during a worker authority check for unchanged native files', async () => {
@@ -26,23 +35,53 @@ it('bounds filesystem reads during a worker authority check for unchanged native
   writeFileSync(artifact, 'shared script')
   const confirmed = vi.fn()
   let activeReads: { profile: number; artifact: number } | undefined
+  const total = filesystem.total = new Map<string, number>()
   expect(await publishNativeHookFiles({ engine: 'claude', port: 1234, environment: { HOME: root } },
     [{ file }, { file: artifact, shared: true }],
     { prepareFiles: async (input, _request, current) => {
       filesystem.reads = new Map()
+      filesystem.total = undefined
       expect(current()).toBe(true)
       activeReads = { profile: filesystem.reads.get(realpathSync(file)) ?? 0, artifact: filesystem.reads.get(realpathSync(artifact)) ?? 0 }
       filesystem.reads = undefined
+      filesystem.total = total
       return { version: 1, files: input.files.map((entry, index) => ({ index, content: entry.content })) }
     } },
     { confirmed })).toBe(true)
   expect(readFileSync(file, 'utf8')).toBe('{}')
   expect(readFileSync(artifact, 'utf8')).toBe('shared script')
+  filesystem.total = undefined
+  const ancestorReads = total.get(realpathSync(root)) ?? 0
   expect(confirmed.mock.calls[0][0].current()).toBe(true)
   // The 2026-11-17 launch profile found repeated proof walks. Count real leaf I/O,
   // independent of the temporary folder's depth, while retaining complete publication.
-  expect(activeReads!.profile).toBeLessThanOrEqual(10)
+  expect(activeReads!.profile).toBeLessThanOrEqual(9)
   expect(activeReads!.artifact).toBeLessThanOrEqual(4)
+  // On macOS this fixture owns a fixed depth under /tmp. The whole publisher
+  // read this ancestor 1,513 times before the fresh-snapshot comparison, now 1,021.
+  if (process.platform === 'darwin') expect(ancestorReads).toBeLessThanOrEqual(1021)
+})
+
+it('gives no launch proof when an unchanged child moves through a replaced ancestor', async () => {
+  const parent = join(root, 'parent'), child = join(parent, 'child'), nested = join(child, 'settings.json')
+  mkdirSync(child, { recursive: true }); writeFileSync(nested, 'original')
+  const original = nativeFiles.hookFileVersion(statSync(nested, { bigint: true })), confirmed = vi.fn()
+  let replaced = false
+  expect(await publishNativeHookFiles({ engine: 'claude', port: 1234, environment: { HOME: root } }, [{ file: nested }],
+    { prepareFiles: async input => {
+      filesystem.onStat = path => {
+        if (path !== realpathSync(child)) return
+        filesystem.onStat = undefined
+        const displaced = join(root, 'displaced')
+        renameSync(parent, displaced); mkdirSync(parent); renameSync(join(displaced, 'child'), child)
+        replaced = true
+      }
+      return prepared(input)
+    } }, { confirmed })).toBe(false)
+  expect(replaced).toBe(true)
+  expect(confirmed).not.toHaveBeenCalled()
+  expect(readFileSync(nested, 'utf8')).toBe('original')
+  expect(nativeFiles.hookFileVersion(statSync(nested, { bigint: true }))).toBe(original)
 })
 
 it.each(['owner', 'native input'] as const)('publishes nothing when %s changes while the worker prepares bytes', async change => {

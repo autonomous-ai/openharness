@@ -2,7 +2,9 @@ import { closeSync, constants, mkdirSync, mkdtempSync, openSync, readFileSync, r
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import { directoryChanged, flushDirectory, hookFileVersion, inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
+import { directoryChanged, flushDirectory, hookFileVersion, hookPreparationRoutes, inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
+import { NativePaths } from './nativePaths.js'
+import { IdentityReadUnavailable } from './identityScan.js'
 
 // Windows moved a just-published file's change time when its handle closed (measured on DESKTOP-0TFH0OJ, 2026-11-05), after the
 // publication had read it: Kilo's, Pi's and Amp's plugins were written, then reported as failed, at every start.
@@ -52,6 +54,146 @@ function fixture() {
   return { root, file: join(root, 'config.json') }
 }
 afterEach(() => { fault.sync = false; fault.write = false; fault.windows = false; fault.writableOpens = 0; fault.onSync = undefined; fault.openAs = undefined; fault.onStat = undefined; vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+
+const routeVerifiers = [
+  { name: 'file observation', capture: (file: string) => inspectHookFile(file) },
+  { name: 'destination reservation', capture: (file: string) => hookPreparationRoutes([file]) },
+]
+
+it.each(routeVerifiers.flatMap(verifier => ['leaf', 'child', 'before verification'].map(boundary => ({ ...verifier, boundary }))))(
+  '$name refuses an ancestor replaced at $boundary', ({ capture, boundary }) => {
+  const { root } = fixture(), parent = join(root, 'parent'), child = join(parent, 'child'), file = join(child, 'config.json')
+  mkdirSync(child, { recursive: true }); writeFileSync(file, 'unchanged')
+  const original = statSync(file, { bigint: true }), childInode = statSync(child).ino
+  const observed = capture(file)
+  let replaced = false
+  const replaceParent = () => {
+    const displaced = join(root, 'displaced')
+    renameSync(parent, displaced); mkdirSync(parent); renameSync(join(displaced, 'child'), child)
+    replaced = true
+  }
+  if (boundary === 'before verification') replaceParent()
+  else fault.onStat = path => {
+    if (path !== (boundary === 'leaf' ? file : child)) return
+    fault.onStat = undefined
+    replaceParent()
+  }
+  let error: unknown
+  try { observed.verify() } catch (caught) { error = caught }
+  expect(replaced).toBe(true)
+  expect(hookFileVersion(statSync(file, { bigint: true }))).toBe(hookFileVersion(original))
+  expect(statSync(child).ino).toBe(childInode)
+  expect(error).toBeInstanceOf(IdentityReadUnavailable)
+  expect((error as Error).message).toMatch(/changed/)
+})
+
+it.each(routeVerifiers)('$name bounds repeated ancestor metadata reads', ({ capture }) => {
+  const { root, file } = fixture(); writeFileSync(file, 'unchanged')
+  const observed = capture(file)
+  let reads = 0
+  fault.onStat = path => { if (path === root) reads++ }
+  observed.verify()
+  expect(reads).toBeLessThanOrEqual(2)
+})
+
+it.each(routeVerifiers)('$name refuses an original fact missing from the verified fresh snapshot', ({ capture }) => {
+  const { root, file } = fixture(); writeFileSync(file, 'unchanged')
+  const observed = capture(file), snapshot = NativePaths.prototype.snapshot
+  vi.spyOn(NativePaths.prototype, 'snapshot').mockImplementation(function (this: NativePaths) {
+    return snapshot.call(this).filter(fact => fact.path !== root)
+  })
+  expect(() => observed.verify()).toThrow(IdentityReadUnavailable)
+})
+
+it('keeps the distinct empty retained-fact rules for file observations and reservations', () => {
+  const { file } = fixture(); writeFileSync(file, 'unchanged')
+  const snapshot = vi.spyOn(NativePaths.prototype, 'snapshot')
+  snapshot.mockReturnValueOnce([])
+  expect(() => inspectHookFile(file)).toThrow(/retained route exceeds its limit/)
+  snapshot.mockReturnValueOnce([])
+  const reserved = hookPreparationRoutes([file])
+  expect(() => reserved.verify()).not.toThrow()
+})
+
+it.each(routeVerifiers)('$name keeps the retained-fact limit', ({ capture }) => {
+  const { root, file } = fixture(); writeFileSync(file, 'unchanged')
+  const snapshot = NativePaths.prototype.snapshot
+  vi.spyOn(NativePaths.prototype, 'snapshot').mockImplementationOnce(function (this: NativePaths) {
+    const fact = snapshot.call(this).find(fact => fact.path === root)!
+    return Array.from({ length: 257 }, () => fact)
+  })
+  expect(() => capture(file).verify()).toThrow(/retained route exceeds its limit/)
+})
+
+it.each(routeVerifiers.flatMap(verifier => ['relative', 'nul', 'long'].map(invalid => ({ ...verifier, invalid }))))(
+  '$name refuses a retained $invalid path', ({ capture, invalid }) => {
+  const { root, file } = fixture(); writeFileSync(file, 'unchanged')
+  const snapshot = NativePaths.prototype.snapshot
+  vi.spyOn(NativePaths.prototype, 'snapshot').mockImplementationOnce(function (this: NativePaths) {
+    return snapshot.call(this).map(fact => fact.path === root
+      ? { ...fact, path: invalid === 'relative' ? 'relative' : invalid === 'nul' ? `${root}\0` : `/${'a'.repeat(4096)}` }
+      : fact)
+  })
+  expect(() => capture(file).verify()).toThrow(/retained route is invalid/)
+})
+
+it.each(routeVerifiers)('$name accepts ordinary parents created after observed absence', ({ capture }) => {
+  const { root } = fixture(), parent = join(root, 'new', 'child'), file = join(parent, 'config.json')
+  const observed = capture(file)
+  mkdirSync(parent, { recursive: true })
+  expect(() => observed.verify()).not.toThrow()
+})
+
+it.each(routeVerifiers)('$name refuses an alias inserted after observed absence', ({ capture }) => {
+  const { root } = fixture(), parent = join(root, 'new'), target = join(root, 'target'), file = join(parent, 'config.json')
+  const observed = capture(file)
+  mkdirSync(target); symlinkSync(target, parent)
+  expect(() => observed.verify()).toThrow(/alias|route changed/)
+})
+
+it.each(routeVerifiers)('$name compares retained alias versions without device numbers', ({ capture }) => {
+  const { root, file } = fixture(), target = join(root, 'target.json')
+  writeFileSync(target, 'unchanged'); symlinkSync(target, file)
+  const snapshot = NativePaths.prototype.snapshot
+  vi.spyOn(NativePaths.prototype, 'snapshot').mockImplementationOnce(function (this: NativePaths) {
+    return snapshot.call(this).map(fact => ({ ...fact,
+      identity: fact.identity?.replace(/^[^:]+:/, '999:') ?? null,
+      ...(fact.alias ? { alias: { ...fact.alias, version: fact.alias.version.replace(/^[^:]+:/, '999:') } } : {}),
+    }))
+  })
+  expect(() => capture(file).verify()).not.toThrow()
+})
+
+it.each(routeVerifiers.flatMap(verifier => (['target', 'version'] as const).map(changed => ({ ...verifier, changed }))))(
+  '$name refuses a retained alias with a different $changed but the same identity', ({ capture, changed }) => {
+  const { root, file } = fixture(), target = join(root, 'target.json')
+  writeFileSync(target, 'unchanged'); symlinkSync(target, file)
+  const snapshot = NativePaths.prototype.snapshot
+  vi.spyOn(NativePaths.prototype, 'snapshot').mockImplementationOnce(function (this: NativePaths) {
+    return snapshot.call(this).map(fact => fact.alias
+      ? { ...fact, alias: { ...fact.alias, [changed]: `${fact.alias[changed]}-changed` } } : fact)
+  })
+  expect(() => capture(file).verify()).toThrow(IdentityReadUnavailable)
+})
+
+it('keeps the final file-version check after a fresh path walk', () => {
+  const { file } = fixture(); writeFileSync(file, 'before')
+  const observed = inspectHookFile(file), snapshot = NativePaths.prototype.snapshot
+  vi.spyOn(NativePaths.prototype, 'snapshot').mockImplementationOnce(function (this: NativePaths) {
+    const facts = snapshot.call(this)
+    writeFileSync(file, 'peer content')
+    return facts
+  })
+  expect(() => observed.verify()).toThrow(/settings file changed/)
+  expect(readFileSync(file, 'utf8')).toBe('peer content')
+})
+
+it('lets destination reservations replace their writable leaf', () => {
+  const { root, file } = fixture(); writeFileSync(file, 'before')
+  const observed = hookPreparationRoutes([file]), replacement = join(root, 'replacement')
+  writeFileSync(replacement, 'after'); renameSync(replacement, file)
+  expect(() => observed.verify()).not.toThrow()
+})
 
 it('publishes complete bytes durably, preserves private permissions and leaves no staging file', async () => {
   const { root, file } = fixture()

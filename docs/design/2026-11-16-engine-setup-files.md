@@ -431,3 +431,49 @@ establishing it also reads the outer proof paths. The last rejects authority, ex
 shared-file or deadline changes during those reads.
 This correction leaves both phases intact; removing either would need a separate proof about which
 reads and effects can occur under stale authority. There is no cross-await reuse.
+
+## Retained route comparison (2026-11-17)
+
+The remaining-cost review proposed comparing the original route with the verified fresh snapshot
+already taken by `inspectHookFile.verify()` and `hookPreparationRoutes.verify()`. Their independent
+old-fact stat pass both repeated filesystem work and left the fresh walk unrelated to the original
+ancestor identities. This change is private to `nativeHookFiles.ts`; `NativePaths` and its public
+fact verifier remain unchanged for all other consumers.
+
+Design: each invocation walks and verifies a new `NativePaths` snapshot, then compares every retained
+fact by its exact path, identity without device number, and original alias target/version. A missing
+fact is refused without a filesystem fallback. The lookup map contains at most the original 256 facts;
+fresh Windows snapshots may also contain the excluded writable leaf. Original invalid-path and empty
+fact rules remain, including reservations' existing empty-list exception. Newly ordinary parents are
+allowed; new aliases are refused separately for each destination. Canonical targets, final file-version
+checks, both owner/deadline checks, observers, all fsyncs, and all after-await and publication fences stay
+in place. No state, authority, cache, wire format, callback ordering or storage format is added.
+
+The source-derived race was reproduced against `b3ac09ec336918852c0a353bd5992e3a8cb32772` using real
+temporary directories: rename a parent aside, create its replacement and move the unchanged child
+back, preserving the child inode and exact leaf version. File observation accepted this during its
+first leaf or first child stat. Destination reservation accepted it during its first child stat;
+it already refused the proposed first-leaf timing. The full publisher already refused the injected
+race, kept original bytes and issued no confirmed proof. This is a standalone verifier correction,
+not evidence of an exploitable end-to-end publication. The corrected public verifiers also refuse
+the replacement made before verification begins.
+
+The initial focused RED had seven failures and twelve passes: three ancestor races, two missing-fact
+cases, and both real ancestor-read budgets (three reads against two). Tests retain alias target and
+version checks, device-number semantics, path/fact bounds, empty facts, ordinary new parents, newly
+inserted aliases, writable-leaf exclusion and mutation after the fresh walk. The eight selected suites
+passed 186 tests; adding the two before-verification races and explicit fixture type annotations left
+56 file tests passing. The publisher's fixed-depth fixture passes all 13 tests. The other 119 selected
+tests are unchanged: native Windows path/executable fixtures, attempts, preparation, folder trust and
+published grid configuration. Type checking passes after correcting only new test annotations.
+
+On macOS x64, pinned Node 24.22.2 and the unchanged lockfile, the complete unchanged profile plus shared
+artifact publisher performs 10,324 -> 7,255 `lstatSync` calls (29.73% fewer). Its profile-directory reads
+fall from 1,513 to 1,021. The separate extra worker-authority probe, excluded from that total in both
+arms, reads the profile/artifact leaves 10/4 -> 9/4 times. Confirming the returned proof is outside the
+publisher count. The macOS fixture owns a fixed-depth `/tmp` subtree and removes it afterward, so the
+1,021 budget does not depend on the invoking suite's `TMPDIR`; leaf and isolated-verifier budgets run
+on all platforms. Raw counts match before and after that fixture correction. An initial aggregate
+assertion was off by one (1,020); its failed receipt is retained, and the final limit is the measured
+1,021. This is a filesystem-work result only: combined quiet CPU, RSS and latency acceptance belongs
+to the integrating parent. Linux and Windows native execution remain unverified here.
