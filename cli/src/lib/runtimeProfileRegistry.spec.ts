@@ -77,9 +77,15 @@ it('drops an optional config refresh queued by a row replaced before the refresh
   vi.mocked(engineNow).mockReturnValue(module as never)
   vi.mocked(loadEngine).mockResolvedValue(module as never)
   const profiles = new RuntimeProfileState(() => undefined, id => registry.resolve(id))
+  // Registry publication yields, so hold this refresh until its replacement has committed.
+  let refresh!: () => void
+  const queue = vi.spyOn(globalThis, 'queueMicrotask').mockImplementationOnce(callback => { refresh = callback })
   profiles.ingestPane(old, 'old pane', true)
+  queue.mockRestore()
+  expect(refresh).toBeTypeOf('function')
   const current = (await registry.register({ ...input, hermesHome: join(root, 'second') }))!.entry
   expect(current).not.toBe(old)
+  refresh()
   await Promise.resolve()
   expect(config).not.toHaveBeenCalled()
   expect(loadEngine).not.toHaveBeenCalled()
