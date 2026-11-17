@@ -99,9 +99,12 @@ const NONE_COUNTED = { shows: 0, taps: 0, refused: 0, reads: 0, failed: 0, scrol
 
 const isWindowId = (window: unknown): window is string => typeof window === 'string' && WINDOW_ID.test(window)
 
+/** A pid a shell or an agent can have: 2..2^31-1, never launchd's or init's 1. */
+export const isPid = (pid: unknown): pid is number =>
+  typeof pid === 'number' && Number.isInteger(pid) && pid >= 2 && pid <= PID_MAX
+
 const isShells = (terminals: unknown): terminals is number[] =>
-  Array.isArray(terminals) && terminals.length <= VSCODE_TERMINALS
-  && terminals.every((pid) => Number.isInteger(pid) && pid >= 2 && pid <= PID_MAX)
+  Array.isArray(terminals) && terminals.length <= VSCODE_TERMINALS && terminals.every(isPid)
   && new Set(terminals).size === terminals.length
 
 export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {

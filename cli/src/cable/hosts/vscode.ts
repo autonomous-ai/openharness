@@ -20,24 +20,12 @@ import { createAppLink, type AppLinkDeps } from './appLink.js'
 import { APP_BUNDLES } from './hostDetect.js'
 import { openPath } from './open.js'
 import { RUN_TIMEOUT_MS } from './orca.js'
+import { isPid, type VscodeTerminals } from './vscodeTerminals.js'
 
 /** A Claude Code session's own id, which the extension's link names. */
 const VSCODE_SESSION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** A terminal pane's id: one form for each pid, so a pane's id and its pid read back the same. */
 const TERM_PANE = /^term:([1-9][0-9]{0,9})$/
-const MAX_PID = 2 ** 31 - 1
-
-/** The terminal of an open window: its id and its shell's pid (vscodeTerminals.ts). */
-interface Terminal { window: string; shell: number }
-
-/** The open windows, by shape (vscodeTerminals.ts). */
-interface Terminals {
-  terminalOf(agentPid: number): Terminal | undefined
-  show(terminal: Terminal, tap: boolean): boolean
-}
-
-const isPid = (pid: number | undefined): pid is number =>
-  typeof pid === 'number' && Number.isInteger(pid) && pid >= 2 && pid <= MAX_PID
 
 /** The agent's pid a terminal pane names (`term:<pid>`, 2..2^31-1); none for the panel's pane or any other id. */
 export function termPid(paneId: string): number | undefined {
@@ -46,7 +34,7 @@ export function termPid(paneId: string): number | undefined {
 }
 
 export function createVscodeAdapter(
-  deps: AppLinkDeps & { terminals: Terminals },
+  deps: AppLinkDeps & { terminals: Pick<VscodeTerminals, 'terminalOf' | 'show'> },
 ): HostAdapter & Required<Pick<HostAdapter, 'canShow' | 'show'>> {
   const mac = deps.platform === 'darwin'
   const openBin = openPath(deps.bin)
