@@ -10,6 +10,11 @@
  * that came: a window still opening may not take the switch yet, and the log says so.
  *
  * Words do not wait for a tap, nor a tap for words: hc types by address, whatever the window shows.
+ *
+ * A stroke on the dial scrolls Herdr's view of a terminal through `herdr-app do terminal.scroll`. A run took 10–50 ms (5
+ * runs on Diego's Mac, 2026-11-17), so it has 2 s, where a focus's 10 s would freeze a stroke. One run at a time per
+ * terminal, the lines that come meanwhile carried by the next: a fast stroke costs one process per round trip, not one
+ * per dial frame. Its queue is its own: a scroll that joined an `agent.focus` run would lose its lines.
  */
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { HC_TERMINAL, hcPaneKey, type HcClient, type HcPrompt } from './hcClient.js'
@@ -20,6 +25,11 @@ import type { PaneSwitch } from './types.js'
 
 /** Herdr.app's own binary, which ~/.local/bin/herdr-app links to. */
 export const HERDR_APP = '/Applications/Herdr.app/Contents/MacOS/Herdr'
+
+const SCROLL_TIMEOUT_MS = 2_000
+/** The most lines that wait, either way, for a terminal's run under way: a run that hangs to its deadline is followed by a
+ *  bounded jump, not by all the travel of the stroke meanwhile. */
+const SCROLL_PENDING_MAX = 100
 
 export interface HerdrAppDeps extends OrcaDeps {
   client: Pick<HcClient, 'prompt'>
@@ -46,10 +56,16 @@ export interface HerdrAppAdapter extends HostAdapter {
   prompt(address: string, kind: string, text: string): Promise<HcPrompt>
   /** Where `herdr-app` is: on PATH, else Herdr.app's own binary. None: Herdr is not installed. */
   binary(): string | null
+  canScroll(pane: Pane): boolean
+  scroll(pane: Pane, lines: number): void
 }
 
 /** What a run did: whether Herdr is forward, and whether its window switched to the terminal. */
 interface Run { forward: boolean; switched: boolean }
+
+/** A terminal's scroll queue while a run is under way: the lines that came meanwhile, and what it did since it started,
+ *  for the line it says once it drains. */
+interface Scrolling { pending: number; lines: number; runs: number; failed: number }
 
 export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
   const mac = deps.platform === 'darwin'
@@ -59,6 +75,10 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
   const running = new Map<string, Promise<Run>>()
   // Per terminal, the words under way: two transcripts typed at once would mix in the agent's prompt.
   const prompting = new Set<string>()
+  // Per terminal, its scroll queue while a run is under way.
+  const scrolling = new Map<string, Scrolling>()
+  // A stroke sends many lines: the failure is said once until a scroll run succeeds, not once a frame.
+  let scrollFailedSaid = false
 
   const binary = (): string | null => deps.onPath('herdr-app') ?? (deps.exists(HERDR_APP) ? HERDR_APP : null)
 
@@ -77,6 +97,50 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
       && (await deps.run(herdrApp, ['do', 'agent.focus', '--terminal', address], RUN_TIMEOUT_MS)).code === 0
     if (!switched) deps.log('[herdr-app] focus · failed')
     return switched
+  }
+
+  // Nobody awaits a scroll, so a run that rejects is a failed run: a rejection left unhandled would end the devices.
+  const scrollRun = async (address: string, lines: number, queue: Scrolling): Promise<boolean> => {
+    const herdrApp = binary()
+    if (herdrApp === null) return false
+    queue.runs++
+    try {
+      return (await deps.run(herdrApp, ['do', 'terminal.scroll', '--terminal', address, '--lines', String(lines)], SCROLL_TIMEOUT_MS)).code === 0
+    } catch {
+      return false
+    }
+  }
+
+  // Its lines are dropped on a failure, never retried: a run that timed out may still have scrolled. The line names no
+  // terminal: hc's addresses are a person's agents.
+  const drain = async (address: string, queue: Scrolling, first: number): Promise<void> => {
+    let lines = first
+    while (lines !== 0) {
+      if (!(await scrollRun(address, lines, queue))) {
+        queue.failed += Math.abs(lines) + Math.abs(queue.pending)
+        if (!scrollFailedSaid) deps.log('[herdr-app] scroll · failed')
+        scrollFailedSaid = true
+        break
+      }
+      scrollFailedSaid = false
+      queue.lines += Math.abs(lines)
+      lines = queue.pending
+      queue.pending = 0
+    }
+    scrolling.delete(address)
+    deps.log(`[herdr-app] scroll · ${queue.lines} lines · ${queue.runs} runs · ${queue.failed} failed`)
+  }
+
+  const scroll = (pane: Pane, lines: number): void => {
+    if (!mac || !HC_TERMINAL.test(pane.id) || lines === 0 || !Number.isSafeInteger(lines)) return
+    const queue = scrolling.get(pane.id)
+    if (queue) {
+      queue.pending = Math.max(-SCROLL_PENDING_MAX, Math.min(SCROLL_PENDING_MAX, queue.pending + lines))
+      return
+    }
+    const started: Scrolling = { pending: 0, lines: 0, runs: 0, failed: 0 }
+    scrolling.set(pane.id, started)
+    void drain(pane.id, started, lines)
   }
 
   const prompt = async (address: string, kind: string, text: string): Promise<HcPrompt> => {
@@ -121,6 +185,9 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
       // hc types into any terminal by its address: one whose program reports no agent's status is at no agent's prompt.
       canType: (pane: Pane) => deps.reports(pane.id),
     } : {}),
+    // Asked at each stroke's down: the PATH lookup last, so it runs only for a pane that passed the rest.
+    canScroll: (pane) => mac && HC_TERMINAL.test(pane.id) && deps.inFront() && deps.shows(pane.id) && binary() !== null,
+    scroll,
     paneKey: (pane) => hcPaneKey(pane.id),
     prompt,
     binary,
