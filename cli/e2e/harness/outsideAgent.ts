@@ -80,13 +80,37 @@ function fakeApp(d: IsolatedDaemon, app: FakeApp): string {
 
 /** Claude Code in a terminal app outside Harness: no tmux pane, no Harness pane. */
 export class Outside {
-  private constructor(private readonly tab: ChildProcess, readonly pid: number, readonly sessionId: string, readonly folder: string) {}
+  /** [home]: the config folder it was started in, when not the daemon's own. */
+  private constructor(private readonly tab: ChildProcess, readonly pid: number, readonly sessionId: string, readonly folder: string,
+    private readonly home?: string) {}
 
   /** The dial's id for it. */
   get id(): string { return observedAgentId('claude', this.sessionId) }
 
   /** With [app], the tab runs under a fake of it: the engine's parents are the pseudo-terminal, the app, the test. */
   static async start(d: IsolatedDaemon, folder: string, hints: Record<string, string>, app?: FakeApp): Promise<Outside> {
+    const { tab, pid } = await Outside.open(d, folder, hints, app)
+    // Its conversation, as its SessionStart hook named it once that hook had run.
+    const started = new RegExp(`claude pid=${pid} SessionStart\\(startup\\) session=(\\S+) ran`)
+    const sessionId = await until(`${folder} to run its SessionStart hook`, () => d.hookLog().match(started)?.[1], 30_000, 100)
+    return new Outside(tab, pid, sessionId, folder)
+  }
+
+  /**
+   * In a config folder of its own, [home] as CLAUDE_CONFIG_DIR, as Orca starts an account's Claude Code. Harness put no
+   * hooks there, so no hook names its conversation: the process record it writes in that home does.
+   */
+  static async startIn(d: IsolatedDaemon, folder: string, home: string, hints: Record<string, string>): Promise<Outside> {
+    const { tab, pid } = await Outside.open(d, folder, { ...hints, CLAUDE_CONFIG_DIR: home })
+    const record = join(home, 'sessions', `${pid}.json`)
+    const sessionId = await until(`${folder} to write its process record`, () => {
+      try { return (JSON.parse(readFileSync(record, 'utf8')) as { sessionId?: string }).sessionId } catch { return undefined }
+    }, 30_000, 100)
+    return new Outside(tab, pid, sessionId, folder, home)
+  }
+
+  /** The tab, once it said the engine's pid. */
+  private static async open(d: IsolatedDaemon, folder: string, hints: Record<string, string>, app?: FakeApp): Promise<{ tab: ChildProcess; pid: number }> {
     const cwd = join(d.projectsDir, folder)
     mkdirSync(cwd, { recursive: true })
     // d.env carries none of the developer's host hints (testing/daemonEnvironment.ts): only [hints] name the app.
@@ -102,10 +126,7 @@ export class Outside {
       })
       tab.once('exit', (code) => reject(new Error(`the terminal tab exited (${code}): ${said}`)))
     })
-    // Its conversation, as its SessionStart hook named it once that hook had run.
-    const started = new RegExp(`claude pid=${pid} SessionStart\\(startup\\) session=(\\S+) ran`)
-    const sessionId = await until(`${folder} to run its SessionStart hook`, () => d.hookLog().match(started)?.[1], 30_000, 100)
-    return new Outside(tab, pid, sessionId, folder)
+    return { tab, pid }
   }
 
   /** Typed at its prompt, then Enter, as a person does. */
@@ -117,10 +138,11 @@ export class Outside {
   /**
    * Named as Claude Code names a session in its own process record: [nameSource] `user` for a name the person gave it,
    * `derived` for one Claude Code made up. The record is the one the engine wrote as it started (fakeEngine.mjs
-   * announceProcess), which nothing rewrites later; written beside it and renamed over, so the daemon never reads half.
+   * announceProcess) in the config folder it runs in, which nothing rewrites later; written beside it and renamed over,
+   * so the daemon never reads half.
    */
   named(d: IsolatedDaemon, name: string, nameSource: 'user' | 'derived'): void {
-    const record = join(dirname(d.env.CLAUDE_PROJECTS_DIR!), 'sessions', `${this.pid}.json`)
+    const record = join(this.home ?? dirname(d.env.CLAUDE_PROJECTS_DIR!), 'sessions', `${this.pid}.json`)
     const row = JSON.parse(readFileSync(record, 'utf8')) as Record<string, unknown>
     writeFileSync(`${record}.tmp`, JSON.stringify({ ...row, name, nameSource }))
     renameSync(`${record}.tmp`, record)
