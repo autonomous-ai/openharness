@@ -27,10 +27,13 @@ const ok = (sessions: CmuxSession[]): CmuxSessions => ({ ok: true, sessions })
 const turn = () => new Promise((resolve) => setImmediate(resolve))
 
 describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
-  afterEach(() => { vi.restoreAllMocks() })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+  })
 
   /** A source on a client whose runs the test answers by hand, a watch the test fires, a folder flag, a set of live
-   *  pids and clocks the test moves. */
+   *  pids and clocks the test moves. The 250 ms between one agent's runs pass at once, but in the gap's own test. */
   function setup(over: Partial<CmuxSourceDeps> = {}) {
     const pending: Array<{ resolve(answer: CmuxSessions): void; reject(error: Error): void }> = []
     const sessions = vi.fn((_word?: string) =>
@@ -54,6 +57,11 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
       },
       folder: () => state.folder,
       alive: (pid) => live.has(pid),
+      after: (_ms, run) => {
+        let on = true
+        queueMicrotask(() => { if (on) run() })
+        return () => { on = false }
+      },
       prompt,
       focus,
       canShow,
@@ -271,6 +279,39 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
       expect(s.asked()).toEqual(['all', 'claude', 'claude'])
       await s.reply(2, ok([record()]))
       expect(s.asked()).toEqual(['all', 'claude', 'claude'])
+    })
+
+    // A working agent's hooks write its store many times a second.
+    it('two runs of one agent start at least 250 ms apart, and the changes between give one run; another agent\'s run does not wait', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const s = setup({ after: (ms, run) => { const timer = setTimeout(run, ms); return () => clearTimeout(timer) } })
+      await started(s, [record()])
+      s.change('claude-hook-sessions.json')
+      await s.reply(1, ok([record()]))
+      s.change('claude-hook-sessions.json')
+      s.change('claude-hook-sessions.json')
+      s.change('codex-hook-sessions.json')
+      expect(s.asked()).toEqual(['all', 'claude', 'codex'])
+      vi.advanceTimersByTime(249)
+      expect(s.asked()).toEqual(['all', 'claude', 'codex'])
+      vi.advanceTimersByTime(1)
+      expect(s.asked()).toEqual(['all', 'claude', 'codex', 'claude'])
+      // A change during a run gives one more after it, still 250 ms after that run's start.
+      s.change('claude-hook-sessions.json')
+      await s.reply(3, ok([record()]))
+      vi.advanceTimersByTime(249)
+      expect(s.asked()).toHaveLength(4)
+      vi.advanceTimersByTime(1)
+      expect(s.asked()).toEqual(['all', 'claude', 'codex', 'claude', 'claude'])
+      // A run slower than the gap: the one after it starts as it ends.
+      s.change('claude-hook-sessions.json')
+      vi.advanceTimersByTime(400)
+      expect(s.asked()).toHaveLength(5)
+      await s.reply(4, ok([record()]))
+      expect(s.asked()).toEqual(['all', 'claude', 'codex', 'claude', 'claude', 'claude'])
+      // Stopped, no timer is left.
+      s.source.stop()
+      expect(vi.getTimerCount()).toBe(0)
     })
 
     it('two agents\' runs go side by side', async () => {
