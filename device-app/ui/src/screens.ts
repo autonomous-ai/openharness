@@ -58,11 +58,12 @@ function element(tag: string, className: string, text?: string): HTMLElement {
   return node
 }
 
-function spinner(): HTMLElement {
+// Named by the screen's heading, and by the step under it when there is one: render gives the step id body-0, the
+// first of the body's nodes with text.
+function spinner(withStep = false): HTMLElement {
   const spinner = element('div', 'spinner')
   spinner.setAttribute('role', 'status')
-  // Named by the screen's heading: its only approved words.
-  spinner.setAttribute('aria-labelledby', 'heading')
+  spinner.setAttribute('aria-labelledby', withStep ? 'heading body-0' : 'heading')
   return spinner
 }
 
@@ -73,7 +74,7 @@ function body(kind: Body, lines: string[]): HTMLElement[] {
     case 'spinner':
       return [spinner()]
     case 'step':
-      return lines.length > 0 ? [spinner(), element('p', 'body muted', lines[0])] : [spinner()]
+      return lines.length > 0 ? [spinner(true), element('p', 'body muted', lines[0])] : [spinner()]
     case 'output': {
       const output = element('div', 'output')
       output.setAttribute('role', 'alert')
