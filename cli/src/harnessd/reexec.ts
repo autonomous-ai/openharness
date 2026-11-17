@@ -24,7 +24,7 @@
  *
  * Everything that touches the operating system is injected (`ReexecDeps`).
  */
-import { spawn, type ChildProcess } from 'node:child_process'
+import { captureChild, type CaptureStart, type OwnedTask } from './childCapture.js'
 import { linkSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { readWorkerProbe, type WorkerProbe } from './workerContract.js'
@@ -242,53 +242,17 @@ export interface ProbeResult {
 /** Run a bundle's master probe: `node <flags> <bundle> __harnessd-probe`, which must answer in time. */
 export function runProbe(
   nodePath: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs = PROBE_TIMEOUT_MS,
-  start: (file: string, args: string[], env: NodeJS.ProcessEnv) => ChildProcess = (file, argv, environment) => spawn(file, argv, { env: environment, stdio: ['ignore', 'pipe', 'pipe'] }),
-): { result: Promise<ProbeResult>; cancel(): void } {
-  let child: ChildProcess
-  try { child = start(nodePath, args, env) } catch {
-    // Windows can throw UNKNOWN before there is a ChildProcess/PID to own.
-    return { result: Promise.resolve({ ok: false, detail: 'probe process could not start' }), cancel: () => {} }
-  }
-  // Apart: a bundle from before probes answers with its usage on stdout and the reason on stderr.
-  let out = ''
-  let err = ''
-  let bytes = 0
-  let oversized = false
-  const capture = (chunk: Buffer, stderr: boolean): void => {
-    bytes += chunk.length
-    if (bytes > 65_536) {
-      if (!oversized) { oversized = true; try { child.kill('SIGKILL') } catch { /* timeout still owns the probe */ } }
-      return
-    }
-    if (stderr) err += chunk.toString('utf8')
-    else out += chunk.toString('utf8')
-  }
-  child.stdout?.on('data', (chunk: Buffer) => capture(chunk, false))
-  child.stderr?.on('data', (chunk: Buffer) => capture(chunk, true))
-  const lastLine = (text: string): string => { const lines = text.trim().split('\n'); return lines[lines.length - 1].trim() }
-  const result = new Promise<ProbeResult>((resolve) => {
-    let settled = false
-    const done = (ok: boolean, detail: string, handover = false) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      const worker = ok ? readWorkerProbe(out) : undefined
-      resolve({ ok, detail, ...(handover ? { handover: true } : {}), ...(worker ? { worker } : {}) })
-    }
-    let failure: string | null = null
-    const timer = setTimeout(() => {
-      failure ??= `no answer within ${timeoutMs} ms`
-      try { child.kill('SIGKILL') } catch { /* close still owns the child */ }
-    }, timeoutMs)
-    child.on('error', (error) => { failure ??= error.message })
-    child.on('close', (code, signal) => {
-      if (failure) { done(false, failure); return }
-      if (oversized) { done(false, 'probe output exceeds 65536 bytes'); return }
-      const ok = code === 0 && out.includes(PROBE_ANSWER)
-      done(ok, lastLine(err) || lastLine(out) || (signal ? `signal ${signal}` : `exit ${signedExitCode(code)}`), ok && out.includes(PROBE_HANDOVER))
-    })
-  })
-  return { result, cancel: () => { try { child.kill('SIGKILL') } catch { /* gone */ } } }
+  start?: CaptureStart,
+): OwnedTask<ProbeResult> {
+  const running = captureChild(nodePath, args, env, timeoutMs, start)
+  return { cancel: running.cancel, result: running.result.then(({ code, signal, out, err, failure }) => {
+    if (failure) return { ok: false, detail: failure }
+    const lastLine = (text: string): string => { const lines = text.trim().split('\n'); return lines[lines.length - 1].trim() }
+    const ok = code === 0 && out.includes(PROBE_ANSWER)
+    const worker = ok ? readWorkerProbe(out) : undefined
+    return { ok, detail: lastLine(err) || lastLine(out) || (signal ? `signal ${signal}` : `exit ${signedExitCode(code)}`),
+      ...(ok && out.includes(PROBE_HANDOVER) ? { handover: true as const } : {}), ...(worker ? { worker } : {}) }
+  }) }
 }
 
 export interface ReexecDeps {
@@ -316,7 +280,7 @@ export interface ReexecDeps {
   /** Select a positively supported child layout, only after the previous children are reaped. */
   prepareChildren?(bundle: string, probe?: ProbeResult): boolean
   /** Packaged children: claim immutable probe bytes after reap, even on this master's first own cohort. */
-  prepareProbe?(bundle: string): string | null
+  prepareProbe?(bundle: string): string | null | OwnedTask<string | null>
   writeMarker(marker: ReexecMarker): void
   removeMarker(): void
   /** The master is stopping: nothing is replaced or restarted then. */
@@ -393,7 +357,7 @@ export function createReexec(deps: ReexecDeps): {
   // code after rollback must reap those children too; the master's fingerprint does not identify them.
   let childrenBundle = deps.prepareProbe ? null : deps.own
   let probe: { cancel(): void } | null = null
-  let probing: Promise<ProbeResult> | null = null
+  let probing: Promise<unknown> | null = null
   let replacing = false
   let handing: Promise<void> | null = null
   let handedOver = false
@@ -608,23 +572,29 @@ export function createReexec(deps: ReexecDeps): {
         proceed(outcome)
       }
       const check = (done: (result: ProbeResult) => void): void => {
-        const script = deps.prepareProbe ? deps.prepareProbe(next) : deps.scriptPath
-        if (script === null) { done({ ok: false, detail: 'immutable execution artifact unavailable' }); return }
-        // Historical protocols positively validate their documented inline mode under this environment.
-        // A modern probe separately reports its canonical executed host/capability plan.
-        let running: ReturnType<ReexecDeps['probe']>
-        try { running = deps.probe([...deps.execArgv, script, PROBE_COMMAND], { ...env, HARNESSD_SERVICES: 'none', HARNESSD_SERVICE_PROCESSES: '' }) } catch {
-          done({ ok: false, detail: 'probe process could not start' })
-          return
-        }
-        probe = running
-        probing = running.result
-        void running.result.then((result) => {
-          probe = null
-          probing = null
+        const run = (script: string | null): void => {
           if (deps.stopping()) return
-          checked = result
-          done(result)
+          if (script === null) { done({ ok: false, detail: 'immutable execution artifact unavailable' }); return }
+          let running: ReturnType<ReexecDeps['probe']>
+          try { running = deps.probe([...deps.execArgv, script, PROBE_COMMAND], { ...env, HARNESSD_SERVICES: 'none', HARNESSD_SERVICE_PROCESSES: '' }) } catch {
+            done({ ok: false, detail: 'probe process could not start' }); return
+          }
+          probe = running
+          probing = running.result
+          void running.result.then(result => {
+            probe = null; probing = null
+            if (deps.stopping()) return
+            checked = result
+            done(result)
+          })
+        }
+        const prepared = deps.prepareProbe ? deps.prepareProbe(next) : deps.scriptPath
+        if (prepared === null || typeof prepared === 'string') { run(prepared); return }
+        probe = prepared
+        probing = prepared.result
+        void prepared.result.then(script => {
+          probe = null; probing = null
+          run(script)
         })
       }
       // Ordinary core restarts keep surviving workers. A changed cohort always waits for actual reap.
@@ -701,7 +671,9 @@ export function createReexec(deps: ReexecDeps): {
             // Only what `process.execve` refuses before it begins: arguments it cannot take.
             deps.removeMarker()
             deps.log(`[harnessd] could not re-execute this master (${error instanceof Error ? error.message : String(error)}) — keeping it`)
-            carryOn('kept')
+            // Preparation released its claim before exec. Reacquire and prove it once, without another exec.
+            if (deps.prepareProbe) check(result => carryOn(result.ok ? 'kept' : 'refused'))
+            else carryOn('kept')
           }
         })
       })
@@ -709,7 +681,7 @@ export function createReexec(deps: ReexecDeps): {
     cancel: () => { probe?.cancel(); probe = null },
     replacing: () => replacing,
     settled: (done) => {
-      const pending = [probing, handing].filter((running): running is Promise<ProbeResult> | Promise<void> => running !== null)
+      const pending = [probing, handing].filter((running): running is Promise<unknown> => running !== null)
       if (!pending.length) { done(handedOver); return }
       void Promise.allSettled(pending).then(() => done(handedOver))
     },

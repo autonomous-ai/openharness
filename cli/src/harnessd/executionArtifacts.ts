@@ -1,10 +1,10 @@
 /** One immutable, claimed image for a probe and every child admitted by that probe. */
 import { createHash } from 'node:crypto'
 import { closeSync, fstatSync, lstatSync, openSync, readSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
-import { MAX_BUNDLE_BYTES, bundleReadFlags } from './bundleFingerprint.js'
+import { basename, dirname, join, resolve } from 'node:path'
+import { MAX_BUNDLE_BYTES, bundleReadFlags, sha256File } from './bundleFingerprint.js'
 import {
-  LEAN_CORE_ENTRY, LEAN_ENTRY, readLeanBundle, releaseLeanClaim, writeLeanBundle,
+  LEAN_CORE_ENTRY, LEAN_ENTRY, folderFingerprint, readLeanBundle, releaseLeanClaim, writeLeanBundle,
   type LeanBundle, type LeanWrite,
 } from './leanBundle.js'
 
@@ -29,6 +29,48 @@ export interface ExecutionArtifact {
 
 interface ArtifactOptions extends LeanWrite { directory: string }
 type ImagePaths = Omit<ExecutionArtifact, 'release'>
+
+export interface ArtifactMetadata {
+  selected: string
+  folder: string
+  lean?: { fingerprint: string; entry: string; core?: string }
+}
+
+/** Only hashes cross the child boundary; the parent supplies every canonical path itself. */
+export function artifactMetadata(image: ExecutionArtifact): ArtifactMetadata {
+  return { selected: image.selected, folder: basename(dirname(image.fullScript)),
+    ...(image.leanScript ? { lean: { fingerprint: image.leanFingerprint!, entry: image.leanEntryFingerprint!,
+      ...(image.leanCoreFingerprint ? { core: image.leanCoreFingerprint } : {}) } } : {}) }
+}
+
+/** Adopt only after the preparer has closed. An invalid reply never authorizes deleting its claims. */
+export function adoptExecutionArtifact(originalScript: string, expected: string, data: unknown, options: ArtifactOptions): ExecutionArtifact {
+  const bad = (): never => { throw new Error('worker_artifact_cleanup_unsettled') }
+  const record = (value: unknown, keys: string[]): value is Record<string, unknown> => !!value && typeof value === 'object'
+    && !Array.isArray(value) && Object.keys(value).every(key => keys.includes(key))
+  const hash = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value)
+  if (!record(data, ['selected', 'folder', 'lean']) || data.selected !== expected || !hash(expected)
+    || typeof data.folder !== 'string' || !/^[0-9a-f]{16}$/.test(data.folder)) return bad()
+  const lean = data.lean
+  if (lean !== undefined && (!record(lean, ['fingerprint', 'entry', 'core']) || !hash(lean.fingerprint)
+    || !hash(lean.entry) || (lean.core !== undefined && !hash(lean.core)))) return bad()
+  const proof = lean as ArtifactMetadata['lean']
+  const folder = join(options.directory, data.folder)
+  const fullScript = join(folder, proof ? FULL_ENTRY : LEAN_ENTRY)
+  const whole = proof?.fingerprint ?? digest(Buffer.from(`${LEAN_ENTRY}\0${expected}\n`))
+  try {
+    if (whole.slice(0, 16) !== data.folder || !lstatSync(join(folder, `.claim-${options.pid ?? process.pid}`)).isFile()
+      || sha256File(fullScript) !== expected || folderFingerprint(folder) !== whole) return bad()
+    if (proof && (sha256File(join(folder, LEAN_ENTRY)) !== proof.entry
+      || (proof.core !== undefined && sha256File(join(folder, LEAN_CORE_ENTRY)) !== proof.core))) return bad()
+  } catch { return bad() }
+  let released = false
+  return { selected: expected, originalScript, probeScript: fullScript, fullScript, fullFingerprint: expected,
+    ...(proof ? { leanScript: join(folder, LEAN_ENTRY), leanFingerprint: proof.fingerprint, leanEntryFingerprint: proof.entry,
+      ...(proof.core ? { leanCoreScript: join(folder, LEAN_CORE_ENTRY), leanCoreFingerprint: proof.core } : {}) } : {}),
+    release: () => { if (!released) { release(fullScript, options); released = true } },
+  }
+}
 
 class SourceCloseUnsettled extends Error {
   constructor() { super('worker_artifact_source_close_unsettled') }

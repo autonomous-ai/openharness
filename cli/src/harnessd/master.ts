@@ -12,6 +12,7 @@ import { performance } from 'node:perf_hooks'
 import { ignoreLogWriteErrors, trimLogFile, ts } from '../lib/log.js'
 import { folderFingerprint } from './leanBundle.js'
 import type { ExecutionArtifact } from './executionArtifacts.js'
+import type { OwnedTask } from './childCapture.js'
 import { WORKER_CONTRACT, WORKER_PLAN, WORKER_COHORT_ENV, workerCohortEnvironment } from './workerContract.js'
 import { CORE, leanServices } from './leanServices.js'
 import { platformFromEnv, type PlatformName } from './platform.js'
@@ -53,7 +54,7 @@ export interface MasterConfig {
    *  from, whatever is on disk by the time this master starts. */
   bundleFingerprint?: string
   /** Installed bundle entry injects the existing-store owner; source development has no publication. */
-  executionArtifacts?: { prepare(originalScript: string, expected: string): ExecutionArtifact }
+  executionArtifacts?: { prepare(originalScript: string, expected: string): OwnedTask<ExecutionArtifact> }
   /** Existing lean opt-out/platform decision; the immutable full fallback remains mandatory. */
   leanArtifacts?: boolean
   pidFile: string
@@ -417,24 +418,27 @@ export function runMaster(config: MasterConfig): Supervisor {
       return false
     }
   }
-  const prepareExecution = (selected: string): ExecutionArtifact | null => {
+  const prepareExecution = (selected: string): string | null | OwnedTask<string | null> => {
     if (releaseFailed) return null
-    // reexec releases before changing selection. Probe and admission reuse this one prepared handle.
-    if (execution) return execution.artifact
-    try {
-      const artifact = config.executionArtifacts!.prepare(script(), selected)
-      execution = { artifact, lean: leanServices({
-        scriptPath: artifact.fullScript, leanPath: config.leanArtifacts === false ? undefined : artifact.leanScript,
-        leanFingerprint: artifact.leanFingerprint, folderFingerprint, exists: existsSync, sameBundle: () => true, log,
-      }) }
-      return artifact
-    } catch (error) {
-      const reason = error instanceof Error && /^worker_artifact_(source_unavailable|source_changed|source_close_unsettled|reserved_name|publish_failed|cleanup_unsettled|in_use)$/.test(error.message)
+    // reexec calls this only after reap/release, including failed-exec reacquisition. Admission below
+    // alone reuses the prepared handle; an accidental second preparation is refused by its owner.
+    const failed = (error: unknown): null => {
+      const reason = error instanceof Error && /^worker_artifact_(request_refused|source_unavailable|source_changed|source_close_unsettled|reserved_name|publish_failed|cleanup_unsettled|in_use)$/.test(error.message)
         ? error.message : 'worker_artifact_prepare_failed'
       const action = reason.endsWith('_unsettled') || reason === 'worker_artifact_in_use' ? 'restart the supervisor' : 'restore a supported selected build'
       log(`[harnessd] ${reason} — ${action}; no children will start`)
       return null
     }
+    try {
+      const preparing = config.executionArtifacts!.prepare(script(), selected)
+      return { cancel: preparing.cancel, result: preparing.result.then(artifact => {
+        execution = { artifact, lean: leanServices({
+          scriptPath: artifact.fullScript, leanPath: config.leanArtifacts === false ? undefined : artifact.leanScript,
+          leanFingerprint: artifact.leanFingerprint, folderFingerprint, exists: existsSync, sameBundle: () => true, log,
+        }) }
+        return artifact.probeScript
+      }, failed) }
+    } catch (error) { return failed(error) }
   }
   const childScript = (admitted: Cohort, name: string): { file: string; expected: string; cli: string; lean: ReturnType<typeof leanServices> | null } | null => {
     const refused = (): null => { log('[harnessd] worker_artifact_changed — refusing a child before spawn; restore the selected build'); return null }
@@ -503,14 +507,14 @@ export function runMaster(config: MasterConfig): Supervisor {
     probe: (args, probeEnv) => runProbe(node, args, probeEnv),
     stopChildren: (done) => { cohort = null; services.stop(() => { releaseExecution(); done() }) },
     startChildren: () => services.start(),
-    ...(config.executionArtifacts ? { prepareProbe: (selected: string) => prepareExecution(selected)?.probeScript ?? null } : {}),
+    ...(config.executionArtifacts ? { prepareProbe: (selected: string) => prepareExecution(selected) } : {}),
     prepareChildren: (selected, checked) => {
       const worker = checked?.worker
       const legacy = worker?.kind === 'legacy'
       if ((config.executionArtifacts || selected !== own) && !legacy
         && !(worker?.kind === 'modern' && worker.contract === WORKER_CONTRACT && worker.plan === WORKER_PLAN)) return false
       if (config.executionArtifacts) {
-        const artifact = prepareExecution(selected)
+        const artifact = execution?.artifact
         if (!artifact || bundleHash(artifact.fullScript) !== artifact.fullFingerprint) return false
         if (legacy && (!artifact.leanCoreScript || !artifact.leanCoreFingerprint
           || bundleHash(artifact.leanCoreScript) !== artifact.leanCoreFingerprint

@@ -33,7 +33,7 @@ import { ts } from './lib/log.js'
 import { confirm as confirmUpdate, pendingVersion, putNodeBack, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
 import { keepStaged, ptyUnjudged, rollBackStaged } from './lib/windows/ptyUpdate.js'
 import { SERVICES_EXPLICIT_ENV } from './harnessd/workerContract.js'
-import { createExecutionArtifacts } from './harnessd/executionArtifacts.js'
+import { createArtifactPreparation } from './harnessd/executionArtifactProcess.js'
 import { VERSION } from './version.js'
 
 /** Where a master re-executing on a new bundle leaves word of it, until that master's core is up. */
@@ -271,7 +271,9 @@ export function startMaster(
     ...windowsConfig,
     ...start,
     ...(start.packaged ? {
-      executionArtifacts: createExecutionArtifacts({ directory: LEAN_DIR, ...(serviceScriptPath ? { keepMasterEntry: serviceScriptPath } : {}) }),
+      executionArtifacts: createArtifactPreparation({ directory: LEAN_DIR,
+        node: namedNode(baseNode(process.execPath), 'harnessd-prepare', env.ADAPTER_RUNTIME_DIR, { log: masterLog }),
+        ...(serviceScriptPath ? { keepMasterEntry: serviceScriptPath } : {}) }),
       leanArtifacts: platform !== 'win32' && process.env.HARNESSD_LEAN !== 'off' && !existsSync(LEAN_OFF_FILE),
     } : {}),
     pidFile: PID_FILE,

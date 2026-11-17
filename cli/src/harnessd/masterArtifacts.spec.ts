@@ -74,7 +74,9 @@ describe('owned packaged child execution', { timeout: 15_000 }, () => {
       },
       restoreUpdate: () => {}, confirmUpdate: () => {}, execve: null,
       onSignal: (signal, listener) => signals.set(signal, listener), exit: code => { exits.push(code) },
-      executionArtifacts, ...more,
+      executionArtifacts: { prepare: (original: string, expected: string) => ({
+        result: Promise.resolve(executionArtifacts.prepare(original, expected)), cancel: () => {},
+      }) }, ...more,
     } as MasterConfig)
     const stop = async () => {
       signals.get('SIGTERM')!()
@@ -275,6 +277,37 @@ describe('owned packaged child execution', { timeout: 15_000 }, () => {
       expect(master.supervisor.status().corePid).toBeNull()
     } finally { await master.stop() }
     expect(artifacts.releases).toEqual([1, 2])
+  })
+
+  it('refuses full payload corruption after the probe ran but before admission', async () => {
+    writeFileSync(selected, body().replace('appendFileSync, readFileSync', 'appendFileSync, readFileSync, writeFileSync')
+      .replace('console.log(', 'writeFileSync(process.argv[1], "// corrupted after execution"); console.log('))
+    const artifacts = owner(), master = start(artifacts)
+    try {
+      await vi.waitFor(() => expect(master.supervisor.status().lastExit).toBe('bundle admission refused'))
+      expect(records()).toEqual([])
+    } finally { await master.stop() }
+  })
+
+  it('refuses canonical publication during the post-probe full verification', async () => {
+    const proof = join(directory, 'probe-completed')
+    writeFileSync(selected, body().replace('console.log(', `appendFileSync(${JSON.stringify(proof)}, 'done'); console.log(`))
+    const artifacts = owner(), prepare = artifacts.prepare.getMockImplementation()!
+    artifacts.prepare.mockImplementation((original, expected) => {
+      const image = prepare(original, expected)
+      let published = false
+      return { ...image, get fullScript() {
+        // Deterministically inject the publisher at the verification boundary, after real probe execution.
+        if (!published && existsSync(proof)) { published = true; writeFileSync(selected, `${body()}\n// later publication`) }
+        return image.fullScript
+      } }
+    })
+    const master = start(artifacts)
+    try {
+      await vi.waitFor(() => expect(master.supervisor.status().lastExit).toBe('bundle admission refused'))
+      expect(records()).toEqual([])
+      expect(existsSync(proof)).toBe(true)
+    } finally { await master.stop() }
   })
 
   it.each([['search', true], ['__run', true], ['search', false]] as const)('refuses a changed entry before a replacement %s PID exists (packaged=%s)', async (role, packaged) => {

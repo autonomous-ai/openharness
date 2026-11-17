@@ -344,6 +344,91 @@ describe('re-executing', () => {
     expect(prepareProbe).toHaveBeenCalledTimes(1)
   })
 
+  it('waits for owned preparation to close before probing or admitting the candidate', async () => {
+    let prepared!: (path: string | null) => void
+    const task = { result: new Promise<string | null>(resolve => { prepared = resolve }), cancel: vi.fn() }
+    const admit = vi.fn(() => true)
+    const { reexec } = make({ execve: null, prepareProbe: (() => task) as never, prepareChildren: admit })
+    reexec(state(), outcome => outcomes.push(outcome))
+    stopped[0]()
+    expect(probes).toEqual([])
+    expect(admit).not.toHaveBeenCalled()
+    expect(outcomes).toEqual([])
+    prepared('/owned/cohort-cli.mjs')
+    await new Promise(resolve => setImmediate(resolve))
+    expect(probes[0].args).toEqual(['--flag', '/owned/cohort-cli.mjs', PROBE_COMMAND])
+    await settle({ ok: true, detail: 'prepared and admitted' })
+    expect(outcomes).toEqual(['kept'])
+  })
+
+  it('keeps shutdown pending until the cancelled preparer actually closes', async () => {
+    let closed!: (path: string | null) => void
+    const task = { result: new Promise<string | null>(resolve => { closed = resolve }), cancel: vi.fn() }
+    const running = make({ execve: null, prepareProbe: (() => task) as never, prepareChildren: () => true })
+    running.reexec(state(), outcome => outcomes.push(outcome)); stopped[0]()
+    stopping = true
+    running.cancel()
+    const settled = vi.fn()
+    running.settled(settled)
+    expect(task.cancel).toHaveBeenCalledTimes(1)
+    expect(settled).not.toHaveBeenCalled()
+    expect(probes).toEqual([])
+    closed(null)
+    await new Promise(resolve => setImmediate(resolve))
+    expect(settled).toHaveBeenCalledExactlyOnceWith(false)
+    expect(outcomes).toEqual([])
+    expect(calls).not.toContain('start children')
+  })
+
+  it('owns failed-exec reacquisition through cancellation before any child restarts', async () => {
+    let closed!: (path: string | null) => void
+    const task = { result: new Promise<string | null>(resolve => { closed = resolve }), cancel: vi.fn() }
+    const prepare = vi.fn().mockReturnValueOnce('/owned/cohort-cli.mjs').mockReturnValue(task)
+    const running = make({ prepareProbe: prepare, prepareChildren: () => true,
+      execve: () => { throw new Error('exec refused before replacement') } })
+    running.reexec(state(), outcome => outcomes.push(outcome)); stopped[0]()
+    await settle({ ok: true, detail: 'first proof' })
+    expect(prepare).toHaveBeenCalledTimes(2)
+    expect(outcomes).toEqual([])
+    stopping = true; running.cancel()
+    const settled = vi.fn(); running.settled(settled)
+    expect(task.cancel).toHaveBeenCalledTimes(1)
+    expect(settled).not.toHaveBeenCalled()
+    closed(null)
+    await new Promise(resolve => setImmediate(resolve))
+    expect(settled).toHaveBeenCalledExactlyOnceWith(false)
+    expect(calls).not.toContain('start children')
+  })
+
+  it.each(['continue', 'stop', 'drift'])('settles the second failed-exec probe once before %s', async ending => {
+    let prepared!: (path: string | null) => void
+    const task = { result: new Promise<string | null>(resolve => { prepared = resolve }), cancel: vi.fn() }
+    const prepare = vi.fn().mockReturnValueOnce('/owned/first.mjs').mockReturnValue(task)
+    const execve = vi.fn(() => { throw new Error('exec refused before replacement') }), admit = vi.fn(() => true)
+    const running = make({ prepareProbe: prepare, prepareChildren: admit, execve })
+    running.reexec(state(), outcome => outcomes.push(outcome)); stopped[0]()
+    await settle({ ok: true, detail: 'first proof' })
+    prepared('/owned/second.mjs')
+    await new Promise(resolve => setImmediate(resolve))
+    expect(probes).toHaveLength(2)
+    expect(probes[1].env).toEqual(probes[0].env)
+    expect(execs).toHaveLength(0)
+    expect(execve).toHaveBeenCalledTimes(1)
+    const settled = vi.fn()
+    if (ending === 'stop') {
+      stopping = true; running.cancel(); running.settled(settled)
+      expect(probes[1].cancelled).toBe(true)
+      expect(settled).not.toHaveBeenCalled()
+    }
+    if (ending === 'drift') onDisk = 'another publication'
+    await settle({ ok: true, detail: 'second proof' })
+    expect(execve).toHaveBeenCalledTimes(1)
+    expect(outcomes).toEqual(ending === 'stop' ? [] : [ending === 'continue' ? 'kept' : 'unsupported'])
+    expect(calls.filter(call => call === 'start children')).toHaveLength(ending === 'continue' ? 1 : 0)
+    expect(admit).toHaveBeenCalledTimes(ending === 'continue' ? 1 : 0)
+    if (ending === 'stop') expect(settled).toHaveBeenCalledExactlyOnceWith(false)
+  })
+
   it('never probes or starts a packaged candidate when immutable preparation refuses it', () => {
     const prepareChildren = vi.fn(() => true)
     const { reexec } = make({ execve: null, prepareProbe: () => null, prepareChildren } as Partial<ReexecDeps>)

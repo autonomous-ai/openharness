@@ -11,6 +11,7 @@
  * `require` via the banner so ws's try/catch fallback works without them.
  */
 import * as esbuild from 'esbuild'
+import { workerPreparer } from './scripts/lib/workerPreparer.mjs'
 import { createHash } from 'node:crypto'
 import { appendFileSync, readFileSync, copyFileSync, rmSync, writeFileSync } from 'fs'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
@@ -21,6 +22,7 @@ import { asciiOnly } from './scripts/lib/asciiOnly.mjs'
 import { copyPtyPayload } from './scripts/lib/ptyPayload.mjs'
 import { fileURLToPath } from 'node:url'
 import { basename } from 'node:path'
+const artifactPreparer = await workerPreparer()
 const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(new URL('../store/agents/autonomous-grid', import.meta.url))))
 const devicesBundle = JSON.stringify(readBuiltinBundle(fileURLToPath(new URL('../store/agents/devices', import.meta.url)), ['harness.json', 'AGENTS.md', 'LICENSE', 'template']))
 const harnessMonitorBundle = JSON.stringify(readHarnessMonitorBundle(fileURLToPath(new URL('../store/agents/harness-monitor', import.meta.url))))
@@ -61,6 +63,7 @@ const options = {
   external: ['bufferutil', 'utf-8-validate'],
   define: {
     __ADAPTER_VERSION__: JSON.stringify(version),
+    __WORKER_ARTIFACT_PREPARER__: JSON.stringify(artifactPreparer),
     __DSH_REGISTRY__: JSON.stringify(dshRegistry),
     __MODEL_MANAGER_BUNDLE__: JSON.stringify(modelManagerBundle),
     __DEVICES_BUNDLE__: JSON.stringify(devicesBundle),
