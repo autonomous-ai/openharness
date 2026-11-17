@@ -123,13 +123,14 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
             }
         })
         .build(handle)?;
-    // Desktop's dark artwork on a dark bar (tray_macos.rs).
+    // Desktop's dark artwork on a dark bar (tray_macos.rs), at the size Tauri gave tray.png: the tray's click target
+    // was framed to the button at that size.
     #[cfg(target_os = "macos")]
     tray.with_inner_tray_icon(|inner| {
         let button =
             objc2::MainThreadMarker::new().zip(inner.ns_status_item()).and_then(|(main, item)| item.button(main));
         if let Some(button) = button
-            && let Some(image) = tray_macos::image(objc2_foundation::NSSize::new(28.0, 18.0))
+            && let Some(image) = button.image().and_then(|light| tray_macos::image(light.size()))
         {
             button.setImage(Some(&image));
         }
