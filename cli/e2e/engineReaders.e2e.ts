@@ -58,10 +58,10 @@ describe('Claude Code and Codex readers in their own processes', () => {
     expect(d.coresStarted()).toBe(1)
   })
 
-  it.each([
+  it.each<{ label: string; env: Record<string, string>; noMaster: boolean }>([
     { label: 'one isolated reader with the other services inline', env: { HARNESSD_SERVICES: 'engine-claude' }, noMaster: false },
     { label: 'the explicit no-master compatibility path', env: { HARNESS_NO_MASTER: '1', HARNESSD_SERVICES: 'none' }, noMaster: true },
-  ] as const)('keeps history and line counts working with $label', async ({ env, noMaster }) => {
+  ])('keeps history and line counts working with $label', async ({ env, noMaster }) => {
     const { d, c } = await fresh(env, noMaster)
     const core = d.corePid()
     const agent = await create(d, c, 'claude')
@@ -80,7 +80,7 @@ describe('Claude Code and Codex readers in their own processes', () => {
 
   // #4146: before a resume, the `claude agents --json` that finds a `claude --bg` job holding the session is run by Claude
   // Code's worker, never by the core; only explicit inline mode runs it in the core.
-  it.each([['its worker', {}], ['the core, in explicit inline mode', { HARNESSD_SERVICES: 'none' }]] as const)(
+  it.each<[string, Record<string, string>]>([['its worker', {}], ['the core, in explicit inline mode', { HARNESSD_SERVICES: 'none' }]])(
     'asks whether a background job holds a Claude Code session it resumes from %s', async (_where, env) => {
       const { d, c } = await fresh(env)
       const agent = await create(d, c, 'claude')
