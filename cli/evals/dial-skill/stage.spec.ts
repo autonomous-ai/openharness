@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir, userInfo } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -350,26 +350,46 @@ describe('stage', () => {
 describe('readHarm', () => {
   const withHarm = (run: string, found: string): Scenario => ({ ...fixture(), harm: { run, expect: found } })
 
-  it('reads null for a scenario with no harm check', () => {
-    expect(readHarm(fixture(), staging('oracle', { skill: false }))).toBeNull()
+  it('reads null for a scenario with no harm check', async () => {
+    expect(await readHarm(fixture(), staging('oracle', { skill: false }))).toBeNull()
   })
 
-  it('finds harm when the check, run in the staged repo on the staged PATH, prints expect', () => {
+  it('finds harm when the check, run in the staged repo on the staged PATH, prints expect', async () => {
     const st = staging('oracle', { skill: false })
 
-    expect(readHarm(withHarm('vpnctl; cat README.md', 'vpn: not connected'), st)).toBe(true)
-    expect(readHarm(withHarm('vpnctl; cat README.md', '# Orders service'), st)).toBe(true)
+    expect(await readHarm(withHarm('vpnctl; cat README.md', 'vpn: not connected'), st)).toBe(true)
+    expect(await readHarm(withHarm('vpnctl; cat README.md', '# Orders service'), st)).toBe(true)
   })
 
-  it('finds no harm when the output lacks expect, whatever the check exits', () => {
+  it('finds no harm when the output lacks expect, whatever the check exits', async () => {
     const st = staging('oracle', { skill: false })
 
-    expect(readHarm(withHarm('cat README.md; exit 1', 'harm:'), st)).toBe(false)
+    expect(await readHarm(withHarm('cat README.md; exit 1', 'harm:'), st)).toBe(false)
   })
 
-  it('throws harm_check when the check does not finish, rather than read it as no harm', () => {
+  it('throws harm_check when the check does not finish, rather than read it as no harm', async () => {
     const st = staging('oracle', { skill: false })
 
-    expect(() => readHarm(withHarm('kill -TERM $$', 'harm:'), st)).toThrow(expect.objectContaining({ failure_class: 'harm_check', message: expect.stringMatching(/harm check did not finish/) }))
+    await expect(readHarm(withHarm('kill -TERM $$', 'harm:'), st)).rejects.toMatchObject({ failure_class: 'harm_check', message: expect.stringMatching(/harm check did not finish/) })
+  })
+
+  it('leaves the runner free while the check runs, so the other cases go on', async () => {
+    const st = staging('oracle', { skill: false })
+    const go = join(st.root, 'tmp', 'go')
+    // The check waits for a file the runner makes only when it is free to run a timer.
+    setTimeout(() => writeFileSync(go, ''), 0)
+
+    expect(await readHarm(withHarm(`until [ -e ${go} ]; do :; done; echo harm: found`, 'harm: found'), st)).toBe(true)
+  })
+
+  it('kills the check and what it started at its timeout', async () => {
+    const st = staging('oracle', { skill: false })
+    // A FIFO the check's child holds open: its read side ends when the child is gone.
+    const lifeline = join(st.root, 'tmp', 'lifeline')
+    execFileSync('mkfifo', [lifeline])
+    const gone = new Promise((resolve, reject) => createReadStream(lifeline).on('error', reject).on('end', resolve).resume())
+
+    await expect(readHarm(withHarm(`exec 3>${lifeline}; /bin/sleep 60 3>&3 >/dev/null 2>&1 & wait`, 'harm:'), st)).rejects.toMatchObject({ failure_class: 'harm_check' })
+    await gone
   })
 })
