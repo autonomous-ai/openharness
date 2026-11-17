@@ -20,7 +20,7 @@ import { READY_LINE, STOPPED_LINE } from './agentBrowser/notices.js'
 import { createPodman } from './agentBrowser/podman.js'
 import { runAgentBrowserService } from './agentBrowserProcess.js'
 import type { ServiceProcessOptions } from './process.js'
-import { defaultSettings, type BrowserSettings } from './agentBrowser/settings.js'
+import { defaultSettings, settingsHash, type BrowserSettings } from './agentBrowser/settings.js'
 import { StateFile } from './agentBrowser/stateFile.js'
 import { resetAgentTmpSweep } from '../lib/agentTmp.js'
 import { Browsers } from './agentBrowser/browsers.js'
@@ -1202,7 +1202,13 @@ describe('the person\'s Start and Stop', () => {
   it('stops a browser left running for an agent that is not here, or whose Browser is off, as it starts', async () => {
     saveState({ gone: defaultSettings(HOST), off: defaultSettings(HOST), kept: defaultSettings(HOST) })
     new StateFile(join(dataDir, 'agent-browser.json')).update(state => { state.on = { kept: true, gone: true } })
-    const label = (agentId: string) => ({ Names: [`harness-browser-${agentId}`], Labels: { 'harness.agent': agentId, 'harness.daemon': daemonIdOf(dataDir) }, State: 'running' })
+    // Each as this daemon started it, on this week's image with its settings now: kept's own start finds its browser
+    // running and replaces nothing, so an `rm` of it is only ever the sweep's.
+    const applied = settingsHash({ ...defaultSettings(HOST), timeZone: HOST.timeZone })
+    const label = (agentId: string) => ({
+      Names: [`harness-browser-${agentId}`], Image: `localhost/${imageTag(browserAssetsHash(), NOW)}`, State: 'running',
+      Labels: { 'harness.agent': agentId, 'harness.daemon': daemonIdOf(dataDir), 'harness.settings': applied },
+    })
     // Listed first: the look at what runs has judged it before it stops the others, so a stop of it would be asked by then.
     fake.reply('ps', { stdout: JSON.stringify([label('kept'), label('gone'), label('off')]) })
     const { port } = startSwitching([session('kept', { browser: undefined }), session('off', { browser: undefined })], { options: { everyAgent: async () => [session('kept'), session('off'), session('gone')] } })
