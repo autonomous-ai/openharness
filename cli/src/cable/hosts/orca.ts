@@ -32,7 +32,8 @@ const MULTIPLEXERS: ReadonlySet<string> = new Set(['herdr', 'rex', 'zellij', 'tm
 export interface OrcaDeps {
   /** Its stdout too: tmux's answer is what it printed (tmux.ts). */
   run(file: string, args: string[], timeoutMs: number): Promise<{ code: number | null; stdout: string }>
-  onPath(name: string): string | null
+  /** The first executable [name] on PATH that [accept] takes: any, by default. */
+  onPath(name: string, accept?: (path: string) => boolean): string | null
   exists(path: string): boolean
   platform: NodeJS.Platform
 }
@@ -72,7 +73,7 @@ export function orcaDeps(): OrcaReadDeps {
         resolve({ code: null, stdout: '' })
       }
     }),
-    onPath: (name) => resolveBinaryOnPath(name),
+    onPath: (name, accept) => resolveBinaryOnPath(name, process.env, accept),
     exists: existsSync,
     platform: process.platform,
     spawn: (file, args) => {

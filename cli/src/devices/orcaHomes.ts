@@ -6,7 +6,7 @@
  * The `harness device` command and the devices service both import it (docs/plans/2026-11-17-new-user-onboarding-design.md).
  */
 import { type ChildProcess, spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
 import { ownDirectory } from './dialSkill.js'
 import { listable, MAX_HOMES } from './dialSkillFiles.js'
@@ -14,7 +14,12 @@ import { listable, MAX_HOMES } from './dialSkillFiles.js'
 export interface OrcaHomes { claude: string[]; codex: string[] }
 export type OrcaHomesFailure = 'no orca' | 'failed' | 'timed out' | 'unreadable'
 export interface OrcaHomesRead { homes: OrcaHomes; failure?: OrcaHomesFailure }
-export interface OrcaBinaryDeps { onPath(name: string): string | null; exists(path: string): boolean; platform: NodeJS.Platform }
+export interface OrcaBinaryDeps {
+  /** The first executable [name] on PATH that [accept] takes. */
+  onPath(name: string, accept: (path: string) => boolean): string | null
+  exists(path: string): boolean
+  platform: NodeJS.Platform
+}
 export interface OrcaHomesDeps extends OrcaBinaryDeps {
   /** No shell, stdin closed. Resolves within timeoutMs whatever the child does; never rejects. `code` is null for a
    *  kill, a binary that could not start or output past maxBytes. */
@@ -28,15 +33,27 @@ export const ORCA_HOMES_MAX_BYTES = 256 * 1024
 export const ORCA_HOMES_REFRESH_MS = 5 * 60_000
 
 const APP_ORCA = '/Applications/Orca.app/Contents/Resources/bin/orca'
+/** Where Orca installs its launcher: in the app on macOS, in `resources/bin` beside its binary on Linux. */
+const LAUNCHER = /\/(?:Orca\.app\/Contents\/Resources|resources)\/bin\/orca$/
 
 const none = (): OrcaHomes => ({ claude: [], codex: [] })
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
-/** Orca's CLI: the one on PATH, else, on macOS, the app's own. */
+/** Whether [path] is Orca's own launcher, by its real path: GNOME's screen reader is /usr/bin/orca, and run with Orca's
+ *  arguments it ignores them and starts. */
+function orcaLauncher(path: string): boolean {
+  try {
+    return LAUNCHER.test(realpathSync(path))
+  } catch {
+    return false
+  }
+}
+
+/** Orca's CLI: its launcher on PATH, else, on macOS, the app's own. */
 export function orcaBinary(deps: OrcaBinaryDeps): string | null {
-  return deps.onPath('orca') ?? (deps.platform === 'darwin' && deps.exists(APP_ORCA) ? APP_ORCA : null)
+  return deps.onPath('orca', orcaLauncher) ?? (deps.platform === 'darwin' && deps.exists(APP_ORCA) ? APP_ORCA : null)
 }
 
 /** This computer's real `orca`. */
@@ -78,7 +95,7 @@ export function orcaHomesDeps(): OrcaHomesDeps {
       })
       child.on('close', (code: number | null) => end(code, false))
     }),
-    onPath: (name) => resolveBinaryOnPath(name),
+    onPath: (name, accept) => resolveBinaryOnPath(name, process.env, accept),
     exists: existsSync,
     platform: process.platform,
     // A platform with no uid owns nothing, so no home is kept there.
