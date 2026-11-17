@@ -8,12 +8,12 @@ import type { CodexQueueResult } from './codexQueue.js'
 import { createHerdrAdapter } from './herdr.js'
 import type { HerdrPrompt } from './herdrClient.js'
 import { type Delivery, Inbox } from './inbox.js'
-import { askedLine, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, type PromptSource } from './observed.js'
+import { askedLine, countWord, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, type PromptSource } from './observed.js'
 import type { OpenTarget } from './open.js'
 import { createOrcaAdapter, type OrcaDeps } from './orca.js'
 import { createTabsAdapter, type TabApp } from './tabs.js'
 import { createTmuxAdapter } from './tmux.js'
-import type { PaneSwitch } from './types.js'
+import type { PaneSwitch, TypeResult } from './types.js'
 import { createVscodeAdapter } from './vscode.js'
 import { createWeztermAdapter } from './wezterm.js'
 
@@ -906,7 +906,7 @@ const HANDLE = 'term_0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b'
 
 /** What the tests answer for the source's routes: its own, and the Orca, Claude app, Codex app and tab verbs its adapters run. */
 interface Fakes extends Omit<ObservedActions, 'adapters'> {
-  orcaSend(handle: string, text: string): Promise<boolean>
+  orcaSend(handle: string, text: string): Promise<TypeResult>
   orcaSwitch(handle: string): Promise<PaneSwitch>
   herdrPrompt(pane: string, kind: string, text: string): Promise<HerdrPrompt>
   herdrStamp(): string | undefined
@@ -917,9 +917,9 @@ interface Fakes extends Omit<ObservedActions, 'adapters'> {
   tabSelect(app: TabApp, tty: string, raise: boolean): PaneSwitch
 }
 
-/** What each count says, as devices.ts logs it: an adapter by its fixed id. */
+/** What each count says, as devices.ts logs it. */
 const counted = (count: { mock: { calls: Array<Parameters<ObservedActions['count']>> } }): string[] =>
-  count.mock.calls.map(([what]) => (typeof what === 'string' ? what : what.id))
+  count.mock.calls.map(([what]) => countWord(what))
 
 /** Routes that answer as told, recording what each was handed. The adapters are the real ones for that platform, their
  *  verbs the fakes, and any command of their own goes to an inert runner. */
@@ -928,7 +928,7 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
   const fakes = {
     modReady: vi.fn((sessionId: string) => ready.has(sessionId)),
     toMod: vi.fn(async (_sessionId: string, _text: string): Promise<Delivery> => 'taken'),
-    orcaSend: vi.fn(async (_handle: string, _text: string) => true),
+    orcaSend: vi.fn(async (_handle: string, _text: string): Promise<TypeResult> => true),
     orcaSwitch: vi.fn(async (_handle: string): Promise<PaneSwitch> => 'ok'),
     // herdr takes every prompt.
     herdrPrompt: vi.fn(async (_pane: string, _kind: string, _text: string): Promise<HerdrPrompt> => ({ outcome: 'sent' })),
@@ -1319,6 +1319,51 @@ describe('ObservedSource actions', () => {
     const { src, ev } = setup({ actions })
     src.ingest(ev('session-start', withHandle))
     expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+  })
+
+  // The app may know better than the hook: an agent its hook left idle can be in a turn, or asking, there.
+  it('an adapter that says busy gives the busy sentence, counted busy', async () => {
+    const { actions } = fakeActions({ orcaSend: vi.fn(async (): Promise<TypeResult> => 'busy') })
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-stop', withHandle))
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
+    expect(counted(actions.count)).toEqual(['busy'])
+  })
+
+  it('an adapter that says waiting gives the waiting sentence, counted waiting', async () => {
+    const { actions } = fakeActions({ orcaSend: vi.fn(async (): Promise<TypeResult> => 'waiting') })
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-stop', withHandle))
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj is waiting for your answer in Orca.' })
+    expect(counted(actions.count)).toEqual(['waiting'])
+  })
+
+  // An object is truthy: it must not count as typed.
+  it('an adapter\'s own sentence reaches the dial as it is, counted refused (orca)', async () => {
+    const { actions } = fakeActions({ orcaSend: vi.fn(async (): Promise<TypeResult> => ({ refused: 'Turn on Automation mode in cmux.' })) })
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-stop', withHandle))
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'Turn on Automation mode in cmux.' })
+    expect(counted(actions.count)).toEqual(['refused (orca)'])
+  })
+
+  it('after each of the three, the next turn\'s hook is a person\'s, not the dial\'s', async () => {
+    for (const result of ['busy', 'waiting', { refused: 'Turn on Automation mode in cmux.' }] as const) {
+      const { actions } = fakeActions({ orcaSend: vi.fn(async (): Promise<TypeResult> => result) })
+      const { src, ev } = setup({ actions })
+      src.ingest(ev('turn-stop', withHandle))
+      expect((await src.send(src.list()[0], 'next')).ok).toBe(false)
+      expect(src.ingest(ev('turn-start', withHandle))).toBe('person')
+    }
+  })
+
+  it('countWord says a word as it is, an adapter by its id, and a refusal by its adapter\'s id', () => {
+    const { actions } = fakeActions()
+    const orca = actions.adapters.find((a) => a.id === 'orca')!
+    expect(countWord('busy')).toBe('busy')
+    expect(countWord('codex-failed (exit 1)')).toBe('codex-failed (exit 1)')
+    expect(countWord(orca)).toBe('orca')
+    expect(countWord({ refused: orca })).toBe('refused (orca)')
   })
 
   it('a text over 2000 characters is refused before any route', async () => {
