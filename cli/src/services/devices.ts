@@ -509,6 +509,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  added since is found by this scan. */
   const scanOpen = async (source: ObservedSource): Promise<void> => {
     if (await orcaHomes.refresh()) skillPass()
+    // The dial went, or the devices began to stop, while Orca was read (up to its 5 s): the scan is an attached dial's alone.
+    if (stopped || !dialOn) return
     await source.scanOpen()
   }
   /** herdr's agents, hook or no hook, listed and followed over herdr's own socket (docs/specs/2026-11-16-device-herdr.md).
