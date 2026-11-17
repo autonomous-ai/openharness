@@ -135,16 +135,126 @@ const finaleOf = (source: string) =>
   source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# Shared by every download")) +
   source.slice(source.indexOf("# 5. Final verification"));
 
+// A fake's first line when it reads its stdin to the end, as `brew` read the piped script on
+// 2026-11-17. By its full path: some tests' PATH holds only the fakes.
+const DRAIN = "/bin/cat >/dev/null";
+const drained = (drain: boolean, lines: string[]) => (drain ? [DRAIN, ...lines] : lines);
+
 // A ~/.local/bin with a launcher that answers `version`, plus the node and tmux the verification runs.
-const installedFixture = (scratch: string) => {
+const installedFixture = (scratch: string, drain = false) => {
   const home = join(scratch, "home");
   const bin = join(home, ".local", "bin");
   mkdirSync(bin, { recursive: true });
-  writeCommand(bin, "harness", ['[ "$1" = version ] && echo 0.2.60', "exit 0"]);
-  writeCommand(scratch, "node", ["exit 0"]);
-  writeCommand(scratch, "tmux", ['echo "tmux 3.7"']);
+  writeCommand(bin, "harness", drained(drain, ['[ "$1" = version ] && echo 0.2.60', "exit 0"]));
+  writeCommand(scratch, "node", drained(drain, ["exit 0"]));
+  writeCommand(scratch, "tmux", drained(drain, ['echo "tmux 3.7"']));
   return { home, node: join(scratch, "node") };
 };
+
+// A fake CDN: `curl -o` writes the archive, plain `curl` prints the manifest. The archive wraps a
+// fake tmux so the whole managed path — fetch, verify, unpack, record, link — runs for real.
+const managedFixture = (scratch: string, tamperSha = false, drain = false) => {
+  const home = join(scratch, "home");
+  const root = "tmux-9.9-darwin-arm64";
+  const stage = join(scratch, "stage", root, "bin");
+  mkdirSync(stage, { recursive: true });
+  writeCommand(stage, "tmux", drained(drain, ["printf 'tmux 9.9\\n'"]));
+  const archive = join(scratch, `${root}.tar.gz`);
+  spawnSync("tar", ["-czf", archive, "-C", join(scratch, "stage"), root]);
+  const sha = spawnSync("shasum", ["-a", "256", archive], { encoding: "utf8" }).stdout.split(" ")[0];
+  const manifest = JSON.stringify({
+    tmux: {
+      "darwin-arm64": {
+        version: "9.9",
+        url: "https://cdn.example/tmux.tar.gz",
+        sha256: tamperSha ? "0".repeat(64) : sha,
+        size: 1,
+        archiveRoot: root,
+      },
+    },
+  }, null, 2);
+  writeFileSync(join(scratch, "manifest.json"), manifest);
+  // The ladder's first rung is `command -v tmux && tmux -V`, and PATH below still includes /usr/bin
+  // — where ubuntu-latest (CI) ships a real tmux 3.4, so on that runner the script found it, said
+  // "tmux ready (tmux 3.4)" and never took the managed path these tests exist for. A broken tmux
+  // in the fixture dir (first on PATH) fails that rung everywhere; once the managed build is
+  // linked, the script puts BIN_DIR ahead of PATH, so the 9.9 fake wins from then on.
+  writeCommand(scratch, "tmux", ["exit 127"]);
+  writeCommand(scratch, "curl", [
+    `printf '%s\\n' "$*" >> '${join(scratch, "curl-invocations")}'`,
+    `case "$*" in *"-o "*) cp '${archive}' "$4" ;; *) cat '${join(scratch, "manifest.json")}' ;; esac`,
+  ]);
+  writeCommand(scratch, "uname", [`if [ "$1" = "-m" ]; then printf 'arm64\\n'; else printf 'Darwin\\n'; fi`]);
+  mkdirSync(home, { recursive: true });
+  return { home, root };
+};
+
+// The helpers plus the grid step alone, as one runnable unit.
+const gridStepOf = (source: string) =>
+  source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# 1. Host requirements")) +
+  source.slice(source.indexOf("# 3b. The managed grid"), source.indexOf("# 3c. hn's binary"));
+
+const gridFixture = (scratch: string, tamperSha = false, drain = false) => {
+  const home = join(scratch, "home");
+  const root = "grid-9.9-darwin-arm64";
+  const stage = join(scratch, "stage", root, "bin");
+  mkdirSync(stage, { recursive: true });
+  writeCommand(stage, "grid", drained(drain, ["printf 'grid 9.9\\n'"]));
+  const archive = join(scratch, `${root}.tar.gz`);
+  spawnSync("tar", ["-czf", archive, "-C", join(scratch, "stage"), root]);
+  const sha = spawnSync("shasum", ["-a", "256", archive], { encoding: "utf8" }).stdout.split(" ")[0];
+  writeFileSync(join(scratch, "manifest.json"), JSON.stringify({
+    grid: {
+      "darwin-arm64": {
+        version: "9.9",
+        url: "https://cdn.example/grid.tar.gz",
+        sha256: tamperSha ? "0".repeat(64) : sha,
+        size: 1,
+        archiveRoot: root,
+      },
+    },
+  }, null, 2));
+  writeCommand(scratch, "curl", [
+    `printf '%s\\n' "$*" >> '${join(scratch, "curl-invocations")}'`,
+    `case "$*" in *"-o "*) cp '${archive}' "$4" ;; *) cat '${join(scratch, "manifest.json")}' ;; esac`,
+  ]);
+  writeCommand(scratch, "uname", [`if [ "$1" = "-m" ]; then printf 'arm64\\n'; else printf 'Darwin\\n'; fi`]);
+  mkdirSync(home, { recursive: true });
+  return { home, root };
+};
+
+// The constants and helpers (install_hn among them), then step 3c alone.
+const hnStepOf = (source: string) =>
+  source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# 1. Host requirements")) +
+  source.slice(source.indexOf("# 3c. hn's binary"), source.indexOf("# 4. Ensure ~/.local/bin"));
+
+const hnFixture = (scratch: string, { tamper = false, runs = true, drain = false } = {}) => {
+  const home = join(scratch, "home");
+  mkdirSync(home, { recursive: true });
+  const binary = join(scratch, "harness-tui-darwin-arm64");
+  writeFileSync(binary, ["#!/bin/sh", ...drained(drain, [runs ? "echo 'hn 0.1.0 (tmux 3.5a)'" : "exit 1"]), ""].join("\n"));
+  chmodSync(binary, 0o755);
+  const sha = spawnSync("shasum", ["-a", "256", binary], { encoding: "utf8" }).stdout.split(" ")[0];
+  // As release-tui.yml writes it: jq's pretty print, one build per platform.
+  writeFileSync(join(scratch, "manifest.json"), JSON.stringify({
+    version: "0.1.0",
+    builds: {
+      "darwin-x64": { url: "https://cdn.example/harness-tui-darwin-x64", sha256: "1".repeat(64) },
+      "darwin-arm64": { url: "https://cdn.example/harness-tui-darwin-arm64", sha256: tamper ? "0".repeat(64) : sha },
+    },
+  }, null, 2));
+  writeCommand(scratch, "curl", [
+    `printf '%s\\n' "$*" >> '${join(scratch, "curl-invocations")}'`,
+    `case "$*" in *"-o "*) cp '${binary}' "$4" ;; *) cat '${join(scratch, "manifest.json")}' ;; esac`,
+  ]);
+  writeCommand(scratch, "uname", [`if [ "$1" = "-m" ]; then printf 'arm64\\n'; else printf 'Darwin\\n'; fi`]);
+  return { home, tui: join(home, ".harness", "bin", "harness-tui") };
+};
+
+// Step 2's choice of a Node, up to the download, with RUNTIME_DIR at `runtime`.
+const nodeSelectionOf = (source: string, runtime: string) =>
+  `RUNTIME_DIR='${runtime}'; CURRENT_NODE_FILE="$RUNTIME_DIR/current-node"; ` +
+  source.slice(source.indexOf("# Prints the major version"), source.indexOf('if [ -z "$NODE_BIN" ]; then\n  # Fetch'));
 
 /** What tells the installer an agent ran it: removed from this test's own environment, which may be an agent's. */
 const AGENT_KEYS = ["CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "AI_AGENT", "HARNESS_AGENT_SESSION"];
@@ -323,8 +433,7 @@ describe("scripts/install.sh command contract", () => {
       mkdirSync(join(runtime, `node-v${major}`, "bin"), { recursive: true });
       writeCommand(join(runtime, `node-v${major}`, "bin"), "node", [`printf ${major}`, "echo"]);
       writeFileSync(join(runtime, "current-node"), `${node}\n`);
-      const script = source.slice(source.indexOf("# Prints the major version"), source.indexOf("if [ -z \"$NODE_BIN\" ]; then\n  # Fetch"));
-      const out = spawnSync("/bin/sh", ["-c", `RUNTIME_DIR='${runtime}'; CURRENT_NODE_FILE="$RUNTIME_DIR/current-node"; ${script}\nprintf '[%s]' "$NODE_BIN"`], {
+      const out = spawnSync("/bin/sh", ["-c", `${nodeSelectionOf(source, runtime)}\nprintf '[%s]' "$NODE_BIN"`], {
         encoding: "utf8",
         env: { PATH: "/usr/bin:/bin", HOME: scratch },
       });
@@ -556,44 +665,6 @@ describe("scripts/install.sh command contract", () => {
       expect(process.env.PATH).toBe(workerPath);
     } finally { await pending; }
   });
-
-  // A fake CDN: `curl -o` writes the archive, plain `curl` prints the manifest. The archive wraps a
-  // fake tmux so the whole managed path — fetch, verify, unpack, record, link — runs for real.
-  const managedFixture = (scratch: string, tamperSha = false) => {
-    const home = join(scratch, "home");
-    const root = "tmux-9.9-darwin-arm64";
-    const stage = join(scratch, "stage", root, "bin");
-    mkdirSync(stage, { recursive: true });
-    writeCommand(stage, "tmux", ["printf 'tmux 9.9\\n'"]);
-    const archive = join(scratch, `${root}.tar.gz`);
-    spawnSync("tar", ["-czf", archive, "-C", join(scratch, "stage"), root]);
-    const sha = spawnSync("shasum", ["-a", "256", archive], { encoding: "utf8" }).stdout.split(" ")[0];
-    const manifest = JSON.stringify({
-      tmux: {
-        "darwin-arm64": {
-          version: "9.9",
-          url: "https://cdn.example/tmux.tar.gz",
-          sha256: tamperSha ? "0".repeat(64) : sha,
-          size: 1,
-          archiveRoot: root,
-        },
-      },
-    }, null, 2);
-    writeFileSync(join(scratch, "manifest.json"), manifest);
-    // The ladder's first rung is `command -v tmux && tmux -V`, and PATH below still includes /usr/bin
-    // — where ubuntu-latest (CI) ships a real tmux 3.4, so on that runner the script found it, said
-    // "tmux ready (tmux 3.4)" and never took the managed path these tests exist for. A broken tmux
-    // in the fixture dir (first on PATH) fails that rung everywhere; once the managed build is
-    // linked, the script puts BIN_DIR ahead of PATH, so the 9.9 fake wins from then on.
-    writeCommand(scratch, "tmux", ["exit 127"]);
-    writeCommand(scratch, "curl", [
-      `printf '%s\\n' "$*" >> '${join(scratch, "curl-invocations")}'`,
-      `case "$*" in *"-o "*) cp '${archive}' "$4" ;; *) cat '${join(scratch, "manifest.json")}' ;; esac`,
-    ]);
-    writeCommand(scratch, "uname", [`if [ "$1" = "-m" ]; then printf 'arm64\\n'; else printf 'Darwin\\n'; fi`]);
-    mkdirSync(home, { recursive: true });
-    return { home, root };
-  };
 
   it("downloads, verifies and links the managed tmux when there is no Homebrew", () => {
     const source = readFileSync(installer, "utf8");
@@ -1056,11 +1127,6 @@ describe("scripts/install.sh command contract", () => {
   // the install still succeeds. And never linked into ~/.local/bin: that path is grid's own
   // installer's (uv's, on a Mac); the daemon puts the managed grid on an agent pane's PATH itself.
 
-  // The helpers plus the grid step alone, as one runnable unit.
-  const gridStepOf = (source: string) =>
-    source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# 1. Host requirements")) +
-    source.slice(source.indexOf("# 3b. The managed grid"), source.indexOf("# 3c. hn's binary"));
-
   it("installs the managed grid after the CLI and before PATH, as a step the install can survive", () => {
     const source = readFileSync(installer, "utf8");
     const cliStep = source.indexOf("# 3. Fetch manifest");
@@ -1077,35 +1143,6 @@ describe("scripts/install.sh command contract", () => {
     expect(fn).not.toContain("exit ");
     expect(fn).not.toContain("ln -s");
   });
-
-  const gridFixture = (scratch: string, tamperSha = false) => {
-    const home = join(scratch, "home");
-    const root = "grid-9.9-darwin-arm64";
-    const stage = join(scratch, "stage", root, "bin");
-    mkdirSync(stage, { recursive: true });
-    writeCommand(stage, "grid", ["printf 'grid 9.9\\n'"]);
-    const archive = join(scratch, `${root}.tar.gz`);
-    spawnSync("tar", ["-czf", archive, "-C", join(scratch, "stage"), root]);
-    const sha = spawnSync("shasum", ["-a", "256", archive], { encoding: "utf8" }).stdout.split(" ")[0];
-    writeFileSync(join(scratch, "manifest.json"), JSON.stringify({
-      grid: {
-        "darwin-arm64": {
-          version: "9.9",
-          url: "https://cdn.example/grid.tar.gz",
-          sha256: tamperSha ? "0".repeat(64) : sha,
-          size: 1,
-          archiveRoot: root,
-        },
-      },
-    }, null, 2));
-    writeCommand(scratch, "curl", [
-      `printf '%s\\n' "$*" >> '${join(scratch, "curl-invocations")}'`,
-      `case "$*" in *"-o "*) cp '${archive}' "$4" ;; *) cat '${join(scratch, "manifest.json")}' ;; esac`,
-    ]);
-    writeCommand(scratch, "uname", [`if [ "$1" = "-m" ]; then printf 'arm64\\n'; else printf 'Darwin\\n'; fi`]);
-    mkdirSync(home, { recursive: true });
-    return { home, root };
-  };
 
   const runGridStep = (scratch: string, home: string, mode: string) =>
     spawnSync("/bin/sh", ["-c", gridStepOf(readFileSync(installer, "utf8"))], {
@@ -1227,11 +1264,6 @@ describe("scripts/install.sh command contract", () => {
 });
 
 describe("scripts/install.sh: hn", () => {
-  // The constants and helpers (install_hn among them), then step 3c alone.
-  const hnStepOf = (source: string) =>
-    source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# 1. Host requirements")) +
-    source.slice(source.indexOf("# 3c. hn's binary"), source.indexOf("# 4. Ensure ~/.local/bin"));
-
   it("installs hn after the grid and before PATH, as a step the install can survive", () => {
     const source = readFileSync(installer, "utf8");
     const grid = source.indexOf("# 3b. The managed grid");
@@ -1246,29 +1278,6 @@ describe("scripts/install.sh: hn", () => {
     expect(source).toContain('TUI_BIN="$HOME/.harness/bin/harness-tui"');
     expect(source).toContain("harness/tui/metadata.json");
   });
-
-  const hnFixture = (scratch: string, { tamper = false, runs = true } = {}) => {
-    const home = join(scratch, "home");
-    mkdirSync(home, { recursive: true });
-    const binary = join(scratch, "harness-tui-darwin-arm64");
-    writeFileSync(binary, runs ? "#!/bin/sh\necho 'hn 0.1.0 (tmux 3.5a)'\n" : "#!/bin/sh\nexit 1\n");
-    chmodSync(binary, 0o755);
-    const sha = spawnSync("shasum", ["-a", "256", binary], { encoding: "utf8" }).stdout.split(" ")[0];
-    // As release-tui.yml writes it: jq's pretty print, one build per platform.
-    writeFileSync(join(scratch, "manifest.json"), JSON.stringify({
-      version: "0.1.0",
-      builds: {
-        "darwin-x64": { url: "https://cdn.example/harness-tui-darwin-x64", sha256: "1".repeat(64) },
-        "darwin-arm64": { url: "https://cdn.example/harness-tui-darwin-arm64", sha256: tamper ? "0".repeat(64) : sha },
-      },
-    }, null, 2));
-    writeCommand(scratch, "curl", [
-      `printf '%s\\n' "$*" >> '${join(scratch, "curl-invocations")}'`,
-      `case "$*" in *"-o "*) cp '${binary}' "$4" ;; *) cat '${join(scratch, "manifest.json")}' ;; esac`,
-    ]);
-    writeCommand(scratch, "uname", [`if [ "$1" = "-m" ]; then printf 'arm64\\n'; else printf 'Darwin\\n'; fi`]);
-    return { home, tui: join(home, ".harness", "bin", "harness-tui") };
-  };
 
   const runHnStep = (scratch: string, home: string, mode: string) =>
     spawnSync("/bin/sh", ["-c", hnStepOf(readFileSync(installer, "utf8"))], {
@@ -1493,4 +1502,167 @@ describe("scripts/install.sh: OpenCode for hn's first window", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("OpenCode will be installed when hn first starts it");
   }, 20_000);
+});
+
+describe("scripts/install.sh: no child reads the script", () => {
+  // Under `curl … | sh -s` the script is sh's stdin, and every program it starts inherits it: one that
+  // reads its stdin eats the rest of the script, and the install stops there without a word.
+  const sh = (input: string, env: NodeJS.ProcessEnv, args: string[] = []) => {
+    const home = mkdtempSync(join(tmpdir(), "harness-piped-home-"));
+    try {
+      // Host mode, and step 4 of the others, write the PATH line into the shell's rc file.
+      return spawnSync("/bin/sh", ["-s", ...args], { encoding: "utf8", input, env: { ...process.env, HOME: home, SHELL: "/bin/zsh", ...env } });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  };
+  // 24 KiB of comments before the marker: CI's /bin/sh is dash, which reads 8 KiB ahead, so a marker
+  // close behind the call would already be in its buffer, and a child that read the rest would miss it.
+  const PADDING = `# ${"-".repeat(77)}\n`.repeat(320);
+  const piped = (slice: string, env: NodeJS.ProcessEnv) => sh(`${slice}\n${PADDING}echo REACHED-THE-END\n`, env);
+  const source = () => readFileSync(installer, "utf8");
+
+  const withScratch = <T>(name: string, run: (scratch: string) => T): T => {
+    const scratch = mkdtempSync(join(tmpdir(), `harness-piped-${name}-`));
+    try {
+      return run(scratch);
+    } finally {
+      // The managed grid's bin/ is laid down read-only.
+      try { chmodSync(join(scratch, "home", ".harness", "runtime", "grid-9.9-darwin-arm64", "bin"), 0o755); } catch { /* none */ }
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  };
+
+  it("tmux -V and the ready line (a Mac's tmux)", () => withScratch("tmux", (scratch) => {
+    writeCommand(scratch, "uname", ["printf 'Darwin\\n'"]);
+    writeCommand(scratch, "tmux", [DRAIN, "printf 'tmux 3.6\\n'"]);
+    const result = piped(hostSetupOf(source()), { INSTALL_MODE: "standalone", PATH: `${scratch}:/usr/bin:/bin` });
+    expect(result.stdout, result.stderr).toContain("REACHED-THE-END");
+  }));
+
+  it("the managed tmux's -V", () => withScratch("managed-tmux", (scratch) => {
+    const { home } = managedFixture(scratch, false, true);
+    const result = piped(hostSetupOf(source()), {
+      HOME: home, INSTALL_MODE: "standalone", PATH: `${scratch}:/usr/bin:/bin`,
+      HARNESS_TMUX_METADATA_URL: "https://cdn.example/manifest.json", HARNESS_HOMEBREW_PREFIXES: join(scratch, "no-homebrew"),
+    });
+    expect(result.stdout, result.stderr).toContain("tmux ready (tmux 9.9)");
+    expect(result.stdout).toContain("REACHED-THE-END");
+  }));
+
+  // On Linux, apt-get as root and through sudo; sudo asks for a password on the tty, not on stdin.
+  const linuxApt = (scratch: string, uid: string) => {
+    writeLinuxHostCommands(scratch);
+    writeCommand(scratch, "uname", ["printf 'Linux\\n'"]);
+    writeCommand(scratch, "id", [`printf '${uid}\\n'`]);
+    writeCommand(scratch, "sudo", ['exec "$@"']);
+    writeCommand(scratch, "apt-get", [
+      DRAIN,
+      `printf '%s\\n' '#!/bin/sh' 'printf "tmux 3.6\\\\n"' > '${join(scratch, "tmux")}'`,
+      `/bin/chmod 700 '${join(scratch, "tmux")}'`,
+    ]);
+    // Only the fakes on PATH: ubuntu-latest (CI) has a real tmux in /usr/bin.
+    return piped(hostSetupOf(source()), { INSTALL_MODE: "standalone", DISPLAY: "", WAYLAND_DISPLAY: "", PATH: scratch });
+  };
+
+  it("apt-get as root", () => withScratch("apt-root", (scratch) => {
+    const result = linuxApt(scratch, "0");
+    expect(result.stdout, result.stderr).toContain("tmux ready (tmux 3.6)");
+    expect(result.stdout).toContain("REACHED-THE-END");
+  }));
+
+  it("apt-get through sudo", () => withScratch("apt-sudo", (scratch) => {
+    const result = linuxApt(scratch, "1000");
+    expect(result.stdout, result.stderr).toContain("tmux ready (tmux 3.6)");
+    expect(result.stdout).toContain("REACHED-THE-END");
+  }));
+
+  it("the managed Node's -e and -v", () => withScratch("node", (scratch) => {
+    const runtime = join(scratch, "runtime");
+    const bin = join(runtime, "node-v24", "bin");
+    mkdirSync(bin, { recursive: true });
+    writeCommand(bin, "node", [DRAIN, "printf 24"]);
+    writeFileSync(join(runtime, "current-node"), `${join(bin, "node")}\n`);
+    const result = piped(nodeSelectionOf(source(), runtime), { PATH: "/usr/bin:/bin", HARNESS_NODE_BINARY: "" });
+    expect(result.stdout, result.stderr).toContain("Using the managed Node runtime already installed (24)");
+    expect(result.stdout).toContain("REACHED-THE-END");
+  }));
+
+  it("dsh builtins", () => withScratch("dsh", (scratch) => {
+    writeCommand(scratch, "node", [DRAIN, "exit 0"]);
+    const result = piped(gridStepOf(source()), { INSTALL_MODE: "desktop", NODE_BIN: join(scratch, "node"), PATH: `${scratch}:/usr/bin:/bin` });
+    expect(result.stdout, result.stderr).toContain("REACHED-THE-END");
+  }));
+
+  it("the managed grid's --version", () => withScratch("grid", (scratch) => {
+    const { home } = gridFixture(scratch, false, true);
+    writeCommand(scratch, "node", ["exit 0"]);
+    const result = piped(gridStepOf(source()), {
+      HOME: home, INSTALL_MODE: "standalone", NODE_BIN: join(scratch, "node"), PATH: `${scratch}:/usr/bin:/bin`,
+      HARNESS_GRID_METADATA_URL: "https://cdn.example/manifest.json",
+    });
+    expect(result.stdout, result.stderr).toContain("installed grid 9.9");
+    expect(result.stdout).toContain("REACHED-THE-END");
+  }));
+
+  it("hn's --version before it is installed", () => withScratch("hn", (scratch) => {
+    const { home } = hnFixture(scratch, { drain: true });
+    const result = piped(hnStepOf(source()), {
+      HOME: home, INSTALL_MODE: "standalone", PATH: `${scratch}:/usr/bin:/bin`, HARNESS_TUI_MANIFEST_URL: "https://cdn.example/manifest.json",
+    });
+    expect(result.stdout, result.stderr).toContain("installed hn 0.1.0");
+    expect(result.stdout).toContain("REACHED-THE-END");
+  }));
+
+  it.each(["standalone", "desktop"])("the final checks and the versions it prints (%s)", (mode) => withScratch("finale", (scratch) => {
+    const { home, node } = installedFixture(scratch, true);
+    mkdirSync(join(home, ".harness", "bin"), { recursive: true });
+    writeCommand(join(home, ".harness", "bin"), "harness-tui", [DRAIN, "echo 'hn 0.1.0 (tmux 3.5a)'"]);
+    const result = piped(finaleOf(source()), { HOME: home, INSTALL_MODE: mode, NODE_BIN: node, PATH: `${scratch}:/usr/bin:/bin` });
+    expect(result.stdout, result.stderr).toContain("harness 0.2.60 installed.");
+    if (mode === "standalone") expect(result.stdout).toContain("✓ hn 0.1.0 installed.");
+    expect(result.stdout).toContain("REACHED-THE-END");
+  }));
+
+  it("the whole script piped into sh -s -- --host still says it is ready", () => withScratch("host", (scratch) => {
+    writeCommand(scratch, "uname", ["printf 'Darwin\\n'"]);
+    writeCommand(scratch, "tmux", [DRAIN, "printf 'tmux 3.6\\n'"]);
+    const result = sh(source(), { PATH: `${scratch}:/usr/bin:/bin`, HARNESS_HOMEBREW_PREFIXES: join(scratch, "no-homebrew") }, ["--", "--host"]);
+    expect(result.stdout, result.stderr).toMatch(/✓ Host requirements ready\.\n$/);
+  }));
+
+  it("the whole script piped into sh -s -- --desktop still says it is installed", () => withScratch("desktop", (scratch) => {
+    // A Node that answers `-e` with 24, writes a launcher when it runs step 3 (no arguments, the code
+    // on stdin), and does nothing otherwise; it and the launcher read their stdin to the end.
+    const launcher = ["#!/bin/sh", DRAIN, '[ "$1" = version ] && echo 0.2.60', "exit 0", ""].join("\n");
+    writeCommand(scratch, "node", [
+      DRAIN,
+      'case "$#:${1:-}" in',
+      "  1:-e|2:-e) printf 24 ;;",
+      `  0:) mkdir -p "$HOME/.local/bin" && printf '%s' '${launcher}' > "$HOME/.local/bin/harness" && chmod 755 "$HOME/.local/bin/harness" ;;`,
+      "esac",
+      "exit 0",
+    ]);
+    const result = sh(source(), { PATH: `${scratch}:/usr/bin:/bin`, HARNESS_NODE_BINARY: join(scratch, "node") }, ["--", "--desktop"]);
+    expect(result.stdout, result.stderr).toContain("harness 0.2.60 installed.");
+  }));
+
+  // Rows 9 (the override's error, printed as the script exits) and 12 (a background list, which already
+  // reads /dev/null) cannot be told apart by a run: the source says it for them, and for the rest.
+  it("every call in the list carries the redirect", () => {
+    const calls = [
+      '"$tui_staging" --version', '"$grid_target/bin/grid" --version', 'apt-get "$@"', "tmux -V",
+      '"$tmux_target/bin/tmux" -V', "-e 'process.stdout.write", '"$NODE_BIN" -v', "dsh builtins",
+      "bash -s -- --no-modify-path", 'opencode" --version', '"$NODE_BIN" --version', '"$LAUNCHER" version',
+      '"$TUI_BIN" --version',
+    ];
+    const lines = source().split("\n").filter((line) => !line.trimStart().startsWith("#"));
+    const found = calls.flatMap((call) => {
+      const at = lines.filter((line) => line.includes(call));
+      expect(at, call).not.toEqual([]);
+      return at;
+    });
+    expect(found).toHaveLength(18);
+    expect(found.filter((line) => !line.includes("</dev/null"))).toEqual([]);
+  });
 });
