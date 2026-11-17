@@ -1,6 +1,6 @@
 /**
  * Status, enable, disable and update against a fake `claude`: a recording ClaudeRun answers each call from a table, and
- * one real script on a throwaway PATH and HOME stands in for the binary `claudeRun` and `claudeFound` find. The real
+ * one real script on a throwaway PATH and HOME stands in for the binary `claudeRun`, `claudeRunIn` and `claudeFound` find. The real
  * `claude` and ~/.claude are never touched.
  */
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -8,7 +8,10 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as engineBin from '../lib/engineBin.js'
-import { claudeDisable, claudeEnable, claudeFound, claudeRun, claudeSetUp, claudeStatus, claudeUpdate, type ClaudeRun } from './claudePlugin.js'
+import {
+  claudeDisable, claudeEnable, claudeFound, claudeHomeDisable, claudeHomeEnable, claudeRun, claudeRunIn, claudeSetUp, claudeStatus,
+  claudeUpdate, type ClaudeRun,
+} from './claudePlugin.js'
 
 // A copy of the module, so a test can watch whether the lookup that starts the login shell ran.
 vi.mock('../lib/engineBin.js', async (original) => ({ ...await original<object>() }))
@@ -227,6 +230,88 @@ describe('claudeDisable', () => {
     expect(await claudeDisable({ run: claude.run, platform: 'darwin' })).toEqual({ ok: true })
     expect(claude.writes()).toEqual([])
     expect(await claudeDisable({ run: null, platform: 'darwin' })).toEqual({ ok: true })
+  })
+})
+
+// An Orca account's home shares `plugins/` with the default home: only its own settings are ever changed there.
+describe('claudeHomeEnable', () => {
+  const enable = 'plugin enable harness-device@openharness --scope user'
+
+  it('turns the plugin on in that home with enable alone', async () => {
+    const claude = fakeClaude({ 'plugin list --json': list(USER_OFF) })
+    expect(await claudeHomeEnable({ run: claude.run, platform: 'darwin' })).toEqual({ ok: true })
+    expect(claude.calls.map((call) => call.args)).toEqual(['--version', 'plugin list --json', enable])
+    expect(claude.calls.find((call) => call.args === enable)?.timeoutMs).toBe(15_000)
+  })
+
+  it('one already on runs nothing more', async () => {
+    const claude = fakeClaude({ 'plugin list --json': list(USER_ON) })
+    expect(await claudeHomeEnable({ run: claude.run, platform: 'linux' })).toEqual({ ok: true })
+    expect(claude.calls.map((call) => call.args)).toEqual(['--version', 'plugin list --json'])
+  })
+
+  it('not listed there, it still runs enable, and a failure is the first line Claude Code wrote, step enable', async () => {
+    const unlisted = fakeClaude({ 'plugin list --json': list({ ...USER_ON, scope: 'project' }) })
+    expect(await claudeHomeEnable({ run: unlisted.run, platform: 'darwin' })).toEqual({ ok: true })
+    expect(unlisted.writes()).toEqual([enable])
+
+    const failing = fakeClaude({ [enable]: { code: 1, stderr: '\nError: plugin not found\n  at enable\n' } })
+    expect(await claudeHomeEnable({ run: failing.run, platform: 'darwin' }))
+      .toEqual({ ok: false, error: 'Error: plugin not found', step: 'enable' })
+    expect(failing.writes()).toEqual([enable])
+  })
+
+  it('a list that cannot be read is step list', async () => {
+    const claude = fakeClaude({ 'plugin list --json': { code: 1, stderr: 'Error: settings locked\n' } })
+    expect(await claudeHomeEnable({ run: claude.run, platform: 'darwin' }))
+      .toEqual({ ok: false, error: 'Error: settings locked', step: 'list' })
+    expect(claude.writes()).toEqual([])
+  })
+
+  it('an old Claude Code is unsupported and asked nothing more', async () => {
+    const unsupported = { ok: false, error: 'Claude Code 2.1.287 or later is needed.', step: 'unsupported' }
+    const old = fakeClaude({}, '2.1.286 (Claude Code)')
+    expect(await claudeHomeEnable({ run: old.run, platform: 'darwin' })).toEqual(unsupported)
+    expect(old.calls.map((call) => call.args)).toEqual(['--version'])
+    const windows = fakeClaude({}, '2.2.0 (Claude Code)')
+    expect(await claudeHomeEnable({ run: windows.run, platform: 'win32' })).toEqual(unsupported)
+    expect(windows.calls.map((call) => call.args)).toEqual(['--version'])
+    expect(await claudeHomeEnable({ run: null, platform: 'darwin' })).toEqual(unsupported)
+  })
+})
+
+describe('claudeHomeDisable', () => {
+  const disable = 'plugin disable harness-device@openharness --scope user'
+
+  it('turns the plugin off and never uninstalls it', async () => {
+    const claude = fakeClaude({ 'plugin list --json': list(USER_ON) })
+    expect(await claudeHomeDisable({ run: claude.run, platform: 'darwin' })).toEqual({ ok: true })
+    expect(claude.writes()).toEqual([disable])
+    expect(claude.calls.find((call) => call.args === disable)?.timeoutMs).toBe(15_000)
+  })
+
+  it('an entry not listed or already off runs nothing', async () => {
+    for (const plugins of [list(), list(USER_OFF), list({ ...USER_ON, scope: 'project' })]) {
+      const claude = fakeClaude({ 'plugin list --json': plugins })
+      expect(await claudeHomeDisable({ run: claude.run, platform: 'darwin' })).toEqual({ ok: true })
+      expect(claude.writes()).toEqual([])
+    }
+  })
+
+  it('a failure is the first line Claude Code wrote, step disable', async () => {
+    const claude = fakeClaude({ 'plugin list --json': list(USER_ON), [disable]: { code: 1, stderr: 'Error: settings locked\n' } })
+    expect(await claudeHomeDisable({ run: claude.run, platform: 'darwin' }))
+      .toEqual({ ok: false, error: 'Error: settings locked', step: 'disable' })
+  })
+
+  it('a list that cannot be read is step list and runs nothing', async () => {
+    const claude = fakeClaude({ 'plugin list --json': { code: null } })
+    expect(await claudeHomeDisable({ run: claude.run, platform: 'darwin' })).toEqual({ ok: false, error: UNLISTED, step: 'list' })
+    expect(claude.writes()).toEqual([])
+  })
+
+  it('no claude is ok and runs nothing', async () => {
+    expect(await claudeHomeDisable({ run: null, platform: 'darwin' })).toEqual({ ok: true })
   })
 })
 
@@ -483,5 +568,28 @@ describe('claudeFound', () => {
     const dir = throwawayPath()
     expect(await claudeFound(join(dir, '.claude'), true)).toBeNull()
     expect(await claudeFound(join(dir, '.claude'), false)).toBeNull()
+  })
+})
+
+describe('claudeRunIn', () => {
+  // The command run inside an Orca terminal has that account's CLAUDE_CONFIG_DIR: the child names the home asked for,
+  // and the process keeps its own for every other call it makes.
+  it('the child gets CLAUDE_CONFIG_DIR and process.env does not', async () => {
+    const dir = throwawayPath()
+    const script = join(dir, 'claude')
+    writeFileSync(script, '#!/bin/sh\necho "home: ${CLAUDE_CONFIG_DIR-none}"\n')
+    chmodSync(script, 0o755)
+    vi.stubEnv('CLAUDE_CONFIG_DIR', join(dir, 'profile-b'))
+    const home = join(dir, 'profile-a')
+
+    const run = claudeRunIn(home)
+
+    expect(await run!(['--version'], 15_000)).toEqual({ code: 0, stdout: `home: ${home}\n`, stderr: '' })
+    expect(process.env.CLAUDE_CONFIG_DIR).toBe(join(dir, 'profile-b'))
+  })
+
+  it('is null when no claude is found', () => {
+    const dir = throwawayPath()
+    expect(claudeRunIn(join(dir, 'profile-a'))).toBeNull()
   })
 })
