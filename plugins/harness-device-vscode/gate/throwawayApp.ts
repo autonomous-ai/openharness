@@ -48,21 +48,29 @@ export function rebrand(app: string): void {
 /** Throws, naming each, if any bundle in the app, or any app's signature, still carries Microsoft's id. */
 export function assertRebranded(app: string): void {
   const left: string[] = []
-  for (const plist of infoPlists(app)) {
+  const name = (path: string): string => relative(dirname(realpathSync(app)), path)
+  for (const plist of infoPlists(realpathSync(app))) {
     const id = plistId(plist)
-    const name = relative(dirname(app), plist)
-    if (id?.startsWith(MICROSOFT)) left.push(`${name} still carries ${id}`)
-    if (basename(dirname(plist)) !== 'Contents') continue
-    const signed = signedId(dirname(dirname(plist)))
-    if (signed === undefined || signed.startsWith(MICROSOFT)) left.push(`${relative(dirname(app), dirname(dirname(plist)))} is signed as ${signed ?? 'nothing'}`)
+    if (id?.startsWith(MICROSOFT)) left.push(`${name(plist)} still carries ${id}`)
+  }
+  for (const bundle of appBundles(app)) {
+    const signed = signedId(bundle)
+    if (signed === undefined || signed.startsWith(MICROSOFT)) left.push(`${name(bundle)} is signed as ${signed ?? 'nothing'}`)
   }
   if (left.length) throw new Error(`refusing to launch the throwaway VS Code: ${left.join('; ')}`)
 }
 
-/** LaunchServices keeps an app it saw launch after its folder is gone: this forgets this one app, and only it, by the
- *  real path LaunchServices records (/private/tmp for /tmp). */
+/** The app and each app inside it (its helpers), by the real path LaunchServices records them under (/private/tmp for
+ *  /tmp): it registers each helper that runs apart from the app. */
+export function appBundles(app: string): string[] {
+  const real = realpathSync(app)
+  return infoPlists(real).filter((plist) => basename(dirname(plist)) === 'Contents').map((plist) => dirname(dirname(plist)))
+}
+
+/** LaunchServices keeps an app it saw launch after its folder is gone: this forgets this one, its helpers too, and
+ *  nothing else. */
 export function unregister(app: string): void {
-  execFileSync(LSREGISTER, ['-u', realpathSync(app)])
+  for (const bundle of appBundles(app)) execFileSync(LSREGISTER, ['-u', bundle])
 }
 
 export type Stamp = { mtimeMs: number; sha256: string } | null
