@@ -252,8 +252,8 @@ describe('inCmux', () => {
     ...['--help', 'x; rm -rf /', `${S}0`].map((surface) => ({ CMUX_SURFACE_ID: surface, CMUX_WORKSPACE_ID: W })),
     ...['vscode', 'WezTerm', 'tmux', 'iTerm.app'].map((program) => ({ ...cmux, TERM_PROGRAM: program })),
     ...['com.cmuxterm.app.nightly', 'com.googlecode.iterm2'].map((bundle) => ({ ...cmux, TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: bundle })),
-    ...['HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE', 'HC_TERMINAL_ID', 'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_TERMINAL_HANDLE']
-      .map((own) => ({ ...cmux, [own]: '1' })),
+    ...['HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE', 'HC_TERMINAL_ID', 'KITTY_WINDOW_ID', 'WEZTERM_PANE',
+      'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE'].map((own) => ({ ...cmux, [own]: '1' })),
   ])("not cmux's own terminal: %j", (hints) => {
     expect(inCmux(hints)).toBe(false)
   })
@@ -270,6 +270,10 @@ describe('inCmux', () => {
     const hints = { ...cmux, TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: 'com.cmuxterm.app.nightly' }
     expect(detectHost(hints)).not.toBe('cmux')
     expect(detectApp(hints)).not.toBe('cmux')
+  })
+
+  it('an Orca session started from a cmux terminal is Orca\'s', () => {
+    expect(detectHost({ ...cmux, TERM_PROGRAM: 'ghostty', ORCA_AGENT_SESSION_ID: '1' })).toBe('orca')
   })
 
   it('a program started from a cmux terminal is its own', () => {
