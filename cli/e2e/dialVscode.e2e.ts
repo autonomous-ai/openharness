@@ -1,10 +1,10 @@
 /**
- * A tap and a swipe reach Claude Code in VS Code's integrated terminal (docs/plans/2026-11-17-dial-vscode-extension-design.md),
- * on the real daemon. Two sessions run each under a shell of its own under a fake VS Code (harness/outsideAgent.ts), so
+ * A tap, a swipe and a stroke on the glass reach Claude Code in VS Code's integrated terminal
+ * (docs/plans/2026-11-17-dial-vscode-extension-design.md), on the real daemon. Two sessions run each under a shell of its own under a fake VS Code (harness/outsideAgent.ts), so
  * the parent chain the devices read from `ps` is this computer's own; Harness's extension's loop
  * (plugins/harness-device-vscode/src/loop.ts) runs with a fake window in a process of its own (harness/vscodeWindow.ts),
- * reports both shells on the real devices' socket and prints each terminal it is asked to show; a fake dial on the desk
- * taps and rests. The app in front is a line on the stdin of the real `harness hardware watch --json`, as the Harness
+ * reports both shells on the real devices' socket and prints each terminal it is asked to show and each line it scrolls;
+ * a fake dial on the desk taps, rests and scrolls. The app in front is a line on the stdin of the real `harness hardware watch --json`, as the Harness
  * Device app writes it.
  *
  * The real VS Code, its `code` and `/usr/bin/open` never run: the daemon's `open` is the harness's fake
@@ -19,6 +19,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { devicesListenerPath } from '../src/devices/listenerPath.js'
+import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
@@ -46,6 +47,10 @@ interface Window {
   states: string[]
   /** Each shell's pid it was asked to show, in order. */
   shows: number[]
+  /** Each line it scrolled its active terminal, in order. */
+  scrolls: ('up' | 'down')[]
+  /** Each state it took from set(), as it then said it was, in order. */
+  took: WindowState[]
   /** Its channel's lines, then anything it wrote on stderr. */
   logs: string[]
   /** The window's terminals change, as VS Code tells it. */
@@ -54,12 +59,14 @@ interface Window {
   stop(): Promise<number | null>
 }
 
-describe.skipIf(process.platform === 'win32')("a tap and a swipe reach an agent in VS Code's terminal", () => {
+describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach an agent in VS Code's terminal", () => {
   let daemon: IsolatedDaemon | undefined
   let desk: Desk | undefined
   const children: ChildProcess[] = []
   const outside: Outside[] = []
+  const clients: LocalClient[] = []
   afterEach(async () => {
+    for (const client of clients.splice(0)) client.close()
     for (const child of children.splice(0)) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
     for (const engine of outside.splice(0)) await engine.close()
     await desk?.close()
@@ -130,6 +137,8 @@ describe.skipIf(process.platform === 'win32')("a tap and a swipe reach an agent 
     children.push(child)
     const states: string[] = []
     const shows: number[] = []
+    const scrolls: ('up' | 'down')[] = []
+    const took: WindowState[] = []
     const logs: string[] = []
     const lines = (from: NodeJS.ReadableStream, take: (line: string) => void): void => {
       let rest = ''
@@ -141,17 +150,19 @@ describe.skipIf(process.platform === 'win32')("a tap and a swipe reach an agent 
       })
     }
     lines(child.stdout, (line) => {
-      const said = JSON.parse(line) as { state?: string; show?: number; log?: string }
+      const said = JSON.parse(line) as { state?: string; show?: number; scroll?: 'up' | 'down'; took?: WindowState; log?: string }
       if (said.state !== undefined) states.push(said.state)
       if (said.show !== undefined) shows.push(said.show)
+      if (said.scroll !== undefined) scrolls.push(said.scroll)
+      if (said.took !== undefined) took.push(said.took)
       if (said.log !== undefined) logs.push(said.log)
     })
     lines(child.stderr, (line) => logs.push(line))
     let exited: { code: number | null } | undefined
     child.once('close', (code) => { exited = { code } })
-    onTestFailed(() => { console.log(`---- the window's states\n${states.join('\n')}\n---- its shows\n${shows.join('\n')}\n---- its log\n${logs.join('\n')}`) })
+    onTestFailed(() => { console.log(`---- the window's states\n${states.join('\n')}\n---- its shows\n${shows.join('\n')}\n---- its scrolls\n${scrolls.join(' ')}\n---- its log\n${logs.join('\n')}`) })
     return {
-      states, shows, logs,
+      states, shows, scrolls, took, logs,
       set: (state) => { child.stdin.write(`${JSON.stringify(state)}\n`) },
       stop: async () => {
         child.stdin.end()
@@ -185,14 +196,11 @@ describe.skipIf(process.platform === 'win32')("a tap and a swipe reach an agent 
   const ring = (dial: FakeDial, app: string, since: number): Promise<DialMessage> =>
     dial.next((m) => m.t === 'apps' && m.shown === app, 45_000, `${app}'s ring`, since)
 
-  it('a tap shows its terminal and brings VS Code forward, a rest shows it while VS Code is in front, and neither once the window goes', async () => {
-    const { d, dial } = await fresh()
-    // The open the daemon runs is the harness's fake in its root, never the real one.
-    const open = d.env.HARNESS_OPEN_BIN ?? ''
-    expect(isAbsolute(open), open).toBe(true)
-    expect(relative(d.root, open).startsWith('..'), open).toBe(false)
-
-    // 1. A and B in VS Code's terminals, and W in Ghostty: VS Code's ring is shown, with both.
+  /**
+   * A and B in VS Code's terminals, and W in Ghostty, so that Ghostty's ring tells Ghostty is in front: VS Code's ring is
+   * shown, with both. Then the window's loop connects and reports both shells, A's active.
+   */
+  const twoTerminals = async (d: IsolatedDaemon, dial: FakeDial): Promise<{ a: Outside; b: Outside; window: Window }> => {
     const a = await inVscode(d, 'a')
     const b = await inVscode(d, 'b')
     const w = new InOrca(d, 'w', children, { TERM_PROGRAM: 'ghostty' })
@@ -202,7 +210,6 @@ describe.skipIf(process.platform === 'win32')("a tap and a swipe reach an agent 
       && (m.apps as Array<{ id: string; count: number }>).some((app) => app.id === 'ghostty' && app.count === 1), 45_000, 'VS Code 2 and Ghostty 1')
     for (const agent of [a, b]) expect(agent.shellPid).not.toBe(agent.pid)
 
-    // The window's loop connects and reports both shells, A's active.
     const window = vscodeWindow(d)
     window.set({ terminals: [a.shellPid!, b.shellPid!], active: a.shellPid!, focused: true })
     await until('the window connected', () => window.states.at(-1) === 'connected', 60_000)
@@ -213,6 +220,18 @@ describe.skipIf(process.platform === 'win32')("a tap and a swipe reach an agent 
         await dial.next((m) => m.t === 'agent' && m.id === agent.id && String(m.caps).includes('f'), 45_000, 'its terminal found')
       }
     }
+    return { a, b, window }
+  }
+
+  it('a tap shows its terminal and brings VS Code forward, a rest shows it while VS Code is in front, and neither once the window goes', async () => {
+    const { d, dial } = await fresh()
+    // The open the daemon runs is the harness's fake in its root, never the real one.
+    const open = d.env.HARNESS_OPEN_BIN ?? ''
+    expect(isAbsolute(open), open).toBe(true)
+    expect(relative(d.root, open).startsWith('..'), open).toBe(false)
+
+    // 1. A and B in VS Code's terminals, and W in Ghostty, and the window holds A's and B's, A's active.
+    const { a, b, window } = await twoTerminals(d, dial)
 
     // 2. Swipe: with VS Code in front, a rest on A shows A's terminal.
     const front = watch(d)
@@ -270,4 +289,70 @@ describe.skipIf(process.platform === 'win32')("a tap and a swipe reach an agent 
     const leaks = linesWith(d, 'vscode').filter((line) => pids.some((pid) => pid.test(line)) || UUID.test(line) || line.includes(d.root))
     expect(leaks).toEqual([])
   })
+
+  /** The window's minute lines' counts of scroll lines and of lines dropped, summed: a stroke may fall either side of a minute. */
+  const scrollCounts = (window: Window): { scrollLines: number; dropped: number } => {
+    let scrollLines = 0
+    let dropped = 0
+    for (const line of window.logs) {
+      const counted = /^in the last minute: .*, (\d+) scroll lines, (\d+) dropped$/.exec(line)
+      if (!counted) continue
+      scrollLines += Number(counted[1])
+      dropped += Number(counted[2])
+    }
+    return { scrollLines, dropped }
+  }
+
+  // Longer than the file's other case: the loop writes its counts a minute after a minute's first event, and step 2 waits
+  // for them.
+  it("a stroke scrolls the shown agent's terminal while VS Code is in front and it is the active one, and Harness's windows hear none of it", async () => {
+    const { d, dial } = await fresh()
+    const { a, b, window } = await twoTerminals(d, dial)
+    const harness = await LocalClient.connect(d)
+    clients.push(harness)
+    const front = watch(d)
+    front(VSCODE)
+    await turned(dial, a, "A's terminal shown", () => window.shows[0])
+    const shown = [...window.shows]
+
+    // A stroke toward older lines: each move's 8 is 20 px, one line of 16 (scrollLines.ts) and the rest kept; the up lifts
+    // the finger with too little left for a line. It is taken once the devices logged its up.
+    let strokes = 0
+    const stroke = async (): Promise<void> => {
+      dial.send({ t: 'scroll', phase: 'down', dy: 0, v: 0 })
+      for (let move = 0; move < 3; move++) dial.send({ t: 'scroll', phase: 'move', dy: 8, v: 0 })
+      dial.send({ t: 'scroll', phase: 'up', dy: 0, v: 0 })
+      strokes += 1
+      await until('the stroke taken to its up', () => linesWith(d, 'cable: scroll ↑').length === strokes, 30_000, 50)
+    }
+
+    // 1. On A, its terminal active: three lines toward older ones.
+    await stroke()
+    await until('three lines scrolled', () => window.scrolls.length === 3, 30_000, 50)
+
+    // 2. B's terminal active: the lines for A's run nothing, and the loop's minute line counts them dropped.
+    window.set({ active: b.shellPid! })
+    await until("B's terminal active", () => window.took.at(-1)?.active === b.shellPid, 10_000, 50)
+    await stroke()
+    const counted = await until('the stroke counted dropped', () => {
+      const counts = scrollCounts(window)
+      return counts.dropped > 0 && counts
+    }, 150_000, 200)
+    expect(counted.scrollLines).toBe(3)
+
+    // 3. A's terminal active again, and Ghostty in front: the stroke goes to Harness's windows.
+    window.set({ active: a.shellPid! })
+    await until("A's terminal active again", () => window.took.at(-1)?.active === a.shellPid, 10_000, 50)
+    const since = dial.messages.length
+    front(GHOSTTY)
+    await ring(dial, 'ghostty', since)
+    await stroke()
+    await harness.waitFor((f) => f.type === 'dial_scroll' && f.payload?.phase === 'up', 30_000, "the stroke's up in Harness's window")
+
+    // The window scrolled the first stroke's three lines alone and showed nothing more. Harness's window hears the devices'
+    // frames in order, so a dial_scroll from either stroke on VS Code would come before the last stroke's.
+    expect(window.scrolls).toEqual(['up', 'up', 'up'])
+    expect(window.shows).toEqual(shown)
+    expect(harness.frames.filter((f) => f.type === 'dial_scroll').map((f) => f.payload?.phase)).toEqual(['down', 'move', 'move', 'move', 'up'])
+  }, 300_000)
 })
