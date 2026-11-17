@@ -105,6 +105,8 @@ import '../settings/experimental_features.dart';
 import '../core/local_key_value_store.dart';
 import '../measurement/setup_preference_store.dart';
 import '../devices/device_hosts.dart';
+import '../devices/device_app_offer.dart';
+import '../devices/device_app_setup.dart';
 import '../stats/harness_stats.dart';
 import '../terminal/terminal_session.dart';
 import '../terminal/terminal_theme.dart';
@@ -4171,6 +4173,7 @@ class AppNotifier extends ChangeNotifier {
     AgentUnread? agentUnread,
     SystemNotifications? systemNotifications,
     this.experimentalSettingsTransport,
+    DeviceAppOffer? deviceAppOffer,
   }) : agentPrefetch =
            agentPrefetch ??
            (kUnderTest
@@ -4195,6 +4198,9 @@ class AppNotifier extends ChangeNotifier {
        // layout is remembered: with a layout store there is a state file, and
        // without one (the tests) nothing is written anywhere.
        dial = DialState(paneLayoutStore?.storage),
+       deviceAppOffer =
+           deviceAppOffer ??
+           deviceAppOfferForThisComputer(store: paneLayoutStore?.storage),
        agentPreference = AgentPreference(paneLayoutStore?.storage),
        firstArrival = FirstArrival(paneLayoutStore?.storage),
        projectHistory = ProjectHistory(paneLayoutStore?.storage),
@@ -4277,6 +4283,15 @@ class AppNotifier extends ChangeNotifier {
     // scope here and is the nullable one.
     this.agentUnread.addListener(_announceUnreadToDial);
     addListener(_syncDeviceHosts);
+    // The menu-bar app's offer looks again when a dial attaches and when the
+    // window comes back in front. The dial outlives the app; a disposed offer
+    // is told nothing.
+    dial.addListener(() {
+      if (!_disposed) this.deviceAppOffer.dialChanged(dial.status.attached);
+    });
+    foreground.addListener(() {
+      if (foreground.value) this.deviceAppOffer.windowFronted();
+    });
     addListener(_firstArrivalBehindTour);
     _autoRenameTabs = appearancePrefsStore.value.autoRenameTabs;
     appearancePrefsStore.addListener(_autoRenameChanged);
@@ -4526,6 +4541,10 @@ class AppNotifier extends ChangeNotifier {
   /// frames from the local daemon; its own notifier, so the row rebuilds
   /// without dragging the whole rail through a machine-list rebuild.
   final DialState dial;
+
+  /// The Harness menu-bar app's offer, for the band and the Devices row; fed
+  /// the dial and the window coming back in front.
+  final DeviceAppOffer deviceAppOffer;
   final AgentPreference agentPreference;
   final ProjectHistory projectHistory;
 
@@ -22274,6 +22293,7 @@ class AppNotifier extends ChangeNotifier {
     setupDownloads.dispose();
     experimentalFeatures.dispose();
     deviceHosts.dispose();
+    deviceAppOffer.dispose();
     viewer?.auth.dispose();
     _deviceVisit?.dispose();
     _modelManager?.dispose();
