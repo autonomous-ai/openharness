@@ -634,13 +634,15 @@ describe('ObservedSource and a turn\'s end by hook', () => {
     expect(src.list()[0]).toMatchObject({ state: 'needs-you', unseenDone: false })
   })
 
-  it('a session that ends within the 1.5 s is never done', async () => {
+  // Its turn is over all the same (`claude -p` ends its session at once): it does not read working until it is removed.
+  it('a session that ends within the 1.5 s is never done, and its turn is over', async () => {
     const { src, ev } = setup()
     src.ingest(ev('turn-start'))
     src.ingest(ev('turn-stop'))
     src.ingest(ev('session-end'))
+    expect(src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false })
     await graced()
-    expect(src.list()[0]).toMatchObject({ state: 'working', unseenDone: false })
+    expect(src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false })
   })
 
   // The person stopped the turn: nothing to tell as done, as a Claude turn stopped with Esc.
