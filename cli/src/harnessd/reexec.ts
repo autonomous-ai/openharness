@@ -397,6 +397,9 @@ export function createReexec(deps: ReexecDeps): {
   settled(done: (handedOver: boolean) => void): void
 } {
   let warned = false
+  // A retained master may already have restarted its children on another bundle. Returning to its own
+  // code after rollback must reap those children too; the master's fingerprint does not identify them.
+  let childrenBundle = deps.own
   let probe: { cancel(): void } | null = null
   let replacing = false
   let handing: Promise<void> | null = null
@@ -582,16 +585,30 @@ export function createReexec(deps: ReexecDeps): {
   return {
     reexec: (state, proceed) => {
       const next = deps.current()
-      if (next === null || next === deps.own) { proceed('same'); return }
+      if (next === null) { proceed('same'); return }
+      // A master that cannot replace itself still replaces children from the previous bundle. Ordinary
+      // core restarts on the same bundle keep the surviving workers, including on-demand ones.
+      const keep = (outcome: ReexecOutcome): void => {
+        if (next === childrenBundle) { proceed(outcome); return }
+        replacing = true
+        deps.stopChildren(() => {
+          if (deps.stopping()) return
+          childrenBundle = next
+          replacing = false
+          deps.startChildren()
+          proceed(outcome)
+        })
+      }
+      if (next === deps.own) { keep('same'); return }
       if (!deps.execve && !deps.handOver) {
         if (!warned) deps.log('[harnessd] the bundle on disk is newer than this master, but this Node cannot re-execute a process: the master keeps its code until it restarts')
         warned = true
-        proceed('kept')
+        keep('kept')
         return
       }
       if (state.unproven >= REEXEC_LIMIT) {
         deps.log(`[harnessd] this master re-executed ${state.unproven} times without a core coming up — keeping its code; something keeps rewriting the bundle`)
-        proceed('kept')
+        keep('kept')
         return
       }
       const now = deps.now()
@@ -599,6 +616,7 @@ export function createReexec(deps: ReexecDeps): {
       const args = [...deps.execArgv, deps.scriptPath]
       // Called only once the master is known not to be stopping: its children come back, and its core.
       const carryOn = (outcome: ReexecOutcome) => {
+        childrenBundle = next
         replacing = false
         deps.startChildren()
         proceed(outcome)

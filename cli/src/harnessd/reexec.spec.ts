@@ -268,19 +268,80 @@ describe('re-executing', () => {
     expect(calls).toEqual([])
   })
 
-  it('keeps this master where this Node cannot re-execute, and says so once', () => {
-    const { reexec } = make({ execve: null })
+  it('reaps the previous bundle before keeping a master that cannot re-execute, and says so once', () => {
+    const { reexec, replacing } = make({ execve: null })
     reexec(state(), (outcome) => outcomes.push(outcome))
+    expect(outcomes).toEqual([])
+    expect(replacing()).toBe(true)
+    expect(calls.at(-1)).toBe('stop children')
+    stopped[0]()
+    expect(outcomes).toEqual(['kept'])
+    expect(replacing()).toBe(false)
+    expect(calls.at(-1)).toBe('start children')
+    // A core restart on the same bundle keeps its surviving workers.
     reexec(state(), (outcome) => outcomes.push(outcome))
     expect(outcomes).toEqual(['kept', 'kept'])
-    expect(calls).toEqual(['[harnessd] the bundle on disk is newer than this master, but this Node cannot re-execute a process: the master keeps its code until it restarts'])
+    expect(stopped).toHaveLength(1)
+    expect(calls.filter((line) => line.includes('cannot re-execute'))).toHaveLength(1)
+    expect(probes).toEqual([])
   })
 
-  it('keeps this master after re-executing again and again without a core coming up', () => {
-    const { reexec } = make()
+  it('reaps the previous bundle even at the unproven re-execution limit', () => {
+    const { reexec, replacing } = make()
     reexec(state({ unproven: REEXEC_LIMIT }), (outcome) => outcomes.push(outcome))
+    expect(outcomes).toEqual([])
+    expect(replacing()).toBe(true)
+    expect(calls.at(-1)).toBe('stop children')
+    stopped[0]()
     expect(outcomes).toEqual(['kept'])
-    expect(calls).toEqual([`[harnessd] this master re-executed ${REEXEC_LIMIT} times without a core coming up — keeping its code; something keeps rewriting the bundle`])
+    expect(replacing()).toBe(false)
+    expect(calls.at(-1)).toBe('start children')
+    reexec(state({ unproven: REEXEC_LIMIT }), (outcome) => outcomes.push(outcome))
+    expect(outcomes).toEqual(['kept', 'kept'])
+    expect(stopped).toHaveLength(1)
+    expect(probes).toEqual([])
+  })
+
+  it('reaps a kept newer cohort when rollback selects this master\'s own bundle', () => {
+    const { reexec, replacing } = make({ execve: null })
+    reexec(state(), (outcome) => outcomes.push(outcome))
+    expect(stopped).toHaveLength(1)
+    stopped[0]()
+    onDisk = 'old'
+    reexec(state(), (outcome) => outcomes.push(outcome))
+    expect(outcomes).toEqual(['kept'])
+    expect(replacing()).toBe(true)
+    expect(stopped).toHaveLength(2)
+    stopped[1]()
+    expect(outcomes).toEqual(['kept', 'same'])
+    expect(replacing()).toBe(false)
+    reexec(state(), (outcome) => outcomes.push(outcome))
+    expect(outcomes).toEqual(['kept', 'same', 'same'])
+    expect(stopped).toHaveLength(2)
+    expect(calls.filter((line) => line === 'start children')).toHaveLength(2)
+  })
+
+  it('reaps children restarted after a refused probe before rollback to its own bundle', async () => {
+    const { reexec } = make()
+    reexec(state(), (outcome) => outcomes.push(outcome))
+    stopped[0]()
+    await settle({ ok: false, detail: 'no' })
+    onDisk = 'old'
+    reexec(state(), (outcome) => outcomes.push(outcome))
+    expect(outcomes).toEqual(['refused'])
+    expect(stopped).toHaveLength(2)
+    stopped[1]()
+    expect(outcomes).toEqual(['refused', 'same'])
+  })
+
+  it('never restarts kept children or a core when shutdown begins during their reap', () => {
+    const { reexec } = make({ execve: null })
+    reexec(state(), (outcome) => outcomes.push(outcome))
+    stopping = true
+    expect(stopped).toHaveLength(1)
+    stopped[0]()
+    expect(outcomes).toEqual([])
+    expect(calls).not.toContain('start children')
   })
 
   it('stops its children, probes the bundle, leaves its marker and replaces itself, handing its state on', async () => {
