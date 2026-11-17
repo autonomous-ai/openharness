@@ -8,14 +8,17 @@
  */
 import type { LiveState } from '../../engines/facets/live.js'
 import type { OtherStreams } from '../engines/otherStreams.js'
+import type { TurnHooks } from '../turns/turnHooks.js'
 
-export function createSessionNormalizers(others: Pick<OtherStreams, 'get' | 'has' | 'forget' | 'stop'>) {
+export function createSessionNormalizers(others: Pick<OtherStreams, 'get' | 'has' | 'forget' | 'stop'>,
+  turns?: Pick<TurnHooks, 'held' | 'closed' | 'forget'>) {
   // Per-session web turn-lifecycle state; the device mirror keeps its own state + recap.
   const liveParsers = new Map<string, LiveState>()
 
-  /** Whether this session's engine state says a turn is open right now, whichever engine it is. */
+  /** Whether this session's engine state says a turn is open right now, whichever engine it is. A turn whose end is
+   *  held for its Stop is open, whatever its parser says (core/turns/turnHooks.ts). */
   const sessionTurnState = (sessionId: string): boolean | undefined =>
-    liveParsers.get(sessionId)?.turnOpen ?? others.get(sessionId)?.turnOpen
+    turns?.held(sessionId) || (liveParsers.get(sessionId)?.turnOpen ?? others.get(sessionId)?.turnOpen)
   const sessionTurnOpen = (sessionId: string): boolean => sessionTurnState(sessionId) ?? false
 
   /** Whether any engine state exists for this session: an attach that finds some is not a first one. */
@@ -25,13 +28,15 @@ export function createSessionNormalizers(others: Pick<OtherStreams, 'get' | 'has
   const forget = (sessionId: string): void => {
     liveParsers.delete(sessionId)
     others.forget(sessionId)
+    turns?.forget(sessionId)
   }
 
   /** Mark the session's turn closed in whichever engine holds it (a cancel). Nothing it closes is emitted: a cancel
-   *  sends no turn end. */
+   *  sends no turn end, and an end held for its Stop is dropped. */
   const closeTurns = (sessionId: string): void => {
     liveParsers.get(sessionId)?.closeTurn('cancel')
     others.get(sessionId)?.closeTurn('cancel')
+    turns?.closed(sessionId)
   }
 
   /** Stop following every other engine's stream (shutdown, and the handoff to an update). */

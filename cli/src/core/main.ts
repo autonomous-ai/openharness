@@ -167,7 +167,7 @@ import { createHeartbeats } from './turns/heartbeats.js'
 import { createEventFunnel } from './turns/funnel.js'
 import { createAgyBackstop } from './turns/agyBackstop.js'
 import { createIngest } from './transcripts/ingest.js'
-import { createTurnHooks } from './turns/turnHooks.js'
+import { createTurnHooks, type TurnHooks } from './turns/turnHooks.js'
 import { createAttach } from './transcripts/attach.js'
 import { createHistory } from './transcripts/history.js'
 import { createRelaunchMarks, transcriptSize } from './transcripts/relaunch.js'
@@ -1319,8 +1319,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     frame: (session, frame) => ingest.acceptStreamFrame(session, frame),
     reattach: (session) => { void attachSession(session, true).catch(() => console.error('[engine-others] LIVE_REATTACH_FAILED')) },
   })
+  // What the engines' hooks say of each session's turn (core/turns/turnHooks.ts), built further down.
+  let turnHooksRef: TurnHooks | undefined
   // Each session's engine state, in one table (core/transcripts/normalizers.ts).
-  const normalizers = createSessionNormalizers(otherStreams)
+  const normalizers = createSessionNormalizers(otherStreams, { held: id => turnHooksRef?.held(id) ?? false,
+    closed: id => turnHooksRef?.closed(id), forget: id => turnHooksRef?.forget(id) })
   const sessionTurnState = normalizers.sessionTurnState
   const sessionTurnOpen = normalizers.sessionTurnOpen
   const { watcher, live: engineLive } = createLiveWatcher(new Watcher(), {
@@ -1340,6 +1343,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     sessionTurnOpen,
     drain: (sessionId) => watcher.pollSession(sessionId),
     nativeActivity: (session) => nativeControls.activity(session),
+    withheld: (sessionId) => turnHooksRef?.withheld(sessionId) ?? false,
   })
   const runtimeActivity = activity.runtimeActivity
   const turnActivity = activity.turnActivity
@@ -2229,13 +2233,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     resolve: (id) => registry.resolve(id),
     normalizers,
     others: otherStreams,
-    emit: (sessionId, events) => emitSessionEvents(sessionId, events),
+    emit: (sessionId, events, opts) => emitSessionEvents(sessionId, events, opts),
     drain: (sessionId) => watcher.pollSession(sessionId),
     announceTurnAborted,
     armAgyIdleWatch,
     clearAgyIdleWatch,
     mirror,
   })
+  turnHooksRef = turnHooks
   // Which agent a hook belongs to, and what a SessionEnd means (core/engines/hooks.ts).
   const engineHooks = createEngineHooks({ get tmuxBackend() { return tmuxBackend }, ptyHostBackend, agentReconciler, registry, panePending: restorePanes.pending, syncSession })
   // What agents may do: the account's experiments, kept in this daemon's data folder for its launches
@@ -2457,7 +2462,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     runtimeProfiles,
     normalizers,
     announceTurnAborted,
-    emit: (sessionId, events, opts) => emitSessionEvents(sessionId, events, opts),
+    emit: turnHooks.transcript,
     attachSession: (session, reset) => attachSession(session, reset),
     setIdentityHold: registry.setIdentityHold.bind(registry),
     announceSession,

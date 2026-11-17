@@ -22,6 +22,12 @@ export interface HookTurnContext {
   noteEngineStopped(sessionId: string): void
   emit(sessionId: string, events: LiveEvent[]): void
   graceMs: number
+  /** The turn whose end the transcript has read and core holds for its Stop. */
+  heldEnd(sessionId: string): { identity?: string; openedAt?: number } | undefined
+  /** True once an end is held, at once when one is; false after `ms`. */
+  heldEndWithin(sessionId: string, ms: number): Promise<boolean>
+  /** The held end goes to the funnel. False when none is held. */
+  deliverHeldEnd(sessionId: string): boolean
 }
 
 export type HookAdmission = { accepted: true } | { accepted: false; reason: string }

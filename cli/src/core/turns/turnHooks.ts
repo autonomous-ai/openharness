@@ -4,7 +4,9 @@
  * would leave open: each engine drains what is unread first, waits a grace, and closes only what is
  * still open — or, for an error, announces why. Claude Code's and Codex's declare theirs as hooks
  * (engines/hooks.ts); the other engines' as Stop rules (engines/otherEngines.ts `STOP_RULES`), applied here
- * with what their worker does to their parsers (core/engines/otherStreams.ts).
+ * with what their worker does to their parsers (core/engines/otherStreams.ts). Once Claude Code or Codex has sent a
+ * Stop, the end its transcript reads of a turn is held here for that turn's Stop
+ * (docs/plans/2026-11-16-hook-driven-agent-status-plan.md, Turn rules).
  *
  * Moved verbatim out of the hook server's options in `runForeground` (the core boundary, step 9:
  * docs/design/2026-10-03-harnessd.md).
@@ -18,15 +20,28 @@ import { sid } from '../../lib/log.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { SessionNormalizers } from '../transcripts/normalizers.js'
+import type { TranscriptRead } from '../transcripts/ingest.js'
 
 // Claude's Stop hook fires when the agent finishes, but the transcript can lag a moment behind
 // (docs: "the transcript file may lag behind the in-memory conversation"). Acting immediately races
-// that flush → an empty recap + a premature close. So the Stop hook is a DELAYED fallback: poll, and
-// only if the turn is still open after this grace + a re-poll do we force-close (by then the assistant
-// text is on disk, so the natural close usually wins and the recap isn't empty).
+// that flush → an empty recap + a premature close. So the Stop hook waits this grace for the turn's end, and
+// only if the turn is still open after it + a re-poll do we force-close (by then the assistant
+// text is on disk, so its end is usually read first and the recap isn't empty).
 export const STOP_HOOK_GRACE_MS = 1_500
-/** How many sessions' latest prompt hooks are remembered. */
-const PROMPT_HOOKS_KEPT = 512
+/** How many sessions' hook records are kept. */
+export const HOOKS_KEPT = 512
+
+/** What a session's hooks have said of its turn. One a session. */
+interface HookTurn {
+  /** When its engine ran its latest prompt hook: a Stop run before it is about an earlier turn. */
+  promptAt?: number
+  /** It has sent a Stop in this daemon run, so its engine sends them: its turns end by hook (R0). */
+  endsByHook: boolean
+  /** The turn's own end, read and held for its Stop. */
+  held?: { end: LiveEvent; identity?: string; openedAt?: number }
+  /** Stops waiting for that end, each at most the grace. */
+  awaiting: Array<(held: boolean) => void>
+}
 
 export interface TurnHookDeps {
   holdStop?: (session: RegisteredSession, force?: boolean) => boolean
@@ -35,7 +50,7 @@ export interface TurnHookDeps {
   normalizers: Pick<SessionNormalizers, 'liveParsers'>
   /** The other engines' streams: their parsers are their worker's. */
   others: Pick<OtherStreams, 'get' | 'close' | 'openTurn' | 'task'>
-  emit: (sessionId: string, events: LiveEvent[]) => void
+  emit: (sessionId: string, events: LiveEvent[], opts?: { replay?: boolean }) => void
   /** Read what the transcript has that the tail has not delivered yet (Watcher.pollSession). */
   drain: (sessionId: string) => Promise<void>
   announceTurnAborted: (sessionId: string, engine: string, message: string) => void
@@ -59,14 +74,56 @@ export function createTurnHooks({
     // A no-op after the turn's first tool call.
     void others.openTurn(sessionId).then(events => { if (events.length) emit(sessionId, events) })
   }
-  /** When each session's latest prompt hook was run by its engine: a Stop run before it is about an earlier
-   *  turn. Bounded: a session's entry outlives it only until enough newer ones come. */
-  const promptFiredAt = new Map<string, number>()
+  /** Each session's hook record. Bounded: a session's entry outlives it only until enough newer ones come. */
+  const turns = new Map<string, HookTurn>()
+  /** The held end goes to the funnel, its turn closed before: what the funnel runs on it reads it closed. */
+  const deliver = (sessionId: string): boolean => {
+    const turn = turns.get(sessionId)
+    if (!turn?.held) return false
+    const { end } = turn.held
+    turn.held = undefined
+    emit(sessionId, [end])
+    return true
+  }
+  /** The session's record, made the newest. The oldest makes room, its held end delivered first. */
+  const record = (sessionId: string): HookTurn => {
+    const turn = turns.get(sessionId) ?? { endsByHook: false, awaiting: [] }
+    turns.delete(sessionId)
+    turns.set(sessionId, turn)
+    if (turns.size > HOOKS_KEPT) {
+      const oldest = turns.keys().next().value!
+      deliver(oldest)
+      turns.delete(oldest)
+    }
+    return turn
+  }
   const onPromptHook = (sessionId: string, firedAt: number): void => {
-    if (firedAt <= (promptFiredAt.get(sessionId) ?? 0)) return
-    promptFiredAt.delete(sessionId)
-    promptFiredAt.set(sessionId, firedAt)
-    if (promptFiredAt.size > PROMPT_HOOKS_KEPT) promptFiredAt.delete(promptFiredAt.keys().next().value!)
+    if (firedAt <= (turns.get(sessionId)?.promptAt ?? 0)) return
+    record(sessionId).promptAt = firedAt
+  }
+  /** Every transcript read of a session, on its way to the funnel (R1): a turn's end waits for its Stop. */
+  const transcript = (sessionId: string, events: LiveEvent[], read: TranscriptRead = {}): void => {
+    const turn = turns.get(sessionId)
+    if (read.replay) {
+      // The transcript was read again: what it says of its turns is the latest word.
+      if (turn?.held && events.some(event => event.type === 'turn_started' || event.type === 'turn_ended')) turn.held = undefined
+      return emit(sessionId, events, { replay: true })
+    }
+    if (!turn?.endsByHook) return emit(sessionId, events)
+    const out: LiveEvent[] = []
+    for (const event of events) {
+      if (event.type === 'turn_started' && turn.held) { out.push(turn.held.end); turn.held = undefined }
+      // An aborted end, and one no Stop follows (a paused /goal pass), go on at once.
+      if (event.type !== 'turn_ended' || event.payload.aborted || read.over) { out.push(event); continue }
+      turn.held = { end: event, identity: read.turn?.identity, openedAt: read.turn?.openedAt }
+      for (const answer of turn.awaiting) answer(true)
+    }
+    if (out.length) emit(sessionId, out)
+  }
+  /** Its turns end by hook, none is open and none is held: progress read now claims no work (lib/turnActivity.ts). */
+  const withheld = (sessionId: string): boolean => {
+    const turn = turns.get(sessionId)
+    return !!turn?.endsByHook && !turn.held && !liveParsers.get(sessionId)?.turnOpen
   }
   const hookTurns: HookTurnContext = {
     turnState: (sessionId) => {
@@ -80,11 +137,24 @@ export function createTurnHooks({
       afterStop?.(resolve(sessionId)!)
       return true
     },
-    latestPromptAt: (sessionId) => promptFiredAt.get(sessionId),
+    latestPromptAt: (sessionId) => turns.get(sessionId)?.promptAt,
     drain,
     noteEngineStopped: (sessionId) => mirror.noteEngineStopped(sessionId),
     emit,
     graceMs: STOP_HOOK_GRACE_MS,
+    heldEnd: (sessionId) => turns.get(sessionId)?.held,
+    heldEndWithin: (sessionId, ms) => new Promise(resolve => {
+      const turn = turns.get(sessionId)
+      if (!turn || turn.held) return resolve(!!turn)
+      const answer = (held: boolean): void => {
+        clearTimeout(timer)
+        turn.awaiting = turn.awaiting.filter(other => other !== answer)
+        resolve(held)
+      }
+      const timer = setTimeout(answer, ms, false)
+      turn.awaiting.push(answer)
+    }),
+    deliverHeldEnd: deliver,
   }
   // Cursor's Task tool start: the sub-agent it starts is followed in Cursor's stream, behind a drain of its transcript.
   const onToolStart = ({ sessionId, toolUseId, toolName, input: toolInput }: { sessionId: string; toolUseId: string; toolName: string; input: unknown }): void => {
@@ -97,15 +167,16 @@ export function createTurnHooks({
       session.evidenceRevision, session.identityHold])
     const binding = JSON.stringify([session.agentId, session.sessionId, session.engine])
     let retained = false
+    const onStop = hooksFor(session.engine)?.onStop
     const current = (): boolean => {
       const latest = resolve(sessionId)
       if (!latest || JSON.stringify([latest.agentId, latest.sessionId, latest.engine]) !== binding) return false
       const changed = authority !== JSON.stringify([latest.agentId, latest.sessionId, latest.engine, latest.transcriptPath,
         latest.evidenceRevision, latest.identityHold])
       if ((latest.identityHold || latest.interpretationHold || changed) && holdStop) {
-        // Claude already supplies positive stale-event evidence. A hold does not turn a proven old
+        // Claude Code and Codex already supply positive stale-event evidence. A hold does not turn a proven old
         // Stop into an unknown completion that would require cancelling the newer turn.
-        if (session.engine === 'claude' && firedAt !== undefined && (promptFiredAt.get(sessionId) ?? 0) > firedAt) return false
+        if (onStop && firedAt !== undefined && (turns.get(sessionId)?.promptAt ?? 0) > firedAt) return false
         if (!retained) retained = holdStop(latest, changed)
         if (retained) return false
       }
@@ -116,9 +187,10 @@ export function createTurnHooks({
     // its sub-agents; the turn is NOT over, so nothing closes, but the run that proved this necessary also finished its
     // sub-agents and then never sent another Stop, so a backstop watches the pane instead (core/turns/agyBackstop.ts).
     if (rule?.backstop && status === 'waiting') { armAgyIdleWatch(sessionId); return }
-    const hooks = hooksFor(session.engine)
-    if (hooks) {
-      if (!hooks.onStop || !current()) return
+    if (onStop) {
+      // Its engine sends Stops: from this one on, its turns end by hook (R0).
+      record(sessionId).endsByHook = true
+      if (!current()) return
       // Invoke synchronously: the engine snapshots which turn the hook arrived about before draining.
       const failed = (error: unknown): void => {
         console.error(`[hooks] ${session.engine} stop hook failed:`, error instanceof Error ? error.message : error)
@@ -128,8 +200,9 @@ export function createTurnHooks({
         closeTurn: (id, identity) => current() && hookTurns.closeTurn(id, identity),
         noteEngineStopped: id => { if (current()) hookTurns.noteEngineStopped(id) },
         emit: (id, events) => { if (current()) emit(id, events) },
+        deliverHeldEnd: id => current() && deliver(id),
       }
-      try { void Promise.resolve(hooks.onStop(context, { sessionId, status, firedAt })).catch(failed) } catch (error) { failed(error) }
+      try { void Promise.resolve(onStop(context, { sessionId, status, firedAt })).catch(failed) } catch (error) { failed(error) }
       return
     }
     if (!rule || !current()) return
@@ -155,5 +228,14 @@ export function createTurnHooks({
       console.error(`[hooks] ${session.engine} stop hook failed:`, err instanceof Error ? err.message : err)
     })
   }
-  return { onTurnStart, onToolStart, onTurnStop, onPromptHook }
+  return {
+    onTurnStart, onToolStart, onTurnStop, onPromptHook, transcript, withheld,
+    /** The turn's own end is read and held for its Stop: the turn is still open (R7). */
+    held: (sessionId: string): boolean => !!turns.get(sessionId)?.held,
+    /** The turn was closed without its end (a cancel): what is held goes, unsent. */
+    closed: (sessionId: string): void => { const turn = turns.get(sessionId); if (turn) turn.held = undefined },
+    forget: (sessionId: string): void => { turns.delete(sessionId) },
+  }
 }
+
+export type TurnHooks = ReturnType<typeof createTurnHooks>

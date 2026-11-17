@@ -77,5 +77,5 @@ export const hooks: HookContract = {
   // record names it a child (`source.subagent`). Registered, it would take the parent's pane and transcript,
   // and its prompt would be credited to the parent: refused before either (hookServer.ts, registry.register).
   children: { type: 'session_meta', child: ['payload', 'source', 'subagent'], reason: 'codex_subagent' },
-  // Codex closes turns through its transcript, never a Stop hook.
+  stopClosesTurns: true,
 }
