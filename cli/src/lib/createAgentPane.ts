@@ -185,9 +185,10 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
         ...(deps.openclawLocal ? { openclawLocal: deps.openclawLocal } : {}),
       })
     } catch (error) {
-      await deps.tmuxBackend.kill(spawned.runtime)
+      const closed = await deps.tmuxBackend.kill(spawned.runtime)
       if (!(error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed)) throw error
-      console.warn(`[agent] create ${deps.engine} not saved · pane ${spawned.runtime.paneId} closed`)
+      console.warn(`[agent] create ${deps.engine} not saved · pane ${spawned.runtime.paneId} `
+        + (closed?.state === 'succeeded' ? 'closed' : `close ${closed?.state ?? 'unknown'}`))
       return { ok: false, error: 'PERSISTENCE_UNCONFIRMED', detail: error.message }
     }
     if (pending) return { ok: true, spawned, pending }

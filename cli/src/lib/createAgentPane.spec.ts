@@ -161,7 +161,7 @@ describe('createAndRegisterPane', () => {
   it('a pending admission the storage refuses rejects with the storage category, and a taken route still answers null', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()
-    ;(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/other' }))
+    expect(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/other' })).not.toBeNull()
     expect(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }] })).toBeNull()
     refuse.code = 'ENOSPC'
     await expect(registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%2' }] }))
