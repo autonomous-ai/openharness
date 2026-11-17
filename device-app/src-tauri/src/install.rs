@@ -377,6 +377,15 @@ mod tests {
     }
 
     #[test]
+    fn a_step_line_is_logged_cut_to_512_characters() {
+        // Characters of two bytes, as in the lines shown: a cut by bytes would split one.
+        let long = format!("\x1b[1m▸ {}\x07\n", "é".repeat(10_000));
+        let ran = install_with(vec![ended(0, &long, ""), ended(0, "", "")], true);
+        let cut = format!("install: ▸ {}", "é".repeat(512 - 2));
+        assert_eq!(ran.log, [cut.as_str(), "install: --host exit 0", "install: --desktop exit 0"]);
+    }
+
+    #[test]
     fn the_system_shell_is_for_macos() {
         assert_eq!(system_shell().is_some(), cfg!(target_os = "macos"));
     }
