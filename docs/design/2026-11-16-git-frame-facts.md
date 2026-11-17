@@ -213,3 +213,30 @@ PR checks and final merge are still required. Receipt:
 `/tmp/core-git-frame-final-acceptance.json`, SHA-256
 `fcc840738a8c43180c59fe905aa3bc9dce6b4567f6ce1888e0634247cd6532a4`.
 This closes the frame/Git implementation step after CI/merge; Browser streams,+wake policy and harness-index/manifest extraction remain separate work.
+
+
+## Final CI fixture composition correction (2026-11-17)
+
+Automatic CI `44014141479` failed seven `sessionGitPullRequest.spec.ts` cases.
+The fixture still called the core's bare frame builder and expected it to inspect
+Git and observe branch history. That call now correctly gives the documented
+folder placeholder until workspaces publishes facts. The same seven failures
+reproduce locally, with three other cases passing, in
+`/tmp/core-git-frame-ci-session-pr-red.log` (4.70 seconds).
+
+Compose the real `startWorkspaceFrames` producer in that existing fixture, retain
+it across frame requests so display versions remain monotonic, and wait for its
+bounded publication before building the frame. It reads the fixture's real Git
+repositories, usage cache and history store. All existing branch, PR, history,
+restart, moved-work and version assertions are unchanged. The producer stops
+before fixture stores and roots are removed. No runtime, storage, contract,
+capacity, deadline or golden bytes change.
+
+The corrected PR/history/context/frame selection passes 36 tests in five files
+(11.95 seconds), and TypeScript passes. Receipts:
+`/tmp/core-git-frame-ci-session-pr-green.log` and
+`/tmp/core-git-frame-ci-session-pr-types.log`. This is macOS x64 on pinned Node
+24.22.2; the next automatic Linux PR run remains required. Prior runtime and
+performance evidence is unchanged. The separate workspaces owner/lifecycle
+selection passes 18 tests in 3.94 seconds (`/tmp/core-git-frame-ci-workspace-owner-green.log`).
+No manual CI run or full-suite retry was made.
