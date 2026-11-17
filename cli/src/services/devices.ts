@@ -1024,12 +1024,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     else tell(event)
   }
   /** Builds the dial's lists, then tells the cards held for those of `batch` they hold. One listed again meanwhile is in
-   *  a later batch too, whose check tells what it held since. */
+   *  a later batch too, whose check tells what it held since. A build that fails tells none and holds them no longer:
+   *  held for good, each later card of theirs would be. */
   const check = async (batch: Map<string, DialEvent[]>): Promise<void> => {
-    const listed = await listedIds()
-    for (const [agentId, held] of batch) {
-      checking.delete(agentId)
-      if (listed.has(agentId)) for (const event of held) tell(event)
+    try {
+      const listed = await listedIds()
+      for (const [agentId, held] of batch) if (listed.has(agentId)) for (const event of held) tell(event)
+    } finally {
+      for (const agentId of batch.keys()) checking.delete(agentId)
     }
   }
 
