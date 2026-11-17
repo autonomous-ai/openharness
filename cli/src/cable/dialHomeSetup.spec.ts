@@ -847,6 +847,38 @@ describe('what the person removed stays removed, and Harness\'s own is kept curr
     expect(r.lines).toEqual([])
   })
 
+  it('a Claude Code skill the person deleted stays deleted through the plugin turned off and on again', () => {
+    const adopted = folder()
+    const r = rig({ adopted: () => ({ claude: [adopted], codex: [] }) })
+    pluginOn(r.claudeHome)
+    r.writer.started()
+    rmSync(skillFile(adopted))
+
+    // Turned off, then on again, through /plugin.
+    writeFileSync(join(r.claudeHome, 'settings.json'), JSON.stringify({ enabledPlugins: {} }))
+    r.writer.scanned([])
+    pluginOn(r.claudeHome)
+    r.writer.scanned([])
+
+    expect(existsSync(skillFile(adopted))).toBe(false)
+    // The one Harness took out at off is written again.
+    expect(hasSkill(r.claudeHome)).toBe(true)
+    expect(sorted(readSetup(r.dataDir).homes.claude)).toEqual(sorted([r.claudeHome, adopted].map(skillsOf)))
+  })
+
+  it('Claude Code settings that say nothing change nothing: the skill stays while the plugin was last read on', () => {
+    const r = rig()
+    pluginOn(r.claudeHome)
+    r.writer.started()
+
+    // Half written, or edited by hand.
+    writeFileSync(join(r.claudeHome, 'settings.json'), '{ "enabledPlugins": ')
+    r.writer.scanned([])
+
+    expect(hasSkill(r.claudeHome)).toBe(true)
+    expect(readSetup(r.dataDir).homes.claude).toEqual([skillsOf(r.claudeHome)])
+  })
+
   it('a recorded home whose skills folder was deleted is not made again while its home is there', () => {
     const r = rig()
     const other = folder()
