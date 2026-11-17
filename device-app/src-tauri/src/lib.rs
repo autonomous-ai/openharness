@@ -24,6 +24,7 @@ pub mod tabs_macos;
 pub mod tray_macos;
 pub mod types;
 pub mod update;
+pub mod vscode;
 pub mod watch;
 
 #[cfg(test)]

@@ -117,7 +117,7 @@ fn settable(state: &AppState) -> Option<&DialStatus> {
 mod tests {
     use super::*;
     use crate::types::{
-        AppState, AppUpdate, CliState, Daemon, DialStatus, MenuAction, MenuItem, NotifyMode, Saved, Screen,
+        AppState, AppUpdate, CliState, Daemon, DialStatus, MenuAction, MenuItem, NotifyMode, Saved, Screen, Vscode,
     };
     use MenuItem::{Action, Check, Separator, Submenu, Text};
 
@@ -162,6 +162,8 @@ mod tests {
             saved: Saved { version: 1, cli_seen: true, asked_sign_in: true, login_item: true },
             app_update: AppUpdate::None,
             cli_version: None,
+            vscode: None,
+            vscode_busy: false,
         }
     }
 
@@ -188,7 +190,8 @@ mod tests {
         );
     }
 
-    /// Every CliState × Daemon × dial (none, attached, with Sound and Notifications) × signed_in.
+    /// Every CliState × Daemon × dial (none, attached, with Sound and Notifications) × signed_in × VS Code's status
+    /// × a turn-on that runs.
     fn states() -> Vec<AppState> {
         let dials = [None, Some(dial(true, Some("0.0.95"))), Some(notifying(NotifyMode::Full))];
         let mut states = Vec::new();
@@ -196,7 +199,12 @@ mod tests {
             for daemon in [Daemon::Starting, Daemon::Up, Daemon::Stopped, Daemon::Updating] {
                 for dial in &dials {
                     for signed_in in [Some(true), Some(false), None] {
-                        states.push(AppState { cli, daemon, dial: dial.clone(), signed_in, ..state() });
+                        for vscode in [None, Some(Vscode::Absent), Some(Vscode::Off), Some(Vscode::On)] {
+                            for vscode_busy in [false, true] {
+                                let dial = dial.clone();
+                                states.push(AppState { cli, daemon, dial, signed_in, vscode, vscode_busy, ..state() });
+                            }
+                        }
                     }
                 }
             }
@@ -208,9 +216,31 @@ mod tests {
     fn no_agent_rows_in_any_state() {
         for state in states() {
             let line = menu_log(&menu(&state));
-            for word in ["Claude Code", "Codex", "Turn on", "Turn off", "Turning"] {
+            for word in ["Claude Code", "Codex", "Turn off", "Turning"] {
                 assert!(!line.contains(word), "{line}");
             }
+            // "Turn on" names VS Code alone, an app and not an agent, and once at most.
+            assert_eq!(line.matches("Turn on").count(), line.matches("Turn on VS Code").count(), "{line}");
+            assert!(line.matches("Turn on VS Code").count() <= 1, "{line}");
+        }
+    }
+
+    #[test]
+    fn the_vs_code_item() {
+        let off = AppState { vscode: Some(Vscode::Off), ..state() };
+        let item = act(MenuAction::TurnOnVscode, "Turn on VS Code");
+        let items = menu(&off);
+        let at = items.iter().position(|row| *row == item).unwrap();
+        assert_eq!(items[at + 1], Separator);
+        // Below the app's own update row, the last above the separator.
+        let updating = menu(&AppState { app_update: AppUpdate::Installing, ..off.clone() });
+        assert_eq!(updating[2..5], [text("Updating Harness…"), item.clone(), Separator]);
+        for vscode in [None, Some(Vscode::Absent), Some(Vscode::On)] {
+            assert!(!menu(&AppState { vscode, ..state() }).contains(&item), "{vscode:?}");
+        }
+        assert!(!menu(&AppState { vscode_busy: true, ..off.clone() }).contains(&item));
+        for cli in [CliState::Removed, CliState::Installing, CliState::InstallFailed] {
+            assert!(!menu(&AppState { cli, ..off.clone() }).contains(&item), "{cli:?}");
         }
     }
 
@@ -457,6 +487,10 @@ mod tests {
         assert_eq!(
             menu_log(&menu(&AppState { dial: Some(notifying(NotifyMode::You)), ..state() })),
             "Device ready | Signed in | Sound ✓ | Notifications: Needs you | Open Harness | About | Quit"
+        );
+        assert_eq!(
+            menu_log(&menu(&AppState { vscode: Some(Vscode::Off), ..state() })),
+            "Dial connected | Signed in | Turn on VS Code | Open Harness | About | Quit"
         );
     }
 }
