@@ -33,7 +33,7 @@ import { messagesRpc, type Rpc } from '../messages/rpc.js'
 import { PERSON_AGENT_ID, REPLY_OFF_TEXT } from '../messages/replyLocal.js'
 import { TELL_OFF_TEXT } from '../messages/tell.js'
 import { sendPane } from '../messages/command.js'
-import { PROGRAM_TOKEN_FLAG, ProgramRecords, programMay, readProgramToken, sameHash, type ProgramHarness } from './program.js'
+import { PROGRAM_TOKEN_FLAG, ProgramRecords, programMay, readProgramToken, sameHash, type ProgramHarness, type ProgramInput } from './program.js'
 import { asSaid, callerOf, clip, cloudMeta, cloudTurn, failureOf, forAgent, isAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type CloudMeta, type Failure, type Frame, type HistoryEvent, type Row, type State } from './model.js'
 
 export interface ClientDeps {
@@ -623,17 +623,34 @@ async function programReply(s: Setup, o: Opened, t: ProgramTarget, text: string,
   // What is left of [timeoutMs] bounds the wait for the paste; the turn's start then has [timeoutMs] from the paste.
   const ackMs = Math.max(1_000, deadline - s.now())
   const takenMs = Math.max(1_000, timeoutMs)
-  const reply = await o.daemon.request('input_ack', { agentId: t.frame.id, text, ackMs, takenMs }, ackMs + takenMs + 10_000)
-  if (reply.error === 'UNSUPPORTED') return programFailure(s, json, 'DAEMON_TOO_OLD', 'This Harness daemon cannot acknowledge a reply. Restart Harness on this version.', EXIT.failed)
-  if (typeof reply.error === 'string') return programFailure(s, json, reply.error, `${name} did not take the words (${reply.error}).`, EXIT.failed)
-  const inputId = String(reply.inputId ?? '')
-  if (reply.state === 'taken') {
-    const takenAt = typeof reply.takenAt === 'number' ? reply.takenAt : s.now()
-    try { t.record.inputs.push({ id: inputId, takenAt }); t.record.inputs.length && new ProgramRecords(o.where.dataDir).taken(t.frame.id, { id: inputId, takenAt }) }
+  // Named here, so the input can be followed even when the daemon's answer never arrives.
+  const asked = `program:${randomUUID()}`
+  /** Keeps the input for `wait --after`, and, as a tell's ledger line, holds `wait` and `show` on the answer to the work
+   *  before until a turn asked with these words is seen. */
+  const remember = (input: ProgramInput): void => {
+    try { t.record.inputs.push(input); new ProgramRecords(o.where.dataDir).taken(t.frame.id, input) }
     catch { /* `wait --after` then does not know it, and says so */ }
-    // As a tell's: `wait` and `show` hold the answer to the work before until a turn asked with these words is seen.
     try { o.ledger.append({ at: s.now(), by: { machineId: o.where.machineId, agentId: PERSON_AGENT_ID }, told: { machineId: t.machineId, agentId: t.frame.id }, probe: flat(text).slice(0, PROBE_CHARS) }) }
     catch { /* `wait` then reads its last answer as it would without the line */ }
+  }
+  /** Maybe typed, its turn not seen to start: it may yet run. Followed, never sent twice. */
+  const unconfirmed = (inputId: string, reason?: string): number => {
+    remember({ id: inputId, takenAt: s.now(), unconfirmed: true })
+    return programFailure(s, json, 'TIMEOUT', `${name} was given the words but has not been seen to take them. Follow it with harness wait ${name} --after ${inputId} before sending them again.`,
+      EXIT.timeout, { cancelled: false, inputId, ...(reason ? { reason } : {}) })
+  }
+  let reply: Record<string, unknown>
+  try { reply = await o.daemon.request('input_ack', { agentId: t.frame.id, text, ackMs, takenMs, inputId: asked }, ackMs + takenMs + 10_000) }
+  catch (error) {
+    if (error instanceof AgentClientError && error.code === 'TIMEOUT') return unconfirmed(asked, 'no_answer')
+    throw error
+  }
+  if (reply.error === 'UNSUPPORTED') return programFailure(s, json, 'DAEMON_TOO_OLD', 'This Harness daemon cannot acknowledge a reply. Restart Harness on this version.', EXIT.failed)
+  if (typeof reply.error === 'string') return programFailure(s, json, reply.error, `${name} did not take the words (${reply.error}).`, EXIT.failed)
+  const inputId = String(reply.inputId ?? asked)
+  if (reply.state === 'taken') {
+    const takenAt = typeof reply.takenAt === 'number' ? reply.takenAt : s.now()
+    remember({ id: inputId, takenAt })
     s.out(json ? JSON.stringify({ state: 'taken', inputId, takenAt: new Date(takenAt).toISOString() })
       : `${name} took it (${inputId}). Wait for its answer: harness wait ${name} --after ${inputId}`)
     return EXIT.ok
@@ -641,14 +658,14 @@ async function programReply(s: Setup, o: Opened, t: ProgramTarget, text: string,
   const reason = typeof reply.reason === 'string' ? reply.reason : String(reply.state)
   if (reply.state === 'rejected') {
     if (/^(agent_gone|runtime_gone)/.test(reason)) return programFailure(s, json, 'NOT_RUNNING', `${name} is no longer running (${reason}). Run harness ensure.`, EXIT.stopped, { reason })
+    // Enter held back, or a paste that failed partway: the words may be in its box. Followed, not sent again.
+    if (/^(enter_withheld|paste_failed)/.test(reason)) return unconfirmed(inputId, reason)
     return programFailure(s, json, 'ENGINE_NOT_READY', `${name} did not take the words (${reason}). Nothing was taken; try again.`, EXIT.refused, { reason })
   }
   if (reply.state === 'timeout' && reply.cancelled === true) {
     return programFailure(s, json, 'TIMEOUT', `${name} did not take the words in time. Nothing was typed; send them again.`, EXIT.timeout, { cancelled: true })
   }
-  // Typed, its turn not seen to start in time (or never confirmed): it may yet run. Followed, never sent twice.
-  return programFailure(s, json, 'TIMEOUT', `${name} was given the words but has not been seen to take them. Follow it with harness wait ${name} --after ${inputId} before sending them again.`,
-    EXIT.timeout, { cancelled: false, inputId, ...(reply.state === 'unknown' ? { reason } : {}) })
+  return unconfirmed(inputId, reply.state === 'unknown' ? reason : undefined)
 }
 
 /** `harness new claude @office`, the old way to name a machine, said as it is now typed. */
@@ -1497,8 +1514,10 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       /** Looked at last as working by the daemon's word: its next change, whatever it is, is pushed. */
       const pushedNext = new Set<Target>()
       const sawWorking = new Set<Target>()
-      // Its turn started when the input was taken (`reply` answers only then): the first idle after it is its end.
-      if (input) for (const t of targets) if (t.frame.id === input.agentId) sawWorking.add(t)
+      // Its turn started when the input was taken (`reply` answers only then): the first idle after it is its end. One
+      // not seen taken (`unconfirmed`) is waited on until it is seen working, then idle.
+      const unconfirmed = new Set<Target>()
+      if (input) for (const t of targets) if (t.frame.id === input.agentId) (input.inputs.find((i) => i.id === after)?.unconfirmed ? unconfirmed : sawWorking).add(t)
       /** Idle looks in a row, on the same turn. */
       const idle = new Map<Target, { turn: string; looks: number }>()
       /** Idle at its last look with background commands still running: how many, for a timeout to say. */
@@ -1549,6 +1568,11 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         const before = idle.get(t)
         const looks = before && before.turn === key ? before.looks + 1 : 1
         idle.set(t, { turn: key, looks })
+        // An input not seen taken: idle only after it was seen working, or once its last turn is the one these words asked.
+        if (unconfirmed.has(t) && !sawWorking.has(t)) {
+          const probe = o.ledger.toldBy({ machineId: o.where.machineId, agentId: PERSON_AGENT_ID }, { machineId: t.machineId, agentId: t.frame.id })?.probe
+          if (!(probe && turn?.ask && flat(turn.ask).includes(probe))) return null
+        }
         if (sawWorking.has(t)) return looks >= 2 ? 'idle' : null
         if (turn) return looks >= 2 && turn.answered ? 'idle' : null
         // Nothing asked of it at all, past its start: a harness started without a task has nothing to finish. A harness
