@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { env } from '../config/env.js'
-import { registry, type RegisteredSession } from './registry.js'
+import { registry, RegistryOwnershipChanged, type RegisteredSession } from './registry.js'
 import { commitRelaunchedEngine } from '../core/agents/restart.js'
 import { createAgentRetargeter, type RetargetDeps } from '../core/agents/retarget.js'
 import { createPaneWatcher } from '../core/agents/newPane.js'
@@ -149,6 +149,25 @@ it.each(['owner', 'observation', 'cancel'] as const)('never converts uncertain l
   // The visible rename may name the destination. A failed recovery cannot publish the old route over it.
   expect(persisted().find(entry => entry.agentId === row.agentId)).toMatchObject({ processIdentity: newProcess, runtimes: [destination] })
 })
+
+it.each([['the same', 'confirmed', newProcess], ['another', 'refused', { ...newProcess, pid: 7003, startMarker: 'other' }]] as const)(
+  'a launch discovery confirmed first with %s process, while this confirmation waited behind it, is %s', async (_which, outcome, peerProcess) => {
+    // A resumed row: no process yet, its launch starting (registry.ts `resumePendingAgent`).
+    registry.clearProcessIdentity(row.agentId)
+    registry.setLaunch(row.agentId, { state: 'starting', nativeToken: startingToken })
+    await registry.flush()
+    const held = holdImage(rows => rows.some(entry => entry.agentId === row.agentId && entry.processIdentity?.pid === peerProcess.pid))
+    // Discovery's pass over the pane confirms its engine first (discovery.ts `onObserved`)...
+    const peer = registry.confirmLaunch(row.agentId, { processIdentity: peerProcess, runtimes: [runtime] })
+    await held.entered
+    // ...while the resume that launched it confirms the process it verified, behind that write (resumeAgentService.ts).
+    const own = registry.confirmLaunch(row.agentId, { processIdentity: newProcess, launchArgs: ['--fixture'] }).catch(error => error)
+    held.release()
+    expect(await peer).toMatchObject({ state: 'confirmed' })
+    if (outcome === 'confirmed') {
+      expect(await own).toMatchObject({ state: 'confirmed', entry: { processIdentity: newProcess, launch: { state: 'ready' }, launchArgs: ['--fixture'] } })
+    } else expect(await own).toBeInstanceOf(RegistryOwnershipChanged)
+  })
 
 it('retarget keeps provider success and terminal release behind the complete durable launch', async () => {
   const held = holdImage(rows => rows.some(entry => entry.agentId === row.agentId && entry.processIdentity?.pid === newProcess.pid))
