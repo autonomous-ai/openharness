@@ -85,6 +85,7 @@ d('the Hermes store a session reads from', () => {
     expect(registry.resolve(entry.agentId)?.hermesHome).toBe(demo)
     // …and it survives a reload, which is where a field added to the type but not to the rehydrate
     // list silently disappears.
+    await registry.flush()
     const reloaded = await load()
     reloaded.registry.load()   // the daemon's own first act — the singleton does not read on import
     expect(reloaded.registry.resolve(entry.agentId)?.hermesHome).toBe(demo)

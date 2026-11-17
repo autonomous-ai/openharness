@@ -129,6 +129,7 @@ describe('the web-search status on the per-agent frame', () => {
     const row = (await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/demo' }))!
     await retargetOntoGrid(registry, row.agentId, 'GLM-4.7-Flash')
 
+    await registry.flush()
     registry = await loadRegistry()
     const frame = await agentFrame(registry.byAgent(row.agentId)!, { selectedModel: null, terminalAvailable: true })
     expect(frame.grid).toMatchObject({ webSearch: 'on' })
