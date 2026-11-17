@@ -224,6 +224,14 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
     return false
   }
 
+  /** A home whose skills folder no record could hold: said once a run, counted at each try. */
+  const shapeRefused = (engine: DialEngine, counts: Counts): 'refused' => {
+    sayOnce('shape', 'dial skill: path refused (shape)')
+    counts[engine].failed++
+    deps.count(engine, 'failed', 'shape')
+    return 'refused'
+  }
+
   /** One existing home. */
   const writeHome = (engine: DialEngine, home: string, counts: Counts): Outcome => {
     // Read before anything is made in the home: while off a home is not handled, and nothing goes into it.
@@ -245,9 +253,9 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
       return result === 'updated' && !stillOn(engine, counts) ? 'off' : 'done'
     }
     // The person deleted the recorded skills folder itself: it is not made again.
-    const deleted = found === null ? join(realOr(home), 'skills') : null
-    if (deleted !== null && listed.includes(deleted)) {
-      leftRemoved(engine, deleted)
+    const toMake = found === null ? join(realOr(home), 'skills') : null
+    if (toMake !== null && listed.includes(toMake)) {
+      leftRemoved(engine, toMake)
       return 'done'
     }
     // A throwaway home that is gone makes room first; a record still full writes nothing, so every file Harness wrote
@@ -258,17 +266,16 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
       deps.count(engine, 'failed', 'full')
       return 'refused'
     }
-    // Made only now: a home the record has no room for gets no empty folder either.
+    // Made only now: a home the record has no room for, or whose folder no record could hold, gets no empty folder
+    // either.
+    if (toMake !== null && !listable(toMake)) return shapeRefused(engine, counts)
     const skills = found ?? skillsFolderOf(home, true, deps.uid)
     if (!skills) {
       deps.count(engine, 'failed', 'write')
       return 'refused'
     }
     // Through its link the folder can be one no record holds: written, it would be one a disable never finds.
-    if (!listable(skills)) {
-      sayOnce('shape', 'dial skill: path refused (shape)')
-      return 'refused'
-    }
+    if (!listable(skills)) return shapeRefused(engine, counts)
     const result = writeSkill(skills)
     tally(counts, engine, result)
     if (result === 'failed') return 'refused'
