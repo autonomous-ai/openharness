@@ -47,9 +47,13 @@ export async function gradeRun(s: Scenario, run: RunResult, rings: { line: strin
       verdicts.push(verdict)
       return verdict
     } catch (err) {
-      // The calls before this one were billed too; the errors sidecar counts what the thrown error carries.
-      const e = err as { judge_usage?: Usage }
-      throw Object.assign(err as object, { judge_usage: sum([...verdicts.map((v) => v.usage), ...(e.judge_usage ? [e.judge_usage] : [])]) })
+      // The calls before this one were billed too; the errors sidecar counts what the thrown error carries, and prices
+      // it by the model named, so an error with none (a timeout) takes the earlier calls'.
+      const e = err as { judge_model?: string; judge_usage?: Usage }
+      throw Object.assign(err as object, {
+        judge_model: e.judge_model ?? verdicts[0]?.model,
+        judge_usage: sum([...verdicts.map((v) => v.usage), ...(e.judge_usage ? [e.judge_usage] : [])]),
+      })
     }
   }
 
