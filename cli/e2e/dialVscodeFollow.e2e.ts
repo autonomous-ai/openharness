@@ -120,6 +120,11 @@ describe.skipIf(process.platform !== 'darwin')("a rest shows a session in the VS
     front(ORCA)
     await dial.next((m) => m.t === 'apps' && m.shown === 'orca', 45_000, "Orca's ring", since)
     dial.send({ t: 'focus', agentId: v2.id })
+    // The dial's frames (its pty bridge) and the watch's line (its own process) race to the daemon: VS Code's front landing
+    // first would let this focus rest. The dial's next list is answered after its focus was taken, with Orca in front.
+    since = dial.messages.length
+    dial.send({ t: 'agents.list' })
+    await dial.next((m) => m.t === 'agents.end', 45_000, 'the list asked for after the focus', since)
     since = dial.messages.length
     front(VSCODE)
     await dial.next((m) => m.t === 'apps' && m.shown === 'vscode', 45_000, "VS Code's ring again", since)
