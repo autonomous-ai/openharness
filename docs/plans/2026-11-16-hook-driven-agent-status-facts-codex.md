@@ -73,8 +73,11 @@ thread and all descendant threads", `Session::session_id`, `codex-rs/core/src/se
   `codex-rs/core/src/tasks/mod.rs`). Post-turn compaction can run between the two. It does not run for an interrupted
   turn (the task is aborted, the loop never reaches it). **It does not run for a turn that ends in an error** (a model
   or request error: `emit_turn_error_lifecycle`, then `break`), nor when a UserPromptSubmit or SessionStart hook stops
-  the turn: those turns end only by their `task_complete` record (0.169.0 puts the error on it; 0.144.0 writes an
-  `error` event before it). Codex has no StopFailure. A Stop hook of someone else's that blocks continues the turn and
+  the turn: those turns end only by their `task_complete` record (0.169.0 puts the error on it; 0.144.0 writes no
+  error to the transcript at all: its `TurnCompleteEvent` has no `error` field, `codex-rs/protocol/src/protocol.rs:1955`,
+  and `EventMsg::Error` is transient on both, `codex-rs/rollout/src/policy.rs:118` at 0.144.0, `:162` at 0.169.0).
+  Nothing in the transcript tells a turn a prompt hook stopped from a finished one: both are a plain `task_complete`
+  with `last_agent_message: null`. Codex has no StopFailure. A Stop hook of someone else's that blocks continues the turn and
   Stop runs again (`stop_hook_active: true`), as Claude Code's `/goal`.
 - **Interrupt** runs only for `TurnAbortReason::Interrupted` (Esc, Ctrl-C, an app's interrupt), for a root thread only
   (`run_turn_interrupt_hooks`, `codex-rs/core/src/hook_runtime.rs`). It runs after the interrupted-turn marker is
@@ -139,8 +142,8 @@ thread and all descendant threads", `Session::session_id`, `codex-rs/core/src/se
    written with timeout 5. Needed: Interrupt written with a timeout of at most 3, or `reviewHash` clamping Interrupt
    (and SessionEnd) to 1..3 as Codex does. Either changes Task 20's contract or `hookReview.ts`; not decided here.
 2. **A Codex turn that ends in an error has no Stop.** Under R1, from the session's first Stop its errored turn's end
-   is held, and only R6 delivers it, after 120 s. The plan needs a rule for it (for example: a Codex end that carries an
-   error, or follows an `error` record, goes on at once, as R1.2 does for an aborted end).
+   is held, and only R6 delivers it, after 120 s. The transcript cannot single that end out (0.144.0 records no error),
+   so every Codex end goes on at once (§5, Task 25).
 3. **SubagentStart is dropped by `isCodexSubagent` today** (its transcript is the child's). Task 13.
 4. **SubagentStop fires per child turn**, SubagentStart once per child; an interrupted or failed child turn fires
    neither. R5's count is not exact for Codex.
@@ -148,3 +151,22 @@ thread and all descendant threads", `Session::session_id`, `codex-rs/core/src/se
    and the transcript's aborted end follows for a turn already closed.
 6. **A wait can open with no dialog:** PreToolUse `request_user_input` where the tool is refused, and PermissionRequest
    under automatic review. R4's "two polls read the pane clear" ends both.
+
+## 5. Stop runs before `task_complete`
+
+Codex runs its Stop hook and waits for it before it writes the turn's `task_complete`, on both supported ends:
+
+| Step | 0.144.0 (`rust-v0.144.0`) | 0.169.0 (`rust-v0.169.0`) |
+|---|---|---|
+| The turn loop calls the Stop hooks and awaits them | `codex-rs/core/src/session/turn.rs:374` | `codex-rs/core/src/session/turn.rs:807` |
+| …which runs the hooks and awaits their outcome | `codex-rs/core/src/hook_runtime.rs:363` (`hooks.run_stop(request).await`) | `codex-rs/core/src/hook_runtime.rs:449` |
+| The task's `run` (the turn loop) is awaited | `codex-rs/core/src/tasks/mod.rs:405` | `codex-rs/core/src/tasks/mod.rs:428` |
+| Only then `on_task_finished` | `codex-rs/core/src/tasks/mod.rs:428` | `codex-rs/core/src/tasks/mod.rs:460` |
+| …builds `TurnComplete` | `codex-rs/core/src/tasks/mod.rs:769` | `codex-rs/core/src/tasks/mod.rs:968` |
+| …and sends it, which writes `task_complete` | `codex-rs/core/src/tasks/mod.rs:777` | `codex-rs/core/src/tasks/mod.rs:982` |
+| `TurnComplete` is persisted to the rollout | `codex-rs/rollout/src/policy.rs:99` | `codex-rs/rollout/src/policy.rs:139` |
+
+So by the time Harness reads a `task_complete`, its turn's Stop, if any, has already reached the daemon; a Stop that
+blocks continues the turn before any `task_complete` is written. An errored or prompt-hook-stopped turn writes the
+same `task_complete` and sends no Stop (§2). Holding a Codex end for its Stop can therefore only delay it: the
+engine-codex worker marks every Codex end `over` (Task 25), and the fake Codex keeps this order (Tasks 14, 22).

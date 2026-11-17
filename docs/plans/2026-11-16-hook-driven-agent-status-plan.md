@@ -619,7 +619,7 @@ As the facts files say the real CLIs do; where they differ from the lines below,
 - `runHooks` honours a block's matcher for PreToolUse (the tool's name) and Notification (its type), as it does SessionStart's.
 - `!ask`, `!askmany`: PreToolUse (`AskUserQuestion`; Codex `request_user_input`), waited for, then the dialog.
 - `!permit`, `!permitnext`: PermissionRequest (Codex; Claude Code under Variant P), waited for, then the dialog. Claude Code's Notification after 6 s stays.
-- Codex: Stop after each finished turn's last record, waited for, none after an interrupt or an error; Interrupt when Esc or Ctrl-C ends a turn, waited for, before its `turn_aborted` record (facts-codex §2).
+- Codex: Stop after each finished turn's last answer and before its `task_complete`: the fake runs Stop, waits for it, and only then writes `task_complete`, as the real Codex does (facts-codex §5); none after an interrupt or an error; Interrupt when Esc or Ctrl-C ends a turn, waited for, before its `turn_aborted` record (facts-codex §2).
 - `!fail` (Codex): the turn ends with a `task_complete` carrying an `error`, as `codexTaskError` reads it, and no Stop.
 - `!spawn` and the background sub-agent (Claude Code): SubagentStart as the child starts and SubagentStop as it ends.
 - Config `withoutHooks: string[]`: the events this release does not have.
@@ -1034,6 +1034,7 @@ it('claude: AskUserQuestion, and codex: request_user_input, the same', …)
 it('claude: a lead whose subagent still runs stays working past its own Stop, and ends at its Stop after the subagent stops', …)
 it('codex: a lead with a subagent ends once, as today: no subagent hook is installed or waited for', …)   // `!spawn`; hooks.json holds no SubagentStart or SubagentStop
 it('codex: a turn that ends in an error is told at once, with no Stop and no 2-minute wait', …)   // `!fail` after a first plain turn (Task 25)
+it('codex: a turn\'s Stop reaches the daemon before its task_complete is written, and the end is told once', …)   // `!heldstop`: no task_complete in the rollout and no turn_ended until the release (facts-codex §5, Task 25)
 it('claude: a /goal loop announces nothing between its passes, and Finished once at its end', …)   // turn_summary.notification, once
 it.each(engines)('%s: Finished comes once, no sooner than 1.5 s after the turn ends', …)
 it.each(engines)('%s: an engine that sends no Stop ends its turns from the transcript, as before', …)   // withoutHooks
@@ -1181,35 +1182,35 @@ it('a background subagent keeps the lead working past its Stop, and the turn end
 **Depends on:** none (Tasks 5 and 6, which changed these files, have landed). **Effort:** high. Must land before Task 22.
 
 **Files:**
-- Modify: `cli/src/engines/codex/normalizer.ts`, `cli/src/engines/codex/live.ts`, `docs/plans/2026-11-16-hook-driven-agent-status-facts-codex.md` (one line, Step 1)
-- Test: `cli/src/engines/codex/live.spec.ts`, `cli/src/engines/codex/normalizer.spec.ts`
+- Modify: `cli/src/engines/codex/live.ts`, `docs/plans/2026-11-16-hook-driven-agent-status-facts-codex.md` (§2's 0.144.0 error line, §5)
+- Test: `cli/src/engines/codex/live.spec.ts`
 
-Codex runs no Stop for a turn that ends in an error (0.169.0 puts the error on its `task_complete`, 0.144.0 writes an `error` event before it) nor for one a UserPromptSubmit or SessionStart hook stops, and has no StopFailure (facts-codex §2). Under R1 such an end would be held until R6's 2 minutes. The engine-codex worker marks it `over`, as engine-claude marks a paused `/goal` end (Task 6), and R1.2 sends it on at once (Ken, 2026-11-17). Engine worker only: no core file changes, and no Stop the core takes changes.
+Codex runs its Stop hook and waits for it before it writes `task_complete` (facts-codex §5, the source of 0.144.0 and
+0.169.0), so once a Codex end is read any Stop has already come. A turn that ends in an error or that a prompt hook
+stopped sends no Stop and reads the same as a finished one (0.144.0 records no error at all, facts-codex §2). Holding a
+Codex end would only delay those, so the engine-codex worker marks every live Codex end `over`, as engine-claude marks
+a paused `/goal` end (Task 6), and R1.2 sends it on at once (Ken, 2026-11-17). Engine worker only: no core file
+changes, and no error detection.
 
-**Interfaces — Produces:** `live.ts`'s `ingest` returns `over: true` on the read whose plain (not aborted) `turn_ended` ends a turn that carried an error (`codexTaskError(line)` is not null, or the normalizer read an `error` record since the turn opened) or that a prompt hook stopped. `CodexNormalizer` keeps whether its open turn read such a record, reset when a turn opens. A replay marks nothing.
+**Interfaces — Produces:** `live.ts`'s `ingest` returns `over: true` on every read whose events hold a `turn_ended`
+(`task_complete`, `turn_aborted`, or a prompt that closes a turn left open). A read that ends no turn is not marked;
+replays are unchanged (the replay normalizer emits no `turn_ended`).
 
-- [ ] **Step 1: Establish** from the source at `rust-v0.169.0` and `rust-v0.144.0` (the prompt hook's stop path, `codex-rs/core/src/hook_runtime.rs` and the turn loop) what the rollout holds for a turn a UserPromptSubmit or SessionStart hook stopped, and add it to facts-codex §2 as one line with its source. If nothing in the rollout tells that turn apart from a finished one, stop and report, changing nothing else.
+- [ ] **Step 1: Facts.** In facts-codex: §2's 0.144.0 error line says 0.144.0 writes no error to the transcript; a new
+  §5 "Stop runs before `task_complete`" cites the file:line in both releases where Codex runs and awaits the Stop hook
+  and then writes `task_complete`.
 - [ ] **Step 2: Write the failing tests**
 
 ```ts
 // engines/codex/live.spec.ts
-it('an end that carries an error is marked over: no Stop follows it', () => {
-  const parser = live.create({ engine: 'codex', codexHome: undefined })
-  parser.ingest(line('2026-11-17T01:02:03.000Z', { type: 'user_message', message: 'go' }))
-  const read = parser.ingest(line('2026-11-17T01:02:04.000Z', { type: 'task_complete', turn_id: 't1', error: { message: 'usage limit' } }))
-  expect(read.events.at(-1)).toEqual({ type: 'turn_ended', payload: {} })
-  expect(read.over).toBe(true)
-})
-it('an end after an error record is marked over (Codex 0.144.0)', …)
-it('a turn a prompt hook stopped ends marked over', …)                 // the records Step 1 found
-it('a finished turn, an aborted one, and the next turn after an errored one are not marked', …)
-it('a replay marks nothing', …)
+it('every turn end is marked over: finished, errored, aborted, or closed by the next prompt', …)
+it('an end read with no turn open ends nothing and is not marked', …)
 ```
 
-- [ ] **Step 3: Run** `cd cli && npx vitest run src/engines/codex/live.spec.ts src/engines/codex/normalizer.spec.ts`. Expected: FAIL (`over` undefined).
+- [ ] **Step 3: Run** `cd cli && npx vitest run src/engines/codex/live.spec.ts`. Expected: FAIL (`over` undefined).
 - [ ] **Step 4: Implement.** `liveStreams.ts` already copies `over` onto the frame (Task 6).
-- [ ] **Step 5: Run** the same, and `npx vitest run src/engines/worker src/architecture.spec.ts`. Expected: PASS.
-- [ ] **Step 6: Commit** `Codex: a turn that ends with no Stop after it is told at once`.
+- [ ] **Step 5: Run** the same, and `npx vitest run src/engines/codex/normalizer.spec.ts src/engines/worker src/architecture.spec.ts`. Expected: PASS.
+- [ ] **Step 6: Commit** `Codex: every turn end is told at once, never held for a Stop`.
 
 ---
 
