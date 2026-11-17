@@ -549,11 +549,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** opencode's sessions, listed and followed over its local server (docs/plans/2026-11-17-dial-opencode-design.md). It
    *  runs only while a dial is attached, behind the observed agents' switch, on every platform. It looks for no `opencode`
    *  on PATH: the desktop app runs the service with no CLI installed. */
+  const opencodeFolder = dirname(opencodeAt.servicePath)
+  const opencodeState = dirname(opencodeFolder)
+  // The folder of service.json, else the state folder above it, and none higher: on macOS a watch on ~/.local or the home
+  // folder would wake the devices on every write below it. So no state folder that is the home folder or a disk's root,
+  // as XDG_STATE_HOME can make it.
+  const opencodeFolders = opencodeState === homedir() || opencodeState === dirname(opencodeState) ? [opencodeFolder] : [opencodeFolder, opencodeState]
   const opencode = observed ? new OpencodeSource({
     client: opencodeClient,
-    // The folder of service.json, else the state folder above it, and none higher: on macOS a watch on ~/.local or the
-    // home folder would wake the devices on every write below it. Set at each attach, so a folder made since is held.
-    watch: (changed) => watchNearest([dirname(opencodeAt.servicePath), dirname(dirname(opencodeAt.servicePath))], changed),
+    // Set at each attach, so a folder made since is held.
+    watch: (changed) => watchNearest(opencodeFolders, changed),
     after: timerIn('opencode'),
     now: Date.now,
     monotonic,
