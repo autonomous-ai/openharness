@@ -437,6 +437,44 @@ void main() {
     );
   }, skip: Platform.isWindows ? 'needs /bin/sleep' : null);
 
+  test('a tool that times out has ended before the throw', () async {
+    // It writes after it is told to stop: the cleanup that follows the throw
+    // must not race it.
+    final written = File(p.join(root.path, 'written'));
+    await expectLater(
+      runDeviceAppTool('/bin/sh', [
+        '-c',
+        r'''trap 'kill $!; sleep 0.3; : > "$1"; exit 0' TERM; sleep 30 & wait''',
+        'sh',
+        written.path,
+      ], timeout: const Duration(seconds: 1)),
+      throwsA(isA<TimeoutException>()),
+    );
+    expect(written.existsSync(), isTrue);
+  }, skip: Platform.isWindows ? 'needs /bin/sh' : null);
+
+  test('a tool that ignores TERM is killed before the throw', () async {
+    final pid = File(p.join(root.path, 'pid'));
+    await expectLater(
+      runDeviceAppTool('/bin/sh', [
+        '-c',
+        r'''trap '' TERM; echo $$ > "$1"; exec sleep 30''',
+        'sh',
+        pid.path,
+      ], timeout: const Duration(seconds: 1)),
+      throwsA(isA<TimeoutException>()),
+    );
+    // CONT changes nothing for a process still running; one that has ended
+    // and been reaped takes no signal.
+    expect(
+      Process.killPid(
+        int.parse(pid.readAsStringSync().trim()),
+        ProcessSignal.sigcont,
+      ),
+      isFalse,
+    );
+  }, skip: Platform.isWindows ? 'needs /bin/sh' : null);
+
   test(
     'installs into the first folder, opens it, and leaves nothing behind',
     () async {
@@ -603,6 +641,28 @@ void main() {
     expect(opened, [bundleIn(first.path)]);
     expect(tempRoot.listSync(), isEmpty);
   }, skip: _needsDitto);
+
+  test(
+    'a partial that cannot be removed leaves the result as it was',
+    () async {
+      afterTool = (call, result) async {
+        if (call.first == '/usr/bin/ditto') {
+          File(p.join(bundleIn(first.path), 'marker'))
+              .createSync(recursive: true);
+          // Nothing in a folder this person cannot write can be removed.
+          makeReadOnly(p.join(call[2], 'Contents'));
+        }
+        return result;
+      };
+
+      final result = await installer().install();
+
+      expect(result.failed, isNull);
+      expect(result.installedAt, bundleIn(first.path));
+      expect(opened, [bundleIn(first.path)]);
+    },
+    skip: _needsDitto,
+  );
 
   test('a partial that cannot be renamed fails at install', () async {
     afterTool = (call, result) async {
