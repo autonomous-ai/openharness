@@ -19,9 +19,9 @@ it('declares each engine\'s hooks once, for the full engine interface and the ho
   expect(admitHook('claude', {})).toEqual({ accepted: true })
 })
 
-it('composes only what a contract declares: Claude Code corrects transcripts and closes turns, Codex admits', () => {
+it('composes only what a contract declares: Claude Code corrects transcripts, Codex admits, and both Stops close turns', () => {
   expect(Object.keys(engineHooks.claude).sort()).toEqual(['install', 'installIn', 'onStop', 'transcriptFor'])
-  expect(Object.keys(engineHooks.codex).sort()).toEqual(['admit', 'install', 'installIn'])
+  expect(Object.keys(engineHooks.codex).sort()).toEqual(['admit', 'install', 'installIn', 'onStop'])
 })
 
 it('keeps every contract plain data: nothing in it runs', () => {
@@ -82,6 +82,7 @@ it('does not emit an end when core rejects a stale closure proposal', async () =
   await engineHooks.claude.onStop!({
     turnState: () => parser.snapshot(), closeTurn, latestPromptAt: () => undefined,
     drain: async () => {}, noteEngineStopped: () => {}, emit, graceMs: 0,
+    heldEnd: () => undefined, heldEndWithin: async () => false, deliverHeldEnd: () => false,
   }, { sessionId: 'session' })
   expect(closeTurn).toHaveBeenCalledWith('session', parser.snapshot().identity)
   expect(emit).not.toHaveBeenCalled()

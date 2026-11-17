@@ -50,6 +50,23 @@ describe('the session normalizer table', () => {
     expect(() => table.closeTurns('never-seen')).not.toThrow()
   })
 
+  it('reads a turn as open while its end is held, whatever the parser says', () => {
+    const turns = { held: (id: string) => id === 'held', closed: vi.fn(), forget: vi.fn() }
+    const table = createSessionNormalizers(others({ other: stream(false) }), turns)
+    table.liveParsers.set('held', parser(false))
+    table.liveParsers.set('closed', parser(false))
+    expect(['held', 'closed', 'other', 'none'].map(table.sessionTurnState)).toEqual([true, false, false, undefined])
+  })
+
+  it('a cancel tells the turn hooks it closed; forgetting a session forgets its record', () => {
+    const turns = { held: () => false, closed: vi.fn(), forget: vi.fn() }
+    const table = createSessionNormalizers(others(), turns)
+    table.closeTurns('s')
+    expect(turns.closed).toHaveBeenCalledWith('s')
+    table.forget('s')
+    expect(turns.forget).toHaveBeenCalledWith('s')
+  })
+
   it('stops following every other engine\'s stream on shutdown', () => {
     const streams = others()
     createSessionNormalizers(streams).stopPollers()
