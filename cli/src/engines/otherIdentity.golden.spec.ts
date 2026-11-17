@@ -129,7 +129,7 @@ beforeAll(async () => {
     hermes: await import('./hermes/contract.js'),
     cursorDiscovery: await import('../core/engines/cursorDiscovery.js'),
   }
-  m.registry.registry.load()
+  await m.registry.registry.load()
   golden = RECORD ? {} : JSON.parse(readFileSync(GOLDEN, 'utf8')) as Record<string, unknown>
 })
 

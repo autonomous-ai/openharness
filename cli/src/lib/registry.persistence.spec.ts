@@ -46,7 +46,7 @@ beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), 'registry-persistence-'))
   for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) vi.stubEnv(key, directory)
   registry = (await import('./registry.js')).registry
-  registry.load()
+  await registry.load()
   ;(await registry.openProcessAgent(input))
   await registry.flush()
 })

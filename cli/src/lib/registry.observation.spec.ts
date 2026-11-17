@@ -67,7 +67,7 @@ beforeEach(async () => {
   file = join(directory, 'registry.json')
   for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) vi.stubEnv(key, directory)
   registry = (await import('./registry.js')).registry
-  registry.load()
+  await registry.load()
   expect((await registry.openProcessAgent(input))).not.toBeNull()
   await registry.flush()
   clearCounts()
@@ -154,7 +154,7 @@ describe('unchanged discovery observations', () => {
       closePlan: reversed(plan), lastOpenedAt: 1790900000000,
     })], null, 2))
     clearCounts()
-    registry.load()
+    await registry.load()
     const discover = () => registry.transaction(() => {
       registry.updateRuntimes(input.agentId, [{ backend: 'tmux', paneId: '%31' }])
       registry.updateProcessIdentity(input.agentId, { ...input.processIdentity })

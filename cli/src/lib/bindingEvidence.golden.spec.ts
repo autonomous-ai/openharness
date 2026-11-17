@@ -88,7 +88,7 @@ it.each(['linux', 'darwin'])('preserves healthy binding and capture answers on %
     owned = registry
     const { admitHook } = await import('../engines/hooks.js')
     const { captureResumeIdentity } = await import('./captureResumeIdentity.js')
-    registry.load()
+    await registry.load()
     check('loaded', registry.list().map(shape).sort((a, b) => a!.agent.localeCompare(b!.agent)))
     check('paths', [validTranscriptPath('codex', parent), validTranscriptPath('codex', path('alias.jsonl')),
       validTranscriptPath('codex', movedFile), validTranscriptPath('codex', profiled, profile),

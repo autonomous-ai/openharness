@@ -36,6 +36,7 @@ import {
   writeFileSync,
 } from 'fs'
 import { randomUUID } from 'crypto'
+import { setImmediate as nextTurn } from 'node:timers/promises'
 import { join, basename, dirname, relative, isAbsolute } from 'path'
 import { machineNames } from './machineNames.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
@@ -1238,6 +1239,21 @@ class Registry {
    */
   private terminalAvailableAgents = new Set<string>()
   private readonly writer = new RegistryWriteQueue()
+  private loading: Promise<void> | undefined
+  private initializing = false
+  private exiting = false
+
+  private assertReady(): void {
+    // Prior admitted writes can still read the complete old view while the queue
+    // drains. Once load starts replacing it, no public reader sees staged rows.
+    if (this.initializing) throw new RegistryPersistenceUnavailable('registry is initializing')
+  }
+
+  private assertOpen(): void {
+    this.writer.assertOpen()
+    if (this.exiting) throw new RegistryPersistenceUnavailable('registry is closing')
+    if (this.loading) throw new RegistryPersistenceUnavailable('registry is initializing')
+  }
   private pendingObservation: Promise<void> | undefined
   private transactionCompletion: Promise<void> = Promise.resolve()
   private transactionDepth = 0
@@ -1265,6 +1281,7 @@ class Registry {
 
   /** True when the last `load()` found the machine had rebooted since the previous daemon run. */
   get rebootedSinceLastRun(): boolean {
+    this.assertReady()
     return this.rebooted
   }
 
@@ -1284,6 +1301,7 @@ class Registry {
   }
 
   private entered(engine: AgentEngine): void {
+    if (this.initializing || this.exiting) return
     try { this.onEnter?.(engine) }
     catch (error) { console.warn('[registry] engine entry notification failed:', error) }
   }
@@ -1319,8 +1337,31 @@ class Registry {
    *  A reboot keeps every row but clears its process identity and marks it dormant: no process survives
    *  a reboot, but the agent — its id, cwd, session and pane placement — is what `restoreAgents` rebuilds
    *  a pane for. */
-  load(): void {
-    this.writer.assertOpen()
+  load(): Promise<void> {
+    if (this.loading) return this.loading
+    try {
+      this.assertOpen()
+      if (this.transactionDepth) throw new RegistryPersistenceUnavailable('registry has an unfinished transaction')
+    } catch (error) { return Promise.reject(error) }
+    const loading = this.loadState().then(() => {
+      this.initializing = false
+      for (const row of this.agents.values()) this.entered(row.engine)
+    }, error => {
+      this.agents.clear(); this.sessionIndex.clear(); this.runtimeIndex.clear(); this.processIndex.clear()
+      this.writeBlocked = true
+      this.initializing = false
+      throw error
+    })
+    this.loading = loading
+    const settled = () => { if (this.loading === loading) this.loading = undefined }
+    void loading.then(settled, settled)
+    return loading
+  }
+
+  private async loadState(): Promise<void> {
+    // A reload cannot clear a prior publication while its I/O still owns the queue.
+    await this.writer.run(async () => {})
+    this.initializing = true
     this.agents.clear()
     this.sessionIndex.clear()
     this.runtimeIndex.clear()
@@ -1343,11 +1384,12 @@ class Registry {
     const savedBoot = readSavedBoot()
     const bootId = currentBootId()
     const rebooted = bootChanged(savedBoot, bootId)
-    writeBoot(bootId) // refresh the reference so a reboot is detected exactly once, even across same-boot restarts
+    let originalContents: string | undefined
     try {
-      const stored = JSON.parse(readPrivateStateFile(FILE)) as unknown
+      originalContents = readPrivateStateFile(FILE)
+      const stored = JSON.parse(originalContents) as unknown
       if (!Array.isArray(stored)) {
-        this.quarantine('root is not an array')
+        await this.quarantine('root is not an array', originalContents)
         return
       }
       const { rows: parsed, dropped, changed: strippedRetired } = withoutRetiredRows(stored)
@@ -1360,13 +1402,13 @@ class Registry {
       }
       const legacyRows = parsed.filter((row) => !row || typeof row !== 'object' || !Object.hasOwn(row, 'schemaVersion'))
       if (legacyRows.some((row) => !validLegacyRegistryRow(row))) {
-        this.quarantine('contains a malformed legacy row')
+        await this.quarantine('contains a malformed legacy row', originalContents)
         return
       }
       const v2Rows = parsed.filter((row) => !!row && typeof row === 'object'
         && (row as { schemaVersion?: unknown }).schemaVersion === 2)
       if (v2Rows.length && !validatedRows(v2Rows)) {
-        this.quarantine('contains a malformed v2 row')
+        await this.quarantine('contains a malformed v2 row', originalContents)
         return
       }
       let arr = parsed as Array<Partial<RegisteredSession>>
@@ -1394,24 +1436,27 @@ class Registry {
       if (rebooted) {
         this.rebooted = true
         console.log(`[registry] machine rebooted since last run — ${arr.length} agent(s) kept with their process identity cleared (stale panes, restored on start)`)
-        // The boot marker was already refreshed above, so a crash before the save below would leave
-        // pre-reboot pids on disk with no second chance to notice — force the cleared snapshot out.
+        // Persist the cleared snapshot before advancing the boot marker, so a crash
+        // during initialization leaves a second chance to recognize the reboot.
         changed = true
       }
-      // One fresh catalog proof serves this synchronous batch. No row is indexed or saved until
-      // that proof is checked again; a changed or unavailable catalog preserves its former bindings.
+      // One catalog snapshot serves the private initialization. Its final guard
+      // preserves every dependent binding if the catalog changed between rows.
       let snapshot: EngineHomeSnapshot | undefined, unavailableHomes: unknown
       const dependent = new Map<string, Partial<RegisteredSession>>()
       const staged = new Map<string, RegisteredSession>()
-      const bindingProofs = new Map<string, { proof: ReturnType<typeof savedTranscriptEvidence>; original: Partial<RegisteredSession> }>()
-      const rootScopes = new Map<string, { proof?: ReturnType<typeof transcriptRootEvidence>; error?: unknown;
+      const bindingProofs = new Map<string, { original: Partial<RegisteredSession> }>()
+      const rootScopes = new Map<string, { proof?: ReturnType<typeof transcriptRootEvidence>; verify?: () => void; error?: unknown;
         rows: Map<string, Partial<RegisteredSession>> }>()
       const rootsFor = (engine: AgentEngine, profile: string | undefined, catalog: EngineHomeSnapshot | undefined) => {
         const key = JSON.stringify([engine, profile ?? null])
         let scope = rootScopes.get(key)
         if (!scope) {
           scope = { rows: new Map() }; rootScopes.set(key, scope)
-          try { scope.proof = transcriptRootEvidence(engine, profile, catalog) }
+          try {
+            scope.proof = transcriptRootEvidence(engine, profile, catalog)
+            scope.verify = scope.proof.retain()
+          }
           catch (error) { scope.error = error }
         }
         if (scope.error) throw scope.error
@@ -1576,21 +1621,24 @@ class Registry {
           || legacyLauncherId !== ''
         ) changed = true
         if (staged.has(s.agentId)) {
-          this.quarantine('contains duplicate agent identities')
+          await this.quarantine('contains duplicate agent identities', originalContents)
           return
         }
-        if (bindingProof) bindingProofs.set(s.agentId, { proof: bindingProof, original: raw })
+        // The proof and this private row commitment share one turn. A later native
+        // effect earns fresh evidence; startup never grants lasting file authority.
+        if (bindingProof) {
+          try { bindingProof.verify() }
+          catch (error) { preserve(s, raw, error) }
+          bindingProofs.set(s.agentId, { original: raw })
+        }
         rootScope?.rows.set(s.agentId, raw)
         if (needsCatalog) dependent.set(s.agentId, raw)
         if (homeError) preserve(s, raw, homeError)
         staged.set(s.agentId, s)
+        await nextTurn()
       }
-      for (const [id, { proof, original }] of bindingProofs) {
-        try { proof.verify() }
-        catch (error) { preserve(staged.get(id)!, original, error) }
-      }
-      for (const { proof, rows } of rootScopes.values()) {
-        try { proof?.verify() }
+      for (const { verify, rows } of rootScopes.values()) {
+        try { verify?.() }
         catch (error) { for (const [id, raw] of rows) preserve(staged.get(id)!, raw, error) }
       }
       if (snapshot) {
@@ -1607,18 +1655,22 @@ class Registry {
           console.log(`[registry] repaired ${sessionStoreOf(row.engine)!.label} parent ${row.sessionId.slice(0, 8)} transcript after child hook overwrite`)
         }
       }
-      if (!validatedRows(this.list().map(persistedRow))) {
-        this.quarantine('violates global identity invariants')
+      if (!validatedRows([...this.agents.values()].map(persistedRow))) {
+        await this.quarantine('violates global identity invariants', originalContents)
         return
       }
-      if (changed) this.save()
+      if (changed) await this.writer.run(deadline => this.persist(deadline, 'observation'))
+      // A marker must not make an interrupted migration look complete on the next start.
+      writeBoot(bootId)
       if (ownModes) atomicWriteJson(OWN_MODES_FILE, Date.now())
     } catch (error) {
-      if (error instanceof SyntaxError) this.quarantine(`is not JSON (${error.message})`)
+      if (error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed) throw error
+      if (error instanceof SyntaxError) await this.quarantine(`is not JSON (${error.message})`, originalContents!)
       else if (existsSync(FILE)) {
         this.writeBlocked = true
         console.error('[registry] registry is unreadable; refusing to overwrite it:', error instanceof Error ? error.message : error)
       } else {
+        writeBoot(bootId)
         atomicWriteJson(OWN_MODES_FILE, Date.now())
       }
       // A genuinely absent file starts empty. A file that cannot be opened safely (a symlink, another
@@ -1633,7 +1685,7 @@ class Registry {
    * not start a single agent until someone repaired the file by hand. A newer version's rows (an
    * unknown schema) are not corruption, and are still never touched.
    */
-  private quarantine(reason: string): void {
+  private async quarantine(reason: string, originalContents: string): Promise<void> {
     this.agents.clear()
     this.sessionIndex.clear()
     this.runtimeIndex.clear()
@@ -1644,12 +1696,21 @@ class Registry {
     this.intended.clear()
     const aside = `${FILE}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`
     try {
-      renameSync(FILE, aside)
+      await this.writer.run(deadline => registryFileLock(env.ADAPTER_DATA_DIR, deadline, async checkOwner => {
+        // A peer may publish while rows are being prepared or the lock is awaited.
+        // Only the exact malformed image we read may be moved aside.
+        if (readPrivateStateFile(FILE) !== originalContents) {
+          throw new RegistryPersistenceUnavailable('registry image changed during initialization')
+        }
+        checkOwner()
+        renameSync(FILE, aside)
+      }))
       this.writeBlocked = false
       console.error(`[registry] registry ${reason}; moved it aside to ${aside} and started empty`)
     } catch (error) {
       this.writeBlocked = true
       console.error(`[registry] registry ${reason}, and it could not be moved aside (${error instanceof Error ? error.message : error}); refusing to overwrite it`)
+      if (error instanceof RegistryPersistenceUnavailable) throw error
     }
   }
 
@@ -1697,7 +1758,7 @@ class Registry {
        */
       evicted: RegisteredSession[]
     } | null> {
-    this.writer.assertOpen()
+    this.assertOpen()
     if (this.writeBlocked) return null
     input = structuredClone(input)
     const { engine, processIdentity } = input
@@ -1871,7 +1932,7 @@ class Registry {
     /** OpenClaw's `--local` folder — see RegisteredSession.openclawLocal. */
     openclawLocal?: string
   }): Promise<RegisteredSession | null> {
-    this.writer.assertOpen()
+    this.assertOpen()
     input = structuredClone(input)
     return this.writer.run(async deadline => {
       if (this.writeBlocked) return null
@@ -1954,7 +2015,7 @@ class Registry {
    * Archived routes/processes are evidence only: none of them may be indexed or signalled here. */
   async resumePendingAgent(saved: RegisteredSession, runtimes: TerminalRuntimeRef[], nativeToken?: string,
     authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
-    this.writer.assertOpen()
+    this.assertOpen()
     const archived = structuredClone(saved), routes = normalizedRuntimes(structuredClone(runtimes))
     return this.writer.run(async deadline => {
       if (this.writeBlocked || this.agents.has(archived.agentId)
@@ -1989,7 +2050,7 @@ class Registry {
 
   /** Readiness, its native process and the launch words are one durable authority change. */
   async confirmLaunch(agentId: string, input: LaunchPublicationInput, authority: RegistryAuthority = {}): Promise<LaunchPublication> {
-    this.writer.assertOpen()
+    this.assertOpen()
     const selected = this.byAgent(agentId)
     if (!selected || (!isTerminalEngine(selected.engine) && !validProcessIdentity(input.processIdentity))) return { state: 'not-published' }
     const verifyOwner = this.ownerGuard(agentId, authority.current)
@@ -2092,7 +2153,7 @@ class Registry {
 
   /** A current observation for frames; never persisted as conversation evidence. */
   setIdentityHold(agentId: string, reason?: string): boolean {
-    this.writer.assertOpen()
+    this.assertOpen()
     const entry = this.agents.get(agentId)
     const detail = reason === undefined ? undefined : reason.slice(0, 1024) || 'Waiting for conversation identity.'
     if (!entry || entry.identityHold === detail) return false
@@ -2104,7 +2165,7 @@ class Registry {
 
   /** Only the attachment that read this revision can complete or explain its recovery. */
   setInterpretationHold(agentId: string, revision: number | undefined, reason?: string, create = false): boolean {
-    this.writer.assertOpen()
+    this.assertOpen()
     const entry = this.agents.get(agentId)
     if (!entry || entry.identityHold || entry.evidenceRevision !== revision || (!entry.interpretationHold && !(create && reason))) return false
     if (!entry.interpretationHold) entry.evidenceRevision = ++this.evidenceRevision
@@ -2115,7 +2176,7 @@ class Registry {
 
   /** Retry only this saved binding. A failed read leaves all of its prior facts intact. */
   async revalidateBinding(agentId: string, authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
-    this.writer.assertOpen()
+    this.assertOpen()
     const verifyOwner = this.ownerGuard(agentId, authority.current)
     return this.writer.run(async deadline => {
       verifyOwner()
@@ -2172,7 +2233,7 @@ class Registry {
     /** The `codexHome` the input named was not taken: this session's transcript was not found under it. */
     refusedHome?: true
   } | null> {
-    this.writer.assertOpen()
+    this.assertOpen()
     input = structuredClone(input)
     const engine = normalizedAgentEngine(input.engine)
     const pane = input.tmuxPane
@@ -2455,7 +2516,7 @@ class Registry {
 
   /** A session reset is acknowledged only after its exact binding is durably released. */
   async confirmSessionUnbound(agentId: string, sessionId: string, authority: RegistryAuthority = {}): Promise<LaunchPublication> {
-    this.writer.assertOpen()
+    this.assertOpen()
     const selected = this.byAgent(agentId)
     if (!selected || selected.sessionId !== sessionId) return { state: 'not-published' }
     const verify = this.ownerGuard(agentId, authority.current)
@@ -2473,14 +2534,17 @@ class Registry {
   }
 
   has(sessionId: string): boolean {
+    this.assertReady()
     return this.sessionIndex.has(sessionId)
   }
 
   byAgent(agentId: string): RegisteredSession | undefined {
+    this.assertReady()
     return this.agents.get(agentId)
   }
 
   bySession(sessionId: string): RegisteredSession | undefined {
+    this.assertReady()
     const agentId = this.sessionIndex.get(sessionId)
     return agentId ? this.agents.get(agentId) : undefined
   }
@@ -2490,12 +2554,14 @@ class Registry {
   }
 
   byRuntimeEngine(runtime: TerminalRuntimeRef, engine: AgentEngine): RegisteredSession | undefined {
+    this.assertReady()
     const agentId = this.runtimeIndex.get(terminalRouteKey(runtime))
     const entry = agentId ? this.agents.get(agentId) : undefined
     return entry?.engine === engine ? entry : undefined
   }
 
   byProcess(engine: AgentEngine, identity: ProcessIdentity): RegisteredSession | undefined {
+    this.assertReady()
     const agentId = this.processIndex.get(processIdentityKey(engine, identity))
     return agentId ? this.agents.get(agentId) : undefined
   }
@@ -2528,7 +2594,7 @@ class Registry {
    */
   async reinstateArchived(terminalAgentId: string, saved: RegisteredSession, processIdentity: ProcessIdentity,
     authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
-    this.writer.assertOpen()
+    this.assertOpen()
     const archived = structuredClone(saved), identity = structuredClone(processIdentity)
     const verifyHolder = this.ownerGuard(terminalAgentId, authority.current)
     const verifySaved = this.ownerGuard(archived.agentId)
@@ -2554,7 +2620,7 @@ class Registry {
 
   async adoptEngine(agentId: string, engine: AgentEngine, processIdentity?: ProcessIdentity | null,
     authority: RegistryAuthority = {}, observed?: Pick<LaunchPublicationInput, 'runtimes' | 'primaryRuntimeKey' | 'gateway' | 'grid'>): Promise<RegisteredSession | null> {
-    this.writer.assertOpen()
+    this.assertOpen()
     const verify = this.ownerGuard(agentId, authority.current)
     const identity = processIdentity ? structuredClone(processIdentity) : null
     const observation = observed ? structuredClone(observed) : undefined
@@ -2632,7 +2698,7 @@ class Registry {
   /** Archive/shell announcements follow this durable ownership-group transition. */
   async confirmEngineExit(agentId: string, disposition: 'shell' | 'successor' | 'remove',
     authority: RegistryAuthority = {}): Promise<LaunchPublication> {
-    this.writer.assertOpen()
+    this.assertOpen()
     const verify = this.ownerGuard(agentId, authority.current)
     return this.writer.run(async deadline => {
       verify()
@@ -2652,7 +2718,7 @@ class Registry {
   }
 
   updateRuntimes(agentId: string, runtimes: readonly TerminalRuntimeRef[], primaryRuntimeKey?: string): boolean {
-    this.writer.assertOpen()
+    this.assertOpen()
     const entry = this.agents.get(agentId)
     const normalized = normalizedRuntimes(runtimes)
     if (!entry || !normalized.length) return false
@@ -2670,7 +2736,7 @@ class Registry {
   }
 
   setActive(agentId: string, active: boolean): boolean {
-    this.writer.assertOpen()
+    this.assertOpen()
     const entry = this.agents.get(agentId)
     if (!entry || entry.active === active) return !!entry
     entry.active = active
@@ -2696,7 +2762,7 @@ class Registry {
   }
 
   setLaunch(agentId: string, launch: AgentLaunch): RegisteredSession | null {
-    this.writer.assertOpen()
+    this.assertOpen()
     const entry = this.agents.get(agentId)
     if (!entry) return null
     const before = entry.launch
@@ -2718,7 +2784,7 @@ class Registry {
 
   /** Prepare outside the loop; native authority and durable publication still share one final section. */
   async setExternalResume(agentId: string, value: ExternalResumeIntent, authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
-    this.writer.assertOpen()
+    this.assertOpen()
     const captured = structuredClone(value)
     const verify = this.ownerGuard(agentId, authority.current)
     return this.writer.run(async deadline => {
@@ -2744,7 +2810,7 @@ class Registry {
 
   /** A cancelled external intent has no owned conversation to archive. Its deletion must be durable. */
   async finishExternalCancellation(agentId: string): Promise<boolean> {
-    this.writer.assertOpen()
+    this.assertOpen()
     const verify = this.ownerGuard(agentId)
     return this.writer.run(async deadline => {
       verify()
@@ -2759,7 +2825,7 @@ class Registry {
 
   /** The dispatch and first task are durable before a terminal may replace the inert shell. */
   async beginExternalDispatch(agentId: string, firstTask?: string, authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
-    this.writer.assertOpen()
+    this.assertOpen()
     const verify = this.ownerGuard(agentId, authority.current)
     return this.writer.run(async deadline => {
       verify()
@@ -2776,7 +2842,7 @@ class Registry {
 
   /** A backend may leave its guarded shell only after this exact native token is durable. */
   async beginNativeDispatch(agentId: string, nativeToken: string, authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
-    this.writer.assertOpen()
+    this.assertOpen()
     const verifyOwner = this.ownerGuard(agentId, authority.current)
     const before = launchIdentity(this.byAgent(agentId))
     return this.writer.run(async deadline => {
@@ -2796,7 +2862,7 @@ class Registry {
 
   /** The task is returned only after its removal is durable, to at most one caller. */
   async takeFirstTask(agentId: string): Promise<string | null> {
-    this.writer.assertOpen()
+    this.assertOpen()
     const verify = this.ownerGuard(agentId)
     return this.writer.run(async deadline => {
       verify()
@@ -2811,7 +2877,7 @@ class Registry {
   }
 
   async setClosePlan(agentId: string, plan: RegisteredSession['closePlan'] | null, authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
-    this.writer.assertOpen()
+    this.assertOpen()
     const captured = plan ? structuredClone(plan) : null
     const verify = this.ownerGuard(agentId, authority.current)
     return this.writer.run(async deadline => {
@@ -2838,7 +2904,7 @@ class Registry {
 
   /** Mark whether at least one backend placement was verified by this daemon process. */
   setTerminalAvailable(agentId: string, available: boolean): boolean {
-    this.writer.assertOpen()
+    this.assertOpen()
     if (!this.agents.has(agentId)) return false
     if (available) this.terminalAvailableAgents.add(agentId)
     else this.terminalAvailableAgents.delete(agentId)
@@ -2846,12 +2912,14 @@ class Registry {
   }
 
   terminalAvailable(agentId: string): boolean {
+    this.assertReady()
     return this.terminalAvailableAgents.has(agentId)
   }
 
   /** The one lookup for anything that arrives from outside: web and device address an agent by `agentId`
    *  for most things but by a bare `sessionId` for turn control, and both must land on the same record. */
   resolve(id: string): RegisteredSession | undefined {
+    this.assertReady()
     return this.agents.get(id) ?? this.bySession(id)
   }
 
@@ -2865,7 +2933,7 @@ class Registry {
     gateway?: 'ori' | null,
     grid?: GridAssignment | null,
   ): boolean {
-    this.writer.assertOpen()
+    this.assertOpen()
     const session = this.resolve(sessionId)
     if (!session || !validProcessIdentity(processIdentity)) return false
     const before = rowFingerprint(persistedRow(session))
@@ -2886,7 +2954,7 @@ class Registry {
 
   /** Forget the process an agent was last seen as — its pane is gone, so the pid is gone with it. */
   clearProcessIdentity(agentId: string): boolean {
-    this.writer.assertOpen()
+    this.assertOpen()
     const session = this.agents.get(agentId)
     if (!session) return false
     if (!session.processIdentity) return true
@@ -2899,7 +2967,7 @@ class Registry {
   }
 
   setBypassPermission(agentId: string, bypassPermission: boolean): boolean {
-    this.writer.assertOpen()
+    this.assertOpen()
     const session = this.agents.get(agentId)
     if (!session) return false
     if ((session.bypassPermission === true) === bypassPermission) return true
@@ -2915,7 +2983,7 @@ class Registry {
    *  like `setCodexHome`: the mode create recorded is the person's choice and is never re-derived
    *  (the same name again is a no-op). A name that is not a mode is refused, as on load. */
   setPermissionMode(agentId: string, permissionMode: string): boolean {
-    this.writer.assertOpen()
+    this.assertOpen()
     const session = this.agents.get(agentId)
     if (!session || !permissionModeName(permissionMode)) return false
     if (session.permissionMode) return session.permissionMode === permissionMode
@@ -2928,7 +2996,7 @@ class Registry {
   /** Put a row back in the folder its transcript belongs to (cwdRepair.ts). Any engine, any value:
    *  the caller has already proved the new folder from the transcript. */
   setCwd(agentId: string, cwd: string): boolean {
-    this.writer.assertOpen()
+    this.assertOpen()
     const session = this.agents.get(agentId)
     if (!session || session.cwd === cwd) return false
     session.cwd = cwd
@@ -2941,7 +3009,7 @@ class Registry {
    *  open), for an engine whose sessions follow one (its session store's `sessions.profile`). Never overwrites: the
    *  profile is chosen once, see `codexHome`. */
   setCodexHome(agentId: string, codexHome: string): boolean {
-    this.writer.assertOpen()
+    this.assertOpen()
     const session = this.agents.get(agentId)
     if (!session || !sessionStoreOf(session.engine)?.sessions.profile || session.codexHome) return false
     session.codexHome = codexHome
@@ -2957,7 +3025,7 @@ class Registry {
    *  never marked either: a descriptor cannot tell an older daemon's row from one Harness launched by name, whose
    *  relaunch must export its home. */
   setHermesHome(agentId: string, hermesHome: string, derived = false): boolean {
-    this.writer.assertOpen()
+    this.assertOpen()
     const session = this.agents.get(agentId)
     if (!session || session.engine !== 'hermes' || session.hermesHome) return false
     session.hermesHome = hermesHome
@@ -2969,7 +3037,7 @@ class Registry {
 
   /** Where an OpenClaw session's TUI keeps its state, read off the TUI while it runs: the one it holds now wins. */
   setOpenclawStateDir(agentId: string, stateDir: string): boolean {
-    this.writer.assertOpen()
+    this.assertOpen()
     const session = this.agents.get(agentId)
     // A `--local` row's store is its folder: a TUI seen elsewhere never moves it off.
     if (!session || session.engine !== 'openclaw' || session.openclawLocal || session.openclawStateDir === stateDir) return false
@@ -2986,7 +3054,7 @@ class Registry {
    * status, is a row the app would read wrongly.
    */
   setGridLaunch(agentId: string, launch: GridLaunchRecord | null): boolean {
-    this.writer.assertOpen()
+    this.assertOpen()
     const session = this.agents.get(agentId)
     if (!session) return false
     session.gridLaunch = launch?.override ?? null
@@ -2998,7 +3066,7 @@ class Registry {
 
   /** Record the model and effort [agentId]'s session relaunches with (RegisteredSession.launchModel); null forgets it. */
   async setLaunchModel(agentId: string, launchModel: LaunchModel | null, authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
-    this.writer.assertOpen()
+    this.assertOpen()
     const session = this.agents.get(agentId)
     if (!session) return null
     const verify = this.ownerGuard(agentId, authority.current)
@@ -3026,7 +3094,7 @@ class Registry {
    * moved.
    */
   markOpened(agentId: string): RegisteredSession | null {
-    this.writer.assertOpen()
+    this.assertOpen()
     const session = this.agents.get(agentId)
     if (!session) return null
     session.lastOpenedAt = Date.now()
@@ -3035,7 +3103,7 @@ class Registry {
   }
 
   touchTranscript(sessionId: string, at = Date.now()): boolean {
-    this.writer.assertOpen()
+    this.assertOpen()
     const session = this.bySession(sessionId)
     if (!session) return false
     session.lastTranscriptAt = at
@@ -3050,7 +3118,7 @@ class Registry {
    * then or later. The agent keeps the name it had until its engine titles the conversation anew.
    */
   updateTitle(sessionId: string, title: string | null, quiet = false): RegisteredSession | null {
-    this.writer.assertOpen()
+    this.assertOpen()
     const session = this.resolve(sessionId)
     if (!session) return null
     const next = titleDisplayName(title)
@@ -3083,7 +3151,7 @@ class Registry {
    * agent back to a default.
    */
   inheritName(fromSessionId: string, toSessionId: string): void {
-    this.writer.assertOpen()
+    this.assertOpen()
     const name = NAME_OVERRIDES.get(fromSessionId)
     if (!name || NAME_OVERRIDES.has(toSessionId)) return
     NAME_OVERRIDES.set(toSessionId, name)
@@ -3091,7 +3159,7 @@ class Registry {
   }
 
   async rename(id: string, name: string, authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
-    this.writer.assertOpen()
+    this.assertOpen()
     const s = this.resolve(id)
     if (!s) return null
     const trimmed = name.trim()
@@ -3109,7 +3177,7 @@ class Registry {
   }
 
   async deleteSavedNames(ids: string[]): Promise<void> {
-    this.writer.assertOpen()
+    this.assertOpen()
     for (const id of ids) { this.deletedNames.add(id); NAME_OVERRIDES.delete(id) }
     this.namesRevision++
     this.namesUnsaved = true
@@ -3117,6 +3185,7 @@ class Registry {
   }
 
   list(): RegisteredSession[] {
+    this.assertReady()
     return Array.from(this.agents.values())
   }
 
@@ -3137,7 +3206,7 @@ class Registry {
    * that (RECONCILE_PASS_DEADLINE_MS).
    */
   async transaction<T>(apply: () => T | Promise<T>, options: { holdSavesMs?: number } = {}): Promise<T> {
-    this.writer.assertOpen()
+    this.assertOpen()
     this.transactionDepth++
     let holding = true, completion: Promise<void> = Promise.resolve()
     const release = (): Promise<void> => {
@@ -3179,7 +3248,7 @@ class Registry {
 
   /** Run a durability-sensitive action only after the current discovery batch has committed. */
   async afterTransaction<T>(action: () => T | Promise<T>): Promise<T> {
-    this.writer.assertOpen()
+    this.assertOpen()
     if (this.transactionDepth === 0) return this.transactionCompletion.then(action)
     return new Promise<T>((resolve, reject) => {
       this.afterTransactionCallbacks.push({ run: () => {
@@ -3189,24 +3258,32 @@ class Registry {
   }
 
   flush(options: { exiting?: boolean } = {}): Promise<void> {
-    const write = async (deadline: RegistryWriteDeadline) => {
-      await this.persistNames(deadline)
-      await this.persist(deadline, 'observation', options.exiting === true)
+    if (options.exiting) this.exiting = true
+    const finish = () => {
+      const write = async (deadline: RegistryWriteDeadline) => {
+        await this.persistNames(deadline)
+        await this.persist(deadline, 'observation', options.exiting === true)
+      }
+      return options.exiting ? this.writer.finish(write) : this.writer.run(write)
     }
-    return options.exiting ? this.writer.finish(write) : this.writer.run(write)
+    // Closing the writer first would let a late load install rows it cannot persist.
+    return this.loading ? this.loading.then(finish, async error => {
+      if (options.exiting) await this.writer.finish(async () => {})
+      throw error
+    }) : finish()
   }
 
   private ownerGuard(agentId: string, current?: () => boolean): () => void {
-    const identity = ownershipIdentity(this.byAgent(agentId))
+    const identity = ownershipIdentity(this.agents.get(agentId))
     return () => {
-      if (current?.() === false || ownershipIdentity(this.byAgent(agentId)) !== identity) {
+      if (current?.() === false || ownershipIdentity(this.agents.get(agentId)) !== identity) {
         throw new RegistryOwnershipChanged('the registry owner changed while its write was being prepared')
       }
     }
   }
 
   private committedOwner(agentId: string, receipt: string | undefined): RegisteredSession | null {
-    const row = this.byAgent(agentId)
+    const row = this.agents.get(agentId)
     return row && receipt !== undefined && ownershipIdentity(row) === receipt ? row : null
   }
 
@@ -3240,8 +3317,8 @@ class Registry {
     return () => {
       // Candidate claims are private snapshots; every live claimant is read again at each fence.
       const affected = new Set(selected)
-      for (const row of this.list()) if (claims(row).some(claim => wanted.has(claim))) affected.add(row.agentId)
-      for (const id of affected) if (ownershipIdentity(this.byAgent(id)) !== ownershipIdentity(before.get(id))) {
+      for (const row of Array.from(this.agents.values())) if (claims(row).some(claim => wanted.has(claim))) affected.add(row.agentId)
+      for (const id of affected) if (ownershipIdentity(this.agents.get(id)) !== ownershipIdentity(before.get(id))) {
         throw new RegistryOwnershipChanged('the registry ownership group changed while its write was being prepared')
       }
     }
@@ -3249,7 +3326,7 @@ class Registry {
 
   /** Adopt a peer's complete ownership group without granting native control. */
   private reconcileUnconfirmed(latest: Map<string, Record<string, unknown>>, affected: Set<string>): void {
-    const selected = new Map(this.list().map(row => [row.agentId, row]))
+    const selected = new Map(Array.from(this.agents.values()).map(row => [row.agentId, row]))
     // Follow the same process, terminal and owned/provisional conversation
     // identities as validatedRows, including external canonical IDs and aliases.
     const peer = new Map([...latest].map(([id, value]) => [id, strictPersistedRow(value)]))
@@ -3318,12 +3395,12 @@ class Registry {
     let committedOwner: string | undefined
     try {
       deadline.check()
-      const currentRows = new Map(this.list().map((entry) => {
+      const currentRows = new Map(Array.from(this.agents.values()).map((entry) => {
         const row = structuredClone(persistedRow(entry)) as unknown as Record<string, unknown>
         return [entry.agentId, row] as const
       }))
       // Preserve authority now; unchanged observations never need to serialize it.
-      const beforeOwners = new Map(strict ? this.list().map(row => [row.agentId, {
+      const beforeOwners = new Map(strict ? Array.from(this.agents.values()).map(row => [row.agentId, {
         ...currentRows.get(row.agentId), evidenceRevision: row.evidenceRevision,
       } as unknown as RegisteredSession]) : [])
       // Only these owned snapshots share comparisons; live rows must be read afresh after preparation.
@@ -3572,7 +3649,7 @@ class Registry {
           verifyOwners?.()
           bindingCommit?.verify()
           // Ordinary observations can advance during durability; never install the pre-rename rebase.
-          const liveRows = new Map(this.list().map(row => [row.agentId, persistedRow(row) as unknown as Record<string, unknown>]))
+          const liveRows = new Map(Array.from(this.agents.values()).map(row => [row.agentId, persistedRow(row) as unknown as Record<string, unknown>]))
           const committed = new Map(serialized.map(row => [row.agentId, row as unknown as Record<string, unknown>]))
           const remainingIntents = new Map([...this.intended].filter(([id, intent]) => capturedIntents.get(id) !== intent))
           return [...mergedForSave(committed, liveRows, beforeCommit, remainingIntents).values()].map(value => {
@@ -3639,7 +3716,7 @@ class Registry {
           this.index(entry, false)
           entered.push(entry.engine)
         }
-        committedOwner = bindingCommit ? ownershipIdentity(this.byAgent(bindingCommit.agentId)) : undefined
+        committedOwner = bindingCommit ? ownershipIdentity(this.agents.get(bindingCommit.agentId)) : undefined
         this.persistedBaseline = new Map(serialized.map(row => [rowId(row), snapshotFingerprint(row as unknown as Record<string, unknown>)]))
         deadline.markAdmitted()
         if (rebased.length !== serialized.length || rebased.some(row => this.persistedBaseline.get(row.agentId) !== (preparedImages.has(row)

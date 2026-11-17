@@ -26,7 +26,7 @@ beforeEach(() => {
 })
 afterEach(async () => { for (const instance of instances) await instance.flush({ exiting: true }).catch(() => {}); instances.clear(); vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.resetModules(); rmSync(root, { recursive: true, force: true }) })
 
-async function load() { vi.resetModules(); const mod = await import('./registry.js'); instances.add(mod.registry); mod.registry.load(); return mod }
+async function load() { vi.resetModules(); const mod = await import('./registry.js'); instances.add(mod.registry); await mod.registry.load(); return mod }
 const disk = (): RegisteredSession[] => JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))
 async function pending() {
   const { registry, strictPersistedRow } = await load()

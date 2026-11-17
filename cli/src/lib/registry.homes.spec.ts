@@ -60,14 +60,14 @@ it('repairs a child-overwritten parent from an adopted Codex home before the log
     if (--looks === 0) fault.onDirectoryOpen = undefined
     writeFileSync(join(root!, `sibling-${looks}`), 'changed during enumeration')
   }
-  registry.load()
+  await registry.load()
   expect(fault.onDirectoryOpen).toBeUndefined()
   expect(registry.get(parentId)).toMatchObject({ transcriptPath: child, identityHold: expect.stringContaining('ancestor changed') })
   expect(JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))[0].transcriptPath).toBe(child)
   // A changed ancestor is incomplete evidence, even when another CI fixture
   // caused it. The preserved binding can be repaired by the next fresh read.
   await vi.waitFor(async () => {
-    registry.load()
+    await registry.load()
     await registry.flush()
     expect(registry.get(parentId)?.transcriptPath).toBe(parent)
     expect(registry.get(parentId)?.identityHold).toBeUndefined()
@@ -89,7 +89,7 @@ it.each(['unbind', 'release', 'separate-shell'] as const)('clears a hold with it
   const { registry } = await import('./registry.js')
   const log = vi.spyOn(console, 'log').mockImplementation(() => {})
   try {
-    registry.load()
+    await registry.load()
     expect(registry.byAgent('fixture-0')?.identityHold).toBeTruthy()
     const released = operation === 'unbind'
       ? (expect((await unbindRegistrySession(registry, 'session-0'))).toBe(true), registry.byAgent('fixture-0'))
@@ -128,7 +128,7 @@ it.each(['healthy', 'unreadable', 'changed-at-commit'] as const)('stages a regis
   observeHomeReads()
   const { registry } = await import('./registry.js')
   const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-  registry.load()
+  await registry.load()
   log.mockRestore()
   expect(fault.captures).toBe(1)
   expect(registry.list()).toHaveLength(200)
@@ -141,6 +141,6 @@ it.each(['healthy', 'unreadable', 'changed-at-commit'] as const)('stages a regis
   expect(saved.some((row: any) => row.identityHold)).toBe(false)
   fault.beforeVerify = undefined
   writeFileSync(file, JSON.stringify({ codex: [moved] }))
-  registry.load()
+  await registry.load()
   expect(registry.list().every(row => row.sessionId && !row.identityHold)).toBe(true)
 })

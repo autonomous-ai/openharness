@@ -24,7 +24,7 @@ const intent = (extra: Partial<ExternalResumeIntent> = {}): ExternalResumeIntent
 })
 const fact = () => ({ engine: 'claude' as const, sessionId: 'canonical', aliases: ['alias', 'other-alias'], cwd: root,
   origin: 'terminal' as const, title: 'Saved conversation', mtime: 1, transcriptPath: join(root, 'record.jsonl') })
-async function load() { vi.resetModules(); const mod = await import('./registry.js'); instances.add(mod.registry); mod.registry.load(); return mod.registry }
+async function load() { vi.resetModules(); const mod = await import('./registry.js'); instances.add(mod.registry); await mod.registry.load(); return mod.registry }
 const disk = (): RegisteredSession[] => JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))
 const write = (rows: RegisteredSession[]) => writeFileSync(join(root, 'registry.json'), JSON.stringify(rows), { mode: 0o600 })
 const pending = async (extra: Partial<ExternalResumeIntent> = {}) => {

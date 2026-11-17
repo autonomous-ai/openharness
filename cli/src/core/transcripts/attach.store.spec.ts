@@ -35,7 +35,7 @@ beforeEach(async () => {
   for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME', 'HERMES_HOME']) vi.stubEnv(key, directory)
   vi.resetModules()
   registry = (await import('../../lib/registry.js')).registry
-  registry.load()
+  await registry.load()
   vi.spyOn(console, 'log').mockImplementation(() => {})
 })
 afterEach(() => {

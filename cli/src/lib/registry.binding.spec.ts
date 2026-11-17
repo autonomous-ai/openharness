@@ -25,7 +25,7 @@ beforeEach(async () => {
   })
   writeFileSync(file, JSON.stringify(rows), { mode: 0o600 })
   vi.resetModules(); ({ registry } = await import('./registry.js'))
-  registry.load()
+  await registry.load()
   await registry.flush()
 })
 afterEach(async () => { await registry.flush().catch(() => {}); vi.restoreAllMocks(); vi.doUnmock('../engines/transcriptBindings.js'); vi.unstubAllEnvs(); vi.resetModules(); rmSync(root, { recursive: true, force: true }) })
@@ -33,7 +33,7 @@ afterEach(async () => { await registry.flush().catch(() => {}); vi.restoreAllMoc
 it.each(['', '{', 'wrong-id'])('holds a saved unreadable identity (%s), preserves its bytes, and retries without restarting', async text => {
   const before = readFileSync(file, 'utf8')
   writeFileSync(transcript(0), text === 'wrong-id' ? header(ids[1]!) : text)
-  registry.load()
+  await registry.load()
   expect(registry.byAgent('fixture-0')).toMatchObject({ sessionId: ids[0], transcriptPath: transcript(0), identityHold: expect.any(String) })
   expect(registry.byAgent('fixture-1')).toMatchObject({ sessionId: ids[1], transcriptPath: transcript(1) })
   expect(registry.byAgent('fixture-1')).not.toHaveProperty('identityHold')
@@ -55,19 +55,22 @@ it('restores every affected staged row when the shared root changes after file v
     const actual = await original<typeof import('../engines/transcriptBindings.js')>()
     return { ...actual, transcriptRootEvidence: (...args: Parameters<typeof actual.transcriptRootEvidence>) => {
       const proof = actual.transcriptRootEvidence(...args)
-      return { ...proof, verify() {
-        renameSync(join(home, 'sessions'), join(home, 'previous')); mkdirSync(join(home, 'sessions'))
-        proof.verify()
+      return { ...proof, retain() {
+        const verify = proof.retain()
+        return () => {
+          renameSync(join(home, 'sessions'), join(home, 'previous')); mkdirSync(join(home, 'sessions'))
+          verify()
+        }
       } }
     } }
   })
-  vi.resetModules(); ({ registry } = await import('./registry.js')); registry.load()
+  vi.resetModules(); ({ registry } = await import('./registry.js')); await registry.load()
   for (const [index, id] of ids.entries()) expect(registry.byAgent(`fixture-${index}`)).toMatchObject({ sessionId: id,
     transcriptPath: transcript(index), identityHold: expect.stringContaining('changed') })
   expect(readFileSync(file, 'utf8')).toBe(before)
 })
 
-it('holds only the row whose header changed while its sibling was staged', async () => {
+it('rechecks a leaf changed after its private initialization commitment before granting later authority', async () => {
   const before = readFileSync(file, 'utf8')
   vi.doMock('../engines/transcriptBindings.js', async original => {
     const actual = await original<typeof import('../engines/transcriptBindings.js')>()
@@ -77,8 +80,9 @@ it('holds only the row whose header changed while its sibling was staged', async
       return proof
     } }
   })
-  vi.resetModules(); ({ registry } = await import('./registry.js')); registry.load()
-  expect(registry.byAgent('fixture-0')).toMatchObject({ sessionId: ids[0], transcriptPath: transcript(0), identityHold: expect.stringContaining('changed') })
+  vi.resetModules(); ({ registry } = await import('./registry.js')); await registry.load()
+  expect(registry.byAgent('fixture-0')).toMatchObject({ sessionId: ids[0], transcriptPath: transcript(0) })
+  await expect(registry.revalidateBinding('fixture-0')).rejects.toThrow('different conversation')
   expect(registry.byAgent('fixture-1')).not.toHaveProperty('identityHold')
   expect(readFileSync(file, 'utf8')).toBe(before)
 })
@@ -99,7 +103,7 @@ it('keeps holds transient and only retries bindings that still exist', async () 
 it.each(['same', 'absent', 'repaired'] as const)('never overwrites a peer binding while retrying %s evidence', async outcome => {
   const binding = await import('../engines/transcriptBindings.js')
   const peer = new (registry.constructor as new () => typeof registry)()
-  peer.load()
+  await peer.load()
   const original = registry.byAgent('fixture-0')!
   registry.setIdentityHold(original.agentId, 'waiting')
   if (outcome === 'absent') rmSync(transcript(0))
@@ -158,7 +162,7 @@ it('rechecks native evidence while holding the registry write lock and publishes
       } }
     } }
   })
-  vi.resetModules(); ({ registry } = await import('./registry.js')); registry.load()
+  vi.resetModules(); ({ registry } = await import('./registry.js')); await registry.load()
   registry.setIdentityHold('fixture-0', 'waiting')
   const before = readFileSync(file, 'utf8')
   retry = true

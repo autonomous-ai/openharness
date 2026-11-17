@@ -38,7 +38,7 @@ async function loadRegistry() {
   process.env.CODEX_HOME = dataDir
   process.env.CURSOR_HOME = dataDir
   const { registry } = await import('./registry.js')
-  registry.load()
+  await registry.load()
   return registry
 }
 

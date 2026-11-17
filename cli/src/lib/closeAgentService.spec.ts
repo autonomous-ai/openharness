@@ -254,7 +254,7 @@ it('persists a deferred close, survives a daemon restart and waits for sustained
   expect(await service.request(request('after_task'))).toEqual({ deferred: true })
   expect(row.closePlan?.id).toBe(plan.id)
   service.dispose()
-  registry.load()
+  await registry.load()
   row = registry.byAgent(row.agentId)!
   expect(row.closePlan?.id).toBe(plan.id)
   service = new CloseAgentService(deps)
@@ -280,7 +280,7 @@ it('durably records a deferred close that arrives during a registry discovery tr
     await transaction
     expect(await closing).toEqual({ deferred: true })
     expect(registry.byAgent(row.agentId)?.closePlan?.state).toBe('waiting')
-    registry.load()
+    await registry.load()
     expect(registry.byAgent(row.agentId)?.closePlan?.state).toBe('waiting')
   } finally { finish(); await transaction }
 })

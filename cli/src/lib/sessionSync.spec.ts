@@ -30,7 +30,7 @@ function harness(overrides: Partial<SessionSyncDeps> = {}) {
 
 describe('session sync', () => {
   it('keeps an existing pane through registry reload, early metadata sync, and terminal rediscovery', async () => {
-    registry.load()
+    await registry.load()
     const opened = (await registry.openProcessAgent({
       agentId: 'restart-agent', engine: 'codex', tmuxPane: '%16',
       processIdentity: { pid: 42, executable: 'codex', startMarker: 'test-process' },
@@ -41,7 +41,7 @@ describe('session sync', () => {
 
     // A daemon restart forgets verification, not the pane or the process. Title/profile updates
     // can arrive before discovery verifies that saved terminal locator again.
-    registry.load()
+    await registry.load()
     const restored = registry.byAgent(opened.agentId)!
     expect(restored).toBeDefined()
     expect(registry.terminalAvailable(restored.agentId)).toBe(false)

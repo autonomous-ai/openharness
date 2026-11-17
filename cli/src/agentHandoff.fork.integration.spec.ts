@@ -52,7 +52,7 @@ async function modules() {
   const handoff = await import('./lib/agentHandoff.js')
   const stopped = await import('./lib/stoppedAgents.js')
   const stores = await import('./engines/sessionStores.js')
-  registryModule.registry.load()
+  await registryModule.registry.load()
   return { ...registryModule, ...repair, ...discovery, ...publication, ...handoff, ...stopped, processSession: stores.processSessionOf }
 }
 
@@ -141,7 +141,7 @@ describe('fork record → registry → stopped copy → inheritance (real module
     // A daemon restart: a fresh registry module loads the row from disk (the 03-verify-r1 major: load() lost forkedFrom).
     vi.resetModules()
     const reloaded = await import('./lib/registry.js')
-    reloaded.registry.load()
+    await reloaded.registry.load()
     const restartedFork = reloaded.registry.byAgent(fork.agentId)!
     expect(restartedFork.forkedFrom).toEqual(fork.forkedFrom)
 

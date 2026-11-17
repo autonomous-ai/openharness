@@ -87,7 +87,7 @@ d('the Hermes store a session reads from', () => {
     // list silently disappears.
     await registry.flush()
     const reloaded = await load()
-    reloaded.registry.load()   // the daemon's own first act — the singleton does not read on import
+    await reloaded.registry.load()   // the daemon's own first act — the singleton does not read on import
     expect(reloaded.registry.resolve(entry.agentId)?.hermesHome).toBe(demo)
   })
 

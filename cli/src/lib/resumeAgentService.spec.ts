@@ -377,7 +377,7 @@ describe('resuming a stopped harness with new launch words', () => {
     expect(deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ agentId: saved.agentId, launchArgs: WORDS }), expect.any(Function))
     expect(buildEngineLaunchArgv).toHaveBeenCalledWith('codex', expect.objectContaining({ ownerArgs: WORDS }))
     expect(registry.byAgent(saved.agentId)?.launchArgs).toEqual(WORDS)
-    registry.load()
+    await registry.load()
     expect(registry.byAgent(saved.agentId)?.launchArgs).toEqual(WORDS)
   })
 
@@ -589,7 +589,7 @@ describe('production resume handler', () => {
     expect(JSON.parse(create.mock.calls[0][0].env.OPENCODE_CONFIG_CONTENT)).toEqual({
       model: 'custom/kept', permission: permissionMode === 'auto' ? 'allow' : 'ask', mcp: { custom: { enabled: true } },
     })
-    registry.load()
+    await registry.load()
     expect(registry.byAgent(saved.agentId)?.permissionMode).toBe(permissionMode)
   })
 
@@ -806,7 +806,7 @@ describe('production resume handler', () => {
     expect(result).toMatchObject({ ok: true, session: { processIdentity: identity, launch: { state: 'ready' } } })
     expect(registry.byAgent(saved.agentId)?.processIdentity).toEqual(identity)
     expect(deps.announceSession).toHaveBeenLastCalledWith(expect.objectContaining({ processIdentity: identity }))
-    registry.load()
+    await registry.load()
     expect(registry.byAgent(saved.agentId)?.processIdentity).toEqual(identity)
   })
 
@@ -1460,7 +1460,7 @@ it('refuses resumed authority when a peer changes the selected durable row', asy
   const peer = Reflect.construct(registry.constructor, []) as typeof registry
   const plan = { id: '12345678-1234-1234-1234-123456789012', identity: 'fixture-conversation', requestedAt: Date.now(), state: 'waiting' as const }
   vi.mocked(resolvePaneEngineProcess).mockImplementationOnce(async () => {
-    peer.load()
+    await peer.load()
     await peer.setClosePlan(saved.agentId, plan)
     return identity
   }).mockResolvedValue(identity)

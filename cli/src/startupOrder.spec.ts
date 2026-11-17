@@ -175,7 +175,7 @@ describe('the core\'s start-up order (core/main.ts)', () => {
 
   it('drains durable registry work after producers stop and before releasing successor ownership', () => {
     const source = code(SOURCE)
-    expect(source.indexOf('registry.load()')).toBeGreaterThan(source.indexOf('await refuseServedDataFolder('))
+    expect(source.indexOf('await registry.load()')).toBeGreaterThan(source.indexOf('await refuseServedDataFolder('))
     // A process exit event cannot await storage; every acknowledged authority operation is already durable.
     expect(source).not.toContain("process.on('exit', () => registry.flush(")
     const update = source.slice(source.indexOf('const updateTeardown ='), source.indexOf('daemonBoot.applyStagedUpdate ='))
@@ -198,7 +198,7 @@ describe('the core\'s start-up order (core/main.ts)', () => {
     const claimed = source.indexOf("? await claimDataFolder(env.ADAPTER_DATA_DIR, ensureDaemonToken(env.ADAPTER_DATA_DIR), ")
     expect(claimed).toBeGreaterThan(source.indexOf("const dataFolderClaim = process.platform === 'win32'"))
     expect(claimed).toBeGreaterThan(source.indexOf('await refuseServedDataFolder('))
-    expect(claimed).toBeLessThan(source.indexOf('registry.load()'))
+    expect(claimed).toBeLessThan(source.indexOf('await registry.load()'))
     expect(claimed).toBeLessThan(source.indexOf('await startHookServer('))
     // In the update's teardown and in the shutdown, beside the local socket: a successor may start once both are gone.
     expect(source.match(/dataFolderClaim\?\.release\(\)/g)).toHaveLength(2)

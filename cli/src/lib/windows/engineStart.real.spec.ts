@@ -7,7 +7,7 @@
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { createAgentCreator, type CreateAgentDeps } from '../../core/agents/create.js'
 import { heldPaneArgv } from '../../core/agents/heldLaunches.js'
 import { captureLaunchExecutable } from '../../engines/kit/launchExecutable.js'
@@ -100,7 +100,7 @@ async function created(backend: PtyHostBackend, engine: AgentEngine) {
 }
 
 ;(enabled ? describe : describe.skip)('engines created on the real pty host', () => {
-  registry.load()
+  beforeAll(async () => { await registry.load() })
 
   // A grid launch's provider keys: the host inherited them from the daemon, and a pane told to clear them must not see
   // them, in any case of the name, while the rest of what it inherits stays (security; lib/windows/engineStart.ts).

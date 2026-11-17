@@ -540,7 +540,7 @@ async function registryCases(): Promise<Record<string, unknown>> {
         writeFileSync(file, JSON.stringify(rows), { mode: 0o644 })
         chmodSync(file, 0o644)
         logs.length = 0
-        m.registry.registry.load()
+        await m.registry.registry.load()
         await m.registry.registry.flush()
         const persisted = JSON.parse(readFileSync(file, 'utf8')) as Array<Record<string, unknown>>
         cases[`${moved ? 'moved homes' : 'default homes'} · ${name}`] = norm({

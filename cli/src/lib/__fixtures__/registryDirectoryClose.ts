@@ -51,7 +51,7 @@ if (mode === 'status') {
   await import('../../cli.js')
 } else {
   const { registry } = await import('../registry.js')
-  registry.load()
+  await registry.load()
   await registry.flush()
   const row = registry.list()[0]!
   const plan = { id: '12345678-1234-1234-1234-123456789012', identity: 'fixture-owner', requestedAt: 1790900000000, state: 'waiting' as const }

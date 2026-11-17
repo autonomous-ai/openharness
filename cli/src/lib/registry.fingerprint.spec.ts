@@ -48,7 +48,7 @@ async function observe(on: typeof Registry = registry, identity: Row = { ...inpu
 async function freshRegistry(): Promise<typeof Registry> {
   vi.resetModules()
   const next = (await import('./registry.js')).registry
-  next.load()
+  await next.load()
   loaded.push(next)
   return next
 }
@@ -63,7 +63,7 @@ beforeEach(async () => {
   file = join(directory, 'registry.json')
   for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) vi.stubEnv(key, directory)
   registry = (await import('./registry.js')).registry
-  registry.load()
+  await registry.load()
   loaded.push(registry)
   expect((await registry.openProcessAgent(input))).not.toBeNull()
   clearCounts()
@@ -160,7 +160,7 @@ describe('key-order-insensitive row comparison', () => {
 
   it('keeps the saved file format: two-space JSON in insertion order, never sorted keys', async () => {
     // One load first, so the row carries load()'s own normalisation (dshRuntime, gridWebSearch).
-    registry.load()
+    await registry.load()
     await observe()
     const [saved] = readRows()
     expect(readFileSync(file, 'utf8')).toBe(JSON.stringify([saved], null, 2))
@@ -168,7 +168,7 @@ describe('key-order-insensitive row comparison', () => {
     expect(Object.keys(saved.processIdentity as Row)).toEqual(['pid', 'executable', 'startMarker'])
     // A file another writer ordered differently is written back in that order, not canonicalised.
     writeRows([reversedDeep(saved)])
-    registry.load()
+    await registry.load()
     await observe()
     const [written] = readRows()
     expect(readFileSync(file, 'utf8')).toBe(JSON.stringify([written], null, 2))
@@ -186,7 +186,7 @@ describe('key-order-insensitive row comparison', () => {
       tmuxPane: '%31',
     }])
     clearCounts()
-    registry.load()
+    await registry.load()
     await observe()
     expect(registryWrites()).toBe(1)
     const row = registry.byAgent(input.agentId)!

@@ -22,7 +22,7 @@ it('fences deferred config, staged history and detached pane observations agains
   vi.stubEnv('CLAUDE_PROJECTS_DIR', root)
   vi.resetModules()
   const { registry } = await import('./registry.js')
-  registry.load()
+  await registry.load()
   const input = { engine: 'hermes' as const, sessionId: '20261009_060000_abc123', tmuxPane: '%81', cwd: root,
     hermesHome: join(root, 'first') }
   ;(await registry.openProcessAgent({ ...input, processIdentity: { pid: 7001, executable: 'hermes', startMarker: 'fixture' } }))
@@ -65,7 +65,7 @@ it('drops an optional config refresh queued by a row replaced before the refresh
   vi.stubEnv('CLAUDE_PROJECTS_DIR', root)
   vi.resetModules()
   const { registry } = await import('./registry.js')
-  registry.load()
+  await registry.load()
   const input = { engine: 'hermes' as const, sessionId: '20261009_060001_abc123', tmuxPane: '%82', cwd: root,
     hermesHome: join(root, 'first') }
   ;(await registry.openProcessAgent({ ...input, processIdentity: { pid: 7002, executable: 'hermes', startMarker: 'fixture' } }))

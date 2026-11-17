@@ -353,6 +353,26 @@ recorded; none is relabeled as the accepted final comparison.
   file).
 - Show save time before and after (a bench of N saves, and the loop hold during them).
 
+#### Startup native proof, 17 November continuation
+
+The coordinator approved the [initialization Design](../2026-11-17-registry-initialization.md)
+before runtime edits. The measured 1,600-row native proof/recheck batch becomes
+independent no-yield row commitments, yielding between rows behind initialization
+admission. Original root/catalog guards remain at final installation; later native
+effects still earn fresh proof. Previously admitted writers drain against the old
+complete view before private initialization begins; new mutations are refused
+immediately, and no staged rows are exposed. Both product callers await load;
+core readiness still follows its separate durable dormant transaction.
+
+Initialization and shutdown wait for required migration publication and actual
+writer settlement. A newer peer image cannot be quarantined as the old corrupt
+image. The whole-image read, JSON parse, schema/fingerprint passes, unbounded
+image growth and per-row synchronous worst cases remain explicit residuals.
+Author validation passed 68 focused and 285 selected caller cases with actual
+exit 0, plus TypeScript. The preceding sandbox probe failure remains recorded.
+Independent review, fixed cost, native lifecycle and combined gate acceptance
+belong to the coordinator; this is not a completed performance acceptance claim.
+
 ### PR 5 (core-loop-5): create receipts are deleted
 
 - `lib/agentCreationReceipt.ts` `AgentCreationReceipts` (class at line 105): one file per creation id, never deleted.

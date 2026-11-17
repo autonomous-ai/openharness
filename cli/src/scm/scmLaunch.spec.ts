@@ -48,7 +48,7 @@ describe('the SCM launch record on the registry row', () => {
 
   it('is written at create, survives a reload and the first hook bind, and is absent — not null — when nothing prepared the folder', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const prepared = (await registry.openPendingAgent({
       engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%9' }], cwd: '/tmp/demo', scmLaunchRecord: GIT,
     }))!
@@ -63,7 +63,7 @@ describe('the SCM launch record on the registry row', () => {
     expect(nulled).not.toHaveProperty('scmLaunch')
 
     const { registry: reloaded } = await loadRegistryModule()
-    reloaded.load()
+    await reloaded.load()
     expect(reloaded.byAgent(prepared.agentId)?.scmLaunch).toEqual(GIT)
     expect(reloaded.byAgent(plain.agentId)).not.toHaveProperty('scmLaunch')
 
@@ -81,13 +81,13 @@ describe('the SCM launch record on the registry row', () => {
 
   it('drops an unrecognised or half-formed record from disk rather than relaunching with it', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const row = (await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%3' }], cwd: '/tmp/demo', scmLaunchRecord: GIT }))!
     const saved = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8')) as Array<Record<string, unknown>>
     const damaged = saved.map(entry => entry.agentId === row.agentId ? { ...entry, scmLaunch: { kind: 'svn', url: 'x' } } : entry)
     writeFileSync(join(dataDir, 'registry.json'), JSON.stringify(damaged))
     const { registry: reloaded, strictPersistedRow } = await loadRegistryModule()
-    reloaded.load()
+    await reloaded.load()
     expect(reloaded.byAgent(row.agentId)).not.toHaveProperty('scmLaunch')
     // The same rule for a row read back from elsewhere (a stopped harness's saved row).
     expect(strictPersistedRow({ ...saved[0], scmLaunch: { kind: 'svn' } })).not.toHaveProperty('scmLaunch')
@@ -96,7 +96,7 @@ describe('the SCM launch record on the registry row', () => {
 
   it('goes from the pane create to the row to every relaunch, where its env layers last', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const create = vi.fn(async (): Promise<TerminalCreateResult<TmuxRuntimeRef>> => ({ state: 'succeeded', dispatch: 'executed', runtime: { backend: 'tmux', paneId: '%1' } }))
     const tmuxBackend = { create, kill: vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const })) }
     const result = await createAndRegisterPane({

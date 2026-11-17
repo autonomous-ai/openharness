@@ -1,6 +1,7 @@
 import * as fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { performance } from 'node:perf_hooks'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { NativeFiles } from './kit/nativeFiles.js'
 import { NativeEvidenceBudget } from './kit/nativeEvidence.js'
@@ -229,10 +230,25 @@ it('retains absent and present roots in an explicit operation scope', () => {
   const moved = join(root, 'moved'), sessions = join(moved, 'sessions')
   fs.writeFileSync(join(root, 'data', 'engine-homes.json'), JSON.stringify({ codex: [moved] }))
   const scope = bindings.transcriptRootEvidence('codex')
+  const retained = scope.retain()
   const result = bindings.savedTranscriptEvidence('codex', A, file, undefined, undefined, scope)
   result.verify(); scope.verify()
+  retained()
   fs.mkdirSync(sessions, { recursive: true })
   expect(() => scope.verify()).toThrow('changed')
+  expect(retained).toThrow('changed')
+})
+it('retains the original root identity with a fresh budget after an initialization yield', () => {
+  const scope = bindings.transcriptRootEvidence('codex', home)
+  const retained = scope.retain()
+  const time = vi.spyOn(performance, 'now').mockReturnValue(4_000)
+  try {
+    expect(() => scope.verify()).toThrow('deadline')
+    expect(retained).not.toThrow()
+    fs.renameSync(join(home, 'sessions'), join(home, 'old-sessions'))
+    fs.mkdirSync(join(home, 'sessions'))
+    expect(retained).toThrow('changed')
+  } finally { time.mockRestore() }
 })
 it('retains an unreadable competing directory even after the parent was found', () => {
   const path = child(), blocked = join(home, 'sessions', 'blocked'); fs.mkdirSync(blocked)

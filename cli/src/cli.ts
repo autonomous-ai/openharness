@@ -2681,7 +2681,7 @@ async function status(): Promise<void> {
   const daemonStatus = alive ? await runningDaemonStatus() : null
   const signedIn = daemonStatus?.signedIn ?? session !== null
   if (!alive) {
-    registry.load()
+    await registry.load()
     try { await registry.flush() }
     catch { console.error('[registry] status flush failed') }
   }

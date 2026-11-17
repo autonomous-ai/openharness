@@ -40,7 +40,7 @@ describe('a registry no version can load', () => {
 
   it('with two rows claiming one agent: moved aside, and the registry starts empty and writable', async () => {
     const registry = await loadRegistry()
-    registry.load()
+    await registry.load()
     ;(await registry.openProcessAgent({ agentId: 'a1', engine: 'claude', tmuxPane: '%1', processIdentity: processIdentity(101) }))
     ;(await registry.openProcessAgent({ agentId: 'a2', engine: 'claude', tmuxPane: '%2', processIdentity: processIdentity(102) }))
     const file = join(dataDir, 'registry.json')
@@ -50,7 +50,7 @@ describe('a registry no version can load', () => {
     writeFileSync(file, duplicated, { mode: 0o600 })
 
     const again = await loadRegistry()
-    again.load()
+    await again.load()
     expect(again.list()).toEqual([])
     const aside = readdirSync(dataDir).filter((name) => name.startsWith('registry.json.corrupt-'))
     expect(aside).toHaveLength(1)
@@ -64,7 +64,7 @@ describe('a registry no version can load', () => {
     writeFileSync(file, '[{"agentId":', { mode: 0o600 })
     rename.fails = 'error'
     const registry = await loadRegistry()
-    registry.load()
+    await registry.load()
     expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry is not JSON \(.*\), and it could not be moved aside \(EXDEV: cross-device link not permitted\); refusing to overwrite it$/))
     ;(await registry.openProcessAgent({ agentId: 'must-not-write', engine: 'claude', tmuxPane: '%9', processIdentity: processIdentity(109) }))
     expect(readFileSync(file, 'utf8')).toBe('[{"agentId":')
@@ -76,7 +76,7 @@ describe('a registry no version can load', () => {
     writeFileSync(file, '{"schemaVersion":2}', { mode: 0o600 })
     rename.fails = 'string'
     const registry = await loadRegistry()
-    registry.load()
+    await registry.load()
     expect(error).toHaveBeenCalledWith('[registry] registry root is not an array, and it could not be moved aside (read-only file system); refusing to overwrite it')
   })
 })

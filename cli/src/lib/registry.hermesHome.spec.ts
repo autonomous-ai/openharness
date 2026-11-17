@@ -19,7 +19,7 @@ async function reload(): Promise<typeof Registry> {
   vi.resetModules()
   const reloaded = (await import('./registry.js')).registry
   instances.add(reloaded)
-  reloaded.load()
+  await reloaded.load()
   return reloaded
 }
 

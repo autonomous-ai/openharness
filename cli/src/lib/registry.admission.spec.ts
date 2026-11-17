@@ -118,7 +118,7 @@ it('rechecks the native header under the write lock before publishing any regist
   unchanged(before)
 })
 it('never overwrites a different durable admission that arrived during inspection', async () => {
-  const peer = new (registry.constructor as new () => typeof registry)(); peer.load()
+  const peer = new (registry.constructor as new () => typeof registry)(); await peer.load()
   const other = join(home, 'sessions', `rollout-${B}.jsonl`); writeFileSync(other, header(B))
   const before = JSON.stringify(registry.list())
   let committed = ''
@@ -134,7 +134,7 @@ it('never overwrites a different durable admission that arrived during inspectio
   await expect((async () => (await registry.register(input())))()).rejects.toThrow('saved binding changed')
   expect(JSON.stringify(registry.list())).toBe(before)
   expect(readFileSync(file, 'utf8')).toBe(committed)
-  peer.load()
+  await peer.load()
   expect(peer.bySession(B)?.agentId).toBe(target)
 })
 it('returns the committed row snapshot and publishes only after the registry write', async () => {
@@ -219,7 +219,7 @@ it.each(['rename', 'changed-proof', 'peer-commit'])('keeps a resumed binding int
   if (mode === 'changed-proof') fault.beforeVerify = () => writeFileSync(other, header(A))
   let peerDisk: string | undefined
   if (mode === 'peer-commit') {
-    const peer = new (registry.constructor as new () => typeof registry)(); peer.load()
+    const peer = new (registry.constructor as new () => typeof registry)(); await peer.load()
     fault.afterProof = () => {
       fault.afterProof = undefined
       const rows = JSON.parse(readFileSync(file, 'utf8'))
@@ -234,7 +234,7 @@ it.each(['rename', 'changed-proof', 'peer-commit'])('keeps a resumed binding int
 })
 
 it('cannot flush an unrelated stale discovery claim over a newer durable peer', async () => {
-  const peer = new (registry.constructor as new () => typeof registry)(); peer.load()
+  const peer = new (registry.constructor as new () => typeof registry)(); await peer.load()
   let peerDisk = ''
   await registry.transaction(async () => {
     registry.updateRuntimes(source, [{ backend: 'tmux', paneId: '%3' }], 'tmux\u0000%3')

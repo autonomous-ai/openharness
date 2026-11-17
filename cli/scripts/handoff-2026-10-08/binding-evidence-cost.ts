@@ -29,12 +29,12 @@ try {
   writeFileSync(join(data, 'registry.json'), JSON.stringify(rows), { mode: 0o600 })
   const { registry } = await import(pathToFileURL(join(cli, 'src/lib/registry.ts')).href)
   // Normalize the same legacy fixture before measuring unchanged complete v2 loads.
-  registry.load()
+  await registry.load()
   const expected = new Set(rows.map(row => row.sessionId))
   const outcomes: Record<string, number> = {}, latenciesMs: number[] = []
   const cpu = process.cpuUsage(), started = performance.now()
   for (let i = 0; i < 5; i++) {
-    const before = performance.now(); registry.load(); latenciesMs.push(performance.now() - before)
+    const before = performance.now(); await registry.load(); latenciesMs.push(performance.now() - before)
     for (const row of registry.list()) {
       const result = row.identityHold ? 'held' : expected.has(row.sessionId) && row.transcriptPath ? 'complete' : 'wrong'
       outcomes[result] = (outcomes[result] ?? 0) + 1

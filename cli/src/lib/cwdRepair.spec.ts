@@ -87,7 +87,7 @@ describe('repairProjectCwds (Claude Code rows)', () => {
     // Persisted, not just in memory.
     vi.resetModules()
     const { registry: reloaded } = await import('./registry.js')
-    reloaded.load()
+    await reloaded.load()
     expect(reloaded.byAgent(drifted.agentId)?.cwd).toBe(project)
   })
 

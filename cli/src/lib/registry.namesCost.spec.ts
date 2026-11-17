@@ -94,7 +94,7 @@ beforeEach(async () => {
   io.file = join(root, 'data', 'agent-names.json')
   writeFileSync(join(root, 'data', 'engine-homes.json'), '{}', { mode: 0o600 })
   registry = (await import('./registry.js')).registry
-  registry.load()
+  await registry.load()
   expect(await registry.openProcessAgent({ agentId: ID, engine: 'claude', tmuxPane: '%1',
     processIdentity: { pid: 1001, executable: '/fixture/claude', startMarker: 'fixture-owner' },
   })).not.toBeNull()

@@ -45,7 +45,7 @@ describe('createAndRegisterPane', () => {
 
   it('registers on the first attempt when the pane is unclaimed', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const tmuxBackend = fakeTmux([succeeded('%1')])
 
     const result = await createAndRegisterPane({
@@ -60,7 +60,7 @@ describe('createAndRegisterPane', () => {
 
   it('starts an explicit-argv terminal in its folder without evaluating its arguments', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const tmuxBackend = fakeTmux([succeeded('%1')])
     const argv = ['/bin/zsh', '/work/a script', '$(touch injected)', 'a; echo b', '']
     const result = await createAndRegisterPane({
@@ -73,7 +73,7 @@ describe('createAndRegisterPane', () => {
 
   it('starts a Windows engine in its workspace with its hand-off, and an explicit folder still wins', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const tmuxBackend = fakeTmux([succeeded('%1'), succeeded('%2'), succeeded('%3')])
     const afterExit = { command: ['pwsh.exe', '-NoLogo'], env: { HARNESS_ENGINE_COMMAND: 'claude' } }
     await createAndRegisterPane({ tmuxBackend, registry, engine: 'claude', cwd: 'C:\\work', sessionLabel: 'harness-claude-1', argv: ['claude.exe'],
@@ -88,7 +88,7 @@ describe('createAndRegisterPane', () => {
 
   it('retries past a stale registration collision and succeeds on the next pane', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     // Simulates a stale entry from a previous tmux-server generation already holding %1.
     ;(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/other' }))
     const tmuxBackend = fakeTmux([succeeded('%1'), succeeded('%2')])
@@ -107,7 +107,7 @@ describe('createAndRegisterPane', () => {
 
   it('gives up with REGISTRATION_FAILED after 3 attempts when every pane collides', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     for (const paneId of ['%1', '%2', '%3']) {
       ;(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId }], cwd: '/tmp/other' }))
     }
@@ -128,7 +128,7 @@ describe('createAndRegisterPane', () => {
 
   it('records the named agent and the requested name on the row it opens', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const tmuxBackend = fakeTmux([succeeded('%1')])
 
     const result = await createAndRegisterPane({
@@ -144,7 +144,7 @@ describe('createAndRegisterPane', () => {
 
   it('records which harness here started it, only when another agent did', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const started = await createAndRegisterPane({
       tmuxBackend: fakeTmux([succeeded('%1')]), registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1',
       argv: ['claude'], startedBy: 'agent', parentAgentId: 'lead-1',
@@ -159,7 +159,7 @@ describe('createAndRegisterPane', () => {
 
   it('records a Browser on from the start on the row it opens', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const ticked = await createAndRegisterPane({
       tmuxBackend: fakeTmux([succeeded('%1')]), registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1',
       argv: ['claude'], browser: true,
@@ -173,7 +173,7 @@ describe('createAndRegisterPane', () => {
 
   it('a first task goes onto the row the pane is registered as', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const openPendingAgent = vi.spyOn(registry, 'openPendingAgent')
     await createAndRegisterPane({
       tmuxBackend: fakeTmux([succeeded('%1')]), registry, engine: 'openclaw', cwd: '/tmp/demo', sessionLabel: 'harness-openclaw-1',
@@ -189,7 +189,7 @@ describe('createAndRegisterPane', () => {
 
   it('a local launch\'s folder goes on its row', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const openPendingAgent = vi.spyOn(registry, 'openPendingAgent')
     const local = await createAndRegisterPane({
       tmuxBackend: fakeTmux([succeeded('%1')]), registry, engine: 'openclaw', cwd: '/tmp/demo', sessionLabel: 'harness-openclaw-1',
@@ -206,7 +206,7 @@ describe('createAndRegisterPane', () => {
 
   it('does not retry a tmux spawn failure', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     const openPendingAgent = vi.spyOn(registry, 'openPendingAgent')
     const tmuxBackend = fakeTmux([{ state: 'failed', dispatch: 'not_started', reason: 'tmux is unavailable' }])
 

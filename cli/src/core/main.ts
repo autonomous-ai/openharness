@@ -591,7 +591,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const prepareInstructions = (cwd: string | null | undefined, engine: string): Promise<void> =>
     prepareWorkspaceInstructions(ports.workspaces, cwd, engine)
 
-  registry.load()
+  await registry.load()
   // Persisted locators are hints until this process has observed their terminal root and PID/start marker.
   // Mark them dormant before the backend socket can publish anything; the first authoritative reconcile
   // reactivates matching process agents without changing their public identity or session binding.
