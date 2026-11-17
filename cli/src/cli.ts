@@ -109,7 +109,7 @@ import { ensureManagedGrid, ensureManagedRuntime } from './lib/runtimeInstall.js
 // which silently costs the daemon every pane it would have discovered. See lib/childLocale.ts.
 ensureUtf8Locale()
 import { prepareLogFile, ts } from './lib/log.js'
-import { startEnvLine } from './lib/startEnvironment.js'
+import { narrowOwnEnvironment, startEnvLine } from './lib/startEnvironment.js'
 import { privacyCommand } from './lib/privacyCommand.js'
 
 
@@ -1633,12 +1633,18 @@ async function launch(foreground: boolean, repair: boolean = false): Promise<voi
     // Beside a daemon that serves this data folder, leave at once and say so, as its core would have:
     // the master would start its services and a core only to see the core refused, and end with 0.
     await refuseServedDataFolder(localSocketPath(env.ADAPTER_DATA_DIR, env.PORT), 1_000, servedFolderDeps(env.ADAPTER_DATA_DIR, env.PORT))
+    // This process becomes the daemon, so the shell's environment would be the daemon's and every child's: only the
+    // allowlist stays, then HARNESS_ENV_FILE is read again, its variables having gone with the rest
+    // (docs/plans/2026-11-17-daemon-minimal-env-design.md).
+    console.log(`${ts()} ${narrowOwnEnvironment()}`)
     startMasterInForeground(SCRIPT_PATH)
     return
   }
   // …and a dev/tsx run (a .ts is not spawned detached): the core inline, on its own. A repo run never updates
   // itself (runForeground), so it has no update to hand over.
   if (foreground || SCRIPT_PATH.endsWith('.ts')) {
+    // The same as the master's start above: the core runs in this process, a dev run's too (the design's decision 8).
+    console.log(`${ts()} ${narrowOwnEnvironment()}`)
     if (!foreground) console.log('[cli] dev mode — running in the foreground (Ctrl-C to stop)')
     await runCoreInForeground(session, SCRIPT_PATH)
     return
