@@ -216,10 +216,13 @@ export function stamp(path: string): Stamp {
   return { mtimeMs, sha256: createHash('sha256').update(readFileSync(path)).digest('hex') }
 }
 
-/** Throws if the file is not as `before` found it. It says how, never what the file holds. */
+/** Throws if the file is not as `before` found it. It says how, never what the file holds, and names the file from ~:
+ *  the home's path holds the account's name. */
 export function assertUnchanged(path: string, before: Stamp): void {
   const after = stamp(path)
   if (isDeepStrictEqual(before, after)) return
   const how = before === null ? 'made' : after === null ? 'removed' : 'rewritten or touched'
-  throw new Error(`the developer's VS Code's preferences changed while the throwaway VS Code ran: ${path} was ${how}`)
+  const home = userInfo().homedir
+  const named = path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path
+  throw new Error(`the developer's VS Code's preferences changed while the throwaway VS Code ran: ${named} was ${how}`)
 }
