@@ -162,6 +162,8 @@ function installAll(): void {
   install({ spec: 1, id: MODEL_MANAGER, name: 'Grid', engine: 'codex', agent: { instructions: 'AGENTS.md' } }, { 'AGENTS.md': '# Grid\n' })
 }
 
+// Cold imports prepare the private launch composition for every engine. Give that setup a
+// bounded budget of its own; the product's launch deadlines stay unchanged.
 beforeAll(async () => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-launch-shapes-golden-')))
   for (const name of VARS) saved[name] = process.env[name]
@@ -184,7 +186,7 @@ beforeAll(async () => {
     dataDir: join(root, 'data'), machine: () => ({ ...M1 }), capabilities: async () => ({ sessionEnv: pane.tmux }),
     readCodexConfig: () => null, setGridLaunch: () => {}, gridName: () => gridName, projectsRoot: join(root, 'work'),
   })
-})
+}, 30_000)
 
 afterAll(() => {
   for (const name of VARS) {

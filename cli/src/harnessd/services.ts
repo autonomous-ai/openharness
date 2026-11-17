@@ -11,6 +11,12 @@
  * supervisor with it, for the table below (the audit of 2026-11-12).
  */
 
+// Full legacy histories exceed 16 KiB; see docs/design/2026-11-16-git-frame-facts.md.
+export const FRAME_PART_BYTES = 2 * 1024 * 1024
+export const FRAME_PART_VALUES = 16_384
+export const FRAME_PART_TOTAL_BYTES = 4 * 1024 * 1024
+export const FRAME_PART_ENTRIES = 4096
+
 export interface ServiceSpec {
   /** The process's name: what the master logs it as and the process is titled (`harnessd <name>`). */
   name: string
@@ -29,6 +35,8 @@ export interface ServiceSpec {
   /** What happens to agents that this process's services must not miss while it is down, by service: the core holds
    *  each of these for that service from its own start until the service hears it (core/agentLife.ts). */
   hears?: Readonly<Record<string, readonly HeldAgentLife[]>>
+  /** Display fields a service may publish, and row fields required while they are shown. */
+  frameParts?: Readonly<Record<string, { fields: readonly string[]; having?: readonly string[] }>>
 }
 
 /** The kinds of what happens to an agent that a service in its own process can be held (core/api.ts `AgentLife`): a stop
@@ -68,7 +76,8 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // Started only once something needs it (core/viewersWake.ts): a harness here, a Store or viewer request, or
   // the release's own harnesses to put in place. It idled at about 96 MiB on every computer, and few harnesses
   // have a viewer: 1 of 14 on one real machine, 2 of 35 on another (2026-10-12).
-  viewers: { services: ['viewers', 'store'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 5 },
+  viewers: { services: ['viewers', 'store'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 5,
+    frameParts: { viewers: { fields: ['dsh', 'dshName', 'viewerUrl', 'viewerName', 'verdict'], having: ['dsh'] } } },
   // The git work (workspaces, the project readers) runs in git's own processes, and the monitor's
   // samples in ps's and ioreg's; what it holds is the agents the core sent it and one parsed sample.
   // The monitor parses up to 8 MB of ioreg output per Monitor poll on a Mac with a GPU, hence more
@@ -86,7 +95,7 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // a probe starts, four at once, are processes of their own, outside this budget.
   // A harness stopped while the host is down still closes the harnesses it started: held for the cleanup.
   edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'goals', 'hachi', 'engineProbe'], heapLimitMiB: 384, rssLimitMiB: 768,
-    hears: { agentCleanup: ['stopped'] } },
+    hears: { agentCleanup: ['stopped'] }, frameParts: { workspaces: { fields: ['project', 'gitContext'] } } },
   // The orchestrator (services/orchestratorProcess.ts), an experiment: started only once it is on, for a
   // saved project or a request (core/api.ts `EXPERIMENTS`). Its projects' files and the frames of their
   // Directors; the agents it runs are the core's.
@@ -130,7 +139,7 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // Browser never pays for it.
   // A purge and a pane's new agent are held for it while it is down: a deleted agent's login, and a pane's logins that go
   // with the pane (decision 19).
-  agentBrowser: { services: ['agentBrowser'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 7, hears: { agentBrowser: ['purged', 'taken'] } },
+  agentBrowser: { services: ['agentBrowser'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 7, hears: { agentBrowser: ['purged', 'taken'] }, frameParts: { agentBrowser: { fields: ['browser'] } } },
 }
 
 /** Every service this build can run outside the core's process: what `HARNESSD_SERVICES` names. */

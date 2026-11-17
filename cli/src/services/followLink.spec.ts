@@ -20,6 +20,17 @@ function setup(options: Parameters<typeof followLink>[0] = {}) {
 describe('what a service in its own process hears of agents', () => {
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
+  it('frame publishers learn a current lease on every connection, including a restarted core with the same agent', async () => {
+    const { link, heard } = setup({ frames: true })
+    const old = { ...agent('a'), frameEpoch: 'old-core:1' }, next = { ...agent('a'), frameEpoch: 'new-core:1' }
+    await link.connected(coreAnswering({ agents: [old] }))
+    link.disconnected()
+    await link.connected(coreAnswering({ agents: [old] }))
+    link.disconnected()
+    await link.connected(coreAnswering({ agents: [next] }))
+    expect(heard).toEqual([{ kind: 'running', session: old }, { kind: 'running', session: old }, { kind: 'running', session: next }])
+  })
+
   it('reads only what the core tells of an agent, in the shape it tells it', () => {
     expect(agentLifeIn({ kind: 'touch' })).toBeNull()
     expect(agentLifeIn({ kind: 'agent' })).toBeNull()

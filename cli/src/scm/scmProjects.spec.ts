@@ -10,8 +10,9 @@ import { encryptDownFrame, encryptRpcResult } from '../lib/e2ee/applicationFrame
 import { readGitProject } from '../lib/gitProject.js'
 import { GitScmProject } from './gitScmProject.js'
 import {
-  describeScmProject, detectScmProject, forgetScmProject, prepareInstructionWrites, prepareScmWrite, renameScmProject, scmByKind, scmLaunchEnv, scmProjects,
+  describeScmProject, detectScmProject, forgetScmProject, renameScmProject, scmByKind, scmProjects,
 } from './scmProjects.js'
+import { prepareInstructionWrites, prepareScmWrite, scmLaunchEnv } from './launch.js'
 import { parseScmLaunchRecord, type ScmDetectResult, type ScmProject } from './types.js'
 
 const exec = promisify(execFile)

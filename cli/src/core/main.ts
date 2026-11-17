@@ -117,7 +117,7 @@ import { installedDsh, invalidateInstalledDsh } from '../dsh/installed.js'
 import { dshThrough } from './agents/dshThrough.js'
 import { ApiConnectionMetadata } from '../lib/apiConnectionMetadata.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
-import type { AgentBrowserFrame, AgentDshContext } from '../lib/agentFrame.js'
+import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
 import { confirmHomes, sessionCodexHome } from '../lib/engineHomes.js'
 import { sessionStoreContracts } from '../engines/sessionStoreContracts.js'
@@ -207,6 +207,7 @@ import { createOtherStreams } from './engines/otherStreams.js'
 import { transcriptReadIdentity } from './transcripts/readIdentity.js'
 import { isOtherEngine, OTHER_ENGINE_STATES, OTHER_ENGINES_SERVICE } from '../engines/otherEngines.js'
 import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, GOALS_REQUESTS, TURN_DELIVERERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, ENGINE_PROBE_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type WindowFocus } from './api.js'
+import { createFrameParts } from './frameParts.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
 import { createServiceLinks, READER_START_MS, type ServiceLinks } from './serviceLinks.js'
@@ -269,7 +270,6 @@ import { TranscriptPager } from '../lib/transcriptPages.js'
 import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
 import { agentFrame, lastActivityAt, type AgentFrame } from '../lib/agentFrame.js'
 import { transcriptActivityAt } from '../lib/transcriptActivity.js'
-import { forgetAgentProject } from '../lib/agentProject.js'
 import { createUsageLink } from './usageLink.js'
 import type { UsageSnapshots } from './usageLink.js'
 import { usageTarget, validUsage, validUsageTarget, type AgentUsageTarget } from '../lib/agentUsageWire.js'
@@ -441,9 +441,7 @@ let activityFrameContextRef: ((s: RegisteredSession) => ActivityFrame | null) | 
 /** Set by runForeground once the input is built: what a message to an agent waits for (core/input.ts), for every frame. */
 let waitingForRef: ((s: RegisteredSession) => 'engine' | null) | null = null
 
-let dshFrameContextRef: ((s: RegisteredSession) => AgentDshContext | null) | null = null
-/** Set by runForeground once the agent browser can be asked: an agent's browser, for its frame (services/agentBrowser.ts). */
-let browserFrameRef: ((agentId: string) => AgentBrowserFrame | undefined) | null = null
+let framePartsRef: ((s: RegisteredSession) => () => Readonly<Record<string, unknown>>) | null = null
 
 /** Aggregate snapshots only; populated after the optional usage port is composed. */
 let usagePortRef: UsageSnapshots | null = null
@@ -457,11 +455,10 @@ function projectFrame(s: RegisteredSession, selectedModel: string | null, worksp
     selectedModel,
     workspace,
     terminalAvailable: registry.terminalAvailable(s.agentId),
-    dsh: dshFrameContextRef?.(s) ?? null,
+    parts: framePartsRef?.(s),
     activity: () => activityFrameContextRef?.(s) ?? null,
     waitingFor: () => waitingForRef?.(s) ?? null,
     gridAnnotation: (grid) => gridAnnotationRef?.(grid) ?? null,
-    browser: browserFrameRef?.(s.agentId),
   })
 }
 
@@ -1041,7 +1038,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const runtime = primaryRuntime(session)
       return terminals.backendFor(runtime)?.paneInfo(runtime).then(info => info?.pid ?? null) ?? Promise.resolve(null)
     },
-    dsh: (session) => backendRef?.dshFrameProvider?.(session) ?? null,
+    dsh: (session) => {
+      const part = frameParts.read(session.agentId)
+      return session.dsh && typeof part.dsh === 'string' ? { id: part.dsh, name: part.dshName, viewerUrl: part.viewerUrl,
+        viewerName: part.viewerName, verdict: part.verdict } as AgentDshContext : null
+    },
     windows: (frame) => backendRef?.sendLocal(frame),
     daemon: { command: daemonCommand(), port: env.PORT, machineId: () => backendRef?.machineId ?? '', autonomousEnv: session?.autonomousEnv ?? env.AUTONOMOUS_ENV },
     // Share: its observers' frames to the relay, and its welcomes signed by the gateway, which holds the identity.
@@ -1077,8 +1078,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Each service starts and is called through the host, so one that fails is logged and left off and
   // the core carries on without it (core/serviceHost.ts).
   const serviceHost = createServiceHost(ports, { faults: testFaults(harnessd.HARNESSD_TEST_FAULTS) })
-  // The DSH companions: each harness agent's viewer and verdict watch (services/viewers.ts), started below.
-  dshFrameContextRef = (s) => ports.viewers?.frameContext(agentView(s)) ?? null
+  // Services publish bounded display fields without putting their state or interpretation in the core.
+  const frameParts = createFrameParts({ core: coreApi, epoch: agentLife.frameEpoch, available: service => !serviceHost.isOff(service) })
+  framePartsRef = frameParts.forFrame
+  for (const service of frameParts.services) serviceHost.onOff(service, () => frameParts.disabled(service))
   // Models (services/models.ts), started below: what an agent's frame says of its grid, from memory.
   gridAnnotationRef = (grid) => (ports.models ?? MODELS_OFF).annotation(grid)
   // A look at a live agent, for the services that follow agents (core/agentLife.ts): a create, a fork, a resume, a
@@ -1267,7 +1270,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (services/agentBrowser/streams.ts): the core passes its frames on, decides who may open one, and holds each to the
   // connection that opened it (core/browserStreams.ts).
   const browserStreams = createBrowserStreams({
-    port: () => ports.agentBrowser,
+    port: () => ports.agentBrowser, frame: frameParts.read,
     asker: (connId) => backend.askerFor(connId),
     send: (connId, type, payload) => backend.sendTerminalTo(connId, type, payload),
     sendBinary: (connId, frame) => backend.sendTerminalLocalFrameTo(connId, frame),
@@ -1576,7 +1579,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     { wake: (why) => viewersWake.ask('viewers', why) })
   // How the core tells workspaces in their own process what to do, and answers them (core/workspacesLink.ts).
   const workspacesLink = createWorkspacesLink(coreApi, (frame) => serviceLinks.notify('workspaces', frame),
-    (type, payload, waitMs) => serviceLinks.call('workspaces', type, payload, waitMs), forgetAgentProject)
+    (type, payload, waitMs) => serviceLinks.call('workspaces', type, payload, waitMs))
   // Agent Messages in its own process: which of its deliveries may be written, as it last said, and what it may ask
   // and hear of the core (core/messagesLink.ts).
   // A roster change it tells (`observers`) goes to Share: to its process, which a call starts while it is off, or to its
@@ -1651,6 +1654,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const agentBrowserLink = createAgentBrowserLink({ core: coreApi, notify: (frame) => serviceLinks.notify('agentBrowser', frame),
     notifyBinary: (bytes) => serviceLinks.notifyBinary('agentBrowser', bytes), streamsGone: () => browserStreams.gone(), want: () => coreLink.want('agentBrowser') })
   const usageLink = createUsageLink({ call: payload => ports.usage?.read(payload.target as AgentUsageTarget) ?? Promise.resolve({}), changed: agentEvents.onTokenUsageChanged })
+  coreApi.usage = target => usageLink.readSnapshot(target, coreApi.agents.all())
+  coreApi.usageFresh = async (agentId) => {
+    const row = registry.byAgent(agentId)
+    const target = row && usageTarget(row)
+    if (!target || !validUsageTarget(target)) return null
+    const answer = await ports.usage?.read(target)
+    return answer && validUsage(answer.value) ? answer.value : null
+  }
   const serviceLinks = createServiceLinks({
     token: serviceToken,
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
@@ -1670,7 +1681,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     startWaits: Object.fromEntries([...Object.values(READER_SERVICES), OTHER_ENGINES_SERVICE].map(service => [service, READER_START_MS])),
     want: (service) => experimentHooks.want(service),
     // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
-    answer: async (service, query, payload, authority) => await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
+    answer: async (service, query, payload, authority) => frameParts.answer(service, query, payload, () => authority.current?.() === true) ?? await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
       // Agent Messages is answered what it uses and nothing more, never what an experiment may ask (core/messagesLink.ts).
       ?? (service === 'messages' ? await messagesLink.answer(query, payload) : null)
       // What happens to agents, for a service that follows them (core/agentLife.ts): the live agents' rows, which only a
@@ -1778,10 +1789,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (outOfProcess.has('viewers')) {
     ports.viewers = viewersLink.port
     viewersLink.follow()
-  } else serviceHost.start('viewers', inline!.startViewers, coreApi, VIEWERS_FALLBACKS)
+  } else serviceHost.start('viewers', inline!.startViewers, frameParts.scope('viewers', coreApi), VIEWERS_FALLBACKS)
   // Workspaces: in this process, or in the edge host (services/workspacesProcess.ts), told what to do and when.
   if (outOfProcess.has('workspaces')) ports.workspaces = workspacesLink.port
-  else serviceHost.start('workspaces', inline!.startWorkspaces, coreApi, WORKSPACES_FALLBACKS)
+  else serviceHost.start('workspaces', inline!.startWorkspaces, frameParts.scope('workspaces', coreApi), WORKSPACES_FALLBACKS)
   // The orchestrator, an experiment (services/orchestrator.ts): in this process, or in its own once it is on,
   // as the core sees it there (core/orchestratorLink.ts). It reads its Directors' turns from the frames sent.
   if (outOfProcess.has('orchestrator')) ports.orchestrator = orchestratorLink.port
@@ -1812,14 +1823,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   else serviceHost.start('usage', inline!.startUsageInCore, coreApi, USAGE_FALLBACKS, USAGE_REQUESTS)
   usagePortRef = usageLink.port
   backend.tokenUsageProvider = target => usageLink.port.get(target)
-  coreApi.usage = target => usageLink.readSnapshot(target, coreApi.agents.all())
-  coreApi.usageFresh = async (agentId) => {
-    const row = registry.byAgent(agentId)
-    const target = row && usageTarget(row)
-    if (!target || !validUsageTarget(target)) return null
-    const answer = await ports.usage?.read(target)
-    return answer && validUsage(answer.value) ? answer.value : null
-  }
+
 
   // This machine's and each agent's resources, for the Monitor and the list's readings (services/monitor.ts):
   // in this process, or in the edge host (services/monitorProcess.ts), asked through its port (core/monitorLink.ts).
@@ -1862,9 +1866,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (outOfProcess.has('agentBrowser')) {
     ports.agentBrowser = agentBrowserLink.port
     agentBrowserLink.follow()
-  } else serviceHost.start('agentBrowser', inline!.startAgentBrowser, coreApi, AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS)
-  browserFrameRef = (agentId) => ports.agentBrowser?.frameContext(agentId)
-  backend.browserFrameProvider = browserFrameRef
+  } else serviceHost.start('agentBrowser', inline!.startAgentBrowser, frameParts.scope('agentBrowser', coreApi), AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS)
   // Models: grid access and its pin, the model pictures on agents' frames, the keystroke prewarm, where an
   // agent on a grid model sends its inference, and the models requests the apps send (services/models.ts):
   // in this process, or in its own (services/modelsProcess.ts), reached through core/modelsLink.ts.
@@ -1896,7 +1898,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   backend.runtimeProfileProvider = (session) => runtimeProfiles.selectedModel(session)
   backend.workspaceProvider = (session) => runtimeProfiles.workspace(session)
-  backend.dshFrameProvider = (s) => ports.viewers?.frameContext(agentView(s)) ?? null
+  backend.framePartsProvider = frameParts.forFrame
   // `harness remote` names the tile it was typed in by its pane; the registry knows whose it is (lib/terminalHandoff.ts).
   backend.onTerminalHandoff = (pane) => handoffAgentId(registry.advertised(), pane)
   // A rename, a model and effort, or an app opening an agent (core/agents/update.ts).

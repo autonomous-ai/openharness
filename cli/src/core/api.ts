@@ -25,7 +25,7 @@ import type { UnreadNotification } from '../lib/notificationRead.js'
 import type { AutonomousDeviceAgent, AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'
 import type { StoreAgent } from '../lib/autonomous-device/store.js'
 import type { DshLaunchAnswer, DshLaunchRequest, DshMaterializeAnswer, DshMaterializeRequest } from '../dsh/launchWire.js'
-import type { AgentBrowserFrame, AgentDshContext } from '../lib/agentFrame.js'
+import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { GridAccess } from '../lib/gridAttach.js'
 import type { createHarnessResourcesReader } from '../lib/harnessResources.js'
 import type { createHarnessStorageReader } from '../lib/harnessTelemetry.js'
@@ -95,7 +95,7 @@ export const TERMINALS_OFF: TerminalsPort = {
 }
 
 /** Agent metadata a service may read; the saved credential belongs to launch/restore authority. */
-export type AgentView = Omit<RegisteredSession, 'gridLaunch'>
+export type AgentView = Omit<RegisteredSession, 'gridLaunch'> & { /** Ephemeral authority for this run, only for a frame publisher. */ readonly frameEpoch?: string }
 
 /** Always copy: a row without a key now may acquire one after an inline service retains its view. */
 export function agentView(session: RegisteredSession): AgentView {
@@ -181,6 +181,8 @@ export interface CoreApi {
     terminalAvailable(agentId: string): boolean
     /** Send the agent's frame to the apps again. */
     sync(session: RegisteredSession): void
+    /** Replace this service's declared display fields for the exact followed run. */
+    publishFrame?(session: AgentView, fields: Readonly<Record<string, unknown>>): void
     /** The Model/Effort choices an agent's engine offers (opaque `runtime-v1` ids): one agent's, or
      *  every live agent's when none is named. */
     runtimeModels(agentId?: string): Promise<RuntimeModelOption[]>
@@ -1114,6 +1116,8 @@ export type AgentLife =
 
 /** How a follower hears agents run and end (`running`, `ended`). The other kinds it hears whatever it asks. */
 export interface FollowOptions {
+  /** Receive an ephemeral publication lease on each followed view; no lease is written to the registry. */
+  frames?: boolean
   /** Told `running` at every look at an agent, as a harness's viewer is attached; else once each time it starts
    *  running here. */
   each?: boolean
@@ -1129,13 +1133,11 @@ export const FOLLOW_HAVING_MAX = 4
 export type { HeldAgentLife } from '../harnessd/services.js'
 
 /**
- * The core's calls into the agent browser (services/agentBrowser.ts): its browser's state for the agent's frame, which
- * the core reads in line (from what the service last said, when it runs in its own process: core/agentBrowserLink.ts),
- * and a viewer's stream of its screen. What happens to its agents it hears as every service that follows agents does
+ * The core's stream calls into the agent browser (services/agentBrowser.ts). Display fields use the generic publisher;
+ * what happens to its agents it hears as every service that follows agents does
  * (`AgentLife`).
  */
 export interface AgentBrowserPort {
-  frameContext(agentId: string): AgentBrowserFrame | undefined
   /** A viewer's frame of a browser's stream (`agent_browser_open`, `agent_browser_ack`, `agent_browser_close`), from the
    *  connection [connId]; an open with who asked as the core established it, and an ack or a close with nobody, as the
    *  stream's own. The stream is the service's (services/agentBrowser/streams.ts): the core passes frames on and
@@ -1159,15 +1161,12 @@ export interface AgentBrowserPort {
 
 /** What the core gets when the agent browser fails: frames without a browser, and no stream taken. */
 export const AGENT_BROWSER_FALLBACKS: PortFallbacks<AgentBrowserPort> = {
-  frameContext: undefined,
   stream: false, streamInput: false, streamClosed: undefined, streamRoute: undefined, streamTransportError: undefined, streamRefused: undefined, stop: undefined,
 }
 
 /** The core's calls into the DSH viewers: each harness agent's viewer server and verdict watch. Which agents have
  *  one they hear as every service that follows agents does (`AgentLife`, `VIEWERS_FOLLOW`). */
 export interface ViewersPort {
-  /** What the agent's frame says about its DSH: its name, its viewer and its verdict. */
-  frameContext(session: AgentView): AgentDshContext | null
   /** Where the windows' viewer pane for the agent forwards to. */
   forwardingUrl(agentId: string): string | null
   /** Stop every viewer and watch, for a restart or a shutdown. */
@@ -1186,17 +1185,16 @@ export interface ViewersPort {
 /** How the viewers follow agents (core/agentLife.ts), in their process and in the core's: each agent with a harness at
  *  every look at it, as its viewer was attached, since a look may be the first to find its harness and a viewer follows
  *  its harness's update; and its end. */
-export const VIEWERS_FOLLOW: FollowOptions = { each: true, having: ['dsh'] }
+export const VIEWERS_FOLLOW: FollowOptions = { each: true, having: ['dsh'], frames: true }
 
 /** What a client is told for a surface the viewers cannot render while they are off or failing. */
 export const VIEWERS_UNAVAILABLE = { error: 'SERVICE_UNAVAILABLE', service: 'viewers', retryable: true }
 
-/** What the core gets when the viewers fail: agents' frames carry no DSH context and the windows
- *  no viewer, a client's viewer stream is refused at once (core/viewerStreams.ts) and its surface
+/** What the core gets when the viewers fail: no new forwarding target, a client's viewer stream is refused at once (core/viewerStreams.ts) and its surface
  *  answered unavailable, and a restart or shutdown goes on. Their process on demand, before it has
  *  first connected, holds a stream and a surface while it starts instead (core/viewersLink.ts). */
 export const VIEWERS_FALLBACKS: PortFallbacks<ViewersPort> = {
-  frameContext: null, forwardingUrl: null, stop: later(undefined),
+  forwardingUrl: null, stop: later(undefined),
   stream: false, surface: later(VIEWERS_UNAVAILABLE), closed: undefined,
 }
 
@@ -1327,6 +1325,7 @@ export type WorktreeAnswer = { ok: true; review: WorktreeReview } | { ok: false;
  * A refusal is an answer, never a throw, which would count against the service and could switch it off.
  */
 export interface WorkspacesPort {
+  stop(): void
   nameBranches(): void
   /** Whether it can make a folder now: a create waits for it (held) while it cannot, rather than failing for the moment a
    *  restart takes. */
@@ -1354,12 +1353,14 @@ const REMOVAL_UNAVAILABLE = { ok: false as const, reason: `The worktree was kept
 /** What the core gets when workspaces fails: branches keep their names, a create waits for its folder, and nothing of a
  *  worktree is read or removed. */
 export const WORKSPACES_FALLBACKS: PortFallbacks<WorkspacesPort> = {
+  stop: undefined,
   nameBranches: undefined, ready: false, prepareFolder: later(FOLDER_UNAVAILABLE), describeWorkspace: later(null),
   reviewWorktree: later(REVIEW_UNAVAILABLE), removeWorktree: later(REMOVAL_UNAVAILABLE),
 }
 
 /** What the core calls while `ports.workspaces` is null (workspaces off): its fallbacks' answers. */
 export const WORKSPACES_OFF: WorkspacesPort = {
+  stop: () => {},
   nameBranches: () => {}, ready: () => false, prepareFolder: async () => FOLDER_UNAVAILABLE, describeWorkspace: async () => null,
   reviewWorktree: async () => REVIEW_UNAVAILABLE, removeWorktree: async () => REMOVAL_UNAVAILABLE,
 }

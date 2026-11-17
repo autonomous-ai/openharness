@@ -95,8 +95,6 @@ export function createWorkspacesLink(
   core: Pick<CoreApi, 'agents'>,
   notify: NotifyWorkspaces,
   call: CallWorkspaces,
-  /** Forget what the core read of a folder's project (lib/agentProject.ts `forgetAgentProject`). */
-  forgetProject: (cwd: string) => void,
 ) {
   /** The process connected now said it makes folders: until it does, it is asked none of it. */
   let folders = false
@@ -115,6 +113,7 @@ export function createWorkspacesLink(
   }
 
   const port: WorkspacesPort = {
+    stop: () => {},
     nameBranches: () => {
       notify({ type: 'service_event', payload: { kind: 'nameBranches', agents: core.agents.live() } })
     },
@@ -145,7 +144,6 @@ export function createWorkspacesLink(
   const branchNamed = (payload: Payload): Payload => {
     const session = typeof payload.agentId === 'string' ? core.agents.byAgent(payload.agentId) : undefined
     if (!session) return { synced: false }
-    if (session.cwd) forgetProject(session.cwd)
     core.agents.sync(session)
     return { synced: true }
   }

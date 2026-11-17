@@ -7,7 +7,7 @@
  * so the answer leaves it be. One the followers were told runs that the answer does not list ended while this process
  * was not hearing (the core restarted, or the link dropped): they are told it ended.
  */
-import type { AgentLife, FollowOptions } from '../core/api.js'
+import type { AgentLife, AgentView, FollowOptions } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { agentsIn, isSession } from './processCoreApi.js'
 
@@ -36,7 +36,7 @@ export function agentLifeIn(payload: Payload): AgentLife | null {
 export function followLink(options: FollowOptions, log: (line: string) => void = (line) => console.warn(line)) {
   const listeners = new Set<(event: AgentLife) => void>()
   /** The agents the followers were told run, and not since that they ended. */
-  const told = new Map<string, RegisteredSession>()
+  const told = new Map<string, AgentView>()
   /** Heard of while a catch-up is pending: newer than its answer. Released when it ends, so a long connection
    *  retains no ids of agents that have ended. */
   let heard: Set<string> | null = null
@@ -106,7 +106,7 @@ export function followLink(options: FollowOptions, log: (line: string) => void =
         tell({ kind: 'ended', agentId })
       }
       for (const session of listed) {
-        if (changed.has(session.agentId) || (!options.each && told.has(session.agentId))) continue
+        if (changed.has(session.agentId) || (!options.each && !options.frames && told.has(session.agentId))) continue
         told.set(session.agentId, session)
         tell({ kind: 'running', session })
       }

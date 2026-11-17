@@ -20,7 +20,7 @@ it('keeps grid launch custody in the real core while a viewer attaches, reads fr
   const attach = () => runServiceProcess({ name: 'viewers', socketPath: daemon.socketPath, machineId: daemon.computerId,
     token, requests: {}, onConnected: core => {
       connected = core
-      void core.query('follow_agents', { each: true, having: ['dsh'] }).then(snapshot => {
+      void core.query('follow_agents', { each: true, having: ['dsh'], frames: true }).then(snapshot => {
         events.push({ kind: 'catch-up', ...snapshot }); followed = true
       })
     }, onDisconnected: () => { connected = undefined; followed = false },
@@ -53,9 +53,13 @@ it('keeps grid launch custody in the real core while a viewer attaches, reads fr
     expect(Object.hasOwn(attached.session!, 'gridLaunch')).toBe(false)
     expect(JSON.stringify(attached)).not.toContain(grid.apiKey)
 
-    // The viewer's metadata becomes a public frame through main.ts's frame provider.
+    // The viewer's metadata becomes a public frame through its current lifecycle lease.
     const context = { id, name: 'Custody', viewerName: 'Fixture Viewer', viewerUrl: 'http://127.0.0.1:9/', verdict: null }
-    expect(await connected!.query('context', { agentId, context, forwardingUrl: context.viewerUrl })).toEqual({ kept: true })
+    const frameEpoch = (attached.session as Record<string, unknown>).frameEpoch
+    expect(typeof frameEpoch).toBe('string')
+    expect(await connected!.query('frame_part', { agentId, frameEpoch, fields: {
+      dsh: context.id, dshName: context.name, viewerName: context.viewerName, viewerUrl: context.viewerUrl, verdict: context.verdict,
+    } })).toEqual({ ok: true })
     const frame = await until('the public viewer frame', async () => {
       const reply = await client!.request('agents_list', {})
       return (reply.agents as Array<Record<string, unknown>>).find(row => row.id === agentId && row.sessionId
