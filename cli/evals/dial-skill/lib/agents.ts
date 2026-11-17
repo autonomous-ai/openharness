@@ -33,6 +33,12 @@ export const CLAUDE_SANDBOX = {
     allowUnsandboxedCommands: false,
     network: { allowedDomains: ['registry.npmjs.org'] },
   },
+  // The profile's claude.ai connectors and push reach the person's real mail, calendar, documents and phone: an eval
+  // run must not email, schedule or notify anyone. Only the fake harness reaches the person here.
+  permissions: {
+    deny: ['PushNotification', 'RemoteTrigger', 'DesignSync',
+      'mcp__claude_ai_Gmail', 'mcp__claude_ai_Google_Calendar', 'mcp__claude_ai_Microsoft_365', 'mcp__claude_ai_Claude_Docs'],
+  },
 }
 
 /** Between SIGTERM and SIGKILL for a timed-out agent's process group. */
