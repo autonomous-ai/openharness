@@ -240,8 +240,7 @@ describe('a daemon under test knows nothing of the developer\'s own state', () =
     const d = daemon = await IsolatedDaemon.create()
     failed(d)
     await d.start()
-    // The core's line: the master names itself harnessd (process.title), which is all ps then shows of it, and it
-    // starts the core on its own Node.
+    // The core's line: the master starts the core on its own Node.
     const ran = execFileSync('ps', ['-o', 'args=', '-p', String(d.corePid())], { encoding: 'utf8' }).trim().split(' ')[0]
     // A yes or a no, and a count: at the base the folder is the developer's own, and the names in it their programs.
     expect(ran === process.env.E2E_NODE_PATH, 'the daemon runs on the run\'s Node').toBe(true)

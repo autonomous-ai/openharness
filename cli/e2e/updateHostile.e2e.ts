@@ -293,7 +293,7 @@ class Installed {
     } finally { client.close() }
   }
 
-  /** Every process running a build of this install, from the process table. */
+  /** Every process running a build of this install, from the process table: the master, its core and its services. */
   daemonProcesses(): Array<{ pid: number; ppid: number; command: string }> {
     return execFileSync('ps', ['-axo', 'pid=,ppid=,command='], { encoding: 'utf8' }).split('\n')
       .map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line))
@@ -301,10 +301,12 @@ class Installed {
       .map((match) => ({ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] }))
   }
 
-  /** One core, the master's child, and nothing else running this install: no orphan, no probe left. */
+  /** The master, one core and its services as the master's children, and nothing else running this install: no orphan, no probe left. */
   async nothingOrphaned(): Promise<void> {
     const master = this.daemon.pid!
-    await until('only the master\'s own core', () => this.daemonProcesses().every((one) => one.ppid === master && one.command.endsWith(' __run')), 15_000, 200)
+    const own = (one: { pid: number; ppid: number; command: string }) =>
+      one.pid === master || (one.ppid === master && / __(?:run|service \S+)$/.test(one.command))
+    await until('only the master and its own children', () => this.daemonProcesses().every(own), 15_000, 200)
     expect(this.daemonProcesses().filter((one) => one.command.endsWith(' __run'))).toHaveLength(1)
   }
 

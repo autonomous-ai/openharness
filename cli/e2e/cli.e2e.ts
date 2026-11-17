@@ -195,7 +195,7 @@ describe('harness start, stop and status from the installed bundle', () => {
     const master = pidOf(m)!
     const core = (await statusOf(m)).corePid as number
     seen.add(master).add(core)
-    // The core's line: the master names itself harnessd, which is all ps shows of it, and starts the core on its own Node.
+    // The core's line: the master starts the core on its own Node.
     const ran = commandOf(core).split(' ')[0]
     // A yes or a no: at the base the path is the developer's own Node.
     expect(ran === process.env.E2E_NODE_PATH, 'the core runs on the run\'s Node').toBe(true)
@@ -217,9 +217,9 @@ describe('harness start, stop and status from the installed bundle', () => {
     const core = status.corePid as number
     expect(core).not.toBe(master)
     seen.add(master).add(core)
-    // harnessd's master (it retitles itself), running the installed bundle's core: from the lean bundle that
+    // harnessd's master, running the installed bundle's core: from the lean bundle that
     // bundle carries, written out into the data folder (src/harnessd/leanBundle.ts).
-    expect(commandOf(master)).toBe('harnessd')
+    expect(commandOf(master)).toMatch(/ __harnessd$/)
     expect(commandOf(core)).toMatch(leanCore(m))
 
     const running = await harness(m, 'status')
@@ -260,7 +260,7 @@ describe('harness start, stop and status from the installed bundle', () => {
     const first = pidOf(m)!
     seen.add(first)
     expect(platformPid(m), `${platform} runs the master`).toBe(first)
-    expect(commandOf(first)).toBe('harnessd')
+    expect(commandOf(first)).toMatch(/ __harnessd$/)
     const firstCore = (await statusOf(m)).corePid as number
     seen.add(firstCore)
     expect(commandOf(firstCore)).toMatch(leanCore(m))

@@ -8,7 +8,6 @@
  *
  * Nothing here reaches beyond this machine: the daemon's every server setting is the fake backend's.
  */
-import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -26,12 +25,9 @@ const row = async (client: LocalClient, agentId: string) =>
 
 const isTurn = (type: string, agentId: string) => (frame: Frame | PhoneFrame) => frame.type === type && frame.agentId === agentId
 
-/** This daemon's gateway: titled `harnessd-gateway` AND started by its own master, by the pid it logged. */
+/** This daemon's gateway: started by its own master, by the pid it logged, and still its child. */
 function gatewayPids(d: IsolatedDaemon): number[] {
-  const ours = new Set([...d.log().matchAll(/\[harnessd\] service gateway started \(pid (\d+)\)/g)].map((match) => Number(match[1])))
-  const table = execFileSync('ps', ['-A', '-o', 'pid=,command=']).toString().trim().split('\n')
-  return table.map((line) => line.trim().match(/^(\d+)\s+(.*)$/)).filter((match): match is RegExpMatchArray => !!match)
-    .filter(([, pid, command]) => command.trim() === 'harnessd-gateway' && ours.has(Number(pid))).map(([, pid]) => Number(pid))
+  return d.servicePids('gateway')
 }
 /** ⌘K on a machine: its pick for a task (`route_task`), and its send to an agent anywhere (`route_send`). */
 async function routeTask(client: LocalClient, text: string): Promise<Record<string, any>> {

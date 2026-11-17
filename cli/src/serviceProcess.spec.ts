@@ -27,7 +27,7 @@ vi.mock('./lib/harnessdEnv.js', async (real) => {
 
 describe('a service in its own process', () => {
   const title = process.title
-  afterEach(() => { process.title = title; local.socket = '/data/daemon-18473.sock'; harnessd.held = {}; vi.restoreAllMocks() })
+  afterEach(() => { local.socket = '/data/daemon-18473.sock'; harnessd.held = {}; vi.restoreAllMocks() })
 
   it('can run every service the master knows, and the updater it runs beside them, and loads each one\'s runner on its own', async () => {
     expect([...SERVICE_RUNNERS.keys()].sort()).toEqual([...KNOWN_SERVICES, ...UPDATER_HOST.services].sort())
@@ -64,7 +64,8 @@ describe('a service in its own process', () => {
     expect(loaded).toEqual(['search'])
     // The token is the service's to connect with, and no child's: out of process.env before any service loads.
     expect(inherited).toEqual([undefined])
-    expect(process.title).toBe('harnessd-search')
+    // Named by the link it was exec'd through and nothing else: a title put its environment in `pgrep -f` on macOS.
+    expect(process.title).toBe(title)
     // Its lines are stamped like the core's and the master's in the log they share.
     expect(stamped.times).toBe(1)
     expect(seen).toEqual([{ dataDir: expect.any(String), socketPath: '/data/daemon-18473.sock', machineId: expect.any(String), token: 'token' }])
@@ -82,7 +83,7 @@ describe('a service in its own process', () => {
       await running.stop()
     } finally { delete process.env.HARNESSD_SERVICE }
     expect(started).toEqual(['workspaces', 'usage'])
-    expect(process.title).toBe('harnessd-edge')
+    expect(process.title).toBe(title)
     expect(hosted[0].options).toEqual({ name: 'edge', services: ['workspaces', 'usage'] })
     expect(hosted[0].services).toHaveLength(2)
     expect(stops.workspaces).toHaveBeenCalledOnce()

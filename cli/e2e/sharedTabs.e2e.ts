@@ -223,13 +223,13 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('shared tabs across accou
     times.push(`shared again ${again2.sharedTabId === sharedTabId ? 'same id' : 'new id'} v${reshared!.version}`)
 
     // Where it ran: killing Alice's edge host cuts Agent Messages' link to the core, with the edge's other services.
-    const edge = (await processes(A.d)).find((p) => / harnessd-edge\b/.test(p) || /__service.*edge/.test(p))
+    const edge = A.d.servicePids('edge').at(-1)
     expect(edge, 'an edge host process').toBeDefined()
     const from = A.d.log().length
-    process.kill(Number(edge!.split(' ')[0]), 'SIGKILL')
+    process.kill(edge!, 'SIGKILL')
     await until('messages to disconnect with the edge host', () => /\[services\] messages disconnected/.test(A.d.log().slice(from)) || null, 20_000, 100)
     const cut = A.d.log().slice(from).split('\n').filter((l) => /\[services\] \w+ disconnected|service edge (started|exited|stopped)/.test(l))
-    times.push(`edge ${edge!.split(' ')[0]} killed: ${cut.slice(0, 16).join(' || ')}`)
+    times.push(`edge ${edge} killed: ${cut.slice(0, 16).join(' || ')}`)
     expect(cut.some((l) => /\[services\] workspaces disconnected/.test(l)), 'the edge host\'s other services went with it').toBe(true)
     await until('messages to connect again from a new edge host', () => /\[services\] messages connected/.test(A.d.log().slice(from)) || null, 30_000, 200)
     // Step 1b's tests run beside each other after this one: these daemons have nothing more to do.
@@ -372,10 +372,10 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('shared tabs across accou
     const removedNotice = await until('bob\'s removed notice', async () =>
       ((await shares(B)).notices as Array<Record<string, any>>).find((n) => n.kind === 'removed' && n.sharedTabId === sharedTabId) ?? null, 30_000, 300)
     expect(typeof removedNotice.id).toBe('string')
-    const edgeB = (await processes(B.d)).find((p) => / harnessd-edge\b/.test(p) || /__service.*edge/.test(p))
+    const edgeB = B.d.servicePids('edge').at(-1)
     expect(edgeB, 'an edge host process').toBeDefined()
     const fromB = B.d.log().length
-    process.kill(Number(edgeB!.split(' ')[0]), 'SIGKILL')
+    process.kill(edgeB!, 'SIGKILL')
     await until('bob\'s messages to disconnect with the edge host', () => /\[services\] messages disconnected/.test(B.d.log().slice(fromB)) || null, 20_000, 100)
     await until('bob\'s messages to connect again', () => /\[services\] messages connected/.test(B.d.log().slice(fromB)) || null, 30_000, 200)
     const kept = await until('the removed notice after the restart', async () =>
