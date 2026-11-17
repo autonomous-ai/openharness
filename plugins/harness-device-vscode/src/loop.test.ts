@@ -328,6 +328,24 @@ describe('startLoop', () => {
     expect([w.states, w.watches.length, w.watches[0].closed]).toEqual([['unplugged', 'notRunning'], 1, true])
   })
 
+  it('a folder change during a link run that then connects is let go: the pass after the stream waits 1 s', async () => {
+    let answer!: (ran: Ran) => void
+    const w = world([UNPLUGGED, new Promise<Ran>((settle) => (answer = settle))])
+    await w.until(() => w.timers.size > 0)
+    await w.to(1_000)
+    await w.until(() => w.runs.length === 2)
+    w.watches[0].changed('devices.sock')
+    answer(READY)
+    await w.until(() => w.streams.length === 1)
+    w.streams[0].answer(200)
+    await w.until(() => w.states.at(-1) === 'connected')
+    await w.to(61_000)
+    w.streams[0].end()
+    await w.until(() => w.streams[0].signal.aborted)
+    await flush()
+    expect([w.runs.length, w.due()[0]]).toEqual([2, 62_000])
+  })
+
   it('opens the stream with its window id and is connected at the head', async () => {
     const w = world([READY])
     await w.until(() => w.streams.length === 1)
