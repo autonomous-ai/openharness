@@ -15,6 +15,7 @@ export interface VariantStats {
 export interface Summary {
   variants: Record<string, VariantStats>
   paired: Record<string, Record<string, Paired>> // vs baseline, per split, on score
+  warnings: string[]
 }
 
 interface Usage { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number;
@@ -54,12 +55,17 @@ function interval(xs: number[]): SplitStats {
   return { mean: m, ci_lo: m - half, ci_hi: m + half, n }
 }
 
-function readJsonl<T>(path: string): T[] {
+// A line that is not JSON, as the runner's last write is when it was killed mid-line, is skipped and named in
+// `warnings`, as build-report-lite.mjs does, so one torn row never blocks the summary.
+function readJsonl<T>(path: string, warnings: string[]): T[] {
   if (!existsSync(path)) return []
   return readFileSync(path, 'utf8').split('\n').flatMap((line, i) => {
     if (!line.trim()) return []
     try { return [JSON.parse(line) as T] }
-    catch { throw new Error(`${path}:${i + 1}: not JSON`) }
+    catch {
+      warnings.push(`${path}:${i + 1}: not JSON, skipped`)
+      return []
+    }
   })
 }
 
@@ -129,9 +135,10 @@ export function summarize(flow: string): Summary {
   const split = splitOf(readState(flow))
   const variants: Record<string, VariantStats> = {}
   const means: Record<string, Map<string, number>> = {}
+  const warnings: string[] = []
   for (const v of variantsOf(flow)) {
-    const rows = readJsonl<Row>(join(flow, v, 'results.jsonl'))
-    const errs = readJsonl<ErrorRow>(join(flow, v, 'errors.jsonl'))
+    const rows = readJsonl<Row>(join(flow, v, 'results.jsonl'), warnings)
+    const errs = readJsonl<ErrorRow>(join(flow, v, 'errors.jsonl'), warnings)
     means[v] = caseMeans(rows)
     const splits: Record<string, SplitStats> = {}
     for (const sp of SPLITS) {
@@ -181,7 +188,7 @@ export function summarize(flow: string): Summary {
       paired[v][sp] = { ...s, significant: s.ci_lo > 0 || s.ci_hi < 0 }
     }
   }
-  return { variants, paired }
+  return { variants, paired, warnings }
 }
 
 const fmt = (x: number, digits = 2) => (Number.isFinite(x) ? x.toFixed(digits) : 'n/a')
@@ -196,8 +203,9 @@ const fmtSplit = (s: SplitStats | undefined) =>
 // One row per case with each rep's score, so a reader sees the spread between runs, not only the mean.
 export function runTable(flow: string, variant: string): string {
   const split = splitOf(readState(flow))
-  const rows = readJsonl<Row>(join(flow, variant, 'results.jsonl'))
-  const errs = readJsonl<ErrorRow>(join(flow, variant, 'errors.jsonl'))
+  // The same files summarize() reads and warns of, so their warnings are not given twice.
+  const rows = readJsonl<Row>(join(flow, variant, 'results.jsonl'), [])
+  const errs = readJsonl<ErrorRow>(join(flow, variant, 'errors.jsonl'), [])
   const reps = Math.max(0, ...[...rows, ...errs].map(r => r.rep + 1))
   const repCols = Array.from({ length: reps }, (_, k) => k)
   // Error rows too: a case whose every attempt failed has a row that says so.
@@ -285,11 +293,11 @@ function replaceBlock(path: string, [open, close]: readonly [string, string], bo
 }
 
 // Writes every variant's table.md, the status table in narrative.md and the aggregate table in metrics.md;
-// returns the headline line.
-export function writeSummaries(flow: string): string {
+// returns the headline line and the lines it skipped.
+export function writeSummaries(flow: string): { headline: string; warnings: string[] } {
   const s = summarize(flow)
   for (const v of Object.keys(s.variants)) writeFileSync(join(flow, v, 'table.md'), runTable(flow, v))
   replaceBlock(join(flow, 'narrative.md'), STATUS, statusTable(s))
   replaceBlock(join(flow, 'metrics.md'), AGGREGATE, aggregateTable(s))
-  return headline(s)
+  return { headline: headline(s), warnings: s.warnings }
 }

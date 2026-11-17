@@ -7,4 +7,6 @@ if (!flow || process.argv.length > 3) {
   console.error('usage: npx tsx evals/dial-skill/summarize.ts <flow>')
   process.exit(2)
 }
-console.log(writeSummaries(flow))
+const { headline, warnings } = writeSummaries(flow)
+for (const warning of warnings) console.error(warning)
+console.log(headline)
