@@ -28,7 +28,9 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { UNASKED } from './processCoreApi.js'
 import { createFramePublisher } from './framePublisher.js'
-import { startViewers } from './viewers.js'
+import { startViewers, viewerStreamEndpoint, type ViewersRuntimeSlot } from './viewers.js'
+import { CLIENT_STREAMS, type ClientStreamEndpoint } from '../lib/clientStreamContract.js'
+import { createServiceClientStreams } from './clientStreams.js'
 
 export interface ViewersServiceOptions {
   dataDir: string
@@ -55,7 +57,7 @@ export function viewersCoreApi(
   dataDir: string,
   sessions: ReadonlyMap<string, RegisteredSession>,
   tell: (agentId: string) => void,
-  viewerFrame: CoreApi['clients']['viewerFrame'],
+  streamFrame: CoreApi['clients']['streamFrame'],
   follow: NonNullable<CoreApi['agents']['follow']>,
 ): CoreApi {
   const attached = (): RegisteredSession[] => [...sessions.values()]
@@ -97,7 +99,7 @@ export function viewersCoreApi(
       ...ACCOUNT_BACKEND_OFF,
       ...UNASKED.account,
     },
-    clients: { viewerChanged: tell, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {}, observer: () => false, ...UNASKED.clients, viewerFrame },
+    clients: { viewerChanged: tell, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {}, observer: () => false, ...UNASKED.clients, streamFrame },
     daemon: DAEMON_UNKNOWN,
     wifi: UNASKED.wifi,
   }
@@ -117,7 +119,7 @@ export function runViewersService(options: ViewersServiceOptions): ServiceProces
   /** The agents attached or detached since the core was last asked for all of them: newer than its answer. */
   const heard = new Set<string>()
   let core: CoreConnection | null = null
-  const ports = emptyPorts()
+  const ports: ViewersRuntimeSlot = { viewers: null }
 
   const tell = (agentId: string): void => {
     const session = sessions.get(agentId)
@@ -131,19 +133,17 @@ export function runViewersService(options: ViewersServiceOptions): ServiceProces
     void core.query('viewer_target', state).catch(() => {})
   }
 
-  /** A stream's frame for one client: through the core, which alone holds the client's connection. */
-  const viewerFrame = (connId: string, type: string, payload: Record<string, unknown>): boolean => {
-    if (!core?.notice) return false
-    core.notice('viewer', { connId, type, payload })
-    return true
-  }
+  let endpoint: ClientStreamEndpoint | null = null
+  const streamLink = createServiceClientStreams(CLIENT_STREAMS.find(spec => spec.service === 'viewers')!, () => endpoint)
+  const streamFrame = streamLink.frame
   const publisher = createFramePublisher((session, fields) => ({ query: 'context', payload: { agentId: session.agentId,
     context: typeof fields.dsh === 'string' ? { id: fields.dsh, name: fields.dshName, viewerUrl: fields.viewerUrl,
       viewerName: fields.viewerName, verdict: fields.verdict } : null, forwardingUrl: ports.viewers?.forwardingUrl(session.agentId) ?? null } }))
-  const api = publisher.scope(viewersCoreApi(options.dataDir, sessions, tell, viewerFrame, follow))
+  const api = publisher.scope(viewersCoreApi(options.dataDir, sessions, tell, streamFrame, follow))
   ;(options.start ?? startViewers)(api, ports)
   if (!ports.viewers) throw new Error('the viewers did not start')
   const viewers = ports.viewers
+  endpoint = viewerStreamEndpoint(viewers)
 
   const attach = (session: RegisteredSession): void => {
     sessions.set(session.agentId, session)
@@ -194,11 +194,8 @@ export function runViewersService(options: ViewersServiceOptions): ServiceProces
       },
     },
     onEvent: (payload) => {
-      if (payload.kind === 'stream' && typeof payload.connId === 'string' && typeof payload.type === 'string') {
-        viewers.stream(payload.connId, payload.type, payload.frame && typeof payload.frame === 'object' ? payload.frame as Record<string, unknown> : {})
-      } else if (payload.kind === 'closed') {
-        viewers.closed(typeof payload.connId === 'string' ? payload.connId : undefined)
-      } else if (payload.kind === 'agent' && payload.event && typeof payload.event === 'object') {
+      if (streamLink.event(payload)) return
+      if (payload.kind === 'agent' && payload.event && typeof payload.event === 'object') {
         // A look at an agent with a harness, or the end of one: what else agents do is not the viewers' business.
         const event = payload.event as Record<string, unknown>
         if (event.kind === 'running' && isSession(event.session)) {
@@ -219,6 +216,7 @@ export function runViewersService(options: ViewersServiceOptions): ServiceProces
     },
     onConnected: (connection) => {
       core = connection
+      streamLink.connected(connection)
       publisher.connected(connection)
       told.clear()
       heard.clear()
@@ -234,8 +232,9 @@ export function runViewersService(options: ViewersServiceOptions): ServiceProces
     onDisconnected: () => {
       core = null
       publisher.disconnected()
-      viewers.closed()
+      streamLink.disconnected()
     },
+    onConnectionClosed: streamLink.closed,
   })
   return { stop }
 }

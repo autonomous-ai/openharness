@@ -192,7 +192,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       ...UNASKED.account,
     },
     clients: {
-      viewerChanged: () => {}, viewerFrame: () => false, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {},
+      viewerChanged: () => {}, streamFrame: () => false, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {},
       windows: (frame) => { void ask?.('windows', { frame }).catch(() => {}) },
       // A goal Hachi closed, for every window of the account (core/agentQueries.ts `hachi_goal_done`). One the core
       // cannot take now is lost, as a count is: the goal is closed and kept, and its notice is a courtesy.

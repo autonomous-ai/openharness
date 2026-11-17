@@ -202,12 +202,13 @@ import { createStoreOf } from './transcripts/stores.js'
 import { createOtherStreams } from './engines/otherStreams.js'
 import { paneReadIdentity } from './transcripts/readIdentity.js'
 import { isOtherEngine, OTHER_ENGINE_STATES, OTHER_ENGINES_SERVICE } from '../engines/otherEngines.js'
-import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, GOALS_REQUESTS, TURN_DELIVERERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, ENGINE_PROBE_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type WindowFocus } from './api.js'
+import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, GOALS_REQUESTS, TURN_DELIVERERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, VIEWERS_UNAVAILABLE, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, ENGINE_PROBE_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type WindowFocus } from './api.js'
 import { createFrameParts } from './frameParts.js'
 import { testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
 import { createServiceLinks, READER_START_MS, type ServiceLinks } from './serviceLinks.js'
-import { createViewerStreams } from './viewerStreams.js'
+import { createClientStreams } from './clientStreams.js'
+import { CLIENT_STREAMS, type ClientStreamEndpoint, type ClientStreamSink } from '../lib/clientStreamContract.js'
 import { createViewersLink } from './viewersLink.js'
 import { createWorkspacesLink, prepareWorkspaceInstructions } from './workspacesLink.js'
 import { createMonitorLink } from './monitorLink.js'
@@ -217,10 +218,8 @@ import { createGuestCreate } from './agents/guestCreate.js'
 import { createStoreLink } from './storeLink.js'
 import { createModelsLink } from './modelsLink.js'
 import { createRecapsLink } from './recapsLink.js'
-import { createAgentBrowserLink, wakeAgentBrowser } from './agentBrowserLink.js'
-import { createBrowserStreams, type BrowserStreams } from './browserStreams.js'
 import { createAgentCleanupLink } from './agentCleanupLink.js'
-import { agentView, AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, AGENT_CLEANUP_FALLBACKS, RECAPS_FALLBACKS, TERMINALS_OFF } from './api.js'
+import { agentView, AGENT_BROWSER_REQUESTS, AGENT_CLEANUP_FALLBACKS, RECAPS_FALLBACKS, TERMINALS_OFF } from './api.js'
 import { answerAgentQuery } from './agentQueries.js'
 import { createDeliveries } from './deliveries.js'
 import { createTerminalWatch } from './terminalWatch.js'
@@ -951,10 +950,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     syncSession,
     runtimeModels,
     viewerChanged: () => {}, // nothing in the core forwards to a viewer: the viewers follow their own (services/viewers.ts)
-    viewerFrame: (connId, type, payload) => backendRef?.sendViewerFrame(connId, type, payload) ?? false,
-    // A browser stream's answers and bytes, from its service to the connection that opened it (core/browserStreams.ts).
-    browserFrame: (connId, type, payload) => browserStreamsRef?.frame(connId, type, payload) ?? false,
-    browserBytes: (frame) => browserStreamsRef?.bytes(frame) ?? false,
     gridNamed: (name) => backendRef?.setHarnessGridName(name),
     gridModelsChanged: () => { void backendRef?.pushGridModels() },
     privateGridName: async () => backendRef?.gridName() ?? null,
@@ -1141,7 +1136,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let appVoiceFocus: { machineId: string; agentId: string; connId: string } | undefined
   let backendRef: BackendSocket | undefined
   // Where a browser stream's answers go: made below, once the socket is.
-  let browserStreamsRef: BrowserStreams | undefined
   /** Assigned below, once the grid reconcile exists. A backend (re)connect is the signal that the
    *  control plane is reachable again, which is precisely what an earlier attempt may have lacked. */
   let fullReconcile: (announceDevice?: boolean) => Promise<void> = async () => {}
@@ -1181,8 +1175,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   const gatewayLink = outOfProcess.has('gateway') ? createGatewayLink({
     events: backend.fromGateway,
-    notify: (frame) => serviceLinksRef?.notify('gateway', frame) ?? false,
-    notifyBinary: (bytes) => serviceLinksRef?.notifyBinary('gateway', bytes) ?? false,
+    notify: (frame, quota) => serviceLinksRef?.notify('gateway', frame, { quota }) ?? false,
+    notifyBinary: (bytes, quota) => serviceLinksRef?.notifyBinary('gateway', bytes, quota) ?? false,
     buffered: () => serviceLinksRef?.buffered('gateway') ?? 0,
     call: (type, payload, waitMs) => serviceLinksRef?.call('gateway', type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
     start: () => ({ machineId: backend.machineId, computerId: computerId(), autonomousEnv, signedIn: !!session?.machineId, account: account(), machineName: terminalHintMachineName(), hostname: hostname() }),
@@ -1204,8 +1198,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const gatewayOps = gateway.ops
   gatewayOpsRef = gatewayOps
   daemonBoot.openRequests = () => backend.openRequests()
-  // This machine's viewers, served to a client over its connection by the viewers (core/viewerStreams.ts).
-  backend.viewerStreams = createViewerStreams(() => ports.viewers, (connId, type, payload) => backend.sendViewerFrame(connId, type, payload))
+  backend.viewerSurface = (connection, payload) => ports.viewers?.surface(connection, payload) ?? Promise.resolve(VIEWERS_UNAVAILABLE)
 
   /**
    * Is ANY device surface watching this machine?
@@ -1243,7 +1236,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // sign-in the phone catches comes back to the program (core/terminals/browser.ts, lib/browserShim.ts).
   const browser = createBrowser({
     agentOfPane: (pane) => registry.list().find((session) => session.tmuxPane === pane)?.agentId,
-    sendTo: (connId, type, payload) => backend.sendViewerFrame(connId, type, payload),
+    sendTo: (connId, type, payload) => backend.sendTargetFrame(connId, type, payload),
     isLocal: isLocalClientId,
     who: (connId) => backend.remoteClient(connId)?.identity ?? connId,
     replay: (url) => loopbackAnswer(url),
@@ -1287,17 +1280,37 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     moveGate,
   })
   backend.setTerminalStreamManager(terminalStreams)
-  // An agent browser's screen, to the panels open on it, on the terminals' transport. The stream is the agent browser's
-  // (services/agentBrowser/streams.ts): the core passes its frames on, decides who may open one, and holds each to the
-  // connection that opened it (core/browserStreams.ts).
-  const browserStreams = createBrowserStreams({
-    port: () => ports.agentBrowser, frame: frameParts.read,
-    asker: (connId) => backend.askerFor(connId),
-    send: (connId, type, payload) => backend.sendTerminalTo(connId, type, payload),
-    sendBinary: (connId, frame) => backend.sendTerminalLocalFrameTo(connId, frame),
+  const streamEndpoints = new Map<string, ClientStreamEndpoint>()
+  const streamSinks = new Map<string, ClientStreamSink>()
+  const clientStreams = createClientStreams({
+    endpoint: service => streamEndpoints.get(service) ?? null,
+    disabled: service => serviceHost?.isOff(service) ?? false,
+    send: (service, connection, type, payload, final) => backend.sendStreamFrame(service, connection, type, payload, final),
+    sendBinary: (service, connection, frame) => backend.sendStreamBinary(service, connection, frame),
+    wake: service => coreLink.want(service),
   })
-  browserStreamsRef = browserStreams
-  backend.setBrowserStreams(browserStreams)
+  backend.clientStreams = clientStreams
+  coreApi.agents.follow?.(event => {
+    if (event.kind !== 'running') return
+    for (const spec of CLIENT_STREAMS) {
+      if (outOfProcess.has(spec.service) && event.session[spec.wakeField]) coreLink.want(spec.service)
+    }
+  }, { each: true })
+  for (const { service } of CLIENT_STREAMS) {
+    if (!outOfProcess.has(service)) continue
+    const quota = { service, direction: 'service' as const }
+    const tell = (payload: Record<string, unknown>): boolean =>
+      (serviceLinksRef?.buffered(service) ?? 0) <= 4 * 1024 * 1024 &&
+      (serviceLinksRef?.notify(service, { type: 'service_event', payload }, { quota }) ?? false)
+    streamEndpoints.set(service, {
+      frame: event => tell({ kind: 'client_stream', ...event }),
+      binary: frame => (serviceLinksRef?.buffered(service) ?? 0) <= 4 * 1024 * 1024 && (serviceLinksRef?.notifyBinary(service, frame, quota) ?? false),
+      // Individual connection ends are already delivered by serviceLinks.closeConnection.
+      closed: connection => { if (connection === undefined) tell({ kind: 'client_stream_closed' }) },
+      control: (grant, payload) => { tell({ kind: 'client_stream_control', grant, payload }) },
+      refused: (grant, streamId) => { tell({ kind: 'client_stream_refused', grant, ...(streamId ? { streamId } : {}) }) },
+    })
+  }
   // What a harness's pane runs and where, and the desktop's pane colours (core/terminals/requests.ts). A
   // theme is applied only for a frame, well after `agentReconciler` below exists (connect() comes last).
   const terminalRequests = createTerminalRequests({
@@ -1609,9 +1622,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Directors' (core/orchestratorLink.ts).
   const orchestratorLink = createOrchestratorLink((frame) => serviceLinks.notify('orchestrator', frame))
   // What the core keeps of the viewers in their own process, for the frames it builds (core/viewersLink.ts).
-  const viewersLink = createViewersLink(coreApi, (frame, opts) => serviceLinks.notify('viewers', frame, opts),
-    { call: (type, payload, waitMs) => serviceLinks.call('viewers', type, payload, waitMs), buffered: () => serviceLinks.buffered('viewers') },
-    { wake: (why) => viewersWake.ask('viewers', why) })
+  const viewersLink = createViewersLink(coreApi, { call: (type, payload, waitMs) => serviceLinks.call('viewers', type, payload, waitMs) })
+
   // How the core tells workspaces in their own process what to do, and answers them (core/workspacesLink.ts).
   const workspacesLink = createWorkspacesLink(coreApi, (frame) => serviceLinks.notify('workspaces', frame),
     (type, payload, waitMs) => serviceLinks.call('workspaces', type, payload, waitMs))
@@ -1685,9 +1697,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // What the core tells the agent cleanup in its own process, and answers it (core/agentCleanupLink.ts).
   const agentCleanupLink = createAgentCleanupLink(coreApi, (frame, opts) => serviceLinks.notify('agentCleanup', frame, opts),
     (type, payload, waitMs) => serviceLinks.call('agentCleanup', type, payload, waitMs))
-  // What the core tells the agent browser in its own process, keeps of what it says, and answers it (core/agentBrowserLink.ts).
-  const agentBrowserLink = createAgentBrowserLink({ core: coreApi, notify: (frame) => serviceLinks.notify('agentBrowser', frame),
-    notifyBinary: (bytes) => serviceLinks.notifyBinary('agentBrowser', bytes), streamsGone: () => browserStreams.gone(), want: () => coreLink.want('agentBrowser') })
   const usageLink = createUsageLink({ call: payload => ports.usage?.read(payload.target as AgentUsageTarget) ?? Promise.resolve({}), changed: agentEvents.onTokenUsageChanged })
   coreApi.usage = target => usageLink.readSnapshot(target, coreApi.agents.all())
   coreApi.usageFresh = async (agentId) => {
@@ -1716,7 +1725,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     startWaits: Object.fromEntries([...Object.values(READER_SERVICES), OTHER_ENGINES_SERVICE].map(service => [service, READER_START_MS])),
     want: (service) => experimentHooks.want(service),
     // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
-    answer: async (service, query, payload, authority) => frameParts.answer(service, query, payload, () => authority.current?.() === true) ?? await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload, authority)
+    answer: async (service, query, payload, authority) => (query === 'client_streams' && streamEndpoints.has(service) && authority.current?.() === true ? { ok: clientStreams.serving(service) } : null) ?? frameParts.answer(service, query, payload, () => authority.current?.() === true) ?? await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload, authority)
       // Agent Messages is answered what it uses and nothing more, never what an experiment may ask (core/messagesLink.ts).
       ?? (service === 'messages' ? await messagesLink.answer(query, payload) : null)
       // What happens to agents, for a service that follows them (core/agentLife.ts): the live agents' rows, which only a
@@ -1738,12 +1747,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       : service === 'handoff' ? answerConversationQuery(coreApi, query, payload, authority)
       : service === 'shell' ? answerShellQuery(coreApi, query, payload)
       : service === 'agentCleanup' ? agentCleanupLink.answer(query, payload)
-      : service === 'agentBrowser' ? agentBrowserLink.answer(query, payload)
+
       : service === 'recaps' ? recapsLink.answer(query, payload) : answerAgentQuery(coreApi, query, payload)),
     // The gateway's own traffic: its remote clients and what they sent, and its comings and goings; and what
     // the devices tell the core (a turn, a frame for the windows, a dial on the wire); a viewer stream's answers.
-    notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload); else if (service === 'devices') devicesLink.notice(payload); else if (service === 'wifi') wifiLink.notice(payload); else if (service === 'viewers') viewersLink.notice(payload); else if (service === 'recaps') recapsLink.notice(payload); else if (service === 'agentBrowser') agentBrowserLink.notice(payload) },
-    binary: (service, bytes) => { if (service === 'gateway') gatewayLink?.binary(bytes); else if (service === 'agentBrowser') agentBrowserLink.binary(bytes) },
+    notice: (service, payload) => {
+      if (payload.kind === 'client_stream' && typeof payload.grant === 'string' && typeof payload.type === 'string' && payload.payload && typeof payload.payload === 'object' && !Array.isArray(payload.payload)) {
+        streamSinks.get(service)?.frame(payload.grant, payload.type, payload.payload as Record<string, unknown>); return
+      }
+      if (service === 'gateway') gatewayLink?.notice(payload); else if (service === 'devices') devicesLink.notice(payload); else if (service === 'wifi') wifiLink.notice(payload); else if (service === 'recaps') recapsLink.notice(payload) },
+    binary: (service, bytes) => { if (service === 'gateway') gatewayLink?.binary(bytes); else streamSinks.get(service)?.binary(bytes) },
     connected: (service) => {
       engineStorage.connected(service)
       if (othersLive && service === OTHER_ENGINES_SERVICE) otherStreams.connected()
@@ -1765,8 +1778,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (service === 'gateway') { gatewayLink?.connected(); tabRelay.connected() }
       if (service === 'devices') devicesLink.connected()
       if (service === 'wifi') wifiCore.started(appVoiceFocus ?? null)
-      if (service === 'viewers') viewersLink.connected()
-      if (service === 'agentBrowser') agentBrowserLink.connected()
+      const streamSink = clientStreams.connected(service)
+      if (streamSink) streamSinks.set(service, streamSink)
       devicesWake.connected(service)
       viewersWake.connected(service)
       // A service up again (or up at last): the agents held for it are launched (core/agents/heldLaunches.ts).
@@ -1795,7 +1808,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (service === 'devices') devicesLink.disconnected()
       if (service === 'wifi') wifiCore.stopped()
       if (service === 'recaps') recapsLink.disconnected()
-      if (service === 'agentBrowser') agentBrowserLink.disconnected()
+      clientStreams.disconnected(service)
+      streamSinks.delete(service)
       if (service === 'workspaces') workspacesLink.disconnected()
       agentLife.disconnected(service)
       void terminalWatch.gone(service)
@@ -1827,7 +1841,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (outOfProcess.has('viewers')) {
     ports.viewers = viewersLink.port
     viewersLink.follow()
-  } else serviceHost!.start('viewers', inline!.startViewers, frameParts.scope('viewers', coreApi), VIEWERS_FALLBACKS)
+  }
+  const inlineStreams = inline?.startInlineClientStreams({ host: serviceHost!, outOfProcess,
+    scope: service => frameParts.scope(service, coreApi),
+    register: (service, endpoint) => { streamEndpoints.set(service, endpoint); const sink = clientStreams.connected(service)!; clientStreams.serving(service); return sink },
+    gone: service => { clientStreams.disconnected(service); streamEndpoints.delete(service) },
+  })
   // Workspaces: in this process, or in the edge host (services/workspacesProcess.ts), told what to do and when.
   if (outOfProcess.has('workspaces')) ports.workspaces = workspacesLink.port
   else serviceHost!.start('workspaces', inline!.startWorkspaces, frameParts.scope('workspaces', coreApi), WORKSPACES_FALLBACKS)
@@ -1899,12 +1918,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Cleaning up after agents: the harnesses a closed harness started, and those idle half an hour (services/agentCleanup.ts).
   if (outOfProcess.has('agentCleanup')) ports.agentCleanup = agentCleanupLink.port; else serviceHost!.start('agentCleanup', (core, given) => inline!.startAgentCleanup(core, given), coreApi, AGENT_CLEANUP_FALLBACKS)
   if (!outOfProcess.has('shell')) serviceHost!.serve('shell', inline!.startShell, coreApi, SHELL_REQUESTS)
-  // A sandboxed Chrome beside each agent whose Browser is on (services/agentBrowser.ts): in its own process, on
-  // demand (services/agentBrowserProcess.ts), or in this one.
-  if (outOfProcess.has('agentBrowser')) {
-    ports.agentBrowser = agentBrowserLink.port
-    agentBrowserLink.follow()
-  } else serviceHost!.start('agentBrowser', inline!.startAgentBrowser, frameParts.scope('agentBrowser', coreApi), AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS)
   // Models: grid access and its pin, the model pictures on agents' frames, the keystroke prewarm, where an
   // agent on a grid model sends its inference, and the models requests the apps send (services/models.ts):
   // in this process, or in its own (services/modelsProcess.ts), reached through core/modelsLink.ts.
@@ -2353,7 +2366,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     devicesWake.start(outOfProcess)
     wakeModels({ outOfProcess, dataDir: env.ADAPTER_DATA_DIR, runtimeDir: env.ADAPTER_RUNTIME_DIR, want: (service) => coreLink.want(service) })
     wakeViewers({ wake: viewersWake, agents: () => registry.list(), dataDir: env.ADAPTER_DATA_DIR })
-    wakeAgentBrowser({ outOfProcess, dataDir: env.ADAPTER_DATA_DIR, want: (service) => coreLink.want(service) })
+    wakeExperiments({ dataDir: env.ADAPTER_DATA_DIR, experiments: Object.fromEntries(CLIENT_STREAMS.filter(spec => spec.state).map(spec => [spec.service, { state: spec.state! }])), outOfProcess, want: service => coreLink.want(service) })
   } else {
     try { writeFileSync(PID_FILE, String(process.pid) + '\n') } catch { /* best effort */ }
   }
@@ -3234,6 +3247,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ['the timers', () => { clearInterval(logTrimTimer); clearInterval(runtimeReconcileTimer); clearInterval(paneTitleSyncTimer) }],
     ['the question watchers', () => questionWatcher.stopAll()],
     ['the turn heartbeats', () => { for (const t of heartbeats.values()) clearInterval(t); heartbeats.clear() }],
+    ['inline streams', () => inlineStreams?.()],
     ['the normalizers', () => { normalizers.stopPollers(); inlineOthers?.clear() }],
     ['Cursor discovery', () => cursorDiscovery.stop()], ['the runtime profiles', () => runtimeProfiles.stop()], ['the transcript watcher', () => watcher.stop()],
     // The FIXED hook port, released before the successor binds it (no fallback → EADDRINUSE otherwise).

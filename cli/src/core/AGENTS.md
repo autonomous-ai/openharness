@@ -78,8 +78,9 @@ The core stays small and secure, in the code and at run time: read
   methods, its writes' local header, whether only the daemon's own socket may ask it (`door`), its wait, the headers its
   answers carry, and its own answer while that service is down; and a window's frame a service answers
   (`SERVICE_WS_FRAMES`: ⌘K's), its answer sent back as the frame its route names. `usageOutcomes.ts`: what the usage report counts of a request, told the gateway raw; the gateway names it. `viewersLink.ts`: what the core
-  keeps of the viewers when they run in theirs. `viewerStreams.ts`: a client's viewer stream and rendered
-  frames, handed to the viewers, refused at once while they are down, and held while they first start. `workspacesLink.ts`: workspaces in
+  keeps of the viewers when they run in theirs, including bounded surface requests. `clientStreams.ts`: the shared
+  connection-owned relay for viewers and Browser, with private grants, service incarnations and bounded queues;
+  viewer traffic is held only while its service first starts. `workspacesLink.ts`: workspaces in
   theirs, which run the git the core runs none of: a create's folder and a purge's worktree, each asked with a deadline and
   read as typed data, and the made-up branches they name. `messagesLink.ts`: Agent Messages out of this process (the edge host): which of its deliveries may be
   written, as it last said, the few things it may ask (`MESSAGES_QUERIES`: the agents, this daemon, the account
@@ -122,11 +123,8 @@ The core stays small and secure, in the code and at run time: read
   `agentLife.ts`: what happens to agents (each look at a live one, its end, a stop, a purge, a pane's new agent), for the
   services that follow them (`CoreApi.agents.follow`, `follow_agents` from a service's process); it names no service, and
   holds for one in its own process only the kinds its process says it hears (`harnessd/services.ts` `hears`).
-  `agentBrowserLink.ts`: the agent browser in its own process: each browser's state as it last said, kept only for the
-  agents running here, and its viewers' streams passed on. `browserStreams.ts`: the core's side of a browser's
-  stream, and nothing of the stream itself: who may open one, whose each is, its own bounds (an open the service does
-  not answer, bytes a viewer has not read), and that it is closed when its service goes. The core starts no command
-  for a browser, reads none of a viewer's VNC bytes, and sends the service's screen frames on as they came.
+  Browser admission and its runtime stay in `../services/agentBrowserRuntime.ts`; the core's shared relay reads no
+  Browser state, starts no browser command, and forwards validated binary buffers without reframing them.
   `modelsWake.ts`: when models' process is asked for as the core starts, once grid is in use here.
   `gatewayWake.ts`: when the gateway's process is asked for as the core starts, before it binds: signed in, or
   anything paired here. `viewersWake.ts`: when the viewers' process (the viewers and the Store) is asked for: a

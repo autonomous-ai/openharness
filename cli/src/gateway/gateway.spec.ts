@@ -13,7 +13,7 @@ import type { BackendSocket } from '../backendSocket.js'
 import type { Asker } from '../core/api.js'
 import * as C from '../lib/e2ee/core.js'
 import { deriveTerminalBinaryKey, sealTerminalBinary } from '../lib/e2ee/terminalSeal.js'
-import { TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
+import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
 import { bindMessageRequest } from '../testing/socketCore.js'
 import { dispatchDown, gatewayOf, relaySocket, upstreamOf } from '../testing/relaySocket.js'
 import type { DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
@@ -518,17 +518,17 @@ describe('terminal streams on a client\'s P2P channel', () => {
     const NEVER = '00000000-0000-4000-8000-000000000001', LIVE = '00000000-0000-4000-8000-000000000002'
     // The client asks to move a stream it was never told about: refused, its bytes stay on the relay.
     await dispatchDown(socket, phone.seal('terminal_resync', { streamId: NEVER }), 'phone-1', 'p2p')
-    gateway.terminalBinary('phone-1', bytes(NEVER))
+    gateway.terminalBinary('phone-1', encodeTerminalLocal(bytes(NEVER))!)
     expect(viaP2p.calls).toBe(0)
     // Told it has one, it may move it.
     expect(gateway.terminal('phone-1', 'terminal_ready', { requestId: 'open-1', streamId: LIVE })).toBe(false) // no link: nothing sent
     await dispatchDown(socket, phone.seal('terminal_resync', { streamId: LIVE }), 'phone-1', 'p2p')
-    gateway.terminalBinary('phone-1', bytes(LIVE))
+    gateway.terminalBinary('phone-1', encodeTerminalLocal(bytes(LIVE))!)
     expect(viaP2p.calls).toBe(1)
     // Closed, it is off P2P: a resync for it cannot put it back.
     gateway.terminal('phone-1', 'terminal_closed', { streamId: LIVE })
     await dispatchDown(socket, phone.seal('terminal_resync', { streamId: LIVE }), 'phone-1', 'p2p')
-    gateway.terminalBinary('phone-1', bytes(LIVE))
+    gateway.terminalBinary('phone-1', encodeTerminalLocal(bytes(LIVE))!)
     expect(viaP2p.calls).toBe(1)
     await socket.stop()
   })
@@ -545,7 +545,7 @@ describe('terminal streams on a client\'s P2P channel', () => {
     gateway.terminal('phone-1', 'terminal_ready', { requestId: 'open-1', streamId: STREAM })
     const outputRides = (): 'p2p' | 'relay' => {
       const before = send.mock.calls.length
-      gateway.terminalBinary('phone-1', { kind: TerminalBinaryKind.output, streamId: STREAM, seq: 1, compressed: false, bytes: new Uint8Array([104]) })
+      gateway.terminalBinary('phone-1', encodeTerminalLocal({ kind: TerminalBinaryKind.output, streamId: STREAM, seq: 1, compressed: false, bytes: new Uint8Array([104]) })!)
       return send.mock.calls.length > before ? 'p2p' : 'relay'
     }
     const logged = () => log.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith('[terminal-p2p]'))
@@ -617,11 +617,11 @@ describe('terminal streams on a client\'s P2P channel', () => {
     await dispatchDown(socket, phone.seal('terminal_open', { requestId: 'open-p2p', agentId: 'a1', cols: 80, rows: 24 }), 'phone-1', 'p2p')
     gateway.terminal('phone-1', 'terminal_ready', { requestId: 'open-p2p', streamId: STREAM })
     const before = send.mock.calls.length
-    gateway.terminalBinary('phone-1', { kind: TerminalBinaryKind.output, streamId: STREAM, seq: 1, compressed: false, bytes: new Uint8Array([104]) })
+    gateway.terminalBinary('phone-1', encodeTerminalLocal({ kind: TerminalBinaryKind.output, streamId: STREAM, seq: 1, compressed: false, bytes: new Uint8Array([104]) })!)
     expect(send.mock.calls.length).toBe(before + 1)
     // A relay frame sealed after the open is the client moving it back.
     await dispatchDown(socket, phone.seal('terminal_ack', { streamId: STREAM, lastSeq: 1 }), 'phone-1', 'relay')
-    gateway.terminalBinary('phone-1', { kind: TerminalBinaryKind.output, streamId: STREAM, seq: 2, compressed: false, bytes: new Uint8Array([104]) })
+    gateway.terminalBinary('phone-1', encodeTerminalLocal({ kind: TerminalBinaryKind.output, streamId: STREAM, seq: 2, compressed: false, bytes: new Uint8Array([104]) })!)
     expect(send.mock.calls.length).toBe(before + 1)
     await socket.stop()
   })
@@ -656,8 +656,11 @@ describe('agent browser streams on a client\'s links', () => {
     const transport = vi.spyOn(p2p, 'transport').mockReturnValue('direct')
     const link = (gateway as unknown as { link: { sendBinary(packet: Uint8Array): boolean } }).link
     const relayBinary = vi.spyOn(link, 'sendBinary').mockReturnValue(true)
-    const route = vi.spyOn(socket.fromGateway, 'browserRoute')
-    const lost = vi.spyOn(socket.fromGateway, 'browserRouteLost')
+    const route = vi.fn(), lost = vi.fn()
+    vi.spyOn(socket.fromGateway, 'streamControl').mockImplementation((_service, streamId, payload) => {
+      if (payload.route === null) lost(streamId)
+      else if (typeof payload.route === 'string') route(streamId, payload.route)
+    })
     vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const phone = await pairedClient(socket, PHONE)
@@ -667,7 +670,7 @@ describe('agent browser streams on a client\'s links', () => {
       await dispatchDown(socket, phone.seal('agent_browser_open', { requestId, agentId: 'a1' }), PHONE, via)
       gateway.terminal(PHONE, 'agent_browser_open_result', { requestId, streamId })
     }
-    const screen = (streamId: string) => gateway.terminalBinary(PHONE, { kind: TerminalBinaryKind.browser, streamId, seq: 1, compressed: false, bytes: new Uint8Array([1]) })
+    const screen = (streamId: string) => gateway.terminalBinary(PHONE, encodeTerminalLocal({ kind: TerminalBinaryKind.browser, streamId, seq: 1, compressed: false, bytes: new Uint8Array([1]) })!)
     const directSends = () => send.mock.calls.filter(([, data]) => typeof data !== 'string').length
     return { socket, gateway, phone, send, transport, relayBinary, route, lost, open, screen, directSends }
   }
@@ -755,7 +758,7 @@ describe('agent browser streams on a client\'s links', () => {
 
   it('a plaintext agent_browser_transport_error from the backend is accepted and raises browserTransportError', async () => {
     const socket = relaySocket(MACHINE)
-    const heard = vi.spyOn(socket.fromGateway, 'browserTransportError')
+    const heard = vi.spyOn(socket.fromGateway, 'streamControl')
     await dispatchDown(socket, { type: 'agent_browser_transport_error', payload: { code: 'RATE' } }, '')
     expect(heard).toHaveBeenCalledTimes(1)
     await socket.stop()
@@ -763,7 +766,7 @@ describe('agent browser streams on a client\'s links', () => {
 
   it('the same frame from a client is refused', async () => {
     const socket = relaySocket(MACHINE)
-    const heard = vi.spyOn(socket.fromGateway, 'browserTransportError')
+    const heard = vi.spyOn(socket.fromGateway, 'streamControl')
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const phone = await pairedClient(socket, PHONE)
     await dispatchDown(socket, { type: 'agent_browser_transport_error', payload: { code: 'RATE' } }, PHONE)
@@ -810,7 +813,7 @@ describe('a client\'s terminal bytes, on their way to the core', () => {
     into.frame(phone.seal('p2p_ice_candidate', { sessionId: 's1', candidate: null, protocolVersion: 1 }))
     into.bytes(phone.sealBinary(key(1)))
     await vi.waitFor(() => expect(signals).toEqual(['p2p_offer']))
-    expect(core).toHaveBeenCalledWith('phone-1', key(1))
+    expect(core).toHaveBeenCalledWith('phone-1', key(1), encodeTerminalLocal(key(1)))
     // The candidate still waits for its offer: it has no responder to reach before the answer.
     answered()
     await vi.waitFor(() => expect(signals).toEqual(['p2p_offer', 'p2p_ice_candidate']))
@@ -830,7 +833,7 @@ describe('a client\'s terminal bytes, on their way to the core', () => {
     into.frame({ type: 'e2e_hello', payload: { identityPub: C.b64e(identity.pub), ephPub: C.b64e(eph.pub), sig: C.b64e(C.helloSig(identity.priv, MACHINE, eph.pub)) } })
     into.bytes(phone.sealBinary(key(1)))
     into.bytes(phone.sealBinary(key(2)))
-    expect(core.mock.calls).toEqual([['phone-1', key(1)], ['phone-1', key(2)]])
+    expect(core.mock.calls).toEqual([['phone-1', key(1), encodeTerminalLocal(key(1))], ['phone-1', key(2), encodeTerminalLocal(key(2))]])
     socket.openRequests()
     await socket.stop()
   })

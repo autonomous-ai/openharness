@@ -78,7 +78,7 @@ hang or leak costs only its process. A process per risk, not per feature (`SERVI
 | `memory` | memory | an experiment: Memories across machines | on demand |
 | `router` | router | an experiment: where ⌘B sends a task, decided by Jev | on demand |
 | `cloud` | cloud | an experiment: cloud agents (Fo, Devin Cloud, Cursor Cloud), harnesses on their makers' servers | on demand |
-| `agentBrowser` | agentBrowser | Podman's calls and event stream, image builds, Podman's setup, whose Browser is on (its state file), and each viewer's stream of a browser's screen: its exec into the container, the viewer's VNC bytes, the credit and the pacing (`agentBrowserProcess.ts`, `core/agentBrowserLink.ts`; the core passes a stream on and holds it to the connection that opened it, `core/browserStreams.ts`) | on demand |
+| `agentBrowser` | agentBrowser | Podman's calls and event stream, image builds, Podman's setup, whose Browser is on (its state file), and each viewer's stream of a browser's screen: its exec into the container, the viewer's VNC bytes, the credit and the pacing (`agentBrowserProcess.ts`, `agentBrowserRuntime.ts`; the shared relay holds streams to their connections in `core/clientStreams.ts`) | on demand |
 
 A fault in one of the edge host's services can cost the others in it, never the core. Every service in
 `KNOWN_SERVICES` runs out of the core's process by default, unless `HARNESSD_SERVICES` names a subset, by
@@ -281,14 +281,14 @@ like any other. Named in `HARNESSD_SERVICES`, it starts with the others.
   process left running (`src/core/viewersWake.ts`). The core never reads the installed index. Models and Memories
   prepare their own bundled package on actual first use; the Store retries incomplete preparation on actual package
   requests. Different-package index mutations share one lock, with immediate visible busy refusal. A stream before it has first connected is held, bounded,
-  until it does (`src/core/viewersLink.ts`).
+  until it does (`src/core/clientStreams.ts`).
 - **Older cores.** `askedSince` is the core protocol (`HARNESSD_PROTOCOL`, `src/harnessd/protocol.ts`) from
   which a core asks for this process. A core that speaks an older one never asks, so the master starts the
   process as that core binds (`ServiceSupervisor.unasked`). It is 3 by default, the experiments'; the
   devices, models and the gateway became on demand at protocol 4, which may also ask before it binds; the
   viewers at protocol 5; the agent browser at protocol 7, asked for by a request, as the core starts when its state file
   is there, or by an agent whose row still carries the Browser flag the core kept until 2026-11-15
-  (`core/agentBrowserLink.ts`, until 2026-12-18). Making another process on demand needs a protocol bump, and that number in its
+  (the shared stream declaration's `wakeField`, until 2026-12-18). Making another process on demand needs a protocol bump, and that number in its
   `askedSince`. A newer core under an older master asks for a process that master started with the others,
   which changes nothing.
 - **Proof.** `e2e/experiments.e2e.ts`, `e2e/devicesOnDemand.e2e.ts`, `e2e/modelsOnDemand.e2e.ts`,

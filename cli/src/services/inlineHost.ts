@@ -81,7 +81,7 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
     if (recent.length >= maxFailures) switchOff(name, recent.length)
   }
 
-  const guard = <K extends PortName>(name: K, port: Port<K>, fallbacks: PortFallbacks<Port<K>>): Port<K> => {
+  const guard = <P extends object>(name: string, port: P, fallbacks: PortFallbacks<P>): P => {
     const guarded: Record<string, Member> = {}
     for (const [member, fallback] of Object.entries(fallbacks) as Array<[string, unknown]>) {
       const { deferred, value } = readFallback(fallback)
@@ -110,7 +110,7 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
         })
       }
     }
-    return guarded as unknown as Port<K>
+    return guarded as unknown as P
   }
 
   /** Take the request types a service declares, before its start: a type another service answers is a
@@ -140,6 +140,8 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
   }
 
   return {
+    /** Guard a service-owned boundary without adding a component port to core. */
+    guard,
     /**
      * Start one service. It fills its own port (`ports[name]`) in a staging copy; what it filled is
      * installed guarded, and anything else it wrote is ignored. A service that leaves its port null
@@ -177,7 +179,7 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
       }
       const stop = (port as unknown as { stop?: () => unknown }).stop
       if (typeof stop === 'function') stoppers.set(name, () => { void Promise.resolve(stop.call(port)).catch(() => {}) })
-      ports[name] = guard(name, port, fallbacks) as CorePorts[K]
+      ports[name] = guard<Port<K>>(name, port, fallbacks) as CorePorts[K]
     },
     /**
      * Start a service the core never calls: it has no port, and only answers the apps' `requests`.

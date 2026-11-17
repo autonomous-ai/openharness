@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AgentBrowserFrame } from '../lib/agentFrame.js'
 import type { Asker } from './api.js'
-import { BROWSER_OPEN_WAIT_MS, BROWSER_OPENS_PENDING_MAX, BROWSER_UNACKED_MAX, createBrowserStreams } from './browserStreams.js'
-import { encodeTerminalLocal, TerminalBinaryKind } from '../lib/terminalBinary.js'
+import { createClientStreams } from './clientStreams.js'
+import { CLIENT_STREAMS, type ClientStreamEndpoint } from '../lib/clientStreamContract.js'
+const browserSpec = CLIENT_STREAMS.find(spec => spec.service === 'agentBrowser')!
+const BROWSER_OPEN_WAIT_MS = browserSpec.waitMs, BROWSER_OPENS_PENDING_MAX = browserSpec.pendingPerConnection, BROWSER_UNACKED_MAX = browserSpec.binary!.unreadBytes
+import { clientStreamLocalFrame, encodeTerminalLocal, TerminalBinaryKind } from '../lib/terminalBinary.js'
 
 const LOCAL: Asker = { local: true, owner: true }
 const OTHER_DESKTOP: Asker = { local: false, owner: true, accountOwner: true }
@@ -22,21 +24,62 @@ function setup(served = true) {
   let sendOk = true
   let binaryOk = true
   const port = {
-    // The agents' browsers, as their frames show them: a1's and a2's ready, one starting, one failed, and none else.
-    frame: vi.fn((agentId: string): AgentBrowserFrame | undefined => ({ a1: { state: 'ready' as const }, a2: { state: 'ready' as const }, starting: { state: 'starting' as const }, failed: { state: 'failed' as const, error: 'podman_old' } })[agentId]),
     stream: vi.fn((_connId: string, _type: string, _payload: Record<string, unknown>, _asker?: Asker) => true),
     streamInput: vi.fn((_streamId: string, _bytes: Uint8Array) => true),
     streamClosed: vi.fn(), streamRoute: vi.fn(), streamTransportError: vi.fn(), streamRefused: vi.fn(),
   }
   const log = vi.fn()
   let current: typeof port | null = served ? port : null
-  const streams = createBrowserStreams({
-    port: () => current, frame: id => ({ browser: port.frame(id) }),
-    asker: (connId) => ASKERS[connId] ?? { local: false, owner: false },
-    send: (connId, type, payload) => { frames.push({ connId, type, payload }); return sendOk },
-    sendBinary: (connId, frame) => { binary.push({ connId, frame }); return binaryOk },
-    log,
+  const pending = new Map<string, { connection: string; publicId: unknown; grant: string }>()
+  const live = new Map<string, { connection: string; grant: string }>()
+  let opening: { connection: string; publicId: unknown } | null = null
+  const endpoint: ClientStreamEndpoint = {
+    frame: event => {
+      if (event.type === browserSpec.open && opening) pending.set(JSON.stringify([opening.connection, opening.publicId]), { ...opening, grant: event.grant })
+      return event.type === browserSpec.open ? port.stream(event.connection, event.type, event.payload, event.asker)
+        : port.stream(event.connection, event.type, event.payload)
+    },
+    binary: raw => { const read = clientStreamLocalFrame(raw)!; return port.streamInput(read.streamId, read.bytes) },
+    closed: connection => port.streamClosed(connection),
+    control: (_grant, payload) => {
+      if (payload.kind === 'transport_error') port.streamTransportError()
+      else port.streamRoute(payload.streamId, payload.route)
+    },
+    refused: (_grant, streamId) => { if (streamId) port.streamRefused(streamId) },
+  }
+  const relay = createClientStreams({
+    endpoint: service => service === 'agentBrowser' && current ? endpoint : null,
+    disabled: () => !served,
+    send: (_service, connId, type, payload) => { frames.push({ connId, type, payload }); return sendOk },
+    sendBinary: (_service, connId, frame) => { binary.push({ connId, frame }); return binaryOk },
+    wake: () => {}, log,
   })
+  let sink = relay.connected('agentBrowser')!
+  if (served) relay.serving('agentBrowser')
+  const streams = {
+    open: (connection: string, payload: Record<string, unknown>) => {
+      opening = { connection, publicId: payload.requestId }
+      relay.frame(connection, browserSpec.open, payload, ASKERS[connection] ?? { local: false, owner: false })
+      opening = null
+    },
+    ack: (connection: string, payload: Record<string, unknown>) => relay.frame(connection, browserSpec.ack, payload, LOCAL),
+    close: (connection: string, payload: Record<string, unknown>) => relay.frame(connection, browserSpec.close, payload, LOCAL),
+    input: (connection: string, streamId: string, bytes: Uint8Array) => relay.binary(connection, screenFrame(streamId, 0, bytes)),
+    frame: (connection: string, type: string, payload: Record<string, unknown>) => {
+      const entry = type === browserSpec.opened ? pending.get(JSON.stringify([connection, payload.requestId])) ?? [...pending.values()].find(each => each.connection === connection && each.grant === payload.requestId) : live.get(String(payload.streamId))
+      if (!entry || entry.connection !== connection) return sink.frame('unknown-grant', type, payload)
+      const result = sink.frame(entry.grant, type, type === browserSpec.opened ? { ...payload, requestId: entry.grant } : payload)
+      if (result && type === browserSpec.opened && typeof payload.streamId === 'string') live.set(payload.streamId, { connection, grant: entry.grant })
+      return result
+    },
+    bytes: (raw: Uint8Array) => sink.binary(raw),
+    reconnect: () => { sink = relay.connected('agentBrowser')!; relay.serving('agentBrowser') },
+    closeConnection: (connection: string) => relay.closed(connection),
+    gone: () => relay.disconnected('agentBrowser'),
+    route: (streamId: string, route: string) => relay.controlStream('gateway', streamId, { streamId, route }),
+    routeLost: (streamId: string) => relay.controlStream('gateway', streamId, { streamId, route: null }),
+    transportError: () => relay.control('gateway', 'agentBrowser', null, { kind: 'transport_error' }),
+  }
   /** A stream [connId] holds: asked, and answered by the service. */
   const opened = (connId: string, streamId = STREAM, requestId = 'r-1') => {
     streams.open(connId, { requestId, agentId: 'a1' })
@@ -53,8 +96,8 @@ describe('opening a browser stream, as the core passes it on', () => {
     streams.open('local:w', { requestId: 'r-1', agentId: 'a1' })
     streams.open('mac-2', { requestId: 'r-2', agentId: 'a1' })
     expect(port.stream.mock.calls).toEqual([
-      ['local:w', 'agent_browser_open', { requestId: 'r-1', agentId: 'a1' }, LOCAL],
-      ['mac-2', 'agent_browser_open', { requestId: 'r-2', agentId: 'a1' }, OTHER_DESKTOP],
+      ['local:w', 'agent_browser_open', { requestId: expect.any(String), agentId: 'a1' }, LOCAL],
+      ['mac-2', 'agent_browser_open', { requestId: expect.any(String), agentId: 'a1' }, OTHER_DESKTOP],
     ])
     expect(frames).toEqual([])
   })
@@ -77,19 +120,14 @@ describe('opening a browser stream, as the core passes it on', () => {
     expect(frames).toEqual([])
   })
 
-  // As before the stream was its service's: the core answered these from the state it keeps for the agent's frame.
-  it('answers in line for an agent with no browser, or one that is not ready, and asks nobody', () => {
+  it('leaves live semantic admission to the service, without reading a display projection', () => {
     const { streams, port, frames } = setup()
-    streams.open('local:w', { requestId: 'r-1', agentId: 'plain' })
-    streams.open('local:w', { requestId: 'r-2' })
-    streams.open('local:w', { requestId: 'r-3', agentId: 7 })
-    streams.open('local:w', { requestId: 'r-4', agentId: 'starting' })
-    streams.open('local:w', { requestId: 'r-5', agentId: 'failed' })
-    expect(port.stream).not.toHaveBeenCalled()
-    expect(frames.map(frame => [frame.payload.requestId, frame.payload.error])).toEqual([['r-1', 'NO_BROWSER'], ['r-2', 'NO_BROWSER'], ['r-3', 'NO_BROWSER'], ['r-4', 'NOT_READY'], ['r-5', 'NOT_READY']])
-    // None of them is waited for.
-    expect(streams.frame('local:w', 'agent_browser_open_result', { requestId: 'r-4', streamId: STREAM })).toBe(false)
-    // The agent browser off: no agent has one.
+    for (const [requestId, agentId] of [['plain', 'plain'], ['missing', undefined], ['malformed', 7], ['starting', 'starting'], ['failed', 'failed']]) {
+      streams.open('local:w', { requestId, agentId })
+    }
+    expect(port.stream).toHaveBeenCalledTimes(5)
+    expect(frames).toEqual([])
+    streams.gone()
     const off = setup(false)
     off.streams.open('local:w', { requestId: 'r-1', agentId: 'a1' })
     expect(off.frames).toEqual([{ connId: 'local:w', type: 'agent_browser_open_result', payload: { requestId: 'r-1', error: 'NO_BROWSER' } }])
@@ -392,7 +430,7 @@ describe('the core\'s own bounds on a browser stream', () => {
     vi.advanceTimersByTime(1)
     expect(frames).toEqual([{ connId: 'local:w', type: 'agent_browser_open_result', payload: { requestId: 'r-1', error: 'NOT_READY' } }])
     expect(log).toHaveBeenCalledOnce()
-    expect(log.mock.calls[0]![0]).toContain('did not answer')
+    expect(log.mock.calls[0]![0]).toContain('OPEN_TIMEOUT')
     // Its answer after all is a stream started for nobody: the service ends it.
     expect(streams.frame('local:w', 'agent_browser_open_result', { requestId: 'r-1', streamId: STREAM })).toBe(false)
     expect(port.streamRefused).toHaveBeenCalledExactlyOnceWith(STREAM)
@@ -464,11 +502,12 @@ describe('the core\'s own bounds on a browser stream', () => {
     expect(streams.bytes(Uint8Array.of(1, 2, 3))).toBe(false)
     expect(streams.bytes(new Uint8Array(64))).toBe(false)
     expect(log).toHaveBeenCalledOnce()
-    expect(log.mock.calls[0]![0]).toContain('cannot read (3 bytes)')
+    expect(log.mock.calls[0]![0]).toContain('INVALID_BINARY 3 bytes')
     // A frame for a stream nobody holds is the tail of one that ended: no word.
     expect(streams.bytes(screenFrame(STREAM, 0, Uint8Array.of(1)))).toBe(false)
     expect(log).toHaveBeenCalledOnce()
     streams.gone()
+    streams.reconnect()
     expect(streams.bytes(Uint8Array.of(1))).toBe(false)
     expect(log).toHaveBeenCalledTimes(2)
   })
@@ -476,8 +515,10 @@ describe('the core\'s own bounds on a browser stream', () => {
   it('logs to the console when it is given no log', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
-      const streams = createBrowserStreams({ port: () => null, frame: () => ({}), asker: () => ({ local: true, owner: true }), send: () => true, sendBinary: () => true })
-      streams.bytes(Uint8Array.of(1))
+      const relay = createClientStreams({ endpoint: () => null, disabled: () => false, wake: () => {}, send: () => true, sendBinary: () => true })
+      const sink = relay.connected('agentBrowser')!
+      relay.serving('agentBrowser')
+      sink.binary(Uint8Array.of(1))
       expect(warn).toHaveBeenCalledOnce()
     } finally {
       warn.mockRestore()

@@ -1,3 +1,4 @@
+import type { ViewersRuntime, ViewersRuntimeSlot } from './viewers.js'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
@@ -72,10 +73,10 @@ function setup(live: RegisteredSession | null = agent(), terminalAvailable = tru
   const core = fakeCore({
     agents: { byAgent: vi.fn(() => live ?? undefined), terminalAvailable: vi.fn(() => terminalAvailable), sync: vi.fn(), publishFrame: vi.fn(), follow },
   })
-  const ports = emptyPorts()
+  const ports: ViewersRuntimeSlot = { viewers: null }
   startViewers(core, ports)
   const published = (session: RegisteredSession = agent()) => { heard({ kind: 'running', session }); return vi.mocked(core.agents.publishFrame!).mock.calls.at(-1)?.[1] }
-  return { published, core, port: ports.viewers as ViewersPort, ledger: built.ledger[0], viewers: built.viewers[0], verdicts: built.verdicts[0], forwarder: built.forwarders[0], surfaces: built.surfaces[0],
+  return { published, core, port: ports.viewers as ViewersRuntime, ledger: built.ledger[0], viewers: built.viewers[0], verdicts: built.verdicts[0], forwarder: built.forwarders[0], surfaces: built.surfaces[0],
     follow, unfollow, attach: (session: RegisteredSession) => heard({ kind: 'running', session }), detach: (agentId: string) => heard({ kind: 'ended', agentId }), heard: (event: AgentLife) => heard(event) }
 }
 
@@ -282,9 +283,9 @@ describe('the DSH viewers service', () => {
       expect(forwarder.handle).toHaveBeenCalledWith('c1', 'viewer_request', { streamId: 's1' })
       // Only the viewer this service allocated, as the windows' pane forwards to it.
       expect(forwarder.deps.target('a1')).toBe('http://127.0.0.1:9/a1')
-      vi.mocked(core.clients.viewerFrame).mockReturnValueOnce(true)
+      vi.mocked(core.clients.streamFrame).mockReturnValueOnce(true)
       expect(forwarder.deps.send('c1', 'viewer_response', { streamId: 's1' })).toBe(true)
-      expect(core.clients.viewerFrame).toHaveBeenCalledWith('c1', 'viewer_response', { streamId: 's1' })
+      expect(core.clients.streamFrame).toHaveBeenCalledWith('c1', 'viewer_response', { streamId: 's1' })
     })
 
     it('renders a frame of it for a client, from the same viewer', async () => {

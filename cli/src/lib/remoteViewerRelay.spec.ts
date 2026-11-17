@@ -8,7 +8,9 @@ import { gatewayOf, relaySocket } from '../testing/relaySocket.js'
 import { attachLocalWsServer } from '../localWsServer.js'
 import { env } from '../config/env.js'
 import { DshViewerManager } from '../dsh/viewer.js'
-import { createViewerStreams } from '../core/viewerStreams.js'
+import { createClientStreams } from '../core/clientStreams.js'
+import { createServiceClientStreams } from '../services/clientStreams.js'
+import { CLIENT_STREAMS } from './clientStreamContract.js'
 import { serveViewers } from '../services/viewers.js'
 import { E2eeStore } from './e2ee/store.js'
 import { b64e, fingerprint, newIdentity } from './e2ee/core.js'
@@ -97,8 +99,25 @@ wss.on('connection', ws => ws.on('message', (data, binary) => ws.send(data, {bin
 server.listen(Number(process.env.HARNESS_VIEWER_PORT), '127.0.0.1');`)
   // The daemon's side as the core wires it: the viewers' own serving (services/viewers.ts), reached through
   // the core's streams (core/viewerStreams.ts), as with HARNESSD_SERVICES=none.
-  const served = serveViewers((agentId) => manager.forwardingUrl(agentId), (connId, type, payload) => daemon.sendViewerFrame(connId, type, payload))
-  daemon.viewerStreams = createViewerStreams(() => served, (connId, type, payload) => daemon.sendViewerFrame(connId, type, payload))
+  const served = serveViewers(agentId => manager.forwardingUrl(agentId), (connection, type, payload) => bridge.frame(connection, type, payload))
+  const bridge = createServiceClientStreams(CLIENT_STREAMS.find(spec => spec.service === 'viewers')!, () => ({
+    frame: event => served.stream(event.connection, event.type, event.payload), binary: () => false,
+    closed: served.closed, control: () => {}, refused: (grant, _id, connection) => {
+      if (connection) served.stream(connection, 'viewer_close', { streamId: grant, error: 'Viewer connection closed' })
+    },
+  }))
+  const streams = createClientStreams({ disabled: () => false, wake: () => {}, sendBinary: () => false,
+    send: (service, connection, type, payload, final) => daemon.sendStreamFrame(service, connection, type, payload, final),
+    endpoint: () => ({ frame: event => bridge.event({ kind: 'client_stream', ...event }), binary: bridge.binary,
+      closed: bridge.closed, control: () => {}, refused: (grant, streamId) => { bridge.event({ kind: 'client_stream_refused', grant, streamId }) },
+    }),
+  })
+  daemon.clientStreams = streams
+  const sink = streams.connected('viewers')!
+  streams.serving('viewers')
+  bridge.connected({ query: async () => ({ ok: true }), notice: (_kind, payload) => {
+    sink.frame(payload!.grant as string, payload!.type as string, payload!.payload as Record<string, unknown>)
+  } })
   const manager = new DshViewerManager({
     onUrl: (agentId, viewerUrl) => {
       served.refresh(agentId)

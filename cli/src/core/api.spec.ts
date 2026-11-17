@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, PAIR_WAIT_MS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WIFI_OFF, WORKSPACES_FALLBACKS, WORKSPACES_OFF, WORKSPACES_UNAVAILABLE, type CoreApiDeps } from './api.js'
+import { AGENT_BROWSER_REQUESTS, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, PAIR_WAIT_MS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WIFI_OFF, WORKSPACES_FALLBACKS, WORKSPACES_OFF, WORKSPACES_UNAVAILABLE, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 import { answerAgentQuery } from './agentQueries.js'
@@ -121,7 +121,7 @@ describe('the core API services stand on', () => {
       syncSession: vi.fn(),
       runtimeModels: vi.fn(async () => []),
       viewerChanged: vi.fn(),
-      viewerFrame: vi.fn(() => true),
+      streamFrame: vi.fn(() => true),
       gridNamed: vi.fn(),
       gridModelsChanged: vi.fn(),
       dshInstallStatus: vi.fn(),
@@ -267,13 +267,9 @@ describe('the core API services stand on', () => {
     expect(core.agents.runtimeModels).toBe(deps.runtimeModels)
     expect(core.clients.viewerChanged).toBe(deps.viewerChanged)
     // A viewer stream's frames reach a client; nothing else a viewers process names does.
-    expect(core.clients.viewerFrame('c1', 'viewer_data', { streamId: 's' })).toBe(true)
-    expect(deps.viewerFrame).toHaveBeenCalledWith('c1', 'viewer_data', { streamId: 's' })
-    expect(core.clients.viewerFrame('c1', 'agent_synced', {})).toBe(false)
-    expect(deps.viewerFrame).toHaveBeenCalledTimes(1)
-    // A core that names no browser streams offers a service none.
-    expect(core.clients.browserFrame).toBeUndefined()
-    expect(core.clients.browserBytes).toBeUndefined()
+    expect(core.clients.streamFrame('c1', 'viewer_data', { streamId: 's' })).toBe(true)
+    expect(deps.streamFrame).toHaveBeenCalledWith('c1', 'viewer_data', { streamId: 's' })
+    expect(core.clients.streamBytes).toBeUndefined()
     expect(core.clients.dshInstallStatus).toBe(deps.dshInstallStatus)
     expect(core.agents.advertised().map((s) => s.agentId)).toEqual(['live'])
     expect(core.clients.gridNamed).toBe(deps.gridNamed)
@@ -402,39 +398,17 @@ describe('the core API services stand on', () => {
     expect(createCoreApi(coreDeps()).count).toBeUndefined()
   })
 
-  // A verified machine share is `owner` too, and the browser holds its person's logins.
-  it('passes a browser stream\'s answers and bytes on, and nothing else the agent browser names', () => {
-    const browserFrame = vi.fn(() => true)
-    const browserBytes = vi.fn(() => true)
-    const core = createCoreApi({ ...coreDeps(), browserFrame, browserBytes })
-    expect(core.clients.browserFrame?.('c1', 'agent_browser_open_result', { requestId: 'r-1' })).toBe(true)
-    expect(core.clients.browserFrame?.('c1', 'agent_browser_close', { streamId: 's' })).toBe(true)
-    expect(browserFrame.mock.calls).toEqual([['c1', 'agent_browser_open_result', { requestId: 'r-1' }], ['c1', 'agent_browser_close', { streamId: 's' }]])
-    // A frame of another kind, a terminal's or a viewer's, is never the agent browser's to send a window.
-    for (const type of ['terminal_output', 'viewer_data', 'agent_synced', 'agent_browser_open']) expect(core.clients.browserFrame?.('c1', type, {}), type).toBe(false)
-    expect(browserFrame).toHaveBeenCalledTimes(2)
-    expect(core.clients.browserBytes).toBe(browserBytes)
+  it('exposes no default stream sender without a service-scoped adapter', () => {
+    const { streamFrame: _unused, ...deps } = coreDeps()
+    const core = createCoreApi(deps)
+    expect(core.clients.streamFrame('c1', 'viewer_data', {})).toBe(false)
+    expect(core.clients.streamFrame('c1', 'agent_browser_open_result', {})).toBe(false)
+    expect(core.clients.streamBytes).toBeUndefined()
   })
 
-  it('opens an agent\'s browser for this computer and the owner\'s own apps only, never a plain owner or a guest', () => {
-    expect(AGENT_BROWSER_REQUESTS).toEqual(['agent_browser_available', 'agent_browser_setup', 'agent_browser_retry',
-      'agent_browser_state', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test',
-      'agent_browser_start', 'agent_browser_stop', 'agent_browser_run', 'agent_browser_window'])
-    expect(mayOpenBrowser({ local: true, owner: true })).toBe(true)
-    expect(mayOpenBrowser({ local: false, owner: true, accountOwner: true })).toBe(true)
-    expect(mayOpenBrowser({ local: false, owner: true })).toBe(false)
-    expect(mayOpenBrowser({ local: false, owner: true, accountOwner: true, guest: 'kim@acme.io' })).toBe(false)
-    expect(mayOpenBrowser({ local: true, owner: false, guest: 'kim@acme.io' })).toBe(false)
-  })
-
-  it('tells the agent browser nothing while it is off, and its frames carry no browser', () => {
-    // Asserted member by member, not as one object, so a member added later still has to answer one of these.
-    const { stream, streamInput, ...notices } = AGENT_BROWSER_FALLBACKS
-    // Nobody took a viewer's frame: the core refuses the open at once, as when the service never started, and ends a
-    // stream whose viewer's bytes reached nobody (core/browserStreams.ts).
-    expect(stream).toBe(false)
-    expect(streamInput).toBe(false)
-    for (const [member, fallback] of Object.entries(notices)) expect(fallback, member).toBeUndefined()
+  it('passes an explicitly scoped stream byte sender through', () => {
+    const streamBytes = vi.fn(() => true)
+    expect(createCoreApi({ ...coreDeps(), streamBytes }).clients.streamBytes).toBe(streamBytes)
   })
 
   it('tells the agent cleanup nothing while it is off: every harness is left open, as before it, and none whose told lines it could not erase is deleted', () => {
@@ -574,7 +548,7 @@ describe('the core API services stand on', () => {
   })
 
   it('starts with every port empty: a service fills its own when it starts', () => {
-    expect(emptyPorts()).toEqual({ usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, connectors: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, sharedMachines: null, agentBrowser: null })
+    expect(emptyPorts()).toEqual({ usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, connectors: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, sharedMachines: null })
     expect(emptyPorts()).not.toBe(emptyPorts())
   })
 

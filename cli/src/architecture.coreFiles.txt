@@ -9,7 +9,6 @@ config/loadEnv.ts
 config/terminalConfig.ts
 config/testIsolation.ts
 core/accountQueries.ts
-core/agentBrowserLink.ts
 core/agentCleanupLink.ts
 core/agentLife.ts
 core/agentQueries.ts
@@ -49,8 +48,8 @@ core/agents/retarget.ts
 core/agents/swap.ts
 core/agents/update.ts
 core/api.ts
-core/browserStreams.ts
 core/cardText.ts
+core/clientStreams.ts
 core/cloudLink.ts
 core/connectorsLink.ts
 core/connectorsQueries.ts
@@ -147,7 +146,6 @@ core/updateHandoff.ts
 core/updaterBeside.ts
 core/usageLink.ts
 core/usageOutcomes.ts
-core/viewerStreams.ts
 core/viewersLink.ts
 core/viewersWake.ts
 core/wifi.ts
@@ -299,6 +297,8 @@ lib/cellAdvance.ts
 lib/checkpointStages.ts
 lib/childLocale.ts
 lib/claudeHomes.ts
+lib/clientStreamContract.ts
+lib/clientStreamQueue.ts
 lib/closeAgentService.ts
 lib/cloudAgents.ts
 lib/computerIdentity.ts
@@ -498,7 +498,6 @@ lib/transcriptTail.ts
 lib/turnActivity.ts
 lib/typedInput.ts
 lib/userShell.ts
-lib/viewerFrames.ts
 lib/windowSurfaces.ts
 lib/windows/claudeCodeGitBash.ts
 lib/windows/daemonPipe.ts

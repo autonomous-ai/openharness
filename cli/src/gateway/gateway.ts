@@ -1,3 +1,5 @@
+import { decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.js'
+type BrowserRoute = 'direct' | 'turn' | 'relay'
 /**
  * The gateway: everything between this machine and a remote client (docs/design/2026-10-06-core-boundary-next.md,
  * "Relay and E2EE — its own process", step 10). It holds the backend link (gateway/upstream.ts), the E2EE
@@ -14,7 +16,7 @@
  * E2EE_REQUIRED. backendSocket.spec.ts and gateway/gateway.spec.ts hold each of them.
  */
 import { env } from '../config/env.js'
-import type { BrowserRoute, GatewayEvents, GatewayPort, RemoteRole, RemoteTransport, UsageEvent } from '../core/api.js'
+import type { GatewayEvents, GatewayPort, RemoteRole, RemoteTransport, UsageEvent } from '../core/api.js'
 import { countUsage } from './usageEvents.js'
 import { launchErrorCode, type ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
 import type { LaunchErrorCode, ProductUsageMetric } from '../lib/productUsageContract.js'
@@ -121,7 +123,7 @@ export class RelayGateway implements GatewayPort {
   private readonly browserPendingOpens = new Map<string, Set<string>>()
   /**
    * Each client's agent browser streams, and the route each opened on, kept apart from the terminal's `p2pStreams`:
-   * a terminal survives a move between wires through its resync and keyframe, and VNC has neither (core/browserStreams.ts).
+   * a terminal survives a move between wires through its resync and keyframe, and VNC has neither.
    * A stream keeps its route until it closes; when the route goes, the stream ends.
    */
   private readonly browserStreams = new Map<string, Map<string, BrowserRoute>>()
@@ -455,7 +457,9 @@ export class RelayGateway implements GatewayPort {
 
   /** Pairwise-encrypted binary terminal output/keyframe. The hop prefix exposes
    * only connId and direction to the opaque backend relay. */
-  terminalBinary(connId: string, clear: TerminalBinaryClear): boolean {
+  terminalBinary(connId: string, raw: Uint8Array): boolean {
+    const clear = decodeTerminalLocal(raw)
+    if (!clear) return false
     if (clear.kind === TerminalBinaryKind.browser) return this.browserBinary(connId, clear)
     const clientFrame = this.e2ee.wrapTerminalBinary(connId, clear)
     if (!clientFrame) return false
@@ -574,7 +578,7 @@ export class RelayGateway implements GatewayPort {
       if (env.TYPING_TRACE && (clear.kind === TerminalBinaryKind.input || clear.kind === TerminalBinaryKind.paste)) {
         console.log(`[typing] in conn=${sid(connId)} stream=${sid(clear.streamId)} ${clear.kind === TerminalBinaryKind.paste ? 'paste' : `seq=${clear.seq}`} ${clear.bytes.length}B via=${via}`)
       }
-      void Promise.resolve(this.core.binary(connId, clear)).catch((err) => {
+      void Promise.resolve(this.core.binary(connId, clear, encodeTerminalLocal(clear) ?? undefined)).catch((err) => {
         console.error('[backend] binary terminal dispatch failed:', err instanceof Error ? err.message : err)
       })
     } catch (err) {
@@ -766,7 +770,7 @@ export class RelayGateway implements GatewayPort {
     // The relay dropped one of this machine's browser frames over its budget (backend lib/adapterWs.ts). It cannot
     // say whose: the stream is inside the ciphertext.
     if (type === 'agent_browser_transport_error') {
-      this.core.browserTransportError()
+      this.core.streamControl('agentBrowser', null, { kind: 'transport_error' })
       return
     }
 
@@ -1048,7 +1052,7 @@ export class RelayGateway implements GatewayPort {
     for (const streamId of lost) browser!.delete(streamId)
     if (browser?.size === 0) this.browserStreams.delete(connId)
     console.warn(`[terminal-p2p] conn=${sid(connId)} fallback=relay reason=${reason}${lost.length ? ` browser_streams_closed=${lost.length}` : ''}`)
-    for (const streamId of lost) this.core.browserRouteLost(streamId)
+    for (const streamId of lost) this.core.streamControl('agentBrowser', streamId, { streamId, route: null })
   }
 
   // ── agent browser streams, each on the route it opened on ─────────────────────────────────────────
@@ -1083,7 +1087,7 @@ export class RelayGateway implements GatewayPort {
         let streams = this.browserStreams.get(connId)
         if (!streams) { streams = new Map(); this.browserStreams.set(connId, streams) }
         streams.set(streamId, route)
-        this.core.browserRoute(streamId, route)
+        this.core.streamControl('agentBrowser', streamId, { streamId, route })
       }
     } else {
       const streams = this.browserStreams.get(connId)
@@ -1113,7 +1117,7 @@ export class RelayGateway implements GatewayPort {
     }
     const packet = sealed ? encodeTerminalHop(TerminalHopDirection.up, connId, sealed) : null
     if (packet && this.link.sendBinary(packet)) return true
-    this.core.browserRouteLost(clear.streamId)
+    this.core.streamControl('agentBrowser', clear.streamId, { streamId: clear.streamId, route: null })
     return false
   }
 

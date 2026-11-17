@@ -39,7 +39,7 @@ export type DownTransport = 'relay' | 'local' | 'p2p'
  * the second could fake an answer to its own append — neither is anything a client should be sending.
  *
  * `agent_browser_transport_error` is the relay saying it dropped one of this machine's browser frames
- * (core/browserStreams.ts): forged, it would close every relayed browser stream here.
+ * (the shared stream relay): forged, it would close every relayed browser stream here.
  */
 export const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed', 'zoo_changed', 'machines_changed', 'device_keys_changed', 'connectors_changed', 'devlog_append_result', 'agent_browser_transport_error'])
 

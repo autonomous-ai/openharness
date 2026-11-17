@@ -139,7 +139,7 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   devices: { services: ['devices', 'wifi', 'machineAddons'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 4 },
   // The agent browser (services/agentBrowserProcess.ts): its Podman calls, one `podman events` stream, an image build that
   // prints for minutes and a setup that waits on a password dialog. Chrome itself runs in Podman's containers, outside
-  // this budget. Started only once a browser is wanted here (core/agentBrowserLink.ts): a computer that never ticked
+  // this budget. Started only once a browser is wanted here (the shared stream declaration): a computer that never ticked
   // Browser never pays for it.
   // A purge and a pane's new agent are held for it while it is down: a deleted agent's login, and a pane's logins that go
   // with the pane (decision 19).

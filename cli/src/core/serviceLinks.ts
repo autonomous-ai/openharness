@@ -1,3 +1,4 @@
+import type { ClientStreamQuota } from '../lib/clientStreamQueue.js'
 /**
  * The core's end of the services that run in their own processes (harnessd/services.ts starts them).
  *
@@ -25,9 +26,9 @@ export interface ServiceFrame {
 
 /** Where frames to one service's connection go. */
 export interface ServiceSink {
-  sendFrame(frame: ServiceFrame): boolean
+  sendFrame(frame: ServiceFrame, quota?: ClientStreamQuota): boolean
   /** Bytes, for a service that carries terminals (the gateway); false when the socket refused them. */
-  sendBinary?(bytes: Uint8Array): boolean
+  sendBinary?(bytes: Uint8Array, quota?: ClientStreamQuota): boolean
   /** How many bytes are waiting on the socket to the service: a hung one stops reading, and what the core
    *  keeps sending it would pile up in the core's memory. */
   buffered?(): number
@@ -354,8 +355,8 @@ export function createServiceLinks(options: ServiceLinksOptions) {
     },
 
     /** Bytes for a service that carries terminals; false when it is not connected or would not take them. */
-    notifyBinary(service: string, bytes: Uint8Array): boolean {
-      return links.get(service)?.sink.sendBinary?.(bytes) ?? false
+    notifyBinary(service: string, bytes: Uint8Array, quota?: ClientStreamQuota): boolean {
+      return links.get(service)?.sink.sendBinary?.(bytes, quota) ?? false
     },
 
     /** How many bytes wait on the socket to a service; 0 when it is not connected. */
@@ -365,8 +366,8 @@ export function createServiceLinks(options: ServiceLinksOptions) {
 
     /** Tell a service something it needs to know; false when it is not connected to hear it. With
      *  `untilDelivered`, what it misses is said again when it next connects. */
-    notify(service: string, frame: ServiceFrame, opts: { untilDelivered?: boolean } = {}): boolean {
-      if (links.get(service)?.sink.sendFrame(frame)) return true
+    notify(service: string, frame: ServiceFrame, opts: { untilDelivered?: boolean; quota?: ClientStreamQuota } = {}): boolean {
+      if (links.get(service)?.sink.sendFrame(frame, opts.quota)) return true
       if (opts.untilDelivered && Object.hasOwn(options.owned, service)) {
         const owed = held.get(service) ?? []
         owed.push(frame)

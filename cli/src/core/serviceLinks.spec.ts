@@ -103,7 +103,14 @@ describe('service links', () => {
     link.receiveBinary(Uint8Array.of(7))
     expect(binary).toHaveBeenCalledWith('gateway', Uint8Array.of(7))
     expect(links.notifyBinary('gateway', Uint8Array.of(2))).toBe(true)
-    expect(gateway.sendBinary).toHaveBeenCalledWith(Uint8Array.of(2))
+    expect(gateway.sendBinary).toHaveBeenCalledWith(Uint8Array.of(2), undefined)
+    const quota = { service: 'agentBrowser', direction: 'service' } as const
+    const raw = Uint8Array.of(3)
+    expect(links.notifyBinary('gateway', raw, quota)).toBe(true)
+    expect(gateway.sendBinary).toHaveBeenLastCalledWith(raw, quota)
+    const frame = { type: 'service_event', payload: { kind: 'client_stream' } }
+    expect(links.notify('gateway', frame, { quota })).toBe(true)
+    expect(gateway.sendFrame).toHaveBeenLastCalledWith(frame, quota)
     expect(links.buffered('gateway')).toBe(42)
     link.closed()
     expect(disconnected).toHaveBeenCalledWith('gateway')

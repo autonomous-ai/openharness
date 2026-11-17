@@ -81,7 +81,7 @@ export function searchCoreApi(
       ...ACCOUNT_BACKEND_OFF,
       ...UNASKED.account,
     },
-    clients: { viewerChanged: () => {}, viewerFrame: () => false, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {}, observer: () => false, ...UNASKED.clients },
+    clients: { viewerChanged: () => {}, streamFrame: () => false, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {}, observer: () => false, ...UNASKED.clients },
     daemon: DAEMON_UNKNOWN,
     wifi: UNASKED.wifi,
   }

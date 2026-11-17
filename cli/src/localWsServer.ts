@@ -1,3 +1,4 @@
+import { createClientStreamQueue, type ClientStreamQuota } from './lib/clientStreamQueue.js'
 import { randomUUID } from 'node:crypto'
 import type { AppSwarms } from './cable/cableSession.js'
 import { notificationReadToken, type UnreadNotification } from './lib/notificationRead.js'
@@ -12,6 +13,7 @@ import { localCredentialMatches } from './lib/localCredential.js'
 import { peerIsThisAccount, type PeerAccount } from './lib/peerAccount.js'
 import type { Frame, LocalClientSink } from './backendSocket.js'
 import {
+  clientStreamLocalFrame,
   decodeTerminalLocal,
   TERMINAL_BINARY_VERSION,
   TERMINAL_LOCAL_PASTE_MAX_PAYLOAD_BYTES,
@@ -44,7 +46,7 @@ export interface LocalWsBackend {
   registerLocalClient: (connId: string, sink: LocalClientSink, opts?: { tool?: boolean; surface?: 'tui'; watch?: readonly 'dial'[] }) => boolean
   unregisterLocalClient: (connId: string) => Promise<void>
   handleLocalFrame: (connId: string, frame: Frame) => void
-  handleLocalBinary: (connId: string, frame: TerminalBinaryClear) => Promise<void>
+  handleLocalBinary: (connId: string, frame: TerminalBinaryClear, raw?: Uint8Array) => Promise<void>
   /** The agent this window has focused, or null — which of its terminals gets the short output window. */
   setLocalTerminalFocus?: (connId: string, agentId: string | null, visibleAgents?: readonly string[]) => void
   /** hn's `product_observe`, from a connection on this computer's own socket bound to this machine. */
@@ -243,6 +245,7 @@ function withLocalClient(frame: Frame, localClient: LocalWsServerOptions['localC
 export const LOCAL_WS_CLOSE_GRACE_MS = 1_000
 
 export function attachLocalWsServer(server: http.Server, options: LocalWsServerOptions): LocalWsServer {
+  const streamQueue = createClientStreamQueue()
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: MAX_WS_MESSAGE_BYTES,
@@ -330,21 +333,43 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     /** Set when this connection is one of the core's services, not a window. */
     let serviceLink: { receive(frame: Frame): void; receiveBinary(bytes: Uint8Array): void; closed(): void } | null = null
 
+    const refusedStream = (quota: ClientStreamQuota): false => {
+      if (quota.direction === 'service') {
+        // Revoke authority now. Actual queued bytes stay charged until the physical socket releases them.
+        serviceLink?.closed()
+        serviceLink = null
+        close(1013, 'Stream queue full')
+      } else if (quota.final) close(1013, 'Stream queue full')
+      return false
+    }
+    const queued = streamQueue.connection()
+    ws.once('close', () => queued.close())
     const sink: LocalClientSink = {
-      sendFrame: (frame) => {
+      sendFrame: (frame, quota) => {
         if (ws.readyState !== WebSocket.OPEN) return false
-        try { ws.send(JSON.stringify(frame)); return true } catch { return false }
+        const serialized = JSON.stringify(frame)
+        const release = quota ? queued.reserve(quota, Buffer.byteLength(serialized)) : undefined
+        if (release === null) return refusedStream(quota!)
+        try {
+          ws.send(serialized, (error) => { release?.(); if (error) ws.terminate() })
+          return true
+        } catch { release?.(); return false }
       },
-      sendBinary: (frame) => {
+      sendBinary: (frame, quota) => {
         if (ws.readyState !== WebSocket.OPEN) return false
-        try { ws.send(frame, { binary: true }); return true } catch { return false }
+        const release = quota ? queued.reserve(quota, frame.length) : undefined
+        if (release === null) return refusedStream(quota!)
+        try {
+          ws.send(frame, { binary: true }, (error) => { release?.(); if (error) ws.terminate() })
+          return true
+        } catch { release?.(); return false }
       },
     }
     // A reading cursor belongs to this physical desk. A terminal's upstream
     // event feed cannot manufacture device gestures; only sendToWindow can.
     const terminalSink: LocalClientSink = {
       ...sink,
-      sendFrame: (frame) => frame.type === 'dial_selection' || frame.type === 'dial_visit' || frame.type === 'dial_form' || sink.sendFrame(frame),
+      sendFrame: (frame, quota) => frame.type === 'dial_selection' || frame.type === 'dial_visit' || frame.type === 'dial_form' || sink.sendFrame(frame, quota),
     }
 
     const close = (code: number, reason: string): void => {
@@ -726,9 +751,10 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         }
 
         if (isBinary) {
-          const frame = decodeTerminalLocal(binaryBytes(raw))
+          const bytes = binaryBytes(raw)
+          const frame = clientStreamLocalFrame(bytes) ?? decodeTerminalLocal(bytes)
           if (!frame) { close(4400, 'invalid terminal frame'); return }
-          return options.backend.handleLocalBinary(connId, frame)
+          return options.backend.handleLocalBinary(connId, frame, bytes)
         }
         if (!parsed) { close(4400, 'invalid json frame'); return }
         options.backend.handleLocalFrame(connId, parsed)

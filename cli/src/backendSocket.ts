@@ -1,3 +1,6 @@
+import { CLIENT_STREAMS } from './lib/clientStreamContract.js'
+const STREAM_TRANSPORTS = new Map(CLIENT_STREAMS.map(spec => [spec.service, spec.transport]))
+import type { ClientStreamQuota } from './lib/clientStreamQueue.js'
 import type { DeliveryOptions } from './core/api.js'
 import type { MessageReceipt } from './lib/sessionInput.js'
 import { isLocalOnly, withoutUpdate } from './lib/cardUpdate.js'
@@ -6,8 +9,7 @@ import type { PurgeAgentService } from './lib/purgeAgentService.js'
 import { MESSAGES_REQUESTS, SHARE_REQUESTS, type Asker, type LocalWindows, type WindowSurface, type BackendNotice, type GatewayEvents, type GatewayPort, type ModelsPort, type RemoteClient, type RemoteRole, type RemoteTransport, type TabFrame } from './core/api.js'
 import { ServiceUnavailableError } from './core/serviceHost.js'
 import { countWindows } from './lib/windowSurfaces.js'
-import type { ViewerStreams } from './core/viewerStreams.js'
-import type { BrowserStreams } from './core/browserStreams.js'
+import type { ClientStreams } from './core/clientStreams.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { MonitorCompletions } from './lib/harnessMonitor.js'
 import type { WifiCore } from './core/wifi.js'
@@ -42,7 +44,6 @@ import { createUsageOutcomes } from './core/usageOutcomes.js'
 import type { AgentTokenUsage } from './lib/agentUsageWire.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
 import { OwnerCommands, ROUTE_COMMAND_TYPES } from './lib/ownerCommands.js'
-import { VIEWER_DOWN_TYPES } from './lib/viewerFrames.js'
 import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { decodeTerminalLocal, encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from './lib/terminalBinary.js'
 import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSafeType, PAIR_REQUESTS, PLATE_REQUEST, rpcResultType, type DownTransport } from './lib/relayFrames.js'
@@ -81,8 +82,8 @@ const logged = (frame: Frame): boolean => env.LOG_FRAMES && !String(frame.type).
 export type Frame = Record<string, unknown>
 
 export interface LocalClientSink {
-  sendFrame: (frame: Frame) => boolean
-  sendBinary: (frame: Uint8Array) => boolean
+  sendFrame: (frame: Frame, quota?: ClientStreamQuota) => boolean
+  sendBinary: (frame: Uint8Array, quota?: ClientStreamQuota) => boolean
 }
 
 export class BackendSocket {
@@ -135,7 +136,7 @@ export class BackendSocket {
   /** The windows that are `harness tui`, not the desktop app: each surface is its own presence. */
   private readonly tuiClients = new Set<string>()
   private terminalStreams: TerminalStreamManager | null = null
-  private browserStreams: BrowserStreams | null = null
+  clientStreams: ClientStreams | null = null
   private onStatus: (connected: boolean) => void
   /** Cross-instance commander (device) client count, as the gateway reads it from the backend. */
   private commanderCount = 0
@@ -234,12 +235,20 @@ export class BackendSocket {
   waitingForProvider: ((session: RegisteredSession) => 'engine' | null) | null = null
   /** Captures a run's service projection before asynchronous frame work. */
   framePartsProvider: ((session: RegisteredSession) => () => Readonly<Record<string, unknown>>) | null = null
-  /** This machine's viewers, served to a client over its connection: the viewers' (core/viewerStreams.ts). */
-  viewerStreams: ViewerStreams | null = null
-  /** A viewer stream's frame to the one connection that opened it: false when it cannot reach it. */
-  sendViewerFrame(connId: string, type: string, payload: Record<string, unknown>): boolean {
-    if (this.localClients.has(connId)) { this.sendTo(connId, { type, payload }); return true }
-    return this.throughGateway('viewer', (gateway) => gateway.target(connId, type, payload), false)
+  /** The viewers' rendered surfaces are bounded requests; stream routing is shared. */
+  viewerSurface: ((connId: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>) | null = null
+  sendStreamFrame(service: string, connId: string, type: string, payload: Record<string, unknown>, final = false): boolean {
+    const quota: ClientStreamQuota = { service, direction: 'client', final }
+    if (STREAM_TRANSPORTS.get(service) === 'target') return this.sendTargetFrame(connId, type, payload, quota)
+    const local = this.localClients.get(connId)
+    if (local) return local.sendFrame({ type, payload }, quota)
+    return this.throughGateway('stream', gateway => gateway.terminal(connId, type, payload, quota), false)
+  }
+  sendStreamBinary(service: string, connId: string, frame: Uint8Array): boolean {
+    const quota: ClientStreamQuota = { service, direction: 'client' }
+    const local = this.localClients.get(connId)
+    if (local) return local.sendBinary(frame, quota)
+    return this.throughGateway('stream', gateway => gateway.terminalBinary(connId, frame, quota), false)
   }
   readonly ownerCommands = new OwnerCommands()
   /** Takes back a delivered turn not yet being written (core/deliveries.ts, cli.ts binds core/input.ts). */
@@ -435,7 +444,7 @@ export class BackendSocket {
    */
   readonly fromGateway: GatewayEvents = {
     frame: (connId, frame, transport, role) => this.enqueueDown(frame, connId, transport, role),
-    binary: (connId, clear) => this.enqueueTerminalBinary(connId, clear),
+    binary: (connId, clear, raw) => this.enqueueTerminalBinary(connId, clear, raw),
     client: (connId, client) => {
       this.wifi?.session(connId, client)
       if (client) {
@@ -450,14 +459,12 @@ export class BackendSocket {
         return
       }
       if (!this.remoteClients.delete(connId)) return
-      this.viewerStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
-      this.browserStreams?.closeConnection(connId)
+      this.clientStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
     },
     disconnected: async (connId) => {
       this.wifi?.dropped(connId)
       this.remoteClients.delete(connId)
-      this.viewerStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
-      this.browserStreams?.closeConnection(connId)
+      this.clientStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
       await this.terminalStreams?.closeConnection(
         connId,
         'client connection closed',
@@ -475,8 +482,7 @@ export class BackendSocket {
     },
     linkDown: () => {
       this.observers?.closeAll()
-      this.viewerStreams?.closedAll(); this.ownerCommands.closeAll(); for (const connId of this.remoteClients.keys()) this.onConnectionClosed?.(connId)
-      for (const connId of this.remoteClients.keys()) this.browserStreams?.closeConnection(connId)
+      this.clientStreams?.closed(); this.ownerCommands.closeAll(); for (const connId of this.remoteClients.keys()) this.onConnectionClosed?.(connId)
       void this.terminalStreams?.closeConnectionsWhere(
         (connId) => !isLocalClientId(connId),
         'backend disconnected',
@@ -509,9 +515,10 @@ export class BackendSocket {
     deviceRevoked: (identity) => this.wifi?.revoked(identity),
     toWindows: (frame) => this.sendLocal(frame),
     tabFrame: (event) => this.onTabFrame?.(event),
-    browserRoute: (streamId, route) => this.browserStreams?.route(streamId, route),
-    browserRouteLost: (streamId) => this.browserStreams?.routeLost(streamId),
-    browserTransportError: () => this.browserStreams?.transportError(),
+    streamControl: (service, streamId, payload) => {
+      if (streamId === null) this.clientStreams?.control('gateway', service, null, payload)
+      else this.clientStreams?.controlStream('gateway', streamId, payload)
+    },
   }
 
   /** The Wi-Fi device's sessions and requests, as the gateway hands them on, for its service with the
@@ -529,9 +536,7 @@ export class BackendSocket {
     this.terminalStreams = manager
   }
 
-  setBrowserStreams(streams: BrowserStreams): void {
-    this.browserStreams = streams
-  }
+
 
   /** The account's private harness grid name, as the backend last reported it. Null until the first
    *  `machine_meta` lands, or when this account has none yet. */
@@ -579,7 +584,7 @@ export class BackendSocket {
     this.closed = true
     this.sharesNotice.stop()
     this.closeAgentService?.dispose()
-    this.viewerStreams?.closedAll(); this.ownerCommands.closeAll()
+    this.clientStreams?.closed(); this.ownerCommands.closeAll()
     await this.terminalStreams?.stop()
     await this.gatewayPort?.stop()
   }
@@ -716,24 +721,20 @@ export class BackendSocket {
     return this.throughGateway('terminal', (gateway) => gateway.terminal(connId, type, payload), false)
   }
 
-  /** Binary terminal output/keyframe: in the clear to a window here, sealed by the gateway for anyone else. */
-  sendTerminalBinaryTo(connId: string, clear: TerminalBinaryClear): boolean {
+  /** A bounded client response uses the gateway's target door, which refuses while its relay is down. */
+  sendTargetFrame(connId: string, type: string, payload: Record<string, unknown>, quota?: ClientStreamQuota): boolean {
     const local = this.localClients.get(connId)
-    if (local) {
-      const frame = encodeTerminalLocal(clear)
-      return frame ? local.sendBinary(frame) : false
-    }
-    return this.throughGateway('terminal', (gateway) => gateway.terminalBinary(connId, clear), false)
+    if (local) return local.sendFrame({ type, payload }, quota)
+    return this.throughGateway('target', gateway => gateway.target(connId, type, payload, quota), false)
   }
 
-  /** A frame already on a window's wire (`encodeTerminalLocal`): as it is to a window here, and read for the gateway,
-   *  which seals it for another machine. A browser stream's screen, framed once by its service (core/browserStreams.ts).
-   *  False when it reached nobody, or is no such frame. */
-  sendTerminalLocalFrameTo(connId: string, frame: Uint8Array): boolean {
+  /** Binary terminal output/keyframe: in the clear to a window here, sealed by the gateway for anyone else. */
+  sendTerminalBinaryTo(connId: string, clear: TerminalBinaryClear): boolean {
+    const frame = encodeTerminalLocal(clear)
+    if (!frame) return false
     const local = this.localClients.get(connId)
     if (local) return local.sendBinary(frame)
-    const clear = decodeTerminalLocal(frame)
-    return clear ? this.throughGateway('terminal', (gateway) => gateway.terminalBinary(connId, clear), false) : false
+    return this.throughGateway('terminal', gateway => gateway.terminalBinary(connId, frame), false)
   }
 
   /** Send a user-level notification to every logged-in browser that owns this machine. */
@@ -829,12 +830,11 @@ export class BackendSocket {
     this.dialWatchers.delete(connId)
     this.tuiClients.delete(connId)
     this.rowStateWindows.delete(connId)
-    this.viewerStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
+    this.clientStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
     // The last one leaving before any link could hear it attach: nothing happened, as far as the backend
     // is concerned, and the gateway does not tell a later link otherwise.
     this.gatewayPort?.localClients(this.localWindows())
     this.downChains.delete(connId)
-    this.browserStreams?.closeConnection(connId)
     await this.terminalStreams?.closeConnection(connId, 'local client disconnected', false)
   }
 
@@ -858,9 +858,9 @@ export class BackendSocket {
   }
 
   /** Route an authenticated local terminal frame without applying cloud E2EE. */
-  async handleLocalBinary(connId: string, frame: TerminalBinaryClear): Promise<void> {
+  async handleLocalBinary(connId: string, frame: TerminalBinaryClear, raw?: Uint8Array): Promise<void> {
     if (!this.localClients.has(connId)) return
-    if (frame.kind === TerminalBinaryKind.browser) { this.browserStreams?.input(connId, frame.streamId, frame.bytes); return }
+    if (raw && this.clientStreams?.binary(connId, raw)) return
     await this.terminalStreams?.handleBinary(connId, frame)
   }
 
@@ -941,9 +941,9 @@ export class BackendSocket {
    * phone now does not either. A paste still holds the keystrokes typed after it, and an upload's chunks
    * stay in line with its begin and cancel.
    */
-  private enqueueTerminalBinary(connId: string, clear: TerminalBinaryClear): Promise<void> {
+  private enqueueTerminalBinary(connId: string, clear: TerminalBinaryClear, raw?: Uint8Array): Promise<void> {
     // A viewer's keys and mouse, written at once in the order they came: the stream's exec waits on nothing else.
-    if (clear.kind === TerminalBinaryKind.browser) { this.browserStreams?.input(connId, clear.streamId, clear.bytes); return Promise.resolve() }
+    if (raw && this.clientStreams?.binary(connId, raw)) return Promise.resolve()
     const traced = env.TYPING_TRACE && clear.kind === TerminalBinaryKind.input
     const queuedAt = traced ? performance.now() : 0
     return this.inStreamLane(connId, clear.streamId, async () => {
@@ -1091,7 +1091,7 @@ export class BackendSocket {
     if (type === 'viewer_surface') {
       if (!owner) return
       // Rendering and input never hold up terminal traffic on the ordered machine queue.
-      void (this.viewerStreams?.surface(connId, payload) ?? Promise.reject(new Error('no viewers')))
+      void (this.viewerSurface?.(connId, payload) ?? Promise.reject(new Error('no viewers')))
         .then(result => reply(type, requestId, result))
         .catch(() => reply(type, requestId, { error: 'VIEWER_UNAVAILABLE' }))
       return
@@ -1104,16 +1104,7 @@ export class BackendSocket {
       return
     }
 
-    if (type.startsWith('viewer_')) {
-      if (VIEWER_DOWN_TYPES.has(type) && owner) this.viewerStreams?.frame(connId, type, payload)
-      return
-    }
-
-    // An agent browser's stream, which is its service's: handed on by core/browserStreams.ts, which decides who may open
-    // one and holds each to the connection that opened it. Its route is the gateway's.
-    if (type === 'agent_browser_open') { this.browserStreams?.open(connId, payload); return }
-    if (type === 'agent_browser_ack') { this.browserStreams?.ack(connId, payload); return }
-    if (type === 'agent_browser_close') { this.browserStreams?.close(connId, payload); return }
+    if (this.clientStreams?.handles(type) && this.clientStreams.frame(connId, type, payload, { ...this.askerFor(connId), local, owner })) return
 
     // Which of a remote client's terminal streams ride its P2P channel is the gateway's, which noted this
     // frame's route as it opened it.

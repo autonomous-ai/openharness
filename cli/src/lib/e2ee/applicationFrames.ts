@@ -19,7 +19,7 @@ import { ROUTE_COMMAND_TYPES, PAIR_REQUESTS, PLATE_REQUEST, PLATE_RESULT, rpcRes
 // (lib/relayFrames.ts), which load no cipher; this stays the one place every extension is listed.
 export { ROUTE_COMMAND_TYPES, PAIR_REQUESTS, PLATE_REQUEST, PLATE_RESULT, rpcResultType }
 
-/** An agent browser's stream (core/browserStreams.ts): JSON control beside its binary `browser` kind. Pairwise sealed
+/** An agent browser's stream: JSON control beside its binary `browser` kind. Pairwise sealed
  * both ways, so the relay routes them by type and connection and never sees the agent, the stream or the reason.
  * Not `browser_open`: that is a pane's BROWSER shim opening a URL (agentClient/openUrl.ts). */
 export const AGENT_BROWSER_DOWN_TYPES = new Set(['agent_browser_open', 'agent_browser_ack', 'agent_browser_close'])

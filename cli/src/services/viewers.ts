@@ -1,3 +1,4 @@
+import type { ClientStreamEndpoint } from '../lib/clientStreamContract.js'
 /**
  * A DSH agent has two things beside its pane that the daemon owns for as long as the agent exists:
  * its viewer server (a URL the desktop shows in a pane next to the terminal) and a watch on the
@@ -15,7 +16,7 @@
  * only through `CoreApi`, and the core reaches it only through `ports.viewers`.
  */
 import { join } from 'node:path'
-import { VIEWERS_FOLLOW, type AgentView, type CoreApi, type CorePorts } from '../core/api.js'
+import { VIEWERS_FOLLOW, type AgentView, type CoreApi, type ViewersPort } from '../core/api.js'
 import { env } from '../config/env.js'
 import { catalogEntry } from '../dsh/catalog.js'
 import { installedDsh } from '../dsh/installed.js'
@@ -34,7 +35,7 @@ import { ViewerForwarder } from '../lib/viewerForwarder.js'
 export function serveViewers(
   /** Where an agent's viewer is served now, or null. */
   target: (agentId: string) => string | null,
-  /** A stream's frame to the one connection that opened it (`CoreApi.clients.viewerFrame`). */
+  /** A stream's frame to the one connection that opened it (`CoreApi.clients.streamFrame`). */
   send: (connId: string, type: string, payload: Record<string, unknown>) => boolean,
 ) {
   const forwarder = new ViewerForwarder({ target, send })
@@ -58,7 +59,13 @@ export function serveViewers(
   }
 }
 
-export function startViewers(core: CoreApi, ports: CorePorts): void {
+export interface ViewersRuntime extends ViewersPort {
+  stream(connection: string, type: string, payload: Record<string, unknown>): boolean
+  closed(connection?: string): void
+}
+export interface ViewersRuntimeSlot { viewers: ViewersRuntime | null }
+
+export function startViewers(core: CoreApi, ports: ViewersRuntimeSlot): void {
   const sessions = new Map<string, AgentView>()
   const dshFrames = new Map<string, { viewerUrl: string | null; verdict: DshVerdict | null }>()
   const dshFrameFor = (agentId: string): { viewerUrl: string | null; verdict: DshVerdict | null } => {
@@ -99,7 +106,7 @@ export function startViewers(core: CoreApi, ports: CorePorts): void {
   // restart. Only pids whose live start time matches what that daemon recorded are touched.
   const viewerLedger = new ViewerLedger({ log: (line) => console.log(line) })
   viewerLedger.reapOrphans()
-  const served = serveViewers((agentId) => dshViewers.forwardingUrl(agentId), (connId, type, payload) => core.clients.viewerFrame(connId, type, payload))
+  const served = serveViewers((agentId) => dshViewers.forwardingUrl(agentId), (connId, type, payload) => core.clients.streamFrame(connId, type, payload))
   const dshViewers = new DshViewerManager({
     onUrl: (agentId, url) => {
       dshFrameFor(agentId).viewerUrl = url
@@ -176,5 +183,17 @@ export function startViewers(core: CoreApi, ports: CorePorts): void {
     stream: served.stream,
     surface: served.surface,
     closed: served.closed,
+  }
+}
+
+export function viewerStreamEndpoint(port: ViewersRuntime): ClientStreamEndpoint {
+  return {
+    frame: event => port.stream(event.connection, event.type, event.payload),
+    binary: () => false,
+    closed: connection => port.closed(connection),
+    control: () => {},
+    refused: (grant, _streamId, connection) => {
+      if (connection !== undefined) port.stream(connection, 'viewer_close', { streamId: grant, error: 'Viewer connection closed' })
+    },
   }
 }

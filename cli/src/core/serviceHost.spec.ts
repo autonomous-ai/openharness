@@ -24,7 +24,7 @@ const SEARCH = {
 const testPort = (h: { ports: CorePorts }): TestPort => h.ports.search as unknown as TestPort
 const VIEWERS: PortFallbacks<ViewersPort> = {
   forwardingUrl: null, stop: later(undefined),
-  stream: false, surface: later({}), closed: undefined,
+  surface: later({}),
 }
 /** The viewer streams' members, which these tests never call. */
 const STREAMS = { stream: vi.fn(() => true), surface: vi.fn(async () => ({})), closed: vi.fn() }

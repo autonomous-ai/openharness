@@ -19,7 +19,7 @@ import { databaseHistory } from '../engines/storeHistory.js'
 import { liveFor } from '../engines/live.js'
 import { runtimeFor } from '../engines/runtime.js'
 import { startGateway } from '../gateway/start.js'
-import { startAgentBrowser } from './agentBrowser.js'
+import { startInlineClientStreams } from './inlineClientStreams.js'
 import { startAgentCleanup } from './agentCleanup.js'
 import { startMemory } from './memory.js'
 import { startConnectors } from './connectors.js'
@@ -44,7 +44,6 @@ import { startSharedMachines } from './sharedMachines.js'
 import { startSharing } from './sharing.js'
 import { startStoreInCore } from './store.js'
 import { startUsageInCore } from './usage.js'
-import { startViewers } from './viewers.js'
 import { startWifi } from './wifi.js'
 import { startWindowNames } from './windowNames.js'
 import { startGoals } from './goals.js'
@@ -53,6 +52,6 @@ import { startWorkspaces } from './workspaces.js'
 
 describe('the services the core runs in its own process only when they do not run in theirs', () => {
   it('are their own starts, unchanged: the same services either way', () => {
-    expect({ ...inline }).toEqual({ RuntimeProfileState, preloadEngine, hermesBackground, exportDatabase, otherEngineRequests, createInlineHistory, createServiceHost, inlineSharedMachinesPort, databaseHistory, liveFor, runtimeFor, screenFor, submissionFor, nativeControlFor, backgroundJobFor, providerMoveFor, prepareResume, modelControlFor, questionControlFor, createLocalNativeSetup, startAgentBrowser, startAgentCleanup, startCloud, startConnectors, startDevices, startEngineProbe, startGoals, startHachiInCore, startHandoff, startGateway, startMemory, startModels, startMonitor, startOrchestrator, startOsDevice, startMachineAddons, startProjects, startRecaps, startRouter, startSearch, startSharedMachines, startSharing, startShell, startStoreInCore, startMessagesInCore, startUsageInCore, startViewers, startWifi, startWindowNames, startWorkspaces })
+    expect({ ...inline }).toEqual({ RuntimeProfileState, preloadEngine, hermesBackground, exportDatabase, otherEngineRequests, createInlineHistory, createServiceHost, inlineSharedMachinesPort, databaseHistory, liveFor, runtimeFor, screenFor, submissionFor, nativeControlFor, backgroundJobFor, providerMoveFor, prepareResume, modelControlFor, questionControlFor, createLocalNativeSetup, startInlineClientStreams, startAgentCleanup, startCloud, startConnectors, startDevices, startEngineProbe, startGoals, startHachiInCore, startHandoff, startGateway, startMemory, startModels, startMonitor, startOrchestrator, startOsDevice, startMachineAddons, startProjects, startRecaps, startRouter, startSearch, startSharedMachines, startSharing, startShell, startStoreInCore, startMessagesInCore, startUsageInCore, startWifi, startWindowNames, startWorkspaces })
   })
 })

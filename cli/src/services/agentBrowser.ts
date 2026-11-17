@@ -39,7 +39,8 @@ import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { availableParallelism, totalmem } from 'node:os'
 import { join, resolve } from 'node:path'
-import { AGENT_BROWSER_REQUESTS, mayOpenBrowser, type AgentLife, type AgentView, type Asker, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
+import { AGENT_BROWSER_REQUESTS, type AgentLife, type AgentView, type Asker, type CoreApi, type ServiceRequests } from '../core/api.js'
+import { mayOpenBrowser, type BrowserRuntimeSlot } from './agentBrowserRuntime.js'
 import { sweepAgentTmpWhenDue } from '../lib/agentTmp.js'
 import { browserTools } from '../lib/browserToolsAsset.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
@@ -136,9 +137,12 @@ function named(error: unknown): Reply {
  * Windows is not in v1 (spec § Later: Windows): WSL 2 could not be tested on any runner or VM we have. Nothing here
  * runs Podman, the port tells the core no agent has a browser, and every request says so.
  */
-function unsupported(ports: Pick<CorePorts, 'agentBrowser'>): ServiceRequests {
+function unsupported(core: CoreApi, ports: BrowserRuntimeSlot): ServiceRequests {
   ports.agentBrowser = {
-    stream: () => false,
+    stream: (connection, type, payload) => {
+      if (type !== 'agent_browser_open' || typeof payload.requestId !== 'string') return false
+      return core.clients.streamFrame(connection, 'agent_browser_open_result', { requestId: payload.requestId, error: 'NO_BROWSER' })
+    },
     streamInput: () => false,
     streamClosed: () => {},
     streamRoute: () => {},
@@ -151,9 +155,9 @@ function unsupported(ports: Pick<CorePorts, 'agentBrowser'>): ServiceRequests {
     : { error: NAMED_ON_WINDOWS.has(type) ? 'NOT_ON_WINDOWS' : 'UNSUPPORTED' })]))
 }
 
-export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBrowser'>, options: AgentBrowserOptions = {}): ServiceRequests {
+export function startAgentBrowser(core: CoreApi, ports: BrowserRuntimeSlot, options: AgentBrowserOptions = {}): ServiceRequests {
   const platform = options.platform ?? process.platform
-  if (platform === 'win32') return unsupported(ports)
+  if (platform === 'win32') return unsupported(core, ports)
   const podman = options.podman ?? createPodman()
   const now = options.now ?? (() => new Date())
   const log = (line: string) => console.log(line)
@@ -185,7 +189,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
   /**
    * The viewers' streams of this machine's browsers (agentBrowser/streams.ts). Each is this service's own exec into a
    * ready browser's container; its answers and the screen's bytes go to the core, which holds each to the connection
-   * that opened the stream (core/browserStreams.ts). Until the audit of 2026-11-12 the core ran these itself.
+   * that opened the stream through its shared relay. Until the audit of 2026-11-12 the core ran these itself.
    */
   const streams = new BrowserStreamManager({
     exec: (agentId) => {
@@ -199,12 +203,12 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       // published port), so a viewer's bytes reach it through this exec.
       return { spawn: () => podman.spawn(containers.execArgs(profile, VNC_PIPE)) }
     },
-    sendTarget: (connId, type, payload) => core.clients.browserFrame?.(connId, type, payload) ?? false,
+    sendTarget: (connId, type, payload) => core.clients.streamFrame?.(connId, type, payload) ?? false,
     // Framed once, here, as a window is sent it: the core sends it on as it is, to the connection it holds the stream
     // for, whichever this names.
     sendBinaryTarget: (_connId, frame) => {
       const encoded = encodeTerminalLocal(frame)
-      return !!encoded && (core.clients.browserBytes?.(encoded) ?? false)
+      return !!encoded && (core.clients.streamBytes?.(encoded) ?? false)
     },
     measure: count,
     pacing: { bytesPerSecond: BROWSER_PACING_BYTES_PER_SECOND },
@@ -368,7 +372,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
   })
   /** A purged agent with no entry may still have been turned on, or taken in: nothing of it stays. The file is written
    *  only when it holds something of it: a purge of an agent that never had a Browser makes no state file, which would
-   *  start this service's process at every start of the core (core/agentBrowserLink.ts `wakeAgentBrowser`). */
+   *  start this service's process at every start of the core through the shared saved-state wake declaration. */
   const forget = (agentId: string): void => {
     try {
       const saved = state.read()
@@ -417,7 +421,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
     },
     // Taken, as the stream's own process: one that ended meanwhile hears its close come back.
     streamInput: (streamId, bytes) => { streams.input(streamId, bytes); return true },
-    streamClosed: connId => streams.closeConnection(connId),
+    streamClosed: connId => { if (connId === undefined) streams.closeAll(); else streams.closeConnection(connId) },
     streamRoute: (streamId, route) => (route ? streams.route(streamId, route) : streams.routeLost(streamId)),
     streamTransportError: () => streams.transportError(),
     streamRefused: streamId => streams.refused(streamId),

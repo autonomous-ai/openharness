@@ -1,3 +1,4 @@
+import type { ClientStreamQuota } from '../lib/clientStreamQueue.js'
 /**
  * The gateway in its own process, as the core sees it (docs/design/2026-10-06-core-boundary-next.md, step
  * 10, R2; the process's side is gateway/gatewayProcess.ts). The relay, the E2EE sessions and every key
@@ -18,7 +19,7 @@
  */
 import { RelayConnectError } from '../lib/relayFrames.js'
 import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS } from '../lib/gatewayWire.js'
-import { decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.js'
+import { clientStreamLocalFrame, decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.js'
 import { currentToken, RENEWAL_WAIT_MS, tokenOf } from '../lib/authSession.js'
 import { guestMachineList, withStaleMarker } from '../lib/machineListReply.js'
 import { PAIR_WAIT_MS, type GatewayMachines } from './api.js'
@@ -34,8 +35,8 @@ export interface GatewayLinkDeps {
   /** The core's side of what the gateway tells it (BackendSocket's `fromGateway`). */
   events: GatewayEvents
   /** The service link to the gateway (core/serviceLinks.ts, for `gateway`). */
-  notify(frame: ServiceFrame): boolean
-  notifyBinary(bytes: Uint8Array): boolean
+  notify(frame: ServiceFrame, quota?: ClientStreamQuota): boolean
+  notifyBinary(bytes: Uint8Array, quota?: ClientStreamQuota): boolean
   buffered(): number
   call(type: string, payload: Record<string, unknown>, waitMs?: number): Promise<Record<string, unknown>>
   /** What the gateway starts from each time it connects: this machine's ids, whether it is signed in. */
@@ -122,8 +123,8 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
   let droppedSaidAt = -Infinity
   let droppedUnsaid = 0
 
-  const send = (kind: string, payload: Record<string, unknown> = {}): boolean =>
-    up && deps.notify({ type: 'service_event', payload: { ...payload, kind } })
+  const send = (kind: string, payload: Record<string, unknown> = {}, quota?: ClientStreamQuota): boolean =>
+    up && deps.notify({ type: 'service_event', payload: { ...payload, kind } }, quota)
   /** A frame for remote clients: dropped rather than held while the gateway reads nothing. */
   const fits = (): boolean => {
     if (deps.buffered() <= GATEWAY_BUFFER_LIMIT) return true
@@ -192,13 +193,12 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     commander: (frame) => { bulk('commander', { frame }) },
     user: (frame) => { send('user', { frame }) },
     reply: (connId, type, requestId, payload) => { send('reply', { connId, type, requestId, payload }) },
-    target: (connId, type, payload) => up && linkUp && clients.has(connId) && bulk('target', { connId, type, payload }),
-    terminal: (connId, type, payload) => reachableClient(connId) && bulk('terminal', { connId, type, payload }),
-    terminalBinary: (connId, clear) => {
+    target: (connId, type, payload, quota) => up && linkUp && clients.has(connId) && fits() && send('target', { connId, type, payload }, quota),
+    terminal: (connId, type, payload, quota) => reachableClient(connId) && fits() && send('terminal', { connId, type, payload }, quota),
+    terminalBinary: (connId, local, quota) => {
       if (!reachableClient(connId) || !fits()) return false
-      const local = encodeTerminalLocal(clear)
-      const bytes = local && encodeGatewayBinary(GatewayBinary.remote, connId, local)
-      return !!bytes && deps.notifyBinary(bytes)
+      const bytes = encodeGatewayBinary(GatewayBinary.remote, connId, local)
+      return !!bytes && deps.notifyBinary(bytes, quota)
     },
     observer: (connId, type, payload) => up && linkUp && send('observer', { connId, type, payload }),
     windowOpened: (surface) => { send('windowOpened', { surface }) },
@@ -459,17 +459,10 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
         if (event) events.tabFrame(event)
         return
       }
-      case 'browserRoute': {
-        const streamId = text(payload.streamId)
-        const route = payload.route
-        if (streamId && (route === 'direct' || route === 'turn' || route === 'relay')) events.browserRoute(streamId, route)
-        return
-      }
-      case 'browserRouteLost':
-        if (text(payload.streamId)) events.browserRouteLost(text(payload.streamId))
-        return
-      case 'browserTransportError':
-        events.browserTransportError()
+      case 'clientStreamControl':
+        if (typeof payload.service === 'string' && (payload.streamId === null || typeof payload.streamId === 'string')) {
+          events.streamControl(payload.service, payload.streamId, record(payload.payload))
+        }
         return
       case 'windowOpened': {
         const window = windows.get(text(payload.id))
@@ -495,8 +488,8 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     const decoded = decodeGatewayBinary(raw)
     if (!decoded) return
     if (decoded.kind === GatewayBinary.window) { windows.get(decoded.id)?.sink.sendBinary(decoded.bytes); return }
-    const clear = decodeTerminalLocal(decoded.bytes)
-    if (clear) void events.binary(decoded.id, clear)
+    const clear = clientStreamLocalFrame(decoded.bytes) ?? decodeTerminalLocal(decoded.bytes)
+    if (clear) void events.binary(decoded.id, clear, decoded.bytes)
   }
 
   /**

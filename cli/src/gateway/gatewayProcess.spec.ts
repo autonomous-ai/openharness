@@ -9,7 +9,7 @@ import type { GatewayEvents, GatewayOps, GatewayPort, WindowRelay } from '../cor
 import { createGatewayLink } from '../core/gatewayLink.js'
 import { GATEWAY_CALLS } from '../lib/gatewayWire.js'
 import { RelayConnectError } from '../lib/relayFrames.js'
-import { TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
+import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
 import type { CoreConnection, ServiceProcessOptions } from '../services/process.js'
 import { b64e, newIdentity } from '../lib/e2ee/core.js'
 import { runGatewayService } from './gatewayProcess.js'
@@ -87,7 +87,7 @@ function wire() {
     frame: vi.fn(), binary: vi.fn(), client: vi.fn(), disconnected: vi.fn(), observer: vi.fn(), toLocal: vi.fn(), status: vi.fn(),
     linkDown: vi.fn(), commanders: vi.fn(), commanderJoined: vi.fn(), meta: vi.fn(), notice: vi.fn(), revoked: vi.fn(), busy: vi.fn(),
     device: vi.fn(), deviceRevoked: vi.fn(), toWindows: vi.fn(), tabFrame: vi.fn(),
-    browserRoute: vi.fn(), browserRouteLost: vi.fn(), browserTransportError: vi.fn(),
+    streamControl: vi.fn(),
   }
   const backend = vi.fn(async () => ({ status: 200, body: { data: { acct: 'a' } } }))
   const link = createGatewayLink({
@@ -221,7 +221,7 @@ describe('the gateway\'s process, spoken to by the core', () => {
     w.link.port.reply('phone-1', 'agents_list', 'r-1', { agents: [] })
     w.link.port.target('phone-1', 'viewer_data', { a: 1 })
     w.link.port.terminal('phone-1', 'terminal_ready', { streamId: STREAM })
-    w.link.port.terminalBinary('phone-1', clear)
+    w.link.port.terminalBinary('phone-1', encodeTerminalLocal(clear)!)
     w.link.port.observer('observer:1', 'observer_frame', { b: 2 })
     w.link.port.windowOpened('tui')
     await w.link.port.local('local:w', { type: 'e2ee_pairings_list', payload: {} })
@@ -240,7 +240,7 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(port.reply).toHaveBeenCalledWith('phone-1', 'agents_list', 'r-1', { agents: [] })
     expect(port.target).toHaveBeenCalledWith('phone-1', 'viewer_data', { a: 1 })
     expect(port.terminal).toHaveBeenCalledWith('phone-1', 'terminal_ready', { streamId: STREAM })
-    expect(port.terminalBinary).toHaveBeenCalledWith('phone-1', clear)
+    expect(port.terminalBinary).toHaveBeenCalledWith('phone-1', encodeTerminalLocal(clear))
     expect(port.observer).toHaveBeenCalledWith('observer:1', 'observer_frame', { b: 2 })
     expect(port.windowOpened).toHaveBeenCalledWith('tui')
     expect(port.local).toHaveBeenCalledWith('local:w', { type: 'e2ee_pairings_list', payload: {} })
@@ -280,12 +280,12 @@ describe('the gateway\'s process, spoken to by the core', () => {
     events.deviceRevoked('P')
     events.toWindows({ type: 'device_keys_changed', payload: {} })
     events.tabFrame({ sharedTabId: 'a1b2c3d4e5f6a1b2c3d4e5f6', closed: { code: 4403, reason: 'Not in this shared tab' } })
-    events.browserRoute('s-1', 'turn')
-    events.browserRouteLost('s-2')
-    events.browserTransportError()
+    events.streamControl('agentBrowser', 's-1', { route: 'turn' })
+    events.streamControl('agentBrowser', 's-2', { route: null })
+    events.streamControl('agentBrowser', null, { kind: 'transport_error' })
     const { heard } = w
     expect(heard.frame).toHaveBeenCalledWith('phone-1', { type: 'message' }, 'p2p', 'web')
-    expect(heard.binary).toHaveBeenCalledWith('phone-1', clear)
+    expect(heard.binary).toHaveBeenCalledWith('phone-1', clear, encodeTerminalLocal(clear))
     expect(heard.client).toHaveBeenCalledWith('phone-1', { role: 'device', label: 'Dial', identity: 'P', direct: true })
     expect(heard.disconnected).toHaveBeenCalledWith('phone-1')
     expect(heard.observer).toHaveBeenCalledWith('observer:1', 'observer_hello', { a: 1 })
@@ -302,9 +302,9 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(heard.deviceRevoked).toHaveBeenCalledWith('P')
     expect(heard.toWindows).toHaveBeenCalledWith({ type: 'device_keys_changed', payload: {} })
     expect(heard.tabFrame).toHaveBeenCalledWith({ sharedTabId: 'a1b2c3d4e5f6a1b2c3d4e5f6', closed: { code: 4403, reason: 'Not in this shared tab' } })
-    expect(heard.browserRoute).toHaveBeenCalledWith('s-1', 'turn')
-    expect(heard.browserRouteLost).toHaveBeenCalledWith('s-2')
-    expect(heard.browserTransportError).toHaveBeenCalledTimes(1)
+    expect(heard.streamControl).toHaveBeenCalledWith('agentBrowser', 's-1', { route: 'turn' })
+    expect(heard.streamControl).toHaveBeenCalledWith('agentBrowser', 's-2', { route: null })
+    expect(heard.streamControl).toHaveBeenCalledWith('agentBrowser', null, { kind: 'transport_error' })
   })
 
   it('answers the core\'s calls from the gateway it runs, and 503 with none running', async () => {

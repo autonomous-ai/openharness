@@ -15,7 +15,7 @@ function events(): { [K in keyof GatewayEvents]: ReturnType<typeof vi.fn> } {
     frame: vi.fn(), binary: vi.fn(), client: vi.fn(), disconnected: vi.fn(), observer: vi.fn(), toLocal: vi.fn(), status: vi.fn(),
     linkDown: vi.fn(), commanders: vi.fn(), commanderJoined: vi.fn(), meta: vi.fn(), notice: vi.fn(), revoked: vi.fn(), busy: vi.fn(),
     device: vi.fn(), deviceRevoked: vi.fn(), toWindows: vi.fn(), tabFrame: vi.fn(),
-    browserRoute: vi.fn(), browserRouteLost: vi.fn(), browserTransportError: vi.fn(),
+    streamControl: vi.fn(),
   }
 }
 
@@ -83,7 +83,7 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(link.port.connected()).toBe(false)
     expect(link.port.target('phone-1', 'viewer_data', {})).toBe(false)
     expect(link.port.terminal('phone-1', 'terminal_ready', {})).toBe(false)
-    expect(link.port.terminalBinary('phone-1', bytesOf('hi'))).toBe(false)
+    expect(link.port.terminalBinary('phone-1', encodeTerminalLocal(bytesOf('hi'))!)).toBe(false)
     expect(link.port.observer('observer:1', 'observer_frame', {})).toBe(false)
     expect(link.port.device('dial-1', 'autonomous_device_event', {})).toBe(false)
     link.notice({ kind: 'status', connected: true })
@@ -102,10 +102,10 @@ describe('the gateway in its own process, as the core sees it', () => {
     link.port.usageCounter?.('create_requests')
     link.port.usage?.({ kind: 'observed', payload: { measure: 'collector_days' } })
     await link.port.local('local:w', { type: 'e2ee_pairings_list', payload: {} })
-    expect(link.port.terminalBinary('phone-1', bytesOf('hi'))).toBe(true)
+    expect(link.port.terminalBinary('phone-1', encodeTerminalLocal(bytesOf('hi'))!)).toBe(true)
     // An id the binary frame cannot carry: refused, never sent half-framed.
     register(link, 'x'.repeat(300))
-    expect(link.port.terminalBinary('x'.repeat(300), bytesOf('hi'))).toBe(false)
+    expect(link.port.terminalBinary('x'.repeat(300), encodeTerminalLocal(bytesOf('hi'))!)).toBe(false)
     expect(kinds().slice(1)).toEqual(['broadcast', 'commander', 'user', 'reply', 'target', 'terminal', 'observer', 'device', 'deviceClient', 'windowOpened', 'usageCounter', 'usage', 'localFrame'])
     expect(sent[4]).toEqual({ kind: 'reply', connId: 'phone-1', type: 'agents_list', requestId: 'r-1', payload: { agents: [] } })
     const framed = decodeGatewayBinary(binary[0])!
@@ -141,7 +141,7 @@ describe('the gateway in its own process, as the core sees it', () => {
     setBuffered(GATEWAY_BUFFER_LIMIT + 1)
     link.port.broadcast({ type: 'text_delta' })
     link.port.commander({ type: 'commander_event' })
-    expect(link.port.terminalBinary('phone-1', bytesOf('hi'))).toBe(false)
+    expect(link.port.terminalBinary('phone-1', encodeTerminalLocal(bytesOf('hi'))!)).toBe(false)
     expect(kinds()).toEqual(['start'])
     expect(log).toHaveBeenCalledTimes(1)
     tick(61_000)
@@ -177,17 +177,14 @@ describe('the gateway in its own process, as the core sees it', () => {
     link.notice({ kind: 'toWindows', frame: { type: 'device_key_added' } })
     link.notice({ kind: 'tabFrame', event: { sharedTabId: 'a1b2c3d4e5f6a1b2c3d4e5f6', from: { machineId: 'alice-mac', userId: 'u' }, payload: { a: 1 }, extra: 'x' } })
     link.notice({ kind: 'tabFrame', event: { from: { machineId: 'alice-mac', userId: 'u' } } })
-    link.notice({ kind: 'browserRoute', streamId: 's-1', route: 'direct' })
-    link.notice({ kind: 'browserRoute', streamId: 's-2', route: 'p2p' })
-    link.notice({ kind: 'browserRoute', streamId: '', route: 'relay' })
-    link.notice({ kind: 'browserRouteLost', streamId: 's-3' })
-    link.notice({ kind: 'browserRouteLost' })
-    link.notice({ kind: 'browserTransportError' })
+    link.notice({ kind: 'clientStreamControl', service: 'agentBrowser', streamId: 's-1', payload: { route: 'direct' } })
+    link.notice({ kind: 'clientStreamControl', service: 'agentBrowser', streamId: null, payload: { kind: 'transport_error' } })
+    link.notice({ kind: 'clientStreamControl', service: 7, streamId: 's-1' })
+    link.notice({ kind: 'clientStreamControl', service: 'viewers', streamId: 7 })
     link.notice({ kind: 'mystery' })
-    // A route it does not know is not a route: the stream is paced as a relayed one until it closes.
-    expect(heard.browserRoute.mock.calls).toEqual([['s-1', 'direct']])
-    expect(heard.browserRouteLost.mock.calls).toEqual([['s-3']])
-    expect(heard.browserTransportError).toHaveBeenCalledTimes(1)
+    expect(heard.streamControl.mock.calls).toEqual([
+      ['agentBrowser', 's-1', { route: 'direct' }], ['agentBrowser', null, { kind: 'transport_error' }],
+    ])
     expect(heard.frame.mock.calls).toEqual([['phone-1', { type: 'message' }, 'p2p', 'web'], ['dial-1', {}, 'relay', 'device']])
     expect(heard.client).toHaveBeenCalledWith('phone-1', null)
     expect(heard.disconnected).toHaveBeenCalledWith('phone-1')
@@ -214,7 +211,7 @@ describe('the gateway in its own process, as the core sees it', () => {
     link.binary(encodeGatewayBinary(GatewayBinary.remote, 'phone-1', local)!)
     link.binary(encodeGatewayBinary(GatewayBinary.remote, 'phone-1', new Uint8Array([1, 2]))!)
     link.binary(new Uint8Array([9, 9]))
-    expect(heard.binary.mock.calls).toEqual([['phone-1', bytesOf('ls\r')]])
+    expect(heard.binary.mock.calls).toEqual([['phone-1', bytesOf('ls\r'), encodeTerminalLocal(bytesOf('ls\r'))]])
   })
 
   it('a gateway that goes takes the relay with it: every remote client, the link and the devices watching', async () => {

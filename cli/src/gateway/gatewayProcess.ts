@@ -52,8 +52,8 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
   const notice = (kind: string, payload: Payload = {}): void => { core?.notice?.(kind, payload) }
   const events: GatewayEvents = {
     frame: (connId, frame, transport, role) => notice('frame', { connId, frame, transport, role }),
-    binary: (connId, clear) => {
-      const local = encodeTerminalLocal(clear)
+    binary: (connId, clear, raw) => {
+      const local = raw ?? encodeTerminalLocal(clear)
       const bytes = local && encodeGatewayBinary(GatewayBinary.remote, connId, local)
       if (bytes) core?.sendBinary?.(bytes)
     },
@@ -73,9 +73,7 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     deviceRevoked: (identity) => notice('deviceRevoked', { identity }),
     toWindows: (frame) => notice('toWindows', { frame }),
     tabFrame: (event) => notice('tabFrame', { event }),
-    browserRoute: (streamId, route) => notice('browserRoute', { streamId, route }),
-    browserRouteLost: (streamId) => notice('browserRouteLost', { streamId }),
-    browserTransportError: () => notice('browserTransportError'),
+    streamControl: (service, streamId, payload) => notice('clientStreamControl', { service, streamId, payload }),
   }
 
   /** This process renews the account's sign-in (lib/authRefresh.ts): one manager, so every start of the gateway and the
@@ -214,7 +212,7 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     const clear = decoded && decodeTerminalLocal(decoded.bytes)
     if (!decoded || !clear) return
     if (decoded.kind === GatewayBinary.window) void windows.get(decoded.id)?.sendBinary(clear)
-    else running?.port.terminalBinary(decoded.id, clear)
+    else running?.port.terminalBinary(decoded.id, decoded.bytes)
   }
 
   /** What the core asks of the gateway (`GatewayOps`), each answered from its gateway once that has started. */

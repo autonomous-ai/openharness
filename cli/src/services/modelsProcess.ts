@@ -133,7 +133,7 @@ export function modelsCoreApi(dataDir: string, ask: (query: string, payload?: Pa
     },
     clients: {
       viewerChanged: () => {},
-      viewerFrame: () => false,
+      streamFrame: () => false,
       gridNamed: (name) => told('gridNamed', { name }),
       gridModelsChanged: () => told('gridModelsChanged'),
       dshInstallStatus: () => {},

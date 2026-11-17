@@ -1,3 +1,4 @@
+import { createClientStreams } from './core/clientStreams.js'
 import { removeRegistryAgent } from './testing/registryFixtures.js'
 import { USAGE_FALLBACKS } from './core/api.js'
 import * as gitPullRequest from './lib/gitPullRequest.js'
@@ -479,7 +480,7 @@ describe('viewer forwarding authentication', () => {
     const socket = relaySocket('token')
     const internals = socket as any
     const request = vi.fn(async () => ({ data: 'jpeg' }))
-    socket.viewerStreams = { frame: vi.fn(), surface: request, closed: vi.fn(), closedAll: vi.fn() }
+    socket.viewerSurface = request
     vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
     const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
     const clear = { type: 'viewer_surface', payload: { requestId: 'one', surfaceId: 'surface', agentId: 'a', op: 'frame' } }
@@ -501,25 +502,39 @@ describe('viewer forwarding authentication', () => {
     // With nothing to render it, the surface is answered unavailable rather than left unanswered.
     const local = vi.fn(() => true)
     socket.registerLocalClient('local:none', { sendFrame: local, sendBinary: () => true })
-    socket.viewerStreams = null
+    socket.viewerSurface = null
     await dispatchDown(socket, { ...clear, payload: { ...clear.payload, requestId: 'two' } }, 'local:none')
     await vi.waitFor(() => expect(local).toHaveBeenCalledWith({ type: 'viewer_surface_result', payload: { requestId: 'two', error: 'VIEWER_UNAVAILABLE' } }))
     await socket.unregisterLocalClient('local:viewer')
     await socket.stop()
   })
 
+  it('keeps session browser callbacks on the target route and preserves immediate unavailable refusal', async () => {
+    const socket = relaySocket('token')
+    const local = vi.fn(() => true), gateway = gatewayOf(socket)
+    socket.registerLocalClient('local:callback', { sendFrame: local, sendBinary: () => true })
+    expect(socket.sendTargetFrame('local:callback', 'browser_open', { url: 'https://example.invalid' })).toBe(true)
+    expect(local).toHaveBeenCalledWith({ type: 'browser_open', payload: { url: 'https://example.invalid' } }, undefined)
+    const target = vi.spyOn(gateway, 'target').mockReturnValue(false)
+    const terminal = vi.spyOn(gateway, 'terminal')
+    expect(socket.sendTargetFrame('remote', 'browser_open', { url: 'https://example.invalid' })).toBe(false)
+    expect(target).toHaveBeenCalledWith('remote', 'browser_open', { url: 'https://example.invalid' }, undefined)
+    expect(terminal).not.toHaveBeenCalled()
+    await socket.stop()
+  })
+
   it('hands a viewer stream\'s answers to the one connection that opened it, and ends its streams as connections go', async () => {
     const socket = relaySocket('token')
-    const streams = { frame: vi.fn(), surface: vi.fn(), closed: vi.fn(), closedAll: vi.fn() }
-    socket.viewerStreams = streams
+    const streams = { handles: vi.fn(() => true), frame: vi.fn(), surface: vi.fn(), closed: vi.fn(), closedAll: vi.fn() }
+    socket.clientStreams = streams as unknown as ReturnType<typeof createClientStreams>
     const local = vi.fn(() => true)
     socket.registerLocalClient('local:viewer', { sendFrame: local, sendBinary: () => true })
-    expect(socket.sendViewerFrame('local:viewer', 'viewer_response', { streamId: 's1', status: 200 })).toBe(true)
-    expect(local).toHaveBeenCalledWith({ type: 'viewer_response', payload: { streamId: 's1', status: 200 } })
+    expect(socket.sendStreamFrame('viewers', 'local:viewer', 'viewer_response', { streamId: 's1', status: 200 })).toBe(true)
+    expect(local).toHaveBeenCalledWith({ type: 'viewer_response', payload: { streamId: 's1', status: 200 } }, { service: 'viewers', direction: 'client', final: false })
     // A remote connection's go through the gateway, which says whether it could take them.
     const target = vi.spyOn(gatewayOf(socket), 'target').mockReturnValue(false)
-    expect(socket.sendViewerFrame('remote', 'viewer_data', { streamId: 's1', data: 'AA==' })).toBe(false)
-    expect(target).toHaveBeenCalledWith('remote', 'viewer_data', { streamId: 's1', data: 'AA==' })
+    expect(socket.sendStreamFrame('viewers', 'remote', 'viewer_data', { streamId: 's1', data: 'AA==' })).toBe(false)
+    expect(target).toHaveBeenCalledWith('remote', 'viewer_data', { streamId: 's1', data: 'AA==' }, { service: 'viewers', direction: 'client', final: false })
     await socket.unregisterLocalClient('local:viewer')
     expect(streams.closed).toHaveBeenCalledWith('local:viewer')
     socket.fromGateway.client('r1', { role: 'web', label: null, identity: 'PUB', direct: false })
@@ -528,16 +543,19 @@ describe('viewer forwarding authentication', () => {
     await socket.fromGateway.disconnected('r2')
     expect(streams.closed).toHaveBeenCalledWith('r2')
     socket.fromGateway.linkDown()
-    expect(streams.closedAll).toHaveBeenCalledTimes(1)
+    expect(streams.closed.mock.calls.filter(call => call.length === 0)).toHaveLength(1)
     await socket.stop()
-    expect(streams.closedAll).toHaveBeenCalledTimes(2)
+    expect(streams.closed.mock.calls.filter(call => call.length === 0)).toHaveLength(2)
   })
 
   it('requires encryption and a web-role session remotely, while permitting trusted local clients', async () => {
     const socket = relaySocket('token')
     const internals = socket as any
     const handle = vi.fn()
-    socket.viewerStreams = { frame: handle, surface: vi.fn(), closed: vi.fn(), closedAll: vi.fn() }
+    socket.clientStreams = createClientStreams({ disabled: () => false, wake: () => {}, send: () => true, sendBinary: () => false,
+      endpoint: () => ({ frame: event => { handle(event.connection, event.type, event.payload); return true }, binary: () => false, closed: () => {}, control: () => {}, refused: () => {} }),
+    })
+    socket.clientStreams.connected('viewers'); socket.clientStreams.serving('viewers')
     const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
     const frame = { type: 'viewer_request', payload: { streamId: 'v', agentId: 'a' } }
     const unwrap = vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue(frame)
@@ -550,10 +568,10 @@ describe('viewer forwarding authentication', () => {
     expect(handle).not.toHaveBeenCalled()
     role.mockReturnValue('web')
     await dispatchDown(socket, encrypted, 'remote')
-    expect(handle).toHaveBeenCalledWith('remote', 'viewer_request', frame.payload)
+    expect(handle).toHaveBeenCalledWith('remote', 'viewer_request', { ...frame.payload, streamId: expect.any(String) })
     socket.registerLocalClient('local:viewer', { sendFrame: () => true, sendBinary: () => true })
     await dispatchDown(socket, frame, 'local:viewer')
-    expect(handle).toHaveBeenCalledWith('local:viewer', 'viewer_request', frame.payload)
+    expect(handle).toHaveBeenCalledWith('local:viewer', 'viewer_request', { ...frame.payload, streamId: expect.any(String) })
     handle.mockClear()
     await dispatchDown(socket, { type: 'viewer_arbitrary', payload: {} }, 'local:viewer')
     expect(handle).not.toHaveBeenCalled()
@@ -2495,7 +2513,7 @@ describe('BackendSocket outbound queue', () => {
     expect(decodeTerminalLocal(binary[0])).toEqual(clear)
     // A frame its maker framed already (a browser stream's screen, core/browserStreams.ts) goes to a window as it is.
     const framed = encodeTerminalLocal(clear)!
-    expect(socket.sendTerminalLocalFrameTo('local:terminal', framed)).toBe(true)
+    expect(socket.sendStreamBinary('agentBrowser', 'local:terminal', framed)).toBe(true)
     expect(binary[1]).toBe(framed)
 
     socket.connect()
