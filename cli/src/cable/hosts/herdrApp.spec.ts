@@ -75,6 +75,13 @@ const openCall: Call = { file: '/usr/bin/open', args: ['-b', 'dev.herdr.app'], t
 const focusCall = (address: string, file = FAKE_PATH_HERDR_APP): Call =>
   ({ file, args: ['do', 'agent.focus', '--terminal', address], timeoutMs: 10_000 })
 const FAILED_LINE = '[herdr-app] focus · failed'
+const scrollCall = (address: string, lines: number, file = FAKE_PATH_HERDR_APP): Call =>
+  ({ file, args: ['do', 'terminal.scroll', '--terminal', address, '--lines', String(lines)], timeoutMs: 2_000 })
+const SCROLL_FAILED = '[herdr-app] scroll · failed'
+/** The line a terminal's scroll queue says once it drains. */
+const drained = (lines: number, runs: number, failed: number) =>
+  `[herdr-app] scroll · ${lines} lines · ${runs} runs · ${failed} failed`
+const scrollFailures = (log: string[]) => log.filter((line) => line === SCROLL_FAILED).length
 
 describe('the Herdr adapter', () => {
   it('its id is herdr-app, and a tap is its own', () => {
@@ -350,5 +357,202 @@ describe('the Herdr adapter', () => {
 
   it('paneKey is herdr-app:<address>', () => {
     expect(recorder().adapter.paneKey(pane('t7'))).toBe('herdr-app:t7')
+  })
+
+  describe('scroll', () => {
+    it('canScroll needs macOS, hc\'s form of address, Herdr in front, a terminal its window shows, and herdr-app found', () => {
+      expect(recorder().adapter.canScroll(pane('t7'))).toBe(true)
+      expect(recorder({ platform: 'linux' }).adapter.canScroll(pane('t7'))).toBe(false)
+      for (const id of FORGED) expect(recorder().adapter.canScroll(pane(id)), id).toBe(false)
+      expect(recorder({ inFront: () => false }).adapter.canScroll(pane('t7'))).toBe(false)
+      expect(recorder({ shows: () => false }).adapter.canScroll(pane('t7'))).toBe(false)
+      expect(recorder({ onPath: () => null }).adapter.canScroll(pane('t7'))).toBe(false)
+      // Asked at every stroke's down: the PATH lookup runs only for a pane that passed the rest.
+      const onPath = vi.fn(() => FAKE_PATH_HERDR_APP)
+      expect(recorder({ onPath, shows: () => false }).adapter.canScroll(pane('t7'))).toBe(false)
+      expect(onPath).not.toHaveBeenCalled()
+    })
+
+    it('scroll runs herdr-app do terminal.scroll with the terminal and the lines, each one argument, within 2 s', async () => {
+      const { calls, adapter } = recorder()
+      adapter.scroll(pane('t7'), -3)
+      await turn()
+      expect(calls).toEqual([scrollCall('t7', -3)])
+      adapter.scroll(pane('t7'), 2)
+      await turn()
+      expect(calls).toEqual([scrollCall('t7', -3), scrollCall('t7', 2)])
+      const app = recorder({ onPath: () => null, exists: (path) => path === APP_BINARY })
+      app.adapter.scroll(pane('t7'), -3)
+      await turn()
+      expect(app.calls).toEqual([scrollCall('t7', -3, APP_BINARY)])
+    })
+
+    it('one run at a time: lines that come meanwhile are summed, and the next run carries them', async () => {
+      const { calls, adapter, answer } = holding()
+      adapter.scroll(pane('t7'), -3)
+      adapter.scroll(pane('t7'), -2)
+      adapter.scroll(pane('t7'), -4)
+      await turn()
+      expect(calls).toEqual([scrollCall('t7', -3)])
+      await answer(0)
+      expect(calls).toEqual([scrollCall('t7', -3), scrollCall('t7', -6)])
+      await answer(0)
+      expect(calls).toHaveLength(2)
+    })
+
+    it.each([-1, 1])('the pending count is clamped to 100 either way (%i)', async (sign) => {
+      const { calls, adapter, answer } = holding()
+      adapter.scroll(pane('t7'), sign)
+      adapter.scroll(pane('t7'), 60 * sign)
+      adapter.scroll(pane('t7'), 60 * sign)
+      await answer(0)
+      expect(calls).toEqual([scrollCall('t7', sign), scrollCall('t7', 100 * sign)])
+    })
+
+    // Review Focus 1: most strokes wobble, and the lines that came meanwhile may sum to 0.
+    it('lines that cancel while a run is under way run nothing more, and the queue drains', async () => {
+      const { calls, log, adapter, answer } = holding()
+      adapter.scroll(pane('t7'), -3)
+      adapter.scroll(pane('t7'), -2)
+      adapter.scroll(pane('t7'), 2)
+      await answer(0)
+      expect(calls).toEqual([scrollCall('t7', -3)])
+      expect(log).toEqual([drained(3, 1, 0)])
+      adapter.scroll(pane('t7'), -1)
+      expect(calls).toEqual([scrollCall('t7', -3), scrollCall('t7', -1)])
+    })
+
+    it('another terminal\'s lines run beside it', () => {
+      const { calls, adapter } = holding()
+      adapter.scroll(pane('t7'), -1)
+      adapter.scroll(pane('t8'), -1)
+      expect(calls).toEqual([scrollCall('t7', -1), scrollCall('t8', -1)])
+    })
+
+    // A scroll that joined the focus run would lose its lines.
+    it('a scroll during a focus of the same terminal runs on its own', async () => {
+      const { calls, adapter, answer } = holding()
+      const tap = adapter.focus(pane('t7'))
+      expect(calls).toEqual([openCall])
+      adapter.scroll(pane('t7'), -3)
+      expect(calls).toEqual([openCall, scrollCall('t7', -3)])
+      await answer(0)
+      await answer(0)
+      await answer(0)
+      expect(await tap).toBe(true)
+      expect(calls).toEqual([openCall, scrollCall('t7', -3), focusCall('t7')])
+    })
+
+    it.each([1, null])('a run that fails drops its lines and those pending, and says so once until a run succeeds (exit %s)', async (code) => {
+      const { calls, log, adapter, answer } = holding()
+      adapter.scroll(pane('t7'), -3)
+      adapter.scroll(pane('t7'), -2)
+      await answer(code)
+      expect(calls).toEqual([scrollCall('t7', -3)])
+      expect(scrollFailures(log)).toBe(1)
+      adapter.scroll(pane('t7'), -1)
+      await answer(code)
+      expect(calls).toEqual([scrollCall('t7', -3), scrollCall('t7', -1)])
+      expect(scrollFailures(log)).toBe(1)
+      adapter.scroll(pane('t7'), -1)
+      await answer(0)
+      adapter.scroll(pane('t7'), -1)
+      await answer(code)
+      expect(calls).toEqual([scrollCall('t7', -3), scrollCall('t7', -1), scrollCall('t7', -1), scrollCall('t7', -1)])
+      expect(scrollFailures(log)).toBe(2)
+    })
+
+    it('with herdr-app gone nothing runs, and the lines are dropped', async () => {
+      const { calls, log, adapter } = recorder({ onPath: () => null })
+      adapter.scroll(pane('t7'), -3)
+      await turn()
+      adapter.scroll(pane('t7'), -1)
+      adapter.scroll(pane('t8'), 2)
+      await turn()
+      expect(calls).toEqual([])
+      expect(scrollFailures(log)).toBe(1)
+    })
+
+    // Review Focus 5: nobody awaits a scroll, so a rejection left unhandled would end the devices process.
+    it('a run that rejects is a failed run', async () => {
+      const unhandled = vi.fn()
+      process.on('unhandledRejection', unhandled)
+      try {
+        const calls: Call[] = []
+        const { log, adapter } = recorder({
+          run: async (file, args, timeoutMs) => {
+            calls.push({ file, args, timeoutMs })
+            if (calls.length === 1) throw new Error('spawn failed')
+            return { code: 0, stdout: '' }
+          },
+        })
+        adapter.scroll(pane('t7'), -3)
+        await turn()
+        expect(log).toEqual([SCROLL_FAILED, drained(0, 1, 3)])
+        adapter.scroll(pane('t7'), -2)
+        await turn()
+        expect(calls).toEqual([scrollCall('t7', -3), scrollCall('t7', -2)])
+        await turn()
+        expect(unhandled).not.toHaveBeenCalled()
+      } finally {
+        process.off('unhandledRejection', unhandled)
+      }
+    })
+
+    it('the drain line counts what the queue did, and names no terminal', async () => {
+      const one = recorder()
+      one.adapter.scroll(pane('t7'), -3)
+      await turn()
+      expect(one.log).toEqual([drained(3, 1, 0)])
+
+      const carried = holding()
+      carried.adapter.scroll(pane('t7'), -3)
+      carried.adapter.scroll(pane('t7'), -6)
+      await carried.answer(0)
+      await carried.answer(0)
+      expect(carried.log).toEqual([drained(9, 2, 0)])
+
+      const failing = holding()
+      failing.adapter.scroll(pane('t7'), -3)
+      failing.adapter.scroll(pane('t7'), -2)
+      await failing.answer(1)
+      expect(failing.log).toEqual([SCROLL_FAILED, drained(0, 1, 5)])
+
+      const none = recorder({ onPath: () => null })
+      none.adapter.scroll(pane('t7'), -3)
+      await turn()
+      expect(none.log).toEqual([SCROLL_FAILED, drained(0, 0, 3)])
+
+      for (const line of [...one.log, ...carried.log, ...failing.log, ...none.log]) expect(line).not.toContain('t7')
+    })
+
+    it('a bad id or 0 lines runs nothing', async () => {
+      const { calls, log, adapter } = recorder()
+      for (const id of FORGED) adapter.scroll(pane(id), -3)
+      adapter.scroll(pane('t7'), 0)
+      await turn()
+      expect(calls).toEqual([])
+      expect(log).toEqual([])
+    })
+
+    // Review Focus 4: a garbled frame's travel (dy: 1e308) makes the lines -Infinity.
+    it.each([NaN, Infinity, -Infinity, 1.5])('lines that are no whole number run nothing (%s)', async (lines) => {
+      const { calls, log, adapter } = recorder()
+      adapter.scroll(pane('t7'), lines)
+      await turn()
+      expect(calls).toEqual([])
+      expect(log).toEqual([])
+    })
+
+    it('off macOS nothing scrolls', async () => {
+      for (const platform of ['linux', 'win32'] as const) {
+        const { calls, log, adapter } = recorder({ platform })
+        expect(adapter.canScroll(pane('t7')), platform).toBe(false)
+        adapter.scroll(pane('t7'), -3)
+        await turn()
+        expect(calls, platform).toEqual([])
+        expect(log, platform).toEqual([])
+      }
+    })
   })
 })
