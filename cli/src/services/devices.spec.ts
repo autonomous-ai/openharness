@@ -5874,7 +5874,8 @@ describe('cmux\'s agents, from cmux\'s own stores (docs/plans/2026-11-17-dial-cm
     await live()
     fake.records = []
     await changed('claude-hook-sessions.json')
-    expect(await host().openAgent(ID)).toBeUndefined()
+    // No pane and no app a hook named: nothing to open.
+    expect(await host().openAgent(ID)).toMatchObject({ ok: false })
     expect(orcaRuns).toEqual([])
     port.observed(hook('turn-stop'))
     expect(await host().openAgent(ID)).toBeUndefined()

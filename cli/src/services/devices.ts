@@ -29,6 +29,9 @@ import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, D
 import { CableSession, SHOWN_ONLY_PREFIX, type DialStatus, type FollowCause } from '../cable/cableSession.js'
 import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
 import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
+import { cmuxClientDeps, cmuxStoreDir, createCmuxClient, type CmuxClient } from '../cable/hosts/cmuxCli.js'
+import { createCmuxAppAdapter } from '../cable/hosts/cmuxApp.js'
+import { CmuxSource, pidAlive } from '../cable/hosts/cmuxSource.js'
 import { createCodexAppAdapter } from '../cable/hosts/codexApp.js'
 import { codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
 import { createHcClient, hcClientDeps, hcPaneKey, hcSocketPath, type HcClient } from '../cable/hosts/hcClient.js'
@@ -123,6 +126,8 @@ export interface DevicesDeps {
   herdr?: HerdrClient
   /** For this service's tests: Herdr Core's socket (cable/hosts/hcClient.ts). */
   hc?: HcClient
+  /** For this service's tests: cmux's own command line (cable/hosts/cmuxCli.ts). */
+  cmux?: CmuxClient
   /** Opens the devices' own listener with these handlers (services/devicesListener.ts). Given by the devices process
    *  alone: inside the core's process (`HARNESSD_SERVICES=none`, Harness OS) there is none, so the core's process opens
    *  no socket for the devices, and the dial follows no app in front there. */
@@ -319,6 +324,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     inFront: () => cableHost.latestFront() === 'herdr', shows: (address) => hcSource?.shows(address) === true,
     reports: (address) => hcSource?.reports(address) === true })
   const hcPane = (address: string): Pane => ({ adapter: herdrApp.id, id: address })
+  /** Where cmux's stores are, from the daemon's own home: the client reads them through cmux, and the cmux source watches
+   *  their folder. */
+  const cmuxAt = cmuxClientDeps()
+  const cmuxClient = deps.cmux ?? createCmuxClient({ ...cmuxAt, platform: apps.platform })
+  /** cmux is installed, as the last attach found it: only then are a hooked agent's words offered to it. */
+  let cmuxFound = false
+  const cmuxApp = createCmuxAppAdapter({ ...apps, client: cmuxClient, bin: openBin, found: () => cmuxFound,
+    inFront: () => cableHost.latestFront() === 'cmux', kindAt: (surface) => cmuxSource?.kindAt(surface) })
+  const cmuxPane = (pane: string): Pane => ({ adapter: cmuxApp.id, id: pane })
   const claude = createClaudeAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'claude' })
   // Harness's own Codex home, whose config `codex queue` loads; run from the home folder, so no project's .codex/ is read.
   const codexQueue = createCodexQueue({ ...(deps.codex ?? codexQueueDeps()), home: env.CODEX_HOME, cwd: homedir() })
@@ -376,17 +390,19 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const herdrNoted = noting(herdrAdapter)
   /** Herdr's adapter as the dial's verbs reach it: a tap or a rest on an agent hc lists (below) is the dial's own move. */
   const herdrAppNoted = noting(herdrApp)
+  /** cmux's adapter as the dial's verbs reach it: a tap or a rest on an agent cmux lists (below) is the dial's own move. */
+  const cmuxAppNoted = noting(cmuxApp)
   /** Each Orca terminal's worktree, by handle, from the latest layout read that landed (below): a rest's or a tap's
    *  switch activates it first. */
   let orcaWorktrees: ReadonlyMap<string, string> = new Map()
   /** The apps an outside agent runs in, in the order its panes are kept: each verb of the dial takes the first that can.
    *  The nearest host first: a multiplexer keeps the environment it started in, so in a tmux pane WezTerm's and Orca's
-   *  values name the terminal the tmux server began in, and herdr inside tmux carries tmux's pane. Herdr comes after
-   *  tmux, as a tmux inside an hc terminal is the nearer host, and before the terminals: hc tells its programs they run
-   *  in Ghostty, whose tabs hold none of them. */
+   *  values name the terminal the tmux server began in, and herdr inside tmux carries tmux's pane. Herdr and cmux come
+   *  after tmux, as a tmux inside their terminal is the nearer host, and before the terminals: each tells its programs
+   *  they run in Ghostty, whose tabs hold none of them. */
   const tmux = noting(createTmuxAdapter({ run: apps.run, processes: readProcessNames, log }))
   const orca = createOrcaAdapter(apps, { worktreeOf: (handle) => orcaWorktrees.get(handle), log, switching: (handle) => orcaSwitches.note(handle) })
-  const adapters: readonly HostAdapter[] = [herdrNoted, tmux, herdrAppNoted, ...[
+  const adapters: readonly HostAdapter[] = [herdrNoted, tmux, herdrAppNoted, cmuxAppNoted, ...[
     createWeztermAdapter(apps),
     // A rest's or a tap's switch: Orca's focus line for that pane, a moment later, is the dial's own echo.
     { ...orca,
@@ -486,6 +502,31 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // The noted copy keeps the show Herdr's adapter has.
     show: (address, agentId) => herdrAppNoted.show!(hcPane(address), agentId),
     after: timerIn('herdr-app'),
+    now: Date.now,
+    monotonic,
+    uuid: randomUUID,
+    log,
+    count: voiced,
+  }) : null
+  /** cmux's agents, hook or no hook, listed from cmux's own stores when one changes
+   *  (docs/plans/2026-11-17-dial-cmux-design.md). It runs only while a dial is attached, behind the observed agents'
+   *  switch, on macOS alone, where cmux runs, and only with cmux installed (dialAttached). */
+  const cmuxSource = observed && apps.platform === 'darwin' ? new CmuxSource({
+    client: cmuxClient,
+    // The stores sit in ~/.cmuxterm: the watch holds that folder, else its parent until it appears.
+    watch: (changed) => watchSocket({ socketPath: join(cmuxStoreDir(cmuxAt.home), 'stores'), home: cmuxAt.home }, changed),
+    folder: () => existsSync(cmuxStoreDir(cmuxAt.home)),
+    alive: pidAlive,
+    prompt: cmuxApp.prompt,
+    // Through the opener, as a hooked agent's tap: one bring runs at a time, and a pick waiting is dropped. Noted before
+    // it, as the observed source's tap is.
+    focus: (pane, agentId) => {
+      noteMove()
+      return opener.open(agentId, { pane: cmuxPane(pane) })
+    },
+    canShow: (pane) => cmuxApp.canShow(cmuxPane(pane)),
+    // The noted copy keeps the show cmux's adapter has.
+    show: (pane, agentId) => cmuxAppNoted.show!(cmuxPane(pane), agentId),
     now: Date.now,
     monotonic,
     uuid: randomUUID,
@@ -657,7 +698,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   })
   // What the dial lists with no window, or with one in the apps view: this computer's harness agents, and the ones outside
   // a pane unless switched off.
-  const registry = new HostRegistry([cableHost.harness, observed, herdr, hcSource].filter((source) => source !== null))
+  const registry = new HostRegistry([cableHost.harness, observed, herdr, hcSource, cmuxSource].filter((source) => source !== null))
   cableHost.setRegistry(registry)
   // The dial's log lives with the app's, one file a day (dialLog.ts). The old unbounded `dial.log` in the
   // data folder is cut down to a pointer, for anyone with a bookmark.
@@ -971,6 +1012,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   observed?.onChange(() => part.call('dial', outsideTurn))
   herdr?.onChange(() => part.call('dial', outsideTurn))
   hcSource?.onChange(() => part.call('dial', outsideTurn))
+  cmuxSource?.onChange(() => part.call('dial', outsideTurn))
   /** One of the observed source's timers, each run guarded as a notice is: one that throws is logged and the next runs. */
   const every = (ms: number, run: () => unknown): ReturnType<typeof setInterval> => {
     const timer = setInterval(() => part.call('observed', run), ms)
@@ -1096,6 +1138,31 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   if (observed) observed.onChange(() => part.call('orca', () => orcaMembers(observed)))
 
+  /**
+   * The open scan's copy of a session cmux lists, placed at that row's cmux pane
+   * (docs/plans/2026-11-17-dial-cmux-design.md, decided 7): it wins the fold over cmux's row by its session id, and has no
+   * hook to name its pane until that session's next turn, so a tap and a rest would open nothing after each restart. Only
+   * an agent with no cmux pane of its own. A place opens and shows, never takes words (observed.ts shownOnly). cmux names
+   * no pane: no names.
+   */
+  const placeInCmux = (source: ObservedSource, listing: CmuxSource): void => {
+    const placed = new Map<string, string>()
+    for (const { id, engine, sessionId } of listing.list()) {
+      if (sessionId === undefined) continue
+      const agentId = observedAgentId(engine, sessionId)
+      // A row it lists has its pane.
+      if (source.paneOf(agentId, 'cmux') === undefined) placed.set(agentId, listing.paneAt(id)!)
+    }
+    source.setPaneNames('cmux', new Map(), placed)
+  }
+  // After each change of either: setPaneNames tells only a change, so the two never loop. The source stopping drops its
+  // rows, and with them every place.
+  if (observed && cmuxSource) {
+    const place = (): void => part.call('cmux', () => placeInCmux(observed, cmuxSource))
+    observed.onChange(place)
+    cmuxSource.onChange(place)
+  }
+
   // ── the pane focused in Orca ───────────────────────────────────────────────────────────────────────
   //
   // Where Orca's CLI has `watch-focus`, the dials turn to the agent in the pane the person focuses in Orca: a prompt they
@@ -1191,6 +1258,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     part.call('herdr', () => on && apps.onPath('herdr') ? herdr.start() : herdr.stop())
     // Only with Herdr installed, read at each attach as herdr's is: with none, no folder is watched for hc's socket.
     if (hcSource) part.call('herdr-app', () => on && herdrApp.binary() ? hcSource.start() : hcSource.stop())
+    // Only with cmux installed, read at each attach as Herdr's is: with none, no folder is watched for its stores, and a
+    // hooked agent's words are not offered to it.
+    if (cmuxSource) part.call('cmux', () => {
+      cmuxFound = on && cmuxClient.binary() !== null
+      return cmuxFound ? cmuxSource.start() : cmuxSource.stop()
+    })
     if (!on) {
       // The next attach checks Orca's ring afresh, and a read under way lands on nothing.
       orcaRing = { again: false }
