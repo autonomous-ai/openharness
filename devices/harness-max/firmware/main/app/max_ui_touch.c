@@ -1,20 +1,54 @@
-// The finger on the lanes (max_ui.h): a tap acts on what the last render drew, a sideways swipe turns the page.
+// The finger on the screen (max_ui.h): a tap acts on what the last render drew, a sideways swipe turns the page of
+// lanes, or moves the form's choice. A tap on a card's button or the form queues its message in the outbox.
 #include <string.h>
 
 #include "max_ui_internal.h"
 
 static int iabs(int v) { return v < 0 ? -v : v; }
 static bool inside(max_box_t b, int x, int y) { return x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h; }
+static bool on_hit(const max_hit_t *h, int x, int y) { return x >= h->x && x < h->x + h->w && y >= h->y && y < h->y + h->h; }
 
 static max_act_t act_for(max_act_kind_t kind, const char *id)
 {
-    max_act_t act = {kind, ""};
+    max_act_t act = {kind, "", "", 0};
     max_copy(act.agent_id, sizeof act.agent_id, id);
     return act;
 }
 
-static max_act_t tap(int x, int y)
+// A button of the card or the form. The card must still be the one the person saw: the same question, at the same
+// step, in the same phase; the form's page the one drawn.
+static max_act_t press(const max_hit_t *h, uint32_t now_ms)
 {
+    const max_form_t *f = &max_m.form;
+    const bool page = max_form_open() && f->page.revision == max_m.form_revision;
+    bool changed = false;
+    switch ((max_hit_kind_t)h->kind) {
+    case MAX_HIT_NEW:
+        if (!max_form_open()) return act_for(MAX_ACT_NEW, NULL);
+        break;
+    case MAX_HIT_FORM_MOVE: changed = page && max_form_command(MAX_FORM_MOVE, h->arg, now_ms); break;
+    case MAX_HIT_FORM_PICK: changed = page && max_form_command(MAX_FORM_ACTIVATE, 0, now_ms); break;
+    case MAX_HIT_FORM_BACK: changed = page && max_form_command(MAX_FORM_BACK, 0, now_ms); break;
+    case MAX_HIT_FORM_CLOSE: changed = max_form_dismiss(); break;
+    case MAX_HIT_FORM_RETRY:
+        if (!max_form_open() || !f->failed) break;
+        max_form_reset();
+        max_m.dirty = true;
+        return act_for(MAX_ACT_NEW, NULL);
+    default: {
+        max_agent_t *a = max_find(max_m.card_id);
+        changed = a && max_card_key(a) == max_m.card_key && max_ask_hit(a, (max_hit_kind_t)h->kind, h->arg, now_ms);
+        break;
+    }
+    }
+    if (changed) max_m.dirty = true;
+    return act_for(MAX_ACT_NONE, NULL);
+}
+
+static max_act_t tap(int x, int y, uint32_t now_ms)
+{
+    for (int i = 0; i < max_m.hit_count; i++)
+        if (on_hit(&max_m.hits[i], x, y)) return press(&max_m.hits[i], now_ms);
     for (int i = 0; i < max_m.lane_hits; i++) {
         if (!inside(max_m.lane_box[i], x, y)) continue;
         // The lane the person saw, even if the order moved since; gone from the roster, it opens nothing.
@@ -25,7 +59,16 @@ static max_act_t tap(int x, int y)
     }
     if (max_m.talk_hit && inside(max_m.talk_box, x, y)) {
         if (max_m.talk == MAX_TALK_RECORDING) return act_for(MAX_ACT_SEND, max_m.talk_id);
-        if (max_m.talk == MAX_TALK_IDLE && max_find(max_m.selected)) {
+        if (max_m.talk != MAX_TALK_IDLE) return act_for(MAX_ACT_NONE, NULL);
+        if (max_form_open()) {   // a spoken name for the form's field
+            if (!max_form_can_say() || max_m.form.page.revision != max_m.form_revision) return act_for(MAX_ACT_NONE, NULL);
+            max_m.talk_id[0] = 0;
+            max_act_t act = act_for(MAX_ACT_SAY, NULL);
+            memcpy(act.form_id, max_m.form.id, sizeof act.form_id);
+            act.revision = max_m.form.page.revision;
+            return act;
+        }
+        if (max_find(max_m.selected)) {
             max_copy(max_m.talk_id, sizeof max_m.talk_id, max_m.selected);
             return act_for(MAX_ACT_TALK, max_m.talk_id);
         }
@@ -35,7 +78,6 @@ static max_act_t tap(int x, int y)
 
 max_act_t max_ui_touch(bool down, int x, int y, uint32_t now_ms)
 {
-    (void)now_ms;
     if (down) {
         if (!max_m.down) {
             max_m.down = true;
@@ -53,8 +95,13 @@ max_act_t max_ui_touch(bool down, int x, int y, uint32_t now_ms)
     }
     max_m.down = false;
     const int dx = x - max_m.down_x, dy = y - max_m.down_y;
-    if (!max_m.moved && iabs(dx) <= MAX_TAP_SLOP && iabs(dy) <= MAX_TAP_SLOP) return tap(max_m.down_x, max_m.down_y);
-    if (iabs(dx) >= MAX_SWIPE_PX && iabs(dx) * 2 > iabs(dy) * 3) {   // sideways: to the left shows the next page
+    if (!max_m.moved && iabs(dx) <= MAX_TAP_SLOP && iabs(dy) <= MAX_TAP_SLOP) return tap(max_m.down_x, max_m.down_y, now_ms);
+    if (iabs(dx) >= MAX_SWIPE_PX && iabs(dx) * 2 > iabs(dy) * 3) {   // sideways: to the left shows what comes next
+        if (max_form_open()) {
+            if (max_m.form.page.revision == max_m.form_revision && max_form_command(MAX_FORM_MOVE, dx < 0 ? 1 : -1, now_ms))
+                max_m.dirty = true;
+            return act_for(MAX_ACT_NONE, NULL);
+        }
         const int was = max_m.page;
         max_m.page += dx < 0 ? 1 : -1;
         max_clamp_page();

@@ -35,7 +35,7 @@ static int checks;
 
 // ---- the recorder --------------------------------------------------------------------------------------
 enum { EV_STATS, EV_LINK, EV_AGENTS, EV_SWARMS, EV_LIBRARY, EV_CONTEXT, EV_TURN, EV_SUMMARY, EV_QUESTION, EV_QCLOSE, EV_FOCUS,
-       EV_VOICE, EV_MACHINES, EV_NREPLACE, EV_NSEEN };
+       EV_VOICE, EV_MACHINES, EV_NREPLACE, EV_NSEEN, EV_ASK, EV_QSTATE, EV_RECEIPT, EV_FORM, EV_VFORM, EV_TOAST };
 typedef struct { int kind; char id[64]; char a[2400], b[2400], c[2400], d[128]; long n1, n2, n3, n4, n5; } ev_t;
 #define EV_MAX 64
 static ev_t evs[EV_MAX];
@@ -111,6 +111,60 @@ void pro_app_question(const char *id, const char *request, const char *text)
     ev_t *e = add(EV_QUESTION, id); (void)request; put(e->a, text);
 }
 void pro_app_question_close(const char *id) { add(EV_QCLOSE, id); }
+// Questions as one line: "key|q|o1/o2|m|w; ..." (multi and whole as 0/1, a NULL key as <null>).
+static void put_items(char *dst, const pro_ask_item_t *items, int n)
+{
+    dst[0] = 0;
+    for (int i = 0; i < n; i++) {
+        const pro_ask_item_t *it = &items[i];
+        size_t len = strlen(dst);
+        snprintf(dst + len, 2400 - len, "%s%s|%s|", i ? "; " : "", it->key ? it->key : "<null>", it->q);
+        for (int j = 0; j < it->option_count; j++) {
+            len = strlen(dst);
+            snprintf(dst + len, 2400 - len, "%s%s", j ? "/" : "", it->options[j]);
+        }
+        len = strlen(dst);
+        snprintf(dst + len, 2400 - len, "|%d|%d", it->multi, it->whole);
+    }
+}
+static pro_ask_item_t rec_items[PRO_ASK_ITEMS];
+void pro_app_ask(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
+                 bool permission)
+{
+    ev_t *e = add(EV_ASK, id); put(e->a, text); snprintf(e->d, sizeof e->d, "%s", request); e->n1 = n; e->n2 = permission;
+    put_items(e->b, items, n);
+    if (n > 0) memcpy(rec_items, items, (size_t)n * sizeof *items);
+}
+void pro_app_question_state(const char *id, const char *fetch, bool ok, const char *request, const char *token,
+                            bool submitted, const char *error, const pro_ask_item_t *items, int n)
+{
+    ev_t *e = add(EV_QSTATE, id); snprintf(e->d, sizeof e->d, "%s", fetch);
+    e->n1 = ok; e->n2 = submitted; e->n3 = n;
+    put(e->a, request); put(e->c, token); put_items(e->b, items, n);
+    if (error) put(e->b, error);   // an error comes only without items
+}
+void pro_app_answer_receipt(const char *id, const char *fetch, const char *token, bool ok, bool pending, const char *error)
+{
+    ev_t *e = add(EV_RECEIPT, id); snprintf(e->d, sizeof e->d, "%s", fetch);
+    put(e->a, token); put(e->b, error); e->n1 = ok; e->n2 = pending;
+}
+// A page as one line: "title|label|detail|previous|next|error|status|action|query" and the numbers in n1..n5.
+static void put_page(ev_t *e, const pro_form_page_t *p)
+{
+    snprintf(e->b, 2400, "%s|%s|%s|%s|%s|%s|%s|%s|%s", p->title, p->label, p->detail, p->previous, p->next, p->error,
+             p->status, p->action, p->query);
+    e->n2 = p->revision; e->n3 = p->position; e->n4 = p->total;
+    e->n5 = p->active | p->busy << 1 | p->enabled << 2 | p->can_query << 3;
+}
+void pro_app_form_state(const char *request, const char *form_id, bool ok, const pro_form_page_t *page)
+{
+    ev_t *e = add(EV_FORM, form_id); snprintf(e->d, sizeof e->d, "%s", request); e->n1 = ok; put_page(e, page);
+}
+void pro_app_voice_form(const char *form_id, bool ok, const pro_form_page_t *page)
+{
+    ev_t *e = add(EV_VFORM, form_id); e->n1 = ok; put_page(e, page);
+}
+void pro_app_toast(const char *text) { ev_t *e = add(EV_TOAST, NULL); put(e->a, text); }
 void pro_app_focus(const char *id) { add(EV_FOCUS, id); }
 void pro_app_voice_result(int kind, const char *text) { ev_t *e = add(EV_VOICE, NULL); e->n1 = kind; put(e->a, text); }
 void pro_app_machines(const cable_machine_t *rows, int count, const char *selected)
@@ -397,7 +451,8 @@ static void pro_cable_test_oversize(void)
     char *prompt = repeat("\xC3\xA9", 600);
     reset();
     feedf("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"q1\",\"questions\":[{\"q\":\"%s\"}]}", prompt);
-    CHECK(nev == 1 && evs[0].kind == EV_QUESTION && strlen(evs[0].a) <= PRO_QUESTION_BYTES - 1 && utf8_ok(evs[0].a));
+    CHECK(nev == 2 && evs[0].kind == EV_QUESTION && strlen(evs[0].a) <= PRO_QUESTION_BYTES - 1 && utf8_ok(evs[0].a));
+    CHECK(evs[1].kind == EV_ASK && evs[1].n1 == 0);   // no key and no options: not one the daemon's inbox holds
     free(prompt);
 
     // 64 swarms over the cap: exactly SWARMS_MAX come through, once, and the call returns.
@@ -463,18 +518,15 @@ static void pro_cable_test_ignores_round(void)
         "{\"t\":\"carry.state\",\"agentId\":\"a\",\"carryId\":\"c1\",\"state\":\"ready\"}",
         "{\"t\":\"draft.state\",\"agentId\":\"a\",\"draftId\":\"d\",\"text\":\"x\"}",
         "{\"t\":\"visit.state\",\"agentId\":\"a\",\"visitId\":\"v\"}",
-        "{\"t\":\"form.state\",\"formId\":\"f\"}",
         "{\"t\":\"selection.state\",\"agentId\":\"a\"}",
         "{\"t\":\"metrics.state\",\"requestId\":\"r\"}",
         "{\"t\":\"workspace.state\"}",
         "{\"t\":\"perf\"}",
-        "{\"t\":\"toast\",\"text\":\"hi\"}",
         "{\"t\":\"models\",\"agentId\":\"a\",\"items\":[]}",
         "{\"t\":\"speech.state\",\"agentId\":\"a\"}",
         "{\"t\":\"wifi.configure\",\"ssid\":\"x\",\"password\":\"y\"}",
         "{\"t\":\"voice.draft\",\"agentId\":\"a\"}",
         "{\"t\":\"player.overview\",\"harnesses\":1}",
-        "{\"t\":\"question.state\",\"agentId\":\"a\"}",
         "{\"t\":\"no.such.message\"}",
     };
     uint32_t bad0, unknown0, bad1, unknown1;
@@ -596,7 +648,10 @@ static void test_session_machines_library_voice(void)
     feed("{\"t\":\"question\",\"agentId\":\"c\"}");
     feed("{\"t\":\"question.close\",\"agentId\":\"a\",\"id\":\"q1\"}");
     feed("{\"t\":\"question.close\",\"agentId\":\"a\"}");
-    CHECK(nev == 3 && !strcmp(evs[0].a, "Proceed?") && !strcmp(evs[1].a, "Needs your answer") && evs[2].kind == EV_QCLOSE);
+    // Each question is delivered twice: the prompt, then the whole request (here none the inbox would hold).
+    CHECK(nev == 5 && !strcmp(evs[0].a, "Proceed?") && evs[1].kind == EV_ASK && evs[1].n1 == 0);
+    CHECK(!strcmp(evs[2].a, "Needs your answer") && evs[3].kind == EV_ASK && !strcmp(evs[3].a, "Needs your answer"));
+    CHECK(evs[4].kind == EV_QCLOSE);
 
 
     // player.context is delivered (pro_app ignores it)
@@ -665,6 +720,19 @@ static void *parse_heavy(void *arg)
         feed("{\"t\":\"agent\",\"id\":\"a\",\"name\":\"Alpha\",\"engine\":\"claude\",\"machineId\":\"m1\",\"machine\":\"Mac\"}");
         feed("{\"t\":\"agents.end\"}");
         feed("{\"t\":\"voice.transcript\",\"agentId\":\"a\",\"needsConfirm\":true,\"routeId\":\"r\"}");
+        // The fullest questions, their state and a form page.
+        char *option = repeat("\xC3\xA9", 60);
+        feedf("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"q\",\"questions\":["
+              "{\"key\":\"1\",\"q\":\"%s\",\"options\":[\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"],\"multi\":true},"
+              "{\"key\":\"2\",\"q\":\"x\",\"options\":[\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"]}]}",
+              option, option, option, option, option, option, option, option, option, option, option, option, option);
+        feedf("{\"t\":\"question.state\",\"agentId\":\"a\",\"requestId\":\"q1\",\"ok\":true,\"id\":\"q\",\"token\":\"t\","
+              "\"questions\":[{\"key\":\"1\",\"q\":\"%s\",\"options\":[\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"]}]}",
+              option, option, option, option, option, option, option);
+        feedf("{\"t\":\"form.state\",\"requestId\":\"form-1\",\"formId\":\"f\",\"ok\":true,\"active\":true,\"revision\":1,"
+              "\"position\":1,\"total\":2,\"busy\":false,\"enabled\":true,\"title\":\"%s\",\"label\":\"%s\",\"detail\":\"%s\"}",
+              option, option, big);
+        free(option);
     }
     free(big);
     CHECK(nev > 10);
@@ -1156,6 +1224,296 @@ static void replug_spares_a_frame_in_flight(void)
 }
 
 
+// ---- answering and New Harness (the Max's) -----------------------------------------------------------------
+static void welcome_with(const char *features)
+{
+    feedf("{\"t\":\"welcome\",\"machine\":{\"id\":\"m1\",\"name\":\"Mac\"},\"features\":[%s]}", features);
+}
+
+static void test_features(void)
+{
+    end_session();
+    CHECK(!pro_cable_supports(CABLE_FEATURE_FORM) && !pro_cable_supports(CABLE_FEATURE_QUESTION_REVIEW));
+    welcome_with("\"voice.draft\",\"agents.refresh\",\"resync\",\"form\",\"selection\",\"visit\",\"question.review\",\"settings\"");
+    CHECK(pro_cable_supports(CABLE_FEATURE_FORM) && pro_cable_supports(CABLE_FEATURE_QUESTION_REVIEW));
+    CHECK(pro_cable_supports(CABLE_FEATURE_FORM | CABLE_FEATURE_QUESTION_REVIEW | CABLE_FEATURE_RESYNC));
+    CHECK(!pro_cable_supports(CABLE_FEATURE_FORM | CABLE_FEATURE_PLAYER_LIBRARY));   // every bit asked must be offered
+    end_session();
+    CHECK(!pro_cable_supports(CABLE_FEATURE_FORM));   // the session took them with it
+    welcome_with("\"player.library\"");
+    CHECK(!pro_cable_supports(CABLE_FEATURE_FORM) && !pro_cable_supports(CABLE_FEATURE_QUESTION_REVIEW));
+}
+
+static void test_question_items(void)
+{
+    welcome();
+    reset();
+    feed("{\"t\":\"question\",\"agentId\":\"a\",\"name\":\"A\",\"engine\":\"claude\",\"machine\":\"Mac\",\"id\":\"toolu_1\",\"questions\":["
+         "{\"key\":\"k1\",\"q\":\"Which database?\",\"options\":[\"Dev\",\"Staging\"]},"
+         "{\"key\":\"k2\",\"q\":\"Which checks?\",\"options\":[\"Lint\",\"Types\",\"Tests\"],\"multi\":true,\"canText\":true}]}");
+    CHECK(nev == 2 && evs[0].kind == EV_QUESTION && !strcmp(evs[0].a, "Which database?"));
+    CHECK(evs[1].kind == EV_ASK && !strcmp(evs[1].id, "a") && !strcmp(evs[1].d, "toolu_1") && evs[1].n1 == 2);
+    CHECK(!strcmp(evs[1].a, "Which database?"));
+    CHECK(!strcmp(evs[1].b, "k1|Which database?|Dev/Staging|0|1; k2|Which checks?|Lint/Types/Tests|1|1"));
+    CHECK(evs[1].n2 == 0);   // no `permission`: a plain question
+
+    // A permission prompt is marked `permission: true`; anything but true is a plain question.
+    const char *marks[] = {"true", "false", "1", "\"true\""};
+    for (unsigned i = 0; i < sizeof marks / sizeof marks[0]; i++) {
+        reset();
+        feedf("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"r\",\"permission\":%s,"
+              "\"questions\":[{\"key\":\"k\",\"q\":\"Approve Bash command: npm run deploy:staging\",\"options\":[\"Yes\",\"No\"]}]}",
+              marks[i]);
+        CHECK(nev == 2 && evs[1].kind == EV_ASK && evs[1].n1 == 1 && evs[1].n2 == (i == 0));
+    }
+
+    // The inbox's rules: 1..4 questions, each with a key, a prompt and 1..6 non-empty string options, keys unique.
+    // Anything else is a request the daemon cannot take an answer for: delivered with no questions.
+    const char *bad[] = {
+        "[]",
+        "[{\"key\":\"k\",\"q\":\"x\",\"options\":[]}]",
+        "[{\"key\":\"k\",\"q\":\"x\",\"options\":[\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\"]}]",
+        "[{\"key\":\"k\",\"q\":\"x\",\"options\":[\"\"]}]",
+        "[{\"key\":\"k\",\"q\":\"x\",\"options\":[1]}]",
+        "[{\"key\":\"\",\"q\":\"x\",\"options\":[\"a\"]}]",
+        "[{\"q\":\"x\",\"options\":[\"a\"]}]",
+        "[{\"key\":\"k\",\"q\":\"\",\"options\":[\"a\"]}]",
+        "[{\"key\":\"k\",\"options\":[\"a\"]}]",
+        "[{\"key\":\"k\",\"q\":\"x\",\"options\":[\"a\"]},{\"key\":\"k\",\"q\":\"y\",\"options\":[\"b\"]}]",
+        ("[{\"key\":\"1\",\"q\":\"x\",\"options\":[\"a\"]},{\"key\":\"2\",\"q\":\"x\",\"options\":[\"a\"]},"
+         "{\"key\":\"3\",\"q\":\"x\",\"options\":[\"a\"]},{\"key\":\"4\",\"q\":\"x\",\"options\":[\"a\"]},{\"key\":\"5\",\"q\":\"x\",\"options\":[\"a\"]}]"),
+        "[\"x\"]",
+        "{}",
+    };
+    for (unsigned i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        reset();
+        feedf("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"r\",\"questions\":%s}", bad[i]);
+        CHECK(nev == 2 && evs[0].kind == EV_QUESTION && evs[1].kind == EV_ASK && evs[1].n1 == 0);
+    }
+    // Four questions of six options each is the most there is.
+    reset();
+    feed("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"r\",\"questions\":["
+         "{\"key\":\"1\",\"q\":\"x\",\"options\":[\"a\",\"b\",\"c\",\"d\",\"e\",\"f\"]},{\"key\":\"2\",\"q\":\"x\",\"options\":[\"a\"]},"
+         "{\"key\":\"3\",\"q\":\"x\",\"options\":[\"a\"]},{\"key\":\"4\",\"q\":\"x\",\"options\":[\"a\",\"b\",\"c\",\"d\",\"e\",\"f\"]}]}");
+    CHECK(nev == 2 && evs[1].n1 == 4 && rec_items[3].option_count == 6 && !strcmp(rec_items[3].options[5], "f"));
+
+    // A key too long to echo is NULL; a long prompt and a long option are cut on a code point; neither is whole.
+    char *key = repeat("k", PRO_KEY_BYTES), *option = repeat("\xc3\xa9", 200), *q = repeat("\xc3\xa9", 300);
+    reset();
+    feedf("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"r\",\"questions\":[{\"key\":\"%s\",\"q\":\"%s\",\"options\":[\"Yes\",\"No\"]},"
+          "{\"key\":\"k\",\"q\":\"x\",\"options\":[\"%s\"]}]}", key, q, option);
+    CHECK(nev == 2 && evs[1].n1 == 2);
+    CHECK(rec_items[0].key == NULL && !rec_items[0].whole && rec_items[0].option_count == 2);
+    CHECK(strlen(rec_items[0].q) <= PRO_QUESTION_BYTES - 1 && utf8_ok(rec_items[0].q));
+    CHECK(!strcmp(rec_items[1].key, "k") && !rec_items[1].whole);
+    CHECK(strlen(rec_items[1].options[0]) <= PRO_OPTION_BYTES - 1 && strlen(rec_items[1].options[0]) >= PRO_OPTION_BYTES - 2);
+    CHECK(utf8_ok(rec_items[1].options[0]));
+    free(key); free(option); free(q);
+    reset();   // a key one byte under the cap is kept
+    key = repeat("k", PRO_KEY_BYTES - 1);
+    feedf("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"r\",\"questions\":[{\"key\":\"%s\",\"q\":\"x\",\"options\":[\"a\"]}]}", key);
+    CHECK(nev == 2 && rec_items[0].key && strlen(rec_items[0].key) == PRO_KEY_BYTES - 1 && rec_items[0].whole);
+    free(key);
+
+    // A shown-only question is delivered like any other: the app tells it by its id.
+    reset();
+    feed("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"shown:5f0c\",\"questions\":[{\"key\":\"prompt\",\"q\":\"Allow the edit?\",\"options\":[\"In Orca\"]}]}");
+    CHECK(nev == 2 && evs[1].n1 == 1 && !strcmp(evs[1].d, "shown:5f0c") && !strcmp(rec_items[0].options[0], "In Orca"));
+}
+
+static void test_question_state_and_receipt(void)
+{
+    welcome();
+    reset();
+    feed("{\"t\":\"question.state\",\"agentId\":\"a\",\"requestId\":\"q7\",\"name\":\"A\",\"engine\":\"claude\",\"machine\":\"Mac\","
+         "\"ok\":true,\"id\":\"toolu_1\",\"token\":\"0b6f4a52-91e1-4c55-8d0e-2d0e4f8a1c3e\",\"questions\":["
+         "{\"key\":\"k1\",\"q\":\"Which database?\",\"options\":[\"Dev\",\"Staging\"],\"multi\":false,\"canText\":false}],"
+         "\"submitted\":false}");
+    CHECK(nev == 1 && evs[0].kind == EV_QSTATE && !strcmp(evs[0].id, "a") && !strcmp(evs[0].d, "q7"));
+    CHECK(evs[0].n1 == 1 && evs[0].n2 == 0 && evs[0].n3 == 1 && !strcmp(evs[0].a, "toolu_1"));
+    CHECK(!strcmp(evs[0].c, "0b6f4a52-91e1-4c55-8d0e-2d0e4f8a1c3e") && !strcmp(evs[0].b, "k1|Which database?|Dev/Staging|0|1"));
+    reset();   // an answer is in already
+    feed("{\"t\":\"question.state\",\"agentId\":\"a\",\"requestId\":\"q8\",\"ok\":true,\"id\":\"r\",\"token\":\"t\","
+         "\"questions\":[{\"key\":\"k\",\"q\":\"x\",\"options\":[\"a\"]}],\"submitted\":true}");
+    CHECK(nev == 1 && evs[0].n1 == 1 && evs[0].n2 == 1);
+    reset();   // the daemon's refusal, in its words
+    feed("{\"t\":\"question.state\",\"agentId\":\"a\",\"requestId\":\"q9\",\"ok\":false,\"error\":\"No readable question. Check the terminal.\"}");
+    CHECK(nev == 1 && evs[0].n1 == 0 && evs[0].n3 == 0 && !strcmp(evs[0].b, "No readable question. Check the terminal."));
+    CHECK(!strcmp(evs[0].a, "<null>") && !strcmp(evs[0].c, "<null>"));
+    // ok, but nothing to answer with: no token, a token or id over the cap, questions the inbox would not hold.
+    const char *broken[] = {
+        "\"id\":\"r\",\"questions\":[{\"key\":\"k\",\"q\":\"x\",\"options\":[\"a\"]}]",
+        "\"id\":\"r\",\"token\":\"\",\"questions\":[{\"key\":\"k\",\"q\":\"x\",\"options\":[\"a\"]}]",
+        "\"token\":\"t\",\"questions\":[{\"key\":\"k\",\"q\":\"x\",\"options\":[\"a\"]}]",
+        "\"id\":\"r\",\"token\":\"t\",\"questions\":[]",
+        "\"id\":\"r\",\"token\":\"t\"",
+    };
+    for (unsigned i = 0; i < sizeof broken / sizeof broken[0]; i++) {
+        reset();
+        feedf("{\"t\":\"question.state\",\"agentId\":\"a\",\"requestId\":\"q\",\"ok\":true,%s}", broken[i]);
+        CHECK(nev == 1 && evs[0].n1 == 0 && !strcmp(evs[0].b, "") && !strcmp(evs[0].a, "<null>"));
+    }
+    char *long_id = repeat("t", PRO_TOKEN_BYTES);
+    reset();
+    feedf("{\"t\":\"question.state\",\"agentId\":\"a\",\"requestId\":\"q\",\"ok\":true,\"id\":\"r\",\"token\":\"%s\","
+          "\"questions\":[{\"key\":\"k\",\"q\":\"x\",\"options\":[\"a\"]}]}", long_id);
+    feedf("{\"t\":\"question.state\",\"agentId\":\"a\",\"requestId\":\"q\",\"ok\":true,\"id\":\"%s\",\"token\":\"t\","
+          "\"questions\":[{\"key\":\"k\",\"q\":\"x\",\"options\":[\"a\"]}]}", long_id);
+    CHECK(nev == 2 && evs[0].n1 == 0 && evs[1].n1 == 0);
+    // Without our request id (or one we could not have sent), or without an agent, there is nobody to tell.
+    reset();
+    feed("{\"t\":\"question.state\",\"agentId\":\"a\",\"ok\":false,\"error\":\"x\"}");
+    feedf("{\"t\":\"question.state\",\"agentId\":\"a\",\"requestId\":\"%s\",\"ok\":false,\"error\":\"x\"}", long_id);
+    feed("{\"t\":\"question.state\",\"requestId\":\"q\",\"ok\":false,\"error\":\"x\"}");
+    CHECK(nev == 0);
+
+    // answer.receipt
+    reset();
+    feed("{\"t\":\"answer.receipt\",\"agentId\":\"a\",\"token\":\"tok\",\"requestId\":\"q7\",\"ok\":true}");
+    feed("{\"t\":\"answer.receipt\",\"agentId\":\"a\",\"token\":\"tok\",\"requestId\":\"q7\",\"ok\":true,\"pending\":true}");
+    feed("{\"t\":\"answer.receipt\",\"agentId\":\"a\",\"token\":\"tok\",\"requestId\":\"q7\",\"ok\":false,\"error\":\"This question changed. Open it again.\"}");
+    feed("{\"t\":\"answer.receipt\",\"agentId\":\"a\",\"token\":\"tok\",\"requestId\":\"q7\",\"ok\":false}");
+    CHECK(nev == 4 && evs[0].kind == EV_RECEIPT && !strcmp(evs[0].d, "q7") && !strcmp(evs[0].a, "tok"));
+    CHECK(evs[0].n1 == 1 && evs[0].n2 == 0 && !strcmp(evs[0].b, "<null>"));
+    CHECK(evs[1].n1 == 1 && evs[1].n2 == 1);
+    CHECK(evs[2].n1 == 0 && !strcmp(evs[2].b, "This question changed. Open it again."));
+    CHECK(evs[3].n1 == 0 && !strcmp(evs[3].b, "<null>"));
+    reset();   // no token, no request id, either over the cap: not ours
+    feed("{\"t\":\"answer.receipt\",\"agentId\":\"a\",\"requestId\":\"q7\",\"ok\":true}");
+    feed("{\"t\":\"answer.receipt\",\"agentId\":\"a\",\"token\":\"tok\",\"ok\":true}");
+    feedf("{\"t\":\"answer.receipt\",\"agentId\":\"a\",\"token\":\"%s\",\"requestId\":\"q7\",\"ok\":true}", long_id);
+    feedf("{\"t\":\"answer.receipt\",\"agentId\":\"a\",\"token\":\"tok\",\"requestId\":\"%s\",\"ok\":true}", long_id);
+    CHECK(nev == 0);
+    free(long_id);
+}
+
+static void test_form_and_toast(void)
+{
+    welcome();
+    reset();
+    feed("{\"t\":\"form.state\",\"requestId\":\"form-3\",\"formId\":\"form-1a2b-3c4d\",\"ok\":true,\"active\":true,\"revision\":7,"
+         "\"title\":\"New Harness\",\"label\":\"harness-cli\",\"detail\":\"claude\\nharness\",\"previous\":\"Project\",\"next\":\"Start\","
+         "\"action\":\"choose\",\"position\":2,\"total\":4,\"busy\":false,\"enabled\":true,\"canQuery\":true,\"query\":\"cli\"}");
+    CHECK(nev == 1 && evs[0].kind == EV_FORM && !strcmp(evs[0].id, "form-1a2b-3c4d") && !strcmp(evs[0].d, "form-3"));
+    CHECK(evs[0].n1 == 1 && evs[0].n2 == 7 && evs[0].n3 == 2 && evs[0].n4 == 4 && evs[0].n5 == (1 | 4 | 8));
+    CHECK(!strcmp(evs[0].b, "New Harness|harness-cli|claude\nharness|Project|Start|||choose|cli"));
+    reset();   // closed (started, or backed out of): nothing but ok and active is needed
+    feed("{\"t\":\"form.state\",\"requestId\":\"form-4\",\"formId\":\"f\",\"ok\":true,\"active\":false}");
+    feed("{\"t\":\"form.state\",\"requestId\":\"form-5\",\"formId\":\"f\",\"ok\":false,\"active\":false,\"error\":\"Open Harness on this computer.\"}");
+    CHECK(nev == 2 && evs[0].n1 == 1 && evs[0].n5 == 0 && !strcmp(evs[0].b, "||||||||"));
+    CHECK(evs[1].n1 == 0 && !strcmp(evs[1].b, "|||||Open Harness on this computer.|||"));
+    // Active, but a number or a flag missing or out of range: not a page.
+    const char *bad[] = {
+        "\"revision\":1,\"position\":1,\"total\":2,\"busy\":false",
+        "\"revision\":1,\"position\":1,\"busy\":false,\"enabled\":true",
+        "\"revision\":-1,\"position\":1,\"total\":2,\"busy\":false,\"enabled\":true",
+        "\"revision\":1.5,\"position\":1,\"total\":2,\"busy\":false,\"enabled\":true",
+        "\"revision\":1,\"position\":1,\"total\":2147483648,\"busy\":false,\"enabled\":true",
+        "\"revision\":1,\"position\":\"1\",\"total\":2,\"busy\":false,\"enabled\":true",
+    };
+    for (unsigned i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        reset();
+        feedf("{\"t\":\"form.state\",\"requestId\":\"form-6\",\"formId\":\"f\",\"ok\":true,\"active\":true,%s}", bad[i]);
+        CHECK(nev == 0);
+    }
+    reset();   // no request id, no form id: not a reply
+    feed("{\"t\":\"form.state\",\"formId\":\"f\",\"ok\":true,\"active\":false}");
+    feed("{\"t\":\"form.state\",\"requestId\":\"form-7\",\"ok\":true,\"active\":false}");
+    CHECK(nev == 0);
+    // Every string is cut to the desktop's own bound, on a code point.
+    char *big = repeat("\xc3\xa9", 300);
+    reset();
+    feedf("{\"t\":\"form.state\",\"requestId\":\"form-8\",\"formId\":\"f\",\"ok\":false,\"active\":false,\"detail\":\"%s\",\"error\":\"%s\"}",
+          big, big);
+    CHECK(nev == 1 && utf8_ok(evs[0].b));
+    const char *detail = evs[0].b + 2, *end = strchr(detail, '|');   // no title, no label
+    CHECK(!strncmp(evs[0].b, "||", 2) && end && end - detail <= 383 && end - detail >= 382);
+    free(big);
+
+    // toast
+    reset();
+    feed("{\"t\":\"toast\",\"text\":\"This agent is in Orca. Answering it from the device comes in an update.\"}");
+    feed("{\"t\":\"toast\"}");
+    CHECK(nev == 1 && evs[0].kind == EV_TOAST && !strcmp(evs[0].a, "This agent is in Orca. Answering it from the device comes in an update."));
+    big = repeat("\xc3\xa9", 200);
+    reset();
+    feedf("{\"t\":\"toast\",\"text\":\"%s\"}", big);
+    CHECK(nev == 1 && strlen(evs[0].a) <= PRO_TOAST_BYTES - 1 && utf8_ok(evs[0].a));
+    free(big);
+}
+
+static void test_voice_form(void)
+{
+    welcome();
+    reset();
+    pro_cable_voice_form("form-1a2b", 7);
+    CHECK(pro_cable_voice_begin("", "vi", 16000, "up9") && nsent == 1);
+    CHECK(strstr(sent[0], "\"t\":\"voice.begin\"") && strstr(sent[0], "\"formId\":\"form-1a2b\"") && strstr(sent[0], "\"formRevision\":7"));
+    CHECK(!strstr(sent[0], "agentId") && strstr(sent[0], "\"uploadId\":\"up9\"") && strstr(sent[0], "\"lang\":\"vi\""));
+    // The reply for this recording is delivered; one for another upload, or with no form id, is not.
+    feed("{\"t\":\"voice.form\",\"formId\":\"form-1a2b\",\"ok\":true,\"active\":true,\"revision\":8,\"title\":\"Project\","
+         "\"label\":\"harness\",\"position\":1,\"total\":3,\"busy\":false,\"enabled\":true,\"canQuery\":true,\"query\":\"harness\",\"uploadId\":\"up9\"}");
+    feed("{\"t\":\"voice.form\",\"formId\":\"form-1a2b\",\"ok\":true,\"active\":true,\"revision\":8,\"position\":1,\"total\":3,"
+         "\"busy\":false,\"enabled\":true,\"uploadId\":\"up8\"}");
+    feed("{\"t\":\"voice.form\",\"ok\":true,\"active\":false,\"uploadId\":\"up9\"}");
+    CHECK(nev == 1 && evs[0].kind == EV_VFORM && !strcmp(evs[0].id, "form-1a2b") && evs[0].n1 == 1 && evs[0].n2 == 8);
+    CHECK(!strncmp(evs[0].b, "Project|harness|", 16) && evs[0].n5 == (1 | 4 | 8));
+    // Aimed at a form, a recording names no agent even when given one: the daemon refuses both.
+    CHECK(pro_cable_voice_begin("a", "en", 16000, "up10") && !strstr(sent[1], "agentId") && strstr(sent[1], "\"formId\""));
+    feed("{\"t\":\"voice.form\",\"formId\":\"form-1a2b\",\"ok\":false,\"active\":false,\"error\":\"Say a short harness or project name.\",\"uploadId\":\"up10\"}");
+    CHECK(nev == 2 && evs[1].n1 == 0 && strstr(evs[1].b, "Say a short harness or project name."));
+    // Cleared: an ordinary recording names its agent again.
+    pro_cable_voice_form(NULL, 0);
+    CHECK(pro_cable_voice_begin("a", "en", 16000, "up11") && strstr(sent[2], "\"agentId\":\"a\"") && !strstr(sent[2], "formId"));
+    // A form id the daemon would refuse is not aimed at: the recording goes out as an ordinary one.
+    pro_cable_voice_form("form 1", 1);
+    CHECK(pro_cable_voice_begin("", "en", 16000, "up12") && !strstr(sent[3], "formId"));
+    pro_cable_voice_form(NULL, 0);
+}
+
+static void test_answer_and_form_sends(void)
+{
+    welcome();
+    reset();
+    nowait_sent = 0;
+    CHECK(pro_cable_question_read("a", "q7", false) && nowait_sent == 1);
+    CHECK(!strcmp(sent[0], "{\"t\":\"question.read\",\"agentId\":\"a\",\"requestId\":\"q7\"}"));
+    const uint8_t choices[] = {1, 6};
+    CHECK(pro_cable_answer_reviewed("a", "tok", "q8", choices, 2, true) && nowait_sent == 1);
+    CHECK(!strcmp(sent[1], "{\"t\":\"answer.reviewed\",\"agentId\":\"a\",\"token\":\"tok\",\"requestId\":\"q8\",\"choices\":[1,6]}"));
+    const char *keys[] = {"Which database?", "k2"}, *values[] = {"Dev", "Lint, Tests"};
+    CHECK(pro_cable_answer("a", "toolu_1", keys, values, 2, true));
+    CHECK(!strcmp(sent[2], "{\"t\":\"answer\",\"agentId\":\"a\",\"requestId\":\"toolu_1\",\"answers\":{\"Which database?\":\"Dev\",\"k2\":\"Lint, Tests\"}}"));
+    CHECK(pro_cable_form("form-1a2b", "form-1", "open", 0, 0, true));
+    CHECK(!strcmp(sent[3], "{\"t\":\"form\",\"requestId\":\"form-1\",\"formId\":\"form-1a2b\",\"surface\":\"new\",\"op\":\"open\",\"revision\":0,\"delta\":0}"));
+    CHECK(pro_cable_form("form-1a2b", "form-2", "move", 7, -3, false) && nowait_sent == 2);
+    CHECK(strstr(sent[4], "\"op\":\"move\",\"revision\":7,\"delta\":-3"));
+    static const char *const ops[] = {"state", "activate", "back", "close"};
+    for (int i = 0; i < 4; i++) CHECK(pro_cable_form("form-1a2b", "form-3", ops[i], 7, 0, true));
+    CHECK(nsent == 9);
+
+    // Malformed: never sent.
+    char *long_id = repeat("r", PRO_TOKEN_BYTES + 1), *long_agent = repeat("a", ID_MAX);
+    const uint8_t zero[] = {1, 0}, five[] = {1, 1, 1, 1, 1};
+    reset();
+    CHECK(!pro_cable_question_read("", "q", true) && !pro_cable_question_read("a", "", true));
+    CHECK(!pro_cable_question_read("a", long_id, true) && !pro_cable_question_read(long_agent, "q", true));
+    CHECK(!pro_cable_answer_reviewed("a", "", "q", choices, 2, true) && !pro_cable_answer_reviewed("a", "t", "", choices, 2, true));
+    CHECK(!pro_cable_answer_reviewed("a", "t", "q", choices, 0, true) && !pro_cable_answer_reviewed("a", "t", "q", five, 5, true));
+    CHECK(!pro_cable_answer_reviewed("a", "t", "q", zero, 2, true) && !pro_cable_answer_reviewed("a", "t", long_id, choices, 2, true));
+    const char *empty_key[] = {""};
+    CHECK(!pro_cable_answer("a", "r", keys, values, 0, true) && !pro_cable_answer("a", "r", empty_key, values, 1, true));
+    CHECK(!pro_cable_answer("a", "", keys, values, 1, true) && !pro_cable_answer("", "r", keys, values, 1, true));
+    CHECK(!pro_cable_form("form 1", "form-1", "open", 0, 0, true) && !pro_cable_form("", "form-1", "open", 0, 0, true));
+    char *long_form = repeat("f", 49);
+    CHECK(!pro_cable_form(long_form, "form-1", "open", 0, 0, true) && !pro_cable_form("f", "", "open", 0, 0, true));
+    CHECK(!pro_cable_form("f", long_id, "open", 0, 0, true) && !pro_cable_form("f", "form-1", "query", 0, 0, true));
+    CHECK(!pro_cable_form("f", "form-1", "move", 1, 0, true) && !pro_cable_form("f", "form-1", "move", 1, 9, true));
+    CHECK(!pro_cable_form("f", "form-1", "state", -1, 0, true));
+    CHECK(nsent == 0);
+    free(long_id); free(long_agent); free(long_form);
+}
+
 int main(void)
 {
     pro_cable_start();   // the lock and the machine table; no tasks run on the host
@@ -1181,6 +1539,12 @@ int main(void)
     seq_gaps();
     self_replug();
     replug_spares_a_frame_in_flight();
+    test_features();
+    test_question_items();
+    test_question_state_and_receipt();
+    test_form_and_toast();
+    test_voice_form();
+    test_answer_and_form_sends();
     printf("test_pro_cable: %d checks passed\n", checks);
     return 0;
 }

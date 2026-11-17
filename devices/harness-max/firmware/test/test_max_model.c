@@ -127,11 +127,11 @@ static void test_question(void)
 {
     linked(ABC, 3);
     max_ui_turn("b", "started", "", 0, 0);
-    CHECK(max_ui_question("b", "r1", "Run the migration on the dev database now?", 1000));
+    CHECK(max_ui_question("b", "r1", "Run the migration on the dev database now?", NULL, 0, false, false, 1000));
     max_agent_t *b = max_find("b");
     CHECK(b->state == MAX_ASKING && !strcmp(b->question, "Run the migration on the dev database now?"));
-    CHECK(!max_ui_question("b", "r1", "Run the migration on the dev database now?", 1100));
-    CHECK(max_ui_question("b", "r2", "Run the migration on the dev database now?", 1200));
+    CHECK(!max_ui_question("b", "r1", "Run the migration on the dev database now?", NULL, 0, false, false, 1100));
+    CHECK(max_ui_question("b", "r2", "Run the migration on the dev database now?", NULL, 0, false, false, 1200));
     // While it asks, the turn's progress waits; the clock runs on.
     CHECK(!max_ui_turn("b", "activity", "Migrating", 3, 2000));
     CHECK(!max_ui_turn("b", "step", "Bash \xc2\xb7 migrate", -1, 2000));
@@ -139,9 +139,9 @@ static void test_question(void)
     CHECK(max_ui_question_close("b"));
     CHECK(b->state == MAX_WORKING && b->question[0] == 0);
     CHECK(!max_ui_question_close("b"));
-    CHECK(!max_ui_question("zz", "r", "?", 0));
+    CHECK(!max_ui_question("zz", "r", "?", NULL, 0, false, false, 0));
     // A turn that ends while it asks ends the question too.
-    max_ui_question("b", "r3", "Push?", 6000);
+    max_ui_question("b", "r3", "Push?", NULL, 0, false, false, 6000);
     max_ui_turn("b", "done", "", 0, 7000);
     CHECK(b->state == MAX_DONE && b->question[0] == 0);
 }
@@ -185,7 +185,7 @@ static void test_order_and_stability(void)
     CHECK(!strcmp(order_ids(buf, sizeof buf), "a b c d e"));
     max_ui_turn("b", "started", "", 0, 0);
     max_ui_turn("d", "started", "", 0, 0);
-    max_ui_question("d", "r", "Push?", 10);
+    max_ui_question("d", "r", "Push?", NULL, 0, false, false, 10);
     max_ui_turn("e", "error", "Boom", 0, 20);
     CHECK(!strcmp(order_ids(buf, sizeof buf), "d e b a c"));
     // Progress on a working lane never moves it.
@@ -220,7 +220,7 @@ static void test_paging_and_focus(void)
     CHECK(max_ui_focus("d"));
     CHECK(max_m.page == 1);
     // e asks: it leads page 0, and a focus follows it there.
-    max_ui_question("e", "r", "Ok?", 0);
+    max_ui_question("e", "r", "Ok?", NULL, 0, false, false, 0);
     CHECK(max_ui_focus("e"));
     CHECK(max_m.page == 0);
     // Fewer agents: the page comes back within the pages there are.
@@ -246,7 +246,7 @@ static void test_caps(void)
     CHECK(strlen(v->name) == 39 && utf8_valid(v->name));
     max_ui_turn("v", "activity", viet, 1, 0);
     CHECK(strlen(v->activity) == 189 && utf8_valid(v->activity));
-    max_ui_question("v", "r", viet, 0);
+    max_ui_question("v", "r", viet, NULL, 0, false, false, 0);
     CHECK(strlen(v->question) == 237 && utf8_valid(v->question));
     max_ui_turn("v", "verb", viet, -1, 0);
     CHECK(strlen(v->verb) == 0);   // asking: the spinner word waits

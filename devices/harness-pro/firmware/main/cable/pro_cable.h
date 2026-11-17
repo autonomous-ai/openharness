@@ -1,5 +1,5 @@
 // The Harness Pro's cable client: the daemon's framed JSON in, pro_app_* calls out; the few messages the Pro sends back.
-// Only the messages Pod uses are parsed (docs/cable.md); everything else is counted as unknown and ignored.
+// Only the messages Pod and the Max use are parsed (docs/cable.md); everything else is counted as unknown and ignored.
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
@@ -31,10 +31,31 @@ bool pro_cable_voice_pcm(const uint8_t *pcm, size_t len);
 bool pro_cable_voice_end(const char *upload_id);
 bool pro_cable_voice_abort(const char *upload_id, const char *why);   // why may be NULL
 bool pro_cable_voice_cancel(const char *upload_id);                   // voice.abort why:"discarded" (link-side cleanup)
+// The next voice.begin is a spoken name for this form's field at this revision: it carries formId and formRevision and
+// no agentId, and the reply arrives as pro_app_voice_form. NULL: an ordinary recording. Set before each pro_voice_begin.
+void pro_cable_voice_form(const char *form_id, int revision);
+
+// ---- answering and New Harness (the Max; the Pro sends none of these) ----
+// `wait`: block for the port like a tap's agent.open (the touch task), or give up at once (the render task). Each
+// returns false when the message is malformed or could not go out.
+// question.read {agentId, requestId}: the open question whole, for answering it (pro_app_question_state replies).
+bool pro_cable_question_read(const char *agent_id, const char *request_id, bool wait);
+// answer.reviewed {agentId, token, requestId, choices}: one option mask per question, bit j for option j
+// (pro_app_answer_receipt replies).
+bool pro_cable_answer_reviewed(const char *agent_id, const char *token, const char *request_id, const uint8_t *choices,
+                               int count, bool wait);
+// answer {agentId, requestId, answers:{key: value}}: a daemon without question.review. `request_id` is the question's
+// id; no reply comes.
+bool pro_cable_answer(const char *agent_id, const char *request_id, const char *const keys[], const char *const values[],
+                      int count, bool wait);
+// form {requestId, formId, surface:"new", op, revision, delta}: New Harness on the cabled computer. op is open, state,
+// move (delta -8..8, not 0), activate, back or close; formId is [A-Za-z0-9-]{1,48} (pro_app_form_state replies).
+bool pro_cable_form(const char *form_id, const char *request_id, const char *op, int revision, int delta, bool wait);
 
 // ---- state ----
 bool pro_cable_connected(void);          // a welcome arrived and the daemon has not gone quiet
 bool pro_cable_library_supported(void);  // welcome.features names player.library
+bool pro_cable_supports(uint32_t feature);   // welcome.features names every CABLE_FEATURE_* bit in `feature`
 
 const char *pro_cable_fw_version(void);
 

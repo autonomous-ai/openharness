@@ -72,6 +72,9 @@ static bool        s_seq_on;          // the welcome carried a seq
 // The id of the recording in flight: written by the voice task, read by the cable_link task to match a reply.
 static SemaphoreHandle_t s_upload_lock;
 static char s_upload[24];
+// The form field the next recording names (pro_cable_voice_form), under the same lock: "" for none.
+static char s_voice_form[49];
+static int  s_voice_form_revision;
 // The latest player.library request. Written before the request is sent, so a fast reply cannot beat it.
 static atomic_uint s_lib_request;
 static atomic_bool s_lib_requested;
@@ -311,16 +314,49 @@ static bool upload_matches(const char *upload_id)
     return same;
 }
 
+// The daemon's formId: [A-Za-z0-9-]{1,48}.
+static bool form_id_ok(const char *id)
+{
+    const size_t n = id ? strlen(id) : 0;
+    if (n < 1 || n > 48) return false;
+    for (size_t i = 0; i < n; i++)
+        if (!isalnum((unsigned char)id[i]) && id[i] != '-') return false;
+    return true;
+}
+
+void pro_cable_voice_form(const char *form_id, int revision)
+{
+    if (!s_upload_lock) return;
+    xSemaphoreTake(s_upload_lock, portMAX_DELAY);
+    const bool aimed = form_id_ok(form_id) && revision >= 0;
+    snprintf(s_voice_form, sizeof s_voice_form, "%s", aimed ? form_id : "");
+    s_voice_form_revision = aimed ? revision : 0;
+    xSemaphoreGive(s_upload_lock);
+}
+
 bool pro_cable_voice_begin(const char *agent_id, const char *lang, int sample_rate, const char *upload_id)
 {
     if (!upload_id || !upload_id[0]) return false;
     remember_upload(upload_id);
+    char form[sizeof s_voice_form] = "";
+    int form_revision = 0;
+    if (s_upload_lock) {
+        xSemaphoreTake(s_upload_lock, portMAX_DELAY);
+        memcpy(form, s_voice_form, sizeof form);
+        form_revision = s_voice_form_revision;
+        xSemaphoreGive(s_upload_lock);
+    }
     cJSON *root = msg("voice.begin");
-    // OMITTED, not empty, without an agent: absence tells the daemon to route the transcript itself.
-    if (agent_id && agent_id[0]) msg_string(&root, "agentId", agent_id);
+    // OMITTED, not empty, without an agent: absence tells the daemon to route the transcript itself. A spoken name for
+    // a form's field names no agent at all: the daemon refuses one that does.
+    if (agent_id && agent_id[0] && !form[0]) msg_string(&root, "agentId", agent_id);
     msg_string(&root, "lang", lang && lang[0] ? lang : "en");
     msg_number(&root, "sr", sample_rate);
     msg_string(&root, "uploadId", upload_id);
+    if (form[0]) {
+        msg_string(&root, "formId", form);
+        msg_number(&root, "formRevision", form_revision);
+    }
     return send_json(root);
 }
 
@@ -358,6 +394,11 @@ bool pro_cable_connected(void) { return atomic_load(&s_session); }
 bool pro_cable_library_supported(void)
 {
     return atomic_load(&s_session) && (atomic_load(&s_features) & CABLE_FEATURE_PLAYER_LIBRARY);
+}
+
+bool pro_cable_supports(uint32_t feature)
+{
+    return atomic_load(&s_session) && (atomic_load(&s_features) & feature) == feature;
 }
 
 void pro_cable_counters(uint32_t *bad, uint32_t *unknown)
@@ -675,7 +716,54 @@ static void handle_notif_seen(const cJSON *p)
     pro_app_notif_seen(id, token ? token->valuestring : NULL);
 }
 
-// question {agentId, id, questions:[{q}]}.
+// One request's questions, kept for the call that delivers them (4 x 1.3 KB: PSRAM).
+typedef struct { char key[PRO_KEY_BYTES], q[PRO_QUESTION_BYTES], options[PRO_ASK_OPTIONS][PRO_OPTION_BYTES]; } ask_store_t;
+static EXT_RAM_BSS_ATTR ask_store_t s_ask_store[PRO_ASK_ITEMS];
+static pro_ask_item_t s_ask_items[PRO_ASK_ITEMS];
+
+// `questions` as the daemon's inbox takes them (questionInbox.ts set): 1..4, each with a key, a prompt and 1..6
+// non-empty options, the keys unique. Returns how many are in s_ask_items, or 0 for a request it would not hold: an
+// answer to that cannot be checked against what was asked.
+static int read_items(const cJSON *questions)
+{
+    const int n = cJSON_IsArray(questions) ? cJSON_GetArraySize(questions) : 0;
+    if (n < 1 || n > PRO_ASK_ITEMS) return 0;
+    const char *keys[PRO_ASK_ITEMS];
+    int i = 0;
+    const cJSON *it;
+    cJSON_ArrayForEach(it, questions) {
+        const char *key = str_of(it, "key"), *q = str_of(it, "q");
+        const cJSON *options = cJSON_GetObjectItemCaseSensitive(it, "options");
+        const int m = cJSON_IsArray(options) ? cJSON_GetArraySize(options) : 0;
+        if (!key || !key[0] || !q || !q[0] || m < 1 || m > PRO_ASK_OPTIONS) return 0;
+        for (int j = 0; j < i; j++)
+            if (!strcmp(keys[j], key)) return 0;
+        ask_store_t *st = &s_ask_store[i];
+        pro_ask_item_t *item = &s_ask_items[i];
+        // A cut key or option would answer something nobody was asked: only a whole one can be echoed back.
+        const bool key_whole = strlen(key) < sizeof st->key;
+        if (key_whole) memcpy(st->key, key, strlen(key) + 1);
+        copy_cut(st->q, sizeof st->q, q);
+        item->whole = key_whole;
+        int j = 0;
+        const cJSON *o;
+        cJSON_ArrayForEach(o, options) {
+            if (!cJSON_IsString(o) || !o->valuestring[0]) return 0;
+            copy_cut(st->options[j], sizeof st->options[j], o->valuestring);
+            item->whole = item->whole && strlen(o->valuestring) < sizeof st->options[j];
+            item->options[j] = st->options[j];
+            j++;
+        }
+        item->key = key_whole ? st->key : NULL;
+        item->q = st->q;
+        item->option_count = m;
+        item->multi = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(it, "multi"));
+        keys[i++] = key;
+    }
+    return i;
+}
+
+// question {agentId, id, questions:[{key, q, options, multi}]}: the prompt, then the whole request.
 static void handle_question(const char *id, const cJSON *p)
 {
     const char *request = str_of(p, "id");   // the request this question belongs to
@@ -684,6 +772,80 @@ static void handle_question(const char *id, const cJSON *p)
     const char *prompt = str_of(cJSON_GetArrayItem(questions, 0), "q");
     copy_cut(s_text, PRO_QUESTION_BYTES, prompt ? prompt : "Needs your answer");
     pro_app_question(id, request, s_text);
+    pro_app_ask(id, request, s_text, s_ask_items, read_items(questions), flag(p, "permission"));
+}
+
+static bool token_fits(const char *s) { return s && s[0] && strlen(s) < PRO_TOKEN_BYTES; }
+
+// question.state {agentId, requestId, ok, id, token, questions, submitted} or {agentId, requestId, ok:false, error}.
+static void handle_question_state(const char *id, const cJSON *p)
+{
+    const char *fetch = str_of(p, "requestId");
+    if (!token_fits(fetch)) return;   // not a read this device could have sent
+    if (!flag(p, "ok")) {
+        pro_app_question_state(id, fetch, false, NULL, NULL, false, cut_of(p, "error", s_verb, sizeof s_verb), NULL, 0);
+        return;
+    }
+    const char *request = str_of(p, "id"), *token = str_of(p, "token");
+    const int n = read_items(cJSON_GetObjectItemCaseSensitive(p, "questions"));
+    if (token_fits(request) && token_fits(token) && n > 0)
+        pro_app_question_state(id, fetch, true, request, token, flag(p, "submitted"), NULL, s_ask_items, n);
+    else   // nothing to answer with
+        pro_app_question_state(id, fetch, false, NULL, NULL, false, NULL, NULL, 0);
+}
+
+// answer.receipt {agentId, token, requestId, ok, pending?} or {..., ok:false, error}.
+static void handle_answer_receipt(const char *id, const cJSON *p)
+{
+    const char *fetch = str_of(p, "requestId"), *token = str_of(p, "token");
+    if (!token_fits(fetch) || !token_fits(token)) return;
+    const bool ok = flag(p, "ok");
+    pro_app_answer_receipt(id, fetch, token, ok, ok && flag(p, "pending"),
+                           ok ? NULL : cut_of(p, "error", s_verb, sizeof s_verb));
+}
+
+static bool send_maybe(cJSON *root, bool wait) { return wait ? send_json(root) : send_json_with(root, false); }
+
+bool pro_cable_question_read(const char *agent_id, const char *request_id, bool wait)
+{
+    if (!agent_id || !agent_id[0] || strlen(agent_id) >= ID_MAX || !token_fits(request_id)) return false;
+    cJSON *root = msg("question.read");
+    msg_string(&root, "agentId", agent_id);
+    msg_string(&root, "requestId", request_id);
+    return send_maybe(root, wait);
+}
+
+bool pro_cable_answer_reviewed(const char *agent_id, const char *token, const char *request_id, const uint8_t *choices,
+                               int count, bool wait)
+{
+    if (!agent_id || !agent_id[0] || strlen(agent_id) >= ID_MAX || !token_fits(token) || !token_fits(request_id) ||
+        !choices || count < 1 || count > PRO_ASK_ITEMS) return false;
+    for (int i = 0; i < count; i++)
+        if (!choices[i] || choices[i] >= 1u << PRO_ASK_OPTIONS) return false;   // every question answered, by its options
+    cJSON *root = msg("answer.reviewed");
+    msg_string(&root, "agentId", agent_id);
+    msg_string(&root, "token", token);
+    msg_string(&root, "requestId", request_id);
+    cJSON *masks = root ? cJSON_AddArrayToObject(root, "choices") : NULL;
+    msg_check(&root, masks != NULL);
+    for (int i = 0; root && i < count; i++) msg_check(&root, cJSON_AddItemToArray(masks, cJSON_CreateNumber(choices[i])));
+    return send_maybe(root, wait);
+}
+
+bool pro_cable_answer(const char *agent_id, const char *request_id, const char *const keys[], const char *const values[],
+                      int count, bool wait)
+{
+    if (!agent_id || !agent_id[0] || strlen(agent_id) >= ID_MAX || !token_fits(request_id) || !keys || !values ||
+        count < 1 || count > PRO_ASK_ITEMS) return false;
+    for (int i = 0; i < count; i++)
+        if (!keys[i] || !keys[i][0] || !values[i]) return false;
+    cJSON *root = msg("answer");
+    msg_string(&root, "agentId", agent_id);
+    msg_string(&root, "requestId", request_id);
+    cJSON *answers = root ? cJSON_AddObjectToObject(root, "answers") : NULL;
+    msg_check(&root, answers != NULL);
+    for (int i = 0; root && i < count; i++) msg_check(&root, cJSON_AddStringToObject(answers, keys[i], values[i]) != NULL);
+    return send_maybe(root, wait);
 }
 
 static void handle_question_close(const char *id, const cJSON *p)
@@ -770,6 +932,69 @@ static void handle_context(const cJSON *p)
                     cut_of(p, "engine", engine, sizeof engine) ? engine : "");
 }
 
+// ── New Harness: the desktop's form ─────────────────────────────────────────────────────────────────
+// The strings at the desktop's own bounds (windowForm.ts reply), NUL included.
+static struct {
+    char title[80], label[160], detail[384], previous[96], next[96], error[180], status[96], action[32], query[240];
+} s_form;
+
+bool pro_cable_form(const char *form_id, const char *request_id, const char *op, int revision, int delta, bool wait)
+{
+    static const char *const ops[] = {"open", "state", "move", "activate", "back", "close"};
+    bool known = false;
+    for (unsigned i = 0; op && i < sizeof ops / sizeof ops[0]; i++) known = known || !strcmp(op, ops[i]);
+    if (!form_id_ok(form_id) || !token_fits(request_id) || !known || revision < 0 ||
+        (!strcmp(op, "move") && (delta == 0 || delta < -8 || delta > 8))) return false;
+    cJSON *root = msg("form");
+    msg_string(&root, "requestId", request_id);
+    msg_string(&root, "formId", form_id);
+    msg_string(&root, "surface", "new");
+    msg_string(&root, "op", op);
+    msg_number(&root, "revision", revision);
+    msg_number(&root, "delta", delta);
+    return send_maybe(root, wait);
+}
+
+// A page: an active one must carry its revision, position, total, busy and enabled, as the desktop checks them.
+static bool read_form_page(const cJSON *p, pro_form_page_t *page)
+{
+    memset(page, 0, sizeof *page);
+#define FORM_TEXT(field) do { page->field = cut_of(p, #field, s_form.field, sizeof s_form.field); \
+                              if (!page->field) page->field = ""; } while (0)
+    FORM_TEXT(title); FORM_TEXT(label); FORM_TEXT(detail); FORM_TEXT(previous); FORM_TEXT(next);
+    FORM_TEXT(error); FORM_TEXT(status); FORM_TEXT(action); FORM_TEXT(query);
+#undef FORM_TEXT
+    page->active = flag(p, "active");
+    if (!page->active) return true;
+    double revision, position, total;
+    const cJSON *busy = cJSON_GetObjectItemCaseSensitive(p, "busy"), *enabled = cJSON_GetObjectItemCaseSensitive(p, "enabled");
+    if (!whole_number(p, "revision", 0, INT32_MAX, &revision) || !whole_number(p, "position", 0, INT32_MAX, &position) ||
+        !whole_number(p, "total", 0, INT32_MAX, &total) || !cJSON_IsBool(busy) || !cJSON_IsBool(enabled)) return false;
+    page->revision = (int32_t)revision;
+    page->position = (int32_t)position;
+    page->total = (int32_t)total;
+    page->busy = cJSON_IsTrue(busy);
+    page->enabled = cJSON_IsTrue(enabled);
+    page->can_query = flag(p, "canQuery");
+    return true;
+}
+
+// form.state {requestId, formId, ok, active, ...the page}.
+static void handle_form_state(const cJSON *p)
+{
+    const char *request = str_of(p, "requestId"), *form_id = str_of(p, "formId");
+    if (!token_fits(request) || !form_id_ok(form_id)) return;   // not a reply to this device
+    pro_form_page_t page;
+    if (!read_form_page(p, &page)) { s_bad++; return; }
+    pro_app_form_state(request, form_id, flag(p, "ok"), &page);
+}
+
+static void handle_toast(const cJSON *p)
+{
+    static char text[PRO_TOAST_BYTES];
+    if (cut_of(p, "text", text, sizeof text)) pro_app_toast(text);
+}
+
 // ── voice replies ───────────────────────────────────────────────────────────────────────────────────
 
 static void handle_voice_transcript(const char *agent_id, const cJSON *p)
@@ -791,6 +1016,17 @@ static void handle_voice_error(const cJSON *p)
     if (!upload_matches(str_of(p, "uploadId"))) return;
     const char *message = cut_of(p, "message", s_verb, sizeof s_verb);
     pro_app_voice_result(PRO_VOICE_ERROR, message ? message : "");
+}
+
+// voice.form {formId, ok, active, ...the page, uploadId}: what a spoken name did to the form.
+static void handle_voice_form(const cJSON *p)
+{
+    if (!upload_matches(str_of(p, "uploadId"))) return;
+    const char *form_id = str_of(p, "formId");
+    if (!form_id_ok(form_id)) return;
+    pro_form_page_t page;
+    if (!read_form_page(p, &page)) { s_bad++; return; }
+    pro_app_voice_form(form_id, flag(p, "ok"), &page);
 }
 
 // ── session ─────────────────────────────────────────────────────────────────────────────────────────
@@ -882,6 +1118,8 @@ static void handle_message(const cJSON *root)
     if (!strcmp(t, "settings.set")) { handle_settings_set(p); return; }
     if (!strcmp(t, "notif.replace")) { handle_notif_replace(p); return; }
     if (!strcmp(t, "notif.seen")) { handle_notif_seen(p); return; }
+    if (!strcmp(t, "form.state")) { handle_form_state(p); return; }
+    if (!strcmp(t, "toast")) { handle_toast(p); return; }
 
     if (!strcmp(t, "fw.offer")) {
         // A missing or mistyped field becomes NULL/0, which fw_update refuses (and answers with fw.error).
@@ -901,10 +1139,12 @@ static void handle_message(const cJSON *root)
     if (agent_id && strnlen(agent_id, ID_MAX) >= ID_MAX) { s_bad++; return; }
     if (!strcmp(t, "voice.transcript")) { handle_voice_transcript(agent_id, p); return; }
     if (!strcmp(t, "voice.error")) { handle_voice_error(p); return; }
+    if (!strcmp(t, "voice.form")) { handle_voice_form(p); return; }
 
     const bool turn = !strncmp(t, "turn.", 5);
     if (agent_id && agent_id[0] && (turn || !strcmp(t, "summary") || !strcmp(t, "focus") ||
-                                    !strcmp(t, "question") || !strcmp(t, "question.close"))) {
+                                    !strcmp(t, "question") || !strcmp(t, "question.close") ||
+                                    !strcmp(t, "question.state") || !strcmp(t, "answer.receipt"))) {
         if (!strcmp(t, "focus")) { pro_app_focus(agent_id); return; }
         if (!strcmp(t, "turn.started")) {
             const char *text = cut_of(p, "text", s_verb, sizeof s_verb);
@@ -922,10 +1162,12 @@ static void handle_message(const cJSON *root)
         if (!strcmp(t, "summary")) { handle_summary(agent_id, p); return; }
         if (!strcmp(t, "question")) { handle_question(agent_id, p); return; }
         if (!strcmp(t, "question.close")) { handle_question_close(agent_id, p); return; }
+        if (!strcmp(t, "question.state")) { handle_question_state(agent_id, p); return; }
+        if (!strcmp(t, "answer.receipt")) { handle_answer_receipt(agent_id, p); return; }
     }
 
-    // Everything else the round dial uses (carry, draft, form, visit, workspace, selection, metrics,
-    // models, speech, toast, wifi...). Counted, never fatal.
+    // Everything else the round dial uses (carry, draft, visit, workspace, selection, metrics,
+    // models, speech, wifi...). Counted, never fatal.
     s_unknown++;
     ESP_LOGD(TAG, "unhandled message '%s'", t);
 }

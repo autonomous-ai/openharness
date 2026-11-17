@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Render Harness Max screens of the demo model (max_render.c) to 1920 x 480 PNGs.
+"""Render Harness Max screens of the demo model (max_render.c) to PNGs, at 1920 x 480 and the demo bar's 1920 x 415.
 
-    python3 test/max_render.py [--out DIR] [screen ...]     every screen when none is named
+    python3 test/max_render.py [--out DIR] [--height 480|415] [screen ...]     every screen, both heights, by default
 
 Builds test/max_render.c as golden.sh does, with the Pro's fonts (PRO_FONT overrides the generator's default), and
-converts each PPM with the Pro's pod_render.png. Writes to test/out/max unless --out says otherwise.
+converts each PPM with the Pro's pod_render.png. Writes <screen>.png (480) and <screen>-415.png to test/out/max unless
+--out says otherwise.
 """
 import os
 import subprocess
@@ -25,25 +26,33 @@ def main() -> int:
         i = args.index("--out")
         out = Path(args[i + 1]).resolve()
         del args[i:i + 2]
+    heights = [480, 415]
+    if "--height" in args:
+        i = args.index("--height")
+        heights = [int(args[i + 1])]
+        del args[i:i + 2]
     out.mkdir(parents=True, exist_ok=True)
     fonts = out / "pro_fonts.c"
     font = os.environ.get("PRO_FONT")
     subprocess.run([sys.executable, str(pro / "scripts" / "gen_fonts.py"), *(["--font", font] if font else []),
                     "--out", str(fonts)], check=True)
-    exe = out / "max_render"
     disp, app = pro / "main" / "display", fw / "main" / "app"
-    subprocess.run(["cc", "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Wextra", "-Werror", "-O1", "-g",
-                    "-DHT_WIDTH=1920", "-DHT_HEIGHT=480", f"-I{app}", f"-I{pro / 'main'}", f"-I{disp}",
-                    "-o", str(exe), str(here / "max_render.c"), *(str(app / f"max_ui_{p}.c") for p in ("model", "view", "touch")),
-                    str(disp / "terminal.c"), str(disp / "pro_canvas.c"), str(pro / "main" / "pod" / "pod_draw.c"), str(fonts)],
-                   check=True)
-    screens = args or subprocess.run([str(exe), "--list"], check=True, capture_output=True, text=True).stdout.split()
-    for screen in screens:
-        ppm, dest = out / f"{screen}.ppm", out / f"{screen}.png"
-        subprocess.run([str(exe), screen, str(ppm)], check=True, stdout=subprocess.DEVNULL)
-        png(ppm, dest)
-        ppm.unlink()
-        print(dest)
+    for h in heights:
+        exe = out / f"max_render-{h}"
+        subprocess.run(["cc", "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Wextra", "-Werror", "-O1", "-g",
+                        "-DHT_WIDTH=1920", f"-DHT_HEIGHT={h}", f"-I{app}", f"-I{pro / 'main'}", f"-I{disp}",
+                        "-o", str(exe), str(here / "max_render.c"), *sorted(str(p) for p in app.glob("max_ui*.c")),
+                        str(disp / "terminal.c"), str(disp / "pro_canvas.c"), str(pro / "main" / "pod" / "pod_draw.c"),
+                        str(fonts)],
+                       check=True)
+        screens = args or subprocess.run([str(exe), "--list"], check=True, capture_output=True, text=True).stdout.split()
+        for screen in screens:
+            name = screen if h == 480 else f"{screen}-{h}"
+            ppm, dest = out / f"{name}.ppm", out / f"{name}.png"
+            subprocess.run([str(exe), screen, str(ppm)], check=True, stdout=subprocess.DEVNULL)
+            png(ppm, dest)
+            ppm.unlink()
+            print(dest)
     return 0
 
 

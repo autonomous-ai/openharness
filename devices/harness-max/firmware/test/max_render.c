@@ -1,4 +1,5 @@
-// Dev tool: renders one screen of a fixed demo model to a 1920 x 480 PPM, through the same calls max_app.c makes.
+// Dev tool: renders one screen of a fixed demo model to a PPM at the glass it is built for (1920 x HT_HEIGHT), through
+// the same calls max_app.c makes.
 //   max_render <screen> <out.ppm>   one screen (max_render.py turns them into PNGs, golden.sh hashes them)
 //   max_render --list               the screens, one a line
 //   max_render --check-all          every screen within the run budget (run.sh)
@@ -22,10 +23,12 @@ static const pro_agent_row_t AGENTS[] = {{"fw", "firmware-max", "claude", "m1", 
                                          {"docs", "docs", "codex", "m1", "MacBook Pro"},
                                          {"cli", "harness-cli", "claude", "m2", "Mac Studio"}};
 
+// The daemon offers New Harness, as cableHost does.
 static void cable(int agents)
 {
     max_ui_reset();
     max_ui_link(true, "MacBook Pro", T0);
+    max_ui_offers(true);
     max_ui_machines(MACHINES, 3, "m1");
     max_ui_agents(AGENTS, agents, T0);
 }
@@ -47,12 +50,53 @@ static void three_working(void)
     work("be", "Brewing\xe2\x80\xa6", "Running the auth tests \xe2\x80\x94 212 of 640", 3723, BE_STEPS, 2);
     work("web", "Drawing", "Drawing the pricing cards", 12, WEB_STEPS, 1);
 }
+// ---- questions ----
+static max_out_t OUT[MAX_OUTBOX];
+static max_answer_t ANSWER;
+static int take(void) { return max_ui_take(OUT, MAX_OUTBOX, &ANSWER, T0); }
+static void hit(const char *id, max_hit_kind_t kind, int arg) { max_ask_hit(max_find(id), kind, arg, T0); }
+
+// The question as pro_app_ask has it; on the reviewed path, read whole as the daemon answers question.read.
+static void ask(const char *id, const char *request, const pro_ask_item_t *items, int n, bool permission, bool review)
+{
+    max_ui_question(id, request, items[0].q, items, n, permission, review, T0);
+    if (!review) return;
+    take();
+    max_ui_question_state(id, max_ask_of(id)->fetch, true, request, "tok-1", false, NULL, items, n, T0);
+}
+static const pro_ask_item_t MIGRATE = {"run", "Run the migration on the dev database now?", {"Run it", "Not now"}, 2,
+                                       false, true};
+static const pro_ask_item_t DATABASE = {"db", "Which database should the migration run on?", {"Dev", "Staging"}, 2,
+                                        false, true};
+static const pro_ask_item_t BOARD = {"board", "Which board should I flash the new panel driver to?",
+                                     {"ESP32-P4 Function EV", "Harness Max rev A", "Harness Max rev B", "Harness Pro",
+                                      "Dial", "None of these"}, 6, false, true};
+static const pro_ask_item_t PUSH[] = {
+    {"branch", "Where should the fix go?", {"main", "release/0.9"}, 2, false, true},
+    {"checks", "Which checks should run before the push?", {"Lint", "Type check", "Unit tests", "E2E on staging"}, 4,
+     true, true},
+};
+static const pro_ask_item_t DEPLOY = {"perm", "Approve Bash command: npm run deploy:staging",
+                                      {"Yes", "Yes, and don't ask again for npm run commands",
+                                       "No, and tell Claude what to do differently"}, 3, false, true};
+static const pro_ask_item_t SHOWN = {"shown", "Allow Edit of src/auth/session.ts?", {"In Orca"}, 1, false, true};
+static const pro_ask_item_t LONG_EN = {"plan", "The auth tests fail on the session table that the migration dropped. "
+                                       "Should I restore it from the audit log, rebuild it from scratch, or stop here "
+                                       "so you can look at the failing tests yourself first?",
+                                       {"Restore it from the audit log and run the tests again",
+                                        "Rebuild the table from scratch with an empty set of sessions",
+                                        "Stop here and leave everything as it is"}, 3, false, true};
+static const pro_ask_item_t LONG_VI = {"vi", "Bài kiểm thử xác thực lỗi vì bảng phiên đã bị xoá. Tôi nên khôi phục từ "
+                                       "nhật ký kiểm toán, dựng lại từ đầu, hay dừng ở đây để bạn tự xem?",
+                                       {"Khôi phục từ nhật ký kiểm toán rồi chạy lại", "Dựng lại bảng từ đầu",
+                                        "Dừng ở đây", "Hỏi lại tôi sau khi build xong"}, 4, false, true};
+
 static void five(void)
 {
     cable(5);
     work("fw", "Infusing...", "Turning each 24-line strip into the portrait framebuffer", 134, FW_STEPS, 3);
     work("be", "Brewing", "Preparing the migration", 301, BE_STEPS, 2);
-    max_ui_question("be", "q1", "Run the migration on the dev database now?", T0);
+    ask("be", "q1", &MIGRATE, 1, false, false);
     work("cli", "Musing", "Reading the hello handshake", 48, NULL, 0);
     max_ui_turn("web", "started", "", 0, T0 - 252000);
     max_ui_summary("web", "The pricing cards now match the design, and the footer links work again.", NULL, false,
@@ -78,11 +122,12 @@ static void tap(int x, int y)
 static void s_linkdown(void) { max_ui_reset(); }
 static void s_noagents(void) { cable(0); }
 static void s_working(void) { three_working(); }
+// A question the daemon's inbox cannot hold: only the computer answers it.
 static void s_asking(void)
 {
     three_working();
     max_ui_question("be", "q1", "Run the migration on the dev database now? It drops the sessions table and rebuilds it "
-                    "from the audit log, which takes about four minutes.", T0);
+                    "from the audit log, which takes about four minutes.", NULL, 0, false, true, T0);
 }
 static void s_failed(void)
 {
@@ -96,8 +141,8 @@ static void s_five_p2(void) { five(); swipe_left(); }
 static void s_listening(void)
 {
     three_working();
-    tap(MAX_LANE_X + MAX_LANE_W + 200, 240);   // select backend
-    tap(MAX_TALK_X + MAX_TALK_W / 2, 240);     // Talk: recording for it
+    tap(MAX_LANE_X + MAX_LANE_W + 200, MAX_Y(240));             // select backend
+    tap(MAX_TALK_X + MAX_TALK_W / 2, MAX_CARD_Y + MAX_CARD_H / 2);   // Talk: recording for it
 }
 static void s_sending(void) { s_listening(); max_ui_talk(MAX_TALK_SENDING); }
 static void s_update(void) { three_working(); max_ui_update(40, "0.9.0"); }
@@ -115,16 +160,108 @@ static void s_long(void)
     work("vi", "Đang viết", "Đang viết lại hướng dẫn cài đặt cho thanh Harness Max, từ cách cắm cáp đến cách chọn "
          "một làn và nói với nó", 7384, NULL, 0);
     max_ui_turn("vq", "started", "", 0, T0);
-    max_ui_question("vq", "q", "Chạy lại toàn bộ bài kiểm thử trên máy build không?", T0);
+    max_ui_turn("vq", "step", "Bash \xc2\xb7 chạy lại toàn bộ bài kiểm thử trên máy build", -1, T0);
     max_ui_focus("vi");
 }
 static void s_notice(void) { three_working(); max_ui_notice("Sent to backend", 3000, T0); }
+
+// ---- answering and New Harness ----
+static void s_q_two(void) { three_working(); ask("be", "q1", &DATABASE, 1, false, true); }
+static void s_q_six(void) { three_working(); ask("fw", "q1", &BOARD, 1, false, true); }
+static void s_q_multi(void)
+{
+    three_working();
+    ask("web", "q1", PUSH, 2, false, true);
+    hit("web", MAX_HIT_OPTION, 1);   // release/0.9: on to the checks
+    hit("web", MAX_HIT_OPTION, 0);
+    hit("web", MAX_HIT_OPTION, 2);
+}
+static void s_q_permission(void) { three_working(); ask("be", "q1", &DEPLOY, 1, true, true); }
+static void s_q_shown(void) { three_working(); ask("be", "shown:toolu_7", &SHOWN, 1, true, true); }
+static void s_q_error(void)
+{
+    three_working();
+    ask("be", "q1", &DEPLOY, 1, true, true);
+    hit("be", MAX_HIT_OPTION, 0);
+    take();
+    max_ui_answer_receipt("be", max_ask_of("be")->fetch, "tok-1", false, false,
+                          "Permission prompts cannot be answered from here.", T0);
+}
+static void s_q_sent(void)
+{
+    three_working();
+    ask("be", "q1", &DATABASE, 1, false, true);
+    hit("be", MAX_HIT_OPTION, 0);
+    take();
+    max_ui_answer_receipt("be", max_ask_of("be")->fetch, "tok-1", true, true, NULL, T0);
+}
+static void s_q_long(void) { three_working(); ask("fw", "q1", &LONG_EN, 1, false, true); }
+static void s_q_long_vi(void)
+{
+    s_long();
+    ask("vq", "q", &LONG_VI, 1, false, true);
+}
+static void s_done(void)
+{
+    three_working();
+    max_ui_summary("web", "The pricing cards now match the design, and the footer links work again. I also moved the "
+                   "price table into its own component so the annual toggle can share it.", NULL, false,
+                   POD_TIER_ALERT, T0);
+}
+
+// ---- New Harness, as the demo daemon's form answers ----
+static void form_open(void)
+{
+    three_working();
+    max_ui_form_open("form-0badc0de-000186a0", T0);
+    take();
+}
+static void form_page(const pro_form_page_t *page)
+{
+    char request[MAX_FETCH_BYTES];
+    snprintf(request, sizeof request, "form-%lu", (unsigned long)max_m.form.request);
+    max_ui_form_state(request, max_m.form.id, true, page, T0);
+}
+static const pro_form_page_t START = {
+    .title = "New Harness", .label = "New Harness", .detail = "Claude Code\nharness-max-firmware", .previous = "Project",
+    .next = "", .error = "", .status = "", .action = "start", .query = "", .revision = 4, .position = 3, .total = 3,
+    .active = true, .enabled = true};
+static const pro_form_page_t PROJECT = {
+    .title = "Project", .label = "harness-max-firmware", .detail = "~/work/harness/devices/harness-max/firmware",
+    .previous = "backend", .next = "website", .error = "", .status = "", .action = "choose", .query = "",
+    .revision = 7, .position = 2, .total = 5, .active = true, .enabled = true, .can_query = true};
+static void s_form_opening(void) { form_open(); }
+static void s_form_page(void) { form_open(); form_page(&PROJECT); }
+static void s_form_start(void) { form_open(); form_page(&START); }
+static void s_form_busy(void)
+{
+    form_open();
+    form_page(&START);
+    max_form_command(MAX_FORM_ACTIVATE, 0, T0);
+    take();
+    pro_form_page_t busy = START;
+    busy.busy = true;
+    busy.enabled = false;
+    busy.status = "Starting\xe2\x80\xa6";
+    form_page(&busy);
+}
+static void s_form_failed(void) { form_open(); max_form_due(T0 + MAX_FORM_WAIT_MS); }
+static void s_form_say(void)
+{
+    s_form_page();
+    tap(MAX_TALK_X + MAX_TALK_W / 2, MAX_CARD_Y + MAX_CARD_H / 2);   // Say: a name for the field
+    max_ui_talk(MAX_TALK_RECORDING);
+}
 
 typedef struct { const char *name; void (*setup)(void); } screen_t;
 static const screen_t SCREENS[] = {
     {"linkdown", s_linkdown}, {"noagents", s_noagents}, {"working", s_working}, {"asking", s_asking},
     {"failed", s_failed}, {"five-p1", s_five_p1}, {"five-p2", s_five_p2}, {"listening", s_listening},
     {"sending", s_sending}, {"update", s_update}, {"long", s_long}, {"notice", s_notice},
+    {"q-two", s_q_two}, {"q-six", s_q_six}, {"q-multi", s_q_multi}, {"q-permission", s_q_permission},
+    {"q-shown", s_q_shown}, {"q-error", s_q_error}, {"q-sent", s_q_sent}, {"q-long", s_q_long},
+    {"q-long-vi", s_q_long_vi}, {"done", s_done}, {"form-opening", s_form_opening}, {"form-page", s_form_page},
+    {"form-start", s_form_start}, {"form-busy", s_form_busy}, {"form-failed", s_form_failed}, {"form-say", s_form_say},
 };
 enum { SCREEN_COUNT = sizeof SCREENS / sizeof SCREENS[0] };
 

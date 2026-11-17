@@ -1,4 +1,5 @@
-// The lanes model: the cable's feeds and the app's own state, kept for the view and the finger (max_ui.h).
+// The lanes model: the cable's feeds and the app's own state, kept for the view and the finger, and the outbox
+// (max_ui.h). Questions are max_ui_ask.c's, New Harness max_ui_form.c's.
 #include <stdio.h>
 #include <string.h>
 
@@ -85,15 +86,14 @@ void max_fmt_elapsed(char *out, size_t cap, int64_t secs)
     else snprintf(out, cap, "%lld:%02d:%02d", (long long)(secs / 3600), (int)(secs / 60 % 60), (int)(secs % 60));
 }
 
-// The lanes on the page shown, as roster indices. Returns how many.
-static int visible(int out[MAX_LANES])
+int max_visible(int out[MAX_LANES])
 {
     int o[MAX_AGENTS], n = max_order(o), k = 0;
     for (int i = max_m.page * MAX_LANES; i < n && k < MAX_LANES; i++) out[k++] = o[i];
     return k;
 }
 
-static uint32_t fnv(uint32_t h, const void *data, size_t n)
+uint32_t max_fnv(uint32_t h, const void *data, size_t n)
 {
     const unsigned char *p = data;
     for (size_t i = 0; i < n; i++) h = (h ^ p[i]) * 16777619u;
@@ -102,22 +102,66 @@ static uint32_t fnv(uint32_t h, const void *data, size_t n)
 uint32_t max_time_key(uint32_t now_ms)
 {
     uint32_t h = 2166136261u;
-    int v[MAX_LANES], n = visible(v);
+    int v[MAX_LANES], n = max_visible(v);
     for (int i = 0; i < n; i++) {
         const max_agent_t *a = &max_m.agents[v[i]];
         const int64_t secs = max_secs(a, now_ms);
         const bool note = max_note_shown(a, now_ms);
-        h = fnv(h, &secs, sizeof secs);
-        h = fnv(h, &note, sizeof note);
+        h = max_fnv(h, &secs, sizeof secs);
+        h = max_fnv(h, &note, sizeof note);
     }
     const bool notice = max_notice_shown(now_ms);
-    return fnv(h, &notice, sizeof notice);
+    return max_fnv(h, &notice, sizeof notice);
 }
 
 void max_ui_reset(void)
 {
     memset(&max_m, 0, sizeof max_m);
     max_m.update_pct = -1;
+}
+
+// ---- the outbox ----
+
+max_out_t *max_out_push(max_out_kind_t kind)
+{
+    if (max_m.out_count >= MAX_OUTBOX) return NULL;
+    max_out_t *o = &max_m.outbox[max_m.out_count++];
+    memset(o, 0, sizeof *o);
+    o->kind = kind;
+    return o;
+}
+
+int max_ui_take(max_out_t *out, int cap, max_answer_t *answer, uint32_t now_ms)
+{
+    if (max_m.link) {
+        max_ask_due(now_ms);
+        max_form_due(now_ms);
+    }
+    int n = 0, i = 0;
+    bool answered = false;
+    for (; i < max_m.out_count && n < cap; i++) {
+        const max_out_t *o = &max_m.outbox[i];
+        if (o->kind == MAX_OUT_ANSWER) {
+            if (answered) break;   // one answer's words a take: the next take hands out the rest
+            if (!max_ask_taken(o, answer, now_ms)) continue;   // its question went meanwhile
+            answered = true;
+            max_m.dirty = true;
+        }
+        out[n++] = *o;
+    }
+    memmove(max_m.outbox, max_m.outbox + i, (size_t)(max_m.out_count - i) * sizeof max_m.outbox[0]);
+    max_m.out_count -= i;
+    return n;
+}
+
+bool max_ui_unsent(const max_out_t *o, uint32_t now_ms)
+{
+    switch (o->kind) {
+    case MAX_OUT_REVIEWED:
+    case MAX_OUT_ANSWER: return max_ask_unsent(o, now_ms);
+    case MAX_OUT_FORM: return max_form_unsent(o, now_ms);
+    default: return false;   // a read is sent again by the clock
+    }
 }
 
 // ---- feeds ----
@@ -133,13 +177,17 @@ bool max_ui_link(bool up, const char *machine, uint32_t now_ms)
         memcpy(max_m.computer, name, sizeof name);
         return changed;
     }
-    // Everything the daemon told us goes with the link: a lane is a claim that the agent is there now.
-    const bool changed = max_m.link || max_m.count || max_m.machine_count || max_m.computer[0];
+    // Everything the daemon told us goes with the link: a lane is a claim that the agent is there now. So do the
+    // questions, the form and whatever was queued for a daemon that is no longer there.
+    const bool changed = max_m.link || max_m.count || max_m.machine_count || max_m.computer[0] || max_form_open();
     max_m.link = false;
     max_m.computer[0] = 0;
     max_m.count = max_m.machine_count = 0;
     max_m.selected[0] = 0;
     max_m.page = 0;
+    memset(max_m.asks, 0, sizeof max_m.asks);
+    max_form_reset();
+    max_m.out_count = 0;
     return changed;
 }
 
@@ -169,6 +217,8 @@ bool max_ui_agents(const pro_agent_row_t *rows, int n, uint32_t now_ms)
         max_copy(a->machine, sizeof a->machine, r->machine);
     }
     max_m.count = k;
+    for (int i = 0; i < MAX_AGENTS; i++)   // a question goes with its agent
+        if (max_m.asks[i].agent[0] && !max_find(max_m.asks[i].agent)) max_m.asks[i].agent[0] = 0;
     bool changed = k != old || memcmp(max_m.agents, s_old, (size_t)k * sizeof s_old[0]);
     if (max_m.selected[0] && !max_find(max_m.selected)) {
         max_m.selected[0] = 0;
@@ -200,7 +250,7 @@ bool max_ui_machines(const cable_machine_t *rows, int count, const char *selecte
 
 // A state change stops the clock where it is when the turn ends, and drops it when a turn we did not see start
 // begins (until the daemon says how long it has run).
-static void set_state(max_agent_t *a, max_state_t st, uint32_t now_ms)
+void max_set_state(max_agent_t *a, max_state_t st, uint32_t now_ms)
 {
     const bool was = running(a->state), will = running(st);
     if (was && !will && a->clock) {
@@ -245,7 +295,7 @@ static bool turn(max_agent_t *a, const char *kind, const char *text, int elapsed
 {
     const bool said = text && text[0];
     if (!strcmp(kind, "started")) {
-        set_state(a, MAX_WORKING, now_ms);
+        max_set_state(a, MAX_WORKING, now_ms);
         a->clock = true;
         a->clock_s = 0;
         a->clock_ms = now_ms;
@@ -253,27 +303,33 @@ static bool turn(max_agent_t *a, const char *kind, const char *text, int elapsed
         a->verb[0] = a->question[0] = a->note[0] = 0;
         a->step_count = 0;
         a->ask_key = 0;
+        a->card = false;
+        max_ask_drop(a->id);
         return true;
     }
     if (!strcmp(kind, "done")) {
         if (a->state != MAX_DONE) a->note[0] = 0;   // the summary that follows says what it did
-        set_state(a, MAX_DONE, now_ms);
+        max_set_state(a, MAX_DONE, now_ms);
         a->question[0] = 0;
+        a->card = false;
+        max_ask_drop(a->id);
         return true;
     }
     if (!strcmp(kind, "error")) {
-        set_state(a, MAX_FAILED, now_ms);
+        max_set_state(a, MAX_FAILED, now_ms);
         a->question[0] = 0;
         max_copy(a->note, sizeof a->note, text);
+        a->card = true;   // a failure is an alert: its card stays until dismissed
+        max_ask_drop(a->id);
         return true;
     }
     // Progress waits while the agent asks: only turn.started or the question's close ends a question.
     if (a->state == MAX_ASKING) return false;
     if (!strcmp(kind, "verb")) {
-        set_state(a, MAX_WORKING, now_ms);
+        max_set_state(a, MAX_WORKING, now_ms);
         if (said) set_verb(a, text);
     } else if (!strcmp(kind, "activity")) {
-        set_state(a, MAX_WORKING, now_ms);
+        max_set_state(a, MAX_WORKING, now_ms);
         // An empty reading says nothing: the daemon sends one when the terminal shows no footer.
         if (said) max_copy(a->activity, sizeof a->activity, text);
         if (elapsed_s >= 0 && max_secs(a, now_ms) != elapsed_s) {
@@ -283,7 +339,7 @@ static bool turn(max_agent_t *a, const char *kind, const char *text, int elapsed
         }
     } else if (!strcmp(kind, "step")) {
         if (!said) return false;
-        set_state(a, MAX_WORKING, now_ms);
+        max_set_state(a, MAX_WORKING, now_ms);
         push_step(a, text);
     } else {
         return false;
@@ -297,34 +353,6 @@ bool max_ui_turn(const char *id, const char *kind, const char *text, int elapsed
     if (!a || !kind) return false;
     s_before = *a;
     return turn(a, kind, text, elapsed_s, now_ms) && memcmp(&s_before, a, sizeof *a) != 0;
-}
-
-static uint32_t ask_key(const char *request, const char *text)
-{
-    uint32_t h = fnv(2166136261u, request ? request : "", request ? strlen(request) + 1 : 1);
-    return fnv(h, text ? text : "", text ? strlen(text) : 0);
-}
-
-bool max_ui_question(const char *id, const char *request, const char *text, uint32_t now_ms)
-{
-    max_agent_t *a = max_find(id);
-    if (!a) return false;
-    const uint32_t key = ask_key(request, text);
-    if (a->state == MAX_ASKING && a->ask_key == key) return false;   // the same question, re-sent
-    set_state(a, MAX_ASKING, now_ms);
-    max_copy(a->question, sizeof a->question, text);
-    a->ask_key = key;
-    return true;
-}
-
-bool max_ui_question_close(const char *id)
-{
-    max_agent_t *a = max_find(id);
-    if (!a || a->state != MAX_ASKING) return false;
-    a->state = MAX_WORKING;   // answered mid-turn: the turn and its clock go on
-    a->question[0] = 0;
-    a->ask_key = 0;
-    return true;
 }
 
 bool max_ui_summary(const char *id, const char *text, const char *recap, bool restore, pod_tier_t tier,
@@ -341,12 +369,14 @@ bool max_ui_summary(const char *id, const char *text, const char *recap, bool re
         if (a->state != MAX_DONE) {   // a live summary ends the turn
             a->note[0] = 0;
             a->question[0] = 0;
-            set_state(a, MAX_DONE, now_ms);
+            max_set_state(a, MAX_DONE, now_ms);
+            max_ask_drop(a->id);
         }
         if (tier != POD_TIER_SILENT && say) {   // silent: nothing new to say
             max_copy(a->note, sizeof a->note, say);
             a->note_until = now_ms + MAX_DONE_MS;
         }
+        a->card = tier == POD_TIER_ALERT && say;   // the loud tier opens a card; list only shows it on the lane
     }
     return memcmp(&s_before, a, sizeof *a) != 0;
 }
@@ -363,6 +393,8 @@ bool max_ui_focus(const char *id)
 }
 
 // ---- the app's own state ----
+
+bool max_notice_set(const char *text, uint32_t now_ms) { return max_ui_notice(text, MAX_NOTICE_MS, now_ms); }
 
 bool max_ui_notice(const char *text, uint32_t duration_ms, uint32_t now_ms)
 {
@@ -403,7 +435,7 @@ uint32_t max_ui_next_wake_ms(uint32_t now_ms)
 {
     if (max_m.dirty) return 1;
     uint32_t ms = MAX_WAKE_MS;
-    int v[MAX_LANES], n = visible(v);
+    int v[MAX_LANES], n = max_visible(v);
     for (int i = 0; i < n; i++) {
         const max_agent_t *a = &max_m.agents[v[i]];
         if (a->clock && running(a->state)) {
@@ -413,6 +445,7 @@ uint32_t max_ui_next_wake_ms(uint32_t now_ms)
         if (a->state == MAX_DONE && max_note_shown(a, now_ms) && a->note_until - now_ms < ms) ms = a->note_until - now_ms;
     }
     if (max_notice_shown(now_ms) && max_m.notice_until - now_ms < ms) ms = max_m.notice_until - now_ms;
+    if (max_m.link) ms = max_form_wake(now_ms, max_ask_wake(now_ms, ms));   // a read again, a poll, a reply overdue
     return ms ? ms : 1;
 }
 

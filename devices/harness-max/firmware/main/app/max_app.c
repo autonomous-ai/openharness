@@ -4,7 +4,9 @@
 // THREADS: the cable_link task calls the pro_app_* callbacks; the touch task calls pro_app_touch; the voice tasks call
 // pro_app_notice; the render task ticks, draws and paints. One recursive mutex guards the model, the dirty flag and the
 // state below. Nothing that leaves the device is sent under it: a tap's agent.open, a recording's start and its send,
-// the beep and the wake happen after the mutex is released.
+// the beep and the wake happen after the mutex is released. So does the model's outbox (answers, question reads, the
+// New Harness form): taken under the mutex, sent after it, by the touch task (a tap's, waiting for the port as
+// agent.open does) or the render task (the clock's, never waiting).
 #include "app/max_app.h"
 
 #include <assert.h>
@@ -16,6 +18,7 @@
 #include "app/pro_touch.h"
 #include "app/pro_voice.h"
 #include "audio/audio_capture.h"
+#include "cable/cable_features.h"
 #include "cable/cable_link.h"
 #include "cable/pro_cable.h"
 #include "pro_app_api.h"
@@ -32,6 +35,7 @@
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -48,7 +52,6 @@ static const char *TAG = "max";
 
 #define IDLE_SLEEP_MS 300000u       // no touch for this long and the screen sleeps, as the Pro
 #define HEARTBEAT_MS 60000u
-#define NOTICE_MS 3000u             // the notice line, as long as the Pro's
 #define BEEP_COALESCE_MS 30000      // one chime for the alerts of this long (the Pro's POD_BEEP_COALESCE_MS)
 #define ASKED_MAX 32                // pro_app_agents sends at most 32 agents
 
@@ -71,6 +74,13 @@ static atomic_bool s_updating, s_painted;   // an image is being written (readab
 static atomic_uint s_last_activity;
 static char s_ota_to[24];    // the version being installed (the cable task's)
 static char s_updated[24];   // "Updated to X": set by pro_app_note_update, shown once the cable is up
+// What each sending task takes from the outbox: its own, so neither waits on the other's.
+typedef struct {
+    max_out_t out[MAX_OUTBOX];
+    max_answer_t answer;
+    int n;
+} outbox_t;
+static EXT_RAM_BSS_ATTR outbox_t s_touch_out, s_tick_out;
 
 static uint32_t ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
@@ -124,7 +134,43 @@ static void leave(void)
     if (beep && !pro_settings_muted() && !atomic_load(&s_updating)) audio_beep();
 }
 
-static void notice_locked(const char *text) { changed_if(max_ui_notice(text, NOTICE_MS, ms())); }
+static void notice_locked(const char *text) { changed_if(max_ui_notice(text, MAX_NOTICE_MS, ms())); }
+
+// ---- the outbox ----------------------------------------------------------------------------------------------
+
+// Under the lock: what the model queued, into this task's box.
+static void take_locked(outbox_t *box)
+{
+    box->n = max_ui_take(box->out, MAX_OUTBOX, &box->answer, ms());
+    changed_if(box->n > 0);   // a plain answer shows as sent, a read leaves its card as it was: drawing again is cheap
+}
+
+static bool send_one(const max_out_t *o, const max_answer_t *answer, bool wait)
+{
+    switch (o->kind) {
+    case MAX_OUT_READ: return pro_cable_question_read(o->agent, o->fetch, wait);
+    case MAX_OUT_REVIEWED: return pro_cable_answer_reviewed(o->agent, o->token, o->fetch, o->choices, o->count, wait);
+    case MAX_OUT_ANSWER: {
+        const char *keys[PRO_ASK_ITEMS], *values[PRO_ASK_ITEMS];
+        for (int i = 0; i < answer->count && i < PRO_ASK_ITEMS; i++) keys[i] = answer->keys[i], values[i] = answer->values[i];
+        return pro_cable_answer(o->agent, o->request, keys, values, answer->count, wait);
+    }
+    case MAX_OUT_FORM: return pro_cable_form(o->form, o->fetch, max_form_op_name(o->op), o->revision, o->delta, wait);
+    }
+    return false;
+}
+
+// After the lock: send what was taken; tell the model of each that did not go out.
+static void send_taken(outbox_t *box, bool wait)
+{
+    for (int i = 0; i < box->n; i++) {
+        if (send_one(&box->out[i], &box->answer, wait)) continue;
+        lock();
+        changed_if(max_ui_unsent(&box->out[i], ms()));
+        unlock();
+    }
+    box->n = 0;
+}
 
 static void show_updated(void);
 
@@ -239,13 +285,54 @@ static bool ask_is_new(const char *id, uint32_t key)
     return true;
 }
 
+// The Max takes the whole question from pro_app_ask, which follows this with the same prompt and its options.
 void pro_app_question(const char *id, const char *request, const char *text)
+{
+    (void)id; (void)request; (void)text;
+}
+
+void pro_app_ask(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
+                 bool permission)
+{
+    if (!id_ok(id)) return;
+    const bool review = pro_cable_supports(CABLE_FEATURE_QUESTION_REVIEW);   // the reviewed path, when the daemon has it
+    lock();
+    const bool changed = max_ui_question(id, request, text, items, n, permission, review, ms());
+    changed_if(changed);
+    if (changed && ask_is_new(id, ask_key(request, text))) alert_locked();
+    leave();
+}
+
+void pro_app_question_state(const char *id, const char *fetch, bool ok, const char *request, const char *token,
+                            bool submitted, const char *error, const pro_ask_item_t *items, int n)
 {
     if (!id_ok(id)) return;
     lock();
-    const bool changed = max_ui_question(id, request, text, ms());
-    changed_if(changed);
-    if (changed && ask_is_new(id, ask_key(request, text))) alert_locked();
+    changed_if(max_ui_question_state(id, fetch, ok, request, token, submitted, error, items, n, ms()));
+    leave();
+}
+
+void pro_app_answer_receipt(const char *id, const char *fetch, const char *token, bool ok, bool pending, const char *error)
+{
+    if (!id_ok(id)) return;
+    lock();
+    changed_if(max_ui_answer_receipt(id, fetch, token, ok, pending, error, ms()));
+    leave();
+}
+
+void pro_app_toast(const char *text)
+{
+    lock();
+    notice_locked(text);
+    leave();
+}
+
+// ---- New Harness -------------------------------------------------------------------------------------------
+
+void pro_app_form_state(const char *request, const char *form_id, bool ok, const pro_form_page_t *page)
+{
+    lock();
+    changed_if(max_ui_form_state(request, form_id, ok, page, ms()));
     leave();
 }
 
@@ -301,6 +388,16 @@ void pro_app_voice_result(int kind, const char *text)
     unlock();
 }
 
+// A spoken name's reply: it ends the recording like any voice reply, and moves the form.
+void pro_app_voice_form(const char *form_id, bool ok, const pro_form_page_t *page)
+{
+    if (pro_voice_open()) pro_voice_close();
+    lock();
+    talk_locked(false, false);
+    changed_if(max_ui_voice_form(form_id, ok, page, ms()));
+    unlock();
+}
+
 // Why a recording must not start now (the screen's copy), or NULL: a firmware write would starve it, and without a
 // link there is nobody to send it to.
 static const char *voice_gate(void)
@@ -348,12 +445,32 @@ static void talk_send(void)
 
 // ---- the finger -------------------------------------------------------------------------------------------
 
+// New Harness under a name of its own: the desktop keeps one form per name.
+static void new_form(void)
+{
+    char id[MAX_FORM_ID_BYTES];
+    snprintf(id, sizeof id, "form-%08lx-%08lx", (unsigned long)esp_random(), (unsigned long)ms());
+    lock();
+    changed_if(max_ui_form_open(id, ms()));
+    take_locked(&s_touch_out);
+    unlock();
+    send_taken(&s_touch_out, true);
+}
+
 static void act(const max_act_t *a)
 {
     switch (a->kind) {
     case MAX_ACT_OPEN: pro_cable_send_open(a->agent_id); break;   // agent.open, as the Pro's tap on an agent
-    case MAX_ACT_TALK: talk_begin(a->agent_id); break;
+    case MAX_ACT_TALK:
+        pro_cable_voice_form(NULL, 0);   // a turn for the agent
+        talk_begin(a->agent_id);
+        break;
+    case MAX_ACT_SAY:
+        pro_cable_voice_form(a->form_id, a->revision);   // a name for the form's field: no agent
+        talk_begin("");
+        break;
     case MAX_ACT_SEND: talk_send(); break;
+    case MAX_ACT_NEW: new_form(); break;
     case MAX_ACT_NONE: break;
     }
 }
@@ -369,8 +486,10 @@ bool pro_app_touch(bool down, int x, int y)
     }
     const uint32_t now = ms();
     const max_act_t a = max_ui_touch(down, x, y, now);
+    take_locked(&s_touch_out);      // an answer or a form command the tap queued
     changed_if(max_ui_tick(now));   // a tap that selected a lane, a swipe that turned the page
     leave();
+    send_taken(&s_touch_out, true);
     act(&a);
     return true;
 }
@@ -410,11 +529,15 @@ static void tick(void)
     const uint32_t now = ms();
     pro_voice_tick(now);
     const bool open = pro_voice_open(), waiting = pro_voice_waiting();   // read before the lock
+    const bool form = pro_cable_supports(CABLE_FEATURE_FORM);
     if (open || atomic_load(&s_updating)) pro_app_bump_activity();
     lock();
     talk_locked(open, waiting);   // the 600 s cap, a recorder that died, a reply that never came
+    changed_if(max_ui_offers(form));
+    take_locked(&s_tick_out);     // a question read again, the form's poll, a reply that never came
     if (!pro_app_asleep()) changed_if(max_ui_tick(now));
     unlock();
+    send_taken(&s_tick_out, false);
 }
 
 static uint32_t next_wake_ms(void)
