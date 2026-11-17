@@ -8,7 +8,8 @@ import base from './vitest.config.js'
 export default defineConfig({
   test: {
     ...base.test,
-    include: ['../plugins/harness-device-vscode/gate/**/*.gate.ts'],
+    // With the unit tests of the gate's own helpers, which launch nothing.
+    include: ['../plugins/harness-device-vscode/gate/**/*.gate.ts', '../plugins/harness-device-vscode/gate/**/*.test.ts'],
     fileParallelism: false,
     // The download is a few hundred MB, and a VS Code starts slowly on a loaded Mac.
     testTimeout: 300_000,
