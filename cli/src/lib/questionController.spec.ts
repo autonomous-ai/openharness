@@ -185,3 +185,79 @@ describe('asynchronous question evidence', () => {
     expect(release).toHaveBeenCalledOnce()
   })
 })
+
+describe('a hook said a dialog is coming', () => {
+  const POLL_MS = 1_500
+  // The watcher polls one session; `pane` is what each read finds there, and `device` whether anyone listens.
+  const watching = (pane: PaneView) => {
+    vi.useFakeTimers()
+    const current = row(), onQuestion = vi.fn(), onQuestionGone = vi.fn(), onClear = vi.fn()
+    const state = { device: true }
+    const capture = vi.fn(async (): Promise<string | null> => 'pane')
+    const readQuestion = vi.fn(async (): Promise<PaneView> => pane)
+    const watcher = new QuestionWatcher({ getSession: () => current, capture, hasDevice: () => state.device,
+      readQuestion, onQuestion, onQuestionGone, onClear })
+    watcher.start(current.sessionId)
+    return { watcher, capture, readQuestion, onQuestion, onQuestionGone, onClear, state, id: current.sessionId }
+  }
+
+  it('told a dialog is coming, reads nothing until the next poll', async () => {
+    const { watcher, capture, id } = watching(view)
+    watcher.awaitDialog(id)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(capture).not.toHaveBeenCalled()
+    watcher.stopAll()
+  })
+  it('two polls in a row with no dialog since it was told say the pane is clear, once', async () => {
+    const { watcher, onClear, id } = watching(null)
+    watcher.awaitDialog(id)
+    await vi.advanceTimersByTimeAsync(POLL_MS); expect(onClear).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(POLL_MS); expect(onClear).toHaveBeenCalledExactlyOnceWith(id)
+    await vi.advanceTimersByTimeAsync(POLL_MS * 4); expect(onClear).toHaveBeenCalledTimes(1)
+    watcher.stopAll()
+  })
+  it('a dialog read since ends the count: its close is a question\'s close, and nothing is called clear', async () => {
+    const { watcher, readQuestion, onQuestion, onQuestionGone, onClear, id } = watching(view)
+    watcher.awaitDialog(id)
+    await vi.advanceTimersByTimeAsync(POLL_MS)
+    expect(onQuestion).toHaveBeenCalledOnce()
+    readQuestion.mockResolvedValue(null)
+    await vi.advanceTimersByTimeAsync(POLL_MS * 6)
+    expect(onQuestionGone).toHaveBeenCalledOnce()
+    expect(onClear).not.toHaveBeenCalled()
+    watcher.stopAll()
+  })
+  it.each(['a capture that fails', 'a read that fails', 'a paused poll'] as const)('%s is no read', async (kind) => {
+    const { watcher, capture, readQuestion, onClear, state, id } = watching(null)
+    watcher.awaitDialog(id)
+    await vi.advanceTimersByTimeAsync(POLL_MS)
+    // A failed capture or read breaks the run; a paused poll reads nothing, so it neither counts nor breaks it.
+    if (kind === 'a capture that fails') capture.mockResolvedValueOnce(null)
+    if (kind === 'a read that fails') readQuestion.mockRejectedValueOnce(new Error('worker unavailable'))
+    if (kind === 'a paused poll') state.device = false
+    await vi.advanceTimersByTimeAsync(POLL_MS * 2)
+    expect(onClear).not.toHaveBeenCalled()
+    state.device = true
+    await vi.advanceTimersByTimeAsync(POLL_MS * 2)
+    expect(onClear).toHaveBeenCalledExactlyOnceWith(id)
+    watcher.stopAll()
+  })
+  it('not told: polls with no dialog call nothing, as today', async () => {
+    const { watcher, onQuestionGone, onClear } = watching(null)
+    await vi.advanceTimersByTimeAsync(POLL_MS * 6)
+    expect(onClear).not.toHaveBeenCalled()
+    expect(onQuestionGone).not.toHaveBeenCalled()
+    watcher.stopAll()
+  })
+  it.each(['stop', 'stopAll', 'never watched'] as const)('%s forgets what was told', async (kind) => {
+    const { watcher, onClear, id } = watching(null)
+    if (kind === 'never watched') watcher.stop(id)
+    watcher.awaitDialog(id)
+    if (kind === 'stop') watcher.stop(id)
+    if (kind === 'stopAll') watcher.stopAll()
+    watcher.start(id)
+    await vi.advanceTimersByTimeAsync(POLL_MS * 4)
+    expect(onClear).not.toHaveBeenCalled()
+    watcher.stopAll()
+  })
+})

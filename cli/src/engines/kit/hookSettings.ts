@@ -13,7 +13,7 @@ import { HARNESS_AGENT_COMMANDS, HARNESS_AGENT_TOOLS, HARNESS_AGENT_VERBS, type 
 import { prepareReviewed } from './hookReview.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { isMessagesBlock, messagesCommand, MESSAGES_HOOK_SOURCE } from './messagesHook.js'
-import { HOOK_SCRIPT, hookArgv, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, requireHookScript, foreignHookBlocks, quoteHookCommand, type CommandHook, type HookBlock, type Settings } from './notifyHooks.js'
+import { HOOK_SCRIPT, hookArgv, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, requireHookScript, foreignHookBlocks, quoteHookCommand, withoutOwnHooks, type CommandHook, type HookBlock, type Settings } from './notifyHooks.js'
 import { HookPreparationHeld, type HookPreparationFiles, type HookPreparationAttempt } from './nativeHookFiles.js'
 import type { NativeHookOptions } from './nativeLocations.js'
 import { hostPlatform } from './windowsFiles.js'
@@ -231,7 +231,7 @@ async function installNotifyHooks(settings: HookSettings, port: number, home: st
   let changed = false
   let updated = false // true when an EXISTING block's command changed (path/port drift)
 
-  for (const { event, matcher } of settings.events) {
+  for (const { event, matcher, timeout } of settings.events) {
     if (current.hooks[event] !== undefined && !Array.isArray(current.hooks[event])) throw new HookPreparationHeld('a hook event is not a list')
     const blocks = current.hooks[event] ?? []
     // Collapse any duplicate "ours" blocks (e.g. from an earlier path) down to a single one, and keep every
@@ -249,11 +249,16 @@ async function installNotifyHooks(settings: HookSettings, port: number, home: st
       if (!sameHook(existingHook)) { changed = true; updated = true }
       if (settings.upToDate.matcher && existing.matcher !== matcher) changed = true
     }
-    current.hooks[event] = [...foreign, { ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: entry.command, ...(entry.args ? { args: entry.args } : {}), timeout: settings.timeout }] }]
+    current.hooks[event] = [...foreign, { ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: entry.command, ...(entry.args ? { args: entry.args } : {}), timeout: timeout ?? settings.timeout }] }]
   }
+  // Ours out of every event this release does not declare: one it dropped, or one a newer release added before a
+  // rollback. Everyone else's blocks stay, Agent Messages' too. The lists as they were find the review records by place.
+  const declared = new Set(settings.events.map(({ event }) => event))
+  const pruned: Settings = { hooks: { ...current.hooks } }
+  if (withoutOwnHooks(current.hooks, isOurs, (event) => !declared.has(event))) changed = true
 
   const next = changed ? JSON.stringify(current, null, 2) + '\n' : observed.content!
-  const reviewed = settings.reviewed ? prepareReviewed(settings.reviewed, home, file, JSON.parse(next) as Settings, platform, access) : null
+  const reviewed = settings.reviewed ? prepareReviewed(settings.reviewed, home, file, JSON.parse(next) as Settings, platform, access, pruned) : null
   reviewed?.verify()
   if (!changed) {
     const published = await observed.replace(next, attempt)

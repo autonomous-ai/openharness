@@ -123,7 +123,7 @@ const inWorker = (run: { others: ReturnType<typeof streamsFor> }, sessionId: str
 function setup(over: Partial<AttachDeps> = {}) {
   let deps!: AttachDeps
   const others = streamsFor(() => deps, () => deps.emit)
-  const normalizers = createSessionNormalizers(over.others as never ?? others.streams)
+  const normalizers = createSessionNormalizers(over.others as never ?? others.streams, { held: () => false, closed: () => {}, forget: () => {} })
   const service = { needsTranscript: vi.fn(() => false), observeTranscript: vi.fn() }
   const profile = { ingest: vi.fn(), commit: vi.fn() }
   deps = {
@@ -847,7 +847,9 @@ describe('attaching a session', () => {
       const run = setup()
       const s = session('pi', transcript([{ events: [started('first')] }, { events: [{ type: 'text_delta', payload: { content: 'hi' } }] }]))
       await run.attach.attachSession(s, false, false, true)
-      expect(run.deps.emit).toHaveBeenCalledWith(s.sessionId, [expect.objectContaining({ type: 'turn_started' }), expect.objectContaining({ type: 'text_delta' })])
+      // Read whole after it ran: an end in it goes on at once, never held for a Stop that came already (core/turns/turnHooks.ts).
+      expect(run.deps.emit).toHaveBeenCalledWith(s.sessionId, [expect.objectContaining({ type: 'turn_started' }), expect.objectContaining({ type: 'text_delta' })],
+        { over: true })
       expect(log.mock.calls.map(([line]) => String(line)).some((line) => line.includes('replayed the first turn'))).toBe(true)
       // Once replayed, never again.
       run.normalizers.forget(s.sessionId)
@@ -901,7 +903,7 @@ describe('attaching a session', () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup()
       await run.attach.attachSession(session('claude', transcript([CLAUDE_PROMPT])), false, false, true)
-      expect(vi.mocked(run.deps.emit).mock.calls[0][2]).toBeUndefined()
+      expect(vi.mocked(run.deps.emit).mock.calls[0][2]).toEqual({ over: true })
       const held = setup()
       vi.mocked(held.deps.watcher.hold).mockResolvedValue({ offset: 1_000_000, expired: false, release: vi.fn() })
       await held.attach.attachSession(session('claude', transcript([CLAUDE_PROMPT])), true, false, true)
@@ -1133,7 +1135,9 @@ describe('attaching a session', () => {
         expect(usage).not.toHaveBeenCalled()
         await watcher.pollSession(row.sessionId)
         expect(usage).toHaveBeenCalledExactlyOnceWith(row)
-        expect(emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, expect.arrayContaining([expect.objectContaining({ type: 'turn_ended' })]))
+        // A live line: the answer has no time and Claude's transcript never marks its own end, so only the closed turn goes on.
+        expect(emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, expect.arrayContaining([expect.objectContaining({ type: 'turn_ended' })]),
+          { at: undefined, over: undefined, turn: expect.objectContaining({ turnOpen: false }) })
         expect(run.normalizers.sessionTurnOpen(row.sessionId)).toBe(false)
       } finally { await watcher.stop() }
     })
@@ -1409,7 +1413,8 @@ describe('attaching a session', () => {
           expect(add).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: row.sessionId }), { fromOffset: end })
           await watcher.pollSession(row.sessionId)
           expect(usage).toHaveBeenCalledExactlyOnceWith(row)
-          expect(emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, expect.arrayContaining([expect.objectContaining({ type: 'turn_ended' })]))
+          expect(emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, expect.arrayContaining([expect.objectContaining({ type: 'turn_ended' })]),
+            { at: undefined, over: undefined, turn: expect.objectContaining({ turnOpen: false }) })
         } finally { await watcher.stop() }
       })
 
@@ -1422,7 +1427,7 @@ describe('attaching a session', () => {
         expect(vi.getTimerCount()).toBe(1)
         await vi.advanceTimersByTimeAsync(1_000)
         await read(run, 2)
-        expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, [expect.objectContaining({ type: 'turn_started' })])
+        expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, [expect.objectContaining({ type: 'turn_started' })], { over: true })
         expect(run.attach.replayedFirstTurn.has(row.sessionId)).toBe(true)
       })
 
@@ -1814,7 +1819,7 @@ it.each(['inline', 'worker'] as const)('preserves eager cancel while the %s reco
   const cancel = createCancel({ resolve: () => row, normalizers: run.normalizers,
     input: { cancel: vi.fn(), cancelConfirmed: vi.fn(async () => true) },
     device: () => undefined, stopHeartbeat: vi.fn(), questionWatcher: { stop: vi.fn() }, mirror: { cancel: vi.fn() },
-    turnActivity: { observe: vi.fn(), snapshot: vi.fn() }, turnStartedAt: new Map(), agentIdFor: () => row.agentId, clients: { send: vi.fn() },
+    turnActivity: { observe: vi.fn() }, turnStartedAt: new Map(), tell: vi.fn(),
   })
   await cancel(row.agentId)
   finish(); await pending

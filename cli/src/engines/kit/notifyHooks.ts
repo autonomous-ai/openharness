@@ -221,3 +221,22 @@ export function foreignHookBlocks(blocks: HookBlock[], owns: (block: HookBlock) 
     return hooks.length ? [{ ...block, hooks }] : []
   })
 }
+
+/** Our hooks out of the events [of] takes: a shared block keeps its other hooks, an emptied event leaves the object. How many went. */
+export function withoutOwnHooks(events: Record<string, unknown>, owns: (block: HookBlock) => boolean, of: (event: string) => boolean): number {
+  let removed = 0
+  for (const [event, list] of Object.entries(events)) {
+    // An event with nothing of ours is never read further: a block there in a shape Harness does not know is somebody
+    // else's to keep, and holds neither an install nor an uninstall.
+    if (!of(event) || !Array.isArray(list) || !list.some((block) => owns(block))) continue
+    const blocks = list as HookBlock[]
+    // foreignHookBlocks refuses a block of unconfirmed shape before anything is counted as removed.
+    const kept = foreignHookBlocks(blocks, owns)
+    removed += blocks.reduce((n, block) => n + block.hooks.filter((hook) => owns({ hooks: [hook] })).length, 0)
+    // Replaced only where something of ours went, so an untouched event keeps its exact value; a replaced one keeps its
+    // place among the keys.
+    if (kept.length) events[event] = kept
+    else delete events[event]
+  }
+  return removed
+}

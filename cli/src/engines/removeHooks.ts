@@ -119,8 +119,8 @@ function codexHooksNow(home: string): Settings {
   const settings = hookContracts.codex.settings
   const entry = notifyHookEntry(settings, hookArgv(env.PORT, 'codex', settings.commandNamesHome ? home : undefined))
   const hooks: Record<string, HookBlock[]> = {}
-  if (entry) for (const { event, matcher } of settings.events) {
-    hooks[event] = [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: entry.command, ...(entry.args ? { args: entry.args } : {}), timeout: settings.timeout }] }]
+  if (entry) for (const { event, matcher, timeout } of settings.events) {
+    hooks[event] = [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: entry.command, ...(entry.args ? { args: entry.args } : {}), timeout: timeout ?? settings.timeout }] }]
   }
   if (settings.inbox) (hooks[settings.inbox.event] ??= []).push({ hooks: [{ type: 'command', command: messagesCommand(env.HARNESS_AGENT_MESSAGES_DIR), timeout: settings.timeout }] })
   return { hooks }

@@ -227,6 +227,19 @@ describe('Codex\'s PowerShell hook on Windows', () => {
     expect(log.mock.calls[0]![0]).toBe(codex.settings.messages.current.replace('{file}', file))
     expect([stamp(file), stamp(config)]).toEqual(before)
   })
+
+  it('writes every Codex event the one PowerShell line, PreToolUse with its matcher, Interrupt with timeout 3', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const home = join(dir, 'codex')
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(true)
+    const { command } = notifyHookEntry(codex.settings, hookArgv(19473, 'codex', home), 'win32')!
+    const block = (timeout: number, matcher?: string) => [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command, timeout }] }]
+    expect(JSON.parse(readFileSync(join(home, codex.settings.file), 'utf8')).hooks).toEqual({
+      SessionStart: block(5, 'startup|resume|clear|compact'), UserPromptSubmit: block(5), Stop: block(5),
+      PermissionRequest: block(5), PreToolUse: block(5, 'request_user_input'), Interrupt: block(3),
+    })
+  })
 })
 
 // B4.10 (the B4.6 carries): the Copilot (PowerShell) and Command Code (cmd.exe, nested schema) installs that succeed on

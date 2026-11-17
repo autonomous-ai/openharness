@@ -106,6 +106,17 @@ describe('live worker transport', () => {
     await expect(p.port.pull(ask())).rejects.toMatchObject({ code: 'ENGINE_INVALID_REPLY' })
   })
 
+  it('takes a frame with at and over, and refuses an at that is no integer or an over that is not true', async () => {
+    const frame = (changes: Record<string, unknown>) => ({ raw: '', profile: true, observe: true, events: [], replay: false,
+      turn: { identity: 'binding:empty', turnOpen: false, continued: false }, ...changes }) as LivePage['frames'][number]
+    const taken = page({ frames: [frame({ at: 1_763_341_200_000, over: true })] })
+    expect(await setup(() => ({ version: 1, answer: taken })).port.pull(ask())).toEqual(taken)
+    for (const changes of [{ at: 1.5 }, { at: '1' }, { at: null }, { at: Number.MAX_SAFE_INTEGER + 1 }, { over: false }, { over: 'yes' }]) {
+      const answer = page({ frames: [frame(changes)] })
+      await expect(setup(() => ({ version: 1, answer })).port.pull(ask())).rejects.toMatchObject({ code: 'ENGINE_INVALID_REPLY' })
+    }
+  })
+
   it.each([
     cursor({ serial: 2, offset: 4, origin: 5 }),
     cursor({ serial: 2, offset: 5, origin: 4 }),

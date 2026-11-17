@@ -54,6 +54,31 @@ describe('verified turn activity', () => {
       t.advance(10_000); expect(t.frame()?.state).toBe('unknown')
       t.activity.observe('s', type); expect(t.frame()?.state).toBe('working')
     })
+  it('withheld: text, a tool or a subagent\'s end read then claims nothing; a turn\'s start still does', () => {
+    // A wait on the person: the engine is not working, though its tools' records still land.
+    const t = setup(); t.runtime({ key: 'agent:session:pid:start', turnOpen: true, withheld: true })
+    for (const type of ['text_delta', 'thinking_delta', 'thinking_title', 'tool_start', 'tool_end', 'subagent_finished']) {
+      t.activity.observe('s', type); expect(t.frame()?.state).toBe('unknown')
+    }
+    t.activity.observe('s', 'turn_started'); expect(t.frame()?.state).toBe('working')
+    // Progress does not renew the claim the start made.
+    t.advance(WORK_EVIDENCE_MS - 1); t.activity.observe('s', 'text_delta')
+    t.advance(1); expect(t.frame()?.state).toBe('unknown')
+    t.activity.observe('s', 'turn_ended'); expect(t.frame()?.state).toBe('idle')
+    t.activity.observe('s', 'tool_end'); expect(t.frame()?.state).toBe('idle')
+  })
+  it('withdraw: a Working claim reads unknown at once while its turn is open, idle with none, and an idle one is left', () => {
+    const t = setup(); t.activity.observe('s', 'turn_started')
+    t.activity.withdraw('s'); expect(t.frame()).toMatchObject({ state: 'unknown', validForMs: 0 })
+    const unknown = t.frame()?.revision
+    t.activity.withdraw('s'); expect(t.frame()?.revision).toBe(unknown)
+    t.runtime({ key: 'agent:session:pid:start', turnOpen: false })
+    t.activity.observe('s', 'text_delta'); expect(t.frame()?.state).toBe('working')
+    t.activity.withdraw('s'); expect(t.frame()?.state).toBe('idle')
+    const idle = t.frame()?.revision
+    t.activity.withdraw('s'); expect(t.frame()).toMatchObject({ state: 'idle', revision: idle })
+    t.runtime(); t.activity.withdraw('s'); expect(t.frame()).toBeUndefined()
+  })
   it('does not renew evidence from metadata, snapshots, or heartbeat generation', () => {
     const t = setup(); t.activity.observe('s', 'turn_started')
     const version = t.frame()?.revision

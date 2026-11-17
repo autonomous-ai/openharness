@@ -134,7 +134,7 @@ async function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none'
     ingest: vi.fn(() => false), ingestConfig: vi.fn(async () => { await barrier('config'); return false }), ingestPane: vi.fn(async () => false), capturePane: vi.fn(async () => null) } as AttachDeps['runtimeProfiles']
   const terminalGone = vi.fn(async () => { await barrier('terminal'); return false })
   const relaunchMarks = createRelaunchMarks()
-  const normalizers = createSessionNormalizers(others)
+  const normalizers = createSessionNormalizers(others, { held: () => false, closed: vi.fn(), forget: vi.fn() })
   const attach = createAttach({ liveFor: () => undefined, resolve: id => registry.resolve(id),
     terminalGone, normalizers, others, relaunchMarks,
     watcher: { addSession: vi.fn(async () => {}), removeSession: vi.fn(async () => {}), pollSession: vi.fn(async () => {}),

@@ -1,7 +1,7 @@
 /**
  * Codex outside Harness, told by its own hooks, as harness/inOrca.ts tells Claude Code: no tmux pane, no Harness pane, no
- * process of its own, and the app it runs in named by the hints a test gives it. Codex sends no end-of-turn hook, so with
- * no process to read idle, a turn its prompt hook started stays working for as long as a test needs.
+ * process of its own, and the app it runs in named by the hints a test gives it. It runs no Stop hook here, so with no
+ * process to read idle, a turn its prompt hook started stays working for as long as a test needs.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'

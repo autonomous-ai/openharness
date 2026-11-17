@@ -20,9 +20,18 @@ it('declares each engine\'s hooks once, for the full engine interface and the ho
   expect(admitHook('claude', {})).toEqual({ accepted: true })
 })
 
-it('composes only what a contract declares: Claude Code corrects transcripts and closes turns, Codex admits', () => {
+// A Codex Stop closes nothing: Codex waits for it before it writes the turn's end (core/turns/turnHooks.ts).
+it('composes only what a contract declares: Claude Code corrects transcripts and its Stop closes turns, Codex admits', () => {
   expect(Object.keys(engineHooks.claude).sort()).toEqual(['onStop', 'transcriptFor'])
   expect(Object.keys(engineHooks.codex).sort()).toEqual(['admit'])
+})
+
+// The turn's end, its interrupt and its waits on the person (facts-codex §2). No SubagentStart or SubagentStop: Codex's
+// SubagentStop fires per child turn and never for an interrupted or failed one, so a count of them is not exact.
+it('declares Codex\'s events, and no subagent event', () => {
+  expect(hookContracts.codex.settings.events).toEqual([
+    { event: 'SessionStart', matcher: 'startup|resume|clear|compact' }, { event: 'UserPromptSubmit' }, { event: 'Stop' },
+    { event: 'PermissionRequest' }, { event: 'PreToolUse', matcher: 'request_user_input' }, { event: 'Interrupt', timeout: 3 }])
 })
 
 it('keeps every contract plain data: nothing in it runs', () => {
@@ -39,7 +48,8 @@ it('installs Claude hooks into the requested home through its facet', async () =
     const file = join(home, 'settings.json')
     const first = readFileSync(file, 'utf8')
     const settings = JSON.parse(first)
-    expect(Object.keys(settings.hooks)).toEqual(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure', 'Notification', 'PostToolUse'])
+    expect(Object.keys(settings.hooks)).toEqual(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure', 'Notification',
+      'PreToolUse', 'PermissionRequest', 'Elicitation', 'SubagentStart', 'SubagentStop', 'PostToolUse'])
     // Only the notices that wait for the person run the hook (hook/notify.mjs NEEDS_INPUT), not the idle one after each turn.
     expect(settings.hooks.Notification[0].matcher).toBe('permission_prompt|elicitation_dialog|elicitation_url_dialog|quota_auto_resume_stale')
     const command = settings.hooks.Stop[0].hooks[0].command as string
@@ -48,6 +58,28 @@ it('installs Claude hooks into the requested home through its facet', async () =
     expect(command).not.toContain('--engine')
     await engineHookInstallations.claude.installIn(19473, home)
     expect(readFileSync(file, 'utf8')).toBe(first)
+  } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
+// Variant P (facts-claude §1): PermissionRequest and Elicitation say a dialog waits as it opens, and PreToolUse only for
+// AskUserQuestion, so no hook runs for any other tool. SubagentStart and SubagentStop count a lead's open subagents.
+it('installs Claude Code\'s wait and subagent hooks beside the person\'s own', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'claude-hook-waits-'))
+  const own = { matcher: 'Bash', hooks: [{ type: 'command', command: 'my-guard' }] }
+  try {
+    writeFileSync(join(home, 'settings.json'), JSON.stringify({ hooks: { PreToolUse: [own] } }))
+    await engineHookInstallations.claude.installIn(19473, home)
+    const settings = JSON.parse(readFileSync(join(home, 'settings.json'), 'utf8'))
+    expect(Object.keys(settings.hooks)).toEqual(['PreToolUse', 'SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure',
+      'Notification', 'PermissionRequest', 'Elicitation', 'SubagentStart', 'SubagentStop', 'PostToolUse'])
+    expect(settings.hooks.PreToolUse).toHaveLength(2)
+    expect(settings.hooks.PreToolUse[0]).toEqual(own)
+    expect(settings.hooks.PreToolUse.at(-1)).toMatchObject({ matcher: 'AskUserQuestion' })
+    for (const event of ['PermissionRequest', 'Elicitation', 'SubagentStart', 'SubagentStop']) {
+      expect(settings.hooks[event]).toHaveLength(1)
+      expect(settings.hooks[event][0].matcher).toBeUndefined()
+      expect(settings.hooks[event][0].hooks[0].command).toContain('--port 19473')
+    }
   } finally { rmSync(home, { recursive: true, force: true }) }
 })
 
@@ -83,6 +115,7 @@ it('does not emit an end when core rejects a stale closure proposal', async () =
   await engineHooks.claude.onStop!({
     turnState: () => parser.snapshot(), closeTurn, latestPromptAt: () => undefined,
     drain: async () => {}, noteEngineStopped: () => {}, emit, graceMs: 0,
+    heldEnd: () => undefined, awaitEnd: () => {}, deliverHeldEnd: () => false, subagentsRun: () => false, heldBeforeHook: false,
   }, { sessionId: 'session' })
   expect(closeTurn).toHaveBeenCalledWith('session', parser.snapshot().identity)
   expect(emit).not.toHaveBeenCalled()

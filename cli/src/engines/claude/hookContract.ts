@@ -18,10 +18,17 @@ export const hooks: HookContract = {
     // refusal; StopFailure = turn ended on an API error, where Stop does NOT fire) — they close a turn even
     // when the JSONL-derived turn_ended is missed. Neither supports a matcher (silently ignored).
     // Notification is how a session outside a pane says it waits for the person, which the hook tells the devices
-    // (hook/notify.mjs); for a session in a pane the hook ignores it. Its matcher names the types that wait for the
+    // (hook/notify.mjs); for a session in a pane the hook ignores it: it fires only once the person has not typed for
+    // 6 s, and never for a dialog answered sooner (facts-claude §1). Its matcher names the types that wait for the
     // person (notify.mjs NEEDS_INPUT), so the idle notice after every turn starts no hook.
+    // In a pane, PreToolUse (`AskUserQuestion` only, so no hook runs for any other tool), PermissionRequest and
+    // Elicitation say the session waits on the person as the dialog opens. SubagentStart/SubagentStop count a
+    // turn's open subagents, so its Stop does not end it while one still works. No PreCompact, PostToolBatch or
+    // ElicitationResult: a wait ends on what follows it.
     events: [{ event: 'SessionStart' }, { event: 'SessionEnd' }, { event: 'UserPromptSubmit' }, { event: 'Stop' }, { event: 'StopFailure' },
-      { event: 'Notification', matcher: 'permission_prompt|elicitation_dialog|elicitation_url_dialog|quota_auto_resume_stale' }],
+      { event: 'Notification', matcher: 'permission_prompt|elicitation_dialog|elicitation_url_dialog|quota_auto_resume_stale' },
+      { event: 'PreToolUse', matcher: 'AskUserQuestion' }, { event: 'PermissionRequest' }, { event: 'Elicitation' },
+      { event: 'SubagentStart' }, { event: 'SubagentStop' }],
     timeout: 5,
     // Agent Messages: a teammate's message reaches a working agent at its next tool call (kit/messagesHook.ts).
     inbox: { event: 'PostToolUse' },
@@ -52,8 +59,8 @@ export const hooks: HookContract = {
     win32Runner: 'argv',
     upToDate: { command: 'first-ours', matcher: false },
     messages: {
-      current: '[hooks] Claude session + turn (Stop/StopFailure) hooks already installed',
-      installed: '[hooks] installed Claude session + turn (Stop/StopFailure) hooks → {file}',
+      current: '[hooks] Claude Code session, turn, wait and subagent hooks already installed',
+      installed: '[hooks] installed Claude Code session, turn, wait and subagent hooks → {file}',
       updated: '[hooks] updated (path/port changed) → {script} --port {port} in {file}',
       after: '[hooks] (takes effect on the next claude session start)',
       failed: '[hooks] failed to write settings.json:',

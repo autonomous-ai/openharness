@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { emptyPorts, type RecapSession, type TurnLifecycle } from '../core/api.js'
+import { DONE_QUIET_MS } from '../lib/agentNotifications.js'
 import { SUBAGENT_IDLE_MS, type CommanderMirrorOpts } from '../lib/commander.js'
 import { deriveTurnSummary } from '../lib/deviceRecap.js'
 import type { LiveEvent } from '../lib/normalize.js'
@@ -19,6 +20,9 @@ const s1: RecapSession = { sessionId: 's1', agentId: 'a1', name: 'app', subagent
 const started = (userMessage = 'what is the fix?') => ({ type: 'turn_started', payload: { userMessage } }) as LiveEvent
 const ended = { type: 'turn_ended', payload: {} } as LiveEvent
 const flush = () => new Promise((done) => setTimeout(done, 0))
+/** A turn's recap is told once its end has stayed quiet for DONE_QUIET_MS (lib/agentNotifications.ts): a test that
+ *  waits for one runs on fake timers and lets that window pass instead of waiting it out. */
+const quietWindow = () => vi.advanceTimersByTimeAsync(DONE_QUIET_MS)
 
 const decided = (tier: TierDecision['tier']): TierDecision => ({ tier, by: 'test', detail: '', ms: 0 })
 
@@ -32,6 +36,7 @@ function setup(over: Parameters<typeof createRecaps>[1] = {}, core = fakeCore({ 
 
 describe('the recaps', () => {
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
   })
@@ -43,12 +48,14 @@ describe('the recaps', () => {
   })
 
   it('cuts a turn\'s recap from its final answer, sends the card and the apps\' recap, and keeps it for the core to read', async () => {
+    vi.useFakeTimers()
     const { core, recaps, tell } = setup()
     vi.spyOn(console, 'log').mockImplementation(() => {})
     tell({ kind: 'events', session: s1, events: [started()], replay: false })
     expect(recaps.port.recaps('s1')).toMatchObject({ asks: ['what is the fix?'], busy: true })
     tell({ kind: 'events', session: s1, events: [ended], replay: false })
-    await vi.waitFor(() => expect(core.clients.turnSummary).toHaveBeenCalled())
+    await quietWindow()
+    expect(core.clients.turnSummary).toHaveBeenCalled()
     const summary = await deriveTurnSummary('The fix is in. Tests pass.')
     expect(core.transcripts.lastTurn).toHaveBeenCalledWith('s1')
     expect(vi.mocked(core.clients.turnSummary).mock.calls[0][0]).toMatchObject({ type: 'turn_summary', agentId: 'a1', dbSessionId: 's1', payload: { summary, sessionId: 's1' } })
@@ -60,11 +67,13 @@ describe('the recaps', () => {
   })
 
   it('streams no card with no device watching, and still cuts the recap for the apps', async () => {
+    vi.useFakeTimers()
     const { core, tell } = setup()
     vi.spyOn(console, 'log').mockImplementation(() => {})
     tell({ kind: 'events', session: s1, events: [started()], replay: false }, nobody)
     tell({ kind: 'events', session: s1, events: [ended], replay: false }, nobody)
-    await vi.waitFor(() => expect(core.clients.turnSummary).toHaveBeenCalled())
+    await quietWindow()
+    expect(core.clients.turnSummary).toHaveBeenCalled()
     expect(core.clients.turnCard).not.toHaveBeenCalled()
   })
 
@@ -76,6 +85,25 @@ describe('the recaps', () => {
     expect(core.clients.turnCard).not.toHaveBeenCalled()
     tell({ kind: 'beat', session: s1, working: true })
     expect(vi.mocked(core.clients.turnCard).mock.calls.map(([frame]) => frame.payload)).toEqual([{ kind: 'processing', text: 'Processing' }])
+  })
+
+  // The core withdraws a turn's Working claim while it waits on the person (core/turns/turnHooks.ts). The dial keeps its
+  // tile working under the question (core/questions.ts), and a dial the restarted devices attach again is shown so
+  // (e2e/devicesProcess.e2e.ts, "killed outright").
+  it('beats a busy card, and says it to a dial that just attached, while a question waits on the person', async () => {
+    const { core, recaps, tell } = setup()
+    tell({ kind: 'events', session: s1, events: [started()], replay: false })
+    tell({ kind: 'asked', sessionId: 's1', requestId: 'r1' })
+    vi.mocked(core.clients.turnCard).mockClear()
+    tell({ kind: 'beat', session: s1, working: false })
+    expect(vi.mocked(core.clients.turnCard).mock.calls.map(([frame]) => frame.payload)).toEqual([{ kind: 'processing', text: 'Processing' }])
+    expect(await recaps.port.liveCards()).toEqual([{ type: 'commander_event', agentId: 'a1', dbSessionId: 's1', payload: { kind: 'processing', text: 'Processing' } }])
+    // Answered: the core's beat alone says again.
+    tell({ kind: 'answered', sessionId: 's1', requestId: 'r1' })
+    vi.mocked(core.clients.turnCard).mockClear()
+    tell({ kind: 'beat', session: s1, working: false })
+    expect(core.clients.turnCard).not.toHaveBeenCalled()
+    expect(await recaps.port.liveCards()).toEqual([])
   })
 
   it('clears the card on a cancel and a forget, keeping what is stored for a resume', () => {
@@ -103,11 +131,13 @@ describe('the recaps', () => {
   })
 
   it('moves a conversation\'s recaps to its new session, and forgets a purged one', async () => {
+    vi.useFakeTimers()
     const { core, recaps, tell } = setup()
     vi.spyOn(console, 'log').mockImplementation(() => {})
     tell({ kind: 'events', session: s1, events: [started()], replay: false })
     tell({ kind: 'events', session: s1, events: [ended], replay: false })
-    await vi.waitFor(() => expect(core.clients.turnSummary).toHaveBeenCalled())
+    await quietWindow()
+    expect(core.clients.turnSummary).toHaveBeenCalled()
     tell({ kind: 'rebound', from: 's1', to: 's9' })
     expect(recaps.port.recaps('s9')?.history).toEqual(recaps.port.recaps('s1')?.history)
     tell({ kind: 'purged', sessionId: 's1' })
@@ -115,17 +145,20 @@ describe('the recaps', () => {
   })
 
   it('holds a turn\'s "done" notification while a question waits on the person, and lets it go once answered', async () => {
+    vi.useFakeTimers()
     const { core, tell } = setup()
     vi.spyOn(console, 'log').mockImplementation(() => {})
     tell({ kind: 'events', session: s1, events: [started()], replay: false })
     tell({ kind: 'asked', sessionId: 's1', requestId: 'r1' })
     tell({ kind: 'events', session: s1, events: [ended], replay: false })
-    await vi.waitFor(() => expect(core.clients.turnSummary).toHaveBeenCalledTimes(1))
+    await quietWindow()
+    expect(core.clients.turnSummary).toHaveBeenCalledTimes(1)
     expect(vi.mocked(core.clients.turnSummary).mock.calls[0][0].payload).toMatchObject({ notification: null })
     tell({ kind: 'answered', sessionId: 's1', requestId: 'r1' })
     tell({ kind: 'events', session: s1, events: [started('and now?')], replay: false })
     tell({ kind: 'events', session: s1, events: [ended], replay: false })
-    await vi.waitFor(() => expect(core.clients.turnSummary).toHaveBeenCalledTimes(2))
+    await quietWindow()
+    expect(core.clients.turnSummary).toHaveBeenCalledTimes(2)
     expect(vi.mocked(core.clients.turnSummary).mock.calls[1][0].payload).toMatchObject({ notification: { kind: 'done' } })
   })
 
@@ -159,14 +192,16 @@ describe('the recaps', () => {
   })
 
   it('leaves a turn recapped live alone when its session attaches again', async () => {
+    vi.useFakeTimers()
     const { core, recaps, tell } = setup()
     vi.spyOn(console, 'log').mockImplementation(() => {})
     tell({ kind: 'events', session: s1, events: [started()], replay: false })
     tell({ kind: 'events', session: s1, events: [ended], replay: false })
-    await vi.waitFor(() => expect(core.clients.turnSummary).toHaveBeenCalled())
+    await quietWindow()
+    expect(core.clients.turnSummary).toHaveBeenCalled()
     vi.mocked(core.clients.turnCard).mockClear()
     tell({ kind: 'settled', session: s1 })
-    await flush(); await flush()
+    await quietWindow()
     expect(core.clients.turnCard).not.toHaveBeenCalled()
     expect(recaps.port.recaps('s1')?.history).toHaveLength(1)
   })
@@ -233,23 +268,26 @@ describe('the recaps', () => {
   })
 
   it('cuts no recap from a turn whose final answer the core cannot read', async () => {
+    vi.useFakeTimers()
     const { core, tell } = setup()
     vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.mocked(core.transcripts.lastTurn).mockResolvedValue(null)
     tell({ kind: 'events', session: s1, events: [started()], replay: false })
     tell({ kind: 'events', session: s1, events: [ended], replay: false })
-    await flush()
-    await flush()
+    // Past the quiet window, where a recap would have been told.
+    await quietWindow()
     expect(core.clients.turnSummary).not.toHaveBeenCalled()
     expect(vi.mocked(core.clients.turnCard).mock.calls.at(-1)?.[0].payload).toEqual({ kind: 'done', text: 'done' })
   })
 
   it('a turn the core says is quiet gets no recap and no notification, and the session\'s last recap stays', async () => {
+    vi.useFakeTimers()
     const { core, recaps, tell } = setup()
     vi.spyOn(console, 'log').mockImplementation(() => {})
     tell({ kind: 'events', session: s1, events: [started()], replay: false })
     tell({ kind: 'events', session: s1, events: [ended], replay: false })
-    await vi.waitFor(() => expect(core.clients.turnSummary).toHaveBeenCalled())
+    await quietWindow()
+    expect(core.clients.turnSummary).toHaveBeenCalled()
     const last = recaps.port.recaps('s1')
     vi.mocked(core.clients.turnSummary).mockClear()
     vi.mocked(core.clients.turnCard).mockClear()
@@ -257,8 +295,7 @@ describe('the recaps', () => {
     // A line a service typed for the agent alone (core/deliveries.ts `quiet`), told with the batch that ends its turn.
     tell({ kind: 'events', session: s1, events: [started('Your browser is ready: run `harness browser --help`')], replay: false })
     tell({ kind: 'events', session: s1, events: [ended], replay: false, quiet: true })
-    await flush()
-    await flush()
+    await quietWindow()
     // The apps hear the silent tier alone: no recap, no notification.
     expect(vi.mocked(core.clients.turnSummary).mock.calls).toEqual([
       [{ type: 'turn_summary', agentId: 'a1', dbSessionId: 's1', payload: { sessionId: 's1', tier: 'silent' } }],
@@ -277,11 +314,13 @@ describe('the recaps', () => {
     }
 
     it('is decided once, with the agent\'s engine, for the dial and the apps while a device listens', async () => {
+      vi.useFakeTimers()
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const decideTier = vi.fn(async (_input: TierInput) => decided('alert'))
       const { core, tell } = setup({ decideTier })
       await turn(tell, watching)
-      await vi.waitFor(() => expect(core.clients.turnSummary).toHaveBeenCalled())
+      await quietWindow()
+      expect(core.clients.turnSummary).toHaveBeenCalled()
       expect(decideTier).toHaveBeenCalledExactlyOnceWith({ engine: 'codex', recap: expect.any(String),
         durationS: 0, stats: {}, subagent: false, onScreen: false, failed: false })
       expect(vi.mocked(core.clients.turnSummary).mock.calls[0][0]).toMatchObject({ payload: { tier: 'alert' } })
@@ -289,27 +328,32 @@ describe('the recaps', () => {
     })
 
     it('is decided for an app away from this desk with no device, and for nobody when neither listens', async () => {
+      vi.useFakeTimers()
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const decideTier = vi.fn(async () => decided('list'))
       const away = setup({ decideTier })
       await turn(away.tell, { device: false, active: false, remote: true })
-      await vi.waitFor(() => expect(away.core.clients.turnSummary).toHaveBeenCalled())
+      await quietWindow()
+      expect(away.core.clients.turnSummary).toHaveBeenCalled()
       expect(vi.mocked(away.core.clients.turnSummary).mock.calls[0][0]).toMatchObject({ payload: { tier: 'list' } })
       expect(decideTier).toHaveBeenCalledTimes(1)
       const alone = setup({ decideTier })
       await turn(alone.tell, { ...nobody, remote: false })
-      await vi.waitFor(() => expect(alone.core.clients.turnSummary).toHaveBeenCalled())
+      await quietWindow()
+      expect(alone.core.clients.turnSummary).toHaveBeenCalled()
       expect(decideTier).toHaveBeenCalledTimes(1)
       expect(vi.mocked(alone.core.clients.turnSummary).mock.calls[0][0].payload).not.toHaveProperty('tier')
     })
 
     const decidedWith = async () => {
+      vi.useFakeTimers()
       const log = vi.spyOn(console, 'log').mockImplementation(() => {})
       const backend = vi.fn()
       const core = fakeCore({ dataDir: temp(), account: { backend } })
       const { tell } = setup({ decideTier: undefined }, core)
       await turn(tell, watching)
-      await vi.waitFor(() => expect(core.clients.turnSummary).toHaveBeenCalled())
+      await quietWindow()
+      expect(core.clients.turnSummary).toHaveBeenCalled()
       expect(backend).not.toHaveBeenCalled()
       return { tier: (vi.mocked(core.clients.turnSummary).mock.calls[0][0].payload as { tier?: string }).tier, log }
     }

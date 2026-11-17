@@ -68,7 +68,8 @@ async function setup(home: string | null = null) {
   } as AttachDeps['runtimeProfiles']
   const emit = vi.fn()
   const attach = createAttach({ liveFor: () => undefined, resolve: id => registry.resolve(id),
-    terminalGone: async () => false, normalizers: createSessionNormalizers(others), others,
+    terminalGone: async () => false,
+    normalizers: createSessionNormalizers(others, { held: () => false, closed: vi.fn(), forget: vi.fn() }), others,
     watcher: { addSession: vi.fn(async () => {}), removeSession: vi.fn(async () => {}), pollSession: vi.fn(async () => {}),
       hold: vi.fn(async () => null), tails: () => false },
     setInterpretationHold: registry.setInterpretationHold.bind(registry), announceSession: vi.fn(),

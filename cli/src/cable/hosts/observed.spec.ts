@@ -85,7 +85,7 @@ describe('ObservedSource states', () => {
   beforeEach(() => { vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers() })
 
-  it('drives each event to the spec table', () => {
+  it('drives each event to the spec table', async () => {
     const { src, clock, ev } = setup()
     src.ingest(ev('session-start'))
     expect(src.list()[0]).toMatchObject({ state: 'idle', name: 'proj', engine: 'claude', host: 'terminal' })
@@ -101,6 +101,7 @@ describe('ObservedSource states', () => {
     src.ingest(ev('turn-error'))
     expect(src.list()[0].state).toBe('error')
     src.ingest(ev('turn-stop'))
+    await graced()
     expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
   })
 
@@ -123,9 +124,10 @@ describe('ObservedSource states', () => {
     expect(changes).toHaveBeenCalledTimes(2)
   })
 
-  it('markSeen clears unseenDone and tells listeners once', () => {
+  it('markSeen clears unseenDone and tells listeners once', async () => {
     const { src, changes, ev } = setup()
     src.ingest(ev('turn-stop'))
+    await graced()
     const id = src.list()[0].id
     changes.mockClear()
     src.markSeen(id)
@@ -159,9 +161,8 @@ describe('ObservedSource states', () => {
     const { src, answers, ev } = setup()
     answers.set('/t/s.jsonl', 'Fixed the bug.')
     src.ingest(ev('turn-stop', { transcriptPath: '/t/s.jsonl' }))
-    expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
     await graced()
-    expect(src.list()[0].lastAnswer).toBe('Fixed the bug.')
+    expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true, lastAnswer: 'Fixed the bug.' })
   })
 
   it("reads the last answer once the core's Stop grace is over: Claude's transcript can lag its Stop hook", async () => {
@@ -574,6 +575,253 @@ describe('ObservedSource codex and open sessions', () => {
   })
 })
 
+// A turn outside a pane ends by its engine's own hooks, as a Harness pane's does: its Stop is told as done only once
+// 1.5 s pass with no word of the turn going on, and a lead's subagents keep it working.
+describe('ObservedSource and a turn\'s end by hook', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  const codex = { engine: 'codex', sessionId: 'c1', transcriptPath: '/c/r.jsonl' } as const
+  /** Every state the listeners are told from now on, in order. */
+  const told = (src: ObservedSource): string[] => {
+    const states: string[] = []
+    src.onChange(() => { states.push(src.list()[0].state) })
+    return states
+  }
+
+  it('a Codex turn-stop reads working until 1.5 s of quiet, then done with its answer', async () => {
+    const { src, answers, ev } = setup()
+    answers.set('/c/r.jsonl', 'Codex says hi')
+    src.ingest(ev('turn-start', codex))
+    src.ingest(ev('turn-stop', codex))
+    await vi.advanceTimersByTimeAsync(1_499)
+    expect(src.list()[0]).toMatchObject({ state: 'working', unseenDone: false })
+    await vi.advanceTimersByTimeAsync(1)
+    expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true, lastAnswer: 'Codex says hi' })
+  })
+
+  it('a turn that starts within the 1.5 s is never done, and works', async () => {
+    const lastAnswer = vi.fn(async () => 'x')
+    const { src, ev } = setup({ lastAnswer })
+    src.ingest(ev('turn-start', codex))
+    src.ingest(ev('turn-stop', codex))
+    const states = told(src)
+    await vi.advanceTimersByTimeAsync(1_000)
+    src.ingest(ev('turn-start', codex))
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state: 'working', unseenDone: false })
+    expect(states).not.toContain('done')
+    expect(lastAnswer).not.toHaveBeenCalled()
+  })
+
+  it.each([['needs-input', 'needs-you'], ['turn-error', 'error']] as const)('%s within the 1.5 s is never done', async (event, state) => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('turn-stop'))
+    const states = told(src)
+    src.ingest(ev(event))
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state, unseenDone: false })
+    expect(states).not.toContain('done')
+  })
+
+  it('a prompt asked within the 1.5 s is never done', async () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('turn-stop'))
+    src.ingest({ engine: 'claude', sessionId: 's1', event: 'asked', tool: 'Bash' })
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state: 'needs-you', unseenDone: false })
+  })
+
+  // Its turn is over all the same (`claude -p` ends its session at once): it does not read working until it is removed.
+  it('a session that ends within the 1.5 s is never done, and its turn is over', async () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('turn-stop'))
+    src.ingest(ev('session-end'))
+    expect(src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false })
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false })
+  })
+
+  // Ended at its prompt (Ctrl-C), it waits on nobody, and the interrupt its transcript then gets is no answer.
+  it('a session that ends while it waits on a prompt reads idle, though its transcript grows', async () => {
+    const { src, clock, stamps, ev } = setup()
+    src.ingest(ev('turn-start', { transcriptPath: '/t/s.jsonl' }))
+    clock.t += 6_000
+    src.ingest(ev('needs-input'))
+    clock.t += 3_000
+    src.ingest(ev('session-end'))
+    stamps.set('/t/s.jsonl', clock.t)
+    expect(src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false })
+    await src.checkWorking()
+    expect(src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false })
+  })
+
+  it('a lead that ends its session after its Stop, its subagent running, does not read working', async () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('subagent-start'))
+    src.ingest(ev('turn-stop'))
+    src.ingest(ev('session-end'))
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false })
+  })
+
+  // The person stopped the turn: nothing to tell as done, as a Claude turn stopped with Esc.
+  it.each([['within the 1.5 s', ['turn-start', 'turn-stop']], ['mid-turn', ['turn-start']]] as const)(
+    'turn-aborted %s ends the turn idle, never done', async (_when, before) => {
+      const lastAnswer = vi.fn(async () => 'x')
+      const { src, ev } = setup({ lastAnswer })
+      for (const event of before) src.ingest(ev(event, codex))
+      const states = told(src)
+      src.ingest(ev('turn-aborted', codex))
+      expect(src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false })
+      await graced()
+      expect(src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false })
+      expect(states).not.toContain('done')
+      expect(lastAnswer).not.toHaveBeenCalled()
+    })
+
+  it('a lead whose subagent runs stays working past its Stop, and its owner reading idle does not end it', async () => {
+    const { src, clock, open, owners, working, ev } = setup()
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('subagent-start'))
+    src.ingest(ev('turn-stop'))
+    await graced()
+    expect(src.list()[0].state).toBe('working')
+    working.set('s1', false)
+    clock.t += 3_000
+    await src.checkWorking()
+    expect(src.list()[0]).toMatchObject({ state: 'working', unseenDone: false })
+  })
+
+  // Its wrap-up after its last subagent is still to come: its own Stop ends the turn (engines/kit/stopHook.ts).
+  it('a lead\'s Stop while its subagent runs is not done though the subagent stops within the 1.5 s', async () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('subagent-start'))
+    src.ingest(ev('turn-stop'))
+    const states = told(src)
+    await vi.advanceTimersByTimeAsync(1_000)
+    src.ingest(ev('subagent-stop'))
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state: 'working', unseenDone: false })
+    expect(states).not.toContain('done')
+    src.ingest(ev('turn-stop'))
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
+  })
+
+  it('a lead whose subagents all stopped is done 1.5 s after its Stop', async () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('subagent-start'))
+    src.ingest(ev('subagent-stop'))
+    src.ingest(ev('turn-stop'))
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
+  })
+
+  it('its owner reading idle does not end a turn whose Stop waits out the 1.5 s', async () => {
+    const { src, clock, open, owners, working, ev } = setup()
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    working.set('s1', false)
+    src.ingest(ev('turn-start'))
+    clock.t += 3_000
+    src.ingest(ev('turn-stop'))
+    await src.checkWorking()
+    expect(src.list()[0].state).toBe('working')
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
+  })
+
+  it('a subagent-stop with none running counts none below 0', async () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('subagent-stop'))
+    src.ingest(ev('subagent-start'))
+    src.ingest(ev('turn-stop'))
+    await graced()
+    expect(src.list()[0].state).toBe('working')
+  })
+
+  it('counts 64 subagents at most: the 65th start is not counted, and logged once with no session', async () => {
+    const { src, ev, logs } = setup()
+    src.ingest(ev('turn-start'))
+    for (let i = 0; i < 65; i++) src.ingest(ev('subagent-start'))
+    for (let i = 0; i < 64; i++) src.ingest(ev('subagent-stop'))
+    src.ingest(ev('turn-stop'))
+    await graced()
+    expect(src.list()[0].state).toBe('done')
+    expect(logs.filter((line) => line.includes('subagent'))).toEqual(['[observed] subagent not counted · 64 running'])
+  })
+
+  it('a new turn counts its subagents afresh', async () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('subagent-start'))
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('turn-stop'))
+    await graced()
+    expect(src.list()[0].state).toBe('done')
+  })
+
+  // A SubagentStop that was lost would keep the lead working for good.
+  it('10 minutes with no event for the session count none, and the next Stop is done', async () => {
+    const { src, clock, ev, logs } = setup()
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('subagent-start'))
+    src.ingest(ev('turn-stop'))
+    await graced()
+    clock.t += 599_999
+    await src.checkWorking()
+    src.ingest(ev('turn-stop'))
+    await graced()
+    expect(src.list()[0].state).toBe('working')
+    clock.t += 600_000
+    await src.checkWorking()
+    expect(logs.filter((line) => line.includes('subagent'))).toEqual(['[observed] subagent count reset · no event in 10 min'])
+    src.ingest(ev('turn-stop'))
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
+  })
+
+  // Its Finished comes from its Stop: an owner reading idle with no Stop is a turn the person stopped (Esc).
+  it('a Codex turn with no Stop, after one with a Stop, ends idle once its owner reads idle', async () => {
+    const lastAnswer = vi.fn(async () => 'x')
+    const { src, clock, open, owners, working, ev } = setup({ lastAnswer })
+    open.set('c1', 'terminal')
+    owners.set('c1', { pid: 100, engine: 'codex' })
+    src.ingest(ev('turn-start', codex))
+    src.ingest(ev('turn-stop', codex))
+    await graced()
+    expect(lastAnswer).toHaveBeenCalledTimes(1)
+    src.ingest(ev('turn-start', codex))
+    working.set('c1', false)
+    clock.t += 3_000
+    await src.checkWorking()
+    expect(src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false })
+    expect(lastAnswer).toHaveBeenCalledTimes(1)
+  })
+
+  // An older Codex sends no Stop: its owner reading idle is the only word that its turn is over.
+  it('a Codex session that never sent a Stop is done once its owner reads idle', async () => {
+    const { src, clock, open, owners, working, ev } = setup()
+    open.set('c1', 'terminal')
+    owners.set('c1', { pid: 100, engine: 'codex' })
+    src.ingest(ev('turn-start', codex))
+    working.set('c1', false)
+    clock.t += 3_000
+    await src.checkWorking()
+    expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
+  })
+})
+
 describe('ObservedSource and the app the scan learns', () => {
   /** A session found open in a terminal, its owner `pid`. */
   const found = (s: ReturnType<typeof setup>, sessionId: string, pid: number): void => {
@@ -973,6 +1221,7 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
 }
 
 describe('ObservedSource actions', () => {
+  afterEach(() => { vi.useRealTimers() })
   const withHandle = { hostHints: { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE } }
 
   it('keeps a handle that is term_<uuid> and ignores any other', () => {
@@ -1083,10 +1332,13 @@ describe('ObservedSource actions', () => {
   // A working turn may show a permission prompt the daemon has not heard of yet (Codex has no hook for its approval, which
   // takes `y` or Enter; Claude Code's comes a few hundred ms late): the words and their Enter would answer it.
   it.each(['claude', 'codex'] as const)('with no mod, %s is typed into only at its prompt: busy while it works, waiting while it asks', async (engine) => {
+    vi.useFakeTimers()
     const { actions } = fakeActions()
     const { src, ev } = setup({ actions })
     const after = async (event: ObservedHookEvent['event'], text: string) => {
       src.ingest(ev(event, { engine, ...withHandle }))
+      // A Stop is its turn's end once it waits out its grace.
+      if (event === 'turn-stop') await graced()
       return src.send(src.list()[0], text)
     }
     expect(await after('session-start', 'one')).toEqual({ ok: true })
@@ -1101,11 +1353,13 @@ describe('ObservedSource actions', () => {
 
   // No scan or transcript reads another engine's turn: it is at its prompt only once a hook said its turn ended.
   it('another engine is typed into only after a hook said its turn ended', async () => {
+    vi.useFakeTimers()
     const { actions } = fakeActions()
     const { src, ev } = setup({ actions })
     const busy = { ok: false, reason: 'proj is busy. Say it when it is done.' }
     const after = async (event: ObservedHookEvent['event'], text: string) => {
       src.ingest(ev(event, { engine: 'grok', ...withHandle }))
+      if (event === 'turn-stop') await graced()
       return src.send(src.list()[0], text)
     }
     expect(await after('session-start', 'one')).toEqual(busy)
@@ -1122,6 +1376,7 @@ describe('ObservedSource actions', () => {
 
   // The scan lists another engine's agent idle though its turn may run: its first hook with a handle is no turn's end.
   it('another engine the scan found is busy until a hook said its turn ended', async () => {
+    vi.useFakeTimers()
     const { actions } = fakeActions()
     const { src, open, owners, externals, ev } = setup({ actions })
     open.set('s1', 'terminal')
@@ -1133,6 +1388,7 @@ describe('ObservedSource actions', () => {
     expect(await src.send(src.list()[0], 'yes do it')).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
     expect(actions.orcaSend).not.toHaveBeenCalled()
     src.ingest(ev('turn-stop', { engine: 'grok', ...withHandle }))
+    await graced()
     expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
     src.ingest(ev('turn-start', { engine: 'grok', ...withHandle }))
     expect(await src.send(src.list()[0], 'later')).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
@@ -1406,6 +1662,26 @@ describe('ObservedSource actions', () => {
     // Resumed, it is a live session again.
     src.ingest(ev('session-start', withHandle))
     expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true, focus: true })
+  })
+
+  // Each hook is a process of its own, and a subagent stopped as its lead exits still sends SubagentStop: one that comes
+  // after the lead's SessionEnd is no resume.
+  it.each(['subagent-start', 'subagent-stop'] as const)('%s after its lead\'s session-end does not bring it back', async (event) => {
+    const { actions, ready } = fakeActions()
+    const { src, clock, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-start', withHandle))
+    src.ingest(ev('subagent-start', withHandle))
+    src.ingest(ev('session-end', withHandle))
+    src.ingest(ev(event, withHandle))
+    const agent = src.list()[0]
+    expect(src.capabilities(agent)).toEqual({ status: true, voice: false, focus: false, answer: false })
+    expect(await src.send(agent, 'git push --force')).toEqual({ ok: false, reason: 'proj did not answer.' })
+    expect(actions.toMod).not.toHaveBeenCalled()
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    clock.t += 10_000
+    await src.tick()
+    expect(src.list()).toEqual([])
   })
 
   it('focus opens what its last event names, as the agent\'s own, and is false when nothing can open it', async () => {
@@ -3011,6 +3287,7 @@ describe('ObservedSource and what a turn\'s start was', () => {
 // A permission prompt that waits (deviceClaude/asked.ts): the dial shows the agent waiting and for what, and the prompt is
 // answered in its own app.
 describe('ObservedSource and a waiting prompt', () => {
+  afterEach(() => { vi.useRealTimers() })
   const asked = (over: Partial<ObservedAsked> = {}): ObservedAsked => ({
     engine: 'claude', sessionId: 's1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/elsewhere', ...over,
   })
@@ -3083,15 +3360,19 @@ describe('ObservedSource and a waiting prompt', () => {
   })
 
   it.each(['turn-start', 'turn-stop', 'turn-error', 'session-end'] as const)(
-    'the session\'s own %s clears it, and another session\'s does not', (event) => {
+    'the session\'s own %s clears it, and another session\'s does not', async (event) => {
+      vi.useFakeTimers()
       const { src, ev } = setup()
       src.ingest(ev('turn-start'))
       src.ingest(ev('turn-start', { sessionId: 's2' }))
       src.ingest(asked())
       const id = observedAgentId('claude', 's1')
       src.ingest(ev(event, { sessionId: 's2' }))
+      await graced()
       expect(src.waitingOn(id)).toBe('npm test')
       src.ingest(ev(event))
+      // A Stop ends the turn once it waits out its grace.
+      await graced()
       expect(src.waitingOn(id)).toBeUndefined()
     })
 

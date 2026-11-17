@@ -11,7 +11,12 @@ export interface ActivityFrame {
   /** Remaining lease, not a remote wall clock. Zero for idle/unknown. */
   validForMs: number
 }
-export interface ActivityRuntime { key: string; turnOpen: boolean }
+export interface ActivityRuntime {
+  key: string
+  turnOpen: boolean
+  /** Working is withheld: the turn waits on the person, or the session's turns end by hook and none is open. */
+  withheld?: boolean
+}
 interface Entry {
   runtime: string
   state: ActivityState
@@ -38,8 +43,7 @@ export class TurnActivity {
     now?: () => number
   }) {}
   private now(): number { return this.deps.now?.() ?? performance.now() }
-  private entry(sessionId: string): Entry | undefined {
-    const runtime = this.deps.runtime(sessionId)
+  private entry(sessionId: string, expire = false, runtime = this.deps.runtime(sessionId)): Entry | undefined {
     if (!runtime) { this.entries.delete(sessionId); return undefined }
     let entry = this.entries.get(sessionId)
     if (!entry || entry.runtime !== runtime.key) {
@@ -51,16 +55,19 @@ export class TurnActivity {
     // next prompt. That is what a cancel left when the aborted tool's output landed after it and read as
     // work (a real Codex 0.160, found by daemon QA). The transcript says no turn is open and nothing
     // renewed the claim: idle.
-    if (entry.state === 'working' && this.now() >= entry.until) this.set(entry, runtime.turnOpen ? 'unknown' : 'idle')
+    if (entry.state === 'working' && (expire || this.now() >= entry.until)) this.set(entry, runtime.turnOpen ? 'unknown' : 'idle')
     return entry
   }
+  /** A Working claim reads as an expired one does, now: unknown while a turn is open, idle with none. */
+  withdraw(sessionId: string): void { this.entry(sessionId, true) }
   private set(entry: Entry, state: ActivityState): void {
     entry.state = state
     entry.until = state === 'working' ? this.now() + WORK_EVIDENCE_MS : 0
     entry.revision = ++this.revision
   }
   observe(sessionId: string, type: string, replay = false): void {
-    const entry = this.entry(sessionId)
+    const runtime = this.deps.runtime(sessionId)
+    const entry = this.entry(sessionId, false, runtime)
     if (!entry) return
     if (replay) {
       // A completed history is a baseline. An unfinished history has no live
@@ -70,7 +77,8 @@ export class TurnActivity {
       return
     }
     if (type === 'turn_ended') this.set(entry, 'idle')
-    else if (PROGRESS.has(type)) this.set(entry, 'working')
+    // While withheld, records still land (a tool's output, a late reply after the Stop) with no work behind them.
+    else if (type === 'turn_started' || (PROGRESS.has(type) && !runtime?.withheld)) this.set(entry, 'working')
   }
   snapshot(sessionId: string): ActivityFrame | undefined {
     const entry = this.entry(sessionId)

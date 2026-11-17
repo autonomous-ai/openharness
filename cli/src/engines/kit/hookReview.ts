@@ -7,8 +7,8 @@ import { hookPreparationFiles } from './hookPreparationFiles.js'
  * The record is the engine's own, written as the engine writes it on "Trust all": a table per hook in its
  * config file, keyed by the settings file in the real path of the engine's home, the event, the block and
  * the hook, holding the hash the engine computes of the hook. The hash is the engine's: the hook normalized
- * (its matcher only where the engine honours one, a timeout always, `async`), every object's keys sorted,
- * compact JSON, sha256. It is matched against `codex app-server` `hooks/list` of codex-cli 0.162.0
+ * (its matcher only where the engine honours one, a timeout always, clamped as the engine clamps it, `async`),
+ * every object's keys sorted, compact JSON, sha256. It is matched against `codex app-server` `hooks/list` of codex-cli 0.169.0
  * (hookReview.spec.ts). Should an engine hash differently, it sees a changed hook and asks again, which is
  * where it was before.
  *
@@ -38,12 +38,21 @@ function sortedKeys(value: unknown): unknown {
 
 const identityHash = (identity: unknown): string => `sha256:${createHash('sha256').update(JSON.stringify(sortedKeys(identity))).digest('hex')}`
 
+/** Events Codex gives 1 s when none is named and caps at 3 s, hashing the clamped value (codex-rs
+ *  `normalize_command_hook`, `SESSION_END_DEFAULT_TIMEOUT_SEC`/`SESSION_END_MAX_TIMEOUT_SEC`, 0.150.0 to 0.169.0). */
+const SHORT_EVENTS = new Set(['interrupt', 'session_end'])
+
+/** The timeout the engine hashes: a short event's clamped to 1-3 s, any other at least 1. */
+const hashedTimeout = (label: string, timeout: number | undefined, defaultTimeout: number): number =>
+  SHORT_EVENTS.has(label) ? Math.min(3, Math.max(1, timeout ?? 1)) : Math.max(1, timeout ?? defaultTimeout)
+
 /** The engine's hash of one command hook, as `hooks/list` reports it in `currentHash`. */
 export function reviewHash(record: HookReviewRecord, event: string, matcher: string | undefined, hook: { command: string; timeout?: number; async?: boolean }): string {
+  const label = record.events[event]
   return identityHash({
-    event_name: record.events[event],
+    event_name: label,
     ...(record.matcherEvents.includes(event) && matcher !== undefined ? { matcher } : {}),
-    hooks: [{ type: 'command', command: hook.command, timeout: Math.max(1, hook.timeout ?? record.defaultTimeout), async: hook.async === true }],
+    hooks: [{ type: 'command', command: hook.command, timeout: hashedTimeout(label, hook.timeout, record.defaultTimeout), async: hook.async === true }],
   })
 }
 
@@ -207,28 +216,32 @@ export function withoutReviewRecords(text: string, record: HookReviewRecord, own
 }
 
 /** Inspect approvals before publishing hooks. An unreadable or conflicting
- * config cannot authorize even the first write of the installation. */
+ * config cannot authorize even the first write of the installation. [pruned]: the settings as they were before
+ * Harness's blocks were taken out of them, whose records of those blocks go in the same write. */
 export function prepareReviewed(record: HookReviewRecord, home: string, settingsFile: string, settings: Settings,
-  platform: NodeJS.Platform = process.platform, files: HookPreparationFiles = hookPreparationFiles()) {
+  platform: NodeJS.Platform = process.platform, files: HookPreparationFiles = hookPreparationFiles(), pruned?: Settings) {
   const config = join(home, record.file), observed = files.inspect(config, 0o600)
   // Codex uses the real home plus the literal hooks filename, even when that
   // leaf is an alias. The config's own leaf alias does not change that home.
-  const records = reviewRecords(record, join(observed.directory, basename(settingsFile)), settings, platform)
+  const keyed = join(observed.directory, basename(settingsFile))
+  const records = reviewRecords(record, keyed, settings, platform)
   if (records.size === 0) throw new HookPreparationHeld('the hooks have no verifiable approval records')
   const text = observed.content ?? ''
   try { parseToml(text, { integersAsBigInt: true, maxDepth: 64 }) }
   catch { throw new HookPreparationHeld('the hook review configuration is not complete TOML') }
   const next = withReviewRecords(text, record, records)
   if (next === 'unsafe') throw new HookPreparationHeld('the hook review configuration cannot be safely updated')
-  const output = next === 'unchanged' ? text : next
+  // A record [settings] still needs, the same hook at the same place, stays.
+  const gone = pruned ? reviewRecords(record, keyed, pruned, platform) : new Map<string, string>()
+  const output = withoutReviewRecords(next === 'unchanged' ? text : next, record, (key, hash) => gone.get(key) === hash && records.get(key) !== hash).text
   try { parseToml(output, { integersAsBigInt: true, maxDepth: 64 }) }
   catch { throw new HookPreparationHeld('the prepared hook reviews are not complete TOML') }
   observed.prepare(output)
   return {
     verify: observed.verify,
     commit: async (attempt: HookPreparationAttempt) => {
-      const published = await observed.replace(next === 'unchanged' ? text : next, attempt)
-      if (next !== 'unchanged') files.report('log', record.messages.recorded.replace('{config}', config))
+      const published = await observed.replace(output, attempt)
+      if (output !== text) files.report('log', record.messages.recorded.replace('{config}', config))
       return published
     },
   }
