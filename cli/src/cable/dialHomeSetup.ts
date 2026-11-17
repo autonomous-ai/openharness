@@ -45,6 +45,10 @@ export interface DialHomeSetup {
   plugin(): string | undefined
   /** false when the record could not be saved. */
   recordPlugin(version: string): boolean
+  /** The Orca homes the devices turned the plugin on in, by real path. */
+  pluginHomes(): readonly string[]
+  /** Replaces that list and saves the whole record; false when it could not be saved, and the list is as before. */
+  recordPluginHomes(homes: string[]): boolean
 }
 
 type Counts = Record<DialEngine, { wrote: number; removed: number; failed: number }>
@@ -72,7 +76,7 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
   const realDataDir = realOr(deps.dataDir)
   const defaultHome: Record<DialEngine, string> = { claude: deps.claudeHome, codex: deps.codexHome }
   // The devices process is the record's one writer: it is read at the start and at an attach, and saved whole.
-  let record: DialSetupRecord = { dial: false, homes: { claude: [], codex: [] } }
+  let record: DialSetupRecord = { dial: false, homes: { claude: [], codex: [] }, pluginHomes: [] }
   /** Homes done while their engine was on: a scan passes them with a set lookup. */
   const handled: Record<DialEngine, Set<string>> = { claude: new Set(), codex: new Set() }
   /** Homes, and recorded folders, given no skill for a reason the next try would meet again (no skills folder, a full
@@ -455,6 +459,16 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
 
     recordPlugin(version) {
       const next = { ...record, plugin: version }
+      if (writeSetup(deps.dataDir, next) !== undefined) return false
+      record = next
+      return true
+    },
+
+    pluginHomes: () => record.pluginHomes,
+
+    recordPluginHomes(homes) {
+      // A copy: the caller's list changing later must not change the record without a save.
+      const next = { ...record, pluginHomes: [...homes] }
       if (writeSetup(deps.dataDir, next) !== undefined) return false
       record = next
       return true

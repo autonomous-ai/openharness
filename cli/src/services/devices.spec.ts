@@ -6455,7 +6455,7 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
   }
   const claudeHome = () => dirname(env.CLAUDE_PROJECTS_DIR)
   /** A dial attached on this computer once. */
-  const dialOnce = () => writeSetup(dataDir, { dial: true, homes: { claude: [], codex: [] } })
+  const dialOnce = () => writeSetup(dataDir, { dial: true, homes: { claude: [], codex: [] }, pluginHomes: [] })
   /** A `claude` 2.1.287 with no plugin yet: each call recorded, and each home it was looked for in. */
   const fakeClaude = () => {
     const calls: string[] = []
