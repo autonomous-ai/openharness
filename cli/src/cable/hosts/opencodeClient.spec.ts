@@ -216,6 +216,19 @@ describe('the opencode client (docs/plans/2026-11-17-dial-opencode-design.md)', 
     }
   })
 
+  it('only the latest find holds a service: an earlier one that answers after it holds nothing and is no_service', async () => {
+    const server = await start()
+    const opencode = client(server)
+    const first = opencode.find()
+    // Its answer is on its way when opencode's file goes, and the next find finds none.
+    await server.got('GET /api/info')
+    rmSync(server.servicePath)
+    expect(await opencode.find()).toEqual({ fault: 'no_service' })
+    expect(await first).toEqual({ fault: 'no_service' })
+    expect(await opencode.request('GET', '/api/session/active')).toEqual({ ok: false, fault: 'no_service' })
+    expect(routes(server)).toEqual(['GET /api/info'])
+  })
+
   it('request answers the JSON; before any find it is no_service and nothing connects', async () => {
     const server = await start()
     server.session({ id: 'ses_a1' })
