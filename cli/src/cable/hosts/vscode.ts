@@ -35,12 +35,6 @@ interface Terminals {
   show(terminal: Terminal, tap: boolean): boolean
 }
 
-/** No window is open. Task 10 passes the real windows and deletes this. */
-export const NO_WINDOWS: { terminalOf(agentPid: number): undefined; show(): false } = {
-  terminalOf: () => undefined,
-  show: () => false,
-}
-
 const isPid = (pid: number | undefined): pid is number =>
   typeof pid === 'number' && Number.isInteger(pid) && pid >= 2 && pid <= MAX_PID
 

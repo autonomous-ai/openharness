@@ -51,12 +51,13 @@ import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { createOrcaAdapter, createOrcaReads, orcaDeps, type OrcaFocusWatch, type OrcaReadDeps, type OrcaReads, type OrcaTerminal } from '../cable/hosts/orca.js'
 import { readRecordName } from '../cable/hosts/recordName.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
-import { learnApps, readProcessNames } from '../cable/hosts/scannedApp.js'
+import { learnApps, readProcessNames, type ProcessName } from '../cable/hosts/scannedApp.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
 import { createTmuxAdapter } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
-import { createVscodeAdapter, NO_WINDOWS } from '../cable/hosts/vscode.js'
+import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
+import { vscodeStreams } from '../cable/hosts/vscodeTerminals.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
 import { createEngineTally } from '../cable/engineTally.js'
 import { Notices, type NoticeCaller } from '../cable/notices.js'
@@ -142,6 +143,9 @@ export interface DevicesDeps {
   listen?: (handlers: Readonly<Record<string, ListenerHandler | ListenerStreamHandler>>, log: (line: string) => void) => Promise<DevicesListener | null>
   /** For this service's tests: how an agent's tty is read; `ps` by default (cable/hosts/tabs.ts). */
   tty?: (pid: number) => Promise<string | undefined>
+  /** For this service's tests: the process table VS Code's terminals are matched by; `ps` by default
+   *  (cable/hosts/vscodeTerminals.ts). */
+  processNames?: () => Promise<readonly ProcessName[]>
   /** For this service's tests: how Claude Code is found for a Claude Code home; the daemon's own lookup by default
    *  (devices/claudePlugin.ts claudeFound). */
   claude?: (home: string, shell: boolean) => Promise<ClaudeRun | null>
@@ -370,6 +374,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // (docs/specs/2026-11-16-orca-device-plugin.md). A part of its own, so a throw on its path is never the dial's. Its
   // count's timer stops with the devices.
   const dial = dialStream({ log, after: timerIn('dialStream') })
+  // The streams Harness's own VS Code extension holds open, one a window, and the terminal each VS Code agent runs in
+  // (docs/plans/2026-11-17-dial-vscode-extension-design.md). An adapter's capabilities are read at each look, so a
+  // terminal found or lost tells the dials to look again.
+  const vscode = vscodeStreams({
+    processes: deps.processNames ?? readProcessNames,
+    changed: () => part.call('dial', () => cable.syncAgents()),
+    now: monotonic,
+    after: timerIn('vscode'),
+    log,
+  })
   const ttyOf = apps.platform === 'darwin' ? deps.tty ?? readTty : undefined
   /** Where the dial moved an app lately, a rest's and a tap's alike, each as it started: the echoes an app's report is
    *  checked against, each excusing one. */
@@ -439,7 +453,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // No echo to guard: the Codex app sends no attach for the follow to take as a person's.
     createCodexAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'codex', log }),
     // No echo to guard: VS Code sends no attach for the follow to take as a person's.
-    createVscodeAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode', terminals: NO_WINDOWS }),
+    createVscodeAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode', terminals: vscode }),
     createTabsAdapter({
       isOpen: () => tabs.isOpen(),
       select: (tab, raise) => {
@@ -1254,6 +1268,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     return readOrcaOrder(source)
   }
   if (observed) observed.onChange(() => part.call('orca', () => orcaMembers(observed)))
+  // Each change tells VS Code's windows which agents run in one of its terminals, by their panes: only theirs may cost a
+  // read of the process table. A part of its own, so a throw there is never the dial's.
+  if (observed) observed.onChange(() => part.call('vscode', () => vscode.agents(observed.list().flatMap(({ id }) => {
+    const pid = termPid(observed.paneOf(id, 'vscode') ?? '')
+    return pid === undefined ? [] : [pid]
+  }))))
 
   /**
    * The open scan's copy of a session cmux lists, placed at that row's cmux pane
@@ -1458,6 +1478,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       part.call('notices', () => { result = notices.notify(ask) })
       return result
     }),
+    ...vscode.handlers,
   }, log)
     .then((listener) => {
       listenerOpen = listener !== null
