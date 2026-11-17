@@ -97,8 +97,8 @@ export function createCmuxAppAdapter(deps: CmuxAppDeps): CmuxAppAdapter {
       if (!mac || place.host !== 'cmux' || !inCmux(place.hints)) return undefined
       return { adapter: 'cmux', id: cmuxPaneId(place.hints.CMUX_WORKSPACE_ID, place.hints.CMUX_SURFACE_ID) }
     },
-    // No forward of its own: a cmux pane comes from a cmux terminal or a cmux row alone, so a link that fails leaves the
-    // opener's fallback to bring cmux (open.ts).
+    // No forward of its own. A hooked agent's tap carries cmux's bundle (open.ts bundleOf), so a link that fails falls
+    // back to bringing cmux; a listed row's tap carries its pane alone (devices.ts), so a failed link brings nothing.
     ...createAppLink(deps, {
       session: CMUX_PANE,
       // appLink.ts names only an id CMUX_PANE took, which cmuxPaneOf takes too.
