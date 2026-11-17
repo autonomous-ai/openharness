@@ -484,6 +484,23 @@ describe('the opencode client (docs/plans/2026-11-17-dial-opencode-design.md)', 
     expect((await server.got(POST)).body).toEqual({ text: 'run the tests', id, delivery: 'queue' })
   })
 
+  it('a prompt posts to the service it read: a find in the middle of it moves none of its steps', async () => {
+    const other = await start()
+    other.session({ id: 'ses_a1' })
+    const server = await start()
+    server.session({ id: 'ses_a1' })
+    const opencode = await found(server)
+    const sent = opencode.prompt('ses_a1', 'run the tests', opencodeMessageId())
+    // Its first read's answer is on its way when the file names another service.
+    await server.got(ACTIVE)
+    server.register({ url: other.url })
+    const moved = opencode.find()
+    expect(await sent).toBe('sent')
+    expect(await moved).toEqual({ stamp: expect.any(String) })
+    expect(routes(server)).toEqual(['GET /api/info', ACTIVE, 'GET /api/session/ses_a1/permission', POST])
+    expect(routes(other)).toEqual(['GET /api/info'])
+  })
+
   it('a running session is busy and a pending permission is waiting: nothing is posted', async () => {
     const server = await start()
     server.session({ id: 'ses_a1' })
