@@ -39,6 +39,7 @@ function staged(env: NodeJS.ProcessEnv = {}): Staged {
     root,
     repo: join(root, 'repo'),
     recFile: join(root, 'rec', 'calls.jsonl'),
+    origin: null,
     env: { PATH: '/usr/bin:/bin', CLAUDE_CONFIG_DIR: join(root, 'profile'), ...env },
     skill: null,
   }

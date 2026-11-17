@@ -45,7 +45,7 @@ export const CLAUDE_SANDBOX = {
 /** Between SIGTERM and SIGKILL for a timed-out agent's process group. */
 const KILL_GRACE_MS = 10_000
 
-export function claudeArgs(cfg: Omit<AgentConfig, 'timeoutMs'>, st: Pick<Staged, 'root'>, prompt: string): string[] {
+export function claudeArgs(cfg: Omit<AgentConfig, 'timeoutMs'>, st: Pick<Staged, 'root' | 'origin'>, prompt: string): string[] {
   return [
     '-p', prompt,
     '--output-format', 'stream-json', '--verbose',
@@ -55,8 +55,9 @@ export function claudeArgs(cfg: Omit<AgentConfig, 'timeoutMs'>, st: Pick<Staged,
     '--no-session-persistence',
     '--permission-mode', 'acceptEdits',
     '--disallowedTools', 'WebFetch', 'WebSearch',
-    // The fake harness records rings in rec/, and TMPDIR (npm's cache with it) is tmp/: both outside the repo.
-    '--add-dir', join(st.root, 'rec'), join(st.root, 'tmp'),
+    // The fake harness records rings in rec/, and TMPDIR (npm's cache with it) is tmp/: both outside the repo. A push
+    // writes its objects into the origin before the origin's hooks run, so a read-only origin fails every push there.
+    '--add-dir', join(st.root, 'rec'), join(st.root, 'tmp'), ...(st.origin ? [st.origin] : []),
     '--settings', JSON.stringify(CLAUDE_SANDBOX),
   ]
 }

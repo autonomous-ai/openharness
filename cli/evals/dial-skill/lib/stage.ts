@@ -16,6 +16,8 @@ export interface Staged {
   root: string
   repo: string
   recFile: string
+  /** The bare repo the staged repo pushes to, or null when the scenario has none. */
+  origin: string | null
   env: NodeJS.ProcessEnv
   /** The SKILL.md text staged into the repo, or null when the run has none. */
   skill: string | null
@@ -70,8 +72,8 @@ export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; bas
   appendFileSync(join(repo, '.git', 'info', 'exclude'), '.claude/\n')
   git('add', '-A')
   git('commit', '-q', '-m', 'Initial commit')
-  if (s.origin) {
-    const origin = join(root, 'origin.git')
+  const origin = s.origin ? join(root, 'origin.git') : null
+  if (origin) {
     git('init', '-q', '--bare', origin)
     git('remote', 'add', 'origin', origin)
     git('push', '-q', '-u', 'origin', 'main')
@@ -95,7 +97,7 @@ export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; bas
     if (result !== 'written') throw new Error(`dial skill not staged: ${result}`)
     skill = DIAL_SKILL
   }
-  return { root, repo, recFile, env, skill }
+  return { root, repo, recFile, origin, env, skill }
 }
 
 export function readRings(st: Staged): Ring[] {
