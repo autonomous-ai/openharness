@@ -552,6 +552,18 @@ describe("the opencode source (docs/plans/2026-11-17-dial-opencode-design.md)", 
       ])
     })
 
+    it('an entry whose parentID is null is a root, and listed', async () => {
+      server.answer(LIST, {
+        status: 200,
+        json: { cursor: {}, data: [{ id: 'ses_a1', parentID: null, projectID: 'prj_1', title: 'Fix', time: { created: WALL - 5000, updated: WALL - 1000 } }] },
+      })
+      const s = setup()
+      s.source.start()
+      await s.until(() => s.log.length === 1)
+      expect(s.log).toEqual(['[opencode] listed · 1 sessions'])
+      expect(s.source.list().map(({ sessionId, name }) => [sessionId, name])).toEqual([['ses_a1', 'Fix']])
+    })
+
     it('a name is the title, else the folder\'s name, else opencode; cut to 64 by code point, its control characters removed; the folder is cut to 4096', async () => {
       // Under the client's 1 MiB bound on an answer, which holds the whole list.
       server.session({ id: 'ses_t', title: '\u001b[31m😀'.repeat(60_000), updated: WALL - 1000 })
