@@ -1145,15 +1145,20 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    * an agent with no cmux pane of its own. A place opens and shows, never takes words (observed.ts shownOnly). cmux names
    * no pane: no names.
    */
+  let placedInCmux = false
   const placeInCmux = (source: ObservedSource, listing: CmuxSource): void => {
+    const rows = listing.list()
+    // Each observed change lands here, cmux running or not: with no row and no place to drop, there is nothing to tell.
+    if (rows.length === 0 && !placedInCmux) return
     const placed = new Map<string, string>()
-    for (const { id, engine, sessionId } of listing.list()) {
+    for (const { id, engine, sessionId } of rows) {
       if (sessionId === undefined) continue
       const agentId = observedAgentId(engine, sessionId)
       // A row it lists has its pane.
       if (source.paneOf(agentId, 'cmux') === undefined) placed.set(agentId, listing.paneAt(id)!)
     }
     source.setPaneNames('cmux', new Map(), placed)
+    placedInCmux = placed.size > 0
   }
   // After each change of either: setPaneNames tells only a change, so the two never loop. The source stopping drops its
   // rows, and with them every place.
