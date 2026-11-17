@@ -1361,6 +1361,20 @@ mod tests {
     }
 
     #[test]
+    fn a_check_that_fails_never_makes_a_version_wait_longer() {
+        // The check downloaded nothing: only a failed download, signature or install counts against a version.
+        let mut app = found();
+        app.handle(tick(B + 5));
+        app.handle(Event::UpdateChecked(Some("0.1.3".into())));
+        app.handle(Event::UpdateFailed(UpdateFailure::Download));
+        assert!(has(&app.handle(tick(B + 5 + M1)), &Effect::CheckUpdate));
+        app.handle(Event::UpdateFailed(UpdateFailure::Check));
+        // Two minutes after its one failed download, it is tried again.
+        assert!(has(&app.handle(tick(B + 5 + 2 * M1)), &Effect::CheckUpdate));
+        assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::InstallUpdate));
+    }
+
+    #[test]
     fn a_bundle_that_cannot_be_replaced_offers_the_page_and_says_so_once() {
         let mut app = found();
         app.handle(tick(B + 5));
