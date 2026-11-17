@@ -1,0 +1,11 @@
+{
+  "name": "slugline",
+  "version": "1.4.2",
+  "description": "Turn titles into URL slugs.",
+  "type": "module",
+  "main": "src/slug.js",
+  "scripts": {
+    "test": "node --test"
+  },
+  "license": "MIT"
+}

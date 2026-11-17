@@ -516,8 +516,9 @@ static const char *host_name(const char *host)
 {
     static const char *const table[][2] = {
         {"orca", "Orca"}, {"herdr", "herdr"}, {"rex", "Rex"}, {"zellij", "Zellij"}, {"tmux", "tmux"},
-        {"kitty", "kitty"}, {"wezterm", "WezTerm"}, {"ghostty", "Ghostty"}, {"iterm", "iTerm2"}, {"vscode", "VS Code"},
-        {"cursor", "Cursor"}, {"warp", "Warp"}, {"claude", "Claude"}, {"codex", "ChatGPT"}, {"harness", "Harness"},
+        {"kitty", "kitty"}, {"wezterm", "WezTerm"}, {"ghostty", "Ghostty"}, {"cmux", "cmux"}, {"iterm", "iTerm2"},
+        {"vscode", "VS Code"}, {"cursor", "Cursor"}, {"warp", "Warp"}, {"claude", "Claude"}, {"codex", "ChatGPT"},
+        {"harness", "Harness"},
     };
     for (unsigned i = 0; host && i < sizeof(table) / sizeof(table[0]); i++)
         if (!strcmp(host, table[i][0])) return table[i][1];

@@ -118,23 +118,31 @@ def check_sums(folder, path):
 
 
 def file_entries(version, folder, base_url):
-    """What the manifest says of this build: its version, the update archive for both Macs, and the dmg."""
+    """What the manifest says of this build: its version, the update archive for both Macs, and an entry in Desktop's
+    shape for the archive and the dmg, once per Mac."""
     parse(version)
     folder = Path(folder)
     sums = file_sums(folder)
     update = {"url": f"{base_url}/{version}/{ARCHIVE}", "signature": (folder / SIGNATURE).read_text().strip()}
+
+    def entry(name):
+        return {"version": version, "url": f"{base_url}/{version}/{name}", **sums[name]}
+
+    # The app is universal, so the arm64 pair names the same files as the other pair.
     return {"version": version, "platforms": {"darwin-aarch64": update, "darwin-x86_64": dict(update)},
-            "dmg": {"url": f"{base_url}/{version}/{DMG}", **sums[DMG]}}
+            "device-macos": entry(ARCHIVE), "device-macos-dmg": entry(DMG),
+            "device-macos-arm64": entry(ARCHIVE), "device-macos-arm64-dmg": entry(DMG)}
 
 
 def build_manifest(version, folder, notes, pub_date, base_url):
-    """Tauri's static update manifest, plus the dmg the website links to."""
+    """Tauri's static update manifest, which installed apps read, plus the archive's and the dmg's entries in
+    Desktop's shape."""
     if not PUB_DATE.fullmatch(pub_date):
         raise ValueError(f"pub_date {pub_date!r} must be YYYY-MM-DDTHH:MM:SSZ")
     datetime.strptime(pub_date, "%Y-%m-%dT%H:%M:%SZ")  # and a real date: the updater reads it as RFC 3339
-    entries = file_entries(version, folder, base_url)
+    # file_entries repeats version, which keeps its first place, ahead of notes and pub_date.
     return {"version": version, "notes": notes.rstrip("\n"), "pub_date": pub_date,
-            "platforms": entries["platforms"], "dmg": entries["dmg"]}
+            **file_entries(version, folder, base_url)}
 
 
 def gcloud(*args):
@@ -243,7 +251,7 @@ def verify(version, folder, manifest_url=ORIGIN_MANIFEST, base_url=CDN_BASE, tri
     # Equal entries put every URL it names under base_url/<version>/, so nothing else is fetched.
     sums = file_sums(folder)
     download_matches(manifest["platforms"]["darwin-aarch64"]["url"], sums[ARCHIVE], tries, pause)
-    download_matches(manifest["dmg"]["url"], sums[DMG], tries, pause)
+    download_matches(manifest["device-macos-dmg"]["url"], sums[DMG], tries, pause)
 
 
 class Parser(argparse.ArgumentParser):

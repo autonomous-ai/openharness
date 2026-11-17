@@ -1,0 +1,5 @@
+{
+  "provider": "https://api.payments.invalid/v2",
+  "merchantId": "acme-shop-eu",
+  "apiKey": "pay_FAKE5Hd8Qm2Vx7Lr3Tn9Kc4Wb6"
+}

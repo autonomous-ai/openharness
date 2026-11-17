@@ -6,6 +6,9 @@
  * 2026-10-11: `env` in an agent's pane listed every one). The core now takes them out of its
  * environment before it starts anything (lib/harnessdEnv.ts), and a tmux server an earlier boot started
  * with them is told to forget them as the core takes it over (TmuxBackend `unsetServerEnvironment`).
+ * And a start from a shell keeps only an allowlist of that shell's environment, then what HARNESS_ENV_FILE names
+ * (lib/startEnvironment.ts): another program's token in that shell never reaches a pane
+ * (docs/plans/2026-11-17-daemon-minimal-env-design.md).
  */
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
@@ -69,15 +72,16 @@ async function engineAnswer(client: LocalClient, agentId: string, directive: str
 const engineHas = (client: LocalClient, agentId: string, prefixes = HARNESSD): Promise<string> =>
   engineAnswer(client, agentId, `!env ${prefixes}`, `env ${prefixes}: `)
 
-/** The names starting with [prefixes] in the environment of the shell a pane runs, written to a file by that shell. */
-async function shellHas(d: IsolatedDaemon, pane: string, name: string, prefixes = HARNESSD): Promise<string[]> {
-  const file = join(d.root, `${name}.env`)
-  await d.tmux.run('send-keys', '-t', pane, `env > ${file}.tmp && mv ${file}.tmp ${file}`, 'Enter')
-  await until(`${name}'s shell to write its environment`, () => existsSync(file) || null, 20_000, 100)
-  return names(readFileSync(file, 'utf8'), prefixes)
-}
-const names = (env: string, prefixes = HARNESSD): string[] =>
-  env.split('\n').map((line) => line.split('=')[0]).filter((name) => prefixes.split(',').some((prefix) => name.startsWith(prefix))).sort()
+/** The names starting with [prefixes] in the environment of the shell a pane runs, as that shell sees it. */
+const shellHas = async (d: IsolatedDaemon, pane: string, name: string, prefixes = HARNESSD): Promise<string[]> =>
+  withPrefix(Object.keys(await d.paneEnvironment(pane, name)), prefixes)
+const names = (env: string, prefixes = HARNESSD): string[] => withPrefix(env.split('\n').map((line) => line.split('=')[0]), prefixes)
+const withPrefix = (all: string[], prefixes: string): string[] =>
+  all.filter((name) => prefixes.split(',').some((prefix) => name.startsWith(prefix))).sort()
+
+/** What the shell that runs `harness start -f` may hold beside the daemon's own: another program's token, an agent's
+ *  session, a provider key. Made-up values (docs/plans/2026-11-17-daemon-minimal-env-design.md). */
+const SHELL_SESSION = { SENTINEL_TOKEN: 'sentinel-from-the-shell', CLAUDE_CODE_MESSAGING_TOKEN: 'agent-token', ANTHROPIC_API_KEY: 'kept-sentinel' }
 
 describe('a pane\'s environment', () => {
   let daemon: IsolatedDaemon | undefined
@@ -140,5 +144,27 @@ describe('a pane\'s environment', () => {
     const client = await LocalClient.connect(d)
     await expectNoneIn(d, client, SESSION)
     client.close()
+  }, 300_000)
+
+  it.each([
+    ['the master', {}],
+    // The core in the CLI's own process, as Harness OS's unit runs it: the env file is read again after the narrowing.
+    ['the core alone', { HARNESS_NO_MASTER: '1' }],
+  ])('harness start -f gives %s only the allowlist of its shell, and the env file\'s variables', async (_what, more) => {
+    const d = await IsolatedDaemon.create({ foreground: true, env: { ...SHELL_SESSION, ...more }, envFile: { E2E_FROM_ENV_FILE: 'reaches-the-pane' } })
+    daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    await d.start()
+    const client = await LocalClient.connect(d)
+    const tile = await create(d, client, 'terminal', 'pane-foreground')
+    const env = await d.paneEnvironment(tile.tmuxPane, 'foreground')
+    client.close()
+    expect(env.SENTINEL_TOKEN).toBeUndefined()
+    expect(env.CLAUDE_CODE_MESSAGING_TOKEN).toBeUndefined()
+    expect(env.ANTHROPIC_API_KEY).toBe('kept-sentinel')
+    expect(env.PATH).toContain(join(d.root, 'bin'))
+    expect(env.E2E_FROM_ENV_FILE).toBe('reaches-the-pane')
+    expect(d.log()).toMatch(/\[env\] started with \d+ variables; [1-9]\d* left out \(docs\/cli\.md#the-daemons-environment\)/)
+    expect(d.log().includes('SENTINEL_TOKEN') || d.log().includes('sentinel-from-the-shell'), 'the log names no variable').toBe(false)
   }, 300_000)
 })
