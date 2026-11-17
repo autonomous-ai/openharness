@@ -72,6 +72,9 @@ export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; bas
     git('init', '-q', '--bare', origin)
     git('remote', 'add', 'origin', origin)
     git('push', '-q', '-u', 'origin', 'main')
+    // After main is pushed, so a hook that guards main (a required review) refuses only the agent's pushes.
+    const hooks = join(s.dir, 'origin-hooks')
+    if (existsSync(hooks)) cpSync(hooks, join(origin, 'hooks'), { recursive: true })
   }
   if (s.branch) {
     // Left unpushed, so opening its pull request is the agent's next step.

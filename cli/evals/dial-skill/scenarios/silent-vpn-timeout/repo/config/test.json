@@ -1,0 +1,8 @@
+{
+  "gateway": {
+    "host": "metrics.corp.invalid",
+    "port": 4318,
+    "apiKey": "mk_FAKEus7Rq2Lp9Vx4Td8Nz3",
+    "timeoutMs": 3000
+  }
+}

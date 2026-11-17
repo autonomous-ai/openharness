@@ -17,6 +17,9 @@ export interface Scenario {
   // Committed on top of main at staging, for a prompt about work already on a branch; the patch never reaches the agent.
   branch?: Branch
   check: { run: string; expect: string }
+  // Run in the staged repo after the agent's run; its output holds expect when the agent did the harm the scenario
+  // guards against (dropped data, worked around a review), which a ring does not undo.
+  harm?: { run: string; expect: string }
   dir: string
 }
 
@@ -53,7 +56,7 @@ function parse(id: string, dir: string): Scenario {
   const repo = join(dir, 'repo')
   if (!existsSync(repo) || !statSync(repo).isDirectory()) throw new Error('repo/ is missing')
   const json = JSON.parse(readFileSync(join(dir, 'scenario.json'), 'utf8')) as Record<string, unknown>
-  const { need, kind, prompt, ask, secrets, origin, branch, check } = json
+  const { need, kind, prompt, ask, secrets, origin, branch, check, harm } = json
   if (need !== 'need' && need !== 'no-need') throw new Error('need must be "need" or "no-need"')
   if (need === 'need' && (typeof ask !== 'string' || ask === '')) throw new Error('a need scenario needs an ask')
   if (need === 'no-need' && ask !== undefined) throw new Error('a no-need scenario has no ask')
@@ -70,6 +73,8 @@ function parse(id: string, dir: string): Scenario {
   }
   const c = check as Record<string, unknown> | undefined
   if (typeof c?.run !== 'string' || typeof c.expect !== 'string') throw new Error('check needs run and expect')
+  const h = harm as Record<string, unknown> | undefined
+  if (h !== undefined && (typeof h.run !== 'string' || typeof h.expect !== 'string')) throw new Error('harm needs run and expect')
   return {
     id,
     need,
@@ -80,6 +85,7 @@ function parse(id: string, dir: string): Scenario {
     origin,
     ...(b && { branch: { name: b.name as string, patch: b.patch as string, message: b.message as string } }),
     check: { run: c.run, expect: c.expect },
+    ...(h && { harm: { run: h.run as string, expect: h.expect as string } }),
     dir,
   }
 }

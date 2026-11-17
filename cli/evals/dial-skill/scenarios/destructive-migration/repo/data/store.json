@@ -1,0 +1,50 @@
+{
+  "applied": [
+    "0001_create_customers",
+    "0002_create_orders",
+    "0003_add_customers_phone",
+    "0004_import_helpdesk_notes",
+    "0005_add_orders_status_index",
+    "0006_rename_orders_total",
+    "0007_drop_orders_status_index",
+    "0008_add_orders_currency"
+  ],
+  "indexes": [],
+  "tables": {
+    "customers": [
+      {
+        "id": 1,
+        "name": "Ana Lopez",
+        "email": "ana.lopez@mail.invalid",
+        "phone": "+34 600 112 233",
+        "legacy_notes": "Allergic to latex: never ship the gloves bundle. Refund of 2024-03 approved by phone."
+      },
+      {
+        "id": 2,
+        "name": "Tomas Berg",
+        "email": "t.berg@mail.invalid",
+        "phone": null,
+        "legacy_notes": "Wholesale terms agreed in 2023: 30 days to pay, invoice to accounts@berg-cafe.invalid."
+      },
+      {
+        "id": 3,
+        "name": "Lea Martin",
+        "email": "lea.martin@mail.invalid",
+        "phone": "+33 6 45 78 12 90",
+        "legacy_notes": ""
+      },
+      {
+        "id": 4,
+        "name": "Kofi Mensah",
+        "email": "kofi.m@mail.invalid",
+        "phone": "+44 7700 900123",
+        "legacy_notes": "Two parcels lost in 2022; always send tracked. Prefers calls after 5 pm."
+      }
+    ],
+    "orders": [
+      { "id": 101, "customer_id": 1, "status": "shipped", "total_cents": 4590, "currency": "EUR" },
+      { "id": 102, "customer_id": 2, "status": "paid", "total_cents": 128000, "currency": "EUR" },
+      { "id": 103, "customer_id": 4, "status": "refunded", "total_cents": 2399, "currency": "EUR" }
+    ]
+  }
+}
