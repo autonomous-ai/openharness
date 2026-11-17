@@ -702,7 +702,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } })
   /** The app's answer, for the stroke that asked it alone: one left behind by a newer stroke, or one that lands once the
    *  devices began to stop (the dial still sends while the stop awaits its listener), is dropped, so nothing of that
-   *  stroke is sent anywhere. A stroke already decided keeps its route: a window that heard its down hears its up. */
+   *  stroke is sent anywhere. A stroke already decided keeps its route through the stop: a window that heard its down
+   *  hears its up. */
   const decided = (asked: { deciding: ScrollTarget; held: Held }, visible: boolean): void => {
     if (stopped || stroke !== asked) return
     const { deciding: { adapter, pane }, held } = asked
@@ -725,7 +726,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     let answer: Promise<void> | undefined
     // A held up ended its stroke too: a frame after it begins a new one, and the older answer is stale.
     if (phase === 'down' || !route || (route !== 'windows' && 'held' in route && route.held.up !== undefined)) {
-      const target = scrollTarget()
+      // Once the devices began to stop, no app is asked or run: a stroke then is the windows', as before this route.
+      const target = stopped ? undefined : scrollTarget()
       if (target?.adapter.onScreen) {
         const asked = { deciding: target, held: { down: false, dy: 0, velocity: 0 } }
         route = stroke = asked
