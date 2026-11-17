@@ -14,7 +14,7 @@
  */
 import { basename } from 'node:path'
 import {
-  CMUX_AUTOMATION_OFF, CMUX_STORE, cmuxPaneId, cmuxPaneKey,
+  CMUX_AUTOMATION_OFF, CMUX_STORE, cmuxPaneId, cmuxPaneKey, cmuxTakesWords,
   type CmuxClient, type CmuxLifecycle, type CmuxPrompt, type CmuxSession, type CmuxSessions,
 } from './cmuxCli.js'
 import { MAX_AGENTS, shown } from './herdrSource.js'
@@ -126,9 +126,10 @@ export class CmuxSource implements HostSource {
     return this.listed().map(({ agent }) => ({ ...agent }))
   }
 
-  /** Status, words, a tap and a rest; an agent waiting in cmux is answered there. */
-  capabilities(): Caps {
-    return { status: true, voice: true, focus: true, answer: false }
+  /** Status, a tap and a rest, and words for an agent whose prompt cmux reads; an agent waiting in cmux is answered
+   *  there. */
+  capabilities(agent: HostAgent): Caps {
+    return { status: true, voice: cmuxTakesWords(agent.engine), focus: true, answer: false }
   }
 
   /** The dial's words, as the observed source says them. Its own state refuses first; the adapter reads the prompt

@@ -8,7 +8,8 @@
  *   fake keeps every record, as the client always asks `--all`.
  * - A2 `socket-status --json`: CLI/CMUXCLI+SocketControlStatus.swift. It never connects; the live app is not observed.
  * - A3 `rpc`: CLI/cmux.swift (`case "rpc"`, the method's result at the top level, JSON with or without `--json`) and
- *   docs/cli-contract.md (Draft Guard: `surface.input_state`'s fields).
+ *   docs/cli-contract.md (Draft Guard: `surface.input_state`'s fields). Its prompt state is read from the screen, and only
+ *   Claude Code's and Codex's prompts are known (AgentPromptInputState.swift): another agent's is `unknown`.
  * - A4 `paste`: CLI/CMUXCLI+Paste.swift (its arguments, stdin read before the socket, the Draft guard on `blocks_typing`
  *   unless `--force`), CLI/cmux.swift (`printV2Payload`) and tests_v2/test_terminal_paste_delivery.py (`terminal.paste`
  *   answers `delivery` and `submitted`).
@@ -42,7 +43,8 @@ export interface FakeCmuxState {
   sessions?: FakeCmuxSession[]
   /** `effective_mode`; `cmuxOnly` when unset, as cmux's default. */
   mode?: string
-  /** `surface.input_state` by surface id; unset: a terminal with an idle agent at an empty prompt. */
+  /** `surface.input_state` by surface id; unset: a terminal with an idle agent at an empty prompt, or an unknown one
+   *  where the newest record active there is another agent's than Claude Code's or Codex's. */
   input?: Record<string, { terminal?: boolean; agent?: boolean; lifecycle?: string; state?: string; blocks_typing?: boolean }>
   /** `terminal.paste`'s `submitted`; true when unset. */
   submitted?: boolean
@@ -93,13 +95,19 @@ const out = (value) => { process.stdout.write(JSON.stringify(value, null, 2) + '
 const refuse = (message) => { process.stderr.write('Error: ' + message + '\n'); return 1 }
 const UNANSWERED = 64
 
+const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase()
 const inputOf = (surface) => {
-  const key = Object.keys(state.input ?? {}).find((id) => id.toLowerCase() === String(surface).toLowerCase())
+  const key = Object.keys(state.input ?? {}).find((id) => same(id, surface))
   const given = key === undefined ? {} : state.input[key]
+  const [held] = (state.sessions ?? [])
+    .map((record, place) => ({ agent: record.agent, at: record.updated_at_unix ?? T + place, here: record.active_for_surface !== false && same(record.surface_id, surface) }))
+    .filter(({ here }) => here)
+    .sort((a, b) => b.at - a.at)
+  const read = !held || held.agent === 'claude' || held.agent === 'codex'
   const terminal = given.terminal ?? true
   const agent = given.agent ?? true
   const lifecycle = given.lifecycle ?? 'idle'
-  const shown = given.state ?? 'empty'
+  const shown = given.state ?? (read ? 'empty' : 'unknown')
   return {
     state: shown, ...(shown === 'draft' ? { draft_length: 5 } : {}), agent, lifecycle,
     waiting_on_human: lifecycle === 'needsInput',

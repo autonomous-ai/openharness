@@ -6,15 +6,16 @@
  * cmux's default mode; it goes to cmux alone by its bundle id, so cmux NIGHTLY, which registers the same scheme, never
  * gets it; and it brings cmux itself, opening it when it is closed.
  *
- * The dial's words go through cmux's own command line (cmuxCli.ts), only at an idle, empty prompt of the agent the dial
- * means, and only in a mode that lets a process outside cmux in. The mode is read when the words are said, so turning
+ * The dial's words go through cmux's own command line (cmuxCli.ts), only to a Claude Code or Codex agent, the only ones
+ * whose prompt cmux reads, at an idle, empty prompt of the agent the dial means, and only in a mode that lets a process
+ * outside cmux in. The mode is read when the words are said, so turning
  * Automation mode on works at once. Words do not wait for a tap, nor a tap for words: a paste goes to a surface by its
  * id, whatever cmux shows.
  */
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { createAppLink, type AppLinkDeps } from './appLink.js'
 import {
-  CMUX_AUTOMATION_OFF, cmuxPaneId, cmuxPaneKey, cmuxPaneOf, type CmuxClient, type CmuxPrompt,
+  CMUX_AUTOMATION_OFF, cmuxPaneId, cmuxPaneKey, cmuxPaneOf, cmuxTakesWords, type CmuxClient, type CmuxPrompt,
 } from './cmuxCli.js'
 import { APP_BUNDLES, CMUX_UUID, inCmux } from './hostDetect.js'
 import { CONTROL, MAX_TEXT } from './orca.js'
@@ -74,7 +75,8 @@ export function createCmuxAppAdapter(deps: CmuxAppDeps): CmuxAppAdapter {
     // A newline would submit part of the text and an escape would steer the agent's screen.
     const line = text.replace(CONTROL, ' ')
     const ids = cmuxPaneOf(pane)
-    if (!mac || !ids || text.length > MAX_TEXT || line.trim() === '') return 'no-answer'
+    // An agent cmux lists nothing for yet is known by the engine the dial means.
+    if (!mac || !ids || !cmuxTakesWords(kind) || text.length > MAX_TEXT || line.trim() === '') return 'no-answer'
     // Busy queues nothing: the dial asks again, never stacked behind.
     const key = ids.surface.toLowerCase()
     if (prompting.has(key)) return 'busy'
@@ -106,8 +108,13 @@ export function createCmuxAppAdapter(deps: CmuxAppDeps): CmuxAppAdapter {
       },
       bundle: APP_BUNDLES.cmux,
     }),
-    // The mode is prompt's to read, when the words are said.
-    canType: () => mac && deps.found(),
+    // The mode is prompt's to read, when the words are said. Where cmux lists an agent whose prompt it does not read, none
+    // are offered: the observed source knows the engine, the pane alone does not.
+    canType: (pane) => {
+      const ids = cmuxPaneOf(pane.id)
+      const listed = ids && deps.kindAt(ids.surface)
+      return mac && deps.found() && (listed === undefined || cmuxTakesWords(listed))
+    },
     async type(pane, text, engine) {
       const answer = await prompt(pane.id, engine, text)
       if (answer === 'sent') return true

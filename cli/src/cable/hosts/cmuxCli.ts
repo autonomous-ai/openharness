@@ -44,6 +44,10 @@ const MODE = /^[A-Za-z]{1,32}$/
  *  (`claude`, `codex`, `cursor`, `opencode`, `pi`, `omp`, `muse`, `amp`, `grok`, `copilot`) are their engines' own. */
 const KINDS: Record<string, string> = { 'hermes-agent': 'hermes', antigravity: 'agy' }
 
+/** Whether an agent of that kind takes the dial's words in cmux: cmux v0.65.2.2 reads only Claude Code's and Codex's
+ *  prompts (AgentPromptInputState.swift), and every other agent's is `unknown`. */
+export const cmuxTakesWords = (kind: string): boolean => kind === 'claude' || kind === 'codex'
+
 /** A pane id's two ids, each in its form; else none. */
 export function cmuxPaneOf(id: string): { workspace: string; surface: string } | undefined {
   const parts = id.split('/')
