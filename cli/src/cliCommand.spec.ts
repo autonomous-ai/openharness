@@ -52,6 +52,11 @@ function freshRoot(): string {
 }
 
 function envFor(root: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  // A dev run narrows its own environment, which takes the test runner's mark that keeps the real `gh` from running
+  // (lib/github.ts); the env file puts it back, as the product says such a variable goes
+  // (docs/plans/2026-11-17-daemon-minimal-env-design.md).
+  const envFile = join(root, 'test.env')
+  writeFileSync(envFile, 'VITEST=true\n')
   return {
     ...process.env,
     HOME: root,
@@ -72,6 +77,7 @@ function envFor(root: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv 
     // (re)start goes next, which must never be the production one.
     PORT: '1',
     BACKEND_WS_URL: 'http://127.0.0.1:1',
+    HARNESS_ENV_FILE: envFile,
     ...extra,
   }
 }
@@ -426,6 +432,7 @@ describe('start beside a daemon that serves another account', () => {
     expect(result.stderr).not.toContain('fetch failed')
     expect(result.stdout + result.stderr).not.toContain('resolve-computer')
     expect(result.stdout).toContain('dev mode — running in the foreground')
+    expect(result.stdout).toMatch(/\[env\] started with \d+ variables; \d+ left out/)
   }, ONE_RUN_TEST_MS)
 
   it('starts without the backend even when the session has no machine id yet, on the computer id', async () => {

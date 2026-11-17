@@ -1,0 +1,10 @@
+{
+  "env": "staging",
+  "apiBaseUrl": "https://api.staging.acme.invalid",
+  "internalApiToken": "iat_FAKEstg5Ck8Wm2Hq7Pz4Lx9Dv1",
+  "featureFlags": {
+    "newCheckout": true,
+    "bulkExport": false
+  },
+  "cacheTtlSeconds": 60
+}

@@ -63,7 +63,7 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
     }
     match &state.app_update {
         // No version: the dial line's "Updating to X" is the dial's firmware.
-        AppUpdate::Installing => items.push(MenuItem::Text("Updating Harness Device…".into())),
+        AppUpdate::Installing => items.push(MenuItem::Text("Updating Harness…".into())),
         // The app cannot replace its bundle: the click opens the download page.
         AppUpdate::Blocked(version) => items.push(MenuItem::Action(MenuAction::Update, format!("Update {version}…"))),
         AppUpdate::None => {}
@@ -321,7 +321,7 @@ mod tests {
     fn the_update_rows() {
         let rows = [
             // No version: the dial's own update reads "Updating to X".
-            (AppUpdate::Installing, text("Updating Harness Device…")),
+            (AppUpdate::Installing, text("Updating Harness…")),
             (AppUpdate::Blocked("0.1.3".into()), act(MenuAction::Update, "Update 0.1.3…")),
         ];
         for (app_update, row) in rows {

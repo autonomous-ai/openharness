@@ -17,7 +17,7 @@ const ALLOWED: Record<string, string> = {
   'lib/appModels.ts': 'a model server must outlive the daemon, and starts no console program',
   'lib/connectors/command.ts': 'the Connectors page must outlive this command, and starts no console program',
   'core/main.ts': 'a core an older release started with no master: Windows always has one (harness-launch.exe)',
-  'cli.ts': 'a build run from a checkout: an installed copy starts through harness-launch.exe',
+  'lib/daemonLaunch.ts': 'a build run from a checkout: an installed copy starts through harness-launch.exe',
 }
 
 function sources(dir: string): string[] {

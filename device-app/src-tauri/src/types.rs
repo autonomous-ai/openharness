@@ -382,11 +382,35 @@ mod tests {
         assert_eq!(windows.len(), 1);
         let window = &windows[0];
         assert_eq!(window["label"], "main");
-        assert_eq!(window["title"], "Harness Device");
+        assert_eq!(window["title"], "Harness");
         assert_eq!((window["width"].as_f64(), window["height"].as_f64()), (Some(420.0), Some(320.0)));
         assert_eq!(window["resizable"], false);
         assert_eq!(window["center"], true);
         assert_eq!(window["visible"], false);
+    }
+
+    /// The file stays Harness Device.app beside the desktop app's Harness.app, and updates find it by that name;
+    /// Finder, Login Items, the About panel and permission prompts show the bundle's name, Harness.
+    #[test]
+    fn the_app_is_named_harness() {
+        let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(config["productName"], "Harness Device");
+        let macos = &config["bundle"]["macOS"];
+        assert_eq!(macos["bundleName"], "Harness");
+        // One line per tag, so the plist's indentation does not matter. Tauri writes the region "English": "en" names
+        // the folder the strings below ship in.
+        let plist: String = include_str!("../Info.plist").lines().map(str::trim).collect();
+        for entry in
+            ["<key>CFBundleDevelopmentRegion</key><string>en</string>", "<key>LSHasLocalizedDisplayName</key><true/>"]
+        {
+            assert!(plist.contains(entry), "{plist}");
+        }
+        // macOS shows the localized name only while the plist's display name, which Tauri sets to productName, is the
+        // file's name.
+        assert!(!plist.contains("CFBundleDisplayName"), "{plist}");
+        let source = macos["files"]["Resources/en.lproj/InfoPlist.strings"].as_str().expect("InfoPlist.strings mapped");
+        let strings = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(source)).unwrap();
+        assert_eq!(strings, "CFBundleName = \"Harness\";\nCFBundleDisplayName = \"Harness\";\n");
     }
 
     #[test]

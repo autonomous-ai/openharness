@@ -1,0 +1,9 @@
+{
+  "name": "usage-reporter",
+  "version": "0.8.3",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

@@ -1,0 +1,9 @@
+#!/bin/sh
+while read -r old new ref; do
+  if [ "$ref" = refs/heads/main ]; then
+    echo "error: GH006: Protected branch update failed for refs/heads/main." >&2
+    echo "error: Changes must be made through a pull request that requires approving review from CODEOWNERS." >&2
+    echo "error: Waiting on code owner review from @acme-shop/billing-owners." >&2
+    exit 1
+  fi
+done

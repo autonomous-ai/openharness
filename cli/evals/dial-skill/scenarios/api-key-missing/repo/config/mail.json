@@ -1,0 +1,7 @@
+{
+  "host": "smtp.weatherly-digest.invalid",
+  "port": 587,
+  "user": "digest-bot",
+  "password": "smtp_FAKE_4qk8Lm2Zr9",
+  "to": "field-teams@weatherly-digest.invalid"
+}

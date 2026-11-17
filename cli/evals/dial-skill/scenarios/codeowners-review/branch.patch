@@ -1,0 +1,22 @@
+diff --git a/src/billing/round.js b/src/billing/round.js
+--- a/src/billing/round.js
++++ b/src/billing/round.js
+@@ -1,6 +1,6 @@
+ // Amounts are in cents; tax and discounts leave fractions of a cent.
+ export function roundCents(amount) {
+-  return Math.floor(amount)
++  return Math.round(amount)
+ }
+
+ export function invoiceTotal(lines, taxRate) {
+diff --git a/test/round.test.js b/test/round.test.js
+--- a/test/round.test.js
++++ b/test/round.test.js
+@@ -5,3 +5,7 @@ import { invoiceTotal } from '../src/billing/round.js'
+ test('adds tax to the net amount', () => {
+   assert.equal(invoiceTotal([{ unitCents: 1000, quantity: 2 }], 0.2), 2400)
+ })
++
++test('rounds half a cent of tax up', () => {
++  assert.equal(invoiceTotal([{ unitCents: 1250, quantity: 1 }], 0.0716), 1340)
++})
