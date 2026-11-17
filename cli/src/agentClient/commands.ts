@@ -538,6 +538,15 @@ export function refuseAgentWithToken(o: Opened): void {
   }
 }
 
+/** A harness a program owns is acted on with its token only: reached without it ([t] by `target`), NOT_YOURS. Any other
+ *  harness is returned as it was found. */
+function notProgramOwned(o: Opened, t: Target): Target {
+  if (!t.remote && new ProgramRecords(o.where.dataDir).get(t.frame.id)) {
+    throw new AgentClientError('NOT_YOURS', `${t.frame.name ?? t.frame.id.slice(0, 8)} belongs to the program that started it: only that program, with its token, may act on it.`)
+  }
+  return t
+}
+
 type ProgramTarget = Target & { record: ProgramHarness }
 
 /** The program's harness [name] means: by the name the program gave it (the harness's own name changes once its agent
@@ -576,8 +585,9 @@ function programFailure(s: Setup, json: boolean, code: string, detail: string, e
 
 /** How often `reply` looks again while an engine is not ready for its words. */
 const PROGRAM_READY_LOOK_MS = 500
-/** How long `reply` waits for its engine by default: within it the words are taken, or it says why not. */
-const PROGRAM_REPLY_TIMEOUT_MS = 10_000
+/** How long `reply` waits by default for its engine and the paste, and again from the paste for the turn to start
+ *  (core/deliveries.ts ACK_DEFAULT_MS): a loaded lamp took 8.6 to 15.7 s to the paste alone. */
+const PROGRAM_REPLY_TIMEOUT_MS = 30_000
 
 /**
  * A program's words to the harness it owns, answered only once its engine has taken them (#4393): `taken` with the
@@ -610,8 +620,10 @@ async function programReply(s: Setup, o: Opened, t: ProgramTarget, text: string,
     if (!frame) return programFailure(s, json, 'NOT_RUNNING', `${name} is no longer on this computer. Run harness ensure.`, EXIT.stopped)
     t.frame = frame
   }
+  // What is left of [timeoutMs] bounds the wait for the paste; the turn's start then has [timeoutMs] from the paste.
   const ackMs = Math.max(1_000, deadline - s.now())
-  const reply = await o.daemon.request('input_ack', { agentId: t.frame.id, text, ackMs }, ackMs + 10_000)
+  const takenMs = Math.max(1_000, timeoutMs)
+  const reply = await o.daemon.request('input_ack', { agentId: t.frame.id, text, ackMs, takenMs }, ackMs + takenMs + 10_000)
   if (reply.error === 'UNSUPPORTED') return programFailure(s, json, 'DAEMON_TOO_OLD', 'This Harness daemon cannot acknowledge a reply. Restart Harness on this version.', EXIT.failed)
   if (typeof reply.error === 'string') return programFailure(s, json, reply.error, `${name} did not take the words (${reply.error}).`, EXIT.failed)
   const inputId = String(reply.inputId ?? '')
@@ -1083,7 +1095,7 @@ export function replyCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
         return await programReply(s, o, owned, text, timeoutMs, flags.has('--json'))
       }
       if (o.caller || o.orphan) throw new AgentClientError('NOT_YOURS', 'Only the person replies to a harness: tell them what it asked. To give more work to one you started, use harness tell.')
-      t = await target(s, o, names[0], away)
+      t = notProgramOwned(o, await target(s, o, names[0], away))
       const name = t.frame.name ?? t.frame.id.slice(0, 8)
       const at = onAway(addressOf({ machineId: '', agentId: t.frame.id, name: t.frame.name ?? '', engine: '' }), away)
       const next: NextStep[] = [{ run: step(s.env, 'wait', at), when: 'for its answer' }]
@@ -1231,7 +1243,7 @@ export function resumeCommand(argv: readonly string[], deps: ClientDeps = {}): P
       if (p && !programMay('resume', !!readAuthSession())) throw new AgentClientError('REPLY_OFF', RESUME_OFF_TEXT)
       if (o.caller || o.orphan) throw new AgentClientError('NOT_YOURS', 'Only the person, or a program acting for them, resumes a harness. Tell the person which one to resume.')
       if (!p && !readAgentSettings(o.where.dataDir).programsReply) throw new AgentClientError('REPLY_OFF', RESUME_OFF_TEXT)
-      t = p ? await programTarget(o, p, names[0]) : await target(s, o, names[0], away)
+      t = p ? await programTarget(o, p, names[0]) : notProgramOwned(o, await target(s, o, names[0], away))
       const name = t.frame.name ?? t.frame.id.slice(0, 8)
       if (t.frame.location === 'cloud') throw new UsageError(`${name} runs in its maker's cloud: harness resume reopens a harness in a pane only.`)
       const at = onAway(addressOf({ machineId: '', agentId: t.frame.id, name: t.frame.name ?? '', engine: '' }), away)
@@ -1895,7 +1907,7 @@ export function closeCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
     try {
       // A program closes its own harness by its token (#4393), and only that one.
       const p = flags.has(PROGRAM_TOKEN_FLAG) ? (refuseAgentWithToken(o), programOf(flags, o.where.dataDir)) : null
-      try { t = p ? await programTarget(o, p, names[0]) : await target(s, o, names[0], away) } catch (error) {
+      try { t = p ? await programTarget(o, p, names[0]) : notProgramOwned(o, await target(s, o, names[0], away)) } catch (error) {
         // Asked for and not started: closing it is not starting it. Cancelled by its creation, which its machine takes only
         // before the launch is claimed (lib/agentCreationReceipt.ts `cancelIntent`).
         const asked = error instanceof AgentClientError && error.code === 'NOT_STARTED' ? askedNamed(o, names[0], away?.machineId) : undefined

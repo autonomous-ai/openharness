@@ -5,10 +5,11 @@ import { createDeliveries } from './deliveries.js'
 const event = (deliveryId: string, state: TurnDelivery['state'], reason?: string): TurnDelivery =>
   ({ deliveryId, sessionId: 'agent-1', state, ...(reason ? { reason } : {}) })
 
-const acked = (cancel: () => boolean = () => true, ids = true) => {
+const acked = (cancel: (deliveryId: string) => boolean = () => true, ids = true) => {
   let clock = 1_000
+  let n = 0
   const deps = { submit: vi.fn(), cancel: vi.fn(cancel), tell: vi.fn(), deliverers: new Set<string>(), log: vi.fn(),
-    ...(ids ? { newId: () => 'n1', now: () => clock } : {}) }
+    ...(ids ? { newId: () => `n${++n}`, now: () => clock } : {}) }
   const ack = createDeliveries(deps)
   ack.ready()
   const answers: Array<Record<string, unknown>> = []
@@ -18,38 +19,38 @@ const acked = (cancel: () => boolean = () => true, ids = true) => {
 afterEach(() => { vi.useRealTimers() })
 
 describe('acknowledged input (input_ack, #4393)', () => {
-  it('answers taken once the turn the words typed has started, and logs how long that took', () => {
+  it('answers taken once the turn the words typed has started, and logs both phases', () => {
     const t = acked()
     t.ack.acknowledged({ agentId: 'agent-1', text: 'turn on the light', ackMs: 5_000 }, t.answer)
     expect(t.deps.submit).toHaveBeenCalledWith('agent-1', 'turn on the light', 'program:n1')
     t.ack.settled(event('program:other', 'started'))
     t.ack.settled(event('program:n1', 'queued'))
+    t.tick(300)
     t.ack.settled(event('program:n1', 'delivered'))
     expect(t.answers).toEqual([])
     t.tick(420)
     t.ack.settled(event('program:n1', 'started'))
-    expect(t.answers).toEqual([{ inputId: 'program:n1', state: 'taken', takenAt: 1_420 }])
-    expect(t.deps.log).toHaveBeenCalledWith('[input-ack] agent-1 taken in 420ms')
+    expect(t.answers).toEqual([{ inputId: 'program:n1', state: 'taken', takenAt: 1_720 }])
+    expect(t.deps.log).toHaveBeenCalledWith('[input-ack] agent-1 taken in 720ms (pre-paste 300ms, paste to taken 420ms)')
     t.ack.settled(event('program:n1', 'rejected'))
     expect(t.answers).toHaveLength(1)
   })
 
   it('says a refusal and an unconfirmed turn with their reasons', () => {
     const t = acked()
-    t.ack.acknowledged({ agentId: 'agent-1', text: 'a' }, t.answer)
-    t.ack.settled(event('program:n1', 'rejected', 'agent_gone'))
-    t.ack.acknowledged({ agentId: 'agent-1', text: 'b' }, t.answer)
-    t.ack.settled(event('program:n1', 'rejected'))
-    t.ack.acknowledged({ agentId: 'agent-1', text: 'c' }, t.answer)
-    t.ack.settled(event('program:n1', 'unknown', 'dispatch_ambiguous'))
-    t.ack.acknowledged({ agentId: 'agent-1', text: 'd' }, t.answer)
-    t.ack.settled(event('program:n1', 'unknown'))
+    for (const [text, state, reason] of [['a', 'rejected', 'agent_gone'], ['b', 'rejected', undefined], ['c', 'unknown', 'dispatch_ambiguous'], ['d', 'unknown', undefined]] as const) {
+      t.ack.acknowledged({ agentId: 'agent-1', text }, t.answer)
+      t.ack.settled(event(`program:n${t.answers.length + 1}`, state, reason))
+    }
     expect(t.answers.map((a) => [a.state, a.reason])).toEqual([['rejected', 'agent_gone'], ['rejected', 'rejected'], ['unknown', 'dispatch_ambiguous'], ['unknown', 'unknown']])
+    expect(t.deps.log).toHaveBeenCalledWith('[input-ack] agent-1 rejected in 0ms (pre-paste 0ms)')
   })
 
-  it('takes the words back at the deadline when nothing was typed, so the program may send them again', () => {
+  it('takes the words back at the pre-paste deadline when nothing was typed, so the program may send them again', () => {
     vi.useFakeTimers()
     const t = acked(() => true)
+    // The input says a delivery taken back is rejected, at once: that is the deadline's answer, never a refusal.
+    t.deps.cancel.mockImplementation((id: string) => { t.ack.settled(event(id, 'rejected', 'cancelled')); return true })
     t.ack.acknowledged({ agentId: 'agent-1', text: 'a', ackMs: 50 }, t.answer)
     vi.advanceTimersByTime(999)
     expect(t.answers).toEqual([])
@@ -58,16 +59,48 @@ describe('acknowledged input (input_ack, #4393)', () => {
     expect(t.answers).toEqual([{ inputId: 'program:n1', state: 'timeout', cancelled: true, written: false }])
   })
 
-  it('says words already typed at the deadline are written, never taken back, and waits two minutes at most', () => {
+  it('waits on words being pasted at the pre-paste deadline, and counts the taken window from the paste', () => {
     vi.useFakeTimers()
     const t = acked(() => false)
-    t.ack.acknowledged({ agentId: 'agent-1', text: 'a', ackMs: 10 * 60_000 }, t.answer)
+    t.ack.acknowledged({ agentId: 'agent-1', text: 'a', ackMs: 5_000, takenMs: 5_000 }, t.answer)
+    // The daemon checked the runtime and waited for the pane past the first deadline: still being written.
+    vi.advanceTimersByTime(5_000)
+    expect(t.deps.cancel).toHaveBeenCalledWith('program:n1')
+    expect(t.answers).toEqual([])
+    vi.advanceTimersByTime(3_000)
+    t.ack.settled(event('program:n1', 'delivered'))
+    vi.advanceTimersByTime(4_000)
+    t.ack.settled(event('program:n1', 'started'))
+    expect(t.answers).toEqual([{ inputId: 'program:n1', state: 'taken', takenAt: 1_000 }])
+  })
+
+  it('says words pasted but never seen to start written, never taken back, and waits two minutes a phase at most', () => {
+    vi.useFakeTimers()
+    const t = acked(() => false)
+    t.ack.acknowledged({ agentId: 'agent-1', text: 'a', ackMs: 10 * 60_000, takenMs: 10 * 60_000 }, t.answer)
     t.ack.settled(event('program:n1', 'delivered'))
     vi.advanceTimersByTime(120_000)
     expect(t.answers).toEqual([{ inputId: 'program:n1', state: 'timeout', cancelled: false, written: true }])
+    // Neither pasted nor taken back: answered at the end of the taken window all the same.
     t.ack.acknowledged({ agentId: 'agent-1', text: 'b', ackMs: Number.NaN }, t.answer)
-    vi.advanceTimersByTime(10_000)
-    expect(t.answers[1]).toMatchObject({ state: 'timeout', written: false })
+    vi.advanceTimersByTime(30_000)
+    expect(t.answers).toHaveLength(1)
+    vi.advanceTimersByTime(30_000)
+    expect(t.answers[1]).toMatchObject({ state: 'timeout', cancelled: false, written: false })
+  })
+
+  it('takes ten replies in a row into one session, each pasted after a slow runtime check', () => {
+    vi.useFakeTimers()
+    const t = acked(() => false)
+    for (let i = 1; i <= 10; i++) {
+      t.ack.acknowledged({ agentId: 'agent-1', text: `task ${i}` }, t.answer)
+      // 8.6 to 15.7 s from the request to the paste on a loaded lamp, then 1.2 to 1.8 s to the turn's start.
+      vi.advanceTimersByTime(15_700)
+      t.ack.settled(event(`program:n${i}`, 'delivered'))
+      vi.advanceTimersByTime(1_800)
+      t.ack.settled(event(`program:n${i}`, 'started'))
+    }
+    expect(t.answers.map((a) => [a.inputId, a.state])).toEqual(Array.from({ length: 10 }, (_, i) => [`program:n${i + 1}`, 'taken']))
   })
 
   it('refuses words with no harness or nothing to say, and names an input by a random id by default', () => {
