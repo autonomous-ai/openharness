@@ -124,6 +124,9 @@ here (`tierOf`).
 - `cli/src/services/devices.ts`, the `summary` branch (today lines 727-753): after the on-screen/sub-agent check and
   before both tier paths, a pending notice of that agent makes the summary `silent` and tallies
   `tally('silent', 'rule:notice', 'notice', 0)`. Failed summaries (`event.failed === true`) are not touched.
+  Whether the card is pending is read as the summary arrives (`toDial`), not when its turn in the agent's queue comes:
+  a summary can wait up to 2 s behind its turn's `done` while the turn's tokens are read, and the next turn's start (a
+  message sent while the agent worked) ends the card meanwhile.
 - `Notices` gets one read, `pending(agentId): boolean`, if `from()` (which returns only the caller's names) is not the
   right question to ask.
 - No change outside the devices component. No new setting.
