@@ -148,12 +148,18 @@ class SelectionTests(unittest.TestCase):
 
     def test_the_vscode_extension_belongs_to_the_cli_suite(self):
         # cli/build.mjs inlines it and cli/vitest.config.ts runs its tests.
-        for path in ("plugins/harness-device-vscode/src/loop.ts", "plugins/harness-device-vscode/package.json"):
+        for path in ("plugins/harness-device-vscode/src/loop.ts", "plugins/harness-device-vscode/package.json",
+                     "plugins/harness-device-vscode/gate/realVscode.gate.ts"):
             with self.subTest(path=path):
                 self.assertEqual(planner.owners(path), {"cli"})
                 self.assertEqual(planner.select([path])[0], {"cli"})
                 self.assertTrue(planner.reads("cli", path))
                 self.assertIsNone(planner.shared_input(path))
+        # A folder whose name only starts the same is not the extension's: it stays outside every suite.
+        look_alike = "plugins/harness-device-vscode-x/a.ts"
+        self.assertEqual(planner.owners(look_alike), set())
+        self.assertEqual(planner.select([look_alike])[0], set())
+        self.assertIsNotNone(planner.shared_input(look_alike))
         # Orca's plugin is tested by Orca's own tools: it stays outside every suite.
         self.assertEqual(planner.select(["plugins/harness-device-orca/src/dial.ts"])[0], set())
 
