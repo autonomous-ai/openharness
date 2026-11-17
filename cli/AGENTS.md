@@ -60,8 +60,8 @@ it is fixed in, is in [the audit](../docs/design/2026-11-12-core-audit.md): that
 ### The processes
 
 The master runs the core and every service process (`SERVICE_HOSTS` in `src/harnessd/services.ts`). Each
-service process runs one or more services, each on its own link to the core. In Activity Monitor and `ps`
-they show as `harnessd`, `harnessd-core` and `harnessd-<process>` (`src/harnessd/processName.ts`).
+service process runs one or more services, each on its own link to the core. In Activity Monitor, `top` and
+`ps -c` they show as `harnessd`, `harnessd-core` and `harnessd-<process>` (`src/harnessd/processName.ts`).
 
 | Process | Runs | Started |
 |---|---|---|

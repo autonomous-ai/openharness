@@ -88,8 +88,9 @@ describe.skipIf(!FROM)('a release rehearsal: the update from a published release
     return streamId
   }
   /**
-   * harnessd's processes as their master logs them (never by title: the master and its services rename
-   * themselves): the master this test started, its latest core, and each service's latest process, alive.
+   * harnessd's processes as their master logs them (never by what ps shows: an older release's master and services
+   * rename themselves, this build's do not): the master this test started, its latest core, and each service's latest
+   * process, alive.
    */
   const harnessdProcesses = (): Array<{ role: string; pid: number }> => {
     const text = logs()

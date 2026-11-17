@@ -8,7 +8,6 @@
  * SERVICE_UNAVAILABLE at once (a create on a grid model, GRID_UNAVAILABLE), and the master brings it back
  * (or parks it, when it keeps crashing), every service in it connected again.
  */
-import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -39,16 +38,9 @@ async function turn(client: LocalClient, agentId: string, content: string): Prom
   client.send('message', { agentId, content })
   await ended
 }
-/**
- * This daemon's search service processes: titled `harnessd search` AND started by its own master, by
- * the pid the master logged. The title alone matched every daemon's search on the machine — another
- * file's in a parallel run, another checkout's — and the tests below stop and kill what it returns.
- */
+/** This daemon's search service processes: started by its own master, by the pid it logged, and still its child. */
 function searchPids(d: IsolatedDaemon): number[] {
-  const ours = new Set([...d.log().matchAll(/\[harnessd\] service search started \(pid (\d+)\)/g)].map((match) => Number(match[1])))
-  const table = execFileSync('ps', ['-A', '-o', 'pid=,command=']).toString().trim().split('\n')
-  return table.map((line) => line.trim().match(/^(\d+)\s+(.*)$/)).filter((match): match is RegExpMatchArray => !!match)
-    .filter(([, pid, command]) => command.trim() === 'harnessd-search' && ours.has(Number(pid))).map(([, pid]) => Number(pid))
+  return d.servicePids('search')
 }
 const finds = async (client: LocalClient, word: string, sessionId: string): Promise<boolean> =>
   JSON.stringify(await client.request('session_search', { query: word }, 30_000)).includes(sessionId)
@@ -180,12 +172,9 @@ describe('services in their own processes', () => {
   })
 })
 
-/** This daemon's edge host: titled `harnessd-edge` AND started by its own master, by the pid it logged. */
+/** This daemon's edge host: started by its own master, by the pid it logged, and still its child. */
 function edgePids(d: IsolatedDaemon): number[] {
-  const ours = new Set([...d.log().matchAll(/\[harnessd\] service edge started \(pid (\d+)\)/g)].map((match) => Number(match[1])))
-  const table = execFileSync('ps', ['-A', '-o', 'pid=,command=']).toString().trim().split('\n')
-  return table.map((line) => line.trim().match(/^(\d+)\s+(.*)$/)).filter((match): match is RegExpMatchArray => !!match)
-    .filter(([, pid, command]) => command.trim() === 'harnessd-edge' && ours.has(Number(pid))).map(([, pid]) => Number(pid))
+  return d.servicePids('edge')
 }
 /** The services the edge host runs, each on its own link to the core. */
 const EDGE = ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps']
@@ -362,12 +351,9 @@ describe('the edge host: several services in one process of their own', () => {
   })
 })
 
-/** This daemon's models process: titled `harnessd-models` AND started by its own master, by the pid it logged. */
+/** This daemon's models process: started by its own master, by the pid it logged, and still its child. */
 function modelsPids(d: IsolatedDaemon): number[] {
-  const ours = new Set([...d.log().matchAll(/\[harnessd\] service models started \(pid (\d+)\)/g)].map((match) => Number(match[1])))
-  const table = execFileSync('ps', ['-A', '-o', 'pid=,command=']).toString().trim().split('\n')
-  return table.map((line) => line.trim().match(/^(\d+)\s+(.*)$/)).filter((match): match is RegExpMatchArray => !!match)
-    .filter(([, pid, command]) => command.trim() === 'harnessd-models' && ours.has(Number(pid))).map(([, pid]) => Number(pid))
+  return d.servicePids('models')
 }
 /** A create on a grid the desktop already resolved (`grid`), bound to its conversation like any other. */
 async function createOn(daemon: IsolatedDaemon, client: LocalClient, engine: Engine, folder: string, grid: Record<string, unknown>): Promise<Record<string, any>> {

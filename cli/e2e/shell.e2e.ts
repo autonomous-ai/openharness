@@ -1,5 +1,4 @@
 /** A connected shell opens through the service, with literal arguments and the terminal's existing access rules. */
-import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -64,11 +63,9 @@ describe('opening connected shells', () => {
     // to the core and must survive, while the restarted service recovers the same durable launch.
     await until('the shell service to connect', () => d.log().includes('[services] shell connected') || null, 30_000)
     const connects = d.log().split('[services] shell connected').length
-    const edgePid = Number([...d.log().matchAll(/\[harnessd\] service edge started \(pid (\d+)\)/g)].at(-1)?.[1])
-    expect(Number.isInteger(edgePid) && edgePid > 0).toBe(true)
-    const processRow = execFileSync('ps', ['-o', 'ppid=,command=', '-p', String(edgePid)], { encoding: 'utf8' }).trim()
-    expect(processRow).toMatch(new RegExp(`^${d.pid}\\s+harnessd-edge$`))
-    process.kill(edgePid, 'SIGKILL')
+    const edgePid = d.servicePids('edge').at(-1)
+    expect(edgePid, 'the edge host this master runs').toBeDefined()
+    process.kill(edgePid!, 'SIGKILL')
     await until('shell receipts to reconnect after the edge crash', () => d.log().split('[services] shell connected').length > connects || null, 30_000)
     client.sendBinary({ kind: TerminalBinaryKind.input, streamId: ready.payload!.streamId, seq: 1, compressed: false,
       bytes: Buffer.from('printf still-connected > after-crash.txt\r') })

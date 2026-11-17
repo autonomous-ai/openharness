@@ -18,7 +18,8 @@ export const FRAME_PART_TOTAL_BYTES = 4 * 1024 * 1024
 export const FRAME_PART_ENTRIES = 4096
 
 export interface ServiceSpec {
-  /** The process's name: what the master logs it as and the process is titled (`harnessd <name>`). */
+  /** The process's name: what the master logs it as, and the hard link it is started through (`harnessd-<name>`,
+   *  ./processName.ts). */
   name: string
   /** The services it runs, as `harness __service <a>,<b>` names them, each on its own link to the core. */
   services: readonly string[]

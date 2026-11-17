@@ -3,7 +3,6 @@
  * finds where `HARNESSD_TEST_DIAL_PORT` points, a file it reads at every scan (cable/cableFleet.ts), so a
  * test can plug several in and unplug them. And the devices' processes a daemon's master started.
  */
-import { execFileSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import type { IsolatedDaemon } from './daemon.js'
 import { FakeDial } from './fakeDial.js'
@@ -11,13 +10,9 @@ import { FakeDial } from './fakeDial.js'
 /** What a dial says its settings are when it greets. */
 export const SETTINGS = { brightness: 60, character: 0, face: 466, muted: false, quiet: false, straightTitle: false, focusFace: false, scrollReversed: false, round: true, voiceLang: 'en' }
 
-/** This daemon's devices processes, by the pids its master logged: `harnessd-devices` alone would match every
- *  daemon's on the machine, another file's in a parallel run. */
+/** This daemon's devices processes: started by its own master, by the pid it logged, and still its child. */
 export function devicesPids(d: IsolatedDaemon): number[] {
-  const ours = new Set([...d.log().matchAll(/\[harnessd\] service devices started \(pid (\d+)\)/g)].map((match) => Number(match[1])))
-  const table = execFileSync('ps', ['-A', '-o', 'pid=,command=']).toString().trim().split('\n')
-  return table.map((line) => line.trim().match(/^(\d+)\s+(.*)$/)).filter((match): match is RegExpMatchArray => !!match)
-    .filter(([, pid, command]) => command.trim() === 'harnessd-devices' && ours.has(Number(pid))).map(([, pid]) => Number(pid))
+  return d.servicePids('devices')
 }
 /** The dials this daemon finds, written where its discovery reads them at every scan. */
 export class Desk {

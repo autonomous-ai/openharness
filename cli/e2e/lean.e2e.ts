@@ -92,25 +92,24 @@ describe('harnessd\'s master and services lean', () => {
 
   it('re-executes the master, same pid, on the lean bundle, and runs every service and the core from it', async () => {
     const d = await fresh()
-    // The master titles itself `harnessd`, so its log says what it runs on: the lean bundle, written
-    // into the data folder, which only a master running on it says it shares with the services.
+    // Its log says what it runs on: the lean bundle, written into the data folder, which only a master
+    // running on it says it shares with the services. Its command line says the same.
     const lean = /\[harnessd\] services run from (\S+), as this master does/.exec(d.log())?.[1]
     expect(lean, 'the master re-executed on the lean bundle').toMatch(/[\\/]lean[\\/][0-9a-f]{16}[\\/]harnessd\.mjs$/)
     expect(lean!.startsWith(join(d.dataDir, 'lean'))).toBe(true)
     expect(existsSync(lean!)).toBe(true)
     // The same process `harness start` started: re-executed in place.
     const master = d.pid!
-    expect(commandOf(master)).toBe('harnessd')
+    expect(commandOf(master).endsWith(` ${lean} __harnessd`), 'the master runs on the lean bundle').toBe(true)
     // The core from the lean bundle too, on its own entry; to everything it hands on, its script is cli.js:
     // the hooks it installed run the notify.mjs beside it, not one beside the lean bundle.
     expect(coreCommand(d)).toMatch(new RegExp(` ${escape(join(d.dataDir, 'lean'))}/[0-9a-f]{16}/${escape(LEAN_CORE_ENTRY)} __run$`))
     expect(await claudeHookCommand(d)).toContain(join(dirname(bundle), 'notify.mjs'))
-    // A service's lines are stamped, as the core's and the master's are in the log they share. Each says it is connected only
-    // after it has named its process (serviceProcess.ts), which the master's "started" line, written as it spawns, comes before.
+    // A service's lines are stamped, as the core's and the master's are in the log they share.
     for (const name of SERVICES) {
       await until(`${name} to say it is connected`, () => new RegExp(`\\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d:\\d\\d\\.\\d{3} \\[service ${name}\\] connected to the core`).test(d.log()) || null, 30_000, 200)
     }
-    for (const [name, pid] of servicePids(d)) expect(commandOf(pid), name).toBe(`harnessd-${name}`)
+    for (const [name, pid] of servicePids(d)) expect(commandOf(pid).includes(` ${lean} __service `), `${name} runs from the lean bundle`).toBe(true)
     // Lean: under the cost of parsing the whole CLI, which every one of them paid before (at idle,
     // 115 to 160 MiB each), and a long way under it at that (55 to 80).
     for (const [name, pid] of [['master', master], ...servicePids(d)] as Array<[string, number]>) {
