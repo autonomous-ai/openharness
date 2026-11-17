@@ -636,7 +636,10 @@ export class ObservedSource implements HostSource {
         break
       case 'turn-stop':
         entry.sentStop = true
-        clearTimeout(entry.heldStop)
+        this.dropStop(entry)
+        // A lead whose subagents run has not finished, though they stop within the grace: its wrap-up after the last one
+        // is still to come, and its own Stop ends the turn, as a pane's does (engines/kit/stopHook.ts).
+        if (entry.subagents) break
         entry.heldStop = setTimeout(() => { this.finish(entry) }, ANSWER_GRACE_MS)
         entry.heldStop.unref()
         break
