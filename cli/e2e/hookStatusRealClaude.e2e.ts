@@ -15,7 +15,7 @@
  */
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir, userInfo } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
@@ -68,6 +68,7 @@ const SIGNED_OUT = 'signed out'
 const PERMISSION_DIALOG = /Do you want to proceed\?/
 
 const sha256 = (file: string): string => existsSync(file) ? createHash('sha256').update(readFileSync(file)).digest('hex') : 'absent'
+const shellQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`
 const readIf = (file: string): string => { try { return readFileSync(file, 'utf8') } catch { return '' } }
 /** The folder Claude Code keeps a working folder's transcripts in, under its home's `projects` (the eval's rule). */
 const projectFolders = (cwd: string): string[] =>
@@ -154,7 +155,11 @@ describe.runIf(REAL_CLAUDE && PROFILE)('hook-driven status with the real Claude 
     settingsBefore = sha256(profileSettings)
     dir = mkdtempSync(join(tmpdir(), 'hsrc-'))
     mkdirSync(join(dir, 'system'))
-    if (existsSync('/usr/bin/security')) symlinkSync('/usr/bin/security', join(dir, 'system', 'security'))
+    // The pane's HOME is the daemon's throwaway one, and security finds the login Keychain, which holds the profile's
+    // sign-in, only under the account's own home: that home for this lookup alone, Claude Code keeps the throwaway one.
+    if (existsSync('/usr/bin/security')) {
+      writeFileSync(join(dir, 'system', 'security'), `#!/bin/sh\nHOME=${shellQuote(userInfo().homedir)} exec /usr/bin/security "$@"\n`, { mode: 0o755 })
+    }
     // The daemon may ask its Claude Code for its version before its hooks are in: the deny list from the start.
     writeFileSync(join(dir, 'flags.json'), JSON.stringify({ permissions: { deny: DENIED } }))
     writeFileSync(join(dir, 'claude'), wrapperSource(dir), { mode: 0o755 })
