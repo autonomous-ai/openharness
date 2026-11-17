@@ -145,9 +145,11 @@ describe('the DSH viewers in their own process', () => {
     installHarness(d)
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
     await d.start()
-    // Core readiness never waits for Store. These viewer scenarios start with a
-    // prepared harness, so their setup waits for Store in the viewers process.
+    // Index parsing belongs to Store. Explicitly ask for it before the fixture's viewer
+    // scenarios; an idle core no longer scans installed packages to wake this process.
     if (services.split(',').includes('viewers')) {
+      const client = await LocalClient.connect(d)
+      try { await client.request('dsh_list', {}, 60_000) } finally { client.close() }
       await until('the Store to connect before preparing the viewer fixture',
         () => d.log().includes('[services] store connected') || null, 30_000, 100)
     }

@@ -36,6 +36,8 @@ describe('memory: this machine\'s memories for the owner\'s other machines', () 
     expect(await memory.memory_snapshot!({}, owner)).toMatchObject({ error: 'MEMORY_FAILED', detail: 'DSH_INDEX_BUSY' })
     expect(await memory.memory_snapshot!({}, owner)).toMatchObject({ error: 'MEMORIES_NOT_INSTALLED' })
     expect(ensureBundledMemories).toHaveBeenCalledTimes(3)
+    await memory.memory_snapshot!({}, owner)
+    expect(ensureBundledMemories).toHaveBeenCalledTimes(3)
   })
   afterEach(() => vi.clearAllMocks())
 

@@ -61,6 +61,9 @@ Reviewed direction: root, 2026-11-17, before implementation.
    Store. Models and Memories prepare their bundled package at their existing
    outside-core first use with the same locked/atomic installer; failure remains
    visible instead of silently dropping the bundled feature.
+   Each consumer retains successful first-use readiness for that process, so later
+   requests do not rehash bundle contents. Only incomplete/failed preparation is
+   retried by the next actual request; a component restart loads a new release.
 10. Platforms: shared TypeScript on macOS/Linux/Windows. No new process mechanism,
     dependency, OS account or platform-specific shell. Paths use native path APIs;
     fixtures cover symlinked workspace, renamed package and old install directory.
@@ -75,3 +78,23 @@ flows, at most two test workers. Parent coordinates timing, integration and rele
 
 `lib/apiConnectionMetadata.ts` remains another default-core zod import until its
 separate extraction integrates. This task removes the Store path, not that path.
+
+## Combined-source review
+
+Merged main `e9670ffd23` into extraction head `f8f2e159fc`. The only textual
+conflict was the Registry import in resumeAgentService: retain its new launch
+publication/authority helpers while removing installedDsh. Registry's pending
+admission and persisted receipt fences remain intact.
+
+The program-harness delta from `88dd98d1a8` to `e9670ffd23` changes no core create,
+fork, launch, Registry, stopped-record or resume module. Its new token ownership
+remains in the CLI, and its input acknowledgement wiring is retained in main.
+`ensure` only replaces work after AGENT_NOT_FOUND/RESUME_UNAVAILABLE; preserved
+INVALID_DSH and Store-unavailable answers therefore cannot become a fresh
+conversation. Package create payloads, canonical receipt fingerprints and runtime
+keys retain their formats. Ordinary engine ensure never asks Store.
+
+Selected final checks: CLI types; core, harnessd, resume, portability and local-models
+required gates; architecture and Store/Grid/native launch goldens; private Store
+process kill/hang/restore and viewer scenarios; program ensure/newCommand specs and
+programHarness private E2E for the merged source. No benchmark runs overlap them.

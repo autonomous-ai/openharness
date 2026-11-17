@@ -240,6 +240,8 @@ type LocalModelRequest = 'grid_fleet_models_list' | 'grid_fleet_model_download' 
  * show them.
  */
 function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => Promise<string | null>): ServiceRequests {
+  // A component restart loads the next release. Failed first use retries only when asked again.
+  let bundledReady = false
   // The Model Manager reads the grid it runs on through the same credential-less reader as every picker
   // (never `grid engines`, which carries the grid credential and so wakes a sleeping grid on every tick),
   // and a start or stop it finishes makes every list read again — pushed to the window when it changes.
@@ -268,7 +270,10 @@ function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => P
   // account's own grid, and so does the Set up that offers it.
   const localModel = (type: LocalModelRequest): ServiceRequest => async (payload) => {
     try {
-      if (!ensureBundledModelManager()) return { error: 'The Model Manager package is unavailable. Try again.' }
+      if (!bundledReady) {
+        if (!ensureBundledModelManager()) return { error: 'The Model Manager package is unavailable. Try again.' }
+        bundledReady = true
+      }
       const list = type === 'grid_fleet_models_list'
       const setup = list ? payload.setup === true : type !== 'grid_fleet_model_stop'
       const unready = setup ? await notReady(grid, type !== 'grid_fleet_model_download') : null

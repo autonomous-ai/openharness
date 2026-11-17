@@ -74,6 +74,7 @@ const failed = (error: unknown): Record<string, unknown> =>
   ({ error: 'MEMORY_FAILED', detail: error instanceof Error ? error.message : String(error) })
 
 export function startMemory(_core: CoreApi, deps: MemoryDeps = DEFAULTS): ServiceRequests {
+  let bundledReady = deps !== DEFAULTS
   // Writes one at a time: two machines' panes can send a choice or a profile at the same moment, and each
   // run reads and rewrites the same files. In order, "never older over newer" holds; side by side, an older
   // choice could land last. Snapshots asked for together share one read.
@@ -87,7 +88,10 @@ export function startMemory(_core: CoreApi, deps: MemoryDeps = DEFAULTS): Servic
   let reading: Promise<Record<string, unknown>> | null = null
   const mem = async (args: string[], input?: string): Promise<Record<string, unknown>> => {
     try {
-      if (deps === DEFAULTS && !ensureBundledMemories()) return { error: 'MEMORIES_NOT_INSTALLED', detail: 'Memories is not installed on this machine. Try again.' }
+      if (!bundledReady) {
+        if (!ensureBundledMemories()) return { error: 'MEMORIES_NOT_INSTALLED', detail: 'Memories is not installed on this machine. Try again.' }
+        bundledReady = true
+      }
       const dir = deps.packageDir()
       if (!dir) return { error: 'MEMORIES_NOT_INSTALLED', detail: 'Memories is not installed on this machine.' }
       const { stdout } = await deps.run(dir, args, input)
