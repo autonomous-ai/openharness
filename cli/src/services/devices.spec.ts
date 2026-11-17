@@ -1,6 +1,6 @@
 // The devices (services/devices.ts): what the core tells them reaches the dial and the window bridges, what
 // they say reaches the core through its API alone, and the fleet failing costs the dial nothing.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, dirname, join, parse } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
@@ -334,17 +334,18 @@ function fakeOrcaReads(over: { watches?: boolean | Promise<boolean> } = {}) {
   return { reads, probes, orders, watches }
 }
 
-/** Orca's account homes as a spec gives them (devices/orcaHomes.ts): `homes` is the last read's list, and each refresh
- *  says `changed` at once, or, while `held`, waits until the spec lands it. */
+/** Orca's account homes as a spec gives them (devices/orcaHomes.ts): `homes` is the last read's list, `answered` whether
+ *  that read gave Orca's answer, and each refresh says `changed` at once, or, while `held`, waits until the spec lands it. */
 function fakeOrcaHomes(homes: OrcaHomes = { claude: [], codex: [] }) {
   const fake = {
     homes,
+    answered: true,
     changed: false,
     held: false,
     /** The refreshes held, each landed with whether the list changed. */
     pending: [] as Array<(changed: boolean) => void>,
     refresh: vi.fn((): Promise<boolean> => fake.held ? new Promise((resolve) => { fake.pending.push(resolve) }) : Promise.resolve(fake.changed)),
-    cache: (): OrcaHomesCache => ({ get: () => fake.homes, refresh: fake.refresh }),
+    cache: (): OrcaHomesCache => ({ get: () => fake.homes, answered: () => fake.answered, refresh: fake.refresh }),
     /** The last refresh asked: what the devices do once it lands runs before a spec's own wait on it ends. */
     landed: () => fake.refresh.mock.results.at(-1)?.value,
   }
@@ -6483,6 +6484,35 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
     expect(claude.looked).toEqual([claudeHome()])
     expect(logs).toContain('[device] dial setup · codex · set up')
     expect(logs).toContainEqual(expect.stringMatching(/^\[device\] dial setup · day \d{4}-\d\d-\d\d · claude set up 0 updated 0 failed 0 left removed 0 · codex set up 1 updated 0 failed 0 left removed 0$/))
+  })
+
+  it('the dial setup is given Orca\'s Claude Code homes and whether the read answered', async () => {
+    const home = join(homes, 'orca-claude')
+    mkdirSync(home)
+    // The default home's plugin on, as the install leaves it: Orca's homes follow it.
+    mkdirSync(claudeHome())
+    writeFileSync(join(claudeHome(), 'settings.json'), JSON.stringify({ enabledPlugins: { 'harness-device@openharness': true } }))
+    const claude = fakeClaude()
+    const read = fakeOrcaHomes({ claude: [home], codex: [] })
+    start({ faults: ['fleet'], listen: fakeListener().listen, claude: claude.found, orcaHomes: read })
+
+    seen.host.watching!(true)
+
+    await vi.waitFor(() => expect(readSetup(dataDir).pluginHomes).toEqual([realpathSync(home)]))
+    expect(claude.looked).toEqual([claudeHome(), realpathSync(home)])
+    expect(claude.calls).toContain('plugin enable harness-device@openharness --scope user')
+
+    // A read that failed lists no home and drops none from the record; Orca's answer with none does.
+    read.homes = { claude: [], codex: [] }
+    read.answered = false
+    seen.host.watching!(true)
+    // The attach's pass, which runs no `claude` here, ends within the tick.
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(readSetup(dataDir).pluginHomes).toEqual([realpathSync(home)])
+    read.homes = { claude: [], codex: [] }
+    read.answered = true
+    seen.host.watching!(true)
+    await vi.waitFor(() => expect(readSetup(dataDir).pluginHomes).toEqual([]))
   })
 
   it('the devices\' start on a computer that never had a dial writes nothing', async () => {

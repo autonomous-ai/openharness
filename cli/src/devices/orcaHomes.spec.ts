@@ -346,6 +346,20 @@ describe('createOrcaHomesCache', () => {
     }
   })
 
+  // A failed read empties the list: the plugin's setup must not take that for Orca listing no home.
+  it('answered says whether the last read gave Orca\'s answer', async () => {
+    const t = cacheOf([ok(NONE), failed('timed out'), ok(A)])
+    expect(t.cache.answered()).toBe(false)
+    await t.cache.refresh()
+    expect(t.cache.answered()).toBe(true)
+    t.advance(5 * 60_000)
+    await t.cache.refresh()
+    expect(t.cache.answered()).toBe(false)
+    t.advance(5 * 60_000)
+    await t.cache.refresh()
+    expect(t.cache.answered()).toBe(true)
+  })
+
   it('a read that throws is failed', async () => {
     const t = cacheOf([ok(A), () => { throw new Error('/made/up/a person1@example.com') }, () => Promise.reject(new Error('/made/up/b'))])
     await t.cache.refresh()
