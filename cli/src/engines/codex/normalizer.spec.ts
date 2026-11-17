@@ -875,13 +875,22 @@ describe('Codex tool_end outputTail', () => {
 describe('Codex: a turn the person stopped', () => {
   const say = (normalizer: CodexNormalizer, payload: object) => normalizer.ingest(JSON.stringify({ type: 'event_msg', payload }))
 
+  // Codex writes `reason` on every turn_aborted, in snake case (TurnAbortReason, 0.144 and 0.169). Only Interrupted is
+  // the person stopping the turn; a replaced turn, a review's end or a spent budget is the turn's plain end.
   it('a turn the person stopped ends as aborted, a finished one does not', () => {
     const normalizer = new CodexNormalizer('live')
     say(normalizer, { type: 'user_message', message: 'go' })
-    expect(say(normalizer, { type: 'turn_aborted' }).at(-1)).toEqual({ type: 'turn_ended', payload: { aborted: true } })
+    expect(say(normalizer, { type: 'turn_aborted', reason: 'interrupted' }).at(-1)).toEqual({ type: 'turn_ended', payload: { aborted: true } })
     say(normalizer, { type: 'user_message', message: 'again' })
     expect(say(normalizer, { type: 'task_complete' }).at(-1)).toEqual({ type: 'turn_ended', payload: {} })
   })
+
+  it.each([['replaced', 'replaced'], ['review_ended', 'review_ended'], ['budget_limited', 'budget_limited'], ['no reason', undefined]])(
+    'a turn Codex ended for %s ends plainly', (_, reason) => {
+      const normalizer = new CodexNormalizer('live')
+      say(normalizer, { type: 'user_message', message: 'go' })
+      expect(say(normalizer, { type: 'turn_aborted', reason }).at(-1)).toEqual({ type: 'turn_ended', payload: {} })
+    })
 
   it('an abort with no turn open, or on a replay, ends nothing', () => {
     expect(say(new CodexNormalizer('live'), { type: 'turn_aborted' })).toEqual([])

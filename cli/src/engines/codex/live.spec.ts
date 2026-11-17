@@ -50,6 +50,14 @@ describe('the Codex live parser', () => {
     expect(next.over).toBe(true)
   })
 
+  it.each(['replaced', 'review_ended', 'budget_limited'])('a turn Codex ended for %s is a plain end, marked over', (reason) => {
+    const parser = live.create({ engine: 'codex', codexHome: undefined })
+    parser.ingest(line('2026-11-17T01:02:03.000Z', { type: 'user_message', message: 'go' }))
+    const ended = parser.ingest(line('2026-11-17T01:02:04.000Z', { type: 'turn_aborted', reason }))
+    expect(ended.events.at(-1)).toEqual({ type: 'turn_ended', payload: {} })
+    expect(ended.over).toBe(true)
+  })
+
   it('an end read with no turn open ends nothing and is not marked', () => {
     const parser = live.create({ engine: 'codex', codexHome: undefined })
     const stray = parser.ingest(line('2026-11-17T01:02:03.000Z', { type: 'task_complete', turn_id: 't0', last_agent_message: null }))
