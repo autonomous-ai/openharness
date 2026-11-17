@@ -98,6 +98,19 @@ describe('processRows', () => {
     expect(later?.map((row) => row.pid)).toEqual([123])
   })
 
+  // A Mac with long command lines (shells started with their whole environment on the line) printed a table of
+  // 1.12 MB, past execFile's 1 MiB default: every read failed, and an engine killed was believed running (#4393).
+  it('reads a table larger than 1 MiB', async () => {
+    const long = `sh -c ${'x'.repeat(2_000)}`
+    const rows = ['  123     1 claude          Mon Sep 21 10:00:00 2026 claude --resume',
+      ...Array.from({ length: 700 }, (_, i) => `  ${1_000 + i}     1 sh              Mon Sep 21 10:00:00 2026 ${long}`)].join('\n') + '\n'
+    expect(Buffer.byteLength(rows)).toBeGreaterThan(1024 * 1024)
+    writeFileSync(join(dir, 'rows'), rows)
+    const read = await processRows()
+    expect(read?.length).toBe(701)
+    expect(read?.[0]?.args).toBe('claude --resume')
+  })
+
   it('a failed read is not remembered', async () => {
     writeFileSync(join(dir, 'fail'), '')
     expect(await processRows()).toBeNull()

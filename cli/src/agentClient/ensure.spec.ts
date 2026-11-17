@@ -319,7 +319,8 @@ describe('harness ensure (#4393)', () => {
     own('a1')
     const h = harness(d)
     await ensureCommand(args(['--fresh']), h.deps)
-    expect(d.requests.find((r) => r.type === 'agent_close' && r.payload.mode === 'now')?.payload).toMatchObject({ agentId: 'a1' })
+    // Asked as a fresh start: one that never bound a conversation is stopped without one (#4393, Hermes).
+    expect(d.requests.find((r) => r.type === 'agent_close' && r.payload.mode === 'now')?.payload).toMatchObject({ agentId: 'a1', freshStart: true })
     expect(h.json()).toMatchObject({ result: 'new', id: 'new1' })
     expect(new ProgramRecords(dir).get('a1')).toBeNull()
   })

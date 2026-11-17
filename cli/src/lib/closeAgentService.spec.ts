@@ -641,6 +641,32 @@ describe('a close of a harness still starting', () => {
     expect(await service.request(request('now'))).toEqual({ closed: true, withoutConversation: true })
     expect(registry.byAgent(row.agentId)).toBeUndefined()
   })
+  // `harness ensure --fresh` (#4393) of a Hermes never given words: it bound nothing, so every close was refused
+  // IDENTITY_UNAVAILABLE and a program asking for a fresh start got the old harness back, refused.
+  describe('a program\'s fresh start', () => {
+    const freshStart = (over: Partial<AgentCloseRequest> = {}): AgentCloseRequest => ({ ...request('now'), freshStart: true, ...over })
+    beforeEach(() => {
+      time = row.registeredAt + 18 * 60_000
+      Object.assign(row, { engine: 'hermes', launch: { state: 'ready' } })
+      vi.mocked(deps.stop).mockImplementation(async (id, options) => {
+        if (!options.withoutConversation) throw held()
+        options.withoutConversation()
+        ;(await removeRegistryAgent(registry, id))
+      })
+      service = new CloseAgentService(deps)
+    })
+    it('stops a harness that never bound a conversation without one', async () => {
+      expect(await service.request(freshStart())).toEqual({ closed: true, withoutConversation: true })
+      expect(registry.byAgent(row.agentId)).toBeUndefined()
+    })
+    it('is refused as before for every other close, and for one that has a conversation', async () => {
+      expect(await service.request(request('now'))).toMatchObject({ error: 'IDENTITY_UNAVAILABLE' })
+      expect(await service.request(freshStart({ mode: 'idle' }))).not.toMatchObject({ closed: true })
+      Object.assign(row, { sessionId: 'first', boundAt: time - 1 })
+      expect(await service.request(freshStart({ sessionId: 'first' }))).toMatchObject({ error: 'IDENTITY_UNAVAILABLE' })
+      expect(registry.byAgent(row.agentId)).toBeDefined()
+    })
+  })
   it('never lets a conversation go that way, whatever its screen shows', async () => {
     time = row.registeredAt + 18 * 60_000
     Object.assign(row, { sessionId: 'first', boundAt: time - 1 })

@@ -92,10 +92,24 @@ describe('following a Hermes from its terminal record', () => {
   it('binds an unbound agent to the session its record names', async () => {
     const { deps, t } = setup()
     expect(await t.follow(agent({ sessionId: '' }), observed(), pass())).toEqual({ sessionId: S })
-    expect(deps.read).toHaveBeenCalledWith(HOME, ['tty-dev-pts-3', 'tmux_pane--5'], Date.parse(STARTED) - 5_000)
+    expect(deps.read).toHaveBeenCalledWith(HOME, ['tty-dev-pts-3', 'tmux_pane--5'], Date.parse(STARTED) - 1_000)
     expect(deps.kind).toHaveBeenCalledExactlyOnceWith(HOME, S)
     expect(deps.recordSeen).toHaveBeenCalledExactlyOnceWith(HOME)
     expect(log).not.toHaveBeenCalled()
+  })
+
+  // #4393, measured 2026-11-17: `ensure --fresh` closed a Hermes, whose close rewrote its record (cli_session_mixin
+  // `_write_terminal_breadcrumb`) about 3 s before the new Hermes started in a pane given the same tty. Five seconds of
+  // slack took that record for the new process's, and the fresh harness was bound to the old conversation until its
+  // first turn. Hermes stamps its record with its own clock after it starts, and `ps` floors the start to the second:
+  // one second is the granularity. A sandboxed Hermes keeps the wider slack, its clock not the host's.
+  it("never takes a record left in the tty before its process started, past the start's second", async () => {
+    const { deps, t } = setup()
+    await t.follow(agent(), observed(), pass())
+    expect(deps.read).toHaveBeenCalledWith(HOME, expect.any(Array), Date.parse(STARTED) - 1_000)
+    const sandboxed = setup()
+    await sandboxed.t.follow(agent(), observed({ sandboxed: true }), pass())
+    expect(sandboxed.deps.read).toHaveBeenCalledWith(HOME, expect.any(Array), Date.parse(STARTED) - 5_000)
   })
 
   it('carries a home that is not the default and not yet on the row', async () => {
@@ -357,7 +371,7 @@ describe('following a Hermes from its terminal record', () => {
     expect(await t.follow(agent(), later, pass())).toBe('none')
     expect(deps.paneInfo).toHaveBeenCalledTimes(2)
     expect(deps.read).toHaveBeenCalledTimes(2)
-    expect(deps.read).toHaveBeenLastCalledWith(HOME, expect.any(Array), Date.parse('2026-11-12T11:00:00Z') - 5_000)
+    expect(deps.read).toHaveBeenLastCalledWith(HOME, expect.any(Array), Date.parse('2026-11-12T11:00:00Z') - 1_000)
     expect(lines('ignored · malformed')).toHaveLength(1)
 
     deps.read.mockResolvedValue(RECORD)

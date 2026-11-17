@@ -30,6 +30,14 @@ import { processIdentityOf, sameProcessIdentity } from './terminalRuntime.js'
 // (patientExec.ts).
 const run = patientExec(execFile)
 
+/**
+ * The most a whole-table `ps` may print. execFile's default, 1 MiB, was too little: a Mac whose shells were started
+ * with their whole environment on the command line printed 1.12 MB of `args` (2026-11-17), every read failed as
+ * "process table unavailable", and an engine killed was believed running. Bounded all the same: a table past it is
+ * a read that failed, as before.
+ */
+export const PS_TABLE_MAX_BYTES = 32 * 1024 * 1024
+
 export interface ProcessRow extends ProcessIdentity {
   parentPid: number
   args: string
@@ -430,7 +438,7 @@ export function processRows(): Promise<ProcessRow[] | null> {
  */
 export async function readProcessRows(os: NodeJS.Platform = process.platform): Promise<ProcessRow[] | null> {
   const [rows, commandPaths] = await Promise.all([new Promise<ProcessRow[] | null>((resolve) => {
-    run('ps', ['-axo', 'pid=,ppid=,comm=,lstart=,args='], { timeout: 3000, env: psEnv() }, (err, stdout) => {
+    run('ps', ['-axo', 'pid=,ppid=,comm=,lstart=,args='], { timeout: 3000, maxBuffer: PS_TABLE_MAX_BYTES, env: psEnv() }, (err, stdout) => {
       if (err) { resolve(null); return }
       const rows: ProcessRow[] = []
       for (const line of stdout.split('\n')) {
@@ -457,7 +465,7 @@ export async function readProcessRows(os: NodeJS.Platform = process.platform): P
  */
 function readCommandPaths(): Promise<ReadonlyMap<number, { startMarker: string; comm: string }>> {
   return new Promise((resolve) => {
-    run('ps', ['-axo', 'pid=,lstart=,comm='], { timeout: 3000, env: psEnv() }, (err, stdout) => {
+    run('ps', ['-axo', 'pid=,lstart=,comm='], { timeout: 3000, maxBuffer: PS_TABLE_MAX_BYTES, env: psEnv() }, (err, stdout) => {
       const paths = new Map<number, { startMarker: string; comm: string }>()
       if (err) { resolve(paths); return }
       for (const line of stdout.split('\n')) {

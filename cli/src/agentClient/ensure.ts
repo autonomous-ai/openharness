@@ -103,13 +103,16 @@ export function ensureCommand(argv: readonly string[], deps: EnsureDeps): Promis
         if (live && dead) {
           // Its stale row closed first, so the resume below is a closed harness's, as on any later pass. A row the daemon
           // would not close would be found live by the resume, which would then start nothing: said, nothing started.
-          const closed = await o.daemon.request('agent_close', { agentId: live.frame.id, sessionId: live.frame.sessionId ?? '', createdAt: live.frame.createdAt ?? '', mode: 'now' }, 60_000)
+          const closed = await o.daemon.request('agent_close', { agentId: live.frame.id, sessionId: live.frame.sessionId ?? '', createdAt: live.frame.createdAt ?? '', mode: 'now',
+            ...(flags.has('--fresh') ? { freshStart: true } : {}) }, 60_000)
             .catch((error: unknown) => ({ error: error instanceof AgentClientError ? error.code : 'FAILED' }))
           if (closed.error) {
             throw new AgentClientError('ENGINE_NOT_READY', `${name}'s engine has stopped, and Harness could not close it yet (${String(closed.error)}); nothing was started. Try harness ensure again.`)
           }
         } else if (live) {
-          const closed = await o.daemon.request('agent_close', { agentId: live.frame.id, sessionId: live.frame.sessionId ?? '', createdAt: live.frame.createdAt ?? '', mode: 'now' }, 60_000)
+          // A fresh start: one that never bound a conversation (a Hermes never given words) is stopped without one, where
+          // any other close of it is refused (lib/closeAgentService.ts `freshStart`).
+          const closed = await o.daemon.request('agent_close', { agentId: live.frame.id, sessionId: live.frame.sessionId ?? '', createdAt: live.frame.createdAt ?? '', mode: 'now', freshStart: true }, 60_000)
           if (closed.error) throw new AgentClientError(String(closed.error), `${name} could not be closed for a fresh start (${String(closed.error)}).`)
         }
         // Closed: opened again with its conversation, unless a fresh one is asked for.

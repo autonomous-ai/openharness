@@ -8,7 +8,7 @@ import { execFile } from 'node:child_process'
 import { psEnv } from './childLocale.js'
 import { patientExec } from './patientExec.js'
 import { processStartTicks } from './processLiveness.js'
-import { codexSharedServerProcess, hermesGatewayProcess, liveProcessRows, parseProcessRow, withStartTicks, type ProcessRow } from './processTable.js'
+import { codexSharedServerProcess, hermesGatewayProcess, liveProcessRows, parseProcessRow, PS_TABLE_MAX_BYTES, withStartTicks, type ProcessRow } from './processTable.js'
 import { sameProcessIdentity } from './terminalRuntime.js'
 import type { ProcessIdentity } from './terminalTypes.js'
 
@@ -32,7 +32,7 @@ const run = patientExec(execFile)
 /** One read of the process table; null when `ps` failed. */
 function readTable(): Promise<string | null> {
   return new Promise((resolve) => {
-    run('ps', ['-axo', 'pid=,ppid=,pgid=,lstart=,args='], { timeout: 3000, env: psEnv() }, (err, stdout) => resolve(err ? null : stdout))
+    run('ps', ['-axo', 'pid=,ppid=,pgid=,lstart=,args='], { timeout: 3000, maxBuffer: PS_TABLE_MAX_BYTES, env: psEnv() }, (err, stdout) => resolve(err ? null : stdout))
   })
 }
 
