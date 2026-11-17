@@ -794,7 +794,7 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
       if (program && typeof agent.id === 'string' && agent.id) {
         const at = clock()
         const record = { agentId: agent.id, tokenHash: program.hash, name: args.name?.trim() || String(agent.name ?? agent.id),
-          engine: String(agent.engine ?? payload.engine), createdAt: at, startedAt: at, inputs: [] }
+          engine: String(agent.engine ?? payload.engine), createdAt: at, startedAt: at, inputs: [], ...(args.local !== null ? { local: args.local } : {}) }
         // Tried a few times: the record's lock held a moment by another program command. A harness started and never
         // recorded is no program's, and its name would be refused to the program for good. `harness ensure` writes it
         // again for one it has just made.

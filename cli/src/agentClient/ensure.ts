@@ -5,6 +5,7 @@
  * it changes.
  */
 import { randomUUID } from 'node:crypto'
+import { resolve } from 'node:path'
 import { engineName } from '../messages/model.js'
 import {
   EXIT, exactly, inspect, list, named, opened, programOf, refuseAgentWithToken, resumedAgent, run, STARTING_MS, UsageError, wantsJson, words,
@@ -150,7 +151,10 @@ export function ensureCommand(argv: readonly string[], deps: EnsureDeps): Promis
           const agent = (line.agent ?? {}) as Frame
           // Recorded by harness new; written here when it could not be, so the harness just made stays the program's.
           if (agent.id && !p.records.get(agent.id)) {
-            try { p.records.put({ agentId: agent.id, tokenHash: p.hash, name, engine: agent.engine ?? engine, createdAt: s.now(), startedAt: s.now(), inputs: [] }) }
+            try {
+              p.records.put({ agentId: agent.id, tokenHash: p.hash, name, engine: agent.engine ?? engine, createdAt: s.now(), startedAt: s.now(), inputs: [],
+                ...(typeof local === 'string' ? { local: resolve(local) } : {}) })
+            }
             catch { /* said by harness new already */ }
           }
           return say('new', { ...agent, engine: agent.engine ?? engine }, why)

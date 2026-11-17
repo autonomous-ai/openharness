@@ -33,6 +33,7 @@ import { messagesRpc, type Rpc } from '../messages/rpc.js'
 import { PERSON_AGENT_ID, REPLY_OFF_TEXT } from '../messages/replyLocal.js'
 import { TELL_OFF_TEXT } from '../messages/tell.js'
 import { sendPane } from '../messages/command.js'
+import { deleteOpenclawSession, openclawKey, runOpenclaw, type Deletion, type RunOpenclaw } from './forget.js'
 import { PROGRAM_TOKEN_FLAG, ProgramRecords, programMay, readProgramToken, sameHash, type ProgramHarness, type ProgramInput } from './program.js'
 import { asSaid, callerOf, clip, cloudMeta, cloudTurn, failureOf, forAgent, isAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type CloudMeta, type Failure, type Frame, type HistoryEvent, type Row, type State } from './model.js'
 
@@ -56,6 +57,8 @@ export interface ClientDeps {
   machines?: () => Promise<NewMachine[]>
   /** How long `ps --machines` waits on each other machine. */
   answerMs?: number
+  /** Runs `openclaw` (`close --forget`'s Gateway `sessions.delete`, forget.ts). */
+  openclaw?: RunOpenclaw
 }
 
 const ON_MACHINE = '--machine <name> is another of your machines, by its name or id as harness new takes it; this one when left out.'
@@ -135,7 +138,16 @@ export const CLOSE_USAGE = `Usage: harness close [--machine <name>] <name> [--no
 Saves the harness's screen and stops it. Its conversation is kept: the person can resume it.
 It is refused while the harness is working or still runs background commands, unless --now. An agent may close only
 harnesses it started: closing another's exits 5.
-${ON_MACHINE}`
+${ON_MACHINE}
+
+A program closes its own harness with ${PROGRAM_TOKEN_FLAG} <path> (this computer only). With --forget as well, for
+a sign-out, a reset or another engine, its conversation is deleted too: the engine's own session where the engine
+allows it (OpenClaw's through its Gateway; Hermes's from its store), and everything Harness kept of it. The program then
+no longer owns it, so the next harness ensure of that name starts a new one. --forget takes ${PROGRAM_TOKEN_FLAG}: a
+harness a person started is never forgotten this way.
+--json answers {"name","id","engine","closed","forgotten":true,"harness":{"state"},"engineSession":{"state","key"?},
+"effect"}; each "state" is "deleted", "none" (there was nothing to delete) or "kept", with "detail" saying why.
+Exit status: 0 everything deleted, 1 something kept (NOT_ALL_DELETED: it is still forgotten), 5 refused.`
 export const DELETE_USAGE = `Usage: harness delete <name> [--json]
 
 Stops the harness and erases its conversation and everything Harness keeps of it: its saved screen, recaps, search
@@ -250,6 +262,7 @@ function setup(deps: ClientDeps) {
     intervalMs: deps.intervalMs ?? DEFAULT_INTERVAL_MS,
     record: deps.record ?? messagesRpc,
     answerMs: deps.answerMs ?? PS_MACHINES_ANSWER_MS,
+    openclaw: deps.openclaw ?? runOpenclaw,
     machines: deps.machines ?? (async (): Promise<NewMachine[]> => {
       throw new AgentClientError('MACHINES_UNAVAILABLE', 'Harness could not list your machines here.')
     }),
@@ -1922,8 +1935,11 @@ function printWatch(s: Setup, json: boolean, chars: number, t: Target, event: Wa
 
 export function closeCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
   return run(CLOSE_USAGE, deps, wantsJson, argv, async (s) => {
-    const { names, flags, machine } = words(argv, { '--now': 'flag', '--json': 'flag', [PROGRAM_TOKEN_FLAG]: 'value' })
+    const { names, flags, machine } = words(argv, { '--now': 'flag', '--json': 'flag', [PROGRAM_TOKEN_FLAG]: 'value', '--forget': 'flag' })
     if (names.length !== 1) throw new UsageError(names.length ? 'Close one harness at a time.' : 'Name the harness to close.')
+    if (flags.has('--forget') && !flags.has(PROGRAM_TOKEN_FLAG)) {
+      throw new UsageError(`--forget deletes a program's own harness's conversation: it takes ${PROGRAM_TOKEN_FLAG} <path>.`)
+    }
     if (flags.has(PROGRAM_TOKEN_FLAG) && machine !== null) throw new UsageError(`${PROGRAM_TOKEN_FLAG} is for a harness on this computer: leave out --machine.`)
     const away = await machineOf(s, s.where(), machine)
     const o = await opened(s)
@@ -1931,6 +1947,7 @@ export function closeCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
     try {
       // A program closes its own harness by its token (#4393), and only that one.
       const p = flags.has(PROGRAM_TOKEN_FLAG) ? (refuseAgentWithToken(o), programOf(flags, o.where.dataDir)) : null
+      if (p && flags.has('--forget')) return await forgetProgramHarness(s, o, p, names[0], flags.has('--now'), flags.has('--json'))
       try { t = p ? await programTarget(o, p, names[0]) : notProgramOwned(o, await target(s, o, names[0], away)) } catch (error) {
         // Asked for and not started: closing it is not starting it. Cancelled by its creation, which its machine takes only
         // before the launch is claimed (lib/agentCreationReceipt.ts `cancelIntent`).
@@ -1961,26 +1978,7 @@ export function closeCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
       }
       // An agent closes only what it started; the person, at a terminal, closes anything.
       if (o.caller && !t.yours) throw new AgentClientError('NOT_YOURS', `You did not start ${name}, so you may not close it. Only the person can.`)
-      const anyway = s.env[VIA_MCP_ENV] === '1' ? 'now: true' : '--now'
-      // Idle with background commands still running is not done, and a close would end them (it ends the engine's whole
-      // process tree). Refused here, not by the daemon: its idle close keeps its rule for the windows' Close.
-      if (!flags.has('--now')) {
-        const { background } = await inspect(t)
-        if (background) throw new AgentClientError('WORKING', `${name}: ${backgroundSaid(background)}; ${anyway} closes anyway`)
-      }
-      const reply = await t.daemon.request('agent_close', {
-        agentId: t.frame.id, sessionId: t.frame.sessionId ?? '', createdAt: t.frame.createdAt ?? '', mode: flags.has('--now') ? 'now' : 'idle',
-      }, 60_000)
-      if (reply.error === 'SESSION_NOT_IDLE') {
-        throw new AgentClientError('WORKING', `${name} is ${reply.activity === 'needs_input' ? 'waiting for the person' : 'working'}. Wait for it (${step(s.env, 'wait', onAway(name, away))}), or close it anyway with ${anyway}.`)
-      }
-      if (reply.error === 'AGENT_CHANGED') throw new AgentClientError('AGENT_CHANGED', `${name} changed while closing. Check it with ${step(s.env, 'show', onAway(name, away))}, then try again.`)
-      // Its machine cannot read which conversation it is in just now, and closing it would lose that conversation. The
-      // machine's own reason ("the native control descriptor type is unavailable") means nothing to the agent asking.
-      if (reply.error === 'IDENTITY_UNAVAILABLE') {
-        throw new AgentClientError('IDENTITY_UNAVAILABLE', `${name} was not closed: Harness cannot tell which conversation it is in right now, and closing it would lose that conversation. Try again in a moment.`)
-      }
-      if (reply.error) throw new AgentClientError(String(reply.error), typeof reply.detail === 'string' && reply.detail ? reply.detail : `Could not close ${name}.`)
+      const reply = await closeTarget(s, t, name, away, flags.has('--now'))
       // Recorded for `wait`, which then says the caller closed it rather than that it stopped. The close is done either way.
       if (o.caller) {
         try { o.ledger.append({ at: s.now(), by: { machineId: o.caller.machineId, agentId: o.caller.agentId }, closed: { machineId: t.machineId, agentId: t.frame.id } }) }
@@ -2001,6 +1999,111 @@ export function closeCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
       return EXIT.ok
     } finally { if (t?.remote) t.daemon.close(); o.daemon.close() }
   })
+}
+
+/** [t] closed (`agent_close`), as `harness close` closes it: refused, with what to do, while it works or still runs
+ *  background commands, unless [now]. The daemon's answer, once it closed it. */
+async function closeTarget(s: Setup, t: Target, name: string, away: Away | null, now: boolean): Promise<Record<string, unknown>> {
+  const anyway = s.env[VIA_MCP_ENV] === '1' ? 'now: true' : '--now'
+  // Idle with background commands still running is not done, and a close would end them (it ends the engine's whole
+  // process tree). Refused here, not by the daemon: its idle close keeps its rule for the windows' Close.
+  if (!now) {
+    const { background } = await inspect(t)
+    if (background) throw new AgentClientError('WORKING', `${name}: ${backgroundSaid(background)}; ${anyway} closes anyway`)
+  }
+  const reply = await t.daemon.request('agent_close', {
+    agentId: t.frame.id, sessionId: t.frame.sessionId ?? '', createdAt: t.frame.createdAt ?? '', mode: now ? 'now' : 'idle',
+  }, 60_000)
+  if (reply.error === 'SESSION_NOT_IDLE') {
+    throw new AgentClientError('WORKING', `${name} is ${reply.activity === 'needs_input' ? 'waiting for the person' : 'working'}. Wait for it (${step(s.env, 'wait', onAway(name, away))}), or close it anyway with ${anyway}.`)
+  }
+  if (reply.error === 'AGENT_CHANGED') throw new AgentClientError('AGENT_CHANGED', `${name} changed while closing. Check it with ${step(s.env, 'show', onAway(name, away))}, then try again.`)
+  // Its machine cannot read which conversation it is in just now, and closing it would lose that conversation. The
+  // machine's own reason ("the native control descriptor type is unavailable") means nothing to the agent asking.
+  if (reply.error === 'IDENTITY_UNAVAILABLE') {
+    throw new AgentClientError('IDENTITY_UNAVAILABLE', `${name} was not closed: Harness cannot tell which conversation it is in right now, and closing it would lose that conversation. Try again in a moment.`)
+  }
+  if (reply.error) throw new AgentClientError(String(reply.error), typeof reply.detail === 'string' && reply.detail ? reply.detail : `Could not close ${name}.`)
+  return reply
+}
+
+// ── close --forget: a program's own harness and its conversation (#4393) ───────────────────────────
+
+/**
+ * A program's own harness closed and its conversation deleted, for a sign-out, a reset or an engine switch. Closed as
+ * `close` closes it (refused while it works, unless [now]); then the engine's own session where the engine allows it
+ * (OpenClaw's by its Gateway, forget.ts; any other engine's by Harness's purge, as `harness delete` erases it); then
+ * everything Harness kept of it (`agent_purge`); then the program's record, so the next `ensure` answers `new`. A record
+ * whose harness Harness no longer lists is forgotten too, its OpenClaw session deleted by the key it was launched with.
+ * Each part is said as it went, never one that failed as done: NOT_ALL_DELETED (exit 1) when anything was kept.
+ */
+async function forgetProgramHarness(s: Setup, o: Opened, p: Program, name: string, now: boolean, json: boolean): Promise<number> {
+  let t: ProgramTarget | null = null
+  try { t = await programTarget(o, p, name) } catch (error) {
+    // A record whose harness is gone from this computer: nothing to close, its engine's session perhaps still there.
+    if (!(error instanceof AgentClientError) || error.code !== 'UNKNOWN_HARNESS' || !p.records.named(name, p.hash).length) throw error
+  }
+  const record = t?.record ?? p.records.named(name, p.hash)[0]
+  const id = record.agentId, engine = t?.frame.engine ?? record.engine, said = t?.frame.name ?? record.name
+  const closed = !!t && t.frame.status !== 'stopped'
+  if (t && closed) await closeTarget(s, t, said, null, now)
+  // Read again once closed: a close moves it to the stopped ones, and binds what it was in.
+  const frame = t ? named(await list(o.daemon, true)).find((f) => f.id === id) ?? null : null
+  let engineSession: Deletion & { key?: string }
+  if (engine === 'openclaw') {
+    const key = openclawKey(id, frame?.sessionId ?? t?.frame.sessionId)
+    engineSession = record.local
+      ? { state: 'kept', key, detail: `it ran on its own --local folder (${record.local}), which holds its session: delete that folder` }
+      : { ...await deleteOpenclawSession(key, s.openclaw), key }
+  } else engineSession = { state: 'kept', detail: 'Harness no longer keeps this harness, so it cannot find its conversation' }
+  let harness: Deletion = { state: 'none' }
+  if (frame) {
+    const purged = await purgeOwned(o.daemon, frame)
+    harness = purged.error ? { state: 'kept', detail: purged.error } : { state: 'deleted' }
+    // Every other engine's own session is the purge's: erased with it, or kept with the purge's reason.
+    if (engine !== 'openclaw') {
+      const kept = purged.kept?.[0]?.reason
+      engineSession = purged.error ? { state: 'kept', detail: purged.error } : kept ? { state: 'kept', detail: kept } : { state: frame.sessionId ? 'deleted' : 'none' }
+    }
+  }
+  p.records.forget(id)
+  const result = { name: said, id, engine, closed, forgotten: true, harness, engineSession }
+  const effect = forgetSaid(said, engineName(engine), result)
+  if (harness.state === 'kept' || engineSession.state === 'kept') {
+    return programFailure(s, json, 'NOT_ALL_DELETED', effect, EXIT.failed, { ...result, effect })
+  }
+  s.out(json ? JSON.stringify({ ...result, effect }) : effect)
+  return EXIT.ok
+}
+
+/** What `close --forget` did, in one paragraph: each part as it went. */
+function forgetSaid(name: string, engine: string, r: { closed: boolean; harness: Deletion; engineSession: Deletion & { key?: string } }): string {
+  const why = (d: Deletion): string => (d.detail ? `: ${d.detail}` : '')
+  const session = `Its ${engine} session${r.engineSession.key ? ` ${r.engineSession.key}` : ''}`
+  return [
+    `${name}: ${r.closed ? 'closed and ' : ''}forgotten; the next harness ensure starts a new one.`,
+    r.engineSession.state === 'deleted' ? `${session} was deleted${r.engineSession.detail ? ` (${r.engineSession.detail})` : ''}.`
+      : r.engineSession.state === 'none' ? `${session} had nothing to delete${why(r.engineSession)}.`
+      : `${session} was NOT deleted${why(r.engineSession)}.`,
+    r.harness.state === 'deleted' ? 'Everything Harness kept of it is erased.'
+      : r.harness.state === 'none' ? 'Harness kept nothing of it.'
+      : `What Harness kept of it was NOT erased${why(r.harness)}.`,
+  ].join(' ')
+}
+
+/** A stopped harness purged as `harness delete` purges it (`agent_purge`, reviewed, then done): its conversation and
+ *  everything Harness kept of it, never its folder. `error` says why it was not; `kept`, what an engine's store kept. */
+async function purgeOwned(daemon: Daemon, frame: Frame): Promise<{ error?: string; kept?: Kept[] }> {
+  const which = { agentId: frame.id, sessionId: frame.sessionId || null, createdAt: Date.parse(frame.createdAt ?? '') }
+  const failure = (reply: Record<string, unknown>): string | undefined =>
+    reply.error ? (typeof reply.detail === 'string' && reply.detail ? reply.detail : String(reply.error)) : undefined
+  try {
+    const review = await daemon.request('agent_purge', { ...which, mode: 'inspect' }, 60_000)
+    if (failure(review)) return { error: failure(review) }
+    const reply = await daemon.request('agent_purge', { ...which, mode: 'delete', reviewId: review.reviewId, choices: { sessionData: true, worktreeData: false } }, 120_000)
+    if (failure(reply)) return { error: failure(reply) }
+    return { kept: Array.isArray(reply.kept) ? reply.kept as Kept[] : [] }
+  } catch (error) { return { error: error instanceof Error ? error.message : String(error) } }
 }
 
 // ── delete ─────────────────────────────────────────────────────────────────────────────────────────

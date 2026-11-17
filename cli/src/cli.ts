@@ -195,6 +195,7 @@ Machine:
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
   harness ensure <openclaw|hermes> --name <n> --program-token-file <p> --json
                                a program's own harness, kept across its tasks: live, resumed or new
+  harness capabilities [--json]  what this Harness offers a program ({"programSessions":1}), with Harness stopped too
   harness machines             list the machines on this account (this computer's is marked)
   harness search <words>       find the conversation on this computer that said them: every turn of
                                every harness, live or stopped (--limit=N, --json)
@@ -206,6 +207,8 @@ Machine:
   harness wait <name>[,<name>] wait until they stop working (--any, --timeout 30m); exit 3 = needs the person
   harness watch <name>         follow a harness: a line (--json: an object) each time it changes, until it stops
   harness close <name> [--now] save a harness's screen and stop it; an agent closes only what it started
+  harness close <name> --program-token-file <p> --forget
+                               a program's own harness closed and its conversation deleted, its engine's session too
   harness delete <name>        stop a harness and erase its conversation and what Harness kept of it
   harness tell <name> -- <w>   from an agent's pane: more work for a harness it started (agents-tell-agents)
   harness goal open|done|list  Hachi's goals: the one its harnesses are started for (new --goal), and when it is done
@@ -2773,6 +2776,7 @@ async function logsExportCommand(json: boolean): Promise<void> {
 import { orchestratorCommand } from './orchestrator/command.js'
 import { paneOwner, sendCommand, sendPane } from './messages/command.js'
 import { ensureCommand } from './agentClient/ensure.js'
+import { capabilitiesCommand } from './agentClient/capabilities.js'
 import { ensureDaemonForProgram } from './lib/programDaemon.js'
 import { agentOrigin, closeCommand, deleteCommand, goalCommand, psCommand, replyCommand, resumeCommand, routeCommand, showCommand, tellCommand, waitCommand, watchCommand, whoamiCommand } from './agentClient/commands.js'
 import { agentsHelp, helpFor } from './agentClient/help.js'
@@ -3036,6 +3040,10 @@ switch (cmd) {
     }).then((code) => { process.exitCode = code }).catch(onError)
     break
   }
+  // What this CLI offers a program (#4393): read with the daemon down, signed in or out, and with no token.
+  case 'capabilities':
+    capabilitiesCommand(rest).then((code) => { process.exitCode = code }).catch(onError)
+    break
   case 'shell-launch':
     import('./shellLaunch.js').then(({ shellLaunch }) => shellLaunch(rest)).then((code) => { process.exitCode = code }).catch(onError)
     break

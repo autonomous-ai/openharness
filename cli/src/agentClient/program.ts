@@ -95,6 +95,8 @@ export interface ProgramHarness {
   startedAt: number
   /** The last inputs taken, newest last: a few, for `wait --after`. */
   inputs: ProgramInput[]
+  /** OpenClaw's `--local` state folder it runs on, absolute: its session is there, not in the Gateway (`close --forget`). */
+  local?: string
 }
 
 interface ProgramFile { v: 1; harnesses: Record<string, ProgramHarness> }
@@ -111,7 +113,8 @@ function harnessOf(value: unknown): ProgramHarness | null {
   const inputs = Array.isArray(v.inputs) ? v.inputs.filter((i): i is ProgramInput => !!i && typeof i.id === 'string' && typeof i.takenAt === 'number')
     .map((i): ProgramInput => ({ id: i.id, takenAt: i.takenAt, ...(i.unconfirmed === true ? { unconfirmed: true } : {}) })) : []
   return { agentId: v.agentId, tokenHash: v.tokenHash, name: v.name, engine: v.engine,
-    createdAt: Number(v.createdAt) || 0, startedAt: Number(v.startedAt) || 0, inputs: inputs.slice(-KEPT_INPUTS) }
+    createdAt: Number(v.createdAt) || 0, startedAt: Number(v.startedAt) || 0, inputs: inputs.slice(-KEPT_INPUTS),
+    ...(typeof v.local === 'string' && v.local ? { local: v.local } : {}) }
 }
 
 /**
