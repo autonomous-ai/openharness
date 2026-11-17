@@ -28,10 +28,10 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, constants as FS, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync, writeSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { constants as OS, homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AGENT_CONFIG, claudeArgs, runAgent } from './lib/agents.ts';
+import { AGENT_CONFIG, claudeArgs, killAgents, runAgent } from './lib/agents.ts';
 import { gradeRun } from './lib/grade.ts';
 import { claudeJudge, JUDGE_EFFORT, JUDGE_MODEL, RUBRIC_SHA } from './lib/judge.ts';
 import { caseId, loadScenarios } from './lib/scenarios.ts';
@@ -145,6 +145,11 @@ const REF_EXTS = ['', '.html', '.txt', '.json'];
 const AGENTS = ['claude', 'oracle', 'null', 'always'];
 const SPLITS = ['train', 'val', 'test'];
 const JUDGE_TIMEOUT_MS = 120_000;
+
+// The agents run in process groups of their own (lib/agents.ts), which no signal to the runner reaches: however the
+// runner ends, it kills them first. A signal ends it through exit, with the code the signal would have left.
+process.on('exit', killAgents);
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => process.exit(128 + OS.signals[signal]));
 
 /** --timeout-s bounds the whole case, so the agent gets what the judge's two calls (the line and the answer) leave: 660 s
  *  of 900. A ceiling too short for both judge calls is split in half. 0, no ceiling, leaves the agent unbounded too. */

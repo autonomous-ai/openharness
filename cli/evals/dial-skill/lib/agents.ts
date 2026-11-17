@@ -108,11 +108,28 @@ async function runClaude(s: Scenario, st: Staged, cfg: AgentConfig): Promise<Run
 
 interface Exit { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; timedOut: boolean }
 
+/** The process group of each run still going, by its leader's pid, with the run's root. */
+const running = new Map<number, string>()
+
+/** Kills every run still going, for a runner that is exiting: a signal to the runner reaches none of their process
+ *  groups. */
+export function killAgents(): void {
+  for (const [pid, root] of running) {
+    try {
+      process.kill(-pid, 'SIGKILL')
+    } catch {
+      // ESRCH: every process in the group has already exited.
+    }
+    killWorkingIn(root)
+  }
+}
+
 /** Runs the agent as the leader of its own process group, so the timeout and the end of the run reach every process it
  *  started, not only the CLI. */
 function spawnGroup(bin: string, args: string[], st: Staged, timeoutMs: number): Promise<Exit> {
   return new Promise((done, fail) => {
     const child = spawn(bin, args, { cwd: st.repo, env: st.env, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
+    if (child.pid !== undefined) running.set(child.pid, st.root)
     const signalGroup = (signal: NodeJS.Signals): void => {
       try {
         if (child.pid !== undefined) process.kill(-child.pid, signal)
@@ -144,6 +161,7 @@ function spawnGroup(bin: string, args: string[], st: Staged, timeoutMs: number):
       clearTimeout(killTimer)
       // Nothing a run started outlives it, even a process that let go of the pipes.
       signalGroup('SIGKILL')
+      running.delete(child.pid!)
       try {
         killWorkingIn(st.root)
       } catch (error) {
