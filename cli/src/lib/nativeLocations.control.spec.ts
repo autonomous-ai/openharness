@@ -92,7 +92,7 @@ it('Copilot binding retains its previous conversation when native ownership move
   const deps = { registry: { byProcess: () => row, byAgent: () => row, bySession: () => undefined, register,
     setIdentityHold: (_id: string, reason: string) => { row.identityHold = reason; return true } },
     announceSession: vi.fn(),
-    attachSession: vi.fn(async () => true),
+    attachSession: vi.fn(async () => true), followsLive: () => false,
     homes: { copilot: join(root, 'copilot') } } as unknown as BindDeps
   const observed: DiscoveredTerminalAgent = { engine: 'copilot', cwd: root, runtimes: [], primaryRuntimeKey: '',
     args: 'copilot', resumeSessionId: null, processIdentity: row.processIdentity! }
@@ -101,7 +101,8 @@ it('Copilot binding retains its previous conversation when native ownership move
   expect(register).not.toHaveBeenCalled(); expect(row.sessionId).toBe('previous')
   expect(console.log).toHaveBeenCalledWith(expect.stringContaining('process conversation changed'))
   await binding.bindObservedAgent(observed)
-  expect(register).toHaveBeenCalledWith(expect.objectContaining({ sessionId: B, transcriptPath: undefined }))
+  expect(register).toHaveBeenCalledWith(expect.objectContaining({ sessionId: B, transcriptPath: undefined }),
+    { current: expect.any(Function) })
 })
 
 it.each(['path', 'root', 'stat'] as const)('holds a Cursor pool when %s validation is unavailable beside a readable competitor', async failure => {

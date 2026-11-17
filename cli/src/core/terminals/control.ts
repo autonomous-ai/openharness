@@ -20,15 +20,17 @@ export interface TerminalControlDeps {
   /** The agent a target names: its agent id, session id or pane. */
   resolve: (target: string) => RegisteredSession | undefined
   terminals: TerminalControlBackend
+  refused?: (agentId: string) => boolean
 }
 
-export function createTerminalControl({ resolve, terminals }: TerminalControlDeps) {
+export function createTerminalControl({ resolve, terminals, refused }: TerminalControlDeps) {
   const terminalSession = (target: string): RegisteredSession | undefined => resolve(target)
   const controlLeases = new Map<string, { lease: Awaited<ReturnType<typeof terminals.acquireLease>> & { state: 'succeeded' }; expiresAt: number }>()
   const pinnedControls = new Set<string>()
   const invalidControls = new Set<string>()
   const CONTROL_LEASE_IDLE_MS = 15_000
   const leasedTerminal = async (session: RegisteredSession): Promise<Extract<Awaited<ReturnType<typeof terminals.acquireLease>>, { state: 'succeeded' }> | null> => {
+    if (refused?.(session.agentId)) return null
     const pinned = pinnedControls.has(session.agentId)
     if (pinned && invalidControls.has(session.agentId)) return null
     const current = controlLeases.get(session.agentId)
@@ -38,19 +40,20 @@ export function createTerminalControl({ resolve, terminals }: TerminalControlDep
         if (pinned) invalidControls.add(session.agentId)
         return null
       }
+      if (refused?.(session.agentId)) return null
       current.expiresAt = Date.now() + CONTROL_LEASE_IDLE_MS
       return current.lease
     }
     controlLeases.delete(session.agentId)
     const acquired = await terminals.acquireLease(session)
-    if (acquired.state !== 'succeeded') return null
+    if (acquired.state !== 'succeeded' || refused?.(session.agentId)) return null
     const value = { lease: acquired, expiresAt: Date.now() + CONTROL_LEASE_IDLE_MS }
     controlLeases.set(session.agentId, value)
     return acquired
   }
   const pinTerminalControl = (target: string): (() => void) | null => {
     const session = terminalSession(target)
-    if (!session || pinnedControls.has(session.agentId)) return null
+    if (!session || refused?.(session.agentId) || pinnedControls.has(session.agentId)) return null
     pinnedControls.add(session.agentId)
     invalidControls.delete(session.agentId)
     return () => {
@@ -93,9 +96,10 @@ export function createTerminalControl({ resolve, terminals }: TerminalControlDep
     const lease = await leasedTerminal(session)
     if (!lease) return terminalActionNotStarted(TERMINAL_LEASE_REFUSED)
     if (options?.allowed && !options.allowed()) return terminalActionNotStarted('terminal control revoked')
+    const guarded = { ...options, allowed: () => !refused?.(session.agentId) && options?.allowed?.() !== false }
     const result = pinnedControls.has(session.agentId)
-      ? await terminals.submitTextLease(lease.value, text, options)
-      : await terminals.submitTextForLease(session, lease.value, text, options)
+      ? await terminals.submitTextLease(lease.value, text, guarded)
+      : await terminals.submitTextForLease(session, lease.value, text, guarded)
     if (result.state !== 'succeeded' && pinnedControls.has(session.agentId)) invalidateTerminalControl(session.agentId)
     return result
   }
@@ -107,7 +111,7 @@ export function createTerminalControl({ resolve, terminals }: TerminalControlDep
     if (!session) return false
     const lease = await leasedTerminal(session)
     if (!lease) return false
-    const succeeded = terminalActionSucceeded(await terminals.typeLiteralLease(lease.value, text))
+    const succeeded = terminalActionSucceeded(await terminals.typeLiteralLease(lease.value, text, () => !refused?.(session.agentId)))
     if (!succeeded && pinnedControls.has(session.agentId)) invalidateTerminalControl(session.agentId)
     return succeeded
   }
@@ -116,8 +120,9 @@ export function createTerminalControl({ resolve, terminals }: TerminalControlDep
     if (!session) return terminalActionNotStarted('terminal session is unavailable')
     const lease = await leasedTerminal(session)
     if (!lease) return terminalActionNotStarted(TERMINAL_LEASE_REFUSED)
-    if (allowed && !allowed()) return terminalActionNotStarted('terminal control revoked')
-    const result = await terminals.sendLegacyKeyLease(lease.value, key)
+    const current = () => !refused?.(session.agentId) && allowed?.() !== false
+    if (!current()) return terminalActionNotStarted('terminal control revoked')
+    const result = await terminals.sendLegacyKeyLease(lease.value, key, current)
     if (result.state !== 'succeeded' && pinnedControls.has(session.agentId)) invalidateTerminalControl(session.agentId)
     return result
   }

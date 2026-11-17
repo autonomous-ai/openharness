@@ -11,7 +11,8 @@ import type { TurnRecaps } from '../turns/recaps.js'
 import type { ShortTurnGuard } from '../turns/shortTurnGuard.js'
 import { sid } from '../../lib/log.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
-import { withHermesHome, type RegisteredSession, type registry } from '../../lib/registry.js'
+import { matchesLaunchReceipt, withHermesHome, type RegisteredSession, type RegistryAuthority, type registry } from '../../lib/registry.js'
+import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import type { RuntimeProfileManager } from '../../lib/runtimeProfile.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
@@ -26,7 +27,7 @@ export interface ForgetDeps {
   onRemoved?: (agentId: string) => void
   /** One owner per conversation, stopped harnesses included (conversationOwners.ts). */
   owners?: Pick<ConversationOwners, 'settleSaved'>
-  registry: Pick<typeof registry, 'resolve' | 'unbindSession' | 'removeAgent' | 'remove'>
+  registry: Pick<typeof registry, 'resolve' | 'bySession' | 'confirmEngineExit' | 'confirmSessionUnbound'>
   stoppedAgents: Pick<StoppedAgentStore, 'save'>
   syncRecapPool: () => void
   normalizers: Pick<SessionNormalizers, 'forget'>
@@ -54,28 +55,34 @@ export interface ForgetDeps {
   clients: { send(frame: Frame): void; sendCommander(frame: Frame): void }
 }
 
+export interface ForgetOptions {
+  force?: boolean
+  keepAgent?: boolean
+  agentId?: string
+  captured?: RegisteredSession
+  authority?: RegistryAuthority
+}
+
 export function createForgetSession({
   registry, stoppedAgents, syncRecapPool, normalizers, forgetAttach, turnStartedAt, prompts, neverFoldedHistory, replayedFirstTurn, relaunchMarks,
   clearAgyIdleWatch, cursorDiscovery, runtimeProfiles, watcher, stopHeartbeat, input,
   deviceInput, ended, mirror, clients, onRemoved, owners, shortTurns,
 }: ForgetDeps) {
   /** Release a mutable session binding, or remove the process-owned agent everywhere. */
-  const forgetSession = (
+  const forgetSession = async (
     id: string,
-    opts: { force?: boolean; keepAgent?: boolean; agentId?: string; captured?: RegisteredSession } = {},
-  ): void => {
-    const doomed = registry.resolve(id)
-    const sessionId = doomed?.sessionId || id
+    opts: ForgetOptions = {},
+  ): Promise<void> => {
+    // A retired session may already belong to another agent. An explicit old agent id
+    // is the selection, never a reason to resolve that reused session again.
+    const doomed = registry.resolve(opts.agentId ?? id)
+    const sessionId = opts.keepAgent ? (doomed?.agentId === id ? doomed.sessionId : id) : doomed?.sessionId || id
     // Clients key on the AGENT id. Normally it is read off the entry, but an
     // agent already removed from the registry cannot be looked up — and
     // announcing its sessionId instead is silently useless: the app takes
     // payload.agentId verbatim, matches nothing, and leaves the dead row on
     // screen. Callers who know the id pass it.
     const announceId = doomed?.agentId ?? opts.agentId ?? sessionId
-
-    console.log(opts.keepAgent
-      ? `[agent] ${sid(announceId)} released session ${sid(sessionId)}`
-      : `[agent] ${sid(announceId)} forgotten`)
 
     if (!opts.keepAgent && doomed) {
       const captured = opts.captured
@@ -90,9 +97,18 @@ export function createForgetSession({
       stoppedAgents.save(captured ? withHermesHome({ ...doomed, sessionId: captured.sessionId, transcriptPath: captured.transcriptPath,
         boundAt: captured.boundAt, source: captured.source }, captured) : doomed)
     }
-    if (opts.keepAgent) registry.unbindSession(sessionId)
-    else if (doomed) registry.removeAgent(doomed.agentId)
-    else registry.remove(sessionId)
+    if (doomed && (!opts.keepAgent || doomed.sessionId === sessionId)) {
+      const publication = opts.keepAgent
+        ? await registry.confirmSessionUnbound(doomed.agentId, sessionId, opts.authority)
+        : await registry.confirmEngineExit(doomed.agentId, 'remove', opts.authority)
+      const latest = registry.resolve(doomed.agentId)
+      if (publication.state !== 'confirmed' || (opts.keepAgent ? !publication.entry || !matchesLaunchReceipt(latest, publication.entry) : !!latest)) {
+        throw new IdentityReadUnavailable('the selected session removal is not durably confirmed')
+      }
+    }
+    console.log(opts.keepAgent
+      ? `[agent] ${sid(announceId)} released session ${sid(sessionId)}`
+      : `[agent] ${sid(announceId)} forgotten`)
     // No longer running, its last record may still hold a conversation another harness took meanwhile: the
     // save keeps a known one through an unbound row (StoppedAgentStore.save). One owner each from here on.
     if (!opts.keepAgent && doomed) {
@@ -100,25 +116,27 @@ export function createForgetSession({
       catch (error) { console.warn(`[agent] ${sid(doomed.agentId)} could not settle who owns its conversation: ${error instanceof Error ? error.message : error}`) }
     }
     syncRecapPool()
-    normalizers.forget(sessionId)
-    forgetAttach(sessionId)
-    turnStartedAt.delete(sessionId)
-    shortTurns?.forget(sessionId)
-    neverFoldedHistory.delete(sessionId)
-    // Both sets are per-session and must die with it: left behind they grow without bound in a daemon
-    // that runs for days, and a session forgotten then re-registered under the same id would inherit a
-    // stale "already replayed" and lose a first turn it was entitled to.
-    replayedFirstTurn.delete(sessionId)
-    relaunchMarks?.forget(sessionId)
-    clearAgyIdleWatch(sessionId)
-    cursorDiscovery.remove(sessionId)
-    runtimeProfiles.forget(sessionId)
-    void watcher.removeSession(sessionId)
-    stopHeartbeat(sessionId)
+    // Publication can finish after another agent acquired the old session. Its reader/state
+    // belongs to that replacement now; only this retired agent's stores may be released.
+    const owner = sessionId ? registry.bySession(sessionId) : undefined
+    if (!owner || owner.agentId === announceId) {
+      normalizers.forget(sessionId)
+      forgetAttach(sessionId)
+      turnStartedAt.delete(sessionId)
+      shortTurns?.forget(sessionId)
+      neverFoldedHistory.delete(sessionId)
+      replayedFirstTurn.delete(sessionId)
+      relaunchMarks?.forget(sessionId)
+      clearAgyIdleWatch(sessionId)
+      cursorDiscovery.remove(sessionId)
+      runtimeProfiles.forget(sessionId)
+      void watcher.removeSession(sessionId)
+      stopHeartbeat(sessionId)
+      mirror.forget(sessionId)
+    }
     input.forget(announceId)
     deviceInput.forget(announceId)
     if (!opts.keepAgent) { ended(announceId); onRemoved?.(announceId); prompts.delete(announceId) }
-    mirror.forget(sessionId) // aborts any in-flight recap + clears busy; KEEPS the persisted summary
     if (opts.keepAgent) return
     clients.send({ type: 'agent_deleted', payload: { agentId: announceId, retained: !!doomed } }) // web tab
     clients.sendCommander({ type: 'agent_deleted', payload: { agentId: announceId } })

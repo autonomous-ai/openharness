@@ -4,7 +4,7 @@
  * harness-daemon.service runs the core alone (HARNESS_NO_MASTER=1), and one step of the stop that never
  * resolved held it until systemd's own 90 s ran out, three seconds after boot, with the OS's update waiting
  * on all of it (2026-10-13). A core alone keeps the same time on itself, and says which step it gave up on.
- * By then the registry is already written: the stop flushes it first.
+ * An unsettled registry write keeps process ownership until this forced exit; it is never acknowledged by the deadline.
  */
 
 export const ALONE_STOP_DEADLINE_MS = 2_500

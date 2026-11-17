@@ -20,7 +20,7 @@ export type AgentEngine = (typeof ENGINES)[number]
  * The one engine that is not a program: a plain login shell in a harness pane, opened by the
  * desktop's New Terminal. It has no binary to launch, no hooks, no session, no process signature —
  * the pane is the whole agent. When an engine CLI is started INSIDE it the row adopts that engine
- * (`registry.adoptEngine`) and drops back to `terminal` when it exits (`registry.releaseEngine`).
+ * (`registry.adoptEngine`) and drops back to `terminal` when it exits (`registry.confirmEngineExit`).
  */
 export const TERMINAL_ENGINE = 'terminal' satisfies AgentEngine
 export type TerminalEngine = typeof TERMINAL_ENGINE

@@ -17,7 +17,16 @@ function setup() {
   for (const session of ['s1', 'other']) for (let i = 0; i < 10; i++) { shortTurns.started(session, session); at += 1_000; shortTurns.ended(session) }
   const deps: ForgetDeps = {
     shortTurns,
-    registry: { resolve: vi.fn((id: string) => agents.get(id)), unbindSession: vi.fn(() => true), removeAgent: vi.fn(() => true), remove: vi.fn(() => true) },
+    registry: {
+      resolve: vi.fn((id: string) => agents.get(id)),
+      bySession: vi.fn((id: string) => [...agents.values()].find(row => row.sessionId === id)),
+      confirmEngineExit: vi.fn(async id => { for (const [key, row] of agents) if (row.agentId === id) agents.delete(key); return { state: 'confirmed' as const, entry: null } }),
+      confirmSessionUnbound: vi.fn(async (id, sessionId) => {
+        const row = agents.get(id)!
+        agents.delete(sessionId); row.sessionId = ''
+        return { state: 'confirmed' as const, entry: structuredClone(row) }
+      }),
+    },
     stoppedAgents: { save: vi.fn() },
     syncRecapPool: vi.fn(),
     normalizers: { forget: vi.fn() },
@@ -63,34 +72,74 @@ function expectLetGo(deps: ForgetDeps, sessionId: string, agentId: string) {
 }
 
 describe('forgetting a session', () => {
-  it('drops the agent\'s kept prompt when the agent goes, and keeps it when only a session is released', () => {
+  it.each(['unpublished removal', 'replacement after removal', 'empty unbind', 'replacement after unbind'] as const)(
+    'retains readers and notifications when publication cannot prove absence: %s', async phase => {
+      const { deps, forgetSession } = setup()
+      const keepAgent = phase.includes('unbind')
+      if (keepAgent) vi.mocked(deps.registry.confirmSessionUnbound).mockResolvedValue({ state: 'confirmed',
+        entry: phase === 'empty unbind' ? null : { ...deps.registry.resolve('a1')!, sessionId: 'replacement' } })
+      else vi.mocked(deps.registry.confirmEngineExit).mockResolvedValue(phase === 'unpublished removal'
+        ? { state: 'not-published' } : { state: 'confirmed', entry: null })
+      await expect(forgetSession('a1', { keepAgent })).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+      expect(deps.normalizers.forget).not.toHaveBeenCalled()
+      expect(deps.watcher.removeSession).not.toHaveBeenCalled()
+      expect(deps.clients.send).not.toHaveBeenCalled()
+    })
+
+  it('releases an empty binding without looking up an empty conversation', async () => {
+    const { deps, forgetSession } = setup()
+    await forgetSession('fresh', { keepAgent: true })
+    expect(deps.registry.bySession).not.toHaveBeenCalled()
+    expect(deps.ended).not.toHaveBeenCalled()
+  })
+  it.each([false, true])('keeps a replacement session reader acquired after publication, binding-only=%s', async keepAgent => {
+    const { deps, forgetSession } = setup()
+    const replacement = { agentId: 'replacement', sessionId: 's1', engine: 'claude' } as RegisteredSession
+    const publish = keepAgent ? deps.registry.confirmSessionUnbound : deps.registry.confirmEngineExit
+    const original = vi.mocked(publish).getMockImplementation()!
+    vi.mocked(publish).mockImplementation(async (...args: any[]) => {
+      const publication = await (original as (...values: any[]) => Promise<any>)(...args)
+      vi.mocked(deps.registry.bySession).mockReturnValue(replacement)
+      return publication
+    })
+    await forgetSession('s1', { keepAgent, agentId: 'a1' })
+    expect(deps.normalizers.forget).not.toHaveBeenCalled()
+    expect(deps.forgetAttach).not.toHaveBeenCalled()
+    expect(deps.watcher.removeSession).not.toHaveBeenCalled()
+    expect(deps.mirror.forget).not.toHaveBeenCalled()
+    if (!keepAgent) {
+      expect(deps.ended).toHaveBeenCalledWith('a1')
+      expect(deps.clients.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 'a1', retained: true } })
+    }
+  })
+  it('drops the agent\'s kept prompt when the agent goes, and keeps it when only a session is released', async () => {
     const gone = setup()
-    gone.forgetSession('a1')
+    await gone.forgetSession('a1')
     expect(gone.deps.prompts.has('a1')).toBe(false)
     expect(gone.deps.prompts.get('other')).toBe('Keep me')
     const kept = setup()
-    kept.forgetSession('a1', { keepAgent: true })
+    await kept.forgetSession('a1', { keepAgent: true })
     expect(kept.deps.prompts.get('a1')).toBe('Fix it')
   })
 
   afterEach(() => { vi.restoreAllMocks() })
 
-  it.each(['bound', 'unbound', 'process'] as const)('archives the proven capture of an unchanged %s agent', mode => {
+  it.each(['bound', 'unbound', 'process'] as const)('archives the proven capture of an unchanged %s agent', async mode => {
     const { deps, forgetSession } = setup()
     const live = deps.registry.resolve(mode === 'unbound' ? 'fresh' : 'a1')!
     if (mode === 'process') live.processIdentity = { pid: 41, startMarker: 'birth', executable: '<engine>' }
     const captured = { ...live, sessionId: 's1', transcriptPath: '/fixture/parent.jsonl', boundAt: 23, source: 'stop-repair' }
-    forgetSession(live.agentId, { captured })
+    await forgetSession(live.agentId, { captured })
     expect(deps.stoppedAgents.save).toHaveBeenCalledWith(expect.objectContaining(captured))
-    expect(deps.registry.removeAgent).toHaveBeenCalledWith(live.agentId)
+    expect(deps.registry.confirmEngineExit).toHaveBeenCalledWith(live.agentId, 'remove', undefined)
   })
 
-  it('archives a captured Hermes home with its own mark, never the live row\'s', () => {
+  it('archives a captured Hermes home with its own mark, never the live row\'s', async () => {
     const { deps, forgetSession } = setup()
     const live = deps.registry.resolve('a1')!
     Object.assign(live, { engine: 'hermes', hermesHome: '/sandbox/agent/.hermes', hermesHomeDerived: true })
     const { hermesHomeDerived: _mark, ...unmarked } = live
-    forgetSession(live.agentId, { captured: { ...unmarked, hermesHome: '/home/u/.hermes/profiles/work' } })
+    await forgetSession(live.agentId, { captured: { ...unmarked, hermesHome: '/home/u/.hermes/profiles/work' } })
     const archived = vi.mocked(deps.stoppedAgents.save).mock.calls[0]![0]
     expect(archived.hermesHome).toBe('/home/u/.hermes/profiles/work')
     expect(archived.hermesHomeDerived).toBeUndefined()
@@ -100,12 +149,12 @@ describe('forgetting a session', () => {
     const marked = same.deps.registry.resolve('a1')!
     Object.assign(marked, { engine: 'hermes', hermesHome: '/sandbox/agent/.hermes', hermesHomeDerived: true })
     const { hermesHomeDerived: _kept, ...captured } = marked
-    same.forgetSession(marked.agentId, { captured })
+    await same.forgetSession(marked.agentId, { captured })
     expect(vi.mocked(same.deps.stoppedAgents.save).mock.calls[0]![0]).toMatchObject({ hermesHome: '/sandbox/agent/.hermes', hermesHomeDerived: true })
   })
 
   it.each(['agent', 'engine', 'registered', 'conversation', 'process', 'executable', 'missing process'] as const)(
-    'refuses a captured conversation after the %s identity changes', changed => {
+    'refuses a captured conversation after the %s identity changes', async changed => {
       const { deps, forgetSession } = setup()
       const live = deps.registry.resolve('a1')!
       live.processIdentity = { pid: 41, startMarker: 'birth', executable: '<engine>' }
@@ -117,37 +166,37 @@ describe('forgetting a session', () => {
       if (changed === 'process') captured.processIdentity.pid++
       if (changed === 'executable') live.processIdentity.executable = '<replacement>'
       if (changed === 'missing process') live.processIdentity = null
-      expect(() => forgetSession('a1', { captured })).toThrow('changed before')
+      await expect(forgetSession('a1', { captured })).rejects.toThrow('changed before')
       expect(deps.stoppedAgents.save).not.toHaveBeenCalled()
-      expect(deps.registry.removeAgent).not.toHaveBeenCalled()
+      expect(deps.registry.confirmEngineExit).not.toHaveBeenCalled()
       expect(deps.clients.send).not.toHaveBeenCalled()
     })
 
-  it('drops a crash-resume boundary when the conversation is stopped or unbound', () => {
+  it('drops a crash-resume boundary when the conversation is stopped or unbound', async () => {
     const { deps } = setup()
     const marks = createRelaunchMarks()
     marks.note('s1', 20, true)
     marks.read('s1')
-    createForgetSession({ ...deps, relaunchMarks: marks })('a1', { keepAgent: true })
+    await createForgetSession({ ...deps, relaunchMarks: marks })('a1', { keepAgent: true })
     expect(marks.size).toBe(0)
   })
 
-  it('forgets lifecycle epochs only when the agent is removed', () => {
+  it('forgets lifecycle epochs only when the agent is removed', async () => {
     const { deps } = setup()
     const onRemoved = vi.fn()
     const forget = createForgetSession({ ...deps, onRemoved })
-    forget('a1', { keepAgent: true })
+    await forget('a1', { keepAgent: true })
     expect(onRemoved).not.toHaveBeenCalled()
-    forget('a1')
+    await forget('a1')
     expect(onRemoved).toHaveBeenCalledWith('a1')
   })
 
-  it('releases a session and keeps its agent: everything per-session goes, the agent and its tiles stay', () => {
+  it('releases a session and keeps its agent: everything per-session goes, the agent and its tiles stay', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const { deps, forgetSession } = setup()
-    forgetSession('a1', { keepAgent: true })
-    expect(deps.registry.unbindSession).toHaveBeenCalledWith('s1')
-    expect(deps.registry.removeAgent).not.toHaveBeenCalled()
+    await forgetSession('a1', { keepAgent: true })
+    expect(deps.registry.confirmSessionUnbound).toHaveBeenCalledWith('a1', 's1', undefined)
+    expect(deps.registry.confirmEngineExit).not.toHaveBeenCalled()
     expect(deps.stoppedAgents.save).not.toHaveBeenCalled()
     expect(deps.ended).not.toHaveBeenCalled()
     expectLetGo(deps, 's1', 'a1')
@@ -156,12 +205,12 @@ describe('forgetting a session', () => {
     expect(String(log.mock.calls[0][0])).toContain('released session')
   })
 
-  it('removes an agent everywhere, archived as stopped, and tells the app and the dial', () => {
+  it('removes an agent everywhere, archived as stopped, and tells the app and the dial', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const { deps, forgetSession } = setup()
-    forgetSession('s1')
+    await forgetSession('s1')
     expect(deps.stoppedAgents.save).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1' }))
-    expect(deps.registry.removeAgent).toHaveBeenCalledWith('a1')
+    expect(deps.registry.confirmEngineExit).toHaveBeenCalledWith('a1', 'remove', undefined)
     expect(deps.ended).toHaveBeenCalledWith('a1')
     expectLetGo(deps, 's1', 'a1')
     expect(deps.clients.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 'a1', retained: true } })
@@ -170,63 +219,64 @@ describe('forgetting a session', () => {
   })
 
   // Its last record may hold a conversation another harness took meanwhile (conversationOwners.ts).
-  it('settles who owns the conversation its last record holds, once it is no longer running; never on a release', () => {
+  it('settles who owns the conversation its last record holds, once it is no longer running; never on a release', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { deps } = setup()
     const order: string[] = []
-    vi.mocked(deps.registry.removeAgent).mockImplementation(() => { order.push('removed'); return true })
+    const remove = vi.mocked(deps.registry.confirmEngineExit).getMockImplementation()!
+    vi.mocked(deps.registry.confirmEngineExit).mockImplementation(async (...args) => { order.push('removed'); return remove(...args) })
     const owners = { settleSaved: vi.fn(() => { order.push('settled'); return [] }) }
     const forget = createForgetSession({ ...deps, owners })
-    forget('s1')
+    await forget('s1')
     expect(owners.settleSaved).toHaveBeenCalledWith('a1')
     expect(order).toEqual(['removed', 'settled'])
-    forget('s1', { keepAgent: true })
-    forget('unknown-session')
+    await forget('s1', { keepAgent: true })
+    await forget('unknown-session')
     expect(owners.settleSaved).toHaveBeenCalledTimes(1)
     owners.settleSaved.mockImplementationOnce(() => { throw new Error('stopped store unreadable') })
-    forget('s1')
+    await createForgetSession({ ...setup().deps, owners })('s1')
     owners.settleSaved.mockImplementationOnce(() => { throw 'plain' })
-    forget('s1')
+    await createForgetSession({ ...setup().deps, owners })('s1')
     expect(warn).toHaveBeenCalledWith('[agent] a1 could not settle who owns its conversation: stopped store unreadable')
     expect(warn).toHaveBeenCalledWith('[agent] a1 could not settle who owns its conversation: plain')
     expect(deps.clients.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 'a1', retained: true } })
   })
 
-  it('removes a session the registry no longer knows, announced by the agent id the caller names', () => {
+  it('removes a session the registry no longer knows, announced by the agent id the caller names', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const named = setup()
-    named.forgetSession('s9', { agentId: 'a9' })
-    expect(named.deps.registry.remove).toHaveBeenCalledWith('s9')
+    await named.forgetSession('s9', { agentId: 'a9' })
+    expect(named.deps.registry.confirmEngineExit).not.toHaveBeenCalled()
     expect(named.deps.stoppedAgents.save).not.toHaveBeenCalled()
     expect(named.deps.ended).toHaveBeenCalledWith('a9')
     expect(named.deps.clients.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 'a9', retained: false } })
     expect(named.deps.input.forget).toHaveBeenCalledWith('a9')
     // With no agent id at all, the session id is all there is to announce.
     const bare = setup()
-    bare.forgetSession('s9')
+    await bare.forgetSession('s9')
     expect(bare.deps.clients.sendCommander).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 's9' } })
   })
 
-  it('clears agent-keyed input after binding revalidation has already released the session index', () => {
+  it('clears agent-keyed input after binding revalidation has already released the session index', async () => {
     const { deps } = setup()
     vi.mocked(deps.registry.resolve).mockReturnValue(undefined)
     const pending = ['input', 'deviceInput'].map(() => new Map([['a1', 'queued'], ['other', 'keep']]))
     for (const [index, key] of (['input', 'deviceInput'] as const).entries()) {
       deps[key].forget = id => { pending[index]!.delete(id) }
     }
-    createForgetSession(deps)('s1', { force: true, keepAgent: true, agentId: 'a1' })
+    await createForgetSession(deps)('s1', { force: true, keepAgent: true, agentId: 'a1' })
     for (const queue of pending) expect([...queue]).toEqual([['other', 'keep']])
     expect(deps.stoppedAgents.save).not.toHaveBeenCalled()
-    expect(deps.registry.removeAgent).not.toHaveBeenCalled()
+    expect(deps.registry.confirmEngineExit).not.toHaveBeenCalled()
     expect(deps.normalizers.forget).toHaveBeenCalledWith('s1')
   })
 
-  it('forgets an agent that has no session yet under the id it was asked by', () => {
+  it('forgets an agent that has no session yet under the id it was asked by', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const { deps, forgetSession } = setup()
-    forgetSession('fresh')
-    expect(deps.registry.removeAgent).toHaveBeenCalledWith('fresh')
+    await forgetSession('fresh')
+    expect(deps.registry.confirmEngineExit).toHaveBeenCalledWith('fresh', 'remove', undefined)
     expect(deps.normalizers.forget).toHaveBeenCalledWith('fresh')
   })
 })

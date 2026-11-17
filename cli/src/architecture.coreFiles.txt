@@ -440,6 +440,7 @@ lib/questionController.ts
 lib/recapReads.ts
 lib/redactSecrets.ts
 lib/registry.ts
+lib/registryPersistence.ts
 lib/relayFrames.ts
 lib/removePath.ts
 lib/restartAgent.ts
@@ -523,6 +524,7 @@ lib/windows/guestTree.ts
 lib/windows/hermesLaunch.ts
 lib/windows/installNames.ts
 lib/windows/launch.ts
+lib/windows/noWindow.ts
 lib/windows/pipeAuth.ts
 lib/windows/pipeClient.ts
 lib/windows/powershell.ts

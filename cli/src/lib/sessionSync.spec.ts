@@ -31,10 +31,10 @@ function harness(overrides: Partial<SessionSyncDeps> = {}) {
 describe('session sync', () => {
   it('keeps an existing pane through registry reload, early metadata sync, and terminal rediscovery', async () => {
     registry.load()
-    const opened = registry.openProcessAgent({
+    const opened = (await registry.openProcessAgent({
       agentId: 'restart-agent', engine: 'codex', tmuxPane: '%16',
       processIdentity: { pid: 42, executable: 'codex', startMarker: 'test-process' },
-    })!.entry
+    }))!.entry
     const h = harness({ terminalAvailable: (agentId) => registry.terminalAvailable(agentId) })
     await h.sync(opened)
     expect(h.send).toHaveBeenCalledTimes(1)

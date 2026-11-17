@@ -56,6 +56,22 @@ function submitBy(onFirst: Awaited<ReturnType<TerminalBackend['submitText']>>) {
 }
 
 describe('TerminalBackendCoordinator', () => {
+  it.each(['leased', 'direct'] as const)('carries a revoked key predicate through the %s route', async route => {
+    const native = backend('tmux:default', vi.fn())
+    const allowed = () => false
+    native.sendKey = vi.fn<TerminalBackend['sendKey']>(async (_runtime, _key, current) => current?.() === false
+      ? { state: 'failed', dispatch: 'not_started', reason: 'revoked' }
+      : { state: 'succeeded', dispatch: 'executed' })
+    const coordinator = new TerminalBackendCoordinator([native], ['tmux'])
+    const row = session(), lease = await coordinator.acquireLease(row)
+    expect(lease.state).toBe('succeeded')
+    if (lease.state !== 'succeeded') throw new Error('fixture lease was refused')
+    const result = route === 'leased' ? await coordinator.sendLegacyKeyLease(lease.value, 'Enter', allowed)
+      : await coordinator.sendLegacyKey(row, 'Enter', allowed)
+    expect(result).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(native.sendKey).toHaveBeenCalledWith(expect.anything(), 'enter', allowed)
+  })
+
   it('opens a retained terminal runtime even when engine discovery marked the agent dormant', async () => {
     const tmuxBackend = backend('tmux:default', vi.fn())
     const handle = streamHandle()

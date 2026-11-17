@@ -152,14 +152,20 @@ describe('stopping, purging and resuming an agent', () => {
       expect(purge.restarting('a1')).toBe(true)
     })
 
-    it('forgets a deleted conversation\'s lines and names, tells every window, and then whoever follows agents, with every conversation it had', () => {
+    it('waits for saved-name deletion before telling windows and lifecycle followers', async () => {
       const purged = vi.fn()
       const { deps, purge } = setup({ purged })
-      purge.deleted(row())
+      let saved!: () => void
+      vi.mocked(deps.registry.deleteSavedNames).mockImplementation(() => new Promise<void>(resolve => { saved = resolve }))
+      const deletion = purge.deleted(row())
       expect(deps.mirror.deleteHistory).toHaveBeenCalledWith('s1')
+      expect(purged).not.toHaveBeenCalled()
+      expect(deps.registry.deleteSavedNames).toHaveBeenCalledWith(['a1', 's1'])
+      expect(deps.send).not.toHaveBeenCalled()
+      saved()
+      await deletion
       expect(purged).toHaveBeenCalledExactlyOnceWith('a1', ['s1'])
       expect(vi.mocked(deps.send).mock.invocationCallOrder[0]).toBeLessThan(purged.mock.invocationCallOrder[0]!)
-      expect(deps.registry.deleteSavedNames).toHaveBeenCalledWith(['a1', 's1'])
       expect(deps.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 'a1', retained: false } })
     })
 
@@ -213,11 +219,11 @@ describe('stopping, purging and resuming an agent', () => {
       expect(deps.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'agent_deleted' }))
     })
 
-    it('with no session yet, forgets only what there is', () => {
+    it('with no session yet, forgets only what there is', async () => {
       const { deps, purge } = setup()
-      purge.deleted(row())
+      await purge.deleted(row())
       expect(deps.mirror.deleteHistory).toHaveBeenCalledWith('s1')
-      purge.deleted(row({ sessionId: '' }))
+      await purge.deleted(row({ sessionId: '' }))
       expect(deps.mirror.deleteHistory).toHaveBeenCalledTimes(1)
       expect(deps.registry.deleteSavedNames).toHaveBeenLastCalledWith(['a1'])
     })
@@ -228,7 +234,7 @@ describe('stopping, purging and resuming an agent', () => {
       const { lifecycle, purge } = setup({ purged })
       await lifecycle.stopAgent('a1')
       expect(purged).not.toHaveBeenCalled()
-      purge.deleted(row())
+      await purge.deleted(row())
       expect(purged).toHaveBeenCalledWith('a1', ['s1'])
     })
   })
