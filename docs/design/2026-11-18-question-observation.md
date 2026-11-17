@@ -218,3 +218,25 @@ question tests independently retain 100% coverage. The shared API test first fai
 was absent; that verifies the extraction contract, not a newly discovered behavior bug. An initial restricted
 sandbox run could not bind its private loopback sockets (`EPERM`); its exact runner group was interrupted
 and verified gone before the same focused command passed with loopback access. No new cost run was made.
+
+## Merged-source escaped comparison
+
+One fixed ABBA block compares baseline `787c737db6` with merged `7aa0903a8b`, including the shared
+primitive and physical stream/question accounting. The source freeze precedes a later metric-only
+correction; this is the selected question caller comparison, not whole-daemon or native acceptance.
+It retains the same legal 6,295,552-byte escaped Cloud input, routes, one warmup and ten samples per
+route per worker, with all 60 measured samples preserved.
+
+Matched legacy window baseline/candidate synchronous send medians were 33.576/32.440 ms, maxima
+36.331/36.049 ms; loop maxima were 55.837/59.048 ms. Server CPU medians were 148.424/148.737 ms and
+snapshot medians 208.384/208.451 ms. Both retained the complete final-ID snapshot: 18,886,467 bytes in
+three frames. The candidate-only observer had synchronous median/max 55.810/62.146 ms, immediate probe
+maximum 62.210 ms and loop maximum 72.810 ms; CPU median 172.076 ms and snapshot median 187.017 ms.
+Its snapshot was 12,591,613 bytes in five frames, with no refusals. The bounded route therefore adds
+23.370 ms median synchronous work against the same candidate's legacy route for this maximum escaped
+input; that increment is not attributed to intrinsic old serialization. The algorithm stays frozen.
+
+Actual outer, four worker and four receiver exits were zero. All EOF/reap/group/guardian checks passed,
+198 of 198 sockets physically closed, all four private roots were removed, and all 426 frozen input
+hashes plus report/evidence hashes matched. The remaining ordinary/new-observer/boundary cost phases
+and final native gates are separate; these numbers alone do not close responsiveness acceptance.
