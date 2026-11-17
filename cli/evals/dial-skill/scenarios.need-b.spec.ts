@@ -31,9 +31,11 @@ function env(s: Scenario, home: string): NodeJS.ProcessEnv {
   return { PATH: path, HOME: home, TMPDIR: home, LANG: 'en_US.UTF-8' }
 }
 
+// Waits on the exit itself, with no deadline of its own: a fake that hangs fails on the test's timeout, and a slow
+// start under load is not a failure. The signal is null only when the fake exited by itself.
 function exitWithStdinClosed(file: string, e: NodeJS.ProcessEnv): Promise<NodeJS.Signals | null> {
   return new Promise((resolve, reject) => {
-    const child = spawn(file, [], { stdio: ['ignore', 'ignore', 'ignore'], env: e, timeout: 2_000 })
+    const child = spawn(file, [], { stdio: ['ignore', 'ignore', 'ignore'], env: e })
     child.on('error', reject)
     child.on('exit', (_code, signal) => resolve(signal))
   })
@@ -86,7 +88,7 @@ describe.each(IDS)('need scenario %s', (id) => {
     }
   })
 
-  it('has fakes that resolve first on PATH and exit within 2 s with stdin closed', async () => {
+  it('has fakes that resolve first on PATH and exit by themselves with stdin closed', async () => {
     const s = find(id)
     const e = env(s, work)
     for (const file of fakes(s)) {

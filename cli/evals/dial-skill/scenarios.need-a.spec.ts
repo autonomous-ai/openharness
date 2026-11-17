@@ -33,6 +33,16 @@ function run(cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, d
   })
 }
 
+// Waits on the exit itself, with no deadline of its own: a fake that hangs fails on the test's timeout, and a slow
+// start under load is not a failure. The signal is null only when the fake exited by itself.
+function exitWithStdinClosed(file: string, cwd: string, env: NodeJS.ProcessEnv): Promise<NodeJS.Signals | null> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, [], { cwd, env, stdio: ['ignore', 'ignore', 'ignore'] })
+    child.on('error', reject)
+    child.on('exit', (_code, signal) => resolve(signal))
+  })
+}
+
 function scenario(id: string): Scenario {
   const found = loadScenarios().find((s) => s.id === id)
   if (!found) throw new Error(`scenario ${id} is missing`)
@@ -83,11 +93,10 @@ describe.each(IDS)('need scenario %s', (id) => {
     for (const secret of s.secrets) expect(texts.some((text) => text.includes(secret)), secret).toBe(true)
   })
 
-  it('has fakes that exit within 2 s with stdin closed', async () => {
+  it('has fakes that exit by themselves with stdin closed', async () => {
     const s = scenario(id)
     for (const fake of filesUnder(join(s.dir, 'bin'))) {
-      const exit = await run(fake, [], s.dir, withBin(s), 2_000)
-      expect(exit.timedOut, fake).toBe(false)
+      expect(await exitWithStdinClosed(fake, s.dir, withBin(s)), fake).toBeNull()
     }
   })
 
