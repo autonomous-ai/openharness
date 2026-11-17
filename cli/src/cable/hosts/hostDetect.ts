@@ -13,6 +13,7 @@ export const APP_BUNDLES: Readonly<Record<string, string>> = {
   iterm: 'com.googlecode.iterm2',
   'terminal-app': 'com.apple.Terminal',
   ghostty: 'com.mitchellh.ghostty',
+  cmux: 'com.cmuxterm.app',
   vscode: 'com.microsoft.VSCode',
   cursor: 'com.todesktop.230313mzl4w4u92',
   warp: 'dev.warp.Warp-Stable',
@@ -32,6 +33,7 @@ const NAMES: Record<string, string> = {
   iterm: 'iTerm2',
   'terminal-app': 'Terminal',
   ghostty: 'Ghostty',
+  cmux: 'cmux',
   vscode: 'VS Code',
   cursor: 'Cursor',
   warp: 'Warp',
@@ -40,7 +42,7 @@ const NAMES: Record<string, string> = {
   terminal: 'Terminal',
 }
 
-/** The apps an agent can run in, the dial's pages: the hosts, in the order of their names. Seventeen ids; the firmware
+/** The apps an agent can run in, the dial's pages: the hosts, in the order of their names. Eighteen ids; the firmware
  *  holds 16 (`CABLE_MAX_APPS`), and the `apps` frame holds to it (`APP_LIMIT`, select.ts). */
 export const APP_IDS: readonly string[] = Object.keys(NAMES)
 
