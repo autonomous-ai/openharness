@@ -29,10 +29,11 @@ _local_spec.loader.exec_module(local_checks)
 
 CORE = {"cli", "desktop", "tui", "backend", "companions"}
 EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty", "device-app"}
-SUITES = CORE | EXTRA | {"pro"}
+SUITES = CORE | EXTRA | {"pro", "max"}
 JOBS = {
     "cli": {"cli-typecheck", "cli-tests"},
     "pro": {"pro-firmware-build", "pro-golden"},
+    "max": {"max-firmware-build", "max-golden"},
     "desktop": {"desktop-tests"},
     # backend-integration: the Super Tab integration suite (backend/integration) in four shards (task #2459).
     "tui": {"tui-test"}, "backend": {"backend-desk", "backend-integration"}, "companions": {"companion-subsystems"},
@@ -58,8 +59,10 @@ ALSO = {"cli/src/lib/ptyHost/": "pty", "cli/src/lib/ptyHostBackend": "pty",
 ALSO.update({"scripts/test-desktop.py": "desktop", "scripts/desktop-test-durations.json": "desktop"})
 # The desktop test helper the phone's tests import (session_work_page_test.dart).
 ALSO.update({"desktop/test/support/real_fonts.dart": "mobile"})
-# Narrower directories that add a suite on top of their component's (the ESP32-P4 build and golden screens).
-SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
+# Narrower directories that add a suite on top of their component's (the ESP32-P4 builds and golden screens).
+SUBCOMPONENTS = {"devices/harness-pro/": "pro", "devices/harness-max/": "max"}
+# Harness Max compiles the Pro's sources where they are, so a Pro change runs Max's build and goldens too.
+ALSO.update({"devices/harness-pro/": "max"})
 
 # Reuse after Update branch. Reusing an earlier result needs every file a suite may read outside its own directory,
 # because main's commits were never tested together with this PR: these sets are broad on purpose, as the scan misses a
