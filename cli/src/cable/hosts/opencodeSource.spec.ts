@@ -442,12 +442,14 @@ describe("the opencode source (docs/plans/2026-11-17-dial-opencode-design.md)", 
           return answer
         }
         const events = vi.fn(real.events)
+        const asked: string[] = []
         const s = setup({
           client: {
             ...real,
             events,
             find: async () => step === 'find' ? hold(await real.find()) : real.find(),
             request: async (method, path, body) => {
+              asked.push(path)
               const answer = await real.request(method, path, body)
               return path.includes(step) ? hold(answer) : answer
             },
@@ -456,8 +458,11 @@ describe("the opencode source (docs/plans/2026-11-17-dial-opencode-design.md)", 
         s.source.start()
         await reaching
         s.source.stop()
+        const stopped = asked.length
         release()
         await turn()
+        // Nothing more is asked: a late answer's next request would land after these checks.
+        expect(asked.slice(stopped)).toEqual([])
         expect(s.source.list()).toEqual([])
         expect(s.changes).toBe(0)
         expect(s.timers).toEqual([])
