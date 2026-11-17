@@ -43,24 +43,31 @@ npx vitest run --config evals/dial-skill/vitest.config.ts
 - Claude runs under the `CLAUDE_CONFIG_DIR` already set (the session's profile, never the default `~/.claude`), with
   `--setting-sources project`, so the person's hooks never fire into the live daemon and the person's own skills are
   not loaded: only Claude Code's bundled skills and the dial skill. Every variant runs the same way.
-- The profile's claude.ai connectors (Gmail, Calendar, Docs), `PushNotification` and `RemoteTrigger` are denied to
-  the agent, so a run never reaches the person's accounts or phone, and the eval does not measure push competing with
-  the dial.
+- Every claude.ai connector is off (`disableClaudeAiConnectors`), and `PushNotification`, `RemoteTrigger`,
+  `SendMessage` and `ListAgents` are denied to the agent, so a run never reaches the person's accounts, phone or other
+  Claude sessions, and the eval does not measure push competing with the dial.
 - A run leaves in the profile only what `claude -p` writes at startup (`.claude.json`, its backups, `session-env/`,
-  caches); the empty `projects/<temp repo>/` folder Claude makes for each run is removed with the run. To check after
-  a pass, list the profile's top-level entries and its `projects/` before and after, names only, and compare:
+  caches); the empty `projects/<temp repo>/` folder Claude makes for each run is removed with the run. To check, list
+  what in the profile changed during the pass:
 
   ```sh
-  (ls -A "$CLAUDE_CONFIG_DIR"; ls -A "$CLAUDE_CONFIG_DIR/projects") > "$TMPDIR/profile-before"   # before the pass
-  (ls -A "$CLAUDE_CONFIG_DIR"; ls -A "$CLAUDE_CONFIG_DIR/projects") | diff "$TMPDIR/profile-before" -   # after it
+  marker=$(mktemp)   # before the pass
+  find -H "$CLAUDE_CONFIG_DIR"/ "$CLAUDE_CONFIG_DIR"/*/ -newer "$marker" | sort -u   # after it
   ```
 
   Only the startup files above may appear; a new `projects/` entry is a run that was not cleaned up.
 - Each run stages a temp git repo under the system temp folder, outside every git worktree, so no openharness
   `AGENTS.md` loads and no answer key is in reach.
 - A fake `harness` records rings; the scenario's fakes (`gh`, `aws`, `shipit`…) come first on a curated `PATH` that
-  leaves out the real `harness` and `gh`. Nothing reads or writes `~/.harness`, the daemon, the real dial or the
-  production backend.
+  leaves out the real `harness` and `gh`; `node`, `npm` and `npx` are linked into the staged `bin/`. The sandbox
+  denies reads of `~/.harness` and `~/.config/gh`, so nothing reaches the daemon, the real dial, gh's sign-in or the
+  production backend. `HOME` stays the person's, because Claude finds its sign-in in their keychain through it.
+- `ZDOTDIR` is an empty staged folder, so zsh reads none of the person's startup files: before that fix, the
+  environment those files export reached every agent command. `DEVELOPER_DIR` is `/Library/Developer/CommandLineTools`
+  (the Command Line Tools must be installed), so git and make work while the real `xcodebuild` refuses.
+  `CLAUDE_CODE_TMPDIR` sits under the run.
+- When a run ends, every process whose working folder is in the run's root is killed, and a stopped runner kills its
+  agents.
 - Claude's own sandbox confines writes to the temp repo; the network stays on, with `registry.npmjs.org` the only
   allowed host, and npm's cache sits in the run's own temp folder. A scenario's staged origin is within the sandbox's
   write roots: before that fix, a push failed on the sandbox instead of reaching the origin's hooks. Every scenario
@@ -70,8 +77,11 @@ npx vitest run --config evals/dial-skill/vitest.config.ts
 ## Cost
 
 Every run is one `claude-opus-5-5` session at effort `high` (up to 40 turns) plus up to two judge calls
-(`claude-opus-5-5`, effort `low`). A train + val pass at 2 reps is 34 runs, about $6; a test pass is 16 runs, about $3. Spend per pass and in total is in the
-status table at the top of `flow/narrative.md`, computed from each row's model and usage.
+(`claude-opus-5-5`, effort `low`), priced at $4 / $20 per million tokens, cache reads $0.20 and 1-hour cache writes
+2× input. A train + val pass at 2 reps is 34 runs, about $6.50; a test pass is 16 runs, about $3.20. Spend per pass
+and in total is in the status table at the top of `flow/narrative.md`, computed from each row's model and usage. The
+rows add up to $23.47 (baseline $9.70, v1 $9.87, the archived first baseline $3.89); the pilot and probes, which left
+no rows, added roughly $3.50, so the whole effort cost about $27 against a $50 cap.
 
 ## Results
 
@@ -81,10 +91,10 @@ the person's connectors, `PushNotification` and `RemoteTrigger`.
 
 | split | variant | score [95% CI] | recall | specificity | precision | line_ok | ask_ok | harmed | spend |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| test | baseline | 1.69 [0.03, 3.34] | 88% | 100% | 100% | 100% | 100% | none checked | $2.84 |
-| test | v1 | 2.00 [0.21, 3.79] | 100% | 100% | 100% | 100% | 100% | none checked | $2.87 |
-| val | baseline | 2.06 [0.41, 3.71] | 90% | 100% | 100% | 78% | 100% | 0 of 2 | $2.69 |
-| val | v1 | 2.50 [0.77, 4.23] | 100% | 100% | 100% | 100% | 100% | 0 of 2 | $2.85 |
+| test | baseline | 1.69 [0.03, 3.34] | 88% | 100% | 100% | 100% | 100% | none checked | $3.21 |
+| test | v1 | 2.00 [0.21, 3.79] | 100% | 100% | 100% | 100% | 100% | none checked | $3.23 |
+| val | baseline | 2.06 [0.41, 3.71] | 90% | 100% | 100% | 78% | 100% | 0 of 2 | $3.02 |
+| val | v1 | 2.50 [0.77, 4.23] | 100% | 100% | 100% | 100% | 100% | 0 of 2 | $3.17 |
 
 Test, paired v1 − baseline: +0.31 [−0.43, 1.05] over 8 cases, within noise (the test ceiling is 2.00). Val: +0.44
 [−0.44, 1.32]. Every case that moved, moved up; no no-need run rang under either text.
