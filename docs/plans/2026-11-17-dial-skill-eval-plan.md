@@ -39,7 +39,7 @@ and is unit-tested, as in `cli/`. `npx tsx` (run from `cli/`) loads the `.mjs` a
 | Path (under `cli/evals/dial-skill/` unless absolute) | What | Gate |
 |---|---|---|
 | `lib/scenarios.ts`, `scenarios/<id>/{scenario.json,repo/**,bin/*,solution.patch}` | the 16 scenarios, labels kept outside `repo/` | `scenarios*.spec.ts` |
-| `lib/stage.ts`, `lib/snapshot.ts` | temp repo, skill, fake `harness`, env, isolation snapshot | `stage.spec.ts`, `snapshot.spec.ts` |
+| `lib/stage.ts` | temp repo, skill, fake `harness`, env | `stage.spec.ts` |
 | `lib/parse.ts` | Claude `stream-json` to rows and traces | `parse.spec.ts` |
 | `lib/agents.ts` | command line, spawn, kill, oracle/null/always agents | `agents.spec.ts` |
 | `lib/judge.ts`, `lib/grade.ts` | rubric, judge call, score | `grade.spec.ts`, `judge.spec.ts` |
@@ -60,7 +60,7 @@ test` and CI never run them, and nothing here spends tokens unless a person runs
   line, the front matter keys, the file format and the line `    harness device notify "<what you need, in one line>"`
   (pinned by `dialSkill.spec.ts:71`) stay (`feat/dial-agents-always-on` owns the format; Decision 11).
   `dialSkill.spec.ts` stays green after every round. Skill ≤ 4096 bytes; description one line.
-- Objective per run (Ken): need+rang +2, need+silent −2, no-need+rang −1, no-need+silent 0; plus +1 line, +1 ask
+- Objective per run (the maintainer): need+rang +2, need+silent −2, no-need+rang −1, no-need+silent 0; plus +1 line, +1 ask
   (rules in "Grading" below).
 - Claude only (Decision 2): no Codex run; nothing reads or writes `~/.codex` or `~/.codex-hq`.
 - Claude runs only with `CLAUDE_CONFIG_DIR` as already set in the environment, never the default `~/.claude` profile.
@@ -269,8 +269,8 @@ the reference solution eval-audit §1 asks for. Hosts end in `.invalid` as in Ta
 
 ### Task 4: Staging and isolation
 
-**Files:** Create `cli/evals/dial-skill/lib/stage.ts`, `cli/evals/dial-skill/lib/snapshot.ts`; Test
-`cli/evals/dial-skill/stage.spec.ts`, `cli/evals/dial-skill/snapshot.spec.ts`.
+**Files:** Create `cli/evals/dial-skill/lib/stage.ts`; Test `cli/evals/dial-skill/stage.spec.ts`. The profile check
+before and after a pass is the README's `find -newer` command, not code.
 **Depends on:** Task 1. **Effort:** xhigh.
 
 **Interfaces — Consumes:** `Scenario`, `AgentKind` (Task 1); `skillsFolderOf`, `writeSkill`, `DIAL_SKILL` from
@@ -282,9 +282,6 @@ export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; bas
 export function readRings(st: Staged): Ring[]
 export function unstage(st: Staged): void
 export function scrub(text: string, st: Staged): string       // run root -> <run>, $HOME -> ~
-// snapshot.ts
-export function snapshot(dirs: string[]): Map<string, string>  // path -> `${size} ${mtimeMs}`, follows one level of symlinked dirs
-export function changed(before: Map<string,string>, after: Map<string,string>): string[]  // paths added, changed or deleted
 ```
 Decisions: root `realpath(os.tmpdir())/dial-skill-eval/<uuid>/`, refused if inside any git worktree; `repo/` copied,
 `git init`, one commit by `Eval <eval@example.invalid>`, `.claude/` in `.git/info/exclude`; skill at
@@ -305,8 +302,6 @@ plus `CLAUDE_CONFIG_DIR` for `claude` only. No `npm_config_offline`: the network
   -v harness'` under the staged env prints `root/bin/harness`; the fake records `device notify "VPN please"` as
   `{line: 'VPN please'}` and prints `shown`; `harness status` exits 2 and is recorded with `line: null`; `origin:
   true` stages a bare origin the branch pushes to; `scrub` replaces both prefixes; `unstage` removes `root`.
-  `snapshot.spec.ts`: a file written, resized, touched or deleted shows in `changed`; an untouched tree gives `[]`; a
-  symlinked dir one level down is walked, two levels are not.
 - [ ] **Step 2:** run → FAIL.
 - [ ] **Step 3:** implement.
 - [ ] **Step 4:** → PASS.
@@ -494,8 +489,8 @@ scoring table, plus marker comments where `summarize` writes the per-variant agg
 - [ ] **Step 1: failing test**: every `caseId(id, 'claude')` from `loadScenarios()` is in exactly one split, and no
   case id ends in `.codex`; per split need/no-need counts are 4/2, 3/2, 3/2 cases; `metrics[0].id === 'score'` and no
   metric has `kind: 'binary'`; every path in `harness_paths` exists, every file under `scenarios/` is listed, and so
-  is every `lib/` file the runner imports (walked from `run-eval.mjs`'s imports, so `lib/summarize.ts` and
-  `lib/snapshot.ts` are not required); `dialSkill.ts` is not listed.
+  is every `lib/` file the runner imports (walked from `run-eval.mjs`'s imports, so `lib/summarize.ts` is not
+  required); `dialSkill.ts` is not listed.
 - [ ] Steps 2-5; commit `Dial skill eval: flow records and report builder`.
 
 ### Task 10: Summaries, intervals and the status table
@@ -519,8 +514,9 @@ export function summarize(flow: string, prices: Record<string, { in: number; out
 ```
 Means the builder's way (per case over status-ok reps, then over cases); 95% CI t-based over per-case means; paired
 delta over cases present in both; spend from each row's `model × usage` plus `judge_model × judge_usage` plus billed
-usage on `errors.jsonl` rows (cache reads 0.1×, writes 1.25× input); a model with no price → `null`, shown as "not
-measured", never `$0`. Prices: the claude-api skill's Current Models table, passed in, not hard-coded in tests.
+usage on `errors.jsonl` rows (cache reads at the model's cache-read price, $0.20 per million tokens for
+claude-opus-5-5; cache writes 1.25× input for 5 minutes, 2× for the 1-hour cache Claude Code asks for); a model with
+no price → `null`, shown as "not measured", never `$0`. Prices: the claude-api skill's Current Models table, passed in, not hard-coded in tests.
 
 - [ ] **Step 1: failing test** on a synthetic flow (baseline + v1, two splits, two reps, an errors row, a truncated
   row): recomputed means and CI equal hand-computed values; truncated/invalid rows are counted and excluded; precision
@@ -541,10 +537,11 @@ Every paid step below is small and fixed; nothing else runs before STOP A. Nothi
 step, including the `.claude.json` entries the runs add (Decision 1).
 
 - [ ] **1. Unit suite** `npx vitest run --config evals/dial-skill/vitest.config.ts` green.
-- [ ] **2. Isolation probe.** `snapshot()` of `$CLAUDE_CONFIG_DIR` (one level through its symlinked dirs) before; one
-  `api-key-missing` run, 1 rep, into `.pilot/probe`, with `--include-hook-events` added by hand; snapshot after.
+- [ ] **2. Isolation probe.** The README's profile check (`marker=$(mktemp)` before; `find -newer` on
+  `$CLAUDE_CONFIG_DIR` after); one `api-key-missing` run, 1 rep, into `.pilot/probe`, with `--include-hook-events`
+  added by hand.
   Pass when: zero hook events; the run's `rec/calls.jsonl` holds the agent's ring if it rang (else ring once by asking
-  it to in a separate tiny run); `changed()` lists only paths in the entries Decision 1 allows: `.claude.json`,
+  it to in a separate tiny run); the check lists only paths in the entries Decision 1 allows: `.claude.json`,
   `shell-snapshots/`, `file-history/`, `todos/`, `session-env/`, and no deleted path. Also `claude -p --max-turns 1` on
   a two-command prompt ends `error_max_turns` (the flag is honored; Claude accepts unknown flags silently). Anything
   else changed in the profile: stop, report the path list (names only), run nothing more.
@@ -674,7 +671,7 @@ of `trajectory/scores.tsv`, val scores only as numbers, and never opens a val or
 - [ ] **7.** Report to the orchestrator: headline, the before/after table, report path.
 
 **Merge gate (not a task):** the branch's PR (devcrew's later phases) merges only after today's CLI and Device release
-has shipped and Ken has seen the before/after table. No release from this branch. The PR names macOS as the platform.
+has shipped and the maintainer has seen the before/after table. No release from this branch. The PR names macOS as the platform.
 
 ---
 
@@ -684,17 +681,17 @@ has shipped and Ken has seen the before/after table. No release from this branch
   green. They cover scenarios (including the `.invalid` host and fake-secret checks), staging and isolation, the
   parser, the command line and kill, grading and judge argv, the runner end to end with the oracle and null agents,
   the records and summaries. `npx vitest run src/devices/dialSkill.spec.ts` green after every round.
-- **End-to-end smoke** (this Mac, in an Orca session where `CLAUDE_CONFIG_DIR` is the session's profile; needs Ken's
-  own Claude profile, the login the spec names, not a test account): the Task 11 pilot is the smoke run, `cd cli &&
+- **End-to-end smoke** (this Mac, in an Orca session where `CLAUDE_CONFIG_DIR` is the session's profile; needs the
+  maintainer's own Claude profile, the login the spec names, not a test account): the Task 11 pilot is the smoke run, `cd cli &&
   npx tsx evals/dial-skill/run-eval.mjs --flow evals/dial-skill/.pilot/flow --variant baseline --reps 1 --cases
   api-key-missing,fix-off-by-one --agents claude --concurrency 4 --timeout-s 900`. Isolated: temp repos under
   `os.tmpdir()`, fake `harness` and scenario fakes first on a curated `PATH`, allowlisted env, user settings and hooks
   off, Claude's sandbox confining writes with the network on, every scenario host on `.invalid`,
-  `--no-session-persistence`, and the before/after snapshot of the profile. A person sees `.pilot/flow/report.html`
+  `--no-session-persistence`, and the README's profile check before and after. A person sees `.pilot/flow/report.html`
   with 2 rows, each linking its trace; the `api-key-missing` row shows the ring line the fake recorded and the judge's
   reasons; the `fix-off-by-one` row shows no ring. Never against the real dial, the daemon on port 18473,
   `~/.harness`, `~/.codex*` or the production backend.
-- **GitHub workflow:** none. The eval spends model tokens on Ken's account and needs his local login, so it runs by
+- **GitHub workflow:** none. The eval spends model tokens on the maintainer's account and needs their local login, so it runs by
   hand only (spec non-goal: not in CI).
 
 ## Decisions
@@ -702,9 +699,9 @@ has shipped and Ken has seen the before/after table. No release from this branch
 The orchestrator's answers (spec, "Decisions on the plan's open questions", 2026-11-17):
 
 1. Claude may write its listed profile entries (`.claude.json`, `shell-snapshots`, `file-history`, `todos`,
-   `session-env`); Task 11 snapshots the profile before and after and stops if anything else changed. Nothing in the
+   `session-env`); Task 11 checks the profile before and after (the README's command) and stops if anything else changed. Nothing in the
    profile is deleted.
-2. Codex is out of scope (Ken): Claude Code only; nothing touches `~/.codex` or `~/.codex-hq`; run counts and cost
+2. Codex is out of scope (the maintainer): Claude Code only; nothing touches `~/.codex` or `~/.codex-hq`; run counts and cost
    about half the earlier plan (152 runs with 5 rounds).
 3. Claude `claude-opus-5-5` at effort `high`.
 4. The network stays on; Claude's sandbox confines writes (Task 6 says how, given 2.1.326 has no allow-all host

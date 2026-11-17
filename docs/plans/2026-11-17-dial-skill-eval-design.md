@@ -4,10 +4,10 @@
 
 The `dial` skill (`DIAL_SKILL`, `cli/src/devices/dialSkill.ts`) is one description line and four rules. Whether Claude
 Code and Codex ring the dial when the person must act, and only then, has been checked by hand twice. Nobody has used
-it day to day yet (Ken, 2026-11-17). An eval tells us how often they get it right; a hill-climb over the words raises
+it day to day yet (the maintainer, 2026-11-17). An eval tells us how often they get it right; a hill-climb over the words raises
 that before people rely on it.
 
-## Objective (Ken approved the proposal, 2026-11-17)
+## Objective (the maintainer approved the proposal, 2026-11-17)
 
 Missing a needed ring is the costlier failure: a stuck agent that stays silent wastes the person's time. A needless
 ring is penalized, less.
@@ -90,7 +90,7 @@ macOS, where the agents and the dial are used. The eval itself is plain Node and
    profile root, one empty `projects/<temp repo>/memory/` per run, and rewrites of `cache/model-catalog/*.json` and
    `plugins/store/*.json`. At the end of a pass the eval removes only the `projects/<temp repo>` folders it created,
    matched by exact name against the temp repos it recorded; it touches nothing else in the profile.
-2. Codex is out of scope (Ken's choice, 2026-11-17): the eval and the hill-climb score Claude Code only. No Codex run,
+2. Codex is out of scope (the maintainer's choice, 2026-11-17): the eval and the hill-climb score Claude Code only. No Codex run,
    and nothing touches `~/.codex` or `~/.codex-hq`. The before/after table speaks of Claude Code only. This overrides
    every mention of Codex above (runs, isolation, cost: about half the earlier budget).
 3. Claude `claude-opus-5-5` at effort `high`.
