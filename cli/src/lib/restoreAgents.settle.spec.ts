@@ -129,6 +129,25 @@ it('an engine that dies in the settle window is forgotten, and the fresh launch 
   expect(w.deps.clearRemainOnExit).toHaveBeenCalledOnce()
 })
 
+it('an engine that dies in the settle window leaves its row starting again while the fresh launch starts', async () => {
+  const row = await starting(true)
+  let died = false, respawned = false
+  const seen: unknown[] = []
+  const w = watch({
+    probeProcess: async () => respawned ? fresh : died ? null : engine,
+    paneState: async () => { if (respawned) return { dead: false, engineExit: null }; died = true; return { dead: true, engineExit: 1 } },
+    respawn: async (_runtime, _launch, control) => {
+      seen.push(structuredClone(registry.byAgent(row.agentId)?.launch))
+      await control?.onDispatch?.(); respawned = true; return { ok: true }
+    },
+  })
+  await restoreAgents(w.deps)
+  await w.settling
+  w.settle(); await w.finished
+  // Not the dead engine's `ready`: the desk read a fresh launch with no engine and no conversation as up.
+  expect(seen).toEqual([{ state: 'starting' }])
+})
+
 it('another conversation taking the row in the settle window ends the watch with the terminal still held', async () => {
   const row = await starting(true)
   const w = watch()
