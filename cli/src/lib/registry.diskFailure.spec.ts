@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { namesTheDisk } from '../harnessd/supervisor.js'
 import type { registry as Registry } from './registry.js'
 
-const refuse = vi.hoisted(() => ({ code: undefined as string | undefined }))
+const refuse = vi.hoisted(() => ({ code: undefined as string | undefined, directorySync: undefined as string | undefined }))
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
   return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
@@ -16,8 +16,18 @@ vi.mock('node:fs/promises', async original => {
   } }
 })
 
+// After the rename: the folder's fsync, where the write is on disk but unconfirmed.
+vi.mock('./secureState.js', async original => {
+  const actual = await original<typeof import('./secureState.js')>()
+  return { ...actual, syncStateDirectory: (...args: Parameters<typeof actual.syncStateDirectory>) => {
+    if (refuse.directorySync) throw Object.assign(new Error(`${refuse.directorySync}: fixture, fsync '${args[0]}'`), { code: refuse.directorySync })
+    return actual.syncStateDirectory(...args)
+  } }
+})
+
 let directory: string
 let registry: typeof Registry
+let AtomicWriteUnconfirmed: typeof import('./registryPersistence.js').AtomicWriteUnconfirmed
 const input = { agentId: 'persisted-agent', engine: 'claude' as const, tmuxPane: '%1',
   processIdentity: { pid: 101, executable: '/fixture/claude', startMarker: 'fixture-101' } }
 beforeEach(async () => {
@@ -25,12 +35,14 @@ beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), 'registry-disk-'))
   for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) vi.stubEnv(key, directory)
   registry = (await import('./registry.js')).registry
+  AtomicWriteUnconfirmed = (await import('./registryPersistence.js')).AtomicWriteUnconfirmed
   registry.load()
   await registry.openProcessAgent(input)
   await registry.flush()
 })
 afterEach(async () => {
   refuse.code = undefined
+  refuse.directorySync = undefined
   await registry.flush().catch(() => {})
   vi.unstubAllEnvs()
   rmSync(directory, { recursive: true, force: true })
@@ -57,3 +69,19 @@ it.each([['EIO', 'registry storage write failed'], ['EACCES', 'registry storage 
     expect((failure as Error).message).toBe(`Registry persistence unavailable: ${words}`)
     expect(namesTheDisk((failure as Error).message)).toBe(false)
   })
+
+it.each([
+  ['ENOSPC', 'has no available space (ENOSPC)'],
+  ['EDQUOT', 'has no available space (EDQUOT)'],
+  ['EROFS', 'is read-only (EROFS)'],
+])('a save left unconfirmed by %s after its rename still names the disk', async (code, words) => {
+  refuse.directorySync = code
+  const rows = await registry.transaction(() => { registry.setActive(input.agentId, false) }).catch((error: Error) => error)
+  const names = await registry.rename(input.agentId, 'Renamed').catch((error: Error) => error)
+  for (const [failure, subject] of [[rows, 'registry storage'], [names, 'name storage']] as const) {
+    expect(failure).toBeInstanceOf(AtomicWriteUnconfirmed)
+    expect((failure as Error).message).toBe(`Registry persistence unavailable: ${subject} ${words}`)
+    expect(namesTheDisk((failure as Error).message)).toBe(true)
+    expect((failure as Error).message).not.toContain(directory)
+  }
+})
