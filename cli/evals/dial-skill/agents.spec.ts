@@ -244,7 +244,7 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(SAMPLE)}))`)
 
   it('rejects a failed run with the model and usage its stream reported, as it was billed', async () => {
     const events = [
-      { type: 'system', subtype: 'init', model: 'claude-opus-5-5' },
+      { type: 'assistant', parent_tool_use_id: null, message: { model: 'claude-opus-5-5', content: [] } },
       { type: 'result', subtype: 'error_during_execution', is_error: true, usage: { input_tokens: 7, output_tokens: 3 } },
     ]
     const bin = fake('claude', `process.stdout.write(${JSON.stringify(events.map((e) => `${JSON.stringify(e)}\n`).join(''))}); process.exitCode = 1`)
@@ -253,7 +253,7 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(SAMPLE)}))`)
   })
 
   it('rejects a timed-out run with the model its stream reported', async () => {
-    const bin = shellAgent(`echo '{"type":"system","subtype":"init","model":"claude-opus-5-5"}'\n/bin/sleep 600`)
+    const bin = shellAgent(`echo '{"type":"assistant","parent_tool_use_id":null,"message":{"model":"claude-opus-5-5","content":[]}}'\n/bin/sleep 600`)
 
     await expect(runAgent('claude', need, staged(), config(bin, 200))).rejects.toMatchObject({ failure_class: 'timeout', model: 'claude-opus-5-5' })
   })

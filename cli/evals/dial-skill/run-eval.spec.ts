@@ -25,7 +25,7 @@ function agent(model: string, text = 'Looked around'): string {
 require('node:child_process').execFileSync('harness', ['device', 'notify', 'Check ' + home])
 for (const event of [
   { type: 'system', subtype: 'init', model: ${JSON.stringify(model)} },
-  { type: 'assistant', message: { content: [
+  { type: 'assistant', parent_tool_use_id: null, message: { model: ${JSON.stringify(model)}, content: [
     { type: 'text', text: ${JSON.stringify(text)} + ' in ' + process.cwd() },
     { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'harness device notify "Check ' + home + '"' } },
   ] } },
@@ -48,6 +48,7 @@ process.exitCode = 1`
 const TRUNCATED = String.raw`require('node:child_process').execFileSync('harness', ['device', 'notify', 'Set WEATHER_API_KEY'])
 for (const event of [
   { type: 'system', subtype: 'init', model: 'claude-opus-5-5' },
+  { type: 'assistant', parent_tool_use_id: null, message: { model: 'claude-opus-5-5', content: [] } },
   { type: 'result', subtype: 'error_max_turns', is_error: true, usage: { input_tokens: 7, output_tokens: 3 } },
 ]) console.log(JSON.stringify(event))
 process.exitCode = 1`
@@ -427,6 +428,7 @@ describe('run-eval.mjs with claude', () => {
   it('keeps the model and usage of a claude run that failed on its own on its error row', () => {
     fakeClaude(String.raw`for (const event of [
   { type: 'system', subtype: 'init', model: 'claude-opus-5-5' },
+  { type: 'assistant', parent_tool_use_id: null, message: { model: 'claude-opus-5-5', content: [] } },
   { type: 'result', subtype: 'error_during_execution', is_error: true, usage: { input_tokens: 7, output_tokens: 3 } },
 ]) console.log(JSON.stringify(event))
 process.exitCode = 1`)
