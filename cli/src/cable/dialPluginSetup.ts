@@ -6,12 +6,12 @@
 //
 // Orca runs Claude Code under its own account homes, whose `plugins/` is linked to the default home's: the files are
 // there already, so only each home's entry is turned on, once, and the home recorded by its real path. One the person
-// turned off since stays off. Orca's homes follow the default home: only while its plugin reads on there, as one turned
+// turned off, before or since, stays off. Orca's homes follow the default home: only while its plugin reads on there, as one turned
 // off or removed there said no for every home, and a removal takes the files they all name.
 import { realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { claudeDisable, claudeHomeDisable, claudeHomeEnable, claudeSetUp, claudeUpdate, type ClaudeDeps, type ClaudeRun, type ClaudeSetup } from '../devices/claudePlugin.js'
-import { claudePluginState } from '../devices/dialSkill.js'
+import { claudePluginState, claudePluginTurnedOff } from '../devices/dialSkill.js'
 import { listable, MAX_HOMES, type Read, type SetupCount } from '../devices/dialSkillFiles.js'
 
 export interface DialPluginSetupDeps {
@@ -172,6 +172,11 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
       // Turned on and not recorded, a home the person turns off afterwards would be turned on again.
       if (deps.pluginHomes().length >= MAX_HOMES) {
         homeFailed(home, 'full')
+        continue
+      }
+      // Its entry false: the person turned it off there before this setup reached it. Recorded, it stays off.
+      if (claudePluginTurnedOff(join(home, 'settings.json'))) {
+        if (!deps.recordPluginHomes([...deps.pluginHomes(), home])) homeFailed(home, 'save')
         continue
       }
       const found = await deps.claudeIn(home, shell())
