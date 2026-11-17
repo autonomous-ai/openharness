@@ -56,6 +56,8 @@ interface HookTurn {
   waitAt?: number
   /** How many of its subagents run, by Claude Code's SubagentStart and SubagentStop (R5). */
   subagents: number
+  /** When its engine ran a SubagentStop taken with none counted: the SubagentStart it ran before it is that stop's. */
+  stoppedFirstAt?: number
   /** When progress was last read while they run. */
   progressAt: number
 }
@@ -293,11 +295,13 @@ export function createTurnHooks({
     if (activity) clients.send(correlateAgentEvent({ type: 'agent_activity', payload: { activity } }, sessionId, agentIdFor(sessionId)))
     awaitDialog(sessionId)
   }
-  /** Claude Code's SubagentStart and SubagentStop (R5). One started before this daemon run can stop in it. */
-  const onSubagent = ({ sessionId, started }: { sessionId: string; started: boolean }): void => {
+  /** Claude Code's SubagentStart and SubagentStop (R5). One started before this daemon run can stop in it. Each hook is
+   *  a process of its own, so a slow daemon can take a stop before its start. */
+  const onSubagent = ({ sessionId, started, firedAt }: { sessionId: string; started: boolean; firedAt?: number }): void => {
     const turn = record(sessionId)
     turn.hookAt = Date.now()
-    if (!started) turn.subagents = Math.max(0, turn.subagents - 1)
+    if (!started) { if (turn.subagents) turn.subagents--; else turn.stoppedFirstAt = firedAt }
+    else if ((firedAt ?? Infinity) < (turn.stoppedFirstAt ?? 0)) turn.stoppedFirstAt = undefined
     else if (turn.subagents < SUBAGENTS_MAX) turn.subagents++
     else log(`[turn] ${sid(sessionId)} subagent not counted · ${SUBAGENTS_MAX} running`)
   }

@@ -135,8 +135,8 @@ export interface HookServerHandlers {
   }) => void
   /** The engine waits on the person: a permission, a question. */
   onWait?: (body: { sessionId: string; firedAt?: number }) => void
-  /** A subagent of the session started, or stopped. */
-  onSubagent?: (body: { sessionId: string; started: boolean }) => void
+  /** A subagent of the session started, or stopped, and when its engine ran the hook. */
+  onSubagent?: (body: { sessionId: string; started: boolean; firedAt?: number }) => void
   /** For the end-to-end suite only: how long a Stop hook is held before it is acted on, as the hook's own
    *  verification can take under load (`HARNESSD_TEST_STOP_HOOK_DELAY_MS`). */
   stopHookDelayMs?: number
@@ -1079,7 +1079,8 @@ export function startHookServer(
       if (req.method === 'POST' && url === '/api/hook/subagent') {
         const hook = await boundHook('subagent', (body) => body.hookEvent === 'SubagentStart' || body.hookEvent === 'SubagentStop')
         if (!hook) return
-        handlers.onSubagent?.({ sessionId: hook.sessionId, started: hook.hookEvent === 'SubagentStart' })
+        const firedAt = hookFiredAt(req)
+        handlers.onSubagent?.({ sessionId: hook.sessionId, started: hook.hookEvent === 'SubagentStart', ...(firedAt ? { firedAt } : {}) })
         json(200, { ok: true })
         return
       }
