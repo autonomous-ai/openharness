@@ -2797,13 +2797,16 @@ export class CableSession {
     this.questionInbox.forget()
     this.greeting = false
     for (const { agentId, id, questions } of this.questionInbox.open()) {
-      // A real question whose turn moved on without a close is not asked again. A notice or a wait is different: its
-      // owner closes it, and it stays on the dial after its turn ends, so a dial that greets again is shown it again.
-      const owed = id.startsWith(SHOWN_ONLY_PREFIX) || this.liveTurns.get(agentId) === 'question'
-      if (owed && this.questionInbox.ask(agentId, id)) {
+      if (this.owed(agentId, id) && this.questionInbox.ask(agentId, id)) {
         await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
       }
     }
+  }
+
+  /** Whether a dial that lost its questions is asked this one again. A real question whose turn moved on without a close
+   *  is not. A notice or a wait is: its owner closes it, and it stays on the dial after its turn ends. */
+  private owed(agentId: string, id: string): boolean {
+    return id.startsWith(SHOWN_ONLY_PREFIX) || this.liveTurns.get(agentId) === 'question'
   }
 
   /**
@@ -3278,10 +3281,10 @@ export class CableSession {
     if (this.questionInbox.read(agentId).ok && (this.greeting || !this.questionInbox.ask(agentId, id))) return
     await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
   }
-  /** Every question, notice and wait this dial holds, whether or not its turn is still live: a notice stays after its
-   *  turn ends. For a dial plugged in beside this one, which nothing else asks. */
-  openQuestions(): ReturnType<QuestionInbox['open']> {
-    return this.questionInbox.open()
+  /** What this dial would be asked again had it lost its questions, by the same rule: for a dial plugged in beside this
+   *  one, which nothing else asks. */
+  owedQuestions(): ReturnType<QuestionInbox['open']> {
+    return this.questionInbox.open().filter(({ agentId, id }) => this.owed(agentId, id))
   }
   /** A turn ended: its agent is no longer live. */
   private endLive(agentId: string): void {
