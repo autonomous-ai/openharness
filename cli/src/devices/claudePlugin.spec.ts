@@ -588,6 +588,20 @@ describe('claudeRunIn', () => {
     expect(process.env.CLAUDE_CONFIG_DIR).toBe(join(dir, 'profile-b'))
   })
 
+  // The command run inside an Orca terminal turns the plugin on or off in ~/.claude too: Claude Code's own default, which
+  // it reads with no CLAUDE_CONFIG_DIR.
+  it('with ~/.claude as the home the child gets no CLAUDE_CONFIG_DIR, though the process has one', async () => {
+    const dir = throwawayPath()
+    const script = join(dir, 'claude')
+    writeFileSync(script, '#!/bin/sh\necho "home: ${CLAUDE_CONFIG_DIR-none}"\n')
+    chmodSync(script, 0o755)
+    vi.stubEnv('CLAUDE_CONFIG_DIR', join(dir, 'profile-b'))
+
+    const run = claudeRunIn(join(dir, '.claude'))
+
+    expect(await run!(['--version'], 15_000)).toEqual({ code: 0, stdout: 'home: none\n', stderr: '' })
+  })
+
   it('is null when no claude is found', () => {
     const dir = throwawayPath()
     expect(claudeRunIn(join(dir, 'profile-a'))).toBeNull()

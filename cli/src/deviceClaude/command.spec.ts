@@ -109,6 +109,8 @@ async function device(argv: string[], deps: Partial<DeviceDeps> = {}) {
   const code = await runDeviceCommand(argv, {
     dataDir: folder(), port: PORT, platform: 'darwin', stdin: chunks(), claude: () => fakeClaude(),
     orcaHomes: async () => [], claudeIn: () => null,
+    // The command's own: CLAUDE_CONFIG_DIR stands for ~/.claude unless a spec runs it in an Orca terminal.
+    defaultClaudeHome: claudeHome,
     codexHome: folder(), codex: () => true, env: {}, cwd: '/',
     out: (line) => { out.push(line) }, err: (line) => { err.push(line) },
     ...deps,
@@ -424,7 +426,8 @@ describe('the dial skill', () => {
     const claudeThen = claudeHome
     expect(await device(['claude', 'enable'], { dataDir })).toEqual({ code: 0, out: [], err: [] })
     vi.stubEnv('CLAUDE_CONFIG_DIR', folder())
-    expect(await device(['claude', 'disable'], { dataDir })).toEqual({ code: 0, out: [], err: [] })
+    // The default home the enable ran with shares its plugin: turned off there too.
+    expect(await device(['claude', 'disable'], { dataDir, claudeIn: () => fakeClaude(INSTALLED) })).toEqual({ code: 0, out: [], err: [] })
     expect(existsSync(join(claudeThen, 'skills', 'dial'))).toBe(false)
     // Nothing is left to find: the record holds no folder.
     expect(answers(dataDir)).toEqual({ removed: { claude: true, codex: true } })
@@ -763,10 +766,20 @@ describe('Orca\'s Claude Code homes', () => {
       .toEqual({ code: 1, out: [], err: ['Could not save the dial setting.'] })
   })
 
+  /** Claude Code's default home in a throwaway folder, its plugin on there: the command run in an Orca terminal has the
+   *  account's home as its own (CLAUDE_CONFIG_DIR), and this one beside it, sharing its `plugins/`. */
+  function defaultHomeOn(): string {
+    const home = join(folder(), '.claude')
+    mkdirSync(home)
+    writeFileSync(join(home, 'settings.json'), JSON.stringify({ enabledPlugins: { 'harness-device@openharness': true } }))
+    return home
+  }
+
   it('the command\'s own home is not run twice', async () => {
     const dataDir = folder()
     const home = folder()
     const links = folder()
+    const defaultHome = defaultHomeOn()
     symlinkSync(claudeHome, join(links, 'own'))
     symlinkSync(home, join(links, 'home'))
     // The command run in an Orca terminal: its own home is one Orca lists, as itself and through a link. Another home is
@@ -774,11 +787,45 @@ describe('Orca\'s Claude Code homes', () => {
     const listing = async () => [claudeHome, join(links, 'own'), home, join(links, 'home'), home]
     for (const [verb, on] of [['enable', false], ['disable', true]] as const) {
       const { calls, claude, claudeIn } = claudes((at) => at === null ? INSTALLED : listed(on))
-      expect(await device(['claude', verb], { dataDir, claude, claudeIn, orcaHomes: listing }), verb).toEqual(ok)
-      expect(new Set(calls.map((call) => call.home)), verb).toEqual(new Set([null, realpathSync(home)]))
-      expect(calls.filter((call) => call.args === (on ? DISABLE : ENABLE)), verb).toEqual([{ home: realpathSync(home), args: on ? DISABLE : ENABLE }])
+      expect(await device(['claude', verb], { dataDir, claude, claudeIn, orcaHomes: listing, defaultClaudeHome: defaultHome }), verb).toEqual(ok)
+      expect(new Set(calls.map((call) => call.home)), verb).toEqual(new Set([null, defaultHome, realpathSync(home)]))
+      const turned = on ? DISABLE : ENABLE
+      expect(calls.filter((call) => call.args === turned), verb).toEqual([{ home: defaultHome, args: turned }, { home: realpathSync(home), args: turned }])
     }
+    // The default home is no Orca account's.
     expect(readPluginHomes(dataDir)).toEqual({ homes: [realpathSync(home)] })
+  })
+
+  // An uninstall in the command's own home takes the files the default home names: its entry would stay on, with nothing
+  // left to turn off.
+  it('disable in an Orca terminal turns the default home off before the uninstall', async () => {
+    const defaultHome = defaultHomeOn()
+    const other = folder()
+    const { calls, claude, claudeIn } = claudes((home) => home === null ? INSTALLED : listed(true))
+    expect(await device(['claude', 'disable'], { claude, claudeIn, orcaHomes: async () => [claudeHome, other], defaultClaudeHome: defaultHome })).toEqual(ok)
+    expect(calls).toEqual([
+      { home: defaultHome, args: 'plugin list --json' }, { home: defaultHome, args: DISABLE },
+      { home: realpathSync(other), args: 'plugin list --json' }, { home: realpathSync(other), args: DISABLE },
+      { home: null, args: 'plugin list --json' }, { home: null, args: UNINSTALL },
+    ])
+  })
+
+  // Off there, plain sessions would never ring, and the devices turn on no Orca home while it reads off.
+  it('enable after a disable in an Orca terminal turns the default home on after the install', async () => {
+    const dataDir = folder()
+    const defaultHome = defaultHomeOn()
+    const listing = async () => [claudeHome]
+    const off = claudes((home) => home === null ? INSTALLED : listed(true))
+    expect(await device(['claude', 'disable'], { dataDir, claude: off.claude, claudeIn: off.claudeIn, orcaHomes: listing, defaultClaudeHome: defaultHome })).toEqual(ok)
+    // Uninstalled, and off in the default home.
+    const { calls, claude, claudeIn } = claudes((home) => home === null ? {} : listed(false))
+    expect(await device(['claude', 'enable'], { dataDir, claude, claudeIn, orcaHomes: listing, defaultClaudeHome: defaultHome })).toEqual(ok)
+    const install = calls.findIndex((call) => call.args === 'plugin install harness-device@openharness --scope user')
+    expect(install).toBeGreaterThan(-1)
+    expect(calls.slice(install + 1)).toEqual([
+      { home: defaultHome, args: '--version' }, { home: defaultHome, args: 'plugin list --json' }, { home: defaultHome, args: ENABLE },
+    ])
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [] })
   })
 
   it('disable turns off each Orca home first, then the default home', async () => {
