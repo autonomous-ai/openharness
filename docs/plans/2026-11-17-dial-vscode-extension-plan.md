@@ -73,13 +73,13 @@ Nothing under `cli/src/core/` or `cli/src/harnessd/` changes, and `cli/src/archi
 - **The extension shows nothing of its own:** no panel, no status bar item, no notification, no palette command. Its output channel `Harness Device` names its state (`noHarness`, `notRunning`, `unplugged`, `connected`) and counts, nothing else. It does nothing on Windows or in a remote window (`vscode.env.remoteName` set). It starts nothing but `harness device vscode link`.
 - **Wire, exact.** Stream open: `{"type":"vscode","window":"<id>"}`, `<id>` matching `[A-Za-z0-9-]{8,36}`, at most 96 bytes, 1 a second a connection; one stream per window, at most 8, a ninth window answered 409. State: `{"type":"vscode-state","window":"<id>","terminals":[<pid>,…],"active":<pid>|null,"focused":<bool>}`, at most 1 KiB, 8 a second a connection, at most 32 distinct integers in 2..2^31-1, `active` one of them or null. Lines: `{"show":<pid>}`, `{"scroll":<n>,"pid":<pid>}` (|n| at most 100), `{"replaced":true}`. A field either side does not know is ignored.
 - **The extension's timings:** `link` 5 s and 4 KiB; the stream's head 2 s; backoff 1 s, 2 s, 4 s … 30 s, reset by a stream open over 30 s; the socket's folder watched at most once a second, plus a look every 5 min; state reports coalesced to the latest, at most 4 a second, each a `POST /` on a connection of its own with `Connection: close`; a line over 1 KiB ends the stream.
-- **The match is the process tree, exact:** one `ps -axo pid=,ppid=,comm=` read (`scannedApp.ts` `readProcessNames`, `parentChain`, 16 parents at most), at most one in flight and one queued, at most once per 5 s per agent after a failure. Only pids and parents are read: never another process's environment (cli/AGENTS.md rule 4).
+- **The match is the process tree, exact:** one `ps -axo pid=,ppid=` read (`vscodeTerminals.ts` `readProcessParents`, `scannedApp.ts` `parentChain`, 16 parents at most), at most one in flight and one queued, at most once per 5 s per agent after a failure. Only pids and parents are read: never another process's environment (cli/AGENTS.md rule 4).
 - **Connections** stay at `LISTENER_MAX_CONNECTIONS = 16`.
 - **Install:** `--install-extension <file> --force` and `--uninstall-extension autonomous-ai.harness-device`, 60 s each, no shell, VS Code's own CLI (`<app>/Contents/Resources/app/bin/code` on macOS, `code` on Linux). VS Code's default profile only (`~/.vscode/extensions/extensions.json`). No `@vscode/vsce`, no Marketplace, no Open VSX, no outside service, no secret.
 - **Never installed when off:** the devices process runs `enable` only when the extension is on at another version than this build's. A failed update retries after 1 h.
 - **Menu copy, exact:** `Turn on VS Code`. The item's click runs `harness device vscode enable` with a 90 s deadline.
 - **Logs and measures:** counts and fixed words. Never a pid, a window id, a path, a name or a label, in the daemon's log, the extension's channel or Harness Device's log.
-- **Never the developer's own VS Code.** No task, test or check runs `harness device vscode enable` or `disable` with the real dependencies, runs an installed VS Code's `code`, runs `open -b com.microsoft.VSCode`, opens a `vscode://` link, or reads or writes `~/.vscode` or VS Code's settings. Unit tests pass a fake `code` and a fake record; `services/devices.spec.ts`'s `start()` always passes a fake `vscodeExtension` and a fake `processNames`; end-to-end daemons run under a throwaway home with the harness's fake `open`; the one real VS Code is the gate's and the spike's throwaway, downloaded into a temporary folder and run with its own `--user-data-dir`, `--extensions-dir` and `HOME`. The first real `enable` is the person's check after merge.
+- **Never the developer's own VS Code.** No task, test or check runs `harness device vscode enable` or `disable` with the real dependencies, runs an installed VS Code's `code`, runs `open -b com.microsoft.VSCode`, opens a `vscode://` link, or reads or writes `~/.vscode` or VS Code's settings. Unit tests pass a fake `code` and a fake record; `services/devices.spec.ts`'s `start()` always passes a fake `vscodeExtension` and a fake `processParents`; end-to-end daemons run under a throwaway home with the harness's fake `open`; the one real VS Code is the gate's and the spike's throwaway, downloaded into a temporary folder and run with its own `--user-data-dir`, `--extensions-dir` and `HOME`. The first real `enable` is the person's check after merge.
 - **Repo rules:** a test that fails first, at the layer where the behavior lives; no fixed sleeps (clocks and timers are passed in); comments say why; copy short; 100% per file for `cli/src/services/`.
 - **Platforms:** macOS and Linux. Windows: the listener has no Windows path, so the extension stops, `status` says `absent` and the menu item never shows.
 
@@ -275,7 +275,7 @@ Rules the tests pin:
 - **`terminalOf`:** the first pid of the chain, nearest first, that an open window's state lists; of two windows that list it, the one whose state came last.
 - **`changed()`** is called once whenever the answer of `terminalOf` for any listed agent differs from before: after a state, a stream's open or end, a read, an agent leaving.
 - **A window's writer:** one line in flight per stream; a pending show (the latest wins) is written from `onWritable`.
-- **Log lines, fixed words and counts only:** `[devices] vscode stream · open · windows <n>`, `[devices] vscode stream · ended · <StreamEnd> · windows <n>`, and, a minute after the first of a minute's events, `[devices] vscode · in the last minute: <n> shows, <n> taps, <n> refused states, <n> ps reads`.
+- **Log lines, fixed words and counts only:** `[devices] vscode stream · open · windows <n>`, `[devices] vscode stream · ended · <StreamEnd> · windows <n>`, and, a minute after the first of a minute's events, `[devices] vscode · in the last minute: <n> shows, <n> taps, <n> refused states, <n> ps reads, <n> failed`.
 
 - [ ] **Step 1: Write the failing tests** with a fake `ListenerStream` whose drain the test controls, a `processes` that answers from a table the test sets and counts its calls, and a clock the test moves:
 
@@ -557,7 +557,7 @@ export function fakeVscode(options?: { remoteName?: string }): {
 }
 ```
 
-The facade asks each terminal's `processId` once, keeps the answer, and tells a change when it resolves; one that rejects, or resolves undefined, is never listed.
+The facade reads every terminal's `processId` again on each terminal event, on `onDidChangeTerminalState` and on a window focus change (a relaunched shell gets a new pid), and tells a change when the answer differs; one that rejects, or resolves undefined, is never listed.
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -694,15 +694,15 @@ it('stop ends the stream, the watch and a link still running, and nothing is tol
 
 **Interfaces — Consumes:** `vscodeStreams`, `VscodeTerminals` (Task 3); `createVscodeAdapter`, `termPid` (Task 5).
 
-**Interfaces — Produces:** `DevicesDeps.processNames?: () => Promise<readonly ProcessName[]>` (for this service's tests; `readProcessNames` by default).
+**Interfaces — Produces:** `DevicesDeps.processParents?: VscodeTerminalsDeps['processes']` (for this service's tests; `readProcessParents` by default).
 
-- One `vscodeStreams({ processes: deps.processNames ?? readProcessNames, changed, now: monotonic, after: timerIn('vscode'), log })`, made before the adapters. `changed` is `part.call('dial', () => cable.syncAgents())`: an adapter's capabilities are read at each look, so the dials are told to look.
+- One `vscodeStreams({ processes: deps.processParents ?? readProcessParents, changed, now: monotonic, after: timerIn('vscode'), log })`, made before the adapters. `changed` is `part.call('dial', () => cable.syncAgents())`: an adapter's capabilities are read at each look, so the dials are told to look.
 - The adapter is given `terminals` (that object) in place of `NO_WINDOWS`, which is deleted from `vscode.ts`: nothing else reads it.
 - The listener's handlers gain `vscode` and `'vscode-state'`, after `notice`.
 - Each change of the observed source tells the windows which agents are VS Code's, in a part of its own (`part.call('vscode', …)`): `vscode.agents(...)` with `termPid(observed.paneOf(id, 'vscode') ?? '')` of each listed agent that has one.
 - `cli/AGENTS.md`, the devices row, after Orca's plugin's sentence: Claude Code and Codex in VS Code's integrated terminal, matched to their terminal by the process tree from the shells each VS Code window reports through Harness's own extension (`plugins/harness-device-vscode`) on the listener's `vscode` stream, one per window and at most 8 (`cable/hosts/vscodeTerminals.ts`); a tap shows the terminal and brings VS Code forward, and a rest shows it while VS Code is in front; each window's latest state and one parent chain an agent (in memory).
 
-- [ ] **Step 1: Write the failing tests.** `start()` gains `processNames` (a table the spec sets, counted; empty by default, so no spec reads this machine's processes). The spec opens the `vscode` handler with a fake stream and hands states to `'vscode-state'`, as it does for `tabs` and `dial`:
+- [ ] **Step 1: Write the failing tests.** `start()` gains `processParents` (a table the spec sets, counted; empty by default, so no spec reads this machine's processes). The spec opens the `vscode` handler with a fake stream and hands states to `'vscode-state'`, as it does for `tabs` and `dial`:
 
 ```ts
 it('the listener is given the vscode stream and its state report, with their bounds', …)
@@ -1165,7 +1165,7 @@ it('raise runs <the command the spike found>', …)                             
 ```
 
 - [ ] **Step 2: Run** the three files. Expected: FAIL.
-- [ ] **Step 3: Implement.** The end-to-end case 2 expects the tap's line with `raise`; the gate gains a second window and asserts that a tap's show from the window behind makes it the focused one.
+- [ ] **Step 3: Implement.** The end-to-end case 2 expects the tap's line with `raise`; the two-window raise case is not in the gate (Decisions, 4).
 - [ ] **Step 4: Run** the three files, `e2e/dialVscode.e2e.ts` and `npm run test:vscode`. Expected: PASS.
 - [ ] **Step 5: Commit** `Dial: a tap raises the VS Code window that holds the terminal`.
 
@@ -1434,12 +1434,14 @@ does not exist. There, a tap on a terminal in a window behind still shows the te
   running the throwaway's executable again, with the same `--user-data-dir`, `--extensions-dir` and `HOME` and a
   second folder; the running instance took it. A window opened by the driver with `vscode.openFolder(…,
   { forceNewWindow: true })` also gets the installed extension.
+  The gate does not use it in the end (Decisions, 4).
 
 ## Decisions of 2026-11-17 (the draft's open questions, answered by the PM)
 
 1. #4407 (`feat/dial-vscode-follow`) merges first and this branch is rebased onto it (Base); the terminal pane stays in the one `vscode` adapter, `tap: 'instead'`, its `focus` running `open -b com.microsoft.VSCode` itself on macOS after its show is queued, and the panel's tap and rest stay as #4407 left them (Task 5).
 2. The real-VS Code gate does not read the terminal's scroll position: it checks the install, the pids, `show`, and that a scroll line runs VS Code's scroll command on the right terminal by the extension's count (Task 25); the visual scroll is the person's check after merge (Verification check 6 (d)).
 3. A process-table read happens only while some window holds a state and some VS Code agent has no chain, so never with the extension off (Design; Task 3).
+4. (2026-11-17, after Task 19) The gate has no two-window raise case. Five runs showed macOS does not let a background throwaway VS Code activate itself. The spike's result and the person's check 6 (f) stand.
 
 ## Verification
 

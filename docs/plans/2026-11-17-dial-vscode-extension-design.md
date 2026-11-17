@@ -67,7 +67,8 @@ VS Code window ── extension ──"vscode" stream (NDJSON, devices.sock)◀�
 Id `autonomous-ai.harness-device` (publisher `autonomous-ai`, name `harness-device`), display name "Harness Device",
 version the CLI's own, `engines.vscode` `^1.75.0`, activation
 `onStartupFinished`, no contributed commands, views or settings. TypeScript built to one JavaScript file; Node's
-built-in modules and the `vscode` API only, no runtime dependency. It runs in every local window; in a remote window
+built-in modules and the `vscode` API only, no runtime dependency. It runs in every local window, Restricted Mode too
+(`capabilities.untrustedWorkspaces` supported); in a remote window
 (SSH, WSL, container) its terminals are another computer's, so it does nothing there (`vscode.env.remoteName` set).
 
 Like the Orca plugin's worker, its loop (`src/loop.ts`) takes its inputs (platform, home, `PATH`, process runner,
@@ -88,7 +89,8 @@ real ones.
    `Connection: close` (no keep-alive agent), never on the stream's connection:
    `{"type":"vscode-state","window":"<id>","terminals":[<shell pid>, …],"active":<pid>|null,"focused":<bool>}`.
    At most 32 terminals (the first 32 of `window.terminals`); a terminal whose `processId` is not known yet is left out
-   until it resolves.
+   until it resolves. Every terminal's pid is read again on each terminal event, on `onDidChangeTerminalState` and on
+   a focus change: a relaunched shell gets a new pid.
 5. Lines from the stream:
    - `{"show":<pid>}`: `Terminal.show(false)` on the terminal whose shell pid it is; none: ignored, counted.
    - `{"scroll":<n>}`: when the active terminal's pid is the `pid` in the line, run
@@ -131,12 +133,12 @@ in `services/devices.ts`, like every app.
 
 - **The match is the process tree, exact.** An agent's process (`claude`, or Codex's own process) is a descendant of
   the shell whose pid VS Code reports. For each VS Code agent (app `vscode`, not the extension panel's), the devices
-  take its pid's parent chain from one `ps -axo pid=,ppid=,comm=` read (`scannedApp.ts` `readProcessNames` and
+  take its pid's parent chain from one `ps -axo pid=,ppid=` read (`readProcessParents`, and `scannedApp.ts`
   `parentChain`, 16 levels at most), and the agent's terminal is the window and shell pid found in that chain. The chain
   of a running pid does not change, so it is read once per agent pid and kept until the agent leaves; one `ps` read
   serves every agent that needs one, and a read is asked for only while some window holds a state and some VS Code
   agent has no chain (so never with the extension off): when such an agent appears, or its last read failed (at most once per 5 s per agent; at most one read in flight, one queued). A shell with no agent in
-  it never asks for a read. Only ppids and names are read: never another process's environment (cli/AGENTS.md rule 4).
+  it never asks for a read. Only pids and parents are read: never another process's environment (cli/AGENTS.md rule 4).
 - **Refresh.** When a window's state, or a new chain, changes which agents have a terminal, `vscodeTerminals` asks the
   devices for a list refresh, since an adapter's capabilities are read at each look (`observed.ts`).
 - **The agent's pid.** A hooked session's place carries its caller (the engine's own process, `notify.mjs`
@@ -231,7 +233,7 @@ are; `docs/plans/2026-11-13-device-menubar-design.md` gains the item. The menu i
 ## Measures (rule 8)
 
 The devices log: a `vscode` stream opening and ending, with its reason and the number of windows open; once a minute,
-when any happened, counts of shows, taps, scroll lines sent and dropped, refused states and `ps` reads; the extension
+when any happened, counts of shows, taps, scroll lines sent and dropped, refused states, `ps` reads and failed `ps` reads; the extension
 update (`set up`, `updated`, `failed`, `left removed`, as the plugin's tally). Never a pid, a window id, a path, a name
 or a label. The extension's output channel: its state and counts, nothing else.
 
@@ -329,6 +331,11 @@ does and never does, how it is turned on and off).
   devices match it against each panel session's title (custom title, else AI title, read from its transcript, cut to
   24 characters and `…` as the panel cuts it) and follow only when exactly one matches. The title is used for the match
   only: never shown, sent, or logged (PM, 2026-11-17).
+
+## Known gaps (PM, 2026-11-17)
+
+- With two dials, one dial's scroll can follow the agent the other dial shows.
+- A swipe that rests on a terminal in a window behind does not raise that window. Only a tap does.
 
 ## Not in this work
 
