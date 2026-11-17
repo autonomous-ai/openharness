@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { APP_IDS, appDisplayName, detectApp, detectHost, hostDisplayName, inHerdr, UNKNOWN_APP } from './hostDetect.js'
+import { APP_IDS, appDisplayName, detectApp, detectHost, hostDisplayName, inCmux, inHerdr, UNKNOWN_APP } from './hostDetect.js'
 
 describe('detectHost', () => {
   it.each([
@@ -225,5 +225,59 @@ describe('inHerdr', () => {
   ])('not hc\'s own terminal: %j', (hints) => {
     expect(inHerdr(hints)).toBe(false)
     expect(detectApp(hints)).not.toBe('herdr')
+  })
+})
+
+// Only cmux's own terminal is cmux's: every program started there inherits its CMUX_* variables (`code .`, WezTerm,
+// kitty, tmux), and the ids are outside text that decide which adapter may type into a terminal.
+describe('inCmux', () => {
+  const S = '6F1C2B3A-4D5E-4F60-8172-93A4B5C6D7E8'
+  const W = '0A1B2C3D-4E5F-4061-8273-94A5B6C7D8E9'
+  const cmux = { CMUX_SURFACE_ID: S, CMUX_WORKSPACE_ID: W }
+
+  it.each<Record<string, string>>([
+    cmux,
+    { ...cmux, TERM_PROGRAM: 'ghostty' },
+    { ...cmux, __CFBundleIdentifier: 'com.cmuxterm.app' },
+    { CMUX_SURFACE_ID: S.toLowerCase(), CMUX_WORKSPACE_ID: W.toLowerCase() },
+  ])("cmux's own terminal: %j", (hints) => {
+    expect(inCmux(hints)).toBe(true)
+  })
+
+  it.each<Record<string, string>>([
+    {},
+    { CMUX_SURFACE_ID: S },
+    { CMUX_WORKSPACE_ID: W },
+    ...['--help', 'x; rm -rf /', `${S}0`].map((surface) => ({ CMUX_SURFACE_ID: surface, CMUX_WORKSPACE_ID: W })),
+    ...['vscode', 'WezTerm', 'tmux', 'iTerm.app'].map((program) => ({ ...cmux, TERM_PROGRAM: program })),
+    ...['HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE', 'HC_TERMINAL_ID', 'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_TERMINAL_HANDLE']
+      .map((own) => ({ ...cmux, [own]: '1' })),
+  ])("not cmux's own terminal: %j", (hints) => {
+    expect(inCmux(hints)).toBe(false)
+  })
+
+  it("a cmux terminal is cmux's host and page, never Ghostty's", () => {
+    for (const hints of [{ ...cmux, TERM_PROGRAM: 'ghostty' }, { ...cmux, TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: 'com.mitchellh.ghostty' }]) {
+      expect(detectHost(hints)).toBe('cmux')
+      expect(detectApp(hints)).toBe('cmux')
+    }
+  })
+
+  it('a program started from a cmux terminal is its own', () => {
+    const hints = { ...cmux, TERM_PROGRAM: 'vscode', __CFBundleIdentifier: 'com.microsoft.VSCode' }
+    expect(detectHost(hints)).toBe('vscode')
+    expect(detectApp(hints)).toBe('vscode')
+  })
+
+  it("tmux inside cmux is tmux, on cmux's page", () => {
+    const hints = { ...cmux, TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.cmuxterm.app' }
+    expect(detectHost(hints)).toBe('tmux')
+    expect(detectApp(hints)).toBe('cmux')
+  })
+
+  it("a cmux terminal whose ids the hook left out is Ghostty's host, on cmux's page", () => {
+    const hints = { TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: 'com.cmuxterm.app' }
+    expect(detectHost(hints)).toBe('ghostty')
+    expect(detectApp(hints)).toBe('cmux')
   })
 })
