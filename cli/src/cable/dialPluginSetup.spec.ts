@@ -2,10 +2,23 @@
  * The plugin's pass against a fake `claude`: a ClaudeRun whose `plugin list` follows its own installs, uninstalls and
  * updates. The real `claude` and ~/.claude are never touched.
  */
-import { describe, expect, it } from 'vitest'
+import * as fs from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ClaudeRun } from '../devices/claudePlugin.js'
-import type { SetupCount } from '../devices/dialSkillFiles.js'
+import { readRemoved, type SetupCount } from '../devices/dialSkillFiles.js'
 import { createDialPluginSetup, type DialPluginSetupDeps } from './dialPluginSetup.js'
+
+// A copy of the module, so a test can watch the file calls a pass makes.
+vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
+
+const folders: string[] = []
+afterEach(() => {
+  vi.restoreAllMocks()
+  for (const dir of folders.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
 
 const ADD = 'plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin plugins'
 const INSTALL = 'plugin install harness-device@openharness --scope user'
@@ -45,6 +58,20 @@ function fakeClaude({ version = '2.1.287', installed, pulled = '9f2c1d0e7a4b', f
   return { run, calls, writes }
 }
 
+/** Every synchronous file call from here on, by name and first argument, until the test ends. */
+function fileCalls(): [string, unknown][] {
+  const calls: [string, unknown][] = []
+  const module = fs as unknown as Record<string, (...args: unknown[]) => unknown>
+  for (const [name, real] of Object.entries(module)) {
+    if (typeof real !== 'function' || !name.endsWith('Sync')) continue
+    vi.spyOn(module, name).mockImplementation((...args) => {
+      calls.push([name, args[0]])
+      return real(...args)
+    })
+  }
+  return calls
+}
+
 function rig(claude: ReturnType<typeof fakeClaude> | null = fakeClaude(), over: Partial<DialPluginSetupDeps> = {}) {
   const state = { wanted: true, recorded: undefined as string | undefined, saves: true, now: 0, lookups: 0, found: claude }
   const counted: Array<[SetupCount] | [SetupCount, string]> = []
@@ -80,6 +107,25 @@ describe('createDialPluginSetup', () => {
     expect(await setup.pass()).toBe(false)
     expect(claude.calls).toHaveLength(before)
     expect(state.lookups).toBe(1)
+  })
+
+  it('a pass with this version recorded, or within the hour after a failure, reads no file', async () => {
+    // wanted() as the devices compose it: dial-skill.json, read anew at each call.
+    const dataDir = mkdtempSync(join(tmpdir(), 'dial-plugin-'))
+    folders.push(dataDir)
+    const { setup, state, counted } = rig(fakeClaude({ fail: [INSTALL] }), { wanted: () => readRemoved(dataDir).claude !== true })
+    await setup.pass()
+    expect(counted).toEqual([['failed', 'install']])
+    const calls = fileCalls()
+
+    state.now = HOUR - 1
+    await setup.pass()
+    expect(calls).toEqual([])
+
+    state.recorded = '0.6.59'
+    state.now = HOUR
+    await setup.pass()
+    expect(calls).toEqual([])
   })
 
   it('a computer that never had a dial, or a removed Claude Code: no lookup', async () => {

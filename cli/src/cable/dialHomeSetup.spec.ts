@@ -455,17 +455,20 @@ describe('the devices set the dial skill up', () => {
       ['statSync', join(later.dataDir, DIAL_SKILL_FILE)], ['statSync', join(later.claudeHome, 'settings.json')], ['statSync', later.codexHome],
     ])
 
-    // An engine a scan read removed is looked at no more until a stamp changes.
+    // An engine a scan read removed is looked at no more until a stamp changes, its open sessions' homes included.
     let removed = false
     const off = rig({ removed: () => (removed ? { codex: true } : {}) })
+    const open = folder()
     off.writer.started()
     removed = true
-    off.writer.scanned([ownerIn(folder())])
+    off.writer.scanned([ownerIn(open)])
     calls.length = 0
+    const offReads = off.read.removed
 
-    off.writer.scanned([])
+    off.writer.scanned([ownerIn(open)])
 
     expect(calls).toEqual([['statSync', join(off.dataDir, DIAL_SKILL_FILE)], ['statSync', join(off.claudeHome, 'settings.json')]])
+    expect(off.read.removed).toBe(offReads)
   })
 
   it('a home is not handled while its engine is removed', () => {
@@ -936,6 +939,47 @@ describe('what the person removed stays removed, and Harness\'s own is kept curr
     r.writer.scanned([ownerIn(r.codexHome)])
     expect(hasSkill(r.codexHome)).toBe(true)
     expect(r.counted).toEqual([['codex', 'failed', 'write'], ['codex', 'set up']])
+  })
+
+  it('a home that could not be written waits out its hour through an attach', () => {
+    const r = rig()
+    // A dial folder that takes no file.
+    const dial = join(skillsAt(r.codexHome), 'dial')
+    mkdirSync(dial)
+    chmodSync(dial, 0o500)
+    r.writer.attached()
+    // A replug two minutes later neither tries it nor counts it again.
+    r.clock.at = 120_000
+    r.writer.attached()
+    chmodSync(dial, 0o700)
+    expect(r.counted).toEqual([['codex', 'failed', 'write']])
+
+    r.clock.at = 3_600_000
+    r.writer.scanned([])
+    expect(hasSkill(r.codexHome)).toBe(true)
+    expect(r.counted).toEqual([['codex', 'failed', 'write'], ['codex', 'set up']])
+  })
+
+  it('a recorded folder whose skill cannot be brought current waits out its hour through an attach', () => {
+    const r = rig()
+    const listedHome = folder()
+    // No default home: the recorded folder is the pass's one write.
+    rmSync(r.codexHome, { recursive: true })
+    const skills = skillsAt(listedHome)
+    oldSkillIn(skills)
+    dialOnce(r.dataDir, { claude: [], codex: [skills] })
+    // A dial folder that takes no new file.
+    chmodSync(join(skills, 'dial'), 0o500)
+    r.writer.attached()
+    r.clock.at = 120_000
+    r.writer.attached()
+    chmodSync(join(skills, 'dial'), 0o700)
+    expect(r.counted).toEqual([['codex', 'failed', 'write']])
+
+    r.clock.at = 3_600_000
+    r.writer.attached()
+    expect(hasSkill(listedHome)).toBe(true)
+    expect(r.counted).toEqual([['codex', 'failed', 'write'], ['codex', 'updated']])
   })
 })
 
