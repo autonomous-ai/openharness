@@ -33,7 +33,7 @@ export interface ClaudeStatus {
 export type ClaudeStep = 'unsupported' | 'list' | 'marketplace' | 'install' | 'enable' | 'uninstall' | 'update'
 export type ClaudeResult = { ok: true } | { ok: false; error: string; step: ClaudeStep }
 /** What the devices' setup did: installed or updated the plugin; found it current, on as it should be; or found it absent,
- *  not on, which the person made it, and ran nothing for it. */
+ *  not on as the person left it, and ran nothing for it. */
 export type ClaudeSetup = { ok: true; outcome: 'installed' | 'updated' | 'current' | 'absent' } | { ok: false; error: string; step: ClaudeStep }
 type ClaudeFailure = Extract<ClaudeResult, { ok: false }>
 
