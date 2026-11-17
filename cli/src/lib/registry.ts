@@ -1998,11 +1998,13 @@ class Registry {
     this.writer.assertOpen()
     const selected = this.byAgent(agentId)
     if (!selected || (!isTerminalEngine(selected.engine) && !validProcessIdentity(input.processIdentity))) return { state: 'not-published' }
-    // A peer that confirmed this same process while this write waited (discovery's pass over the pane) published this
-    // launch, not another owner's. Read apart, a resume that discovery beat answered RESUME_UNCONFIRMED over its running
-    // engine (e2e/eagerOpenCode.e2e.ts, 2026-11-17). Any other process or field still ends the write.
+    // A peer that recorded this same process while this write waited (discovery's pass over the pane: its confirmation,
+    // active and ready, or the process and the grid its argv names after a retarget) wrote part of this launch, not
+    // another owner's. Read apart, a resume that discovery beat answered RESUME_UNCONFIRMED over its running engine
+    // (e2e/eagerOpenCode.e2e.ts, 2026-11-17). Any other process or field still ends the write.
     const owners = [selected, { ...selected, processIdentity: input.processIdentity }].map(ownershipIdentity)
-    const launches = [selected, { ...selected, launch: { state: 'ready' as const } }].map(launchIdentity)
+    const grids = input.grid === undefined ? [selected] : [selected, { ...selected, grid: input.grid }]
+    const launches = grids.flatMap(row => [row, { ...row, active: true, launch: { state: 'ready' as const } }]).map(launchIdentity)
     const requested = structuredClone(input)
     const expires = Math.min(authority.expires ?? Infinity, performance.now() + 5_000)
     const verify = () => {
