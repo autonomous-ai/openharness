@@ -19,7 +19,7 @@ const README_FIX = `diff --git a/README.md b/README.md
 -# Orders service
 +# Orders service.
 `
-const ALLOWED = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'ZDOTDIR', 'LANG', 'TERM', 'TMPDIR', 'GIT_CONFIG_GLOBAL', 'npm_config_userconfig', 'npm_config_cache', 'DEVELOPER_DIR', 'CLAUDE_CONFIG_DIR']
+const ALLOWED = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'ZDOTDIR', 'LANG', 'TERM', 'TMPDIR', 'CLAUDE_CODE_TMPDIR', 'GIT_CONFIG_GLOBAL', 'npm_config_userconfig', 'npm_config_cache', 'DEVELOPER_DIR', 'CLAUDE_CONFIG_DIR']
 
 let base: string
 let scenarios: string
@@ -153,6 +153,8 @@ describe('stage', () => {
       expect(st.env.SHELL).toBe('/bin/zsh')
       expect(st.env.ZDOTDIR).toBe(join(st.root, 'zdotdir'))
       expect(st.env.TMPDIR).toBe(join(st.root, 'tmp'))
+      // Claude Code's own temp folder, else /private/tmp/claude-<uid>/<repo path>, outside the run root.
+      expect(st.env.CLAUDE_CODE_TMPDIR).toBe(join(st.root, 'tmp'))
       expect(st.env.GIT_CONFIG_GLOBAL).toBe(join(st.root, 'gitconfig'))
       expect(st.env.npm_config_userconfig).toBe(join(st.root, 'npmrc'))
     }
