@@ -450,3 +450,16 @@ uint32_t max_ui_next_wake_ms(uint32_t now_ms)
 }
 
 const char *max_ui_selected(void) { return max_m.selected[0] ? max_m.selected : NULL; }
+
+bool max_toast_shown(uint32_t now_ms)
+{
+    const max_agent_t *a = max_m.toast_id[0] ? max_find(max_m.toast_id) : NULL;
+    return a && a->state == MAX_ASKING && now_ms - max_m.toast_from < MAX_TOAST_MS;
+}
+
+bool max_can_talk(const max_agent_t *a)
+{
+    if (!a || !max_m.link || max_m.talk != MAX_TALK_IDLE || max_form_open()) return false;
+    const max_ask_t *k = a->state == MAX_ASKING ? max_ask_of(a->id) : NULL;
+    return !k || (!k->permission && k->phase != MAX_ASK_SENDING);
+}

@@ -77,25 +77,38 @@ No new message in this milestone.
 1920 x 480 at about 225 ppi: 1 mm is about 8.9 px, and a finger needs about 80 px.
 
 ```
-┌────────┬──────────────┬──────────────┬──────────────┬────────┐
-│ Mac    │ name  engine │ name  engine │ name  engine │        │
-│ 3 on   │ machine      │ machine      │ machine      │  Talk  │
-│        │ state        │ asks:        │ state        │        │
-│ Server │ activity     │ question     │ activity     │        │
-│ 1 on   │ steps        │              │ steps   2:14 │        │
-└────────┴──────────────┴──────────────┴──────────────┴────────┘
+┌────────┬──────────────────────────────────┬────────┬────────┬────────┬────────┐
+│ Mac    │ harness-web   Claude · Mac  Asks │ name   │ name   │ name   │ name   │
+│ 2 on   │        ┌──────────────────────┐  │ bubble │ bubble │ bubble │ bubble │
+│ Studio │  pet   │ Where should the ... │  │        │        │        │        │
+│ 2 on   │        └──────────────────────┘  │  pet   │  pet   │  pet   │  pet   │
+│        │ Tap to │ [Inside] [Next] [Over]   │        │        │        │        │
+│ New    │  talk  │                          │ state  │ state  │ state  │ state  │
+└────────┴──────────────────────────────────┴────────┴────────┴────────┴────────┘
 ```
 
-- The rail (about 300 px): the link ("Not connected", or the computer's name) and the machines with their agents.
-- Three lanes at a time. Each lane shows the agent's name, engine and machine, its state, what it is doing now, its
-  last tool steps and the elapsed time. A lane whose agent asks shows the question (read only in this milestone); a
-  failed turn shows red.
-- Order: agents that need a person first, then working ones, then the rest in the roster's order. More than three:
-  swipe sideways, a page at a time.
-- Tap a lane: it is selected, and the computer opens that agent (`agent.open`, as the Pro sends it).
-- The Talk slot (about 260 px): a tap records for the selected agent through the Pro's voice path; another tap sends.
-- Copy is short and in English. The Pro's light theme and Inter faces: at the Pro's 258 ppi they come out about the
-  same physical size.
+- The Pro's dark Pets look, on Max's own tokens with the values of the Pro's `pod/home/ph.h` (the Pro's `theme.h`
+  paper colour is only its clear colour and never shows): the room ground, warm paper speech bubbles, dark thought
+  bubbles, lanes on the engine's gradient, the Pro's pets, and Inter faces. At the Pro's 258 ppi they come out about
+  the same physical size.
+- The rail (about 220 px): the link ("Not connected", or the computer's name), the machines with their agents, and
+  New Harness when the computer offers it.
+- The room (800 px): one agent, large. Its name, engine, machine and state; its pet; a speech bubble with its
+  question, a thought bubble with what it is doing and the step under it, or its failure or summary on paper; and the
+  buttons: the answers, Yes and No, or Dismiss.
+- The lanes: every other agent, up to four a page, each with its pet, a short bubble and its state. A lane whose
+  agent asks has a peach ring. Swipe sideways for the next page. Order: agents that need a person first, then working
+  ones, then the rest in the roster's order.
+- Voice goes to the agent in the room, always: tap its pet (Tap to talk under it). The pet listens, the bubble says
+  who is listening, and the room offers Send and Cancel; everything outside the room rests until then. A permission
+  prompt takes no voice, only Yes or No.
+- Which agent the room shows: the oldest question waiting, when nobody is at the bar. After an answer the room moves
+  to the next question if one waits, else it stays to show the agent at work. Tap a lane to see that agent; the
+  computer opens it too (`agent.open`, as the Pro sends it).
+- A question never takes the room from a person at the bar (a tap in the last 20 s, talking, or New Harness open):
+  it shows the Pro's toast over the lanes for 5 s instead, and a tap on the toast opens it. Left alone for 20 s, the
+  room goes back to the question waiting.
+- Copy is short and in English.
 
 ## Tests
 

@@ -19,6 +19,8 @@
 #define MAX_VERSION_BYTES 24
 #define MAX_DONE_MS 60000u          // how long a finished turn's summary stays on its lane
 #define MAX_WAKE_MS 60000u          // the render task's longest sleep when nothing drawn depends on the time
+#define MAX_QUIET_MS 20000u         // a tap or swipe this recent means a person is at the bar: a new question waits
+#define MAX_TOAST_MS 5000u          // a question that waits is announced this long, as the Pro's toast
 
 // The glass, 1920 x 480 at about 225 ppi (8.86 px a mm), or the demo bar's 1920 x 415. Columns, left to right: the
 // rail, three lanes, the Talk slot. Cards are inset in their column so neighbours stand 16 px apart; the band under the
@@ -106,6 +108,11 @@ typedef enum {
     MAX_HIT_FORM_BACK,
     MAX_HIT_FORM_CLOSE,
     MAX_HIT_FORM_RETRY,  // a failed form: open a new one
+    MAX_HIT_TALK,        // the room's pet and its Tap to talk: record for the room's agent
+    MAX_HIT_TALK_SEND,   // the room's Send while recording
+    MAX_HIT_TALK_CANCEL, // the room's Cancel while recording: nothing is sent
+    MAX_HIT_TOAST,       // the toast: the room opens its agent (toast_id)
+    MAX_HIT_FORM_SAY,    // the form's Say, while max_form_can_say(): a spoken name for its field
 } max_hit_kind_t;
 typedef struct {
     int16_t x, y, w, h;
@@ -128,6 +135,7 @@ typedef struct {
     uint8_t step_count;
     char question[MAX_QUESTION_BYTES];
     uint32_t ask_key;                // the open question's request, prompt and questions: a re-sent one is no change
+    uint32_t ask_since;              // when the open question arrived: the room takes the oldest first
     char note[MAX_NOTE_BYTES];       // FAILED: the error; DONE: the summary's text, shown until note_until
     uint32_t note_until;
     bool card;                       // a failure opens a card until dismissed; an alert's summary, until it runs out
@@ -150,7 +158,11 @@ typedef struct {
     max_form_t form;
     max_out_t outbox[MAX_OUTBOX];    // queued for the app to send (max_ui_take)
     int out_count;
-    char selected[ID_MAX];           // "" = none
+    char selected[ID_MAX];           // the room's agent, "" = none; the lanes show the others
+    bool touched;                    // a tap or swipe at touched_ms: a person is at the bar for MAX_QUIET_MS
+    uint32_t touched_ms;
+    char toast_id[ID_MAX];           // a question that arrived while a person was at the bar, announced from toast_from
+    uint32_t toast_from;
     int page;                        // the page of lanes shown, 0-based, always within max_ui_pages()
     char notice[MAX_NOTICE_BYTES];
     uint32_t notice_until;
@@ -203,6 +215,12 @@ int max_visible(int out[MAX_LANES]);
 bool max_notice_set(const char *text, uint32_t now_ms);   // for MAX_NOTICE_MS
 // A state change, with the turn's clock (stopped at the end of a turn, dropped when one we did not see start begins).
 void max_set_state(max_agent_t *, max_state_t st, uint32_t now_ms);
+
+// The toast is up: toast_id still asks, for MAX_TOAST_MS from toast_from.
+bool max_toast_shown(uint32_t now_ms);
+// The room's pet takes voice for this agent: the link is up, nothing is recorded or sent, no form is up, and the agent
+// is neither on a permission prompt (Yes or No only) nor waiting on an answer that is on its way.
+bool max_can_talk(const max_agent_t *);
 
 // ---- questions (max_ui_ask.c) ----
 max_ask_t *max_ask_of(const char *agent);

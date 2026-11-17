@@ -117,6 +117,7 @@ typedef enum {
     MAX_ACT_SEND,    // the Talk slot was tapped while recording: finish and send
     MAX_ACT_NEW,     // New on the rail: name a form and open it (max_ui_form_open)
     MAX_ACT_SAY,     // the Talk slot while the form takes a spoken name: record one for form_id at revision
+    MAX_ACT_CANCEL,  // Cancel while recording: stop and send nothing
 } max_act_kind_t;
 typedef struct {
     max_act_kind_t kind;

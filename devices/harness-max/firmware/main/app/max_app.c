@@ -470,6 +470,10 @@ static void act(const max_act_t *a)
         talk_begin("");
         break;
     case MAX_ACT_SEND: talk_send(); break;
+    case MAX_ACT_CANCEL:   // stopped, nothing sent
+        pro_voice_end(false);
+        talk_sync();
+        break;
     case MAX_ACT_NEW: new_form(); break;
     case MAX_ACT_NONE: break;
     }
