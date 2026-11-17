@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process'
 import { accessSync, closeSync, constants, existsSync, fstatSync, mkdtempSync, openSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, isAbsolute, join } from 'node:path'
+import { ownProcessGroup } from '../lib/windows/noWindow.js'
 import { writeZip } from '../lib/zipWriter.js'
 
 declare const __VSCODE_EXTENSION__: string | undefined
@@ -206,7 +207,7 @@ function runFile(file: string, args: readonly string[], timeoutMs: number): Prom
   return new Promise((resolve) => {
     // A process group of its own, and the time kills the group: VS Code's `code` on macOS and Linux is a script that
     // starts Electron as a child and waits for it, so a kill of the script alone would leave the install running.
-    const child = spawn(file, args, { detached: true, stdio: 'ignore' })
+    const child = spawn(file, args, { ...ownProcessGroup(), stdio: 'ignore' })
     let timedOut = false
     const timer = setTimeout(() => {
       timedOut = true
