@@ -264,15 +264,20 @@ process.stdin.resume();
       const created = await client.request('agent_create', { engine: 'amp', cwd: cwd('lean-amp') }, 90_000)
       expect(created.error, JSON.stringify(created)).toBeUndefined()
       await client.waitFor(frame => frame.type === 'agent_synced' && frame.payload?.agent?.id === created.agent.id
-        && frame.payload.agent.launch?.state === 'ready', 30_000, 'Amp readiness published')
-      await until('the other engines worker connected', () => d.log().includes('[services] engine-others connected') || null, 30_000, 200)
+        && frame.payload?.agent?.launch?.state === 'ready', 30_000, 'Amp readiness published')
       // Mandatory launch and plugin installation do not depend on the optional reader copies.
       // Losing the lazy hooks module cannot prevent an OpenCode launch. Ask needs no probed flag here.
       const launched = await client.request('agent_create', { engine: 'opencode', cwd: cwd('lean-opencode'), permissionMode: 'ask', bypassPermission: false }, 90_000)
       expect(launched.error, JSON.stringify(launched)).toBeUndefined()
       expect(launched.agent.engine).toBe('opencode')
       await client.waitFor(frame => frame.type === 'agent_synced' && frame.payload?.agent?.id === launched.agent.id
-        && frame.payload.agent.launch?.state === 'ready', 30_000, 'OpenCode readiness published')
+        && frame.payload?.agent?.launch?.state === 'ready', 30_000, 'OpenCode readiness published')
+      // The reader starts for a read, not for an unbound native launch.
+      const history = await client.request('session_get', { sessionId: launched.agent.id, limit: 10 }, 30_000)
+      expect(history.error, JSON.stringify(history)).toBeUndefined()
+      expect(history.engine).toBe('opencode')
+      expect(Array.isArray(history.events)).toBe(true)
+      expect(d.log()).toContain('[services] engine-others connected')
       expect(unavailable('hooks')).toBe(0)
     } finally { client.close() }
     await agentWorks(d, 'claude')

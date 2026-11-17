@@ -339,7 +339,7 @@ export class IsolatedDaemon {
       ...(options.trustPrompt ? { trustPrompt: true } : {}),
       ...(options.graphicsQuery ? { graphicsQuery: options.graphicsQuery } : {}),
     }
-    for (const name of ['claude', 'codex'] as const) await writeFile(join(dirs.bin, name), fakeEngineShim(name, config), { mode: 0o755 })
+    for (const name of ['claude', 'codex'] as const) await writeFile(join(dirs.bin, name), fakeEngineShim(name, { ...config }), { mode: 0o755 })
     // A daemon never finds the developer's own gh (shared tabs' tasks run it): a stub that refuses, until a test writes its own.
     await writeFile(join(dirs.bin, 'gh'), GH_FORBIDDEN_STUB, { mode: 0o755 })
     // Engine probes and usage readers must not consult the person's macOS
