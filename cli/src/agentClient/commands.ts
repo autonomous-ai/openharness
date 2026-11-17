@@ -154,7 +154,8 @@ export const EXIT = { ok: 0, failed: 1, usage: 2, needsInput: 3, stopped: 4, ref
  *  `GOAL_LIMIT`, `GOAL_DONE` and `GOAL_FULL` are `harness goal`'s (services/goals.ts): retried, they are refused the
  *  same. `NOT_IDLE` is not among them: once the harness has finished, the reply is taken. */
 export const REFUSED_CODES: ReadonlySet<string> = new Set(['SPAWN_LIMIT', 'TURNED_OFF', 'NOT_YOURS', 'TELL_OFF', 'NOT_RUNNING', 'REPLY_OFF',
-  'NOT_HACHI', 'GOAL_EMPTY', 'GOAL_LIMIT', 'GOAL_DONE', 'GOAL_FULL', 'BAD_TOKEN_FILE', 'NAME_TAKEN'])
+  'NOT_HACHI', 'GOAL_EMPTY', 'GOAL_LIMIT', 'GOAL_DONE', 'GOAL_FULL', 'BAD_TOKEN_FILE', 'NAME_TAKEN',
+  'ENGINE_NOT_READY'])
 
 /** What a refused caller may do instead: close one of its own when it is at its limit; otherwise the message says. */
 export function refusalNext(env: NodeJS.ProcessEnv, error: AgentClientError): NextStep[] {
@@ -201,9 +202,9 @@ const PS_MACHINES_MAX = 32
 const QUIET_LOOKS = 3
 /** How long a new harness may take to start and have its task typed (a Codex start with its trust prompt is the
  *  slowest seen). Before it, a harness that is not working may simply not have begun. */
-const STARTING_MS = 2 * 60_000
+export const STARTING_MS = 2 * 60_000
 
-class UsageError extends Error {}
+export class UsageError extends Error {}
 
 /** What an agent's `harness new` (and MCP's `harness_start`) says while the person has not let agents start agents: an
  *  account experiment, off by default (lib/agentSettings.ts), so it says where the person turns it on, as `harness send`
@@ -219,7 +220,7 @@ const ORPHAN = 'This pane\'s harness is no longer running, so nothing here may c
  */
 export interface Asked { row: Pending; state: 'installing' | 'starting' | 'failed'; detail: string }
 
-interface Opened {
+export interface Opened {
   where: Where; daemon: Daemon; frames: Frame[]; caller: Caller | null; ledger: Ledger; machine: string
   /** The caller's harnesses asked for and not started (`Asked`). */
   asked: Asked[]
@@ -254,7 +255,7 @@ function setup(deps: ClientDeps) {
     }),
   }
 }
-type Setup = ReturnType<typeof setup>
+export type Setup = ReturnType<typeof setup>
 
 /** Another machine named with `--machine`: as typed, and its id and name as the account knows them. */
 export interface Away { word: string; machineId: string; label: string }
@@ -291,7 +292,7 @@ export function machineNameOf(dataDir: string): string {
   return hostname().replace(/\.local$/, '')
 }
 
-async function list(daemon: Daemon, includeStopped: boolean): Promise<Frame[]> {
+export async function list(daemon: Daemon, includeStopped: boolean): Promise<Frame[]> {
   const reply = await daemon.request('agents_list', { includeStopped })
   if (reply.error) throw new AgentClientError(String(reply.error), 'Harness could not list its harnesses. Try again.')
   return Array.isArray(reply.agents) ? reply.agents as Frame[] : []
@@ -302,7 +303,7 @@ async function list(daemon: Daemon, includeStopped: boolean): Promise<Frame[]> {
  * unless asked: the list with every stopped harness took 128 ms against 10 ms on the owner's Mac (391 harnesses, 21
  * live), and a stopped harness keeps no pane, so the caller is never one.
  */
-async function opened(s: Setup, includeStopped = false): Promise<Opened> {
+export async function opened(s: Setup, includeStopped = false): Promise<Opened> {
   const where = s.where()
   const daemon = await s.open(where)
   try {
@@ -403,10 +404,10 @@ const notStarted = (env: NodeJS.ProcessEnv, a: Asked, away: Away | null = null):
 interface Target { daemon: Daemon; frame: Frame; machineId: string; machine: string; yours: boolean; remote: boolean }
 
 /** A machine's harnesses by the names the verbs call them: a terminal is the person's, and an unnamed one is its id's start. */
-const named = (frames: Frame[]) => frames.filter(isAgent).map((f) => ({ ...f, name: f.name || f.id.slice(0, 8) }))
+export const named = (frames: Frame[]) => frames.filter(isAgent).map((f) => ({ ...f, name: f.name || f.id.slice(0, 8) }))
 
 /** Exactly [name], by its name or its id. */
-const exactly = (name: string) => (f: Frame) => f.name?.toLowerCase() === name.trim().toLowerCase() || f.id.toLowerCase() === name.trim().toLowerCase()
+export const exactly = (name: string) => (f: Frame) => f.name?.toLowerCase() === name.trim().toLowerCase() || f.id.toLowerCase() === name.trim().toLowerCase()
 
 /** The caller started it, as the ledger says. */
 const yoursOn = (o: Opened, machineId: string, agentId: string): boolean => {
@@ -487,7 +488,7 @@ type Screen = 'working' | 'needs-input' | 'idle' | 'draft'
 /** What the screen says now (the windows' read, `agent_close` `inspect`); null when it cannot be read. `draft`:
  *  text waits in its box, the person's or a message being typed, so the agent is about to work. `background`: how many
  *  background commands an idle harness still runs; null when the daemon cannot say (an older one sends no field). */
-async function inspect(t: { daemon: Daemon; frame: Frame }): Promise<{ screen: Screen | null; background: number | null }> {
+export async function inspect(t: { daemon: Daemon; frame: Frame }): Promise<{ screen: Screen | null; background: number | null }> {
   const reply = await t.daemon.request('agent_close', {
     agentId: t.frame.id, sessionId: t.frame.sessionId ?? '', createdAt: t.frame.createdAt ?? '', mode: 'inspect',
   }).catch(() => ({} as Record<string, unknown>))
@@ -524,14 +525,14 @@ async function readLastTurn(t: { daemon: Daemon; frame: Frame }, pages = 4) {
 interface Program { hash: string; file: string; records: ProgramRecords }
 
 /** The program token [flags] name, or null without `--program-token-file`. BAD_TOKEN_FILE for a file that proves nothing. */
-function programOf(flags: Map<string, string | true>, dataDir: string): Program | null {
+export function programOf(flags: Map<string, string | true>, dataDir: string): Program | null {
   const file = flags.get(PROGRAM_TOKEN_FLAG)
   if (file === undefined) return null
   return { hash: readProgramToken(String(file)).hash, file: String(file), records: new ProgramRecords(dataDir) }
 }
 
 /** An agent (in a pane, outside Harness, or what is left of one) never acts with a program's token, even holding it. */
-function refuseAgentWithToken(o: Opened): void {
+export function refuseAgentWithToken(o: Opened): void {
   if (o.caller || o.orphan) {
     throw new AgentClientError('NOT_YOURS', 'A program-owned harness is its program\'s alone: an agent may not act on it, even with its token.')
   }
@@ -672,7 +673,7 @@ export const atMachineRefusal = (word: string): string =>
   `Name the machine with ${word.length > 1 ? machineOption(word.slice(1)) : '--machine <name>'}.`
 
 /** The words and options of a verb. Every verb takes `--machine <name>`, which is returned apart. */
-function words(argv: readonly string[], known: Record<string, 'flag' | 'value'>): { names: string[]; flags: Map<string, string | true>; machine: string | null } {
+export function words(argv: readonly string[], known: Record<string, 'flag' | 'value'>): { names: string[]; flags: Map<string, string | true>; machine: string | null } {
   const names: string[] = [], flags = new Map<string, string | true>()
   let machine: string | null = null
   for (let i = 0; i < argv.length; i++) {
@@ -712,7 +713,7 @@ const ago = (iso: string | null, now: number): string => {
 const home = process.env.HOME ?? ''
 const tilde = (path: string | null): string => (!path ? '-' : home && path.startsWith(home) ? `~${path.slice(home.length)}` : path)
 
-async function run(usage: string, deps: ClientDeps, json: (argv: readonly string[]) => boolean, argv: readonly string[],
+export async function run(usage: string, deps: ClientDeps, json: (argv: readonly string[]) => boolean, argv: readonly string[],
   body: (s: Setup) => Promise<number>): Promise<number> {
   const s = setup(deps)
   try { return await body(s) } catch (error) {
@@ -731,7 +732,7 @@ async function run(usage: string, deps: ClientDeps, json: (argv: readonly string
     return refused ? EXIT.refused : EXIT.failed
   }
 }
-const wantsJson = (argv: readonly string[]): boolean => argv.includes('--json')
+export const wantsJson = (argv: readonly string[]): boolean => argv.includes('--json')
 
 // ── ps ─────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -1289,7 +1290,7 @@ export function resumeCommand(argv: readonly string[], deps: ClientDeps = {}): P
 export const RESUME_OFF_TEXT = `Programs may not open your closed harnesses again yet. ${askThePersonFirst('programs-reply', 'tell them which harness to resume, and they open it in Harness.')}`
 
 /** The harness a resume's receipt says is open again, or why it is not, said for a program rather than the app. */
-function resumedAgent(s: Setup, name: string, at: string, agentId: string, reply: Record<string, unknown>): Frame {
+export function resumedAgent(s: Setup, name: string, at: string, agentId: string, reply: Record<string, unknown>): Frame {
   const agent = reply.agent as Frame | undefined
   if (reply.state === 'created' && agent?.id === agentId) return agent
   // Relaunched but not seen to resume its conversation, or still opening: a second resume checks it again rather than

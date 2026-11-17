@@ -793,8 +793,16 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
       // Recorded as the program's (agentClient/program.ts), by its id: a restart, a sign-in or a sign-out keeps it.
       if (program && typeof agent.id === 'string' && agent.id) {
         const at = clock()
-        new ProgramRecords(deps.dataDir ?? config.ADAPTER_DATA_DIR).put({ agentId: agent.id, tokenHash: program.hash, name: args.name?.trim() || String(agent.name ?? agent.id),
-          engine: String(agent.engine ?? payload.engine), createdAt: at, startedAt: at, inputs: [] })
+        const record = { agentId: agent.id, tokenHash: program.hash, name: args.name?.trim() || String(agent.name ?? agent.id),
+          engine: String(agent.engine ?? payload.engine), createdAt: at, startedAt: at, inputs: [] }
+        // Tried a few times: the record's lock held a moment by another program command. A harness started and never
+        // recorded is no program's, and its name would be refused to the program for good. `harness ensure` writes it
+        // again for one it has just made.
+        for (let tries = 1; ; tries++) {
+          try { new ProgramRecords(deps.dataDir ?? config.ADAPTER_DATA_DIR).put(record); break } catch (error) {
+            if (tries >= 3) { deps.error(`${record.name} started, but Harness could not record it as the program's: ${error instanceof Error ? error.message : String(error)}`); break }
+          }
+        }
       }
       const warning = await origin?.created(machineId, agent, creationId)
       if (warning) deps.error(warning)
