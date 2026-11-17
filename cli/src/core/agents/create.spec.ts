@@ -35,9 +35,17 @@ vi.mock('../../lib/projectFolder.js', async real => {
   return { ...actual, projectsRoot: vi.fn(actual.projectsRoot) }
 })
 
+const workspaceRead = vi.hoisted(() => ({ afterStat: undefined as ((path: unknown) => void) | undefined }))
+
 vi.mock('node:fs', async real => {
   const actual = await real<typeof import('node:fs')>()
-  return { ...actual, opendirSync: vi.fn(actual.opendirSync) }
+  return { ...actual, opendirSync: vi.fn(actual.opendirSync),
+    statSync: (...args: Parameters<typeof actual.statSync>) => {
+      const result = actual.statSync(...args)
+      workspaceRead.afterStat?.(args[0])
+      return result
+    },
+  }
 })
 vi.mock('node:fs/promises', async real => {
   const actual = await real<typeof import('node:fs/promises')>()
@@ -182,7 +190,7 @@ describe('creating an agent', () => {
     vi.mocked(createAndRegisterPane).mockReset().mockResolvedValue({ ok: true, spawned: { runtime: { paneId: '%1' } }, pending } as never)
   })
   // A launch or an installed harness one test queued and never used answers no other test.
-  afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); launchDsh.mockReset(); vi.mocked(installedDsh).mockReset() })
+  afterEach(() => { workspaceRead.afterStat = undefined; vi.restoreAllMocks(); vi.clearAllMocks(); launchDsh.mockReset(); vi.mocked(installedDsh).mockReset() })
 
   it('waits for deferred workspace instructions and refuses a launch revoked during them', async () => {
     let release!: () => void, entered!: () => void
@@ -225,6 +233,21 @@ describe('creating an agent', () => {
       expect(result).toMatchObject({ ok: false, unavailable: 'launch' })
       expect(prepareHooks).not.toHaveBeenCalled()
     } else expect(result.ok).toBe(true)
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
+  })
+
+  it('refuses native hook preparation when authority changes during the final trusted-workspace read', async () => {
+    const cwd = folder()
+    vi.mocked(projectsRoot).mockReturnValue(root)
+    let current = true, trusted = false
+    workspaceRead.afterStat = path => { if (trusted && path === cwd) current = false }
+    const prepareHooks = vi.fn(async () => true)
+    const launch = { current: () => current, environment: { HOME: root }, prepareHooks } as unknown as NativeLaunch
+    const run = setup({ native: async () => ({ ok: true, launch }), prepareFolderTrust: async () => { trusted = true; return true } })
+    const result = await run.create.prepare(request({ cwd }),
+      { id: 'fixture', label: 'harness-claude-fixture', current: () => current, hold: () => {} }, { local: true })
+    expect(result).toMatchObject({ ok: false, error: 'LAUNCH_AUTHORITY_CHANGED' })
+    expect(prepareHooks).not.toHaveBeenCalled()
     expect(createAndRegisterPane).not.toHaveBeenCalled()
   })
 
@@ -359,7 +382,7 @@ describe('creating an agent', () => {
     expect(opencodeMajorVersion).not.toHaveBeenCalled()
   })
 
-  it.each(['initial', 'inspect', 'permission', 'models', 'account', 'materialize', 'harness', 'instructions', 'dispatch'] as const)(
+  it.each(['initial', 'description', 'inspect', 'permission', 'models', 'account', 'materialize', 'harness', 'instructions', 'dispatch'] as const)(
     'revokes preparation at %s before any native pane dispatch', async stage => {
       let current = stage !== 'initial'
       const revoke = (at: string) => { if (stage === at) current = false }
@@ -369,7 +392,7 @@ describe('creating an agent', () => {
       const run = setup({ native: async () => { revoke('inspect'); return { ok: true, launch } },
         buildGridLaunch: async request => { revoke('models'); return { ok: true, override: request.override, launch: { env: {}, args: [], webSearch: 'unsupported' } } },
         privateGridName: async () => { revoke('account'); return null },
-        dshLaunch: { describe: describeDsh,
+        dshLaunch: { describe: async (dsh, engine) => { const answer = await describeDsh(dsh, engine); revoke('description'); return answer },
           materialize: async () => { revoke('materialize'); return { ok: true, warnings: [], created: [], kept: [] } },
           launch: async () => { revoke('harness'); return { ok: true, launch: { env: {}, args: [] } } },
         },

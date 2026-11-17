@@ -11,7 +11,7 @@ import { env } from '../config/env.js'
 import { createCloseRequests } from '../core/agents/close.js'
 import { createHandoffRequest, type Handoff, type HandoffRequest } from '../services/handoffRequest.js'
 import { createLaunchRequests, type LaunchRequestDeps, type RestartAgent, type ResumeAgent } from '../core/agents/launches.js'
-import { MODELS_OFF, WORKSPACES_OFF, type PreparedFolder, type WorkspacesPort } from '../core/api.js'
+import { MODELS_OFF, STORE_OFF, WORKSPACES_OFF, type PreparedFolder, type WorkspacesPort } from '../core/api.js'
 import { createPurgeRequest, createStopRequest } from '../core/agents/lifecycle.js'
 import { createAgentList, type AgentListDeps } from '../core/agents/list.js'
 import { createAgentUpdate } from '../core/agents/update.js'
@@ -133,7 +133,7 @@ export function bindHandoffRequest(socket: BackendSocket, prepare: ((req: Handof
   }
 }
 
-type Launcher = { resume: ResumeAgent | null; restart: RestartAgent | null; modelTarget: LaunchRequestDeps['modelTarget'] | null; workspaces: WorkspacesPort | null }
+type Launcher = { describeDsh: LaunchRequestDeps['describeDsh'] | null; resume: ResumeAgent | null; restart: RestartAgent | null; modelTarget: LaunchRequestDeps['modelTarget'] | null; workspaces: WorkspacesPort | null }
 const launchers = new WeakMap<BackendSocket, Launcher>()
 
 /** Workspaces that make every folder a create asks git for with [prepare], and nothing else. */
@@ -148,10 +148,11 @@ export const prepared = (cwd: string, more: Partial<Extract<PreparedFolder, { ok
 export function bindLaunchRequests(socket: BackendSocket, over: Partial<Launcher> = {}): void {
   let launcher = launchers.get(socket)
   if (!launcher) {
-    const state: Launcher = { resume: null, restart: null, modelTarget: null, workspaces: null }
+    const state: Launcher = { describeDsh: null, resume: null, restart: null, modelTarget: null, workspaces: null }
     launcher = state
     launchers.set(socket, state)
     const launches = createLaunchRequests({
+      describeDsh: (dsh, engine) => state.describeDsh?.(dsh, engine) ?? STORE_OFF.dshDescribe({ dsh, engine }),
       opencodeMajor: opencodeMajorVersion,
       receipts: new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations')),
       createAgent: () => socket.onCreateAgent, forkAgent: () => socket.onForkAgent,

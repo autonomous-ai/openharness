@@ -229,3 +229,23 @@ files' 172 passing tests remain valid. Types passed after the same fixture corre
 
 These are focused integration results on macOS, not full coverage, native-platform or performance acceptance.
 Combined gates, corrected engine-cost measurements, independent review and publication remain outstanding.
+
+### Integrated acceptance follow-up
+
+At integration `29a7ec4677`, all 5,443 core behavior tests passed but five files missed the required per-file
+coverage threshold. Nine other mapped CLI gates passed; portability failed one Store socket fixture that had not
+been wired to the new package-description port. Neither the full core nor portability gate is claimed passing.
+The eight selected bundled terminal cases passed (106.19 seconds): on-demand setup, two materialized-template
+trust prompts, two trusted-source worktrees, and unavailable/late/malformed optional trust replies. The runner
+observed exit 0, EOF, process/group/guardian cleanup and removal of private roots, Node copy and bundle. Receipt:
+`/tmp/civ-8z7h2zuh/receipt.json`. An earlier preflight failed before starting any child because the source hasher
+followed the tracked `os/site` directory symlink; the corrected hasher records its link text. Both attempts remain.
+
+The additional create cases cover revocation while Store describes a package and while the final workspace
+identity is read after optional trust. The latter proves the final native-authority guard is necessary: deleting
+that guard in an isolated mutation made the new test fail because hook preparation began after revocation. The
+production guard is unchanged. The socket fixture now supplies Store's real launch port through `dshThrough`,
+including its unavailable fallback, instead of bypassing the extracted dependency. The original portability
+failure is retained; the corrected focused run passed 99/99 with create.ts at 100% in all four coverage metrics.
+Logs: `/tmp/core-create-integration-{guards,guards-corrected,types}.log` and
+`/tmp/core-create-final-workspace-fence-mutation.log`. Full combined gates remain outstanding for these additions.
