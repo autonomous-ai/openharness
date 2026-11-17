@@ -1,0 +1,98 @@
+# Harness Max (Waveshare ESP32-P4-NANO: ESP32-P4NRW32X + ESP32-C6, 8.8" 480x1920 MIPI-DSI turned landscape).
+#
+# The Pro's defaults, which have run on a P4 for weeks, with the Max's panel, touch and audio. The module facts below
+# (chip revision, flash, PSRAM mode and speed) are the NANO's as Waveshare documents them; NONE has been on a bench yet.
+# The wrong PSRAM pair boots to a blank screen rather than to an error: check it first on the bench.
+CONFIG_IDF_TARGET="esp32p4"
+
+# --- Silicon revision ---
+# The NANO's P4NRW32X is the v3.x part. Requires ESP-IDF 5.5.3 or later. The image will not boot on a v1.x board.
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=n
+CONFIG_ESP32P4_REV_MIN_300=y
+
+# --- Flash (16 MB) ---
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- OTA (firmware update over the cable) ---
+# Dual-OTA partitions (see partitions.csv) + rollback: a freshly written image boots in PENDING_VERIFY and must be
+# confirmed by fw_confirm_* once healthy, else the bootloader reverts to the previous slot on the next reboot.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+
+# --- FreeRTOS ---
+CONFIG_FREERTOS_HZ=1000
+
+# --- CPU ---
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_400=y
+
+# --- Main task stack ---
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# --- Log level ---
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+# SILENT keeps the abort (a failed invariant still stops) and drops the file/line strings and the formatting.
+CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_SILENT=y
+
+# --- PSRAM (32 MB hex SPI at 200 MHz, executing in place) ---
+# 200 MHz is behind IDF_EXPERIMENTAL_FEATURES; without it the speed choice is not offered and the build
+# silently drops to 80 MHz.
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_SPIRAM_SPEED=200
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+# Only allocations of 1 KiB or less stay in internal RAM, and 32 KiB of it is held back from the
+# PSRAM-first allocator so an interrupt path always has somewhere to allocate from.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
+# Keep the lanes model and the scenes in PSRAM, leaving internal RAM for the strip, the turned band and the stacks.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# --- MIPI-DSI ---
+# The panel is fed by DMA from PSRAM, so the DSI interrupt must not be parked behind a cache miss on the
+# very memory it is servicing: its handler is pinned in IRAM and its object in internal RAM.
+CONFIG_LCD_DSI_ISR_HANDLER_IN_IRAM=y
+CONFIG_LCD_DSI_OBJ_FORCE_INTERNAL=y
+
+# --- Touch ---
+# Observe every contact the GT9271 reports (through the GT911 driver); extra fingers must cancel, never be truncated.
+CONFIG_ESP_LCD_TOUCH_MAX_POINTS=5
+
+# Panic output must reach the wire. USB-Serial-JTAG (GPIO24/25) is the PRIMARY console, so a panic goes out the same
+# cable the protocol uses and the daemon records it. Secondary is NONE because a console cannot be its own mirror.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=n
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# A wedged task reboots instead of freezing: the reset reason and the last log lines before it come back
+# over the cable (last_words.c). 10 s, so a full redraw is never mistaken for a hang.
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+
+# --- Crashes must be diagnosable and must reboot ---
+# OCDAWARE makes the panic handler HALT instead of rebooting whenever the JTAG block looks attached, which the
+# USB-Serial-JTAG port can look like to it. Off: a panic always prints, records itself (last_words.c) and reboots.
+CONFIG_ESP_DEBUG_OCDAWARE=n
+CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y
+CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS=0
+# The unwinder last_words.c's backtrace hook rides on (esp_fp_generated_step).
+CONFIG_ESP_SYSTEM_USE_FRAME_POINTER=y
+# Both watchdogs are the IDF defaults, stated so a changed default cannot switch them off.
+CONFIG_ESP_INT_WDT=y
+CONFIG_ESP_INT_WDT_TIMEOUT_MS=300
+CONFIG_ESP_INT_WDT_CHECK_CPU1=y
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y
+# A hang the panic handler never sees ends in a hardware watchdog reset. The CPUs' PC recorder (assist_debug) is
+# what bootloader_components/wdt_pc saves for that case; off, the app gates its clock and the record goes stale.
+CONFIG_ESP_SYSTEM_HW_PC_RECORD=y

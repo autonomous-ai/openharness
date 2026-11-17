@@ -1,0 +1,12 @@
+# Managed component dependencies (pulled by the IDF Component Manager on build).
+dependencies:
+  idf:
+    version: ">=5.5.0"
+  # The panel driver: the OTA7290B's register sequence, its power-on through the display board's MCU (I2C 0x45), and the
+  # DSI timings for THIS panel: OTA7290B_480_1920_PANEL_60HZ_DPI_CONFIG and OTA7290B_PANEL_BUS_DSI_2CH_CONFIG. Pinned:
+  # the bus and power sequence it hard-codes are what main/board/pins_max.h was read from.
+  waveshare/esp_lcd_ota7290b: "2.0.0"
+  # The GT9271 speaks the GT911's protocol. Its INT and RST are not wired, so the driver is given GPIO_NUM_NC for both.
+  espressif/esp_lcd_touch_gt911: "^1.1.0"
+  # Audio codec abstraction (the ES8311: speaker DAC and microphone ADC).
+  espressif/esp_codec_dev: "*"
