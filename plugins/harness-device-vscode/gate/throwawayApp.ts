@@ -2,8 +2,8 @@
  * What keeps a throwaway VS Code on a Mac apart from the developer's own. macOS files an app's state by its bundle id,
  * not its folder: a downloaded copy keeps Microsoft's `com.microsoft.VSCode`, and on 2026-11-17 a gate run rewrote the
  * developer's `~/Library/Preferences/com.microsoft.VSCode.plist`, and LaunchServices kept the deleted copy under that id.
- * So before any launch the copy gets ids of its own, after the run LaunchServices forgets it, and the gate checks the
- * developer's preferences were left as they were.
+ * So before any launch the copy gets ids of its own and claims no links or files, after the run LaunchServices forgets
+ * it, and the gate checks the developer's preferences were left as they were.
  */
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -62,18 +62,32 @@ function signedId(bundle: string): string | undefined {
   return /^Identifier=(.+)$/m.exec(spawnSync('codesign', ['-dv', bundle], { encoding: 'utf8' }).stderr)?.[1]
 }
 
-/** Gives the app and every bundle in it whose id is Microsoft's an id under GATE_ID, signs it again ad hoc (the rewrite
- *  broke Microsoft's signature, and the new one carries the new ids) and checks it. */
+/** What VS Code's apps claim, so macOS sends them `vscode:` links and the files they open: while the gate runs, a link
+ *  the developer clicks could go to the throwaway. */
+const CLAIMS = ['CFBundleURLTypes', 'CFBundleDocumentTypes', 'UTExportedTypeDeclarations', 'UTImportedTypeDeclarations']
+
+function claims(bundle: string): string[] {
+  const plist = join(bundle, 'Contents', 'Info.plist')
+  return CLAIMS.filter((key) => spawnSync('plutil', ['-extract', key, 'xml1', '-o', '-', plist]).status === 0)
+}
+
+/** Gives the app and every bundle in it whose id is Microsoft's an id under GATE_ID, drops each app's claims on links
+ *  and files, signs it again ad hoc (the rewrite broke Microsoft's signature, and the new one carries the new ids) and
+ *  checks it. */
 export function rebrand(app: string): void {
   for (const plist of infoPlists(app)) {
     const id = plistId(plist)
     if (id?.startsWith(MICROSOFT)) execFileSync('plutil', ['-replace', 'CFBundleIdentifier', '-string', `${GATE_ID}${id.slice(MICROSOFT.length)}`, plist])
   }
+  for (const bundle of appBundles(app)) {
+    for (const key of claims(bundle)) execFileSync('plutil', ['-remove', key, join(bundle, 'Contents', 'Info.plist')])
+  }
   execFileSync('codesign', ['--force', '--deep', '--sign', '-', app], { stdio: 'pipe' })
   assertRebranded(app)
 }
 
-/** Throws, naming each, if any bundle in the app, or any app's signature, still carries Microsoft's id. */
+/** Throws, naming each, if any bundle in the app, or any app's signature, still carries Microsoft's id, or any app still
+ *  claims links or files. */
 export function assertRebranded(app: string): void {
   const left: string[] = []
   const name = (path: string): string => relative(dirname(realpathSync(app)), path)
@@ -84,6 +98,7 @@ export function assertRebranded(app: string): void {
   for (const bundle of appBundles(app)) {
     const signed = signedId(bundle)
     if (signed === undefined || signed.startsWith(MICROSOFT)) left.push(`${name(bundle)} is signed as ${signed ?? 'nothing'}`)
+    for (const key of claims(bundle)) left.push(`${name(bundle)} still claims ${key}`)
   }
   if (left.length) throw new Error(`refusing to launch the throwaway VS Code: ${left.join('; ')}`)
 }
