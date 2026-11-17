@@ -2,8 +2,10 @@
  * The VS Code extension as the CLI builds carry it inside cli.js (scripts/lib/vscodeExtensionBundle.mjs): its
  * manifest at the build's version and its one bundled file, which `enable` packs into a .vsix (vscodeExtension.ts).
  */
+import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { isBuiltin } from 'node:module'
+import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
 import { packVsix, type VscodeExtensionFiles } from './vscodeExtension.js'
 
@@ -56,6 +58,13 @@ describe('the VS Code extension inside cli.js', () => {
     const required = [...main.matchAll(/\brequire\(\s*["']([^"']+)["']\s*\)/g)].map((m) => m[1]!)
     expect(required).toContain('vscode')
     expect(required.filter((name) => name !== 'vscode' && !isBuiltin(name))).toEqual([])
+  }, 60_000)
+
+  it('a build run from another folder is the same bytes, with no path of the computer that built it', async () => {
+    const script = `const { readVscodeExtensionBundle } = await import(${JSON.stringify(new URL('../../scripts/lib/vscodeExtensionBundle.mjs', import.meta.url).href)})
+process.stdout.write(await readVscodeExtensionBundle('1.2.3'))`
+    const elsewhere = execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: tmpdir(), encoding: 'utf8' })
+    expect(JSON.parse(elsewhere)).toEqual(await built())
   }, 60_000)
 
   it('packed, it is the four entries', async () => {
