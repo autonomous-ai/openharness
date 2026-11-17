@@ -11,7 +11,6 @@
  * (services/agentBrowser/streams.ts), which the core only passes on: its bytes both ways, its close, and what the
  * window is told when that process dies.
  */
-import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -189,13 +188,9 @@ async function started(onDaemon: (d: IsolatedDaemon) => void, options: Parameter
 
 const OFF_LINE = 'Your browser is off. Ask your person to start it: Browser in your chat.'
 
-/** This daemon's agent browser processes, by the pids its master logged: the title alone would match every daemon's on
- *  the machine, another file's in a parallel run (as `devicesPids`, e2e/harness/desk.ts). */
+/** This daemon's agent browser processes: started by its own master, by the pid it logged, and still its child. */
 function browserPids(d: IsolatedDaemon): number[] {
-  const ours = new Set([...d.log().matchAll(/\[harnessd\] service agentBrowser started \(pid (\d+)\)/g)].map((match) => Number(match[1])))
-  const table = execFileSync('ps', ['-A', '-o', 'pid=,command=']).toString().trim().split('\n')
-  return table.map((line) => line.trim().match(/^(\d+)\s+(.*)$/)).filter((match): match is RegExpMatchArray => !!match)
-    .filter(([, pid, command]) => command.trim() === 'harnessd-agentBrowser' && ours.has(Number(pid))).map(([, pid]) => Number(pid))
+  return d.servicePids('agentBrowser')
 }
 
 /** A stream's screen bytes, as the Desktop's page reads them: `take(n)` resolves with the next `n`, in order. */

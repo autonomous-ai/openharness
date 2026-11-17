@@ -19,10 +19,10 @@ import { hungRateLimitRead, writeHungCodex } from './harness/hungCodex.js'
 
 interface Started { root: string; master: number; core: number; socket: string; escaped: number[]; left: number; readOnly: string }
 
-/** The master [pid] and the service processes it runs (`harnessd-<process>`): the short-lived probes they start
+/** The master [pid] and the service processes it runs (`… __service <names>`): the short-lived probes they start
  *  (`lsof`, `ps`) are left out, as their pids can go to strangers while the test waits. */
 const daemonProcesses = (pid: number): number[] => [pid, ...processTable()
-  .filter((row) => row.ppid === pid && /^harnessd-/.test(row.command)).map((row) => row.pid)]
+  .filter((row) => row.ppid === pid && / __service \S+$/.test(row.command)).map((row) => row.pid)]
 
 const tmuxServer = (socket: string): number | null => {
   try { return Number(execFileSync('tmux', ['-S', socket, 'display-message', '-p', '#{pid}'], { encoding: 'utf8', timeout: 5_000 }).trim()) || null } catch { return null }
@@ -61,7 +61,7 @@ describe('a daemon under test', () => {
   })
 
   // Removed roots on one Mac each kept a 19 MB runtime/grid-* (2026-11-14). What can still ask, in models' process
-  // (`harnessd-models`): a managed grid following its pin on every start, and grid's set-up on a grid feature's first
+  // (`__service models`): a managed grid following its pin on every start, and grid's set-up on a grid feature's first
   // use (the picker's Set up, a Get, a Use): installCli reads the managed grid's manifest, then runs grid's public
   // installer when there is still no `grid`.
   it('asks no grid manifest and runs no grid installer beyond the machine', async () => {
