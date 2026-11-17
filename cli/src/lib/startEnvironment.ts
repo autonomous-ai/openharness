@@ -65,6 +65,8 @@ export const START_ENV_PREFIXES: readonly string[] = [
   'ANTHROPIC_', 'OPENAI_', 'AWS_', 'GOOGLE_', 'GEMINI_', 'AZURE_', 'OPENROUTER_', 'XAI_', 'CLAUDE_CODE_USE_',
 ]
 
+const WINDOWS_ONLY = 'read on Windows only, where a start keeps the whole environment'
+
 /**
  * Names a start leaves out though Harness or a shell knows them, each with why. No group above names them, which is
  * what drops them; this list is the record that someone decided. An agent's session variables are not listed again:
@@ -79,6 +81,15 @@ export const DROPPED_ON_PURPOSE: Readonly<Record<string, string>> = {
   HC_SESSION: 'the calling shell\'s Herdr session, not the daemon\'s; put it in HARNESS_ENV_FILE to keep it',
   TYPESAFE_CREDENTIALS: 'a credential; put it in HARNESS_ENV_FILE to keep it',
   GIT_SSH_COMMAND: 'a command line every git in every pane would run; put it in HARNESS_ENV_FILE to keep it',
+  GIT_CONFIG_GLOBAL: 'git\'s own move of its global config; without it the daemon watches ~/.gitconfig, as under launchd and systemd',
+  GIT_CONFIG_SYSTEM: 'git\'s own move of its system config; without it the daemon watches /etc/gitconfig, as under launchd and systemd',
+  UV_THREADPOOL_SIZE: 'Node\'s thread pool size; the daemon runs on Node\'s default of 4',
+  VITEST: 'the test runner\'s mark, so a unit test never runs the real gh; no daemon is given it',
+  ComSpec: WINDOWS_ONLY,
+  LOCALAPPDATA: WINDOWS_ONLY,
+  SystemRoot: WINDOWS_ONLY,
+  USERPROFILE: WINDOWS_ONLY,
+  windir: WINDOWS_ONLY,
 }
 
 const names: ReadonlySet<string> = new Set(START_ENV_NAMES)
