@@ -248,6 +248,26 @@ describe('harness device claude', () => {
       .toEqual({ code: 0, err: [], out: [JSON.stringify({ socketPath: unixSocketPath(dataDir, PORT), devicesSocket })] })
   })
 
+  // The devices service installs the plugin into the daemon's Claude Code home, which may not be this command's: there a
+  // disable uninstalls nothing, and the plugin stays on in the settings its hook and mod read.
+  it('asked and link after a disable that left the plugin on tell nothing, and after enable act again', async () => {
+    const dataDir = folder()
+    const bodies = await daemonAt(dataDir)
+    const asked = (session: string) => device(['claude', 'asked'], {
+      dataDir, stdin: chunks(JSON.stringify({ session_id: session, tool_name: 'Bash', tool_input: { command: 'npm test' } })),
+    })
+    expect(await device(['claude', 'disable'], { dataDir })).toEqual({ code: 0, out: [], err: [] })
+    expect(readFileSync(settings, 'utf8')).toContain('"harness-device@openharness":true')
+    expect(await asked('sess-off')).toEqual({ code: 0, out: [], err: [] })
+    expect(await device(['claude', 'link', '--json'], { dataDir })).toEqual({ code: 1, out: [], err: [] })
+    expect(await device(['claude', 'enable'], { dataDir })).toEqual({ code: 0, out: [], err: [] })
+    expect(await asked('sess-on')).toEqual({ code: 0, out: [], err: [] })
+    expect(await device(['claude', 'link', '--json'], { dataDir }))
+      .toEqual({ code: 0, err: [], out: [JSON.stringify({ socketPath: unixSocketPath(dataDir, PORT) })] })
+    await vi.waitFor(() => expect(bodies).toHaveLength(1))
+    expect(JSON.parse(bodies[0]).sessionId).toBe('sess-on')
+  })
+
   it('asked with no daemon prints nothing and exits 0', async () => {
     const stdin = chunks(JSON.stringify({ session_id: 'sess-1', tool_name: 'Bash', tool_input: { command: 'npm test' } }))
     expect(await device(['claude', 'asked'], { stdin })).toEqual({ code: 0, out: [], err: [] })
