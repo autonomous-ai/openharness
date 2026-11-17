@@ -2,7 +2,7 @@
 
 Measures whether Claude Code, given Harness's dial skill (`DIAL_SKILL` in `cli/src/devices/dialSkill.ts`), rings the
 dial when, and only when, the person must act, and whether the line and the final answer say what to do. Claude Code
-only (Codex is out of scope by Ken's choice); no other agent is scored.
+only (Codex is out of scope, spec Decision 2); no other agent is scored.
 
 25 scenarios under `scenarios/`, each a tiny repo with a one-line task: 15 where the person must act (a missing key, a
 2FA code, a design choice, a board to plug in, a code owner's review…) and 10 the agent can finish alone. Split train /
@@ -12,7 +12,9 @@ scenarios joined every split. What each metric means and how a run scores: `flow
 
 ## Run
 
-From `cli/`:
+The runner stages whatever `cli/src/devices/dialSkill.ts` holds, not the variant's folder: before a pass, set that
+file to the variant's text (`flow/v<k>/SKILL.before.md` for the text round k started from, `flow/v<k>/SKILL.md` for
+round k's). From `cli/`:
 
 ```sh
 npx tsx evals/dial-skill/run-eval.mjs --flow evals/dial-skill/flow --variant <baseline|vN> --reps 2 \
@@ -45,7 +47,15 @@ npx vitest run --config evals/dial-skill/vitest.config.ts
   the agent, so a run never reaches the person's accounts or phone, and the eval does not measure push competing with
   the dial.
 - A run leaves in the profile only what `claude -p` writes at startup (`.claude.json`, its backups, `session-env/`,
-  caches); the empty `projects/<temp repo>/` folder Claude makes for each run is removed with the run.
+  caches); the empty `projects/<temp repo>/` folder Claude makes for each run is removed with the run. To check after
+  a pass, list the profile's top-level entries and its `projects/` before and after, names only, and compare:
+
+  ```sh
+  (ls -A "$CLAUDE_CONFIG_DIR"; ls -A "$CLAUDE_CONFIG_DIR/projects") > "$TMPDIR/profile-before"   # before the pass
+  (ls -A "$CLAUDE_CONFIG_DIR"; ls -A "$CLAUDE_CONFIG_DIR/projects") | diff "$TMPDIR/profile-before" -   # after it
+  ```
+
+  Only the startup files above may appear; a new `projects/` entry is a run that was not cleaned up.
 - Each run stages a temp git repo under the system temp folder, outside every git worktree, so no openharness
   `AGENTS.md` loads and no answer key is in reach.
 - A fake `harness` records rings; the scenario's fakes (`gh`, `aws`, `shipit`…) come first on a curated `PATH` that
