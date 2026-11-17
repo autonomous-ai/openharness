@@ -9,6 +9,7 @@
  * is, so the plugin builds no path. `harness device notify` is an agent's, from the dial skill (devices/notice.ts). This
  * runs only in the `harness` command's own process; nothing the core or a service loads imports this folder.
  */
+import { mkdirSync } from 'node:fs'
 import { connect, type Socket } from 'node:net'
 import { dirname } from 'node:path'
 import { claudeDisable, claudeEnable, claudeStatus, type ClaudeResult, type ClaudeRun } from '../devices/claudePlugin.js'
@@ -143,8 +144,8 @@ function setUp(engine: DialEngine, dataDir: string): boolean {
  * failed save leaves nothing behind. The default home's skills folder is then recorded before the skill is written, so
  * a disable run with another home still finds it; a folder the record cannot hold gets no skill. The default home is
  * made when missing, as a fresh install has none yet; a person's own dial skill there stays. Last, each folder the
- * devices service recorded gets the skill again, since the service leaves alone one the person removed; a folder gone
- * since is not made.
+ * devices service recorded gets the skill again, since the service leaves alone one the person removed: a skills folder
+ * deleted whole is made again while its home is there, and one whose home is gone is not.
  */
 function turnOn(engine: DialEngine, home: string, deps: DeviceDeps): number {
   if (writeRemoved(deps.dataDir, engine, false) !== undefined) {
@@ -162,11 +163,24 @@ function turnOn(engine: DialEngine, home: string, deps: DeviceDeps): number {
   if (result === 'theirs') deps.err(`${ENGINE_NAMES[engine]} already has a skill named dial that Harness did not write; it stays.`)
   let failed = result === 'failed'
   for (const folder of readSetup(deps.dataDir).homes[engine]) {
-    if (ownDirectory(folder) === 'ok' && writeSkill(folder) === 'failed') failed = true
+    const there = ownDirectory(folder)
+    const remade = there === 'missing' && ownDirectory(dirname(folder)) === 'ok'
+    if (there !== 'ok' && !remade) continue
+    if ((remade && !madeFolder(folder)) || writeSkill(folder) === 'failed') failed = true
   }
   if (!failed) return 0
   deps.err(`Could not write the ${ENGINE_NAMES[engine]} skill.`)
   return 1
+}
+
+/** Not recursive: the home above it was checked to be this account's own folder, and nothing is made past it. */
+function madeFolder(folder: string): boolean {
+  try {
+    mkdirSync(folder, { mode: 0o700 })
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
