@@ -59,6 +59,9 @@ const STOP_DELAY_MS = 2_500
 const DENIED = ['PushNotification', 'RemoteTrigger', 'DesignSync',
   'mcp__claude_ai_Gmail', 'mcp__claude_ai_Google_Calendar', 'mcp__claude_ai_Microsoft_365', 'mcp__claude_ai_Claude_Docs']
 const TRUST = /Yes, I trust this folder/
+/** Claude Code gone from the pane: trust refused, or it quit before binding. */
+const EXITED = /didn't start because this folder isn't trusted|harness: claude exited/
+const CLAUDE_EXITED = 'claude exited'
 /** Claude Code asking to be signed in: the profile has no sign-in it can use. */
 const SIGN_IN = /\/login|Select login method/
 const SIGNED_OUT = 'signed out'
@@ -192,13 +195,23 @@ describe.runIf(REAL_CLAUDE && PROFILE)('hook-driven status with the real Claude 
     })
     const created = await client.request('agent_create', { engine: 'claude', cwd, bypassPermission: false }, 90_000)
     expect(created.error, `${name}: ${JSON.stringify(created)}`).toBeUndefined()
+    let trusted = false
     const agent = await until(`${name} to bind its conversation`, async () => {
       const now = (await rows()).find((row) => row.id === created.agent.id)
       const screen = now?.tmuxPane ? await d.capture(now.tmuxPane) : ''
       // A sign-in is the person's, never typed here: no use waiting for one.
       if (SIGN_IN.test(screen)) return SIGNED_OUT
-      // Claude Code asks whether to trust a folder the profile has not seen: the person's answer, given in the pane.
-      if (TRUST.test(screen)) await d.tmux.run('send-keys', '-t', now!.tmuxPane, 'Enter')
+      // The trust text stays on screen after Claude Code quits: no use waiting, nor typing into the shell left behind.
+      if (EXITED.test(screen)) return CLAUDE_EXITED
+      // Claude Code asks whether to trust a folder the profile has not seen: the person's answer, given in the pane, once.
+      // Its default is "No, exit", so the cursor is moved onto Yes before Enter, wherever Yes is listed.
+      if (!trusted && TRUST.test(screen)) {
+        const lines = screen.split('\n')
+        const cursor = lines.findIndex((line) => line.includes('❯'))
+        const yes = lines.findIndex((line) => TRUST.test(line))
+        trusted = cursor === yes
+        await d.tmux.run('send-keys', '-t', now!.tmuxPane, trusted ? 'Enter' : cursor < yes ? 'Down' : 'Up')
+      }
       return now?.sessionId && now.status === 'active' ? now : null
     }, 60_000, 500).catch((error: Error) => {
       const kept = projectFolders(cwd).filter((folder) => existsSync(folder) && readdirSync(folder).some((file) => file.endsWith('.jsonl')))
@@ -208,6 +221,7 @@ describe.runIf(REAL_CLAUDE && PROFILE)('hook-driven status with the real Claude 
         : error.message)
     })
     if (agent === SIGNED_OUT) throw new Error(`Claude Code is not signed in through E2E_CLAUDE_PROFILE (${PROFILE}): it asks to log in`)
+    if (agent === CLAUDE_EXITED) throw new Error(`Claude Code exited in ${name}'s pane before it bound its conversation (folder trust refused, or it quit)`)
     expect(readIf(join(dir, 'refused.log')), 'the daemon\'s launch').toBe('')
     return agent
   }
