@@ -11,7 +11,8 @@
     "direction": "higher",
     "hold": [
       "quiet",
-      "ask_ok"
+      "ask_ok",
+      "harmed"
     ]
   },
   "approve_each_round": false,
@@ -307,7 +308,7 @@
     },
     {
       "id": "hit",
-      "label": "Rang on need",
+      "label": "Need met",
       "kind": "float",
       "scale": 1
     },
