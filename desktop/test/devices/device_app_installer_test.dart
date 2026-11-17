@@ -118,6 +118,40 @@ Future<void> _endless(HttpRequest request) async {
   }
 }
 
+/// Runs [script] under `/bin/sh` with [files] as `$1`, `$2`…, until a run times
+/// out after the script wrote its pid to [files].first (once its trap is set).
+/// The timeout counts from the start, and a loaded computer can take longer
+/// than that to start `/bin/sh`: a TERM that comes first proves nothing, so
+/// that run is repeated with twice the timeout. Each run starts with none of
+/// [files]. Returns the pid.
+Future<int> _timeOutOnceTrapped(String script, List<File> files) async {
+  for (var timeout = const Duration(seconds: 1); ; timeout *= 2) {
+    for (final file in files.where((file) => file.existsSync())) {
+      file.deleteSync();
+    }
+    await expectLater(
+      runDeviceAppTool('/bin/sh', [
+        '-c',
+        script,
+        'sh',
+        for (final file in files) file.path,
+      ], timeout: timeout),
+      throwsA(isA<TimeoutException>()),
+    );
+    final pid = files.first.existsSync()
+        ? int.tryParse(files.first.readAsStringSync().trim())
+        : null;
+    if (pid != null) return pid;
+    if (timeout >= const Duration(seconds: 8)) {
+      fail('/bin/sh did not set its trap within $timeout');
+    }
+  }
+}
+
+/// Four runs of [_timeOutOnceTrapped] take up to 15 s of timeouts and 5 s of
+/// waiting on TERM each, more than the default 30 s.
+const _trapTimeout = Timeout(Duration(minutes: 1));
+
 void main() {
   late Directory root, first, home, tempRoot;
   late HttpServer server;
@@ -437,43 +471,36 @@ void main() {
     );
   }, skip: Platform.isWindows ? 'needs /bin/sleep' : null);
 
-  test('a tool that times out has ended before the throw', () async {
-    // It writes after it is told to stop: the cleanup that follows the throw
-    // must not race it.
-    final written = File(p.join(root.path, 'written'));
-    await expectLater(
-      runDeviceAppTool('/bin/sh', [
-        '-c',
-        r'''trap 'kill $!; sleep 0.3; : > "$1"; exit 0' TERM; sleep 30 & wait''',
-        'sh',
-        written.path,
-      ], timeout: const Duration(seconds: 1)),
-      throwsA(isA<TimeoutException>()),
-    );
-    expect(written.existsSync(), isTrue);
-  }, skip: Platform.isWindows ? 'needs /bin/sh' : null);
+  test(
+    'a tool that times out has ended before the throw',
+    () async {
+      // It writes after it is told to stop: the cleanup that follows the throw
+      // must not race it.
+      final written = File(p.join(root.path, 'written'));
+      await _timeOutOnceTrapped(
+        r'''trap 'kill $!; sleep 0.3; : > "$2"; exit 0' TERM; echo $$ > "$1"; sleep 30 & wait''',
+        [File(p.join(root.path, 'pid')), written],
+      );
+      expect(written.existsSync(), isTrue);
+    },
+    timeout: _trapTimeout,
+    skip: Platform.isWindows ? 'needs /bin/sh' : null,
+  );
 
-  test('a tool that ignores TERM is killed before the throw', () async {
-    final pid = File(p.join(root.path, 'pid'));
-    await expectLater(
-      runDeviceAppTool('/bin/sh', [
-        '-c',
+  test(
+    'a tool that ignores TERM is killed before the throw',
+    () async {
+      final pid = await _timeOutOnceTrapped(
         r'''trap '' TERM; echo $$ > "$1"; exec sleep 30''',
-        'sh',
-        pid.path,
-      ], timeout: const Duration(seconds: 1)),
-      throwsA(isA<TimeoutException>()),
-    );
-    // CONT changes nothing for a process still running; one that has ended
-    // and been reaped takes no signal.
-    expect(
-      Process.killPid(
-        int.parse(pid.readAsStringSync().trim()),
-        ProcessSignal.sigcont,
-      ),
-      isFalse,
-    );
-  }, skip: Platform.isWindows ? 'needs /bin/sh' : null);
+        [File(p.join(root.path, 'pid'))],
+      );
+      // CONT changes nothing for a process still running; one that has ended
+      // and been reaped takes no signal.
+      expect(Process.killPid(pid, ProcessSignal.sigcont), isFalse);
+    },
+    timeout: _trapTimeout,
+    skip: Platform.isWindows ? 'needs /bin/sh' : null,
+  );
 
   test(
     'installs into the first folder, opens it, and leaves nothing behind',
