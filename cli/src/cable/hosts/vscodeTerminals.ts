@@ -23,6 +23,8 @@ export const VSCODE_OPEN_PER_SECOND = 1
 export const VSCODE_STATE_MAX_BYTES = 1024
 /** The extension sends at most 4 a second; twice that leaves room for a window's reload. */
 export const VSCODE_STATE_PER_SECOND = 8
+/** Whole lines in one scroll line: the extension runs no more of one, and what is over goes in the line after it. */
+export const VSCODE_SCROLL_MAX = 100
 /** An agent whose read failed is not asked again sooner: one whose pid no table holds costs a read no more often. */
 export const CHAIN_RETRY_MS = 5_000
 
@@ -41,6 +43,8 @@ export interface VscodeTerminals {
   terminalOf(agentPid: number): VscodeTerminal | undefined
   /** Queues `{"show":<shell>}` on the window's stream, the latest winning; false when that stream is gone. `tap` chooses the count only. */
   show(terminal: VscodeTerminal, tap: boolean): boolean
+  /** Adds whole lines for that terminal; false when its window's stream is gone. */
+  scroll(terminal: VscodeTerminal, lines: number): boolean
 }
 
 export interface VscodeTerminalsDeps {
@@ -60,9 +64,12 @@ interface Window {
   shells?: ReadonlySet<number>
   /** A show its stream has not taken yet: the latest wins. */
   show?: number
+  /** Lines its stream has not taken yet, all for one shell: written after the show. */
+  scroll?: { shell: number; lines: number }
 }
 
-const NONE_COUNTED = { shows: 0, taps: 0, refused: 0, reads: 0 }
+/** `scrolls` counts each scroll line written; `dropped` each wait of lines replaced by lines for another shell. */
+const NONE_COUNTED = { shows: 0, taps: 0, refused: 0, reads: 0, scrolls: 0, dropped: 0 }
 
 const isWindowId = (window: unknown): window is string => typeof window === 'string' && WINDOW_ID.test(window)
 
@@ -94,7 +101,7 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
     minute = true
     deps.after(MINUTE_MS, () => {
       minute = false
-      deps.log(`[devices] vscode · in the last minute: ${counted.shows} shows, ${counted.taps} taps, ${counted.refused} refused states, ${counted.reads} ps reads`)
+      deps.log(`[devices] vscode · in the last minute: ${counted.shows} shows, ${counted.taps} taps, ${counted.refused} refused states, ${counted.reads} ps reads, ${counted.scrolls} scroll lines, ${counted.dropped} dropped`)
       counted = { ...NONE_COUNTED }
     })
   }
@@ -162,8 +169,19 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
     ask()
   }
 
+  /** One line at a time: the show first, then up to VSCODE_SCROLL_MAX of what waits to scroll. */
   const write = (window: Window): void => {
-    if (window.show !== undefined && window.stream.write({ show: window.show })) window.show = undefined
+    if (window.show !== undefined) {
+      if (!window.stream.write({ show: window.show })) return
+      window.show = undefined
+    }
+    const waiting = window.scroll
+    if (!waiting) return
+    const lines = Math.max(-VSCODE_SCROLL_MAX, Math.min(VSCODE_SCROLL_MAX, waiting.lines))
+    if (!window.stream.write({ scroll: lines, pid: waiting.shell })) return
+    count('scrolls')
+    waiting.lines -= lines
+    if (!waiting.lines) window.scroll = undefined
   }
 
   return {
@@ -233,6 +251,21 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
       window.show = terminal.shell
       write(window)
       count(tap ? 'taps' : 'shows')
+      return true
+    },
+    scroll: (terminal, lines) => {
+      const window = windows.get(terminal.window)
+      if (!window) return false
+      if (!lines) return true
+      if (window.scroll?.shell === terminal.shell) {
+        window.scroll.lines += lines
+        // Lines that cancel out leave nothing to write: no scroll line is 0.
+        if (!window.scroll.lines) window.scroll = undefined
+      } else {
+        if (window.scroll) count('dropped')
+        window.scroll = { shell: terminal.shell, lines }
+      }
+      write(window)
       return true
     },
   }

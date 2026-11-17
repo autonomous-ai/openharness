@@ -425,6 +425,12 @@ describe('VS Code\'s windows', () => {
     expect(one.lines.at(-1)).toEqual({ scroll: 70, pid: 700 })
     one.drain()
     expect(one.lines).toHaveLength(4)
+    // Lines that wait and add up to none write none.
+    h.terminals.scroll(terminal, -1)
+    h.terminals.scroll(terminal, -2)
+    h.terminals.scroll(terminal, 2)
+    one.drain()
+    expect(one.lines).toHaveLength(5)
   })
 
   it('a show that waits is written before the scroll', () => {
