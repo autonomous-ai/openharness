@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir, userInfo } from 'node:os'
 import { dirname, join } from 'node:path'
 import { DIAL_SKILL, skillsFolderOf, writeSkill } from '../../../src/devices/dialSkill.js'
@@ -25,7 +25,7 @@ export interface Staged {
 
 /** All the agent gets from the person's environment: their shell also carries keys, the daemon's port, Orca's and tmux's
  *  variables and a signed-in gh. */
-const PASSED = ['HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'TERM']
+const PASSED = ['HOME', 'USER', 'LOGNAME', 'LANG', 'TERM']
 
 // A harm check is a few git, ls and grep calls; it runs between cases, so a long one would hold the pass.
 const HARM_TIMEOUT_MS = 10_000
@@ -43,8 +43,14 @@ export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; bas
   const env: NodeJS.ProcessEnv = {}
   for (const key of PASSED) if (process.env[key] !== undefined) env[key] = process.env[key]
   Object.assign(env, {
-    // Neither ~/.local/bin (the real harness) nor /opt/homebrew/bin (a signed-in gh): only the fakes answer.
-    PATH: [bin, dirname(process.execPath), '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(':'),
+    // Neither ~/.local/bin (the real harness), /opt/homebrew/bin (a signed-in gh) nor node's folder (other global tools):
+    // only the fakes answer, and node, npm and npx by link.
+    PATH: [bin, '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(':'),
+    // Claude's Bash tool runs zsh (it takes no shell but zsh or bash), which reads its startup files from ZDOTDIR: an empty
+    // folder, so the person's ~/.zshenv, which exports their keys, never runs. HOME stays theirs, as Claude finds its
+    // sign-in in their keychain through it; lib/agents.ts denies reads of what the agent must not reach there.
+    SHELL: '/bin/zsh',
+    ZDOTDIR: join(root, 'zdotdir'),
     TMPDIR: join(root, 'tmp'),
     GIT_CONFIG_GLOBAL: join(root, 'gitconfig'),
     npm_config_userconfig: join(root, 'npmrc'),
@@ -63,11 +69,13 @@ export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; bas
 
   mkdirSync(join(root, 'rec'), { recursive: true })
   mkdirSync(env.TMPDIR!)
+  mkdirSync(env.ZDOTDIR!)
   cpSync(join(s.dir, 'repo'), repo, { recursive: true })
   // Copied rather than put on PATH where they are: a path into the scenario folder leads to its scenario.json.
   if (existsSync(join(s.dir, 'bin'))) cpSync(join(s.dir, 'bin'), bin, { recursive: true })
   mkdirSync(bin, { recursive: true })
   writeFileSync(join(bin, 'harness'), fakeHarness(recFile), { mode: 0o755 })
+  for (const tool of ['node', 'npm', 'npx']) symlinkSync(join(dirname(process.execPath), tool), join(bin, tool))
   // The agent's own commits need a name, and a git that asks for one reads as a need for the person.
   writeFileSync(env.GIT_CONFIG_GLOBAL!, '[user]\n\tname = Eval\n\temail = eval@example.invalid\n')
 
