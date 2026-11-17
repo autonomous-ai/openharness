@@ -169,6 +169,40 @@ it.each([['the same', 'confirmed', newProcess], ['another', 'refused', { ...newP
     } else expect(await own).toBeInstanceOf(RegistryOwnershipChanged)
   })
 
+it('a starting launch discovery marked dormant, then confirmed first with the same process, is confirmed', async () => {
+  // A resumed row whose engine was not yet in its pane at discovery's last pass (discovery.ts `onDormant`).
+  registry.clearProcessIdentity(row.agentId)
+  registry.setLaunch(row.agentId, { state: 'starting', nativeToken: startingToken })
+  registry.setActive(row.agentId, false)
+  await registry.flush()
+  const held = holdImage(rows => rows.some(entry => entry.agentId === row.agentId && entry.processIdentity?.pid === newProcess.pid))
+  const peer = registry.confirmLaunch(row.agentId, { processIdentity: newProcess, runtimes: [runtime] })
+  await held.entered
+  const own = registry.confirmLaunch(row.agentId, { processIdentity: newProcess }).catch(error => error)
+  held.release()
+  expect(await peer).toMatchObject({ state: 'confirmed' })
+  expect(await own).toMatchObject({ state: 'confirmed', entry: { processIdentity: newProcess, active: true, launch: { state: 'ready' } } })
+})
+
+it.each([['the grid it was relaunched on', 'confirmed', 'https://fixture.invalid/v1'], ['another grid', 'refused', 'https://other.invalid/v1']] as const)(
+  'a relaunch whose process discovery recorded first with %s is %s', async (_which, outcome, peerUrl) => {
+    // A running agent moved to a grid (retarget.ts): its row ready, on its old process and no grid.
+    registry.setLaunch(row.agentId, { state: 'ready' })
+    await registry.flush()
+    const grid = { baseUrl: 'https://fixture.invalid/v1', model: 'fixture-model' }
+    const held = holdImage(rows => rows.some(entry => entry.agentId === row.agentId && entry.bypassPermission === true))
+    registry.setBypassPermission(row.agentId, true)
+    await held.entered
+    // The retarget confirms its engine behind that save...
+    const own = registry.confirmLaunch(row.agentId, { processIdentity: newProcess, grid }).catch(error => error)
+    // ...while discovery's pass records the relaunched engine and the grid its argv names (discovery.ts
+    // `updateProcessIdentity`, a Codex's or Pi's).
+    registry.updateProcessIdentity(row.agentId, newProcess, undefined, { ...grid, baseUrl: peerUrl })
+    held.release()
+    if (outcome === 'confirmed') expect(await own).toMatchObject({ state: 'confirmed', entry: { processIdentity: newProcess, grid } })
+    else expect(await own).toBeInstanceOf(RegistryOwnershipChanged)
+  })
+
 it('retarget keeps provider success and terminal release behind the complete durable launch', async () => {
   const held = holdImage(rows => rows.some(entry => entry.agentId === row.agentId && entry.processIdentity?.pid === newProcess.pid))
   const grid = { networkId: 'fixture-grid', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'fixture-key', model: 'fixture-model' }
