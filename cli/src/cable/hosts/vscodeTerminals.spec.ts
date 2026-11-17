@@ -141,7 +141,7 @@ describe('VS Code\'s windows', () => {
     expect(h.processes).not.toHaveBeenCalled()
     expect(h.timers.map(({ ms }) => ms)).toEqual([60_000])
     h.timers[0]!.run()
-    expect(h.logged.at(-1)).toBe('[devices] vscode · in the last minute: 0 shows, 0 taps, 1 refused states, 0 ps reads, 0 scroll lines, 0 dropped')
+    expect(h.logged.at(-1)).toBe('[devices] vscode · in the last minute: 0 shows, 0 taps, 1 refused states, 0 ps reads, 0 failed, 0 scroll lines, 0 dropped')
     // The same state in its form is taken.
     expect(h.state(W1, [700])).toBeUndefined()
     expect(h.processes).toHaveBeenCalledTimes(1)
@@ -473,7 +473,7 @@ describe('VS Code\'s windows', () => {
     one.drain()
     expect(h.timers.map(({ ms }) => ms)).toEqual([60_000])
     h.timers[0]!.run()
-    expect(h.logged.at(-1)).toBe('[devices] vscode · in the last minute: 0 shows, 0 taps, 0 refused states, 0 ps reads, 3 scroll lines, 1 dropped')
+    expect(h.logged.at(-1)).toBe('[devices] vscode · in the last minute: 0 shows, 0 taps, 0 refused states, 0 ps reads, 0 failed, 3 scroll lines, 1 dropped')
   })
 
   it('scroll answers false once the window\'s stream has ended, and what waited is gone', () => {
@@ -490,8 +490,8 @@ describe('VS Code\'s windows', () => {
     expect(next.lines).toEqual([])
   })
 
-  it('the log holds counts and fixed words: no pid and no window id', async () => {
-    const h = harness()
+  it('the log holds counts and fixed words: no pid, no window id and no read\'s error', async () => {
+    const h = harness([...TREE, ...SECOND])
     const id = '5f3a9c2e-1b7d-4e8a-9c0f-2d6b8e4a7c13'
     const older = h.open(id)
     h.terminals.agents([900])
@@ -506,18 +506,22 @@ describe('VS Code\'s windows', () => {
     h.timers[0]!.run()
     const newer = h.open(id)
     older.end('replaced')
+    h.state(id, [700, 710])
+    // A read that fails is counted apart from the ones that read the table.
+    h.terminals.agents([900, 910])
+    await h.fail()
     h.terminals.show(terminal, false)
     expect(h.timers.map(({ ms }) => ms)).toEqual([60_000, 60_000])
     h.timers[1]!.run()
     newer.end('gone')
     expect(h.logged).toEqual([
       '[devices] vscode stream · open · windows 1',
-      '[devices] vscode · in the last minute: 1 shows, 1 taps, 1 refused states, 1 ps reads, 0 scroll lines, 0 dropped',
+      '[devices] vscode · in the last minute: 1 shows, 1 taps, 1 refused states, 1 ps reads, 0 failed, 0 scroll lines, 0 dropped',
       '[devices] vscode stream · open · windows 1',
       '[devices] vscode stream · ended · replaced · windows 1',
-      '[devices] vscode · in the last minute: 1 shows, 0 taps, 0 refused states, 0 ps reads, 0 scroll lines, 0 dropped',
+      '[devices] vscode · in the last minute: 1 shows, 0 taps, 0 refused states, 1 ps reads, 1 failed, 0 scroll lines, 0 dropped',
       '[devices] vscode stream · ended · gone · windows 0',
     ])
-    for (const line of h.logged) expect(line).not.toMatch(/900|700|5f3a/)
+    for (const line of h.logged) expect(line).not.toMatch(/900|910|700|710|5f3a|process table/)
   })
 })
