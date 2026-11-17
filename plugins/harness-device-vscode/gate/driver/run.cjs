@@ -1,6 +1,7 @@
 // The gate's hands inside the throwaway VS Code (../realVscode.gate.ts), run as its extension tests: it connects to the
-// gate's control socket and answers one NDJSON line per asked line. It touches nothing the extension under test does;
-// the extension is the installed one. Its run ending, on `exit` or the gate gone, ends VS Code with code 0.
+// gate's control socket and answers one NDJSON line per asked line, `{ error }` when the ask failed. It touches nothing
+// the extension under test does; the extension is the installed one. Its run ending, on `exit` or the gate gone, ends
+// VS Code with code 0.
 const { connect } = require('node:net')
 const vscode = require('vscode')
 
@@ -15,6 +16,9 @@ const asks = {
   },
 }
 
+/** The answer, or the failure's message: the gate is told, never left waiting. */
+const answer = (ask) => Promise.resolve().then(() => asks[ask]()).catch((error) => ({ error: String(error?.message ?? error) }))
+
 exports.run = () =>
   new Promise((done) => {
     const socket = connect(process.env.HARNESS_GATE_CONTROL)
@@ -26,7 +30,7 @@ exports.run = () =>
         const { ask } = JSON.parse(held.slice(0, end))
         held = held.slice(end + 1)
         if (ask === 'exit') socket.end()
-        else asks[ask]().then((answer) => socket.write(`${JSON.stringify(answer)}\n`))
+        else answer(ask).then((line) => socket.write(`${JSON.stringify(line)}\n`))
       }
     })
     socket.on('error', () => {})

@@ -71,7 +71,7 @@ let launched: Promise<number> | undefined
 const shellStarts = new Map<number, string>()
 let exited: number | Error | undefined
 let logsWatch: FSWatcher | undefined
-const answers: ((line: Record<string, unknown>) => void)[] = []
+const answers: { resolve: (line: Record<string, unknown>) => void; reject: (error: Error) => void }[] = []
 const opened: { window: string; stream: ListenerStream }[] = []
 const states: { terminals: number[]; active: number | null }[] = []
 const log: string[] = []
@@ -107,12 +107,13 @@ function until<T>(what: string, found: () => T | undefined): Promise<T> {
   })
 }
 
-/** One line to the driver, and its answer. */
+/** One line to the driver, and its answer within UNTIL_MS: a failed ask, or the driver's connection closing, rejects it. */
 function ask(what: 'terminals' | 'active'): Promise<Record<string, unknown>> {
-  return new Promise((resolve) => {
-    answers.push(resolve)
+  const answer = new Promise<Record<string, unknown>>((resolve, reject) => {
+    answers.push({ resolve, reject })
     driver!.write(`${JSON.stringify({ ask: what })}\n`)
   })
+  return within(answer, UNTIL_MS, `the driver's answer to ${what}`)
 }
 
 const inside = (path: string): boolean => !relative(root, path).startsWith('..')
@@ -278,9 +279,15 @@ describe('the extension in a real, throwaway VS Code', () => {
       connection.on('data', (chunk) => {
         held += chunk
         for (let end = held.indexOf('\n'); end !== -1; end = held.indexOf('\n')) {
-          answers.shift()?.(JSON.parse(held.slice(0, end)) as Record<string, unknown>)
+          const line = JSON.parse(held.slice(0, end)) as Record<string, unknown>
           held = held.slice(end + 1)
+          const asked = answers.shift()
+          if (typeof line.error === 'string') asked?.reject(new Error(`the driver: ${line.error}`))
+          else asked?.resolve(line)
         }
+      })
+      connection.on('close', () => {
+        for (const { reject } of answers.splice(0)) reject(new Error('the driver\'s connection closed'))
       })
       changed()
     })
