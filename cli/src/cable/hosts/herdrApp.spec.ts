@@ -14,9 +14,9 @@ const FORGED = ['vps/t7', 'T7', 't', ' t7', 't7\n', '--help', 't7; rm -rf /', `t
 interface Call { file: string; args: string[]; timeoutMs: number }
 
 /** A recording runner that runs nothing, so no spec opens Herdr or moves its window: each call answers the next of
- *  [codes], then exit 0, with [stdout] (what `herdr-app status` printed). Beside it a recording client that opens no socket (its `prompt` answers `sent` unless the test
- *  sets another answer), Herdr in front, every terminal shown and reporting an agent, and the default hc session
- *  followed unless the test says otherwise, and the log's lines kept. */
+ *  [codes], then exit 0, with [stdout] (what `herdr-app status` printed). Beside it a recording client that opens no
+ *  socket (its `prompt` answers `sent` unless the test sets another answer), Herdr in front, every terminal shown and
+ *  reporting an agent, and the default hc session followed unless the test says otherwise, and the log's lines kept. */
 function recorder(over: Partial<HerdrAppDeps> = {}, codes: Array<number | null> = [], stdout = '') {
   const calls: Call[] = []
   const log: string[] = []

@@ -11,10 +11,11 @@
  *
  * Words do not wait for a tap, nor a tap for words: hc types by address, whatever the window shows.
  *
- * A stroke on the dial scrolls Herdr's view of a terminal through `herdr-app do terminal.scroll`. A run took 10–50 ms (5
- * runs on Diego's Mac, 2026-11-17), so it has 2 s, where a focus's 10 s would freeze a stroke. One run at a time per
- * terminal, the lines that come meanwhile carried by the next: a fast stroke costs one process per round trip, not one
- * per dial frame. Its queue is its own: a scroll that joined an `agent.focus` run would lose its lines.
+ * A stroke on the dial scrolls Herdr's view of a terminal through `herdr-app do terminal.scroll`. A `herdr-app` run took
+ * 10–50 ms (`herdr-app commands`, which does not reach the window: 5 runs on Diego's Mac, 2026-11-17; a scroll's own is
+ * not measured), so it has 2 s, where a focus's 10 s would freeze a stroke. One run at a time per terminal, the lines
+ * that come meanwhile carried by the next: a fast stroke costs one process per round trip, not one per dial frame. Its
+ * queue is its own: a scroll that joined an `agent.focus` run would lose its lines.
  *
  * Which terminal is on screen is the window's alone: hc's terminal facts have no focus or viewer. So a stroke asks
  * `herdr-app status` (one run took 0.04 s) and reads its `agent` alone: the rest names the person's spaces and layouts.
