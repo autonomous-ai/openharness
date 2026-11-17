@@ -196,7 +196,13 @@ export async function openDevicesListener(
   const openStream = (type: string, handler: ListenerStreamHandler, message: Record<string, unknown>, socket: Socket, res: ServerResponse): void => {
     const { standby } = message
     if (standby !== undefined && typeof standby !== 'boolean') return drop(res, 400, 'refused')
-    const key = handler.keyed ? handler.keyed.key(message) : ''
+    let key: string | typeof REFUSED
+    // The handler's code, as its open below: a throw would go unanswered and reject settle() with nobody to catch it.
+    try {
+      key = handler.keyed ? handler.keyed.key(message) : ''
+    } catch {
+      return drop(res, 500, 'failed')
+    }
     if (key === REFUSED) return drop(res, 400, 'refused')
     let ofType = streams.get(type)
     if (!ofType) streams.set(type, ofType = new Map())
