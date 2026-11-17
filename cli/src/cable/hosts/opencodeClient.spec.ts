@@ -367,6 +367,19 @@ describe('the opencode client (docs/plans/2026-11-17-dial-opencode-design.md)', 
     events.close()
   })
 
+  it('a frame whose data is empty is dropped, and the stream goes on', async () => {
+    const server = await start()
+    const opencode = await found(server)
+    const events = stream(opencode)
+    await events.told(1)
+    server.send('data:\n\ndata\n\nevent: session.idle\ndata: \n\n')
+    server.event('session.idle', { sessionID: 'ses_a1' })
+    await events.told(2)
+    await fence(opencode)
+    expect(events.calls).toEqual([CONNECTED, { type: 'session.idle', data: { sessionID: 'ses_a1' } }])
+    events.close()
+  })
+
   it('a kind it did not ask for is dropped', async () => {
     const server = await start()
     const opencode = await found(server)
@@ -380,7 +393,7 @@ describe('the opencode client (docs/plans/2026-11-17-dial-opencode-design.md)', 
     events.close()
   })
 
-  it('a frame over 1 MiB closes oversize; one that is no JSON object with a type closes bad_json; the server ending closes ended: onClose once, and nothing after', async () => {
+  it('a frame over 1 MiB closes oversize; one that is no JSON object with a type closes bad_json; opencode\'s stream failure and the server ending close ended: onClose once, and nothing after', async () => {
     const server = await start()
     const opencode = await found(server)
     // Each with an event behind it that is never told; the server's own end has nothing behind it.
@@ -391,6 +404,8 @@ describe('the opencode client (docs/plans/2026-11-17-dial-opencode-design.md)', 
       ['data: [1]\n\n', 'bad_json'],
       ['data: "session.idle"\n\n', 'bad_json'],
       ['data: {"type":7}\n\n', 'bad_json'],
+      // The frame opencode ends a stream with when it fails, its cause as data.
+      ['event: effect/http-api/stream/failure\ndata: [{"_tag":"Die","defect":"The stream failed."}]\n\n', 'ended'],
       ['drop', 'ended'],
     ]
     for (const [raw, reason] of ends) {
