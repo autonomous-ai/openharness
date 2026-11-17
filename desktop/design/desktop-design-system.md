@@ -741,16 +741,16 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
 The menu, top to bottom:
 
 ```text
-Dial connected
-Signed in
-Claude Code: On
-Turn off
-Sound ✓
-Notifications ▸
+  Dial connected
+  Signed in
+  Claude Code: On
+  Turn off
+✓ Sound
+  Notifications ▸
 ──────────
-Open Harness
-About
-Quit
+  Open Harness
+  About
+  Quit
 ```
 
 The [gallery](../../device-app/ui/gallery.html) shows every screen in every
