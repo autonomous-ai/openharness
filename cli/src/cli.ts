@@ -72,7 +72,7 @@ import { apiCommand, apiUsage } from './lib/apiCommand.js'
 import { connectionsCommand, connectionsUsage } from './lib/connectors/command.js'
 // Static, not import(): --help prints DEVICE_USAGE, so the module loads at start anyway, and the core and services never load cli.ts.
 import { DEVICE_USAGE, runDeviceCommand } from './deviceClaude/command.js'
-import { claudeRun } from './deviceClaude/plugin.js'
+import { claudeRun } from './devices/claudePlugin.js'
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { machineChoices, newCommand, type MachineRow, type NewMachine } from './lib/newCommand.js'

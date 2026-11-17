@@ -11,13 +11,14 @@
  */
 import { connect, type Socket } from 'node:net'
 import { dirname } from 'node:path'
+import { claudeDisable, claudeEnable, claudeStatus, type ClaudeResult, type ClaudeRun } from '../devices/claudePlugin.js'
 import { removeSkill, skillOn, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
 import { listable, MAX_HOMES, readAnswers, readHomes, readWritten, writeAnswer, type DialEngine } from '../devices/dialSkillFiles.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { NOTICE_USAGE, runNotice } from '../devices/notice.js'
 import { localSocketRoute, socketIsPrivate } from '../lib/localTransport.js'
 import { daemonPost, runAsked } from './asked.js'
-import { claudeDisable, claudeEnable, claudePluginOn, claudeSettingsPath, claudeStatus, type ClaudeResult, type ClaudeRun } from './plugin.js'
+import { claudePluginOn, claudeSettingsPath } from './plugin.js'
 
 /** `asked`, `link` and `orca link` are left out: they are the plugins', and typed by hand they only wait on stdin or print a path. */
 export const DEVICE_USAGE = `Harness device (the dial shows Claude Code's waiting prompts in any terminal, takes a spoken prompt, and rings when an agent needs you):
