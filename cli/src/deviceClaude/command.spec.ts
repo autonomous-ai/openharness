@@ -161,6 +161,21 @@ describe('harness device claude', () => {
     expect(await device(['claude', 'disable'], { claude: () => installed })).toEqual({ code: 0, out: [], err: [] })
   })
 
+  it('disable with no claude found while the plugin is on says so and exits 1, the rest still done', async () => {
+    const dataDir = folder()
+    skillIn(claudeHome)
+    expect(await device(['claude', 'disable'], { dataDir, claude: () => null })).toEqual({
+      code: 1, out: [], err: ['Claude Code was not found, so its harness-device plugin is still on; /plugin in Claude Code removes it.'],
+    })
+    expect(answers(dataDir)).toEqual({ removed: { claude: true } })
+    expect(existsSync(skillAt(claudeHome))).toBe(false)
+    // Off, or settings that say nothing of it: nothing is left on.
+    pluginOn(false)
+    expect(await device(['claude', 'disable'], { claude: () => null })).toEqual({ code: 0, out: [], err: [] })
+    rmSync(settings)
+    expect(await device(['claude', 'disable'], { claude: () => null })).toEqual({ code: 0, out: [], err: [] })
+  })
+
   it('link --json prints the socket path and nothing else', async () => {
     const dataDir = folder()
     expect(await device(['claude', 'link', '--json'], { dataDir }))
