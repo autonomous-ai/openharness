@@ -262,6 +262,7 @@ export function aggregateTable(s: Summary): string {
 // The newest round against the baseline, on test once it has run, else on val.
 export function headline(s: Summary): string {
   const names = Object.keys(s.variants)
+  if (!names.length) return 'no variants'
   const v = names[names.length - 1]
   const x = s.variants[v]
   const sp = x.splits.test ? 'test' : x.splits.val ? 'val' : Object.keys(x.splits)[0]
