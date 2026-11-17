@@ -40,7 +40,7 @@ export function claudeJudge(cfg: { claudeBin: string; env: NodeJS.ProcessEnv; ti
       '--json-schema', SCHEMA, '--output-format', 'json', '--no-session-persistence', '--setting-sources', 'project']
     // An empty cwd, so no project's CLAUDE.md, settings or files reach the judge.
     const cwd = mkdtempSync(join(tmpdir(), 'dial-skill-judge-'))
-    let out: { code: number | null; stdout: string }
+    let out: { code: number | null; stdout: string; stderr: string }
     try {
       out = await run(cfg.claudeBin, args, cwd, cfg.env, cfg.timeoutMs)
     } finally {
@@ -50,7 +50,10 @@ export function claudeJudge(cfg: { claudeBin: string; env: NodeJS.ProcessEnv; ti
     try {
       result = JSON.parse(out.stdout)
     } catch {
-      throw new Error(`judge printed no JSON (exit ${out.code})`)
+      // Claude Code says why on stderr (signed out, a bad flag). Its end is enough; the runner scrubs every judge error
+      // of the home folder and user name before it is written.
+      const tail = out.stderr.trim().slice(-200)
+      throw new Error(`judge printed no JSON (exit ${out.code})${tail ? `: ${tail}` : ''}`)
     }
     const models = Object.keys((result.modelUsage ?? {}) as object)
     const model = models.join(',')
@@ -78,17 +81,19 @@ function block(label: string, text: string): string {
   return `${label}:\n${fence}\n${text}\n${fence}`
 }
 
-function run(bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, timeoutMs: number): Promise<{ code: number | null; stdout: string }> {
+function run(bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, timeoutMs: number): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     // stdin closed: `claude -p` would otherwise wait for piped input.
-    const child = spawn(bin, args, { cwd, env, stdio: ['ignore', 'pipe', 'ignore'] })
+    const child = spawn(bin, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
     let stdout = ''
+    let stderr = ''
     let timedOut = false
     const timer = setTimeout(() => {
       timedOut = true
       child.kill('SIGKILL')
     }, timeoutMs)
     child.stdout.setEncoding('utf8').on('data', (chunk: string) => { stdout += chunk })
+    child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr = (stderr + chunk).slice(-4096) })
     child.on('error', (err) => {
       clearTimeout(timer)
       reject(err)
@@ -96,7 +101,7 @@ function run(bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, t
     child.on('close', (code) => {
       clearTimeout(timer)
       if (timedOut) reject(Object.assign(new Error(`judge timed out after ${timeoutMs} ms`), { failure_class: 'timeout' }))
-      else resolve({ code, stdout })
+      else resolve({ code, stdout, stderr })
     })
   })
 }
