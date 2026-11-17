@@ -101,6 +101,8 @@ interface Service {
 const LOOPBACK: ReadonlySet<string> = new Set(['127.0.0.1', '[::1]', 'localhost'])
 const ASKED: ReadonlySet<string> = new Set(EVENT_TYPES)
 const EVENT_PATH = `/api/event?${new URLSearchParams(EVENT_TYPES.map((type): [string, string] => ['types', type]))}`
+/** The frame's event name when opencode's stream fails, its cause as data (OpenAPI `x-effect-stream.failureEvent`). */
+const STREAM_FAILURE = 'effect/http-api/stream/failure'
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -304,6 +306,7 @@ export function createOpencodeClient(deps: OpencodeClientDeps): OpencodeClient {
     let answered = false
     let line: Buffer[] = []
     let data: string[] = []
+    let kind = ''
     // The frame's bytes so far, its line being read among them.
     let size = 0
 
@@ -322,20 +325,26 @@ export function createOpencodeClient(deps: OpencodeClientDeps): OpencodeClient {
       onEvent({ type: value.type, data: isObject(value.data) ? value.data : {} })
     }
 
-    // As SSE reads a line: a blank one ends the frame, and only the data field is read. A comment (opencode's heartbeat)
-    // is a field with no name.
+    // As SSE reads a line: a blank one ends the frame, and only the data and event fields are read. A comment (opencode's
+    // heartbeat) is a field with no name.
     const read = (text: string) => {
       if (text === '') {
-        const frame = data
+        const frame = data.join('\n')
+        const failed = kind === STREAM_FAILURE
         data = []
+        kind = ''
         size = 0
-        if (frame.length > 0) tell(frame.join('\n'))
+        // opencode's own end of a stream it could not go on with: its cause is no event of ours.
+        if (failed) return end('ended')
+        // No data, or empty data: nothing to tell, and no fault.
+        if (frame !== '') tell(frame)
         return
       }
       const colon = text.indexOf(':')
-      if ((colon === -1 ? text : text.slice(0, colon)) !== 'data') return
-      const value = colon === -1 ? '' : text.slice(colon + 1)
-      data.push(value.startsWith(' ') ? value.slice(1) : value)
+      const name = colon === -1 ? text : text.slice(0, colon)
+      const value = colon === -1 ? '' : text.slice(colon + 1).replace(/^ /, '')
+      if (name === 'data') data.push(value)
+      else if (name === 'event') kind = value
     }
 
     request = send(service, 'GET', EVENT_PATH, undefined, (response) => {
