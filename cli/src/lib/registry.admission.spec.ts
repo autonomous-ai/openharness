@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import type { Server } from 'node:http'
 import type { HookServerHandlers } from '../hookServer.js'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -63,42 +64,44 @@ beforeEach(async () => {
   writeFileSync(join(root, 'data', 'engine-homes.json'), '{}')
   transcript = join(home, 'sessions', `rollout-${A}.jsonl`); writeFileSync(transcript, header())
   vi.resetModules(); observeNativeProof(); ({ registry } = await import('./registry.js'))
-  target = registry.openProcessAgent({ engine: 'terminal', tmuxPane: '%1', cwd: root,
-    processIdentity: { pid: 4101, startMarker: 'fixture-start', executable: '<shell>' } })!.entry.agentId
-  source = registry.openProcessAgent({ engine: 'codex', tmuxPane: '%2', cwd: root, processIdentity: input(A, transcript, '%2').processIdentity })!.entry.agentId
+  target = (await registry.openProcessAgent({ engine: 'terminal', tmuxPane: '%1', cwd: root,
+    processIdentity: { pid: 4101, startMarker: 'fixture-start', executable: '<shell>' } }))!.entry.agentId
+  source = (await registry.openProcessAgent({ engine: 'codex', tmuxPane: '%2', cwd: root, processIdentity: input(A, transcript, '%2').processIdentity }))!.entry.agentId
+  await registry.flush()
 })
 afterEach(async () => {
   if (server) await new Promise<void>(resolve => server!.close(() => resolve()))
   server = undefined
   fault.rename = false; fault.directorySync = false; fault.renamed = false; fault.afterProof = undefined; fault.beforeVerify = undefined
+  await registry.flush().catch(() => {})
   vi.restoreAllMocks(); vi.doUnmock('../engines/transcriptBindings.js'); vi.unstubAllEnvs(); vi.resetModules(); rmSync(root, { recursive: true, force: true })
 })
 
-it.each(['', '{', '{"type":"session_meta"}\n'])('holds incomplete native evidence without promoting the terminal: %s', text => {
+it.each(['', '{', '{"type":"session_meta"}\n'])('holds incomplete native evidence without promoting the terminal: %s', async text => {
   writeFileSync(transcript, text)
   const before = snapshot()
-  expect(() => registry.register(input())).toThrow()
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow()
   unchanged(before)
   expect(registry.byRuntimeTerminal({ backend: 'tmux', paneId: '%1' })?.agentId).toBe(target)
 })
-it.each(['different-id', 'delegated'])('refuses confirmed %s without changing the terminal or its durable row', kind => {
+it.each(['different-id', 'delegated'])('refuses confirmed %s without changing the terminal or its durable row', async kind => {
   writeFileSync(transcript, header(kind === 'different-id' ? B : A, kind === 'delegated'))
   const before = snapshot()
-  expect(registry.register(input())).toBeNull()
+  expect((await registry.register(input()))).toBeNull()
   unchanged(before)
 })
-it.each(['terminal', 'active-owner', 'dormant-owner'])('keeps every live and durable owner when the %s commit fails', kind => {
+it.each(['terminal', 'active-owner', 'dormant-owner'])('keeps every live and durable owner when the %s commit fails', async kind => {
   if (kind !== 'terminal') {
-    expect(registry.register(input(A, transcript, '%2'))).not.toBeNull()
-    if (kind === 'dormant-owner') registry.setActive(source, false)
+    expect((await registry.register(input(A, transcript, '%2')))).not.toBeNull()
+    if (kind === 'dormant-owner') { registry.setActive(source, false); await registry.flush() }
   }
   const before = snapshot(); fault.rename = true
-  expect(() => registry.register(input())).toThrow('fixture registry write failure')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
   unchanged(before)
   expect(registry.byAgent(target)?.engine).toBe('terminal')
   if (kind !== 'terminal') expect(registry.bySession(A)?.agentId).toBe(source)
 })
-it('rechecks the native header under the write lock before publishing any registration', () => {
+it('rechecks the native header under the write lock before publishing any registration', async () => {
   const before = snapshot()
   let checked = false
   fault.beforeVerify = () => {
@@ -106,26 +109,31 @@ it('rechecks the native header under the write lock before publishing any regist
     expect(JSON.parse(readFileSync(join(file + '.lock', 'owner.json'), 'utf8')).pid).toBe(process.pid)
     writeFileSync(transcript, header(B))
   }
-  expect(() => registry.register(input())).toThrow('header changed')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('header changed')
   expect(checked).toBe(true)
   unchanged(before)
 })
-it('never overwrites a different durable admission that arrived during inspection', () => {
+it('never overwrites a different durable admission that arrived during inspection', async () => {
   const peer = new (registry.constructor as new () => typeof registry)(); peer.load()
   const other = join(home, 'sessions', `rollout-${B}.jsonl`); writeFileSync(other, header(B))
   const before = JSON.stringify(registry.list())
   let committed = ''
   fault.afterProof = () => {
     fault.afterProof = undefined
-    expect(peer.register(input(B, other))).not.toBeNull()
+    const rows = JSON.parse(readFileSync(file, 'utf8'))
+    Object.assign(rows.find((row: { agentId: string }) => row.agentId === target), {
+      engine: 'codex', sessionId: B, transcriptPath: other, boundAt: Date.now(), processIdentity: input(B, other).processIdentity,
+    })
+    writeFileSync(file, JSON.stringify(rows, null, 2))
     committed = readFileSync(file, 'utf8')
   }
-  expect(() => registry.register(input())).toThrow('saved binding changed')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('saved binding changed')
   expect(JSON.stringify(registry.list())).toBe(before)
   expect(readFileSync(file, 'utf8')).toBe(committed)
+  peer.load()
   expect(peer.bySession(B)?.agentId).toBe(target)
 })
-it('returns the committed live row and publishes only after the registry write', () => {
+it('returns the committed row snapshot and publishes only after the registry write', async () => {
   const former = registry.byAgent(target)!, before = structuredClone(former)
   const entered: string[] = []
   registry.onEnter = engine => {
@@ -133,18 +141,18 @@ it('returns the committed live row and publishes only after the registry write',
     expect(saved.find(row => row.agentId === target)?.sessionId).toBe(A)
     entered.push(engine)
   }
-  const result = registry.register(input())!
+  const result = (await registry.register(input()))!
   expect(result.entry).not.toBe(former)
   expect(former).toEqual(before)
-  expect(result.entry).toBe(registry.byAgent(target))
+  expect(result.entry).toEqual(registry.byAgent(target))
   expect(result.entry.sessionId).toBe(A)
-  expect(registry.bySession(A)).toBe(result.entry)
+  expect(registry.bySession(A)).toEqual(result.entry)
   expect(entered).toContain('codex')
 })
 
 
-it('publishes all displaced owners before optional entry notification and contains its failure', () => {
-  expect(registry.register(input(A, transcript, '%2'))).not.toBeNull()
+it('publishes all displaced owners before optional entry notification and contains its failure', async () => {
+  expect((await registry.register(input(A, transcript, '%2')))).not.toBeNull()
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
   const observations: string[] = []
   registry.onEnter = engine => {
@@ -154,8 +162,8 @@ it('publishes all displaced owners before optional entry notification and contai
     observations.push(engine)
     throw new Error('optional engine startup unavailable')
   }
-  const result = registry.register(input())!
-  expect(result.entry).toBe(registry.byAgent(target))
+  const result = (await registry.register(input()))!
+  expect(result.entry).toEqual(registry.byAgent(target))
   expect(observations.length).toBe(2)
   expect(warning).toHaveBeenCalledTimes(2)
   const rows = JSON.parse(readFileSync(file, 'utf8')) as Array<{ agentId: string; sessionId: string }>
@@ -164,43 +172,43 @@ it('publishes all displaced owners before optional entry notification and contai
 })
 
 
-it.each(['terminal', 'active-owner', 'dormant-owner'])('reconciles its own post-rename uncertainty for %s before publishing', kind => {
+it.each(['terminal', 'active-owner', 'dormant-owner'])('reconciles its own post-rename uncertainty for %s before publishing', async kind => {
   if (kind !== 'terminal') {
-    expect(registry.register(input(A, transcript, '%2'))).not.toBeNull()
-    if (kind === 'dormant-owner') registry.setActive(source, false)
+    expect((await registry.register(input(A, transcript, '%2')))).not.toBeNull()
+    if (kind === 'dormant-owner') { registry.setActive(source, false); await registry.flush() }
   }
   const before = JSON.stringify(registry.list())
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(input())).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
   expect(JSON.stringify(registry.list())).toBe(before)
   const written = readFileSync(file, 'utf8')
   expect(JSON.parse(written).find((row: { agentId: string }) => row.agentId === target).sessionId).toBe(A)
   fault.directorySync = false
-  const result = registry.register(input())!
+  const result = (await registry.register(input()))!
   expect(result.entry.sessionId).toBe(A)
-  expect(result.entry).toBe(registry.byAgent(target))
+  expect(result.entry).toEqual(registry.byAgent(target))
   expect(readFileSync(file, 'utf8')).toBe(written)
   if (kind === 'active-owner') expect(registry.byAgent(source)?.sessionId).toBe('')
   if (kind === 'dormant-owner') expect(registry.byAgent(source)).toBeUndefined()
 })
 
-it('does not consume post-rename uncertainty as success after a local removal changes ownership', () => {
+it('does not consume post-rename uncertainty as success after a local removal changes ownership', async () => {
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(input())).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
   fault.directorySync = false
   const written = readFileSync(file, 'utf8')
-  registry.removeAgent(target)
-  expect(registry.register(input())).toBeNull()
+  ;(await removeRegistryAgent(registry, target))
+  expect((await registry.register(input()))).toBeNull()
   expect(registry.byAgent(target)).toBeUndefined()
   const saved = JSON.parse(readFileSync(file, 'utf8')).find((row: { agentId: string }) => row.agentId === target)
   expect(saved).toBeUndefined()
   expect(readFileSync(file, 'utf8')).not.toBe(written)
 })
 
-it.each(['rename', 'changed-proof', 'peer-commit'])('keeps a resumed binding intact when mismatch refusal meets %s', mode => {
-  expect(registry.register(input())).not.toBeNull()
+it.each(['rename', 'changed-proof', 'peer-commit'])('keeps a resumed binding intact when mismatch refusal meets %s', async mode => {
+  expect((await registry.register(input()))).not.toBeNull()
   const row = registry.byAgent(target)!
-  row.resumeOnly = true; row.lastHookAt = 0; row.launch = { state: 'starting' }; registry.flush()
+  row.resumeOnly = true; row.lastHookAt = 0; row.launch = { state: 'starting' }; (await registry.flush())
   const other = join(home, 'sessions', `rollout-${B}.jsonl`); writeFileSync(other, header(B))
   const before = snapshot()
   if (mode === 'rename') fault.rename = true
@@ -208,9 +216,15 @@ it.each(['rename', 'changed-proof', 'peer-commit'])('keeps a resumed binding int
   let peerDisk: string | undefined
   if (mode === 'peer-commit') {
     const peer = new (registry.constructor as new () => typeof registry)(); peer.load()
-    fault.afterProof = () => { fault.afterProof = undefined; peer.setLaunch(target, { state: 'ready' }); peerDisk = readFileSync(file, 'utf8') }
+    fault.afterProof = () => {
+      fault.afterProof = undefined
+      const rows = JSON.parse(readFileSync(file, 'utf8'))
+      rows.find((row: { agentId: string }) => row.agentId === target).launch = { state: 'ready' }
+      writeFileSync(file, JSON.stringify(rows, null, 2))
+      peerDisk = readFileSync(file, 'utf8')
+    }
   }
-  expect(() => registry.register(input(B, other))).toThrow()
+  await expect((async () => (await registry.register(input(B, other))))()).rejects.toThrow()
   expect(JSON.stringify(registry.list())).toBe(before.live)
   expect(readFileSync(file, 'utf8')).toBe(peerDisk ?? before.disk)
 })
@@ -220,12 +234,13 @@ it('cannot flush an unrelated stale discovery claim over a newer durable peer', 
   let peerDisk = ''
   await registry.transaction(async () => {
     registry.updateRuntimes(source, [{ backend: 'tmux', paneId: '%3' }], 'tmux\u0000%3')
-    const third = peer.openProcessAgent({ engine: 'claude', tmuxPane: '%3', cwd: root,
-      processIdentity: { pid: 9103, startMarker: 'fixture-peer', executable: '<claude>' } })!
+    const third = (await peer.openProcessAgent({ engine: 'claude', tmuxPane: '%3', cwd: root,
+      processIdentity: { pid: 9103, startMarker: 'fixture-peer', executable: '<claude>' } }))!
+    await peer.flush()
     peerDisk = readFileSync(file, 'utf8')
     expect(third.entry.agentId).not.toBe(source)
     const live = JSON.stringify(registry.list())
-    expect(() => registry.register(input())).toThrow()
+    await expect((async () => (await registry.register(input())))()).rejects.toThrow()
     expect(JSON.stringify(registry.list())).toBe(live)
     expect(readFileSync(file, 'utf8')).toBe(peerDisk)
     // Finish the observation without the stale route; it never earns a write through registration.
@@ -235,109 +250,111 @@ it('cannot flush an unrelated stale discovery claim over a newer durable peer', 
 })
 
 
-it('rolls back only its unpublished image before a different local write and then retries the held admission', () => {
+it('rolls back only its unpublished image before a different local write and then retries the held admission', async () => {
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(input())).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
   fault.directorySync = false
   registry.setCwd(source, '/fixture/next-folder')
   expect(registry.byAgent(target)?.engine).toBe('terminal')
   expect(registry.byAgent(source)?.cwd).toBe('/fixture/next-folder')
-  const result = registry.register(input())!
+  const result = (await registry.register(input()))!
   expect(result.entry.sessionId).toBe(A)
   expect(registry.byAgent(source)?.cwd).toBe('/fixture/next-folder')
   expect(JSON.parse(readFileSync(file, 'utf8')).find((row: { agentId: string }) => row.agentId === source).cwd).toBe('/fixture/next-folder')
 })
 
-it('contains another directory failure while reversing an unpublished binding for removal', () => {
+it('contains another directory failure while reversing an unpublished binding for removal', async () => {
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(input())).toThrow('fixture directory sync failure')
-  registry.removeAgent(target)
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
+  await expect(removeRegistryAgent(registry, target)).rejects.toThrow('registry storage write failed')
+  expect(registry.byAgent(target)).toBeDefined()
   fault.directorySync = false
-  registry.flush()
-  expect(registry.register(input())).toBeNull()
+  await removeRegistryAgent(registry, target)
+  ;(await registry.flush())
+  expect((await registry.register(input()))).toBeNull()
   const saved = JSON.parse(readFileSync(file, 'utf8')).find((row: { agentId: string }) => row.agentId === target)
   expect(saved).toBeUndefined()
 })
 
-it('reconciles a peer-changed ownership group and allows unrelated strict writes and fresh admission', () => {
+it('reconciles a peer-changed ownership group and allows unrelated strict writes and fresh admission', async () => {
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(input())).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
   fault.directorySync = false
   const peerRows = JSON.parse(readFileSync(file, 'utf8'))
   peerRows.find((row: { agentId: string }) => row.agentId === target).cwd = '/fixture/peer-folder'
   writeFileSync(file, JSON.stringify(peerRows, null, 2))
   const peerDisk = readFileSync(file, 'utf8')
-  expect(() => registry.register(input())).toThrow('different durable owner')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('different durable owner')
   expect(readFileSync(file, 'utf8')).toBe(peerDisk)
   expect(registry.byAgent(target)?.engine).toBe('codex')
   expect(registry.byAgent(target)?.identityHold).toContain('concurrent binding')
   const other = join(home, 'sessions', `rollout-${B}.jsonl`); writeFileSync(other, header(B))
-  expect(registry.register(input(B, other, '%2'))?.entry.sessionId).toBe(B)
+  expect((await registry.register(input(B, other, '%2')))?.entry.sessionId).toBe(B)
   expect(registry.byAgent(target)?.cwd).toBe('/fixture/peer-folder')
-  expect(registry.register(input())?.entry.sessionId).toBe(A)
+  expect((await registry.register(input()))?.entry.sessionId).toBe(A)
   expect(registry.bySession(B)?.agentId).toBe(source)
 })
 
-it('confirms an unpublished group while retaining an unrelated peer write', () => {
+it('confirms an unpublished group while retaining an unrelated peer write', async () => {
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(input())).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
   fault.directorySync = false
   const peerRows = JSON.parse(readFileSync(file, 'utf8'))
   peerRows.find((row: { agentId: string }) => row.agentId === source).cwd = '/fixture/peer-folder'
   writeFileSync(file, JSON.stringify(peerRows, null, 2))
-  expect(registry.register(input())?.entry.sessionId).toBe(A)
+  expect((await registry.register(input()))?.entry.sessionId).toBe(A)
   expect(registry.byAgent(source)?.cwd).toBe('/fixture/peer-folder')
   expect(JSON.parse(readFileSync(file, 'utf8')).find((row: { agentId: string }) => row.agentId === source).cwd).toBe('/fixture/peer-folder')
 })
 
-it('keeps its unconfirmed image independent of mutable input objects', () => {
+it('keeps its unconfirmed image independent of mutable input objects', async () => {
   const pending = input()
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(pending)).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register(pending)))()).rejects.toThrow('registry storage write failed')
   const written = readFileSync(file, 'utf8')
   pending.processIdentity.startMarker = 'mutated-after-write'
   fault.directorySync = false
-  expect(() => registry.register(input())).not.toThrow()
+  await expect((async () => (await registry.register(input())))()).resolves.not.toBeInstanceOf(Error)
   expect(registry.byAgent(target)?.sessionId).toBe(A)
   expect(readFileSync(file, 'utf8')).toBe(written)
 })
 
-it('lets a late hook recover a launch timeout while its live process remains the owner', () => {
+it('lets a late hook recover a launch timeout while its live process remains the owner', async () => {
   registry.setLaunch(source, { state: 'failed', error: 'START_TIMEOUT' })
-  expect(registry.register(input(A, transcript, '%2'))?.entry.sessionId).toBe(A)
+  expect((await registry.register(input(A, transcript, '%2')))?.entry.sessionId).toBe(A)
 })
 
 
-it('does not acknowledge a Close plan discarded by peer ownership recovery', () => {
+it('does not acknowledge a Close plan discarded by peer ownership recovery', async () => {
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(input())).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
   fault.directorySync = false
   const peerRows = JSON.parse(readFileSync(file, 'utf8'))
   peerRows.find((row: { agentId: string }) => row.agentId === target).cwd = '/fixture/peer-folder'
   writeFileSync(file, JSON.stringify(peerRows, null, 2))
   const disk = readFileSync(file, 'utf8')
   const plan = { id: 'cccccccc-3333-4333-8333-cccccccccccc', state: 'waiting' as const, identity: 'fixture-binding', requestedAt: Date.now() }
-  expect(() => registry.setClosePlan(target, plan)).toThrow('different durable owner')
+  await expect((async () => (await registry.setClosePlan(target, plan)))()).rejects.toThrow('different durable owner')
   expect(registry.byAgent(target)?.closePlan).toBeUndefined()
   expect(readFileSync(file, 'utf8')).toBe(disk)
-  expect(registry.setClosePlan(source, plan)?.closePlan).toEqual(plan)
+  expect((await registry.setClosePlan(source, plan))?.closePlan).toEqual(plan)
 })
 
-it('does not authorize an external dispatch discarded by recovery of a staged batch', () => {
-  const external = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%3' }],
-    externalResume: { token: 'cccccccc-3333-4333-8333-cccccccccccc', request: { engine: 'codex', sessionId: B }, takeOver: null, phase: 'waiting' } })!
-  registry.setExternalResume(external.agentId, { ...external.externalResume!, phase: 'admitted', session: {
+it('does not authorize an external dispatch discarded by recovery of a staged batch', async () => {
+  const external = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%3' }],
+    externalResume: { token: 'cccccccc-3333-4333-8333-cccccccccccc', request: { engine: 'codex', sessionId: B }, takeOver: null, phase: 'waiting' } }))!
+  ;(await registry.setExternalResume(external.agentId, { ...external.externalResume!, phase: 'admitted', session: {
     engine: 'codex', sessionId: B, cwd: root, origin: 'terminal', title: 'fixture', mtime: 1, transcriptPath: null,
-  } })
+  } }))
   registry.byAgent(external.agentId)!.cwd = '/fixture/staged-folder'
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(input())).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
   fault.directorySync = false
   const peerRows = JSON.parse(readFileSync(file, 'utf8'))
   peerRows.find((row: { agentId: string }) => row.agentId === external.agentId).cwd = '/fixture/peer-folder'
   writeFileSync(file, JSON.stringify(peerRows, null, 2))
   const disk = readFileSync(file, 'utf8')
-  expect(() => registry.beginExternalDispatch(external.agentId)).toThrow('different durable owner')
+  await expect((async () => (await registry.beginExternalDispatch(external.agentId)))()).rejects.toThrow('different durable owner')
   expect(registry.byAgent(external.agentId)?.externalResume?.dispatched).toBeUndefined()
   expect(registry.byAgent(external.agentId)?.launch?.state).toBe('held')
   expect(registry.byAgent(external.agentId)?.cwd).toBe('/fixture/peer-folder')
@@ -345,15 +362,15 @@ it('does not authorize an external dispatch discarded by recovery of a staged ba
 })
 
 
-it('reconciles a whole alias-only ownership transfer after an unconfirmed write', () => {
+it('reconciles a whole alias-only ownership transfer after an unconfirmed write', async () => {
   const alias = 'shared-alias'
-  const previous = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%3' }],
-    externalResume: { token: 'cccccccc-3333-4333-8333-cccccccccccc', request: { engine: 'codex', sessionId: B }, takeOver: null, phase: 'waiting' } })!
-  registry.setExternalResume(previous.agentId, { ...previous.externalResume!, phase: 'admitted', session: {
+  const previous = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%3' }],
+    externalResume: { token: 'cccccccc-3333-4333-8333-cccccccccccc', request: { engine: 'codex', sessionId: B }, takeOver: null, phase: 'waiting' } }))!
+  ;(await registry.setExternalResume(previous.agentId, { ...previous.externalResume!, phase: 'admitted', session: {
     engine: 'codex', sessionId: B, aliases: [alias], cwd: root, origin: 'terminal', title: 'fixture', mtime: 1, transcriptPath: null,
-  } })
+  } }))
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(input())).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
   fault.directorySync = false
   const peerRows = JSON.parse(readFileSync(file, 'utf8'))
   peerRows.find((row: { agentId: string }) => row.agentId === previous.agentId).externalResume.session.aliases = []
@@ -363,11 +380,11 @@ it('reconciles a whole alias-only ownership transfer after an unconfirmed write'
   }
   writeFileSync(file, JSON.stringify(peerRows, null, 2))
   const disk = readFileSync(file, 'utf8')
-  expect(() => registry.register(input())).toThrow('different durable owner')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('different durable owner')
   expect(readFileSync(file, 'utf8')).toBe(disk)
   expect(registry.externalConflict([alias])?.agentId).toBe(target)
   expect(registry.byAgent(previous.agentId)?.externalResume?.session?.aliases).toEqual([])
-  expect(registry.register(input())?.entry.sessionId).toBe(A)
+  expect((await registry.register(input()))?.entry.sessionId).toBe(A)
 })
 
 
@@ -410,7 +427,7 @@ it('keeps each prompt through an HTTP registration write failure and credits it 
   expect(f.registered).not.toHaveBeenCalled()
   expect(registry.byAgent(source)?.sessionId).toBe('')
   expect(readFileSync(file, 'utf8')).toBe(before)
-  expect(f.reasons.some(reason => reason?.includes('registry write failure'))).toBe(true)
+  expect(f.reasons.some(reason => reason?.includes('registry storage write failed'))).toBe(true)
   fault.rename = false
   await vi.waitFor(() => expect(f.prompts).toEqual(['first prompt', 'second prompt']), { timeout: 4_000 })
   expect(f.registered).toHaveBeenCalledTimes(2)
@@ -428,8 +445,8 @@ it('holds a missing announced transcript on the actual HTTP path and retries com
 })
 
 it.each(['commandcode', 'grok', 'agy', 'copilot'] as const)('admits the %s SessionStart before its deterministic transcript directories exist', async engine => {
-  const agent = registry.openProcessAgent({ engine, tmuxPane: '%3', cwd: root,
-    processIdentity: { pid: 5103, startMarker: 'fixture-start', executable: `<${engine}>` } })!.entry
+  const agent = (await registry.openProcessAgent({ engine, tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 5103, startMarker: 'fixture-start', executable: `<${engine}>` } }))!.entry
   const f = await httpFixture()
   expect(await f.post({ engine, tmuxPane: '%3', transcriptPath: undefined, hookEvent: 'SessionStart', prompt: undefined }))
     .toEqual({ status: 200, body: { ok: true } })
@@ -439,21 +456,22 @@ it.each(['commandcode', 'grok', 'agy', 'copilot'] as const)('admits the %s Sessi
   expect(f.prompts).toEqual([])
 })
 
-it('rechecks an unwritten derived locator proof under the lock and never grants it to a reported path', () => {
-  const agent = registry.openProcessAgent({ engine: 'commandcode', tmuxPane: '%3', cwd: root,
-    processIdentity: { pid: 5103, startMarker: 'fixture-start', executable: '<commandcode>' } })!.entry
+it('rechecks an unwritten derived locator proof under the lock and never grants it to a reported path', async () => {
+  const agent = (await registry.openProcessAgent({ engine: 'commandcode', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 5103, startMarker: 'fixture-start', executable: '<commandcode>' } }))!.entry
+  await registry.flush()
   const body = { engine: 'commandcode' as const, sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: agent.processIdentity! }
   const before = snapshot()
-  expect(() => registry.register({ ...body, transcriptPath: join(root, 'commandcode', 'projects', 'announced.jsonl') })).toThrow('not yet available')
+  await expect((async () => (await registry.register({ ...body, transcriptPath: join(root, 'commandcode', 'projects', 'announced.jsonl') })))()).rejects.toThrow('not yet available')
   unchanged(before)
   fault.beforeVerify = () => {
     expect(JSON.parse(readFileSync(join(file + '.lock', 'owner.json'), 'utf8')).pid).toBe(process.pid)
     mkdirSync(join(root, 'commandcode'))
   }
-  expect(() => registry.register(body)).toThrow('changed')
+  await expect((async () => (await registry.register(body)))()).rejects.toThrow('changed')
   unchanged(before)
   fault.beforeVerify = undefined
-  expect(registry.register(body)?.entry.sessionId).toBe(A)
+  expect((await registry.register(body))?.entry.sessionId).toBe(A)
 })
 
 it('the actual Stop job blocks hook admission before its first asynchronous step settles', async () => {
@@ -480,29 +498,31 @@ it('the actual Stop job blocks hook admission before its first asynchronous step
   await refused
 })
 
-it('recovers a peer-changed fileless binding only after fresh native source admission', () => {
-  registry.removeAgent(target)
-  const agent = registry.openProcessAgent({ engine: 'hermes', tmuxPane: '%1', cwd: root,
-    processIdentity: { pid: 6101, startMarker: 'fixture-start', executable: '<hermes>' } })!.entry
+it('recovers a peer-changed fileless binding only after fresh native source admission', async () => {
+  ;(await removeRegistryAgent(registry, target))
+  const agent = (await registry.openProcessAgent({ engine: 'hermes', tmuxPane: '%1', cwd: root,
+    processIdentity: { pid: 6101, startMarker: 'fixture-start', executable: '<hermes>' } }))!.entry
   const body = { engine: 'hermes' as const, tmuxPane: '%1', sessionId: '20261010_050000_abcdef', cwd: root, processIdentity: agent.processIdentity! }
+  await registry.flush()
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register(body)).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register(body)))()).rejects.toThrow('registry storage write failed')
   fault.directorySync = false
   const peerRows = JSON.parse(readFileSync(file, 'utf8'))
   peerRows.find((row: { agentId: string }) => row.agentId === agent.agentId).cwd = '/fixture/peer-folder'
   writeFileSync(file, JSON.stringify(peerRows, null, 2))
-  expect(() => registry.register(body)).toThrow('different durable owner')
-  expect(registry.register(body)?.entry.identityHold).toContain('concurrent binding')
-  const result = registry.register(body, { verifiedNativeSource: true })!
+  await expect((async () => (await registry.register(body)))()).rejects.toThrow('different durable owner')
+  expect((await registry.register(body))?.entry.identityHold).toContain('concurrent binding')
+  const result = (await registry.register(body, { verifiedNativeSource: true }))!
   expect(result.entry.identityHold).toBeUndefined()
   expect(result.entry.interpretationHold).toBeTruthy()
 })
 
-it('revokes a stale displaced-owner draft when a peer gave that owner another conversation', () => {
-  expect(registry.register(input(A, transcript, '%2'))).not.toBeNull()
+it('revokes a stale displaced-owner draft when a peer gave that owner another conversation', async () => {
+  expect((await registry.register(input(A, transcript, '%2')))).not.toBeNull()
   registry.setActive(source, false)
+  await registry.flush()
   fault.directorySync = true; fault.renamed = false
-  expect(() => registry.register({ ...input(A, transcript, '%2'), title: 'unconfirmed title' })).toThrow('fixture directory sync failure')
+  await expect((async () => (await registry.register({ ...input(A, transcript, '%2'), title: 'unconfirmed title' })))()).rejects.toThrow('registry storage write failed')
   fault.directorySync = false
   const other = join(home, 'sessions', `rollout-${B}.jsonl`); writeFileSync(other, header(B))
   const peerRows = JSON.parse(readFileSync(file, 'utf8'))
@@ -511,11 +531,11 @@ it('revokes a stale displaced-owner draft when a peer gave that owner another co
   const disk = readFileSync(file, 'utf8')
   // This draft's target is outside the recovered group, but its displaced owner is
   // inside it. Returning stale orphan metadata would let binding delete that owner.
-  expect(() => registry.register(input())).toThrow('different durable owner')
+  await expect((async () => (await registry.register(input())))()).rejects.toThrow('different durable owner')
   expect(registry.byAgent(target)?.engine).toBe('terminal')
   expect(registry.bySession(B)?.agentId).toBe(source)
   expect(readFileSync(file, 'utf8')).toBe(disk)
-  expect(registry.register(input())?.orphaned).toBeNull()
+  expect((await registry.register(input()))?.orphaned).toBeNull()
   expect(registry.bySession(B)?.agentId).toBe(source)
 })
 
@@ -536,7 +556,7 @@ it('keeps the older hold visible when a competing delegated delivery is refused'
   const child = join(home, 'sessions', `rollout-${B}.jsonl`); writeFileSync(child, '{\n')
   await f.post({ sessionId: B, transcriptPath: child, prompt: 'child' }, { firedAt: firedAt + 1 })
   writeFileSync(child, header(B, true))
-  await vi.waitFor(() => expect(f.reasons.at(-1)).toContain('registry write failure'), { timeout: 3_000 })
+  await vi.waitFor(() => expect(f.reasons.at(-1)).toContain('registry storage write failed'), { timeout: 3_000 })
   expect(f.prompts).toEqual([])
   fault.rename = false
   await vi.waitFor(() => expect(f.prompts).toEqual(['parent']), { timeout: 3_000 })
@@ -553,7 +573,7 @@ it('contains a failed status publisher without losing durable prompt notificatio
 })
 
 it('does not let a delayed older ordinary hook replace a newer accepted conversation', async () => {
-  registry.register(input(A, transcript, '%2'))
+  ;(await registry.register(input(A, transcript, '%2')))
   const f = await httpFixture()
   const other = join(home, 'sessions', `rollout-${B}.jsonl`); writeFileSync(other, header(B))
   const time = Date.now() + 10_000
@@ -636,8 +656,8 @@ it.each(['cursor', 'commandcode'] as const)('retains %s Stop before recovered re
     const path = commandcodeTranscriptPath(root, A)!
     mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, '{}\n')
   }
-  const owner = registry.openProcessAgent({ engine, tmuxPane: '%3', cwd: root,
-    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } })!.entry
+  const owner = (await registry.openProcessAgent({ engine, tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
   const onTurnStop = vi.fn(), order: string[] = []
   let retain = false
   const onAdmissionStop = vi.fn((_row, unmatched) => { expect(unmatched).toBe(true); order.push('retain'); return retain })
@@ -665,9 +685,9 @@ it.each(['cursor', 'commandcode'] as const)('retains %s Stop before recovered re
 })
 
 it('claims an immediate already-bound linked Stop once, including concurrent retries', async () => {
-  const owner = registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
-    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } })!.entry
-  registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! })
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
   const onTurnStop = vi.fn()
   const f = await httpFixture(() => false, 65_536, { onTurnStop, onAdmissionStop: (_row, unmatched) => {
     expect(unmatched).toBe(false); return false
@@ -682,9 +702,9 @@ it('claims an immediate already-bound linked Stop once, including concurrent ret
 })
 
 it.each([false, true])('retains an overtaking Stop after process resolution recovers, with onWait: %s', async waiting => {
-  const owner = registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
-    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } })!.entry
-  registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! })
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
   let finish: ((row: typeof owner) => void) | undefined
   const held = vi.fn(() => true), stopped = vi.fn()
   const f = await httpFixture(() => false, 65_536, { onAdmissionStop: held, onTurnStop: stopped,
@@ -722,9 +742,9 @@ it.each([false, true])('keeps a held delivery through route changes and requires
 })
 
 it('holds a same-owner linked Stop after interpretation recovered, without closing its later turn', async () => {
-  const owner = registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
-    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } })!.entry
-  registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! })
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
   const onTurnStop = vi.fn(), holds: boolean[] = []
   const f = await httpFixture(() => false, 65_536, { onTurnStop, onAdmissionStop: (row, unmatched) => {
     holds.push(unmatched)
@@ -753,9 +773,9 @@ it('holds a same-owner linked Stop after interpretation recovered, without closi
 it.each(['before-followup', 'during-followup', 'during-registration', 'during-initial-resolution'] as const)('Cancel supersedes original Stop %s without closing a newer turn', async phase => {
   const { createAttach } = await import('../core/transcripts/attach.js')
   const { createSessionNormalizers } = await import('../core/transcripts/normalizers.js')
-  const owner = registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
-    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } })!.entry
-  registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! })
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
   const row = registry.byAgent(owner.agentId)!
   // Only the core's eager cancellation fence is needed. Unexpected attachment
   // or native interpretation would fail this fixture before any external access.
@@ -802,9 +822,9 @@ it.each(['before-followup', 'during-followup', 'during-registration', 'during-in
 })
 
 it('rechecks the completion claim after a concurrent duplicate waits across recovery', async () => {
-  const owner = registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
-    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } })!.entry
-  registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! })
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
   const finishes: Array<() => void> = [], onAdmissionStop = vi.fn(() => false)
   let resolutions = 0
   const onTurnStop = vi.fn(() => {
@@ -832,9 +852,9 @@ it('rechecks the completion claim after a concurrent duplicate waits across reco
 })
 
 it.each(['records', 'bytes'] as const)('never lets a linked Stop bypass refused admission at %s capacity', async capacity => {
-  const owner = registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
-    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } })!.entry
-  registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! })
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
   const onTurnStop = vi.fn()
   const f = await httpFixture(() => false, capacity === 'records' ? 0 : 65_536, { onTurnStop }, capacity === 'bytes' ? 0 : undefined)
   const delivery = { id: 'fixture-unowned-stop-01', firedAt: Date.now() }

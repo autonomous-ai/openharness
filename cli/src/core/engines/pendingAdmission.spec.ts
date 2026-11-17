@@ -11,6 +11,32 @@ function request(overrides: Partial<PendingAdmission<string>> = {}): PendingAdmi
 const flush = async () => { await Promise.resolve(); await Promise.resolve() }
 
 describe('pending hook admission', () => {
+  it.each(['same', 'cancelled', 'new conversation', 'same conversation'] as const)(
+    'rechecks admission authority after durable preparation: %s', async change => {
+      const queue = createPendingAdmissions()
+      let live = true, attempts = 0, finish!: () => void, entered!: () => void
+      const started = new Promise<void>(resolve => { entered = resolve })
+      const waiting = new Promise<void>(resolve => { finish = resolve })
+      const original = request({ order: { scope: 'process', firedAt: 10, arrival: 1 }, conversationId: 'parent', current: () => live,
+        commit: async (value, current) => {
+          expect(current()).toBe(true)
+          if (++attempts > 1) return { kind: 'accept', value }
+          entered(); await waiting
+          expect(current()).toBe(change === 'same' || change === 'same conversation')
+          return { kind: 'accept', value }
+        } })
+      queue.submit('agent', 'first', original)
+      await started
+      if (change === 'cancelled') live = false
+      const next = request({ order: { scope: 'process', firedAt: 20, arrival: 2 },
+        conversationId: change === 'same conversation' ? 'parent' : 'child', inspect: async () => ({ kind: 'reject', reason: 'delegated' }) })
+      if (change === 'new conversation' || change === 'same conversation') queue.submit('agent', 'next', next)
+      finish(); await flush(); await flush(); await flush()
+      if (change === 'cancelled') expect(original.reject).toHaveBeenCalledExactlyOnceWith('stale_hook')
+      else if (change === 'new conversation') expect(next.reject).toHaveBeenCalledExactlyOnceWith('delegated')
+      else expect(original.accept).toHaveBeenCalledExactlyOnceWith('home')
+      queue.close()
+    })
   it.each(['held', 'throws', 'throws a non-Error'] as const)('retains the exact candidate until its %s durable commit succeeds', async failure => {
     vi.useFakeTimers()
     const queue = createPendingAdmissions({ retryMs: 20 })

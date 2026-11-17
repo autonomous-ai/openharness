@@ -290,6 +290,8 @@ export class BackendSocket {
    *  Agent Messages and the orchestrator deliver through `onMessage` above. [receipt]: what became of it, for
    *  its request's measurement (core/usageOutcomes.ts). */
   messageProvider: ((payload: Record<string, unknown>, receipt?: MessageReceipt) => void) | null = null
+  /** Answers `input_ack`: words typed into an agent, once its engine has taken them (core/deliveries.ts). */
+  inputAckProvider: ((payload: Record<string, unknown>, answer: (result: Record<string, unknown>) => void) => void) | null = null
   /** Answers `agent_update` through its last argument, before the windows hear of the change: a rename, a
    *  model and effort, or an app opening the agent (cli.ts binds core/agents/update.ts). */
   agentUpdateProvider: ((payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
@@ -974,7 +976,7 @@ export class BackendSocket {
   private emitReply(connId: string, type: string, requestId: unknown, payload: Record<string, unknown>): void {
     const resultType = rpcResultType(type)
     // Before the E2EE wrap: an RPC reply is only readable here.
-    if (env.LOG_FRAMES && !MESSAGE_REQUESTS.has(type) && !ROUTE_COMMAND_TYPES.has(type) && !type.startsWith('viewer_') && !type.startsWith(UNLOGGED_BROWSER) && type !== 'phone_pair' && type !== 'api_connections' && type !== 'connectors' && type !== 'os_device' && type !== 'machine_addon' && type !== 'browser_open' && type !== 'browser_callback' && type !== 'orchestrator' && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'scm_project_info' && type !== 'git_pull_request' && type !== 'git_pull_requests_status' && type !== 'agent_handoff_prepare' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
+    if (env.LOG_FRAMES && !MESSAGE_REQUESTS.has(type) && !ROUTE_COMMAND_TYPES.has(type) && !type.startsWith('viewer_') && !type.startsWith(UNLOGGED_BROWSER) && type !== 'phone_pair' && type !== 'api_connections' && type !== 'connectors' && type !== 'os_device' && type !== 'machine_addon' && type !== 'browser_open' && type !== 'browser_callback' && type !== 'orchestrator' && type !== 'input_ack' && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'scm_project_info' && type !== 'git_pull_request' && type !== 'git_pull_requests_status' && type !== 'agent_handoff_prepare' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
     if (this.localClients.has(connId)) {
       this.sendTo(connId, { type: resultType, payload: { requestId, ...payload } })
       return
@@ -1035,7 +1037,7 @@ export class BackendSocket {
     // actually asked for rather than as an opaque __e2e envelope.
     // Terminal frames contain raw keystrokes, paste text and screen bytes after
     // unwrap. Never pass them to the frame logger, even in diagnostic mode.
-    if (env.LOG_FRAMES && !MESSAGE_REQUESTS.has(type) && !ROUTE_COMMAND_TYPES.has(type) && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith(UNLOGGED_BROWSER) && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'scm_project_info' && type !== 'git_pull_request' && type !== 'git_pull_requests_status' && type !== 'agent_handoff_prepare' && type !== 'orchestrator' && type !== 'api_connections' && type !== 'connectors' && type !== 'os_device' && type !== 'machine_addon' && type !== 'browser_open' && type !== 'browser_callback' && type !== 'phone_pair' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) {
+    if (env.LOG_FRAMES && !MESSAGE_REQUESTS.has(type) && !ROUTE_COMMAND_TYPES.has(type) && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith(UNLOGGED_BROWSER) && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'scm_project_info' && type !== 'git_pull_request' && type !== 'git_pull_requests_status' && type !== 'agent_handoff_prepare' && type !== 'orchestrator' && type !== 'input_ack' && type !== 'api_connections' && type !== 'connectors' && type !== 'os_device' && type !== 'machine_addon' && type !== 'browser_open' && type !== 'browser_callback' && type !== 'phone_pair' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) {
       logFrame('←', connId ? `conn:${sid(connId)}` : 'backend', frame)
     }
     // A request the usage report measures, and each of its answers, told the gateway as they are (core/usageOutcomes.ts).
@@ -1405,6 +1407,14 @@ export class BackendSocket {
         case 'message':
           if (this.messageProvider) this.messageProvider(payload, measured?.receipt)
           else console.warn('[backend] message handler is not wired; terminal input was not dispatched')
+          return
+
+        // Words a program here types into a harness it owns, answered once the engine has taken them (core/deliveries.ts
+        // `acknowledged`, #4393). This computer's own processes only: never from the relay.
+        case 'input_ack':
+          if (!local) { answer({ error: 'LOCAL_ONLY' }); return }
+          if (this.inputAckProvider) this.inputAckProvider(payload, answer)
+          else answer({ error: 'UNSUPPORTED' })
           return
 
         // A person interrupting an agent's turn (core/turns/cancel.ts, bound by cli.ts).

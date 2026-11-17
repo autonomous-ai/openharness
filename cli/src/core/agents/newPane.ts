@@ -12,20 +12,22 @@ import { describeAgentCreateFailure, summarizePaneOutput } from '../../lib/agent
 import type { engineInstallRecipe } from '../../lib/engineInstall.js'
 import { commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
 import { sid } from '../../lib/log.js'
-import type { registry, RegisteredSession } from '../../lib/registry.js'
+import { matchesLaunchReceipt, RegistryOwnershipChanged, type LaunchPublication, type registry, type RegisteredSession, type RegistryAuthority } from '../../lib/registry.js'
+import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
 import type { TerminalRuntimeRef } from '../../lib/terminalTypes.js'
 import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
-import { terminalRouteKey, terminalRuntimeLabel } from '../../lib/terminalRuntime.js'
-import { createLaunchAuthority } from './launchAuthority.js'
+import { sameProcessIdentity, terminalRouteKey, terminalRuntimeLabel } from '../../lib/terminalRuntime.js'
 
 export interface PaneWatcherDeps {
-  registry: Pick<typeof registry, 'byAgent' | 'updateProcessIdentity' | 'setLaunch' | 'setTerminalAvailable' | 'releaseEngine'>
+  registry: Pick<typeof registry, 'byAgent' | 'confirmLaunch' | 'setLaunch' | 'setTerminalAvailable' | 'confirmEngineExit'>
   announceSession: (session: RegisteredSession) => void
   /** Ask the reconciler to bind what now runs in a pane (TerminalAgentReconciler.triggerHint). */
   triggerHint: (runtime: TerminalRuntimeRef, engine: AgentEngine) => Promise<void>
   captureTerminal: (target: string, historyLines?: number) => Promise<string | null>
-  retainExitedSession: (session: RegisteredSession, announce: boolean) => void
+  retainExitedSession: (session: RegisteredSession, announce: boolean, authority?: RegistryAuthority) => Promise<LaunchPublication>
+  revision?: (agentId: string) => number
+  cancelled?: (agentId: string) => boolean
   /** The backend that holds a new pane: its process, state and hold (`isHeld`) are asked of it. */
   terminals: Pick<TerminalBackendCoordinator, 'backendFor'>
   /** Keeps discovery off a pane until the returned release (TerminalAgentReconciler.holdRoute, with no timer). */
@@ -37,20 +39,33 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
   timer.unref?.()
 })
 
-export function createPaneWatcher({ registry, announceSession, triggerHint, captureTerminal, retainExitedSession, terminals, holdRoute }: PaneWatcherDeps) {
+export function createPaneWatcher({ registry, announceSession, triggerHint, captureTerminal, retainExitedSession, terminals, holdRoute, revision, cancelled }: PaneWatcherDeps) {
   /**
    * Watch a pane this daemon just opened until its engine process shows up (ready), dies (failed), or
    * ten minutes pass. Shared by create and fork: the two open panes the same way and wait the same way.
    */
   const watchNewPane = async (engine: AgentEngine, pending: RegisteredSession, spawned: { runtime: TerminalRuntimeRef }, command: string[], installIfMissing: ReturnType<typeof engineInstallRecipe> | undefined, budgetMs = 10 * 60_000): Promise<void> => {
     const startedAt = Date.now()
+    pending = structuredClone(pending)
     let delayMs = 50
     const nativeToken = pending.launch?.state === 'starting' ? pending.launch.nativeToken : undefined
     const local = !!pending.openclawLocal
     // A delayed probe belongs to this launch, including its original route and
     // binding. Stop, a newer launch or discovery can supersede it while tmux waits.
-    const current = nativeToken ? createLaunchAuthority({ byAgent: id => registry.byAgent(id),
-      revision: () => 0, cancelled: () => false })(pending.agentId, pending) : () => true
+    const generation = revision?.(pending.agentId)
+    const lifecycle = () => !cancelled?.(pending.agentId) && revision?.(pending.agentId) === generation
+    const current = () => {
+      const row = registry.byAgent(pending.agentId)
+      return lifecycle() && !!row && row.registeredAt === pending.registeredAt && row.engine === engine
+        && row.cwd === pending.cwd && row.codexHome === pending.codexHome && row.claudeHome === pending.claudeHome
+        && row.hermesHome === pending.hermesHome
+        && row.runtimes.some(route => terminalRouteKey(route) === terminalRouteKey(spawned.runtime))
+        && (!pending.sessionId || row.sessionId === pending.sessionId)
+        && (!pending.processIdentity || (sameProcessIdentity(pending.processIdentity, row.processIdentity)
+          && pending.processIdentity.executable === row.processIdentity?.executable))
+        && (!row.launch || row.launch.state === 'starting' || row.launch.state === 'ready')
+        && (row.launch?.state !== 'starting' || row.launch.nativeToken === nativeToken)
+    }
     // A local OpenClaw's process shows seconds before its TUI draws. Discovery seeing it would mark the launch ready and
     // supersede this watcher, which then never releases the pane's hold, says it ready, binds it or says a folder in
     // use: the pane is this watcher's alone until it is done.
@@ -70,10 +85,41 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
           : true
         if (!current()) return
         if (processIdentity && drawn) {
-          registry.updateProcessIdentity(pending.agentId, processIdentity)
-          const ready = registry.setLaunch(pending.agentId, { state: 'ready' })
-          await backend.releaseHold(spawned.runtime)
-          if (ready) announceSession(ready)
+          const selected = structuredClone(registry.byAgent(pending.agentId)!)
+          const origin = (row: RegisteredSession) => JSON.stringify([row.registeredAt, row.engine, row.cwd, row.runtimes,
+            row.primaryRuntimeKey, row.codexHome, row.claudeHome, row.hermesHome, row.dsh, row.dshRuntime,
+            row.openclawLocal, row.openclawStateDir, row.launchArgs, row.gridLaunch, row.subscriptionModel])
+          const expires = performance.now() + Math.min(5_000, Math.max(0, budgetMs - (Date.now() - startedAt)))
+          const exact = () => {
+            const selected = registry.byAgent(pending.agentId)?.processIdentity
+            return current() && terminals.backendFor(spawned.runtime) === backend && (!selected
+              || (sameProcessIdentity(processIdentity, selected) && selected.executable === processIdentity.executable))
+          }
+          const refresh = async () => {
+            const observed = await resolvePaneEngineProcess(backend, spawned.runtime, engine)
+            if (!sameProcessIdentity(processIdentity, observed) || observed?.executable !== processIdentity.executable
+              || (local && readOpenclawScreen(await captureTerminal(pending.agentId, 40) ?? '').footer === null)) {
+              throw new IdentityReadUnavailable('the new pane changed before readiness publication')
+            }
+          }
+          if (!exact()) return
+          let publication: LaunchPublication
+          try { publication = await registry.confirmLaunch(pending.agentId, { processIdentity }, { current: exact, refresh, expires }) }
+          catch (error) {
+            // One first native hook may bind this same process while preparation waits. Its old image
+            // was revoked before publication; uncertainty is never retried by reselecting an owner.
+            const hooked = registry.byAgent(pending.agentId)
+            if (!(error instanceof RegistryOwnershipChanged) || selected.sessionId || !hooked?.sessionId || origin(hooked) !== origin(selected) || !exact()) throw error
+            await refresh()
+            publication = await registry.confirmLaunch(pending.agentId, { processIdentity }, { current: exact, refresh, expires })
+          }
+          const ready = publication.state === 'confirmed' ? publication.entry : null
+          const committed = () => lifecycle() && !!ready && terminals.backendFor(spawned.runtime) === backend
+            && matchesLaunchReceipt(registry.byAgent(pending.agentId), ready)
+          if (!committed()) return
+          await backend.releaseHold(spawned.runtime, committed)
+          if (!committed() || !ready) return
+          announceSession(ready)
           // Before the hint: the pass it asks for is the one that must see this pane again.
           releaseRoute()
           void triggerHint(spawned.runtime, engine).catch((error) => {
@@ -99,8 +145,9 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
         // A pane holds a launch by token on a backend that can say so (`TerminalBackend.isHeld`): tmux and the
         // pty host. On the pty host the held shell has no tmux to respawn itself with; it stays inert there, and a
         // restore replaces it through `respawn` with the token.
+        const waitingOwner = structuredClone(registry.byAgent(pending.agentId)!)
         const waiting = nativeToken && await backend.isHeld?.(spawned.runtime, nativeToken)
-        if (!current()) return
+        if (!current() || !matchesLaunchReceipt(registry.byAgent(pending.agentId), waitingOwner)) return
         if (waiting === true) {
           const held = registry.setLaunch(pending.agentId, { state: 'held', service: 'native', nativeToken,
             detail: 'The engine did not start because its executable or native hooks changed. The original launch is held for recovery.' })
@@ -126,7 +173,7 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
         // "Start failed" tile they cannot type into.
         if (paneState.engineExit !== null) {
           // Say what happened before the evidence goes. The pane is about to become an ordinary
-          // terminal and `releaseEngine` rewrites the launch to `ready`, so after this point nothing
+          // terminal and `confirmEngineExit` rewrites the launch to `ready`, so after this point nothing
           // anywhere — frame, registry, archive — records that an engine was ever meant to be here
           // or why it left. openharness#285 was exactly this: opencode printed its help over a flag
           // it did not know, and the only trace was one line saying the pane had become a terminal.
@@ -153,16 +200,25 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
               processes: [],
               elapsedMs: Date.now() - startedAt,
             }))
-          await backend.releaseHold(spawned.runtime, current)
-          if (!current()) return
           // A hook may have bound a conversation while this watcher was awaiting its probe.
           // Archive the current row, not the pre-hook pending snapshot.
           const row = registry.byAgent(pending.agentId)
-          if (row?.sessionId) retainExitedSession(row, true)
-          else {
-            const released = registry.releaseEngine(pending.agentId)
-            if (released) announceSession(released)
-          }
+          const authority = { current, refresh: async () => {
+            const latest = await backend.paneState(spawned.runtime)
+            if (latest === 'gone' || latest === 'unknown' || latest.dead || latest.engineExit !== paneState.engineExit
+              || await resolvePaneEngineProcess(backend, spawned.runtime, engine)) {
+              throw new IdentityReadUnavailable('the exited pane changed before shell publication')
+            }
+          } }
+          const publication = row?.sessionId ? await retainExitedSession(row, true, authority)
+            : await registry.confirmEngineExit(pending.agentId, 'shell', authority)
+          const shell = publication.state === 'confirmed' ? publication.entry : null
+          const committed = () => lifecycle() && !!shell && terminals.backendFor(spawned.runtime) === backend
+            && matchesLaunchReceipt(registry.byAgent(shell.agentId), shell)
+          if (!committed()) return
+          await backend.releaseHold(spawned.runtime, committed)
+          if (!committed()) return
+          if (!row?.sessionId && shell) announceSession(shell)
           console.warn(`[agent] create · ${engine} exited (${paneState.engineExit}) before ready · agent ${pending.agentId} kept as a terminal`)
           return
         }
@@ -177,7 +233,7 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
       if (failed) announceSession(failed)
       console.warn(`[agent] create timed out · ${engine} · agent ${pending.agentId}`)
     } catch (error) {
-      console.warn(`[agent] create watch failed · ${engine} · ${error instanceof Error ? error.message : error}`)
+      console.warn(`[agent] create watch failed · ${engine} · readiness publication unavailable`)
     } finally {
       releaseRoute()
     }

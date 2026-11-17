@@ -12,7 +12,8 @@
 
 import type { AgentEngine } from '../../engines/types.js'
 import type { TerminateOutcome } from '../deleteAgentFallback.js'
-import type { RegisteredSession } from '../registry.js'
+import type { LaunchPublication, RegisteredSession } from '../registry.js'
+import { AtomicWriteUnconfirmed } from '../registryPersistence.js'
 import { KILL_CONFIRMED } from '../restartAgent.js'
 import type { RestoreAgentsDeps, RestoreLaunch } from '../restoreAgents.js'
 import type { TerminalBackend } from '../terminalBackend.js'
@@ -84,7 +85,8 @@ export interface MoveAgentDeps {
   /** Point the row at [runtime], in one `registry.transaction`: `updateRuntimes(agentId, [runtime],
    *  terminalRouteKey(runtime))` and `updateProcessIdentity`, then announce the session as a restart does. Throws
    *  only when the row was not switched. */
-  swap(agentId: string, runtime: TerminalRuntimeRef, identity: ProcessIdentity): void
+  swap(agentId: string, runtime: TerminalRuntimeRef, identity: ProcessIdentity): Promise<LaunchPublication>
+  complete(): void
   /** Move the agent's open streams to [runtime] (`TerminalStreamManager.retarget`). */
   retarget(agentId: string, runtime: TerminalRuntimeRef): Promise<void>
   /** Hand the new pane back to the backend's default disposal once it is the agent's, as a restart does
@@ -241,15 +243,17 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
   /** Step 6 ran: the new pane may run an engine, so it must be confirmed closed before the old one is relaunched. */
   let respawned = false
   /** Step 8 ran: the row names the new pane, whose engine runs. Nothing after it may relaunch the old one. */
-  let swapped = false
+  let publication: 'never-published' | 'uncertain' | 'confirmed' = 'never-published'
 
   /** Undo everything a failed or cancelled move did before its swap. The gate is released by the caller after it. */
   const recover = async (reason: string): Promise<MoveOutcome> => {
     const cancelled = reason === CANCELLED || reason === IN_USE || reason === NOT_ELIGIBLE
     const notMoved = (fellBack: boolean): MoveOutcome => ({ moved: false, reason, fellBack, ...(cancelled ? { cancelled: true as const } : {}) })
-    if (swapped) {
-      log(`[terminal] move ${agentId}: after the switch, ${reason}`)
-      return { moved: true, resumed: true }
+    if (publication !== 'never-published') {
+      for (const key of routeHolds.keys()) keptRoutes.add(key)
+      await deps.gate.refuse(agentId)
+      log(`[terminal] move ${agentId}: ${publication} publication; the move remains held`)
+      return notMoved(false)
     }
     let newPaneClosed = true
     if (created) {
@@ -361,21 +365,29 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     // 8. The row names the new pane first, synchronously, and only then are the streams moved: a stream opened during
     // the hold opened on the pane the row named, and retarget moves it with the rest. Retargeted before the switch, a
     // stream opened in between would land on the old pane and stay there.
-    try { deps.swap(agentId, newPane, identity) } catch (error) {
-      return await recover(`could not switch the row: ${error instanceof Error ? error.message : String(error)}`)
+    try {
+      const receipt = await deps.swap(agentId, newPane, identity)
+      if (receipt.state === 'confirmed') publication = 'confirmed'
+      if (receipt.state !== 'confirmed' || !receipt.entry || !deps.current()) return await recover('destination publication was not confirmed for this owner')
+    } catch (error) {
+      if (error instanceof AtomicWriteUnconfirmed) publication = 'uncertain'
+      return await recover('destination publication failed')
     }
-    swapped = true
     created = null
     const streams = await bounded(() => deps.retarget(agentId, newPane), MOVE_STEP_TIMEOUT_MS, 'moving open streams')
     if (!streams.done) log(`[terminal] move ${agentId}: ${streams.reason}`)
+    if (!deps.current()) return await recover(CANCELLED)
     const released = await bounded(() => deps.releaseHold(newPane), MOVE_STEP_TIMEOUT_MS, 'releasing the new pane')
-    if (!released.done) log(`[terminal] move ${agentId}: ${released.reason}`)
+    if (!released.done) return await recover('the confirmed destination remains held')
+    if (!deps.current()) return await recover(CANCELLED)
 
     // 9. The old pane, which nothing names now.
     for (const old of session.runtimes) {
+      if (!deps.current()) return await recover(CANCELLED)
       const closed = await bounded(() => deps.killPane(old), MOVE_STEP_TIMEOUT_MS, 'closing the old pane')
       if (!closed.done || !closed.value) log(`[terminal] move ${agentId}: the old pane was not confirmed closed (${closed.done ? 'refused' : closed.reason})`)
     }
+    deps.complete()
     return { moved: true, resumed: true }
   } catch (error) {
     return await recover(`the move failed: ${error instanceof Error ? error.message : String(error)}`)

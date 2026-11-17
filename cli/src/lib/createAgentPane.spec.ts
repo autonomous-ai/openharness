@@ -90,7 +90,7 @@ describe('createAndRegisterPane', () => {
     const { registry } = await loadRegistryModule()
     registry.load()
     // Simulates a stale entry from a previous tmux-server generation already holding %1.
-    registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/other' })
+    ;(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/other' }))
     const tmuxBackend = fakeTmux([succeeded('%1'), succeeded('%2')])
 
     const result = await createAndRegisterPane({
@@ -109,7 +109,7 @@ describe('createAndRegisterPane', () => {
     const { registry } = await loadRegistryModule()
     registry.load()
     for (const paneId of ['%1', '%2', '%3']) {
-      registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId }], cwd: '/tmp/other' })
+      ;(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId }], cwd: '/tmp/other' }))
     }
     const tmuxBackend = fakeTmux([succeeded('%1'), succeeded('%2'), succeeded('%3')])
 

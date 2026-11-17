@@ -857,7 +857,7 @@ export class TerminalStreamManager {
     const gate = this.heldGate(state)
     if (gate) {
       const held = Uint8Array.from(bytes)
-      gate.enqueue(state.agentId, () => this.reportInput(state, this.writeRawTo(state, held, true)))
+      gate.enqueue(state.agentId, () => this.reportInput(state, this.writeRawTo(state, held, true)), () => this.moveRefused(state, 'TERMINAL_INPUT_FAILED'))
       return
     }
     // Not awaited. `writeRaw` hands its `send-keys` to the control client's FIFO synchronously, so
@@ -897,20 +897,28 @@ export class TerminalStreamManager {
     return gate?.holding(state.agentId) ? gate : null
   }
 
+  private moveRefused(state: ActiveStream, code: string): boolean {
+    if (!this.deps.moveGate?.refused(state.agentId)) return false
+    this.sendError(state.connId, code, { streamId: state.streamId, message: 'This harness is held until the daemon restarts.' })
+    return true
+  }
+
   /**
    * Raw bytes into [state]'s pane: the stream's own pane, retargeted to the row's by the time held input is
    * delivered. [held] input whose stream closed during the move goes to the row's pane through its backend:
    * the stream is gone, and the input is still the person's.
    */
   private writeRawTo(state: ActiveStream, bytes: Uint8Array, held = false): Promise<TerminalActionResult> {
+    if (this.deps.moveGate?.refused(state.agentId)) return Promise.resolve({ state: 'failed', dispatch: 'not_started', reason: 'The harness is held until the daemon restarts.' })
     if (!held || !state.closing) return state.handle.writeRaw(bytes)
     return this.writeToRow(state, (backend, runtime) => backend.writeInput?.(runtime, bytes))
   }
 
   /** A paste into [state]'s pane, as `writeRawTo` writes raw bytes. */
   private pasteRawTo(state: ActiveStream, text: string, held = false): Promise<TerminalActionResult> {
+    if (this.deps.moveGate?.refused(state.agentId)) return Promise.resolve(terminalActionNotStarted('The harness is held until the daemon restarts.'))
     // Asked again as it lands (main's guard): a paste takes two tmux processes, and its stream may close meanwhile.
-    if (!held || !state.closing) return state.handle.pasteRaw(text, () => !state.closing)
+    if (!held || !state.closing) return state.handle.pasteRaw(text, () => !state.closing && !this.deps.moveGate?.refused(state.agentId))
     return this.writeToRow(state, (backend, runtime) => backend.pasteInput?.(runtime, text))
   }
 
@@ -978,13 +986,14 @@ export class TerminalStreamManager {
     // Held while the agent changes host, in order with its keystrokes (see `input`).
     const gate = this.heldGate(state)
     if (gate) {
-      gate.enqueue(state.agentId, () => this.deliverPaste(state, text, true))
+      gate.enqueue(state.agentId, () => this.deliverPaste(state, text, true), () => this.moveRefused(state, 'TERMINAL_PASTE_FAILED'))
       return
     }
     await this.deliverPaste(state, text)
   }
 
   private async deliverPaste(state: ActiveStream, text: string, held = false): Promise<void> {
+    if (this.moveRefused(state, 'TERMINAL_PASTE_FAILED')) return
     const result = await this.pasteRawTo(state, text, held)
     if (state.closing) return
     if (result.state !== 'succeeded') {
@@ -1009,6 +1018,7 @@ export class TerminalStreamManager {
    * show the right feedback instead of a silent difference in behavior.
    */
   private async pasteImage(state: ActiveStream, bytes: Uint8Array, held = false): Promise<void> {
+    if (this.moveRefused(state, 'TERMINAL_PASTE_IMAGE_FAILED')) return
     if (bytes.length === 0) return
     state.expiresAt = this.now() + HEARTBEAT_TIMEOUT_MS
     let path: string
@@ -1021,6 +1031,7 @@ export class TerminalStreamManager {
       })
       return
     }
+    if (this.moveRefused(state, 'TERMINAL_PASTE_IMAGE_FAILED')) { void unlink(path).catch(() => {}); return }
     const clipboard = await writeImageToOsClipboard(path, bytes)
     if (clipboard.state === 'written') {
       // The OS clipboard now owns the bytes — the file was only a hand-off.
@@ -1068,6 +1079,7 @@ export class TerminalStreamManager {
    * without ever reaching the wire), so there is no local/remote branch to make here either.
    */
   private async pasteFile(state: ActiveStream, filename: string, bytes: Uint8Array, held = false): Promise<void> {
+    if (this.moveRefused(state, 'TERMINAL_PASTE_FILE_FAILED')) return
     state.expiresAt = this.now() + HEARTBEAT_TIMEOUT_MS
     let path: string
     try {
@@ -1219,7 +1231,7 @@ export class TerminalStreamManager {
       : this.pasteFile(state, pending.filename!, assembled, held)
     // Held while the agent changes host, in order with its keystrokes (see `input`).
     const gate = this.heldGate(state)
-    if (gate) gate.enqueue(state.agentId, () => deliver(true))
+    if (gate) gate.enqueue(state.agentId, () => deliver(true), () => this.moveRefused(state, 'TERMINAL_PASTE_FAILED'))
     else await deliver(false)
   }
 
@@ -1239,6 +1251,7 @@ export class TerminalStreamManager {
     }
     state.expiresAt = this.now() + HEARTBEAT_TIMEOUT_MS
     const deliver = async (): Promise<void> => {
+      if (this.moveRefused(state, 'TERMINAL_SCROLL_FAILED')) return
       // A scroll moves this view's pane only: one whose stream closed during a move has nothing to scroll.
       if (state.closing) return
       const result = await state.handle.scroll(direction, lines)
@@ -1248,7 +1261,7 @@ export class TerminalStreamManager {
     }
     // A scroll writes keys into the pane (PageUp/PageDown), so it waits with the agent's other writes.
     const gate = this.heldGate(state)
-    if (gate) gate.enqueue(state.agentId, deliver)
+    if (gate) gate.enqueue(state.agentId, deliver, () => this.moveRefused(state, 'TERMINAL_SCROLL_FAILED'))
     else await deliver()
   }
 

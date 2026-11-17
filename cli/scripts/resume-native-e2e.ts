@@ -14,6 +14,7 @@ import { createServer } from 'node:http'
 import { cleanupFixtureGit } from './native-fixture-git.js'
 import assert from 'node:assert/strict'
 import type { NativeResumeRequests } from '../src/testing/nativeResumeSocket.js'
+import { removeRegistryAgent, unbindRegistrySession } from '../src/testing/registryFixtures.js'
 const exec = promisify(execCallback)
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'harness-resume-native-')))
 const cliRoot = resolve('.')
@@ -84,7 +85,7 @@ const server = await startHookServer(0, {
       await lookupPaneEngineProcess(backend, pane, input.engine), await tmuxPaneProcessTree(input.tmuxPane)); return null }
     const row = registry.byPaneEngine(input.tmuxPane, input.engine)
     if (!row || row.engine !== input.engine) { console.error('[fixture] no registry route', input, identity, registry.list().map(r => ({ id: r.agentId, pane: r.tmuxPane }))); return null }
-    return registry.openProcessAgent({ engine: input.engine, processIdentity: identity, runtimes: row.runtimes, primaryRuntimeKey: row.primaryRuntimeKey, cwd: row.cwd })?.entry ?? null
+    return (await registry.openProcessAgent({ engine: input.engine, processIdentity: identity, runtimes: row.runtimes, primaryRuntimeKey: row.primaryRuntimeKey, cwd: row.cwd }))?.entry ?? null
   },
 })
 let nativeRequests: NativeResumeRequests | undefined
@@ -138,9 +139,9 @@ try {
       engineHooks.codex.installIn(server.port, profile)
 
     }
-    const old = registry.openPendingAgent({ engine, runtimes: [{ backend: 'tmux', paneId: '%99999' }], cwd, codexHome: engine === 'codex' ? profile : null, defaultName: `Native ${engine} fixture` })!
+    const old = (await registry.openPendingAgent({ engine, runtimes: [{ backend: 'tmux', paneId: '%99999' }], cwd, codexHome: engine === 'codex' ? profile : null, defaultName: `Native ${engine} fixture` }))!
     const saved = { ...old, sessionId, transcriptPath, launch: { state: 'ready' as const }, processIdentity: null }
-    stoppedAgents.save(saved); registry.removeAgent(old.agentId)
+    stoppedAgents.save(saved); await removeRegistryAgent(registry, old.agentId)
     fixtures.push({ agentId: old.agentId, engine, sessionId, marker })
     const launchEnv: Record<string, string> = {
       CLAUDE_CONFIG_DIR: join(root, 'claude'), CODEX_HOME: join(root, 'codex'), ZDOTDIR: root,
@@ -169,7 +170,11 @@ try {
     const stopAgent = createStopAgentService({
       registry, stoppedAgents, restartJobs: jobs, stopJobs, backendFor: () => backend,
       agentReconciler: { suppress: () => {}, holdRoute: () => {}, releaseRoute: () => {}, trigger: async () => {} },
-      forgetSession: id => { registry.removeAgent(id); socketBackend.send({ type: 'agent_deleted', payload: { agentId: id, retained: true } }) }, markDeleted: () => {}, clearDeleted: () => {},
+      forgetSession: async (id, options) => {
+        const publication = await registry.confirmEngineExit(id, 'remove', options?.authority)
+        assert(publication.state === 'confirmed' && !registry.byAgent(id), 'fixture removal must be durable')
+        socketBackend.send({ type: 'agent_deleted', payload: { agentId: id, retained: true } })
+      }, markDeleted: () => {}, clearDeleted: () => {},
       stopNative: inlineNativeControls().stop,
     })
     socketBackend.closeAgentService?.dispose()
@@ -198,10 +203,13 @@ try {
     const resumeAgent = createResumeAgentService({
       registry, stoppedAgents, createBackend: backend, backendFor: () => backend, restartJobs: jobs, stopJobs, pinnedControls: new Set(),
       announceSession: () => {}, relaunchOverrides: async () => ({ ok: true, overrides: { env: launchEnv, extraArgs: [], clearEnv: ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CLAUDECODE'] } }),
-      prepareSessionResume: () => {}, refreshGridWebSearch: () => {}, clearDeleted: () => {}, attach: () => {},
+      prepareSessionResume: async () => true, refreshGridWebSearch: () => {}, clearDeleted: () => {}, attach: () => {},
       // This fixture checks the native TUI's history directly; it has no daemon transcript watcher.
       attachSession: async () => false,
-      retainExitedSession: (row, alive) => { stoppedAgents.save(row); if (alive) registry.releaseEngine(row.agentId, true); else registry.removeAgent(row.agentId) },
+      retainExitedSession: async (row, alive, authority) => {
+        stoppedAgents.save(row)
+        return registry.confirmEngineExit(row.agentId, alive ? 'successor' : 'remove', authority)
+      },
     })
     nativeRequests = { resume: resumeAgent, stop: stopAgent }
     bindNativeResumeRequests(socketBackend, nativeRequests)
@@ -283,7 +291,7 @@ try {
     assert.equal((await rpc('agent_create_status', { creationId })).state, 'created')
     // Reproduce a legacy daemon row whose hook binding was lost. Remove the earlier
     // archive too, so Stop must recover from the real process, not the seeded snapshot.
-    registry.unbindSession(sessionId)
+    assert(await unbindRegistrySession(registry, sessionId), 'fixture unbind must be durable')
     rmSync(join(root, 'data', 'stopped-agents', `${old.agentId}.json`))
     const unbound = registry.byAgent(old.agentId)!
     assert.equal(unbound.sessionId, '')
@@ -385,7 +393,7 @@ try {
     })
     socketBackend.setTerminalStreamManager(streams)
     const anchorPane = (await tmux('display-message', '-p', '-t', 'fixture-anchor', '#{pane_id}')).trim()
-    const anchor = registry.openPendingAgent({ engine: 'terminal', runtimes: [{ backend: 'tmux', paneId: anchorPane }], cwd: root, defaultName: 'Keep this work open' })!
+    const anchor = (await registry.openPendingAgent({ engine: 'terminal', runtimes: [{ backend: 'tmux', paneId: anchorPane }], cwd: root, defaultName: 'Keep this work open' }))!
     registry.setLaunch(anchor.agentId, { state: 'ready' })
     assert(nativeRequests)
     const { resume, stop } = nativeRequests

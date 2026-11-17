@@ -15,7 +15,7 @@ import type { NativeHookOptions } from '../../engines/kit/nativeLocations.js'
 import type { OpencodeLaunchSnapshot } from '../../engines/launchControl.js'
 import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
-import { validTerminalRuntime } from '../../lib/registry.js'
+import { RegistryOwnershipChanged, validTerminalRuntime } from '../../lib/registry.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import { hermesGatewayProcess, type ProcessRow } from '../../lib/processTable.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
@@ -158,7 +158,15 @@ export function createEngineHooks(deps: EngineHookDeps) {
     }
     // A pass that outran its deadline has not yet opened the agent a hook from a new engine belongs to.
     let overdue = false
-    for (const runtime of resolved) if (!await agentReconciler.triggerHint(runtime, engine)) overdue = true
+    for (const runtime of resolved) {
+      try { if (!await agentReconciler.triggerHint(runtime, engine)) overdue = true }
+      catch (error) {
+        if (!(error instanceof RegistryOwnershipChanged)) throw error
+        // A pane commit can supersede discovery's observation. Match fresh evidence through the existing wait.
+        overdue = true
+        console.log('[hooks] reconciliation owner changed; checking current process evidence')
+      }
+    }
 
     let table = await arrival
     // A `ps` already running (processRows shares it) may predate the hook's process; the next read has it.

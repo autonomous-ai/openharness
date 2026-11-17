@@ -109,8 +109,11 @@ it.each(['shared conversation', 'saved binding'])('keeps history when %s changes
   const removeTree = vi.spyOn(worktrees, 'removeReviewedWorktree').mockImplementation(async () => {
     await Promise.resolve()
     if (change === 'saved binding') { ctx.saved.get(row.agentId)!.boundAt! += 1; return }
-    const owner = registry.openPendingAgent({ engine: 'codex', cwd: root, runtimes: [{ backend: 'tmux', paneId: '%90077' }] })!
-    Object.assign(owner, { sessionId: ID, transcriptPath: path })
+    const owner = (await registry.openPendingAgent({ engine: 'codex', cwd: root, runtimes: [{ backend: 'tmux', paneId: '%90077' }] }))!
+    const bound = await registry.register({ engine: 'codex', cwd, sessionId: ID, transcriptPath: path,
+      codexHome: join(root, 'CODEX_HOME'), runtimes: owner.runtimes,
+      processIdentity: { pid: 90077, executable: 'codex', startMarker: 'fixture' } })
+    expect(bound?.entry.agentId).toBe(owner.agentId)
     expect(registry.list().some(entry => entry.agentId === owner.agentId && entry.sessionId === ID)).toBe(true)
   })
   const plan = await ctx.service.request({ ...ctx.request, mode: 'inspect', includeWorktree: true })

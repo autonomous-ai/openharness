@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 /**
  * A guest's harness against an owner's, on a real Mac with guest access: the same program, run in the owner's tmux
  * as the owner and through the guest helper as a guest's own OS user (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
@@ -140,18 +141,20 @@ real('a guest\'s harness against an owner\'s', () => {
     expect(() => process.kill(panes.guest.pid, 'SIGTERM')).toThrow(/EPERM/)
     // The daemon's own Stop on the guest's row, through tmux, as in production (stopAgentService's guest path).
     const row = (await processRows())!.find((r) => r.pid === panes.guest.pid)!
-    const agent = registry.openPendingAgent({ engine: 'claude', cwd: work, runtimes: [{ backend: 'tmux', paneId: panes.guest.pane }] })!
-    Object.assign(agent, { guest: 'parity@example.com', sessionId: '', processIdentity: { pid: row.pid, executable: row.executable, startMarker: row.startMarker } })
+    const agent = (await registry.openPendingAgent({ engine: 'claude', cwd: work, runtimes: [{ backend: 'tmux', paneId: panes.guest.pane }] }))!
+    Object.assign(registry.byAgent(agent.agentId)!, { guest: 'parity@example.com', sessionId: '', processIdentity: { pid: row.pid, executable: row.executable, startMarker: row.startMarker } })
+    const processIdentity = structuredClone(registry.byAgent(agent.agentId)!.processIdentity)
+    expect(processIdentity?.pid).toBe(panes.guest.pid)
     const backend = new TmuxBackend()
     const stop = createStopAgentService({
       registry, stoppedAgents, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
       backendFor: (runtime) => runtime.backend === 'tmux' ? backend : undefined,
       agentReconciler: { suppress: () => {}, holdRoute: () => {}, releaseRoute: () => {}, trigger: async () => {} },
-      forgetSession: (id) => { registry.removeAgent(id) }, markDeleted: () => {}, clearDeleted: () => {},
+      forgetSession: async (id) => { (await removeRegistryAgent(registry, id)) }, markDeleted: () => {}, clearDeleted: () => {},
       stopNative: async () => { throw new Error('a guest\'s engine is not this daemon\'s to unload') },
     })
     await stop(agent.agentId)
-    expect((await checkPidRuntime({ engine: 'claude', processIdentity: agent.processIdentity })).state).toBe('gone')
+    expect((await checkPidRuntime({ engine: 'claude', processIdentity })).state).toBe('gone')
     expect(registry.byAgent(agent.agentId)).toBeUndefined()
     // The owner's harness, its pane closed the same way, leaves as well.
     await server.run('kill-pane', '-t', panes.owner.pane)

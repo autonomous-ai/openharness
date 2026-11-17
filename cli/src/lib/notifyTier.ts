@@ -22,6 +22,9 @@ export const isTier = (value: unknown): value is Tier => value === 'alert' || va
 /** The rule for a decision superseded before it lands (lib/commander.ts): a turn that ran 120 s or more is worth a glance later, a shorter one is not. */
 export const fallbackTier = (durationS: number | null): Tier => (durationS !== null && durationS >= LONG_TURN_S ? 'list' : 'silent')
 
+/** Local YYYY-MM-DD, so a day's counts match the person's day. */
+export const localDay = (at: number): string => new Date(at).toLocaleDateString('sv')
+
 /** Logs one decision line and the day's running count per tier, so the volume can be read from the log (no storage). A
  *  measure: never the agent's name, which can be a folder's, a session's or a tab's title. */
 export function createTally(log: (line: string) => void, now: () => number = Date.now): (tier: Tier, by: string, detail: string, ms: number) => void {
@@ -29,7 +32,7 @@ export function createTally(log: (line: string) => void, now: () => number = Dat
   const counts: Record<Tier, number> = { alert: 0, list: 0, silent: 0 }
   return (tier, by, detail, ms) => {
     log(`notify · ${tier} · ${by} · ${detail} · ${ms}ms`)
-    const today = new Date(now()).toLocaleDateString('sv')   // local YYYY-MM-DD, so a day matches the person's day
+    const today = localDay(now())
     if (today !== day) { day = today; counts.alert = counts.list = counts.silent = 0 }
     counts[tier]++
     log(`notify · day ${day} · alert ${counts.alert} · list ${counts.list} · silent ${counts.silent}`)

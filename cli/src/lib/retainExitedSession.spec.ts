@@ -23,8 +23,10 @@ function harness(over: Partial<RetainExitedSessionDeps> = {}) {
       get: agentId => archive.get(agentId) ?? null,
     },
     registry: {
-      releaseEngine: (agentId, separate) => { calls.push(`release:${agentId}:${separate}`); return shell },
-      removeAgent: agentId => { calls.push(`remove:${agentId}`); return true },
+      confirmEngineExit: async (agentId, disposition) => {
+        calls.push(disposition === 'remove' ? `remove:${agentId}` : `release:${agentId}:true`)
+        return { state: 'confirmed', entry: disposition === 'remove' ? null : shell }
+      },
     },
     send: frame => { calls.push(`send:${frame.type}`); frames.push(frame) },
     publishStoppedAgent: async saved => { calls.push(`publish:${saved.agentId}`) },
@@ -40,10 +42,10 @@ function harness(over: Partial<RetainExitedSessionDeps> = {}) {
 }
 
 describe('retainExitedSession', () => {
-  it('ends the identity that was running the engine so its views move to the surviving shell', () => {
+  it('ends the identity that was running the engine so its views move to the surviving shell', async () => {
     const h = harness()
     const entry = row()
-    h.retain(entry, true)
+    await h.retain(entry, true)
 
     expect(h.frames).toEqual([{ type: 'agent_deleted', payload: { agentId: 'agent-a', retained: true, successor: 'agent-shell' } }])
     expect(h.calls.indexOf('release:agent-a:true')).toBeLessThan(h.calls.indexOf('send:agent_deleted'))
@@ -59,21 +61,21 @@ describe('retainExitedSession', () => {
 
   // Every exit that leaves its pane a shell hands its tiles to that shell, a failed start or one after
   // work: the pane says it is a shell now, and Ctrl-C to stop Codex must not take it away (#600).
-  it('an engine whose pane outlived it names the shell that keeps the pane', () => {
+  it('an engine whose pane outlived it names the shell that keeps the pane', async () => {
     for (const exited of [row(), row({ transcriptPath: null }), row({ engine: 'opencode', transcriptPath: null }),
       row({ registeredAt: 1_000, touchedAt: 1_000 + 24 * 3_600_000 })]) {
       const h = harness()
-      h.retain(exited, true)
+      await h.retain(exited, true)
       expect(h.frames, exited.engine).toEqual([{ type: 'agent_deleted', payload: { agentId: 'agent-a', retained: true, successor: 'agent-shell' } }])
     }
     const dead = harness()
-    dead.retain(row(), false)
+    await dead.retain(row(), false)
     expect(dead.frames).toEqual([{ type: 'agent_deleted', payload: { agentId: 'agent-a', retained: true } }])
   })
 
-  it('a pane that died with its engine leaves no shell, and its views close just the same', () => {
+  it('a pane that died with its engine leaves no shell, and its views close just the same', async () => {
     const h = harness()
-    h.retain(row(), false)
+    await h.retain(row(), false)
 
     expect(h.frames).toEqual([{ type: 'agent_deleted', payload: { agentId: 'agent-a', retained: true } }])
     expect(h.calls).toContain('remove:agent-a')
@@ -82,19 +84,19 @@ describe('retainExitedSession', () => {
     expect(h.calls).toContain('publish:agent-a')
   })
 
-  it('releases input, terminal control and the harness viewer before anything is announced', () => {
+  it('releases input, terminal control and the harness viewer before anything is announced', async () => {
     const h = harness()
-    h.retain(row(), true)
+    await h.retain(row(), true)
     for (const call of ['control:agent-a', 'input:agent-a', 'dsh:agent-a']) {
       expect(h.calls.indexOf(call)).toBeGreaterThanOrEqual(0)
       expect(h.calls.indexOf(call)).toBeLessThan(h.calls.indexOf('send:agent_deleted'))
     }
   })
 
-  it.each([false, true])('releases a pending resume boundary when the engine exits, pane alive: %s', paneAlive => {
+  it.each([false, true])('releases a pending resume boundary when the engine exits, pane alive: %s', async paneAlive => {
     const forgetRelaunch = vi.fn()
     const h = harness({ forgetRelaunch })
-    h.retain(row(), paneAlive)
+    await h.retain(row(), paneAlive)
     expect(forgetRelaunch).toHaveBeenCalledExactlyOnceWith('session-a')
   })
 

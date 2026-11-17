@@ -297,13 +297,18 @@ export class SessionInputController {
   private async injectWhenLeased(
     write: () => Promise<boolean | TerminalActionResult>,
     current: () => boolean,
+    held: () => boolean,
   ): Promise<boolean | TerminalActionResult> {
     const now = this.deps.now ?? Date.now
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
     const deadline = now() + LEASE_WAIT_MS
+    const refused = (): TerminalActionResult => ({ state: 'failed', dispatch: 'not_started', reason: 'held' })
+    if (held()) return refused()
+    if (!current()) return { state: 'failed', dispatch: 'not_started', reason: TERMINAL_LEASE_REFUSED }
     let delivery = await write()
     while (leaseRefused(delivery) && now() < deadline) {
       await sleep(LEASE_RETRY_MS)
+      if (held()) return refused()
       if (!current()) break
       delivery = await write()
     }
@@ -384,6 +389,7 @@ export class SessionInputController {
   /** [receipt]: what became of a person's message (one with no [deliveryId]), for its measurement. */
   submit(sessionId: string, content: string, deliveryId?: string, receipt?: MessageReceipt): void {
     const said = sayOnce(receipt)
+    if (this.refuseHeldMessage(sessionId, deliveryId, said)) return
     // An agent changing host has no pane to type into until the move ends: the message waits, as itself, and
     // is submitted then, through every check `submitNow` makes, into the pane the row then names.
     const agentId = this.controlSession(sessionId)?.agentId
@@ -398,6 +404,12 @@ export class SessionInputController {
       gate.enqueue(agentId, async () => {
         removeHeld(state.held, item)
         if (!item.cancelled && this.states.get(sessionId) === state) await this.submitNow(sessionId, content, deliveryId, said)
+      }, () => {
+        removeHeld(state.held, item)
+        if (!item.cancelled && this.states.get(sessionId) === state) {
+          item.cancelled = true
+          this.rejectHeldMessage(sessionId, deliveryId, said)
+        }
       })
       return
     }
@@ -410,6 +422,7 @@ export class SessionInputController {
    * must not land between its paste and its Enter.
    */
   private submitNow(sessionId: string, content: string, deliveryId?: string, said?: MessageReceipt): Promise<void> {
+    if (this.refuseHeldMessage(sessionId, deliveryId, said)) return Promise.resolve()
     const session = this.controlSession(sessionId)
     if (!session) {
       said?.('agent_gone')
@@ -458,6 +471,7 @@ export class SessionInputController {
         if (pending.cancelled) return Promise.resolve()
       }
       if (this.states.get(sessionId) !== state) return Promise.resolve()
+      if (this.refuseHeldMessage(sessionId, deliveryId, receipt)) return Promise.resolve()
       // On its way before a cancel began, its turn to be typed came while the Ctrl-C is: it goes on after it.
       if (state.cancelling) {
         this.holdForCancel(sessionId, state, pending?.bytes ?? Buffer.byteLength(content, 'utf8'), deliveryId, receipt, 'writes',
@@ -765,6 +779,7 @@ export class SessionInputController {
       this.deps.onError(sessionId, 'This agent process is no longer running.')
       return
     }
+    if (this.refuseHeldMessage(sessionId, undefined, receipt)) return
     if (session.engine === 'cursor') {
       // Cursor leaves the previous prompt sitting in its composer after the turn completes — the text is
       // still on the "→" line long after the answer and its recap have arrived. sendToTmux() types into
@@ -798,11 +813,15 @@ export class SessionInputController {
       }
     }
     if (!current()) { gone(); return }
-    const delivery = await this.injectWhenLeased(() => this.deps.inject(session.agentId, content), current)
+    const delivery = await this.injectWhenLeased(() => this.deps.inject(session.agentId, content),
+      current, () => this.deps.moveGate?.refused(session.agentId) === true)
     const accepted = typeof delivery === 'boolean'
       ? delivery
       : delivery.state === 'succeeded' || delivery.dispatch === 'possibly_executed'
     if (!current()) { gone(accepted ? 'ambiguous' : 'agent_gone'); return }
+    if (typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.dispatch === 'not_started' && delivery.reason === 'held') {
+      this.rejectHeldMessage(sessionId, undefined, receipt); return
+    }
     const withheld = enterWithheldReason(delivery)
     if (withheld) {
       // Typed, its Enter not pressed: never pressed later either, which would send it into whatever is open.
@@ -838,6 +857,7 @@ export class SessionInputController {
   }
 
   private async inject(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, receipt?: MessageReceipt): Promise<void> {
+    if (this.refuseHeldMessage(sessionId, deliveryId, receipt)) return
     const state = this.state(sessionId)
     if (!deliveryId) {
       // A local submission keeps its original scheduling. Overlap removes our ability
@@ -862,6 +882,7 @@ export class SessionInputController {
         return
       }
       if (state.cancelled || this.states.get(sessionId) !== state) return
+      if (this.deps.moveGate?.refused(session.agentId)) { this.finishDelivery(sessionId, state, 'rejected', 'held'); receipt?.('held'); return }
       // Before the team's own check of the pane, which a reader not yet up cannot read either.
       const waitingForEngine = this.engineReady(sessionId, session, deliveryId.startsWith('team:'))
       if (waitingForEngine) {
@@ -881,6 +902,7 @@ export class SessionInputController {
         if (held) { this.finishDelivery(sessionId, state, 'rejected', held); return }
       }
       if (session.engine === 'cursor' && !deliveryId.startsWith('team:')) {
+        if (this.deps.moveGate?.refused(session.agentId)) { this.finishDelivery(sessionId, state, 'rejected', 'held'); receipt?.('held'); return }
         // Cursor leaves the previous prompt sitting in its composer after the turn completes — the text is
         // still on the "→" line long after the answer and its recap have arrived. sendToTmux() types into
         // whatever is already there, so the next message is APPENDED to the last one and the pair is
@@ -901,9 +923,12 @@ export class SessionInputController {
       state.writing = true
       const delivery = await this.injectWhenLeased(() => (deliveryId.startsWith('team:') && this.deps.injectTeam
         ? this.deps.injectTeam(session.agentId, content, deliveryId) : this.deps.inject(session.agentId, content)),
-      () => !state.cancelled && this.states.get(sessionId) === state)
+      () => !state.cancelled && this.states.get(sessionId) === state, () => this.deps.moveGate?.refused(session.agentId) === true)
       state.writing = false
       if (state.cancelled || this.states.get(sessionId) !== state) return
+      if (typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.dispatch === 'not_started' && delivery.reason === 'held') {
+        this.finishDelivery(sessionId, state, 'rejected', 'held'); receipt?.('held'); return
+      }
       if (typeof delivery !== 'boolean' && delivery.state === 'failed' && delivery.dispatch === 'not_started' && delivery.reason.startsWith('team_waiting_')) {
         this.finishDelivery(sessionId, state, 'rejected', delivery.reason)
         return
@@ -1198,7 +1223,8 @@ export class SessionInputController {
     const agentId = this.controlSession(sessionId)?.agentId
     const gate = this.deps.moveGate
     if (agentId && gate?.holding(agentId)) {
-      gate.enqueue(agentId, () => this.drainNow(sessionId, state))
+      gate.enqueue(agentId, () => this.drainNow(sessionId, state),
+        () => { if (this.states.get(sessionId) === state) this.rejectHeldQueue(sessionId, state) })
       return
     }
     void this.drainNow(sessionId, state)
@@ -1206,6 +1232,8 @@ export class SessionInputController {
 
   private async drainNow(sessionId: string, state: InputState): Promise<void> {
     if (this.states.get(sessionId) !== state) return
+    const agentId = this.controlSession(sessionId)?.agentId
+    if (agentId && this.deps.moveGate?.refused(agentId)) { this.rejectHeldQueue(sessionId, state); return }
     this.dropExpired(sessionId, state)
     if (state.controlLocked || state.cancelling || state.turnOpen || state.settling || state.awaitingFingerprint) return
     if (state.queue[0]?.deliveryId && (state.dispatching || state.deliveryId)) return
@@ -1227,6 +1255,32 @@ export class SessionInputController {
     if (this.refusedFull(sessionId, state, bytes, deliveryId, receipt)) return
     state.queue.push({ content, bytes, expiresAt: Date.now() + ITEM_TTL_MS, deliveryId, ...(receipt ? { receipt } : {}) })
     this.delivery(sessionId, deliveryId, 'queued')
+  }
+
+  /** A failed move refuses pending messages without deleting an in-flight turn or issuing Ctrl-C. */
+  refuse(agentId: string): void {
+    const row = this.controlSession(agentId)
+    for (const key of new Set([agentId, row?.sessionId].filter((id): id is string => !!id))) {
+      const state = this.states.get(key)
+      if (state) this.rejectHeldQueue(key, state)
+    }
+  }
+
+  private rejectHeldQueue(sessionId: string, state: InputState): void {
+    for (const item of state.queue.splice(0)) this.rejectHeldMessage(sessionId, item.deliveryId, item.receipt)
+  }
+
+  private rejectHeldMessage(sessionId: string, deliveryId?: string, receipt?: MessageReceipt): void {
+    this.delivery(sessionId, deliveryId, 'rejected', 'held')
+    receipt?.('held')
+    if (!deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This harness is held until the daemon restarts.')
+  }
+
+  private refuseHeldMessage(sessionId: string, deliveryId?: string, receipt?: MessageReceipt): boolean {
+    const agentId = this.controlSession(sessionId)?.agentId
+    if (!agentId || !this.deps.moveGate?.refused(agentId)) return false
+    this.rejectHeldMessage(sessionId, deliveryId, receipt)
+    return true
   }
 
   /** Refuse a message of [bytes] when the agent's queued and held messages are at their limits. */

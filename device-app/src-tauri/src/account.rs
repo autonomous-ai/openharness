@@ -12,7 +12,7 @@ use url::Url;
 /// The sign-in screen's words when the CLI gave no `result`, or none in time.
 pub const NO_RESULT: &str = "Sign-in did not finish.";
 
-/// The longest message the window is handed, in characters, as for Claude Code's reasons: a line can be 64 KiB.
+/// The longest message the window is handed, in characters: a line can be 64 KiB.
 const MESSAGE_MAX: usize = 200;
 
 /// How long `harness login` has after SIGTERM before its group is killed: it waits up to 3 s to take its code back,

@@ -65,9 +65,10 @@ export function createUpdateHandoff(deps: UpdateHandoffDeps) {
   /** Every step, in order, each failure said and passed; given up on, all the same, after the deadline. */
   const releaseAll = async (teardown: readonly TeardownStep[]): Promise<void> => {
     try { await deps.beforeTeardown?.() } catch (error) { deps.error(`[update] the moves did not settle (${message(error)}) — handing over all the same`) }
-    let at = ''
+    let at = '', abandoned = false
     const steps = (async () => {
       for (const [name, release] of teardown) {
+        if (abandoned) return
         at = name
         try { await release() } catch (error) { deps.error(`[update] ${name} did not let go (${message(error)}) — handing over all the same`) }
       }
@@ -76,6 +77,7 @@ export function createUpdateHandoff(deps: UpdateHandoffDeps) {
     let timer: ReturnType<typeof setTimeout> | undefined
     const late = new Promise<void>((resolve) => {
       timer = setTimeout(() => {
+        abandoned = true
         deps.error(`[update] the teardown did not finish within ${deadlineMs} ms (at ${at}) — handing over all the same`)
         resolve()
       }, deadlineMs)

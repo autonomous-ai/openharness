@@ -115,11 +115,11 @@ export function createAgentLifecycle({
     // The person reads what was not erased; the cleanup's log has why (services/agentCleanup.ts).
     eraseFirst: async (s) => { if (!await forgetTold(s.agentId)) throw new Error(TOLD_NOT_ERASED) },
     eraseRecords: async (s) => { await scrubCreated(s.agentId) },
-    deleted: s => {
+    deleted: async s => {
       // Every conversation the harness had: a run that moved on (`/new`) leaves nothing under its earlier keys.
       const keys = [s.sessionId, ...(s.earlierSessionIds ?? [])].filter(Boolean)
       for (const key of keys) mirror.deleteHistory(key)
-      registry.deleteSavedNames([s.agentId, ...keys])
+      await registry.deleteSavedNames([s.agentId, ...keys])
       send({ type: 'agent_deleted', payload: { agentId: s.agentId, retained: false } })
       purged?.(s.agentId, keys)
     },

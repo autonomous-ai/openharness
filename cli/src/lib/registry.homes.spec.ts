@@ -1,3 +1,4 @@
+import { releaseRegistryEngine, unbindRegistrySession } from '../testing/registryFixtures.js'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -90,8 +91,8 @@ it.each(['unbind', 'release', 'separate-shell'] as const)('clears a hold with it
     registry.load()
     expect(registry.byAgent('fixture-0')?.identityHold).toBeTruthy()
     const released = operation === 'unbind'
-      ? (expect(registry.unbindSession('session-0')).toBe(true), registry.byAgent('fixture-0'))
-      : registry.releaseEngine('fixture-0', operation === 'separate-shell')
+      ? (expect((await unbindRegistrySession(registry, 'session-0'))).toBe(true), registry.byAgent('fixture-0'))
+      : (await releaseRegistryEngine(registry, 'fixture-0', operation === 'separate-shell'))
     expect(released).toMatchObject({ sessionId: '', transcriptPath: null })
     expect(released).not.toHaveProperty('identityHold')
     expect(registry.byAgent(released!.agentId)).not.toHaveProperty('identityHold')
