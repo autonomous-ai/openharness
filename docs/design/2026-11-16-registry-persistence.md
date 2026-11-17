@@ -2,10 +2,11 @@
 
 ## Pending admission during discovery (17 November Design)
 
-Concurrent native Claude/Codex creation exposed a pending-admission refusal while
-the other engine's discovery transaction was active. Pending admission alone did
-not permit the writer to validate and commit a complete observation batch, as
-process admission and binding already do. Give it the same existing permission;
+Concurrent native Claude/Codex creation exposed a pending-admission refusal; its
+single diagnostic run did not reproduce that failure. A deterministic transaction
+test then exposed a defect: pending admission alone did not permit the writer to
+validate and commit a complete observation batch, as process admission and binding
+already do. Give it the same existing permission;
 retain whole-batch validation, durable peer ownership, captured live ownership,
 the original write deadline, and publication before returning its detached row.
 Do not wait inside the writer for a transaction whose callback may await that
