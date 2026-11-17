@@ -167,8 +167,6 @@ void ram_telemetry_periodic(const char *tag) { (void)tag; }
 static const char *const IDS[] = {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"};
 enum { AGENTS = MAX_LANES + 2 };
 _Static_assert(AGENTS <= sizeof IDS / sizeof IDS[0], "IDS holds the room and two pages of lanes");
-enum { CARD_CY = MAX_CARD_Y + MAX_CARD_H / 2 };
-static const int TALK_CX = MAX_TALK_X + MAX_TALK_W / 2;
 
 // The cable says hello and lists the agents; the glass shows what the model holds (the render task's draw). The room
 // shows a.
@@ -193,6 +191,29 @@ static void contact(int x, int y, int dx, int dy)
     now += 30;
     CHECK(pro_app_touch(false, x + dx, y + dy));
     CHECK(LOCK_DEPTH == 0);
+}
+
+// A button the view drew.
+static const max_hit_t *find_hit(max_hit_kind_t kind, int arg)
+{
+    for (int i = 0; i < max_m.hit_count; i++)
+        if (max_m.hits[i].kind == kind && max_m.hits[i].arg == arg) return &max_m.hits[i];
+    return NULL;
+}
+static void press(max_hit_kind_t kind, int arg)
+{
+    render(now);
+    const max_hit_t *h = find_hit(kind, arg);
+    CHECK(h != NULL);
+    contact(h->x + h->w / 2, h->y + h->h / 2, 0, 0);
+}
+// A button of the room: its card's, its pet, Send and Cancel while it records, the form's Say.
+static void press_room(max_hit_kind_t kind, int arg)
+{
+    render(now);
+    room_card();
+    const max_hit_t *h = room_hit(kind, arg);
+    contact(h->x + h->w / 2, h->y + h->h / 2, 0, 0);
 }
 
 // ---- tests ----
@@ -224,20 +245,18 @@ static void test_tap_opens_the_lane(void)
     CHECK(OPENS == 1);
 }
 
-// Talk records for the selected agent, a second tap sends, and the reply ends it; the slot follows the recorder.
+// The room's pet records for its agent, Send sends, and the reply ends it; the room follows the recorder.
 static void test_talk_records_and_sends(void)
 {
     fresh();
     V_BEGINS = 0;
     contact(lane_x(0), lane_y(0), 0, 0);   // the room shows b
-    render(now);
     NOTIFIES = 0;
-    contact(TALK_CX, CARD_CY, 0, 0);
+    press_room(MAX_HIT_TALK, 0);
     CHECK(V_BEGINS == 1 && !strcmp(V_AGENT, "b") && V_OPEN);
     CHECK(max_m.talk == MAX_TALK_RECORDING && NOTIFIES > 0);
 
-    render(now);
-    contact(TALK_CX, CARD_CY, 0, 0);
+    press_room(MAX_HIT_TALK_SEND, 0);
     CHECK(V_WAITING && max_m.talk == MAX_TALK_SENDING);
 
     pro_app_voice_result(PRO_VOICE_ERROR, "Nobody heard that");
@@ -245,19 +264,33 @@ static void test_talk_records_and_sends(void)
     CHECK(!strcmp(max_m.notice, "Nobody heard that"));
 }
 
-// An accepted update offer holds voice off: a Talk tap says so and starts nothing.
+// Cancel stops the recording and sends nothing; the room's agent takes voice again.
+static void test_cancel_sends_nothing(void)
+{
+    fresh();
+    press_room(MAX_HIT_TALK, 0);
+    CHECK(V_OPEN && max_m.talk == MAX_TALK_RECORDING);
+    press_room(MAX_HIT_TALK_CANCEL, 0);
+    CHECK(!V_OPEN && !V_WAITING && max_m.talk == MAX_TALK_IDLE && LOCK_DEPTH == 0);
+    V_BEGINS = 0;
+    press_room(MAX_HIT_TALK, 0);
+    CHECK(V_BEGINS == 1 && V_OPEN && !strcmp(V_AGENT, "a"));
+    press_room(MAX_HIT_TALK_CANCEL, 0);
+}
+
+// An accepted update offer holds voice off: a tap on the pet says so and starts nothing.
 static void test_update_gate_holds_talk(void)
 {
     fresh();
     CHECK(pro_app_begin_update_gate());
     V_BEGINS = 0;
-    contact(TALK_CX, CARD_CY, 0, 0);
+    press_room(MAX_HIT_TALK, 0);
     CHECK(V_BEGINS == 0 && !V_OPEN && max_m.talk == MAX_TALK_IDLE);
     CHECK(!strcmp(max_m.notice, "Updating"));
     pro_app_end_update_gate();
-    contact(TALK_CX, CARD_CY, 0, 0);
+    press_room(MAX_HIT_TALK, 0);
     CHECK(V_BEGINS == 1 && V_OPEN);
-    contact(TALK_CX, CARD_CY, 0, 0);
+    press_room(MAX_HIT_TALK_SEND, 0);
     pro_app_voice_result(PRO_VOICE_OK, "a");
     CHECK(!V_OPEN);
 }
@@ -298,27 +331,6 @@ static void test_question_chimes_once(void)
 
 // ---- answering and New Harness ----
 
-static const max_hit_t *find_hit(max_hit_kind_t kind, int arg)
-{
-    for (int i = 0; i < max_m.hit_count; i++)
-        if (max_m.hits[i].kind == kind && max_m.hits[i].arg == arg) return &max_m.hits[i];
-    return NULL;
-}
-static void press(max_hit_kind_t kind, int arg)
-{
-    render(now);
-    const max_hit_t *h = find_hit(kind, arg);
-    CHECK(h != NULL);
-    contact(h->x + h->w / 2, h->y + h->h / 2, 0, 0);
-}
-// A button of the room's card.
-static void press_room(max_hit_kind_t kind, int arg)
-{
-    render(now);
-    room_card();
-    const max_hit_t *h = room_hit(kind, arg);
-    contact(h->x + h->w / 2, h->y + h->h / 2, 0, 0);
-}
 static const pro_ask_item_t DB = {"db", "Which database?", {"Dev", "Staging"}, 2, false, true};
 
 // The reviewed path end to end: the read goes out after the lock (with the next contact's take, as with the clock's),
@@ -383,11 +395,10 @@ static void test_new_harness(void)
     pro_app_form_state("form-1", form_id, true, &page);
     // Say: the recording names the form, not an agent.
     V_BEGINS = 0;
-    render(now);
-    contact(TALK_CX, CARD_CY, 0, 0);
+    press_room(MAX_HIT_FORM_SAY, 0);
     CHECK(V_BEGINS == 1 && V_OPEN && !strcmp(V_AGENT, "") && !strcmp(VOICE_FORM, form_id) && VOICE_REVISION == 7);
     CHECK(max_m.talk == MAX_TALK_RECORDING);
-    contact(TALK_CX, CARD_CY, 0, 0);
+    press_room(MAX_HIT_TALK_SEND, 0);
     CHECK(V_WAITING);
     pro_form_page_t found = page;
     found.revision = 8;
@@ -398,10 +409,9 @@ static void test_new_harness(void)
     press(MAX_HIT_FORM_CLOSE, 0);
     CHECK(!max_form_open() && strstr(last_sent(), " close 8 0"));
     // Talk for an agent clears the form's name from the next recording.
-    render(now);
-    contact(TALK_CX, CARD_CY, 0, 0);
+    press_room(MAX_HIT_TALK, 0);
     CHECK(V_OPEN && !strcmp(V_AGENT, "a") && VOICE_FORM[0] == 0);
-    contact(TALK_CX, CARD_CY, 0, 0);
+    press_room(MAX_HIT_TALK_SEND, 0);
     pro_app_voice_result(PRO_VOICE_OK, "a");
     CHECK(LOCK_DEPTH == 0);
 }
@@ -420,6 +430,7 @@ int main(void)
     test_touch_wakes_the_renderer();
     test_tap_opens_the_lane();
     test_talk_records_and_sends();
+    test_cancel_sends_nothing();
     test_update_gate_holds_talk();
     test_asleep_refuses_the_finger();
     test_question_chimes_once();

@@ -363,7 +363,7 @@ void pro_app_notice(const char *text)
     unlock();
 }
 
-// The Talk slot follows the recorder: recording (or starting), sending (stopped, its reply awaited), or idle. The
+// The room's voice follows the recorder: recording (or starting), sending (stopped, its reply awaited), or idle. The
 // caller reads the recorder before taking the lock.
 static void talk_locked(bool open, bool waiting)
 {
@@ -410,7 +410,8 @@ static const char *voice_gate(void)
     return why;   // a literal, valid after the unlock
 }
 
-// The Talk slot was tapped while idle: record for the selected agent. No lock held: the recorder may call back.
+// The room's pet or the form's Say was tapped: record for this agent ("": the form's). No lock held: the recorder may
+// call back.
 static void talk_begin(const char *agent)
 {
     const char *why = voice_gate();
@@ -431,7 +432,7 @@ static void talk_begin(const char *agent)
     unlock();
 }
 
-// The Talk slot was tapped while recording: send. Stopped before the recorder even started, nothing was recorded.
+// Send while recording. Stopped before the recorder even started, nothing was recorded.
 static void talk_send(void)
 {
     if (pro_voice_open() && pro_voice_start_pending()) {

@@ -167,7 +167,7 @@ typedef struct {
     char notice[MAX_NOTICE_BYTES];
     uint32_t notice_until;
     max_talk_t talk;
-    char talk_id[ID_MAX];            // the agent the recording is for (set when the Talk tap starts it; "": the form's)
+    char talk_id[ID_MAX];            // the agent the recording is for (set when the room's pet starts it; "": Say's)
     int update_pct;                  // -1: no update
     char update_to[MAX_VERSION_BYTES];
     // What the last render drew, for the finger and the clock.
