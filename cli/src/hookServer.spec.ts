@@ -478,7 +478,7 @@ describe('process-owned hook server', () => {
     ['/api/hook/turn-start', {}, 'onTurnStart'],
     ['/api/hook/tool-start', { toolUseId: 'tool-1', toolName: 'Task' }, 'onToolStart'],
     ['/api/hook/turn-stop', { status: 'error' }, 'onTurnStop'],
-    ['/api/hook/wait', { hookEvent: 'PermissionRequest' }, 'onWait'],
+    ['/api/hook/wait', { hookEvent: 'PermissionRequest' }, 'onPersonWait'],
     ['/api/hook/subagent', { hookEvent: 'SubagentStart' }, 'onSubagent'],
   ] as const)('rejects a forged bound-session mutation on %s', async (path, extra, handlerName) => {
     const handler = vi.fn()
@@ -542,16 +542,16 @@ describe('process-owned hook server', () => {
     }
 
     it('hands a wait on with when its engine ran it', async () => {
-      const onWait = vi.fn()
-      const { base, headers } = await start({ onWait, resolveHookAgent: bound() })
+      const onPersonWait = vi.fn()
+      const { base, headers } = await start({ onPersonWait, resolveHookAgent: bound() })
       const waited = await hook(base, { ...headers, 'x-harness-hook-fired-at': '1700000000000' }, '/api/hook/wait',
         { hookEvent: 'PermissionRequest', toolName: 'Bash' })
       expect(waited.status).toBe(200)
       expect(await waited.json()).toEqual({ ok: true })
-      expect(onWait).toHaveBeenLastCalledWith({ sessionId: 'real-session', firedAt: 1_700_000_000_000 })
+      expect(onPersonWait).toHaveBeenLastCalledWith({ sessionId: 'real-session', firedAt: 1_700_000_000_000 })
       // A hook client too old to say: the wait is handed on with no time.
       expect((await hook(base, headers, '/api/hook/wait', { hookEvent: 'PermissionRequest' })).status).toBe(200)
-      expect(onWait.mock.lastCall).toStrictEqual([{ sessionId: 'real-session' }])
+      expect(onPersonWait.mock.lastCall).toStrictEqual([{ sessionId: 'real-session' }])
     })
 
     it('a subagent hook says started or stopped by its event, and any other event is refused', async () => {
@@ -577,15 +577,15 @@ describe('process-owned hook server', () => {
 
     // What the person is asked is theirs: a wait says only that the engine waits, and when.
     it('refuses a wait that carries a tool\'s input or a prompt', async () => {
-      const onWait = vi.fn()
+      const onPersonWait = vi.fn()
       const resolveHookAgent = bound()
-      const { base, headers } = await start({ onWait, resolveHookAgent })
+      const { base, headers } = await start({ onPersonWait, resolveHookAgent })
       for (const extra of [{ input: { command: 'ls' } }, { prompt: 'go on' }]) {
         const refused = await hook(base, headers, '/api/hook/wait', { hookEvent: 'PermissionRequest', ...extra })
         expect(refused.status).toBe(400)
         expect(await refused.json()).toEqual({ error: 'invalid hook body' })
       }
-      expect(onWait).not.toHaveBeenCalled()
+      expect(onPersonWait).not.toHaveBeenCalled()
       expect(resolveHookAgent).not.toHaveBeenCalled()
     })
 
@@ -595,7 +595,7 @@ describe('process-owned hook server', () => {
       const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
       vi.useFakeTimers({ toFake: ['Date'] })
       try {
-        const handlers = { onWait: vi.fn(), onSubagent: vi.fn(), onTurnStop: vi.fn(), onSessionEnd: vi.fn(), onToolStart: vi.fn(),
+        const handlers = { onPersonWait: vi.fn(), onSubagent: vi.fn(), onTurnStop: vi.fn(), onSessionEnd: vi.fn(), onToolStart: vi.fn(),
           onTurnStart: vi.fn() }
         const { base, headers } = await start(handlers)
         const unbound = async (path: string, sessionId?: string) => {
@@ -623,7 +623,7 @@ describe('process-owned hook server', () => {
     })
 
     it('needs the hook token on each', async () => {
-      const handlers = { onWait: vi.fn(), onSubagent: vi.fn() }
+      const handlers = { onPersonWait: vi.fn(), onSubagent: vi.fn() }
       const { base } = await start({ ...handlers, resolveHookAgent: bound() })
       for (const path of ['/api/hook/wait', '/api/hook/subagent']) {
         const refused = await hook(base, { 'content-type': 'application/json' }, path, { hookEvent: 'SubagentStart' })
@@ -1334,7 +1334,7 @@ it.each(['/api/hook/session-end', '/api/hook/turn-start', '/api/hook/tool-start'
     vi.spyOn(registry, 'byAgent').mockReturnValue(row)
     const mutation = vi.fn()
     const { base, headers } = await start({ onSessionEnd: mutation, onTurnStart: mutation, onToolStart: mutation, onTurnStop: mutation,
-      onWait: mutation, onSubagent: mutation,
+      onPersonWait: mutation, onSubagent: mutation,
       resolveHookAgent: async () => { await Promise.resolve(); row.evidenceRevision = 2; return row } })
     const response = await fetch(`${base}${path}`, { method: 'POST', headers,
       body: JSON.stringify({ engine: 'claude', sessionId: row.sessionId, tmuxPane: '%1', callerPid: 4242,

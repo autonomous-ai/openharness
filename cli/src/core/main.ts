@@ -2285,7 +2285,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onTurnStart: turnHooks.onTurnStart,
     onToolStart: turnHooks.onToolStart,
     onTurnStop: turnHooks.onTurnStop,
-    onWait: turnHooks.onWait,
+    onPersonWait: turnHooks.onWait,
     onSubagent: turnHooks.onSubagent,
     // A paneless agent's event goes on to the devices process and stays nowhere in the core; no devices, no forward.
     onObserved: observedHook.onObserved,
