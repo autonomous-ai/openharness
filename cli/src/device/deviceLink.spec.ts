@@ -16,7 +16,11 @@ import type { IncomingMessage } from 'node:http'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { LaneOpened, LaneSeal, LaneSealed } from '../core/api.js'
+import { FAKE_COMPUTER_NAME } from '../__fixtures__/computerNameFake.js'
 import { DeviceLink, type DeviceFrame } from './deviceLink.js'
+
+// A computer's name that is not its hostname, so the device-ws label shows which one it sends.
+vi.mock('../lib/computerName.js', () => import('../__fixtures__/computerNameFake.js'))
 
 const LINKED = 'linked-machine'
 const LINKED_2 = 'second-linked-machine'
@@ -27,6 +31,7 @@ type Frame = Record<string, unknown>
 async function fakeDeviceWs(opts: { refuseToken?: string; late?: (frame: Frame, nth: number) => number } = {}) {
   const received: Frame[] = []
   const tokens: string[] = []
+  const urls: string[] = []
   let socket: WebSocket | null = null
   const wss = new WebSocketServer({
     port: 0, host: '127.0.0.1',
@@ -34,6 +39,7 @@ async function fakeDeviceWs(opts: { refuseToken?: string; late?: (frame: Frame, 
     verifyClient: (info: { req: IncomingMessage }, done: (ok: boolean, code?: number) => void) => {
       const token = String(info.req.headers['sec-websocket-protocol'] ?? '')
       tokens.push(token)
+      urls.push(info.req.url ?? '')
       done(token !== opts.refuseToken, 401)
     },
   })
@@ -58,6 +64,8 @@ async function fakeDeviceWs(opts: { refuseToken?: string; late?: (frame: Frame, 
     url: `ws://127.0.0.1:${port}`,
     received,
     tokens,
+    /** Each upgrade's path and query, as the lane dialed it. */
+    urls,
     /** Frames for machines, as the lane sent them: its own control frames left out. */
     forMachines: () => received.filter((frame) => frame.type !== 'device_hello' && frame.type !== 'machines_watch' && frame.type !== 'ping'),
     send: (frame: Frame) => socket?.send(JSON.stringify(frame)),
@@ -274,6 +282,13 @@ describe('the fleet\'s lane, sealed by the gateway', () => {
     expect(auth.accessToken).toHaveBeenNthCalledWith(1)
     expect(auth.accessToken).toHaveBeenNthCalledWith(2, { force: true, failedToken: 'token-1' })
     expect(server.tokens).toEqual(['token-1', 'token-2'])
+  })
+
+  // The backend names a new device binding with this label once and never renames it.
+  it('labels its socket with the computer\'s name, not its hostname', async () => {
+    const { server, link } = await lane()
+    await link.online()
+    expect(new URL(server.urls[0]!, 'ws://backend').searchParams.get('label')).toBe(FAKE_COMPUTER_NAME)
   })
 })
 
