@@ -515,13 +515,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // process alone, as the dial setup: inside the core's the core would run VS Code's `code`. A part of its own, so a throw
   // in VS Code's files is never the dial's.
   if (deps.listen) part.call('vscodeExtension', () => {
-    const vscode = deps.vscodeExtension ?? vscodeExtensionDeps()
+    const extension = deps.vscodeExtension ?? vscodeExtensionDeps()
     const count = createEngineTally('[device] vscode extension', ['vscode'], ['updated', 'failed', 'left removed'], log)
     startVscodeExtensionUpdate({
-      platform: vscode.platform,
-      status: () => vscodeStatus(vscode),
-      version: () => buildVersion(vscode),
-      enable: () => vscodeEnable(vscode),
+      platform: extension.platform,
+      status: () => vscodeStatus(extension),
+      version: () => buildVersion(extension),
+      enable: () => vscodeEnable(extension),
       after: timerIn('vscodeExtension'),
       count: (kind, reason) => count('vscode', kind, reason),
     })
