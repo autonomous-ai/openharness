@@ -3,6 +3,7 @@
  * always) that bounds the score and checks the grader without spending tokens.
  */
 import { execFile, execFileSync, spawn } from 'node:child_process'
+import { realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -48,6 +49,9 @@ export const CLAUDE_SANDBOX = {
 
 /** Between SIGTERM and SIGKILL for a timed-out agent's process group. */
 const KILL_GRACE_MS = 10_000
+
+// Listing every process's working folder takes well under a second; a stuck lsof fails the run rather than hold it.
+const LSOF_TIMEOUT_MS = 10_000
 
 export function claudeArgs(cfg: Omit<AgentConfig, 'timeoutMs'>, st: Pick<Staged, 'root' | 'origin'>, prompt: string): string[] {
   return [
@@ -140,9 +144,36 @@ function spawnGroup(bin: string, args: string[], st: Staged, timeoutMs: number):
       clearTimeout(killTimer)
       // Nothing a run started outlives it, even a process that let go of the pipes.
       signalGroup('SIGKILL')
+      try {
+        killWorkingIn(st.root)
+      } catch (error) {
+        fail(error)
+        return
+      }
       done({ code, signal, stdout: Buffer.concat(stdout).toString('utf8'), stderr, timedOut })
     })
   })
+}
+
+/** Kills every process working in the run root: Claude starts each Bash command in a process group of its own, which
+ *  the group kill does not reach. One lsof lists every process's working folder, so the cost follows the process
+ *  count, not the files in the run. */
+function killWorkingIn(root: string): void {
+  // lsof prints real paths, and a temp folder on macOS is reached through the /var link.
+  const dir = realpathSync(root)
+  // -F pn: a `p<pid>` line for each process, then an `n<folder>` line for its working folder.
+  const listing = execFileSync('/usr/sbin/lsof', ['-n', '-P', '-w', '-d', 'cwd', '-F', 'pn'], { encoding: 'utf8', timeout: LSOF_TIMEOUT_MS })
+  let pid = 0
+  for (const line of listing.split('\n')) {
+    if (line.startsWith('p')) pid = Number(line.slice(1))
+    else if (line === `n${dir}` || line.startsWith(`n${dir}/`)) {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // ESRCH: it exited after lsof listed it.
+      }
+    }
+  }
 }
 
 function failure(message: string, failure_class: string): Error {
