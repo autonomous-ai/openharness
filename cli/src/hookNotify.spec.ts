@@ -2911,10 +2911,9 @@ describe('hook notify: what the hook says of its own environment', () => {
 // The engine's own word, from a Harness pane, that it waits on the person, ended a turn, or runs a subagent.
 describe('hook notify: waits, turn ends and subagents from a pane', () => {
   const urls = (requests: Array<{ url: string }>) => requests.map((request) => request.url)
-  /** Claude Code fixed SubagentStop firing about twice a minute for each running subagent in this release. */
-  const COUNTED = '2.1.311'
+  // Claude Code's hook payload names no version.
   const subagent = (event: 'SubagentStart' | 'SubagentStop', fields: Record<string, unknown> = {}) => ({
-    hook_event_name: event, session_id: 'lead-1', agent_id: 'agent-7', agent_type: 'Explore', version: COUNTED, ...fields,
+    hook_event_name: event, session_id: 'lead-1', agent_id: 'agent-7', agent_type: 'Explore', ...fields,
   })
   /** Every event this change installs, engine by engine. */
   const NEW_EVENTS = [
@@ -2998,20 +2997,13 @@ describe('hook notify: waits, turn ends and subagents from a pane', () => {
     expect(requests).toEqual([])
   })
 
-  // Before 2.1.311 a running background subagent sent a SubagentStop about every 30 s, which would end the lead's turn
-  // early; Claude Code's hooks that name no version cannot be told from those.
-  it.each([['2.1.310'], ['2.0.999'], [undefined]])('claude %s: no subagent event posts anything', async (version) => {
+  // The hook cannot tell which Claude Code sent it, so no version gates its subagent events.
+  it.each([[{}], [{ version: '2.1.300' }]])('claude %j: its subagent events post', async (fields) => {
     const { port, requests } = await collect()
     for (const event of ['SubagentStart', 'SubagentStop'] as const) {
-      await runHook({ port, tmuxPane: '%4', input: subagent(event, { version }) })
+      await runHook({ port, tmuxPane: '%4', input: subagent(event, fields) })
     }
-    expect(requests).toEqual([])
-  })
-
-  it.each([['2.1.311'], ['2.2.0'], ['3.0.0']])('claude %s counts its subagents', async (version) => {
-    const { port, requests } = await collect()
-    await runHook({ port, tmuxPane: '%4', input: subagent('SubagentStart', { version }) })
-    expect(urls(requests)).toEqual(['/api/hook/subagent'])
+    expect(urls(requests)).toEqual(['/api/hook/subagent', '/api/hook/subagent'])
   })
 
   // A resumed subagent, or a teammate taking a new message, sends a start with its own stop: the count stays even.
