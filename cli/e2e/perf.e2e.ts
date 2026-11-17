@@ -61,6 +61,23 @@ function sampleProcess(pid: number) {
       memory: { rssMean: rss.length ? rss.reduce((a, b) => a + b, 0) / rss.length : null, rssMax: rss.length ? Math.max(...rss) : null, samples: rss.length } }
   }
 }
+const HOOK_RAN = /^(\S+) \S+ pid=\d+ (\w+)(?:\([^)]*\))? session=\S* ran in (\d+) ms · exit=/
+/** The hooks the fake engines ran inside [from, to] (epoch ms), from their log (fakeEngine.mjs `runHookCommand`):
+ *  each line is stamped when its hook exited, so a round trip is the hook's request to the daemon and back. */
+function hookRequests(log: string, from: number, to: number, completedTurns: number) {
+  const ms: number[] = []
+  const byEvent: Record<string, number> = {}
+  for (const line of log.split('\n')) {
+    const [, at, event, took] = HOOK_RAN.exec(line) ?? []
+    const time = at ? Date.parse(at) : NaN
+    if (!(time >= from && time <= to)) continue
+    ms.push(Number(took))
+    byEvent[event] = (byEvent[event] ?? 0) + 1
+  }
+  ms.sort((a, b) => a - b)
+  return { count: ms.length, perTurn: completedTurns ? ms.length / completedTurns : null,
+    roundTripMs: { p50: ms[Math.floor(ms.length * .5)] ?? null, p95: ms[Math.floor(ms.length * .95)] ?? null }, byEvent }
+}
 function knob(name: string, fallback: number, min: number, max: number): number {
   const n = Number(process.env[name] ?? fallback)
   if (!Number.isInteger(n) || n < min || n > max) throw new Error(`${name} must be an integer from ${min} to ${max}`)
@@ -235,6 +252,7 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
         const loadStart = loadavg()
         await Promise.all([probe('start', label), ...readers.map(([, pid]) => probe('start', label, pid))])
         const masterEnd = sampleProcess(d.pid!)
+        const windowStartedAt = Date.now()
         const readLatencies: number[] = []
         const reads = (async () => {
           while (measureReaders && saved.length && running) {
@@ -319,13 +337,15 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
             errors: answers.flatMap(answer => answer.errors.map(error => `${answer.engine} ${answer.kind} ${answer.token}: ${error}`)),
             samples: answers.map(({ sentAt, completedAt, ...answer }) => ({ ...answer, inWindow: completedAt <= windowEndedAt })) }
         }
+        const completedTurns = turns.reduce((a, b) => a + b, 0)
         report.phases.push({ ...metrics!, readers: readerMetrics, master, loadAverage: { start: loadStart, end: loadEnd }, questions,
+          hooks: hookRequests(d.hookLog(), windowStartedAt, performance.timeOrigin + windowEndedAt, completedTurns),
           modelControls: Object.fromEntries(Object.entries(controlLatencies).map(([engine, values]) => {
             values.sort((a, b) => a - b)
             return [engine, { count: values.length, p50Ms: values[Math.floor(values.length * .5)] ?? null, p95Ms: values[Math.floor(values.length * .95)] ?? null }]
           })),
           historyReads: { count: readLatencies.length, p50Ms: readLatencies[Math.floor(readLatencies.length * .5)] ?? null, p95Ms: readLatencies[Math.floor(readLatencies.length * .95)] ?? null },
-          coreAndReaders: { cpuPercent: metrics!.cpu.percent + readerMetrics.reduce((sum, m) => sum + m.cpu.percent, 0), rssMean: metrics!.memory.rssMean + readerMetrics.reduce((sum, m) => sum + m.memory.rssMean, 0) }, turns, completedTurns: turns.reduce((a, b) => a + b, 0),
+          coreAndReaders: { cpuPercent: metrics!.cpu.percent + readerMetrics.reduce((sum, m) => sum + m.cpu.percent, 0), rssMean: metrics!.memory.rssMean + readerMetrics.reduce((sum, m) => sum + m.memory.rssMean, 0) }, turns, completedTurns,
           turnLatencyMs: { p50: latencies[Math.floor(latencies.length * .5)] ?? null, p95: latencies[Math.floor(latencies.length * .95)] ?? null },
           windows: after.map((stats, i) => Object.fromEntries(Object.entries(stats).map(([key, value]) =>
             [key, value - before[i][key as keyof ReturnType<PerfWindow['stats']>]]))) })
