@@ -369,9 +369,10 @@ impl App {
     }
 
     /// The relaunch would also cut short a daemon start or what the window shows, so it waits for them too; a check
-    /// does not, as the first launch's window is open right after the CLI install.
+    /// does not, as the first launch's window is open right after the CLI install. A VS Code turn-on runs at most 90 s:
+    /// relaunched under it, its result is never logged and the new instance may start a second one.
     fn relaunch_waits(&self) -> bool {
-        self.running() || self.keep.starting() || self.window.is_some()
+        self.running() || self.keep.starting() || self.window.is_some() || self.state.vscode_busy
     }
 
     /// Only a button the window shows does something, so a second click on one that started a run does nothing.
