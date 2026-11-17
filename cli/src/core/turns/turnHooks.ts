@@ -197,6 +197,16 @@ export function createTurnHooks({
       turn.endsByHook = true
       turn.hookAt = Date.now()
       if (!current()) return
+      if (status === 'interrupted') {
+        // Codex's Interrupt (R3): Codex waits for it before it writes turn_aborted, so the open turn ends here, before
+        // the route answers, as aborted, the way Claude Code's interrupt line ends one: no drain, no wait, no key. The
+        // parser, closed, ends nothing at that turn_aborted. One run before the latest prompt hook, or before the open
+        // turn opened, is about an earlier turn (kit/stopHook.ts).
+        const open = hookTurns.turnState(sessionId)
+        if (open?.turnOpen && !(firedAt !== undefined && Math.max(turn.promptAt ?? 0, open.openedAt ?? 0) > firedAt)
+          && hookTurns.closeTurn(sessionId, open.identity)) emit(sessionId, [{ type: 'turn_ended', payload: { aborted: true } }])
+        return
+      }
       // Invoke synchronously: the engine snapshots which turn the hook arrived about before draining.
       const failed = (error: unknown): void => {
         console.error(`[hooks] ${session.engine} stop hook failed:`, error instanceof Error ? error.message : error)
