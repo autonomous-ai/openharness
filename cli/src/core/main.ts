@@ -201,7 +201,7 @@ import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn
 import { createCursorDiscovery } from './engines/cursorDiscovery.js'
 import { createStoreOf } from './transcripts/stores.js'
 import { createOtherStreams } from './engines/otherStreams.js'
-import { paneReadIdentity, transcriptReadIdentity } from './transcripts/readIdentity.js'
+import { paneReadIdentity } from './transcripts/readIdentity.js'
 import { isOtherEngine, OTHER_ENGINE_STATES, OTHER_ENGINES_SERVICE } from '../engines/otherEngines.js'
 import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, GOALS_REQUESTS, TURN_DELIVERERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, ENGINE_PROBE_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type WindowFocus } from './api.js'
 import { createFrameParts } from './frameParts.js'
@@ -1391,14 +1391,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Following a session: its history read into its engine's normalizer, then its tail
   // (core/transcripts/attach.ts).
   // Where a conversation kept in a database is: the core names the store its engine's reader reads (core/transcripts/stores.ts).
+  // A reader must not fill the native home: changing it here revoked the attach awaiting this same lookup.
   const storeOf = createStoreOf({ opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB,
     openclaw: async (sessionId, pane) => (await otherStreams.locateStore({ engine: 'openclaw', sessionId,
       processIdentity: { pid: pane.pid } as RegisteredSession['processIdentity'], openclawStateDir: pane.stateDir })).store,
   }, async session => {
-    const identity = transcriptReadIdentity(session)
     const location = await otherStreams.locateStore(session)
     if (!location.store) throw new Error('ENGINE_UNAVAILABLE')
-    if (location.home && transcriptReadIdentity(registry.byAgent(session.agentId)) === identity) registry.setHermesHome(session.agentId, location.home)
     return location.store
   })
   const attach = createAttach({
@@ -2025,6 +2024,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     forgetSession,
     clients: backend,
     attachSession,
+    captureReader: attach.captureReader,
     announceSession,
     stoppedAgents,
     syncRecapPool,

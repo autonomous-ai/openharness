@@ -92,6 +92,7 @@ function setup(over: Partial<BindDeps> = {}) {
     forgetSession: vi.fn(),
     clients: { send: vi.fn() },
     attachSession: vi.fn(async () => true),
+    captureReader: vi.fn(() => () => false),
     announceSession: vi.fn(),
     stoppedAgents: { save: vi.fn(), finishResume: vi.fn(), get: vi.fn(() => null) },
     syncRecapPool: vi.fn(),
@@ -996,7 +997,7 @@ describe('binding a running process to its session', () => {
       const seen = hermes({ cwd: '/data/work/p1' })
       await run.binding.bindObservedAgent(seen)
       expect(follow).toHaveBeenCalledExactlyOnceWith(entry, { ...seen, sandboxed: false },
-        { current: expect.any(Function), mayClaim: expect.any(Function), hold: expect.any(Function) })
+        { current: expect.any(Function), mayClaim: expect.any(Function), hold: expect.any(Function), refresh: false })
       expect(findLiveSession).not.toHaveBeenCalled()
       expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ engine: 'hermes', sessionId: 'S', hermesHome: '/data/agents/a1/.hermes',
         cwd: '/data/work/p1', source: 'hermes-terminal', hookEvent: 'HermesTerminal', runtimes: seen.runtimes,
@@ -1040,23 +1041,33 @@ describe('binding a running process to its session', () => {
         runtimes: seen.runtimes, primaryRuntimeKey: seen.primaryRuntimeKey, processIdentity: seen.processIdentity, hookEvent: 'HermesTerminal' }, { current: expect.any(Function) })
       expect(run.deps.attachSession).toHaveBeenCalledOnce()
       expect(findLiveSession).not.toHaveBeenCalled()
-      // A rotation the registry refused, or one that was not new, attaches nothing more.
+      // A refused commit follows nothing; a successful same-session confirmation still follows its committed identity.
       vi.mocked(run.deps.registry.register).mockResolvedValueOnce(null).mockReturnValueOnce({ entry: agent({ engine: 'hermes', sessionId: 'S' }), ...meta() } as never)
       await run.binding.bindObservedAgent(seen)
       await run.binding.bindObservedAgent(seen)
-      expect(run.deps.attachSession).toHaveBeenCalledOnce()
+      expect(run.deps.attachSession).toHaveBeenCalledTimes(2)
       // Nor is either said to be a switch: a refused one is tried again in the repair's rhythm.
       expect(said()).toEqual(['[discovery] a1 switched hermes session old → S'])
     })
 
-    it('confirms a resumed Hermes without a switch', async () => {
+    it('follows a resumed Hermes confirmation without reporting a switch', async () => {
       const { run } = withRecord({ sessionId: 'S', resumeOnly: true, lastHookAt: 0 })
       vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: agent({ engine: 'hermes', sessionId: 'S' }), ...meta() } as never)
       follow.mockResolvedValue({ sessionId: 'S' })
       await run.binding.bindObservedAgent(hermes())
       expect(run.deps.registry.register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: 'S', source: 'hermes-terminal', hookEvent: 'HermesTerminal' }), { current: expect.any(Function) })
       expect(said()).toEqual([])
-      expect(run.deps.attachSession).not.toHaveBeenCalled()
+      expect(run.deps.attachSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: 'S' }), false, false, false)
+      expect(run.deps.clients.send).not.toHaveBeenCalled()
+    })
+
+    it('commits a different native conversation while the previous reader still owns its hold', async () => {
+      const { run } = withRecord({ sessionId: 'old', identityHold: OTHER_ENGINE_STATES.unavailable })
+      vi.mocked(run.deps.followsLive).mockReturnValue(true)
+      follow.mockResolvedValue({ sessionId: 'new' })
+      await run.binding.bindObservedAgent(hermes())
+      expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'new', source: 'hermes-terminal' }))
+      expect(run.deps.attachSession).toHaveBeenCalledOnce()
     })
 
     it('does nothing while a record waits', async () => {

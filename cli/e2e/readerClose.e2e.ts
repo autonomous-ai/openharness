@@ -38,7 +38,9 @@ it('closes and resumes the same conversation after its reader dies during the re
         if (fs.existsSync(${JSON.stringify(release)})) { clearTimeout(deadline); watcher.close(); finish(); }
       });
       const deadline = setTimeout(() => { watcher.close(); finish(); }, 10000);
-      fs.writeFileSync(${JSON.stringify(signalled)}, JSON.stringify({ pid: process.pid, signal: 'SIGTERM' }));
+      // The observer uses existence as the barrier, so publish only a complete marker.
+      fs.writeFileSync(${JSON.stringify(signalled + '.tmp')}, JSON.stringify({ pid: process.pid, signal: 'SIGTERM' }));
+      fs.renameSync(${JSON.stringify(signalled + '.tmp')}, ${JSON.stringify(signalled)});
     });
   })\n`
   writeFileSync(d.env.HERMES_PATH!, fake, { mode: 0o755 })
@@ -51,6 +53,9 @@ it('closes and resumes the same conversation after its reader dies during the re
   const active = () => until('the original Hermes conversation active without a hold', async () =>
     (await rows()).find(row => row.id === created.agent.id && row.sessionId && row.status === 'active' && !row.identityHold) ?? null, 30_000, 100)
   const original = await active()
+  const nativeRow = () => (JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')) as
+    { agentId: string; sessionId: string; hermesHome: string | null; processIdentity?: { pid: number } }[])
+    .find(row => row.agentId === original.id)!
   const attached = (from: number) => until('a completed native-history attachment for this conversation', () => {
     const line = `[agent] ${original.id.slice(0, 8)} attached · engine=hermes`
     return d.log().slice(from).split('\n').some(text => text.includes(line) && text.includes(`session=${original.sessionId.slice(0, 8)}`)) || null
@@ -59,6 +64,8 @@ it('closes and resumes the same conversation after its reader dies during the re
   appendFileSync(commands, JSON.stringify({ say: history }) + '\n')
   await until('the initial native history available', async () =>
     JSON.stringify(await c.request('session_get', { sessionId: original.id, limit: 10 }, 15_000)).includes(history) || null, 30_000, 100)
+  // Reading the store must leave the implicit default alone. Filling it here made the next attach revoke itself.
+  expect(nativeRow().hermesHome).toBeNull()
   // Fresh creation does not always emit a completed-attach line. Resume supplies the explicit attachment
   // boundary needed here, as it does in the storage acceptance fixture.
   const close = () => c.request('agent_close', { agentId: original.id, sessionId: original.sessionId,
@@ -68,6 +75,7 @@ it('closes and resumes the same conversation after its reader dies during the re
   expect(await c.request('agent_resume', { agentId: original.id }, 90_000)).not.toHaveProperty('error')
   expect((await active()).sessionId).toBe(original.sessionId)
   await attached(readyFrom)
+  expect(nativeRow().hermesHome).toBeNull()
   rmSync(release)
   const live = 'the reader is active before the fault', from = c.frames.length
   appendFileSync(commands, JSON.stringify({ say: live }) + '\n')
@@ -76,8 +84,7 @@ it('closes and resumes the same conversation after its reader dies during the re
   await c.waitFor(frame => frame.type === 'turn_ended' && frame.agentId === original.id, 15_000, 'the fixture turn ending', from)
   const worker = harnessdProcesses(d).get('engine-others')!
   expect(worker).toBeGreaterThan(0)
-  const saved = (JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')) as
-    { agentId: string; sessionId: string; processIdentity?: { pid: number } }[]).find(row => row.agentId === original.id)!
+  const saved = nativeRow()
   expect(saved.sessionId).toBe(original.sessionId)
   expect(saved.processIdentity?.pid).toBeGreaterThan(0)
   const mark = d.log().length
@@ -102,6 +109,12 @@ it('closes and resumes the same conversation after its reader dies during the re
   expect(await c.request('agent_resume', { agentId: original.id }, 90_000)).not.toHaveProperty('error')
   expect((await active()).sessionId).toBe(original.sessionId)
   await attached(resumedAt)
+  expect(nativeRow().hermesHome).toBeNull()
   expect(JSON.stringify(await c.request('session_get', { sessionId: original.id, limit: 10 }, 15_000))).toContain(history)
+  const afterResume = 'a fresh turn after the final resume', deliveredFrom = c.frames.length
+  appendFileSync(commands, JSON.stringify({ say: afterResume }) + '\n')
+  await c.waitFor(frame => frame.type === 'turn_started' && frame.agentId === original.id && frame.payload?.userMessage === afterResume,
+    15_000, 'the resumed native reader following a fresh turn', deliveredFrom)
+  await c.waitFor(frame => frame.type === 'turn_ended' && frame.agentId === original.id, 15_000, 'the resumed fixture turn ending', deliveredFrom)
   expect(d.corePid()).toBe(core)
 })

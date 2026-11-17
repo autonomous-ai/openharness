@@ -82,6 +82,7 @@ export interface BindDeps {
   /** The app. */
   clients: { send(frame: { type: string; payload: Record<string, unknown> }): void }
   attachSession: (session: RegisteredSession, reset?: boolean, replayCursorFromStart?: boolean, replayFromStart?: boolean) => Promise<boolean>
+  captureReader: (session: RegisteredSession) => (confirmed: RegisteredSession) => boolean
   announceSession: (session: RegisteredSession) => void
   stoppedAgents: Pick<StoppedAgentStore, 'save' | 'finishResume' | 'get'>
   syncRecapPool: () => void
@@ -120,7 +121,7 @@ interface BindPass {
 }
 
 export function createBinding({
-  registry, mirror, forgetSession, clients, attachSession, announceSession, stoppedAgents, syncRecapPool,
+  registry, mirror, forgetSession, clients, attachSession, captureReader, announceSession, stoppedAgents, syncRecapPool,
   input, submitAgent, deviceInput, homes, owners, capturePane, openclawPaneRead, openclawPaneDue, openclawStateDir, hermesTerminal,
   followsLive,
 }: BindDeps) {
@@ -541,12 +542,19 @@ export function createBinding({
         announceSession(agent)
         return
       }
-      const answer = await hermesTerminal.follow(agent, { ...observed, sandboxed: !!observed.sandbox }, { current, mayClaim, hold })
+      const refresh = !!agent.sessionId && !!agent.identityHold && OTHER_ENGINE_HOLDS.has(agent.identityHold)
+        && !followsLive(agent.sessionId)
+      const answer = await hermesTerminal.follow(agent, { ...observed, sandboxed: !!observed.sandbox }, { current, mayClaim, hold, refresh })
       if (answer === 'wait' || !current()) return
       if (answer !== 'none' && agent.sessionId) {
+        // Stamping this same conversation would revoke recovery's pending open. Its reader owns the held cursor;
+        // the next pass confirms it after recovery, without replacing its retained stream.
+        if (answer.sessionId === agent.sessionId && agent.identityHold
+          && OTHER_ENGINE_HOLDS.has(agent.identityHold) && followsLive(agent.sessionId)) return
         // `/new`, `/resume`, a branch and a compression split all rewrite the record: the rotation the Copilot switch
         // takes, so the reader, the recaps and the apps see a session change as they saw one from a hook.
         const was = agent.sessionId
+        const keepReader = captureReader(agent)
         const rotated = await commit({
           engine: 'hermes',
           sessionId: answer.sessionId,
@@ -557,11 +565,20 @@ export function createBinding({
           processIdentity: observed.processIdentity,
           hookEvent: 'HermesTerminal',
         })
-        // A new session is a switch, said once the registry took it: one it refuses (a resume that reopened another
-        // conversation) is tried again in the repair's rhythm, and is no switch; a resumed one confirmed is none either.
-        if (!rotated?.isNew) return
-        console.log(`[discovery] ${sid(agent.agentId)} switched hermes session ${sid(was)} → ${sid(answer.sessionId)}`)
-        followRegistered(rotated.entry, rotated)
+        if (!rotated) return
+        if (!rotated.isNew && !rotated.rebound && !rotated.evicted && !rotated.orphaned && keepReader(rotated.entry)) return
+        // Fileless readers cannot use transcript revalidation. Native confirmation can retry a reader that gave up,
+        // but only its own hold: a retained orphan must be replaced, and unrelated identity holds still stand.
+        const recovered = !!rotated.entry.identityHold && OTHER_ENGINE_HOLDS.has(rotated.entry.identityHold)
+          && !followsLive(rotated.entry.sessionId)
+        if (recovered) {
+          registry.setIdentityHold(rotated.entry.agentId, undefined)
+          announceSession(rotated.entry)
+        }
+        if (rotated.isNew) console.log(`[discovery] ${sid(agent.agentId)} switched hermes session ${sid(was)} → ${sid(answer.sessionId)}`)
+        // Same-conversation confirmation fills boundAt and revokes a Resume attach still reading. Follow its new
+        // identity too: the tracker waits for the obsolete attempt; later terminal passes settle to 'wait'.
+        followRegistered(rotated.entry, recovered ? { ...rotated, recovered: true } : rotated)
         return
       }
       if (answer !== 'none') followed = answer

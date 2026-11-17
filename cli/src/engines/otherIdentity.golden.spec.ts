@@ -235,6 +235,7 @@ describe('where the core finds the other engines\' conversations', () => {
         register: (input: unknown) => { registered.push(input); return null }, setOpenclawStateDir: () => false,
       } as never,
       mirror: { inheritSummary: () => {} }, forgetSession: async () => {}, clients: { send: () => {} }, attachSession: async () => true,
+      captureReader: () => () => false,
       announceSession: () => {}, stoppedAgents: { save: () => {}, finishResume: () => {}, get: () => null } as never, syncRecapPool: () => {},
       input: { forget: () => {} } as never, submitAgent: () => {}, deviceInput: { forget: () => {} } as never,
       homes: { copilot: home('.copilot'), grok: home('.grok'), agy: home('.gemini', 'antigravity-cli') },

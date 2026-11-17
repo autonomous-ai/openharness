@@ -108,6 +108,8 @@ export interface HermesReaderDeps {
   /** Reports the one-time fatal "no SQLite reader" so the caller can warn + stop the reader. */
   onFatal?: (err: Error) => void
   pollMs?: number
+  /** The worker's acknowledged turn before recovery; ordinary attachments still hydrate silently. */
+  resumeTurnOpen?: boolean
 }
 
 export class HermesReader {
@@ -123,7 +125,7 @@ export class HermesReader {
   get turnOpen(): boolean { return this.state.open }
   closeTurn(): void { this.state.open = false; this.state.pendingTools.clear() }
 
-  /** Hydrate silently (no replay), then start polling. */
+  /** Hydrate without replay, reconciling a recovering turn only, then start polling. */
   async start(): Promise<void> {
     try {
       await this.seed()
@@ -151,11 +153,16 @@ export class HermesReader {
     this.hydrate(all)
   }
 
-  /** Seed state from existing rows without emitting, so only NEW activity streams after attach. */
+  /** Seed without replay; recovery may announce only the newly open current turn. */
   private hydrate(messages: HmMessage[]): void {
+    let started: LiveEvent | undefined
     for (const msg of messages) {
       this.cursor = Math.max(this.cursor, msg.id)
-      messageToEvents(msg, this.state, 'live') // advances turn/tool state; output discarded
+      const events = messageToEvents(msg, this.state, 'live')
+      if (this.deps.resumeTurnOpen === false) {
+        const boundary = events.findLast(event => event.type === 'turn_started' || event.type === 'turn_ended')
+        if (boundary) started = boundary.type === 'turn_started' ? boundary : undefined
+      }
     }
     // A trailing user row (or an assistant still calling tools) means we attached mid-turn.
     const tail = messages[messages.length - 1]
@@ -163,6 +170,8 @@ export class HermesReader {
     this.state.open = tail.role === 'user'
       || this.state.pendingTools.size > 0
       || (tail.role === 'assistant' && !isTerminalFinish(tail.finishReason))
+    // Only a current turn begun during the outage is new. Completed turns, text and tools stay history.
+    if (this.deps.resumeTurnOpen === false && this.state.open && started) this.deps.onEvents([started])
   }
 
   private async tick(): Promise<void> {
