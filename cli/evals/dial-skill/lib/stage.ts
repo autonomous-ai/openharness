@@ -67,52 +67,58 @@ export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; bas
   })
   if (agent === 'claude') env.CLAUDE_CONFIG_DIR = profile
 
-  // Inside a work tree, the agent would load that repo's AGENTS.md and CLAUDE.md, and could reach the answer key.
-  if (insideGit(base, env)) throw new Error(`${base} is inside a git work tree`)
+  try {
+    // Inside a work tree, the agent would load that repo's AGENTS.md and CLAUDE.md, and could reach the answer key.
+    if (insideGit(base, env)) throw new Error(`${base} is inside a git work tree`)
 
-  mkdirSync(join(root, 'rec'), { recursive: true })
-  mkdirSync(env.TMPDIR!)
-  mkdirSync(env.ZDOTDIR!)
-  cpSync(join(s.dir, 'repo'), repo, { recursive: true })
-  // Copied rather than put on PATH where they are: a path into the scenario folder leads to its scenario.json.
-  if (existsSync(join(s.dir, 'bin'))) cpSync(join(s.dir, 'bin'), bin, { recursive: true })
-  mkdirSync(bin, { recursive: true })
-  writeFileSync(join(bin, 'harness'), fakeHarness(recFile), { mode: 0o755 })
-  for (const tool of ['node', 'npm', 'npx']) symlinkSync(join(dirname(process.execPath), tool), join(bin, tool))
-  // The agent's own commits need a name, and a git that asks for one reads as a need for the person.
-  writeFileSync(env.GIT_CONFIG_GLOBAL!, '[user]\n\tname = Eval\n\temail = eval@example.invalid\n')
+    mkdirSync(join(root, 'rec'), { recursive: true })
+    mkdirSync(env.TMPDIR!)
+    mkdirSync(env.ZDOTDIR!)
+    cpSync(join(s.dir, 'repo'), repo, { recursive: true })
+    // Copied rather than put on PATH where they are: a path into the scenario folder leads to its scenario.json.
+    if (existsSync(join(s.dir, 'bin'))) cpSync(join(s.dir, 'bin'), bin, { recursive: true })
+    mkdirSync(bin, { recursive: true })
+    writeFileSync(join(bin, 'harness'), fakeHarness(recFile), { mode: 0o755 })
+    for (const tool of ['node', 'npm', 'npx']) symlinkSync(join(dirname(process.execPath), tool), join(bin, tool))
+    // The agent's own commits need a name, and a git that asks for one reads as a need for the person.
+    writeFileSync(env.GIT_CONFIG_GLOBAL!, '[user]\n\tname = Eval\n\temail = eval@example.invalid\n')
 
-  const git = (...args: string[]) => execFileSync('git', args, { cwd: repo, env, stdio: 'pipe' })
-  git('init', '-q', '-b', 'main')
-  appendFileSync(join(repo, '.git', 'info', 'exclude'), '.claude/\n')
-  git('add', '-A')
-  git('commit', '-q', '-m', 'Initial commit')
-  const origin = s.origin ? join(root, 'origin.git') : null
-  if (origin) {
-    git('init', '-q', '--bare', origin)
-    git('remote', 'add', 'origin', origin)
-    git('push', '-q', '-u', 'origin', 'main')
-    // After main is pushed, so a hook that guards main (a required review) refuses only the agent's pushes.
-    const hooks = join(s.dir, 'origin-hooks')
-    if (existsSync(hooks)) cpSync(hooks, join(origin, 'hooks'), { recursive: true })
-  }
-  if (s.branch) {
-    // Left unpushed, so opening its pull request is the agent's next step.
-    git('checkout', '-q', '-b', s.branch.name)
-    git('apply', join(s.dir, s.branch.patch))
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: repo, env, stdio: 'pipe' })
+    git('init', '-q', '-b', 'main')
+    appendFileSync(join(repo, '.git', 'info', 'exclude'), '.claude/\n')
     git('add', '-A')
-    git('commit', '-q', '-m', s.branch.message)
-  }
+    git('commit', '-q', '-m', 'Initial commit')
+    const origin = s.origin ? join(root, 'origin.git') : null
+    if (origin) {
+      git('init', '-q', '--bare', origin)
+      git('remote', 'add', 'origin', origin)
+      git('push', '-q', '-u', 'origin', 'main')
+      // After main is pushed, so a hook that guards main (a required review) refuses only the agent's pushes.
+      const hooks = join(s.dir, 'origin-hooks')
+      if (existsSync(hooks)) cpSync(hooks, join(origin, 'hooks'), { recursive: true })
+    }
+    if (s.branch) {
+      // Left unpushed, so opening its pull request is the agent's next step.
+      git('checkout', '-q', '-b', s.branch.name)
+      git('apply', join(s.dir, s.branch.patch))
+      git('add', '-A')
+      git('commit', '-q', '-m', s.branch.message)
+    }
 
-  let skill: string | null = null
-  if (agent === 'claude' && opts.skill) {
-    // Harness's own writer, so the eval stages exactly what Harness installs.
-    const skills = skillsFolderOf(join(repo, '.claude'), true)
-    const result = skills ? writeSkill(skills) : 'no skills folder'
-    if (result !== 'written') throw new Error(`dial skill not staged: ${result}`)
-    skill = DIAL_SKILL
+    let skill: string | null = null
+    if (agent === 'claude' && opts.skill) {
+      // Harness's own writer, so the eval stages exactly what Harness installs.
+      const skills = skillsFolderOf(join(repo, '.claude'), true)
+      const result = skills ? writeSkill(skills) : 'no skills folder'
+      if (result !== 'written') throw new Error(`dial skill not staged: ${result}`)
+      skill = DIAL_SKILL
+    }
+    return { root, repo, recFile, origin, env, skill }
+  } catch (error) {
+    // A failed stage leaves no run root, and its error goes to errors.jsonl: no temp path, no user name.
+    rmSync(root, { recursive: true, force: true })
+    throw Object.assign(error as Error, { message: scrub((error as Error).message, { root }) })
   }
-  return { root, repo, recFile, origin, env, skill }
 }
 
 export function readRings(st: Staged): Ring[] {
@@ -155,7 +161,7 @@ const USER_NAME = new RegExp(`(?<![\\w.-])${userInfo().username.replace(/[.*+?^$
 
 /** Rows and traces are committed: no temp path, no user name. The run root goes first, for a temp folder under $HOME;
  *  the bare name last, as `ls -l` prints it in the owner column of every file the agent lists. */
-export function scrub(text: string, st: Staged): string {
+export function scrub(text: string, st: Pick<Staged, 'root'>): string {
   return text.replaceAll(st.root, '<run>').replaceAll(homedir(), '~').replace(USER_NAME, '<user>')
 }
 
