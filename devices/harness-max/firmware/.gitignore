@@ -1,0 +1,6 @@
+build*/
+sdkconfig
+sdkconfig.old
+sdkconfig.defaults.stamp
+sdkconfig.superseded
+managed_components/

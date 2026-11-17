@@ -1,0 +1,626 @@
+// Harness Max's app layer, after the Pro's pro_app.c. pro_cable's callbacks (pro_app_api.h) become feeds into the lanes
+// model (max_ui.h), the touch task's contacts become lane taps and page swipes, and the render task draws the model.
+//
+// THREADS: the cable_link task calls the pro_app_* callbacks; the touch task calls pro_app_touch; the voice tasks call
+// pro_app_notice; the render task ticks, draws and paints. One recursive mutex guards the model, the dirty flag and the
+// state below. Nothing that leaves the device is sent under it: a tap's agent.open, a recording's start and its send,
+// the beep and the wake happen after the mutex is released.
+#include "app/max_app.h"
+
+#include <assert.h>
+#include <stdatomic.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "app/max_ui.h"
+#include "app/pro_touch.h"
+#include "app/pro_voice.h"
+#include "audio/audio_capture.h"
+#include "cable/cable_link.h"
+#include "cable/pro_cable.h"
+#include "pro_app_api.h"
+#include "pro_display.h"
+#include "pro_frame.h"
+#include "sys/config_store.h"
+#include "sys/fw_update.h"
+#include "sys/last_words.h"
+#include "sys/ram_telemetry.h"
+#include "task_stacks.h"
+#include "terminal.h"
+#include "theme.h"
+
+#include "esp_attr.h"
+#include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "esp_task_wdt.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
+
+#ifndef ESP_PLATFORM
+#define EXT_RAM_BSS_ATTR   // the host has no PSRAM
+#endif
+
+_Static_assert(HT_WIDTH == PRO_DISPLAY_W && HT_HEIGHT == PRO_DISPLAY_H, "the scene is the glass");
+
+static const char *TAG = "max";
+
+#define IDLE_SLEEP_MS 300000u       // no touch for this long and the screen sleeps, as the Pro
+#define HEARTBEAT_MS 60000u
+#define NOTICE_MS 3000u             // the notice line, as long as the Pro's
+#define BEEP_COALESCE_MS 30000      // one chime for the alerts of this long (the Pro's POD_BEEP_COALESCE_MS)
+#define ASKED_MAX 32                // pro_app_agents sends at most 32 agents
+
+static EXT_RAM_BSS_ATTR ht_scene_t s_scene[2];
+
+static SemaphoreHandle_t s_lock;
+static TaskHandle_t s_renderer;
+static bool s_started, s_linked, s_dirty;
+static bool s_update_shown;   // the update screen is up (fw_update_ui_begin .. a failure)
+static bool s_beepq;          // an alert landed and the last chime is old enough: chime once the lock is released
+static bool s_wakeq;          // an alert landed: light a dark glass once the lock is released
+static bool s_beep_set;
+static uint32_t s_beep_ms;    // when the last chime was queued
+// The questions already chimed for: the agent and its question's request and prompt. Kept over a relink, so a question
+// the daemon sends again when the cable comes back does not chime twice; its close forgets it.
+static struct { char id[ID_MAX]; uint32_t key; } s_asked[ASKED_MAX];
+
+static atomic_bool s_asleep, s_force_frame;
+static atomic_bool s_updating, s_painted;   // an image is being written (readable without the lock); the first frame is out
+static atomic_uint s_last_activity;
+static char s_ota_to[24];    // the version being installed (the cable task's)
+static char s_updated[24];   // "Updated to X": set by pro_app_note_update, shown once the cable is up
+
+static uint32_t ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+
+static bool id_ok(const char *id) { return id && id[0] && strnlen(id, ID_MAX) < ID_MAX; }
+
+// ---- the lock, the dirty flag, the queued effects --------------------------------------------------------
+
+static void lock(void)
+{
+    if (s_lock) xSemaphoreTakeRecursive(s_lock, portMAX_DELAY);
+}
+
+static void unlock(void)
+{
+    if (s_lock) xSemaphoreGiveRecursive(s_lock);
+}
+
+// Mark the scene stale and wake the renderer.
+static void change(void)
+{
+    s_dirty = true;
+    if (s_renderer) xTaskNotifyGive(s_renderer);
+}
+
+static void changed_if(bool changed)
+{
+    if (changed) change();
+}
+
+// An alert (the caller holds the lock): wake the glass, and chime unless one was queued in the last BEEP_COALESCE_MS.
+// Quiet over an update.
+static void alert_locked(void)
+{
+    if (atomic_load(&s_updating)) return;
+    s_wakeq = true;
+    const uint32_t now = ms();
+    if (!s_beep_set || (int32_t)(now - s_beep_ms) >= BEEP_COALESCE_MS) {
+        s_beep_set = true;
+        s_beep_ms = now;
+        s_beepq = true;
+    }
+}
+
+// Release the lock, then light and chime as the feeds asked. Every feed that took the lock ends here.
+static void leave(void)
+{
+    const bool beep = s_beepq, wake = s_wakeq;
+    s_beepq = s_wakeq = false;
+    unlock();
+    if (wake) pro_app_wake();
+    if (beep && !pro_settings_muted() && !atomic_load(&s_updating)) audio_beep();
+}
+
+static void notice_locked(const char *text) { changed_if(max_ui_notice(text, NOTICE_MS, ms())); }
+
+static void show_updated(void);
+
+// ---- the link and the roster ------------------------------------------------------------------------------
+
+void pro_app_link(bool up, const char *machine)
+{
+    if (!up) pro_voice_link_lost();   // the cable is dead: end the recording without telling the daemon
+    lock();
+    s_linked = up;
+    changed_if(max_ui_link(up, machine, ms()));
+    if (up && s_updated[0]) show_updated();   // the first screen the new image shows with a cable: "Updated to X.Y.Z"
+    leave();
+}
+
+void pro_app_agents(const pro_agent_row_t *rows, int n)
+{
+    lock();
+    changed_if(max_ui_agents(rows, n, ms()));
+    leave();
+}
+
+void pro_app_machines(const cable_machine_t *rows, int count, const char *selected)
+{
+    lock();
+    changed_if(max_ui_machines(rows, count, selected));
+    leave();
+}
+
+// The Max has no tabs, no library and no context line: these are parsed by pro_cable and dropped here.
+void pro_app_swarms(const cable_swarm_t *items, int n, const cable_swarm_members_t *members, const char *selected,
+                    const cable_tile_t *tiles, int tile_n)
+{
+    (void)items; (void)n; (void)members; (void)selected; (void)tiles; (void)tile_n;
+}
+
+void pro_app_library(const pro_library_row_t *rows, int count, int offset, int total)
+{
+    (void)rows; (void)count; (void)offset; (void)total;
+}
+
+void pro_app_context(const char *id, const char *machine, const char *project, const char *branch, const char *engine)
+{
+    (void)id; (void)machine; (void)project; (void)branch; (void)engine;
+}
+
+// ---- turns, summaries, questions, focus -----------------------------------------------------------------
+
+void pro_app_turn(const char *id, const char *kind, const char *text, int elapsed_s)
+{
+    if (!id_ok(id) || !kind) return;
+    lock();
+    const bool changed = max_ui_turn(id, kind, text, elapsed_s, ms());
+    changed_if(changed);
+    if (changed && !strcmp(kind, "error")) alert_locked();   // a failure is always an alert, as on the Pro
+    leave();
+}
+
+void pro_app_turn_stats(const char *id, int tests_passed, int tests_failed, int commits, int tokens_in, int tokens_out)
+{
+    (void)id; (void)tests_passed; (void)tests_failed; (void)commits; (void)tokens_in; (void)tokens_out;
+}
+
+void pro_app_summary(const char *id, const char *text, const char *recap, const char *full, bool restore, pod_tier_t tier)
+{
+    (void)full;   // the lane shows a short note: the long recap has nowhere to go
+    if (!id_ok(id)) return;
+    lock();
+    const bool changed = max_ui_summary(id, text, recap, restore, tier, ms());
+    changed_if(changed);
+    if (changed && tier == POD_TIER_ALERT) alert_locked();   // the daemon's loud tier; list and silent only show it
+    leave();
+}
+
+// The Max has no inbox: its lanes show each agent's state.
+void pro_app_notif_replace(const pro_notif_row_t *rows, int n)
+{
+    (void)rows; (void)n;
+}
+
+void pro_app_notif_seen(const char *id, const char *token)
+{
+    (void)id; (void)token;
+}
+
+// FNV-1a of the request id and the prompt, as the Pro's: a lost close must not mute the next question.
+static uint32_t ask_key(const char *request, const char *text)
+{
+    uint32_t h = 2166136261u;
+    for (const char *c = request ? request : ""; *c; c++) h = (h ^ (uint8_t)*c) * 16777619u;
+    h = (h ^ 0u) * 16777619u;
+    for (const char *c = text ? text : ""; *c; c++) h = (h ^ (uint8_t)*c) * 16777619u;
+    return h;
+}
+
+// True when this question has not chimed yet, and remember it. A full table chimes and remembers nothing.
+static bool ask_is_new(const char *id, uint32_t key)
+{
+    int free_slot = -1;
+    for (int i = 0; i < ASKED_MAX; i++) {
+        if (!strcmp(s_asked[i].id, id)) {
+            if (s_asked[i].key == key) return false;
+            s_asked[i].key = key;
+            return true;
+        }
+        if (free_slot < 0 && !s_asked[i].id[0]) free_slot = i;
+    }
+    if (free_slot >= 0) {
+        snprintf(s_asked[free_slot].id, sizeof s_asked[free_slot].id, "%s", id);
+        s_asked[free_slot].key = key;
+    }
+    return true;
+}
+
+void pro_app_question(const char *id, const char *request, const char *text)
+{
+    if (!id_ok(id)) return;
+    lock();
+    const bool changed = max_ui_question(id, request, text, ms());
+    changed_if(changed);
+    if (changed && ask_is_new(id, ask_key(request, text))) alert_locked();
+    leave();
+}
+
+void pro_app_question_close(const char *id)
+{
+    if (!id_ok(id)) return;
+    lock();
+    for (int i = 0; i < ASKED_MAX; i++)
+        if (!strcmp(s_asked[i].id, id)) s_asked[i].id[0] = 0;
+    changed_if(max_ui_question_close(id));
+    leave();
+}
+
+void pro_app_focus(const char *id)
+{
+    if (!id_ok(id)) return;
+    lock();
+    changed_if(max_ui_focus(id));
+    leave();
+}
+
+// ---- voice -------------------------------------------------------------------------------------------------
+
+void pro_app_notice(const char *text)
+{
+    lock();
+    notice_locked(text);
+    unlock();
+}
+
+// The Talk slot follows the recorder: recording (or starting), sending (stopped, its reply awaited), or idle. The
+// caller reads the recorder before taking the lock.
+static void talk_locked(bool open, bool waiting)
+{
+    changed_if(max_ui_talk(!open ? MAX_TALK_IDLE : waiting ? MAX_TALK_SENDING : MAX_TALK_RECORDING));
+}
+
+static void talk_sync(void)
+{
+    const bool open = pro_voice_open(), waiting = pro_voice_waiting();
+    lock();
+    talk_locked(open, waiting);
+    unlock();
+}
+
+void pro_app_voice_result(int kind, const char *text)
+{
+    if (!pro_voice_open()) return;   // a reply nobody waits for
+    pro_voice_close();               // MUST end the state, or the next start is refused
+    lock();
+    talk_locked(false, false);
+    if (kind == PRO_VOICE_ERROR) notice_locked(text && text[0] ? text : "Voice failed");   // the daemon's message
+    unlock();
+}
+
+// Why a recording must not start now (the screen's copy), or NULL: a firmware write would starve it, and without a
+// link there is nobody to send it to.
+static const char *voice_gate(void)
+{
+    const char *why = NULL;
+    lock();
+    if (atomic_load(&s_updating)) why = "Updating";
+    else if (!s_linked) why = "Not connected";
+    unlock();
+    return why;   // a literal, valid after the unlock
+}
+
+// The Talk slot was tapped while idle: record for the selected agent. No lock held: the recorder may call back.
+static void talk_begin(const char *agent)
+{
+    const char *why = voice_gate();
+    const bool was_open = pro_voice_open();
+    if (!why) {
+        pro_voice_begin(agent);
+        // The offer's gate raises s_updating BEFORE it reads whether voice is open, and a start opens voice BEFORE this
+        // reads s_updating: one of the two always sees the other, so a recording never starts over an accepted update.
+        if (atomic_load(&s_updating)) { pro_voice_end(false); why = "Updating"; }
+    }
+    // Started: open and not a send still waiting for its reply (which refuses the start and stays open).
+    const bool open = pro_voice_open(), waiting = pro_voice_waiting();
+    const bool started = !why && open && !waiting;
+    lock();
+    if (!started)
+        notice_locked(why ? why : was_open ? "Still sending the last message" : "Can't talk right now");
+    talk_locked(open, waiting);
+    unlock();
+}
+
+// The Talk slot was tapped while recording: send. Stopped before the recorder even started, nothing was recorded.
+static void talk_send(void)
+{
+    if (pro_voice_open() && pro_voice_start_pending()) {
+        pro_voice_end(false);
+        pro_app_notice("Not sent");
+    } else {
+        pro_voice_end(true);
+    }
+    talk_sync();
+}
+
+// ---- the finger -------------------------------------------------------------------------------------------
+
+static void act(const max_act_t *a)
+{
+    switch (a->kind) {
+    case MAX_ACT_OPEN: pro_cable_send_open(a->agent_id); break;   // agent.open, as the Pro's tap on an agent
+    case MAX_ACT_TALK: talk_begin(a->agent_id); break;
+    case MAX_ACT_SEND: talk_send(); break;
+    case MAX_ACT_NONE: break;
+    }
+}
+
+bool pro_app_touch(bool down, int x, int y)
+{
+    lock();
+    if (pro_app_asleep()) {
+        // The screen went to sleep halfway through this contact. Nothing is delivered; the caller swallows the rest.
+        max_ui_touch_cancel();
+        unlock();
+        return false;
+    }
+    const uint32_t now = ms();
+    const max_act_t a = max_ui_touch(down, x, y, now);
+    changed_if(max_ui_tick(now));   // a tap that selected a lane, a swipe that turned the page
+    leave();
+    act(&a);
+    return true;
+}
+
+void pro_app_touch_cancel(void)
+{
+    lock();
+    max_ui_touch_cancel();
+    unlock();
+}
+
+// ---- the screen's power -----------------------------------------------------------------------------------
+
+bool pro_app_asleep(void) { return atomic_load(&s_asleep); }
+
+void pro_app_bump_activity(void) { atomic_store(&s_last_activity, ms()); }
+
+void pro_app_sleep(void)
+{
+    if (atomic_load(&s_updating)) return;   // the glass stays lit while an image is written
+    if (atomic_exchange(&s_asleep, true)) return;
+    if (s_renderer) xTaskNotifyGive(s_renderer);
+}
+
+void pro_app_wake(void)
+{
+    if (!atomic_exchange(&s_asleep, false)) return;
+    pro_app_bump_activity();
+    atomic_store(&s_force_frame, true);
+    if (s_renderer) xTaskNotifyGive(s_renderer);
+}
+
+// ---- the render task --------------------------------------------------------------------------------------
+
+static void tick(void)
+{
+    const uint32_t now = ms();
+    pro_voice_tick(now);
+    const bool open = pro_voice_open(), waiting = pro_voice_waiting();   // read before the lock
+    if (open || atomic_load(&s_updating)) pro_app_bump_activity();
+    lock();
+    talk_locked(open, waiting);   // the 600 s cap, a recorder that died, a reply that never came
+    if (!pro_app_asleep()) changed_if(max_ui_tick(now));
+    unlock();
+}
+
+static uint32_t next_wake_ms(void)
+{
+    uint32_t wake = 1000;
+    lock();
+    if (!pro_app_asleep()) wake = max_ui_next_wake_ms(ms());
+    unlock();
+    return wake;
+}
+
+static bool take_scene(ht_scene_t *scene)
+{
+    bool fresh = false;
+    lock();
+    if (s_dirty) {   // the hit areas stay in the model for the touch task
+        s_dirty = false;
+        ht_scene_clear(scene, ht_rgb(HT_THEME_CANVAS));
+        max_ui_render(scene, ms());
+        fresh = true;
+    }
+    unlock();
+    return fresh;
+}
+
+static void heartbeat(uint32_t frames, uint32_t raster_max_us, uint32_t frame_max_us)
+{
+    static uint32_t last;
+    const uint32_t now = ms();
+    if (!last) {
+        last = now;
+        return;
+    }
+    if (now - last < HEARTBEAT_MS) return;
+    last = now;
+    pro_touch_stats_t touch;
+    pro_touch_stats(&touch);
+    const cable_link_stats_t link = cable_link_stats();
+    uint32_t bad = 0, unknown = 0;
+    pro_cable_counters(&bad, &unknown);
+    // The Pro's line, field for field: the host watches it while the renderer is alive, including while asleep.
+    ESP_LOGI(TAG, "alive up=%lus heap=%u/%u psram=%u touches=%lu read_fails=%lu frames=%lu raster_max_us=%lu frame_max_us=%lu stack_free=%u muted=%d isr_rx=%lu ring_drop=%lu seq_gaps=%lu link_rx=%lu link_frames=%lu link_corrupt=%lu link_discarded=%lu link_dropped_logs=%lu msg_bad=%lu msg_unknown=%lu%s%s",
+             (unsigned long)(now / 1000), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+             (unsigned long)touch.presses, (unsigned long)touch.read_failures, (unsigned long)frames,
+             (unsigned long)raster_max_us, (unsigned long)frame_max_us,
+             (unsigned)uxTaskGetStackHighWaterMark(NULL), (int)pro_settings_muted(),
+             (unsigned long)link.isr_rx, (unsigned long)link.ring_drop, (unsigned long)pro_cable_seq_gaps(),
+             (unsigned long)link.rx_bytes, (unsigned long)link.frames_ok, (unsigned long)link.corrupt_frames,
+             (unsigned long)link.discarded_bytes, (unsigned long)link.dropped_logs, (unsigned long)bad, (unsigned long)unknown,
+             touch.controller_ok ? "" : " TOUCH-DEAD", pro_app_asleep() ? " asleep" : "");
+    ram_telemetry_periodic("alive");
+}
+
+static void render_task(void *arg)
+{
+    (void)arg;
+    // Under the task watchdog: a render task that stops turning (a blocked panel call) is a reboot whose reason and
+    // last log lines come back over the cable (last_words.c), not a frozen glass.
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
+    int front = 0;
+    bool painted = false, panel_on = true;
+    uint32_t frames = 0, raster_max_us = 0, frame_max_us = 0;
+    for (;;) {
+        ESP_ERROR_CHECK(esp_task_wdt_reset());
+        last_words_phase(LW_RENDER, "render");
+        tick();
+        const bool fresh = take_scene(&s_scene[front ^ 1]);
+        uint32_t wake_ms = next_wake_ms();
+        const int64_t wake_at = esp_timer_get_time() + (int64_t)wake_ms * 1000;
+        const bool on = !pro_app_asleep();
+        if (on != panel_on) {
+            // "Off" is the light: the picture stays in the framebuffer, so a wake is instant.
+            pro_display_power(on);
+            panel_on = on;
+        }
+        // A touch or alert wake can arrive after `on` was sampled; keep its repaint request until an awake pass.
+        const bool force = on && atomic_exchange(&s_force_frame, false);
+        if (on && (fresh || force)) {
+            if (!fresh) s_scene[front ^ 1] = s_scene[front];
+            const int64_t started = esp_timer_get_time();
+            uint32_t pushed_px = 0;
+            const uint32_t raster_us = pro_frame_present(painted && !force ? &s_scene[front] : NULL, &s_scene[front ^ 1], &pushed_px);
+            const uint32_t frame_us = (uint32_t)(esp_timer_get_time() - started);
+            if (pushed_px) {   // a scene identical to the last one paints nothing: it is no frame
+                if (raster_us > raster_max_us) raster_max_us = raster_us;
+                if (frame_us > frame_max_us) frame_max_us = frame_us;
+                frames++;
+            }
+            front ^= 1;
+            painted = true;
+            atomic_store(&s_painted, true);
+        }
+        if (!on && fresh) {
+            front ^= 1;
+            painted = false;
+        }
+        if (on && ms() - atomic_load(&s_last_activity) > IDLE_SLEEP_MS) {
+            lock();
+            // A touch may have refreshed the activity while we waited for the lock: do not act on the stale reading.
+            if (ms() - atomic_load(&s_last_activity) > IDLE_SLEEP_MS) pro_app_sleep();
+            unlock();
+        }
+        heartbeat(frames, raster_max_us, frame_max_us);
+        // Painting used part of this pass's budget; and the recorder's clocks need a tick at least once a second.
+        const int64_t remaining = (wake_at - esp_timer_get_time() + 999) / 1000;
+        wake_ms = remaining > 0 ? (uint32_t)remaining : 1;
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wake_ms > 1000 ? 1000 : wake_ms));
+    }
+}
+
+void pro_app_set_brightness(uint8_t level) { pro_display_set_brightness(level); }
+
+void pro_app_start(void)
+{
+    if (s_started) return;
+    s_started = true;
+    s_lock = xSemaphoreCreateRecursiveMutex();
+    assert(s_lock);
+    max_ui_reset();
+    s_dirty = true;
+    pro_frame_init();
+    pro_display_set_brightness(config_load_brightness());
+    pro_app_bump_activity();
+    BaseType_t ok = xTaskCreatePinnedToCore(render_task, "pro_render", STACK_RENDER, NULL, 5, &s_renderer, 1);
+    assert(ok == pdPASS);
+    (void)ok;
+    ESP_LOGI(TAG, "app up: lanes, render stack %d B", STACK_RENDER);
+}
+
+// ---- firmware update (sys/fw_update.c and pro_cable call these, from the cable task) ------------------------
+
+static void update_screen(int pct, const char *to)
+{
+    lock();
+    s_update_shown = pct >= 0;
+    atomic_store(&s_updating, pct >= 0);
+    changed_if(max_ui_update(pct, to));
+    unlock();
+}
+
+bool pro_app_begin_update_gate(void)
+{
+    lock();
+    atomic_store(&s_updating, true);   // first: a voice start that opens after this sees it and backs out
+    const bool busy = pro_voice_open() || pro_voice_start_pending();
+    if (busy) atomic_store(&s_updating, false);
+    unlock();
+    return !busy;
+}
+
+// The offer was refused before accept: no screen was shown, so no notice either; voice may start again.
+void pro_app_end_update_gate(void)
+{
+    lock();
+    if (!s_update_shown) atomic_store(&s_updating, false);
+    unlock();
+}
+
+void fw_update_ui_begin(const char *from, const char *to)
+{
+    (void)from;   // the screen names the version it installs
+    snprintf(s_ota_to, sizeof s_ota_to, "%s", to ? to : "");
+    update_screen(0, s_ota_to);
+    pro_app_wake();   // a dark glass lights for it, and stays lit (pro_app_sleep refuses)
+}
+
+void fw_update_ui_pct(int pct) { update_screen(pct < 0 ? 0 : pct, s_ota_to); }
+
+void fw_update_ui_restarting(const char *to)
+{
+    snprintf(s_ota_to, sizeof s_ota_to, "%s", to ? to : "");
+    update_screen(100, s_ota_to);
+}
+
+void fw_update_ui_failed(void)
+{
+    update_screen(-1, NULL);   // the lanes come back
+    pro_app_notice("Update failed \xc2\xb7 trying again later");
+    pro_app_bump_activity();
+}
+
+// After fw_mark_valid: if this boot is the first of an update, say so once the cable is up.
+static void show_updated(void)   // under the lock, linked
+{
+    char text[48];
+    snprintf(text, sizeof text, "Updated to %s", s_updated);
+    s_updated[0] = 0;
+    notice_locked(text);
+}
+
+void pro_app_note_update(void)
+{
+    char version[24];
+    if (!fw_was_updated(version, sizeof version)) return;
+    lock();
+    snprintf(s_updated, sizeof s_updated, "%s", version);
+    if (s_linked) show_updated();
+    unlock();
+}
+
+bool pro_app_wait_first_frame(uint32_t timeout_ms)
+{
+    for (uint32_t waited = 0; !atomic_load(&s_painted); waited += 20) {
+        if (waited >= timeout_ms) return false;
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    return true;
+}
