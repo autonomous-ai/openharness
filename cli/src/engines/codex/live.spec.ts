@@ -22,4 +22,38 @@ describe('the Codex live parser', () => {
     expect(parser.ingest(line('soon', { type: 'agent_message', message: 'x' })).at).toBeUndefined()
     expect(parser.ingest('not json').at).toBeUndefined()
   })
+
+  // Codex runs its Stop and waits for it before it writes the end, and an errored or prompt-hook-stopped
+  // turn ends the same with no Stop: the core must never hold a Codex end for one (facts-codex §5).
+  it('every turn end is marked over: finished, errored, aborted, or closed by the next prompt', () => {
+    const parser = live.create({ engine: 'codex', codexHome: undefined })
+    const opened = parser.ingest(line('2026-11-17T01:02:03.000Z', { type: 'user_message', message: 'go' }))
+    expect(opened.over).toBeUndefined()
+    expect(parser.ingest(line('2026-11-17T01:02:04.000Z', { type: 'agent_message', message: 'done' })).over).toBeUndefined()
+    const finished = parser.ingest(line('2026-11-17T01:02:05.000Z', { type: 'task_complete', turn_id: 't1', last_agent_message: null }))
+    expect(finished.events.at(-1)).toEqual({ type: 'turn_ended', payload: {} })
+    expect(finished.over).toBe(true)
+
+    parser.ingest(line('2026-11-17T01:02:06.000Z', { type: 'user_message', message: 'fail' }))
+    const errored = parser.ingest(line('2026-11-17T01:02:07.000Z', { type: 'task_complete', turn_id: 't2', error: { message: 'usage limit' } }))
+    expect(errored.events.at(-1)).toEqual({ type: 'turn_ended', payload: {} })
+    expect(errored.over).toBe(true)
+
+    parser.ingest(line('2026-11-17T01:02:08.000Z', { type: 'user_message', message: 'stop me' }))
+    const aborted = parser.ingest(line('2026-11-17T01:02:09.000Z', { type: 'turn_aborted', reason: 'interrupted' }))
+    expect(aborted.events.at(-1)).toEqual({ type: 'turn_ended', payload: { aborted: true } })
+    expect(aborted.over).toBe(true)
+
+    parser.ingest(line('2026-11-17T01:02:10.000Z', { type: 'user_message', message: 'left open' }))
+    const next = parser.ingest(line('2026-11-17T01:02:11.000Z', { type: 'user_message', message: 'next' }))
+    expect(next.events.map((event) => event.type)).toEqual(['turn_ended', 'turn_started'])
+    expect(next.over).toBe(true)
+  })
+
+  it('an end read with no turn open ends nothing and is not marked', () => {
+    const parser = live.create({ engine: 'codex', codexHome: undefined })
+    const stray = parser.ingest(line('2026-11-17T01:02:03.000Z', { type: 'task_complete', turn_id: 't0', last_agent_message: null }))
+    expect(stray.events).toEqual([])
+    expect(stray.over).toBeUndefined()
+  })
 })
