@@ -50,9 +50,10 @@ export interface FakeOpencode {
   readonly streams: number
   /** Adds or replaces a session; `updated` defaults to now. No event. */
   session(session: FakeSession): void
-  /** A turn starts: it is active, and `session.execution.started` is told. */
+  /** A turn starts: it is active, `time.updated` and `time.busy` now, and `session.execution.started` is told. */
   start(id: string): void
-  /** A turn ends: not active, `time.idle` now, `answer` its last assistant text when given, and the event told. */
+  /** A turn ends: not active, `time.updated` and `time.idle` now, `answer` its last assistant text when given, and the
+   *  event told. */
   end(id: string, how: 'succeeded' | 'failed' | 'interrupted', answer?: string): void
   /** A pending permission and `permission.asked`: its id. */
   ask(id: string): string
@@ -82,7 +83,7 @@ const HEARTBEAT = ': heartbeat\n\n'
 /** Where a session with no `directory` is. */
 const DIRECTORY = '/work'
 
-interface Held extends FakeSession { created: number; updated: number }
+interface Held extends FakeSession { created: number; updated: number; busy?: number }
 interface Permission { id: string; sessionID: string; action: string; resources: string[] }
 interface Live { types: string[]; heartbeat: NodeJS.Timeout }
 
@@ -140,6 +141,7 @@ export async function fakeOpencode(options: FakeOpencodeOptions = {}): Promise<F
     time: {
       created: held.created,
       updated: held.updated,
+      ...(held.busy === undefined ? {} : { busy: held.busy }),
       ...(held.idle === undefined ? {} : { idle: held.idle }),
       ...(held.viewed === undefined ? {} : { viewed: held.viewed }),
       ...(held.archived === undefined ? {} : { archived: held.archived }),
@@ -343,13 +345,15 @@ export async function fakeOpencode(options: FakeOpencodeOptions = {}): Promise<F
     },
     start: (id) => {
       active.add(id)
+      const held = sessions.get(id)
+      if (held) held.updated = held.busy = Date.now()
       event('session.execution.started', { sessionID: id })
     },
     end: (id, how, answer) => {
       active.delete(id)
       const held = sessions.get(id)
       if (held) {
-        held.idle = Date.now()
+        held.updated = held.idle = Date.now()
         if (answer !== undefined) held.answer = answer
       }
       const more = how === 'failed' ? { error: { type: 'unknown', message: 'The turn failed.' } }

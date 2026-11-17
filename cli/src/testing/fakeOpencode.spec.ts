@@ -113,29 +113,36 @@ describe('fakeOpencode', () => {
     expect(await ids('')).toEqual(['ses_d1', 'ses_c1', 'ses_a1', 'ses_e1', 'ses_b1'])
   })
 
-  it('a turn started is active and told; ended, it is not, its time.idle moved and its answer is the last assistant text', async () => {
+  it('a turn started is active, told and its time.updated and time.busy moved; ended, it is not, its time.updated and time.idle moved and its answer is the last assistant text', async () => {
     const server = await start()
     server.session({ id: 'ses_a1', updated: 1000, idle: 1000, answer: 'Earlier.' })
     const next = await listen(server, ['session.execution.started', 'session.execution.succeeded',
       'session.execution.failed', 'session.execution.interrupted'])
     const active = async () => (await json(await get(server, '/api/session/active'))).body
     const answer = async () => (await json(await get(server, '/api/session/ses_a1/message?type=assistant&order=desc&limit=1'))).body
+    const time = async () => ((await json(await get(server, '/api/session'))).body as { data: Array<{ time: Record<string, number> }> }).data[0].time
 
+    const started = Date.now()
     server.start('ses_a1')
     expect(told(await next())).toEqual({
       id: expect.stringMatching(/^evt_/), created: expect.any(Number), type: 'session.execution.started', data: { sessionID: 'ses_a1' },
     })
     expect(await active()).toEqual({ data: { ses_a1: { type: 'running' } } })
+    const busy = await time()
+    expect(busy.busy).toBeGreaterThanOrEqual(started)
+    expect(busy.updated).toBe(busy.busy)
+    expect(busy.idle).toBe(1000)
 
     const before = Date.now()
     server.end('ses_a1', 'succeeded', 'All 12 tests pass.')
     expect(told(await next())).toMatchObject({ type: 'session.execution.succeeded', data: { sessionID: 'ses_a1' } })
     expect(await active()).toEqual({ data: {} })
-    const listed = (await json(await get(server, '/api/session'))).body as { data: Array<{ time: { idle: number } }> }
-    expect(listed.data[0].time.idle).toBeGreaterThanOrEqual(before)
+    const ended = await time()
+    expect(ended.idle).toBeGreaterThanOrEqual(before)
+    expect(ended.updated).toBe(ended.idle)
     expect(await answer()).toEqual({
       data: [{
-        id: expect.stringMatching(/^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/), type: 'assistant', time: { created: listed.data[0].time.idle },
+        id: expect.stringMatching(/^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/), type: 'assistant', time: { created: ended.idle },
         agent: 'build', model: { id: 'm', providerID: 'p' },
         content: [{ type: 'reasoning', text: 'Thinking it over.' }, { type: 'text', text: 'All 12 tests pass.' }],
       }],

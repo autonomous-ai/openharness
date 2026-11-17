@@ -519,8 +519,8 @@ describe("the opencode source (docs/plans/2026-11-17-dial-opencode-design.md)", 
 
       for (let i = 3; i <= 20; i++) server.session({ id: `ses_n${i}`, updated: WALL - i * 60_000, archived: WALL })
       server.session({ id: 'ses_old', updated: WALL - 25 * HOUR })
-      server.session({ id: 'ses_run', updated: WALL - 72 * HOUR })
       server.start('ses_run')
+      server.session({ id: 'ses_run', updated: WALL - 72 * HOUR })
       const second = setup()
       await live(second, 3)
       expect(RECENT_MS).toBe(24 * HOUR)
@@ -833,6 +833,7 @@ describe("the opencode source (docs/plans/2026-11-17-dial-opencode-design.md)", 
       server.session({ id: 'ses_b', title: 'B', updated: WALL - 2000 })
       server.session({ id: 'ses_c', title: 'C', updated: WALL - 3000 })
       server.start('ses_b')
+      server.session({ id: 'ses_b', title: 'B', updated: WALL - 2000 })
       const gate = gated(opencode())
       const s = setup({ client: gate.client })
       await live(s, 3)
