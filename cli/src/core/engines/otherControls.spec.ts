@@ -114,7 +114,7 @@ it('does not expose a rebound session workspace to a captured old binding', () =
   } finally { profiles.stop() }
 })
 
-it.each(OTHER_ENGINES)('keeps %s view-only without waiting for its unavailable optional worker', async engine => {
+it.each(OTHER_ENGINES.filter(engine => engine !== 'opencode'))('keeps %s view-only without waiting for its unavailable optional worker', async engine => {
   const row = { ...session(), engine }
   const read = vi.fn(async () => { throw Error('ENGINE_UNAVAILABLE') })
   const profiles = createRuntimeProfiles({ handles: () => true, resolve: () => row,
@@ -124,6 +124,18 @@ it.each(OTHER_ENGINES)('keeps %s view-only without waiting for its unavailable o
     expect(await profiles.supportsControl(row)).toBe(false)
     expect(await profiles.effortAllowed(row, 'model', 'high', null)).toBe(false)
     expect(read).not.toHaveBeenCalled()
+  } finally { profiles.stop() }
+})
+
+it('keeps unavailable OpenCode model information unknown instead of reporting view-only', async () => {
+  const row = { ...session(), engine: 'opencode' }
+  const read = vi.fn(async () => { throw Error('ENGINE_UNAVAILABLE') })
+  const profiles = createRuntimeProfiles({ handles: () => true, resolve: () => row,
+    transport: { connected: vi.fn(), disconnected: vi.fn(), read } })
+  try {
+    await expect(profiles.modelsForSession(row)).rejects.toThrow('ENGINE_UNAVAILABLE')
+    await expect(profiles.supportsControl(row)).rejects.toThrow('ENGINE_UNAVAILABLE')
+    expect(read).toHaveBeenCalledTimes(2)
   } finally { profiles.stop() }
 })
 

@@ -92,7 +92,7 @@ export class RuntimeProfileController {
       // refused switch followed by one that should have gone through).
       if (controlStarted) this.deps.manager.cancelControl(session.sessionId)
       // A failed switch used to leave NOTHING in the log — the picker just flashed open and shut on the
-      // user's terminal and the device said nothing useful. Name the session, engine and reason.
+      // user's terminal and the device said nothing useful. Name the fixed failure code and stage.
       const code = error instanceof RuntimeProfileControlError ? error.code : 'TMUX_FAILED'
       console.warn(`[runtime-profile] ${code}${code === 'BUSY' && held ? ` (${held})` : ''}`)
       if (error instanceof RuntimeProfileControlError) throw error
