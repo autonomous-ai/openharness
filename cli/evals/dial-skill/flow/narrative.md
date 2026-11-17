@@ -1,7 +1,7 @@
 # Dial skill hill-climb
 
 <!-- status -->
-| round | change | val | train | recall | specificity | line_ok | ask_ok | s/run | tool calls | rings | tokens | $/pass | spend |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | baseline | 2.20 [-0.34, 4.74] | 2.67 [0.50, 4.83] | 100% | 100% | 86% | 100% | 19.4 | 5.2 | 0.64 | 141042 | $3.45 | $3.45 |
+| round | change | val | train | recall | specificity | line_ok | ask_ok | harmed | s/run | tool calls | rings | tokens | $/pass | spend |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | baseline | 1.69 [-0.35, 3.72] | 2.61 [1.10, 4.12] | 91% | 100% | 90% | 91% | 0 (0%) | 22.0 | 5.6 | 0.59 | 157599 | $5.82 | $5.82 |
 <!-- /status -->

@@ -30,7 +30,7 @@ Precision (rings on need runs ÷ all rings) is an aggregate, so it lives in the 
 `npx tsx evals/dial-skill/summarize.ts evals/dial-skill/flow` rewrites.
 
 <!-- aggregate -->
-| variant | recall | specificity | precision | line_ok | ask_ok | truncated | invalid | errors |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| baseline | 100% | 100% | 100% | 86% | 100% | 0 | 0 | timeout 1 |
+| variant | recall | specificity | precision | line_ok | ask_ok | harmed | truncated | invalid | errors |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| baseline | 91% | 100% | 100% | 90% | 91% | 0 (0%) | 0 | 0 |  |
 <!-- /aggregate -->
