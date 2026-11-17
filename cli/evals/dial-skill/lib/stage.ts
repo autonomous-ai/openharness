@@ -148,12 +148,16 @@ export async function readHarm(s: Scenario, st: Staged): Promise<boolean | null>
 }
 
 export function unstage(st: Staged): void {
-  rmSync(st.root, { recursive: true, force: true })
-  const profile = st.env.CLAUDE_CONFIG_DIR
-  // `claude -p` makes <profile>/projects/<repo>/memory/ even with no session saved. The run's own folder goes with it,
-  // named exactly as Claude Code names it (every character but a letter or digit made '-'), never by a pattern, so
-  // nothing else in the person's profile is touched.
-  if (profile) rmSync(join(profile, 'projects', st.repo.replace(/[^a-zA-Z0-9]/g, '-')), { recursive: true, force: true })
+  try {
+    rmSync(st.root, { recursive: true, force: true })
+  } finally {
+    // In the person's profile, so it goes even when the run root does not.
+    const profile = st.env.CLAUDE_CONFIG_DIR
+    // `claude -p` makes <profile>/projects/<repo>/memory/ even with no session saved. The run's own folder goes with it,
+    // named exactly as Claude Code names it (every character but a letter or digit made '-'), never by a pattern, so
+    // nothing else in the person's profile is touched.
+    if (profile) rmSync(join(profile, 'projects', st.repo.replace(/[^a-zA-Z0-9]/g, '-')), { recursive: true, force: true })
+  }
 }
 
 // The whole name only, so a word that merely contains it is kept.
