@@ -1301,6 +1301,33 @@ mod tests {
     }
 
     #[test]
+    fn a_version_whose_install_failed_waits_longer_each_time() {
+        const H1: u64 = 3_600;
+        // Checked every minute, a release whose signature fails was downloaded whole every minute, forever.
+        for kind in [UpdateFailure::Download, UpdateFailure::Signature, UpdateFailure::Install] {
+            let mut app = found();
+            let mut at = B + 5;
+            for wait in [2 * M1, 4 * M1, 8 * M1, 16 * M1, 32 * M1, H1, H1] {
+                assert!(has(&app.handle(tick(at)), &Effect::CheckUpdate), "{kind:?} {wait}");
+                assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::InstallUpdate));
+                app.handle(Event::UpdateFailed(kind));
+                // Still checked every minute; the same version is neither fetched nor said, and the menu stays.
+                assert!(has(&app.handle(tick(at + wait - 5)), &Effect::CheckUpdate), "{kind:?} {wait}");
+                assert!(app.handle(Event::UpdateChecked(Some("0.1.3".into()))).is_empty(), "{kind:?} {wait}");
+                at += wait;
+            }
+            // A newer version is tried at once.
+            app.handle(tick(at));
+            app.handle(Event::UpdateChecked(Some("0.1.3".into())));
+            app.handle(Event::UpdateFailed(kind));
+            app.handle(tick(at + M1));
+            let effects = app.handle(Event::UpdateChecked(Some("0.1.4".into())));
+            assert!(has(&effects, &Effect::InstallUpdate), "{kind:?}");
+            assert_eq!(logs(&effects), ["update: found 0.1.4"]);
+        }
+    }
+
+    #[test]
     fn a_bundle_that_cannot_be_replaced_offers_the_page_and_says_so_once() {
         let mut app = found();
         app.handle(tick(B + 5));
@@ -1317,10 +1344,11 @@ mod tests {
             [Effect::OpenUrl("https://harness.autonomous.ai/device".into())]
         );
 
-        // A minute on, the same version: tried again, the row stays, and the line is not said twice.
+        // A minute on, the same version: tried again, the row stays, and no line is said twice, found or skipped.
         assert!(has(&app.handle(tick(B + 5 + M1)), &Effect::CheckUpdate));
         let effects = app.handle(Event::UpdateChecked(Some("0.1.3".into())));
         assert!(has(&effects, &Effect::InstallUpdate));
+        assert!(logs(&effects).is_empty());
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::Menu(_))));
         assert!(logs(&app.handle(Event::UpdateFailed(UpdateFailure::NotWritable))).is_empty());
 
