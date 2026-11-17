@@ -25,7 +25,6 @@
 //   3. LOG EVERY ERROR AND EVERY DROPPED FRAME. This feature's characteristic bug is SILENT EMPTINESS —
 //      an RPC answered with an error nobody printed, a card arriving in a shape nobody recognised. All of
 //      them render as "the carousel is empty", and none of them says so anywhere by default.
-import { hostname } from 'node:os'
 import { randomUUID } from 'node:crypto'
 
 import WebSocket from 'ws'
@@ -33,6 +32,7 @@ import WebSocket from 'ws'
 import type { LaneSeal } from '../core/api.js'
 import type { MachinePeer } from '../lib/e2ee/machinePeers.js'
 import { isWrapped } from '../lib/relayFrames.js'
+import { computerName } from '../lib/computerName.js'
 import { VERSION } from '../version.js'
 import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE } from '../cable/machineFleet.js'
 
@@ -657,7 +657,8 @@ export class DeviceLink {
     this.state = 'connecting'
     const base = this.opts.backendWsBase.replace(/\/$/, '')
     const url = `${base}/api/device-ws?computer=${encodeURIComponent(this.opts.computerId)}`
-      + `&label=${encodeURIComponent(hostname())}`
+      // The backend names a new device binding with it once, as resolve-computer names a new machine.
+      + `&label=${encodeURIComponent(computerName())}`
       + `&autonomousEnv=${encodeURIComponent(this.opts.autonomousEnv)}`
 
     let token = await this.readToken()
