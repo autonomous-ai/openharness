@@ -515,7 +515,8 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     const { deps, hooks } = setup(engine)
     hooks.transcript('s1', END, { turn: turnOf('t1') })
     hooks.transcript('s1', TEXT, { replay: true })
-    expect(vi.mocked(deps.emit).mock.calls).toEqual([['s1', END], ['s1', TEXT, { replay: true }]])
+    hooks.transcript('s1', START, { resumed: true })
+    expect(vi.mocked(deps.emit).mock.calls).toEqual([['s1', END], ['s1', TEXT, { replay: true }], ['s1', START, { resumed: true }]])
     expect(vi.mocked(deps.emit).mock.calls[0][1]).toBe(END)
     expect(hooks.held('s1')).toBe(false)
     // A prompt hook alone proves nothing about the Stop.
@@ -591,6 +592,16 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     // A start with nothing held goes on as it came.
     run.hooks.transcript('s1', START, { turn: turnOf('t3') })
     expect(run.deps.emit).toHaveBeenLastCalledWith('s1', START)
+  })
+
+  // An attach that read the transcript again (rewritten, or recovered) picks its open turn back up: before, its start
+  // reached the funnel ahead of the end held, which then closed it.
+  stopRule('a turn picked back up at attach while an end is held: the end, then the start, picked back up', async () => {
+    const run = await hookDriven()
+    run.hooks.transcript('s1', END, { turn: turnOf('t1') })
+    run.hooks.transcript('s1', START, { resumed: true })
+    expect(vi.mocked(run.deps.emit).mock.calls).toEqual([['s1', END], ['s1', START, { resumed: true }]])
+    expect(run.hooks.held('s1')).toBe(false)
   })
 
   it('an aborted end, and an end the engine marked over, are never held', async () => {

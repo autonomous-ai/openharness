@@ -830,7 +830,9 @@ describe('attaching a session', () => {
       const run = setup()
       const s = session('pi', transcript([{ events: [started('first')] }, { events: [{ type: 'text_delta', payload: { content: 'hi' } }] }]))
       await run.attach.attachSession(s, false, false, true)
-      expect(run.deps.emit).toHaveBeenCalledWith(s.sessionId, [expect.objectContaining({ type: 'turn_started' }), expect.objectContaining({ type: 'text_delta' })])
+      // Read whole after it ran: an end in it goes on at once, never held for a Stop that came already (core/turns/turnHooks.ts).
+      expect(run.deps.emit).toHaveBeenCalledWith(s.sessionId, [expect.objectContaining({ type: 'turn_started' }), expect.objectContaining({ type: 'text_delta' })],
+        { over: true })
       expect(log.mock.calls.map(([line]) => String(line)).some((line) => line.includes('replayed the first turn'))).toBe(true)
       // Once replayed, never again.
       run.normalizers.forget(s.sessionId)
@@ -1408,7 +1410,7 @@ describe('attaching a session', () => {
         expect(vi.getTimerCount()).toBe(1)
         await vi.advanceTimersByTimeAsync(1_000)
         await read(run, 2)
-        expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, [expect.objectContaining({ type: 'turn_started' })])
+        expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, [expect.objectContaining({ type: 'turn_started' })], { over: true })
         expect(run.attach.replayedFirstTurn.has(row.sessionId)).toBe(true)
       })
 
