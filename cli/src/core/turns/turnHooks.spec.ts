@@ -670,6 +670,29 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     expect(run.hooks.withheld('nobody')).toBe(false)
   })
 
+  // End to end on a loaded runner (cli-e2e, 2026-11-17): a Stop reached the daemon 2 ms before its turn was read, or 6 s
+  // before while the transcript was attached after a restart. That turn's end was then held for a Stop that had come,
+  // and the turn read as working for 2 minutes.
+  stopRule('a Stop that came before its turn was read: that turn\'s end goes on as it is read, later or in its drain', async () => {
+    const run = await hookDriven()
+    run.hooks.onTurnStop({ sessionId: 's1', firedAt: 3_000 })
+    await vi.advanceTimersByTimeAsync(0)
+    run.hooks.transcript('s1', [...START, ...TEXT, ...END], { turn: turnOf('t1', 2_000) })
+    expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', [...START, ...TEXT, ...END])
+    expect(run.hooks.held('s1')).toBe(false)
+    // The next turn opened after that Stop ran: its end is held for its own.
+    run.hooks.transcript('s1', [...START, ...END], { turn: turnOf('t2', 4_000) })
+    expect(run.deps.emit).toHaveBeenLastCalledWith('s1', START)
+    expect(run.hooks.held('s1')).toBe(true)
+    // Read in the Stop's own drain.
+    const drained = await hookDriven()
+    vi.mocked(drained.deps.drain).mockImplementationOnce(async () => drained.hooks.transcript('s1', END, { turn: turnOf('t1', 2_000) }))
+    drained.hooks.onTurnStop({ sessionId: 's1', firedAt: 3_000 })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(drained.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', END)
+    expect(drained.hooks.held('s1')).toBe(false)
+  })
+
   // Review Focus 5: Codex's turn had no opening time, so a Stop that arrived after the next turn's start was read
   // and before its prompt hook could close that next turn.
   stopRule('a Stop run before the turn opened delivers and closes nothing', async () => {
