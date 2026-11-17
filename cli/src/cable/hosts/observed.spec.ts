@@ -2915,7 +2915,7 @@ describe('ObservedSource panes', () => {
     // It cannot bring its pane forward here: Orca's terminal is the first that can.
     near.canFocus.mockReturnValue(false)
     expect(await tap.src.focus(tap.agent)).toBe(true)
-    expect(tap.actions.open.mock.calls[1]).toEqual([tap.agent.id, { pane: { adapter: 'orca', id: HANDLE } }])
+    expect(tap.actions.open.mock.calls[1]).toEqual([tap.agent.id, { bundle: 'com.stablyai.orca', pane: { adapter: 'orca', id: HANDLE } }])
     expect(near.focus).not.toHaveBeenCalled()
 
     // It comes after its app: Orca's terminal is the tap's pane, and its own is raised once the app came.
@@ -2923,7 +2923,7 @@ describe('ObservedSource panes', () => {
     let opened!: (yes: boolean) => void
     const raised = first(late, both, { open: vi.fn(() => new Promise<boolean>((resolve) => { opened = resolve })) })
     const raising = raised.src.focus(raised.agent)
-    expect(raised.actions.open.mock.calls).toEqual([[raised.agent.id, { pane: { adapter: 'orca', id: HANDLE } }]])
+    expect(raised.actions.open.mock.calls).toEqual([[raised.agent.id, { bundle: 'com.stablyai.orca', pane: { adapter: 'orca', id: HANDLE } }]])
     expect(late.focus).not.toHaveBeenCalled()
     opened(true)
     expect(await raising).toBe(true)

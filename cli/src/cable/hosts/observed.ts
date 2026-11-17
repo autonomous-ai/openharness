@@ -406,11 +406,10 @@ export class ObservedSource implements HostSource {
   }
 
   /** What a tap opens: its app, and the first of its panes the opener brings forward. Asked at each look, as a rest's.
-   *  An agent placed by its caller has had no hook to name its app: the adapter it was placed in names it. */
+   *  An agent placed by its caller, or found by the scan, has had no hook to name its app: its pane's adapter names it. */
   private target(e: Entry): OpenTarget {
     const near = this.shownOnly(e).find(({ adapter, pane }) => tapped(adapter, pane))
-    const placed = near && !e.panes.includes(near)
-    const bundle = e.bundle ?? (placed ? near.adapter.bundle : undefined)
+    const bundle = e.bundle ?? near?.adapter.bundle
     return { ...(bundle ? { bundle } : {}), ...(near ? { pane: near.pane } : {}) }
   }
 
@@ -427,10 +426,11 @@ export class ObservedSource implements HostSource {
   }
 
   /** Every pane its adapters know it by, afresh: a session resumed elsewhere keeps none it left. One paired with an hc
-   *  terminal is where that terminal's hook would place it. */
+   *  terminal is where that terminal's hook would place it. A session the scan found has no caller until its first hook:
+   *  its own process (the engine's record's, or the rollout's owner) places it. */
   private locate(entry: Entry): void {
     const hints = entry.paired ? { HC_TERMINAL_ID: entry.paired.address } : entry.hints
-    const place = { host: entry.agent.host, app: entry.agent.app, hints, tty: entry.tty, pid: entry.caller,
+    const place = { host: entry.agent.host, app: entry.agent.app, hints, tty: entry.tty, pid: entry.caller ?? entry.pid,
       sessionId: entry.agent.sessionId, engine: entry.agent.engine }
     entry.panes = (this.deps.actions?.adapters ?? []).flatMap((adapter) => {
       const pane = adapter.paneOf(place)
