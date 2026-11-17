@@ -1,9 +1,9 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { assertRebranded, assertUnchanged, GATE_ID, rebrand, stamp } from './throwawayApp.js'
+import { appBundles, assertRebranded, assertUnchanged, GATE_ID, rebrand, stamp } from './throwawayApp.js'
 
 let root: string
 beforeEach(() => {
@@ -57,6 +57,11 @@ describe.runIf(process.platform === 'darwin')('the throwaway VS Code app', () =>
     execFileSync('codesign', ['--force', '--deep', '--sign', '-', app], { stdio: 'pipe' })
     for (const path of [app, ...helpers]) execFileSync('plutil', ['-replace', 'CFBundleIdentifier', '-string', GATE_ID, join(path, 'Contents', 'Info.plist')])
     expect(() => assertRebranded(app)).toThrow(/signed.*com\.microsoft\.VSCode/)
+  })
+
+  it('names each app LaunchServices registers apart, as it records them: the app and each helper', () => {
+    const { app, helpers } = vscodeApp()
+    expect(appBundles(app).sort()).toEqual([app, ...helpers].map((path) => realpathSync(path)).sort())
   })
 })
 
