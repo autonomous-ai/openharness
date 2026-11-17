@@ -194,7 +194,7 @@ Not changed, and a diff in any is a finding: anything under `cli/src/core/`, `cl
     1. Run `[binary(), ['do', 'terminal.scroll', '--terminal', address, '--lines', String(n)], 2_000]`.
     2. Exit 0: the failed line may be said again; the pending count, when it is not 0, is the next run's `n` and is set to 0; repeat.
     3. No binary, any other exit, no exit code, or a rejection: that run's lines and the pending count are dropped; `[herdr-app] scroll · failed` is said unless it was said since the last run that succeeded; the queue stops.
-    4. When the queue stops, its entry is deleted, then the drain line is said.
+    4. When the queue stops, a timer of 1 s starts, which the terminal's next scroll clears; once it fires, the entry is deleted and the drain line is said (final review: a run is faster than the dial's line, so a line at each drain came up to ~30 a second).
   - **(Q1)** The drain line's numbers, assumed until question 1 is answered: `<lines>` is the lines the runs that exited 0 carried (each run's `|n|`), `<runs>` the processes started, `<failed>` the lines dropped (a failed run's `|n|` and the `|pending|` dropped with it).
 
 - [ ] **Step 1: Write the failing tests.** `scrollCall(address, lines)` is `{ file: FAKE_PATH_HERDR_APP, args: ['do', 'terminal.scroll', '--terminal', address, '--lines', String(lines)], timeoutMs: 2_000 }`.
@@ -313,7 +313,7 @@ Not changed, and a diff in any is a finding: anything under `cli/src/core/`, `cl
        - False: `log('[device] scroll · <adapter.id> · not on screen')`; the windows get the held stroke ("Decided here"); the stroke is `'windows'`, or none when `held.up` came.
     5. It returns the `onScreen` chain when it asked.
   - The wiring: `scrolled: (phase, dy, velocity) => part.call('dial', () => routeScroll(phase, dy, velocity))`. The port's `scroll` (the Wi-Fi device's) already reaches it through `cableHost.scrolled`.
-  - The port's `stop` sets `stroke = undefined`.
+  - Once the port's `stop` began (`stopped`), no app is asked or run: a new stroke is the windows', a late answer is dropped, and a stroke already routed to an app runs nothing more; a stroke the windows took keeps its route to its up (final review).
 
 - [ ] **Step 1: Write the failing tests** in a describe `a stroke on the dial scrolls Herdr (docs/plans/2026-11-17-dial-herdr-scroll-design.md)`, nested in `Herdr's agents, through Herdr Core` for its helpers.
   - Helpers: `shows(agentId)` is `host().dialShows(DIAL, agentId ? { name: 'api', app: 'herdr' } : null, agentId)`; `stroke(moves, velocity = 0)`, `dialScrolls(core)` and `toWindows(phase, dy, velocity)` as the VS Code branch's `devices.spec.ts` has them; `STATUS` is `['/opt/herdr-app/bin/herdr-app', ['status'], 2_000]`; `scrolled(address, lines)` is `['/opt/herdr-app/bin/herdr-app', ['do', 'terminal.scroll', '--terminal', address, '--lines', String(lines)], 2_000]`. `inHerdr(over)` is `withHc` with a `run` that records every call in `orcaRuns` and answers `status` as the test set it (by default exit 0 with `herdrAppStatus('t7')`; another agent; exit 1; or held until the test answers), then `live()` and `host().front('herdr')`. Every wait is `vi.waitFor` on `orcaRuns`, the frames or the log.
