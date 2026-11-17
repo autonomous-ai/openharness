@@ -42,9 +42,9 @@ export async function publishNativeFiles(destinations: readonly NativeHookDestin
         directory: file.directory, content: file.content, mode: file.mode,
         ...(file.content === null ? {} : { alias: lstatSync(destinations[index].file).isSymbolicLink() }),
       }))
-      const active = () => { try { attempt.verify(); return current() } catch { return false } }
+      // verify() checks the owner again after its filesystem reads; another walk repeats that proof.
+      const active = () => { try { attempt.verify(); return true } catch { return false } }
       const candidate = hookCandidate(await prepare(captured, randomUUID(), active), destinations.length)
-      attempt.verify()
       if (!candidate || destinations.some((destination, index) => destination.shared && candidate.files[index].content === null) || !active()) throw new HookPreparationHeld('the hook preparation is unavailable or its owner changed')
       // Every profile destination is preflighted before any publication, including the shared artifact.
       for (const [index, destination] of destinations.entries()) if (!destination.shared) observed[index].prepare(candidate.files[index].content)

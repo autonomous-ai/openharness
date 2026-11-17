@@ -381,3 +381,53 @@ The focused gate passes 61 tests in seven files with all four runtime files at 1
 branches, functions and lines (298/298, 232/232, 75/75 and 199/199); TypeScript passes. A new fixture initially omitted
 captured HOME and failed; correcting that fixture input produced the passing run. Earlier source-scoped
 native evidence is unchanged; the parent's exact-source full gates remain authoritative.
+
+## Repeated publication proof correction (2026-11-17)
+
+The combined engine comparison found six cached launches performing 81,150 `lstatSync` calls,
+versus 5,874 before extraction. The intrusive attribution run locates repeated native-file and
+executable proof walks; it is not a latency acceptance result. A publisher-only control at
+`38f9eba9e0b7af74071602dd94f38acfbaa2168b` performs 12,206 metadata reads while confirming one
+unchanged profile and its unchanged shared artifact. Its worker authority callback alone reads
+those leaves 12 and 6 times, independently of ancestor depth.
+
+Design: `HookPreparationAttempt.verify()` already checks the original owner both before and after
+its route and observation reads. The publisher's authority callback can return true after that
+verification instead of traversing the same owner a third time. After the worker reply, keep the
+single full verification after bounded candidate validation and before preflight/effects; remove
+the immediately preceding duplicate. No proof is retained across an await, and no reservation,
+flush, final publication, alias, executable, cancellation or deadline check is removed. The shared
+folder-trust publisher follows the same path. Growth, identity, schema, migration and rollback are
+unchanged: no new state, cache, setting, files, credentials, or worker operation. The existing
+Design checklist and external-writer race limit above remain applicable on macOS, Linux and Windows.
+
+Validation selected before implementation: a caller-level real-filesystem work budget fails at
+12 profile-leaf reads against a budget of 10; retain mutation/refusal, shared artifact, reservation,
+file durability, native launch, folder-trust, worker-service and type checks. Final combined native
+acceptance and quiet CPU/memory/latency comparisons remain the integrating parent's responsibility.
+
+The correction reduces that publisher-only control from 12,206 to 10,324 metadata reads (15.42%).
+The separately counted worker authority check falls from 12/6 profile/artifact leaf reads to 10/4.
+The control excludes that extra isolated authority-check probe from its publisher total in both
+arms. These are operation counts on one macOS private fixture with pinned Node 24.22.2, not CPU,
+RSS, latency, vendor-native or Linux/Windows acceptance. It is a partial correction: the remaining
+combined launch regression still needs investigation and the parent's quiet comparison.
+
+The original twelve-file focused run passed 235/236 tests. The legacy OpenCode older-caller test
+failed its one-second wait for disk entry; the edited publisher is outside that legacy call path.
+An isolated unmodified-publisher control passed and is retained as diagnosis, not a retry that
+clears the failure. That test started both asynchronous version imports without first proving which
+caller consumed its held probe. It now awaits the older probe's entry, awaits the older caller's
+actual owner check while following the newer installation, and releases and settles both operations
+in `finally`. No polling interval, sleep, or production timeout was increased. All 46 tests in that
+changed file pass; the other 190 focused tests passed on unchanged source. Type checking passes.
+The filesystem budget itself was red (12 reads exceeds 10), then green (10 and 4); existing checks
+cover stale owners/files/aliases, failed durability, shared joining, all thirteen hook families,
+launch authority, optional folder trust, and setup workers. Full integrated gates are still pending.
+
+Both the first and last `check()` in `runHookPreparation.verify()` still traverse the outer current
+proof. The first establishes authority before the attempt's own route and file-observation traversal;
+establishing it also reads the outer proof paths. The last rejects authority, executable,
+shared-file or deadline changes during those reads.
+This correction leaves both phases intact; removing either would need a separate proof about which
+reads and effects can occur under stale authority. There is no cross-await reuse.

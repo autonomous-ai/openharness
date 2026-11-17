@@ -303,21 +303,29 @@ it.each([
 it('does not credit a newer OpenCode installation to a revoked older caller', async () => {
   const { install } = await fixture()
   const control = await import('./opencode/version.js')
-  let release!: (major: number) => void, current = true
-  vi.spyOn(control, 'opencodeMajorVersion').mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
-  const first = install(4242, undefined, { current: () => current })
-  let releaseDisk!: () => void
-  const disk = new Promise<void>(resolve => { releaseDisk = resolve })
-  const entered = vi.fn(async () => disk)
-  probe.beforeSync = entered
-  const second = install(4242)
-  await vi.waitFor(() => expect(entered).toHaveBeenCalled())
-  release(1)
-  // The older caller has joined the newer preparation while still authorized.
-  for (let n = 0; n < 80; n++) await Promise.resolve()
-  current = false; probe.beforeSync = undefined; releaseDisk()
-  expect(await second).toBe(true)
-  expect(await first).toBe(false)
+  let release: ((major: number) => void) | undefined, current = true
+  let began!: () => void, following!: () => void, syncing!: () => void, releaseDisk!: () => void
+  const probing = new Promise<void>(resolve => { began = resolve }), followed = new Promise<void>(resolve => { following = resolve })
+  const disk = new Promise<void>(resolve => { releaseDisk = resolve }), entered = new Promise<void>(resolve => { syncing = resolve })
+  vi.spyOn(control, 'opencodeMajorVersion').mockImplementationOnce(() => new Promise(resolve => { release = resolve; began() }))
+  const first = install(4242, undefined, { current: () => { following(); return current } })
+  let second: Promise<boolean> | undefined
+  const completedEarly = () => { throw Error('fixture installation completed before its intended boundary') }
+  try {
+    // Dynamic version imports may settle out of order. Bind the held probe to the older caller first.
+    await Promise.race([probing, first.then(completedEarly)])
+    probe.beforeSync = async () => { syncing(); await disk }
+    second = install(4242)
+    await Promise.race([entered, second.then(completedEarly)])
+    release!(1)
+    await Promise.race([followed, first.then(completedEarly)])
+    current = false; probe.beforeSync = undefined; releaseDisk()
+    expect(await second).toBe(true)
+    expect(await first).toBe(false)
+  } finally {
+    release?.(1); probe.beforeSync = undefined; releaseDisk()
+    await Promise.allSettled([first, second])
+  }
 })
 
 it('cannot extend the OpenCode deadline by stalling reservation reads', async () => {
