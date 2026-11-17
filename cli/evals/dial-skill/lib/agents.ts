@@ -203,7 +203,14 @@ export function spawnGroup(bin: string, args: string[], st: Staged, timeoutMs: n
  *  count, not the files in the run. */
 function killWorkingIn(root: string): void {
   // lsof prints real paths, and a temp folder on macOS is reached through the /var link.
-  const dir = realpathSync(root)
+  let dir: string
+  try {
+    dir = realpathSync(root)
+  } catch (error) {
+    // A root already removed holds no process's working folder: nothing is left to kill there.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
   // -F pn: a `p<pid>` line for each process, then an `n<folder>` line for its working folder.
   const listing = execFileSync('/usr/sbin/lsof', ['-n', '-P', '-w', '-d', 'cwd', '-F', 'pn'], { encoding: 'utf8', timeout: LSOF_TIMEOUT_MS })
   let pid = 0
