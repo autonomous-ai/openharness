@@ -11,7 +11,7 @@ import { limitedBy, type Usage } from './parse.js'
 
 // Grading is judgement, so the judge is Opus; low effort keeps a two-line rubric cheap.
 export const JUDGE_MODEL = 'claude-opus-5-5'
-const JUDGE_EFFORT = 'low'
+export const JUDGE_EFFORT = 'low'
 
 export const RUBRICS = {
   actionable:

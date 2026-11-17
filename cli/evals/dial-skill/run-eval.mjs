@@ -25,14 +25,15 @@
 //   - row ids, trace filenames, and frozen refs share one path-safe id
 //     (original id kept in meta.original_id when sanitization changed it)
 
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, constants as FS, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AGENT_CONFIG, runAgent } from './lib/agents.ts';
+import { AGENT_CONFIG, claudeArgs, runAgent } from './lib/agents.ts';
 import { gradeRun } from './lib/grade.ts';
-import { claudeJudge, RUBRIC_SHA } from './lib/judge.ts';
+import { claudeJudge, JUDGE_EFFORT, JUDGE_MODEL, RUBRIC_SHA } from './lib/judge.ts';
 import { caseId, loadScenarios } from './lib/scenarios.ts';
 import { readRings, scrub, stage, unstage } from './lib/stage.ts';
 
@@ -172,7 +173,8 @@ function judgeEnv(profile) {
 /** Every scenario under each --agents kind, kept to the --split and --cases scenarios when given. Split and case ids
  *  match on their scenario part, so the stand-ins run their scenario's split. */
 async function loadCases(ctx) {
-  ctx.judge = claudeJudge({ claudeBin: AGENT_CONFIG.claudeBin, env: judgeEnv(sessionProfile()), timeoutMs: JUDGE_TIMEOUT_MS });
+  const env = judgeEnv(sessionProfile());
+  ctx.judge = claudeJudge({ claudeBin: AGENT_CONFIG.claudeBin, env, timeoutMs: JUDGE_TIMEOUT_MS });
   const scenarios = loadScenarios();
   const scenarioOf = id => String(id).split('.')[0];
   const filters = [];
@@ -187,12 +189,47 @@ async function loadCases(ctx) {
     if (unknown !== undefined) throw new Error(`no scenario '${unknown}'`);
     filters.push(new Set(ctx.cases.map(scenarioOf)));
   }
+  writeSummary(ctx, env);
   return scenarios.filter(s => filters.every(f => f.has(s.id))).flatMap(s => ctx.agents.map(agent => ({
     id: caseId(s.id, agent), prompt: s.prompt, tags: [s.need, s.kind, agent],
     // Only claude gets the skill staged (lib/stage.ts).
     meta: { scenario: s.id, agent, skill: agent === 'claude' && ctx.skill, rubric_sha: RUBRIC_SHA },
     scenario: s,
   })));
+}
+
+/**
+ * Records in <variant>/summary.json the environment the pass runs under, written once the pass is past the harness gate
+ * and its cases are known, so rows are only compared with rows run the same way. A round's own description, label and
+ * target are kept.
+ */
+function writeSummary(ctx, env) {
+  const path = join(ctx.flow, ctx.variant, 'summary.json');
+  const lockfile = fileURLToPath(new URL('../../package-lock.json', import.meta.url));
+  const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+  const argv = claudeArgs(AGENT_CONFIG, { root: '' }, '');
+  const summary = {
+    description: ctx.variant, label: ctx.variant, target: 'skill',
+    ...JSON.parse(readIfPresent(path) ?? '{}'),
+    environment: {
+      commit: git('rev-parse', 'HEAD'),
+      lockfile: relative(git('rev-parse', '--show-toplevel'), lockfile),
+      lockfile_sha256: createHash('sha256').update(readFileSync(lockfile)).digest('hex'),
+      claude_version: execFileSync(AGENT_CONFIG.claudeBin, ['--version'], { env, encoding: 'utf8', timeout: JUDGE_TIMEOUT_MS }).trim(),
+      model: AGENT_CONFIG.claudeModel,
+      effort: AGENT_CONFIG.claudeEffort,
+      max_turns: AGENT_CONFIG.maxTurns,
+      agent_timeout_s: agentTimeoutMs(ctx.timeoutS) / 1000,
+      case_timeout_s: ctx.timeoutS,
+      judge_model: JUDGE_MODEL,
+      judge_effort: JUDGE_EFFORT,
+      harness_sha: ctx.state.harness_sha,
+      rubric_sha: RUBRIC_SHA,
+      setting_sources: argv[argv.indexOf('--setting-sources') + 1],
+      date: new Date().toISOString().slice(0, 10),
+    },
+  };
+  writeFileNoFollow(path, JSON.stringify(summary, null, 2) + '\n');
 }
 
 /**
