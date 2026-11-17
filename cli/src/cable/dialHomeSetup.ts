@@ -6,7 +6,7 @@
 // folder is written once: after that only Harness's own file is brought current, and one the person removed stays so.
 import { realpathSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { ownDirectory, refreshSkill, removeSkill, skillsFolderOf, skillWanted, writeSkill } from '../devices/dialSkill.js'
+import { claudePluginState, ownDirectory, refreshSkill, removeSkill, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
 import { DIAL_SKILL_FILE, MAX_HOMES, listable, readSetup, readWritten, writeSetup, type DialEngine, type DialRemoved, type DialSetupRecord, type SetupCount } from '../devices/dialSkillFiles.js'
 import { rolloutHome, takesOwner, type RolloutOwner } from './codexRolloutHome.js'
 
@@ -82,8 +82,18 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
   const said = new Set<string>()
   let stamp = ''
 
+  /** Claude Code's plugin as last read: settings that say nothing (half written, edited by hand) change nothing, so a
+   *  moment's bad file does not take the skill out. Off until a read says on. */
+  let pluginOn = false
+
   /** Read only once a dial is recorded: a pass never runs before. */
-  const on = (engine: DialEngine): boolean => skillWanted(engine, deps.removed()[engine] === true, settingsFile)
+  const on = (engine: DialEngine): boolean => {
+    if (deps.removed()[engine] === true) return false
+    if (engine === 'codex') return true
+    const state = claudePluginState(settingsFile)
+    if (state !== 'unknown') pluginOn = state === 'on'
+    return pluginOn
+  }
 
   /** A file's inode, size and time, so a rewrite is a new stamp whatever it holds. */
   const stampOf = (file: string): string => {
@@ -153,13 +163,16 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
     new Set([...record.homes[engine], ...readWritten(deps.dataDir)[engine], skillsFolderOf(defaultHome[engine], false, deps.uid)])
 
   /** Off: ours goes from every folder it may be in, the ones no record of this service holds too (the command wrote
-   *  them, and a plugin uninstalled through /plugin runs no disable). Only a recorded folder whose removal failed stays
-   *  recorded, so a later disable still finds it. A folder the other engine holds its skill in while on
-   *  (~/.codex/skills linked to ~/.claude/skills) only leaves this engine's record. */
+   *  them, and a plugin uninstalled through /plugin runs no disable). After a disable only a recorded folder whose
+   *  removal failed stays recorded, so a later disable still finds it. With the plugin off only what Harness took out
+   *  leaves the record: a skill the person had deleted stays deleted once the plugin is back. A folder the other engine
+   *  holds its skill in while on (~/.codex/skills linked to ~/.claude/skills) keeps it, and a disable only takes it from
+   *  this engine's record. */
   const turnOff = (engine: DialEngine, counts: Counts): void => {
     onAtPass.delete(engine)
     handled[engine].clear()
-    if (deps.removed()[engine] === true) {
+    const removal = deps.removed()[engine] === true
+    if (removal) {
       // Once a removal: another disable writes dial-skill.json again.
       const at = stampOf(removedFile)
       if (removalCounted[engine] !== at) {
@@ -168,14 +181,15 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
       }
     }
     const shared = on(OTHER[engine]) ? foldersOf(OTHER[engine]) : new Set()
-    const failed = new Set<string>()
+    const results = new Map<string, string>()
     for (const skills of foldersOf(engine)) {
       if (skills === null || shared.has(skills)) continue
       const result = removeSkill(skills)
       tally(counts, engine, result)
-      if (result === 'failed') failed.add(skills)
+      results.set(skills, result)
     }
-    const kept = record.homes[engine].filter((skills) => failed.has(skills))
+    const kept = record.homes[engine].filter((skills) =>
+      removal ? results.get(skills) === 'failed' : results.get(skills) !== 'removed')
     if (kept.length === record.homes[engine].length) return
     record.homes[engine] = kept
     save(counts, engine)
