@@ -7,11 +7,11 @@
  * asks it for a token (core/gatewayLink.ts), calls no other host (the core audit of 2026-11-12, decision 4). The CLI's
  * commands renew in their own process, under the same lock.
  */
-import { hostname } from 'os'
 import {
   AuthSessionError, currentToken, markSignedOutHeld, readAuthSession, readStored, REFRESH_TIMEOUT_MS, RETRY_FIRST_MS,
   RETRY_LONGEST_MS, withLock, writeAuthSession, type AuthSession, type SignedOutMark, type TokenOptions,
 } from './authSession.js'
+import { computerName } from './computerName.js'
 
 type RefreshResult = { token: string; refreshToken?: string; expiresIn?: number }
 
@@ -20,7 +20,7 @@ type RefreshResult = { token: string; refreshToken?: string; expiresIn?: number 
  * a Harness session of its own (backend lib/ssoSession.ts), so an ordinary request never waits on the account
  * service. A backend from before it answers with the SSO tokens as ever, and those are kept.
  */
-export const harnessSessionRequest = (): { kind: 'computer'; label: string } => ({ kind: 'computer', label: hostname().slice(0, 80) })
+export const harnessSessionRequest = (): { kind: 'computer'; label: string } => ({ kind: 'computer', label: computerName().slice(0, 80) })
 
 /** Whether renewing [session] asks to move it to a Harness session: an SSO sign-in's does. One that is a Harness
  *  session already (`hnr_`) renews as one, and a QR sign-in is a session of its own kind. */

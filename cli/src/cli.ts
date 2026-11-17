@@ -55,6 +55,7 @@ import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type 
 import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
 import { AUTH_DIR, AuthSessionError, knownSsoClientId, recordMachineId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { AuthSessionManager, harnessSessionRequest } from './lib/authRefresh.js'
+import { computerName } from './lib/computerName.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { claimTicket, qrSignIn, type QrSignInTokens } from './lib/qrSignIn.js'
 import { pickSignInMethod, signInMethodFlag, signInProviderName, withSignInProvider, type SignInMethod, type SignInProvider } from './lib/signInMethodPicker.js'
@@ -324,7 +325,7 @@ async function resolveComputerMachine(signal?: AbortSignal): Promise<AuthSession
   const accessToken = await auth.accessToken()
   const result = await postJson<{ machine?: { machineId?: string } }>('/api/machines/resolve-computer', {
     computerId: current.computerId,
-    label: hostname(),
+    label: computerName(),
     // Same claim the adapter-ws dial carries: a machine deleted while this computer was offline must
     // come back as 403, not as a quietly minted replacement.
     ...(current.machineId ? { machineId: current.machineId } : {}),
@@ -718,7 +719,7 @@ async function qrSignInCommand(
   const result = await qrSignIn({
     post: (path, body) => postJson(path, body),
     ...(hooks.onStarted ? { onStarted: hooks.onStarted } : {}),
-    label: hostname().slice(0, 80),
+    label: computerName().slice(0, 80),
     computerId: computerId(),
     ...(hooks.spoken ? {
       showCode: (code: string, expiresIn: number) => {

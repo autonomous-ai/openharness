@@ -16,11 +16,11 @@
  * Auth: the SSO access token rides as the first WS subprotocol.
  */
 import { WebSocket } from 'ws'
-import { hostname } from 'os'
 import { env } from '../config/env.js'
 import { tuiPresence, WINDOW_SURFACES, type LocalWindows, type WindowSurface } from '../lib/windowSurfaces.js'
 import { AuthSessionError } from '../lib/authSession.js'
 import { AuthSessionManager } from '../lib/authRefresh.js'
+import { computerName } from '../lib/computerName.js'
 import { backendHttpBase } from '../lib/backendHttpBase.js'
 import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness, type LivenessWatch } from '../lib/wsLiveness.js'
 import { decodeTerminalHop, TerminalHopDirection } from '../lib/terminalBinary.js'
@@ -138,10 +138,10 @@ export class UpstreamLink {
     this.auth = auth ?? new AuthSessionManager(backendHttpBase())
     this.testToken = auth ? undefined : machineId
     this.events = events
-    // `?label=<hostname>` lets the backend record which machine connected (shown on the machine card);
+    // `?label=<the computer's name>` lets the backend record which machine connected (shown on the machine card);
     // `?computer=<stable id>` enforces one-computer-per-computer (a 2nd computer is rejected with HTTP 409);
     // `?v=<VERSION>` is our own version, which the backend stores on the machine at every connect.
-    const base = `${env.BACKEND_WS_URL.replace(/\/$/, '')}/api/adapter-ws?label=${encodeURIComponent(hostname())}&v=${encodeURIComponent(VERSION)}&autonomousEnv=${encodeURIComponent(autonomousEnv)}`
+    const base = `${env.BACKEND_WS_URL.replace(/\/$/, '')}/api/adapter-ws?label=${encodeURIComponent(computerName())}&v=${encodeURIComponent(VERSION)}&autonomousEnv=${encodeURIComponent(autonomousEnv)}`
     // `?machine=<id>` is the machine this daemon still believes it is. The backend uses it to tell a
     // REVOKED daemon — one whose machine was deleted while it was offline — apart from a first-time
     // pairing, and answers 403 instead of quietly minting a replacement machine. Guarded on shape
