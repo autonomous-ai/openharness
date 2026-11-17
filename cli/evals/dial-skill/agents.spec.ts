@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AGENT_CONFIG, CLAUDE_SANDBOX, claudeArgs, runAgent, type AgentConfig } from './lib/agents.js'
 import { parseClaudeStream } from './lib/parse.js'
 import type { Scenario } from './lib/scenarios.js'
@@ -31,6 +31,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.unstubAllEnvs()
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -155,6 +156,18 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(SAMPLE)}))`)
     const bin = fake('claude', `require('node:fs').writeFileSync(${JSON.stringify(ran)}, '')`)
 
     await expect(runAgent('claude', need, staged({ CLAUDE_CONFIG_DIR: profile }), config(bin))).rejects.toThrow(/CLAUDE_CONFIG_DIR/)
+    expect(existsSync(ran)).toBe(false)
+  })
+
+  it('refuses to start Claude with CLAUDE_CONFIG_DIR a link to the default ~/.claude', async () => {
+    const home = join(root, 'home')
+    mkdirSync(join(home, '.claude'), { recursive: true })
+    vi.stubEnv('HOME', home)
+    symlinkSync(join(home, '.claude'), join(root, 'linked'))
+    const ran = join(root, 'ran')
+    const bin = fake('claude', `require('node:fs').writeFileSync(${JSON.stringify(ran)}, '')`)
+
+    await expect(runAgent('claude', need, staged({ CLAUDE_CONFIG_DIR: join(root, 'linked') }), config(bin))).rejects.toThrow(/CLAUDE_CONFIG_DIR/)
     expect(existsSync(ran)).toBe(false)
   })
 

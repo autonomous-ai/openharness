@@ -1,6 +1,6 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { createReadStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { constants, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -153,6 +153,18 @@ describe('run-eval.mjs arguments', () => {
     expect(out.stderr).toMatch(/CLAUDE_CONFIG_DIR/)
     expect(callsMade()).toEqual([])
     expect(jsonl('baseline', 'results.jsonl')).toEqual([])
+  })
+
+  it('refuses to run with CLAUDE_CONFIG_DIR a link to the default ~/.claude', () => {
+    mkdirSync(join(home, '.claude'))
+    symlinkSync(join(home, '.claude'), join(tmp, 'linked'))
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'oracle', '--cases', 'board-unplugged', '--approve-harness'],
+      { CLAUDE_CONFIG_DIR: join(tmp, 'linked') })
+
+    expect(out.status).toBe(2)
+    expect(out.stderr).toMatch(/CLAUDE_CONFIG_DIR/)
+    expect(callsMade()).toEqual([])
   })
 
   it.each([
