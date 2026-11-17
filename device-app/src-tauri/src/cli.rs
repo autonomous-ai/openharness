@@ -703,6 +703,134 @@ mod tests {
         }
     }
 
+    /// What `sh -c script` hands a sink, and its output. `args` are the script's `$1` on.
+    fn handed(script: &str, args: &[&str]) -> (Vec<String>, Output) {
+        let mut command = Command::new("sh");
+        command.args(["-c", script, "sh"]).args(args);
+        let mut seen = Vec::new();
+        let output = run_lines(command, WAIT, &mut |line| seen.push(line.to_string())).unwrap();
+        (seen, output)
+    }
+
+    /// A child that prints `a` on stdout, `b` on stderr, then `c` on stdout and exits 3, each line only once the sink
+    /// has the one before: it waits on a FIFO the sink writes to.
+    fn in_turn() -> (Vec<String>, Output) {
+        let folder = tempfile::tempdir().unwrap();
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "mkfifo one two; echo a; read go < one; echo b >&2; read go < two; echo c; exit 3"])
+            .current_dir(folder.path());
+        let mut fifos = ["one", "two"].map(|name| folder.path().join(name)).into_iter();
+        let mut seen = Vec::new();
+        let output = run_lines(command, WAIT, &mut |line| {
+            seen.push(line.to_string());
+            if let Some(fifo) = fifos.next() {
+                // On a thread: a run that held its lines back would leave this open waiting for a reader, not the test.
+                thread::spawn(move || fs::write(fifo, "\n"));
+            }
+        })
+        .unwrap();
+        (seen, output)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_run_hands_each_line_as_it_arrives_in_the_order_written() {
+        assert_eq!(in_turn().0, ["a", "b", "c"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_run_with_a_sink_still_gives_code_and_both_streams() {
+        let output = Output { code: Some(3), timed_out: false, stdout: "a\nc\n".into(), stderr: "b\n".into() };
+        assert_eq!(in_turn().1, output);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_line_over_64_kib_is_not_handed_and_the_next_one_is() {
+        let (over, longest) = ("x".repeat(LINE_MAX + 1), "y".repeat(LINE_MAX));
+        let (seen, _) = handed(r#"printf '%s\n' "$1" "$2" next"#, &[&over, &longest]);
+        assert_eq!(seen, [longest.as_str(), "next"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_last_line_without_a_newline_is_handed() {
+        assert_eq!(handed(r"printf 'a\nb'", &[]).0, ["a", "b"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bytes_that_are_not_utf_8_are_handed_as_text() {
+        let (seen, output) = handed(r"printf 'a\377b\n'", &[]);
+        assert_eq!(seen, ["a\u{fffd}b"]);
+        assert_eq!((output.code, output.timed_out), (Some(0), false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sink_slower_than_the_child_loses_no_line() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut command = Command::new("sh");
+        // `written` opens once every line is in the pipe, past the lines the run queues.
+        command.args(["-c", "mkfifo written; seq 2000; : > written"]).current_dir(folder.path());
+        let written = folder.path().join("written");
+        let (all_written, child_done) = mpsc::channel();
+        let mut seen = Vec::new();
+        let output = run_lines(command, WAIT, &mut |line| {
+            if seen.is_empty() {
+                // The first line waits for the child to have written them all. On a thread, so a run that never gets
+                // there fails the test instead of hanging it.
+                let (written, all_written) = (written.clone(), all_written.clone());
+                thread::spawn(move || all_written.send(fs::read(written).is_ok()));
+                assert_eq!(child_done.recv_timeout(WAIT), Ok(true));
+            }
+            seen.push(line.to_string());
+        })
+        .unwrap();
+        let all: Vec<String> = (1..=2000).map(|line| line.to_string()).collect();
+        assert_eq!(seen, all);
+        assert_eq!((output.code, output.timed_out), (Some(0), false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_run_past_its_deadline_stops_handing_lines_and_dies_with_its_children() {
+        // As a_run_past_its_deadline_dies_with_its_children, and the child never stops printing.
+        let mut deadline = Duration::from_millis(300);
+        loop {
+            let folder = tempfile::tempdir().unwrap();
+            let mut command = Command::new("sh");
+            command.args(["-c", "sleep 600 & echo $! > pid; while :; do echo x; done"]).current_dir(folder.path());
+            // On a thread, so a run that hands lines for ever fails the test instead of hanging it.
+            let (send, back) = mpsc::channel();
+            thread::spawn(move || {
+                let mut handed = 0;
+                let output = run_lines(command, deadline, &mut |_| {
+                    handed += 1;
+                    // A sink slower than the deadline, so lines are queued behind it once it has passed. Not a wait
+                    // for something to happen: the run hands at most this one line however long the child takes.
+                    if handed == 1 {
+                        thread::sleep(deadline);
+                    }
+                });
+                send.send((output.map(|output| output.timed_out), handed))
+            });
+            let (timed_out, handed) =
+                back.recv_timeout(deadline * 2 + WAIT).expect("back within the deadline and WAIT");
+            assert!(timed_out.unwrap());
+            assert!(handed <= 1, "{handed} lines handed");
+            let pid = fs::read_to_string(folder.path().join("pid")).ok().and_then(|pid| pid.trim().parse().ok());
+            if let Some(pid) = pid {
+                assert!(wait_gone(pid));
+                return;
+            }
+            deadline *= 2;
+            assert!(deadline < Duration::from_secs(10), "sh never wrote the pid");
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_child_gives_its_lines_then_ends() {
