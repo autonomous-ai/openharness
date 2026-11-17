@@ -612,6 +612,38 @@ void main() {
     expect(signed, isEmpty);
   }, skip: _needsDitto);
 
+  test(
+    'an archive that reaches outside its folder writes nothing outside',
+    () async {
+      // The installer leaves these to tar: bsdtar, macOS's `/usr/bin/tar`,
+      // refuses both unless told otherwise.
+      final reachingOut = <String, List<int>>{
+        'a .. entry': _tarGz([
+          _infoPlist('Harness Device.app'),
+          // From `<temp>/harness-device-app-*/app` up to the test's root.
+          ArchiveFile.string('../../../outside', 'written'),
+        ]),
+        'a write through a link': _tarGz([
+          _infoPlist('Harness Device.app'),
+          ArchiveFile.symlink('Harness Device.app/link', root.path),
+          ArchiveFile.string('Harness Device.app/link/outside', 'written'),
+        ]),
+      };
+      for (final MapEntry(key: name, value: bytes) in reachingOut.entries) {
+        publish(bytes);
+        expect(await failedStep(), DeviceAppInstallStep.unpack, reason: name);
+        expect(
+          namesIn(root.path),
+          unorderedEquals(['Applications', 'home', 'temp']),
+          reason: name,
+        );
+        expectNothingInstalled();
+      }
+      expect(signed, isEmpty);
+    },
+    skip: Platform.isMacOS ? null : "needs macOS's bsdtar",
+  );
+
   test('a bundle the signature check refuses fails at signature', () async {
     signatureAnswer = () async => false;
     expect(await failedStep(), DeviceAppInstallStep.signature);
