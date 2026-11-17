@@ -418,7 +418,11 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     claude: over.claude === null ? undefined : over.claude ?? (async () => null),
     orcaHomes: over.orcaHomes === null ? undefined : orcaHomes.cache(),
   })
-  return { core, ports, port: ports.devices as DevicesPort, requests, onExit, gone, orcaHomes }
+  const port = ports.devices as DevicesPort
+  // Stopped once the spec ends, as the process stops them: a dial left attached on real timers keeps its 60 s scan, which
+  // would count in a later spec's scans.
+  onTestFinished(() => port.stop())
+  return { core, ports, port, requests, onExit, gone, orcaHomes }
 }
 
 const calls = (name: string) => seen.cable.calls.filter(([called]) => called === name).map(([, args]) => args)
@@ -1740,7 +1744,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
 
       // Stopping, the listener closes first: the dial is still attached until it has.
       let closed!: () => void
-      listener.close.mockImplementation(() => new Promise<void>((resolve) => { closed = resolve }))
+      listener.close.mockImplementationOnce(() => new Promise<void>((resolve) => { closed = resolve }))
       seen.host.watching!(true)
       const stopping = port.stop()
       orca.pending[2](false)
