@@ -9,7 +9,7 @@ import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/ext
 import { roundDrawable } from '../roundGlyphs.js'
 import type { HostAdapter, Pane } from './adapter.js'
 import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure } from './codexQueue.js'
-import { detectApp, detectHost, hostDisplayName, UNKNOWN_APP } from './hostDetect.js'
+import { APP_BUNDLES, detectApp, detectHost, hostDisplayName, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
 import { bundleOf, type OpenTarget } from './open.js'
 import { MAX_TEXT } from './orca.js'
@@ -110,6 +110,9 @@ export interface ObservedDeps {
   tty?(pid: number): Promise<string | undefined>
   /** Every owner a scan read, before any is listed. Absent, nothing is told. */
   scanned?(owners: ReadonlyMap<string, SessionOwner>): void
+  /** The hc terminal whose foreground is that pid, when exactly one is (hcSource.ts terminalOf). Absent, nothing is
+   *  paired. */
+  herdrTerminal?(pid: number): string | undefined
 }
 
 export interface ObservedActions {
@@ -163,6 +166,9 @@ interface Entry {
   hints: Readonly<Record<string, string>>
   /** The process its latest event came from: none for a session the scan found, until its first. */
   caller?: number
+  /** The hc terminal a session the scan found runs in, until its first hook, and the app the scan gave it, which a
+   *  pairing that no longer holds puts back. No hook's hints: only locate() reads it. */
+  paired?: { address: string; app: string; appPending?: true }
   /** Every pane an adapter knows it by, from its latest event and its tty, in the adapters' order. */
   panes: readonly Located[]
   /** The process its tty was read for, its latest in a tab app, and that tty once read. */
@@ -420,9 +426,11 @@ export class ObservedSource implements HostSource {
     })
   }
 
-  /** Every pane its adapters know it by, afresh: a session resumed elsewhere keeps none it left. */
+  /** Every pane its adapters know it by, afresh: a session resumed elsewhere keeps none it left. One paired with an hc
+   *  terminal is where that terminal's hook would place it. */
   private locate(entry: Entry): void {
-    const place = { host: entry.agent.host, app: entry.agent.app, hints: entry.hints, tty: entry.tty, pid: entry.caller,
+    const hints = entry.paired ? { HC_TERMINAL_ID: entry.paired.address } : entry.hints
+    const place = { host: entry.agent.host, app: entry.agent.app, hints, tty: entry.tty, pid: entry.caller,
       sessionId: entry.agent.sessionId, engine: entry.agent.engine }
     entry.panes = (this.deps.actions?.adapters ?? []).flatMap((adapter) => {
       const pane = adapter.paneOf(place)
@@ -594,6 +602,8 @@ export class ObservedSource implements HostSource {
     // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
     entry.hints = e.hostHints
     entry.caller = e.callerPid
+    // Its own hook places it now, and with a caller it is never paired again.
+    entry.paired = undefined
     this.locate(entry)
     entry.bundle = bundleOf(a.host, e.hostHints)
     if (e.cwd) a.cwd = e.cwd
@@ -846,6 +856,7 @@ export class ObservedSource implements HostSource {
     let known = 0
     let named = 0
     let answered = 0
+    let paired = 0
     const now = this.deps.now()
     for (const [sessionId, engine] of listing) {
       // A hook may have told of it while the reads ran: it said more.
@@ -867,6 +878,7 @@ export class ObservedSource implements HostSource {
         delete entry.agent.appPending
         known++
       }
+      if (this.pair(entry)) paired++
       this.learnTty(entry, owner.pid)
       // Once its panes are known.
       entry.agent.name = this.nameOf(entry)
@@ -884,7 +896,61 @@ export class ObservedSource implements HostSource {
     if (!listed) return
     // Counts only: an app, a pid or a path would say whose session runs where, and a name or an answer is the person's own.
     this.deps.log(`[observed] scan · ${listed} found · ${known} app known · ${named} named · ${answered} answered · ${ms} ms`)
+    this.logPaired(paired)
     this.emit()
+  }
+
+  /** Each session the scan found that no hook has told of yet, placed again in the hc terminal it runs in: Herdr's list
+   *  can come after the scan, and a terminal's foreground moves. Called on each change of the hc source. */
+  placeHerdr(): void {
+    let changed = false
+    let paired = 0
+    for (const e of this.entries.values()) {
+      if (!this.pair(e)) continue
+      changed = true
+      // Paired anew or moved; one taken back is not counted.
+      if (e.paired) paired++
+    }
+    this.logPaired(paired)
+    if (changed) this.emit()
+  }
+
+  /**
+   * Places a session the scan found, which no hook has told of, in the hc terminal whose foreground is its process. hc's
+   * own foreground pid, equal to the pid the scan lists it by and named by one terminal only, is a certain place (the
+   * addendum of docs/plans/2026-11-17-dial-recap-after-restart-design.md, decision 5, and the PM's decision of
+   * 2026-11-17), so it is placed as a hook from that terminal would place it: its pane, words and tap follow Herdr's own
+   * rules. It writes no hook state: a hook's hints and caller are what later code and the next hook read, and the next
+   * hook wins. A pairing that no longer holds gives back what the scan gave it. Whether anything changed.
+   */
+  private pair(entry: Entry): boolean {
+    if (!this.deps.herdrTerminal || entry.caller !== undefined) return false
+    const address = this.deps.herdrTerminal(entry.pid)
+    if (address === entry.paired?.address) return false
+    const a = entry.agent
+    if (address !== undefined) {
+      // A move keeps what the scan gave it, not the Herdr it was placed in.
+      const { app, appPending } = entry.paired ?? a
+      entry.paired = { address, app, ...(appPending ? { appPending } : {}) }
+      a.host = 'herdr'
+      a.app = 'herdr'
+      delete a.appPending
+      entry.bundle = APP_BUNDLES.herdr
+    } else {
+      const { app, appPending } = entry.paired!
+      a.host = 'terminal'
+      a.app = app
+      if (appPending) a.appPending = appPending
+      entry.bundle = undefined
+      entry.paired = undefined
+    }
+    this.locate(entry)
+    return true
+  }
+
+  /** A count only: a pid or a terminal's address would say whose session runs where. */
+  private logPaired(paired: number): void {
+    if (paired) this.deps.log(`[observed] herdr · ${paired} paired`)
   }
 
   /** The Claude Code and Codex sessions in a turn, by session id, read one at a time. One that cannot say counts as busy,
