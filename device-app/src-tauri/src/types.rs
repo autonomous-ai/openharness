@@ -414,6 +414,16 @@ mod tests {
     }
 
     #[test]
+    fn the_tray_has_a_dark_artwork_the_size_of_the_light_one() {
+        // A PNG's width and height are the big-endian u32s at bytes 16..24, in its IHDR chunk.
+        let size = |name: &str| {
+            let png = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("icons").join(name)).unwrap();
+            png[16..24].to_vec()
+        };
+        assert_eq!(size("tray-dark.png"), size("tray.png"));
+    }
+
+    #[test]
     fn the_webview_may_close_itself_and_call_two_commands() {
         let capability: Value = serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
         assert_eq!(
