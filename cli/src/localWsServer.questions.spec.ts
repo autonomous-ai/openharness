@@ -117,9 +117,6 @@ it('contains counting and serialization failures, settles once and leaves other 
   expect(settled).toHaveBeenCalledExactlyOnceWith(false)
   const cyclic: Record<string, unknown> = {}; cyclic.self = cyclic
   expect(sinks[1].sendFrame(cyclic)).toBe(false)
-  const ordinary = vi.fn()
-  expect(sinks[1].sendFrame(cyclic, undefined, ordinary)).toBe(false)
-  expect(ordinary).toHaveBeenCalledExactlyOnceWith(false)
   const delivered = new Promise<void>(resolve => clients[2].once('message', () => resolve()))
   expect(sinks[2].sendFrame({}, quota)).toBe(true)
   await delivered

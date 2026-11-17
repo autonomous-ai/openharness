@@ -1,12 +1,12 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { BackendSocket } from './backendSocket.js'
+import { BackendSocket, type Frame, type LocalSendQuota } from './backendSocket.js'
 import { dispatchDown } from './testing/relaySocket.js'
 
 afterEach(() => vi.restoreAllMocks())
 
 function client(socket: BackendSocket, id: string, tool = false, questionProtocol?: 1) {
   const frames: Record<string, unknown>[] = []
-  socket.registerLocalClient(id, { sendFrame: (frame, _quota, settled) => {
+  socket.registerLocalClient(id, { sendFrame: (frame: Frame, _quota?: LocalSendQuota, settled?: (sent: boolean) => void) => {
     frames.push(frame); settled?.(true); return true
   }, sendBinary: () => true, close: vi.fn() }, { tool, questionProtocol })
   return frames

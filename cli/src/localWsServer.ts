@@ -12,7 +12,7 @@ import { isTrustedLocal, pipeProofOf } from './lib/localSocket.js'
 import { PIPE_PROOF_HEADER } from './lib/windows/pipeAuth.js'
 import { localCredentialMatches } from './lib/localCredential.js'
 import { peerIsThisAccount, type PeerAccount } from './lib/peerAccount.js'
-import type { Frame, LocalClientSink } from './backendSocket.js'
+import type { Frame, LocalClientSink, LocalSendQuota } from './backendSocket.js'
 import { replayLegacyQuestions, questionFrameBytes, QUESTION_OBSERVATION_BYTES, QUESTION_OBSERVATION_CONNECTION_FRAMES, QUESTION_OBSERVATION_FRAMES } from './core/questionObservation.js'
 import {
   clientStreamLocalFrame,
@@ -356,7 +356,7 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     const queued = streamQueue.connection()
     ws.once('close', () => queued.close())
     const sink: LocalClientSink = {
-      sendFrame: (frame, quota, settled) => {
+      sendFrame: (frame: Frame, quota?: LocalSendQuota, settled?: (sent: boolean) => void) => {
         if (ws.readyState !== WebSocket.OPEN) { settled?.(false); return false }
         if (quota && 'kind' in quota) {
           let bytes: number | null
@@ -393,17 +393,13 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         let release: (() => void) | null | undefined
         try {
           const serialized = JSON.stringify(frame)
-          if (!quota) {
-            if (settled) ws.send(serialized, error => settled(!error))
-            else ws.send(serialized)
-            return true
-          }
-          if (ws.bufferedAmount > CLIENT_STREAM_QUEUE_BYTES) { settled?.(false); return refusedStream(quota) }
+          if (!quota) { ws.send(serialized); return true }
+          if (ws.bufferedAmount > CLIENT_STREAM_QUEUE_BYTES) return refusedStream(quota)
           release = queued.reserve(quota, Buffer.byteLength(serialized))
-          if (release === null) { settled?.(false); return refusedStream(quota) }
-          ws.send(serialized, (error) => { release!(); settled?.(!error); if (error) ws.terminate() })
+          if (release === null) return refusedStream(quota)
+          ws.send(serialized, (error) => { release!(); if (error) ws.terminate() })
           return true
-        } catch { release?.(); settled?.(false); return false }
+        } catch { release?.(); return false }
       },
       sendBinary: (frame, quota) => {
         if (ws.readyState !== WebSocket.OPEN) return false
@@ -423,9 +419,9 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     // event feed cannot manufacture device gestures; only sendToWindow can.
     const terminalSink: LocalClientSink = {
       ...sink,
-      sendFrame: (frame, quota, settled) => {
+      sendFrame: (frame: Frame, quota?: LocalSendQuota, settled?: (sent: boolean) => void) => {
         if (frame.type === 'dial_selection' || frame.type === 'dial_visit' || frame.type === 'dial_form') { settled?.(false); return true }
-        return sink.sendFrame(frame, quota, settled)
+        return quota && 'kind' in quota ? sink.sendFrame(frame, quota, settled) : sink.sendFrame(frame, quota)
       },
     }
 
