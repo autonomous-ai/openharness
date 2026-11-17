@@ -110,21 +110,20 @@ export function startLoop(
     }
   }
 
-  // VS Code's scroll commands act on the active terminal, so lines run only while it is the one they name.
+  // VS Code's scroll commands act on the active terminal, so lines run only while it is the one they name: asked before
+  // each line, since a click or a show can make another one active mid-run.
   async function run(first: Scroll): Promise<void> {
     scrolling = true
     for (let next: Scroll | null = first; next; next = waiting) {
       waiting = null
       let ran = 0
-      if (window.state().active === next.pid) {
-        try {
-          for (; ran < Math.abs(next.n) && !stopped; ran += 1) {
-            await window.scrollLine(next.n < 0)
-            count('scrollLines')
-          }
-        } catch {
-          // VS Code refused its command: the rest of the run would be refused as well.
+      try {
+        for (; ran < Math.abs(next.n) && !stopped && window.state().active === next.pid; ran += 1) {
+          await window.scrollLine(next.n < 0)
+          count('scrollLines')
         }
+      } catch {
+        // VS Code refused its command: the rest of the run would be refused as well.
       }
       if (ran === 0) count('dropped', next.from)
     }
