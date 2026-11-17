@@ -999,6 +999,32 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn the_version_is_the_first_line_when_it_reads_as_one() {
+        let longest = "1".repeat(32);
+        let too_long = "1".repeat(33);
+        let cases: [(&[&str], Option<&str>); 9] = [
+            (&["0.6.58"], Some("0.6.58")),
+            (&["  0.6.58-dev.3+a1  ", "more"], Some("0.6.58-dev.3+a1")),
+            (&[&longest], Some(&longest)),
+            (&[&too_long], None),
+            (&["0.6.58 (node 24)"], None),
+            (&["<b>0.6.58</b>"], None),
+            (&["", "0.6.58"], None),
+            (&[], None),
+            (&["0.6.58", "@exit 1"], None),
+        ];
+        for (case, (lines, version)) in cases.into_iter().enumerate() {
+            let fake = Fake::new();
+            fake.script("--version", lines);
+            assert_eq!(super::version(&fake.cli()).as_deref(), version, "case {case}");
+            assert_eq!(fake.calls(), ["--version"], "case {case}");
+        }
+        // No script: the fake says `Unknown command` and exits 1.
+        assert_eq!(super::version(&Fake::new().cli()), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn the_fake_keeps_its_contract() {
         let fake = Fake::new();
         let cli = fake.cli();

@@ -862,6 +862,8 @@ mod tests {
         w.fake.script("device claude status --json", &[r#"{"supported":true,"installed":true,"enabled":true}"#]);
         let on = ClaudeStatus { supported: true, installed: true, enabled: true, claude_version: None };
         assert_eq!(w.answer(Effect::ReadClaude), Event::Claude(Some(on)));
+        w.fake.script("--version", &["0.6.58"]);
+        assert_eq!(w.answer(Effect::ReadVersion), Event::CliVersion(Some("0.6.58".into())));
         w.fake.script("device claude enable", &[]);
         assert_eq!(w.answer(Effect::SetClaude(true)), Event::ClaudeSet(true));
         w.fake.script("device claude disable", &["@err Claude Code is busy.", "@exit 1"]);
@@ -884,6 +886,7 @@ mod tests {
                 "start --if-down",
                 "auth status --json",
                 "device claude status --json",
+                "--version",
                 "device claude enable",
                 "device claude disable",
                 "login --json",
@@ -950,6 +953,7 @@ mod tests {
             Effect::ReadAuth,
             Effect::ReadClaude,
             Effect::ReadCodex,
+            Effect::ReadVersion,
             Effect::RunLogin,
             Effect::SetClaude(true),
             Effect::SetCodex(true),
@@ -1011,10 +1015,11 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn the_binary_gets_its_three_effects_back() {
+    fn the_binary_gets_its_four_effects_back() {
         let w = world();
         assert!(w.runner.find_cli());
-        for effect in [Effect::Menu(vec![MenuItem::Separator]), Effect::Show(None), Effect::Quit] {
+        let about = Effect::ShowAbout(Some("Harness 0.6.58".into()));
+        for effect in [Effect::Menu(vec![MenuItem::Separator]), Effect::Show(None), about, Effect::Quit] {
             assert_eq!(w.runner.run(effect.clone()), Some(effect));
         }
         let others = [
@@ -1026,6 +1031,7 @@ mod tests {
             Effect::ReadAuth,
             Effect::ReadClaude,
             Effect::ReadCodex,
+            Effect::ReadVersion,
             Effect::RunLogin,
             Effect::CancelLogin,
             Effect::SetClaude(true),
@@ -1480,23 +1486,25 @@ mod tests {
         let w = world();
         w.fake.script("hardware watch --json", &[r#"{"attached":true,"fw":"0.0.95"}"#, "@stdin"]);
         w.fake.script("auth status --json", &[r#"{"loggedIn":true}"#]);
+        w.fake.script("--version", &["0.6.58"]);
         // No Claude Code or Codex script: this CLI has no such commands.
         let (mut app, mut effects) = App::new(Saved::default(), w.runner.find_cli(), false, B);
-        let connected = MenuItem::Text("Dial connected · 0.0.95".into());
-        let (mut dial, mut auth, mut claude, mut codex) = (false, false, false, false);
+        let connected = MenuItem::Text("Dial connected".into());
+        let (mut dial, mut auth, mut claude, mut codex, mut version) = (false, false, false, false, false);
         loop {
             for effect in effects {
                 if let Some(Effect::Menu(items)) = w.runner.run(effect) {
                     dial |= items.first() == Some(&connected);
                 }
             }
-            if dial && auth && claude && codex {
+            if dial && auth && claude && codex && version {
                 break;
             }
             let event = w.next();
             auth |= event == Event::Auth(Some(true));
             claude |= event == Event::Claude(None);
             codex |= event == Event::Codex(None);
+            version |= event == Event::CliVersion(Some("0.6.58".into()));
             effects = app.handle(event);
         }
         let mut calls = w.fake.calls();
@@ -1504,6 +1512,7 @@ mod tests {
         assert_eq!(
             calls,
             [
+                "--version",
                 "auth status --json",
                 "device claude status --json",
                 "device codex status --json",

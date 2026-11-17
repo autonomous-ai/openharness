@@ -313,13 +313,15 @@ mod tests {
             NotifyYou,
             Update,
             OpenHarness,
+            About,
             Quit,
         ];
         for action in actions {
             assert_eq!(menu_action(menu_id(action)), Some(action));
         }
         let ids: std::collections::HashSet<_> = actions.into_iter().map(menu_id).collect();
-        assert_eq!(ids.len(), 13);
+        assert_eq!(ids.len(), 14);
+        assert_eq!(menu_id(About), "about");
         assert_eq!(menu_id(CodexOn), "codex_on");
         assert_eq!(menu_id(CodexOff), "codex_off");
         assert_eq!(menu_id(NotifyFull), "notify_full");
