@@ -292,3 +292,37 @@ no owned sockets or cleanup failures; EOF/reap/group/guardian and independent ab
 both private roots were removed, and all 426 frozen inputs and report/evidence hashes matched. All
 samples and receipts remain in `/tmp/core-question-final-candidate-results-20261118a`. Maximum plain
 input, exact-boundary and native acceptance remain separate.
+
+## Merged-source maximum plain input
+
+The final plain-input ABBA uses the same exact `787c737db6`/`7aa0903a8b` sources and legal
+6,295,552-byte Cloud service input, with one warmup and ten samples per route per worker. All 60
+measured samples are retained. Matched legacy synchronous medians were 17.844/18.501 ms and maxima
+19.798/19.360 ms; loop maxima were 33.145/37.585 ms. Server CPU medians were 112.182/109.187 ms,
+and snapshot medians 170.750/167.997 ms. Both preserve the exact 18,886,467-byte, three-frame
+complete-ID snapshot.
+
+The candidate observer is reported separately: synchronous median/max 32.502/36.441 ms, immediate
+probe maximum 36.495 ms, loop maximum 46.170 ms, server CPU median 120.027 ms and snapshot median
+143.974 ms. Its snapshot carries 12,591,613 bytes in five frames, with no content failure or refusal.
+The 14.001 ms median synchronous increment against the same candidate's legacy route remains explicit;
+these plain-input results do not remove the separately measured escaped-input responsiveness limitation.
+
+Actual outer, all four worker and all four receiver exits were zero. All 198 sockets physically closed,
+with zero owned sockets or cleanup failures; EOF/reap/group/guardian and independent absence checks
+passed, all four private roots were removed, and all 426 frozen input hashes plus report/evidence hashes
+matched. Every sample and receipt is retained in `/tmp/core-question-final-max-results-20261118a`.
+Exact-boundary and native acceptance remain separate; no per-phase aggregate comparison is made.
+
+The untimed exact-boundary phase on `7aa0903a8b` delivered a 16,777,216-byte question row with the
+expected semantic row/state hashes. A 16,777,217-byte row was visibly refused; the physical accounting
+recorded one refusal and a peak of exactly 16,777,216 bytes in one frame. The accepted snapshot's
+handshake/protocol frames made its total wire size 16,777,769 bytes across five frames. This intentionally
+uses the prior-unbounded inline Cloud source; it is not a valid default-service payload or a performance
+comparison. Input is neither truncated nor admitted by clearing authoritative question state.
+
+Outer, worker and receiver all exited zero. Both sockets physically closed; all EOF/reap/group/guardian
+and independent absence checks passed, the private root was removed, and all 426 frozen input and
+report/evidence hashes matched. Receipts and both outcomes remain in
+`/tmp/core-question-final-boundary-results-20261118a`. The prepared native test remains a separate
+functional gate against the exact combined source and packaged build selected for that run.
