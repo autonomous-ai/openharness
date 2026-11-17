@@ -55,7 +55,8 @@ export interface AttachDeps {
     ingestPane(session: RegisteredSession, text: string, silent?: boolean): boolean | Promise<boolean>
   }
   captureTerminal: (target: string, historyLines?: number) => Promise<string | null>
-  emit: (sessionId: string, events: LiveEvent[], opts?: { resumed?: boolean }) => void
+  /** On to the turn hooks' pass (core/turns/turnHooks.ts), and from it to the funnel. */
+  emit: (sessionId: string, events: LiveEvent[], read?: { resumed?: true; over?: true }) => void
   /** Tell the usage service when an attach has folded a transcript. */
   tokenUsage: { changed(session: RegisteredSession): void }
   questionWatcher: Pick<QuestionWatcher, 'start'>
@@ -607,7 +608,8 @@ export function createAttach({
     // Installing the file watcher also yields. The final history consumer must still own the capture.
     if (historyCurrent && !historyCurrent()) historySuperseded = true
     if (!historySuperseded && initialEvents.length) {
-      emit(session.sessionId, initialEvents)
+      // Read whole after it ran: an end in it goes on at once, not held for a Stop that came already.
+      emit(session.sessionId, initialEvents, { over: true })
       console.log(`[agent] ${sid(session.agentId)} replayed the first turn its transcript already held · ${initialEvents.length} events`)
     }
     console.log(`[agent] ${sid(session.agentId)} attached · engine=${session.engine} · terminal=${terminalLabel(session)} · session=${sid(session.sessionId)} · lines=${fromEnd ? fromEnd.records : opened ? opened.lines : lines.length}`)

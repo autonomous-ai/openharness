@@ -1420,7 +1420,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     device: () => wifiCore.feed,
     runtimeProfiles,
     captureTerminal,
-    emit: (sessionId, events, opts) => emitSessionEvents(sessionId, events, opts),
+    emit: (sessionId, events, read) => (turnHooksRef?.transcript ?? emitSessionEvents)(sessionId, events, read),
     // Built further down: read when an attach starts watching a pane, never now.
     questionWatcher: { start: (sessionId) => questionWatcher.start(sessionId) },
     terminalLabel: primaryTerminalLabel,

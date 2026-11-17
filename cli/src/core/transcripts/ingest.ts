@@ -26,7 +26,7 @@ import type { LiveFrame } from '../../engines/worker/liveProtocol.js'
 const OPENCLAW_STORE_HOLDS = new Set<string>([OPENCLAW_STATES.unsupported, OPENCLAW_STATES.harnessNode, OPENCLAW_STATES.noSessions])
 
 /** What a transcript read says beside its events: the core's turn rules take it (core/turns/turnHooks.ts). */
-export interface TranscriptRead { replay?: boolean; at?: number; over?: true; turn?: LiveTurn }
+export interface TranscriptRead { replay?: boolean; resumed?: true; at?: number; over?: true; turn?: LiveTurn }
 
 export interface IngestDeps {
   liveFor: LiveFor

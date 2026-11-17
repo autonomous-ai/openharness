@@ -71,7 +71,7 @@ export interface TurnHookDeps {
   normalizers: Pick<SessionNormalizers, 'liveParsers'>
   /** The other engines' streams: their parsers are their worker's. */
   others: Pick<OtherStreams, 'get' | 'close' | 'openTurn' | 'task'>
-  emit: (sessionId: string, events: LiveEvent[], opts?: { replay?: boolean }) => void
+  emit: (sessionId: string, events: LiveEvent[], opts?: { replay?: boolean; resumed?: true }) => void
   /** Read what the transcript has that the tail has not delivered yet (Watcher.pollSession). */
   drain: (sessionId: string) => Promise<void>
   announceTurnAborted: (sessionId: string, engine: string, message: string) => void
@@ -145,6 +145,8 @@ export function createTurnHooks({
       if (turn?.held && events.some(event => event.type === 'turn_started' || event.type === 'turn_ended')) turn.held = undefined
       return emit(sessionId, events, { replay: true })
     }
+    // A turn an attach picks back up: the end held before it goes on first (R1.4).
+    if (read.resumed) { deliver(sessionId); return emit(sessionId, events, { resumed: true }) }
     if (turn?.subagents && events.some(event => isProgressEvent(event.type))) turn.progressAt = Date.now()
     if (!turn?.endsByHook) return emit(sessionId, events)
     // An aborted end, one no Stop follows (a paused /goal pass), and one its Stop came for already go on at once.

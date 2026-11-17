@@ -886,7 +886,7 @@ describe('attaching a session', () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup()
       await run.attach.attachSession(session('claude', transcript([CLAUDE_PROMPT])), false, false, true)
-      expect(vi.mocked(run.deps.emit).mock.calls[0][2]).toBeUndefined()
+      expect(vi.mocked(run.deps.emit).mock.calls[0][2]).toEqual({ over: true })
       const held = setup()
       vi.mocked(held.deps.watcher.hold).mockResolvedValue({ offset: 1_000_000, expired: false, release: vi.fn() })
       await held.attach.attachSession(session('claude', transcript([CLAUDE_PROMPT])), true, false, true)
