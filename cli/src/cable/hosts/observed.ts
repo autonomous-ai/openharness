@@ -594,6 +594,8 @@ export class ObservedSource implements HostSource {
     if (e.transcriptPath) entry.transcriptPath = e.transcriptPath
     if (e.event === 'session-end') {
       entry.endAt = now
+      // Its Stop came and the session ended within the grace (`claude -p` ends at once): the turn is over, told as nothing.
+      if (entry.heldStop) this.setState(entry, 'idle', now)
       this.dropStop(entry)
       this.clearAsked(entry)
       this.emit()
