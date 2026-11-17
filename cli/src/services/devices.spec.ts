@@ -6136,6 +6136,14 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
     expect(calls('turnStarted').filter(([agentId]) => agentId !== 'h1')).toEqual([])
   })
 
+  it('a session first listed mid-turn gets its card once the dial\'s list holds it', async () => {
+    const { oc, live } = withOpencode()
+    oc.active = { [SES]: { type: 'busy' } }
+    await live()
+    const [{ id }] = await listed()
+    await vi.waitFor(() => expect(calls('turnStarted')).toEqual([[id, '', undefined]]))
+  })
+
   // The devices' copy of the core's agents is read again only at a list build: opencode lists a new session's first turn
   // before the copy holds the session Harness bound to it.
   it('a session Harness started gets no card as opencode\'s before the dial\'s list binds it', async () => {

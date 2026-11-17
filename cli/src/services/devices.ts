@@ -1001,11 +1001,39 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** Another question of that agent closed: its notice, covered or held back by it, is asked again. */
   const reaskNotice = (agentId: string): void => part.call('notices', () => notices.reask(agentId))
 
+  /** The ids on the dial's lists, built now, which reads the core's agents again. Both lists a dial can hold: the one
+   *  ring, and the shown app's for a dial that says appFilter, read only while one is connected: that read can switch the
+   *  app, which no older dial shows. */
+  const listedIds = async (): Promise<Set<string>> => {
+    const apps = cable.wantsApps() ? [cableHost.listAgentSnapshot({ apps: true })] : []
+    const lists = await Promise.all([cableHost.listAgentSnapshot(), ...apps])
+    return new Set(lists.flatMap((list) => list.agents.map((agent) => agent.id)))
+  }
+  /** opencode's sessions first listed and not yet found on the dial's lists, each with the cards held for it. opencode
+   *  lists a session Harness started before the devices' copy of the core's agents, read again only at a list build,
+   *  holds the session Harness bound to it: that build gives the row to Harness, whose own cards are the turn's. */
+  const checking = new Map<string, DialEvent[]>()
+  const tellOf = (agentId: string, event: DialEvent): void => {
+    const held = checking.get(agentId)
+    if (held) held.push(event)
+    else tell(event)
+  }
+  /** Builds the dial's lists, then tells the cards held for those of `batch` they hold. One listed again meanwhile is in
+   *  a later batch too, whose check tells what it held since. */
+  const check = async (batch: Map<string, DialEvent[]>): Promise<void> => {
+    const listed = await listedIds()
+    for (const [agentId, held] of batch) {
+      checking.delete(agentId)
+      if (listed.has(agentId)) for (const event of held) tell(event)
+    }
+  }
+
   /** What changed among them, told: run whenever a source of theirs says its list changed. */
   const outsideTurn = (): void => {
     showWaits()
     const entries = outsideEntries()
     const ids = new Set(entries.map((entry) => entry.agent.id))
+    const fresh = new Map<string, DialEvent[]>()
     for (const id of told.keys()) {
       if (ids.has(id)) continue
       told.delete(id)
@@ -1022,21 +1050,27 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         // turn's (this turn's was not found) is not said again.
         if (agent.state === 'done' && agent.lastAnswer && agent.lastAnswer !== was.answer) {
           was.answer = agent.lastAnswer
-          tell({ ...card, kind: 'summary', text: agent.lastAnswer, recap: agent.lastAnswer, fullText: agent.lastAnswer })
+          tellOf(agent.id, { ...card, kind: 'summary', text: agent.lastAnswer, recap: agent.lastAnswer, fullText: agent.lastAnswer })
         }
         continue
       }
       told.set(agent.id, { state: agent.state, line, answer: agent.lastAnswer })
+      if (!was && entry.source === opencode) {
+        const held: DialEvent[] = []
+        fresh.set(agent.id, held)
+        checking.set(agent.id, held)
+      }
       // Only an observed agent has a hook to say its turn started (port.observed): another's going busy is its next turn.
       if (entry.source !== observed && busy(entry) && !(was && busyState(was.state))) endNotice(agent.id)
       // An agent a listing names for the first time ended no turn the dial saw: herdr says done of any turn that ended in a
       // pane it has not focused, and lists it again at each plug-in, reconnect and unfold. An observed one is first heard
       // by its hook, which may be the turn's end.
       const ended = was !== undefined || entry.source === observed
-      if (busy(entry)) tell(started(entry))
-      else if (ended && agent.state === 'done') tell({ ...card, kind: 'done' })
-      else if (ended && agent.state === 'error') tell({ ...card, kind: 'error' })
+      if (busy(entry)) tellOf(agent.id, started(entry))
+      else if (ended && agent.state === 'done') tellOf(agent.id, { ...card, kind: 'done' })
+      else if (ended && agent.state === 'error') tellOf(agent.id, { ...card, kind: 'error' })
     }
+    if (fresh.size) part.call('dial', () => check(fresh))
   }
   observed?.onChange(() => part.call('dial', outsideTurn))
   herdr?.onChange(() => part.call('dial', outsideTurn))
@@ -1062,14 +1096,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   /** Each observed agent mid-turn that a dial lists (sixteen at most of the fifty in each list), told again: the dial forgets
    *  a turn it hears nothing of for 25 s, and one that just came, whose window just closed, or whose app the dial was just
-   *  turned to, has heard nothing of it yet. Both lists a dial can hold: the one ring, and the shown app's for a dial that
-   *  says appFilter, read only while one is connected: that read can switch the app, which no older dial shows. */
+   *  turned to, has heard nothing of it yet. */
   const remind = async (): Promise<void> => {
     const mid = outsideEntries().filter(busy)
     if (!mid.length || heldOnTab()) return
-    const apps = cable.wantsApps() ? [cableHost.listAgentSnapshot({ apps: true })] : []
-    const lists = await Promise.all([cableHost.listAgentSnapshot(), ...apps])
-    const listed = new Set(lists.flatMap((list) => list.agents.map((agent) => agent.id)))
+    const listed = await listedIds()
     for (const entry of mid) if (listed.has(entry.agent.id)) tell(started(entry))
   }
 
