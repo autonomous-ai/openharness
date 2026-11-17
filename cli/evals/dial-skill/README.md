@@ -37,14 +37,20 @@ npx vitest run --config evals/dial-skill/vitest.config.ts
 ## Isolation
 
 - Claude runs under the `CLAUDE_CONFIG_DIR` already set (the session's profile, never the default `~/.claude`), with
-  `--setting-sources project`, so the person's hooks never fire into the live daemon.
+  `--setting-sources project`, so the person's hooks never fire into the live daemon and the person's own skills are
+  not loaded: only Claude Code's bundled skills and the dial skill. Every variant runs the same way.
+- The profile's claude.ai connectors (mail, calendar, documents), push notifications and remote triggers are denied to
+  the agent, so a run never reaches the person's accounts or phone.
+- A run leaves in the profile only what `claude -p` writes at startup (`.claude.json`, its backups, `session-env/`,
+  caches); the empty `projects/<temp repo>/` folder Claude makes for each run is removed with the run.
 - Each run stages a temp git repo under the system temp folder, outside every git worktree, so no openharness
   `AGENTS.md` loads and no answer key is in reach.
 - A fake `harness` records rings; the scenario's fakes (`gh`, `aws`, `shipit`…) come first on a curated `PATH` that
   leaves out the real `harness` and `gh`. Nothing reads or writes `~/.harness`, the daemon, the real dial or the
   production backend.
 - Claude's own sandbox confines writes to the temp repo; the network stays on, with `registry.npmjs.org` the only
-  allowed host. Every scenario host ends in `.invalid` and never resolves; every secret is fake.
+  allowed host, and npm's cache sits in the run's own temp folder. Every scenario host ends in `.invalid` and never
+  resolves; every secret is fake.
 - The environment is allowlisted; rows, lines, judge reasons and traces carry `<run>` and `~` in place of paths.
 
 ## Cost
@@ -55,4 +61,5 @@ status table at the top of `flow/narrative.md`, computed from each row's model a
 
 ## Results
 
-Filled in after the held-out test run.
+Filled in after the held-out test run. Every run, baseline and winner alike, loads no personal skills and no hooks
+(`--setting-sources project`).
