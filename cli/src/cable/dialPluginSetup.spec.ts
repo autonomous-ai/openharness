@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ClaudeRun } from '../devices/claudePlugin.js'
-import { MAX_HOMES, readPluginHomes, readRemoved, type Read, type SetupCount } from '../devices/dialSkillFiles.js'
+import { MAX_HOMES, readPluginHomes, readRemoved, writePluginHomes, type Read, type SetupCount } from '../devices/dialSkillFiles.js'
 import { createDialPluginSetup, type DialPluginSetupDeps } from './dialPluginSetup.js'
 
 // A copy of the module, so a test can watch the file calls a pass makes.
@@ -797,6 +797,31 @@ describe('the plugin in each Orca account\'s home', () => {
     r.state.now = HOUR
     await r.setup.pass()
     expect(calls).toEqual([])
+  })
+
+  it('a scan with every Orca home in the command\'s list reads no file, until Orca\'s list changes', async () => {
+    const dataDir = folder()
+    const [a, b] = [folder(), folder()]
+    // The command's list as `harness device claude enable` leaves it.
+    writePluginHomes(dataDir, [real(a), real(b)])
+    const r = orcaRig([a, b], fakeHomes(), { wanted: () => readRemoved(dataDir).claude !== true, enabledByCommand: () => readPluginHomes(dataDir) })
+    await r.setup.pass()
+    expect(r.looked).toEqual([])
+    const calls = fileCalls()
+
+    await r.setup.pass()
+    r.state.now = HOUR
+    await r.setup.pass()
+    expect(calls).toEqual([])
+
+    // A home the command's list dropped since is turned on once Orca's next read gives a new list.
+    writePluginHomes(dataDir, [real(a)])
+    await r.setup.pass()
+    expect(r.looked).toEqual([])
+    r.state.orca = { homes: [a, b], answered: true }
+    await r.setup.pass()
+    expect(r.looked).toEqual([real(b)])
+    expect(r.state.pluginHomes).toEqual([real(b)])
   })
 
   it('a record that cannot be saved counts failed save, and a pass after its hour records the home with no enable', async () => {
