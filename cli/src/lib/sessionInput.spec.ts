@@ -36,6 +36,77 @@ const codexComposer = (draft: string, footer = '  ? for shortcuts') => `\n\u001b
 describe('SessionInputController', () => {
   afterEach(() => vi.useRealTimers())
 
+  it('keeps ordinary writes concurrent, excludes native input until they settle, and releases failures', async () => {
+    const input = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session(), validateRuntime: async () => true, inject: async () => true,
+      sendKey: async () => true, onError: vi.fn(),
+    })
+    const started: string[] = []
+    let finish!: (value: boolean) => void
+    const first = input.writeTerminal('s1', () => { started.push('first'); return new Promise(resolve => { finish = resolve }) })
+    const second = input.writeTerminal('s1', async () => { started.push('second'); return true })
+    expect(started).toEqual(['first', 'second'])
+    expect(input.acquireInputWriter('s1')).toBeNull()
+    await second
+    expect(input.acquireInputWriter('s1')).toBeNull()
+    finish(true)
+    await first
+    await expect(input.writeTerminal('s1', async () => { throw new Error('failed writer') })).rejects.toThrow('failed writer')
+    const release = input.acquireInputWriter('s1')!
+    expect(release).toBeTypeOf('function')
+    release()
+    input.forget('s1')
+  })
+
+  it('registers waiting ordinary writes before another native reservation and releases a reservation once', async () => {
+    const input = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session(), validateRuntime: async () => true, inject: async () => true,
+      sendKey: async () => true, onError: vi.fn(),
+    })
+    const control = input.acquireControl('s1')!
+    expect(input.acquireInputWriter('s1')).toBeNull()
+    control()
+    const release = input.acquireInputWriter('s1')!
+    let finish!: (value: boolean) => void
+    const ordinary = input.writeTerminal('s1', () => new Promise(resolve => { finish = resolve }))
+    release()
+    expect(input.acquireInputWriter('s1')).toBeNull()
+    finish(true)
+    await ordinary
+    const next = input.acquireInputWriter('s1')!
+    release()
+    expect(input.acquireInputWriter('s1')).toBeNull()
+    next()
+    input.forget('s1')
+  })
+
+  it('forgets completed writers and retains only unsettled exclusion across input-state replacement', async () => {
+    const input = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session(), validateRuntime: async () => true, inject: async () => true,
+      sendKey: async () => true, onError: vi.fn(),
+    })
+    // Count retained ownership, not garbage-collector timing: a completed/forgotten input keeps no record.
+    const retired = (input as unknown as { retiredWriters: Map<string, unknown> }).retiredWriters
+    for (let i = 0; i < 100; i++) {
+      const id = `agent-${i}`
+      await input.writeTerminal(id, async () => true)
+      input.forget(id)
+    }
+    expect(retired.size).toBe(0)
+    let finish!: (value: boolean) => void
+    const writing = input.writeTerminal('s1', () => new Promise(resolve => { finish = resolve }))
+    input.forget('s1')
+    expect(retired.size).toBe(1)
+    expect(input.acquireInputWriter('s1')).toBeNull()
+    finish(true)
+    await writing
+    expect(retired.size).toBe(0)
+    const release = input.acquireInputWriter('s1')!
+    expect(release).toBeTypeOf('function')
+    release()
+    input.forget('s1')
+  })
+
   it('keeps successful bursts below the measured cost of discarded ticket-removal arrays', async () => {
     const scope = new AsyncResource('input-burst-allocation-fixture'), owned = new Set([scope.asyncId()])
     const hook = createHook({ init(id, _type, trigger) { if (owned.has(trigger)) owned.add(id) } })

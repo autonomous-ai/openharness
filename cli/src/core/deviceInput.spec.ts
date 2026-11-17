@@ -33,12 +33,12 @@ function fixture(engine: 'claude' | 'codex' | 'commandcode' = 'codex') {
   })
   const legacy: SessionInputController = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
     getSession: () => available ? session : undefined, validateRuntime: async () => available,
-    inject: (id, text) => controller.legacyWrite(id, () => inject(id, text)),
-    sendKey: (id, key) => controller.legacyWrite(id, () => sendKey(id, key)), capture, onError: vi.fn(),
+    inject: (id, text) => legacy.writeTerminal(id, () => inject(id, text)),
+    sendKey: (id, key) => legacy.writeTerminal(id, () => sendKey(id, key)), capture, onError: vi.fn(),
     onDelivery: event => service.delivery(event),
   })
   const controller: AutonomousDeviceInput = new AutonomousDeviceInput({
-    acquireControl: id => legacy.acquireControl(id, { forAnswer: true }),
+    acquireControl: id => legacy.acquireInputWriter(id),
     legacySubmit: (id, text, delivery) => legacy.submit(id, text, delivery),
     legacyCancel: id => legacy.cancelDelivery(id),
     onForget: id => service.agentGone(id),
@@ -378,14 +378,19 @@ it('excludes legacy writes only during Device ownership of the same pane', async
   vi.useFakeTimers()
   const writes: string[] = []
   let finish!: () => void
+  const legacy = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+    getSession: (id) => ({ agentId: id, engine: 'claude' }) as RegisteredSession, validateRuntime: async () => true,
+    inject: async () => true, sendKey: async () => true, onError: vi.fn(),
+  })
   const controller = makeDevice({
+    acquireControl: id => legacy.acquireInputWriter(id),
     inject: async () => { writes.push('device'); await new Promise<void>(resolve => { finish = resolve }); return true },
   })
-  await controller.legacyWrite('agent', async () => { writes.push('local-before') })
+  await legacy.writeTerminal('agent', async () => { writes.push('local-before'); return true })
   controller.submit('agent', 'A', 'delivery-A')
   await vi.advanceTimersByTimeAsync(0)
-  const local = controller.legacyWrite('agent', async () => { writes.push('local-after') })
-  await controller.legacyWrite('other', async () => { writes.push('other-pane') })
+  const local = legacy.writeTerminal('agent', async () => { writes.push('local-after'); return true })
+  await legacy.writeTerminal('other', async () => { writes.push('other-pane'); return true })
   expect(writes).toEqual(['local-before', 'device', 'other-pane'])
   finish()
   await vi.advanceTimersByTimeAsync(0)

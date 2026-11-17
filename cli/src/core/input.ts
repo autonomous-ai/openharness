@@ -1,13 +1,13 @@
 /**
  * Input: everything the core writes into an agent's pane. Messages, delivered turns and keys go through one
- * controller (`SessionInputController`, a per-pane queue while a turn is busy); the Harness device's own
- * route (`AutonomousDeviceInput`) owns the pane writer lock, and every write from the controller takes it
- * first (`legacyWrite`), so a person answering on a device and the core never interleave in one pane.
+ * controller (`SessionInputController`, the shared writer and a per-pane queue while a turn is busy).
+ * The Harness device's own route (`AutonomousDeviceInput`) reserves that writer locally for a native
+ * dispatch, so its paste and a person's ordinary input never interleave in one pane.
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 5: docs/design/2026-10-03-harnessd.md);
  * what it reaches in the registry, the terminal, the deliveries and device features and the clients is passed
- * in. The two controllers' dependencies are built by `sessionInputDeps` and `deviceInputDeps`, each given
- * the other controller lazily: each one calls into the other.
+ * in. `sessionInputDeps` and `deviceInputDeps` both take the shared input controller lazily; ordinary
+ * input does not depend on the device controller.
  */
 import { AutonomousDeviceInput, type DeviceInputDeps } from './deviceInput.js'
 import type { WifiFeed } from './wifi.js'
@@ -164,10 +164,10 @@ async function readTeamHold(deps: Pick<InputDeps, 'readScreen' | 'shortTurns' | 
   return { capture, screen, hold: paneHold(screen) }
 }
 
-/** What `SessionInputController` is given: every write takes the device's pane lock first. */
+/** What `SessionInputController` is given: every write takes its shared pane writer first. */
 export function sessionInputDeps(
   deps: InputDeps,
-  deviceInput: () => Pick<AutonomousDeviceInput, 'legacyWrite'>,
+  input: () => Pick<SessionInputController, 'writeTerminal'>,
 ): SessionInputDeps {
   const { resolve, terminal, deliveries, device, clients, agentIdFor, openTurn, emit } = deps
   const { captureTerminal, validateTerminal, keyTerminalAction } = terminal
@@ -184,14 +184,14 @@ export function sessionInputDeps(
     beforeTeamWrite: async (session) => (await readTeamHold(deps, session)).hold,
     validateRuntime: validateTerminal,
     // Typed into the pane as it stands, a draft or a running turn included, under the pane's write lock.
-    inject: (id, text) => deviceInput().legacyWrite(id, () => writeMessage(id, text)),
+    inject: (id, text) => input().writeTerminal(id, () => writeMessage(id, text)),
     // An Agent Messages turn waits for a ready composer, and for its mailbox to still want it written.
-    injectTeam: (id, text, deliveryId) => deviceInput().legacyWrite(id, async () => {
+    injectTeam: (id, text, deliveryId) => input().writeTerminal(id, async () => {
       if (!resolve(id)) return terminalActionNotStarted('team_waiting_unavailable')
       return writeMessage(id, text, (_session, screen) => paneHold(screen)
         ?? (deliveries.canWrite(deliveryId) ? null : 'team_waiting_control'))
     }),
-    sendKey: (id, key) => deviceInput().legacyWrite(id, () => keyTerminalAction(id, key)),
+    sendKey: (id, key) => input().writeTerminal(id, () => keyTerminalAction(id, key)),
     capture: captureTerminal,
     engineStarting: (session) => deps.engineStarting?.(session.engine) ?? null,
     // The app hears that the message waits, and why: it shows the agent as starting until the message is typed or refused (`error`).
@@ -222,14 +222,14 @@ export function sessionInputDeps(
 /** What `AutonomousDeviceInput` is given: the terminal directly, and the controller for queued input. */
 export function deviceInputDeps(
   deps: InputDeps,
-  input: () => Pick<SessionInputController, 'acquireControl' | 'submit' | 'cancelDelivery'>,
+  input: () => Pick<SessionInputController, 'acquireInputWriter' | 'submit' | 'cancelDelivery'>,
 ): DeviceInputDeps {
   const { resolve, byAgent, terminal, device } = deps
   const { captureTerminal, validateTerminal, keyTerminalAction } = terminal
   return {
     getSession: id => resolve(id),
     validateRuntime: validateTerminal,
-    // The Device holds the pane's write lock itself while it writes.
+    // The shared input writer is reserved locally for the whole dispatch.
     inject: messageWriter(deps),
     sendKey: keyTerminalAction,
     capture: captureTerminal,
@@ -240,7 +240,7 @@ export function deviceInputDeps(
       const screen = await deps.readScreen(session, pane)
       return pane === null || !screen || screen.messageHold !== null
     },
-    acquireControl: id => input().acquireControl(id, { forAnswer: true }),
+    acquireControl: id => input().acquireInputWriter(id),
     legacySubmit: (id, text, deliveryId) => input().submit(id, text, deliveryId),
     legacyCancel: id => input().cancelDelivery(id),
     onDelivery: event => device()?.delivery(event),
@@ -252,7 +252,7 @@ export function deviceInputDeps(
 
 export function createInput(deps: InputDeps) {
   const { resolve, terminal: { pinTerminalControl } } = deps
-  const input: SessionInputController = new SessionInputController(sessionInputDeps(deps, () => deviceInput))
+  const input: SessionInputController = new SessionInputController(sessionInputDeps(deps, () => input))
   const deviceInput: AutonomousDeviceInput = new AutonomousDeviceInput(deviceInputDeps(deps, () => input))
   const acquireTerminalControl = (id: string, opts?: { forAnswer?: boolean }): (() => void) | null => {
     const agentId = resolve(id)?.agentId ?? id

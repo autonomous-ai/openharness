@@ -1,11 +1,13 @@
 /**
- * The pane writer lock's edges (core/deviceInput.ts): what happens when the agent goes, the queue fills,
+ * The device input's edges (core/deviceInput.ts): what happens when the agent goes, the queue fills,
  * a write is cancelled or fails part way, or the pane cannot be read. Each is a write into a person's
  * pane that must either happen once or be said not to have happened.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AutonomousDeviceInput, type DeviceInputDeps } from './deviceInput.js'
 import { inlineSubmission } from '../testing/inlineSubmission.js'
+import { readInlineScreen } from '../testing/inlineScreen.js'
+import { SessionInputController } from '../lib/sessionInput.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { TerminalActionResult } from '../lib/terminalTypes.js'
 
@@ -37,7 +39,7 @@ function held<T>() {
   return { promise, resolve, reject }
 }
 
-describe('the pane writer lock, at its edges', () => {
+describe('device input, at its edges', () => {
   it('refuses a turn for an agent that is gone, and a queue that is full by count or by size', async () => {
     const gone = lock({ getSession: () => undefined })
     gone.device.submit('agent', 'hello', 'd0')
@@ -73,13 +75,17 @@ describe('the pane writer lock, at its edges', () => {
 
   it('waits for a write already in the pane, then writes', async () => {
     vi.useFakeTimers()
-    const f = lock()
-    const legacy = held<void>()
-    const writing = f.device.legacyWrite('agent', () => legacy.promise)
+    const input = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => claude, validateRuntime: async () => true, inject: async () => true,
+      sendKey: async () => true, onError: vi.fn(),
+    })
+    const f = lock({ acquireControl: id => input.acquireInputWriter(id) })
+    const legacy = held<boolean>()
+    const writing = input.writeTerminal('agent', () => legacy.promise)
     f.device.submit('agent', 'after the window', 'd1')
     await vi.advanceTimersByTimeAsync(150)
     expect(f.states('d1')).toEqual(['queued'])
-    legacy.resolve()
+    legacy.resolve(true)
     await writing
     await vi.advanceTimersByTimeAsync(150)
     expect(f.states('d1')).toEqual(['queued', 'delivered'])

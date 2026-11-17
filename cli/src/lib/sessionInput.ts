@@ -7,7 +7,7 @@ import type { RegisteredSession } from './registry.js'
 import { sid } from './log.js'
 import { isMessageHold, messageHoldText, messageWithheldText, passingHold, type MessageHold } from './messageHolds.js'
 import type { MoveGate } from './hostMove/gate.js'
-import { enterWithheldReason, TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
+import { enterWithheldReason, terminalActionNotStarted, TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
 
 const MAX_QUEUE_ITEMS = 8
 const MAX_QUEUE_BYTES = 24 * 1024
@@ -118,6 +118,13 @@ interface HeldInput {
   cancelled: boolean
 }
 
+interface InputWriter {
+  held: boolean
+  writing: number
+  waiters: Array<() => void>
+  retired: boolean
+}
+
 /** Burst profiling found discarded splice results on every consumed ticket. Preserve order without that allocation. */
 function removeHeld(held: HeldInput[], item: HeldInput): void {
   const at = held.indexOf(item)
@@ -127,6 +134,7 @@ function removeHeld(held: HeldInput[], item: HeldInput): void {
 }
 
 interface InputState {
+  writer?: InputWriter
   /** The writes this agent's messages are making, one after another in the order they arrived. */
   writes?: Promise<void>
   deliveryId?: string
@@ -217,10 +225,56 @@ function fingerprint(content: string): string {
 /** Engine-aware prompt injection. Terminal TUIs get a bounded per-session FIFO while a turn is busy. */
 export class SessionInputController {
   private states = new Map<string, InputState>()
+  /** A forgotten pane stays excluded until its actual writes settle, even if its agent is recreated. */
+  private retiredWriters = new Map<string, InputWriter>()
   /** The messages waiting for each agent's engine's reader to start (`engineReady`), by session. */
   private readonly waitingEngine = new Map<string, number>()
 
   constructor(private readonly deps: SessionInputDeps) {}
+
+  private writer(id: string, state: InputState): InputWriter {
+    return state.writer ??= this.retiredWriters.get(id) ?? { held: false, writing: 0, waiters: [], retired: false }
+  }
+
+  private releaseRetiredWriter(id: string, writer: InputWriter): void {
+    if (!writer.retired || writer.held || writer.writing || writer.waiters.length) return
+    if (this.retiredWriters.get(id) === writer) this.retiredWriters.delete(id)
+    writer.retired = false
+  }
+
+  /** Ordinary writes retain their concurrency, except while an atomic input owns this pane. */
+  writeTerminal(id: string, operation: () => Promise<boolean | TerminalActionResult>): Promise<boolean | TerminalActionResult> {
+    const state = this.state(id)
+    const writer = this.writer(id, state)
+    const run = async (): Promise<boolean | TerminalActionResult> => {
+      // Waiting behind another input does not carry authority into a replacement input state.
+      if (this.states.get(id) !== state) return terminalActionNotStarted('terminal agent is unavailable')
+      writer.writing++
+      try { return await operation() }
+      finally { writer.writing--; this.releaseRetiredWriter(id, writer) }
+    }
+    if (!writer.held) return run()
+    return new Promise((resolve, reject) => writer.waiters.push(() => { void run().then(resolve, reject) }))
+  }
+
+  /** Reserve an atomic input locally; terminal authority never leaves the input controller. */
+  acquireInputWriter(id: string): (() => void) | null {
+    const writer = this.writer(id, this.state(id))
+    if (writer.held || writer.writing) return null
+    const releaseControl = this.acquireControl(id, { forAnswer: true })
+    if (!releaseControl) return null
+    writer.held = true
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      writer.held = false
+      // Register the ordinary writes before releasing control, which can drain another input.
+      for (const resume of writer.waiters.splice(0)) resume()
+      releaseControl()
+      this.releaseRetiredWriter(id, writer)
+    }
+  }
 
   /**
    * An engine whose own TUI queues a message typed while a turn is running, and runs it when the turn ends,
@@ -757,6 +811,11 @@ export class SessionInputController {
       state.held = []
       state.afterCancel = { writes: [], sent: [] }
       state.cancelled = true
+      const writer = state.writer
+      if (writer && (writer.held || writer.writing || writer.waiters.length)) {
+        writer.retired = true
+        this.retiredWriters.set(sessionId, writer)
+      }
     }
     this.states.delete(sessionId)
   }

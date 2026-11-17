@@ -1,12 +1,7 @@
 /**
- * The pane writer lock, and the Wi-Fi device's queued turns behind it: one writer at a time into an
- * agent's pane, whoever is writing (a device's turn, a window's message, a team's), and a device turn
- * held until the pane can take it.
- *
- * The core's, not the device's: every write the core makes into a pane takes this lock (core/input.ts),
- * so it has to be where the writes are. It lived beside the Wi-Fi device (lib/autonomous-device/input.ts)
- * until the devices moved into a process of their own (docs/design/2026-10-06-core-boundary-next.md,
- * step 9): a lock that every pane write waits on cannot sit on the far side of a process boundary.
+ * The Wi-Fi device's queued turns. The shared input controller owns the pane's writer and reserves it
+ * locally for each dispatch, until the pane can take another input. Queue and receipt policy still live
+ * here pending package 12's shared native-input contract; this is not yet the process extraction.
  */
 import { createHash } from 'node:crypto'
 import type { RegisteredSession } from '../lib/registry.js'
@@ -47,11 +42,6 @@ interface State {
   release?: () => void
   timer?: NodeJS.Timeout
 }
-interface Writer {
-  held: boolean
-  legacy: number
-  waiters: Array<() => void>
-}
 export interface DeviceInputDeps {
   getSession: (id: string) => RegisteredSession | undefined
   validateRuntime: (session: RegisteredSession) => Promise<boolean>
@@ -61,6 +51,7 @@ export interface DeviceInputDeps {
   /** The engine's reading of its composer after a paste, from its worker; core decides on it. */
   submission: Pick<SubmissionReader, 'read' | 'policy'>
   isAwaitingUser?: (session: RegisteredSession) => Promise<boolean>
+  /** Reserve the shared input writer and control locally, until this dispatch settles. */
   acquireControl: (id: string) => (() => void) | null
   legacySubmit: (id: string, text: string, deliveryId: string) => void
   legacyCancel: (deliveryId: string) => boolean
@@ -87,7 +78,6 @@ const rejected = (result: boolean | TerminalActionResult) => result === false ||
 /** A separate route, used exclusively by Autonomous Device turn.send. */
 export class AutonomousDeviceInput {
   private states = new Map<string, State>()
-  private writers = new Map<string, Writer>()
   constructor(private readonly deps: DeviceInputDeps) {}
   /** The engines whose TUI takes a message typed mid-turn, which this route queues and verifies itself
    *  (Claude Code and Codex, as their submission policies declare); every other engine's goes the legacy way. */
@@ -98,24 +88,6 @@ export class AutonomousDeviceInput {
     let state = this.states.get(id)
     if (!state) { state = { busy: false, userAction: false, queue: [], pending: [], writing: false }; this.states.set(id, state) }
     return state
-  }
-  private writer(id: string): Writer {
-    let writer = this.writers.get(id)
-    if (!writer) { writer = { held: false, legacy: 0, waiters: [] }; this.writers.set(id, writer) }
-    return writer
-  }
-  /** Legacy writes run unchanged unless a Device write currently owns this same pane.
-   * This also covers a local validation that began before Device acquired the existing control lock.
-   */
-  legacyWrite<T>(id: string, operation: () => Promise<T>): Promise<T> {
-    const writer = this.writer(id)
-    const run = async () => {
-      writer.legacy++
-      try { return await operation() }
-      finally { writer.legacy-- }
-    }
-    if (!writer.held) return run()
-    return new Promise<T>((resolve, reject) => writer.waiters.push(() => { void run().then(resolve, reject) }))
   }
   private delivery(id: string, item: Input, state: SessionInputDelivery['state'], reason?: string): void {
     this.deps.onDelivery({ sessionId: id, deliveryId: item.deliveryId, state, ...(reason ? { reason } : {}) })
@@ -163,17 +135,9 @@ export class AutonomousDeviceInput {
     if (!state.queue.length || state.pending.length >= 64) return
     const session = this.deps.getSession(id)
     if (!session) { this.forget(id); return }
-    const writer = this.writer(id)
-    if (writer.held || writer.legacy) { this.later(id, state, 100); return }
     const release = this.deps.acquireControl(id)
     if (!release) { this.later(id, state, 100); return }
-    writer.held = true
-    state.release = () => {
-      writer.held = false
-      // Register delayed legacy writes before another Device write can acquire the pane.
-      for (const resume of writer.waiters.splice(0)) resume()
-      release()
-    }
+    state.release = release
     const item = state.queue.shift()!
     state.active = item
     state.writing = true
