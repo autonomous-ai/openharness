@@ -10,10 +10,10 @@
  * (FOOTPRINT_WARMUP_SECONDS, 20) each stays idle for FOOTPRINT_SECONDS (30) while `ps` reads, every second, the
  * resident memory of every process under the master: the master (`harnessd`), the core (`harnessd-core`), each
  * service process (`harnessd-<name>`) and the engine workers. Each is named by the hard link it runs through, in a
- * release, or by the pid the master logged it under. Reported per process as the mean over the window, and in total: a readable table on stdout
- * for each, and JSON of all of them to FOOTPRINT_REPORT when it is set. Processes that are not the daemon's own (a `ps`
- * the monitor ran at that moment) are listed apart and left out of the total. FOOTPRINT_ENGINES names the agents
- * instead, comma-separated, or `none` for a daemon at rest with no agent.
+ * release, or by the pid the master logged it under. Reported per process as the mean over the window, and in total:
+ * a readable table on stdout for each, and JSON of all of them to FOOTPRINT_REPORT when it is set. Processes that are
+ * not the daemon's own (a `ps` the monitor ran at that moment) are listed apart and left out of the total.
+ * FOOTPRINT_ENGINES names the agents instead, comma-separated, or `none` for a daemon at rest with no agent.
  *
  * Measurement only, no limit: it was written to answer what Agent Messages costs in a process of its own against in
  * the edge host (2026-10-12). Run it on two builds on the same machine, one after the other, and compare.
