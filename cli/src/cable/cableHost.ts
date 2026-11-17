@@ -766,13 +766,19 @@ export class DaemonCableHost implements CableHost {
 
   /** The dial that reported last and what it shows. One report for all dials: a none from another dial is dropped, so
    *  unplugging one of two does not blank the agent the other shows. */
-  private shown: { dial: object; agent: DialAgent } | null = null
+  private shown: { dial: object; agent: DialAgent; agentId: string | null } | null = null
 
-  dialShows(dial: object, agent: DialAgent | null): void {
-    if (agent) this.shown = { dial, agent }
+  dialShows(dial: object, agent: DialAgent | null, agentId: string | null): void {
+    if (agent) this.shown = { dial, agent, agentId }
     else if (this.shown?.dial === dial) this.shown = null
     else return
+    // The id stays here: the `dial` stream writes a name and an app only.
     this.wiring.dialShows?.(agent)
+  }
+
+  /** The id of the agent the dial that moved last shows; none once that dial shows none. */
+  shownAgentId(): string | undefined {
+    return this.shown?.agentId ?? undefined
   }
 
   markSeen(agentId: string, opts: { apps?: boolean } = {}): void {
