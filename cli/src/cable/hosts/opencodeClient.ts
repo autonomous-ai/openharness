@@ -4,8 +4,9 @@
  * use, and names it in `service.json`.
  *
  * Everything is checked here. The file is another program's and names where a password goes: it must be a plain file of
- * this user's, within its bound, before it is read, and its url on this computer before anything connects, so the
- * password and the person's words never leave it. The server must then say it is the process the file names. An answer
+ * this user's, within its bound, before it is read, and its url on this computer and its process running and this
+ * user's before anything connects, so the password and the person's words never leave it nor reach another account. The
+ * server must then say it is the process the file names. An answer
  * and a frame have a bound, and the session id and the words came from the dial, so each is held to its form before it
  * goes out.
  *
@@ -98,7 +99,8 @@ interface Service {
   authorization?: string
 }
 
-const LOOPBACK: ReadonlySet<string> = new Set(['127.0.0.1', '[::1]', 'localhost'])
+/** Addresses as written: a name, localhost among them, is whatever the resolver makes of it. */
+const LOOPBACK: ReadonlySet<string> = new Set(['127.0.0.1', '[::1]'])
 const ASKED: ReadonlySet<string> = new Set(EVENT_TYPES)
 const EVENT_PATH = `/api/event?${new URLSearchParams(EVENT_TYPES.map((type): [string, string] => ['types', type]))}`
 /** The frame's event name when opencode's stream fails, its cause as data (OpenAPI `x-effect-stream.failureEvent`). */
@@ -115,6 +117,16 @@ const loopback = (text: string): URL | undefined => {
     return url.protocol === 'http:' && LOOPBACK.has(url.hostname) && url.username === '' && url.password === '' ? url : undefined
   } catch {
     return undefined
+  }
+}
+
+/** The process runs and is this user's: signal 0 is refused for one that is gone (ESRCH) and another user's (EPERM). */
+const ours = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -259,6 +271,8 @@ export function createOpencodeClient(deps: OpencodeClientDeps): OpencodeClient {
     held = undefined
     const found = service()
     if ('fault' in found) return found
+    // An opencode that died leaves its file, and its port may be another account's now: the password never goes there.
+    if (!ours(found.pid)) return { fault: 'no_service' }
     const [info] = await call(found, 'GET', '/api/info')
     // A server with no /api/info has no V2 API.
     if (!info.ok) return { fault: info.fault === 'not_found' ? 'old_version' : info.fault }

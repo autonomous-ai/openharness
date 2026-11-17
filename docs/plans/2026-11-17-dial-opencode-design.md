@@ -73,6 +73,10 @@ Answered after the draft plan (PM for Diego, 2026-11-17):
   mapping is a follow-up if Diego's own look shows it is needed.
 - **P7.** No run against a real opencode 2.x holds the merge; the first real look is Diego's after he upgrades, a
   follow-up named in the pull request.
+- **Q-R1** (PM for Diego, 2026-11-17). Before anything is sent, the file's `pid` must be running and this user's
+  (`process.kill(pid, 0)`; gone or another user's is `no_service`), and `/api/info` must still answer that pid: an
+  opencode that crashed leaves its file, and another account could take its loopback port and the password with it. Only
+  the literal hosts `127.0.0.1` and `::1` are loopback; `localhost` is refused.
 
 ## Design
 
@@ -85,8 +89,12 @@ opencode's server (cli/AGENTS.md rule 7). The Harness plugin does not change.
   then `opencode/service.json`, as opencode itself works it out. No other process's environment is read.
   - Before each read: `lstat` says a regular file (no symlink), at most 4 KiB, and on macOS and Linux owned by this user.
   - The JSON must have `url` (string) and `pid` (positive integer); `version`, `id`, `password` are strings when present.
-  - **The url must be loopback**: `http:` with host `127.0.0.1`, `::1` or `localhost`. Anything else is refused
-    (`not_local`): the password and the person's words never leave the computer.
+  - **The url must be loopback**: `http:` with host `127.0.0.1` or `::1`, written as such; a name, `localhost` too, is
+    whatever the resolver makes of it. Anything else is refused (`not_local`): the password and the person's words never
+    leave the computer.
+  - **The file's `pid` must be running and this user's** before anything is sent (`process.kill(pid, 0)`: gone or
+    another user's is `no_service`; on Windows, gone): an opencode that crashed leaves its file, and its port may be
+    another account's now (Q-R1).
   - `GET /api/info` must answer the file's `pid`, and its `version` when the file has one, and a `version` whose major is
     2 or more. Else `not_ours` or `old_version`, and nothing more is sent.
 - **The password** stays in memory, sent only as the Basic header to that loopback url. It is never logged, never in an

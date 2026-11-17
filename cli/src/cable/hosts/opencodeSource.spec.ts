@@ -253,7 +253,7 @@ describe("the opencode source (docs/plans/2026-11-17-dial-opencode-design.md)", 
       server.session(API)
       const cases: Array<[string, () => void, () => void]> = [
         ['not_local', () => server.register({ url: 'http://192.168.1.5:4096' }), () => server.register()],
-        ['not_ours', () => server.register({ pid: 1 }), () => server.register()],
+        ['not_ours', () => server.register({ pid: process.ppid }), () => server.register()],
         ['old_version', () => server.answer('GET /api/info', { status: 404 }), () => {
           server.answer('GET /api/info')
           server.register({ id: 'svc_next' })
