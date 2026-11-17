@@ -1,8 +1,9 @@
 /**
  * Harness's VS Code extension's own loop, outside VS Code (dialVscode.e2e.ts), over a fake window: each line on stdin is
  * a `Partial<WindowState>` the window takes, as VS Code tells it of its terminals; each line on stdout is
- * `{"state":…}`, `{"show":<pid>}` or `{"log":…}`. A script, not a module, as pluginDial.ts is: in a process of its own
- * `nodeInputs()` reads only the home and PATH the test hands it.
+ * `{"state":…}`, `{"show":<pid>}`, `{"scroll":"up"|"down"}`, `{"took":<WindowState>}` or `{"log":…}`. `took` follows each
+ * line taken, so the test knows the window changed before it sends what depends on it. A script, not a module, as
+ * pluginDial.ts is: in a process of its own `nodeInputs()` reads only the home and PATH the test hands it.
  *
  * Stdin's end stops the loop. No exit and no signal handler: the process ending by itself, with code 0, says `stop()`
  * left no stream, watcher or timer.
@@ -21,10 +22,17 @@ const loop = startLoop(nodeInputs(), {
     say({ show: pid })
     return fake.window.show(pid)
   },
+  scrollLine: (up) => {
+    say({ scroll: up ? 'up' : 'down' })
+    return fake.window.scrollLine(up)
+  },
 }, {
   changed: (state) => say({ state }),
   log: (line) => say({ log: line }),
 })
 createInterface({ input: process.stdin })
-  .on('line', (line) => fake.set(JSON.parse(line)))
+  .on('line', (line) => {
+    fake.set(JSON.parse(line))
+    say({ took: fake.window.state() })
+  })
   .once('close', () => { void loop?.stop() })
