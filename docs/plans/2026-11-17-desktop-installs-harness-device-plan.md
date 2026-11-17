@@ -31,8 +31,8 @@ By the PM, 2026-11-17 (the spec and the brief). Not reopened:
 3. One click. Install installs, no dialog. `Installing…`, then a failure line and `Retry`, or the app opens.
 4. `Not now` hides the band for good on this computer (local key `device_app.offer_dismissed`). The row stays.
 5. macOS 13 or later only. Linux, Windows, the web and macOS 12 show nothing and make no lookup.
-6. The lookup is LaunchServices (`urlsForApplications`, filtered) and `NSRunningApplication`. Installed and not
-   running shows `Open`, on the row only.
+6. The lookup is LaunchServices (`urlsForApplications`, filtered in Dart, see 23) and `NSRunningApplication`.
+   Installed and not running shows `Open`, on the row only.
 7. The download is the manifest's `Harness-Device.app.tar.gz` (`device-macos-arm64` then `device-macos` on Apple
    Silicon, `device-macos` on Intel), checked by sha256 and size, unpacked with `tar`, checked by `codesign` against
    the running Desktop's Team ID and the identifier `ai.autonomous.harness.device`. `/Applications`, then
@@ -45,8 +45,8 @@ The plan's own, each from what the code showed (below):
 10. Shared facts (ids, the support rule, the steps and their lines, the probe's interface) are one small file,
     `device_app.dart`, so the installer and the controller can be built at the same time.
 11. The manifest's rules are their own file, `device_app_manifest.dart`: pure, tested on every host.
-12. The row is its own widget file, `device_app_row.dart`, not inside `devices_screen.dart` as the spec's table
-    has it: the gallery must import it, and the row and the screen's wiring are then separate tasks.
+12. The row is its own widget file, `device_app_row.dart`, placed by `devices_screen.dart`: the gallery must
+    import it, and the row and the screen's wiring are then separate tasks.
 13. The installer's manifest URL, target folders, signature check and opener are **required** parameters. Only
     `device_app_setup.dart` passes the real ones, so a test that forgets one does not compile, instead of
     installing on the developer's Mac.
@@ -54,54 +54,38 @@ The plan's own, each from what the code showed (below):
     prefixes stay constants nobody can pass in.
 15. `app_state.dart` (22,376 lines) is touched by one task only.
 
-## Open questions
+The PM's answers to the plan's questions, 2026-11-17 (the spec carries them too):
 
-For the PM, in one message. The draft says what it assumes until then.
-
-1. **Button order on the band.** The spec's line shows `Install`, then `Not now`. Every other band, and the design
-   doc, put the quiet button first and the main one last. **The draft assumes** `Not now`, then `Install`.
-2. **The band's colour and icon.** "Style of `NewDeviceNotice`" is an amber band with a shield. **The draft
-   assumes** the same amber band, with `AppIcons.arrowDownToLine` in place of the shield and
-   `AppIcons.triangleAlert` on a failure, as the update band does. The other reading is the update band's accent
-   wash for the offer.
-3. **Where the band sits.** **The draft assumes** last of the device bands: under the held-computer band, above the
-   shared-tab notice.
-4. **Apostrophes.** The spec's failure lines use `'`. Every other line in the app uses `’` (`Couldn’t reach …`).
-   **The draft assumes** `’`.
-5. **A test path that does not exist.** The spec names `desktop/test/update/update_signature_test.dart`. The file is
-   `desktop/test/update_signature_test.dart`. **The draft assumes** the cases go in the existing file.
-6. **The manifest's size, and redirects.** The spec says "under 2 KB". Today's is 2,399 bytes, and its `notes` may
-   hold 100 commit subjects. **The draft assumes** a 64 KiB cap on the manifest's body, and that neither request
-   follows a redirect (both answer 200 with none today), so nothing a server sends but the two checked values
-   reaches a request.
-7. **Timeouts the spec does not give.** `tar`, `ditto` and `open` have none. **The draft assumes** 60 seconds each,
-   the signature check's own value. "200 MB" is read as 200 × 1024 × 1024 bytes.
-8. **The Swift filter has no test that runs anywhere.** The spec puts "on disk, in no Trash, not under `/Volumes/`"
-   in Swift. The repo's Swift tests are hosted in the real app and no gate runs them. **The draft follows the
-   spec:** Swift filters; a Dart test checks the file is compiled in and registered; the native test asks the real
-   channel. **Recommended instead:** Swift returns the paths and whether it runs, Dart filters, and pull request CI
-   tests the filter. A yes changes Tasks 2 and 3 only.
-9. **A wrongly signed bundle and real `codesign`.** The spec's end-to-end list has a corrupted byte (refused at the
-   checksum) but no bundle refused by the signature, which is the one check a rewritten manifest cannot pass.
-   **The draft assumes** one more run in the native test: an ad-hoc signed stand-in served from loopback, refused
-   at `signature`. Also recommended, and **not** in the draft because the brief keeps real `codesign` out of unit
-   tests: three cases for `verifyMacBundle` in `desktop/test/update_signature_macos_test.dart`, the existing file
-   of real-`codesign` cases on temporary bundles, so `make desktop-test` on a Mac keeps checking it.
-10. **What the spec leaves open after an install.** **The draft assumes:** (a) when the app was installed and
-    `open` failed, `Retry` on the band and `Open` on the row only open it, with no second download; (b) `Not now`
-    is disabled while installing, as the update band's Skip is; (c) `Open` failing from the row shows
-    `Installed. Couldn’t open it.`; (d) a lookup that fails keeps the last answer, or shows nothing when there is
-    none; (e) two log lines beside the spec's three: `device app: lookup failed` and `device app: open failed`;
-    (f) after an install, a lookup that still says "not installed" is not believed until one says "installed"
-    (LaunchServices registers late). A person who deletes the app in that gap sees no offer until Desktop restarts.
-11. **A Harness Pro alone.** `dial.status.attached` is true for a square Harness Pro too. **The draft assumes** the
-    spec as written: any attached device shows the offer, with the same copy.
-12. **The mockups.** The UI checklist asks for an ASCII mockup the requester confirmed. The spec has the band's one
-    line. **The draft assumes** the mockups under [Mockups](#mockups) are the ones to confirm.
-13. **A real install, seen by a person.** The path no test reaches is a signed Desktop reading its own Team ID and
-    installing into `/Applications`. This Mac has `Harness Device.app` installed, and no test here removes it.
-    **The draft plans no such check.** Recommended: the owner, on a Mac with a dial and without the app, with an
-    internal build (`git push origin HEAD:internal/<name>`, signed, self-update off). It needs the owner's go.
+16. **The band's buttons.** The quiet `Not now` first, the main `Install` last, as every other band and the design
+    doc.
+17. **The band's colour and icon.** The amber band of `NewDeviceNotice`, with `AppIcons.arrowDownToLine` in place
+    of the shield, and `AppIcons.triangleAlert` on a failure, as the update band does.
+18. **Where the band sits.** Last of the device bands: under the held-computer band, above the shared-tab notice.
+19. **Apostrophes.** `’` in every line of copy (`Couldn’t …`), as the rest of the app.
+20. **The signature cases' file.** The requirement cases go in the existing `desktop/test/update_signature_test.dart`.
+21. **The manifest's size, and redirects.** The manifest's body is read up to 64 KiB, and neither request follows
+    a redirect, so nothing a server sends but the two checked values reaches a request.
+22. **Timeouts.** `tar`, `ditto` and `open` 60 seconds each, the signature check's own value. The archive's cap
+    is 200 MiB (200 × 1024 × 1024 bytes).
+23. **The lookup's filter is in Dart.** Swift returns the paths `urlsForApplications` gives and whether the app
+    runs, and filters nothing. Dart counts a path as installed when it exists on disk, is in no Trash and is not
+    under `/Volumes/`, in a pure function pull request CI tests (Tasks 2 and 3).
+24. **A wrongly signed bundle, and real `codesign`.** Both: the native test serves an ad-hoc signed stand-in from
+    loopback and expects it refused at `signature` (Task 13), and three real-`codesign` cases for
+    `verifyMacBundle` go in `desktop/test/update_signature_macos_test.dart`, so `make desktop-test` on a Mac keeps
+    checking it (Task 4).
+25. **After an install, and when a lookup fails.** (a) Installed but `open` failed: `Retry` on the band and `Open`
+    on the row only open the app, with no second download. (b) `Not now` is disabled while an install runs, as
+    the update band's Skip is. (c) `Open` failing from the row shows `Installed. Couldn’t open it.` (d) A lookup
+    that fails keeps the last answer, or shows nothing when there is none. (e) Two log lines beside the spec's
+    three: `device app: lookup failed` and `device app: open failed`. (f) After an install, a lookup that still
+    says "not installed" is not believed until one says "installed" (LaunchServices registers late); someone who
+    deletes the app in that gap sees no offer until Desktop restarts.
+26. **Any device.** A square Harness Pro alone shows the offer too, with the same copy (Task 11 clicks it).
+27. **The mockups.** The ASCII mockups under [Mockups](#mockups) are the confirmed ones.
+28. **A real install, seen by a person, holds the merge.** After the final review and every other check passes,
+    the owner checks it on his Mac from a signed internal build of the final head ([Verification](#verification)
+    6). No task: nothing in the code changes for it (no switch, no `--dart-define`).
 
 ## Global Constraints
 
@@ -121,9 +105,9 @@ For the PM, in one message. The draft says what it assumes until then.
 - **Fixed arguments.** Every process is started with arguments built in Dart. Of the manifest, only the URL (checked
   against the prefixes), the sha256 and the size are used.
 - **Tests never touch the developer's Mac.** Temporary folders, a loopback `HttpServer`, a recording opener. No
-  test writes outside its own temporary directories. Of the tests this plan adds, only Task 13's native test runs
-  the real `codesign` (the existing `test/update_signature_macos_test.dart` keeps its own cases). No test runs the
-  real `open`.
+  test writes outside its own temporary directories. Of the tests this plan adds, only Task 4's three cases in
+  `test/update_signature_macos_test.dart` (on temporary bundles, skipped off macOS) and Task 13's native test run
+  the real `codesign`. No test runs the real `open`.
 - **Every test passes or is skipped on Linux and Windows.** Pull request CI runs the suite on Linux. A case that
   needs `/usr/bin/ditto` is skipped unless `Platform.isMacOS`, as `test/update_signature_macos_test.dart` does.
 - **Logs.** `device app: install started`, `device app: install done`, `device app: install failed <step>`,
@@ -184,9 +168,9 @@ For the PM, in one message. The draft says what it assumes until then.
 | Task | File | What |
 |---|---|---|
 | 1 | `desktop/lib/devices/device_app.dart` (new), `desktop/test/devices/device_app_test.dart` (new) | ids, the support rule, steps and lines, the probe's interface |
-| 2 | `desktop/macos/Runner/HarnessDeviceApp.swift` (new), `desktop/macos/Runner/MainFlutterWindow.swift`, `desktop/macos/Runner.xcodeproj/project.pbxproj`, `desktop/test/macos_device_app_channel_test.dart` (new) | the Swift lookup |
-| 3 | `desktop/lib/devices/device_app_probe.dart` (new), `desktop/test/devices/device_app_probe_test.dart` (new) | the channel's Dart side |
-| 4 | `desktop/lib/update/update_signature.dart`, `desktop/test/update_signature_test.dart` | the requirement by team and identifier |
+| 2 | `desktop/macos/Runner/HarnessDeviceApp.swift` (new), `desktop/macos/Runner/MainFlutterWindow.swift`, `desktop/macos/Runner.xcodeproj/project.pbxproj`, `desktop/test/macos_device_app_channel_test.dart` (new) | the Swift lookup: paths and running, no filter |
+| 3 | `desktop/lib/devices/device_app_probe.dart` (new), `desktop/test/devices/device_app_probe_test.dart` (new) | the channel's Dart side, and the filter (on disk, no Trash, not `/Volumes/`) |
+| 4 | `desktop/lib/update/update_signature.dart`, `desktop/test/update_signature_test.dart`, `desktop/test/update_signature_macos_test.dart` | the requirement by team and identifier; `verifyMacBundle` with real `codesign` |
 | 5 | `desktop/lib/devices/device_app_manifest.dart` (new), `desktop/test/devices/device_app_manifest_test.dart` (new) | which entry, and whether it may be fetched |
 | 6 | `desktop/lib/devices/device_app_installer.dart` (new), `desktop/test/devices/device_app_installer_test.dart` (new) | the seven steps |
 | 7 | `desktop/lib/devices/device_app_offer.dart` (new), `desktop/test/devices/device_app_offer_test.dart` (new), `desktop/test/support/device_app.dart` (new) | the controller, and the fakes every later test uses |
@@ -348,7 +332,7 @@ Expected: all pass; `No issues found!`
 
 ### Task 2: The lookup in Swift
 
-**Depends on:** nothing. **Effort:** high.
+**Depends on:** nothing. **Effort:** high. (Changed by decision 23: Swift returns the paths and filters nothing.)
 
 **Files:**
 - Create: `desktop/macos/Runner/HarnessDeviceApp.swift`
@@ -358,21 +342,20 @@ Expected: all pass; `No issues found!`
   the file)
 - Test: `desktop/test/macos_device_app_channel_test.dart`
 
-**The test that fails before the change:** `test/macos_device_app_channel_test.dart`, both cases. It reads the
-sources, so it runs in pull request CI: a Swift file left out of the project compiles nowhere, the channel then
-answers nothing, and the offer never shows.
+**The test that fails before the change:** `test/macos_device_app_channel_test.dart`, all three cases. It reads
+the sources, so it runs in pull request CI: a Swift file left out of the project compiles nowhere, the channel
+then answers nothing, and the offer never shows.
 
 **Interfaces:**
 - Produces: channel `harness/device_app`, method `lookup`, no arguments, reply
-  `{"installed": Bool, "running": Bool}`. Any other method: `FlutterMethodNotImplemented`.
+  `{"paths": [String], "running": Bool}`: `paths` is every URL `urlsForApplications` gives, as its file path, in
+  its order, none left out (Task 3 filters them). Any other method: `FlutterMethodNotImplemented`.
 
 ```swift
 enum HarnessDeviceApp {
   static let bundleIdentifier = "ai.autonomous.harness.device"
   /// Sets up `harness/device_app` and keeps the channel.
   static func install(messenger: FlutterBinaryMessenger)
-  /// Whether any of [urls] is an installed copy: on disk, in no Trash, not under /Volumes/.
-  static func isInstalled(_ urls: [URL], exists: (String) -> Bool) -> Bool
 }
 ```
 
@@ -392,11 +375,19 @@ void main() {
     expect(window, contains('HarnessDeviceApp.install(messenger:'));
     final source = swift.readAsStringSync();
     for (final part in [
-      '"harness/device_app"', '"lookup"', '"ai.autonomous.harness.device"',
+      '"harness/device_app"', '"lookup"', '"ai.autonomous.harness.device"', '"paths"', '"running"',
       'urlsForApplications(withBundleIdentifier:', 'runningApplications(withBundleIdentifier:',
-      '"/Volumes/"', '".Trash"', '".Trashes"',
     ]) {
       expect(source, contains(part), reason: part);
+    }
+  });
+
+  // The filter is Dart's (device_app_probe.dart), where pull request CI tests it: a second one here would
+  // be a rule no gate runs.
+  test('the lookup filters nothing', () {
+    final source = swift.readAsStringSync();
+    for (final part in ['/Volumes/', '.Trash', 'fileExists', '.filter']) {
+      expect(source, isNot(contains(part)), reason: part);
     }
   });
 
@@ -416,12 +407,11 @@ Expected: FAIL (the file does not exist; the project names it 0 times, not 6).
 
 - [ ] **Step 3: Commit the red test** (message `Menu-bar app offer: the macOS lookup is compiled in and registered (test)`)
 
-- [ ] **Step 4: Write `HarnessDeviceApp.swift`.** `isInstalled` is true when some URL's path exists, does not
-  start with `"/Volumes/"`, and has no path component equal to `".Trash"` or `".Trashes"`. `lookup` answers on the
-  main thread with `isInstalled(NSWorkspace.shared.urlsForApplications(withBundleIdentifier: bundleIdentifier),
-  exists: FileManager.default.fileExists(atPath:))` and
-  `!NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).isEmpty`. The header comment
-  says why the filter exists (a copy in the Trash or on a mounted disk image is not an install).
+- [ ] **Step 4: Write `HarnessDeviceApp.swift`.** `lookup` answers on the main thread with
+  `"paths": NSWorkspace.shared.urlsForApplications(withBundleIdentifier: bundleIdentifier).map(\.path)` and
+  `"running": !NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).isEmpty`. The
+  header comment says why it filters nothing: LaunchServices also lists copies in the Trash and on mounted disk
+  images, and Dart decides which count, where a test that pull request CI runs checks it.
 
 - [ ] **Step 5: Add the file to the project and register it.** In `project.pbxproj`, one line next to each of
   `MoveToApplications.swift`'s four, same shape, with the two new ids. In `MainFlutterWindow.swift`, after line 52:
@@ -438,41 +428,71 @@ Expected: only the three files of this task (a build with Swift Package Manager 
 revert those).
 
 - [ ] **Step 7: Commit** (the three macOS files; message
-  `Menu-bar app offer: Desktop asks macOS whether Harness Device is installed and running`)
+  `Menu-bar app offer: Desktop asks macOS where Harness Device is and whether it runs`)
 
 ---
 
-### Task 3: The channel's Dart side
+### Task 3: The channel's Dart side, and which copy counts as installed
 
-**Depends on:** Task 1. **Effort:** medium.
+**Depends on:** Task 1. **Effort:** high. (Changed by decision 23: the filter moved here from Swift, so the effort
+rose from medium.)
 
 **Files:**
 - Create: `desktop/lib/devices/device_app_probe.dart`
 - Test: `desktop/test/devices/device_app_probe_test.dart`
 
-**The test that fails before the change:** every case in `test/devices/device_app_probe_test.dart`.
+**The test that fails before the change:** every case in `test/devices/device_app_probe_test.dart`. It runs on
+every host, so pull request CI tests the filter.
 
 **Interfaces:**
-- Consumes: `DeviceAppProbe`, `DeviceAppPresence` (Task 1).
+- Consumes: `DeviceAppProbe`, `DeviceAppPresence` (Task 1); the channel's reply as Task 2 states it.
 - Produces:
 
 ```dart
+/// Whether any of [paths] is an installed copy: it exists on disk, it is in no Trash (no path component is
+/// `.Trash` or `.Trashes`), and it is not under `/Volumes/` (a mounted disk image or another disk).
+/// [exists] defaults to `FileSystemEntity.type(path) != FileSystemEntityType.notFound`.
+Future<bool> deviceAppInstalledAt(List<String> paths, {Future<bool> Function(String path)? exists});
+
 class ChannelDeviceAppProbe implements DeviceAppProbe {
-  const ChannelDeviceAppProbe([this._channel = const MethodChannel('harness/device_app')]);
-  /// Throws a [FormatException] on a reply that is not two booleans, and whatever the channel throws.
+  const ChannelDeviceAppProbe({
+    MethodChannel channel = const MethodChannel('harness/device_app'),
+    Future<bool> Function(String path)? exists, // passed to deviceAppInstalledAt
+  });
+  /// Throws a [FormatException] on a reply that is not `{paths: a list of strings, running: a bool}`, and
+  /// whatever the channel throws.
   @override
   Future<DeviceAppPresence> lookup();
 }
 ```
 
-- [ ] **Step 1: Write the failing tests.** With
+- [ ] **Step 1: Write the failing tests.** The filter, with an `exists` that answers true for a set of paths the
+  test names:
+  - `'a copy in Applications counts'`: `['/Applications/Harness Device.app']` → true; the same under
+    `/Users/a/Applications/` → true.
+  - `'a copy in a Trash does not count'`: `/Users/a/.Trash/Harness Device.app` and
+    `/Volumes/X/.Trashes/501/Harness Device.app`, both existing → false.
+  - `'a copy under /Volumes/ does not count'`: `/Volumes/Harness Device/Harness Device.app`, existing → false.
+  - `'a path that is gone does not count'`: `/Applications/Harness Device.app`, not existing → false.
+  - `'one good copy among others is enough'`: the Trash copy, the `/Volumes/` copy, then the Applications one →
+    true; `[]` → false.
+  - `'a folder that only looks like a Trash counts'`: `/Users/a/Apps.Trash/Harness Device.app` and
+    `/Users/a/VolumesX/Harness Device.app`, existing → true (whole components and the `/Volumes/` prefix only).
+  - `'the real check reads the disk'`: with the default `exists`, a `Harness Device.app` directory made in a
+    temporary folder → true; after deleting it → false.
+
+  The channel, with
   `TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler` on
-  `MethodChannel('harness/device_app')`, cleared in `tearDown`:
-  - `'asks lookup, with no argument, and reads both answers'`: the handler records the call and returns
-    `{'installed': true, 'running': false}`; expect one call, method `lookup`, `arguments` null, and a presence
-    with `installed` true and `running` false.
-  - `'a reply that is not two booleans is refused'`: for `{'installed': true}`, `{'installed': 1, 'running': 0}`,
-    `'yes'` and `null`, `lookup()` throws a `FormatException`.
+  `MethodChannel('harness/device_app')`, cleared in `tearDown`, and the probe built with the test's `exists`:
+  - `'asks lookup, with no argument, and filters the paths'`: the handler records the call and returns
+    `{'paths': ['/Users/a/.Trash/Harness Device.app', '/Applications/Harness Device.app'], 'running': false}`,
+    both existing; expect one call, method `lookup`, `arguments` null, and a presence with `installed` true and
+    `running` false. With only the Trash path: `installed` false.
+  - `'running is read as it comes'`: `{'paths': [], 'running': true}` → `installed` false, `running` true.
+  - `'a reply of the wrong shape is refused'`: for `{'paths': []}`, `{'running': false}`,
+    `{'paths': '/Applications/Harness Device.app', 'running': false}`, `{'paths': [7], 'running': false}`,
+    `{'paths': [], 'running': 0}`, `{'installed': true, 'running': false}`, `'yes'` and `null`, `lookup()` throws
+    a `FormatException`.
   - `'a Mac whose app has no such channel throws'`: no handler set; `lookup()` throws a `MissingPluginException`.
 
 - [ ] **Step 2: Run them and see them fail**
@@ -480,32 +500,38 @@ class ChannelDeviceAppProbe implements DeviceAppProbe {
 Run: `flutter test --no-pub --concurrency=2 --timeout=60s test/devices/device_app_probe_test.dart`
 Expected: FAIL, `device_app_probe.dart` not found.
 
-- [ ] **Step 3: Commit the red tests** (message `Menu-bar app offer: the lookup's Dart side (tests)`)
+- [ ] **Step 3: Commit the red tests** (message `Menu-bar app offer: the lookup's Dart side and its filter (tests)`)
 
-- [ ] **Step 4: Write `ChannelDeviceAppProbe`** with `invokeMethod<Object?>('lookup')`, read with `is`, never
-  `as`.
+- [ ] **Step 4: Write `deviceAppInstalledAt` and `ChannelDeviceAppProbe`** with `invokeMethod<Object?>('lookup')`,
+  read with `is`, never `as`. Components by `package:path`'s `posix.split`. The filter's comment says why it
+  exists (LaunchServices also lists copies in the Trash and on mounted disk images, which are not installs) and
+  why it is in Dart (a test pull request CI runs).
 
 - [ ] **Step 5: Run the tests and the analyzer**
 
 Run: `flutter test --no-pub --concurrency=2 --timeout=60s test/devices/device_app_probe_test.dart && flutter analyze lib/devices/device_app_probe.dart test/devices/device_app_probe_test.dart`
 Expected: all pass; `No issues found!`
 
-- [ ] **Step 6: Commit** (message `Menu-bar app offer: the lookup's Dart side`)
+- [ ] **Step 6: Commit** (message
+  `Menu-bar app offer: the lookup's Dart side; a copy in a Trash or on a mounted disk is not installed`)
 
 ---
 
 ### Task 4: The code requirement by team and identifier
 
-**Depends on:** nothing. **Effort:** xhigh (the updater's signature check).
+**Depends on:** nothing. **Effort:** xhigh (the updater's signature check). (Decision 24 adds the three
+real-`codesign` cases and their file.)
 
 **Files:**
 - Modify: `desktop/lib/update/update_signature.dart:98-108` (`macUpdateRequirement`), `:260-292`
   (`verifyMacUpdate`)
 - Test: `desktop/test/update_signature_test.dart:104-125`
+- Test: `desktop/test/update_signature_macos_test.dart` (three cases after the existing ones; its helpers stay)
 
 **The test that fails before the change:** in `test/update_signature_test.dart`, "the updater's requirement is
-unchanged" and "Harness Device's requirement carries the team, its identifier and notarization" (the new
-signature does not compile).
+unchanged" and "Harness Device's requirement carries the team, its identifier and notarization"; in
+`test/update_signature_macos_test.dart`, the three `verifyMacBundle` cases (neither file compiles: the new
+signature and `verifyMacBundle` do not exist yet). On Linux the macOS file's cases are skipped once it compiles.
 
 **Interfaces:**
 - Produces:
@@ -555,12 +581,22 @@ test("Harness Device's requirement carries the team, its identifier and notariza
 });
 ```
 
+  And in `test/update_signature_macos_test.dart`, with its own helpers (`_adHocBundle`, `_clone`, `_signedRelease`)
+  and skips (`_macOnly`, `noSigned`); real `codesign` on temporary bundles, the release only read or cloned:
+  - `'verifyMacBundle refuses an ad-hoc bundle'` (skip `_macOnly`): `_adHocBundle(scratch.path,
+    'Harness Device.app')` with `team: '54DJVWMJCC', identifier: 'ai.autonomous.harness.device'` → false.
+  - `'verifyMacBundle accepts a notarized bundle of that team and identifier'` (skip `noSigned`): a `_clone` of
+    the signed release with `team: '54DJVWMJCC', identifier: 'ai.autonomous.harness'` → true.
+  - `'verifyMacBundle refuses a notarized bundle with another identifier'` (skip `noSigned`): the same clone with
+    `identifier: 'ai.autonomous.harness.device'` → false (Harness Desktop is not Harness Device).
+
 - [ ] **Step 2: Run them and see them fail**
 
-Run: `flutter test --no-pub --concurrency=2 --timeout=60s test/update_signature_test.dart`
-Expected: FAIL to compile (`macUpdateRequirement` takes a `MacSigner`).
+Run: `flutter test --no-pub --concurrency=2 --timeout=60s test/update_signature_test.dart test/update_signature_macos_test.dart`
+Expected: FAIL to compile (`macUpdateRequirement` takes a `MacSigner`; `verifyMacBundle` is not defined).
 
-- [ ] **Step 3: Commit the red tests** (message `Updater: the code requirement by team and identifier (tests)`)
+- [ ] **Step 3: Commit the red tests** (both test files; message
+  `Updater: the code requirement by team and identifier (tests)`)
 
 - [ ] **Step 4: Change `update_signature.dart`** as the Interfaces block. `readMacSigner` is the first half of
   today's `verifyMacUpdate` (`codesign -dv --verbose=2`, then `parseMacSigner`); `verifyMacBundle` the second
@@ -568,9 +604,9 @@ Expected: FAIL to compile (`macUpdateRequirement` takes a `MacSigner`).
 
 - [ ] **Step 5: Run the tests, and the existing real-`codesign` cases on this Mac**
 
-Run: `flutter test --no-pub --concurrency=2 --timeout=60s test/update_signature_test.dart test/update_signature_macos_test.dart test/desktop_updater_test.dart test/update_progress_test.dart && flutter analyze lib/update test/update_signature_test.dart`
-Expected: all pass (on a Mac the macOS file's cases run; its signed cases use `/Applications/Harness.app`, which
-this Mac has); `No issues found!`
+Run: `flutter test --no-pub --concurrency=2 --timeout=60s test/update_signature_test.dart test/update_signature_macos_test.dart test/desktop_updater_test.dart test/update_progress_test.dart && flutter analyze lib/update test/update_signature_test.dart test/update_signature_macos_test.dart`
+Expected: all pass, the three new cases among them (on a Mac the macOS file's cases run; its signed cases use
+`/Applications/Harness.app`, which this Mac has, and are skipped where it is missing); `No issues found!`
 
 - [ ] **Step 6: Commit** (message
   `Updater: the signature check takes a team and an identifier, so Harness Device can be checked by it`)
@@ -1241,6 +1277,10 @@ nothing" and "before the workspace: no band" (neither surface is mounted yet).
   - `'a dial on another computer: no row'`: the screen's controller over a `DeviceHosts` with one host that is
     not local (as `test/devices_hosts_test.dart` builds one), and `fixture.offer.dialChanged(true)` → the band
     shows, the row does not.
+  - `'a Harness Pro alone: the same band and row'` (decision 26): the only device reported is a square Harness
+    Pro, a status built as `deviceStatus` builds one plus `'board': 'pro'` (`DialStatus.isPro` true) → the band
+    shows the same sentence, the row shows `Menu-bar app` with `Install`, and tapping the band's `Install` runs
+    `fixture.install` once.
   - `'the Devices tab's tick looks again'`: `MaterialApp(home: Scaffold(body: DevicesTab(notifier: app, refreshEvery: const Duration(seconds: 10))))`
     with an `AppNotifier` subclass whose `refreshDevices` does nothing, the dial attached → after
     `tester.pump(const Duration(seconds: 10))`, `fixture.probe.lookups` is one more than before.
@@ -1398,7 +1438,8 @@ Expected: `0`.
   this one merges.
 - **`desktop/CLAUDE.md`.** A line for the new files under "Persistence and native integration" would help the
   next reader. Not in the spec; a proposal.
-- **A Swift unit test.** `RunnerTests` starts the real Desktop and no gate runs it (open question 8).
+- **A Swift unit test.** The Swift side has no rule left to test (decision 23: the filter is Dart's, tested by pull
+  request CI), and `RunnerTests` starts the real Desktop and no gate runs it.
 - **A permanent workflow for Task 13's test.** It reads the live manifest, so it cannot gate pull requests. Not
   proposed.
 
@@ -1419,12 +1460,13 @@ Expected: `0`.
 2. **`desktop-macos`, the local check the repo requires** for `desktop/macos/*` and pull request CI does not run
    (`docs/validation-and-release.md`, "What PR CI does not run"). From the repository root, on a clean tree at
    the final commit: `python3 scripts/local-checks.py --run`. It runs `make desktop-test` (the whole VM suite on
-   macOS, where the installer's macOS cases and `test/update_signature_macos_test.dart` run) and prints one
+   macOS, where the installer's macOS cases and `test/update_signature_macos_test.dart` run, Task 4's three
+   `verifyMacBundle` cases among them) and prints one
    `harness-local-checks` fence. Paste it into the pull request body **before** the push CI reads:
    `process-checks` takes the body from the push event. A slower Mac: `make desktop-test ARGS="--timeout 3600"`
    is the only form the receipt accepts besides `--workers`.
 3. **The affected tests and the analyzer, locally, before the pull request:**
-   `flutter test --no-pub --concurrency=2 --timeout=60s test/devices test/macos_device_app_channel_test.dart test/update_signature_test.dart test/elements_gallery_test.dart test/device_notice_bands_shell_test.dart test/devices_screen_test.dart test/hidden_widget_pollers_test.dart`
+   `flutter test --no-pub --concurrency=2 --timeout=60s test/devices test/macos_device_app_channel_test.dart test/update_signature_test.dart test/update_signature_macos_test.dart test/elements_gallery_test.dart test/device_notice_bands_shell_test.dart test/devices_screen_test.dart test/hidden_widget_pollers_test.dart`
    and `flutter analyze`. Expected: all pass; `No issues found!`. Pull request CI then runs the whole suite on
    Linux (`desktop-tests`), where the cases that need `ditto` are skipped.
 4. **The macOS app compiles with the new Swift file:** `bash scripts/build-macos-debug.sh --no-pub`. Expected:
@@ -1432,9 +1474,39 @@ Expected: `0`.
 5. **The web build still compiles:** `flutter build web --release --no-wasm-dry-run --no-web-resources-cdn` in
    `desktop/`. Expected: `✓ Built build/web`. No pull request check builds it, and three files it holds gain
    imports. A few minutes, locally; no workflow.
-6. **Needs the owner (open question 13):** the real window on a Mac with a dial and without the app, from a
-   signed build. Not planned without the owner's go. Nothing in checks 1 to 5 removes or replaces the menu-bar
-   app installed on this Mac.
+6. **A real install, seen by a person. Only the owner (Diego) does it, and it holds the merge** (decision 28). It is the
+   one path no test reaches: a signed Desktop reading its own Team ID and installing into `/Applications`.
+   - When: last, after the final review and checks 1 to 5 and pull request CI are green on the final head, and
+     only on the PM's go: the workflow is heavy (both macOS builds, signed and notarized) and uploads an unlisted
+     build to the release bucket.
+   - The build: from the final head, `git push origin HEAD:internal/<name>` (for example
+     `internal/desktop-installs-harness-device`), which runs `.github/workflows/desktop-internal-build.yml`
+     (`desktop/CLAUDE.md`, "internal"; `desktop/RELEASE.md`, "Internal builds"). The run page prints two `.dmg`
+     links, `Harness-macos-…dmg` (Intel) and `Harness-macos-arm64-…dmg` (Apple Silicon). Self-update is off in
+     it, so it stays the build under test. Nothing in the code changes for it: no switch, no `--dart-define`.
+   - Isolation: the owner's own Mac, his own sign-in and his own dial, by his choice; no test account is needed,
+     since the band needs only a dial and a missing app. The build installs the real menu-bar app into the real
+     `/Applications`, which is what is being checked; the copy he moved to the Trash at step 3 also checks that a
+     Trash copy does not count as installed. The internal build replaces his Desktop in `/Applications` until he
+     installs the regular one again (step 9). Afterwards the build can be taken back with the `gcloud storage rm`
+     line its run summary prints.
+   - The steps to send him, as they are:
+
+     > 1. Plug your dial into your Mac.
+     > 2. Quit the Harness menu-bar app: click its icon in the menu bar, then Quit.
+     > 3. In Finder, open Applications and move `Harness Device.app` to the Trash.
+     > 4. Quit the Harness app (⌘Q). Download the internal build from this link: `<the .dmg link for your Mac>`.
+     >    Open it, drag Harness to Applications, replacing the one there, and open it from Applications.
+     > 5. At the top of the window you should see: "Your dial follows apps and terminal tabs with the Harness
+     >    menu-bar app." with `Not now` and `Install`.
+     > 6. Press `Install`. It reads `Installing…` for a moment.
+     > 7. You should then see `Harness Device.app` back in Applications, the Harness icon back in the menu bar, and
+     >    the band gone.
+     > 8. Reply with what you saw at steps 5 to 7 (a screenshot of the band helps), or the line the band showed if
+     >    it failed.
+     > 9. This build never updates itself: when you are done, install the regular Harness again.
+
+   - The result goes in the pull request body. Until it is there, the pull request is not merged.
 
 For the pull request: platforms macOS (tested), Linux and Windows (nothing shown; Task 11's Linux case); the UI
 checklist with the gallery's two images; each task's red and green commits; the receipt of check 2; the output of

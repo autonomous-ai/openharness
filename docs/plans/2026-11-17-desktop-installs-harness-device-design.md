@@ -30,6 +30,13 @@ page: `harness.autonomous.ai/device` is no longer used.
 7. **Where it goes.** `/Applications` when Desktop can write there, else `~/Applications`. Never a password prompt.
    An existing `Harness Device.app` at the target counts as installed and is never overwritten.
 8. **Links to `harness.autonomous.ai/device`.** A separate small PR after this one (see Follow-up). Not in this branch.
+9. **Any device.** Any attached device on this computer shows the offer, a square Harness Pro too, with the same copy.
+10. **A real install, seen by a person, holds the merge.** Diego checks it on his Mac from a signed internal build
+    (Verification); every other check runs to green CI before it.
+
+Answers to the plan's questions (PM, 2026-11-17): the band's buttons, colour, icon and place; `’` in copy; a 64 KiB
+manifest and no redirects; 60 s timeouts; the lookup filtered in Dart; a signature-refused run and real-`codesign`
+cases; the behavior after an install (below); the plan's ASCII mockups are the confirmed ones.
 
 ## Approach
 
@@ -57,9 +64,11 @@ result), since LaunchServices may register a freshly renamed bundle a moment lat
 
 ### The band
 
-Top of the window, beside the other bands in `app_shell.dart`, in the band style of `NewDeviceNotice`:
+Top of the window, last of the device bands in `app_shell.dart` (under the held-computer band, above the shared-tab
+notice), in the band style of `NewDeviceNotice`: the same amber band, with `AppIcons.arrowDownToLine` in place of the
+shield, and `AppIcons.triangleAlert` on a failure, as the update band does. The quiet button first, the main one last:
 
-> Your dial follows apps and terminal tabs with the Harness menu-bar app.   `Install`  `Not now`
+> Your dial follows apps and terminal tabs with the Harness menu-bar app.   `Not now`  `Install`
 
 Copy names the app as the [Naming System](../naming-system.md) does: the menu-bar app is **Harness**, with the
 descriptor "menu-bar app" beside Desktop (also Harness); only the file is `Harness Device.app`.
@@ -67,7 +76,8 @@ descriptor "menu-bar app" beside Desktop (also Harness); only the file is `Harne
 - `Install` runs the install (below); the button reads `Installing…`, disabled, until it ends.
 - Success: the app opens and the band goes (the probe now says installed).
 - Failure: the band stays, its text becomes the failure line (below), the button reads `Retry`.
-- `Not now` stores the dismissal (Data) and the band never shows on this computer again.
+- `Not now` stores the dismissal (Data) and the band never shows on this computer again. It is disabled while an
+  install runs, as the update band's Skip is.
 
 ### The Devices row
 
@@ -83,6 +93,14 @@ when the selected device is on this computer (`local`) and attached. A `SettingR
 Both surfaces share one controller, so an install started from one shows `Installing…` on the other, and a second
 press joins the running install instead of starting another.
 
+After an install, and when a lookup fails:
+
+- Installed but `open` failed: `Retry` on the band and `Open` on the row only open the app, with no second download.
+- `Open` failing from the row shows `Installed. Couldn’t open it.`
+- A lookup that fails keeps the last answer, or shows nothing when there is none.
+- After an install, a lookup that still says "not installed" is not believed until one says "installed"
+  (LaunchServices registers late). Someone who deletes the app in that gap sees no offer until Desktop restarts.
+
 ### The install
 
 `DeviceAppInstaller.install()`, one at a time per window; steps in order, each with a name used in logs and measures:
@@ -91,12 +109,13 @@ press joins the running install instead of starting another.
    bucket, never the CDN), 15 s timeout. Entry: on Apple Silicon `device-macos-arm64`, then `device-macos`; on Intel
    `device-macos`. Refused unless `url` is `https://` under `https://cdn.autonomous.ai/harness/device/` or
    `https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/`, `sha256` is 64 hex, and `size` is an
-   integer from 1 byte to 200 MB.
+   integer from 1 byte to 200 MiB (200 × 1024 × 1024). The manifest's body is read up to 64 KiB, and neither request
+   follows a redirect, so nothing a server sends but the two checked values reaches a request.
 2. **download**: Dio stream into a new private temp directory (`Directory.systemTemp.createTemp`), 5 min timeout;
    stops past the manifest's `size`.
 3. **checksum**: the file's size and sha256 equal the manifest's. The hash reads the file in chunks inside an
    isolate (`Isolate.run` over the path), never the whole archive in memory.
-4. **unpack**: `/usr/bin/tar -xzf <archive> -C <temp>/app`. The result must be exactly one top-level entry, a
+4. **unpack**: `/usr/bin/tar -xzf <archive> -C <temp>/app`, 60 s timeout. The result must be exactly one top-level entry, a
    directory named `Harness Device.app`, not a link. (bsdtar already refuses absolute paths and `..` without `-P`.)
 5. **signature**: `codesign --verify --deep --strict -R=<requirement>` on the unpacked bundle, where the requirement
    is the updater's (`anchor apple generic`, Developer ID leaf, `notarized`) with the running Desktop's Team ID
@@ -107,11 +126,11 @@ press joins the running install instead of starting another.
    keeps its behavior. Same rule as Desktop's own updater: a running Desktop with no signer (a local dev build)
    checks sha256 only; every released Desktop is signed, so released builds always check the signature.
 6. **install**: try `/Applications` first, then `~/Applications` (created if missing). In each, if
-   `Harness Device.app` exists, stop: installed, nothing written. Otherwise `/usr/bin/ditto` the bundle to
+   `Harness Device.app` exists, stop: installed, nothing written. Otherwise `/usr/bin/ditto` (60 s timeout) the bundle to
    `.Harness Device.app.<random>.partial` in that folder; a permission refusal there (EACCES/EPERM, or `ditto`
    exiting non-zero with nothing written) moves on to `~/Applications`. Then rename the partial to
    `Harness Device.app` (same folder, so the rename is atomic); a failed rename removes the partial.
-7. **open**: `/usr/bin/open <target>/Harness Device.app`. The app's own first run handles its login item.
+7. **open**: `/usr/bin/open <target>/Harness Device.app`, 60 s timeout. The app's own first run handles its login item.
 
 The temp directory is removed in `finally`, whatever happened. Every process runs with fixed arguments built in Dart;
 nothing from the manifest except the URL (prefix-checked) and the sha256 reaches a command or request.
@@ -120,15 +139,15 @@ Failure lines (one line, short):
 
 | Step | Line |
 |---|---|
-| manifest, download | `Couldn't download the app.` |
-| checksum, unpack, signature | `Couldn't verify the download.` |
-| install | `Couldn't install the app.` |
-| open | `Installed. Couldn't open it.` (the row then offers `Open`) |
+| manifest, download | `Couldn’t download the app.` |
+| checksum, unpack, signature | `Couldn’t verify the download.` |
+| install | `Couldn’t install the app.` |
+| open | `Installed. Couldn’t open it.` (the row then offers `Open`) |
 
 ### Logs and measures
 
 - `appLog` lines: `device app: install started`, `device app: install done`,
-  `device app: install failed <step>`. No path, URL, version string from the network, or team id.
+  `device app: install failed <step>`, `device app: lookup failed`, `device app: open failed`. No path, URL, version string from the network, or team id.
 - No product measure in this branch. A new Desktop flow counts only once the backend lists it
   (`PRODUCT_USAGE_DESKTOP_FLOWS`) and the daemon core's `APP_USAGE_VOCABULARY` (`cli/src/core/api.ts`) is raised;
   that is a core change, which this feature may not make. The final report proposes the measures (offer shown,
@@ -138,12 +157,12 @@ Failure lines (one line, short):
 
 | Unit | File | Does |
 |---|---|---|
-| Probe | `desktop/macos/Runner/HarnessDeviceApp.swift` (added to `Runner.xcodeproj/project.pbxproj` as `MoveToApplications.swift` is; registered in `MainFlutterWindow.swift`), channel `harness/device_app`, method `lookup` | Returns `{installed, running}` for `ai.autonomous.harness.device`: installed when any of `NSWorkspace.urlsForApplications(withBundleIdentifier:)` exists on disk and is neither in a Trash nor under `/Volumes/`; running from `NSRunningApplication.runningApplications(withBundleIdentifier:)`. |
-| Probe (Dart) | `desktop/lib/devices/device_app_probe.dart` | `DeviceAppProbe` interface, the channel implementation, and "not installed, not running" off macOS or below 13 (then the offer never shows). |
+| Probe | `desktop/macos/Runner/HarnessDeviceApp.swift` (added to `Runner.xcodeproj/project.pbxproj` as `MoveToApplications.swift` is; registered in `MainFlutterWindow.swift`), channel `harness/device_app`, method `lookup` | Returns `{paths, running}` for `ai.autonomous.harness.device`: the paths of `NSWorkspace.urlsForApplications(withBundleIdentifier:)`, and running from `NSRunningApplication.runningApplications(withBundleIdentifier:)`. It filters nothing. |
+| Probe (Dart) | `desktop/lib/devices/device_app_probe.dart` | `DeviceAppProbe` interface, the channel implementation, and "not installed, not running" off macOS or below 13 (then the offer never shows). Installed when any returned path exists on disk and is neither in a Trash nor under `/Volumes/`; this filter is pure Dart, tested by PR CI. |
 | Installer | `desktop/lib/devices/device_app_installer.dart` | The seven steps; injectable manifest URL, Dio, process runner, signature check, target folders and opener for tests. |
 | Controller | `desktop/lib/devices/device_app_offer.dart` | `DeviceAppOffer` (ChangeNotifier): state `hidden / offer / installing / failed(step) / notRunning`, the dismissal, the join of a second press, the log lines. Owned by `AppNotifier`, which feeds it the dial and window-front events. |
 | Band | `desktop/lib/widgets/device_app_band.dart` | The band, placed in `app_shell.dart` under `deviceBands`. |
-| Row | `desktop/lib/devices/devices_screen.dart` | The Devices row. |
+| Row | `desktop/lib/devices/device_app_row.dart`, placed by `desktop/lib/devices/devices_screen.dart` | The Devices row (its own file, so the gallery can import it). |
 | Design | `desktop/design/desktop-design-system.md`, `desktop/test/elements_gallery_test.dart`, `desktop/test/goldens/elements/` | The band and row in the doc and the gallery (a new section key, light and dark goldens), each state. |
 
 ## Data and Design (docs/feature-design-rules.md)
@@ -156,7 +175,7 @@ Stored: one local key, `device_app.offer_dismissed` = `true`, in `HarnessFileSto
 2. Concurrency: one install per window (the controller joins a second press). Two Desktop windows or processes
    installing at once: each writes its own `.partial`, and the rename fails for the second (target exists), which
    then reports installed. Nothing locks.
-3. Read cost: the manifest (under 2 KB) once per Install press; the archive once per attempt (about 12 MB today,
+3. Read cost: the manifest (2.4 KB today, read up to 64 KiB) once per Install press; the archive once per attempt (about 12 MB today,
    bounded at 200 MB). The probe is one in-process AppKit call.
 4. Scale: per computer, per press; nothing grows with people or agents.
 5. Compatibility: no new field in any server, CLI or daemon reply. An older Desktop ignores the new key. A future
@@ -179,8 +198,11 @@ Stored: one local key, `device_app.offer_dismissed` = `true`, in `HarnessFileSto
   key fallback; each refusal (URL outside the prefixes, bad sha256 field, size over the cap, sha256 mismatch, size
   mismatch, two top-level entries, a link, signature refused, rename fails) reports its step, writes nothing at the
   target and leaves no temp directory.
-- **Signature requirement** (`desktop/test/update/update_signature_test.dart`): the requirement string for Harness
-  Device carries the given Team ID, its identifier and `notarized`; the updater's requirement is unchanged.
+- **Signature requirement** (`desktop/test/update_signature_test.dart`): the requirement string for Harness
+  Device carries the given Team ID, its identifier and `notarized`; the updater's requirement is unchanged. Three
+  `verifyMacBundle` cases with real `codesign` on temporary bundles go in `desktop/test/update_signature_macos_test.dart`,
+  so `make desktop-test` on a Mac keeps checking it.
+- **Lookup filter** (Dart): a path in a Trash, under `/Volumes/` or missing on disk does not count as installed.
 - **Controller** (`desktop/test/devices/device_app_offer_test.dart`): the conditions in "When the offer shows"
   (each one false hides it), the dismissal persisted through an in-memory `LocalKeyValueStore`, a second press joins,
   the log lines carry only step names.
@@ -200,8 +222,14 @@ manifest and the real CDN archive, with the real `tar`, `ditto` and `codesign`, 
 (the test runner is an unsigned debug build, so it cannot be read from the running bundle), two temp folders as the
 install targets (the first made read-only, so the fallback runs), and a recording opener, so no second menu-bar app
 starts. No app switch or `--dart-define` is added for it. Evidence: the step log, `codesign -dv` of the installed
-copy, the temp folders removed afterwards, and a run with a corrupted byte in a served copy refused at checksum. Platforms named in the PR: macOS (tested), Linux and Windows (nothing shown; covered by the
+copy, the temp folders removed afterwards, a run with a corrupted byte in a served copy refused at checksum, and an
+ad-hoc signed stand-in served from loopback refused at signature. Platforms named in the PR: macOS (tested), Linux and Windows (nothing shown; covered by the
 click-through test's Linux case).
+
+**Held for the owner (holds the merge).** A signed internal build of the final head (`git push origin
+HEAD:internal/<name>`, `desktop-internal-build.yml`, on the PM's go for the heavy workflow). Diego, on his Mac with a
+dial: quit and remove `Harness Device.app` from `/Applications`, open the internal build, see the band, press Install,
+and see the menu-bar app installed in `/Applications` and opened. The result goes in the PR body.
 
 ## Follow-up (separate small PR, after this merges)
 
