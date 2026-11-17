@@ -18,7 +18,8 @@ import { routeVoiceTask } from '../lib/voiceRouter.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, ServiceUnavailableError, type CoreApi, type CorePorts, type DevicesPort } from '../core/api.js'
 import type { ObservedAsked, ObservedHookEvent } from '../core/observedHook.js'
 import { createServiceHost } from '../core/serviceHost.js'
-import { claudeFound, type ClaudeRun } from '../devices/claudePlugin.js'
+import * as claudePlugin from '../devices/claudePlugin.js'
+import type { ClaudeRun } from '../devices/claudePlugin.js'
 import { DIAL_SKILL } from '../devices/dialSkill.js'
 import { readSetup, writeSetup } from '../devices/dialSkillFiles.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
@@ -44,6 +45,8 @@ const seen = vi.hoisted(() => ({
   voice: { sessions: vi.fn(), connected: vi.fn(), shutdown: vi.fn() },
 }))
 
+// A copy of the module, so a spec can watch the daemon's own lookup of Claude Code run.
+vi.mock('../devices/claudePlugin.js', async (real) => ({ ...await real<object>() }))
 vi.mock('../cable/cableHost.js', async (real) => {
   const actual = await real<typeof import('../cable/cableHost.js')>()
   return {
@@ -5698,13 +5701,14 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
     vi.stubEnv('PATH', empty)
     vi.stubEnv('HOME', empty)
     dialOnce()
+    const lookup = vi.spyOn(claudePlugin, 'claudeFound')
 
     start({ faults: ['fleet'], listen: fakeListener().listen, claude: null })
 
     expect(held(env.CODEX_HOME)).toBe(DIAL_SKILL)
-    // One lookup pass at a time is shared (lib/engineBin.ts): once this one ends, the start's has, and only promises are
-    // left of its pass.
-    expect(await claudeFound(claudeHome(), true)).toBeNull()
+    // The start's lookup, the process's first: the login shell's PATH is read with it.
+    expect(lookup.mock.calls).toEqual([[claudeHome(), true]])
+    expect(await lookup.mock.results[0].value).toBeNull()
     await new Promise((resolve) => setImmediate(resolve))
     expect(readSetup(dataDir).plugin).toBeUndefined()
     expect(logs.filter((line) => line.startsWith('[device] dial setup · claude'))).toEqual([])
