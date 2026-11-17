@@ -143,6 +143,8 @@ real('a guest\'s harness against an owner\'s', () => {
     const row = (await processRows())!.find((r) => r.pid === panes.guest.pid)!
     const agent = (await registry.openPendingAgent({ engine: 'claude', cwd: work, runtimes: [{ backend: 'tmux', paneId: panes.guest.pane }] }))!
     Object.assign(registry.byAgent(agent.agentId)!, { guest: 'parity@example.com', sessionId: '', processIdentity: { pid: row.pid, executable: row.executable, startMarker: row.startMarker } })
+    const processIdentity = structuredClone(registry.byAgent(agent.agentId)!.processIdentity)
+    expect(processIdentity?.pid).toBe(panes.guest.pid)
     const backend = new TmuxBackend()
     const stop = createStopAgentService({
       registry, stoppedAgents, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
@@ -152,7 +154,7 @@ real('a guest\'s harness against an owner\'s', () => {
       stopNative: async () => { throw new Error('a guest\'s engine is not this daemon\'s to unload') },
     })
     await stop(agent.agentId)
-    expect((await checkPidRuntime({ engine: 'claude', processIdentity: agent.processIdentity })).state).toBe('gone')
+    expect((await checkPidRuntime({ engine: 'claude', processIdentity })).state).toBe('gone')
     expect(registry.byAgent(agent.agentId)).toBeUndefined()
     // The owner's harness, its pane closed the same way, leaves as well.
     await server.run('kill-pane', '-t', panes.owner.pane)

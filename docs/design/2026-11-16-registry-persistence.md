@@ -2402,3 +2402,49 @@ pinned to its source; reusing the unchanged persistence workload requires an
 explicit exercised-input comparison. No prior full-gate receipt is relabeled as
 a passing combined run. The Resume quiet benchmark is active, so execution waits
 for its completion; source review and conflict resolution proceed meanwhile.
+
+## Detached admission snapshots, 17 November — Design
+
+Registry admission replies deliberately own detached snapshots. Two notifications still assumed
+that later live mutations changed those replies: Resume announced the old web-search status after
+refreshing its launch metadata, and a recovered hook announced an admission hold that core had
+just cleared. Capture the current row after the synchronous metadata change and notify only while
+the committed owner still matches. Keep every durable launch/readiness receipt and hook admission
+check; a newer owner must never inherit the earlier notification.
+
+- Growth: no new stored or retained records; one transient snapshot replaces the existing reply.
+- Concurrency: the existing per-agent admission/resume coordination remains. Reacquire by agent,
+  verify the committed owner, apply only the existing synchronous metadata update, and capture
+  without an intervening await. Recheck ownership after a notification callback can mutate it.
+- Read cost and scale: one indexed in-memory agent lookup and one row copy per notification;
+  no collection scan, disk read, polling, new fan-out, or new background work. Existing admission
+  and Resume failure states remain the signals at 10x; no new capacity claim is made.
+- Compatibility: the existing frame shape and durable Registry format are unchanged. All clients,
+  including the last 30 days, receive the corrected current values through the same contract.
+- Migration and rollback: no migration; revert these caller changes to restore the old behavior.
+- Audience and identity: existing local hook authentication, committed owner checks, and the
+  owner's Registry remain authoritative. No credential or other account's state is added.
+- Failure: a replaced or removed owner suppresses stale notification through the existing changed
+  owner refusal or a content-free hook diagnostic; no successful readiness is invented.
+- Platforms: shared TypeScript behavior affects macOS, Linux, and Windows. Focused caller tests
+  use private state; guest process parity remains a separately opt-in native check.
+
+Before changing runtime code, add failing first-frame and recovered-hook assertions plus controls
+for ownership changing during metadata callbacks. Correct three tests that still seed detached
+return values: pass fork metadata at admission, register the shared native-history owner, and
+capture the real guest process identity before Stop. Preserve every existing behavioral assertion.
+Select the complete Resume, Hermes hook, cwd repair, and native-history deletion files after the
+focused RED, plus TypeScript. Root's already-passing purge fixture is not changed here. Broader
+gates and native/cost reuse remain the coordinator's final-source validation, not this evidence.
+
+Scoped validation: all six selected caller/fixture regressions failed before correction (4.61 s).
+The first four-file run then passed 214 cases but failed six existing Hermes fault cases. Their
+hoisted store-pool wrapper retained an old error class across module resets; an ordered two-case
+reproduction passed the first case and failed the second. A per-fixture spy now wraps the fresh
+real module, preserving source failures and every assertion. The complete Hermes file passes
+28 cases (30.62 s); the other three complete files passed in the earlier run. Five focused Resume
+controls pass (2.95 s), including replacement before/after metadata refresh, cancellation, and a
+missing current row. The new cancellation assertion was corrected to the existing coordinator's
+`AGENT_CHANGED` contract; its first mismatched-detail failure is retained. TypeScript passes.
+These are scoped results across successive source fixes, not a single passing four-file run.
+The real guest parity test and final Resume coverage/native acceptance remain unrun here.
