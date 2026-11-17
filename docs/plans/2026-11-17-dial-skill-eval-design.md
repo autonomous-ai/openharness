@@ -85,6 +85,11 @@ macOS, where the agents and the dial are used. The eval itself is plain Node and
 1. `claude -p` under the session profile may write its listed entries (`.claude.json` per temp repo, the symlinked
    `shell-snapshots`, `file-history`, `todos`, `session-env`). The pilot snapshots the profile before and after and
    stops if anything else changed. Nothing in the profile is deleted.
+   After the isolation probe (orchestrator, 2026-11-17): the allowed list also covers what `claude -p` 2.1.326 does at
+   startup: the `backups/.claude.json.backup.*` rotation, the empty `seed-admin/`, `daemon/` and `.cc-writes/` at the
+   profile root, one empty `projects/<temp repo>/memory/` per run, and rewrites of `cache/model-catalog/*.json` and
+   `plugins/store/*.json`. At the end of a pass the eval removes only the `projects/<temp repo>` folders it created,
+   matched by exact name against the temp repos it recorded; it touches nothing else in the profile.
 2. Codex is out of scope (Ken's choice, 2026-11-17): the eval and the hill-climb score Claude Code only. No Codex run,
    and nothing touches `~/.codex` or `~/.codex-hq`. The before/after table speaks of Claude Code only. This overrides
    every mention of Codex above (runs, isolation, cost: about half the earlier budget).
@@ -99,6 +104,11 @@ macOS, where the agents and the dial are used. The eval itself is plain Node and
 6. Bonuses on need runs only; `+1 line` only when it rang and every line passes (a second ring forfeits it); `+1 ask`
    on need runs whether it rang or not.
 7, 8. Moot (Codex out of scope).
+Cost: the whole plan (agent + judge) is approved in advance if the pilot's projection is under $40; STOP A then only
+reports and the baseline runs without waiting. STOP B still waits for the orchestrator. A compound command refused in
+`-p` mode is watched in the pilot; if the agent treats it as a need for the person, the audit says so.
+
 9. The judge is `claude-opus-5-5` at effort `low` or `medium`; never Sonnet or Haiku (grading is judgement).
-10. The person's own skills stay loaded in every run.
+10. The person's own skills are not loaded and the profile's hooks are off (`--setting-sources project`); every variant
+    runs the same way. The results table says so.
 11. The command line in the skill body is off-limits to rounds.
