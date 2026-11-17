@@ -3,7 +3,7 @@
 // person uninstalled or turned off through /plugin is theirs, before the first pass or after it: the record says it was
 // set up, so it is left removed. A pass that fails is tried again an hour later at the soonest, so a computer with no
 // network does not run `claude` at every scan.
-import { claudeDisable, claudeSetUp, claudeUpdate, type ClaudeRun, type ClaudeSetup } from '../devices/claudePlugin.js'
+import { claudeDisable, claudeSetUp, claudeUpdate, type ClaudeDeps, type ClaudeRun, type ClaudeSetup } from '../devices/claudePlugin.js'
 import type { SetupCount } from '../devices/dialSkillFiles.js'
 
 export interface DialPluginSetupDeps {
@@ -30,6 +30,9 @@ const COUNTED: Record<Extract<ClaudeSetup, { ok: true }>['outcome'], SetupCount 
 export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetup {
   let running = false
   let retryAt = -Infinity
+  /** An undo that failed: tried again at the passes after its hour while Claude Code is not wanted, as nothing else
+   *  would take out what this setup put in. */
+  let undoOwed = false
 
   const failed = (reason: string): false => {
     deps.count('failed', reason)
@@ -43,19 +46,24 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
     else if (kind) deps.count(kind)
   }
 
-  async function run(): Promise<boolean> {
+  /** What this setup put in taken out again, owed until it is done. */
+  const undo = async (claude: ClaudeDeps): Promise<false> => {
+    const disabled = await claudeDisable(claude)
+    undoOwed = !disabled.ok
+    return disabled.ok ? false : failed(disabled.step)
+  }
+
+  async function run(wanted: boolean): Promise<boolean> {
     const found = await deps.claude()
     // Not on this computer yet: asked again at the next pass, with nothing counted.
     if (!found) return false
     const claude = { run: found, platform: deps.platform }
+    if (!wanted) return undo(claude)
     const done = deps.recorded() === undefined ? await claudeSetUp(claude) : await claudeUpdate(claude)
     if (!done.ok) return failed(done.step)
     // A `disable` that landed while the install or the update ran found nothing to undo yet: it is undone here, and
     // nothing recorded.
-    if (!deps.wanted()) {
-      const disabled = await claudeDisable(claude)
-      return disabled.ok ? false : failed(disabled.step)
-    }
+    if (!deps.wanted()) return undo(claude)
     recordAs(COUNTED[done.outcome])
     return done.outcome === 'installed' || done.outcome === 'updated'
   }
@@ -67,8 +75,9 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
       running = true
       try {
         // The in-memory checks first: wanted() reads dial-skill.json, which a scan with the plugin set up never reads.
-        if (deps.recorded() === deps.version || deps.now() < retryAt || !deps.wanted()) return false
-        return await run()
+        if (deps.recorded() === deps.version || deps.now() < retryAt) return false
+        const wanted = deps.wanted()
+        return wanted || undoOwed ? await run(wanted) : false
       } catch {
         return failed('error')
       } finally {
