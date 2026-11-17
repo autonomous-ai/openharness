@@ -1131,7 +1131,7 @@ describe('the record the plugin\'s setup reads', () => {
     expect(again.lines).toEqual(['dial setup: record not read'])
   })
 
-  it('a dial-skill.json that cannot be read writes nothing that pass, and the plugin is not wanted', () => {
+  it('a dial-skill.json that cannot be read writes nothing that pass, and whether the plugin is wanted is not known', () => {
     const r = rig()
     pluginOn(r.claudeHome)
     writeRemoved(r.dataDir, 'codex', true)
@@ -1143,7 +1143,7 @@ describe('the record the plugin\'s setup reads', () => {
     r.writer.scanned([ownerIn(folder())])
 
     for (const home of [r.claudeHome, r.codexHome]) expect(existsSync(join(home, 'skills'))).toBe(false)
-    expect(r.writer.wanted('claude')).toBe(false)
+    expect(r.writer.wanted('claude')).toBeUndefined()
     expect(r.lines).toEqual(['dial skill: removals not read'])
 
     // Read again at the next scan once it can be.

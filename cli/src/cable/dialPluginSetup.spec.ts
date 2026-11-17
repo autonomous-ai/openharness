@@ -73,7 +73,7 @@ function fileCalls(): [string, unknown][] {
 }
 
 function rig(claude: ReturnType<typeof fakeClaude> | null = fakeClaude(), over: Partial<DialPluginSetupDeps> = {}) {
-  const state = { wanted: true, recorded: undefined as string | undefined, saves: true, now: 0, lookups: 0, found: claude }
+  const state = { wanted: true as boolean | undefined, recorded: undefined as string | undefined, saves: true, now: 0, lookups: 0, found: claude }
   const counted: Array<[SetupCount] | [SetupCount, string]> = []
   const setup = createDialPluginSetup({
     platform: 'darwin',
@@ -300,6 +300,46 @@ describe('createDialPluginSetup', () => {
     expect(claude.writes()).toEqual([PULL, UPDATE, UNINSTALL])
     expect(state.recorded).toBe('0.6.58')
     expect(counted).toEqual([])
+  })
+
+  // undefined: dial-skill.json is there but could not be read (EACCES, EIO, EMFILE), so whether disable ran is not known.
+  it('a dial-skill.json that cannot be read while the update runs: nothing undone or recorded, and current at the next pass', async () => {
+    const { setup, state, counted } = rig(null)
+    let updates = 0
+    const claude = fakeClaude({ installed: entry('16a92abfab3f'), on: (call) => { if (call === UPDATE && updates++ === 0) state.wanted = undefined } })
+    state.found = claude
+    state.recorded = '0.6.58'
+    expect(await setup.pass()).toBe(false)
+    expect(claude.writes()).toEqual([PULL, UPDATE])
+    expect(state.recorded).toBe('0.6.58')
+    expect(counted).toEqual([])
+
+    state.wanted = true
+    await setup.pass()
+    expect(claude.writes()).toEqual([PULL, UPDATE, PULL, UPDATE])
+    expect(state.recorded).toBe('0.6.59')
+  })
+
+  it('a dial-skill.json that cannot be read while the install runs leaves the plugin installed, and nothing recorded', async () => {
+    const { setup, state, counted } = rig(null)
+    const claude = fakeClaude({ on: (call) => { if (call === INSTALL) state.wanted = undefined } })
+    state.found = claude
+    expect(await setup.pass()).toBe(false)
+    expect(claude.writes()).toEqual([ADD, INSTALL])
+    expect(state.recorded).toBeUndefined()
+    expect(counted).toEqual([])
+  })
+
+  it('an undo owed waits while dial-skill.json cannot be read', async () => {
+    const fail = [UNINSTALL]
+    const { setup, state } = rig(null)
+    const claude = fakeClaude({ fail, on: (call) => { if (call === INSTALL) state.wanted = false } })
+    state.found = claude
+    await setup.pass()
+    state.wanted = undefined
+    state.now = HOUR
+    expect(await setup.pass()).toBe(false)
+    expect(state.lookups).toBe(1)
   })
 
   it('an undo that failed is tried again after the hour though Claude Code is not wanted, and not once it is done', async () => {
