@@ -1,9 +1,12 @@
 /**
- * The dial skill in every agent home (docs/plans/2026-11-16-dial-skill-every-home-design.md), on the real daemon with a
- * fake dial on the desk (harness/desk.ts) and homes of the test's own:
- * - Claude Code's skill is written as the devices start, from its plugin's entry in the default home's settings;
- * - a Codex in another home gets the skill once the open scan sees the rollout it holds, Turn off removes every copy
- *   Harness wrote and leaves a person's own, and Turn on brings it back with no restart;
+ * Claude Code and Codex set up to ring the dial from its first attach (docs/plans/2026-11-17-dial-agents-always-on-design.md),
+ * on the real daemon with a fake dial on the desk (harness/desk.ts), homes of the test's own and a fake Claude Code
+ * recent enough for its plugin, whose `claude plugin` notes each call (harness/fakeEngine.mjs):
+ * - the first attach, with no command run, installs Claude Code's plugin and writes the skill in both default homes;
+ * - a Codex in another home gets the skill once the open scan sees the rollout it holds; a skill the person deletes stays
+ *   deleted, `disable` removes every copy Harness wrote and leaves a person's own, and `enable` brings it back with no
+ *   restart;
+ * - the plugin uninstalled with Claude Code's own `claude plugin` is never installed again, and its skill goes;
  * - with a real Codex binary (E2E_REAL_CODEX), the app-server that holds its rollout gives its home.
  *
  * The daemon's `lsof` shows only files under the test's root: the open scan reads every `codex` on the computer, and
@@ -11,7 +14,7 @@
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -45,6 +48,20 @@ process.stdin.on('end', () => process.exit(0)).resume()
 const skillOf = (home: string): string => join(home, 'skills', 'dial', 'SKILL.md')
 const read = (file: string): string | null => existsSync(file) ? readFileSync(file, 'utf8') : null
 const rollout = (folder: string): string => join(folder, `rollout-2026-11-16T00-00-00-${randomUUID()}.jsonl`)
+const INSTALL = `plugin install ${DIAL_PLUGIN_ID} --scope user`
+
+/** Each `claude plugin` call the daemon's fake Claude Code took, one line of its words. */
+const pluginCalls = (d: IsolatedDaemon): string[] => read(join(d.root, 'claude-plugin-calls'))?.split('\n').filter(Boolean) ?? []
+const setupRecord = (d: IsolatedDaemon): { dial?: boolean; plugin?: string; homes?: { claude: string[]; codex: string[] } } | null => {
+  const text = read(join(d.dataDir, 'dial-setup.json'))
+  return text === null ? null : JSON.parse(text)
+}
+/** The log's lines that hold [text]. */
+const logLines = (d: IsolatedDaemon, text: string): string[] => d.log().split('\n').filter((line) => line.includes(text))
+/** The setup's lines and the tally's say counts and fixed words, never a path. */
+const noPathLogged = (d: IsolatedDaemon): void => {
+  expect(logLines(d, 'dial s').filter((line) => line.includes(d.root))).toEqual([])
+}
 
 /** The open files `lsof` shows the daemon, asked as its open scan asks. */
 const daemonLsof = (d: IsolatedDaemon, ...args: string[]): string[] =>
@@ -64,7 +81,7 @@ function executablesUnder(folder: string): number[] {
     .map((match) => Number(match[1]))
 }
 
-describe('the dial skill in every home', () => {
+describe('the dial set up from its first attach', () => {
   let daemon: IsolatedDaemon | undefined
   let desk: Desk | undefined
   const children: ChildProcess[] = []
@@ -77,8 +94,8 @@ describe('the dial skill in every home', () => {
   })
 
   /** A daemon whose `lsof` shows only the test's own files, checked before anything is turned on. */
-  const fresh = async (before: (d: IsolatedDaemon) => void = () => {}): Promise<{ d: IsolatedDaemon; desk: Desk }> => {
-    const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false' } })
+  const fresh = async (): Promise<{ d: IsolatedDaemon; desk: Desk }> => {
+    const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false' }, claudeVersion: '2.1.287' })
     daemon = d
     const system = SYSTEM_FOLDERS.map((folder) => join(folder, 'lsof')).find((file) => existsSync(file))
     if (!system) throw new Error('lsof is required: the daemon\'s open scan reads it')
@@ -100,7 +117,6 @@ esac
     const theDesk = new Desk(file)
     desk = theDesk
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
-    before(d)
     await d.start()
     return { d, desk: theDesk }
   }
@@ -138,19 +154,22 @@ esac
     })
   }
 
-  it('Claude Code\'s skill is written as the devices start', async () => {
-    const { d, desk } = await fresh((d) => {
-      writeFileSync(join(dirname(d.env.CLAUDE_PROJECTS_DIR!), 'settings.json'), JSON.stringify({ enabledPlugins: { [DIAL_PLUGIN_ID]: true } }))
-    })
-    await plugged(desk)
+  it('a dial\'s first attach sets Claude Code and Codex up, with no command run', async () => {
+    const { d, desk } = await fresh()
     const claudeHome = dirname(d.env.CLAUDE_PROJECTS_DIR!)
+    await plugged(desk)
+    await until('Codex\'s skill', () => read(skillOf(d.env.CODEX_HOME!)) === DIAL_SKILL, 45_000, 100)
+    // Written once the plugin is on: Claude Code's own settings say so.
     await until('Claude Code\'s skill', () => read(skillOf(claudeHome)) === DIAL_SKILL, 45_000, 100)
-    await until('the pass in the log', () => d.log().includes('dial skill: claude wrote 1 removed 0 failed 0, codex wrote 0 removed 0 failed 0'), 30_000, 50)
+    expect(pluginCalls(d)).toContain(INSTALL)
+    expect(setupRecord(d)).toMatchObject({ dial: true, plugin: expect.any(String) })
+    await until('the day\'s tally', () => logLines(d, '[device] dial setup · day ').length > 0, 30_000, 50)
+    noPathLogged(d)
   })
 
-  it('a Codex in another home gets the skill once the scan sees it, Turn off removes every copy, and Turn on brings it back', async () => {
+  it('a Codex in another home is set up once the scan sees it, and what the person removes stays removed', async () => {
     const { d, desk } = await fresh()
-    expect(await device(d, 'codex', 'enable')).toMatchObject({ code: 0, err: '' })
+    const codexHome = d.env.CODEX_HOME!
     const other = join(d.root, 'codex-other'), mine = join(d.root, 'codex-mine'), old = join(d.root, 'codex-old')
     const theirs = '---\nname: dial\ndescription: my own\n---\n\nMine.\n'
     mkdirSync(dirname(skillOf(mine)), { recursive: true })
@@ -161,35 +180,70 @@ esac
     await hold(d, rollout(join(old, 'archived_sessions')))
     // What the scan will read: the three rollouts, each held.
     await until('the three rollouts held', () => daemonLsof(d, '-c', 'codex').filter((name) => name.includes('/rollout-')).length === 3, 30_000, 100)
+    const recorded = (): string[] => [...setupRecord(d)?.homes?.codex ?? []].sort()
+    const leftRemoved = (): number => logLines(d, '[device] dial setup · codex · left removed').length
 
     await plugged(desk)
     await until('the skill in the other home', () => read(skillOf(other)) === DIAL_SKILL, 45_000, 100)
-    // The scan's report is said once its pass is over, so every owner it read was handled by then.
-    await until('the pass in the log', () => /dial skill: claude wrote 0 removed 0 failed 0, codex wrote [1-9]/.test(d.log()), 30_000, 50)
-    const listed = JSON.parse(readFileSync(join(d.dataDir, 'dial-skill-homes.json'), 'utf8')) as { codex: string[] }
-    expect([...listed.codex].sort()).toEqual([join(d.env.CODEX_HOME!, 'skills'), join(other, 'skills')].sort())
+    await until('both homes recorded', () => recorded().join() === [join(codexHome, 'skills'), join(other, 'skills')].sort().join(), 30_000, 50)
+    // The attach's pass wrote the default home, the scan's the other: each pass reports once it is over, so every
+    // owner the scan read was handled by then.
+    await until('the scan\'s report', () => logLines(d, 'dial skill: ').filter((line) => /codex wrote [1-9]/.test(line)).length >= 2, 30_000, 50)
     expect(read(skillOf(mine))).toBe(theirs)
     expect(existsSync(join(old, 'skills'))).toBe(false)
 
+    // The person deletes the other home's skill: the next attach finds it gone and leaves it so.
+    rmSync(join(other, 'skills', 'dial'), { recursive: true })
+    await desk.unplug('E2E-A')
+    await plugged(desk)
+    await until('the deleted skill counted', () => leftRemoved() >= 1, 30_000, 50)
+    expect(existsSync(skillOf(other))).toBe(false)
+
+    // Taken before the disable: a scan may read the removal before the next attach does.
+    const before = leftRemoved()
     expect(await device(d, 'codex', 'disable')).toMatchObject({ code: 0, err: '' })
-    expect(existsSync(skillOf(d.env.CODEX_HOME!))).toBe(false)
+    expect(existsSync(skillOf(codexHome))).toBe(false)
     expect(existsSync(skillOf(other))).toBe(false)
     expect(read(skillOf(mine))).toBe(theirs)
-    expect(JSON.parse(readFileSync(join(d.dataDir, 'dial-skill.json'), 'utf8'))).toEqual({ codex: false })
+    expect(JSON.parse(readFileSync(join(d.dataDir, 'dial-skill.json'), 'utf8'))).toEqual({ removed: { codex: true } })
 
-    // On again, and an attach runs a scan: the same daemon, never restarted.
+    // Plugged in again: the removal is read (counted once, by this attach or a scan before it), and nothing is written.
+    await desk.unplug('E2E-A')
+    await plugged(desk)
+    await until('the removal read', () => leftRemoved() > before && recorded().length === 0, 30_000, 50)
+    expect(existsSync(skillOf(codexHome))).toBe(false)
+    expect(existsSync(skillOf(other))).toBe(false)
+
+    // Enabled, and an attach runs a scan: the same daemon, never restarted.
     expect(await device(d, 'codex', 'enable')).toMatchObject({ code: 0, err: '' })
+    expect(read(skillOf(codexHome))).toBe(DIAL_SKILL)
     await desk.unplug('E2E-A')
     await plugged(desk)
     await until('the skill in the other home again', () => read(skillOf(other)) === DIAL_SKILL, 45_000, 100)
     expect(read(skillOf(mine))).toBe(theirs)
-    expect(d.log().split('\n').filter((line) => line.includes('dial skill:') && (line.includes('codex-other') || line.includes(d.root)))).toEqual([])
+    noPathLogged(d)
+  })
+
+  it('Claude Code\'s plugin uninstalled with claude plugin stays uninstalled, and its skill goes', async () => {
+    const { d, desk } = await fresh()
+    const claudeHome = dirname(d.env.CLAUDE_PROJECTS_DIR!)
+    await plugged(desk)
+    await until('Claude Code\'s skill', () => read(skillOf(claudeHome)) === DIAL_SKILL, 45_000, 100)
+    await until('the plugin recorded', () => !!setupRecord(d)?.plugin, 30_000, 50)
+
+    // As the person would, from a shell whose Claude Code home is the daemon's.
+    execFileSync(join(d.root, 'bin', 'claude'), ['plugin', 'uninstall', DIAL_PLUGIN_ID, '--scope', 'user'],
+      { env: { ...d.env, CLAUDE_CONFIG_DIR: claudeHome }, stdio: 'ignore' })
+    await desk.unplug('E2E-A')
+    await plugged(desk)
+    await until('Claude Code\'s skill gone', () => !existsSync(skillOf(claudeHome)), 45_000, 100)
+    expect(pluginCalls(d).filter((call) => call === INSTALL)).toEqual([INSTALL])
+    noPathLogged(d)
   })
 
   it.runIf(!!process.env.E2E_REAL_CODEX)('a real Codex app-server\'s rollout gives its home', async () => {
     const codex = process.env.E2E_REAL_CODEX!
     const { d, desk } = await fresh()
-    expect(await device(d, 'codex', 'enable')).toMatchObject({ code: 0, err: '' })
     const home = join(d.root, 'codex-real'), work = join(d.root, 'work'), sessions = join(home, 'sessions')
     mkdirSync(home, { recursive: true })
     mkdirSync(work, { recursive: true })
@@ -237,6 +291,7 @@ trust_level = "trusted"
 
       await plugged(desk)
       await until('the skill in the real Codex\'s home', () => read(skillOf(home)) === DIAL_SKILL, 45_000, 100)
+      noPathLogged(d)
     } finally {
       try { screen = tmux('capture-pane', '-p', '-t', 'codex') } catch { /* gone */ }
       try { tmux('kill-server') } catch { /* already gone */ }
