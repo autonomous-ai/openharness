@@ -9,8 +9,9 @@
  * Claude Code runs in a pane of an `IsolatedDaemon` (throwaway root, own port, private tmux, signed out), signed in
  * through the profile and nothing more, as the dial skill eval runs it: `--setting-sources project` keeps the profile's
  * own hooks, which call the person's daemon and Orca, from loading, and `--settings` gives it the isolated daemon's hooks
- * alone. The profile's `settings.json` is the same before and after; `~/.claude`, `~/.codex` and `~/.harness` are never
- * named.
+ * alone. The profile's `settings.json` is the same before and after; answering Claude Code's folder trust prompt has it
+ * note the throwaway folders in the profile's `.claude.json`, as any folder it is opened in. `~/.claude`, `~/.codex` and
+ * `~/.harness` are never named.
  */
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
@@ -18,6 +19,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { homedir, tmpdir, userInfo } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
+import { DONE_QUIET_MS } from '../src/lib/agentNotifications.js'
 import { LocalClient, type Frame } from './harness/client.js'
 import { assertHooksContained, IsolatedDaemon, until } from './harness/daemon.js'
 
@@ -43,8 +45,6 @@ const CASE_MS = 180_000
 const TURN_MS = 120_000
 /** The person's own daemon's port: nothing here may name it. */
 const PERSONAL_PORT = 18473
-/** The recaps' quiet window before Finished (DONE_QUIET_MS). */
-const QUIET_MS = 1_500
 /** turn_ended and Finished cross the same socket but leave the daemon from different processes: how far apart their
  *  arrival may drift from when each was sent. */
 const FRAME_SKEW_MS = 100
@@ -52,15 +52,20 @@ const FRAME_SKEW_MS = 100
 const PIPE_SKEW_MS = 100
 /** A wait's question shows at the question watcher's next poll (1.5 s), with room for that poll's own read. */
 const QUESTION_AFTER_WAIT_MS = 3_000
+/** Claude Code's Stop acted on this long after it came (`HARNESSD_TEST_STOP_HOOK_DELAY_MS`): its end is held meanwhile,
+ *  which leaves room to read the agent working between an answer and the turn's end however fast the model replies. */
+const STOP_DELAY_MS = 2_500
 /** The eval's list: a run never reaches the person's mail, calendar, documents or phone. */
 const DENIED = ['PushNotification', 'RemoteTrigger', 'DesignSync',
   'mcp__claude_ai_Gmail', 'mcp__claude_ai_Google_Calendar', 'mcp__claude_ai_Microsoft_365', 'mcp__claude_ai_Claude_Docs']
 const TRUST = /Yes, I trust this folder/
+/** Claude Code asking to be signed in: the profile has no sign-in it can use. */
+const SIGN_IN = /\/login|Select login method/
+const SIGNED_OUT = 'signed out'
 const PERMISSION_DIALOG = /Do you want to proceed\?/
 
 const sha256 = (file: string): string => existsSync(file) ? createHash('sha256').update(readFileSync(file)).digest('hex') : 'absent'
 const readIf = (file: string): string => { try { return readFileSync(file, 'utf8') } catch { return '' } }
-const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms))
 /** The folder Claude Code keeps a working folder's transcripts in, under its home's `projects` (the eval's rule). */
 const projectFolders = (cwd: string): string[] =>
   [...new Set([cwd, realpathSync(cwd)])].map((path) => join(PROFILE, 'projects', path.replace(/[^a-zA-Z0-9]/g, '-')))
@@ -103,7 +108,9 @@ type Arrival = { frame: Frame; at: number }
 /** When a frame arrived: a waiter registered before it comes resolves as it is read. */
 const arrival = (frame: Promise<Frame>): Promise<Arrival> => frame.then((value) => ({ frame: value, at: Date.now() }))
 const isTurn = (type: string, agentId: string) => (frame: Frame) => frame.type === type && frame.agentId === agentId
-const working = (agentId: string) => (frame: Frame) => isTurn('agent_activity', agentId)(frame) && frame.payload?.activity?.state === 'working'
+/** Working, as a frame tells it: a change of state, or a beat of an open turn that still works. */
+const working = (agentId: string) => (frame: Frame) =>
+  (isTurn('agent_activity', agentId)(frame) || isTurn('turn_heartbeat', agentId)(frame)) && frame.payload?.activity?.state === 'working'
 const notified = (agentId: string) => (frame: Frame) => isTurn('turn_summary', agentId)(frame) && !!frame.payload?.notification
 
 describe.runIf(REAL_CLAUDE && PROFILE)('hook-driven status with the real Claude Code', () => {
@@ -117,6 +124,13 @@ describe.runIf(REAL_CLAUDE && PROFILE)('hook-driven status with the real Claude 
   const rows = async (): Promise<Row[]> => (await client.request<{ agents: Row[] }>('agents_list', { includeStopped: true }, 30_000)).agents
   /** A round trip that follows every frame awaited before it: "not since" is read after it. */
   const fence = () => rows()
+  const stateOf = async (agentId: string): Promise<string | undefined> => (await rows()).find((row) => row.id === agentId)?.activity?.state
+  /** Polls the agent's row, its state as the apps read it (a frame says working only when the state changes), until it
+   *  reads working: the frame count then, where a turn_ended sent before the read would be before; -1 when a turn_ended
+   *  came since [from] first. */
+  const workingAt = (agentId: string, from: number, what: string): Promise<number> =>
+    until(what, async () => (await stateOf(agentId)) === 'working' ? client.frames.length
+      : client.frames.slice(from).some(isTurn('turn_ended', agentId)) && -1, TURN_MS, 50)
   const daemonSettings = () => join(d.env.HOME!, '.claude', 'settings.json')
 
   /** Each installed hook names this daemon's port, or none and the pane sets it; never the person's daemon's. */
@@ -141,7 +155,8 @@ describe.runIf(REAL_CLAUDE && PROFILE)('hook-driven status with the real Claude 
     // The daemon may ask its Claude Code for its version before its hooks are in: the deny list from the start.
     writeFileSync(join(dir, 'flags.json'), JSON.stringify({ permissions: { deny: DENIED } }))
     writeFileSync(join(dir, 'claude'), wrapperSource(dir), { mode: 0o755 })
-    d = await IsolatedDaemon.create({ env: { HOOK_INSTALL_ENGINES: 'claude', CLAUDE_PATH: join(dir, 'claude') } })
+    d = await IsolatedDaemon.create({ env: { HOOK_INSTALL_ENGINES: 'claude', CLAUDE_PATH: join(dir, 'claude'),
+      HARNESSD_TEST_STOP_HOOK_DELAY_MS: String(STOP_DELAY_MS) } })
     await d.start()
     expect([d.port, d.configuredPort]).not.toContain(PERSONAL_PORT)
     writeFileSync(join(dir, 'flags.json'), JSON.stringify({ hooks: assertHooksPointHere(), permissions: { deny: DENIED } }))
@@ -179,8 +194,11 @@ describe.runIf(REAL_CLAUDE && PROFILE)('hook-driven status with the real Claude 
     expect(created.error, `${name}: ${JSON.stringify(created)}`).toBeUndefined()
     const agent = await until(`${name} to bind its conversation`, async () => {
       const now = (await rows()).find((row) => row.id === created.agent.id)
+      const screen = now?.tmuxPane ? await d.capture(now.tmuxPane) : ''
+      // A sign-in is the person's, never typed here: no use waiting for one.
+      if (SIGN_IN.test(screen)) return SIGNED_OUT
       // Claude Code asks whether to trust a folder the profile has not seen: the person's answer, given in the pane.
-      if (now?.tmuxPane && TRUST.test(await d.capture(now.tmuxPane))) await d.tmux.run('send-keys', '-t', now.tmuxPane, 'Enter')
+      if (TRUST.test(screen)) await d.tmux.run('send-keys', '-t', now!.tmuxPane, 'Enter')
       return now?.sessionId && now.status === 'active' ? now : null
     }, 60_000, 500).catch((error: Error) => {
       const kept = projectFolders(cwd).filter((folder) => existsSync(folder) && readdirSync(folder).some((file) => file.endsWith('.jsonl')))
@@ -189,6 +207,7 @@ describe.runIf(REAL_CLAUDE && PROFILE)('hook-driven status with the real Claude 
         ? `the daemon did not take ${name}'s session: its transcript is under the profile (${kept.join(', ')}), not the daemon's Claude Code projects folder`
         : error.message)
     })
+    if (agent === SIGNED_OUT) throw new Error(`Claude Code is not signed in through E2E_CLAUDE_PROFILE (${PROFILE}): it asks to log in`)
     expect(readIf(join(dir, 'refused.log')), 'the daemon\'s launch').toBe('')
     return agent
   }
@@ -213,9 +232,12 @@ describe.runIf(REAL_CLAUDE && PROFILE)('hook-driven status with the real Claude 
     return (await reply).payload as Record<string, any>
   }
 
-  /** A wait on the person: not working from the wait hook, before its question; the question within 3 s of the hook;
-   *  working again once answered; one turn_ended. Returns when the agent stopped reading as working. */
-  async function waitsOnThePerson(agent: Row, prompt: string, pick: RegExp): Promise<number> {
+  /** A wait on the person: not working from the wait hook; the question within 3 s of it; working again once answered,
+   *  read before the turn ends (its Stop is acted on `STOP_DELAY_MS` late); one turn_ended. [hookFirst]: Claude Code runs
+   *  the hook and waits for it before it draws its dialog (AskUserQuestion's PreToolUse), so the question comes after
+   *  it; a PermissionRequest hook runs beside the dialog just drawn, and either may come first. Returns when the agent
+   *  stopped reading as working. */
+  async function waitsOnThePerson(agent: Row, prompt: string, pick: RegExp, hookFirst: boolean): Promise<number> {
     const since = client.frames.length
     const started = () => client.frames.slice(since).some(isTurn('turn_started', agent.id))
     // Sent at once at the wait hook (R4); a not-working state before the turn started is the last turn's.
@@ -224,14 +246,16 @@ describe.runIf(REAL_CLAUDE && PROFILE)('hook-driven status with the real Claude 
     const asked = arrival(client.next(isTurn('commander_question', agent.id), TURN_MS, 'the question'))
     client.send('message', { agentId: agent.id, content: prompt })
     const [wait, question] = await Promise.all([waited, asked])
-    expect(client.frames.indexOf(wait.frame), 'not working before the question').toBeLessThan(client.frames.indexOf(question.frame))
-    expect(question.at - wait.at, 'the question after the wait hook, ms').toBeLessThanOrEqual(QUESTION_AFTER_WAIT_MS)
+    if (hookFirst) expect(client.frames.indexOf(wait.frame), 'not working before the question').toBeLessThan(client.frames.indexOf(question.frame))
+    expect(Math.abs(question.at - wait.at), 'the question and the wait hook, ms apart').toBeLessThanOrEqual(QUESTION_AFTER_WAIT_MS)
     const from = client.frames.length
     const ended = client.next(isTurn('turn_ended', agent.id), TURN_MS, 'turn_ended once answered')
     const result = await answer(agent.id, question.frame, pick)
     expect(result.error, JSON.stringify(result)).toBeUndefined()
-    const end = await ended
-    expect(client.frames.slice(from, client.frames.indexOf(end)).some(working(agent.id)), 'working again once answered').toBe(true)
+    const read = await workingAt(agent.id, from, 'working again once answered')
+    expect(read, 'working again once answered, before the turn ended').toBeGreaterThanOrEqual(0)
+    expect(client.frames.slice(from, read).filter(isTurn('turn_ended', agent.id)), 'read before the turn ended').toEqual([])
+    await ended
     await fence()
     expect(client.frames.slice(since).filter(isTurn('turn_ended', agent.id))).toHaveLength(1)
     return wait.at
@@ -255,12 +279,13 @@ describe.runIf(REAL_CLAUDE && PROFILE)('hook-driven status with the real Claude 
       await until('the daemon\'s turn-stop line', () => stop.at, 10_000, 20)
       expect(stop.at, 'turn_ended after the Stop hook').toBeLessThanOrEqual(end.at + PIPE_SKEW_MS)
       const done = await finished
-      expect(done.at - end.at, 'Finished after the turn ended, ms').toBeGreaterThanOrEqual(QUIET_MS - FRAME_SKEW_MS)
-      await fence()
+      expect(done.at - end.at, 'Finished after the turn ended, ms').toBeGreaterThanOrEqual(DONE_QUIET_MS - FRAME_SKEW_MS)
+      const state = await stateOf(agent.id)
       const after = client.frames.slice(since)
       expect(after.filter(isTurn('turn_ended', agent.id))).toHaveLength(1)
       expect(after.filter(notified(agent.id))).toHaveLength(1)
       expect(client.frames.slice(client.frames.indexOf(end.frame)).filter(working(agent.id)), 'working after the turn ended').toEqual([])
+      expect(state, 'the agent\'s row after the turn ended').not.toBe('working')
     } finally {
       d.child?.stdout?.off('data', seen)
       d.child?.stderr?.off('data', seen)
@@ -272,29 +297,33 @@ describe.runIf(REAL_CLAUDE && PROFILE)('hook-driven status with the real Claude 
     // Polled from the prompt: when Claude Code drew its dialog, against when its wait hook ran.
     const drawn = until('the permission dialog in the pane', async () => PERMISSION_DIALOG.test(await d.capture(agent.tmuxPane)) && Date.now(), TURN_MS, 50)
     drawn.catch(() => { /* awaited below */ })
-    const waitAt = await waitsOnThePerson(agent, 'Run the shell command date and tell me what it printed.', /^Yes/)
+    const waitAt = await waitsOnThePerson(agent, 'Run the shell command date and tell me what it printed.', /^Yes/, false)
     // Task 1's Notification verdict, measured on the real engine; negative: the hook ran before the dialog was drawn.
     console.log(`[real claude] permission dialog first captured to the wait hook: ${waitAt - await drawn} ms`)
   }, CASE_MS)
 
   it('AskUserQuestion: the same', async () => {
     const agent = await create('ask')
-    await waitsOnThePerson(agent, 'Use the AskUserQuestion tool to ask me to pick red or blue, then tell me which I picked.', /red/i)
+    await waitsOnThePerson(agent, 'Use the AskUserQuestion tool to ask me to pick red or blue, then tell me which I picked.', /red/i, true)
   }, CASE_MS)
 
   it('Esc typed in the pane ends the turn as aborted, and nothing is announced', async () => {
     const agent = await create('esc')
-    const isWorking = client.next(working(agent.id), TURN_MS, 'the agent to read as working')
+    const from = client.frames.length
     client.send('message', { agentId: agent.id, content: 'Write sixty numbered lines about tides.' })
-    await isWorking
+    expect(await workingAt(agent.id, from, 'the agent to read as working'), 'working before its turn ended').toBeGreaterThanOrEqual(0)
     const since = client.frames.length
     const ended = client.next(isTurn('turn_ended', agent.id), TURN_MS, 'turn_ended after Esc')
     await d.tmux.run('send-keys', '-t', agent.tmuxPane, 'Escape')
     expect((await ended).payload?.aborted).toBe(true)
-    // Nothing announced can only be shown once the quiet window it would have come after is over.
-    await sleep(QUIET_MS * 3)
+    // Nothing announced is read once the next turn's Finished, which comes after the quiet window, has come.
+    const finished = client.next(notified(agent.id), TURN_MS, 'the next turn\'s Finished')
+    const next = client.next(isTurn('turn_ended', agent.id), TURN_MS, 'the next turn\'s end')
+    client.send('message', { agentId: agent.id, content: 'Reply with the single word ready.' })
+    const [end, done] = await Promise.all([next, finished])
     await fence()
-    expect(client.frames.slice(since).filter(notified(agent.id))).toEqual([])
+    expect(client.frames.slice(since).filter(notified(agent.id))).toEqual([done])
+    expect(client.frames.indexOf(done), 'the one Finished is the next turn\'s').toBeGreaterThan(client.frames.indexOf(end))
   }, CASE_MS)
 
   it('a background subagent keeps the lead working past its Stop, and the turn ends once after it stops', async (ctx) => {
