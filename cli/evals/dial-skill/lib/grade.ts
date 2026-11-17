@@ -102,6 +102,13 @@ function sum(usages: Usage[]): Usage {
     total.output_tokens += u.output_tokens
     if (u.cache_read_input_tokens !== undefined) total.cache_read_input_tokens = (total.cache_read_input_tokens ?? 0) + u.cache_read_input_tokens
     if (u.cache_creation_input_tokens !== undefined) total.cache_creation_input_tokens = (total.cache_creation_input_tokens ?? 0) + u.cache_creation_input_tokens
+    if (u.cache_creation !== undefined) {
+      const t = total.cache_creation ?? { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 }
+      total.cache_creation = {
+        ephemeral_5m_input_tokens: t.ephemeral_5m_input_tokens + u.cache_creation.ephemeral_5m_input_tokens,
+        ephemeral_1h_input_tokens: t.ephemeral_1h_input_tokens + u.cache_creation.ephemeral_1h_input_tokens,
+      }
+    }
   }
   return total
 }

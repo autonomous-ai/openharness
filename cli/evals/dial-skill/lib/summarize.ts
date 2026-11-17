@@ -18,7 +18,7 @@ export interface Summary {
 }
 
 interface Usage { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number;
-  cache_creation_input_tokens?: number }
+  cache_creation_input_tokens?: number; cache_creation?: { ephemeral_5m_input_tokens?: number } }
 interface Row {
   prompt_id: string; rep: number; meta?: { agent?: string }; status?: string
   model?: string | null; usage?: Usage; judge_model?: string; judge_usage?: Usage
@@ -27,9 +27,10 @@ interface Row {
 interface ErrorRow { prompt_id: string; rep: number; failure_class?: string; model?: string | null; usage?: Usage;
   judge_model?: string; judge_usage?: Usage }
 
-// $ per million tokens, from the claude-api skill's Current Models table (cached 2026-11-03).
-export const PRICES: Record<string, { in: number; out: number }> = {
-  'claude-opus-5-5': { in: 4, out: 20 },
+// $ per million tokens: input and output from the claude-api skill's Current Models table (cached 2026-11-03); cache
+// reads at each model's own rate, as Claude Code bills them (the spec checks a billed run's total_cost_usd).
+export const PRICES: Record<string, { in: number; out: number; cache_read: number }> = {
+  'claude-opus-5-5': { in: 4, out: 20, cache_read: 0.2 },
 }
 
 const SPLITS = ['val', 'train', 'test'] as const
@@ -93,13 +94,17 @@ function tokensOf(u: Usage | undefined): number {
     + (u?.cache_creation_input_tokens ?? 0)
 }
 
-// Dollars for one call: cache reads at 0.1× input, cache writes at 1.25× input; null when billed tokens have no price.
+// Dollars for one call; null when billed tokens have no price. A cache write bills by how long the cache keeps it:
+// 1.25× input for 5 minutes, 2× for the hour Claude Code asks for. A write not known to be 5-minute, as in rows
+// recorded before the split was kept, is priced as 1-hour.
 function costOf(model: string | null | undefined, u: Usage | undefined): number | null {
   if (!tokensOf(u)) return 0
   const p = priceOf(model)
   if (!p) return null
-  return (p.in * ((u!.input_tokens ?? 0) + 0.1 * (u!.cache_read_input_tokens ?? 0)
-    + 1.25 * (u!.cache_creation_input_tokens ?? 0)) + p.out * (u!.output_tokens ?? 0)) / 1e6
+  const writes = u!.cache_creation_input_tokens ?? 0
+  const fiveMinute = u!.cache_creation?.ephemeral_5m_input_tokens ?? 0
+  return (p.in * ((u!.input_tokens ?? 0) + 1.25 * fiveMinute + 2 * (writes - fiveMinute))
+    + p.cache_read * (u!.cache_read_input_tokens ?? 0) + p.out * (u!.output_tokens ?? 0)) / 1e6
 }
 
 function readState(flow: string): Record<string, unknown> {

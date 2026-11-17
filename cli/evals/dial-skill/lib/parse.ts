@@ -4,7 +4,11 @@
  */
 
 export interface Turn { role: 'system' | 'user' | 'assistant' | 'tool_call' | 'tool_result'; content: string; name?: string; thinking?: string }
-export interface Usage { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
+export interface Usage {
+  input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number
+  // The cache writes by how long the cache keeps them, which bill at different rates.
+  cache_creation?: { ephemeral_5m_input_tokens: number; ephemeral_1h_input_tokens: number }
+}
 export interface RunResult {
   answer: string
   transcript: Turn[]
@@ -103,5 +107,9 @@ export function usageOf(raw: unknown): Usage {
   const usage: Usage = { input_tokens: n('input_tokens'), output_tokens: n('output_tokens') }
   if (typeof u.cache_read_input_tokens === 'number') usage.cache_read_input_tokens = u.cache_read_input_tokens
   if (typeof u.cache_creation_input_tokens === 'number') usage.cache_creation_input_tokens = u.cache_creation_input_tokens
+  const split = (u.cache_creation ?? {}) as Record<string, unknown>
+  if (typeof split.ephemeral_5m_input_tokens === 'number' && typeof split.ephemeral_1h_input_tokens === 'number') {
+    usage.cache_creation = { ephemeral_5m_input_tokens: split.ephemeral_5m_input_tokens, ephemeral_1h_input_tokens: split.ephemeral_1h_input_tokens }
+  }
   return usage
 }
