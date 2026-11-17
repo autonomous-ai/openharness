@@ -4,7 +4,7 @@
  * home a throwaway folder, and a daemon and the devices' listener on sockets in a throwaway folder. The real `claude`,
  * ~/.claude, ~/.codex and the daemon are never touched.
  */
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { Socket } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -321,19 +321,20 @@ describe('the dial skill', () => {
       const dataDir = folder()
       const codexHome = folder()
       writeFileSync(join(dataDir, 'dial-skill.json'), JSON.stringify({ removed: { [engine]: true } }))
-      // The person deleted each skill and kept the skills folders.
-      const cleared = [folder(), folder()].map((home) => {
-        mkdirSync(join(home, 'skills'))
-        return realpathSync(join(home, 'skills'))
-      })
-      // A recorded folder that is gone is not made again.
-      const gone = join(folder(), 'skills')
+      // The person deleted the skill and kept the skills folder in one home, and deleted the whole skills folder in another.
+      const kept = folder()
+      mkdirSync(join(kept, 'skills'))
+      const cleared = [realpathSync(join(kept, 'skills')), join(realpathSync(folder()), 'skills')]
+      // A recorded folder whose home is gone is not made again.
+      const gone = join(folder(), 'home', 'skills')
       recorded(dataDir, { [engine]: [...cleared, gone] })
       expect(await device([engine, 'enable'], { dataDir, codexHome }), engine).toEqual({ code: 0, out: [], err: [] })
       const home = engine === 'claude' ? claudeHome : codexHome
       expect(answers(dataDir), engine).toEqual({ homes: { claude: [], codex: [], [engine]: [realpathSync(join(home, 'skills'))] } })
       for (const skills of cleared) expect(readFileSync(join(skills, 'dial', 'SKILL.md'), 'utf8'), engine).toBe(DIAL_SKILL)
-      expect(existsSync(gone), engine).toBe(false)
+      // Made as a skill's own folder is: this account's alone.
+      expect(statSync(cleared[1]).mode & 0o777, engine).toBe(0o700)
+      expect(existsSync(dirname(gone)), engine).toBe(false)
     }
   })
 
