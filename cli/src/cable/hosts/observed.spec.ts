@@ -1224,6 +1224,20 @@ describe('ObservedSource and the last answer the scan reads', () => {
     expect(s.logs.join('\n')).not.toContain('someone')
   })
 
+  // As OpenSessions.busy counts an engine that cannot say: listed idle, a running turn would get a handle to type into.
+  it('a busy check that fails counts as busy: it reads working, its answer is not read, and the look lists the rest', async () => {
+    const lastAnswer = vi.fn(async (_engine: string, path: string): Promise<string | undefined> => `answer of ${path}`)
+    const s = setup({ lastAnswer })
+    let checks = 0
+    s.holdBusy(async () => { if (checks++ === 0) throw new Error('EACCES /Users/someone/.claude/sessions/11.json') })
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    await s.src.scanOpen()
+    expect(lastAnswer.mock.calls).toEqual([['claude', '/t/b.jsonl']])
+    expect(s.src.list().map((a) => [a.sessionId, a.state, a.lastAnswer])).toEqual([['a', 'working', undefined], ['b', 'idle', 'answer of /t/b.jsonl']])
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 0 app known · 0 named · 1 answered · 0 ms'])
+  })
+
   it('a hook heard while the answers are read wins', async () => {
     let answer: (text: string | undefined) => void = () => {}
     const lastAnswer = vi.fn(() => new Promise<string | undefined>((resolve) => { answer = resolve }))
