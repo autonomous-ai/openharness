@@ -33,6 +33,7 @@ import { messagesRpc, type Rpc } from '../messages/rpc.js'
 import { PERSON_AGENT_ID, REPLY_OFF_TEXT } from '../messages/replyLocal.js'
 import { TELL_OFF_TEXT } from '../messages/tell.js'
 import { sendPane } from '../messages/command.js'
+import { PROGRAM_TOKEN_FLAG, ProgramRecords, programMay, readProgramToken, sameHash, type ProgramHarness } from './program.js'
 import { asSaid, callerOf, clip, cloudMeta, cloudTurn, failureOf, forAgent, isAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type CloudMeta, type Failure, type Frame, type HistoryEvent, type Row, type State } from './model.js'
 
 export interface ClientDeps {
@@ -153,7 +154,7 @@ export const EXIT = { ok: 0, failed: 1, usage: 2, needsInput: 3, stopped: 4, ref
  *  `GOAL_LIMIT`, `GOAL_DONE` and `GOAL_FULL` are `harness goal`'s (services/goals.ts): retried, they are refused the
  *  same. `NOT_IDLE` is not among them: once the harness has finished, the reply is taken. */
 export const REFUSED_CODES: ReadonlySet<string> = new Set(['SPAWN_LIMIT', 'TURNED_OFF', 'NOT_YOURS', 'TELL_OFF', 'NOT_RUNNING', 'REPLY_OFF',
-  'NOT_HACHI', 'GOAL_EMPTY', 'GOAL_LIMIT', 'GOAL_DONE', 'GOAL_FULL'])
+  'NOT_HACHI', 'GOAL_EMPTY', 'GOAL_LIMIT', 'GOAL_DONE', 'GOAL_FULL', 'BAD_TOKEN_FILE', 'NAME_TAKEN'])
 
 /** What a refused caller may do instead: close one of its own when it is at its limit; otherwise the message says. */
 export function refusalNext(env: NodeJS.ProcessEnv, error: AgentClientError): NextStep[] {
@@ -517,6 +518,126 @@ async function readLastTurn(t: { daemon: Daemon; frame: Frame }, pages = 4) {
   return lastTurn(events)
 }
 
+// ── program-owned harnesses (#4393) ───────────────────────────────────────────────────────────────
+
+/** A program's token, read from `--program-token-file`, and the records it is checked against. */
+interface Program { hash: string; file: string; records: ProgramRecords }
+
+/** The program token [flags] name, or null without `--program-token-file`. BAD_TOKEN_FILE for a file that proves nothing. */
+function programOf(flags: Map<string, string | true>, dataDir: string): Program | null {
+  const file = flags.get(PROGRAM_TOKEN_FLAG)
+  if (file === undefined) return null
+  return { hash: readProgramToken(String(file)).hash, file: String(file), records: new ProgramRecords(dataDir) }
+}
+
+/** An agent (in a pane, outside Harness, or what is left of one) never acts with a program's token, even holding it. */
+function refuseAgentWithToken(o: Opened): void {
+  if (o.caller || o.orphan) {
+    throw new AgentClientError('NOT_YOURS', 'A program-owned harness is its program\'s alone: an agent may not act on it, even with its token.')
+  }
+}
+
+type ProgramTarget = Target & { record: ProgramHarness }
+
+/** The program's harness [name] means: by the name the program gave it (the harness's own name changes once its agent
+ *  titles its session), or by its id; a live one before a stopped one, the newest first. One held without the token is
+ *  NOT_YOURS. */
+async function programTarget(o: Opened, p: Program, name: string): Promise<ProgramTarget> {
+  if (!o.stopped) { o.frames = await list(o.daemon, true); o.stopped = true }
+  const frames = named(o.frames)
+  const byId = new Map(frames.map((f) => [f.id, f]))
+  const byIdRecord = p.records.get(name.trim())
+  const records = [...p.records.named(name, p.hash), ...(byIdRecord && sameHash(byIdRecord.tokenHash, p.hash) ? [byIdRecord] : [])]
+  const owned = records.flatMap((record) => { const frame = byId.get(record.agentId); return frame ? [{ record, frame }] : [] })
+  const found = owned.find((x) => x.frame.status !== 'stopped') ?? owned[0]
+  if (found) return { daemon: o.daemon, frame: found.frame, machineId: o.where.machineId, machine: o.machine, yours: true, remote: false, record: found.record }
+  if (frames.some(exactly(name))) throw new AgentClientError('NOT_YOURS', `"${name}" is not a harness this token owns.`)
+  throw new AgentClientError('UNKNOWN_HARNESS', `No harness named "${name}" is owned by this token on this computer. Start it with harness ensure.`)
+}
+
+/** The harness that took a program's input: by its id, whatever its name says now; [name] is the program's name for it,
+ *  or its own, or its id. */
+async function inputTarget(o: Opened, input: ProgramHarness, name: string): Promise<Target> {
+  if (!o.stopped) { o.frames = await list(o.daemon, true); o.stopped = true }
+  const frame = named(o.frames).find((f) => f.id === input.agentId)
+  if (!frame) throw new AgentClientError('GONE', `${input.name} is no longer on this computer.`)
+  const wanted = name.trim().toLowerCase()
+  if (input.name.toLowerCase() !== wanted && !exactly(name)(frame)) throw new AgentClientError('UNKNOWN_INPUT', `${name} did not take that input.`)
+  return { daemon: o.daemon, frame, machineId: o.where.machineId, machine: o.machine, yours: false, remote: false }
+}
+
+/** A program verb's failure said and its exit code returned: JSON `{error, detail, …}`, or the words on stderr. */
+function programFailure(s: Setup, json: boolean, code: string, detail: string, exit: number, extra: Record<string, unknown> = {}): number {
+  if (json) s.out(JSON.stringify({ error: code, detail, ...extra }))
+  else s.err(detail)
+  return exit
+}
+
+/** How often `reply` looks again while an engine is not ready for its words. */
+const PROGRAM_READY_LOOK_MS = 500
+/** How long `reply` waits for its engine by default: within it the words are taken, or it says why not. */
+const PROGRAM_REPLY_TIMEOUT_MS = 10_000
+
+/**
+ * A program's words to the harness it owns, answered only once its engine has taken them (#4393): `taken` with the
+ * input's id, or why not. NOT_RUNNING (exit 4) for a harness that was closed or stopped. NOT_IDLE (5) while it works on
+ * the last words or waits for the person: the program queues, Harness does not. While its engine is not ready yet (the
+ * OpenClaw Gateway takes 27 to 50 s after a boot) it is waited for, within [timeoutMs], then ENGINE_NOT_READY (5).
+ * Typed, it is answered by the daemon at the turn's start (`input_ack`, core/deliveries.ts); at [timeoutMs] TIMEOUT
+ * (124), with `cancelled: true` when nothing was typed (send again) or the input's id when it was (follow it with
+ * `harness wait --after`): never "sent, unknown".
+ */
+async function programReply(s: Setup, o: Opened, t: ProgramTarget, text: string, timeoutMs: number, json: boolean): Promise<number> {
+  const name = t.record.name
+  const deadline = s.now() + timeoutMs
+  // Not one input taken since its engine (re)started: whatever its screen says, it is still coming up, not working.
+  const fresh = t.record.inputs.every((input) => input.takenAt < t.record.startedAt)
+  for (;;) {
+    const state = stateOf(t.frame)
+    if (state === 'stopped' || state === 'offline') {
+      return programFailure(s, json, 'NOT_RUNNING', `${name} is not running: it was closed or stopped. Run harness ensure to open it again.`, EXIT.stopped)
+    }
+    const { screen } = await inspect(t)
+    if (screen === 'idle') break
+    if (screen === 'needs-input') return programFailure(s, json, 'NOT_IDLE', `${name} waits for the person (a question or a permission).`, EXIT.refused)
+    if (screen === 'working' && !fresh) return programFailure(s, json, 'NOT_IDLE', `${name} is still working on the last words. Wait for it (harness wait ${name}), then reply.`, EXIT.refused)
+    if (s.now() >= deadline) {
+      return programFailure(s, json, 'ENGINE_NOT_READY', `${name}'s engine is not ready for words yet${screen === 'draft' ? ' (text waits in its box)' : ''}. Nothing was typed; try again.`, EXIT.refused)
+    }
+    await s.sleep(Math.min(PROGRAM_READY_LOOK_MS, Math.max(0, deadline - s.now())))
+    const frame = (await list(o.daemon, true)).find((f) => f.id === t.frame.id)
+    if (!frame) return programFailure(s, json, 'NOT_RUNNING', `${name} is no longer on this computer. Run harness ensure.`, EXIT.stopped)
+    t.frame = frame
+  }
+  const ackMs = Math.max(1_000, deadline - s.now())
+  const reply = await o.daemon.request('input_ack', { agentId: t.frame.id, text, ackMs }, ackMs + 10_000)
+  if (reply.error === 'UNSUPPORTED') return programFailure(s, json, 'DAEMON_TOO_OLD', 'This Harness daemon cannot acknowledge a reply. Restart Harness on this version.', EXIT.failed)
+  if (typeof reply.error === 'string') return programFailure(s, json, reply.error, `${name} did not take the words (${reply.error}).`, EXIT.failed)
+  const inputId = String(reply.inputId ?? '')
+  if (reply.state === 'taken') {
+    const takenAt = typeof reply.takenAt === 'number' ? reply.takenAt : s.now()
+    try { t.record.inputs.push({ id: inputId, takenAt }); t.record.inputs.length && new ProgramRecords(o.where.dataDir).taken(t.frame.id, { id: inputId, takenAt }) }
+    catch { /* `wait --after` then does not know it, and says so */ }
+    // As a tell's: `wait` and `show` hold the answer to the work before until a turn asked with these words is seen.
+    try { o.ledger.append({ at: s.now(), by: { machineId: o.where.machineId, agentId: PERSON_AGENT_ID }, told: { machineId: t.machineId, agentId: t.frame.id }, probe: flat(text).slice(0, PROBE_CHARS) }) }
+    catch { /* `wait` then reads its last answer as it would without the line */ }
+    s.out(json ? JSON.stringify({ state: 'taken', inputId, takenAt: new Date(takenAt).toISOString() })
+      : `${name} took it (${inputId}). Wait for its answer: harness wait ${name} --after ${inputId}`)
+    return EXIT.ok
+  }
+  const reason = typeof reply.reason === 'string' ? reply.reason : String(reply.state)
+  if (reply.state === 'rejected') {
+    if (/^(agent_gone|runtime_gone)/.test(reason)) return programFailure(s, json, 'NOT_RUNNING', `${name} is no longer running (${reason}). Run harness ensure.`, EXIT.stopped, { reason })
+    return programFailure(s, json, 'ENGINE_NOT_READY', `${name} did not take the words (${reason}). Nothing was taken; try again.`, EXIT.refused, { reason })
+  }
+  if (reply.state === 'timeout' && reply.cancelled === true) {
+    return programFailure(s, json, 'TIMEOUT', `${name} did not take the words in time. Nothing was typed; send them again.`, EXIT.timeout, { cancelled: true })
+  }
+  // Typed, its turn not seen to start in time (or never confirmed): it may yet run. Followed, never sent twice.
+  return programFailure(s, json, 'TIMEOUT', `${name} was given the words but has not been seen to take them. Follow it with harness wait ${name} --after ${inputId} before sending them again.`,
+    EXIT.timeout, { cancelled: false, inputId, ...(reply.state === 'unknown' ? { reason } : {}) })
+}
+
 /** `harness new claude @office`, the old way to name a machine, said as it is now typed. */
 export const atMachineRefusal = (word: string): string =>
   `Name the machine with ${word.length > 1 ? machineOption(word.slice(1)) : '--machine <name>'}.`
@@ -813,15 +934,17 @@ export function whoamiCommand(argv: readonly string[], deps: ClientDeps = {}): P
 
 export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
   return run(SHOW_USAGE, deps, wantsJson, argv, async (s) => {
-    const { names, flags, machine } = words(argv, { '--chars': 'value', '--json': 'flag', '--work': 'flag' })
+    const { names, flags, machine } = words(argv, { '--chars': 'value', '--json': 'flag', '--work': 'flag', [PROGRAM_TOKEN_FLAG]: 'value' })
     if (names.length !== 1) throw new UsageError(names.length ? 'Name one harness.' : 'Name the harness to show.')
     const chars = flags.has('--chars') ? Number(flags.get('--chars')) : DEFAULT_CHARS
     if (!Number.isInteger(chars) || chars < 1) throw new UsageError('--chars takes a whole number.')
+    if (flags.has(PROGRAM_TOKEN_FLAG) && machine !== null) throw new UsageError(`${PROGRAM_TOKEN_FLAG} is for a harness on this computer: leave out --machine.`)
     const away = await machineOf(s, s.where(), machine)
     const o = await opened(s)
     let t: Target | null = null
     try {
-      t = await target(s, o, names[0], away)
+      const p = flags.has(PROGRAM_TOKEN_FLAG) ? (refuseAgentWithToken(o), programOf(flags, o.where.dataDir)) : null
+      t = p ? await programTarget(o, p, names[0]) : await target(s, o, names[0], away)
       if (flags.has('--work') && t.frame.location === 'cloud') {
         const name = t.frame.name ?? t.frame.id.slice(0, 8)
         throw new UsageError(`${name} runs in its maker's cloud: it has no folder here to read. Its links are in ${step(s.env, 'show', onAway(name, away))}.`)
@@ -832,7 +955,7 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         ? { screen: null, background: null } : await inspect(t)
       const state: State = screen === 'draft' ? 'idle' : screen ?? listed
       const parent = o.ledger.parentOf({ machineId: t.machineId, agentId: t.frame.id })
-      const startedBy = t.yours ? 'you' : parent ? parent.by.name : 'person'
+      const startedBy = p ? 'program' : t.yours ? 'you' : parent ? parent.by.name : 'person'
       if (flags.has('--work')) {
         const work = await workOf(t)
         const head = { name: t.frame.name, id: t.frame.id, agent: engineName(t.frame.engine ?? ''), machine: t.machine, state, startedBy }
@@ -937,14 +1060,27 @@ const flat = (text: string): string => text.replace(/\s+/g, ' ').trim()
 export function replyCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
   return run(REPLY_USAGE, deps, wantsJson, argv, async (s) => {
     const dash = argv.indexOf('--')
-    const { names, flags, machine } = words(dash < 0 ? argv : argv.slice(0, dash), { '--json': 'flag' })
+    const { names, flags, machine } = words(dash < 0 ? argv : argv.slice(0, dash), { '--json': 'flag', [PROGRAM_TOKEN_FLAG]: 'value', '--timeout': 'value' })
     const text = dash < 0 ? '' : argv.slice(dash + 1).join(' ').trim()
     if (names.length !== 1) throw new UsageError(names.length ? 'Name one harness.' : 'Name the harness to reply to.')
     if (!text) throw new UsageError('Give the words after --: harness reply <name> -- <words>')
+    const token = flags.has(PROGRAM_TOKEN_FLAG)
+    if (token && machine !== null) throw new UsageError(`${PROGRAM_TOKEN_FLAG} is for a harness on this computer: leave out --machine.`)
+    if (!token && flags.has('--timeout')) throw new UsageError(`--timeout is for a program's reply, with ${PROGRAM_TOKEN_FLAG}.`)
+    const timeoutMs = flags.has('--timeout') ? parseDuration(String(flags.get('--timeout'))) : PROGRAM_REPLY_TIMEOUT_MS
     const away = await machineOf(s, s.where(), machine)
     const o = await opened(s)
     let t: Target | null = null
     try {
+      // A program's own harness, by its token (#4393): typed and answered once its engine has taken the words, signed in or
+      // out and without the person's switch, which is about the person's harnesses.
+      if (token) {
+        refuseAgentWithToken(o)
+        const p = programOf(flags, o.where.dataDir)!
+        if (!programMay('reply', !!readAuthSession())) throw new AgentClientError('REPLY_OFF', REPLY_OFF_TEXT)
+        const owned = await programTarget(o, p, names[0])
+        return await programReply(s, o, owned, text, timeoutMs, flags.has('--json'))
+      }
       if (o.caller || o.orphan) throw new AgentClientError('NOT_YOURS', 'Only the person replies to a harness: tell them what it asked. To give more work to one you started, use harness tell.')
       t = await target(s, o, names[0], away)
       const name = t.frame.name ?? t.frame.id.slice(0, 8)
@@ -1081,16 +1217,20 @@ async function replyInPane(s: Setup, o: Opened, t: Target, text: string, at: str
  */
 export function resumeCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
   return run(RESUME_USAGE, deps, wantsJson, argv, async (s) => {
-    const { names, flags, machine } = words(argv, { '--json': 'flag' })
+    const { names, flags, machine } = words(argv, { '--json': 'flag', [PROGRAM_TOKEN_FLAG]: 'value' })
     if (names.length !== 1) throw new UsageError(names.length ? 'Resume one harness at a time.' : 'Name the harness to resume.')
+    if (flags.has(PROGRAM_TOKEN_FLAG) && machine !== null) throw new UsageError(`${PROGRAM_TOKEN_FLAG} is for a harness on this computer: leave out --machine.`)
     const away = await machineOf(s, s.where(), machine)
     // The stopped ones too, from the start: a closed `weather` is meant before a live `weather-api` its name starts.
     const o = await opened(s, true)
     let t: Target | null = null
     try {
+      // A program's own harness (#4393): its token, not the person's switch.
+      const p = flags.has(PROGRAM_TOKEN_FLAG) ? (refuseAgentWithToken(o), programOf(flags, o.where.dataDir)) : null
+      if (p && !programMay('resume', !!readAuthSession())) throw new AgentClientError('REPLY_OFF', RESUME_OFF_TEXT)
       if (o.caller || o.orphan) throw new AgentClientError('NOT_YOURS', 'Only the person, or a program acting for them, resumes a harness. Tell the person which one to resume.')
-      if (!readAgentSettings(o.where.dataDir).programsReply) throw new AgentClientError('REPLY_OFF', RESUME_OFF_TEXT)
-      t = await target(s, o, names[0], away)
+      if (!p && !readAgentSettings(o.where.dataDir).programsReply) throw new AgentClientError('REPLY_OFF', RESUME_OFF_TEXT)
+      t = p ? await programTarget(o, p, names[0]) : await target(s, o, names[0], away)
       const name = t.frame.name ?? t.frame.id.slice(0, 8)
       if (t.frame.location === 'cloud') throw new UsageError(`${name} runs in its maker's cloud: harness resume reopens a harness in a pane only.`)
       const at = onAway(addressOf({ machineId: '', agentId: t.frame.id, name: t.frame.name ?? '', engine: '' }), away)
@@ -1104,6 +1244,7 @@ export function resumeCommand(argv: readonly string[], deps: ClientDeps = {}): P
         if (reply.state === 'missing') throw error
       }
       const agent = resumedAgent(s, name, at, t.frame.id, reply)
+      if (p) { try { p.records.started(t.frame.id, s.now()) } catch { /* its next reply reads it as it was */ } }
       const resumed = reply.resumed !== false
       // Said alike whether it was relaunched or found still running: the machine's answer does not say which.
       const effect = resumed ? `${name} is open, with its conversation.` : `${name} is open, in a new conversation: its agent could not resume the earlier one.`
@@ -1279,10 +1420,13 @@ function waitNext(state: string, run: { read: string; again: string; list: strin
 
 export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
   return run(WAIT_USAGE, deps, wantsJson, argv, async (s) => {
-    const { names, flags, machine } = words(argv, { '--any': 'flag', '--timeout': 'value', '--json': 'flag' })
+    const { names, flags, machine } = words(argv, { '--any': 'flag', '--timeout': 'value', '--json': 'flag', [PROGRAM_TOKEN_FLAG]: 'value', '--after': 'value' })
     const wanted = names.flatMap((n) => n.split(',')).map((n) => n.trim()).filter(Boolean)
     if (!wanted.length) throw new UsageError('Name the harness to wait for.')
     const timeoutMs = flags.has('--timeout') ? parseDuration(String(flags.get('--timeout'))) : DEFAULT_TIMEOUT_MS
+    const after = flags.has('--after') ? String(flags.get('--after')) : null
+    if (after !== null && wanted.length !== 1) throw new UsageError('--after follows one harness\'s input: name that one harness.')
+    if ((after !== null || flags.has(PROGRAM_TOKEN_FLAG)) && machine !== null) throw new UsageError('--after and a program token are for a harness on this computer: leave out --machine.')
     // Every name on the one machine `--machine` names.
     const away = await machineOf(s, s.where(), machine)
     const o = await opened(s)
@@ -1292,9 +1436,16 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
     const following: Asked[] = []
     const gave = new Map<Asked, Settled>()
     try {
+      const p = flags.has(PROGRAM_TOKEN_FLAG) ? (refuseAgentWithToken(o), programOf(flags, o.where.dataDir)) : null
+      // The harness a program's reply typed [after] into (#4393): it is waited on from that input's turn, which has started.
+      const input = after === null ? null : new ProgramRecords(o.where.dataDir).all().find((h) => h.inputs.some((i) => i.id === after)) ?? null
+      if (after !== null && !input) throw new AgentClientError('UNKNOWN_INPUT', `No harness here took an input ${after}.`)
       for (const name of wanted) {
         let t: Target
-        try { t = await target(s, o, name, away) } catch (error) {
+        try {
+          t = p ? await programTarget(o, p, name) : input ? await inputTarget(o, input, name) : await target(s, o, name, away)
+          if (input && t.frame.id !== input.agentId) throw new AgentClientError('UNKNOWN_INPUT', `${name} did not take an input ${after}.`)
+        } catch (error) {
           const asked = error instanceof AgentClientError && (error.code === 'NOT_STARTED' || error.code === 'NEVER_STARTED') ? askedNamed(o, name, away?.machineId) : undefined
           if (!asked) throw error
           if (!following.includes(asked)) following.push(asked)
@@ -1333,6 +1484,8 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       /** Looked at last as working by the daemon's word: its next change, whatever it is, is pushed. */
       const pushedNext = new Set<Target>()
       const sawWorking = new Set<Target>()
+      // Its turn started when the input was taken (`reply` answers only then): the first idle after it is its end.
+      if (input) for (const t of targets) if (t.frame.id === input.agentId) sawWorking.add(t)
       /** Idle looks in a row, on the same turn. */
       const idle = new Map<Target, { turn: string; looks: number }>()
       /** Idle at its last look with background commands still running: how many, for a timeout to say. */
@@ -1732,13 +1885,16 @@ function printWatch(s: Setup, json: boolean, chars: number, t: Target, event: Wa
 
 export function closeCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
   return run(CLOSE_USAGE, deps, wantsJson, argv, async (s) => {
-    const { names, flags, machine } = words(argv, { '--now': 'flag', '--json': 'flag' })
+    const { names, flags, machine } = words(argv, { '--now': 'flag', '--json': 'flag', [PROGRAM_TOKEN_FLAG]: 'value' })
     if (names.length !== 1) throw new UsageError(names.length ? 'Close one harness at a time.' : 'Name the harness to close.')
+    if (flags.has(PROGRAM_TOKEN_FLAG) && machine !== null) throw new UsageError(`${PROGRAM_TOKEN_FLAG} is for a harness on this computer: leave out --machine.`)
     const away = await machineOf(s, s.where(), machine)
     const o = await opened(s)
     let t: Target | null = null
     try {
-      try { t = await target(s, o, names[0], away) } catch (error) {
+      // A program closes its own harness by its token (#4393), and only that one.
+      const p = flags.has(PROGRAM_TOKEN_FLAG) ? (refuseAgentWithToken(o), programOf(flags, o.where.dataDir)) : null
+      try { t = p ? await programTarget(o, p, names[0]) : await target(s, o, names[0], away) } catch (error) {
         // Asked for and not started: closing it is not starting it. Cancelled by its creation, which its machine takes only
         // before the launch is claimed (lib/agentCreationReceipt.ts `cancelIntent`).
         const asked = error instanceof AgentClientError && error.code === 'NOT_STARTED' ? askedNamed(o, names[0], away?.machineId) : undefined

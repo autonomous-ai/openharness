@@ -11,6 +11,7 @@
  * own process delivers by asking the core (`answer`, services/turnsLink.ts) and hears only its own
  * deliveries, told to it until it has them: a delivery it made is its business and no other process's.
  */
+import { randomUUID } from 'node:crypto'
 import type { CoreApi, TurnDelivery } from './api.js'
 
 type Payload = Record<string, unknown>
@@ -37,7 +38,17 @@ export interface DeliveriesDeps {
    *  delivery `started` (core/turns/recaps.ts `quietTurn`); absent, nobody listens. */
   quietStarted?: (agentId: string) => void
   log?: (line: string) => void
+  /** A new id, unique on this computer (an acknowledged input's); a random UUID unless a test gives one. */
+  newId?: () => string
+  now?: () => number
 }
+
+/** How long an acknowledged input waits for its engine to take it, unless asked: what `harness reply` waits by default. */
+export const ACK_DEFAULT_MS = 10_000
+/** Bounds on [ackMs]: a second at least, so a typed line has a look to land in, and the longest wait OpenClaw's own
+ *  submission check makes (three 10 s windows, lib/sessionInput.ts) with room, at most. */
+export const ACK_MIN_MS = 1_000
+export const ACK_MAX_MS = 120_000
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
@@ -102,9 +113,53 @@ export function createDeliveries(deps: DeliveriesDeps) {
     },
   }
 
+  /**
+   * An acknowledged input (`input_ack`, #4393): words a program on this computer types into a harness it owns, answered
+   * only once the engine has taken them, so a program never reads "sent" for words that were lost. Delivered as any
+   * feature's turn, under a delivery id of its own (`program:`, never `team:`), and answered at the first of: its turn
+   * `started` (taken; for OpenClaw the Gateway's run, not text in the composer), `rejected` (nothing was taken), `unknown`
+   * (typed, its turn never confirmed), or [ackMs]. At [ackMs] a delivery not yet being written is taken back, so a
+   * program told `cancelled: true` may send the words again; one being written or awaiting its turn is left to finish,
+   * and is said `written` for the program to follow (`harness wait --after`) rather than send twice.
+   */
+  const acknowledged = (payload: Payload, answer: (result: Payload) => void): void => {
+    const agentId = text(payload.agentId)
+    const content = typeof payload.text === 'string' ? payload.text : ''
+    if (!agentId || !content.trim()) { answer({ error: 'INVALID_INPUT' }); return }
+    const ackMs = Math.min(ACK_MAX_MS, Math.max(ACK_MIN_MS, typeof payload.ackMs === 'number' && Number.isFinite(payload.ackMs) ? payload.ackMs : ACK_DEFAULT_MS))
+    const inputId = `program:${(deps.newId ?? randomUUID)()}`
+    const now = deps.now ?? Date.now
+    const began = now()
+    let written = false
+    const finish = (result: Payload): void => {
+      clearTimeout(timer)
+      stop()
+      // The time from the words to the engine's taking them: the first number to warn at scale (#4393, Design).
+      log(`[input-ack] ${agentId.slice(0, 8)} ${String(result.state)} in ${now() - began}ms`)
+      answer({ inputId, ...result })
+    }
+    const stop = turns.onDelivery((event) => {
+      if (event.deliveryId !== inputId) return
+      if (event.state === 'delivered') written = true
+      else if (event.state === 'started') finish({ state: 'taken', takenAt: now() })
+      else if (event.state === 'rejected') finish({ state: 'rejected', reason: event.reason ?? 'rejected' })
+      else if (event.state === 'unknown') finish({ state: 'unknown', reason: event.reason ?? 'unknown' })
+    })
+    const timer = setTimeout(() => {
+      // Heard no more first: a delivery taken back is said `rejected` at once, which is this timeout's, not a refusal.
+      stop()
+      const cancelled = cancel(inputId)
+      finish({ state: 'timeout', cancelled, written: !cancelled && written })
+    }, ackMs)
+    timer.unref()
+    submit(agentId, content, inputId)
+  }
+
   return {
     /** The delivery members of the core's own `CoreApi`, for the services in its process. */
     turns,
+
+    acknowledged,
 
     /** The core's input says what became of a delivery: every listener here hears it, each guarded, and the
      *  process that made it is told. A listener that throws costs that listener the event, never the input

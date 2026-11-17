@@ -291,6 +291,8 @@ export class BackendSocket {
    *  Agent Messages and the orchestrator deliver through `onMessage` above. [receipt]: what became of it, for
    *  its request's measurement (core/usageOutcomes.ts). */
   messageProvider: ((payload: Record<string, unknown>, receipt?: MessageReceipt) => void) | null = null
+  /** Answers `input_ack`: words typed into an agent, once its engine has taken them (core/deliveries.ts). */
+  inputAckProvider: ((payload: Record<string, unknown>, answer: (result: Record<string, unknown>) => void) => void) | null = null
   /** Answers `agent_update` through its last argument, before the windows hear of the change: a rename, a
    *  model and effort, or an app opening the agent (cli.ts binds core/agents/update.ts). */
   agentUpdateProvider: ((payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
@@ -1406,6 +1408,14 @@ export class BackendSocket {
         case 'message':
           if (this.messageProvider) this.messageProvider(payload, measured?.receipt)
           else console.warn('[backend] message handler is not wired; terminal input was not dispatched')
+          return
+
+        // Words a program here types into a harness it owns, answered once the engine has taken them (core/deliveries.ts
+        // `acknowledged`, #4393). This computer's own processes only: never from the relay.
+        case 'input_ack':
+          if (!local) { answer({ error: 'LOCAL_ONLY' }); return }
+          if (this.inputAckProvider) this.inputAckProvider(payload, answer)
+          else answer({ error: 'UNSUPPORTED' })
           return
 
         // A person interrupting an agent's turn (core/turns/cancel.ts, bound by cli.ts).
