@@ -19,9 +19,10 @@ it('declares each engine\'s hooks once, for the full engine interface and the ho
   expect(admitHook('claude', {})).toEqual({ accepted: true })
 })
 
-it('composes only what a contract declares: Claude Code corrects transcripts, Codex admits, and both Stops close turns', () => {
+// A Codex Stop closes nothing: Codex waits for it before it writes the turn's end (core/turns/turnHooks.ts).
+it('composes only what a contract declares: Claude Code corrects transcripts and its Stop closes turns, Codex admits', () => {
   expect(Object.keys(engineHooks.claude).sort()).toEqual(['install', 'installIn', 'onStop', 'transcriptFor'])
-  expect(Object.keys(engineHooks.codex).sort()).toEqual(['admit', 'install', 'installIn', 'onStop'])
+  expect(Object.keys(engineHooks.codex).sort()).toEqual(['admit', 'install', 'installIn'])
 })
 
 // The turn's end, its interrupt and its waits on the person (facts-codex §2). No SubagentStart or SubagentStop: Codex's

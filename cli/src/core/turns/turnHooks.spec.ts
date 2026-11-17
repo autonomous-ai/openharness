@@ -1091,6 +1091,33 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     })
   })
 
+  // Codex runs its Stop, and waits for it, before it writes the turn's end (facts-codex §5). A Stop that closed the turn
+  // itself ended one a blocking Stop hook of the person's continued, or one still compacting after its Stop.
+  describe.runIf(engine === 'codex')('Stop', () => {
+    it('makes its turns end by hook, and closes, drains and waits for nothing: the turn\'s own end, read later, goes on', async () => {
+      const run = setup(engine)
+      const turn = parse(run, 't1')
+      run.hooks.onTurnStop({ sessionId: 's1', firedAt: 1_000 })
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
+      expect(turn.turnOpen).toBe(true)
+      expect(run.deps.emit).not.toHaveBeenCalled()
+      expect(run.deps.drain).not.toHaveBeenCalled()
+      turn.turnOpen = false
+      run.hooks.transcript('s1', END, { turn: { ...turn }, over: true })
+      expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', END)
+      expect(run.hooks.withheld('s1')).toBe(true)
+    })
+
+    // A held Stop is acted on after the binding is checked (core/transcripts/attach.ts holdStop): a Codex Stop has nothing
+    // to act on.
+    it('is never held for a binding being checked', () => {
+      const row = { agentId: 'a1', sessionId: 's1', engine, identityHold: 'pending' } as RegisteredSession
+      const holdStop = vi.fn(() => true), run = setup(engine, { resolve: () => row, holdStop })
+      run.hooks.onTurnStop({ sessionId: 's1', firedAt: 500 })
+      expect(holdStop).not.toHaveBeenCalled()
+    })
+  })
+
   // Codex's Interrupt comes on the Stop's route as `status: 'interrupted'` (R3). Codex runs it after it marks the turn
   // interrupted and before it writes turn_aborted, and waits for it up to 3 s (facts-codex §2).
   describe.runIf(engine === 'codex')('Interrupt', () => {
