@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { homedir, tmpdir, userInfo } from 'node:os'
 import { dirname, join } from 'node:path'
 import { DIAL_SKILL, skillsFolderOf, writeSkill } from '../../../src/devices/dialSkill.js'
 import type { AgentKind, Scenario } from './scenarios.js'
@@ -139,9 +139,13 @@ export function unstage(st: Staged): void {
   if (profile) rmSync(join(profile, 'projects', st.repo.replace(/[^a-zA-Z0-9]/g, '-')), { recursive: true, force: true })
 }
 
-/** Rows and traces are committed: no temp path, no user name. The run root goes first, for a temp folder under $HOME. */
+// The whole name only, so a word that merely contains it is kept.
+const USER_NAME = new RegExp(`(?<![\\w.-])${userInfo().username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w.-])`, 'g')
+
+/** Rows and traces are committed: no temp path, no user name. The run root goes first, for a temp folder under $HOME;
+ *  the bare name last, as `ls -l` prints it in the owner column of every file the agent lists. */
 export function scrub(text: string, st: Staged): string {
-  return text.replaceAll(st.root, '<run>').replaceAll(homedir(), '~')
+  return text.replaceAll(st.root, '<run>').replaceAll(homedir(), '~').replace(USER_NAME, '<user>')
 }
 
 function insideGit(dir: string, env: NodeJS.ProcessEnv): boolean {
