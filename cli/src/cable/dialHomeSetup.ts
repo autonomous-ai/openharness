@@ -301,17 +301,17 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
   const startPass = (counts: Counts): void => {
     // Taken before on is read, so a disable after it is a changed file at the next scan.
     stamp = stampNow()
-    const wanted = { claude: on('claude'), codex: on('codex') }
+    const engineOn = { claude: on('claude'), codex: on('codex') }
     // A replug, or Claude Code saving another setting, does not try a refused home again before its hour; a removal, an
     // enable or the plugin turned on or off does.
-    const onNow = `${wanted.claude} ${wanted.codex}`
+    const onNow = `${engineOn.claude} ${engineOn.codex}`
     if (onNow !== onBefore) refused.clear()
     onBefore = onNow
     for (const engine of ENGINES) handled[engine].clear()
     onAtPass.clear()
     const adopted = deps.adopted()
     for (const engine of ENGINES) {
-      if (!wanted[engine]) {
+      if (!engineOn[engine]) {
         turnOff(engine, counts)
         continue
       }
