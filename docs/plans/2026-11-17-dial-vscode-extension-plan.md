@@ -990,7 +990,7 @@ export interface VscodeExtensionUpdateDeps {
   version(): string | null
   enable(): Promise<VscodeChange>
   after(ms: number, run: () => void): () => void
-  count(kind: 'updated' | 'failed' | 'left removed', reason?: string): void
+  count(kind: 'updated' | 'failed' | 'off', reason?: string): void
 }
 /** One look now; a failed update is tried again an hour later, while the process runs. Never rejects, never throws. */
 export function startVscodeExtensionUpdate(deps: VscodeExtensionUpdateDeps): void
@@ -999,9 +999,9 @@ export function startVscodeExtensionUpdate(deps: VscodeExtensionUpdateDeps): voi
 ```
 
 - On at this build's version, `absent`, Windows, or no built extension: nothing, nothing counted.
-- `off`: nothing runs; `left removed` is counted (an extension the person uninstalled stays uninstalled).
+- `off`: nothing runs; `off` is counted (an extension the person uninstalled stays uninstalled).
 - On at another version: `enable()`. `on` afterwards counts `updated`; else `failed` with the error's word, and one more look after 3 600 000 ms.
-- In `devices.ts`: started once, in a part of its own (`part.call('vscodeExtension', …)`), only where the devices have their own listener (`deps.listen`), its `status`, `version` and `enable` being `vscodeStatus`, `buildVersion` and `vscodeEnable` on `deps.vscodeExtension ?? vscodeExtensionDeps()`, with `after: timerIn('vscodeExtension')` and a count through `createEngineTally('[device] vscode extension', ['vscode'], ['updated', 'failed', 'left removed'], log)`. The spec's measure list also names `set up`: nothing here installs from off, so it has no line.
+- In `devices.ts`: started once, in a part of its own (`part.call('vscodeExtension', …)`), only where the devices have their own listener (`deps.listen`), its `status`, `version` and `enable` being `vscodeStatus`, `buildVersion` and `vscodeEnable` on `deps.vscodeExtension ?? vscodeExtensionDeps()`, with `after: timerIn('vscodeExtension')` and a count through `createEngineTally('[device] vscode extension', ['vscode'], ['updated', 'failed', 'off'], log)`. The spec's measure list also names `set up`: nothing here installs from off, so it has no line.
 - `cli/AGENTS.md`, the devices row: the extension brought current once at each start of the process when it is on at another version, through VS Code's own `code --install-extension`, up to 60 s, never when it is off (`cable/vscodeExtensionUpdate.ts`).
 
 - [ ] **Step 1: Write the failing tests.**
@@ -1010,7 +1010,7 @@ export function startVscodeExtensionUpdate(deps: VscodeExtensionUpdateDeps): voi
 // vscodeExtensionUpdate.spec.ts
 it('on at another version runs enable once and counts updated', …)
 it('on at this version, absent, Windows, or no built extension: nothing runs and nothing is counted', …)
-it('off is left removed: enable never runs', …)
+it('off stays off: enable never runs, and off is counted', …)
 it('a failed update counts its word and looks again after an hour, once', …)      // after called with 3_600_000; the second look updates
 it('an enable that throws is a failed update, never a throw', …)
 // devices.spec.ts: start() always passes a fake vscodeExtension (absent unless the spec says), never the real one

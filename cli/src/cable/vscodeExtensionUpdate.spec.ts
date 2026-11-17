@@ -52,12 +52,12 @@ describe('the VS Code extension brought current', () => {
     expect(run.timers).toEqual([])
   })
 
-  it('off is left removed: enable never runs', async () => {
+  it('off stays off: enable never runs, and off is counted', async () => {
     const run = fake({ status: { vscode: 'off' }, changes: [updated] })
     startVscodeExtensionUpdate(run.deps)
     await settled()
     expect(run.enables()).toBe(0)
-    expect(run.counted).toEqual([['left removed']])
+    expect(run.counted).toEqual([['off']])
     expect(run.timers).toEqual([])
   })
 

@@ -234,7 +234,7 @@ are; `docs/plans/2026-11-13-device-menubar-design.md` gains the item. The menu i
 
 The devices log: a `vscode` stream opening and ending, with its reason and the number of windows open; once a minute,
 when any happened, counts of shows, taps, scroll lines sent and dropped, refused states, `ps` reads and failed `ps` reads; the extension
-update (`set up`, `updated`, `failed`, `left removed`, as the plugin's tally). Never a pid, a window id, a path, a name
+update (`set up`, `updated`, `failed`, `off`, as the plugin's tally). Never a pid, a window id, a path, a name
 or a label. The extension's output channel: its state and counts, nothing else.
 
 ## Failure

@@ -15,7 +15,7 @@ export interface VscodeExtensionUpdateDeps {
   version(): string | null
   enable(): Promise<VscodeChange>
   after(ms: number, run: () => void): () => void
-  count(kind: 'updated' | 'failed' | 'left removed', reason?: string): void
+  count(kind: 'updated' | 'failed' | 'off', reason?: string): void
 }
 
 /** One look now; a failed update is tried again an hour later, while the process runs. An enable that throws or
@@ -42,7 +42,7 @@ export function startVscodeExtensionUpdate(deps: VscodeExtensionUpdateDeps): voi
     const status = deps.status()
     if (status.vscode === 'absent') return
     if (status.vscode === 'off') {
-      deps.count('left removed')
+      deps.count('off')
       return
     }
     if (status.version !== version) void update()

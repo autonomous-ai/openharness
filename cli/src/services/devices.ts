@@ -516,7 +516,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // in VS Code's files is never the dial's.
   if (deps.listen) part.call('vscodeExtension', () => {
     const extension = deps.vscodeExtension ?? vscodeExtensionDeps()
-    const count = createEngineTally('[device] vscode extension', ['vscode'], ['updated', 'failed', 'left removed'], log)
+    const count = createEngineTally('[device] vscode extension', ['vscode'], ['updated', 'failed', 'off'], log)
     startVscodeExtensionUpdate({
       platform: extension.platform,
       status: () => vscodeStatus(extension),
