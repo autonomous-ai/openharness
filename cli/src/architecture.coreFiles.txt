@@ -352,6 +352,7 @@ lib/gridConfigDir.ts
 lib/gridFleetProtocol.ts
 lib/gridLaunchWire.ts
 lib/guestEngines.ts
+lib/guestLaunchWire.ts
 lib/guestRunner.ts
 lib/guestUser.ts
 lib/handoffAuthority.ts
@@ -376,6 +377,7 @@ lib/hostTheme.ts
 lib/installedCopy.ts
 lib/keepAbandonedConversation.ts
 lib/launchArgs.ts
+lib/launchContribution.ts
 lib/launchFlags.ts
 lib/launchModel.ts
 lib/launchOverrides.ts

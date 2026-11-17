@@ -29,7 +29,10 @@ import { gridAssignmentAnswersIn } from '../lib/gridAssignmentWire.js'
  */
 import { annotate, glanceFor, type GridGlance } from '../lib/gridAnnotation.js'
 import type { GridAttachResult } from '../lib/gridAttach.js'
-import { parseGridLaunchOverride, type GridEngineLaunch, type GridLaunchAnswer, type GridLaunchOverride } from '../lib/gridLaunchWire.js'
+import { API_NETWORK_PREFIX, GRID_ENV_VAR_NAMES, GRID_LAUNCH_FIELDS, parseGridLaunchOverride, type GridEngineLaunch, type GridLaunchAnswer, type GridLaunchOverride, type GridLaunchRequest } from '../lib/gridLaunchWire.js'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { LAUNCH_CONTRIBUTION_LIMITS, launchContributionIn, launchText } from '../lib/launchContribution.js'
 import type { CoreApi, ModelsPort } from './api.js'
 import { ServiceUnavailableError } from './serviceHost.js'
 import type { ServiceFrame } from './serviceLinks.js'
@@ -62,39 +65,80 @@ export function glancesIn(value: unknown): GridGlance[] | null {
 
 /** A launch the process resolved, checked as any grid launch is before it is used; null when there is none. */
 const launchIn = (value: unknown): GridLaunchOverride | null => {
+  if (!isRecord(value) || ['networkId', 'networkName', 'baseUrl', 'apiKey', 'model', 'mcpUrl'].some(key =>
+    value[key] !== undefined && value[key] !== null && !launchText(value[key]))) return null
   const parsed = parseGridLaunchOverride(value)
   return parsed.state === 'ok' ? parsed.override : null
 }
 
 const isText = (value: unknown): value is string => typeof value === 'string'
-const isTexts = (value: unknown): value is string[] => Array.isArray(value) && value.every(isText)
-const isTextRecord = (value: unknown): value is Record<string, string> => isRecord(value) && Object.values(value).every(isText)
 const WEB_SEARCH = new Set(['on', 'unavailable', 'unsupported'])
 
-/** A built launch, as far as the core hands it to a pane and writes its files; null when it is not one. */
-function engineLaunchIn(value: unknown): GridEngineLaunch | null {
-  if (!isRecord(value) || !isTextRecord(value.env) || !isTexts(value.args) || !WEB_SEARCH.has(value.webSearch as string)) return null
-  if (value.sessionModel !== undefined && !isText(value.sessionModel)) return null
+/** Only the engine's declared contribution reaches a pane; implementations remain in Models. */
+function engineLaunchIn(value: unknown, request: GridLaunchRequest): GridEngineLaunch | null {
+  const fields = GRID_LAUNCH_FIELDS[request.engine]
+  const contribution = launchContributionIn(value)
+  if (!fields || !contribution || !isRecord(value) || !WEB_SEARCH.has(value.webSearch as string)) return null
+  const allowedEnv = GRID_ENV_VAR_NAMES[request.engine]!
+  if (Object.keys(contribution.env).some(name => !allowedEnv.includes(name) || name === fields.config?.value)) return null
+  for (let index = 0; index < contribution.args.length; index++) {
+    const flag = contribution.args[index]!
+    if (fields.literals?.includes(flag)) continue
+    const operand = contribution.args[++index]
+    if (operand === undefined) return null
+    if (flag === '-c' && fields.assignments) {
+      const equals = operand.indexOf('=')
+      if (equals < 1 || /[\r\n]/.test(operand) || !fields.assignments.includes(operand.slice(0, equals))) return null
+    } else if (!fields.flags.includes(flag)) return null
+  }
+  let bytes = Object.entries(contribution.env).reduce((sum, [key, text]) => sum + key.length + Buffer.byteLength(text), 0)
+    + contribution.args.reduce((sum, text) => sum + Buffer.byteLength(text), 0)
+  const sessionModel = value.sessionModel
+  if (sessionModel !== undefined && (request.engine !== 'opencode' || !launchText(sessionModel))) return null
+  let configDir: GridEngineLaunch['configDir']
   const dir = value.configDir
   if (dir !== undefined) {
-    if (!isRecord(dir) || !Array.isArray(dir.files)) return null
-    // Pointed at by exactly one of a variable, a flag or a config key (`GridEngineLaunch.configDir`).
-    const pointers = [dir.envVar, dir.arg, dir.cliConfigKey].filter((pointer) => pointer !== undefined)
-    if (pointers.length !== 1 || !isText(pointers[0])) return null
-    if (!dir.files.every((file) => isRecord(file) && isText(file.name) && isText(file.content))) return null
-    if (dir.pointAt !== undefined && !isText(dir.pointAt)) return null
-    if (dir.links !== undefined && !(Array.isArray(dir.links) && dir.links.every((link) => isRecord(link) && isText(link.name) && isText(link.target)))) return null
+    const policy = fields.config
+    if (!policy || !isRecord(dir) || (request.engine === 'hermes' && request.machine.hermesSystemManaged)
+      || !Array.isArray(dir.files) || dir.files.length !== 1 || dir.pointAt !== policy.pointAt) return null
+    const pointers = ['envVar', 'arg', 'cliConfigKey'] as const
+    if (pointers.some(pointer => dir[pointer] !== (pointer === policy.pointer ? policy.value : undefined))) return null
+    const file = dir.files[0]
+    if (!isRecord(file) || file.name !== policy.file || !launchText(file.content)) return null
+    bytes += Buffer.byteLength(file.content)
+    if (bytes > LAUNCH_CONTRIBUTION_LIMITS.bytes) return null
+    const links: NonNullable<GridEngineLaunch['configDir']>['links'] = []
+    if (dir.links !== undefined) {
+      if (!policy.borrow || !Array.isArray(dir.links) || dir.links.length !== 1) return null
+      const link = dir.links[0], target = join(request.machine.grokHome ?? join(homedir(), '.grok'), policy.borrow)
+      if (!isRecord(link) || link.name !== policy.borrow || !launchText(link.target) || link.target !== target) return null
+      links.push({ name: policy.borrow, target })
+    }
+    configDir = { [policy.pointer]: policy.value, files: [{ name: policy.file, content: file.content }],
+      ...(policy.pointAt ? { pointAt: policy.pointAt } : {}), ...(dir.links !== undefined ? { links } : {}) }
   }
-  return value as unknown as GridEngineLaunch
+  return { ...contribution, webSearch: value.webSearch as GridEngineLaunch['webSearch'],
+    ...(sessionModel !== undefined ? { sessionModel } : {}), ...(configDir ? { configDir } : {}) }
 }
 
-/** The process's answer to a grid launch, checked; null when it is not one. */
-export function gridLaunchAnswerIn(value: Record<string, unknown>): GridLaunchAnswer | null {
-  const apiBase = isText(value.apiBase) ? { apiBase: value.apiBase } : {}
-  if (value.ok === false) return isText(value.error) && isText(value.detail) ? { ok: false, error: value.error, detail: value.detail, ...apiBase } : null
-  const launch = engineLaunchIn(value.launch)
+/** Checks the request's own engine declaration, including the explicit inline compatibility path. */
+export function gridLaunchAnswerIn(value: unknown, request: GridLaunchRequest): GridLaunchAnswer | null {
+  if (!isRecord(value)) return null
+  if (value.apiBase !== undefined && !launchText(value.apiBase)) return null
+  const apiBase = typeof value.apiBase === 'string' ? { apiBase: value.apiBase } : {}
+  if (value.ok === false) return launchText(value.error) && launchText(value.detail)
+    ? { ok: false, error: value.error, detail: value.detail, ...apiBase } : null
+  const launch = engineLaunchIn(value.launch, request)
   const override = launchIn(value.override)
   if (value.ok !== true || !launch || !override) return null
+  const refreshedApi = request.refresh && request.override.networkId.startsWith(API_NETWORK_PREFIX)
+  const retained = ['networkId', 'model', 'mcpUrl', 'contextWindow', ...refreshedApi ? [] : ['networkName', 'baseUrl', 'apiKey']] as const
+  if (retained.some(key => override[key as keyof GridLaunchOverride] !== request.override[key as keyof GridLaunchOverride])) return null
+  const texts = [...Object.keys(launch.env), ...Object.values(launch.env), ...launch.args,
+    ...Object.values(override).filter((item): item is string => typeof item === 'string'), value.apiBase ?? '', launch.sessionModel ?? '',
+    ...launch.configDir?.files.flatMap(file => [file.name, file.content]) ?? [],
+    ...launch.configDir?.links?.flatMap(link => [link.name, link.target]) ?? []]
+  if (texts.reduce((bytes, text) => bytes + Buffer.byteLength(text as string), 0) > LAUNCH_CONTRIBUTION_LIMITS.bytes) return null
   return { ok: true, launch, override, ...apiBase }
 }
 
@@ -135,8 +179,9 @@ export function createModelsLink(core: Pick<CoreApi, 'agents' | 'account' | 'cli
       return assignments
     },
     gridLaunch: async (request) => {
-      const answer = gridLaunchAnswerIn(await ask('gridLaunch', { ...request }))
-      if (!answer) throw new ServiceUnavailableError('models')
+      const captured = { ...request, override: { ...request.override }, machine: { ...request.machine } }
+      const answer = gridLaunchAnswerIn(await ask('gridLaunch', { ...request }), captured)
+      if (!answer) { console.warn('[models] LAUNCH_CONTRIBUTION_REFUSED'); throw new ServiceUnavailableError('models') }
       return answer
     },
     apiTarget: async (request) => {

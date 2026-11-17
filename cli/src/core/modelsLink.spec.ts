@@ -111,17 +111,16 @@ describe('models in its own process, as the core reaches it', () => {
 
     it("a grid or saved-API launch, as models built it and checked as far as the core hands it on; unavailable when it is not one", async () => {
       const request = { engine: 'claude' as const, override: LAUNCH, machine: { hermesSystemManaged: false }, refresh: true }
-      const launch = { env: { ANTHROPIC_MODEL: 'Small-Q4' }, args: ['--x'], webSearch: 'on', sessionModel: 'grid/Small-Q4' }
+      const launch = { env: { ANTHROPIC_MODEL: 'Small-Q4' }, args: ['--mcp-config', '{}'], webSearch: 'on' }
       const built = { ok: true, launch, override: LAUNCH }
       const { call, port } = setup({ gridLaunch: built })
       expect(await port.gridLaunch(request)).toEqual(built)
       expect(call).toHaveBeenCalledWith('gridLaunch', request)
-      const files = { envVar: 'OPENCODE_CONFIG', files: [{ name: 'opencode.json', content: '{}' }], pointAt: 'opencode.json', links: [{ name: 'auth.json', target: '/a' }] }
-      const withFiles = { ...built, launch: { ...launch, configDir: files }, apiBase: RELAY }
-      expect(await setup({ gridLaunch: withFiles }).port.gridLaunch(request)).toEqual(withFiles)
-      expect(await setup({ gridLaunch: { ...built, launch: { ...launch, configDir: { envVar: 'PI', files: [] } } } }).port.gridLaunch(request)).toMatchObject({ ok: true })
-      const flag = { ...built, launch: { ...launch, configDir: { arg: '-e', files: [{ name: 'grid-provider.ts', content: '' }], pointAt: 'grid-provider.ts' } } }
-      expect(await setup({ gridLaunch: flag }).port.gridLaunch(request)).toEqual(flag)
+      const files = { envVar: 'OPENCODE_CONFIG', files: [{ name: 'opencode.json', content: '{}' }], pointAt: 'opencode.json' }
+      const withFiles = { ...built, launch: { ...launch, env: { GRID_API_KEY: 'synthetic' }, args: [], sessionModel: 'grid/Small-Q4', configDir: files }, apiBase: RELAY }
+      expect(await setup({ gridLaunch: withFiles }).port.gridLaunch({ ...request, engine: 'opencode' })).toEqual(withFiles)
+      const flag = { ...built, launch: { ...launch, env: { GRID_API_KEY: 'synthetic' }, args: [], configDir: { arg: '-e', files: [{ name: 'grid-provider.ts', content: '' }], pointAt: 'grid-provider.ts' } } }
+      expect(await setup({ gridLaunch: flag }).port.gridLaunch({ ...request, engine: 'pi' })).toEqual(flag)
       const refused = { ok: false, error: 'GRID_ENGINE_UNSUPPORTED', detail: 'no grid for amp', apiBase: RELAY }
       expect(await setup({ gridLaunch: refused }).port.gridLaunch(request)).toEqual(refused)
       expect(await setup({ gridLaunch: { ok: false, error: 'API_UNAVAILABLE', detail: 'gone' } }).port.gridLaunch(request)).toEqual({ ok: false, error: 'API_UNAVAILABLE', detail: 'gone' })

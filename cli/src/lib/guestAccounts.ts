@@ -4,21 +4,13 @@
  * runs to start a guest's harness as that account. Every call is `sudo -n <helper> …`, which the
  * owner's one-time install allowed (guestHelperInstall.ts); nothing here asks for a password.
  */
-import { createHash } from 'node:crypto'
 import { existsSync, readdirSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { runGuestCommand, type GuestRunOptions, type GuestRunResult, type GuestRunner } from './guestRunner.js'
-import { isGuestUser } from './guestUser.js'
-
-export const GUEST_HELPER_PATH = '/usr/local/libexec/harness/guest-helper'
-
-/** Where guests' homes are (the helper's HOME_ROOT): never the owner's own home or `staff`'s reach. On Windows the
- *  guests' own tree (lib/windows/guestTree.ts `WINDOWS_GUEST_ROOT`); their profiles are `C:\Users\hg_<12 hex>`. */
-export function guestHomeRoot(platform: NodeJS.Platform = process.platform): string {
-  if (platform === 'darwin') return '/Users/Shared/HarnessGuests'
-  if (platform === 'win32') return 'C:\\ProgramData\\HarnessGuests'
-  return '/home/harness-guests'
-}
+import { isGuestUser, guestHomeRoot, guestUserFor } from './guestUser.js'
+import { GUEST_HELPER_PATH } from './guestLaunchWire.js'
+export { guestHomeRoot, guestUserFor, guestWorkspaceFor } from './guestUser.js'
+export { GUEST_HELPER_PATH } from './guestLaunchWire.js'
 
 /** A folder of the owner's shared with every guest (docs/plans/2026-10-19-guest-machine-sharing-plan.md,
  *  "Shared folders"): read, or read and write. */
@@ -54,19 +46,6 @@ export interface GuestAccount {
   home: string
   /** Where a guest's harnesses start: `<home>/work`. */
   workspace: string
-}
-
-/** The OS user a guest gets: `hg_` and the first 12 hex of sha256(the lower-cased email). The helper
- *  derives the same name itself; a test holds the two equal. */
-export function guestUserFor(email: string): string {
-  return `hg_${createHash('sha256').update(email.trim().toLowerCase()).digest('hex').slice(0, 12)}`
-}
-
-/** Where a guest's harnesses start unless it picks a shared folder: `<home>/work`, as the helper makes it. Windows
- *  guests have an ordinary profile (`C:\Users\hg_<12 hex>\work`), made by the setup task. */
-export function guestWorkspaceFor(email: string, platform: NodeJS.Platform = process.platform): string {
-  const user = guestUserFor(email)
-  return platform === 'win32' ? `C:\\Users\\${user}\\work` : `${guestHomeRoot(platform)}/${user}/work`
 }
 
 export function guestEnvAllowed(key: string): boolean {

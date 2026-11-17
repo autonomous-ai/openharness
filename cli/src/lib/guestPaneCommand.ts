@@ -9,26 +9,10 @@
  * and when not installs it as the guest, in that pane, so the guest watches it happen the first time rather
  * than waiting on a create that says nothing for a minute.
  */
-import { GUEST_HELPER_PATH, guestRunCommand, type GuestAccount } from './guestAccounts.js'
+import { guestRunCommand, type GuestAccount } from './guestAccounts.js'
 import type { GuestLaunchEngine } from './guestEngines.js'
-
-/** Each engine's flag for "work without asking for each command", which a harness starts with by default. */
-const APPROVE_ALL: Record<GuestLaunchEngine, string> = {
-  claude: '--dangerously-skip-permissions',
-  codex: '--dangerously-bypass-approvals-and-sandbox',
-}
-
-/**
- * The owner's side of the pane: $1 the helper, $2 the guest's user, $3 the workspace, $4 the engine, then the
- * helper's `run` command. The check runs `command -v` as the guest, on the guest's PATH (the helper's).
- */
-export const GUEST_PANE_BOOTSTRAP = [
-  'helper=$1 user=$2 work=$3 engine=$4; shift 4',
-  'if ! sudo -n "$helper" run "$user" --cwd "$work" -- /bin/sh -c \'command -v "$0" >/dev/null\' "$engine" 2>/dev/null; then',
-  '  sudo -n "$helper" install "$user" "$engine" || { printf \'\\nCould not install %s.\\n\' "$engine"; exit 1; }',
-  'fi',
-  'exec "$@"',
-].join('\n')
+import { GUEST_HELPER_PATH, GUEST_PANE_BOOTSTRAP, guestEngineArgv } from './guestLaunchWire.js'
+export { GUEST_PANE_BOOTSTRAP } from './guestLaunchWire.js'
 
 export interface GuestPaneInput {
   account: GuestAccount
@@ -59,10 +43,7 @@ export interface GuestPaneInput {
 export function guestPaneCommand(input: GuestPaneInput): { argv: string[]; env: Record<string, string> } {
   const { account, engine } = input
   const helperPath = input.helperPath ?? GUEST_HELPER_PATH
-  const approve = input.permissionFlags ? [...input.permissionFlags] : input.bypassPermission ? [APPROVE_ALL[engine]] : []
-  // A message that starts with `-` is still a message, not one of the engine's options.
-  const first = !input.prompt ? [] : input.prompt.startsWith('-') ? ['--', input.prompt] : [input.prompt]
-  const engineArgv = [engine, ...approve, ...first]
+  const engineArgv = guestEngineArgv(input)
   const env = { TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: input.lang || 'en_US.UTF-8' }
   const cwd = input.cwd ?? account.workspace
   // The guest's own host makes this pane as the guest: the engine runs directly (no helper, and nothing of the owner's).

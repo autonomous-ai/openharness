@@ -71,7 +71,7 @@ export function launchShapes(world: LaunchWorld) {
     gridLaunch: async (request) => {
       const asked = gridLaunchRequestIn(wire(request))
       if (!asked) throw new Error('models could not read the launch it was asked for')
-      const answer = gridLaunchAnswerIn(wire(await models(asked)))
+      const answer = gridLaunchAnswerIn(wire(await models(asked)), request)
       if (!answer) throw new Error('the core could not read the launch models built')
       return answer
     },
