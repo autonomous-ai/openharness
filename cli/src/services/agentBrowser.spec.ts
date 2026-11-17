@@ -1203,10 +1203,13 @@ describe('the person\'s Start and Stop', () => {
     saveState({ gone: defaultSettings(HOST), off: defaultSettings(HOST), kept: defaultSettings(HOST) })
     new StateFile(join(dataDir, 'agent-browser.json')).update(state => { state.on = { kept: true, gone: true } })
     const label = (agentId: string) => ({ Names: [`harness-browser-${agentId}`], Labels: { 'harness.agent': agentId, 'harness.daemon': daemonIdOf(dataDir) }, State: 'running' })
-    fake.reply('ps', { stdout: JSON.stringify([label('gone'), label('off'), label('kept')]) })
-    startSwitching([session('kept', { browser: undefined }), session('off', { browser: undefined })], { options: { everyAgent: async () => [session('kept'), session('off'), session('gone')] } })
+    // Listed first: the look at what runs has judged it before it stops the others, so a stop of it would be asked by then.
+    fake.reply('ps', { stdout: JSON.stringify([label('kept'), label('gone'), label('off')]) })
+    const { port } = startSwitching([session('kept', { browser: undefined }), session('off', { browser: undefined })], { options: { everyAgent: async () => [session('kept'), session('off'), session('gone')] } })
     await eventually(() => expect(asked()).toContain('rm --force --time 10 harness-browser-off'))
     await eventually(() => expect(asked()).toContain('rm --force --time 10 harness-browser-gone'))
+    // Its own start, which runs beside that look, is done too: whatever it removed is asked by then (CI, 2026-11-17).
+    await ready(port, 'kept')
     expect(asked()).not.toContain('rm --force --time 10 harness-browser-kept')
   })
 
