@@ -1,6 +1,6 @@
 import type { ScreenReader } from './screenReader.js'
 import type { SubmissionReader } from './submissionReader.js'
-import { createHash } from 'crypto'
+import crypto from 'crypto'
 import { composerHolds, composerShown, normalizedTerminalText, visibleTerminal } from '../engines/kit/submission.js'
 import { launchBound, captureSessionBinding } from '../core/engines/sessionBinding.js'
 import type { RegisteredSession } from './registry.js'
@@ -256,7 +256,7 @@ function leaseRefused(delivery: boolean | TerminalActionResult): boolean {
 }
 
 function fingerprint(content: string): string {
-  return createHash('sha256').update(content.replace(/\r\n/g, '\n').trim()).digest('hex')
+  return crypto.hash('sha256', content.replace(/\r\n/g, '\n').trim(), 'hex')
 }
 
 /** Engine-aware prompt injection. Terminal TUIs get a bounded per-session FIFO while a turn is busy. */
