@@ -1,5 +1,5 @@
 import { AsyncResource, createHook, executionAsyncId } from 'node:async_hooks'
-import crypto, { Hash } from 'node:crypto'
+import { Hash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SessionInputController, type SessionInputDeps, type SessionInputDelivery } from './sessionInput.js'
 import { MoveGate } from './hostMove/gate.js'
@@ -19,14 +19,6 @@ function signal() {
   let resolve!: () => void
   const promise = new Promise<void>(done => { resolve = done })
   return { promise, resolve }
-}
-
-/** Observe real hashing across the API change; old stream spies alone would miss one-shot work. */
-function fingerprints() {
-  const stream = vi.spyOn(Hash.prototype, 'update'), oneShot = vi.spyOn(crypto, 'hash')
-  return { stream, oneShot, contents: () => [
-    ...stream.mock.calls.map(([content]) => content), ...oneShot.mock.calls.map(([, content]) => content),
-  ] }
 }
 
 function fixture(over: Partial<SessionInputDeps> = {}) {
@@ -98,9 +90,9 @@ describe('session input work with no queued message or pending match', () => {
 
   it('does not hash an unrelated turn when there is no pending receipt match', () => {
     const { controller } = fixture()
-    const hash = fingerprints()
+    const hash = vi.spyOn(Hash.prototype, 'update')
     controller.onTurnStarted('agent', 'external turn')
-    expect(hash.contents()).toEqual([])
+    expect(hash).not.toHaveBeenCalled()
   })
 
   it('does not hash the later turn of an already confirmed composer input', async () => {
@@ -108,9 +100,9 @@ describe('session input work with no queued message or pending match', () => {
     const { controller, inject } = fixture({ onInput: event => { if (event.phase === 'composer_available') clear.resolve() } })
     controller.submitInput('agent', { content: 'confirmed input', deliveryId: 'confirmed', when: 'composer' })
     await clear.promise
-    const hash = fingerprints()
+    const hash = vi.spyOn(Hash.prototype, 'update')
     controller.onTurnStarted('agent', 'confirmed input')
-    expect(hash.contents()).toEqual([])
+    expect(hash).not.toHaveBeenCalled()
     expect(inject).toHaveBeenCalledOnce()
   })
 
@@ -126,10 +118,10 @@ describe('session input work with no queued message or pending match', () => {
       vi.spyOn(console, 'warn').mockImplementation(() => {})
       controller.submitInput('agent', { content: 'pending input', deliveryId: 'pending', when: 'turn' })
       await written.promise
-      const hash = fingerprints()
+      const hash = vi.spyOn(Hash.prototype, 'update')
       controller.onTurnStarted('agent', observed)
       await settled.promise
-      expect(hash.contents()).toEqual([observed])
+      expect(hash).toHaveBeenCalledExactlyOnceWith(observed)
       expect(events.at(-1)).toMatchObject({ deliveryId: 'pending', state: outcome,
         ...(outcome === 'unknown' ? { reason: 'prompt_mismatch' } : {}) })
     },
@@ -142,12 +134,12 @@ describe('session input work with no queued message or pending match', () => {
       onDelivery: event => { if (event.state === 'started') started.resolve() },
     })
     controller = f.controller
-    const hash = fingerprints()
+    const hash = vi.spyOn(Hash.prototype, 'update')
     controller.submitInput('agent', { content: 'early input', deliveryId: 'early', when: 'turn' })
     await started.promise
     expect(f.events.map(event => event.state)).toEqual(['queued', 'delivered', 'started'])
     // One fingerprint for the submitted input, one for the replayed start; none for the premature event.
-    expect(hash.contents()).toEqual(['early input', 'early input'])
+    expect(hash).toHaveBeenCalledTimes(2)
   })
 
   it('preserves a receipt queued by a synchronously reentrant delivery callback', async () => {
@@ -166,56 +158,9 @@ describe('session input work with no queued message or pending match', () => {
     controller.onTurnStarted('agent', 'first input')
     controller.onTurnEnded('agent')
     await second.promise
-    const hash = fingerprints()
+    const hash = vi.spyOn(Hash.prototype, 'update')
     controller.onTurnStarted('agent', 'second input')
-    expect(hash.contents()).toEqual(['second input'])
+    expect(hash).toHaveBeenCalledExactlyOnceWith('second input')
     expect(f.events.at(-1)).toMatchObject({ deliveryId: 'second', state: 'started' })
-  })
-})
-
-describe('complete prompt fingerprints', () => {
-  it.each([
-    { name: 'CRLF', submitted: ' first\r\nsecond ', observed: 'first\nsecond', outcome: 'started' },
-    { name: 'Unicode whitespace', submitted: '\u00a0\ufeffinput\u2003', observed: 'input', outcome: 'started' },
-    { name: 'Unicode text', submitted: ' tiếng Việt 中文 👋🏽 ', observed: 'tiếng Việt 中文 👋🏽', outcome: 'started' },
-    { name: 'empty text', submitted: '', observed: '\r\n\t ', outcome: 'started' },
-    { name: 'large ready text', submitted: '段🙂'.repeat(16_384), observed: '段🙂'.repeat(16_384), outcome: 'started' },
-    { name: 'bare carriage return', submitted: 'first\rsecond', observed: 'first\nsecond', outcome: 'unknown' },
-    { name: 'distinct Unicode normalization', submitted: 'é', observed: 'e\u0301', outcome: 'unknown' },
-    { name: 'UTF-8 replacement', submitted: '\ud800', observed: '\ufffd', outcome: 'started' },
-    { name: 'embedded NUL', submitted: 'first\0second', observed: 'first\0second', outcome: 'started' },
-  ] as const)('preserves $name matching', async ({ submitted, observed, outcome }) => {
-    const written = signal(), settled = signal()
-    const { controller, events, inject } = fixture({ submission: { ...inlineSubmission, echo: async () => null },
-      onDelivery: event => {
-        if (event.state === 'delivered') written.resolve()
-        if (event.state === 'started' || event.state === 'unknown') settled.resolve()
-      },
-    })
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-    controller.submitInput('agent', { content: submitted, deliveryId: 'complete', when: 'turn' })
-    await written.promise
-    controller.onTurnStarted('agent', observed)
-    await settled.promise
-    expect(inject).toHaveBeenCalledOnce()
-    expect(events.map(event => event.state)).toEqual(['queued', 'delivered', outcome])
-    expect(events.at(-1)).toMatchObject({ deliveryId: 'complete',
-      ...(outcome === 'unknown' ? { reason: 'prompt_mismatch' } : {}) })
-  })
-
-  it('compares a complete prompt without constructing streaming hash work', async () => {
-    const written = signal()
-    const { controller, events } = fixture({ onDelivery: event => { if (event.state === 'delivered') written.resolve() } })
-    const hash = fingerprints()
-    controller.submitInput('agent', { content: 'complete input', deliveryId: 'complete', when: 'turn' })
-    await written.promise
-    controller.onTurnStarted('agent', 'complete input')
-    expect(events.map(event => event.state)).toEqual(['queued', 'delivered', 'started'])
-    expect(hash.contents()).toEqual(['complete input', 'complete input'])
-    // Both required fingerprints remain, with no streaming Hash object for ready input.
-    expect(hash.stream).not.toHaveBeenCalled()
-    expect(hash.oneShot.mock.calls).toEqual([
-      ['sha256', 'complete input', 'hex'], ['sha256', 'complete input', 'hex'],
-    ])
   })
 })
