@@ -153,8 +153,10 @@ All run `notify.mjs`. Only end and wait events are added; there is no hook per t
   turn's end, and when the last end or wait hook came. `sessionTurnOpen` reads it for these sessions.
   - The parser's normal end of a turn is held in the core, not delivered, until the turn's Stop arrives.
   - The engine worker marks an end that never has a Stop after it; that end is delivered at once, never held. Claude:
-    a paused `/goal` pass, which ends with `turn_duration` alone. Codex: a turn that ended in an error or was stopped
-    by a prompt hook, for which Codex sends no Stop and has no StopFailure (measured on Codex 0.169.0).
+    a paused `/goal` pass, which ends with `turn_duration` alone. Codex: every turn end. Codex runs its Stop hook and
+    waits for it before it writes `task_complete` (source of 0.144.0 and 0.169.0, lines in the Codex facts file), so
+    once the end is read, any Stop has already come; and an errored or prompt-hook-stopped turn sends no Stop and
+    reads the same as a finished one. Holding a Codex end would only delay those. A fake-engine test pins the order.
   - Stop: drain; if the parser's end is held, deliver it now. If not, wait up to 1.5 s for it, then close as today's
     fallback does. The stale-Stop rules stay: a Stop run before the latest prompt hook, or before the open turn's
     opening record, closes nothing. A continued `/goal` pass is closed by its own Stop like any turn.
@@ -285,7 +287,8 @@ All run `notify.mjs`. Only end and wait events are added; there is no hook per t
 - A Codex update that changes how it hashes hooks asks the person to review Harness's hooks once again, as today.
   (Ken, 2026-11-17)
 - Codex facts answers (Ken, 2026-11-17): Interrupt written with a 3 s timeout, its hash tested against real Codex;
-  engine-codex marks an errored end as having no Stop after it, delivered at once, no core change; subagents counted
+  every Codex end is delivered at once, never held, on the assumption that Codex runs and waits for Stop before
+  `task_complete` (pinned by a fake-engine test), no core change; subagents counted
   for Claude Code only, Codex as today, recorded in the pull request's Known gaps with the measured Codex behavior.
 - Plan review answers (Ken, 2026-11-17): `cancel.ts` is not split, Interrupt takes the keyless aborted path; oldest
   supported Claude Code 2.1.209 and Codex 0.144.0; no pane read at the hook; a wait also ends on two clear polls; a
