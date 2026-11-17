@@ -866,6 +866,16 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', END)
   })
 
+  // Timed on the wall clock, an hour set back while the end was held (an NTP correction) held it an hour more.
+  stopRule('the wall clock set back while an end waits for a lost Stop: it goes on 2 minutes after it was read all the same', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const run = await hookDriven()
+    run.hooks.transcript('s1', END, { turn: turnOf('t1') })
+    vi.setSystemTime(Date.now() - 3_600_000)
+    vi.advanceTimersByTime(HOOK_SILENCE_MS); run.hooks.beat('s1')
+    expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', END)
+  })
+
   it('nothing held, or a session with no record: a beat does nothing', async () => {
     const run = await hookDriven()
     vi.advanceTimersByTime(HOOK_SILENCE_MS)
