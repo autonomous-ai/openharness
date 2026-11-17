@@ -491,9 +491,15 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
       expect(s.source.kindAt(S3)).toBeUndefined()
     })
 
-    it('its capabilities are status, words and a tap, and it keeps nothing unseen', () => {
+    // cmux v0.65.2.2 reads only Claude Code's and Codex's prompts (AgentPromptInputState.swift): another agent's is unknown.
+    it('words are offered only on a Claude Code or Codex row; every row has its status and a tap, and it keeps nothing unseen', async () => {
       const s = setup()
-      expect(s.source.capabilities()).toEqual({ status: true, voice: true, focus: true, answer: false })
+      await started(s, [record(), codex({ surface: S2, pid: 102 }), record({ word: 'opencode', kind: 'opencode', surface: S3, pid: 103 })])
+      expect(s.source.list().map((agent) => [agent.engine, s.source.capabilities(agent)])).toEqual([
+        ['claude', { status: true, voice: true, focus: true, answer: false }],
+        ['codex', { status: true, voice: true, focus: true, answer: false }],
+        ['opencode', { status: true, voice: false, focus: true, answer: false }],
+      ])
       expect('markSeen' in s.source).toBe(false)
     })
   })

@@ -292,6 +292,15 @@ describe.skipIf(process.platform === 'win32')('cmux client (docs/plans/2026-11-1
     }
   })
 
+  // The fake answers as cmux v0.65.2.2, which reads only Claude Code's and Codex's prompts (AgentPromptInputState.swift).
+  it('inputState() at a surface where cmux lists another agent than Claude Code or Codex reads an unknown prompt, unless the test sets one', async () => {
+    const { fake, cmux } = setup({}, { mode: 'automation', sessions: [RECORD, { ...RECORD, agent: 'opencode', surface_id: S2 }] })
+    expect(await cmux.inputState(S)).toMatchObject({ state: 'empty' })
+    expect(await cmux.inputState(S2)).toEqual({ terminal: true, agent: true, lifecycle: 'idle', state: 'unknown', blocksTyping: false })
+    fake.set({ mode: 'automation', sessions: [{ ...RECORD, agent: 'opencode', surface_id: S2 }], input: { [S2]: { state: 'empty' } } })
+    expect(await cmux.inputState(S2)).toMatchObject({ state: 'empty' })
+  })
+
   it('paste() puts the text on stdin and in no argument, with --workspace, --surface, --submit and -; true only on exit 0 and submitted: true', async () => {
     const text = 'Fix the login test'
     const { fake, cmux, fire } = setup({}, { mode: 'automation' })

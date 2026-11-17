@@ -337,6 +337,21 @@ describe('the cmux adapter', () => {
       expect(await adapter.prompt(PANE, 'claude', 'last')).toBe('sent')
     })
 
+    // cmux v0.65.2.2 reads only Claude Code's and Codex's prompts (AgentPromptInputState.swift): another agent's is unknown.
+    it('only a Claude Code or Codex agent takes words: a hooked copy of another is not typed into, nor offered words where cmux lists one', async () => {
+      let listed: string | undefined = 'opencode'
+      const { asked, adapter } = recorder({ kindAt: (surface) => (surface === S ? listed : undefined) })
+      expect(adapter.canType(pane(PANE))).toBe(false)
+      for (const kind of ['claude', 'codex', undefined]) {
+        listed = kind
+        expect(adapter.canType(pane(PANE)), String(kind)).toBe(true)
+      }
+      // At a surface cmux lists nothing at yet, the engine the dial means decides: nothing is asked of cmux.
+      expect(await adapter.type(pane(PANE), 'run the tests', 'opencode')).toBe(false)
+      expect(await adapter.prompt(PANE, 'gemini', 'run the tests')).toBe('no-answer')
+      expect(asked).toEqual([])
+    })
+
     it('type answers true, busy, waiting, the Automation sentence, or false', async () => {
       const { asked, answers, adapter } = recorder({ kindAt: () => 'codex' })
       expect(await adapter.type(pane(PANE), 'run the tests', 'codex')).toBe(true)
