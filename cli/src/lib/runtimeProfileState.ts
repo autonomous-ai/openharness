@@ -227,8 +227,11 @@ export class RuntimeProfileState {
     return this.observed(session, before, silent)
   }
 
-  supportsControl(session: RegisteredSession): boolean {
-    return !session.gateway && (this.runtimeFor(session.engine)?.supportsControl(session) ?? false)
+  async supportsControl(session: RegisteredSession): Promise<boolean> {
+    if (session.gateway) return false
+    const runtime = this.runtimeFor(session.engine)
+    if (runtime) return runtime.supportsControl(session)
+    return (await this.reader(session.engine))?.supportsControl?.(session) ?? false
   }
 
   effortAllowed(session: RegisteredSession, model: string, effort: string, listed: readonly string[] | null): boolean {
@@ -422,7 +425,13 @@ export class RuntimeProfileState {
     // Display-only through a gateway: the empty catalogue IS the mechanism (see the note above), so web
     // renders a static chip and the device picker closes instead of offering a list we cannot enumerate.
     if (session.gateway) return []
-    return this.runtimeFor(session.engine)?.models(session, this.states.get(session.sessionId)) ?? []
+    const runtime = this.runtimeFor(session.engine)
+    if (runtime) return runtime.models(session, this.states.get(session.sessionId))
+    // Another engine lists its own only where its reader can drive a pick into the pane (OpenCode's pickers): a list
+    // nothing can act on is a picker that flashes open and fails.
+    const reader = await this.reader(session.engine)
+    if (!reader?.supportsControl?.(session) || !reader.models) return []
+    return reader.models(this.context(session, true))
   }
 
   private unbound(sessionId: string): boolean {
@@ -501,9 +510,9 @@ export class RuntimeProfileState {
     return reader?.engine === 'commandcode' ? reader.target(sessionId, profileId) : null
   }
 
-  async opencodeCatalog() {
+  async opencodeCatalog(cwd?: string | null) {
     const reader = await this.reader('opencode')
-    return reader?.engine === 'opencode' ? reader.catalog() : []
+    return reader?.engine === 'opencode' ? reader.catalog(cwd) : []
   }
 
   async kiloCatalog() {

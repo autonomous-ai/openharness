@@ -19,6 +19,7 @@ import 'package:flutter/semantics.dart'
     show CustomSemanticsAction, SemanticsService;
 import 'package:xterm/xterm.dart' show Terminal, TerminalKey, TerminalStyle;
 
+import 'package:harness_mobile/chat/agent_settings_sheet.dart';
 import 'package:harness_mobile/chat/chat_attach_sheet.dart';
 import 'package:harness_mobile/chat/chat_composer.dart';
 import 'package:harness_mobile/chat/chat_mic_button.dart';
@@ -41,6 +42,9 @@ import 'package:harness_mobile/terminal/terminal_theme.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
 import 'package:harness_mobile/terminal/elicitation_press.dart';
 import 'package:harness_mobile/terminal/key_hints.dart';
+import 'package:harness_mobile/terminal/claude_permission.dart';
+import 'package:harness_mobile/terminal/codex_permission.dart';
+import 'package:harness_mobile/terminal/opencode_footer.dart';
 import 'package:harness_mobile/terminal/question_pane.dart';
 import 'package:harness_mobile/terminal/question_pane_watcher.dart';
 import 'package:harness_mobile/terminal/terminal_find.dart';
@@ -1645,10 +1649,8 @@ class _TerminalPageState extends State<TerminalPage>
         ?.agents
         .where((a) => a.id == widget.agentId)
         .firstOrNull;
-    return agent != null &&
-        agent.sessionId != null &&
-        agent.engine != null &&
-        agent.engine != 'terminal';
+    // No session is no reason for a terminal: an agent nobody has talked to yet shows an empty chat.
+    return agent != null && agent.engine != null && agent.engine != 'terminal';
   }
 
   void _setShowsChat(bool chat) => unawaited(
@@ -1669,6 +1671,33 @@ class _TerminalPageState extends State<TerminalPage>
   /// The chip in Chat UI's composer: the engine as people know it, then the model and effort the
   /// daemon saw it running (`Claude Opus 5.5 · Medium`) — read the way the desktop reads it — or the
   /// grid model it was moved to.
+  /// [_chatModelLabel], with what OpenCode's footer says where the machine names no model: an OpenCode agent nobody
+  /// has written to has no session yet, and so no model the machine reads (`terminal/opencode_footer.dart`).
+  String? _chatModelOnScreen(Agent? agent) {
+    final label = _chatModelLabel(agent);
+    if (agent?.engine != 'opencode' || agent?.selectedModel != null) {
+      return label;
+    }
+    final shown = _opencodeOnScreen();
+    return shown == null
+        ? label
+        : '$label ${modelLabelWithEffort(shown.name, shown.effort)}';
+  }
+
+  /// The model and effort OpenCode's footer names, kept between reads: the footer is off the screen while OpenCode
+  /// redraws, as the terminal first fills and each time the keyboard resizes it (45 rows to 24 and back, measured on a
+  /// Pixel 8 Pro), and the chip read just "OpenCode" then.
+  ({String name, String? effort})? _opencodeOnScreen() {
+    final session = widget.notifier
+        .paneOfAgent(widget.machineId, widget.agentId)
+        ?.session;
+    final footer = session == null ? null : opencodeFooter(session.terminal);
+    if (footer != null) _footerModel = footer;
+    return footer ?? _footerModel;
+  }
+
+  ({String name, String? effort})? _footerModel;
+
   static String? _chatModelLabel(Agent? agent) {
     if (agent == null || agent.engine == null) return null;
     final engine = engineIdentity(
@@ -1720,6 +1749,86 @@ class _TerminalPageState extends State<TerminalPage>
       return;
     }
     unawaited(showChatAttachSheet(context, options));
+  }
+
+  /// The permission mode this agent's Claude Code shows in its footer, read off the terminal under the chat.
+  String? _claudePermissionOnScreen() {
+    final session = widget.notifier
+        .paneOfAgent(widget.machineId, widget.agentId)
+        ?.session;
+    return session == null ? null : claudePermissionMode(session.terminal);
+  }
+
+  /// Each engine's commands that open a picker of its own the Model sheet stands for. Claude Code's `/permissions` is
+  /// not one: it edits its tool rules, not its mode.
+  static const _sheetCommands = {
+    'claude': {'/model', '/effort'},
+    'codex': {'/model', '/permissions', '/approvals'},
+    'opencode': {'/models', '/effort'},
+  };
+
+  /// The mode this page last put Codex in through `/permissions`: Codex draws none on screen to read back, and the
+  /// machine still holds the one it started with.
+  String? _codexPermission;
+
+  /// The Model sheet's permission pick. Claude Code takes it in place, by its own Shift+Tab on the terminal this phone
+  /// holds, and Codex by its own `/permissions` menu; OpenCode takes a mode only as it starts, so it is started again
+  /// in it, the conversation kept.
+  Future<String?> _changePermission(String mode) async {
+    final agent = widget.notifier
+        .stateOf(widget.machineId)
+        ?.agents
+        .where((a) => a.id == widget.agentId)
+        .firstOrNull;
+    final engine = agent?.engine;
+    if (engine != 'claude' && engine != 'codex') {
+      return widget.notifier.restartAgentWithPermission(
+        widget.machineId,
+        widget.agentId,
+        mode,
+      );
+    }
+    final session = await _sessionForInput(why: 'permission');
+    if (session == null) return "Couldn't reach the agent's terminal.";
+    if (engine == 'codex') {
+      final taken = await setCodexPermission(
+        session.terminal,
+        session.outputTicks,
+        mode,
+      );
+      if (taken) _codexPermission = mode;
+      return taken
+          ? null
+          : "Codex didn't take it. Empty its prompt and try again.";
+    }
+    final reached = await cycleClaudePermission(
+      session.terminal,
+      session.outputTicks,
+      mode,
+    );
+    return reached
+        ? null
+        : "Claude Code here doesn't offer that mode. Start a new harness in it.";
+  }
+
+  /// The Model sheet's Clear prompt: the key strip's `clear` (Ctrl+K, Ctrl+U), then a wait for the agent to redraw —
+  /// the machine reads the prompt off the pane, and a pick sent before the redraw would find the words still there.
+  Future<bool> _clearPromptForModel() async {
+    final session = await _sessionForInput(why: 'clear');
+    if (session == null) return false;
+    final redrawn = Completer<void>();
+    void heard() {
+      if (!redrawn.isCompleted) redrawn.complete();
+    }
+
+    session.outputTicks.addListener(heard);
+    session.clearPrompt();
+    await redrawn.future.timeout(
+      const Duration(milliseconds: 1500),
+      onTimeout: () {},
+    );
+    session.outputTicks.removeListener(heard);
+    return true;
   }
 
   /// Stop from Chat UI: Esc, as in the agent's own terminal.
@@ -2617,10 +2726,17 @@ class _TerminalPageState extends State<TerminalPage>
         ? widget.notifier.chatConversations.open(
             widget.machineId,
             widget.agentId,
-            agent.sessionId!,
+            agent.sessionId,
             streamsText: agent.engine == 'opencode' || agent.engine == 'kilo',
           )
         : null;
+    // The chip's sheet opens on a list already here: asked once per agent, as its chat first shows.
+    if (chat != null) {
+      widget.notifier.prefetchAgentModelChoices(
+        widget.machineId,
+        widget.agentId,
+      );
+    }
     return Scaffold(
       // On the terminal's palette, which stays dark in a light app — see [TerminalLook].
       backgroundColor: TerminalLook.read(context, () => AppPalette.windowBg),
@@ -3015,7 +3131,17 @@ class _TerminalPageState extends State<TerminalPage>
                             TerminalFindBar(find: _find!, onClose: _closeFind)
                           else if (chat != null)
                             ListenableBuilder(
-                              listenable: chat,
+                              // The terminal's redraws too only while the chip reads OpenCode's footer: a rebuild of
+                              // the composer per chunk drawn is a cost no other agent pays.
+                              listenable:
+                                  session != null &&
+                                      agent?.engine == 'opencode' &&
+                                      agent?.selectedModel == null
+                                  ? Listenable.merge([
+                                      chat,
+                                      session.outputTicks,
+                                    ])
+                                  : chat,
                               builder: (context, _) => ChatComposer(
                                 working: chat.working,
                                 // A terminal another app holds is taken back by the send
@@ -3025,7 +3151,25 @@ class _TerminalPageState extends State<TerminalPage>
                                 onAttach: session != null
                                     ? () => _attachToChat(session, machine)
                                     : null,
-                                model: _chatModelLabel(agent),
+                                model: _chatModelOnScreen(agent),
+                                onModel: () => unawaited(
+                                  showAgentSettingsSheet(
+                                    context,
+                                    widget.notifier,
+                                    machineId: widget.machineId,
+                                    agentId: widget.agentId,
+                                    livePermission: switch (agent?.engine) {
+                                      'claude' => _claudePermissionOnScreen,
+                                      'codex' => () => _codexPermission,
+                                      _ => null,
+                                    },
+                                    liveModel: agent?.engine == 'opencode'
+                                        ? _opencodeOnScreen
+                                        : null,
+                                    onPermission: _changePermission,
+                                    onClearPrompt: _clearPromptForModel,
+                                  ),
+                                ),
                                 // The phone's own voice input, as the terminal's mic.
                                 mic: session == null
                                     ? null
@@ -3033,6 +3177,12 @@ class _TerminalPageState extends State<TerminalPage>
                                         voice: widget.voice,
                                         session: session,
                                       ),
+                                commands: () => widget.notifier.agentCommands(
+                                  widget.machineId,
+                                  widget.agentId,
+                                ),
+                                sheetCommands:
+                                    _sheetCommands[agent?.engine] ?? const {},
                               ),
                             )
                           else if (session != null)

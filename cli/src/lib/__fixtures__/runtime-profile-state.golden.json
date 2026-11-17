@@ -365,7 +365,7 @@
           "session-opencode"
         ]
       },
-      "supported": false,
+      "supported": true,
       "gatewaySupported": false,
       "cancelled": {
         "state": {
@@ -1838,7 +1838,7 @@
           "session-opencode"
         ]
       },
-      "supported": false,
+      "supported": true,
       "gatewaySupported": false,
       "cancelled": {
         "state": {

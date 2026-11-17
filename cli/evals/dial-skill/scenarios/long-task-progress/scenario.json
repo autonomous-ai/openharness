@@ -1,0 +1,11 @@
+{
+  "need": "no-need",
+  "kind": "long-task",
+  "prompt": "Move all ten reports off `src/legacy/format.js` onto `src/format/index.js`, then delete the legacy file.",
+  "secrets": [],
+  "origin": false,
+  "check": {
+    "run": "! grep -rn legacy/format src test && test ! -e src/legacy/format.js && npm test",
+    "expect": "legacy/format"
+  }
+}

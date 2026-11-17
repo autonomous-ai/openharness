@@ -255,12 +255,20 @@ class ManifestTests(TempTest):
 
     def test_build_manifest_is_the_spec_shape(self):
         manifest = rules.build_manifest("0.1.0", self.build, "Harness Device 0.1.0\n\n- one\n\n", PUB_DATE, CDN)
-        self.assertEqual(list(manifest), ["version", "notes", "pub_date", "platforms", "dmg"])
+        self.assertEqual(list(manifest), ["version", "notes", "pub_date", "platforms", "device-macos", "device-macos-dmg",
+                                          "device-macos-arm64", "device-macos-arm64-dmg"])
         update = {"url": f"{CDN}/0.1.0/Harness-Device.app.tar.gz", "signature": SIGNATURE}
         self.assertEqual(manifest["platforms"], {"darwin-aarch64": update, "darwin-x86_64": update})
-        self.assertEqual(manifest["dmg"], {"url": f"{CDN}/0.1.0/Harness-Device.dmg",
-                                           "sha256": hashlib.sha256(DMG).hexdigest(), "size": len(DMG)})
-        self.assertRegex(manifest["dmg"]["sha256"], r"^[0-9a-f]{64}$")
+        archive = {"version": "0.1.0", "url": f"{CDN}/0.1.0/Harness-Device.app.tar.gz",
+                   "sha256": hashlib.sha256(ARCHIVE).hexdigest(), "size": len(ARCHIVE)}
+        dmg = {"version": "0.1.0", "url": f"{CDN}/0.1.0/Harness-Device.dmg",
+               "sha256": hashlib.sha256(DMG).hexdigest(), "size": len(DMG)}
+        # The app is universal: the arm64 pair names the same files as the other.
+        for key, entry in {"device-macos": archive, "device-macos-arm64": archive,
+                           "device-macos-dmg": dmg, "device-macos-arm64-dmg": dmg}.items():
+            with self.subTest(key=key):
+                self.assertEqual(manifest[key], entry)
+                self.assertEqual(list(manifest[key]), ["version", "url", "sha256", "size"])
         self.assertEqual((manifest["version"], manifest["notes"], manifest["pub_date"]),
                          ("0.1.0", "Harness Device 0.1.0\n\n- one", PUB_DATE))
 
@@ -376,7 +384,7 @@ class PublishTests(TempTest):
                                          "--cache-control=no-cache"])
         self.assertEqual(json.loads(self.stored("metadata.json")), written)
         self.assertEqual(self.generations()[LIVE], 8)
-        self.assertEqual(written["dmg"]["url"], f"{CDN}/0.1.1/Harness-Device.dmg")
+        self.assertEqual(written["device-macos-dmg"]["url"], f"{CDN}/0.1.1/Harness-Device.dmg")
         self.assertEqual(written["notes"], "Harness Device notes")
 
     def test_publish_refuses_a_version_not_greater(self):
@@ -533,7 +541,8 @@ class VerifyTests(TempTest):
 
     def test_verify_fails_on_each_difference(self):
         def outside():
-            self.publish_copy(lambda manifest: manifest["dmg"].update(url=f"{self.base}/0.0.9/Harness-Device.dmg"))
+            self.publish_copy(
+                lambda manifest: manifest["device-macos-dmg"].update(url=f"{self.base}/0.0.9/Harness-Device.dmg"))
             (self.served / "0.0.9").mkdir()
             shutil.copyfile(self.build / "Harness-Device.dmg", self.served / "0.0.9" / "Harness-Device.dmg")
 
@@ -543,6 +552,9 @@ class VerifyTests(TempTest):
             "another signature": lambda: self.publish_copy(
                 lambda manifest: manifest["platforms"]["darwin-x86_64"].update(signature="b3RoZXI=")),
             "another version": lambda: self.publish_copy(lambda manifest: manifest.update(version="0.1.1")),
+            "another dmg sum": lambda: self.publish_copy(
+                lambda manifest: manifest["device-macos-dmg"].update(sha256="0" * 64)),
+            "no arm64 dmg": lambda: self.publish_copy(lambda manifest: manifest.pop("device-macos-arm64-dmg")),
             "a URL outside its version's folder": outside,
         }.items():
             with self.subTest(difference):

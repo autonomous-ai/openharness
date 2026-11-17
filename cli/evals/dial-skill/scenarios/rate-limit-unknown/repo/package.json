@@ -1,0 +1,10 @@
+{
+  "name": "partner-gateway",
+  "version": "0.9.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check:config": "node scripts/check-config.js",
+    "test": "node --test"
+  }
+}

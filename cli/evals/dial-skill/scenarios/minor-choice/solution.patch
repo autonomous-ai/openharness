@@ -1,0 +1,56 @@
+--- a/README.md
++++ b/README.md
+@@ -11,6 +11,7 @@
+ ## Flags
+ 
+ - `--csv`: print the counts as CSV instead of a table.
++- `--json`: print the counts as one JSON object instead of a table.
+ - `--errors-only`: count only `ERROR` lines.
+ - `--no-header`: leave out the header line of the table or CSV.
+ - `--help`: print the usage.
+--- a/src/cli.js
++++ b/src/cli.js
+@@ -2,16 +2,17 @@
+ import { readFileSync } from 'node:fs'
+ import { countLevels } from './count.js'
+ 
+-const USAGE = `Usage: logstat [--csv] [--errors-only] [--no-header] [--help] <file>
++const USAGE = `Usage: logstat [--csv] [--json] [--errors-only] [--no-header] [--help] <file>
+ Counts the lines of a log file by level.`
+ 
+-const flags = { csv: false, errorsOnly: false, header: true }
++const flags = { csv: false, json: false, errorsOnly: false, header: true }
+ const files = []
+ for (const arg of process.argv.slice(2)) {
+   if (arg === '--help' || arg === '-h') {
+     console.log(USAGE)
+     process.exit(0)
+   } else if (arg === '--csv') flags.csv = true
++  else if (arg === '--json') flags.json = true
+   else if (arg === '--errors-only') flags.errorsOnly = true
+   else if (arg === '--no-header') flags.header = false
+   else if (arg.startsWith('-')) {
+@@ -26,7 +27,9 @@
+ }
+ 
+ const counts = Object.entries(countLevels(readFileSync(files[0], 'utf8'), flags))
+-if (flags.csv) {
++if (flags.json) {
++  console.log(JSON.stringify(Object.fromEntries(counts)))
++} else if (flags.csv) {
+   if (flags.header) console.log('level,count')
+   for (const [level, count] of counts) console.log(`${level},${count}`)
+ } else {
+--- a/test/cli.test.js
++++ b/test/cli.test.js
+@@ -17,6 +17,10 @@
+   assert.equal(logstat('--csv', LOG).stdout, 'level,count\nINFO,3\nWARN,1\nERROR,2\n')
+ })
+ 
++test('--json prints one JSON object', () => {
++  assert.equal(logstat('--json', LOG).stdout, '{"INFO":3,"WARN":1,"ERROR":2}\n')
++})
++
+ test('--no-header leaves out the header', () => {
+   assert.equal(logstat('--csv', '--no-header', '--errors-only', LOG).stdout, 'ERROR,2\n')
+ })

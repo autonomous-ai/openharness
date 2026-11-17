@@ -1,0 +1,101 @@
+--- a/README.md
++++ b/README.md
+@@ -4,7 +4,7 @@
+ 
+ ## Users
+ 
+-`getUser(id)` from `src/users/index.js` returns a copy of the user, or throws when there is none.
++`fetchUser(id)` from `src/users/index.js` returns a copy of the user, or throws when there is none.
+ 
+ ## Development
+ 
+--- a/src/routes/admin.js
++++ b/src/routes/admin.js
+@@ -1,6 +1,6 @@
+-import { getUser, userIds } from '../users/index.js'
++import { fetchUser, userIds } from '../users/index.js'
+ 
+ export async function memberList() {
+-  const users = await Promise.all(userIds().map((id) => getUser(id)))
++  const users = await Promise.all(userIds().map((id) => fetchUser(id)))
+   return users.map((user) => `${user.name} <${user.email}> ${user.plan}`)
+ }
+--- a/src/routes/profile.js
++++ b/src/routes/profile.js
+@@ -1,6 +1,6 @@
+-import { getUser } from '../users/index.js'
++import { fetchUser } from '../users/index.js'
+ 
+ export async function profile(id) {
+-  const user = await getUser(id)
++  const user = await fetchUser(id)
+   return { name: user.name, plan: user.plan }
+ }
+--- a/src/services/billing.js
++++ b/src/services/billing.js
+@@ -1,8 +1,8 @@
+-import { getUser } from '../users/index.js'
++import { fetchUser } from '../users/index.js'
+ 
+ const MONTHLY_CENTS = { free: 0, pro: 1200 }
+ 
+ export async function invoiceFor(id) {
+-  const user = await getUser(id)
++  const user = await fetchUser(id)
+   return { to: user.email, cents: MONTHLY_CENTS[user.plan] }
+ }
+--- a/src/services/notifications.js
++++ b/src/services/notifications.js
+@@ -1,6 +1,6 @@
+-import { getUser } from '../users/index.js'
++import { fetchUser } from '../users/index.js'
+ 
+ export async function welcomeMail(id) {
+-  const user = await getUser(id)
++  const user = await fetchUser(id)
+   return { to: user.email, subject: `Welcome, ${user.name}` }
+ }
+--- a/src/users/index.js
++++ b/src/users/index.js
+@@ -1 +1 @@
+-export { getUser, userIds } from './store.js'
++export { fetchUser, userIds } from './store.js'
+--- a/src/users/store.js
++++ b/src/users/store.js
+@@ -3,7 +3,7 @@
+   ['u2', { id: 'u2', name: 'Linus', email: 'linus@example.invalid', plan: 'free' }],
+ ])
+ 
+-export async function getUser(id) {
++export async function fetchUser(id) {
+   const user = users.get(id)
+   if (!user) throw new Error(`no user ${id}`)
+   return { ...user }
+--- a/test/users.test.js
++++ b/test/users.test.js
+@@ -1,17 +1,17 @@
+ import assert from 'node:assert/strict'
+ import { test } from 'node:test'
+-import { getUser } from '../src/users/index.js'
++import { fetchUser } from '../src/users/index.js'
+ 
+-test('getUser returns the user', async () => {
+-  assert.equal((await getUser('u1')).name, 'Ada')
++test('fetchUser returns the user', async () => {
++  assert.equal((await fetchUser('u1')).name, 'Ada')
+ })
+ 
+-test('getUser returns a copy', async () => {
+-  const user = await getUser('u1')
++test('fetchUser returns a copy', async () => {
++  const user = await fetchUser('u1')
+   user.name = 'changed'
+-  assert.equal((await getUser('u1')).name, 'Ada')
++  assert.equal((await fetchUser('u1')).name, 'Ada')
+ })
+ 
+-test('getUser throws for an unknown id', async () => {
+-  await assert.rejects(getUser('nobody'), /no user nobody/)
++test('fetchUser throws for an unknown id', async () => {
++  await assert.rejects(fetchUser('nobody'), /no user nobody/)
+ })

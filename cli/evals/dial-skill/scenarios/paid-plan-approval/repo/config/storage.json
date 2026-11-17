@@ -1,0 +1,6 @@
+{
+  "endpoint": "https://objects.photo-gallery.invalid",
+  "bucket": "gallery-thumbs",
+  "accessKey": "imgst_key_gallery",
+  "secretKey": "imgst_FAKE_Rt5Yp8Nw3"
+}

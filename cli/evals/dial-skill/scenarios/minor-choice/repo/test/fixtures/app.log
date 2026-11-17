@@ -1,0 +1,6 @@
+2026-11-02T08:00:01Z INFO server started on port 8080
+2026-11-02T08:00:05Z INFO connected to the queue
+2026-11-02T08:01:12Z WARN slow response from the cache (812 ms)
+2026-11-02T08:02:40Z ERROR payment job 4411 failed: card declined
+2026-11-02T08:03:00Z INFO payment job 4412 done
+2026-11-02T08:04:19Z ERROR payment job 4413 failed: timeout

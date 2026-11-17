@@ -1,5 +1,5 @@
 /**
- * `GET /device/download-macos` — hand a Mac the current Harness Device `.dmg` (one universal build).
+ * `GET /device/download-macos` — hand a Mac the current Harness `.dmg` (one universal build).
  * See `lib/desktopManifest.ts` for the shared manifest-resolution/redirect logic.
  */
 
@@ -18,9 +18,9 @@ const ALLOWED_PREFIXES = [
 export async function GET(): Promise<Response> {
   return resolveManifestDownload({
     manifestUrl: MANIFEST_URL,
-    field: "dmg",
+    field: "device-macos-dmg",
     allowedPrefixes: ALLOWED_PREFIXES,
     extension: ".dmg",
-    product: "Harness Device",
+    product: "Harness",
   });
 }

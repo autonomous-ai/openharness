@@ -10,6 +10,8 @@ use harness_device::loginitem::SystemLoginItem;
 use harness_device::runner::{Doors, Runner};
 use harness_device::state::{JsonStateFile, StateFile};
 use harness_device::tabs;
+#[cfg(target_os = "macos")]
+use harness_device::tray_macos;
 use harness_device::types::{Action, Clock, Effect, Event, Log, MenuAction, MenuItem, SystemClock, View};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -60,7 +62,7 @@ fn main() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("Harness Device could not start");
+        .expect("Harness could not start");
     // Decision 3: no Dock icon. Set before the event loop runs: in `setup`, macOS has already made the app Regular and
     // the window is made, so the Dock icon shows for a moment at each launch.
     #[cfg(target_os = "macos")]
@@ -103,10 +105,11 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
     );
 
     let (clicks, chosen) = (events.clone(), events.clone());
-    TrayIconBuilder::with_id(TRAY)
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+    let tray = TrayIconBuilder::with_id(TRAY)
         .icon(tauri::include_image!("icons/tray.png"))
         .icon_as_template(true)
-        .tooltip("Harness Device")
+        .tooltip("Harness")
         .on_menu_event(move |_, event| {
             if let Some(action) = menu_action(event.id().as_ref()) {
                 let _ = chosen.send(Event::Menu(action));
@@ -120,6 +123,18 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
             }
         })
         .build(handle)?;
+    // Desktop's dark artwork on a dark bar (tray_macos.rs), at the size Tauri gave tray.png: the tray's click target
+    // was framed to the button at that size.
+    #[cfg(target_os = "macos")]
+    tray.with_inner_tray_icon(|inner| {
+        let button =
+            objc2::MainThreadMarker::new().zip(inner.ns_status_item()).and_then(|(main, item)| item.button(main));
+        if let Some(button) = button
+            && let Some(image) = button.image().and_then(|light| tray_macos::image(light.size()))
+        {
+            button.setImage(Some(&image));
+        }
+    })?;
 
     let (app, first) = App::new(saved, runner.find_cli(), SystemDesktopApp.installed(), clock.now());
     let looping = handle.clone();

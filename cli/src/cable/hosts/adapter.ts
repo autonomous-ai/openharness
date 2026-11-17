@@ -4,11 +4,12 @@
  * type in it. Every adapter keeps four rules:
  * 1. `paneOf` checks each hint against its own form, and each verb checks the pane's id again before a command.
  * 2. An adapter is a plain object from a factory. No member uses `this`, so a caller may wrap one by spreading it.
- * 3. A verb that cannot run answers `false`, `'failed'` or `'refused'`. It never throws.
+ * 3. A verb that cannot run answers `false`, `'failed'` or `'refused'`; `type` may say why, in a `TypeResult`. It never
+ *    throws.
  * 4. An agent may have a pane in more than one adapter: the source keeps them all, and each verb uses the first whose
  *    adapter can do it. So `paneOf` answers from its own app's values alone, never from another app's being absent.
  */
-import type { PaneSwitch } from './types.js'
+import type { PaneSwitch, TypeResult } from './types.js'
 
 /** Where an outside agent runs, from its latest hook event and what was learnt of its process. */
 export interface Place {
@@ -45,8 +46,9 @@ export interface HostAdapter {
   canShow?(pane: Pane): boolean
   show?(pane: Pane, agentId: string): Promise<PaneSwitch>
   /** Types a line at the agent's prompt and submits it; `engine` is the agent's, for an app that checks who holds the
-   *  pane. Only the source decides that the prompt is free. */
-  type?(pane: Pane, text: string, engine: string): Promise<boolean>
+   *  pane. The source decides that the prompt is free from the hooks; an app that knows better says `'busy'` or
+   *  `'waiting'`, or refuses in a fixed sentence of its own, which the dial shows as it is. Only `true` was sent. */
+  type?(pane: Pane, text: string, engine: string): Promise<TypeResult>
   /** Whether `type` can reach the pane now (its app's socket there): asked at each look. One that cannot leaves the words
    *  to the agent's next pane whose app types. */
   canType?(pane: Pane): boolean

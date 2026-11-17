@@ -1121,18 +1121,20 @@ describe('the dial that shows one app at a time', () => {
     ] })
   })
 
-  it('17 apps with agents send 16 rows, the shown one kept', async () => {
+  it('19 apps with agents send 16 rows, the shown one kept', async () => {
     const appIds = (snapshot: { apps?: { apps: Array<{ id: string }> } }): string[] | undefined => snapshot.apps?.apps.map((a) => a.id)
+    // The last three ids, codex, opencode and the unknown app, are past the 16 rows: the last is picked.
+    const last = APP_IDS[APP_IDS.length - 1]
     // A second agent in Ghostty, so Ghostty is shown with no draw.
     const host = setup([...APP_IDS.map((app) => agent(`a-${app}`, app)), agent('g2', 'ghostty')])
     const first = await host.listAgentSnapshot({ apps: true })
     expect(appIds(first)).toEqual(APP_IDS.slice(0, 16))
     expect(first.apps?.shown).toBe('ghostty')
-    expect(host.pickApp(APP_IDS[16])).toBe('switched')
+    expect(host.pickApp(last)).toBe('switched')
     const next = await host.listAgentSnapshot({ apps: true })
     // The 16th row gave the shown app its place, and the first 15 did not move.
-    expect(appIds(next)).toEqual([...APP_IDS.slice(0, 15), APP_IDS[16]])
-    expect(next.apps?.shown).toBe(APP_IDS[16])
+    expect(appIds(next)).toEqual([...APP_IDS.slice(0, 15), last])
+    expect(next.apps?.shown).toBe(last)
     expect(next.apps?.apps.at(-1)).toEqual({ id: 'terminal', name: 'Other', count: 1, waiting: 0 })
     // The bound is the frame's, not the ring's.
     expect(ids(next)).toEqual(['a-terminal'])
