@@ -1321,6 +1321,14 @@ describe('ObservedSource actions', () => {
     expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
   })
 
+  // An adapter's answer outside its type says nothing either: no refusal is read off it.
+  it.each([undefined, null, 'typed', {}, { refused: 7 }])('an adapter that answers %j says did not answer', async (answer) => {
+    const { actions } = fakeActions({ orcaSend: vi.fn(async () => answer as unknown as TypeResult) })
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', withHandle))
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+  })
+
   // The app may know better than the hook: an agent its hook left idle can be in a turn, or asking, there.
   it('an adapter that says busy gives the busy sentence, counted busy', async () => {
     const { actions } = fakeActions({ orcaSend: vi.fn(async (): Promise<TypeResult> => 'busy') })
