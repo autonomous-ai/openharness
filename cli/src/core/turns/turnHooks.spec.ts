@@ -618,14 +618,18 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     expect(run.deps.emit).toHaveBeenCalledTimes(2)
   })
 
-  stopRule('a stale Stop, run before the latest prompt hook, delivers and closes nothing', async () => {
-    const run = await hookDriven()
-    run.hooks.transcript('s1', END, { turn: turnOf('t1') })
-    run.hooks.onPromptHook('s1', 2_000)
-    for (const status of [undefined, 'error']) run.hooks.onTurnStop({ sessionId: 's1', status, firedAt: 1_000 })
-    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
-    expect(run.deps.emit).not.toHaveBeenCalled()
-    expect(run.hooks.held('s1')).toBe(true)
+  // A hook of the person's can block the next prompt: its prompt hook ran and no turn opened, so the end held is still
+  // the one this Stop is about. Left held, the turn read as working for 2 minutes.
+  stopRule('a Stop run before the latest prompt hook still delivers the end held for its turn, a failure too', async () => {
+    for (const status of [undefined, 'error']) {
+      const run = await hookDriven()
+      run.hooks.transcript('s1', END, { turn: turnOf('t1', 500) })
+      run.hooks.onPromptHook('s1', 2_000)
+      run.hooks.onTurnStop({ sessionId: 's1', status, firedAt: 1_000 })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', END)
+      expect(run.hooks.held('s1')).toBe(false)
+    }
   })
 
   stopRule('a stale Stop is not held for a binding being checked; one with no prompt hook before it, or a newer one, is', () => {
