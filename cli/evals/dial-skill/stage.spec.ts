@@ -148,7 +148,10 @@ describe('stage', () => {
         expect(ALLOWED, key).toContain(key)
         expect(key).not.toMatch(/^(ANTHROPIC|OPENAI|ORCA|HARNESS|TMUX|CLAUDE_CODE|GH_|GITHUB)/)
       }
+      // Claude finds its sign-in in the keychain through HOME, so HOME stays the person's.
       expect(st.env.HOME).toBe(process.env.HOME)
+      expect(st.env.SHELL).toBe('/bin/zsh')
+      expect(st.env.ZDOTDIR).toBe(join(st.root, 'zdotdir'))
       expect(st.env.TMPDIR).toBe(join(st.root, 'tmp'))
       expect(st.env.GIT_CONFIG_GLOBAL).toBe(join(st.root, 'gitconfig'))
       expect(st.env.npm_config_userconfig).toBe(join(st.root, 'npmrc'))
@@ -179,6 +182,33 @@ describe('stage', () => {
     expect(sh(st, 'command -v harness').stdout).toBe(`${join(st.root, 'bin', 'harness')}\n`)
     expect(sh(st, 'command -v vpnctl').stdout).toBe(`${join(st.root, 'bin', 'vpnctl')}\n`)
     expect(sh(st, 'command -v gh').status).not.toBe(0)
+  })
+
+  it("runs Claude's zsh on none of the person's startup files, which export their keys", () => {
+    const home = mkdtempSync(join(tmpdir(), 'dial-skill-home-'))
+    try {
+      for (const file of ['.zshenv', '.zprofile', '.zshrc']) writeFileSync(join(home, file), 'export FROM_THE_PERSON=1\n')
+      vi.stubEnv('HOME', home)
+      const st = staging('claude', { skill: true })
+
+      // As Claude's Bash tool runs a command: zsh -c, after a login shell's snapshot.
+      for (const flags of ['-c', '-lic']) {
+        const run = spawnSync(st.env.SHELL!, [flags, 'echo ${FROM_THE_PERSON-none}'], { cwd: st.repo, env: st.env, encoding: 'utf8' })
+        expect(run.stdout, flags).toBe('none\n')
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it("gives node, npm and npx by link from the staged bin/, never node's folder on PATH, which holds other global tools", () => {
+    const st = staging('claude', { skill: true })
+
+    expect(st.env.PATH!.split(':')).not.toContain(dirname(process.execPath))
+    for (const tool of ['node', 'npm', 'npx']) expect(sh(st, `command -v ${tool}`).stdout).toBe(`${join(st.root, 'bin', tool)}\n`)
+    expect(sh(st, 'node --version').stdout).toBe(`${process.version}\n`)
+    expect(sh(st, 'npm --version').status).toBe(0)
+    expect(sh(st, 'npx --version').status).toBe(0)
   })
 
   it("keeps the real Xcode out of reach, so xcode-license-sudo's license stops the build, and git and make still run", () => {

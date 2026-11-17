@@ -115,6 +115,14 @@ describe('claudeArgs', () => {
     expect(settings.disableClaudeAiConnectors).toBe(true)
   })
 
+  it("denies reads of the person's ~/.harness (the real harness and its sign-in) and gh's sign-in", () => {
+    const argv = claudeArgs(AGENT_CONFIG, staged(), 'Fix it.')
+    const { permissions } = JSON.parse(argv[argv.indexOf('--settings') + 1])
+    expect(permissions.deny).toEqual(expect.arrayContaining([
+      `Read(/${join(homedir(), '.harness')}/**)`, `Read(/${join(homedir(), '.config', 'gh')}/**)`,
+    ]))
+  })
+
   it('never skips permissions', () => {
     const argv = claudeArgs(AGENT_CONFIG, staged(), 'Fix it.').join(' ')
     for (const flag of ['--dangerously-skip-permissions', 'bypassPermissions', '--bare']) expect(argv).not.toContain(flag)
