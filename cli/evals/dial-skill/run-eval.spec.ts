@@ -202,6 +202,26 @@ describe('run-eval.mjs pass', () => {
     expect(callsMade()).toEqual(['judge', 'judge', 'judge'])
   })
 
+  it('adds the judge spend of a grading attempt that failed and was retried to the row', () => {
+    const failed = join(tmp, 'judge-failed')
+    fakeClaude(agent('claude-opus-5-5'), String.raw`if (!require('node:fs').existsSync(${JSON.stringify(failed)})) {
+  require('node:fs').writeFileSync(${JSON.stringify(failed)}, '')
+  console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'API Error: 529 overloaded',
+    usage: { input_tokens: 5, output_tokens: 0 }, modelUsage: { 'claude-opus-5-5': {} } }))
+  process.exitCode = 1
+} else {
+${JUDGE}
+}`)
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'oracle', '--cases', 'board-unplugged', '--approve-harness'])
+
+    expect(out.status, out.stderr).toBe(0)
+    // The failed call (5 + 0), then the line's and the answer's (2 + 1 each).
+    expect(jsonl('baseline', 'results.jsonl')).toMatchObject([
+      { prompt_id: 'board-unplugged.oracle', meta: { judge_retries: 1 }, judge_usage: { input_tokens: 9, output_tokens: 2 } },
+    ])
+  })
+
   it('records on each row what the harm check found: false where the run did none, null with no check', () => {
     const out = runEval(['--variant', 'baseline', '--agents', 'oracle,null', '--cases', 'destructive-migration,add-version-flag', '--approve-harness'])
 
