@@ -301,7 +301,7 @@ describe('the core\'s request gate (core/main.ts)', () => {
     // `publishStoppedAgent` reads these while restoring agents and in the first reconcile, and those
     // frames go out whether or not requests are open.
     const restore = at('await restoreAgents({')
-    for (const provider of ['activityFrameProvider', 'runtimeProfileProvider', 'framePartsProvider']) {
+    for (const provider of ['activityFrameProvider', 'runtimeDisplayProvider', 'framePartsProvider']) {
       expect(at(`backend.${provider} =`), `backend.${provider} must be bound before restoreAgents`).toBeLessThan(restore)
     }
   })

@@ -6,7 +6,7 @@ import { createModelControls } from './engines/modelControls.js'
 import { masterRunsEngineModelControl } from '../harnessd/services.js'
 import { createScreens } from './engines/screens.js'
 import { createScreenTransport } from './engines/screenTransport.js'
-import { inProcessScreen, preloadEngine } from '../engines/inProcess.js'
+import { terminalScreen } from '../engines/kit/screen.js'
 import { opencodeMajorVersion } from '../engines/launchControl.js'
 import { inspectNativeLaunch, type NativeLaunch } from '../engines/nativeLaunch.js'
 import { nativeHookLocations } from '../engines/kit/nativeLocations.js'
@@ -273,7 +273,7 @@ import { transcriptActivityAt } from '../lib/transcriptActivity.js'
 import { createUsageLink } from './usageLink.js'
 import type { UsageSnapshots } from './usageLink.js'
 import { usageTarget, validUsage, validUsageTarget, type AgentUsageTarget } from '../lib/agentUsageWire.js'
-import { RuntimeProfileState, type RuntimeModelOption } from '../lib/runtimeProfileState.js'
+import type { RuntimeDisplay, RuntimeModelOption } from '../engines/facets/runtime.js'
 import { createRuntimeProfiles } from './engines/runtimeProfiles.js'
 import { createRuntimeTransport } from './engines/runtimeTransport.js'
 import { RuntimeProfileController } from '../lib/runtimeControl.js'
@@ -449,11 +449,11 @@ let usagePortRef: UsageSnapshots | null = null
 /** Set by runForeground once models can be asked: what an agent's frame says of its grid. */
 let gridAnnotationRef: ((grid: AgentGridTarget) => GridAnnotation | null) | null = null
 
-function projectFrame(s: RegisteredSession, selectedModel: string | null, workspace: string | null): Promise<AgentFrame> {
+function projectFrame(s: RegisteredSession, display: RuntimeDisplay): Promise<AgentFrame> {
   return agentFrame(s, {
     tokenUsage: usagePortRef?.get(s) ?? null,
-    selectedModel,
-    workspace,
+    selectedModel: display.selectedModel,
+    workspace: display.workspace,
     terminalAvailable: registry.terminalAvailable(s.agentId),
     parts: framePartsRef?.(s),
     activity: () => activityFrameContextRef?.(s) ?? null,
@@ -601,9 +601,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     catch { console.warn('[apis] Tool instructions could not be added. Saved connections remain available through harness api.') }
   }
 
-  // What a session of another engine reads starts loading as the session enters, from disk or later
-  // (engines/inProcess.ts).
-  registry.onEnter = preloadEngine
   registry.load()
   // Persisted locators are hints until this process has observed their terminal root and PID/start marker.
   // Mark them dormant before the backend socket can publish anything; the first authoritative reconcile
@@ -741,11 +738,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const isolatedLive = (engine: string): boolean => liveHosted
     && readerEngine(engine) && outOfProcess.has(READER_SERVICES[engine])
   const questionControlHosted = masterRunsEngineQuestionControl(harnessd, process.ppid)
-  const isolatedQuestionControl = (engine: string): boolean => questionControlHosted && isolatedLive(engine)
+  const isolatedQuestionControl = (engine: string): boolean => (questionControlHosted && isolatedLive(engine)) || (othersRuntime && isOtherEngine(engine))
   const modelControlHosted = masterRunsEngineModelControl(harnessd, process.ppid)
   const isolatedModelControl = (engine: string): boolean => modelControlHosted && isolatedLive(engine)
   const screenHosted = masterRunsEngineScreen(harnessd, process.ppid)
-  const isolatedScreen = (engine: string): boolean => screenHosted && isolatedLive(engine)
+  const isolatedScreen = (engine: string): boolean => (screenHosted && isolatedLive(engine)) || (othersRuntime && isOtherEngine(engine))
   const submissionHosted = masterRunsEngineSubmission(harnessd, process.ppid)
   const nativeControlHosted = masterRunsEngineNativeControl(harnessd, process.ppid)
   const isolatedNativeControl = (engine: string): boolean => nativeControlHosted && isolatedLive(engine)
@@ -756,13 +753,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const resumeRepairHosted = masterRunsEngineResumeRepair(harnessd, process.ppid)
   const isolatedResumeRepair = (engine: string): boolean => resumeRepairHosted && isolatedLive(engine)
   const isolatedSubmission = (engine: string): boolean => submissionHosted && isolatedLive(engine)
-  const isolatedRuntime = (engine: string): boolean => runtimeHosted && isolatedLive(engine)
+  const isolatedRuntime = (engine: string): boolean => (runtimeHosted && isolatedLive(engine)) || (othersRuntime && isOtherEngine(engine))
   // The other engines' worker reads their history and last turns (engines/others/), under a master that runs it; from
   // its version 2 it follows their live conversations too, and under an older master their streams run in this process.
   const othersHosted = outOfProcess.has(OTHER_ENGINES_SERVICE) && otherEnginesVersion(harnessd, process.ppid) >= 1
   const othersLive = othersHosted && otherEnginesVersion(harnessd, process.ppid) >= 2
-  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !othersLive || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted || !providerMoveHosted || !resumeRepairHosted
+  const othersRuntime = othersHosted && otherEnginesVersion(harnessd, process.ppid) >= 3
+  // Compatibility with explicit inline mode and older masters, until 2026-12-15.
+  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !othersRuntime || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted || !providerMoveHosted || !resumeRepairHosted
     ? await import('../services/inline.js') : null
+  if (!othersRuntime) {
+    registry.onEnter = engine => inline?.preloadEngine(engine)
+    for (const session of registry.list()) inline?.preloadEngine(session.engine)
+  }
   let serviceLinksRef: ServiceLinks | null = null
   const runtimeTransport = createRuntimeTransport({
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
@@ -771,7 +774,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
   })
   const screens = createScreens({ handles: isolatedScreen, transport: screenTransport, resolve: id => registry.resolve(id),
-    inline: (engine, capture) => readerEngine(engine) ? capture === null ? undefined : inline?.screenFor(engine).inspect(capture) : inProcessScreen(engine, capture) })
+    inline: (engine, capture) => isTerminalEngine(engine) ? terminalScreen(capture) : capture === null ? undefined : inline?.screenFor(engine).inspect(capture) })
   const submissionTransport = createSubmissionTransport({
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
   })
@@ -803,7 +806,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Which engine workers are linked now: a close's read refused by a restart waits here for the new link.
   const engineLinks = createEngineLinks()
   const runtimeProfiles = createRuntimeProfiles({
-    local: new RuntimeProfileState(engine => isolatedRuntime(engine) ? undefined : inline?.runtimeFor(engine), id => registry.resolve(id)),
+    local: inline ? new inline.RuntimeProfileState(engine => isolatedRuntime(engine) ? undefined : inline.runtimeFor(engine), id => registry.resolve(id)) : undefined,
     handles: isolatedRuntime,
     resolve: id => registry.resolve(id), transport: runtimeTransport })
   const questionControls = createQuestionControls({
@@ -836,7 +839,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     terminalAvailable: (agentId) => registry.terminalAvailable(agentId),
     resolve: (target) => registry.resolve(target),
     stopped: (agentId) => stoppedAgents.get(agentId),
-    project: (s) => projectFrame(s, runtimeProfiles.selectedModel(s), runtimeProfiles.workspace(s)),
+    project: (s) => projectFrame(s, runtimeProfiles.display(s)),
   })
   const syncSession = agentEvents.syncSession
   const announceRename = agentEvents.announceRename
@@ -1905,8 +1908,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const agentIdFor = (sessionId: string): string => registry.bySession(sessionId)?.agentId ?? sessionId
 
 
-  backend.runtimeProfileProvider = (session) => runtimeProfiles.selectedModel(session)
-  backend.workspaceProvider = (session) => runtimeProfiles.workspace(session)
+  backend.runtimeDisplayProvider = (session) => runtimeProfiles.display(session)
   backend.framePartsProvider = frameParts.forFrame
   // `harness remote` names the tile it was typed in by its pane; the registry knows whose it is (lib/terminalHandoff.ts).
   backend.onTerminalHandoff = (pane) => handoffAgentId(registry.advertised(), pane)

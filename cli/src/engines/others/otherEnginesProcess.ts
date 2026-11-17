@@ -5,10 +5,10 @@
  * that engine's own code, loaded on its first use (engines/inProcess.ts), so an engine nobody runs costs it nothing.
  *
  * It holds no core capability: the core sends it snapshots and reads what it answers, bounded and checked, and
- * denies every query it might make (core/engines/readers.ts `answer`). What it follows is the core's: a core that goes
+ * denies every query except writes under a core-issued question grant. What it follows is the core's: a core that goes
  * takes its streams with it, and the next one opens its own.
  */
-import { runServiceProcess, type ServiceProcess } from '../../services/process.js'
+import { runServiceProcess, type ServiceProcess, type CoreConnection } from '../../services/process.js'
 import type { ServiceRequests } from '../../core/api.js'
 import type { ServiceProcessOptions } from '../../serviceProcess.js'
 import { Watcher } from '../../watcher/watcher.js'
@@ -16,6 +16,7 @@ import { OTHER_ENGINES_SERVICE } from '../otherEngines.js'
 import { createReplyParts, otherReaderRequests } from './readerRequests.js'
 import { otherStreamRequests } from './streamRequests.js'
 import { createOtherStreams } from './streams.js'
+import { otherRuntimeRequests } from './runtimeRequests.js'
 import { STREAM_OPEN, STREAM_VERSION } from '../worker/otherStreamProtocol.js'
 
 export interface OtherEnginesOptions extends ServiceProcessOptions {
@@ -30,10 +31,11 @@ const THE_CORE = { owner: true, local: true } as const
  * The reads and the live streams, sharing the replies kept in parts: what the process serves, and what the core's
  * inline path asks in its own process (services/inline.ts) under a master too old to run them, each within its wait.
  */
-export function otherEngineRequests(watcher: Watcher = new Watcher()) {
+export function otherEngineRequests(watcher: Watcher = new Watcher(), query: (query: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>> = async () => ({ error: 'SERVICE_UNAVAILABLE' })) {
+  const runtime = otherRuntimeRequests({ query })
   const parts = createReplyParts()
   const streams = createOtherStreams({ watcher })
-  const handlers: ServiceRequests = { ...otherReaderRequests({ parts }), ...otherStreamRequests({ streams, parts }) }
+  const handlers: ServiceRequests = { ...otherReaderRequests({ parts }), ...otherStreamRequests({ streams, parts }), ...runtime.requests }
   const active = new Set<AbortController>()
   let stopping: Promise<void> = Promise.resolve()
   const requests: ServiceRequests = Object.fromEntries(Object.entries(handlers).map(([name, handle]) => [name,
@@ -56,6 +58,7 @@ export function otherEngineRequests(watcher: Watcher = new Watcher()) {
     clear: () => {
       for (const controller of active) controller.abort()
       streams.clear()
+      runtime.clear()
       stopping = watcher.stop()
     },
     call(type: string, payload: Record<string, unknown>, waitMs: number): Promise<Record<string, unknown>> {
@@ -71,10 +74,12 @@ export function otherEngineRequests(watcher: Watcher = new Watcher()) {
 }
 
 export function runOtherEngines(options: OtherEnginesOptions): ServiceProcess {
-  const served = options.requests ? null : otherEngineRequests()
+  let core: CoreConnection | null = null
+  const served = options.requests ? null : otherEngineRequests(undefined, (query, payload) => core ? core.query(query, payload) : Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }))
   return (options.run ?? runServiceProcess)({
     name: OTHER_ENGINES_SERVICE, socketPath: options.socketPath, machineId: options.machineId, token: options.token,
     requests: options.requests ?? served!.requests,
-    onDisconnected: () => served?.clear(),
+    onConnected: connected => { core = connected },
+    onDisconnected: () => { core = null; served?.clear() },
   })
 }

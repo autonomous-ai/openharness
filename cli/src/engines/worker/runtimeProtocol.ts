@@ -2,7 +2,7 @@
 import { isAbsolute } from 'node:path'
 import type { RuntimeCatalogModel, RuntimeContext, RuntimeControl, RuntimeModelOption, RuntimeRecord, RuntimeSession, RuntimeState } from '../facets/runtime.js'
 import { encodeRuntimeProfile } from '../kit/runtime.js'
-import { record, type ReaderEngine } from './protocol.js'
+import { record, type WorkerEngine } from './protocol.js'
 
 export const RUNTIME_VERSION = 1
 export const RUNTIME_READ = 'engine_runtime_read'
@@ -25,6 +25,9 @@ export interface RuntimeAnswer {
   control: RuntimeControl | null
   selectedModel: string | null
   supportsControl: boolean
+  refreshConfig?: true
+  /** An ignored screen or config warmup contributes no state or revision. */
+  observed?: false
   models?: RuntimeModelOption[]
   catalog?: RuntimeCatalogModel[]
   effortAllowed?: boolean
@@ -56,13 +59,13 @@ function controlOf(value: unknown, session: RuntimeSession): RuntimeControl | un
 }
 
 /** Copy only the facts an engine needs. Workers cannot mutate core's caller-owned snapshot. */
-export function runtimeContext(value: unknown, engine: ReaderEngine): RuntimeContext | null {
+export function runtimeContext(value: unknown, engine: WorkerEngine): RuntimeContext | null {
   if (!record(value) || !record(value.session) || !runtimeState(value.state)) return null
   const s = value.session
   // Catalogs can be requested before a conversation binds. Core never caches conversation state at ''.
   if (s.engine !== engine || !label(s.agentId) || !text(s.sessionId, 200) || !nullable(s.model) || !nullable(s.cliVersion)
     || (s.transcriptPath !== null && !path(s.transcriptPath)) || (s.cwd !== null && !path(s.cwd))
-    || (s.codexHome != null && !path(s.codexHome))) return null
+    || (s.codexHome != null && !path(s.codexHome)) || (s.hermesHome != null && !path(s.hermesHome))) return null
   const launched = s.launchModel
   const launchModel = launched === undefined ? undefined
     : record(launched) && nullable(launched.model) && nullable(launched.effort)
@@ -70,7 +73,7 @@ export function runtimeContext(value: unknown, engine: ReaderEngine): RuntimeCon
   if (launchModel === null) return null
   const session: RuntimeSession = { agentId: s.agentId, sessionId: s.sessionId, engine, model: s.model, cliVersion: s.cliVersion,
     cwd: s.cwd, transcriptPath: s.transcriptPath, ...(s.codexHome === undefined ? {} : { codexHome: s.codexHome }),
-    ...(launchModel ? { launchModel } : {}) }
+    ...(s.hermesHome === undefined ? {} : { hermesHome: s.hermesHome }), ...(launchModel ? { launchModel } : {}) }
   const control = controlOf(value.control, session)
   if (control === null) return null
   const { model, effort, mode, cliVersion, observedAt, settingsEffort } = value.state
@@ -110,6 +113,8 @@ export function runtimeAnswer(value: unknown, context: RuntimeContext, operation
     } catch { return false }
   }
   if (!record(value) || !runtimeState(value.state) || !nullable(value.cliVersion) || typeof value.supportsControl !== 'boolean'
+    || (value.observed !== undefined && (value.observed !== false || !['pane', 'config'].includes(operation.kind)))
+    || (value.refreshConfig !== undefined && (operation.kind !== 'pane' || value.refreshConfig !== true || value.observed === false))
     || (value.selectedModel !== null && !profile(value.selectedModel)) || (value.control !== null && !record(value.control))) return false
   const control = controlOf(value.control, context.session)
   if (control === null || !!control !== !!context.control

@@ -28,6 +28,7 @@ import { env } from './config/env.js'
 import { registry, projectDisplayName, type RegisteredSession } from './lib/registry.js'
 import type { CloseAgentService } from './lib/closeAgentService.js'
 import type { AgentEngine } from './engines/types.js'
+import type { RuntimeDisplay } from './engines/facets/runtime.js'
 import { gridCliPresence } from './lib/gridBinary.js'
 import { GRID_FLEET_PROTOCOL, GRID_FLEET_MAX_TIMEOUT_MS } from './lib/gridFleetProtocol.js'
 import { isApiLaunch, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunchWire.js'
@@ -343,9 +344,7 @@ export class BackendSocket {
     callback: (payload: Record<string, unknown>, connId: string) => Promise<Record<string, unknown>>
   } | null = null
   tokenUsageProvider: ((session: RegisteredSession) => AgentTokenUsage | null) | null = null
-  runtimeProfileProvider: ((session: RegisteredSession) => string | null) | null = null
-  /** The engine's own workspace, when its tools do not run in the pane's folder (OpenClaw's). */
-  workspaceProvider: ((session: RegisteredSession) => string | null) | null = null
+  runtimeDisplayProvider: ((session: RegisteredSession) => RuntimeDisplay) | null = null
   /** Backend-resolved machine id, persisted by the SSO login preflight. */
   readonly machineId: string
 
@@ -1459,10 +1458,11 @@ export class BackendSocket {
 
   /** Map a registered tmux session onto the web's Project shape (tabs in ProjectTabs). */
   toProject(s: RegisteredSession): Promise<AgentFrame> {
+    const display = this.runtimeDisplayProvider?.(s)
     return agentFrame(s, {
       tokenUsage: this.tokenUsageProvider?.(s) ?? null,
-      selectedModel: this.runtimeProfileProvider?.(s) ?? null,
-      workspace: this.workspaceProvider?.(s) ?? null,
+      selectedModel: display?.selectedModel ?? null,
+      workspace: display?.workspace ?? null,
       terminalAvailable: registry.terminalAvailable(s.agentId),
       parts: this.framePartsProvider?.(s),
       activity: () => this.activityFrameProvider?.(s) ?? null,
