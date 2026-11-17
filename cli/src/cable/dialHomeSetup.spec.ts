@@ -4,19 +4,24 @@
  * and at each attach, each Codex home the open scan finds a session in, and every copy it wrote taken out again once
  * `disable` removed that engine. The person's ~/.claude and ~/.codex are never touched.
  */
+import * as fs from 'node:fs'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DIAL_PLUGIN_ID, DIAL_SKILL, removeSkill, writeSkill } from '../devices/dialSkill.js'
 import { DIAL_SETUP_FILE, DIAL_SKILL_FILE, MAX_HOMES, readRemoved, readSetup, writeRemoved, writeSetup, type DialRemoved, type DialSkillHomes } from '../devices/dialSkillFiles.js'
 import type { RolloutOwner } from './codexRolloutHome.js'
 import { createDialHomeSetup, type DialHomeSetupDeps } from './dialHomeSetup.js'
 
+// A copy of the module, so a test can watch the file calls a scan makes.
+vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
+
 const uid = process.getuid!()
 
 const folders: string[] = []
 afterEach(() => {
+  vi.restoreAllMocks()
   for (const dir of folders.splice(0)) {
     // A test made it read-only: open it again so it can be removed.
     if (existsSync(dir)) chmodSync(dir, 0o700)
@@ -32,6 +37,12 @@ function folder(): string {
 
 const skillFile = (home: string): string => join(home, 'skills', 'dial', 'SKILL.md')
 const hasSkill = (home: string): boolean => existsSync(skillFile(home)) && readFileSync(skillFile(home), 'utf8') === DIAL_SKILL
+/** The skill file 0.6.58 wrote, its marker line the old one. */
+const OLD_SKILL = '---\nname: dial\ndescription: older\n# Written by Harness. Turn off the agent in Harness Device to remove it.\n---\n\nOlder.\n'
+const oldSkillIn = (skills: string): void => {
+  mkdirSync(join(skills, 'dial'), { recursive: true })
+  writeFileSync(join(skills, 'dial', 'SKILL.md'), OLD_SKILL)
+}
 /** A home's skills folder as the record holds it, through its link. */
 const skillsOf = (home: string): string => realpathSync(join(home, 'skills'))
 /** A home with a real, empty skills folder, resolved. */
@@ -57,14 +68,30 @@ const sorted = (list: string[]): string[] => [...list].sort()
 const counts = (claude: [number, number, number?], codex: [number, number, number?]): string =>
   `dial skill: claude wrote ${claude[0]} removed ${claude[1]} failed ${claude[2] ?? 0}, codex wrote ${codex[0]} removed ${codex[1]} failed ${codex[2] ?? 0}`
 
+/** Every synchronous file call from here on, by name and first argument, until the test ends. */
+function fileCalls(): [string, unknown][] {
+  const calls: [string, unknown][] = []
+  const module = fs as unknown as Record<string, (...args: unknown[]) => unknown>
+  for (const [name, real] of Object.entries(module)) {
+    if (typeof real !== 'function' || !name.endsWith('Sync')) continue
+    vi.spyOn(module, name).mockImplementation((...args) => {
+      calls.push([name, args[0]])
+      return real(...args)
+    })
+  }
+  return calls
+}
+
 /** A setup over throwaway homes, on a computer a dial attached on once unless [dial] is false or the test gives its own
  *  data dir, whose record it writes itself. `removed` reads the real dial-skill.json unless the test gives its own;
- *  every call to it is counted. */
+ *  every call to it is counted. The day's tally is `counted`, and `clock.at` the monotonic clock. */
 function rig(over: Partial<DialHomeSetupDeps> = {}, dial = true) {
   const dataDir = over.dataDir ?? folder()
   if (!over.dataDir && dial) dialOnce(dataDir)
   const removed = over.removed ?? ((): DialRemoved => readRemoved(dataDir))
   const lines: string[] = []
+  const counted: string[][] = []
+  const clock = { at: 0 }
   const read = { removed: 0 }
   const deps: DialHomeSetupDeps = {
     platform: 'darwin',
@@ -73,6 +100,8 @@ function rig(over: Partial<DialHomeSetupDeps> = {}, dial = true) {
     codexHome: folder(),
     adopted: () => ({ claude: [], codex: [] }),
     log: (line) => lines.push(line),
+    now: () => clock.at,
+    count: (engine, kind, reason) => { counted.push(reason === undefined ? [engine, kind] : [engine, kind, reason]) },
     ...over,
     dataDir,
     removed: () => {
@@ -80,7 +109,7 @@ function rig(over: Partial<DialHomeSetupDeps> = {}, dial = true) {
       return removed()
     },
   }
-  return { ...deps, lines, read, writer: createDialHomeSetup(deps) }
+  return { ...deps, lines, counted, clock, read, writer: createDialHomeSetup(deps) }
 }
 
 describe('a computer that never had a dial', () => {
@@ -152,10 +181,12 @@ describe('the devices set the dial skill up', () => {
     expect(readSetup(r.dataDir).homes.codex).toEqual([skillsOf(r.codexHome)])
   })
 
-  it('at start it writes the default, adopted and recorded homes of an engine that is on', () => {
+  it('at start it writes the default and adopted homes of an engine that is on, and brings its recorded ones current', () => {
     const dataDir = folder()
     const [claudeAdopted, codexAdopted, claudeListed, codexListed] = [folder(), folder(), folder(), folder()]
-    dialOnce(dataDir, { claude: [skillsAt(claudeListed)], codex: [skillsAt(codexListed)] })
+    const recorded = { claude: [skillsAt(claudeListed)], codex: [skillsAt(codexListed)] }
+    for (const skills of [...recorded.claude, ...recorded.codex]) oldSkillIn(skills)
+    dialOnce(dataDir, recorded)
     const r = rig({ dataDir, adopted: () => ({ claude: [claudeAdopted], codex: [codexAdopted] }) })
     pluginOn(r.claudeHome)
 
@@ -166,6 +197,10 @@ describe('the devices set the dial skill up', () => {
     expect(sorted(listed.claude)).toEqual(sorted([r.claudeHome, claudeAdopted, claudeListed].map(skillsOf)))
     expect(sorted(listed.codex)).toEqual(sorted([r.codexHome, codexAdopted, codexListed].map(skillsOf)))
     expect(r.lines).toEqual([counts([3, 0], [3, 0])])
+    expect(r.counted).toEqual([
+      ['claude', 'updated'], ['claude', 'set up'], ['claude', 'set up'],
+      ['codex', 'updated'], ['codex', 'set up'], ['codex', 'set up'],
+    ])
   })
 
   it('a default home that is missing is not made: only the command makes one', () => {
@@ -347,18 +382,19 @@ describe('the devices set the dial skill up', () => {
     expect(r.lines).toEqual([counts([0, 0], [1, 1])])
   })
 
-  it('the race: a removal while the start pass writes a recorded folder again takes it out', () => {
+  it('the race: a removal while the start pass brings a recorded folder current takes it out', () => {
     const listedHome = folder()
     let removed = false
     const r = rig({
       removed: () => {
-        if (existsSync(skillFile(listedHome))) removed = true
+        if (hasSkill(listedHome)) removed = true
         return removed ? { codex: true } : {}
       },
     })
     // No default home: the recorded folder is the pass's one write.
     rmSync(r.codexHome, { recursive: true })
-    dialOnce(r.dataDir, { claude: [], codex: [skillsAt(listedHome)] })
+    oldSkillIn(skillsAt(listedHome))
+    dialOnce(r.dataDir, { claude: [], codex: [skillsOf(listedHome)] })
 
     r.writer.started()
 
@@ -366,20 +402,22 @@ describe('the devices set the dial skill up', () => {
     expect(readSetup(r.dataDir).homes.codex).toEqual([])
   })
 
-  it('the race: a removal while a scan writes a recorded home again takes it out', () => {
+  it('the race: a removal while a scan brings a recorded home current takes it out', () => {
     const other = folder()
     let armed = false
     let removed = false
     const r = rig({
       removed: () => {
-        if (armed && existsSync(skillFile(other))) removed = true
+        if (armed && hasSkill(other)) removed = true
         return removed ? { codex: true } : {}
       },
     })
-    dialOnce(r.dataDir, { claude: [], codex: [skillsAt(other)] })
+    writeSkill(skillsAt(other))
+    dialOnce(r.dataDir, { claude: [], codex: [skillsOf(other)] })
     r.writer.started()
-    // Removed by hand since: the scan writes it again, and the person runs disable the moment it lands.
-    rmSync(join(other, 'skills', 'dial'), { recursive: true })
+    // 0.6.58's command wrote its file there since: the scan brings it current, and the person runs disable the moment
+    // it lands.
+    writeFileSync(skillFile(other), OLD_SKILL)
     armed = true
 
     r.writer.scanned([ownerIn(other)])
@@ -388,21 +426,46 @@ describe('the devices set the dial skill up', () => {
     expect(readSetup(r.dataDir).homes.codex).toEqual([])
   })
 
-  it('a known home costs no file work on the next scan', () => {
+  it('a scan with every home handled does no file work but the two stamps', () => {
     const other = folder()
     const r = rig()
+    pluginOn(r.claudeHome)
     r.writer.started()
     r.writer.scanned([ownerIn(other)])
     expect(hasSkill(other)).toBe(true)
-    rmSync(skillFile(other))
     const reads = r.read.removed
-    const lines = r.lines.length
+    const [lines, counted] = [r.lines.length, r.counted.length]
+    const calls = fileCalls()
 
     r.writer.scanned([ownerIn(other)])
 
-    expect(existsSync(skillFile(other))).toBe(false)
+    expect(calls).toEqual([['statSync', join(r.dataDir, DIAL_SKILL_FILE)], ['statSync', join(r.claudeHome, 'settings.json')]])
     expect(r.read.removed).toBe(reads)
-    expect(r.lines.length).toBe(lines)
+    expect([r.lines.length, r.counted.length]).toEqual([lines, counted])
+
+    // While a default home is missing, one stat for it besides.
+    const later = rig()
+    rmSync(later.codexHome, { recursive: true })
+    later.writer.started()
+    calls.length = 0
+
+    later.writer.scanned([])
+
+    expect(calls).toEqual([
+      ['statSync', join(later.dataDir, DIAL_SKILL_FILE)], ['statSync', join(later.claudeHome, 'settings.json')], ['statSync', later.codexHome],
+    ])
+
+    // An engine a scan read removed is looked at no more until a stamp changes.
+    let removed = false
+    const off = rig({ removed: () => (removed ? { codex: true } : {}) })
+    off.writer.started()
+    removed = true
+    off.writer.scanned([ownerIn(folder())])
+    calls.length = 0
+
+    off.writer.scanned([])
+
+    expect(calls).toEqual([['statSync', join(off.dataDir, DIAL_SKILL_FILE)], ['statSync', join(off.claudeHome, 'settings.json')]])
   })
 
   it('a home is not handled while its engine is removed', () => {
@@ -427,46 +490,75 @@ describe('the devices set the dial skill up', () => {
       for (const skills of [skillsOf(r.codexHome), ...readSetup(r.dataDir).homes.codex]) removeSkill(skills)
     }
 
-    it('a removal then enable before the next scan writes every home again, and a scan with the file untouched reads it no more', () => {
+    /** enable as the command does it: the removal cleared, then the skill written into the default home and every
+     *  folder the record holds. */
+    const enable = (r: ReturnType<typeof rig>): void => {
+      writeRemoved(r.dataDir, 'codex', false)
+      for (const skills of [skillsOf(r.codexHome), ...readSetup(r.dataDir).homes.codex]) writeSkill(skills)
+    }
+
+    it('a removal then enable before the next scan leaves every home as enable wrote it, and a scan with the file untouched reads it no more', () => {
       const other = folder()
       const r = rig()
       r.writer.started()
       r.writer.scanned([ownerIn(other)])
       disable(r)
-      writeRemoved(r.dataDir, 'codex', false)
+      enable(r)
       r.lines.length = 0
+      r.counted.length = 0
 
       r.writer.scanned([ownerIn(other)])
 
       expect(hasSkill(r.codexHome)).toBe(true)
       expect(hasSkill(other)).toBe(true)
-      expect(r.lines).toEqual([counts([0, 0], [2, 0])])
+      expect(r.lines).toEqual([])
+      expect(r.counted).toEqual([])
 
       const reads = r.read.removed
       r.writer.scanned([ownerIn(other)])
       expect(r.read.removed).toBe(reads)
     })
 
-    it('a scan between the removal and enable empties the record, and the scan after enable writes every home again', () => {
+    it('once the removal is cleared in dial-skill.json, the next scan writes that engine\'s homes again', () => {
       const other = folder()
       const r = rig()
       r.writer.started()
       r.writer.scanned([ownerIn(other)])
       disable(r)
 
+      // A scan between the removal and enable empties the record.
       r.writer.scanned([ownerIn(other)])
       expect(readSetup(r.dataDir).homes.codex).toEqual([])
       expect(existsSync(skillFile(other))).toBe(false)
 
       writeRemoved(r.dataDir, 'codex', false)
       r.lines.length = 0
+      r.counted.length = 0
       r.writer.scanned([ownerIn(other)])
 
       expect(hasSkill(r.codexHome)).toBe(true)
       expect(hasSkill(other)).toBe(true)
       expect(sorted(readSetup(r.dataDir).homes.codex)).toEqual(sorted([r.codexHome, other].map(skillsOf)))
       expect(r.lines).toEqual([counts([0, 0], [2, 0])])
+      expect(r.counted).toEqual([['codex', 'set up'], ['codex', 'set up']])
     })
+  })
+
+  it('an engine disable removed counts left removed once, until dial-skill.json changes', () => {
+    const other = folder()
+    const r = rig()
+    writeRemoved(r.dataDir, 'codex', true)
+
+    r.writer.started()
+    r.writer.attached()
+    r.writer.scanned([ownerIn(other)])
+    r.writer.scanned([ownerIn(other)])
+    expect(r.counted).toEqual([['codex', 'left removed']])
+
+    // A second disable writes the file again.
+    writeRemoved(r.dataDir, 'codex', true)
+    r.writer.scanned([])
+    expect(r.counted).toEqual([['codex', 'left removed'], ['codex', 'left removed']])
   })
 
   /** [count] existing skills folders, each in a home of its own under one throwaway folder. */
@@ -493,6 +585,25 @@ describe('the devices set the dial skill up', () => {
     expect(existsSync(join(fresh, 'skills'))).toBe(false)
     expect(readSetup(dataDir).homes.codex.length).toBe(MAX_HOMES)
     expect(r.lines.filter((line) => line === 'dial skill: codex list full (64)')).toHaveLength(1)
+    // Each try: the default home at the start, the new one at the first scan; the second scan tries nothing.
+    expect(r.counted.filter(([, kind]) => kind === 'failed')).toEqual([['codex', 'failed', 'full'], ['codex', 'failed', 'full']])
+  })
+
+  it('a skills folder the person deleted makes no room in a full record', () => {
+    const dataDir = folder()
+    const listed = listedFolders(MAX_HOMES)
+    dialOnce(dataDir, { claude: [], codex: listed })
+    const r = rig({ dataDir })
+    r.writer.started()
+    // Its home stays.
+    rmSync(listed[5], { recursive: true })
+    const fresh = folder()
+
+    r.writer.scanned([ownerIn(fresh)])
+
+    expect(existsSync(join(fresh, 'skills'))).toBe(false)
+    expect(existsSync(listed[5])).toBe(false)
+    expect(readSetup(dataDir).homes.codex).toEqual(listed)
   })
 
   it('a refused home costs no file work on the next scan, until dial-skill.json changes', () => {
@@ -511,6 +622,8 @@ describe('the devices set the dial skill up', () => {
 
     r.writer.scanned(owners)
     expect(r.read.removed).toBe(reads)
+    // Each tried once: the default home set up, then the two that could not be written.
+    expect(r.counted).toEqual([['codex', 'set up'], ['codex', 'failed', 'write'], ['codex', 'failed', 'write']])
 
     // enable writes dial-skill.json: each is tried once more.
     chmodSync(join(shut, 'skills', 'dial'), 0o700)
@@ -664,6 +777,7 @@ describe('the devices set the dial skill up', () => {
     chmodSync(join(r.codexHome, 'skills', 'dial'), 0o500)
     r.writer.started()
     expect(r.lines).toEqual([counts([0, 0], [0, 0, 1])])
+    expect(r.counted).toEqual([['codex', 'failed', 'write']])
 
     // Removed, and ours in a recorded folder that lets nothing go.
     const stuck = folder()
@@ -675,12 +789,14 @@ describe('the devices set the dial skill up', () => {
     off.writer.started()
     chmodSync(join(stuck, 'skills', 'dial'), 0o700)
     expect(off.lines).toEqual([counts([0, 0], [0, 0, 1])])
+    expect(off.counted).toEqual([['codex', 'left removed'], ['codex', 'failed', 'write']])
 
     // A record that cannot be saved: what was written goes again.
     const unsaved = rig()
     chmodSync(unsaved.dataDir, 0o500)
     unsaved.writer.started()
     expect(unsaved.lines).toEqual([counts([0, 0], [1, 1, 1])])
+    expect(unsaved.counted).toEqual([['codex', 'failed', 'save']])
 
     expect([...r.lines, ...off.lines, ...unsaved.lines].join('\n')).not.toContain('/')
   })
@@ -704,6 +820,122 @@ describe('the devices set the dial skill up', () => {
     first.writer.attached()
     expect(existsSync(join(first.dataDir, DIAL_SETUP_FILE))).toBe(false)
     expect(existsSync(join(first.codexHome, 'skills'))).toBe(false)
+  })
+})
+
+describe('what the person removed stays removed, and Harness\'s own is kept current', () => {
+  it('a recorded home whose skill was deleted is not written again: at a start, an attach and a scan', () => {
+    const r = rig()
+    const home = folder()
+    writeSkill(skillsAt(r.codexHome))
+    writeSkill(skillsAt(home))
+    const listed = [skillsOf(r.codexHome), skillsOf(home)]
+    dialOnce(r.dataDir, { claude: [], codex: listed })
+    rmSync(skillFile(home))
+
+    r.writer.started()
+    r.writer.attached()
+    r.writer.scanned([ownerIn(home)])
+
+    expect(existsSync(skillFile(home))).toBe(false)
+    expect(readSetup(r.dataDir).homes.codex).toEqual(listed)
+    expect(r.counted).toEqual([['codex', 'left removed']])
+    expect(r.lines).toEqual([])
+  })
+
+  it('a recorded home whose skills folder was deleted is not made again while its home is there', () => {
+    const r = rig()
+    const other = folder()
+    const listed = [skillsAt(r.codexHome), skillsAt(other)]
+    dialOnce(r.dataDir, { claude: [], codex: listed })
+    for (const home of [r.codexHome, other]) rmSync(join(home, 'skills'), { recursive: true })
+
+    r.writer.started()
+    r.writer.attached()
+    r.writer.scanned([ownerIn(other)])
+
+    for (const home of [r.codexHome, other]) expect(existsSync(join(home, 'skills'))).toBe(false)
+    expect(readSetup(r.dataDir).homes.codex).toEqual(listed)
+    expect(r.counted).toEqual([['codex', 'left removed'], ['codex', 'left removed']])
+  })
+
+  it('a recorded folder whose home is gone leaves the record, and that home made again is a new home', () => {
+    const r = rig()
+    const home = folder()
+    writeSkill(skillsAt(home))
+    const listed = skillsOf(home)
+    dialOnce(r.dataDir, { claude: [], codex: [listed] })
+    rmSync(home, { recursive: true })
+
+    r.writer.started()
+    expect(readSetup(r.dataDir).homes.codex).toEqual([skillsOf(r.codexHome)])
+
+    mkdirSync(home)
+    r.writer.scanned([ownerIn(home)])
+
+    expect(hasSkill(home)).toBe(true)
+    expect(readSetup(r.dataDir).homes.codex).toEqual([skillsOf(r.codexHome), listed])
+    expect(r.counted).toEqual([['codex', 'set up'], ['codex', 'set up']])
+  })
+
+  it('0.6.58\'s file, the old marker line, in a recorded home is written again', () => {
+    const r = rig()
+    oldSkillIn(skillsAt(r.codexHome))
+    dialOnce(r.dataDir, { claude: [], codex: [skillsOf(r.codexHome)] })
+
+    r.writer.started()
+
+    expect(hasSkill(r.codexHome)).toBe(true)
+    expect(r.counted).toEqual([['codex', 'updated']])
+    expect(r.lines).toEqual([counts([0, 0], [1, 0])])
+  })
+
+  it('a new home counts set up; one already holding DIAL_SKILL is recorded and counts nothing', () => {
+    const r = rig()
+    const holding = folder()
+    writeSkill(skillsAt(holding))
+
+    r.writer.started()
+    r.writer.scanned([ownerIn(holding)])
+
+    expect(readSetup(r.dataDir).homes.codex).toEqual([skillsOf(r.codexHome), skillsOf(holding)])
+    expect(r.counted).toEqual([['codex', 'set up']])
+  })
+
+  it('a Codex default home that appears after the start is written at the next scan', () => {
+    const r = rig()
+    rmSync(r.codexHome, { recursive: true })
+    r.writer.started()
+    expect(existsSync(r.codexHome)).toBe(false)
+
+    // Codex installed since.
+    mkdirSync(r.codexHome)
+    r.writer.scanned([])
+
+    expect(hasSkill(r.codexHome)).toBe(true)
+    expect(readSetup(r.dataDir).homes.codex).toEqual([skillsOf(r.codexHome)])
+    expect(r.counted).toEqual([['codex', 'set up']])
+  })
+
+  it('a home that could not be written is tried again no sooner than an hour later', () => {
+    const r = rig()
+    // A dial folder that takes no file.
+    const dial = join(skillsAt(r.codexHome), 'dial')
+    mkdirSync(dial)
+    chmodSync(dial, 0o500)
+    r.writer.started()
+    expect(r.counted).toEqual([['codex', 'failed', 'write']])
+    chmodSync(dial, 0o700)
+
+    // Its sessions are in the scan too: neither the default home's look nor the owners' tries it before the hour.
+    r.clock.at = 3_599_999
+    r.writer.scanned([ownerIn(r.codexHome)])
+    expect(existsSync(skillFile(r.codexHome))).toBe(false)
+
+    r.clock.at = 3_600_000
+    r.writer.scanned([ownerIn(r.codexHome)])
+    expect(hasSkill(r.codexHome)).toBe(true)
+    expect(r.counted).toEqual([['codex', 'failed', 'write'], ['codex', 'set up']])
   })
 })
 
