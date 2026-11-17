@@ -116,6 +116,32 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
     expect(config).not.toContain('user_prompt_submit:1:0')
   })
 
+  it('Codex: the review record of a pruned hook goes with it, and the others stay', async () => {
+    const codexHome = home(), file = join(codexHome, 'hooks.json'), configFile = join(codexHome, 'config.toml')
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    // A release that installed Stop too. Its label stays among the reviewed events, so its records can be found.
+    const reviewed = { ...record, events: { ...record.events, Stop: 'stop' } }
+    const later = { ...hooks.settings, reviewed }
+    expect(await installHookSettings('codex', { ...later, events: [...later.events, { event: 'Stop' }] }, 19473, codexHome)).toBe(true)
+    const installed = JSON.parse(readFileSync(file, 'utf8'))
+    const theirs = { hooks: [{ type: 'command', command: 'echo theirs' }] }
+    installed.hooks.Stop.push(theirs)
+    writeFileSync(file, JSON.stringify(installed))
+    const theirRecord = `[hooks.state.${JSON.stringify(`${file}:stop:1:0`)}]\ntrusted_hash = "sha256:theirs"\n`
+    writeFileSync(configFile, `${readFileSync(configFile, 'utf8')}\n${theirRecord}`)
+    expect(readFileSync(configFile, 'utf8')).toContain(`${file}:stop:0:0`)
+    expect(await installHookSettings('codex', later, 19473, codexHome)).toBe(true)
+    const now = JSON.parse(readFileSync(file, 'utf8'))
+    expect(now.hooks.Stop).toEqual([theirs])
+    const config = readFileSync(configFile, 'utf8')
+    expect(config).not.toContain(`${file}:stop:0:0`)
+    expect(config).toContain(theirRecord)
+    const records = reviewRecords(reviewed, file, now)
+    expect([...records.keys()].map((key) => key.slice(file.length))).toEqual([':session_start:0:0', ':user_prompt_submit:0:0', ':post_tool_use:0:0'])
+    for (const [key, hash] of records) expect(config).toContain(`[hooks.state.${JSON.stringify(key)}]\ntrusted_hash = ${JSON.stringify(hash)}\n`)
+    expect(config.match(/^\[hooks\.state\./gm)).toHaveLength(4)
+  })
+
   it('records nothing for hooks that never reached the file', async () => {
     const codexHome = home()
     writeFileSync(join(codexHome, 'hooks.json'), '[]\n')

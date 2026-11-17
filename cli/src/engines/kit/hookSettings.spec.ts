@@ -6,7 +6,7 @@ import { env } from '../../config/env.js'
 import { hooks as claude } from '../claude/hookContract.js'
 import { hooks as codex } from '../codex/hookContract.js'
 import { defaultHookHome, harnessRules, installHookSettings } from './hookSettings.js'
-import { HOOK_SCRIPT } from './notifyHooks.js'
+import { command, HOOK_SCRIPT } from './notifyHooks.js'
 import type { HookPreparationProof } from './nativeHookFiles.js'
 import { messagesCommand } from './messagesHook.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
@@ -387,4 +387,64 @@ it.skipIf(process.getuid?.() === 0)('says only the allowance failed when a read-
     expect(warn.mock.calls.map(call => call[0])).toEqual([`[hooks] could not allow Harness's agent commands in ${file} (the engine asks before each one):`])
     expect(existsSync(join(env.HARNESS_AGENT_MESSAGES_DIR, 'hook.mjs'))).toBe(true)
   } finally { chmodSync(file, 0o644) }
+})
+
+/** Claude Code's contract as a release that declares only [events]: no Agent Messages, no allowance. */
+const declaring = (events: typeof claude.settings.events) => ({ ...claude.settings, events, inbox: undefined, allow: undefined })
+const oursAt = (port: number) => ({ hooks: [{ type: 'command', command: command(port, 'claude'), timeout: 5 }] })
+
+it('takes Harness\'s block out of an event its engine no longer declares, and leaves the person\'s', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  mkdirSync(home)
+  const ours = oursAt(19473), theirs = { matcher: 'auto', hooks: [{ type: 'command', command: 'echo compacting' }] }
+  const shared = { matcher: 'mcp', hooks: [...ours.hooks, { type: 'command', command: 'echo asked' }] }
+  writeFileSync(file, JSON.stringify({ model: 'opus', hooks: { PreCompact: [ours, theirs], SubagentStop: [ours], Elicitation: [shared], PreToolUse: [theirs] }, statusLine: 'mine' }))
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }]), 19473, home)).toBe(true)
+  expect(readFileSync(file, 'utf8')).toBe(JSON.stringify({
+    model: 'opus',
+    hooks: { PreCompact: [theirs], Elicitation: [{ matcher: 'mcp', hooks: [{ type: 'command', command: 'echo asked' }] }], PreToolUse: [theirs], SessionStart: [ours] },
+    statusLine: 'mine',
+  }, null, 2) + '\n')
+})
+
+it('a second install writes nothing', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  mkdirSync(home)
+  writeFileSync(file, JSON.stringify({ hooks: { SubagentStop: [oursAt(19474)] } }))
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }]), 19473, home)).toBe(true)
+  const written = readFileSync(file, 'utf8'), before = statSync(file, { bigint: true })
+  expect(Object.keys(JSON.parse(written).hooks)).toEqual(['SessionStart'])
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }]), 19473, home)).toBe(true)
+  const after = statSync(file, { bigint: true })
+  expect(readFileSync(file, 'utf8')).toBe(written)
+  expect([after.ino, after.mtimeNs]).toEqual([before.ino, before.mtimeNs])
+})
+
+it('leaves Agent Messages\' block where it is', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  mkdirSync(home)
+  const messages = { hooks: [{ type: 'command', command: messagesCommand(env.HARNESS_AGENT_MESSAGES_DIR), timeout: 5 }] }
+  writeFileSync(file, JSON.stringify({ hooks: { PostToolUse: [messages, oursAt(19473)] } }))
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }]), 19473, home)).toBe(true)
+  expect(JSON.parse(readFileSync(file, 'utf8')).hooks.PostToolUse).toEqual([messages])
+})
+
+it('leaves an event it does not declare alone when nothing of Harness\'s is in it, whatever its shape', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  mkdirSync(home)
+  const odd = [null, 'text', { hooks: 'no' }, { hooks: [null, { command: 5 }] }]
+  writeFileSync(file, JSON.stringify({ hooks: { PreCompact: odd, SubagentStop: [oursAt(19473)] } }))
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }]), 19473, home)).toBe(true)
+  expect(JSON.parse(readFileSync(file, 'utf8')).hooks).toEqual({ PreCompact: odd, SessionStart: [oursAt(19473)] })
+})
+
+it('on Windows, prunes the forms Harness writes there', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }, { event: 'PreCompact' }]), 19473, home, {}, 'win32')).toBe(true)
+  const execForm = JSON.parse(readFileSync(file, 'utf8')).hooks.PreCompact[0].hooks[0]
+  expect(execForm.command).toBe(managedNodePath())
+  expect(execForm.args).toEqual(expect.arrayContaining(['--port', '19473']))
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }]), 19473, home, {}, 'win32')).toBe(true)
+  expect(Object.keys(JSON.parse(readFileSync(file, 'utf8')).hooks)).toEqual(['SessionStart'])
 })
