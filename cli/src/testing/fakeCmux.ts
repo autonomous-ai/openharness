@@ -13,7 +13,9 @@
  * - A4 `paste`: CLI/CMUXCLI+Paste.swift (its arguments, stdin read before the socket, the Draft guard on `blocks_typing`
  *   unless `--force`), CLI/cmux.swift (`printV2Payload`) and tests_v2/test_terminal_paste_delivery.py (`terminal.paste`
  *   answers `delivery` and `submitted`).
- * - A5 a store is `<agent>-hook-sessions.json`, the name `--agent` takes: CLI/CMUXCLI+AgentHookCatalog.swift.
+ * - A5 a store is `<agent>-hook-sessions.json`, the name `--agent` takes: CLI/CMUXCLI+AgentHookCatalog.swift. `--agent`
+ *   takes only cmux's own agents, by name or alias, and refuses another word (`unknown agent`, A7):
+ *   CLI/CMUXCLI+SessionsList.swift.
  * - A6 the modes `off`, `cmuxOnly` (the default), `automation`, `password`, `allowAll`:
  *   Packages/macOS/CmuxSettings/Sources/CmuxSettings/Values/SocketControlMode.swift.
  * - A7 a socket that refuses throws a CLIError, whose exit code is 1 unless set, and the CLI exits with it, its
@@ -94,6 +96,12 @@ const [command, ...commandArgs] = rest
 const out = (value) => { process.stdout.write(JSON.stringify(value, null, 2) + '\n'); return 0 }
 const refuse = (message) => { process.stderr.write('Error: ' + message + '\n'); return 1 }
 const UNANSWERED = 64
+// cmux's agents at the tag, by the names and aliases --agent takes (A5).
+const AGENTS = new Map([
+  ...['claude', 'codex', 'grok', 'opencode', 'pi', 'omp', 'campfire', 'amp', 'cursor', 'gemini', 'kiro', 'antigravity',
+    'rovodev', 'hermes-agent', 'copilot', 'codebuddy', 'factory', 'qoder', 'kimi', 'muse'].map((name) => [name, name]),
+  ['claude-code', 'claude'], ['claude_code', 'claude'], ['agy', 'antigravity'], ['rovo', 'rovodev'],
+])
 
 const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase()
 const inputOf = (surface) => {
@@ -120,8 +128,11 @@ const sessions = (flags) => {
   let all = false
   let asJson = json
   for (let i = 0; i < flags.length; i++) {
-    if (flags[i] === '--agent' && flags[i + 1] !== undefined) agent = flags[++i].toLowerCase()
-    else if (flags[i] === '--all') all = true
+    if (flags[i] === '--agent' && flags[i + 1] !== undefined) {
+      const word = flags[++i]
+      agent = AGENTS.get(word.trim().toLowerCase())
+      if (agent === undefined) return refuse("sessions list: unknown agent '" + word + "'")
+    } else if (flags[i] === '--all') all = true
     else if (flags[i] === '--json') asJson = true
     else return UNANSWERED
   }

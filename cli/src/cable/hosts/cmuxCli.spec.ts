@@ -176,6 +176,12 @@ describe.skipIf(process.platform === 'win32')('cmux client (docs/plans/2026-11-1
       expect(fake.calls().map((call) => call.args)).toEqual([['sessions', 'list', '--json', '--agent', 'claude', '--all']])
     })
 
+    it('a word cmux does not track is failed, as cmux exits 1', async () => {
+      const { fake, cmux } = setup({}, { sessions: [RECORD] })
+      expect(await cmux.sessions('nobody')).toEqual({ ok: false, fault: 'failed' })
+      expect(fake.calls().map((call) => call.args)).toEqual([['sessions', 'list', '--json', '--agent', 'nobody', '--all']])
+    })
+
     it('it tells only records active for their surface, in form', async () => {
       const { cmux } = setup({}, {
         sessions: [
