@@ -6,9 +6,9 @@
  * devices' process, which brings an installed extension current; never in the core's.
  */
 import { spawn } from 'node:child_process'
-import { closeSync, constants, existsSync, fstatSync, mkdtempSync, openSync, readSync, rmSync, writeFileSync } from 'node:fs'
+import { accessSync, closeSync, constants, existsSync, fstatSync, mkdtempSync, openSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, isAbsolute, join } from 'node:path'
 import { writeZip } from '../lib/zipWriter.js'
 
 declare const __VSCODE_EXTENSION__: string | undefined
@@ -28,6 +28,8 @@ export interface VscodeExtensionDeps {
   /** PATH, where Linux has `code`. */
   pathVar: string
   exists(path: string): boolean
+  /** A regular file this account may run. */
+  executable(path: string): boolean
   /** A file's text; null when it is missing, larger than `maxBytes` or cannot be read. */
   read(path: string, maxBytes: number): string | null
   /** VS Code's own CLI, with no shell. `code` is null when it was killed or could not start. */
@@ -48,11 +50,13 @@ const VSIX = 'harness-device.vsix'
 const VERSION = /^[0-9A-Za-z.+-]{1,64}$/
 const FAILED = { vscode: 'off', error: 'failed' } as const
 
-/** Where VS Code is: its app on a Mac, its `code` on Linux; null when it is not there and on any other platform. */
+/** Where VS Code is: its app on a Mac, its `code` on Linux; null when it is not there and on any other platform. A
+ *  relative PATH folder is wherever Harness happens to run, so only absolute ones are looked in. */
 function installed(deps: VscodeExtensionDeps): string | null {
-  const first = (paths: string[]) => paths.find((path) => deps.exists(path)) ?? null
-  if (deps.platform === 'darwin') return first([join('/Applications', APP), join(deps.home, 'Applications', APP)])
-  if (deps.platform === 'linux') return first(deps.pathVar.split(delimiter).filter(Boolean).map((dir) => join(dir, 'code')))
+  if (deps.platform === 'darwin') return [join('/Applications', APP), join(deps.home, 'Applications', APP)].find((path) => deps.exists(path)) ?? null
+  if (deps.platform === 'linux') {
+    return deps.pathVar.split(delimiter).filter((dir) => isAbsolute(dir)).map((dir) => join(dir, 'code')).find((path) => deps.executable(path)) ?? null
+  }
   return null
 }
 
@@ -224,6 +228,14 @@ export function vscodeExtensionDeps(): VscodeExtensionDeps {
     home: homedir(),
     pathVar: process.env.PATH ?? '',
     exists: existsSync,
+    executable: (path) => {
+      try {
+        accessSync(path, constants.X_OK)
+        return statSync(path).isFile()
+      } catch {
+        return false
+      }
+    },
     read: readBounded,
     run: runFile,
     files: () => typeof __VSCODE_EXTENSION__ === 'string' ? JSON.parse(__VSCODE_EXTENSION__) as VscodeExtensionFiles : null,

@@ -371,6 +371,7 @@ function fakeVscode({ installed = null }: { installed?: string | null } = {}) {
     home: '/nowhere',
     pathVar: '',
     exists: () => installed !== null,
+    executable: () => installed !== null,
     read: () => version === null ? null : JSON.stringify([{ identifier: { id: vscodeExtension.VSCODE_EXTENSION_ID }, version }]),
     run: async (file, args) => { runs.push([file, ...args]); version = '9.9.9'; return { code: 0, timedOut: false } },
     files: () => ({

@@ -1089,6 +1089,7 @@ describe('harness device vscode', () => {
     const deps: VscodeExtensionDeps = {
       platform: 'darwin', home, pathVar: '',
       exists: (path) => disk.has(path),
+      executable: (path) => disk.has(path),
       read: (path) => disk.get(path) ?? null,
       run: async (_file, args) => {
         runs.push([...args])
