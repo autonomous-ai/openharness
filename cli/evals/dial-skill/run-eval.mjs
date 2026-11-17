@@ -28,10 +28,10 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, constants as FS, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync, writeSync } from 'node:fs';
-import { constants as OS, homedir } from 'node:os';
+import { constants as OS } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AGENT_CONFIG, claudeArgs, killAgents, runAgent } from './lib/agents.ts';
+import { AGENT_CONFIG, claudeArgs, isDefaultProfile, killAgents, runAgent } from './lib/agents.ts';
 import { gradeRun } from './lib/grade.ts';
 import { claudeJudge, JUDGE_EFFORT, JUDGE_MODEL, RUBRIC_SHA } from './lib/judge.ts';
 import { caseId, loadScenarios } from './lib/scenarios.ts';
@@ -162,7 +162,7 @@ function agentTimeoutMs(timeoutS) {
  *  default ~/.claude, so the pass is refused before anything is spent. */
 function sessionProfile() {
   const dir = process.env.CLAUDE_CONFIG_DIR;
-  if (!dir || resolve(dir) === join(homedir(), '.claude'))
+  if (!dir || isDefaultProfile(dir))
     throw new Error('CLAUDE_CONFIG_DIR must name the session profile, not the default ~/.claude');
   return dir;
 }

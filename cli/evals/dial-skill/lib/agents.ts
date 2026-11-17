@@ -87,10 +87,23 @@ export async function runAgent(agent: AgentKind, s: Scenario, st: Staged, cfg: A
   }
 }
 
+/** Whether `dir` is the person's default profile, ~/.claude, however it is reached: a link, or HOME through one. */
+export function isDefaultProfile(dir: string): boolean {
+  const real = (path: string): string => {
+    try {
+      return realpathSync(path)
+    } catch {
+      // Not there yet: its path as given is all there is to compare.
+      return resolve(path)
+    }
+  }
+  return real(dir) === real(join(homedir(), '.claude'))
+}
+
 async function runClaude(s: Scenario, st: Staged, cfg: AgentConfig): Promise<RunResult> {
   const profile = st.env.CLAUDE_CONFIG_DIR
   // Unset, Claude falls back to ~/.claude: the person's default profile, which the eval never uses.
-  if (!profile || resolve(profile) === join(homedir(), '.claude')) {
+  if (!profile || isDefaultProfile(profile)) {
     throw new Error('CLAUDE_CONFIG_DIR must name the session profile, not the default ~/.claude')
   }
   if (!cfg.claudeBin) throw new Error('claude was not found on PATH when the eval started')
