@@ -265,6 +265,23 @@ describe('orcaHomesDeps', () => {
     }
   })
 
+  // The end-to-end tests' daemons run inside the real Orca on a developer's Mac: their harness names a fake as the app's
+  // (e2e/harness/daemon.ts). Only looked at, never run: a lookup that fell to the real app's would not start it.
+  it("the app's own is the absolute path HARNESS_ORCA_APP_BIN names, else /Applications'", () => {
+    const fake = script('exit 0', 'Orca.app/Contents/Resources/bin/orca')
+    vi.stubEnv('PATH', dirname(script('exit 0')))
+    const looked: string[] = []
+    const lookup = () => orcaBinary({ ...orcaHomesDeps(), platform: 'darwin', exists: (path) => { looked.push(path); return path === fake } })
+    vi.stubEnv('HARNESS_ORCA_APP_BIN', fake)
+    expect(lookup()).toBe(fake)
+    // A relative one is never looked up.
+    vi.stubEnv('HARNESS_ORCA_APP_BIN', 'orca')
+    expect(lookup()).toBeNull()
+    vi.stubEnv('HARNESS_ORCA_APP_BIN', '')
+    expect(lookup()).toBeNull()
+    expect(looked).toEqual([fake, APP_ORCA, APP_ORCA])
+  })
+
   // GNOME's screen reader is /usr/bin/orca: it ignores the arguments it does not know, and starts.
   it("an orca on PATH that is not Orca's launcher is never run", async () => {
     const ran = join(home(), 'ran')

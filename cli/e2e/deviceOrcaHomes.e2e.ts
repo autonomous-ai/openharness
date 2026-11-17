@@ -14,7 +14,7 @@
  * open scan would otherwise see a Codex the developer runs and write into their real home.
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -216,6 +216,31 @@ esac
     const log = d.log()
     expect(log).toContain('[observed] orca homes · not read · failed')
     expect(log).toMatch(FOUND_ONE)
+  })
+
+  // Every session here may run inside the real Orca: with no launcher on its PATH, a daemon on a Mac runs the Orca app's
+  // own, and the harness names its fake as that app's (harness/daemon.ts). Linux has no app to fall back on.
+  it('with no Orca launcher on its PATH the daemon asks the harness\'s Orca app, never the computer\'s', async () => {
+    let home = ''
+    let orca: FakeOrca | undefined
+    const { d, desk } = await fresh((d) => {
+      const link = join(dirname(d.env.CLAUDE_PATH!), 'orca')
+      // Checked before anything starts: a daemon with no app of the harness's would run the computer's.
+      expect(d.env.HARNESS_ORCA_APP_BIN).toBe(readlinkSync(link))
+      home = join(d.root, 'orca-codex')
+      mkdirSync(home, { recursive: true })
+      orca = FakeOrca.install(d)
+      orca.accounts({ codex: [home] })
+      rmSync(link)
+    })
+    await plugged(desk)
+    if (process.platform === 'darwin') {
+      const skill = join(home, 'skills', 'dial', 'SKILL.md')
+      await until('the skill in the Orca Codex home', () => existsSync(skill), 45_000, 100)
+      expect(orca!.asked()).toContain('account list --json')
+    } else {
+      await until('Orca not found', () => d.log().includes('[observed] orca homes · not read · no orca'), 45_000, 100)
+    }
   })
 
   it('with a dial attached, the plugin is turned on in each Orca account\'s home and recorded', async () => {

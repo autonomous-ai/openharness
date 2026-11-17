@@ -195,6 +195,18 @@ describe('Orca actions', () => {
     expect(existsSync(join(dir, 'argv'))).toBe(false)
   })
 
+  // The end-to-end tests' daemons run inside the real Orca on a developer's Mac: their harness names a fake as the app's
+  // (e2e/harness/daemon.ts). The run is recorded: nothing is started, whichever file the lookup lands on.
+  it('the real deps\' app is the one HARNESS_ORCA_APP_BIN names', async () => {
+    const fake = join(dir, 'Orca.app', 'Contents', 'Resources', 'bin', 'orca')
+    vi.stubEnv('PATH', dir)
+    vi.stubEnv('HARNESS_ORCA_APP_BIN', fake)
+    const { calls, run } = recordingRun()
+    const orca = createOrcaActions({ ...orcaDeps(), run, platform: 'darwin', exists: (path) => path === fake || path === APP_ORCA })
+    expect(await orca.send(HANDLE, 'hi')).toBe(true)
+    expect(calls.map((call) => call.file)).toEqual([fake])
+  })
+
   it('the app\'s own binary is used on macOS when PATH has none', async () => {
     const looked: string[] = []
     const { calls, orca } = recorder({ onPath: () => null, exists: (path) => { looked.push(path); return path === APP_ORCA } })
