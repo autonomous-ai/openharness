@@ -29,7 +29,7 @@ import type { FleetEvent } from '../cable/machineFleet.js'
 import { claudeProjectsRoots, codexHomeRoots } from '../lib/engineHomes.js'
 import type { TierInput } from '../lib/notifyTier.js'
 import type { RegisteredSession } from '../lib/registry.js'
-import { fakeCmux } from '../testing/fakeCmux.js'
+import { fakeCmux, touchStore } from '../testing/fakeCmux.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { Fleet, FleetDeps } from './fleet.js'
 import type { DevicesDeps } from './devices.js'
@@ -5658,16 +5658,18 @@ describe('cmux\'s agents, from cmux\'s own stores (docs/plans/2026-11-17-dial-cm
 
   /**
    * The devices with a cmux the test drives, installed, with its stores' folder there, the dial not attached yet. Each call
-   * of its client is recorded; `sessions` answers the records of that word (all, with none), `mode` the mode, and the
-   * prompt is idle and empty. `live` attaches the dial and lets the first list land; `changed` is the latest watch telling
+   * of its client is recorded; `sessions` answers the records of that word (all, with none) unless it is one that fails,
+   * `mode` the mode, and the prompt is idle and empty. `live` attaches the dial and lets the first list land; `changed` is the latest watch telling
    * a change of that file, and its run landing: one agent's runs start at least 250 ms apart.
    */
   const withCmux = (over: Parameters<typeof start>[0] = {}) => {
-    const fake = { found: true, records: [record()], mode: 'cmuxOnly' as string | undefined, calls: [] as unknown[][] }
+    const fake = { found: true, records: [record()], mode: 'cmuxOnly' as string | undefined, calls: [] as unknown[][],
+      failing: [] as Array<string | undefined> }
     const client: CmuxClient = {
       binary: () => fake.found ? CMUX_APP_BINARY : null,
       sessions: async (word) => {
         fake.calls.push(['sessions', word])
+        if (fake.failing.includes(word)) return { ok: false, fault: 'failed' }
         return { ok: true, sessions: fake.records.filter((one) => word === undefined || one.word === word) }
       },
       mode: async () => { fake.calls.push(['mode']); return fake.mode },
@@ -5713,6 +5715,17 @@ describe('cmux\'s agents, from cmux\'s own stores (docs/plans/2026-11-17-dial-cm
     seen.host.watching!(false)
     expect(await listed()).toEqual([])
     expect(watched.stopped).toBe(watched.calls.length)
+  })
+
+  it('a failed start reads each store\'s agent alone, so one bad store hides only its own agent', async () => {
+    const { fake, live } = withCmux()
+    touchStore(homedir(), 'claude')
+    touchStore(homedir(), 'codex')
+    fake.records = [record(), record({ word: 'codex', kind: 'codex', surface: '9F8E7D6C-0000-4000-8000-00000000000C', cwd: '/work/web' })]
+    fake.failing = [undefined, 'codex']
+    await live()
+    expect(fake.calls.map(([, word]) => word ?? 'all').sort()).toEqual(['all', 'claude', 'codex'])
+    expect((await listed()).map(({ name }) => name)).toEqual(['api'])
   })
 
   it('cmux not installed: nothing is asked and no folder is watched; the next attach looks again', async () => {

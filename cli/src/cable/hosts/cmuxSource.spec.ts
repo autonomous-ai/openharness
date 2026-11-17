@@ -32,8 +32,9 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
     vi.useRealTimers()
   })
 
-  /** A source on a client whose runs the test answers by hand, a watch the test fires, a folder flag, a set of live
-   *  pids and clocks the test moves. The 250 ms between one agent's runs pass at once, but in the gap's own test. */
+  /** A source on a client whose runs the test answers by hand, a watch the test fires, a folder flag that holds Claude
+   *  Code's and Codex's stores, a set of live pids and clocks the test moves. The 250 ms between one agent's runs pass at
+   *  once, but in the gap's own test. */
   function setup(over: Partial<CmuxSourceDeps> = {}) {
     const pending: Array<{ resolve(answer: CmuxSessions): void; reject(error: Error): void }> = []
     const sessions = vi.fn((_word?: string) =>
@@ -56,6 +57,7 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
         return () => { if (changed === tell) changed = undefined }
       },
       folder: () => state.folder,
+      stores: () => ['claude', 'codex'],
       alive: (pid) => live.has(pid),
       after: (_ms, run) => {
         let on = true
@@ -442,6 +444,29 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
       s.change('claude-hook-sessions.json')
       await s.reply(3, { ok: false, fault: 'failed' })
       expect(lists()).toEqual(['[cmux] list · failed · claude', '[cmux] list · failed · claude'])
+    })
+
+    // One store cmux cannot read fails the all-agents run.
+    it('a failed all-agents run is followed by one run per store, so one bad store hides only its own agent', async () => {
+      const s = setup()
+      s.source.start()
+      await s.reply(0, { ok: false, fault: 'failed' })
+      expect(s.asked()).toEqual(['all', 'claude', 'codex'])
+      await s.reply(1, ok([record()]))
+      await s.reply(2, { ok: false, fault: 'failed' })
+      expect(listed(s)).toEqual([key(S1)])
+      expect(s.log.filter((line) => line.startsWith('[cmux] list ·'))).toEqual(['[cmux] list · failed · all', '[cmux] list · failed · codex'])
+    })
+
+    it('the runs per store take only the runs free: none waits behind them', async () => {
+      const words = Array.from({ length: 40 }, (_, n) => `w${n}`)
+      const s = setup({ stores: () => words })
+      s.source.start()
+      s.change('claude-hook-sessions.json')
+      await s.reply(0, { ok: false, fault: 'timeout' })
+      expect(s.asked()).toEqual(['all', 'claude', ...words.slice(0, 31)])
+      await s.reply(1, ok([]))
+      expect(s.sessions).toHaveBeenCalledTimes(33)
     })
 
     it('onChange is told only when a listed row changed', async () => {

@@ -7,7 +7,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
 import { fakeCmux, type FakeCmuxSession, type FakeCmuxState } from '../../testing/fakeCmux.js'
 import {
-  CMUX_APP_BINARY, cmuxClientDeps, type CmuxClientDeps, cmuxKind, cmuxPaneId, cmuxPaneOf, createCmuxClient,
+  CMUX_APP_BINARY, cmuxClientDeps, type CmuxClientDeps, cmuxKind, cmuxPaneId, cmuxPaneOf, cmuxStores, createCmuxClient,
 } from './cmuxCli.js'
 import { RUN_TIMEOUT_MS } from './orca.js'
 
@@ -124,6 +124,17 @@ describe.skipIf(process.platform === 'win32')('cmux client (docs/plans/2026-11-1
     expect(cmuxKind('antigravity')).toBe('agy')
     expect(cmuxKind('gemini')).toBe('gemini')
     for (const word of ['Gemini', 'a b', 'a'.repeat(33), 7, undefined]) expect(cmuxKind(word)).toBeUndefined()
+  })
+
+  it('cmuxStores tells cmux\'s word of each store in the folder; none when there is no folder', () => {
+    const home = folder()
+    const stores = join(home, '.cmuxterm')
+    mkdirSync(stores)
+    for (const name of ['claude-hook-sessions.json', 'codex-hook-sessions.json', 'claude-hook-sessions.json.tmp', 'notes.txt', 'Bad-hook-sessions.json']) {
+      writeFileSync(join(stores, name), '{}')
+    }
+    expect(cmuxStores(stores).sort()).toEqual(['claude', 'codex'])
+    expect(cmuxStores(join(home, 'gone'))).toEqual([])
   })
 
   it('cmuxPaneOf takes <workspace>/<surface>, and refuses any other', () => {
