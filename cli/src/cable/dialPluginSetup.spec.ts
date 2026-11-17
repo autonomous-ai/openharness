@@ -271,6 +271,17 @@ describe('createDialPluginSetup', () => {
     expect(counted).toEqual([])
   })
 
+  it('disable landing while the update runs: the plugin is uninstalled again, nothing recorded', async () => {
+    const { setup, state, counted } = rig(null)
+    const claude = fakeClaude({ installed: entry('16a92abfab3f'), on: (call) => { if (call === UPDATE) state.wanted = false } })
+    state.found = claude
+    state.recorded = '0.6.58'
+    expect(await setup.pass()).toBe(false)
+    expect(claude.writes()).toEqual([PULL, UPDATE, UNINSTALL])
+    expect(state.recorded).toBe('0.6.58')
+    expect(counted).toEqual([])
+  })
+
   it('two passes at once run one install', async () => {
     const claude = fakeClaude()
     const { setup } = rig(claude)
