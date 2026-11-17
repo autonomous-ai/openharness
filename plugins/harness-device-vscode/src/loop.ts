@@ -9,8 +9,6 @@ import type { WindowFacade } from './window'
 export type LoopState = 'noHarness' | 'notRunning' | 'unplugged' | 'connected'
 
 export interface Loop {
-  /** Undefined until the first pass has said. */
-  state(): LoopState | undefined
   /** Ends the loop: nothing is told or logged once it is called. Resolves when the pass in flight has ended. */
   stop(): Promise<void>
 }
@@ -329,7 +327,6 @@ export function startLoop(
   start()
 
   return {
-    state: () => current,
     async stop() {
       halt()
       await passDone

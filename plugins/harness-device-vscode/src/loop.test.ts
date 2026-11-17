@@ -259,7 +259,7 @@ describe('startLoop', () => {
   ] as const)('%s is %s, and nothing is connected', async (_case, state, answers) => {
     const w = world([...answers])
     await w.until(() => w.states.length > 0)
-    expect([w.states, w.loop!.state(), w.streams, w.watches]).toEqual([[state], state, [], []])
+    expect([w.states, w.streams, w.watches]).toEqual([[state], [], []])
   })
 
   it("any output that is not link's answer is notRunning, and nothing is connected", async () => {
@@ -349,10 +349,10 @@ describe('startLoop', () => {
   it('opens the stream with its window id and is connected at the head', async () => {
     const w = world([READY])
     await w.until(() => w.streams.length === 1)
-    expect([w.streams[0].socket, w.streams[0].body, w.loop!.state(), w.states]).toEqual([SOCKET, OPEN, undefined, []])
+    expect([w.streams[0].socket, w.streams[0].body, w.states]).toEqual([SOCKET, OPEN, []])
     w.streams[0].answer(200)
     await w.until(() => w.states.length === 1)
-    expect([w.states, w.loop!.state()]).toEqual([['connected'], 'connected'])
+    expect(w.states).toEqual(['connected'])
   })
 
   it('a head that has not come in 2 s is notRunning', async () => {
