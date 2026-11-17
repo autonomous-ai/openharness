@@ -37,7 +37,7 @@ Off: uninstall it in VS Code's Extensions view. Harness then leaves it alone.
 **Harness Device** in VS Code's Output panel names its state:
 
 - `noHarness`: no Harness CLI found.
-- `notRunning`: the Harness daemon or its devices process is not running.
+- `notRunning`: Harness's daemon can't be reached: stopped, older than this extension, or 8 windows already connected.
 - `unplugged`: no dial is plugged in.
 - `connected`: the dial reaches this window's terminals.
 
