@@ -277,16 +277,18 @@ export class CmuxSource implements HostSource {
     void this.deps.client.sessions(word)
       .catch((): CmuxSessions => ({ ok: false, fault: 'failed' }))
       .then((answer) => this.ended(word, run, order, began, answer))
+      // A listener's throw is its own to say (devices.ts runs each in a part of its own): none ends the devices process.
+      .catch(() => {})
   }
 
+  /** The runs are settled before the answer is taken, so a listener that throws there stops no later run. */
   private ended(word: string | undefined, run: Run, order: number, began: number, answer: CmuxSessions): void {
     this.active--
     run.under = false
-    if (this.runs.get(word) === run) {
-      this.answered(word, order, this.deps.monotonic() - began, answer)
-      this.next(word, run)
-    }
+    const taken = this.runs.get(word) === run
+    if (taken) this.next(word, run)
     if (this.waiting) this.read(undefined)
+    if (taken) this.answered(word, order, this.deps.monotonic() - began, answer)
   }
 
   /** A word's run that ended, 250 ms after it started, frees its word: a change since it started reads it again. */
