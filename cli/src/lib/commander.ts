@@ -525,6 +525,7 @@ export class CommanderMirror {
 
         case 'turn_ended':
           if (options?.replay) this.notifications.cancelled(sessionId)
+          else if (!e.payload.aborted) this.notifications.ended(sessionId)
           if (options?.quiet) st.quiet = true
           // A killed turn takes the cancel path, not the recap path: clear the tile and stay silent. There
           // is nothing to summarize, and a beep for output the user just threw away is worse than nothing.
@@ -858,26 +859,29 @@ export class CommanderMirror {
           this.stored(sessionId)
           this.saveSoon()
           const { recap, body } = splitSummary(summary)
-          const notification = this.notifications.completed(sessionId, body || recap,
-            (this.opts.isSubagent?.(sessionId) ?? false) || st.abandoned)
           this.trace(sessionId, `${sid} done in ${ms}ms · recapLen=${recap.length} · bodyLen=${body.length}`)
           this.emit(sessionId, { kind: 'done', text: 'done' })
-          // One decision feeds both clients. A silent recap still updates the
-          // device's tile; only real completed results create inbox entries.
-          const tell = (tier: Tier | null): void => {
-            this.emit(sessionId, { kind: 'summary', text: body || recap, recap,
-              notification, ...(!notification ? { subagent: true } : {}), ...(tier ? { tier } : {}) })
-            this.opts.sendWeb({ type: 'turn_summary', agentId: this.opts.agentIdFor?.(sessionId) ?? sessionId,
-              dbSessionId: sessionId, payload: { summary, sessionId, notification, ...(tier ? { tier } : {}) } })
-          }
           const durationS = st.startedAt === null ? null : Math.round((Date.now() - st.startedAt) / 1000)
           const stats = this.turnStats.take(sessionId)
-          const decide = this.opts.decideTier
-          if (!decide) tell(null)
-          // Not news (a sub-agent's, a replay, a turn waiting on an answer): silent, and nobody is asked.
-          else if (!notification) tell('silent')
-          // The recap first, as the dial's decision always read it (services/devices.ts).
-          else this.tellOnceDecided(decide, ac, { sessionId, recap: recap || body, durationS, stats }, tell)
+          // The recap waits with its notification out the quiet window. A next turn opening inside it tells null at
+          // once (lib/agentNotifications.ts), so the recap still lands, silent, before that turn's first card.
+          const silent = (this.opts.isSubagent?.(sessionId) ?? false) || st.abandoned
+          this.notifications.decide(sessionId, body || recap, silent, (notification) => {
+            // One decision feeds both clients. A silent recap still updates the
+            // device's tile; only real completed results create inbox entries.
+            const tell = (tier: Tier | null): void => {
+              this.emit(sessionId, { kind: 'summary', text: body || recap, recap,
+                notification, ...(!notification ? { subagent: true } : {}), ...(tier ? { tier } : {}) })
+              this.opts.sendWeb({ type: 'turn_summary', agentId: this.opts.agentIdFor?.(sessionId) ?? sessionId,
+                dbSessionId: sessionId, payload: { summary, sessionId, notification, ...(tier ? { tier } : {}) } })
+            }
+            const decide = this.opts.decideTier
+            if (!decide) tell(null)
+            // Not news (a sub-agent's, a replay, a turn waiting on an answer): silent, and nobody is asked.
+            else if (!notification) tell('silent')
+            // The recap first, as the dial's decision always read it (services/devices.ts).
+            else this.tellOnceDecided(decide, ac, { sessionId, recap: recap || body, durationS, stats }, tell)
+          })
         } else {
           this.opts.changed?.(sessionId)
           this.trace(sessionId, `${sid} summarizer returned NULL after ${ms}ms → done`)
