@@ -4,7 +4,7 @@
 //! (2026-11-17).
 
 use crate::cli::{self, INSTALL_DEADLINE};
-use crate::log::printable;
+use crate::log::{printable, redact};
 use crate::types::{Log, Output};
 use std::io;
 use std::process::Command;
@@ -87,7 +87,7 @@ pub fn install(
             if line.starts_with(['▸', '✓', '✗']) {
                 step_lines = step_lines.saturating_add(1);
                 if step_lines <= STEP_LINES_LOGGED {
-                    log.line(&format!("install: {}", line.chars().take(STEP_LINE_CHARS).collect::<String>()));
+                    log.line(&format!("install: {}", logged(&line, STEP_LINE_CHARS)));
                 } else if step_lines == STEP_LINES_LOGGED + 1 {
                     log.line(&format!("install: {flag} more step lines not logged"));
                 }
@@ -147,14 +147,17 @@ fn shown(log: &dyn Log, lines: &[String], sentence: &str) -> Vec<String> {
     if lines.is_empty() {
         return vec![sentence.to_string()];
     }
-    let shown: Vec<String> = lines[lines.len().saturating_sub(LAST_LINES)..]
-        .iter()
-        .map(|line| line.chars().take(LINE_CHARS).collect())
-        .collect();
-    for line in &shown {
-        log.line(&format!("install: last: {line}"));
+    let last = &lines[lines.len().saturating_sub(LAST_LINES)..];
+    for line in last {
+        log.line(&format!("install: last: {}", logged(line, LINE_CHARS)));
     }
-    shown
+    last.iter().map(|line| line.chars().take(LINE_CHARS).collect()).collect()
+}
+
+/// `line` as the log keeps it: redacted whole, then cut to `chars`. Cut first, the part of an address, a secret or the
+/// person's home folder left before the cut no longer reads as one, and the log's own redaction would keep it.
+fn logged(line: &str, chars: usize) -> String {
+    redact(line).chars().take(chars).collect()
 }
 
 #[cfg(test)]
