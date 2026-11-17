@@ -1,8 +1,8 @@
-// The screen (max_ui.h), 1920 x 480 (or 415) in the Pro's dark Pets look: the rail of machines, the room (one agent,
-// large: max_ui_card.c) and the other agents as lanes on their engine's gradient, the page dots under them, and over
-// the lanes the toast of a question that waits and the notice line. New Harness covers the room and the lanes. While a
-// person talks, everything but the room rests: dimmed, and nothing to tap. Inter faces (gen_fonts.py ph_*): at the
-// Max's 225 ppi they come out a little larger than on the Pro's 258.
+// The screen (max_ui.h), 1920 x 480 (or 415) in the Pro's dark Pets look: the room (one agent, large: max_ui_card.c),
+// the other agents as lanes on their engine's gradient, and the side column: the pager over New Harness. Over the lanes
+// the toast of a question that waits and the notice line. New Harness covers the room and the lanes. While a person
+// talks, everything but the room rests: dimmed, and nothing to tap. Inter faces (gen_fonts.py ph_*): at the Max's
+// 225 ppi they come out a little larger than on the Pro's 258.
 #include <stdio.h>
 #include <string.h>
 
@@ -239,69 +239,44 @@ uint32_t max_motion_ms(uint32_t now_ms)
     return left > 0 ? (uint32_t)left : 0;
 }
 
-// ---- the rail: the link, the machines with their agents, and New Harness ----
+// ---- the side column: the pager over New Harness ----
 
-enum { RAIL_DOT = 12, RAIL_TEXT_X = MAX_RAIL_X + RAIL_DOT + 12, RAIL_TEXT_W = MAX_RAIL_X + MAX_RAIL_W - RAIL_TEXT_X,
-       RAIL_NAME_CY = MAX_CARD_Y + 20, RAIL_SUB = 28, RAIL_PITCH = 72, NEW_R = 22 };
-typedef struct {
-    const char *name;
-    int agents;   // -1: no count to show
-    bool offline;
-} rail_row_t;
+enum { SIDE_R = 28, SIDE_GAP = 14, NEW_H = MAX_Y(104), BADGE = 16 };
 
-static int agents_on(const char *machine_id)
+// The page of lanes shown, "n/m" over the arrow to the next, all of it one tap. Greyed and no tap while there is no
+// other page, or New Harness covers the lanes. A peach badge in its corner while an agent on another page asks. No
+// lanes, no pager.
+static void pager(ht_scene_t *s, int h, bool live)
 {
-    int n = 0;
-    for (int i = 0; i < max_m.count; i++) n += !strcmp(max_m.agents[i].machine_id, machine_id);
-    return n;
+    const int pages = max_pages(), x = MAX_SIDE_X, y = MAX_CARD_Y, w = MAX_SIDE_W, cx = x + w / 2, cy = y + h / 2;
+    if (!pages) return;
+    const bool turns = pages > 1 && !max_form_open();
+    char at[16];
+    snprintf(at, sizeof at, "%d/%d", max_m.page + 1, pages);
+    max_box(s, x, y, w, h, SIDE_R, LINE_W, EDGE, RAISED);
+    max_text_centered(s, cx, cy - 18, w - 16, &ph_sb_26, turns ? INK : MUTED, at);
+    max_text_centered(s, cx, cy + 22, w - 16, &ph_sb_26, turns ? INK : MUTED, "\xe2\x86\x92");
+    if (max_asks_off_page()) max_dot(s, x + w - 16 - BADGE, y + 16 + BADGE / 2, BADGE, PEACH);
+    if (turns && live) max_hit(x, y, w, h, MAX_HIT_PAGE, 0);
 }
-static void rail_row(ht_scene_t *s, int cy, const rail_row_t *r)
+
+// New Harness, at the foot of the column: always in reach, whatever the room shows. Outlined in ink while it is up.
+static void new_button(ht_scene_t *s, bool live)
 {
-    max_dot(s, MAX_RAIL_X, cy, RAIL_DOT, r->offline ? MUTED : GREEN);
-    max_text(s, RAIL_TEXT_X, cy, RAIL_TEXT_W, &ph_sb_26, r->offline ? MUTED : INK, r->name);
-    char sub[24];
-    if (r->offline) snprintf(sub, sizeof sub, "Offline");
-    else if (r->agents >= 0) snprintf(sub, sizeof sub, "%d agent%s", r->agents, r->agents == 1 ? "" : "s");
-    else sub[0] = 0;
-    max_text(s, RAIL_TEXT_X, cy + RAIL_SUB, RAIL_TEXT_W, &ph_sb_22, MUTED, sub);
-}
-// New Harness, at the foot of the rail: always in reach, whatever the room shows. Returns its top.
-static int new_button(ht_scene_t *s, bool live)
-{
-    const int h = MAX_BUTTON_H, y = MAX_BAND_Y - h;
+    const int x = MAX_SIDE_X, y = MAX_CARD_Y + MAX_CARD_H - NEW_H, w = MAX_SIDE_W, cx = x + w / 2;
     const bool open = max_form_open();
-    max_box(s, MAX_RAIL_X, y, MAX_RAIL_W, h, NEW_R, LINE_W, open ? INK : EDGE, GROUND);
-    max_text_centered(s, MAX_RAIL_X + MAX_RAIL_W / 2, y + h / 2, MAX_RAIL_W - 32, &ph_sb_22, INK, "New Harness");
-    if (!open && live) max_hit(MAX_RAIL_X, y, MAX_RAIL_W, h, MAX_HIT_NEW, 0);
-    return y;
+    max_box(s, x, y, w, NEW_H, SIDE_R, LINE_W, open ? INK : EDGE, GROUND);
+    max_text_centered(s, cx, y + MAX_Y(35), w - 16, &ph_sb_48, INK, "+");
+    max_text_centered(s, cx, y + MAX_Y(70), w - 16, &ph_sb_22, INK, "New");
+    if (!open && live) max_hit(x, y, w, NEW_H, MAX_HIT_NEW, 0);
 }
-static void rail(ht_scene_t *s, bool live)
+
+// New only while the computer is there to offer it; the pager takes the rest of the column.
+static void side_column(ht_scene_t *s, bool live)
 {
-    if (!max_m.link) {
-        max_text(s, MAX_RAIL_X, RAIL_NAME_CY, MAX_RAIL_W, &ph_sb_26, MUTED, "Not connected");
-        return;
-    }
-    rail_row_t rows[CABLE_MAX_MACHINES + 1];
-    int n = 0;
-    bool local = false;
-    for (int i = 0; i < max_m.machine_count; i++) local |= max_m.machines[i].local;
-    // The cabled computer leads. With no machine list it holds every agent; a list without it counts none.
-    if (!local) rows[n++] = (rail_row_t){max_m.computer, max_m.machine_count ? -1 : max_m.count, false};
-    for (int pass = 0; pass < 2; pass++)
-        for (int i = 0; i < max_m.machine_count; i++) {
-            const cable_machine_t *m = &max_m.machines[i];
-            if (m->local != (pass == 0)) continue;
-            rows[n++] = (rail_row_t){m->name, agents_on(m->id), !strcmp(m->state, "offline")};
-        }
-    const int bottom = (max_m.offers_form ? new_button(s, live) : MAX_BAND_Y) - 8;
-    const int fit = (bottom - ph_sb_22.height / 2 - RAIL_SUB - RAIL_NAME_CY) / RAIL_PITCH + 1;   // two lines above it
-    const int shown = n > fit ? fit - 1 : n;
-    for (int i = 0; i < shown; i++) rail_row(s, RAIL_NAME_CY + i * RAIL_PITCH, &rows[i]);
-    if (shown < n) {
-        char more[24];
-        snprintf(more, sizeof more, "+%d more", n - shown);
-        max_text(s, RAIL_TEXT_X, RAIL_NAME_CY + shown * RAIL_PITCH, RAIL_TEXT_W, &ph_sb_22, MUTED, more);
-    }
+    const bool add = max_m.link && max_m.offers_form;
+    pager(s, MAX_CARD_H - (add ? NEW_H + SIDE_GAP : 0), live);
+    if (add) new_button(s, live);
 }
 
 // ---- a lane: the agent on its engine's gradient, a short bubble, its pet and its state ----
@@ -399,16 +374,6 @@ static void lanes(ht_scene_t *s, uint32_t now_ms, bool live)
     }
 }
 
-// The page dots, under the lanes.
-static void dots(ht_scene_t *s)
-{
-    enum { DOT = 10, PITCH = 22, CY = (MAX_BAND_Y + HT_HEIGHT) / 2 };
-    const int pages = max_pages();
-    if (pages < 2) return;
-    const int x0 = MAX_LANE_X + MAX_LANES_W / 2 - ((pages - 1) * PITCH + DOT) / 2;
-    for (int p = 0; p < pages; p++) max_dot(s, x0 + p * PITCH, CY, DOT, p == max_m.page ? INK : EDGE);
-}
-
 // ---- over the lanes: the toast of a question that waits, and the notice line, on the Pro's toast navy ----
 
 enum { TOAST_W = 680, TOAST_X = MAX_LANE_X + MAX_LANES_W - TOAST_W, TOAST_Y = 12, TOAST_H = 104, TOAST_R = 26,
@@ -491,19 +456,18 @@ void max_ui_render(ht_scene_t *s, uint32_t now_ms)
         const bool toasting = max_m.link && max_toast_shown(now_ms);
         const max_box_t t = toast_box(form);
         if (toasting && live) max_hit(t.x, t.y, t.w, t.h, MAX_HIT_TOAST, 0);   // first: never dropped past MAX_HITS
-        rail(s, live);
+        side_column(s, live);
         if (form) {
             max_draw_form(s);
         } else {
             max_draw_room(s, max_m.link ? max_find(max_m.selected) : NULL, now_ms);
             if (max_m.link) lanes(s, now_ms, live);
-            dots(s);
         }
         if (toasting) toast(s, t, now_ms);
-        if (!live) {
-            dim(s, 0, 0, MAX_ROOM_X - 4, HT_HEIGHT);
-            if (!form) dim(s, MAX_LANE_X - 4, 0, HT_WIDTH - MAX_LANE_X + 4, HT_HEIGHT);
-            else if (toasting) dim(s, t.x, t.y, t.w, t.h);
+        if (!live) {   // what rests: everything right of the room; over the form, the side column and the toast
+            const int from = form ? MAX_SIDE_X : MAX_LANE_X;
+            dim(s, from - 4, 0, HT_WIDTH - from + 4, HT_HEIGHT);
+            if (form && toasting) dim(s, t.x, t.y, t.w, t.h);
         }
         if (max_notice_shown(now_ms)) {
             // In the toast's place, or under it; while the form is up, in the band above its choices, left of the toast.

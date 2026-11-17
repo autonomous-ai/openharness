@@ -22,18 +22,17 @@
 #define MAX_QUIET_MS 20000u         // a tap or swipe this recent means a person is at the bar: a new question waits
 #define MAX_TOAST_MS 5000u          // a question that waits is announced this long, as the Pro's toast
 
-// The glass, 1920 x 480 at about 225 ppi (8.86 px a mm), or the demo bar's 1920 x 415. Columns, left to right: the
-// rail (the machines), the room (one agent, large) and the lanes (the others, up to four a page sharing their width,
-// MAX_LANE_GAP apart). The room and the lanes stand on one row; the band under the lanes holds the page dots. Heights
-// are drawn for 480 and scaled by MAX_Y; the text keeps its size.
+// The glass, 1920 x 480 at about 225 ppi (8.86 px a mm), or the demo bar's 1920 x 415. Columns, left to right, on one
+// row 22 px from the glass's ends: the room (one agent, large), the lanes (the others, up to three a page sharing their
+// width, MAX_LANE_GAP apart) and the side column (the pager over New Harness). Heights are drawn for 480 and scaled by
+// MAX_Y; the text keeps its size.
 #define MAX_Y(px) ((px) * HT_HEIGHT / 480)
 enum {
-    MAX_RAIL_X = 22, MAX_RAIL_W = 220,                                  // rail 22..242
-    MAX_ROOM_X = 260, MAX_ROOM_W = 800,                                 // room 260..1060
-    MAX_LANE_X = 1074, MAX_LANES_W = HT_WIDTH - MAX_RAIL_X - MAX_LANE_X,   // lanes 1074..1898
-    MAX_LANES = 4, MAX_LANE_GAP = 14,
-    MAX_CARD_Y = MAX_Y(20), MAX_CARD_H = MAX_Y(440),                    // the room and the lanes: 20..460 (17..397 at 415)
-    MAX_BAND_Y = MAX_CARD_Y + MAX_CARD_H,                               // the page dots under the lanes
+    MAX_ROOM_X = 22, MAX_ROOM_W = 820,                                  // room 22..842
+    MAX_LANE_X = 858, MAX_LANES_W = 928,                                // lanes 858..1786: three of 300
+    MAX_LANES = 3, MAX_LANE_GAP = 14,
+    MAX_SIDE_X = MAX_LANE_X + MAX_LANES_W + 16, MAX_SIDE_W = HT_WIDTH - MAX_ROOM_X - MAX_SIDE_X,   // side 1802..1898
+    MAX_CARD_Y = MAX_Y(20), MAX_CARD_H = MAX_Y(440),                    // every column: 20..460 (17..397 at 415)
     MAX_TAP_SLOP = 24,                       // px, as the Pro's POD_TAP_SLOP: farther from the DOWN is a drag
     MAX_SWIPE_PX = 80,                       // a sideways drag this long turns the page
     MAX_BUTTON_H = MAX_Y(80),                // a button: 80 px at 480 (9 mm), 69 at 415
@@ -100,7 +99,7 @@ typedef enum {
     MAX_HIT_STEP_BACK,   // the question before
     MAX_HIT_RELOAD,      // read the question again after a failure
     MAX_HIT_DISMISS,     // a finished or failed turn's card
-    MAX_HIT_NEW,         // New Harness, on the rail
+    MAX_HIT_NEW,         // New Harness, at the foot of the side column
     MAX_HIT_FORM_MOVE,   // arg: -1 the choice before, +1 the one after
     MAX_HIT_FORM_PICK,   // the focused choice, or the action button: activate
     MAX_HIT_FORM_BACK,
@@ -111,6 +110,7 @@ typedef enum {
     MAX_HIT_TALK_CANCEL, // the room's Cancel while recording: nothing is sent
     MAX_HIT_TOAST,       // the toast: the room opens its agent (toast_id)
     MAX_HIT_FORM_SAY,    // the form's Say, while max_form_can_say(): a spoken name for its field
+    MAX_HIT_PAGE,        // the pager: the next page of lanes, the first after the last
 } max_hit_kind_t;
 typedef struct {
     int16_t x, y, w, h;
@@ -152,7 +152,7 @@ typedef struct {
     int machine_count;
     max_ask_t asks[MAX_AGENTS];      // the open questions, one an agent, by agent id
     uint32_t ask_serial;             // names the reads (max_ask_t fetch)
-    bool offers_form;                // the welcome offered `form`: New is on the rail
+    bool offers_form;                // the welcome offered `form`: New is under the pager
     max_form_t form;
     max_out_t outbox[MAX_OUTBOX];    // queued for the app to send (max_ui_take)
     int out_count;
@@ -172,7 +172,7 @@ typedef struct {
     max_box_t lane_box[MAX_LANES];
     char lane_id[MAX_LANES][ID_MAX];
     int lane_hits;
-    max_hit_t hits[MAX_HITS];        // the card's buttons, New, the form's choices
+    max_hit_t hits[MAX_HITS];        // the card's buttons, the pager and New, the form's choices
     int hit_count;
     char card_id[ID_MAX];            // the room's agent as drawn, for its card's buttons ("" = none)
     uint32_t card_key;               // its question and step as drawn: a tap on a card that changed since does nothing
@@ -221,6 +221,8 @@ void max_fmt_elapsed(char *out, size_t cap, int64_t secs);
 uint32_t max_fnv(uint32_t h, const void *data, size_t n);
 // The lanes on the page shown, as roster indices, in max_order() without the room's agent. Returns how many.
 int max_visible(int out[MAX_LANES]);
+// An agent on a page of lanes not shown asks: the pager's badge.
+bool max_asks_off_page(void);
 bool max_notice_set(const char *text, uint32_t now_ms);   // for MAX_NOTICE_MS
 // A state change, with the turn's clock (stopped at the end of a turn, dropped when one we did not see start begins).
 void max_set_state(max_agent_t *, max_state_t st, uint32_t now_ms);

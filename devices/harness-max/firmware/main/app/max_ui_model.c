@@ -118,6 +118,14 @@ int max_visible(int out[MAX_LANES])
     return k;
 }
 
+bool max_asks_off_page(void)
+{
+    int o[MAX_AGENTS], n = lane_order(o);
+    for (int i = 0; i < n; i++)
+        if (i / MAX_LANES != max_m.page && max_m.agents[o[i]].state == MAX_ASKING) return true;
+    return false;
+}
+
 // What is drawn with a clock or a summary: the lanes of the page shown, then the room's agent. Returns how many.
 static int drawn(int out[MAX_LANES + 1])
 {

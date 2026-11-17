@@ -153,6 +153,8 @@ static void watching(void)
     max_ui_focus("fw");
 }
 static void s_watching(void) { watching(); }
+// The second page: its lane alone, and the pager's badge for the questions on the first.
+static void s_watching_p2(void) { watching(); swipe_left(); }
 static void s_toast(void) { watching(); toast("be", 1200); }
 static void s_toast_notice(void) { watching(); toast("be", 3900); max_ui_notice("Sent", 3000, T0); }
 static void s_listening(void) { three_working(); max_ui_focus("be"); talk("be", MAX_TALK_RECORDING); }
@@ -178,7 +180,7 @@ static void s_long(void)
     max_ui_focus("vi");
 }
 static void s_notice(void) { three_working(); max_ui_focus("fw"); max_ui_notice("Sent to backend", 3000, T0); }
-// More agents than a page of lanes holds: the dots under them.
+// More agents than a page of lanes holds: the pager beside them.
 static void s_pages(void)
 {
     static const pro_agent_row_t more[] = {{"a1", "landing-page", "claude", "m1", "MacBook Pro"},
@@ -290,8 +292,9 @@ typedef struct { const char *name; void (*setup)(void); } screen_t;
 static const screen_t SCREENS[] = {
     {"linkdown", s_linkdown}, {"noagents", s_noagents}, {"working", s_working}, {"asking", s_asking},
     {"failed", s_failed}, {"five-p1", s_five_p1}, {"five-p2", s_five_p2}, {"watching", s_watching},
-    {"toast", s_toast}, {"toast-notice", s_toast_notice}, {"listening", s_listening}, {"sending", s_sending},
-    {"talk-toast", s_talk_toast}, {"update", s_update}, {"long", s_long}, {"notice", s_notice}, {"pages", s_pages},
+    {"watching-p2", s_watching_p2}, {"toast", s_toast}, {"toast-notice", s_toast_notice}, {"listening", s_listening},
+    {"sending", s_sending}, {"talk-toast", s_talk_toast}, {"update", s_update}, {"long", s_long}, {"notice", s_notice},
+    {"pages", s_pages},
     {"q-two", s_q_two}, {"q-six", s_q_six}, {"q-multi", s_q_multi}, {"q-permission", s_q_permission},
     {"q-shown", s_q_shown}, {"q-error", s_q_error}, {"q-sent", s_q_sent}, {"q-long", s_q_long},
     {"q-long-vi", s_q_long_vi}, {"done", s_done}, {"form-opening", s_form_opening}, {"form-page", s_form_page},

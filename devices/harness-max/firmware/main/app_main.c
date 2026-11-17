@@ -4,7 +4,7 @@
 //   BOOT -> display -> max_app (render task) -> touch -> USB cable link -> the daemon's agents -> the lanes
 //
 // The cable is the one way in: plugging the Max into a computer running the harness daemon IS the authorization, and
-// everything on the glass arrives over that wire. Without a daemon the rail says "Not connected".
+// everything on the glass arrives over that wire. Without a daemon the room says "Waiting for the computer".
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -44,7 +44,7 @@ void app_main(void)
     pro_display_init();
     pro_voice_init();    // the PSRAM ring and the microphone, while the heap is unfragmented
     audio_beep_init();   // the ES8311's speaker half, for the notification beep
-    pro_app_start();     // the render task; the rail shows "Not connected" until the daemon says hello
+    pro_app_start();     // the render task; the room waits for the computer until the daemon says hello
     pro_touch_start();
     ram_telemetry_checkpoint("ui_ready");
 

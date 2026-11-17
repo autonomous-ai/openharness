@@ -44,7 +44,8 @@ bool max_ui_summary(const char *id, const char *text, const char *recap, bool re
 bool max_ui_focus(const char *id);
 
 // ---- New Harness ----
-// The welcome offers `form`: New shows on the rail. Read on every tick: a daemon restarted inside a session may differ.
+// The welcome offers `form`: New shows under the pager. Read on every tick: a daemon restarted inside a session
+// may differ.
 bool max_ui_offers(bool form);
 // Open the desktop's New Harness form under `form_id` ([A-Za-z0-9-]{1,48}, the app's random name: MAX_ACT_NEW).
 bool max_ui_form_open(const char *form_id, uint32_t now_ms);
@@ -115,7 +116,7 @@ typedef enum {
     MAX_ACT_OPEN,    // a lane was tapped: the room now shows it; send agent.open for agent_id
     MAX_ACT_TALK,    // the room's pet was tapped: record for agent_id (the room's agent)
     MAX_ACT_SEND,    // Send while recording: finish and send (agent_id: the recording's, "" for the form's)
-    MAX_ACT_NEW,     // New on the rail: name a form and open it (max_ui_form_open)
+    MAX_ACT_NEW,     // New, under the pager: name a form and open it (max_ui_form_open)
     MAX_ACT_SAY,     // the form's Say: record a spoken name for form_id at revision
     MAX_ACT_CANCEL,  // Cancel while recording: stop and send nothing
 } max_act_kind_t;

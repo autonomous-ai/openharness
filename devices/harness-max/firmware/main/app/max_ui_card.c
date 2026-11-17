@@ -14,7 +14,7 @@ enum {
     HEAD_CY = MAX_CARD_Y + 38,                                            // the name and the state: 58 at 480
     BODY_Y = MAX_CARD_Y + 70, BODY_BOTTOM = MAX_CARD_Y + MAX_CARD_H - 20, // the pet and the bubble: 90..440 at 480
     PET_X = MAX_ROOM_X + PAD_X, PET_W = 220, PET_CX = PET_X + PET_W / 2,
-    BODY_X = PET_X + PET_W + 22, BODY_W = MAX_ROOM_X + MAX_ROOM_W - PAD_X - BODY_X,   // 526..1036
+    BODY_X = PET_X + PET_W + 22, BODY_W = MAX_ROOM_X + MAX_ROOM_W - PAD_X - BODY_X,   // 288..818
     PILL_H = 40, PILL_Y = BODY_BOTTOM - PILL_H, PET_FOOT = PILL_Y - 16, PET_MAX_H = MAX_Y(200),
     ROOM_ROWS = 3, GRID_ROWS = 3, ONE_BUTTON_W = 200, LABEL_PAD = 12,
     END_MIN_W = 90, END_MAX_W = 150,   // a permission prompt's yes and no: a finger's width, and the most they take

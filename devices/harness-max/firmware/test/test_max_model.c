@@ -242,6 +242,40 @@ static void test_room_and_lanes(void)
     CHECK(max_ui_selected() == NULL && max_pages() == 0 && max_m.page == 0);
 }
 
+// Three lanes a page: the room's agent and six lanes are two pages, a seventh lane makes three.
+static void test_pages_of_three(void)
+{
+    CHECK(MAX_LANES == 3);
+    linked(XS, 7);
+    CHECK(max_pages() == 2);
+    linked(XS, 8);
+    int v[MAX_LANES];
+    CHECK(max_pages() == 3 && max_visible(v) == 3);
+    max_m.page = 2;
+    CHECK(max_visible(v) == 1 && !strcmp(max_m.agents[v[0]].id, "x7"));
+}
+
+// The pager's badge: an agent on a page of lanes not shown asks. The room's agent is on no page.
+static void test_asks_off_page(void)
+{
+    linked(XS, 8);   // the room shows x0; x1..x7 on three pages
+    CHECK(!max_asks_off_page());
+    max_ui_turn("x7", "error", "boom", 0, 0);   // a failure leads the lanes too, but it does not ask
+    max_m.page = 1;
+    CHECK(!max_asks_off_page());
+    max_ui_question("x0", "r0", "Ok?", NULL, 0, false, false, 0);   // the room's own question
+    CHECK(!strcmp(max_ui_selected(), "x0") && !max_asks_off_page());
+    max_ui_question("x5", "r5", "Ok?", NULL, 0, false, false, 0);   // it leads the lanes: on the first page
+    max_m.page = 0;
+    CHECK(!max_asks_off_page());
+    max_m.page = 1;
+    CHECK(max_asks_off_page());
+    max_m.page = 2;
+    CHECK(max_asks_off_page());
+    max_ui_question_close("x5");
+    CHECK(!max_asks_off_page());
+}
+
 // The room's clock and summary are drawn too: they wake the render task and redraw, whatever page the lanes show. And
 // the room's pet moves: the render task wakes for its next step.
 static void test_room_clock(void)
@@ -473,6 +507,8 @@ int main(void)
     test_summary_tiers();
     test_order_and_stability();
     test_room_and_lanes();
+    test_pages_of_three();
+    test_asks_off_page();
     test_room_clock();
     test_questions_take_the_room_oldest_first();
     test_a_person_at_the_bar_keeps_the_room();

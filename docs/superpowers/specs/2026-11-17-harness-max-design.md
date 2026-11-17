@@ -77,28 +77,31 @@ No new message in this milestone.
 1920 x 480 at about 225 ppi: 1 mm is about 8.9 px, and a finger needs about 80 px.
 
 ```
-┌────────┬──────────────────────────────────┬────────┬────────┬────────┬────────┐
-│ Mac    │ harness-web   Claude · Mac  Asks │ name   │ name   │ name   │ name   │
-│ 2 on   │        ┌──────────────────────┐  │ bubble │ bubble │ bubble │ bubble │
-│ Studio │  pet   │ Where should the ... │  │        │        │        │        │
-│ 2 on   │        └──────────────────────┘  │  pet   │  pet   │  pet   │  pet   │
-│        │ Tap to │ [Inside] [Next] [Over]   │        │        │        │        │
-│ New    │  talk  │                          │ state  │ state  │ state  │ state  │
-└────────┴──────────────────────────────────┴────────┴────────┴────────┴────────┘
+┌──────────────────────────────────┬──────────┬──────────┬──────────┬─────┐
+│ harness-web   Claude · Mac  Asks │ name     │ name     │ name     │ 1/2 │
+│        ┌──────────────────────┐  │ machine  │ machine  │ machine  │  →  │
+│  pet   │ Where should the ... │  │ bubble   │ bubble   │ bubble   │     │
+│        └──────────────────────┘  │          │          │          │     │
+│ Tap to │ [Inside] [Next] [Over]   │   pet    │   pet    │   pet    ├─────┤
+│  talk  │                          │  state   │  state   │  state   │  +  │
+│        │                          │          │          │          │ New │
+└──────────────────────────────────┴──────────┴──────────┴──────────┴─────┘
 ```
 
 - The Pro's dark Pets look, on Max's own tokens with the values of the Pro's `pod/home/ph.h` (the Pro's `theme.h`
   paper colour is only its clear colour and never shows): the room ground, warm paper speech bubbles, dark thought
   bubbles, lanes on the engine's gradient, the Pro's pets, and Inter faces. At the Pro's 258 ppi they come out about
   the same physical size.
-- The rail (about 220 px): the link ("Not connected", or the computer's name), the machines with their agents, and
-  New Harness when the computer offers it.
-- The room (800 px): one agent, large. Its name, engine, machine and state; its pet; a speech bubble with its
-  question, a thought bubble with what it is doing and the step under it, or its failure or summary on paper; and the
-  buttons: the answers, Yes and No, or Dismiss.
-- The lanes: every other agent, up to four a page, each with its pet, a short bubble and its state. A lane whose
-  agent asks has a peach ring. Swipe sideways for the next page. Order: agents that need a person first, then working
-  ones, then the rest in the roster's order.
+- No rail: each agent's machine is on its lane and in the room, and with no computer on the cable the empty room says
+  so. Its 220 px go to the lanes, which is what makes them readable from a desk.
+- The room (820 px, from the left edge): one agent, large. Its name, engine, machine and state; its pet; a speech
+  bubble with its question, a thought bubble with what it is doing and the step under it, or its failure or summary on
+  paper; and the buttons: the answers, Yes and No, or Dismiss.
+- The lanes: every other agent, three a page at 300 px each (about 34 mm), each with its name, machine, a short
+  bubble, its pet and its state. A lane whose agent asks has a peach ring. Order: agents that need a person first, then
+  working ones, then the rest in the roster's order.
+- The side column (96 px, right edge): the pager, with the page ("1/2") and a peach dot when an agent on another page
+  asks; tap it, or swipe sideways, for the next page. Under it New (New Harness) when the computer offers it.
 - Voice goes to the agent in the room, always: tap its pet (Tap to talk under it). The pet listens, the bubble says
   who is listening, and the room offers Send and Cancel; everything outside the room rests until then. A permission
   prompt takes no voice, only Yes or No.

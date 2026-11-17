@@ -12,7 +12,7 @@ enum {
     GROUND = 0x221F1D,                    // PH_ROOM_BG: the glass, and the room inside its edge
     RAISED = 0x2C2826, EDGE = 0x47413C,   // PH_RAISED, PH_EDGE: a thought bubble, the Talk pill; every outline
     INK = 0xEFE7DE, MUTED = 0x8F8790,     // PH_ROOM_INK, PH_ROOM_MUTED
-    GREEN = 0x3EE05B, GREEN_INK = 0x0D2414,   // PH_ROOM_GREEN: working, the rail's dots, Yes and Send (dark words)
+    GREEN = 0x3EE05B, GREEN_INK = 0x0D2414,   // PH_ROOM_GREEN: working, Yes and Send (dark words)
     TRACK = 0x4A443F,                     // PH_TRACK: the update's bar
     PEACH = 0xFFC796, MINT = 0x9DFFC0,    // PH_PILL_ASK, PH_PILL_WORK: asking (the ring, the state); a lane at work
     FAIL_INK = 0xF3A6AB, LANE_FAIL = 0xFFD9DB, NO_EDGE = 0xB9787D, NO_INK = 0xF3C3C6,   // Failed, and No's outline

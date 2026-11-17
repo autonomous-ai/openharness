@@ -1,15 +1,25 @@
 // The screen drawn from the model: the run budget, every run in its column and every word inside its box, the room
-// and its card, Talk, the lanes, the toast, New Harness, the empty states, and what moves by the clock.
+// and its card, Talk, the lanes, the toast, the pager, New Harness, the empty states, and what moves by the clock.
 #include "max_test.h"
 #include "max_ui_motion.h"
 
 enum { K_TEXT = 1, K_RECT_AA = 4 };
 static const char *const ABCDE[] = {"a", "b", "c", "d", "e"};
 static const char *const SIX[] = {"a", "b", "c", "d", "e", "f"};
-static const max_box_t RAIL = {MAX_RAIL_X, MAX_CARD_Y, MAX_RAIL_W, MAX_CARD_H};
+static const char NEXT[] = "\xe2\x86\x92";   // the pager's arrow
 static const max_box_t ROOM = {MAX_ROOM_X, MAX_CARD_Y, MAX_ROOM_W, MAX_CARD_H};
 static const max_box_t SHEET = {MAX_ROOM_X, MAX_CARD_Y, MAX_LANE_X + MAX_LANES_W - MAX_ROOM_X, MAX_CARD_H};   // the form
 static const max_box_t LANES = {MAX_LANE_X, 0, MAX_LANES_W, HT_HEIGHT};   // the lanes, and the toast over them
+static const max_box_t SIDE = {MAX_SIDE_X, 0, MAX_SIDE_W, HT_HEIGHT};     // the side column: the pager over New
+// New at the foot of the side column, the pager above it 14 px up, or the whole column without New; the badge 16 px
+// inside the pager's top right corner.
+enum { NEW_H = MAX_Y(104) };
+static const max_box_t NEW = {MAX_SIDE_X, MAX_CARD_Y + MAX_CARD_H - NEW_H, MAX_SIDE_W, NEW_H};
+static const max_box_t BADGE = {MAX_SIDE_X + MAX_SIDE_W - 32, MAX_CARD_Y + 16, 16, 16};
+static max_box_t pager_box(bool with_new)
+{
+    return (max_box_t){MAX_SIDE_X, MAX_CARD_Y, MAX_SIDE_W, MAX_CARD_H - (with_new ? NEW_H + 14 : 0)};
+}
 
 static bool within(ht_rect_t b, max_box_t o)
 {
@@ -21,6 +31,7 @@ static bool apart(max_box_t a, max_box_t b)
 {
     return a.x >= b.x + b.w || b.x >= a.x + a.w || a.y >= b.y + b.h || b.y >= a.y + a.h;
 }
+static bool same(max_box_t a, max_box_t b) { return a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h; }
 static const max_hit_t *find_hit(max_hit_kind_t kind, int arg)
 {
     for (int i = 0; i < max_m.hit_count; i++)
@@ -53,12 +64,17 @@ static bool filled(max_box_t b, unsigned rgb)
     }
     return false;
 }
-// A run that covers the box b whole: the veil over what rests while a person talks.
+// A max_box over b: its outline in edge, its inside in fill.
+static bool boxed(max_box_t b, unsigned edge, unsigned fill)
+{
+    return filled(b, edge) && filled((max_box_t){b.x + LINE_W, b.y + LINE_W, b.w - 2 * LINE_W, b.h - 2 * LINE_W}, fill);
+}
+// A veil that covers the box b whole: what rests while a person talks.
 static bool veiled(max_box_t b)
 {
     for (int i = 0; i < S.count; i++) {
         const ht_rect_t r = ht_run_bounds(&S.runs[i]);
-        if (within(rect_of(b), (max_box_t){r.x, r.y, r.w, r.h})) return true;
+        if (S.runs[i].pro_kind == POD_VEIL && within(rect_of(b), (max_box_t){r.x, r.y, r.w, r.h})) return true;
     }
     return false;
 }
@@ -83,21 +99,22 @@ static bool clear_of_hits(max_box_t b, const max_hit_t *except)
     return true;
 }
 
-// Every run on the glass and in one column: the rail, the room (the form's sheet spans the lanes too), or the lanes.
+// Every run on the glass and in one column: the room (the form's sheet spans the lanes too), the lanes or the side
+// column. A veil over what rests while a person talks lies right of the room.
 static void check_columns(void)
 {
-    const int room_end = max_form_open() ? HT_WIDTH : MAX_ROOM_X + MAX_ROOM_W;
+    const max_box_t room = {MAX_ROOM_X, 0, (max_form_open() ? SHEET.w : ROOM.w), HT_HEIGHT};
     for (int i = 0; i < S.count; i++) {
         const ht_rect_t b = ht_run_bounds(&S.runs[i]);
         CHECK(b.x >= 0 && b.y >= 0 && b.x + b.w <= HT_WIDTH && b.y + b.h <= HT_HEIGHT);
-        const bool in = b.x + b.w <= MAX_ROOM_X || (b.x >= MAX_ROOM_X && b.x + b.w <= room_end) ||
-                        b.x >= MAX_ROOM_X + MAX_ROOM_W;
+        const bool in = S.runs[i].pro_kind == POD_VEIL ? b.x >= MAX_ROOM_X + MAX_ROOM_W
+                      : within(b, room) || within(b, LANES) || within(b, SIDE);
         if (!in) fprintf(stderr, "run %d (%d,%d %dx%d) \"%s\" crosses a column\n", i, b.x, b.y, b.w, b.h, S.runs[i].text);
         CHECK(in);
     }
 }
-// Every word inside the box it belongs to: the rail, the room or the form's sheet, a lane, the toast, the notice's
-// navy card over the lanes. While a person talks the lanes record no boxes: their words stay in the lanes' column.
+// Every word inside the box it belongs to: the room or the form's sheet, a lane, the toast, the notice's navy card over
+// the lanes, the side column. While a person talks the lanes record no boxes: their words stay in the lanes' column.
 static void check_words(void)
 {
     const max_hit_t *toast = find_hit(MAX_HIT_TOAST, 0);
@@ -105,7 +122,7 @@ static void check_words(void)
         const ht_run_t *r = &S.runs[i];
         if (r->pro_kind != K_TEXT) continue;
         const ht_rect_t b = ht_run_bounds(r);
-        bool in = within(b, RAIL) || within(b, max_form_open() ? SHEET : ROOM);
+        bool in = within(b, SIDE) || within(b, max_form_open() ? SHEET : ROOM);
         for (int l = 0; l < max_m.lane_hits; l++) in |= within(b, max_m.lane_box[l]);
         if (toast) in |= within(b, box_of(toast));
         if (r->fg == ht_rgb(NAVY_INK) || max_m.talk != MAX_TALK_IDLE) in |= within(b, LANES);
@@ -114,16 +131,16 @@ static void check_words(void)
         CHECK(!strstr(r->text, "\xe2\x80\xa6\xe2\x80\xa6"));   // never cut after an ellipsis
     }
 }
-// Every button a finger's size (80 px at 480, scaled with the glass), inside `box`, and none over another. New Harness
-// stands on the rail and the toast over the lanes.
+// Every button a finger's size (80 px at 480, scaled with the glass), inside `box`, and none over another. The pager
+// and New stand in the side column and the toast over the lanes.
 static void check_hits(max_box_t box)
 {
     CHECK(max_m.hit_count > 0 && max_m.hit_count < MAX_HITS);
     for (int i = 0; i < max_m.hit_count; i++) {
         const max_hit_t *h = &max_m.hits[i];
-        if (h->kind == MAX_HIT_NEW || h->kind == MAX_HIT_TOAST) continue;
+        if (h->kind == MAX_HIT_TOAST) continue;
         CHECK(h->w >= 80 && h->h >= MAX_Y(80) && h->h >= 69);
-        CHECK(within(rect_of(box_of(h)), box));
+        CHECK(within(rect_of(box_of(h)), h->kind == MAX_HIT_NEW || h->kind == MAX_HIT_PAGE ? SIDE : box));
         for (int j = 0; j < i; j++)
             if (max_m.hits[j].kind != MAX_HIT_TOAST) CHECK(apart(box_of(h), box_of(&max_m.hits[j])));
     }
@@ -187,21 +204,14 @@ static const pro_ask_item_t DEPLOY = {"perm", "Approve Bash command: npm run dep
                                       {"Yes", "Yes, and don't ask again", "No, and tell Claude what to do differently"},
                                       3, false, true};
 
-// The most one screen holds, at both glasses: every machine on the rail and New Harness; in the room a question of six
-// options at its second step (Back and Send too) and its asking pet; four lanes at work in long words; the toast and the
-// notice. Then the same while a person talks to the room's agent, its listening pet the busiest it plays.
+// The most one screen holds, at both glasses: in the room a question of six options at its second step (Back and Send
+// too) and its asking pet; a page of lanes at work in long words; the pager with its badge, New Harness; the toast and
+// the notice. Then the same while a person talks to the room's agent, its listening pet the busiest it plays.
 static void test_budget(void)
 {
     max_ui_reset();
     max_ui_link(true, "MacBook Pro", 0);
     max_ui_offers(true);
-    cable_machine_t m[CABLE_MAX_MACHINES];
-    for (int i = 0; i < CABLE_MAX_MACHINES; i++) {
-        m[i] = (cable_machine_t){.state = "ready", .local = i == 0};
-        snprintf(m[i].id, sizeof m[i].id, "m%d", i + 1);
-        snprintf(m[i].name, sizeof m[i].name, "Machine number %d with a long name", i + 1);
-    }
-    max_ui_machines(m, CABLE_MAX_MACHINES, "m1");
     static const char *const ENGINES[] = {"claude", "codex", "muse", "gemini"};
     pro_agent_row_t rows[MAX_AGENTS];
     char ids[MAX_AGENTS][8];
@@ -211,7 +221,8 @@ static void test_budget(void)
                                     "Machine number 1 with a long name"};
     }
     max_ui_agents(rows, MAX_AGENTS, 0);
-    for (int i = 1; i < 5; i++) working(ids[i], i == 2 ? VIET_TEXT : LONG_TEXT, 0);
+    for (int i = 1; i < 2 * MAX_LANES + 2; i++)
+        if (i != 5) working(ids[i], i % 3 ? LONG_TEXT : VIET_TEXT, 0);
     static const pro_ask_item_t two[] = {
         {"branch", "Where should the fix go?", {"main", "release/0.9"}, 2, false, true},
         {"board", "Which boards should the panel driver be flashed to before the release goes out?",
@@ -223,8 +234,11 @@ static void test_budget(void)
     max_copy(max_m.toast_id, sizeof max_m.toast_id, "x5");
     max_m.toast_from = 0;
     max_ui_notice("Sent to an-agent-name-that-is-far-too-long-for-one", 3000, 0);
+    max_m.page = 1;   // lanes at work; x5 asks on the first page: the badge
     render(1000);
     CHECK(!strcmp(max_ui_selected(), "x0") && max_m.lane_hits == MAX_LANES && find_hit(MAX_HIT_TOAST, 0));
+    for (int i = 0; i < MAX_LANES; i++) CHECK(max_find(max_m.lane_id[i])->state == MAX_WORKING);
+    CHECK(filled(BADGE, PEACH) && find_hit(MAX_HIT_PAGE, 0) && find_hit(MAX_HIT_NEW, 0));
     CHECK(find_hit(MAX_HIT_STEP_BACK, 0) && find_hit(MAX_HIT_SEND, 0) && hits_of(MAX_HIT_OPTION) == 6);
     check_budget();
     check_columns();
@@ -242,23 +256,32 @@ static void test_budget(void)
     printf("test_max_view: at most %d runs of %d on a full screen\n", most_runs, HT_RUNS);
 }
 
-// The room left of the lanes; the lanes right of it, sharing their width, a full page's width on every page.
+// Left to right, 22 px from the glass's ends and 16 px apart: the room, the lanes sharing their width (a full page's
+// width on every page, three to a page), and the side column.
 static void test_room_and_lanes(void)
 {
+    CHECK(MAX_ROOM_X == 22 && MAX_ROOM_X + MAX_ROOM_W == 842 && MAX_LANE_X == 858 && MAX_LANE_X + MAX_LANES_W == 1786);
+    CHECK(MAX_SIDE_X == 1802 && MAX_SIDE_X + MAX_SIDE_W == HT_WIDTH - 22 && MAX_LANES == 3 && MAX_LANE_GAP == 14);
     linked(ABCDE, 5);
     render(0);
     CHECK(!strcmp(max_ui_selected(), "a") && max_m.lane_hits == MAX_LANES && room_edge() == EDGE);
     const int w = (MAX_LANES_W - (MAX_LANES - 1) * MAX_LANE_GAP) / MAX_LANES;
+    CHECK(w == 300);
     for (int i = 0; i < max_m.lane_hits; i++) {
         const max_box_t b = max_m.lane_box[i];
         CHECK(b.x == MAX_LANE_X + i * (w + MAX_LANE_GAP) && b.w == w && b.y == MAX_CARD_Y && b.h == MAX_CARD_H);
-        CHECK(b.x >= MAX_ROOM_X + MAX_ROOM_W && b.x + b.w <= MAX_LANE_X + MAX_LANES_W && apart(b, ROOM));
+        CHECK(within(rect_of(b), LANES) && apart(b, ROOM) && apart(b, SIDE));
         CHECK(strcmp(max_m.lane_id[i], "a"));   // the room's agent is not a lane too
     }
+    CHECK(max_m.lane_box[MAX_LANES - 1].x + w == MAX_LANE_X + MAX_LANES_W);
     CHECK(!strcmp(max_m.card_id, "a") && max_m.card_key == max_card_key(max_find("a")));
     check_columns();
     check_words();
-    // One lane takes the lanes' width; with only the room's agent there is none.
+    // On one page the lanes share the width; one lane takes it all; with only the room's agent there is none.
+    linked(ABCDE, 3);
+    render(0);
+    CHECK(max_m.lane_hits == 2 && max_m.lane_box[0].w == (MAX_LANES_W - MAX_LANE_GAP) / 2);
+    CHECK(max_m.lane_box[1].x + max_m.lane_box[1].w == MAX_LANE_X + MAX_LANES_W);
     linked(ABCDE, 2);
     render(0);
     CHECK(max_m.lane_hits == 1 && max_m.lane_box[0].w == MAX_LANES_W && !strcmp(max_m.lane_id[0], "b"));
@@ -266,13 +289,13 @@ static void test_room_and_lanes(void)
     render(0);
     CHECK(max_m.lane_hits == 0 && text_run("a"));
     check_columns();
-    // Five lanes: two pages, and the second page's lane as wide as the first page's.
+    // Five lanes: two pages, and the second page's lanes as wide as the first page's.
     linked(SIX, 6);
     render(0);
     CHECK(max_pages() == 2 && max_m.lane_hits == MAX_LANES && max_m.lane_box[0].w == w);
     max_m.page = 1;
     render(0);
-    CHECK(max_m.lane_hits == 1 && max_m.lane_box[0].x == MAX_LANE_X && max_m.lane_box[0].w == w);
+    CHECK(max_m.lane_hits == 2 && max_m.lane_box[0].x == MAX_LANE_X && max_m.lane_box[1].w == w);
     check_words();
 }
 
@@ -297,7 +320,8 @@ static void test_talk(void)
     CHECK(max_can_talk(max_find("a")) && find_hit(MAX_HIT_TALK, 0));
     max_ask_hit(max_find("a"), MAX_HIT_OPTION, 0, 0);
     render(0);
-    CHECK(!max_can_talk(max_find("a")) && !find_hit(MAX_HIT_TALK, 0) && max_m.hit_count == 0);
+    CHECK(!max_can_talk(max_find("a")) && !find_hit(MAX_HIT_TALK, 0));
+    CHECK(max_m.hit_count == 1 && find_hit(MAX_HIT_PAGE, 0));   // nothing in the room: only the pager beside it
     // Recording for the room's agent, with New Harness offered and a toast up: only Cancel and Send, in the room.
     linked(ABCDE, 5);
     max_ui_offers(true);
@@ -310,32 +334,41 @@ static void test_talk(void)
     check_hits(ROOM);
     CHECK(max_m.lane_hits == 0 && !find_hit(MAX_HIT_TALK, 0) && !find_hit(MAX_HIT_NEW, 0) && !find_hit(MAX_HIT_TOAST, 0));
     CHECK(text_run("Talking to a") && text_run("Listening") && room_edge() == YOU);
-    CHECK(veiled((max_box_t){0, 0, MAX_RAIL_X + MAX_RAIL_W, HT_HEIGHT}) && veiled(LANES));
+    CHECK(veiled(LANES) && veiled(SIDE) && !veiled(ROOM) && !find_hit(MAX_HIT_PAGE, 0));
     check_columns();
     check_words();
     // Sent: nothing to press until it is through.
     talk("a", MAX_TALK_SENDING);
     render(1000);
     CHECK(max_m.hit_count == 0 && max_m.lane_hits == 0 && text_run("Sending") && !text_run("Cancel"));
+    CHECK(veiled(LANES) && veiled(SIDE) && !veiled(ROOM));
     // Done: the screen comes back.
     talk("a", MAX_TALK_IDLE);
     render(1000);
-    CHECK(find_hit(MAX_HIT_TALK, 0) && find_hit(MAX_HIT_NEW, 0) && find_hit(MAX_HIT_TOAST, 0) && max_m.lane_hits == 4);
+    CHECK(find_hit(MAX_HIT_TALK, 0) && find_hit(MAX_HIT_NEW, 0) && find_hit(MAX_HIT_TOAST, 0));
+    CHECK(find_hit(MAX_HIT_PAGE, 0) && max_m.lane_hits == MAX_LANES && !veiled(LANES) && !veiled(SIDE));
 }
 
-// The toast: top right over the lanes, never over the room; its bar runs down; a tap on it is the first hit.
+// The toast: top right over the lanes, never over the room or the side column; its bar runs down; a tap on it is the
+// first hit.
 static void test_toast(void)
 {
     linked(ABCDE, 5);
+    max_ui_offers(true);
     touch_at(1000);
     max_ui_question("c", "r", "Run the migration on the dev database now?", NULL, 0, false, false, 2000);
     render(2000);
     CHECK(!strcmp(max_ui_selected(), "a") && !strcmp(max_m.toast_id, "c"));
     const max_hit_t *t = find_hit(MAX_HIT_TOAST, 0);
     CHECK(t && t == &max_m.hits[0] && within(rect_of(box_of(t)), LANES) && apart(box_of(t), ROOM));
-    const ht_run_t *who = text_run("c asks"), *q = text_run("Run the migration");
+    CHECK(apart(box_of(t), SIDE) && t->x + t->w == MAX_LANE_X + MAX_LANES_W);
+    CHECK(apart(box_of(t), box_of(find_hit(MAX_HIT_PAGE, 0))) && apart(box_of(t), box_of(find_hit(MAX_HIT_NEW, 0))));
+    const ht_run_t *who = text_run("c asks"), *q = NULL;
+    for (int i = 0; i < S.count; i++)   // the question on the toast's navy, not on its lane's paper
+        if (S.runs[i].pro_kind == K_TEXT && S.runs[i].fg == ht_rgb(NAVY_INK) && strstr(S.runs[i].text, "Run the migration"))
+            q = &S.runs[i];
     CHECK(who && who->fg == ht_rgb(NAVY_NAME) && within(ht_run_bounds(who), box_of(t)));
-    CHECK(q && q->fg == ht_rgb(NAVY_INK) && within(ht_run_bounds(q), box_of(t)));
+    CHECK(q && within(ht_run_bounds(q), box_of(t)));
     check_columns();
     check_words();
     int bar[2] = {0, 0};
@@ -532,30 +565,38 @@ static void test_lanes_say_their_state(void)
     max_ui_summary("d", "Fixed the touch rotation", NULL, false, POD_TIER_ALERT, 61000);
     max_ui_focus("e");
     render(61000);
-    // Asking and failed lead, working follows, then the rest.
+    // Asking and failed lead, working follows, then the rest: on the next page.
     CHECK(!strcmp(max_m.lane_id[0], "b") && !strcmp(max_m.lane_id[1], "c") && !strcmp(max_m.lane_id[2], "a"));
-    CHECK(!strcmp(max_m.lane_id[3], "d") && !strcmp(max_ui_selected(), "e") && text_run("Idle"));
+    CHECK(max_m.lane_hits == 3 && !strcmp(max_ui_selected(), "e") && text_run("Idle"));
     check_columns();
     check_words();
     const struct { const char *word; unsigned ink; int lane; } STATES[] = {
-        {"Asks 1:01", PEACH, 0}, {"Failed", LANE_FAIL, 1}, {"Infusing\xe2\x80\xa6 3:15", MINT, 2}, {"Done", 0, 3}};
+        {"Asks 1:01", PEACH, 0}, {"Failed", LANE_FAIL, 1}, {"Infusing\xe2\x80\xa6 3:15", MINT, 2}};
     for (size_t i = 0; i < sizeof STATES / sizeof STATES[0]; i++) {
         const ht_run_t *r = text_run(STATES[i].word);
         CHECK(r && within(ht_run_bounds(r), max_m.lane_box[STATES[i].lane]));
-        if (STATES[i].ink) CHECK(r->fg == ht_rgb(STATES[i].ink));
+        CHECK(r->fg == ht_rgb(STATES[i].ink));
     }
     CHECK(filled(max_m.lane_box[0], PEACH));
     for (int i = 1; i < max_m.lane_hits; i++) CHECK(!filled(max_m.lane_box[i], PEACH));
-    const char *bubbles[] = {"Run the", "pnpm test", "Editing", "Fixed the"};
-    for (int i = 0; i < 4; i++) {
+    const char *bubbles[] = {"Run the", "pnpm test", "Editing"};
+    for (int i = 0; i < 3; i++) {
         const ht_run_t *r = text_run(bubbles[i]);
         CHECK(r && within(ht_run_bounds(r), max_m.lane_box[i]));
     }
-    // A long spinner word in a narrow lane: the word alone, rather than cut after it.
-    max_ui_turn("a", "verb", "Reticulating", -1, 61000);
+    // A spinner word too long for the lane with its clock: the word alone, rather than cut after it.
+    max_ui_turn("a", "verb", "Reticulating splines", -1, 61000);
     render(61000);
+    const int tw = max_m.lane_box[2].w - 28;
+    CHECK(ht_pro_width(&ph_sb_22, "Reticulating splines\xe2\x80\xa6 3:15") > tw);
     const ht_run_t *verb = text_run("Reticulating");
-    CHECK(verb && !strcmp(verb->text, "Reticulating\xe2\x80\xa6") && within(ht_run_bounds(verb), max_m.lane_box[2]));
+    CHECK(verb && !strcmp(verb->text, "Reticulating splines\xe2\x80\xa6") && within(ht_run_bounds(verb), max_m.lane_box[2]));
+    check_words();
+    max_m.page = 1;
+    render(61000);
+    const ht_run_t *done = text_run("Done"), *letter = text_run("Fixed the");
+    CHECK(!strcmp(max_m.lane_id[0], "d") && done && within(ht_run_bounds(done), max_m.lane_box[0]));
+    CHECK(letter && within(ht_run_bounds(letter), max_m.lane_box[0]) && !filled(max_m.lane_box[0], PEACH));
     check_words();
 }
 
@@ -565,7 +606,8 @@ static void test_names_and_text_fit(void)
     const pro_agent_row_t rows[] = {
         {"a", "an-agent-name-that-is-far-too-long-for-one", "claude", "m1", "A machine with a long name"},
         {"b", "Tr\xe1\xbb\xa3 l\xc3\xbd ti\xe1\xba\xbfng Vi\xe1\xbb\x87t", "codex", "m2", "M\xc3\xa1y ch\xe1\xbb\xa7"},
-        {"c", "c", "claude", "m1", "MacBook Pro"}, {"d", "d", "claude", "m1", "MacBook Pro"}};
+        {"c", "another-agent-name-far-too-long-for-a-lane", "claude", "m1", "The build server down the hall, far away"},
+        {"d", "d", "claude", "m1", "MacBook Pro"}};
     max_ui_agents(rows, 4, 0);
     working("a", LONG_TEXT, 0);
     working("b", VIET_TEXT, 0);
@@ -574,6 +616,14 @@ static void test_names_and_text_fit(void)
     check_words();
     const ht_run_t *name = text_run("an-agent-name");
     CHECK(name && within(ht_run_bounds(name), ROOM) && !strcmp(name->text + strlen(name->text) - 3, "\xe2\x80\xa6"));
+    // A lane's words stay in it, cut to its width: b, c and d share a page.
+    CHECK(max_m.lane_hits == 3 && !strcmp(max_m.lane_id[1], "c"));
+    const ht_run_t *lane_name = text_run("another-agent"), *lane_machine = text_run("The build server");
+    CHECK(lane_name && within(ht_run_bounds(lane_name), max_m.lane_box[1]));
+    CHECK(!strcmp(lane_name->text + strlen(lane_name->text) - 3, "\xe2\x80\xa6"));
+    CHECK(lane_machine && within(ht_run_bounds(lane_machine), max_m.lane_box[1]));
+    const ht_run_t *thought = text_run("\xc4\x90\xc3\xa2y l\xc3\xa0");
+    CHECK(thought && within(ht_run_bounds(thought), max_m.lane_box[0]));
     // The room's thought ends between words, with nothing dangling before the ellipsis: whatever the text.
     static const char *const LONG_WORDS = "Reconfiguring the internationalization and synchronization of the "
         "documentation infrastructure, then reconsidering the characterization of every administration";
@@ -618,35 +668,104 @@ static void test_cut_after_an_ellipsis(void)
     CHECK(!strcmp(out, name));
 }
 
+// Nothing drawn beside the room: no lanes, no pager, no New.
+static void nothing_beside_the_room(void)
+{
+    for (int i = 0; i < S.count; i++) {
+        const ht_rect_t b = ht_run_bounds(&S.runs[i]);
+        CHECK(b.x + b.w <= MAX_ROOM_X + MAX_ROOM_W);
+    }
+}
 static void test_empty_states(void)
 {
     max_ui_reset();
+    max_ui_offers(true);   // New only while the computer is there to offer it
     render(0);
-    const ht_run_t *down = text_run("Not connected"), *wait = text_run("Waiting for the computer");
-    CHECK(down && within(ht_run_bounds(down), RAIL) && wait && within(ht_run_bounds(wait), ROOM));
-    CHECK(max_m.lane_hits == 0 && max_m.hit_count == 0);
+    const ht_run_t *wait = text_run("Waiting for the computer");
+    CHECK(wait && within(ht_run_bounds(wait), ROOM) && room_edge() == EDGE);
+    CHECK(max_m.lane_hits == 0 && max_m.hit_count == 0 && !text_run("Not connected"));
+    nothing_beside_the_room();
+    max_ui_offers(false);
     max_ui_link(true, "MacBook Pro", 0);
     render(0);
     const ht_run_t *none = text_run("No agents");
     CHECK(none && within(ht_run_bounds(none), ROOM));
-    CHECK(text_run("MacBook Pro") != NULL && text_run("Not connected") == NULL);
     CHECK(max_m.lane_hits == 0 && max_m.hit_count == 0);
+    nothing_beside_the_room();
     check_columns();
+    // Offered: New alone in the side column.
+    max_ui_offers(true);
+    render(0);
+    CHECK(max_m.hit_count == 1 && same(box_of(find_hit(MAX_HIT_NEW, 0)), NEW) && !filled(pager_box(true), EDGE));
+    check_columns();
+    check_words();
 }
 
-static void test_pages_and_notice(void)
+// The pager, the whole side column while New is not offered: the page shown as "n/m" over the next one's arrow, and a
+// tap on it turns the page. Nothing under the lanes. One page is greyed and takes no tap. A peach badge in its corner
+// while an agent on a page not shown asks.
+static void test_pager(void)
 {
-    linked(SIX, 6);
+    linked(SIX, 6);   // the room shows a; five lanes, two pages
     render(0);
-    int dots = 0, lit = 0;
-    for (int i = 0; i < S.count; i++) {
-        const ht_run_t *r = &S.runs[i];
-        if (r->y < MAX_BAND_Y || r->pro_kind != K_RECT_AA) continue;
-        CHECK(within(ht_run_bounds(r), LANES));
-        dots++;
-        lit += r->fg == ht_rgb(INK);
+    const max_box_t pager = pager_box(false);
+    const max_hit_t *turn = find_hit(MAX_HIT_PAGE, 0);
+    CHECK(max_pages() == 2 && turn && same(box_of(turn), pager) && boxed(pager, EDGE, RAISED));
+    const ht_run_t *at = text_run("1/2"), *next = text_run(NEXT);
+    CHECK(at && at->fg == ht_rgb(INK) && within(ht_run_bounds(at), pager));
+    CHECK(next && next->fg == ht_rgb(INK) && within(ht_run_bounds(next), pager) && next->y > at->y);
+    CHECK(!filled(BADGE, PEACH) && !find_hit(MAX_HIT_NEW, 0));
+    for (int i = 0; i < S.count; i++) {   // no page dots under the lanes
+        const ht_rect_t b = ht_run_bounds(&S.runs[i]);
+        CHECK(b.y + b.h <= MAX_CARD_Y + MAX_CARD_H);
     }
-    CHECK(dots == 2 && lit == 1);
+    check_columns();
+    check_words();
+    check_hits(ROOM);
+    max_m.page = 1;
+    render(0);
+    CHECK(text_run("2/2") && !text_run("1/2") && find_hit(MAX_HIT_PAGE, 0) && max_m.lane_hits == 2);
+    // b asks with a person at the bar: it leads the lanes, on the first page. The second page shows the badge.
+    touch_at(0);
+    max_ui_question("b", "r1", "Deploy?", NULL, 0, false, false, 0);
+    render(0);
+    CHECK(!strcmp(max_ui_selected(), "a") && filled(BADGE, PEACH) && within(rect_of(BADGE), pager));
+    max_m.page = 0;
+    render(0);
+    CHECK(!strcmp(max_m.lane_id[0], "b") && !filled(BADGE, PEACH));
+    // More questions than a page holds: the one past it badges the first page.
+    max_ui_question("c", "r2", "Deploy?", NULL, 0, false, false, 0);
+    max_ui_question("d", "r3", "Deploy?", NULL, 0, false, false, 0);
+    max_ui_question("e", "r4", "Deploy?", NULL, 0, false, false, 0);
+    render(0);
+    CHECK(!strcmp(max_m.lane_id[2], "d") && filled(BADGE, PEACH));
+    // The room's own question is no lane's: no badge.
+    linked(SIX, 6);
+    max_ui_question("a", "r1", "Deploy?", NULL, 0, false, false, 0);
+    max_m.page = 1;
+    render(0);
+    CHECK(!strcmp(max_ui_selected(), "a") && !filled(BADGE, PEACH));
+    // One page: greyed, and no tap.
+    linked(ABCDE, 4);
+    render(0);
+    at = text_run("1/1"), next = text_run(NEXT);
+    CHECK(max_pages() == 1 && at && at->fg == ht_rgb(MUTED) && next && next->fg == ht_rgb(MUTED));
+    CHECK(!find_hit(MAX_HIT_PAGE, 0) && boxed(pager, EDGE, RAISED));
+    // The most pages there can be: their count whole.
+    pro_agent_row_t rows[MAX_AGENTS];
+    char ids[MAX_AGENTS][8], most[16];
+    for (int i = 0; i < MAX_AGENTS; i++) {
+        snprintf(ids[i], sizeof ids[i], "x%d", i);
+        rows[i] = (pro_agent_row_t){ids[i], ids[i], "claude", "m1", "MacBook Pro"};
+    }
+    max_ui_agents(rows, MAX_AGENTS, 0);
+    max_m.page = max_pages() - 1;
+    render(0);
+    snprintf(most, sizeof most, "%d/%d", max_pages(), max_pages());
+    at = text_run(most);
+    CHECK(max_pages() == 11 && at && !strcmp(at->text, most) && within(ht_run_bounds(at), pager));
+    check_columns();
+    check_words();
     // The notice: on navy over the lanes, at the top right, never over the room; then gone.
     max_ui_notice("Sent to b", 3000, 0);
     render(0);
@@ -656,9 +775,6 @@ static void test_pages_and_notice(void)
     check_words();
     render(3000);
     CHECK(!text_run("Sent to b"));
-    linked(ABCDE, 5);
-    render(3000);
-    for (int i = 0; i < S.count; i++) CHECK(S.runs[i].y < MAX_BAND_Y);   // one page: no dots
 }
 
 static void test_update_screen(void)
@@ -710,24 +826,35 @@ static void test_motion(void)
     talk("a", MAX_TALK_IDLE);
 }
 
-// New Harness: a button on the rail; the form on the toast's navy over the room and the lanes, with Say while its field
-// takes a spoken name, and Cancel and Send while one is recorded; a toast and a notice over none of its buttons.
+// New Harness: a button at the foot of the side column, under the pager; the form on the toast's navy over the room and
+// the lanes, the side column beside it with New outlined in ink, with Say while its field takes a spoken name, and
+// Cancel and Send while one is recorded; a toast and a notice over none of its buttons.
 static void test_new_harness(void)
 {
-    linked(ABCDE, 3);
+    linked(ABCDE, 5);   // two pages of lanes
     render(0);
-    CHECK(!find_hit(MAX_HIT_NEW, 0) && !text_run("New Harness"));
+    CHECK(!find_hit(MAX_HIT_NEW, 0) && !text_run("New") && !text_run("+"));
+    CHECK(same(box_of(find_hit(MAX_HIT_PAGE, 0)), pager_box(false)));
     max_ui_offers(true);
     render(0);
-    const max_hit_t *add = find_hit(MAX_HIT_NEW, 0);
-    CHECK(add && within(rect_of(box_of(add)), RAIL) && add->h >= MAX_Y(80) && add->w >= 200);
+    const max_hit_t *add = find_hit(MAX_HIT_NEW, 0), *turn = find_hit(MAX_HIT_PAGE, 0);
+    CHECK(add && same(box_of(add), NEW) && boxed(NEW, EDGE, GROUND));
+    CHECK(turn && same(box_of(turn), pager_box(true)) && boxed(pager_box(true), EDGE, RAISED));
+    CHECK(NEW.y - (turn->y + turn->h) == 14 && NEW.y + NEW.h == MAX_CARD_Y + MAX_CARD_H);
+    const ht_run_t *plus = text_run("+"), *word = text_run("New");
+    CHECK(plus && plus->pro_font == &ph_sb_48 && within(ht_run_bounds(plus), NEW));
+    CHECK(word && word->pro_font == &ph_sb_22 && within(ht_run_bounds(word), NEW) && word->y > plus->y);
     check_columns();
     check_words();
+    check_hits(ROOM);
     CHECK(max_ui_form_open("form-1", 0));
     render(0);
     CHECK(!find_hit(MAX_HIT_NEW, 0) && max_m.lane_hits == 0 && text_run("Opening") && !find_hit(MAX_HIT_TALK, 0));
     CHECK(find_hit(MAX_HIT_FORM_CLOSE, 0) && !find_hit(MAX_HIT_FORM_PICK, 0) && !find_hit(MAX_HIT_FORM_BACK, 0));
     CHECK(!find_hit(MAX_HIT_FORM_SAY, 0));
+    // The side column stays beside the form: New outlined in ink, the pager greyed with no tap (the lanes are covered).
+    CHECK(boxed(NEW, INK, GROUND) && boxed(pager_box(true), EDGE, RAISED) && !find_hit(MAX_HIT_PAGE, 0));
+    CHECK(text_run("1/2")->fg == ht_rgb(MUTED) && filled(SHEET, NAVY_EDGE) && apart(SHEET, SIDE));
     check_columns();
     take(0);
     pro_form_page_t page = {.title = "Project", .label = "harness-max-firmware", .detail = "~/work/harness",
@@ -766,18 +893,20 @@ static void test_new_harness(void)
     const max_hit_t *toast = find_hit(MAX_HIT_TOAST, 0);
     CHECK(toast && find_hit(MAX_HIT_FORM_CLOSE, 0) && hits_of(MAX_HIT_FORM_MOVE) == 2 && text_run("b asks"));
     const max_box_t toast_box = box_of(toast);
-    CHECK(toast_box.y >= 0 && clear_of_hits(toast_box, toast));
+    CHECK(toast_box.y >= 0 && clear_of_hits(toast_box, toast) && apart(toast_box, SIDE));
+    CHECK(toast_box.x + toast_box.w < find_hit(MAX_HIT_FORM_CLOSE, 0)->x);
     CHECK(within(ht_run_bounds(text_run("b asks")), toast_box) && within(ht_run_bounds(text_run("Deploy?")), toast_box));
     check_columns();
     check_words();
-    // A spoken name meanwhile: the toast rests under a veil where it stands.
+    // A spoken name meanwhile: the toast rests under a veil where it stands, and the side column with it.
     talk("", MAX_TALK_RECORDING);
     render(1000);
     bool veil = false;
     for (int i = 0; i < S.count; i++)
         veil |= S.runs[i].pro_kind == POD_VEIL && S.runs[i].x == toast_box.x && S.runs[i].y == toast_box.y &&
                 S.runs[i].w == toast_box.w && S.runs[i].pro_height == toast_box.h;
-    CHECK(veil && !find_hit(MAX_HIT_TOAST, 0));
+    CHECK(veil && !find_hit(MAX_HIT_TOAST, 0) && veiled(SIDE) && !veiled(SHEET));
+    check_columns();
     talk("", MAX_TALK_IDLE);
     // A notice too: beside the toast, over no button either; alone, in the toast's place.
     max_ui_notice("Sent to backend", 3000, 1000);
@@ -830,7 +959,7 @@ int main(void)
     test_names_and_text_fit();
     test_cut_after_an_ellipsis();
     test_empty_states();
-    test_pages_and_notice();
+    test_pager();
     test_update_screen();
     test_motion();
     test_new_harness();

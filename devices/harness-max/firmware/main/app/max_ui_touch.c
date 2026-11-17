@@ -1,6 +1,6 @@
 // The finger on the screen (max_ui.h): a tap acts on what the last render drew, a sideways swipe turns the page of
-// lanes, or moves the form's choice. A tap on a card's button or the form queues its message in the outbox. While a
-// recording is up, only its Send and Cancel act.
+// lanes (as a tap on the pager does), or moves the form's choice. A tap on a card's button or the form queues its
+// message in the outbox. While a recording is up, only its Send and Cancel act.
 #include <string.h>
 
 #include "max_ui_internal.h"
@@ -59,6 +59,13 @@ static max_act_t press(const max_hit_t *h, uint32_t now_ms)
     case MAX_HIT_NEW:
         if (!max_form_open()) return act_for(MAX_ACT_NEW, NULL);
         break;
+    case MAX_HIT_PAGE: {   // the next of the pages there are now: an agent may have left since the pager was drawn
+        const int pages = max_pages();
+        if (max_form_open() || pages < 2) break;   // the form covers the lanes
+        max_m.page = (max_m.page + 1) % pages;
+        changed = true;
+        break;
+    }
     case MAX_HIT_FORM_MOVE: changed = page && max_form_command(MAX_FORM_MOVE, h->arg, now_ms); break;
     case MAX_HIT_FORM_PICK: changed = page && max_form_command(MAX_FORM_ACTIVATE, 0, now_ms); break;
     case MAX_HIT_FORM_BACK: changed = page && max_form_command(MAX_FORM_BACK, 0, now_ms); break;

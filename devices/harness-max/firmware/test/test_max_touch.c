@@ -1,12 +1,12 @@
-// The finger: a tap opens a lane, talks from the room, presses a card's button, the toast or the form's, a sideways
-// swipe turns the page (or moves the form), anything else does nothing; while a recording is up, only its Send and
-// Cancel act.
+// The finger: a tap opens a lane, talks from the room, presses a card's button, the toast, the pager or the form's, a
+// sideways swipe turns the page (or moves the form), anything else does nothing; while a recording is up, only its Send
+// and Cancel act.
 #include "max_test.h"
 
 static const char *const ABCDE[] = {"a", "b", "c", "d", "e"};
-// Enough agents for the room's and two pages of lanes, whatever MAX_LANES is.
+// Enough agents for the room's and three pages of lanes, whatever MAX_LANES is.
 static const char *const XS[] = {"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9"};
-_Static_assert(MAX_LANES + 2 <= sizeof XS / sizeof XS[0], "XS holds the room and two pages of lanes");
+_Static_assert(2 * MAX_LANES + 2 <= sizeof XS / sizeof XS[0], "XS holds the room and three pages of lanes");
 
 static max_act_t tap(int x, int y)
 {
@@ -61,9 +61,10 @@ static void test_tap_opens_a_lane(void)
     CHECK(!strcmp(max_m.lane_id[0], "a") && !strcmp(max_m.lane_id[1], "c"));
     act = tap(max_m.lane_box[1].x + 2, max_m.lane_box[1].y + 2);
     CHECK(act.kind == MAX_ACT_OPEN && !strcmp(act.agent_id, "c"));
-    // The rail, the gap between cards and the band below them are nobody's.
+    // The gaps between the room, the lanes and the side column, and the band below them are nobody's.
     const max_box_t first = max_m.lane_box[0];
-    CHECK(tap(MAX_RAIL_W / 2, lane_y(0)).kind == MAX_ACT_NONE);
+    CHECK(tap(MAX_ROOM_X + MAX_ROOM_W + 8, lane_y(0)).kind == MAX_ACT_NONE);
+    CHECK(tap(MAX_LANE_X + MAX_LANES_W + 8, lane_y(0)).kind == MAX_ACT_NONE);
     CHECK(tap((first.x + first.w + max_m.lane_box[1].x) / 2, lane_y(0)).kind == MAX_ACT_NONE);
     CHECK(tap(lane_x(0), first.y + first.h + 2).kind == MAX_ACT_NONE);
     CHECK(!strcmp(max_ui_selected(), "c"));
@@ -117,6 +118,40 @@ static void test_swipe_turns_the_page(void)
     CHECK(max_m.page == 0 && !max_ui_tick(0));
 }
 
+// The pager: a tap shows the next page of lanes, the first again after the last. Like any tap it means a person is at
+// the bar. One page takes no tap; nor does a pager drawn before the form covered the lanes or the pages went.
+static void test_pager_turns_the_page(void)
+{
+    enum { N = 2 * MAX_LANES + 2 };
+    linked(XS, N);   // the room shows x0; three pages of lanes
+    render(0);
+    CHECK(max_pages() == 3 && max_m.page == 0);
+    for (int want = 1; want <= 3; want++) {
+        const max_hit_t *turn = find_hit(MAX_HIT_PAGE, 0);
+        CHECK(turn && tap_on(turn).kind == MAX_ACT_NONE);
+        CHECK(max_m.page == want % 3 && max_ui_tick(90) && max_m.touched && max_m.touched_ms == 90);
+        render(90);
+        CHECK(!max_ui_tick(90) && !strcmp(max_m.lane_id[0], XS[1 + want % 3 * MAX_LANES]));
+    }
+    // A person at the bar: a new question waits in its toast rather than take the room.
+    max_ui_question("x5", "r1", DB.q, &DB, 1, false, false, 100);
+    CHECK(!strcmp(max_ui_selected(), "x0") && max_toast_shown(100));
+    // The pager drawn, then the form up: it turns nothing.
+    max_ui_offers(true);
+    render(100);
+    const max_hit_t turn = *find_hit(MAX_HIT_PAGE, 0);
+    CHECK(press(MAX_HIT_NEW, 0).kind == MAX_ACT_NEW && max_ui_form_open("form-1", 100));
+    CHECK(tap_on(&turn).kind == MAX_ACT_NONE && max_m.page == 0 && max_form_open());
+    max_form_dismiss();
+    // The pager drawn, then all but a page of lanes gone: it turns nothing.
+    render(100);
+    roster(XS, MAX_LANES + 1);
+    CHECK(tap_on(&turn).kind == MAX_ACT_NONE && max_m.page == 0 && !max_m.dirty);
+    // One page: no pager to tap, and a tap there turns nothing.
+    render(100);
+    CHECK(!find_hit(MAX_HIT_PAGE, 0) && tap_on(&turn).kind == MAX_ACT_NONE && max_m.page == 0 && !max_m.dirty);
+}
+
 // Voice goes to the room's agent: its pet starts a recording, and while it records only Send and Cancel act.
 static void test_talk_from_the_room(void)
 {
@@ -133,11 +168,12 @@ static void test_talk_from_the_room(void)
     max_act_t act = tap_on(&pet);
     CHECK(act.kind == MAX_ACT_TALK && !strcmp(act.agent_id, "x0") && !strcmp(max_m.talk_id, "x0"));
     max_ui_talk(MAX_TALK_RECORDING);
-    // While it records everything else rests: the pet, the card's buttons, the toast, New, a lane, a swipe.
+    // While it records everything else rests: the pet, the card's buttons, the toast, New, the pager, a lane, a swipe.
     max_ui_question("x1", "toolu_2", DB.q, &DB, 1, false, false, 10);
     CHECK(max_toast_shown(10) && tap_on(&toast).kind == MAX_ACT_NONE);
     CHECK(tap_on(&pet).kind == MAX_ACT_NONE && tap_on(&option).kind == MAX_ACT_NONE && max_m.out_count == 0);
     CHECK(press(MAX_HIT_NEW, 0).kind == MAX_ACT_NONE);
+    CHECK(press(MAX_HIT_PAGE, 0).kind == MAX_ACT_NONE && max_m.page == 0);
     CHECK(tap(lane_x(0), lane_y(0)).kind == MAX_ACT_NONE && !strcmp(max_ui_selected(), "x0"));
     drag(lane_x(0), lane_y(0), -200, 0);
     CHECK(max_m.page == 0 && !strcmp(max_ui_selected(), "x0"));
@@ -237,9 +273,10 @@ static void test_toast_over_the_form(void)
     CHECK(act.kind == MAX_ACT_OPEN && !strcmp(act.agent_id, "c") && !strcmp(max_ui_selected(), "c"));
     CHECK(!max_form_open() && max_m.toast_id[0] == 0 && max_ui_tick(100));
     CHECK(take(100) == 1 && OUT[0].kind == MAX_OUT_FORM && OUT[0].op == MAX_FORM_CLOSE && !strcmp(OUT[0].form, "form-1"));
-    // The room shows it, its card's buttons at hand, and New Harness back on the rail.
+    // The room shows it, its card's buttons at hand, New Harness back in reach and the pager turning again.
     render(100);
-    CHECK(!strcmp(max_m.card_id, "c") && max_m.lane_hits == 4 && find_hit(MAX_HIT_NEW, 0));
+    CHECK(!strcmp(max_m.card_id, "c") && max_m.lane_hits == MAX_LANES && find_hit(MAX_HIT_NEW, 0));
+    CHECK(find_hit(MAX_HIT_PAGE, 0));
 }
 
 static void test_cancel(void)
@@ -386,6 +423,7 @@ int main(void)
     test_tap_opens_a_lane();
     test_drag_is_not_a_tap();
     test_swipe_turns_the_page();
+    test_pager_turns_the_page();
     test_talk_from_the_room();
     test_spoken_answer_moves_the_room();
     test_toast_opens_its_agent();

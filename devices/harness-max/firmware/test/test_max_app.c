@@ -218,12 +218,18 @@ static void press_room(max_hit_kind_t kind, int arg)
 
 // ---- tests ----
 
-// A swipe turns the page and a tap moves the selection: the model only marks itself for redraw (max_ui_touch returns
-// MAX_ACT_NONE), so the touch path must wake the render task, or the new page shows at its next wake, up to 60 s later.
+// A swipe or the pager turns the page and a tap moves the selection: the model only marks itself for redraw
+// (max_ui_touch returns MAX_ACT_NONE), so the touch path must wake the render task, or the new page shows at its next
+// wake, up to 60 s later.
 static void test_touch_wakes_the_renderer(void)
 {
     fresh();
     contact(lane_x(1), lane_y(1), -(MAX_SWIPE_PX + 40), 0);
+    CHECK(max_m.page == 1);
+    CHECK(NOTIFIES > 0);
+
+    fresh();
+    press(MAX_HIT_PAGE, 0);
     CHECK(max_m.page == 1);
     CHECK(NOTIFIES > 0);
 
@@ -342,7 +348,7 @@ static void test_reviewed_answer_is_sent_after_the_lock(void)
     SENDS = OPENS = 0;
     pro_app_ask("a", "toolu_1", DB.q, &DB, 1, false);
     CHECK(SENDS == 0);   // nothing goes from the cable_link task's callback
-    contact(MAX_RAIL_W / 2, 20, 0, 0);
+    contact(HT_WIDTH - 2, HT_HEIGHT - 2, 0, 0);   // where nothing is drawn
     CHECK(SENDS == 1 && WAITED && !strcmp(last_sent(), "question.read a q1"));
     pro_app_question_state("a", "q1", true, "toolu_1", "tok", false, NULL, &DB, 1);
     press_room(MAX_HIT_OPTION, 1);
@@ -352,7 +358,7 @@ static void test_reviewed_answer_is_sent_after_the_lock(void)
     CHECK(!strcmp(max_m.notice, "Sent") && max_find("a")->state == MAX_WORKING);
     // The daemon refuses it: its words.
     pro_app_ask("a", "toolu_2", DB.q, &DB, 1, true);
-    contact(MAX_RAIL_W / 2, 20, 0, 0);
+    contact(HT_WIDTH - 2, HT_HEIGHT - 2, 0, 0);   // where nothing is drawn
     pro_app_question_state("a", "q2", true, "toolu_2", "tok2", false, NULL, &DB, 1);
     press_room(MAX_HIT_OPTION, 0);
     pro_app_answer_receipt("a", "q2", "tok2", false, false, "Permission prompts cannot be answered from here.");
