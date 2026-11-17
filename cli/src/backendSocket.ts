@@ -917,7 +917,7 @@ export class BackendSocket {
   }
 
   /** Raw observations stay on the existing bounded, best-effort gateway usage channel. */
-  reportUsage(event: UsageEvent): void { this.toGateway('usage', gateway => gateway.usage?.(event)) }
+  readonly reportUsage = (event: UsageEvent): void => { this.toGateway('usage', gateway => gateway.usage?.(event)) }
 
   /** What the usage report counts of the requests answered here, raw: the gateway names the counters (core/usageOutcomes.ts). */
   private readonly usageOutcomes = createUsageOutcomes({ send: event => this.reportUsage(event) })

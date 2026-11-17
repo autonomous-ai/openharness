@@ -184,7 +184,12 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
   }
 
   const port: GatewayPort = {
-    usage: (event) => { if (deps.buffered() < GATEWAY_USAGE_BUFFER_LIMIT) send('usage', { event }) },
+    usage: (event) => {
+      if (deps.buffered() >= GATEWAY_USAGE_BUFFER_LIMIT) return
+      // A counter already has a flat wire shape; carry provenance without a second event envelope.
+      if (event.kind === 'service') send('usageCounter', { metric: event.metric, service: event.service })
+      else send('usage', { event })
+    },
     usageCounter: (metric) => { if (deps.buffered() < GATEWAY_USAGE_BUFFER_LIMIT) send('usageCounter', { metric }) },
     connect: () => { dial = 'connect'; need(); send('connect') },
     serveThisComputerOnly: () => { dial = 'local'; send('thisComputerOnly') },

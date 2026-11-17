@@ -168,7 +168,13 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     const connId = text(payload.connId)
     switch (kind) {
       case 'usage': port.usage?.(payload.event as UsageEvent); return
-      case 'usageCounter': port.usageCounter?.(payload.metric as ProductUsageMetric); return
+      case 'usageCounter':
+        if ('service' in payload) {
+          if (typeof payload.service === 'string' && typeof payload.metric === 'string') {
+            port.usage?.({ kind: 'service', service: payload.service, metric: payload.metric })
+          }
+        } else port.usageCounter?.(payload.metric as ProductUsageMetric)
+        return
       case 'connect': port.connect(); return
       case 'thisComputerOnly': port.serveThisComputerOnly(); return
       case 'hold': port.holdRequests(); return

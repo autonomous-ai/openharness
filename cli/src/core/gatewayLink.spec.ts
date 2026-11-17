@@ -115,6 +115,13 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(kinds().at(-1)).toBe('stop')
   })
 
+  it('carries service provenance on the bounded counter frame', () => {
+    const { link, sent } = setup()
+    link.connected()
+    link.port.usage?.({ kind: 'service', service: 'agentBrowser', metric: 'agent_browser_failed_podman_old' })
+    expect(sent.at(-1)).toEqual({ kind: 'usageCounter', service: 'agentBrowser', metric: 'agent_browser_failed_podman_old' })
+  })
+
   it('drops optional measurement before relay traffic and never wakes a stopped gateway', () => {
     const { link, kinds, setBuffered, want } = setup()
     link.port.usageCounter?.('create_requests')

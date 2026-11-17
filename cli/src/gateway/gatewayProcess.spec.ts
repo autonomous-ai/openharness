@@ -15,6 +15,7 @@ import { b64e, newIdentity } from '../lib/e2ee/core.js'
 import { runGatewayService } from './gatewayProcess.js'
 import type { GatewayHost, StartedGateway } from './start.js'
 import { TabSessions } from './tabKey.js'
+import { countUsage } from './usageEvents.js'
 
 const STREAM = '00000000-0000-4000-8000-000000000002'
 const alice = newIdentity(), bob = newIdentity()
@@ -112,6 +113,24 @@ function wire() {
 }
 
 describe('the gateway\'s process, spoken to by the core', () => {
+  it('keeps service counters under recorder admission even when provenance is malformed', () => {
+    const w = wire(), counted: string[] = []
+    w.connect()
+    const gateway = w.gateways[0]
+    gateway.port.usage.mockImplementation(event => countUsage(event, metric => counted.push(metric), () => {}))
+    const receive = (payload: Record<string, unknown>) => w.options().onEvent!({ kind: 'usageCounter', ...payload })
+    receive({ service: 'hachi', metric: 'hachi_wake_done' })
+    receive({ service: 'agentBrowser', metric: 'agent_browser_failed_podman_old' })
+    receive({ service: 'agentBrowser', metric: 'hachi_wake_done' })
+    receive({ service: 'hachi', metric: 'ui_desktop_hachi_opened' })
+    for (const service of [null, 1, {}, 'unknown']) receive({ service, metric: 'hachi_wake_done' })
+    receive({ service: 'hachi', metric: null })
+    expect(counted).toEqual(['hachi_wake_done', 'agent_browser_failed_podman_old'])
+    expect(gateway.port.usageCounter).not.toHaveBeenCalled()
+    receive({ metric: 'create_failed' })
+    expect(gateway.port.usageCounter).toHaveBeenCalledExactlyOnceWith('create_failed')
+  })
+
   it('builds the gateway only when a core says start, with what the core holds, and again on each start', async () => {
     const w = wire()
     w.link.port.holdRequests()

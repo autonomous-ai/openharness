@@ -63,3 +63,29 @@ Exact local receipts: `/tmp/core-service-counter-red.log`,
 `/tmp/core-service-counter-final-types2.log`.
 This checkpoint establishes scoped macOS behavior, coverage and import removal, not independent
 review, hot-path cost acceptance, other-platform execution or final combined release gates.
+
+## Counter transport cost
+
+The first fixed ABBA comparison (`/tmp/core-service-counter-cost-v1`) holds source, Node,
+40 samples and 10,000 observations per sample. CPU rises from 14.8395 to 21.7035 ms per
+sample; elapsed median rises from 14.8024 to 20.8930 ms. The serialized observations grow
+from 890,000 to 1,305,000 bytes per sample. Both preparation and measurement exit zero,
+with EOF, process groups, guardians, private roots and unchanged hashes verified. This is
+a performance hold. The fixture uses the real main callback and counter functions, but
+substitutes null-returning unrelated query handlers and an in-memory JSON hop; it is not
+whole-daemon or kernel IPC evidence.
+
+A separate two-million-observation profile attributes 2,367 of 4,011 sampled milliseconds
+to the serialization adapter and 379 ms to the bundler's function-name helper. Native
+JSON work may be inlined into the adapter; these are not separate stringify/parse times.
+The new per-call reporting arrow invokes that name helper in the production build too.
+
+Correction before acceptance: retain one bound reporting callback per BackendSocket and
+carry service observations on the existing flat `usageCounter` frame with its authenticated
+service field. The gateway must send every frame containing that field through service
+admission, including malformed fields; it must never fall back to the unrestricted core
+counter path. Existing core counters without that field and other usage events retain their
+formats. The already coordinated private worker contract 2 covers this unpublished encoding.
+No extra queue, timer, retained observation or process is introduced. Tests first cover
+callback ownership, exact bounded wire shape, provenance admission and malformed-source
+refusal, followed by the existing recorder/backpressure gates and a frozen comparison.

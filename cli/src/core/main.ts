@@ -1723,7 +1723,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     want: (service) => experimentHooks.want(service),
     // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
     answer: async (service, query, payload, authority) => (query === 'count' && authority.current?.() === true
-      ? answerAgentQuery(coreApi, query, payload, { service, report: event => backend.reportUsage(event) }) : null)
+      ? answerAgentQuery(coreApi, query, payload, { service, report: backend.reportUsage }) : null)
       ?? (query === 'client_streams' && streamEndpoints.has(service) && authority.current?.() === true ? { ok: clientStreams.serving(service) } : null) ?? frameParts.answer(service, query, payload, () => authority.current?.() === true) ?? await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload, authority)
       // Agent Messages is answered what it uses and nothing more, never what an experiment may ask (core/messagesLink.ts).
       ?? (service === 'messages' ? await messagesLink.answer(query, payload) : null)

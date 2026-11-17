@@ -4553,7 +4553,8 @@ describe('opening the app', () => {
     const socket = new BackendSocket('fixture'), counted: string[] = []
     const usage = vi.fn((event: UsageEvent) => countUsage(event, metric => counted.push(metric), () => {}))
     socket.useGateway({ holdRequests: () => {}, serveThisComputerOnly: () => {}, localClients: () => {}, usage } as never)
-    socket.reportUsage({ kind: 'service', service: 'agentBrowser', metric: 'agent_browser_failed_podman_old' })
+    const report = socket.reportUsage
+    report({ kind: 'service', service: 'agentBrowser', metric: 'agent_browser_failed_podman_old' })
     socket.reportUsage({ kind: 'service', service: 'hachi', metric: 'hachi_wake_done' })
     socket.reportUsage({ kind: 'service', service: 'agentBrowser', metric: 'hachi_wake_done' })
     socket.reportUsage({ kind: 'service', service: 'hachi', metric: 'unrecognized_counter' })
