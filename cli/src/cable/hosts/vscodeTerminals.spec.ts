@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { REFUSED, type ListenerStream, type StreamEnd } from '../../services/devicesListener.js'
 import {
-  CHAIN_RETRY_MS, VSCODE_OPEN_MAX_BYTES, VSCODE_OPEN_PER_SECOND, VSCODE_STATE_MAX_BYTES, VSCODE_STATE_PER_SECOND,
-  VSCODE_TERMINALS, VSCODE_WINDOWS, vscodeStreams, type VscodeTerminalsDeps,
+  CHAIN_RETRY_MS, VSCODE_OPEN_MAX_BYTES, VSCODE_OPEN_PER_SECOND, VSCODE_SCROLL_MAX, VSCODE_STATE_MAX_BYTES,
+  VSCODE_STATE_PER_SECOND, VSCODE_TERMINALS, VSCODE_WINDOWS, vscodeStreams, type VscodeTerminalsDeps,
 } from './vscodeTerminals.js'
 
 const W1 = 'window-1'
@@ -141,7 +141,7 @@ describe('VS Code\'s windows', () => {
     expect(h.processes).not.toHaveBeenCalled()
     expect(h.timers.map(({ ms }) => ms)).toEqual([60_000])
     h.timers[0]!.run()
-    expect(h.logged.at(-1)).toBe('[devices] vscode · in the last minute: 0 shows, 0 taps, 1 refused states, 0 ps reads')
+    expect(h.logged.at(-1)).toBe('[devices] vscode · in the last minute: 0 shows, 0 taps, 1 refused states, 0 ps reads, 0 scroll lines, 0 dropped')
     // The same state in its form is taken.
     expect(h.state(W1, [700])).toBeUndefined()
     expect(h.processes).toHaveBeenCalledTimes(1)
@@ -393,6 +393,82 @@ describe('VS Code\'s windows', () => {
     expect(one.lines).toEqual([])
   })
 
+  it('whole lines are written at once on a writable stream, with the shell\'s pid', () => {
+    const h = harness()
+    const one = h.open(W1)
+    expect(h.terminals.scroll({ window: W1, shell: 700 }, -3)).toBe(true)
+    expect(one.lines).toEqual([{ scroll: -3, pid: 700 }])
+    one.drain()
+    // No line is 0: none is written, and none waits.
+    expect(h.terminals.scroll({ window: W1, shell: 700 }, 0)).toBe(true)
+    one.drain()
+    expect(one.lines).toEqual([{ scroll: -3, pid: 700 }])
+  })
+
+  it('lines that cannot be written yet are added to the next line, 100 at most, the rest after it', () => {
+    expect(VSCODE_SCROLL_MAX).toBe(100)
+    const h = harness()
+    const one = h.open(W1)
+    const terminal = { window: W1, shell: 700 }
+    h.terminals.scroll(terminal, -3)
+    h.terminals.scroll(terminal, -60)
+    h.terminals.scroll(terminal, -75)
+    h.terminals.scroll(terminal, 5)
+    expect(one.lines).toEqual([{ scroll: -3, pid: 700 }])
+    one.drain()
+    expect(one.lines.at(-1)).toEqual({ scroll: -100, pid: 700 })
+    // Lines that come while the rest waits are added to it.
+    h.terminals.scroll(terminal, 200)
+    one.drain()
+    expect(one.lines.at(-1)).toEqual({ scroll: 100, pid: 700 })
+    one.drain()
+    expect(one.lines.at(-1)).toEqual({ scroll: 70, pid: 700 })
+    one.drain()
+    expect(one.lines).toHaveLength(4)
+  })
+
+  it('a show that waits is written before the scroll', () => {
+    const h = harness()
+    const one = h.open(W1)
+    h.terminals.show({ window: W1, shell: 700 }, true)
+    h.terminals.scroll({ window: W1, shell: 710 }, 2)
+    h.terminals.show({ window: W1, shell: 710 }, false)
+    one.drain()
+    expect(one.lines).toEqual([{ show: 700 }, { show: 710 }])
+    one.drain()
+    expect(one.lines).toEqual([{ show: 700 }, { show: 710 }, { scroll: 2, pid: 710 }])
+  })
+
+  it('lines for another shell replace what waits, and that is counted dropped', () => {
+    const h = harness()
+    const one = h.open(W1)
+    h.terminals.scroll({ window: W1, shell: 700 }, -1)
+    h.terminals.scroll({ window: W1, shell: 700 }, -5)
+    h.terminals.scroll({ window: W1, shell: 710 }, 2)
+    one.drain()
+    expect(one.lines).toEqual([{ scroll: -1, pid: 700 }, { scroll: 2, pid: 710 }])
+    // A line already written is not what waits: the next shell's lines drop nothing.
+    h.terminals.scroll({ window: W1, shell: 700 }, 1)
+    one.drain()
+    expect(h.timers.map(({ ms }) => ms)).toEqual([60_000])
+    h.timers[0]!.run()
+    expect(h.logged.at(-1)).toBe('[devices] vscode · in the last minute: 0 shows, 0 taps, 0 refused states, 0 ps reads, 3 scroll lines, 1 dropped')
+  })
+
+  it('scroll answers false once the window\'s stream has ended, and what waited is gone', () => {
+    const h = harness()
+    const one = h.open(W1)
+    expect(h.terminals.scroll({ window: W2, shell: 700 }, -1)).toBe(false)
+    h.terminals.scroll({ window: W1, shell: 700 }, -1)
+    h.terminals.scroll({ window: W1, shell: 700 }, -4)
+    one.end('stalled')
+    expect(h.terminals.scroll({ window: W1, shell: 700 }, -1)).toBe(false)
+    expect(one.lines).toEqual([{ scroll: -1, pid: 700 }])
+    // The window's next stream starts with nothing waiting.
+    const next = h.open(W1)
+    expect(next.lines).toEqual([])
+  })
+
   it('the log holds counts and fixed words: no pid and no window id', async () => {
     const h = harness()
     const id = '5f3a9c2e-1b7d-4e8a-9c0f-2d6b8e4a7c13'
@@ -415,10 +491,10 @@ describe('VS Code\'s windows', () => {
     newer.end('gone')
     expect(h.logged).toEqual([
       '[devices] vscode stream · open · windows 1',
-      '[devices] vscode · in the last minute: 1 shows, 1 taps, 1 refused states, 1 ps reads',
+      '[devices] vscode · in the last minute: 1 shows, 1 taps, 1 refused states, 1 ps reads, 0 scroll lines, 0 dropped',
       '[devices] vscode stream · open · windows 1',
       '[devices] vscode stream · ended · replaced · windows 1',
-      '[devices] vscode · in the last minute: 1 shows, 0 taps, 0 refused states, 0 ps reads',
+      '[devices] vscode · in the last minute: 1 shows, 0 taps, 0 refused states, 0 ps reads, 0 scroll lines, 0 dropped',
       '[devices] vscode stream · ended · gone · windows 0',
     ])
     for (const line of h.logged) expect(line).not.toMatch(/900|700|5f3a/)
