@@ -42,6 +42,9 @@ it is fixed in, is in [the audit](../docs/design/2026-11-12-core-audit.md): that
    the component that faces it, and reaches the core as typed, bounded data. No process of the daemon, and no hook,
    reads another process's environment, by any means (`/proc/<pid>/environ`, `ps e`, `KERN_PROCARGS2`,
    `tmux show-environment`): a hook reads its own and says only what it derives (`src/architecture.environment.spec.ts`).
+   Nor is the daemon handed the environment of whatever started it: on macOS and Linux `harness start` passes an
+   allowlist ([the daemon's environment](../docs/cli.md#the-daemons-environment), `src/lib/startEnvironment.ts`), and
+   `src/architecture.startEnvironment.spec.ts` holds every variable the daemon reads to it.
    One reader is left, a listed follow-up: the macOS helper `native/darwin-process-images.c` hashes `KERN_PROCARGS2`,
    environment included.
 5. **The core lends its authority narrowly.** It runs no command line a component hands it, and signs a backend
