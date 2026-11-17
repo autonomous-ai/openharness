@@ -31,6 +31,9 @@ void main() {
     expect(on('Version 13.0 (Build 22A380)'), isTrue);
     expect(on('Version 26.6.2 (Build 25G83)'), isTrue);
     expect(on('Version 12.7.6 (Build 21H1320)'), isFalse);
+    // Apple documents the string as localized.
+    expect(on('バージョン 14.5（ビルド 23F79）'), isTrue);
+    expect(on('Versión 12.7.6 (compilación 21H1320)'), isFalse);
     expect(on(''), isFalse);
     expect(on('6.8.0-45-generic'), isFalse);
     expect(
