@@ -174,7 +174,7 @@ A new `HostSource` with the id `opencode`.
     your answer in opencode.`; too long `Too long. Say it shorter.`; `failed` or `gone` `<name> did not answer.`
   - Each outcome goes to the observed source's counter (`ObservedActions.count`): `opencode` when sent; `busy`,
     `waiting`, `too-long` or `no-answer` when refused.
-- **Checked input:** every field from the server is checked here before use: session id form, `parentID` absent, title
+- **Checked input:** every field from the server is checked here before use: session id form, `parentID` absent or null, title
   and folder bounds, times as finite numbers, state enums; an entry that fails is left out. At most 50 sessions read, 16
   listed.
 

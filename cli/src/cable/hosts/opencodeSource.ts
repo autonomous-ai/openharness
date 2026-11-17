@@ -123,7 +123,9 @@ function entryOf(value: unknown, running: Record<string, unknown>): Entry | unde
   const { id, parentID, title, location } = value
   const { updated, idle, viewed } = value.time
   const directory = isObject(location) ? location.directory : undefined
-  if (typeof id !== 'string' || !OPENCODE_SESSION.test(id) || parentID !== undefined || !finite(updated)) return undefined
+  // A root has no parentID, or a null one: the list asks for roots alone.
+  const root = parentID === undefined || parentID === null
+  if (typeof id !== 'string' || !OPENCODE_SESSION.test(id) || !root || !finite(updated)) return undefined
   if ((idle !== undefined && !finite(idle)) || (viewed !== undefined && !finite(viewed))) return undefined
   if ((title !== undefined && typeof title !== 'string') || (directory !== undefined && typeof directory !== 'string')) return undefined
   return { id, title, directory, updated, idle, viewed, running: Object.hasOwn(running, id) }
