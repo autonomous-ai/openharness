@@ -67,7 +67,8 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
       if (deps.platform === 'win32' || running) return false
       running = true
       try {
-        if (!deps.wanted() || deps.now() < retryAt || deps.recorded() === deps.version) return false
+        // The in-memory checks first: wanted() reads dial-skill.json, which a scan with the plugin set up never reads.
+        if (deps.recorded() === deps.version || deps.now() < retryAt || !deps.wanted()) return false
         return await run()
       } catch {
         return failed('error')

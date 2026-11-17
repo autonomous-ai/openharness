@@ -473,13 +473,14 @@ describe('the devices set the dial skill up', () => {
 
   it('a home is not handled while its engine is removed', () => {
     const other = folder()
-    let removed = true
-    const r = rig({ removed: () => (removed ? { codex: true } : {}) })
+    const r = rig()
+    writeRemoved(r.dataDir, 'codex', true)
     r.writer.started()
     r.writer.scanned([ownerIn(other)])
     expect(existsSync(join(other, 'skills'))).toBe(false)
 
-    removed = false
+    // enable clears the removal in dial-skill.json.
+    writeRemoved(r.dataDir, 'codex', false)
     r.writer.scanned([ownerIn(other)])
 
     expect(hasSkill(other)).toBe(true)
