@@ -290,10 +290,8 @@ describe('a log that cannot grow', () => {
 // to 60, where vitest's 5 s for a whole test ran out before the conditions did.
 describe('runMaster', { timeout: 60_000 }, () => {
   let dir: string
-  // runMaster titles the process it runs in: here, the test worker.
-  const title = process.title
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'harnessd-master-')) })
-  afterEach(() => { rmSync(dir, { recursive: true, force: true }); process.title = title })
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
   /** Wait for [test] to hold. The deadline only names what never came, well before the test's own. */
   /** What the children appended to [path] so far, one JSON line each: whole lines only. Polled while they
@@ -333,6 +331,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     `)
     const exits: number[] = []
     const signals = new Map<string, () => void>()
+    const title = process.title
     const supervisor = runMaster({
       nodePath: node, runtimeDir: runtime, execArgv: [], scriptPath: core, pidFile: join(dir, 'adapter.pid'),
       restoreUpdate: () => {}, confirmUpdate: () => {},
@@ -344,6 +343,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     expect(readFileSync(ran, 'utf8')).toBe(join(libexec, 'harnessd-core'))
     expect(readFileSync(`${ran}search`, 'utf8')).toBe(join(libexec, 'harnessd-search'))
     expect(readFileSync(`${ran}devices,wifi,machineAddons`, 'utf8')).toBe(join(libexec, 'harnessd-devices'))
+    expect(process.title, 'the link is its only name').toBe(title)
     signals.get('SIGTERM')!()
     await until('the master to finish', () => exits.length > 0)
   })
