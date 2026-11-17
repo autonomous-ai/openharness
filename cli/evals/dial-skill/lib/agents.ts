@@ -128,15 +128,23 @@ export interface Exit { code: number | null; signal: NodeJS.Signals | null; stdo
 const running = new Map<number, string>()
 
 /** Kills every run still going, for a runner that is exiting: a signal to the runner reaches none of their process
- *  groups. */
+ *  groups. Every group first, then each run root, so a root that cannot be swept spares no other run. */
 export function killAgents(): void {
-  for (const [pid, root] of running) {
+  for (const pid of running.keys()) {
     try {
       process.kill(-pid, 'SIGKILL')
     } catch {
       // ESRCH: every process in the group has already exited.
     }
-    killWorkingIn(root)
+  }
+  for (const root of running.values()) {
+    try {
+      killWorkingIn(root)
+    } catch (error) {
+      // The runner is exiting, so this line is all a person gets. Its code only: the message names the run root.
+      const code = (error as NodeJS.ErrnoException).code ?? 'error'
+      console.error(`dial skill eval: a run root was not swept (${code}): what is left in it may still run`)
+    }
   }
 }
 
