@@ -146,6 +146,17 @@ class SelectionTests(unittest.TestCase):
                 self.assertEqual(planner.owners(path), expected)
                 self.assertLessEqual(expected, planner.select([path])[0])
 
+    def test_the_vscode_extension_belongs_to_the_cli_suite(self):
+        # cli/build.mjs inlines it and cli/vitest.config.ts runs its tests.
+        for path in ("plugins/harness-device-vscode/src/loop.ts", "plugins/harness-device-vscode/package.json"):
+            with self.subTest(path=path):
+                self.assertEqual(planner.owners(path), {"cli"})
+                self.assertEqual(planner.select([path])[0], {"cli"})
+                self.assertTrue(planner.reads("cli", path))
+                self.assertIsNone(planner.shared_input(path))
+        # Orca's plugin is tested by Orca's own tools: it stays outside every suite.
+        self.assertEqual(planner.select(["plugins/harness-device-orca/src/dial.ts"])[0], set())
+
     def test_the_windows_installer_selects_the_pty_suite(self):
         # installer/'s model and steps are plain Rust that tests on Linux; pty-checks runs them (installer spec §4.1).
         for path in ("installer/src/model.rs", "installer/tests/entry-vectors.json", "installer/Cargo.lock"):
