@@ -1,6 +1,53 @@
 # Package 12: Wi-Fi input and relay ownership
 
+## Dependent compatibility cutover design (2026-11-18)
+
+Status: the coordinator authorized implementation as an isolated dependent draft. Immutable worker
+cohort review and native startup/update/rollback proof are mandatory integration and publication
+gates and have not yet passed. This branch must not ship alone. No admission-only release has been
+published; if that changes, the executed private worker contract must advance before this cutover.
+The freshness owner confirms `WORKER_CONTRACT=1` represents that combined unpublished release.
+
+The shared-input comparison still sends each correlated operation's generic facts and obsolete
+private notices. New workers discard the latter: per 2,000 inputs, 6,000 input-status notices,
+2,000 dispatch notices and 2,000 each legacy turn-start/turn-end notices. Remove that translation
+only when the master positively admits one immutable cohort: probe and current core/services all
+execute its snapshot; startup, upgrade and rollback reap old peers; child entry guards reject an
+unsupported retained parent before effects. A retained legacy cohort runs its verified historical
+lean core with inline historical features and its master-owned immutable historical updater.
+
+That positive admission replaces the earlier elapsed-30-day removal condition for this private
+core/worker link. Public device v1, clients from the last 30 days and durable receipt journals keep
+their contracts. Full-product rollback selects the matching historical cohort, not an old worker
+beside this core. Unresolved receipts stay unknown and are never replayed.
+
+Core removes the legacy input mode/phase translator, duplicate lifecycle interpretation and obsolete
+submit/cancel/started adapters. It keeps the existing synchronous transcript-watch arming and dispatch
+count before the generic input fact. A nonlegacy forced `turnEnded` remains. The worker requires the
+shared input contract and preserves original-connection, captured-binding and current-reservation
+checks around resolve, context, submit and cancel. Generic delivery outcomes and inline onInput/
+onDelivery subscriptions remain. The component's internal receipt methods still interpret generic
+facts; removing an obsolete private port does not remove those methods.
+
+Design: this deletes transient notices, adapters and a core policy import; no new record, cache,
+queue, timer or archive is added. Shared writer ownership, uncertainty and every effect fence remain.
+Read cost keeps the same resolve/input queries and removes duplicate serialization. No public or
+journal schema, migration, audience, identity or secret handling changes. Unsupported private
+contracts fail visibly with the existing bounded wait; disconnect does not retry. This affects common
+TypeScript on macOS, Linux and Windows; host-mocked checks do not prove native Windows behavior.
+
+Selected checks: RED actual core/component bridge for one generic fact/batch, receipt completion and
+watch arming before dispatch; retain binding mutation/revocation, adjacent Codex busy-turn batches,
+forced end, unknown receipts, held-writer wakeups and inline single delivery. Run affected core/service
+files at 100% per-file coverage, types and architecture. Native integration and cost require the
+coordinator's reviewed frozen sources and quiet slot. The cost fixture needs an explicit version
+adapter for each source's composition; disclose that fixture delta while preserving all nine workload
+cases, counts, bounds and deadlines. Neither this draft nor focused tests satisfy the cohort gate.
+
 ## Shared input cutover design (2026-11-17)
+
+This records the integrated transitional design. The dependent amendment above supersedes its
+private compatibility policy only after the stated integration and publication gates pass.
 
 Ordinary messages, tracked whole turns and correlated composer input converge on the session input
 operation. Scheduling is `composer` or `turn`; a delivery id asks for correlation, not a device-specific

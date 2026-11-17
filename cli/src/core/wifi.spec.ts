@@ -8,8 +8,8 @@ const device = (identity: string, direct = false): RemoteClient => ({ role: 'dev
 function harness() {
   const port = {
     session: vi.fn(), request: vi.fn(async () => {}), dropped: vi.fn(), revoked: vi.fn(), resume: vi.fn(async () => {}), card: vi.fn(),
-    turnStarted: vi.fn(), turnEnded: vi.fn(), stream: vi.fn(), transcript: vi.fn(), delivery: vi.fn(), dispatched: vi.fn(),
-    events: vi.fn(), input: vi.fn(), disconnected: vi.fn(), inputStatus: vi.fn(), agentGone: vi.fn(), appFocus: vi.fn(async () => {}), revealed: vi.fn(), stop: vi.fn(),
+    turnEnded: vi.fn(), stream: vi.fn(), transcript: vi.fn(), delivery: vi.fn(),
+    events: vi.fn(), input: vi.fn(), disconnected: vi.fn(), agentGone: vi.fn(), appFocus: vi.fn(async () => {}), revealed: vi.fn(), stop: vi.fn(),
   } satisfies WifiPort
   let on: WifiPort | null = port
   const clients = new Map<string, RemoteClient>()
@@ -92,8 +92,7 @@ describe('the Wi-Fi device, as the core keeps it', () => {
     const { wifi, port } = harness()
     expect(wifi.feed.needsTranscript('a', 's', 'claude')).toBe(false)
     wifi.started(null)
-    wifi.feed.inputDispatched('a', 'd1', 'hi', 's')
-    expect(port.dispatched).toHaveBeenCalledWith('a', 'd1', 'hi', 's')
+    wifi.feed.inputDispatched('a')
     // Before the service could ask for it: the prompt's first lines may come at once.
     expect(wifi.feed.needsTranscript('a', 's', 'claude')).toBe(true)
     expect(wifi.feed.needsTranscript('a', 's', 'codex')).toBe(true)
@@ -102,7 +101,7 @@ describe('the Wi-Fi device, as the core keeps it', () => {
     wifi.feed.observeTranscript('a', 's', 'claude', '{"line":1}')
     expect(port.transcript).toHaveBeenCalledWith('a', 's', 'claude', '{"line":1}')
     // A second prompt the service has not heard of yet: its "done as of the first" leaves it watched.
-    wifi.feed.inputDispatched('a', 'd2', 'again', 's')
+    wifi.feed.inputDispatched('a')
     wifi.api.transcripts('a', 1)
     expect(wifi.feed.needsTranscript('a', 's', 'claude')).toBe(true)
     wifi.api.transcripts('a', 2)
@@ -115,7 +114,7 @@ describe('the Wi-Fi device, as the core keeps it', () => {
   it('takes the service\'s own list as it starts, and forgets the counts the last one heard', () => {
     const { wifi } = harness()
     wifi.started(null)
-    wifi.feed.inputDispatched('a', 'd1', 'hi')
+    wifi.feed.inputDispatched('a')
     wifi.api.watching(['b'])
     expect(wifi.feed.needsTranscript('a', 's', 'claude')).toBe(false)
     expect(wifi.feed.needsTranscript('b', 's', 'claude')).toBe(true)
@@ -153,7 +152,7 @@ describe('the Wi-Fi device, as the core keeps it', () => {
     expect(port.turnEnded).toHaveBeenCalledWith('b', true)
     off()
     for (const call of [() => wifi.feed.agentGone('a'),
-      () => wifi.feed.observeTranscript('a', 's', 'claude', 'x'), () => wifi.feed.inputDispatched('a', 'd', 't'),
+      () => wifi.feed.observeTranscript('a', 's', 'claude', 'x'), () => wifi.feed.inputDispatched('a'),
       () => wifi.feed.turnEnded('a'),
       () => wifi.card({ type: 'commander_event' }), () => wifi.fromGateway.request('c', {}, null), () => wifi.fromGateway.revoked('i'),
       () => wifi.fromGateway.dropped('c'), () => wifi.fromGateway.session('c', device('i')), () => wifi.started(null)]) expect(call()).toBeUndefined()

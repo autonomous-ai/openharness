@@ -30,7 +30,7 @@ import type { CoreApi, RemoteClient, WifiPort, WifiResume } from './api.js'
 export interface WifiFeed {
   needsTranscript(agentId: string, sessionId: string, engine: string): boolean
   observeTranscript(agentId: string, sessionId: string, engine: string, line: string): void
-  inputDispatched(agentId: string, deliveryId: string, text: string, sessionId?: string): void
+  inputDispatched(agentId: string): void
   agentGone(agentId: string): void
   turnEnded(agentId: string, aborted?: boolean): void
   events(agentId: string, events: readonly LiveEvent[]): void
@@ -152,11 +152,10 @@ export function createWifiCore(deps: WifiCoreDeps) {
   const feed: WifiFeed = {
     needsTranscript: (agentId, _sessionId, engine) => up && watched.has(agentId) && PROVEN_BY_TRANSCRIPT.has(engine),
     observeTranscript: (agentId, sessionId, engine, line) => port()?.transcript(agentId, sessionId, engine, line),
-    inputDispatched: (agentId, deliveryId, text, sessionId) => {
+    inputDispatched: (agentId) => {
       // Before the service hears of it: the prompt's first lines may be written before it could ask.
       watched.add(agentId)
       dispatched.set(agentId, (dispatched.get(agentId) ?? 0) + 1)
-      port()?.dispatched(agentId, deliveryId, text, sessionId)
     },
     agentGone: (agentId) => port()?.agentGone(agentId),
     turnEnded: (agentId, aborted = false) => port()?.turnEnded(agentId, aborted),

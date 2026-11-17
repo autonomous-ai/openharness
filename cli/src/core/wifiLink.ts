@@ -14,16 +14,12 @@
  * and a recent turn, as queries; the rest as notices.
  */
 import type { CoreApi, WifiPort } from './api.js'
-import type { ServiceFrame, ServiceQueryAuthority } from './serviceLinks.js'
-import type { Deliveries } from './deliveries.js'
-import type { SessionInputProgress } from '../lib/sessionInput.js'
-import { submissionPolicy } from '../engines/submissionPolicies.js'
+import type { ServiceFrame } from './serviceLinks.js'
 
 export interface WifiLinkDeps {
   core: CoreApi
   /** A notice for the service's process; false when it is not connected to hear it. */
   notify(frame: ServiceFrame): boolean
-  deliveries: Pick<Deliveries, 'answer'>
   log?: (line: string) => void
 }
 
@@ -44,28 +40,13 @@ export function createWifiLink(deps: WifiLinkDeps) {
     revoked: (identity) => event('revoked', { identity }),
     resume: async (state) => event('resume', { ...state }),
     card: (frame, fullText) => event('card', { frame, ...(fullText === undefined ? {} : { fullText }) }),
-    turnStarted: (agentId) => event('turnStarted', { agentId }),
     turnEnded: (agentId, aborted) => event('turnEnded', { agentId, aborted }),
     stream: (agentId, events) => event('stream', { agentId, events }),
     input: progress => event('input', { event: progress }),
     disconnected: () => event('disconnected'),
-    events: (agentId, events) => {
-      event('input_events', { agentId, events })
-      // Introduced 2026-11-17. Remove only after the first release with the new worker has aged
-      // 30 days AND every supported kept-worker/update path has proven the cutover. No runtime expiry.
-      const busyInput = submissionPolicy(core.agents.byAgent(agentId)?.engine)?.typesWhileBusy === true
-      for (let index = 0; index < events.length; index++) {
-        const item = events[index]
-        if (item.type === 'turn_started') event('turnStarted', { agentId, legacy: true })
-        else if (item.type === 'turn_ended' && !(busyInput && events[index + 1]?.type === 'turn_started')) {
-          event('turnEnded', { agentId, aborted: item.payload.aborted === true, legacy: true })
-        }
-      }
-    },
+    events: (agentId, events) => event('input_events', { agentId, events }),
     transcript: (agentId, sessionId, engine, line) => event('transcript', { agentId, sessionId, engine, line }),
     delivery: (delivery) => event('delivery', { event: delivery }),
-    dispatched: (agentId, deliveryId, said, sessionId) => event('dispatched', { agentId, deliveryId, text: said, ...(sessionId === undefined ? {} : { sessionId }) }),
-    inputStatus: (status) => event('inputStatus', { event: status }),
     agentGone: (agentId) => event('agentGone', { agentId }),
     appFocus: async (machineId, agentId, connId) => event('appFocus', { machineId, agentId, connId }),
     revealed: (operationId, agentId) => event('revealed', { operationId, agentId }),
@@ -94,9 +75,6 @@ export function createWifiLink(deps: WifiLinkDeps) {
 
   /** What the service tells the core without asking (`service_notice`), by kind. */
   const notices: Record<string, (payload: Record<string, unknown>) => void> = {
-    cancel: ({ deliveryId }) => { deps.deliveries.answer('wifi', 'cancel_delivery', { deliveryId }) },
-    // Older workers report their own transcript evidence. It is not authority to release a pane.
-    started: () => {},
     scroll: ({ phase, dy, velocity }) => { if (phase === 'down' || phase === 'move' || phase === 'up') core.wifi.scroll(phase, number(dy), number(velocity)) },
     focusApp: ({ agentId, expiresAt, focusRevision }) => { core.wifi.focusApp(text(agentId), number(expiresAt), text(focusRevision)) },
     reveal: ({ operationId, agentId }) => core.wifi.reveal(text(operationId), text(agentId)),
@@ -113,34 +91,9 @@ export function createWifiLink(deps: WifiLinkDeps) {
 
   return {
     port,
-    answer(query: string, payload: Record<string, unknown>, authority?: ServiceQueryAuthority): Record<string, unknown> | Promise<Record<string, unknown>> {
-      if (query === 'submit') {
-        const answer = deps.deliveries.answer('wifi', 'input', { version: 1, agentId: payload.agentId,
-          text: payload.text, deliveryId: payload.deliveryId, when: 'composer' }, authority)!
-        // Old submit ignores error payloads: refusal must reach its receipt consumer too.
-        if (answer.error && authority?.current?.() !== false) event('delivery', { event: { sessionId: text(payload.agentId), deliveryId: text(payload.deliveryId),
-          state: 'rejected', reason: answer.error } })
-        return answer
-      }
+    answer(query: string, payload: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>> {
       const ask = Object.hasOwn(queries, query) ? queries[query] : undefined
       return ask ? ask(payload) : { error: 'UNKNOWN_QUERY' }
-    },
-    /** Stateless translation for retained old workers. New workers consume the generic input fact. */
-    input(progress: SessionInputProgress): void {
-      if (!progress.deliveryId) return
-      const session = core.agents.byAgent(progress.agentId)
-      const policy = session && session.sessionId === progress.sessionId ? submissionPolicy(session.engine) : undefined
-      const waiting = progress.phase.startsWith('waiting_for_')
-      let mode = waiting ? 'daemon_queue' : 'direct'
-      if (!waiting && progress.duringTurn) {
-        mode = policy?.busyInput?.mode ?? 'native_input'
-        const version = session?.cliVersion?.match(/(\d+)\.(\d+)\.(\d+)/)
-        const [major, minor] = policy?.busyInput?.steeringSince ?? [Infinity, 0]
-        if (version && (Number(version[1]) > major || Number(version[1]) === major && Number(version[2]) >= minor)) mode = 'steering'
-      }
-      const phase = progress.phase === 'dispatching' || progress.phase === 'written' ? 'submitted'
-        : progress.phase === 'composer_available' ? 'accepted' : progress.phase
-      event('inputStatus', { event: { sessionId: progress.agentId, deliveryId: progress.deliveryId, mode, phase } })
     },
     notice(payload: Record<string, unknown>): void {
       const kind = text(payload.kind)

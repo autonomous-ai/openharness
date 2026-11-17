@@ -17,8 +17,8 @@ function wifiPort(machineId: string, log: string[]) {
   const record = (name: string) => (...args: unknown[]) => { log.push(`${machineId} ${name} ${JSON.stringify(args)}`) }
   const port: WifiPort = {
     session: record('session'), dropped: record('dropped'), revoked: record('revoked'), card: record('card'),
-    turnStarted: record('turnStarted'), turnEnded: record('turnEnded'), stream: record('stream'), transcript: record('transcript'),
-    delivery: record('delivery'), dispatched: record('dispatched'), inputStatus: record('inputStatus'), agentGone: record('agentGone'),
+    turnEnded: record('turnEnded'), stream: record('stream'), transcript: record('transcript'),
+    delivery: record('delivery'), agentGone: record('agentGone'),
     revealed: record('revealed'), events: record('events'), input: record('input'), disconnected: vi.fn(),
     // A request is taken only once the agents are listed: what the core says after it waits.
     request: vi.fn(async (...args: unknown[]) => { await new Promise((resolve) => setTimeout(resolve, 5)); record('request')(...args) }),
@@ -51,7 +51,7 @@ function setup(over: { startThrows?: boolean; leavesOff?: boolean } = {}) {
   const run = vi.fn((given: ServiceProcessOptions) => { options = given; return { stop } })
   const service = runWifiService({ dataDir: '/data', socketPath: '/sock', machineId: 'computer-9', token: 't', start, run })
   const notices: Array<[string, Record<string, unknown> | undefined]> = []
-  let answers: Record<string, unknown> = { machine: { id: 'machine-1' }, input_contract: { error: 'UNKNOWN_QUERY' } }
+  let answers: Record<string, unknown> = { machine: { id: 'machine-1' }, input_contract: { version: 1 }, follow_agents: { agents: [] }, resolve: { value: { agentId: 'a', sessionId: 's', engine: 'claude' } } }
   const connection: CoreConnection = {
     query: vi.fn(async (query: string) => {
       const answer = answers[query]
@@ -92,7 +92,6 @@ describe('the Wi-Fi device in the devices\' process', () => {
     expect(f.log.filter(line => line.includes(' input '))).toEqual([`machine-1 input [${JSON.stringify(event)}]`])
     expect(f.log.some(line => line.includes('dispatched') || line.includes('inputStatus'))).toBe(false)
     expect(f.ports[0].disconnected).toHaveBeenCalledOnce()
-    f.adapter().consumed!('a', 'already interpreted by shared input')
     expect(f.notices).toEqual([])
     f.event({ kind: 'input', event })
     f.event({ kind: 'agent', event: { kind: 'ended', agentId: 'b' } })
@@ -194,7 +193,6 @@ describe('the Wi-Fi device in the devices\' process', () => {
     await vi.waitFor(() => expect(f.ports[0]?.resume).toHaveBeenCalledOnce())
     f.event({ kind: 'input_events', agentId: 'a', events: [] })
     f.event({ kind: 'turnStarted', agentId: 'a', legacy: true })
-    f.event({ kind: 'turnEnded', agentId: 'a', legacy: true })
     f.event({ kind: 'stream', agentId: 'a', events: [] })
     f.event({ kind: 'turnEnded', agentId: 'a', aborted: true })
     await vi.waitFor(() => expect(f.log.at(-1)).toBe('machine-1 turnEnded ["a",true]'))
@@ -242,13 +240,16 @@ describe('the Wi-Fi device in the devices\' process', () => {
     expect(query.mock.calls.filter(([name]) => name === 'input' || name === 'submit')).toEqual([])
   })
 
-  it.each([{}, { version: 2 }, { error: 'SERVICE_UNAVAILABLE' }, new Error('timeout')])('never falls back after an unconfirmed contract: %j', async answer => {
+  it.each([{}, { version: 2 }, { error: 'UNKNOWN_QUERY' }, { error: 'SERVICE_UNAVAILABLE' }, new Error('timeout')])('never falls back after an unconfirmed contract: %j', async answer => {
     const f = setup()
     f.answer('input_contract', answer)
     f.connect(); f.event({ kind: 'resume' })
     await vi.waitFor(() => expect(f.start).toHaveBeenCalledOnce())
     await expect(f.adapter().submit!('a', 'hello', 'd', () => {})).rejects.toThrow()
     expect(vi.mocked(f.connection.query).mock.calls.filter(([query]) => ['resolve', 'submit', 'input'].includes(query))).toEqual([])
+    f.event({ kind: 'input_events', agentId: 'a', events: [] })
+    await f.options().requests!.wifi_http({}, { local: true, owner: true })
+    expect(f.log.some(line => line.includes(' events '))).toBe(false)
   })
 
   it('rejects a resolved different agent before any input and surfaces a safe shared refusal', async () => {
@@ -272,7 +273,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     const f = setup()
     expect(f.options()).toMatchObject({ name: 'wifi', socketPath: '/sock', machineId: 'computer-9', token: 't' })
     // Nothing the core says reaches a service that is not built yet.
-    f.event({ kind: 'turnStarted', agentId: 'a' })
+    f.event({ kind: 'turnEnded', agentId: 'a' })
     f.connect()
     f.event({ kind: 'resume', sessions: [{ connId: 'c', client: { role: 'device' } }], helloed: 'nope', focus: { machineId: 'm', agentId: 'a', connId: 'w' } })
     await f.settled()
@@ -356,16 +357,13 @@ describe('the Wi-Fi device in the devices\' process', () => {
       'machine-1 request ["c",{},null]',
       'machine-1 card [{"type":"commander_event"},"whole"]',
       'machine-1 card [{"type":"commander_event"},null]',
-      'machine-1 turnStarted ["a"]',
       'machine-1 turnEnded ["a",true]',
       'machine-1 turnEnded ["a",false]',
       'machine-1 stream ["a",[{"type":"text_delta"}]]',
       'machine-1 stream ["a",[]]',
+      'machine-1 events ["a",[]]',
       'machine-1 transcript ["a","s","claude","{}"]',
       'machine-1 delivery [{"deliveryId":"d"}]',
-      'machine-1 dispatched ["a","d","hi","s"]',
-      'machine-1 dispatched ["a","d","hi",null]',
-      'machine-1 inputStatus [{"deliveryId":"d"}]',
       'machine-1 agentGone ["a"]',
       'machine-1 appFocus ["m","a","w"]',
       'machine-1 appFocus ["m",null,"w"]',
@@ -409,10 +407,9 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.answer('stepFocus', { machineId: 7 })
     expect(await wifi.stepFocus('next')).toEqual({ machineId: '', agentId: '' })
     await f.adapter().submit!('a', 'hi', 'd', () => {})
-    expect(f.connection.query).toHaveBeenCalledWith('submit', { agentId: 'a', text: 'hi', deliveryId: 'd' })
+    expect(f.connection.query).toHaveBeenCalledWith('input', { version: 1, agentId: 'a', text: 'hi', deliveryId: 'd', when: 'composer' })
     f.adapter().cancel!('d')
     await Promise.resolve()
-    f.adapter().consumed!('a', 'hi')
     wifi.reveal('op', 'a')
     wifi.send('c', 'i', 'autonomous_device_result', { ok: true })
     wifi.hello('c', 'i')
@@ -423,7 +420,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     wifi.transcripts('a', 1)
     wifi.watching(['a'])
     wifi.streams(['a'])
-    expect(f.notices.map(([kind]) => kind)).toEqual(['scroll', 'focusApp', 'cancel', 'started', 'reveal', 'send', 'hello', 'joined',
+    expect(f.notices.map(([kind]) => kind)).toEqual(['scroll', 'focusApp', 'reveal', 'send', 'hello', 'joined',
       'ready', 'unpaired', 'focus', 'transcripts', 'watching', 'streams'])
     expect(f.notices[0][1]).toEqual({ phase: 'move', dy: 2, velocity: 3 })
     expect(f.notices.find(([kind]) => kind === 'send')![1]).toEqual({ connId: 'c', identity: 'i', type: 'autonomous_device_result', payload: { ok: true } })
@@ -431,7 +428,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.disconnect()
     await expect(wifi.stop('a')).rejects.toThrow('the Wi-Fi device is not connected to the core')
     wifi.joined()
-    expect(f.notices).toHaveLength(14)
+    expect(f.notices).toHaveLength(12)
   })
 
   it('answers its routes of the door once what the core said before is heard, and as down while it is not built', async () => {
@@ -452,7 +449,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     const f = setup({ startThrows: true })
     f.connect()
     f.event({ kind: 'resume' })
-    f.event({ kind: 'turnStarted', agentId: 'a' })
+    f.event({ kind: 'turnEnded', agentId: 'a' })
     await f.settled()
     expect(warn).toHaveBeenCalledWith('[wifi] did not start · journal unreadable')
     expect(await f.options().requests!.wifi_http({ method: 'GET', target: '/api/autonomous-device/addon/state' }, { local: true, owner: true })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
@@ -487,10 +484,10 @@ describe('the Wi-Fi device in the devices\' process', () => {
     expect(f.start).toHaveBeenCalledTimes(1)
     vi.mocked(f.ports[0].appFocus).mockRejectedValueOnce('not an error')
     f.event({ kind: 'appFocus', machineId: 'm', agentId: 'a', connId: 'w' })
-    f.event({ kind: 'turnStarted', agentId: 'a' })
+    f.event({ kind: 'turnEnded', agentId: 'a' })
     await f.settled()
     expect(warn).toHaveBeenCalledWith('[wifi] not an error')
-    expect(f.log.at(-1)).toBe('machine-1 turnStarted ["a"]')
+    expect(f.log.at(-1)).toBe('machine-1 turnEnded ["a",false]')
   })
 
   it('stops its link and its service', async () => {

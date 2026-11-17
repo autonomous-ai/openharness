@@ -186,11 +186,11 @@ describe('the Wi-Fi device, with the dials', () => {
     const deliveryId = vi.mocked(core.turns.deliver).mock.calls[0][2]
     expect(core.turns.deliver).toHaveBeenCalledWith('agent', 'hello', deliveryId, { when: 'composer', current: expect.any(Function) })
     // The core typed it: the service reads the agent's transcript until the turn is proven.
-    port.dispatched('agent', deliveryId, 'hello', 's1')
+    port.input({ agentId: 'agent', deliveryId, content: 'hello', sessionId: 's1', when: 'composer', phase: 'dispatching' })
     expect(core.wifi.transcripts).not.toHaveBeenCalled()
     port.transcript('agent', 's1', 'claude', '{"type":"user","message":{"content":"not ours"},"timestamp":"2026-10-06T00:00:00Z"}')
     // An agent it never sent anything to: done with it at once, as of the one prompt the core told of.
-    port.dispatched('other', 'unknown-delivery', 'hi')
+    port.input({ agentId: 'other', deliveryId: 'unknown-delivery', content: 'hi', when: 'composer', phase: 'dispatching' })
     expect(core.wifi.transcripts).toHaveBeenCalledWith('other', 1)
     port.transcript('other', 's2', 'claude', '{}')
     expect(core.wifi.transcripts).toHaveBeenLastCalledWith('other', 1)
@@ -222,13 +222,13 @@ describe('the Wi-Fi device, with the dials', () => {
     expect(sent(core).at(-1)).toMatchObject({ frame: 'autonomous_device_event', kind: 'turn.summary', payload: { text: 'short', fullText: 'the whole answer' } })
     port.card({ type: 'commander_event', agentId: 'agent', payload: { kind: 'tool', text: 'Read' } })
     expect(sent(core).at(-1)).toMatchObject({ kind: 'turn.tool' })
-    port.turnStarted('agent')
+    port.events('agent', [{ type: 'turn_started', payload: { userMessage: 'hello' } }])
     expect(sent(core).at(-1)).toMatchObject({ kind: 'turn.started' })
     port.turnEnded('agent', true)
     expect(sent(core).at(-1)).toMatchObject({ kind: 'turn.error' })
     port.stream('agent', [{ type: 'turn_started', payload: {} } as unknown as LiveEvent])
     port.delivery({ deliveryId: 'nobody', sessionId: 'agent', state: 'delivered' })
-    port.inputStatus({ deliveryId: 'nobody', sessionId: 'agent', mode: 'queued', phase: 'waiting' } as never)
+    port.input({ deliveryId: 'nobody', agentId: 'agent', when: 'composer', phase: 'waiting_for_turn' })
     port.revealed('op', 'agent')
   })
 

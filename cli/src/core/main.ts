@@ -879,8 +879,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     tellInput: (service, event) => {
       if (service === 'wifi') {
-        if (event.phase === 'dispatching' && event.deliveryId && event.content !== undefined) wifiCore.feed.inputDispatched(event.agentId, event.deliveryId, event.content, event.sessionId)
-        wifiLink.input(event)
+        if (event.phase === 'dispatching' && event.deliveryId && event.content !== undefined) wifiCore.feed.inputDispatched(event.agentId)
         wifiLink.port.input(event)
         return
       }
@@ -1667,7 +1666,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   // The Wi-Fi device in the devices' process (core/wifiLink.ts): its sessions' requests and what the agents do,
   // in order; on each connection, what the core holds for it (core/wifi.ts).
-  const wifiLink = createWifiLink({ deliveries,
+  const wifiLink = createWifiLink({
     core: coreApi,
     notify: (frame) => serviceLinks.notify('wifi', frame),
   })
@@ -1729,7 +1728,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       : service === 'store' ? storeLink.answer(query, payload)
       : service === 'models' ? modelsLink.answer(query, payload)
       : service === 'devices' ? devicesLink.answer(query, payload)
-      : service === 'wifi' ? wifiLink.answer(query, payload, authority)
+      : service === 'wifi' ? wifiLink.answer(query, payload)
       : service === 'handoff' ? answerConversationQuery(coreApi, query, payload, authority)
       : service === 'shell' ? answerShellQuery(coreApi, query, payload)
       : service === 'agentCleanup' ? agentCleanupLink.answer(query, payload)

@@ -33,7 +33,6 @@ export interface WifiDeps {
   /** Process adapter: captures one core connection through capability probe, read and submit. */
   submit?: (agentId: string, text: string, deliveryId: string, context: (agent: AgentView) => void, current?: () => boolean) => Promise<void>
   cancel?: (deliveryId: string) => void
-  consumed?: (agentId: string, text: string) => void
 }
 
 const same = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((item, i) => item === b[i])
@@ -72,7 +71,6 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
   const service = startDevicePart('Wi-Fi device service', () => build({
     store,
     resultJournal: new DeviceResultJournal(join(core.dataDir, 'device-results.json')),
-    inputConsumed: deps.consumed,
     machineId,
     requestAppFocus: (agentId, expiresAt, focusRevision) => core.wifi.focusApp(agentId, expiresAt, focusRevision),
     stepFocus: (direction, currentAgentId) => core.wifi.stepFocus(direction, currentAgentId),
@@ -183,7 +181,6 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       fullText = text
       try { service.commander(frame) } finally { fullText = undefined }
     },
-    turnStarted: (agentId) => service.turnStarted(agentId),
     turnEnded: (agentId, aborted) => service.turnEnded(agentId, aborted),
     events: (agentId, events) => {
       const busyInput = submissionPolicy(view.agents.find(agent => agent.agentId === agentId)?.engine)?.typesWhileBusy === true
@@ -208,12 +205,6 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       reportTranscript(agentId)
     },
     delivery: (event) => service.delivery(event),
-    dispatched: (agentId, deliveryId, text, sessionId) => {
-      seen.set(agentId, (seen.get(agentId) ?? 0) + 1)
-      service.inputDispatched(agentId, deliveryId, text, sessionId)
-      reportTranscript(agentId)
-    },
-    inputStatus: (event) => service.inputStatus(event),
     agentGone: (agentId) => {
       service.agentGone(agentId)
       reportTranscript(agentId)

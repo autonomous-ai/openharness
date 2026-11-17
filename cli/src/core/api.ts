@@ -49,7 +49,6 @@ import type { SessionSearchIndex } from '../lib/sessionSearch/indexer.js'
 import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
 import type { TerminalBinaryClear } from '../lib/terminalBinary.js'
 import { VIEWER_UP_TYPES } from '../lib/viewerFrames.js'
-import type { DeviceInputStatus } from '../lib/autonomous-device/service.js'
 import type { DeviceHookPort } from './deviceHookCalls.js'
 import { FAIL, later, readFallback, ServiceUnavailableError, type PortFallbacks } from './serviceHost.js'
 
@@ -1611,8 +1610,7 @@ export interface WifiPort {
   resume(state: WifiResume): Promise<void>
   /** A frame bound for the devices, as it is sent, with the turn's whole answer for a summary. */
   card(frame: Record<string, unknown>, fullText?: string): void
-  /** Compatibility for older cores; new cores send the complete live batch through events. */
-  turnStarted(agentId: string): void
+  /** Forced end from lifecycle/relaunch; normal live lifecycle stays in its original batch. */
   turnEnded(agentId: string, aborted: boolean): void
   events(agentId: string, events: readonly LiveEvent[]): void
   input(event: SessionInputProgress): void
@@ -1621,10 +1619,8 @@ export interface WifiPort {
   stream(agentId: string, events: readonly LiveEvent[]): void
   /** A transcript line of an agent the device sent a prompt to, which proves what its turn did. */
   transcript(agentId: string, sessionId: string, engine: string, line: string): void
-  /** Compatibility receipt events for retained workers; new workers consume generic input facts. */
+  /** Generic delivery outcomes, including refusal and uncertainty. */
   delivery(event: AutonomousDeviceDelivery): void
-  dispatched(agentId: string, deliveryId: string, text: string, sessionId?: string): void
-  inputStatus(event: DeviceInputStatus): void
   agentGone(agentId: string): void
   /** A window moved to an agent (null: it left one), by its connection. Settles once it is applied. */
   appFocus(machineId: string, agentId: string | null, connId: string): Promise<void>
@@ -1649,9 +1645,9 @@ export const WIFI_OFF: CoreApi['wifi'] = {
  */
 export const WIFI_FALLBACKS: PortFallbacks<WifiPort> = {
   session: undefined, request: later(undefined), dropped: undefined, revoked: undefined, resume: later(undefined), card: undefined,
-  turnStarted: undefined, turnEnded: undefined, stream: undefined, transcript: undefined, delivery: undefined,
+  turnEnded: undefined, stream: undefined, transcript: undefined, delivery: undefined,
   events: undefined, input: undefined, disconnected: undefined,
-  dispatched: undefined, inputStatus: undefined, agentGone: undefined, appFocus: later(undefined), revealed: undefined,
+  agentGone: undefined, appFocus: later(undefined), revealed: undefined,
   stop: later(undefined),
 }
 

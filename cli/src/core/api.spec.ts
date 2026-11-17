@@ -545,8 +545,8 @@ describe('the core API services stand on', () => {
     for (const member of ['request', 'resume', 'appFocus', 'stop'] as const) {
       expect(readFallback(WIFI_FALLBACKS[member]), member).toEqual({ deferred: true, value: undefined })
     }
-    for (const member of ['session', 'dropped', 'revoked', 'card', 'turnStarted', 'turnEnded', 'stream', 'transcript', 'delivery',
-      'dispatched', 'inputStatus', 'agentGone', 'revealed'] as const) {
+    for (const member of ['session', 'dropped', 'revoked', 'card', 'turnEnded', 'stream', 'transcript', 'delivery',
+      'events', 'input', 'disconnected', 'agentGone', 'revealed'] as const) {
       expect(WIFI_FALLBACKS[member], member).toBeUndefined()
     }
   })
