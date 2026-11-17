@@ -37,7 +37,7 @@ describe('gateway connector storage under the legacy lock', () => {
     let failed: FileHandle | undefined
     const open = vi.fn(async (...args: Parameters<typeof vaultStoreIo.open>) => {
       const handle = await vaultStoreIo.open(...args), path = String(args[0])
-      const chosen = stage === 'lock' ? path.endsWith('/.lock') : stage === 'read' ? path.endsWith('/clients.json')
+      const chosen = stage === 'lock' ? path === join(root, '.lock') : stage === 'read' ? path === join(root, 'clients.json')
         : stage === 'temporary' ? path.includes('.incoming-') : path === root
       if (!chosen || failed) return handle
       return new Proxy(handle, { get(target, property) {
