@@ -1,6 +1,6 @@
 # slugline
 
-Turn titles into URL slugs.
+Trun titles into URL slugs.
 
 ```js
 import { slug } from 'slugline'

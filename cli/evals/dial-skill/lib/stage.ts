@@ -26,8 +26,6 @@ export interface Staged {
 const PASSED = ['HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'TERM']
 
 export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; base?: string }): Staged {
-  // With no home of its own, Codex would run in the person's ~/.codex, and the eval scores Claude Code only.
-  if (agent === 'codex') throw new Error('codex is out of scope for this eval')
   const profile = process.env.CLAUDE_CONFIG_DIR
   // Unset, Claude would run in the default ~/.claude profile.
   if (agent === 'claude' && !profile) throw new Error('CLAUDE_CONFIG_DIR is not set: the eval runs Claude only in the session profile')
@@ -71,6 +69,13 @@ export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; bas
     git('init', '-q', '--bare', origin)
     git('remote', 'add', 'origin', origin)
     git('push', '-q', '-u', 'origin', 'main')
+  }
+  if (s.branch) {
+    // Left unpushed, so opening its pull request is the agent's next step.
+    git('checkout', '-q', '-b', s.branch.name)
+    git('apply', join(s.dir, s.branch.patch))
+    git('add', '-A')
+    git('commit', '-q', '-m', s.branch.message)
   }
 
   let skill: string | null = null

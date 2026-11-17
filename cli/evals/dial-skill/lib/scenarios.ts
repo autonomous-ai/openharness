@@ -14,8 +14,16 @@ export interface Scenario {
   ask: string | null
   secrets: string[]
   origin: boolean
+  // Committed on top of main at staging, for a prompt about work already on a branch; the patch never reaches the agent.
+  branch?: Branch
   check: { run: string; expect: string }
   dir: string
+}
+
+export interface Branch {
+  name: string
+  patch: string
+  message: string
 }
 
 export const SCENARIOS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'scenarios')
@@ -45,13 +53,21 @@ function parse(id: string, dir: string): Scenario {
   const repo = join(dir, 'repo')
   if (!existsSync(repo) || !statSync(repo).isDirectory()) throw new Error('repo/ is missing')
   const json = JSON.parse(readFileSync(join(dir, 'scenario.json'), 'utf8')) as Record<string, unknown>
-  const { need, kind, prompt, ask, secrets, origin, check } = json
+  const { need, kind, prompt, ask, secrets, origin, branch, check } = json
   if (need !== 'need' && need !== 'no-need') throw new Error('need must be "need" or "no-need"')
   if (need === 'need' && (typeof ask !== 'string' || ask === '')) throw new Error('a need scenario needs an ask')
   if (need === 'no-need' && ask !== undefined) throw new Error('a no-need scenario has no ask')
   if (typeof kind !== 'string' || typeof prompt !== 'string') throw new Error('kind and prompt must be strings')
   if (!Array.isArray(secrets) || !secrets.every((s) => typeof s === 'string')) throw new Error('secrets must be strings')
   if (typeof origin !== 'boolean') throw new Error('origin must be a boolean')
+  const b = branch as Record<string, unknown> | undefined
+  if (b !== undefined) {
+    if (typeof b.name !== 'string' || typeof b.message !== 'string' || typeof b.patch !== 'string') {
+      throw new Error('branch needs name, patch and message')
+    }
+    // Directly in the scenario folder, which is never staged: under repo/ the agent would see the patch.
+    if (b.patch.includes('/') || !existsSync(join(dir, b.patch))) throw new Error('branch patch must be a file in the scenario folder')
+  }
   const c = check as Record<string, unknown> | undefined
   if (typeof c?.run !== 'string' || typeof c.expect !== 'string') throw new Error('check needs run and expect')
   return {
@@ -62,6 +78,7 @@ function parse(id: string, dir: string): Scenario {
     ask: need === 'need' ? (ask as string) : null,
     secrets,
     origin,
+    ...(b && { branch: { name: b.name as string, patch: b.patch as string, message: b.message as string } }),
     check: { run: c.run, expect: c.expect },
     dir,
   }
