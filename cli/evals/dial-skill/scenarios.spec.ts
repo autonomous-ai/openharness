@@ -75,6 +75,6 @@ describe('loadScenarios', () => {
 
 describe('caseId', () => {
   it('joins the scenario id and the agent', () => {
-    expect(caseId('a', 'codex')).toBe('a.codex')
+    expect(caseId('a', 'claude')).toBe('a.claude')
   })
 })
