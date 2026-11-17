@@ -123,9 +123,10 @@ A lease is not copied onto an older pending result. Process publication captures
 queuing; reconnect, end and purge invalidate pending authority, including the dated fallback. Browser rechecks its
 existing container through its own generation fence when a new core supplies a new lease. Viewers keep their producers
 across a lease replacement: a new core's lease is the same agent's, so its viewer stays up on its port and its URL is
-published again under the new lease. Only `ended`, or another folder or harness, replaces a viewer. Viewer halt clears its old
-child and URL before asynchronously closing the watch; queued old watch/verdict callbacks cannot touch the replacement.
-Watch close has a 10-second bound and named failure. These are service-side lifetimes, not feature records in core.
+published again under the new lease. `ended` stops a viewer; only another folder or harness replaces it. Viewer halt
+clears its old child and URL before asynchronously closing the watch; queued old watch/verdict callbacks cannot touch
+the replacement. Watch close has a 10-second bound and named failure. These are service-side lifetimes, not feature
+records in core.
 
 ## Supported update handover
 
