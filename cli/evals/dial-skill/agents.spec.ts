@@ -106,13 +106,13 @@ describe('claudeArgs', () => {
     expect(sandbox.network.allowedDomains).not.toContain('*')
   })
 
-  it("denies the tools that reach the person's phone or accounts", () => {
+  it("denies the tools that reach the person's phone, accounts or other Claude sessions, and every claude.ai connector", () => {
     const argv = claudeArgs(AGENT_CONFIG, staged(), 'Fix it.')
-    const { permissions } = JSON.parse(argv[argv.indexOf('--settings') + 1])
-    expect(permissions.deny).toEqual(expect.arrayContaining([
-      'PushNotification', 'RemoteTrigger', 'DesignSync',
-      'mcp__claude_ai_Gmail', 'mcp__claude_ai_Google_Calendar', 'mcp__claude_ai_Microsoft_365', 'mcp__claude_ai_Claude_Docs',
+    const settings = JSON.parse(argv[argv.indexOf('--settings') + 1])
+    expect(settings.permissions.deny).toEqual(expect.arrayContaining([
+      'PushNotification', 'RemoteTrigger', 'DesignSync', 'SendMessage', 'ListAgents',
     ]))
+    expect(settings.disableClaudeAiConnectors).toBe(true)
   })
 
   it('never skips permissions', () => {
