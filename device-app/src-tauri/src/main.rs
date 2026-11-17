@@ -60,7 +60,7 @@ fn main() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("Harness Device could not start");
+        .expect("Harness could not start");
     // Decision 3: no Dock icon. Set before the event loop runs: in `setup`, macOS has already made the app Regular and
     // the window is made, so the Dock icon shows for a moment at each launch.
     #[cfg(target_os = "macos")]
@@ -106,7 +106,7 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
     TrayIconBuilder::with_id(TRAY)
         .icon(tauri::include_image!("icons/tray.png"))
         .icon_as_template(true)
-        .tooltip("Harness Device")
+        .tooltip("Harness")
         .on_menu_event(move |_, event| {
             if let Some(action) = menu_action(event.id().as_ref()) {
                 let _ = chosen.send(Event::Menu(action));
