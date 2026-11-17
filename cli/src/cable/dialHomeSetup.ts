@@ -257,6 +257,7 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
       return result === 'updated' && !stillOn(engine, counts) ? 'off' : 'done'
     }
     // The person deleted the recorded skills folder itself: it is not made again.
+    // A home wiped and made again between two passes reads the same, and is not set up again (accepted).
     const toMake = found === null ? join(realOr(home), 'skills') : null
     if (toMake !== null && listed.includes(toMake)) {
       leftRemoved(engine, toMake)

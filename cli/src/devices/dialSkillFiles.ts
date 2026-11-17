@@ -149,7 +149,8 @@ export function readRemoved(dataDir: string): Read<DialRemoved> {
 
 /**
  * undefined once saved; else the error's code (EACCES), never its message, which names the path. [written], when given,
- * becomes the folders the command wrote into for [engine]; else they stay. The old menu's answers are not carried, so they leave the file at its next write.
+ * becomes the folders the command wrote into for [engine]; else they stay. The old menu's answers are not carried, so
+ * they leave the file at its next write.
  */
 export function writeRemoved(dataDir: string, engine: DialEngine, removed: boolean, written?: string[]): string | undefined {
   // Read right before the write, so the other engine's removal and folders stay; one that cannot be read is left.
