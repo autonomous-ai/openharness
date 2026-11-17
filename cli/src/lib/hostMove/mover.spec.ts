@@ -300,6 +300,20 @@ describe('HostMover', () => {
 })
 
 describe('a hand-over while a move holds input', () => {
+  it('refuses pending input if handover expires before the move can confirm publication', async () => {
+    vi.useFakeTimers()
+    const gate = new MoveGate(), written = vi.fn(async () => {}), refused = vi.fn()
+    let finish!: () => void
+    const moving = new Promise<void>(resolve => { finish = resolve })
+    gate.hold('a1'); gate.enqueue('a1', written, refused)
+    const settled = settleMovesForHandOver({ mover: { stop: vi.fn(), settled: () => moving }, gate, log: vi.fn(), waitMs: 30 })
+    await vi.advanceTimersByTimeAsync(30)
+    await settled
+    try { expect(written).not.toHaveBeenCalled(); expect(refused).toHaveBeenCalledOnce() }
+    finally { finish(); await gate.release('a1'); vi.useRealTimers() }
+    expect(written).not.toHaveBeenCalled()
+  })
+
   /** A mover whose one move holds [gate] for a1 until the test lets it finish, then releases it as moveAgent does. */
   async function holding(gate: MoveGate) {
     const h = harness([row('a1'), row('a2')])
@@ -325,7 +339,7 @@ describe('a hand-over while a move holds input', () => {
     gate.enqueue(held, async () => { written.push('k2') })
     const lines: string[] = []
     const settled = settleMovesForHandOver({ mover: h.mover, gate, log: (line) => lines.push(line) })
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await Promise.resolve()
     expect(written).toEqual([])
     finish()
     await settled
@@ -338,17 +352,18 @@ describe('a hand-over while a move holds input', () => {
     expect(h.moves).toHaveLength(1)
   })
 
-  it('past its bound, writes every held keystroke to the row\'s current pane before the hand-over goes on', async () => {
+  it('past its bound, refuses held keystrokes before handover continues', async () => {
     const gate = new MoveGate()
     const { h, held, finish } = await holding(gate)
-    const written: string[] = []
-    gate.enqueue(held, async () => { written.push('k1') })
-    gate.enqueue(held, async () => { written.push('k2') })
+    const written: string[] = [], refused: string[] = []
+    gate.enqueue(held, async () => { written.push('k1') }, () => { refused.push('k1') })
+    gate.enqueue(held, async () => { written.push('k2') }, () => { refused.push('k2') })
     const lines: string[] = []
     await settleMovesForHandOver({ mover: h.mover, gate, log: (line) => lines.push(line), waitMs: 30 })
-    expect(written).toEqual(['k1', 'k2'])
+    expect(written).toEqual([])
+    expect(refused).toEqual(['k1', 'k2'])
     expect(gate.holding(held)).toBe(false)
-    expect(lines).toEqual([`[terminal] move: a move still holds the input of ${held} after 0.03 s — delivering it to the pane the row names before handing over`])
+    expect(lines).toEqual(['[terminal] move: a move still holds input after 0.03 s; refusing pending input before handing over'])
     // The move's own release later finds nothing left.
     finish()
     expect(HAND_OVER_MOVE_WAIT_MS + HAND_OVER_FLUSH_MS).toBeLessThanOrEqual(25_000)

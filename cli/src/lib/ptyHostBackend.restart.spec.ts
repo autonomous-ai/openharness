@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 // Restart's primitives against the real Harness PTY host: a pane keeps its id and its scrollback while the
 // process in it is replaced, as tmux's `remain-on-exit` + `respawn-pane -k` keep a tmux pane. And stop and resume
 // through their services on a machine whose only backend is the host, as on Windows. Build it first:
@@ -184,7 +185,7 @@ const screen = async (backend: PtyHostBackend, runtime: PtyRuntimeRef): Promise<
         if (typeof root !== 'number' || !child) throw new Error(`no process tree: root=${String(root)} child=${child}`)
         expect(running(root) && running(child)).toBe(true)
 
-        const row = registry.openPendingAgent({ engine: 'terminal', runtimes: [pane], cwd: dir })!
+        const row = (await registry.openPendingAgent({ engine: 'terminal', runtimes: [pane], cwd: dir }))!
         registry.setLaunch(row.agentId, { state: 'ready' })
         const stoppedAgents = new StoppedAgentStore(join(dir, 'saved'))
         const restartJobs = new AgentRestartCoordinator()
@@ -194,7 +195,7 @@ const screen = async (backend: PtyHostBackend, runtime: PtyRuntimeRef): Promise<
         const stop = createStopAgentService({
           registry, stoppedAgents, restartJobs, stopJobs, backendFor,
           agentReconciler: { suppress() {}, holdRoute() {}, releaseRoute() {}, trigger: async () => {} },
-          forgetSession: (id) => { registry.removeAgent(id) }, markDeleted() {}, clearDeleted() {}, stopNative: async () => {},
+          forgetSession: async (id) => { (await removeRegistryAgent(registry, id)) }, markDeleted() {}, clearDeleted() {}, stopNative: async () => {},
         })
         await stop(row.agentId)
         expect(registry.byAgent(row.agentId)).toBeUndefined()
@@ -222,7 +223,7 @@ const screen = async (backend: PtyHostBackend, runtime: PtyRuntimeRef): Promise<
         await stop(row.agentId)
         expect(await until(() => backend.paneState(again), (state) => state === 'gone')).toBe('gone')
       } finally {
-        for (const entry of registry.list()) registry.removeAgent(entry.agentId)
+        for (const entry of registry.list()) (await removeRegistryAgent(registry, entry.agentId))
         await removeTree(dir)
       }
     })

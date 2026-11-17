@@ -347,12 +347,12 @@ export function knownTranscriptFor(body: RegisterInput, agent: RegisteredSession
 }
 
 /** Read source evidence without binding. Unreadable stores never authorize a conversation. */
-async function inspectHermesKind(sessionId: string, knownHome?: string): Promise<AdmissionDecision<string | undefined>> {
+async function inspectHermesKind(sessionId: string, knownHome?: string, capture?: (verify: () => void) => void): Promise<AdmissionDecision<string | undefined>> {
   if (!HERMES_SOURCE.id.test(sessionId)) return { kind: 'accept', value: undefined }
   try {
     const found = await readStorePool(HERMES_HOMES, env.HERMES_HOME, {
       sql: columns => storeSourceQuery(HERMES_SOURCE, columns), params: [sessionId], maxRows: 1, maxBuffer: HERMES_SOURCE.maxBuffer,
-      columns: ['id', 'source'], pointKey: 'id', knownHome,
+      columns: ['id', 'source'], pointKey: 'id', knownHome, capture,
     })
     if (!found.length) return { kind: 'hold', reason: 'Waiting for the Hermes session source record; keeping the current conversation.' }
     if (found.length !== 1) return { kind: 'hold', reason: 'Hermes session source is ambiguous across homes; keeping the current conversation.' }
@@ -386,11 +386,11 @@ export function clientEnvPane(clientEnv: unknown): HookTerminalHint | null {
 }
 
 /** The pane Hermes froze with [sessionId] when it was created (`HERMES_SESSION_PANE`), or null: none, or unreadable. */
-async function hermesCreationPane(sessionId: string): Promise<HookTerminalHint | null> {
+async function hermesCreationPane(sessionId: string, capture?: (verify: () => void) => void): Promise<HookTerminalHint | null> {
   try {
     const found = await readStorePool(HERMES_HOMES, env.HERMES_HOME, {
       sql: HERMES_SESSION_PANE.query, params: [HERMES_SESSION_PANE.key(sessionId), sessionId], maxRows: 1,
-      maxBuffer: HERMES_SESSION_PANE.maxBuffer, columns: ['id'], pointKey: 'id',
+      maxBuffer: HERMES_SESSION_PANE.maxBuffer, columns: ['id'], pointKey: 'id', capture,
     })
     return found.length === 1 ? clientEnvPane(found[0].row.client_env) : null
   } catch (error) {
@@ -406,8 +406,8 @@ async function hermesCreationPane(sessionId: string): Promise<HookTerminalHint |
  * conversation in a new pane, and Hermes keeps the creation policy); else the creation pane, for an agent that is still
  * opening there. Null: neither is known, so nothing says which pane the session is.
  */
-async function hermesSessionHint(sessionId: string): Promise<HookTerminalHint | null> {
-  const created = await hermesCreationPane(sessionId)
+async function hermesSessionHint(sessionId: string, capture?: (verify: () => void) => void): Promise<HookTerminalHint | null> {
+  const created = await hermesCreationPane(sessionId, capture)
   if (created && registry.byRuntimeEngine(created, 'hermes')) return created
   const bound = registry.bySession(sessionId)
   const runtime = bound?.engine === 'hermes' ? bound.runtimes[0] : undefined
@@ -714,8 +714,9 @@ export function startHookServer(
         }
         let inspectionIdentity: string | undefined
         let prepared: RegisterInput = body
-        let committed: ReturnType<typeof registry.register> = null
-        let settled = false, stopRetained = false, stopUnmatched = false, stopInvocationClaimed = false
+        let committed: Awaited<ReturnType<typeof registry.register>> = null
+        let replyTimer: ReturnType<typeof setTimeout> | undefined
+        let committing = false, settled = false, stopRetained = false, stopUnmatched = false, stopInvocationClaimed = false
         const stopCurrent = processAgent.sessionId === body.sessionId && stopScope === scope ? stopWitness : undefined
         let followupFingerprint: string | undefined, committedIdentity: string | undefined
         const live = () => registry.byAgent(processAgent.agentId)
@@ -727,6 +728,7 @@ export function startHookServer(
           catch (error) { console.warn('[hooks] admission status notification failed', error) }
         }
         const held = (reason: string) => {
+          clearTimeout(replyTimer)
           deferred = true
           const holds = admissionHolds.get(processAgent.agentId) ?? new Map<string, string>()
           holds.set(deliveryId, reason); admissionHolds.set(processAgent.agentId, holds)
@@ -741,6 +743,7 @@ export function startHookServer(
           publishHold()
         }
         const completedReply = (status: number, reply: unknown) => {
+          clearTimeout(replyTimer)
           // A pruned old process cannot reinsert its receipts from a late callback.
           if (admissionReceipts.get(processAgent.agentId) === history) saveReceipt(history.records, deliveryId,
             { ...history.records.get(deliveryId)!, status, reply, pending: false, bytes: carriesStop ? retainedBytes : 0 })
@@ -802,13 +805,35 @@ export function startHookServer(
             ? { kind: 'hold', reason: 'Waiting for complete native hook evidence.' } : { kind: 'reject', reason: admission.reason }
           return null
         }
-        const commit = (hermesHome: string | undefined): AdmissionDecision<string | undefined> => {
+        const commit = async (hermesHome: string | undefined, admissionCurrent: () => boolean): Promise<AdmissionDecision<string | undefined>> => {
           if (!current() || paneReadIdentity(live()) !== inspectionIdentity) return { kind: 'hold', reason: 'Waiting for fresh evidence after the binding changed.' }
           if (handlers.hookAdmissionBlocked?.(processAgent.agentId)) return { kind: 'hold', reason: 'Waiting for Stop to settle before admitting the hook.' }
           const prior = live()
           const before = prior && { sessionId: prior.sessionId, transcriptPath: prior.transcriptPath,
             held: !!(prior.identityHold || prior.interpretationHold) }
-          committed = registry.register(hermesHome ? { ...prepared, hermesHome } : prepared, { verifiedNativeSource: true })
+          let verifySource: (() => void) | undefined, verifyPane: (() => void) | undefined
+          committing = true
+          try {
+            committed = await registry.register(hermesHome ? { ...prepared, hermesHome } : prepared, { verifiedNativeSource: true,
+              ...(engine === 'hermes' && body.sessionId ? { refresh: async () => {
+                if (bySessionPane) {
+                  const hint = await hermesSessionHint(body.sessionId!, verify => { verifyPane = verify })
+                  if (JSON.stringify(hint) !== JSON.stringify(runtimeHints[0])) {
+                    throw new IdentityReadUnavailable('the Hermes session pane changed during registration')
+                  }
+                }
+                const refreshed = await inspectHermesKind(body.sessionId!, live()?.hermesHome ?? undefined, verify => { verifySource = verify })
+                if (refreshed.kind !== 'accept' || refreshed.value !== hermesHome) {
+                  throw new IdentityReadUnavailable('the Hermes session source changed during registration')
+                }
+              } } : {}),
+              current: () => {
+                verifyPane?.()
+                verifySource?.()
+                return admissionCurrent() && current() && paneReadIdentity(live()) === inspectionIdentity
+                  && !handlers.hookAdmissionBlocked?.(processAgent.agentId)
+              } })
+          } finally { committing = false }
           if (committed?.refusedHome) refusedHeader(CODEX_HOME_HEADER)
           if (stopCurrent && !stopCurrent()) stopInvocationClaimed = true
           if (committed && carriesStop && !stopRetained && !stopInvocationClaimed) {
@@ -824,6 +849,13 @@ export function startHookServer(
         const notify = () => {
           const result = committed!
           clearHold()
+          const owner = live()
+          if (!owner || !current() || paneReadIdentity(owner) !== committedIdentity) {
+            console.warn('[hooks] committed admission notification skipped: owner changed')
+            return
+          }
+          // Core cleared the live admission hold; the durable commit reply is a detached snapshot.
+          result.entry = structuredClone(owner)
           console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=${result.entry.engine} · isNew=${result.isNew}`
             + (engine === 'hermes' ? ` · after a source check${result.entry.hermesHome ? ` · home=${result.entry.hermesHome}` : ''}` : ''))
           const optional = (call: () => void | Promise<void>) => {
@@ -859,10 +891,19 @@ export function startHookServer(
             accept: () => { completedReply(200, { ok: true }); notify() },
           })
           if (queued) {
-            // Synchronous native admission settles in this turn's microtasks. A
-            // queued predecessor or asynchronous source gets an owned pending reply.
+            // A registry commit has its own bounded deadline and owns its reply.
+            // A queued predecessor or asynchronous source still answers pending.
             if (engine === 'hermes') answer(200, { pending: true })
-            else setImmediate(() => { if (!settled) deferred = true; answer(200, { pending: true }) })
+            else setImmediate(() => {
+              if (settled) return
+              const pending = () => { if (!settled) deferred = true; answer(200, { pending: true }) }
+              if (committing) {
+                // The hook process itself has a five-second timeout. Slow durable
+                // preparation retains the delivery while its caller leaves promptly.
+                replyTimer = setTimeout(pending, 250)
+                replyTimer.unref()
+              } else pending()
+            })
           } else {
             saveReceipt(history.records, deliveryId)
             const detail = 'Too many unverified hooks are pending; this hook was not queued. Retry after recovery.'

@@ -125,7 +125,7 @@ describe('forks at their edges', () => {
     expect(await model(source.id)).toBe('gpt-6')
     client.close()
     await d.stop()
-    // What a move back off a grid leaves on the row (retarget.ts `setSubscriptionModel`): the model to come
+    // What a move back off a grid leaves on the row (retarget.ts `confirmLaunch`): the model to come
     // back to. No grid is reachable from a test, so the row is given what that move would have written.
     const file = join(d.dataDir, 'registry.json')
     const saved = JSON.parse(readFileSync(file, 'utf8')) as Array<Record<string, unknown>>

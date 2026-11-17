@@ -13,8 +13,8 @@ export interface PendingAdmission<T> {
   binding?: { id: string; at: number | null } | (() => { id: string; at: number | null } | undefined)
   current: () => boolean
   inspect: () => Promise<AdmissionDecision<T>>
-  /** Synchronous durable publication. Uncertainty retains this candidate and its place. */
-  commit?: (value: T) => AdmissionDecision<T>
+  /** Durable publication rechecks this admission after asynchronous preparation. */
+  commit?: (value: T, current: () => boolean) => AdmissionDecision<T> | Promise<AdmissionDecision<T>>
   /** Optional notification after durable acceptance; never the publication itself. */
   accept: (value: T) => void | Promise<void>
   reject: (reason: string) => void | Promise<void>
@@ -106,9 +106,14 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64, isProc
         + (job.request.order.firedAt === undefined ? ' This hook has no native timestamp; reload or restart the engine with updated hooks.' : '') }
     }
     if (decision.kind === 'accept' && job.request.commit) {
-      try { decision = job.request.commit(decision.value) }
+      const mayCommit = () => current(key, job) && selected(key) === job
+        && order.status(key, conversation(job), job.request.order) !== 'older'
+        && !leaders(key, job).some(other => other !== job && conversation(other) !== conversation(job))
+      try { decision = await job.request.commit(decision.value, mayCommit) }
       catch (error) { decision = { kind: 'hold', reason: `Waiting for durable hook admission: ${error instanceof Error ? error.message : 'commit unavailable'}`.slice(0, 1024) } }
     }
+    if (!current(key, job)) { discard(key, job); notified(job.request.reject('stale_hook')); return }
+    if (decision.kind !== 'reject' && selected(key) !== job) return
     if (decision.kind === 'hold') {
       job.timer = setTimeout(() => { job.timer = null; void run(key, job, true) }, retryMs)
       job.timer.unref()

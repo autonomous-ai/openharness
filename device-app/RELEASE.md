@@ -127,7 +127,7 @@ A build the release stamped with its version checks the manifest on macOS on its
 6 hours, but never while the CLI installs or a sign-in runs. A local `cargo tauri build` is version 0.0.0 and never
 checks. A newer version is downloaded, its signature checked against the public key and the version signed into it
 against the manifest's, installed over the running bundle, and the app relaunches. The relaunch waits while the window
-is open, a Claude Code change or `harness start` runs, or the CLI installs or a sign-in runs. While it updates, the
+is open, `harness start` runs, or the CLI installs or a sign-in runs. While it updates, the
 menu's row reads `Updating Harness Device…`. Timeouts: check 30 s, download 5 min. A failure changes nothing on disk;
 the next check tries again.
 

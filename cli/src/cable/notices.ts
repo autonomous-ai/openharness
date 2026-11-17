@@ -27,7 +27,8 @@ export interface NoticesDeps {
   close(agentId: string, id: string): void
   uuid(): string
   now(): number                    // monotonic ms
-  log(line: string): void
+  /** Each answer, by the caller's engine (`agent` when it names none), for the day's tally. */
+  count(engine: 'claude' | 'codex' | 'agent', result: NoticeResult): void
 }
 
 export const NOTICES_PENDING_MAX = 20
@@ -52,9 +53,9 @@ export class Notices {
   }
 
   notify(ask: NoticeAsk): NoticeResult {
-    // The log names only the engine and the outcome: the text, session and folder are the person's own.
+    // Counted by the engine and the outcome only: the text, session and folder are the person's own.
     const answer = (result: NoticeResult): NoticeResult => {
-      this.deps.log(`[device] notify · ${ask.engine ?? 'agent'} · ${result}`)
+      this.deps.count(ask.engine ?? 'agent', result)
       return result
     }
     // With no dial a notice is nobody's: it must not use up the agent's minute for when one attaches.

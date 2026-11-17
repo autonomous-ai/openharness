@@ -596,7 +596,9 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     // A pre-G host drops `seed` silently, which would look like a pane that kept its scrollback: refuse instead.
     if (request.seed !== undefined && !client.features.includes(SEED_FEATURE)) return terminalActionNotStarted('this host cannot seed a pane')
     if (request.current?.() === false) return terminalActionNotStarted('The harness changed before pane dispatch')
-    request.onDispatch?.()
+    try { const prepared = request.onDispatch?.(); if (prepared) await prepared }
+    catch (error) { return terminalActionNotStarted(error instanceof Error ? error.message : 'Pane dispatch could not be committed') }
+    if (request.current?.() === false || this.disposed || this.draining || this.client !== client) return terminalActionNotStarted('The harness changed before pane dispatch')
     // Held from the start, as tmux's remain-on-exit at create: an engine that exits at once still leaves
     // its error readable. The agent services release it once the pane is a real agent (`releaseHold`).
     const result = await client.call({
@@ -739,9 +741,10 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
   }
 
   /** Typed as `tmux paste-buffer` without `-p` types it (sendLiteralToTmux): each newline a carriage return. */
-  async typeLiteral(runtime: PtyRuntimeRef, text: string): Promise<TerminalActionResult> {
+  async typeLiteral(runtime: PtyRuntimeRef, text: string, allowed?: () => boolean): Promise<TerminalActionResult> {
     const client = this.clientFor(runtime)
     if (!client) return terminalActionNotStarted(UNAVAILABLE)
+    if (allowed?.() === false) return terminalActionNotStarted('terminal control revoked')
     return actionOf(await client.call({ op: 'paste', pane: runtime.paneId, text, bracketed: false }))
   }
 
@@ -780,9 +783,10 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     return actionOf(await client.call({ op: 'paste', pane: runtime.paneId, text, bracketed: true }))
   }
 
-  async sendKey(runtime: PtyRuntimeRef, key: TerminalLogicalKey): Promise<TerminalActionResult> {
+  async sendKey(runtime: PtyRuntimeRef, key: TerminalLogicalKey, allowed?: () => boolean): Promise<TerminalActionResult> {
     const client = this.clientFor(runtime)
     if (!client) return terminalActionNotStarted(UNAVAILABLE)
+    if (allowed?.() === false) return terminalActionNotStarted('terminal control revoked')
     return actionOf(await client.call({ op: 'key', pane: runtime.paneId, key: TMUX_KEYS[key] }))
   }
 
@@ -822,7 +826,9 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     if (!client) return terminalActionNotStarted(UNAVAILABLE)
     if (request.expectedHeldToken && !/^[a-f0-9-]{36}$/.test(request.expectedHeldToken)) return terminalActionNotStarted('invalid waiting pane identity')
     if (request.current?.() === false) return terminalActionNotStarted('The harness changed before pane dispatch')
-    request.onDispatch?.()
+    try { const prepared = request.onDispatch?.(); if (prepared) await prepared }
+    catch (error) { return terminalActionNotStarted(error instanceof Error ? error.message : 'Pane dispatch could not be committed') }
+    if (request.current?.() === false || this.disposed || this.clientFor(runtime) !== client) return terminalActionNotStarted('The harness changed before pane dispatch')
     const result = await client.call({
       op: 'respawn',
       pane: runtime.paneId,

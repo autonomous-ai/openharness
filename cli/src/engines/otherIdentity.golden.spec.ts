@@ -145,11 +145,11 @@ afterAll(() => {
 const home = (...parts: string[]) => join(root, 'home', ...parts)
 let pane = 0
 /** A hook's session, registered as the registry takes it: its process opened on a pane first. */
-function register(engine: AgentEngine, input: { sessionId: string; cwd?: string; transcriptPath?: string }) {
+async function register(engine: AgentEngine, input: { sessionId: string; cwd?: string; transcriptPath?: string }) {
   const tmuxPane = `%${++pane}`
   const processIdentity = { pid: 10_000 + pane, startMarker: `Mon Oct  8 10:00:${String(pane % 60).padStart(2, '0')} 2026`, executable: engine }
-  m.registry.registry.openProcessAgent({ engine, tmuxPane, cwd: input.cwd ?? null, processIdentity })
-  const result = m.registry.registry.register({ engine, tmuxPane, processIdentity, ...input })
+  ;(await m.registry.registry.openProcessAgent({ engine, tmuxPane, cwd: input.cwd ?? null, processIdentity }))
+  const result = (await m.registry.registry.register({ engine, tmuxPane, processIdentity, ...input }))
   return result && { transcriptPath: result.entry.transcriptPath, cwd: result.entry.cwd, sessionId: result.entry.sessionId }
 }
 
@@ -161,13 +161,13 @@ describe('where the core finds the other engines\' conversations', () => {
     check('Hermes id rules', ids.map(id => [id, m.hermes.HERMES_HISTORY_ID_RE.test(id), m.hermes.HERMES_SOURCE.id.test(id)]))
   })
 
-  it('derives each layout\'s transcript for a hook that names none, and takes one it names only in its own folder', () => {
+  it('derives each layout\'s transcript for a hook that names none, and takes one it names only in its own folder', async () => {
     const cwds = ['/work/My Project', '/work/camelCaseRepo', '/work/über-ünïcødé', '/', '/work/a/../b']
     const results: unknown[] = []
     for (const engine of ['commandcode', 'grok', 'agy', 'copilot', 'cursor', 'pi', 'muse', 'amp'] as const) {
       for (const [i, cwd] of cwds.entries()) {
         for (const sessionId of [UUID(i + 1), 'not-a-uuid', '../escape', 'with space']) {
-          results.push([engine, cwd, sessionId, register(engine, { sessionId, cwd })])
+          results.push([engine, cwd, sessionId, (await register(engine, { sessionId, cwd }))])
         }
       }
       // A transcript the hook names: inside each engine's folder, and outside it.
@@ -183,8 +183,8 @@ describe('where the core finds the other engines\' conversations', () => {
       }
       file(inside[engine]!, '{}\n')
       const outside = file(join(root, 'elsewhere', `${engine}.jsonl`), '{}\n')
-      results.push([engine, 'named inside', register(engine, { sessionId: UUID(90), cwd: '/work/x', transcriptPath: inside[engine] })])
-      results.push([engine, 'named outside', register(engine, { sessionId: UUID(91), cwd: '/work/x', transcriptPath: outside })])
+      results.push([engine, 'named inside', (await register(engine, { sessionId: UUID(90), cwd: '/work/x', transcriptPath: inside[engine] }))])
+      results.push([engine, 'named outside', (await register(engine, { sessionId: UUID(91), cwd: '/work/x', transcriptPath: outside }))])
     }
     check('register', results)
   }, 120_000)
@@ -230,11 +230,11 @@ describe('where the core finds the other engines\' conversations', () => {
     const agents = new Map<string, Record<string, unknown>>()
     const binding = m.bind.createBinding({
       registry: {
-        inheritName: () => {}, unbindSession: () => true, byAgent: (id: string) => agents.get(id),
+        inheritName: () => {}, byAgent: (id: string) => agents.get(id),
         byProcess: (engine: string) => agents.get(engine), has: () => false, bySession: () => undefined,
         register: (input: unknown) => { registered.push(input); return null }, setOpenclawStateDir: () => false,
       } as never,
-      mirror: { inheritSummary: () => {} }, forgetSession: () => {}, clients: { send: () => {} }, attachSession: async () => true,
+      mirror: { inheritSummary: () => {} }, forgetSession: async () => {}, clients: { send: () => {} }, attachSession: async () => true,
       announceSession: () => {}, stoppedAgents: { save: () => {}, finishResume: () => {}, get: () => null } as never, syncRecapPool: () => {},
       input: { forget: () => {} } as never, submitAgent: () => {}, deviceInput: { forget: () => {} } as never,
       homes: { copilot: home('.copilot'), grok: home('.grok'), agy: home('.gemini', 'antigravity-cli') },

@@ -162,11 +162,11 @@ export class CloseAgentService {
   dispose(): void { this.disposed = true; if (this.timer) clearTimeout(this.timer); this.timer = null }
 
   /** Opening a queued session means it should stay available. No other queued work is affected. */
-  cancel(agentId: string): void {
+  async cancel(agentId: string): Promise<void> {
     this.revisions.set(agentId, (this.revisions.get(agentId) ?? 0) + 1)
     this.idleSince.delete(agentId)
     if (!this.deps.registry.byAgent(agentId)?.closePlan) return
-    const updated = this.deps.registry.setClosePlan(agentId, null)
+    const updated = await this.deps.registry.setClosePlan(agentId, null)
     if (updated) this.deps.changed(updated)
     if (!this.pending().length && this.timer) { clearTimeout(this.timer); this.timer = null }
   }
@@ -174,7 +174,7 @@ export class CloseAgentService {
   request(request: AgentCloseRequest): Promise<AgentCloseResult> {
     const current = this.deps.registry.byAgent(request.agentId)
     if (!matches(current, request, this.now())) return Promise.resolve(this.changed(request))
-    if (request.mode === 'cancel') { this.cancel(request.agentId); return Promise.resolve({ cancelled: true }) }
+    if (request.mode === 'cancel') return this.cancel(request.agentId).then(() => ({ cancelled: true }))
 
     // A job answers only a request of its own kind. When any job running for the agent answered every
     // request, a close asked for while another window (or the cleanup preview) was inspecting the agent
@@ -302,11 +302,11 @@ export class CloseAgentService {
       if (request.mode === 'after_task') {
         if (s.closePlan?.identity === target && s.closePlan.state === 'waiting') return { deferred: true }
         let created = false
-        const updated = await this.deps.registry.afterTransaction(() => {
+        const updated = await this.deps.registry.afterTransaction(async () => {
           const latest = current()
           if (!latest) return null
           if (latest.closePlan?.identity === target && latest.closePlan.state === 'waiting') return latest
-          const saved = this.deps.registry.setClosePlan(latest.agentId, { id: randomUUID(), identity: target, requestedAt: this.now(), state: 'waiting' })
+          const saved = await this.deps.registry.setClosePlan(latest.agentId, { id: randomUUID(), identity: target, requestedAt: this.now(), state: 'waiting' }, { current: () => !!current() })
           created = !!saved
           return saved
         })
@@ -396,10 +396,13 @@ export class CloseAgentService {
       if (this.disposed) return
       if (this.queues.has(s.agentId)) continue
       const plan = s.closePlan!
-      if (identity(s) !== plan.identity) { this.cancel(s.agentId); continue }
+      const revision = this.revisions.get(s.agentId) ?? 0
+      const currentPlan = () => !this.disposed && (this.revisions.get(s.agentId) ?? 0) === revision
+        && this.deps.registry.byAgent(s.agentId)?.closePlan?.id === plan.id
+      if (identity(s) !== plan.identity) { await this.cancel(s.agentId); continue }
       try {
         const activity = await this.deps.activity(s)
-        if (this.disposed || this.deps.registry.byAgent(s.agentId)?.closePlan?.id !== plan.id) continue
+        if (!currentPlan()) continue
         if (activity !== 'idle') { this.idleSince.delete(s.agentId); continue }
         const since = this.idleSince.get(s.agentId)
         if (since === undefined) { this.idleSince.set(s.agentId, this.now()); continue }
@@ -409,13 +412,13 @@ export class CloseAgentService {
           createdAt: new Date(s.registeredAt).toISOString(), mode: 'idle' })
         if (result.error && result.error !== 'SESSION_NOT_IDLE') {
           const latest = this.deps.registry.byAgent(s.agentId)
-          if (latest?.closePlan?.id === plan.id) {
+          if (latest && currentPlan()) {
             // Native identity can be between writes. Preserve the queued intent and reason
             // so the next idle tick retries before any checkpoint or process mutation.
-            const changed = this.deps.registry.setClosePlan(s.agentId, { ...plan,
+            const changed = await this.deps.registry.setClosePlan(s.agentId, { ...plan,
               state: result.error === 'IDENTITY_UNAVAILABLE' ? 'waiting' : 'failed',
-              detail: result.detail ?? 'Could not save and close this session. Open it to try again.' })
-            if (changed) this.deps.changed(changed)
+              detail: result.detail ?? 'Could not save and close this session. Open it to try again.' }, { current: currentPlan })
+            if (changed && currentPlan()) this.deps.changed(changed)
           }
         }
       } catch (error) {
@@ -423,11 +426,11 @@ export class CloseAgentService {
         // its reason while retrying, without changing a cancelled or replaced plan.
         this.idleSince.delete(s.agentId)
         const latest = this.deps.registry.byAgent(s.agentId)
-        if (!this.disposed && latest?.closePlan?.id === plan.id) {
+        if (latest && currentPlan()) {
           try {
-            const changed = this.deps.registry.setClosePlan(s.agentId, { ...plan, state: 'waiting',
-              detail: error instanceof Error ? error.message : 'The conversation activity could not be confirmed.' })
-            if (changed) this.deps.changed(changed)
+            const changed = await this.deps.registry.setClosePlan(s.agentId, { ...plan, state: 'waiting',
+              detail: error instanceof Error ? error.message : 'The conversation activity could not be confirmed.' }, { current: currentPlan })
+            if (changed && currentPlan()) this.deps.changed(changed)
           } catch { /* The preceding durable intent survives a failed reason update. Retry next tick. */ }
         }
       }

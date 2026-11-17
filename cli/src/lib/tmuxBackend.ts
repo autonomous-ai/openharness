@@ -318,13 +318,17 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     type ExecError = NodeJS.ErrnoException & { killed?: boolean; signal?: NodeJS.Signals | null }
     // A new session is a notification to every control client: on a tmux before 3.7, not while one
     // attaches (tmuxControlGate.ts).
-    const result = await inTmuxRoom('notify', () => new Promise<{ error: ExecError | null; stdout: string; stderr: string }>((resolve) => {
+    const result = await inTmuxRoom('notify', async (): Promise<{ error: ExecError | null; stdout: string; stderr: string }> => {
+      if (request.current?.() === false) return { error: Object.assign(new Error('The harness changed before pane dispatch'), { code: 'HARNESS_CANCELLED' }), stdout: '', stderr: '' }
+      try { const prepared = request.onDispatch?.(); if (prepared) await prepared }
+      catch (error) { return { error: Object.assign(error instanceof Error ? error : new Error('Pane dispatch could not be committed'), { code: 'HARNESS_CANCELLED' }), stdout: '', stderr: '' } }
+      return new Promise<{ error: ExecError | null; stdout: string; stderr: string }>((resolve) => {
       if (request.current?.() === false) { resolve({ error: Object.assign(new Error('The harness changed before pane dispatch'), { code: 'HARNESS_CANCELLED' }), stdout: '', stderr: '' }); return }
-      request.onDispatch?.()
       const done: ExecDone = (error, stdout, stderr) => resolve({ error: error as ExecError | null, stdout, stderr })
       if (variables.length) runScript(args, 5_000, done)
       else run('tmux', args, { timeout: 5_000 }, done)
-    }), features)
+      })
+    }, features)
     if (result.error) {
       if (result.error.code === 'HARNESS_CANCELLED') return terminalActionNotStarted(result.error.message)
       if (result.error.code === 'ENOENT') return terminalActionNotStarted('tmux is unavailable')
@@ -402,9 +406,11 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
       ? ['if-shell', '-F', '-t', runtime.paneId, heldPaneFormat(request.expectedHeldToken),
         commands.map(parts => parts.map(tmuxWord).join(' ')).join('; '), 'display-message -p adoption-mismatch']
       : commands.flatMap((parts, index) => index ? [';', ...parts] : parts)
+    if (request.current?.() === false) return terminalActionNotStarted('The harness changed before pane dispatch')
+    try { const prepared = request.onDispatch?.(); if (prepared) await prepared }
+    catch (error) { return terminalActionNotStarted(error instanceof Error ? error.message : 'Pane dispatch could not be committed') }
     const result = await new Promise<{ error: NodeJS.ErrnoException | null; stderr: string }>((resolve) => {
       if (request.current?.() === false) { resolve({ error: Object.assign(new Error('The harness changed before pane dispatch'), { code: 'HARNESS_CANCELLED' }), stderr: '' }); return }
-      request.onDispatch?.()
       const done: ExecDone = (error, stdout, stderr) => resolve({
         error: stdout.trim() === 'adoption-mismatch' ? Object.assign(new Error('The waiting pane changed'), { code: 'HARNESS_CANCELLED' }) : error as NodeJS.ErrnoException | null,
         stderr,
@@ -666,8 +672,8 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
       : { state: 'succeeded', value: captured }
   }
 
-  async typeLiteral(runtime: TmuxRuntimeRef, text: string): Promise<TerminalActionResult> {
-    return legacyActionResult(await sendLiteralToTmux(runtime.paneId, text), 'tmux literal input')
+  async typeLiteral(runtime: TmuxRuntimeRef, text: string, allowed?: () => boolean): Promise<TerminalActionResult> {
+    return legacyActionResult(await sendLiteralToTmux(runtime.paneId, text, allowed), 'tmux literal input')
   }
 
   async submitText(runtime: TmuxRuntimeRef, text: string, options?: SubmitOptions): Promise<TerminalActionResult> {
@@ -677,8 +683,9 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     return terminalEnterWithheld(sent.withheld)
   }
 
-  async sendKey(runtime: TmuxRuntimeRef, key: TerminalLogicalKey): Promise<TerminalActionResult> {
-    return legacyActionResult(await sendKeyToTmux(runtime.paneId, TMUX_KEYS[key]), 'tmux key input')
+  async sendKey(runtime: TmuxRuntimeRef, key: TerminalLogicalKey, allowed?: () => boolean): Promise<TerminalActionResult> {
+    if (allowed?.() === false) return terminalActionNotStarted('terminal control revoked')
+    return legacyActionResult(await sendKeyToTmux(runtime.paneId, TMUX_KEYS[key], allowed), 'tmux key input')
   }
 
   async setTitle(runtime: TmuxRuntimeRef, title: string): Promise<TerminalActionResult> {

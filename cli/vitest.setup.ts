@@ -37,11 +37,15 @@ for (const name of Object.keys(process.env)) if (name.startsWith('HARNESSD_')) d
 // there showed it. A spec that wants a home of its own still sets one.
 const home = process.env.HOME = mkdtempSync(join(tmpdir(), 'adapter-test-home-'))
 // And no engine's or desktop's folder handed down from the shell that ran the suite (a Codex or Claude Code
-// session sets some of these for its own children), which would outrank that home.
+// session sets some of these for its own children), which would outrank that home. Nor an engine's binary: the
+// daemon's own lookup (lib/engineBin.ts) takes CLAUDE_PATH and the rest first, so a spec that looks for `claude` there
+// would find, and run, the developer's.
 for (const name of [
   'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'CLAUDE_PROJECTS_DIR', 'GROK_HOME', 'COPILOT_HOME', 'CURSOR_HOME', 'CURSOR_CONFIG_DIR',
   'CURSOR_DATA_DIR', 'HERMES_HOME', 'PI_HOME', 'PI_CODING_AGENT_DIR', 'PI_CODING_AGENT_SESSION_DIR', 'COMMANDCODE_HOME',
   'AGY_HOME', 'AGY_CONFIG_DIR', 'OPENCODE_DB', 'KILO_DB', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME',
+  'CLAUDE_PATH', 'CODEX_PATH', 'CURSOR_PATH', 'OPENCODE_PATH', 'PI_PATH', 'OMP_PATH', 'HERMES_PATH', 'COMMANDCODE_PATH',
+  'DEVIN_PATH', 'MUSE_PATH', 'AMP_PATH', 'KILO_PATH', 'GROK_PATH', 'AGY_PATH', 'COPILOT_PATH', 'OPENCLAW_PATH',
 ]) delete process.env[name]
 
 const data = process.env.ADAPTER_DATA_DIR = mkdtempSync(join(tmpdir(), 'adapter-test-data-'))

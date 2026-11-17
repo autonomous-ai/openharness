@@ -14,6 +14,8 @@ import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { createAgentRetargeter, type RetargetDeps } from './retarget.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
+import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
+vi.mock('../../lib/paneEngineProcess.js', () => ({ resolvePaneEngineProcess: vi.fn() }))
 
 vi.mock('../../engines/launchControl.js', async (real) => ({
   ...await real<object>(),
@@ -64,10 +66,13 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RetargetDe
     registry: {
       resolve: vi.fn(() => row ?? undefined),
       byAgent: vi.fn(() => row ?? undefined),
-      updateProcessIdentity: vi.fn(),
-      setGridLaunch: vi.fn(),
-      setSubscriptionModel: vi.fn(),
-      setActive: vi.fn(),
+      confirmLaunch: vi.fn<RetargetDeps['registry']['confirmLaunch']>(async (_id, input, authority) => {
+        if (!row || authority?.current?.() === false) return { state: 'not-published' }
+        const { gridLaunchRecord, ...fields } = input
+        Object.assign(row, fields, { active: true, launch: { state: 'ready' } },
+          gridLaunchRecord === undefined ? {} : { gridLaunch: gridLaunchRecord?.override ?? null, gridWebSearch: gridLaunchRecord?.webSearch ?? null })
+        return { state: 'confirmed', entry: structuredClone(row) }
+      }),
     } as unknown as RetargetDeps['registry'],
     runtimeProfiles: { selectedModel: vi.fn(() => 'runtime-v1:claude:opus') } as never,
     launchOverridesDeps: {} as never,
@@ -88,6 +93,34 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RetargetDe
 }
 
 describe('retargeting an agent', () => {
+  it('keeps the terminal held when a newer lifecycle follows confirmed retarget publication', async () => {
+    const run = setup()
+    const publish = vi.mocked(run.deps.registry.confirmLaunch).getMockImplementation()!
+    vi.mocked(run.deps.registry.confirmLaunch).mockImplementationOnce(async (...args) => {
+      const publication = await publish(...args)
+      run.deps.restartJobs.revision = () => 1
+      return publication
+    })
+    expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+    expect(run.tmux.releaseHold).not.toHaveBeenCalled()
+    expect(run.deps.announceSession).not.toHaveBeenCalled()
+  })
+  it.each(['same', 'gone', 'process', 'executable', 'not-published', 'empty receipt'] as const)('rechecks the retargeted process before durable readiness: %s', async proof => {
+    const run = setup()
+    const process = { pid: 2, startMarker: 'new', executable: '/bin/claude' }
+    const publish = vi.mocked(run.deps.registry.confirmLaunch).getMockImplementation()!
+    vi.mocked(run.deps.registry.confirmLaunch).mockImplementation(async (id, input, authority) => {
+      await authority?.refresh?.()
+      return proof === 'not-published' ? { state: 'not-published' } : proof === 'empty receipt' ? { state: 'confirmed', entry: null } : publish(id, input, authority)
+    })
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(proof === 'gone' ? null
+      : proof === 'process' ? { ...process, startMarker: 'other' }
+      : proof === 'executable' ? { ...process, executable: 'other' } : process)
+    const result = await run.retarget({ agentId: 'a1', grid })
+    expect(result.ok).toBe(proof === 'same')
+    expect(run.tmux.releaseHold).toHaveBeenCalledTimes(proof === 'same' ? 1 : 0)
+    expect(run.deps.announceSession).toHaveBeenCalledTimes(proof === 'same' ? 1 : 0)
+  })
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -173,7 +206,7 @@ describe('retargeting an agent', () => {
     expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'RESPAWN_FAILED' })
     expect(respawn).toHaveBeenCalledExactlyOnceWith(['fixture-engine', 's1'])
     expect(keepAbandoned).not.toHaveBeenCalled()
-    expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+    expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
   })
 
   describe('refusals before anything is touched', () => {
@@ -211,8 +244,8 @@ describe('retargeting an agent', () => {
         }
         const result = await createAgentRetargeter(run.deps)({ agentId: 'a1', grid: phase === 'environment' ? null : grid })
         expect(result).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
-        expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
-        expect(run.deps.registry.setGridLaunch).not.toHaveBeenCalled()
+        if (phase === 'pane-option') expect(run.deps.registry.confirmLaunch).toHaveBeenCalledOnce()
+        else expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
         expect(run.deps.announceSession).not.toHaveBeenCalled()
       })
 
@@ -485,13 +518,13 @@ describe('retargeting an agent', () => {
       vi.mocked(run.tmux.releaseHold).mockRejectedValueOnce('fixture release unavailable')
       expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'RETARGET_FAILED',
         detail: 'The replacement process started, but retarget did not complete. fixture release unavailable' })
-      expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+      expect(run.deps.registry.confirmLaunch).toHaveBeenCalledOnce()
     })
 
     it('does not announce a row removed by a publication observer', async () => {
       const run = setup()
-      vi.mocked(run.deps.registry.setActive).mockImplementationOnce(() => { vi.mocked(run.deps.registry.byAgent).mockReturnValue(undefined); return true })
-      expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: true })
+      vi.mocked(run.deps.registry.confirmLaunch).mockImplementationOnce(async () => { vi.mocked(run.deps.registry.byAgent).mockReturnValue(undefined); return { state: 'confirmed', entry: null } })
+      expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
       expect(run.deps.announceSession).not.toHaveBeenCalled()
     })
 
@@ -502,11 +535,11 @@ describe('retargeting an agent', () => {
       expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalled()
       expect(restartAgent).toHaveBeenCalledWith({ engine: 'claude', sessionId: 's1' }, true, { isCurrent: expect.any(Function) })
       // No gateway: the row keeps the one it had, and the relaunched engine says it again (a hook, or Codex's argv).
-      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', expect.objectContaining({ pid: 2 }), undefined, { baseUrl: grid.baseUrl, model: grid.model })
-      expect(run.deps.registry.setGridLaunch).toHaveBeenCalledWith('a1', { override: grid, webSearch: 'off' })
-      expect(run.deps.registry.setSubscriptionModel).toHaveBeenCalledWith('a1', 'opus')
-      expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', true)
-      expect(run.deps.refreshGridAssignment).toHaveBeenCalledWith(agent())
+      expect(run.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ processIdentity: expect.objectContaining({ pid: 2 }), grid: { baseUrl: grid.baseUrl, model: grid.model } }), expect.anything())
+      expect(run.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ gridLaunchRecord: { override: grid, webSearch: 'off' } }), expect.anything())
+      expect(run.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ subscriptionModel: 'opus' }), expect.anything())
+      expect(run.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.anything(), expect.anything())
+      expect(run.deps.refreshGridAssignment).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', launch: { state: 'ready' }, grid: { baseUrl: grid.baseUrl, model: grid.model } }))
       expect(run.tmux.releaseHold).toHaveBeenCalledWith(pane, expect.any(Function))
       expect(run.deps.announceSession).toHaveBeenCalled()
       expect(run.release).toHaveBeenCalled()
@@ -517,15 +550,15 @@ describe('retargeting an agent', () => {
     it('writes the grid it launched on the row, and none for a move home', async () => {
       const run = setup()
       await run.retarget({ agentId: 'a1', grid })
-      expect(vi.mocked(run.deps.registry.updateProcessIdentity).mock.calls.at(-1)![3]).toEqual({ baseUrl: grid.baseUrl, model: grid.model ?? null })
+      expect(vi.mocked(run.deps.registry.confirmLaunch).mock.calls.at(-1)![1].grid).toEqual({ baseUrl: grid.baseUrl, model: grid.model ?? null })
       const { model: _model, ...modelless } = grid
       await run.retarget({ agentId: 'a1', grid: modelless })
-      expect(vi.mocked(run.deps.registry.updateProcessIdentity).mock.calls.at(-1)![3]).toEqual({ baseUrl: grid.baseUrl, model: null })
+      expect(vi.mocked(run.deps.registry.confirmLaunch).mock.calls.at(-1)![1].grid).toEqual({ baseUrl: grid.baseUrl, model: null })
       const home = setup(agent({ grid: { baseUrl: 'x', model: null } } as Partial<RegisteredSession>), {
         relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: {} })) as never,
       })
       await home.retarget({ agentId: 'a1', grid: null })
-      expect(vi.mocked(home.deps.registry.updateProcessIdentity).mock.calls.at(-1)![3]).toBeNull()
+      expect(vi.mocked(home.deps.registry.confirmLaunch).mock.calls.at(-1)![1].grid).toBeNull()
     })
 
     it('remembers only the model of the agent\'s own login, never a grid\'s, never the one it moves to', async () => {
@@ -533,12 +566,12 @@ describe('retargeting an agent', () => {
       // Grid to grid: the memory stays as it was.
       const fromGrid = setup(agent({ grid: { baseUrl: 'x' }, subscriptionModel: 'sonnet' } as Partial<RegisteredSession>))
       await fromGrid.retarget({ agentId: 'a1', grid })
-      expect(fromGrid.deps.registry.setSubscriptionModel).toHaveBeenCalledWith('a1', 'sonnet')
+      expect(fromGrid.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ subscriptionModel: 'sonnet' }), expect.anything())
       // The engine still reports the grid's model: that is not the one to remember.
       vi.mocked(parseRuntimeProfile).mockReturnValueOnce({ engine: 'claude', model: 'big' } as never)
       const reporting = setup(agent())
       await reporting.retarget({ agentId: 'a1', grid })
-      expect(reporting.deps.registry.setSubscriptionModel).not.toHaveBeenCalled()
+      expect(vi.mocked(reporting.deps.registry.confirmLaunch).mock.calls.at(-1)![1]).not.toHaveProperty('subscriptionModel')
       // Another engine's model, or none observed: nothing to remember.
       vi.mocked(parseRuntimeProfile).mockReturnValueOnce({ engine: 'opencode', model: 'big-pickle' } as never).mockReturnValueOnce(null as never)
       await setup().retarget({ agentId: 'a1', grid })
@@ -555,8 +588,8 @@ describe('retargeting an agent', () => {
       expect(await run.retarget({ agentId: 'a1', grid: null })).toEqual({ ok: true })
       expect(vi.mocked(validateLaunchOverrides).mock.lastCall?.[2]).toEqual({ gridLaunch: null, codexHome: undefined, subscriptionModel: 'opus' })
       expect(run.tmux.clearEnv).toHaveBeenCalledWith(pane, ['ANTHROPIC_BASE_URL'], expect.any(Function))
-      expect(run.deps.registry.setGridLaunch).toHaveBeenCalledWith('a1', null)
-      expect(run.deps.registry.setSubscriptionModel).not.toHaveBeenCalled()
+      expect(run.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ gridLaunchRecord: null }), expect.anything())
+      expect(vi.mocked(run.deps.registry.confirmLaunch).mock.calls.at(-1)![1]).not.toHaveProperty('subscriptionModel')
       expect(log.mock.calls.map(([line]) => String(line))).toContain('claude on its own login · retargeted a1 · fresh session')
       const none = setup(agent(), { relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: {} })) as never })
       await none.retarget({ agentId: 'a1', grid: null })
@@ -590,7 +623,7 @@ describe('retargeting an agent', () => {
       expect(await run.retarget({ agentId: 'a1', grid: null })).toEqual({ ok: true })
       expect(run.deps.terminals.backendFor).toHaveBeenCalledWith(pty)
       // No session env to clear first: the grid's names go with the respawn, out of the pane's create-time env.
-      expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(row, { backend: ptyBackend, runtime: pty }, { clearPaneEnv: ['ANTHROPIC_BASE_URL'] }, null, expect.any(Function))
+      expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', processIdentity: { pid: 1, startMarker: 'old' }, grid: { baseUrl: 'x' } }), { backend: ptyBackend, runtime: pty }, { clearPaneEnv: ['ANTHROPIC_BASE_URL'] }, null, expect.any(Function))
       expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalledWith(terminalRouteKey(pty), null)
       expect(ptyBackend.releaseHold).toHaveBeenCalledWith(pty, expect.any(Function))
       expect(run.tmux.clearEnv).not.toHaveBeenCalled()
@@ -667,7 +700,7 @@ describe('retargeting an agent', () => {
       vi.mocked(restartAgent).mockResolvedValueOnce({ ok: false, detail: 'spawn failed' })
       expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'RESPAWN_FAILED',
         detail: expect.stringContaining('native model change was applied') })
-      expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+      expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
     })
   })
   // A fresh move (a new conversation on the grid, the old one reopened on the way home) served only a retired model

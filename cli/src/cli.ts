@@ -72,7 +72,7 @@ import { apiCommand, apiUsage } from './lib/apiCommand.js'
 import { connectionsCommand, connectionsUsage } from './lib/connectors/command.js'
 // Static, not import(): --help prints DEVICE_USAGE, so the module loads at start anyway, and the core and services never load cli.ts.
 import { DEVICE_USAGE, runDeviceCommand } from './deviceClaude/command.js'
-import { claudeRun } from './deviceClaude/plugin.js'
+import { claudeRun } from './devices/claudePlugin.js'
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { machineChoices, newCommand, type MachineRow, type NewMachine } from './lib/newCommand.js'
@@ -2669,7 +2669,11 @@ async function status(): Promise<void> {
   const session = readAuthSession()
   const daemonStatus = alive ? await runningDaemonStatus() : null
   const signedIn = daemonStatus?.signedIn ?? session !== null
-  if (!alive) registry.load()
+  if (!alive) {
+    registry.load()
+    try { await registry.flush() }
+    catch { console.error('[registry] status flush failed') }
+  }
   // A daemon whose start-up failed is alive and answering, but nothing on this machine works. Say so
   // in the one line a person reads, rather than leaving it looking like an ordinary slow start.
   const safeMode = alive ? readSafeModeMarker(env.ADAPTER_DATA_DIR, isAlive) : null

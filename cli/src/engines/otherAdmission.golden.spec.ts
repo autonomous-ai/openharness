@@ -149,7 +149,7 @@ describe('how the core admits a Hermes session and learns its home', () => {
           forgetStoreHomes(HERMES_HOMES)
         }
         const tmuxPane = `%${++pane}`
-        m.registry.registry.openProcessAgent({ engine: 'hermes', tmuxPane, cwd: '/work/h', processIdentity: { pid: 20_000 + pane, startMarker: START, executable: 'python3' } })
+        ;(await m.registry.registry.openProcessAgent({ engine: 'hermes', tmuxPane, cwd: '/work/h', processIdentity: { pid: 20_000 + pane, startMarker: START, executable: 'python3' } }))
         registered.length = 0
         logs.length = 0
         const response = await fetch(`http://127.0.0.1:${started.port}/api/hook/session-start`, {

@@ -36,15 +36,15 @@ function store(root: string, sessions: string[]): string {
 
 /** A hook arriving on a pane the daemon has not met: the process agent is opened first, as the hook
  *  server does, then the session binds to it. */
-function bindSession(
+async function bindSession(
   registry: Awaited<ReturnType<typeof load>>['registry'],
   sessionId: string,
   pane: string,
   pid: number,
 ) {
   const processIdentity = { pid, executable: 'hermes', startMarker: `Mon Sep 21 15:22:${pid % 60} 2026` }
-  registry.openProcessAgent({ engine: 'hermes', tmuxPane: pane, cwd: '/tmp/work', processIdentity })
-  const result = registry.register({ engine: 'hermes', sessionId, cwd: '/tmp/work', tmuxPane: pane, processIdentity })
+  ;(await registry.openProcessAgent({ engine: 'hermes', tmuxPane: pane, cwd: '/tmp/work', processIdentity }))
+  const result = (await registry.register({ engine: 'hermes', sessionId, cwd: '/tmp/work', tmuxPane: pane, processIdentity }))
   if (!result) throw new Error('registration refused')
   return result.entry
 }
@@ -77,7 +77,7 @@ d('the Hermes store a session reads from', () => {
     const demo = store(join(hermesHome, 'profiles', 'demo'), [PROFILE_SESSION])
     const { hermesDbForSession, registry } = await load()
 
-    const entry = bindSession(registry, PROFILE_SESSION, '%7', 4242)
+    const entry = (await bindSession(registry, PROFILE_SESSION, '%7', 4242))
     expect(entry.hermesHome ?? null).toBeNull()   // nothing known yet — the row was just born
 
     expect(await hermesDbForSession(entry)).toBe(join(demo, 'state.db'))
@@ -85,6 +85,7 @@ d('the Hermes store a session reads from', () => {
     expect(registry.resolve(entry.agentId)?.hermesHome).toBe(demo)
     // …and it survives a reload, which is where a field added to the type but not to the rehydrate
     // list silently disappears.
+    await registry.flush()
     const reloaded = await load()
     reloaded.registry.load()   // the daemon's own first act — the singleton does not read on import
     expect(reloaded.registry.resolve(entry.agentId)?.hermesHome).toBe(demo)
@@ -94,7 +95,7 @@ d('the Hermes store a session reads from', () => {
     store(hermesHome, [DEFAULT_SESSION])
     const { hermesDbForSession, registry } = await load()
 
-    const entry = bindSession(registry, DEFAULT_SESSION, '%8', 4243)
+    const entry = (await bindSession(registry, DEFAULT_SESSION, '%8', 4243))
 
     expect(await hermesDbForSession(entry)).toBe(join(hermesHome, 'state.db'))
     expect(registry.resolve(entry.agentId)?.hermesHome ?? null).toBeNull()
@@ -104,7 +105,7 @@ d('the Hermes store a session reads from', () => {
     store(hermesHome, [])
     const { hermesDbForSession, registry } = await load()
 
-    const entry = bindSession(registry, PROFILE_SESSION, '%9', 4244)
+    const entry = (await bindSession(registry, PROFILE_SESSION, '%9', 4244))
 
     expect(await hermesDbForSession(entry)).toBe(join(hermesHome, 'state.db'))
     expect(registry.resolve(entry.agentId)?.hermesHome ?? null).toBeNull()

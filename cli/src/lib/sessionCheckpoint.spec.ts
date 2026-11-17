@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { link, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -38,12 +39,12 @@ beforeEach(async () => {
   await mkdir(join(home, 'sessions'), { recursive: true, mode: 0o700 })
   history = join(home, 'sessions', 'conversation.jsonl')
   await writeFile(history, transcript('{"history":"retained conversation"}\n'), { mode: 0o600 })
-  row = registry.openPendingAgent({ engine: 'codex', cwd: '/tmp', codexHome: home, runtimes: [{ backend: 'tmux', paneId: '%777' }] })!
+  row = (await registry.openPendingAgent({ engine: 'codex', cwd: '/tmp', codexHome: home, runtimes: [{ backend: 'tmux', paneId: '%777' }] }))!
   Object.assign(row, { sessionId: 'conversation', transcriptPath: history })
   directory = join(root, 'checkpoints')
   store = new SessionCheckpointStore(directory)
 })
-afterEach(async () => { vi.restoreAllMocks(); for (const s of registry.list()) registry.removeAgent(s.agentId); await rm(root, { recursive: true, force: true }) })
+afterEach(async () => { vi.restoreAllMocks(); for (const s of registry.list()) (await removeRegistryAgent(registry, s.agentId)); await rm(root, { recursive: true, force: true }) })
 const manifest = async () => JSON.parse(await readFile(join(directory, (await readdir(directory)).find(f => /^[a-f0-9]{64}\.json$/.test(f))!), 'utf8'))
 
 async function piSession() {

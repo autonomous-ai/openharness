@@ -56,7 +56,7 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
     browser?: boolean
     firstTask?: string
     openclawLocal?: string
-  }) => RegisteredSession | null }
+  }) => Promise<RegisteredSession | null> }
   nativeToken?: string
   /** The agent id the row gets, chosen before the pane so its argv can name it (OpenClaw's session key). */
   agentId?: string
@@ -118,7 +118,7 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
   openclawLocal?: string
   /** Rechecked by the backend after its gates and immediately before process dispatch. */
   current?: () => boolean
-  onDispatch?: () => void
+  onDispatch?: () => void | Promise<void>
   maxAttempts?: number
 }
 
@@ -151,7 +151,7 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       const missing = spawned.reason === 'tmux is unavailable'
       return { ok: false, error: missing ? 'TMUX_UNAVAILABLE' : 'SPAWN_FAILED', detail: spawned.reason }
     }
-    const pending = deps.registry.openPendingAgent({
+    const pending = await deps.registry.openPendingAgent({
       ...(deps.agentId ? { agentId: deps.agentId } : {}),
       ...(deps.nativeToken ? { nativeToken: deps.nativeToken } : {}),
       engine: deps.engine,
