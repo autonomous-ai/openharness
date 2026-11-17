@@ -19,7 +19,8 @@ export interface LiveRead {
   failure?: string
   /** When the engine wrote this record (its own `timestamp`), epoch ms. Absent when it says none. */
   at?: number
-  /** This record is the engine's own word that its turn is over, and no Stop follows it (Claude Code's `turn_duration`). */
+  /** This record is the engine's own word that its turn is over, and no Stop follows it: Claude Code's `turn_duration`,
+   *  and every Codex end, whose Stop runs before the end is written. */
   over?: true
 }
 
