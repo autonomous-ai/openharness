@@ -90,6 +90,14 @@ describe('windowFacade', () => {
     expect(first.shown.length + second.shown.length).toBe(1)
   })
 
+  it("scrollLine runs the terminal's scrollUp or scrollDown, once", async () => {
+    const w = watched()
+    await w.facade.scrollLine(true)
+    expect(w.vscode.commands).toEqual(['workbench.action.terminal.scrollUp'])
+    await w.facade.scrollLine(false)
+    expect(w.vscode.commands).toEqual(['workbench.action.terminal.scrollUp', 'workbench.action.terminal.scrollDown'])
+  })
+
   it('a processId that rejects lists nothing and throws nothing', async () => {
     const w = watched()
     w.vscode.open().reject()

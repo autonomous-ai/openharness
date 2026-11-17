@@ -26,6 +26,8 @@ export function fakeVscode(options: { remoteName?: string } = {}): {
   close(terminal: ApiTerminal): void
   activate(terminal: ApiTerminal | undefined): void
   focus(focused: boolean): void
+  /** Each command run, in order. */
+  commands: string[]
   /** Each channel made: its name, its lines, whether it was disposed. */
   channels: Array<{ name: string; lines: string[]; disposed: boolean }>
   /** How many listeners are still registered. */
@@ -39,8 +41,15 @@ export function fakeVscode(options: { remoteName?: string } = {}): {
   const activeChanged = emitter<ApiTerminal | undefined>()
   const stateChanged = emitter<{ readonly focused: boolean }>()
   const channels: Array<{ name: string; lines: string[]; disposed: boolean }> = []
+  const commands: string[] = []
   const api: VscodeApi = {
     env: { remoteName: options.remoteName },
+    commands: {
+      executeCommand(command) {
+        commands.push(command)
+        return Promise.resolve(undefined)
+      },
+    },
     window: {
       get terminals() {
         return [...terminals]
@@ -95,6 +104,7 @@ export function fakeVscode(options: { remoteName?: string } = {}): {
       focused = next
       stateChanged.fire({ focused })
     },
+    commands,
     channels,
     listeners: () => opened.size() + closed.size() + activeChanged.size() + stateChanged.size(),
   }
