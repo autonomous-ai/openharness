@@ -719,7 +719,7 @@ async function qrSignInCommand(
   const result = await qrSignIn({
     post: (path, body) => postJson(path, body),
     ...(hooks.onStarted ? { onStarted: hooks.onStarted } : {}),
-    label: computerName().slice(0, 80),
+    label: computerName(),
     computerId: computerId(),
     ...(hooks.spoken ? {
       showCode: (code: string, expiresIn: number) => {

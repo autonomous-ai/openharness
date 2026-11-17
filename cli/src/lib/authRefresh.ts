@@ -20,7 +20,7 @@ type RefreshResult = { token: string; refreshToken?: string; expiresIn?: number 
  * a Harness session of its own (backend lib/ssoSession.ts), so an ordinary request never waits on the account
  * service. A backend from before it answers with the SSO tokens as ever, and those are kept.
  */
-export const harnessSessionRequest = (): { kind: 'computer'; label: string } => ({ kind: 'computer', label: computerName().slice(0, 80) })
+export const harnessSessionRequest = (): { kind: 'computer'; label: string } => ({ kind: 'computer', label: computerName() })
 
 /** Whether renewing [session] asks to move it to a Harness session: an SSO sign-in's does. One that is a Harness
  *  session already (`hnr_`) renews as one, and a QR sign-in is a session of its own kind. */

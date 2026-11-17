@@ -17,7 +17,8 @@ export interface ComputerNameSources {
   hostname(): string
 }
 
-export const COMPUTER_NAME_DEADLINE_MS = 2_000
+// tmuxOnPath.ts learned 2 s is too short for a child process on a loaded Mac.
+export const COMPUTER_NAME_DEADLINE_MS = 5_000
 export const COMPUTER_NAME_MAX = 80
 
 // eslint-disable-next-line no-control-regex -- control characters are what it removes
@@ -36,15 +37,20 @@ export const SYSTEM_COMPUTER_NAME_SOURCES: ComputerNameSources = {
   hostname: () => hostname(),
 }
 
+/** At most COMPUTER_NAME_MAX UTF-16 units, as the backend counts, and never half of a surrogate pair. */
+function cut(name: string): string {
+  const pairSplit = /[\uD800-\uDBFF]/.test(name.charAt(COMPUTER_NAME_MAX - 1))
+  return name.slice(0, pairSplit ? COMPUTER_NAME_MAX - 1 : COMPUTER_NAME_MAX)
+}
+
 function readComputerName(sources: ComputerNameSources): string {
   if (sources.platform === 'darwin') {
     try {
-      // By code point, so a character outside the BMP is never split into a lone surrogate.
-      const name = Array.from(sources.scutil().replace(CONTROL, '').trim()).slice(0, COMPUTER_NAME_MAX).join('')
-      if (name) return name
+      const name = sources.scutil().replace(CONTROL, '').trim()
+      if (name) return cut(name)
     } catch { /* scutil failed or ran past its deadline: the hostname, below */ }
   }
-  return sources.hostname()
+  return cut(sources.hostname())
 }
 
 /** A reader that asks once and keeps its answer, whichever it was. */
