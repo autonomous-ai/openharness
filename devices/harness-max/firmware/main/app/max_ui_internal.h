@@ -203,6 +203,12 @@ void max_clamp_page(void);
 // The room shows this agent ("" for none) and the lanes the others. True when it changed. Nothing is sent: the finger
 // sends agent.open itself.
 bool max_room_show(const char *id);
+// A new question from this agent (ask_since set): with nobody at the bar it takes the room, unless the room's agent
+// asks itself; with a person there the room stays, and the toast announces it.
+void max_room_asks(const max_agent_t *, uint32_t now_ms);
+// The room's agent's answer left the bar (a tap that sent it, or a recording sent for it): the room moves on to the
+// question that has waited longest, or stays to show the agent at work when none waits. True when it moved.
+bool max_room_answered(const char *id);
 // The seconds a lane's clock shows at now_ms, or -1 when it shows none.
 int64_t max_secs(const max_agent_t *, uint32_t now_ms);
 // Whether a finished lane still shows its summary, and the notice is up.

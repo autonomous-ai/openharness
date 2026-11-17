@@ -127,20 +127,10 @@ static void start_read(max_ask_t *k, uint32_t now_ms)
     k->note[0] = 0;
 }
 
-bool max_ui_question(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
-                     bool permission, bool review, uint32_t now_ms)
+// How the question in k is answered, and what it starts.
+static void take_question(max_ask_t *k, const char *request, const pro_ask_item_t *items, int n, bool permission,
+                          bool review, uint32_t now_ms)
 {
-    max_agent_t *a = max_find(id);
-    if (!a) return false;
-    if (!items || n < 0 || n > PRO_ASK_ITEMS) n = 0;
-    const uint32_t key = ask_hash(request, text, items, n);
-    if (a->state == MAX_ASKING && a->ask_key == key) return false;   // the same question, re-sent
-    max_set_state(a, MAX_ASKING, now_ms);
-    max_copy(a->question, sizeof a->question, text);
-    a->ask_key = key;
-    a->card = false;   // the question's card replaces a failure's or a summary's
-    max_ask_t *k = ask_slot(id);
-    if (!k) return true;
     const bool request_ok = request && request[0] && exact(k->request, sizeof k->request, request);
     const bool whole = take_items(k, items, n);
     k->permission = permission && n > 0;
@@ -156,6 +146,24 @@ bool max_ui_question(const char *id, const char *request, const char *text, cons
     } else {
         k->path = whole ? MAX_PATH_PLAIN : MAX_PATH_NONE;
     }
+}
+
+bool max_ui_question(const char *id, const char *request, const char *text, const pro_ask_item_t *items, int n,
+                     bool permission, bool review, uint32_t now_ms)
+{
+    max_agent_t *a = max_find(id);
+    if (!a) return false;
+    if (!items || n < 0 || n > PRO_ASK_ITEMS) n = 0;
+    const uint32_t key = ask_hash(request, text, items, n);
+    if (a->state == MAX_ASKING && a->ask_key == key) return false;   // the same question, re-sent: it keeps its place
+    max_set_state(a, MAX_ASKING, now_ms);
+    max_copy(a->question, sizeof a->question, text);
+    a->ask_key = key;
+    a->ask_since = now_ms;
+    a->card = false;   // the question's card replaces a failure's or a summary's
+    max_ask_t *k = ask_slot(id);
+    if (k) take_question(k, request, items, n, permission, review, now_ms);
+    max_room_asks(a, now_ms);
     return true;
 }
 
@@ -272,6 +280,7 @@ static bool submit(const max_agent_t *a, max_ask_t *k, uint32_t now_ms)
         memcpy(o->request, k->request, sizeof o->request);
     }
     k->phase = MAX_ASK_SENDING;
+    max_room_answered(a->id);
     return true;
 }
 

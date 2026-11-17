@@ -286,6 +286,40 @@ static void test_what_ends_a_question(void)
     CHECK(take(100000) == 0);
 }
 
+// An answer from the room on its way: the room moves on to the question waiting longest; with none waiting it stays,
+// to show the agent start working. Left alone meanwhile, it waits for the answer.
+static void test_answered_room_moves_on(void)
+{
+    linked(ABC, 3);
+    CHECK(max_ui_question("a", "toolu_1", DB.q, &DB, 1, false, false, 1000));
+    reviewed("c", TWO, 2, 2000);
+    CHECK(max_ui_question("b", "toolu_3", DEPLOY.q, &DEPLOY, 1, true, false, 3000));
+    CHECK(!strcmp(max_ui_selected(), "a"));
+    // One tap on a single choice: the answer goes, and c's question has waited longest.
+    CHECK(hit("a", MAX_HIT_OPTION, 0, 4000) && ask("a")->phase == MAX_ASK_SENDING);
+    CHECK(!strcmp(max_ui_selected(), "c"));
+    // A step on is not the answer; Send on several choices is.
+    CHECK(hit("c", MAX_HIT_OPTION, 1, 4100) && !strcmp(max_ui_selected(), "c"));
+    CHECK(hit("c", MAX_HIT_OPTION, 2, 4200) && !strcmp(max_ui_selected(), "c"));
+    CHECK(hit("c", MAX_HIT_SEND, 0, 4300) && !strcmp(max_ui_selected(), "b"));
+    // Yes on the permission prompt, and nothing else waits (a's and c's answers are on their way): the room stays.
+    CHECK(hit("b", MAX_HIT_OPTION, 0, 4400) && ask("b")->phase == MAX_ASK_SENDING);
+    CHECK(!strcmp(max_ui_selected(), "b"));
+    max_ui_tick(4400 + MAX_QUIET_MS);
+    CHECK(!strcmp(max_ui_selected(), "b"));
+    // An answer from outside the room leaves the room where it is.
+    take(4500);
+    CHECK(max_ui_answer_receipt("c", ask("c")->fetch, "tok", true, false, NULL, 4500));
+    CHECK(max_ui_question("a", "toolu_4", DB.q, &DB, 1, false, false, 5000));
+    CHECK(max_ui_question("c", "toolu_5", DB.q, &DB, 1, false, false, 6000));
+    CHECK(hit("c", MAX_HIT_OPTION, 0, 7000) && !strcmp(max_ui_selected(), "b"));
+    // An answer that found no room in the outbox did not go: the room stays with its question.
+    max_ui_question_close("b");
+    max_ui_focus("a");
+    while (max_out_push(MAX_OUT_READ)) {}
+    CHECK(hit("a", MAX_HIT_OPTION, 1, 8000) && ask("a")->phase == MAX_ASK_READY && !strcmp(max_ui_selected(), "a"));
+}
+
 static void test_cards(void)
 {
     linked(ABC, 3);
@@ -327,6 +361,7 @@ int main(void)
     test_only_ready_cards_answer();
     test_outbox_full();
     test_what_ends_a_question();
+    test_answered_room_moves_on();
     test_cards();
     printf("test_max_ask: %d checks passed\n", checks);
     return 0;

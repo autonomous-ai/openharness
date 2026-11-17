@@ -88,6 +88,8 @@ max_act_t max_ui_touch(bool down, int x, int y, uint32_t now_ms)
         }
         return act_for(MAX_ACT_NONE, NULL);
     }
+    max_m.touched = true;   // a person is at the bar: for MAX_QUIET_MS no question takes the room from them
+    max_m.touched_ms = now_ms;
     if (!max_m.down || max_m.update_pct >= 0) {   // no contact, or nothing to touch while the image is written
         max_m.down = false;
         return act_for(MAX_ACT_NONE, NULL);

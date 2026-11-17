@@ -119,8 +119,59 @@ bool max_room_show(const char *id)
 {
     if (!strcmp(max_m.selected, id)) return false;
     max_copy(max_m.selected, sizeof max_m.selected, id);
+    if (!strcmp(max_m.toast_id, id)) max_m.toast_id[0] = 0;   // what it announced is in the room now
     max_clamp_page();   // the agent it showed is back among the lanes
     return true;
+}
+
+// A tap or swipe in the last MAX_QUIET_MS, a recording, or the form up: a question must not take the room from them.
+static bool at_bar(uint32_t now_ms)
+{
+    return (max_m.touched && (int32_t)(now_ms - max_m.touched_ms) < (int32_t)MAX_QUIET_MS) ||
+           max_m.talk != MAX_TALK_IDLE || max_form_open();
+}
+
+// An agent that asks and has no answer on its way waits for a person.
+static bool waits(const max_agent_t *a)
+{
+    if (a->state != MAX_ASKING) return false;
+    const max_ask_t *k = max_ask_of(a->id);
+    return !k || (k->phase != MAX_ASK_SENDING && k->phase != MAX_ASK_SENT);
+}
+
+// The question that has waited longest, but `except`'s; NULL when none waits.
+static const max_agent_t *oldest(const char *except)
+{
+    const max_agent_t *best = NULL;
+    for (int i = 0; i < max_m.count; i++) {
+        const max_agent_t *a = &max_m.agents[i];
+        if (waits(a) && strcmp(a->id, except) && (!best || (int32_t)(a->ask_since - best->ask_since) < 0)) best = a;
+    }
+    return best;
+}
+
+// Nobody at the bar and the room's agent not asking (nor with its answer on its way): the room shows the question that
+// has waited longest. True when the room moved.
+static bool settle(uint32_t now_ms)
+{
+    const max_agent_t *room = max_find(max_m.selected), *next = oldest("");
+    if (at_bar(now_ms) || !next || (room && room->state == MAX_ASKING)) return false;
+    return max_room_show(next->id);
+}
+
+void max_room_asks(const max_agent_t *a, uint32_t now_ms)
+{
+    if (at_bar(now_ms) && strcmp(max_m.selected, a->id)) {
+        max_copy(max_m.toast_id, sizeof max_m.toast_id, a->id);
+        max_m.toast_from = now_ms;
+    }
+    settle(now_ms);
+}
+
+bool max_room_answered(const char *id)
+{
+    const max_agent_t *next = strcmp(max_m.selected, id) ? NULL : oldest(id);
+    return next && max_room_show(next->id);
 }
 
 uint32_t max_fnv(uint32_t h, const void *data, size_t n)
@@ -140,8 +191,9 @@ uint32_t max_time_key(uint32_t now_ms)
         h = max_fnv(h, &secs, sizeof secs);
         h = max_fnv(h, &note, sizeof note);
     }
-    const bool notice = max_notice_shown(now_ms);
-    return max_fnv(h, &notice, sizeof notice);
+    const bool notice = max_notice_shown(now_ms), toast = max_toast_shown(now_ms);
+    h = max_fnv(h, &notice, sizeof notice);
+    return max_fnv(h, &toast, sizeof toast);
 }
 
 void max_ui_reset(void)
@@ -450,7 +502,11 @@ bool max_ui_update(int pct, const char *to)
 
 // ---- the clock ----
 
-bool max_ui_tick(uint32_t now_ms) { return max_m.dirty || max_time_key(now_ms) != max_m.drawn_key; }
+bool max_ui_tick(uint32_t now_ms)
+{
+    const bool moved = settle(now_ms);   // left alone: the room goes back to the question waiting
+    return moved || max_m.dirty || max_time_key(now_ms) != max_m.drawn_key;
+}
 
 uint32_t max_ui_next_wake_ms(uint32_t now_ms)
 {
@@ -466,6 +522,10 @@ uint32_t max_ui_next_wake_ms(uint32_t now_ms)
         if (a->state == MAX_DONE && max_note_shown(a, now_ms) && a->note_until - now_ms < ms) ms = a->note_until - now_ms;
     }
     if (max_notice_shown(now_ms) && max_m.notice_until - now_ms < ms) ms = max_m.notice_until - now_ms;
+    const uint32_t toast_end = max_m.toast_from + MAX_TOAST_MS, quiet_end = max_m.touched_ms + MAX_QUIET_MS;
+    if (max_toast_shown(now_ms) && toast_end - now_ms < ms) ms = toast_end - now_ms;
+    // The person's quiet runs out: left alone, the room may go back to a question (max_ui_tick).
+    if (max_m.touched && (int32_t)(quiet_end - now_ms) > 0 && quiet_end - now_ms < ms) ms = quiet_end - now_ms;
     if (max_m.link) ms = max_form_wake(now_ms, max_ask_wake(now_ms, ms));   // a read again, a poll, a reply overdue
     return ms ? ms : 1;
 }
