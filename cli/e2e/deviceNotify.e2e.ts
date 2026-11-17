@@ -4,6 +4,7 @@
  * fake dial on the desk (harness/desk.ts) shows the line as a card of that agent's own:
  * - an outside Claude Code session's and a Codex session's notice is a card on their own row, answered in their app;
  *   the same line again is limited; reading the card leaves it, and the agent's next prompt closes it;
+ * - the turn that sent a notice ends silent, and its card stays;
  * - a Harness agent's notice is tied to the Harness agent, and a session nobody lists rings under its folder;
  * - it rings with a window open on its tab;
  * - with the dial unplugged, or no dial on this computer, it prints `no dial`, and the second starts nothing.
@@ -137,6 +138,31 @@ describe('harness device notify', () => {
 
     await until('the notice in the daemon\'s log', () => d.log().includes('[device] notify · claude · shown'), 30_000, 50)
     expect(d.log().split('\n').filter((line) => line.includes(LINE))).toEqual([])
+  })
+
+  // One ring a turn (docs/plans/2026-11-17-dial-one-ring-per-turn-design.md): the notice rang, so the turn's end only
+  // draws the tile, and the notice keeps its row.
+  it('a turn that sent a notice ends silent, and its card stays', async () => {
+    const { d, desk } = await fresh()
+    const dial = await plugged(desk)
+    const engine = await startOutside(d, 'fix-login')
+    await listed(dial, engine.id)
+    const caller = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: engine.sessionId }
+    const started = dial.messages.length
+    // A turn long enough for the command an agent runs in it: the notice comes while it works.
+    engine.type('!slow 10000')
+    await dial.next((m) => m.t === 'turn.started' && m.agentId === engine.id, 45_000, 'its turn started', started)
+    expect(await notify(d, caller, join(d.projectsDir, 'fix-login'))).toMatchObject({ code: 0, out: 'shown' })
+    const question = await dial.next((m) => m.t === 'question' && m.agentId === engine.id, 45_000, 'the notice', started)
+    const summary = await dial.next((m) => m.t === 'summary' && m.agentId === engine.id, 60_000, 'its answer', started)
+    expect(summary).toMatchObject({ tier: 'silent', silent: true })
+    // The read answered after the summary is the barrier: the card is still the daemon's, and nothing closed it.
+    const since = dial.messages.length
+    dial.send({ t: 'question.read', agentId: engine.id, requestId: 'read-1' })
+    expect(await dial.next((m) => m.t === 'question.state' && m.requestId === 'read-1', 45_000, 'the card read', since))
+      .toMatchObject({ ok: true, id: question.id, questions: card('Ghostty') })
+    expect(dial.messages.some((m) => m.t === 'question.close' && m.agentId === engine.id)).toBe(false)
+    expect(d.log()).toContain('[cable] notify · silent · rule:notice · notice · 0ms')
   })
 
   it('a Codex session\'s notice is its own card', async () => {
