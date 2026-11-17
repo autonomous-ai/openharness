@@ -88,7 +88,7 @@ export class CmuxSource implements HostSource {
   private unwatch: (() => void) | undefined
   /** Whether the stores' folder was there, as last said: kept across a detach, so a dial plugged in again says nothing. */
   private there: boolean | undefined
-  /** The words (none: all) whose run's fault was said, until a run of each answers. */
+  /** The words (none: all) whose run's fault was said this start, until a run of each answers. */
   private readonly failing = new Set<string | undefined>()
   /** The slowest read said by word (none: all), this start's. */
   private readonly slowest = new Map<string | undefined, number>()
@@ -102,6 +102,7 @@ export class CmuxSource implements HostSource {
   start(): void {
     if (this.running) return
     this.running = true
+    this.failing.clear()
     this.slowest.clear()
     // Held before the folder is asked after, so a folder made between the two is still heard.
     this.unwatch = this.deps.watch((file) => this.changed(file))
