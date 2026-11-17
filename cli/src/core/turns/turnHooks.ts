@@ -48,15 +48,15 @@ interface HookTurn {
   /** The turn's own end, read and held for its Stop, and when it was read. */
   held?: { end: LiveEvent; identity?: string; openedAt?: number; at: number }
   /** The turn a Stop came for before its end was read: that end goes on as it is read (R2). */
-  stopped?: string
+  awaited?: string
   /** When its latest end or wait hook reached the daemon: an engine still sending them has not lost the Stop. */
   hookAt: number
   /** When the hook of the wait on the person ran, while it is open (R4). */
   waitAt?: number
   /** How many of its subagents run, by Claude Code's SubagentStart and SubagentStop (R5). */
   subagents: number
-  /** When its engine ran a SubagentStop taken with none counted: the SubagentStart it ran before it is that stop's. */
-  stoppedFirstAt?: number
+  /** When its engine ran a SubagentStop taken with none counted: a SubagentStart it ran before, taken after, is its. */
+  subagentStopAt?: number
   /** When progress was last read while they run. */
   progressAt: number
 }
@@ -149,7 +149,7 @@ export function createTurnHooks({
     if (turn?.subagents && events.some(event => isProgressEvent(event.type))) turn.progressAt = Date.now()
     if (!turn?.endsByHook || (!turn.held && !events.some(event => event.type === 'turn_ended'))) return emit(sessionId, events)
     // An aborted end, one no Stop follows (a paused /goal pass), and one its Stop came for already go on at once.
-    const atOnce = read.over || (read.turn && read.turn.identity === turn.stopped)
+    const atOnce = read.over || (read.turn && read.turn.identity === turn.awaited)
     const out: LiveEvent[] = []
     for (const event of events) {
       if (event.type === 'turn_started' && turn.held) { out.push(turn.held.end); turn.held = undefined }
@@ -185,7 +185,7 @@ export function createTurnHooks({
     emit,
     graceMs: STOP_HOOK_GRACE_MS,
     heldEnd: (sessionId) => turns.get(sessionId)?.held,
-    awaitEnd: (sessionId, identity) => { const turn = turns.get(sessionId); if (turn) turn.stopped = identity },
+    awaitEnd: (sessionId, identity) => { const turn = turns.get(sessionId); if (turn) turn.awaited = identity },
     deliverHeldEnd: deliver,
     subagentsRun: atWork,
   }
@@ -296,8 +296,8 @@ export function createTurnHooks({
   const onSubagent = ({ sessionId, started, firedAt }: { sessionId: string; started: boolean; firedAt?: number }): void => {
     const turn = record(sessionId)
     turn.hookAt = Date.now()
-    if (!started) { if (turn.subagents) turn.subagents--; else turn.stoppedFirstAt = firedAt }
-    else if ((firedAt ?? Infinity) < (turn.stoppedFirstAt ?? 0)) turn.stoppedFirstAt = undefined
+    if (!started) { if (turn.subagents) turn.subagents--; else turn.subagentStopAt = firedAt }
+    else if ((firedAt ?? Infinity) < (turn.subagentStopAt ?? 0)) turn.subagentStopAt = undefined
     else if (turn.subagents < SUBAGENTS_MAX) turn.subagents++
     else log(`[turn] ${sid(sessionId)} subagent not counted · ${SUBAGENTS_MAX} running`)
   }
