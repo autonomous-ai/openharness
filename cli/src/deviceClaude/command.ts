@@ -13,7 +13,7 @@ import { mkdirSync } from 'node:fs'
 import { connect, type Socket } from 'node:net'
 import { dirname } from 'node:path'
 import { claudeDisable, claudeEnable, claudeStatus, type ClaudeResult, type ClaudeRun } from '../devices/claudePlugin.js'
-import { ownDirectory, removeSkill, skillsFolderOf, skillWanted, writeSkill } from '../devices/dialSkill.js'
+import { claudePluginState, ownDirectory, removeSkill, skillsFolderOf, skillWanted, writeSkill } from '../devices/dialSkill.js'
 import { listable, MAX_HOMES, readRemoved, readSetup, readWritten, writeRemoved, type DialEngine } from '../devices/dialSkillFiles.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { NOTICE_USAGE, runNotice } from '../devices/notice.js'
@@ -72,7 +72,12 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
       return 1
     }
     case 'disable':
-      return turnOff('claude', claudeHome(), deps, () => claudeDisable({ run: deps.claude(), platform: deps.platform }))
+      return turnOff('claude', claudeHome(), deps, async () => {
+        const run = deps.claude()
+        // With no `claude` to uninstall it, a plugin on in these settings stays installed: the person is told.
+        if (!run && claudePluginState(claudeSettingsPath()) === 'on') return { ok: false, error: PLUGIN_LEFT_ON, step: 'uninstall' }
+        return claudeDisable({ run, platform: deps.platform })
+      })
     case 'asked': {
       // A session started before `disable` still runs the hook: with the plugin off or removed, its stdin is read and
       // nothing told.
@@ -124,6 +129,7 @@ async function codexCommand(verb: string, json: boolean, deps: DeviceDeps): Prom
 const ENGINE_NAMES: Record<DialEngine, string> = { claude: 'Claude Code', codex: 'Codex' }
 const OTHER: Record<DialEngine, DialEngine> = { claude: 'codex', codex: 'claude' }
 const SAVE_FAILED = 'Could not save the dial setting.'
+const PLUGIN_LEFT_ON = 'Claude Code was not found, so its harness-device plugin is still on; /plugin in Claude Code removes it.'
 
 /**
  * Whether the plugin's hook and mod act: its entry on in this command's Claude Code settings, and `disable` has not
