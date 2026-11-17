@@ -152,6 +152,19 @@ describe('hook-driven agent status', () => {
     expect(client.frames.slice(since).filter(isTurn('turn_ended', agent.id))).toHaveLength(1)
   })
 
+  // A loaded runner (cli-e2e, 2026-11-17): a turn's Stop reached the daemon 2 ms to 6 s before its tail read the turn,
+  // and the end then waited 2 minutes for a Stop that had come. Here the engine writes the turn only once its Stop
+  // has returned (`!lagwrite`).
+  it('claude: a Stop that reaches the daemon before its turn is read ends that turn as it is read', async () => {
+    const { d, client, agent, fence } = await setUp('claude', 'lag-claude')
+    const since = client.frames.length
+    const stops = hooksRan(d, 'Stop', agent.sessionId)
+    await client.turn(agent.id, '!lagwrite', AT_ONCE_MS)
+    expect(hooksRan(d, 'Stop', agent.sessionId), 'its Stop ran').toBe(stops + 1)
+    await fence()
+    expect(client.frames.slice(since).filter(isTurn('turn_ended', agent.id))).toHaveLength(1)
+  })
+
   it.each(engines)('%s: Esc typed in the pane ends the turn as aborted, and nothing is announced', async (engine) => {
     const { d, client, agent, fence } = await setUp(engine, `esc-${engine}`)
     const started = client.next(isTurn('turn_started', agent.id), TURN_MS, 'turn_started')

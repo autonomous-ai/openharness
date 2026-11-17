@@ -53,7 +53,9 @@
 // until the test's release file exists, as a CLI does whose hooks or first record are slow, `!latestop` (Claude
 // Code) has its Stop and the next prompt's hook reach the daemon only after that prompt's turn is on disk (see
 // `lateStop`), `!heldstop` has the turn's Stop reach the daemon only once the test writes `held-stop.release`, alone or
-// before another directive (`!heldstop !permit printf hi`), `!fail`
+// before another directive (`!heldstop !permit printf hi`), `!lagwrite` (Claude Code) writes its turn to the transcript
+// only once its Stop has returned, each record with the time it was made, as a transcript the daemon reads after the
+// Stop came (Claude Code's own docs: the transcript may lag behind; a loaded machine reads it late), `!fail`
 // (Codex) ends the turn in an error, with no Stop, `!elicit` (Claude Code) has an MCP tool's server ask for input in its
 // own dialog, `!spawn [name] [helper|resume]` (Claude Code) starts a background subagent that runs past its lead's Stop
 // until the test writes `<name>.release` (see the directive), `!exit` ends the process. A task `harness new` started it with is read for its directive below the line
@@ -586,7 +588,13 @@ export async function run(engine, config = {}, { native = false } = {}) {
   }
 
   const now = () => new Date().toISOString()
-  const write = (record) => appendFileSync(transcript, JSON.stringify(record) + '\n')
+  /** `!lagwrite`: the turn's records, each with the time it was made, kept back until its Stop has returned. */
+  let lagging = null
+  const write = (record) => {
+    const line = JSON.stringify(record) + '\n'
+    if (lagging) lagging.push(line)
+    else appendFileSync(transcript, line)
+  }
   let parent = null
   const claude = (record) => {
     const uuid = randomUUID()
@@ -1436,6 +1444,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
     const held = heldStop
     heldStop = null
     await runHooks('Stop', { stop_hook_active: false, ...(engine === 'codex' ? { turn_id: ended } : {}) }, held)
+    if (lagging) { appendFileSync(transcript, lagging.join('')); lagging = null }
     if (engine === 'codex') codex('event_msg', { type: 'task_complete', turn_id: ended, last_agent_message: text })
   }
   /**
@@ -1606,6 +1615,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
     turn++
     open = `turn-${turn}`
     if (engine === 'claude') {
+      if (/^!lagwrite(?:\s|$)/.test(prompt.replace(START_HEADER, ''))) lagging = []
       claude({ type: 'user', message: { role: 'user', content: prompt } })
       claude({ type: 'assistant', message: { id: `msg_${turn}_t`, role: 'assistant', model: claudeModel, content: [{ type: 'thinking', thinking: `considering: ${prompt}` }], stop_reason: null } })
       if (late) {
