@@ -3,11 +3,11 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { EXIT, replyCommand, resumeCommand, type ClientDeps } from './commands.js'
+import { closeCommand, EXIT, replyCommand, resumeCommand, type ClientDeps } from './commands.js'
 import { AgentClientError, type Daemon, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
 import { ProgramRecords } from './program.js'
-import { signedOutForTest } from '../testing/agentSettings.js'
+import { setAgentSettingsForTest, signedOutForTest } from '../testing/agentSettings.js'
 import type { Frame } from './model.js'
 
 const NOW = Date.parse('2026-11-17T12:00:00Z')
@@ -79,8 +79,21 @@ describe('harness reply to a program\'s own harness (#4393)', () => {
     const h = harness(d)
     expect(await reply(h)).toBe(EXIT.ok)
     expect(JSON.parse(h.out[0])).toEqual({ state: 'taken', inputId: 'program:x1', takenAt: new Date(NOW + 400).toISOString() })
-    expect(d.requests.find((r) => r.type === 'input_ack')!.payload).toEqual({ agentId: 'a1', text: 'turn on the light', ackMs: 10_000 })
+    expect(d.requests.find((r) => r.type === 'input_ack')!.payload).toEqual({ agentId: 'a1', text: 'turn on the light', ackMs: 30_000, takenMs: 30_000 })
     expect(new ProgramRecords(dir).get('a1')!.inputs).toEqual([{ id: 'program:x1', takenAt: NOW + 400 }])
+  })
+
+  it('sends words starting with ! or / to OpenClaw as a message, never a shell or TUI command; other engines as written', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('a1'), frame('c1', { engine: 'claude' })]
+    own('a1')
+    own('c1', 'lamp-claude', { engine: 'claude' })
+    d.extra.input_ack = () => ({ inputId: 'program:b1', state: 'taken', takenAt: NOW })
+    const say = (name: string, words: string) => replyCommand([name, '--program-token-file', token, '--json', '--', words], harness(d).deps)
+    expect(await say('lamp-openclaw', '!ls ~')).toBe(EXIT.ok)
+    expect(await say('lamp-openclaw', '/new')).toBe(EXIT.ok)
+    expect(await say('lamp-claude', '/new')).toBe(EXIT.ok)
+    expect(d.requests.filter((r) => r.type === 'input_ack').map((r) => r.payload.text)).toEqual(['​!ls ~', '​/new', '/new'])
   })
 
   it('waits for an engine still coming up, then says ENGINE_NOT_READY with nothing typed', async () => {
@@ -170,6 +183,27 @@ describe('harness reply to a program\'s own harness (#4393)', () => {
     expect(await resumeCommand(['lamp-openclaw', '--program-token-file', token, '--json'], h.deps)).toBe(EXIT.ok)
     expect(JSON.parse(h.out[0])).toMatchObject({ ok: true, id: 'a1', resumed: true })
     expect(new ProgramRecords(dir).get('a1')!.startedAt).toBe(NOW)
+  })
+
+  it('refuses a close, resume or reply without the token to a harness a program owns', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('a1', { name: 't1' })]
+    own('a1', 't1')
+    const closed = harness(d)
+    expect(await closeCommand(['t1', '--json'], closed.deps)).toBe(EXIT.refused)
+    expect(JSON.parse(closed.out[0]).error).toBe('NOT_YOURS')
+    d.frames = [frame('a1', { name: 't1', status: 'stopped' })]
+    // The person's switch on, as the lamp's never is: still the program's alone.
+    setAgentSettingsForTest(dir, { programsReply: true })
+    const resumed = harness(d)
+    expect(await resumeCommand(['t1', '--json'], resumed.deps)).toBe(EXIT.refused)
+    expect(JSON.parse(resumed.out[0]).error).toBe('NOT_YOURS')
+    d.frames = [frame('a1', { name: 't1' })]
+    const replied = harness(d)
+    expect(await replyCommand(['t1', '--json', '--', 'hi'], replied.deps)).toBe(EXIT.refused)
+    expect(JSON.parse(replied.out[0]).error).toBe('NOT_YOURS')
+    expect(d.requests.some((r) => r.type === 'agent_close' && r.payload.mode !== 'inspect')).toBe(false)
+    expect(d.requests.some((r) => r.type === 'agent_resume')).toBe(false)
   })
 
   it('keeps every reply without a token as it was: refused while programs-reply is off', async () => {

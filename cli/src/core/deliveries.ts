@@ -43,12 +43,19 @@ export interface DeliveriesDeps {
   now?: () => number
 }
 
-/** How long an acknowledged input waits for its engine to take it, unless asked: what `harness reply` waits by default. */
-export const ACK_DEFAULT_MS = 10_000
-/** Bounds on [ackMs]: a second at least, so a typed line has a look to land in, and the longest wait OpenClaw's own
+/**
+ * How long an acknowledged input waits by default in each of its two phases: until its words are pasted (`ackMs`; the
+ * daemon checks the runtime and waits for the engine and the pane first, 8.6 to 15.7 s under load on a lamp), then from
+ * the paste until the engine's turn starts (`takenMs`). What `harness reply` waits by default.
+ */
+export const ACK_DEFAULT_MS = 30_000
+/** Bounds on each phase: a second at least, so a typed line has a look to land in, and the longest wait OpenClaw's own
  *  submission check makes (three 10 s windows, lib/sessionInput.ts) with room, at most. */
 export const ACK_MIN_MS = 1_000
 export const ACK_MAX_MS = 120_000
+
+const ackWindow = (value: unknown): number =>
+  Math.min(ACK_MAX_MS, Math.max(ACK_MIN_MS, typeof value === 'number' && Number.isFinite(value) ? value : ACK_DEFAULT_MS))
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
@@ -118,40 +125,57 @@ export function createDeliveries(deps: DeliveriesDeps) {
    * only once the engine has taken them, so a program never reads "sent" for words that were lost. Delivered as any
    * feature's turn, under a delivery id of its own (`program:`, never `team:`), and answered at the first of: its turn
    * `started` (taken; for OpenClaw the Gateway's run, not text in the composer), `rejected` (nothing was taken), `unknown`
-   * (typed, its turn never confirmed), or [ackMs]. At [ackMs] a delivery not yet being written is taken back, so a
-   * program told `cancelled: true` may send the words again; one being written or awaiting its turn is left to finish,
-   * and is said `written` for the program to follow (`harness wait --after`) rather than send twice.
+   * (typed, its turn never confirmed), or a deadline. Two deadlines, one per phase:
+   * - [ackMs] until the words are pasted (`delivered`). A delivery not yet being written is then taken back, so a
+   *   program told `cancelled: true` may send the words again; one being written is left to finish.
+   * - [takenMs] from the paste until the turn starts. Past it the words are said `written`, for the program to follow
+   *   (`harness wait --after`) rather than send twice.
+   * Each answer is logged with both phases' times: the first numbers to warn at scale (#4393, Design).
    */
   const acknowledged = (payload: Payload, answer: (result: Payload) => void): void => {
     const agentId = text(payload.agentId)
     const content = typeof payload.text === 'string' ? payload.text : ''
     if (!agentId || !content.trim()) { answer({ error: 'INVALID_INPUT' }); return }
-    const ackMs = Math.min(ACK_MAX_MS, Math.max(ACK_MIN_MS, typeof payload.ackMs === 'number' && Number.isFinite(payload.ackMs) ? payload.ackMs : ACK_DEFAULT_MS))
+    const ackMs = ackWindow(payload.ackMs)
+    const takenMs = ackWindow(payload.takenMs)
     const inputId = `program:${(deps.newId ?? randomUUID)()}`
     const now = deps.now ?? Date.now
     const began = now()
-    let written = false
+    let pastedAt: number | null = null
+    let cancelling = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const arm = (ms: number, fire: () => void): void => {
+      clearTimeout(timer)
+      timer = setTimeout(fire, ms)
+      timer.unref()
+    }
     const finish = (result: Payload): void => {
       clearTimeout(timer)
       stop()
-      // The time from the words to the engine's taking them: the first number to warn at scale (#4393, Design).
-      log(`[input-ack] ${agentId.slice(0, 8)} ${String(result.state)} in ${now() - began}ms`)
+      const end = now()
+      const phases = pastedAt === null ? `pre-paste ${end - began}ms` : `pre-paste ${pastedAt - began}ms, paste to ${String(result.state)} ${end - pastedAt}ms`
+      log(`[input-ack] ${agentId.slice(0, 8)} ${String(result.state)} in ${end - began}ms (${phases})`)
       answer({ inputId, ...result })
     }
+    // Pasted, and its turn not seen to start within [takenMs]: written, to be followed.
+    const late = (): void => finish({ state: 'timeout', cancelled: false, written: pastedAt !== null })
     const stop = turns.onDelivery((event) => {
       if (event.deliveryId !== inputId) return
-      if (event.state === 'delivered') written = true
+      if (event.state === 'delivered') { pastedAt = now(); arm(takenMs, late) }
       else if (event.state === 'started') finish({ state: 'taken', takenAt: now() })
-      else if (event.state === 'rejected') finish({ state: 'rejected', reason: event.reason ?? 'rejected' })
+      // A delivery taken back at the deadline is said `rejected` at once: the deadline's answer, not a refusal.
+      else if (event.state === 'rejected') { if (!cancelling) finish({ state: 'rejected', reason: event.reason ?? 'rejected' }) }
       else if (event.state === 'unknown') finish({ state: 'unknown', reason: event.reason ?? 'unknown' })
     })
-    const timer = setTimeout(() => {
-      // Heard no more first: a delivery taken back is said `rejected` at once, which is this timeout's, not a refusal.
-      stop()
+    arm(ackMs, () => {
+      cancelling = true
       const cancelled = cancel(inputId)
-      finish({ state: 'timeout', cancelled, written: !cancelled && written })
-    }, ackMs)
-    timer.unref()
+      cancelling = false
+      if (cancelled) finish({ state: 'timeout', cancelled: true, written: false })
+      // Being written now: never taken back mid-paste. Its paste starts the [takenMs] window; a paste that never says
+      // so is answered at the end of that window all the same.
+      else arm(takenMs, late)
+    })
     submit(agentId, content, inputId)
   }
 
