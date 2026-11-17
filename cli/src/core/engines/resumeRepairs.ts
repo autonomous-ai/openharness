@@ -1,6 +1,6 @@
 /** Core keeps publication authority and transcript ordering; the worker only stages private files. */
 import { randomUUID } from 'node:crypto'
-import { linkSync, lstatSync, renameSync } from 'node:fs'
+import { close, constants, fstatSync, linkSync, lstatSync, openSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { controlTranscriptEvidence } from '../../engines/transcriptBindings.js'
@@ -50,6 +50,7 @@ export function createResumeRepairs(deps: ResumeRepairsDeps) {
       active.add(source.sessionId)
       const token = randomUUID(), expires = Date.now() + RESUME_REPAIR_WAIT_MS, deadline = performance.now() + RESUME_REPAIR_WAIT_MS
       let expectedGeneration = generation, file: string | undefined, hold: TailHold | null = null
+      let originalFd: number | undefined
       let asked = false, settled = false
       const remaining = () => Math.max(1, Math.min(expires - Date.now(), deadline - performance.now()))
       const allowed = () => current() && generation === expectedGeneration && Date.now() < expires && performance.now() < deadline && !hold?.expired
@@ -75,6 +76,10 @@ export function createResumeRepairs(deps: ResumeRepairsDeps) {
         const answer = await bounded(transport.read('codex', RESUME_REPAIR_PREPARE, { preparation: { source, token, file, original, expires } }, repairAnswer)) as RepairAnswer
         if (!allowed()) return { repairedItems: 0, unrepaired: 'cancelled' }
         if (!('directoryKey' in answer)) return failure(answer)!
+        // Replacing the last link of a large history reclaimed it on core's thread (296 ms for 200 MiB).
+        // Keep its exact inode alive through publication; asynchronous close owns the reclamation.
+        originalFd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+        if (!sameRepairFile(repairFile(fstatSync(originalFd, { bigint: true })), original)) return unavailable()
         hold = await bounded(deps.hold(source.sessionId, proof.path, remaining()).then(value => {
           if (settled) value?.release()
           return value
@@ -93,7 +98,8 @@ export function createResumeRepairs(deps: ResumeRepairsDeps) {
           || !sameRepairFile(repairFile(history.info), answer.history) || answer.backup.size !== original.size
           || answer.repairedItems > original.size) return unavailable()
         proof.verify(original.key); verifyNativePathFacts(route); staged.verify()
-        if (!sameRepairFile(repairFile(lstatSync(file, { bigint: true })), original)) return unavailable()
+        if (!sameRepairFile(repairFile(lstatSync(file, { bigint: true })), original)
+          || !sameRepairFile(repairFile(fstatSync(originalFd, { bigint: true })), original)) return unavailable()
         if (!allowed()) return { repairedItems: 0, unrepaired: 'cancelled' }
         const backupPath = `${file}${launchContract('codex')!.resumeRepair!.backup}${token}`
         // A cleanup may remove private names concurrently. A hard link never overwrites a previous backup, and
@@ -108,10 +114,20 @@ export function createResumeRepairs(deps: ResumeRepairsDeps) {
         return unavailable()
       } finally {
         settled = true
-        hold?.release()
-        active.delete(source.sessionId)
-        // A lost acknowledgement is harmless: the worker expires its bounded private inventory.
-        if (asked) void deps.call('engine-codex', RESUME_REPAIR_RELEASE, { version: RESUME_REPAIR_VERSION, token }, 1000).catch(() => {})
+        try { hold?.release() }
+        finally {
+          if (originalFd === undefined) active.delete(source.sessionId)
+          else {
+            const closing = originalFd
+            originalFd = undefined
+            const failed = () => console.warn('[resume] RESUME_REPAIR_CLEANUP_FAILED; restart required')
+            // A deadline or uncertain close cannot release this slot or retry a possibly reused fd.
+            try { close(closing, error => { if (error) failed(); else active.delete(source.sessionId) }) }
+            catch { failed() }
+          }
+          // A lost acknowledgement is harmless: the worker expires its bounded private inventory.
+          if (asked) void deps.call('engine-codex', RESUME_REPAIR_RELEASE, { version: RESUME_REPAIR_VERSION, token }, 1000).catch(() => {})
+        }
       }
     },
   }
