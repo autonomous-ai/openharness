@@ -50,8 +50,8 @@ Read in the code and in `~/.harness/cli/data/harness.log` (no conversation, tran
    Claude app alone: that title is the very string the session's hook sends as `session_title` on its next prompt.
    A `derived` name, and a CLI session's record with no `nameSource`, are still refused.
 3. **Herdr's own rows stay as they are.** A Herdr.app session the scan found gets its recap on its own copy (decision
-   1); Herdr's row, which has no session id, still shows no recap until the session's next hook folds it. Left as a
-   limit (below).
+   1); Herdr's row, which has no session id, still shows no recap until the session's next hook folds it.
+   Superseded by the addendum below (decisions 5-7), after Diego's test.
 4. **Nothing in the core.** Both changes are in the devices process (`cable/hosts/observed.ts`,
    `cable/hosts/recordName.ts`); `cli/AGENTS.md` rule 7.
 
@@ -128,10 +128,50 @@ Reviewed revision: this spec's first commit on `fix/dial-recap-after-restart`  R
 10. Platforms: the scan and the reader run on macOS, Linux and Windows. The Claude app (`claude-desktop`) runs on macOS
     and Windows. Herdr.app is macOS only.
 
+## Addendum: a Herdr.app session the scan found is paired with its Herdr terminal (2026-11-17)
+
+Diego tried the build from `ca2087458c`: the Claude app and Orca showed their recaps; Herdr.app's agents still showed
+the resting face. That is decision 3's limit, and the PM moved it into this branch: pair Herdr's row with the session
+running in that terminal, by what hc itself reports, only on a unique match, reading no other process's environment,
+and give it its recap by the same read (decision 1).
+
+**Checked on Diego's Mac** (pids and fixed fields only, no folder, command line, title or screen printed): both live
+hc terminals report `status.app: 'claude-code'` and a `foreground.pid`, and each foreground pid is the pid of a live
+Claude Code process record (`~/.claude/sessions/<pid>.json`), the very pid the open scan lists the session by
+(`owner.pid`). hc's `foreground` event (F5 of the herdr-app design) carries `{argv, cwd, name, pid}`; the hc client
+keeps only `cwd` of it today.
+
+5. **Paired by the terminal's foreground pid.** The hc client also keeps `foreground.pid` (a positive safe integer;
+   anything else is none). The hc source answers which live terminal's foreground is a pid, only when exactly one
+   terminal says so. A session the scan listed that no hook has told of yet (its entry has no caller) and whose pid
+   is that foreground is placed in that terminal as its hook would place it: host `herdr`, app `herdr`, its pane
+   `herdr-app` by the terminal's address. Its pane key then folds Herdr's row into the session's copy
+   (`registry.ts`), which carries the recap the scan read (decision 1) and the name the scan gave it.
+6. **Asked again when Herdr's list changes.** Herdr's listing can arrive after the scan, or a terminal can start
+   later: each change of the hc source places again every session still without a hook. A session a hook told of
+   is placed by its hook only, as today; a pairing that no longer holds (the terminal's foreground moved, the terminal
+   left) is taken back on the next change.
+7. **Nothing else of the terminal is kept or logged.** No argv, folder, name or title is added. The scan's and hc's
+   lines stay counts; one count is added where a pairing is made: `[observed] herdr · N paired`.
+
+### Design (addendum)
+
+1. Growth: one number per hc terminal (its foreground pid), and one address per paired entry, each leaving with its
+   terminal or entry (hc's `removed`/`finished`, the entry's `tick`/`evict`).
+2. Concurrency: one event loop. A pairing is set synchronously on an hc change or at the scan's loop; a hook that
+   arrives sets the entry's own hints and caller, which win, and pairing skips any entry with a caller.
+3. Read cost: no new read. The pid rides hc's existing snapshot and `foreground` events (≤ HC_MAX_TERMINALS).
+4. Scale: a lookup per unhooked entry per hc change, over at most 50 entries and the client's bounded terminals.
+5. Compatibility: an hc that sends no `foreground.pid` pairs nothing (today's behavior). Readers of the placed entry
+   are the existing ones of a hook-placed Herdr.app session (adapter `herdr-app`, registry fold, app filter).
+6. Migration and rollback: none.
+7. Audience: a pid is an id, never logged or sent; the recap is decision 1's.
+8. Identity: unchanged; the devices process reads its owner's Herdr Core socket, as today.
+9. Failure: no match, or two terminals reporting the same pid, pairs nothing: Herdr's row stays as today.
+10. Platforms: macOS only (Herdr.app and the `herdr-app` adapter are macOS only).
+
 ## Limits (not in this branch)
 
-- Herdr.app: Herdr's own row of a session the scan found shows no recap until that session's next hook folds it into
-  the session's copy (decision 3). Pairing the two by the terminal's foreground pid, which hc reports, is a follow-up.
 - A session first heard of by a hook other than a start keeps its folder until its next prompt (decision 7 of the
   session-name spec).
 - A Claude turn stopped with Esc before the restart reads the answer of the last turn its transcript holds, as the Stop
