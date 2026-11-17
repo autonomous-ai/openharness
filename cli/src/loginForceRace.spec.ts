@@ -59,6 +59,11 @@ function tempRoot(): string {
 }
 
 function envFor(root: string, backendBase: string): NodeJS.ProcessEnv {
+  // A dev run narrows its own environment, which takes the test runner's mark that keeps the real `gh` from running
+  // (lib/github.ts); the env file puts it back, as the product says such a variable goes
+  // (docs/plans/2026-11-17-daemon-minimal-env-design.md).
+  const envFile = join(root, 'test.env')
+  writeFileSync(envFile, 'VITEST=true\n')
   return {
     ...process.env,
     HOME: root,
@@ -77,6 +82,7 @@ function envFor(root: string, backendBase: string): NodeJS.ProcessEnv {
     // rather than handing a made-up token to whatever `grid` this machine has on PATH.
     DISABLE_GRID_INSTALL: 'true',
     HARNESS_GRID_BIN: join(root, 'no-grid'),
+    HARNESS_ENV_FILE: envFile,
   }
 }
 

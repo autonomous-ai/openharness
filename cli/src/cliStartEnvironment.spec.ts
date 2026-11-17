@@ -19,6 +19,13 @@ function body(name: string): string {
   return SOURCE.slice(from, SOURCE.indexOf('\n}\n', from))
 }
 
+/** Where `call` first appears in [text], after [after] when given. */
+function at(text: string, call: string, after = 0): number {
+  const index = text.indexOf(call, after)
+  expect(index, `still calls ${call}`).toBeGreaterThan(-1)
+  return index
+}
+
 describe('the environment a start gives the daemon (cli.ts)', () => {
   it('the background start spawns the daemon with the allowlist, and says how many variables it left out', () => {
     const text = body('spawnDaemon')
@@ -27,5 +34,22 @@ describe('the environment a start gives the daemon (cli.ts)', () => {
     expect(text.split('startEnvLine(').length - 1).toBe(1)
     // Windows' installed start keeps today's launcher, environment and all (decision 5).
     expect(text).toContain('await launchMaster()')
+  })
+
+  it('a start that becomes the daemon narrows this process before the master or the core starts in it', () => {
+    const text = body('launch')
+    const refusal = at(text, 'refuseServedDataFolder(')
+    const master = at(text, 'startMasterInForeground(')
+    const first = at(text, 'narrowOwnEnvironment(')
+    // After the refusal beside a running daemon: a start that leaves at once says nothing of an environment.
+    expect(first).toBeGreaterThan(refusal)
+    expect(first).toBeLessThan(master)
+    // And again where the core runs alone in this process: HARNESS_NO_MASTER=1 (Harness OS) and a dev run alike.
+    const condition = "if (foreground || SCRIPT_PATH.endsWith('.ts'))"
+    const branch = at(text, condition, master) + condition.length
+    const second = at(text, 'narrowOwnEnvironment(', branch)
+    expect(second).toBeLessThan(at(text, 'runCoreInForeground(', branch))
+    // Its first statement, under no further condition: the dev run is narrowed too (decision 8).
+    expect(text.slice(branch, second)).not.toMatch(/\bif \(/)
   })
 })
