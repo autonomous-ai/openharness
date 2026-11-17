@@ -1,12 +1,13 @@
 // The dial skill in every home an engine's sessions use, set up from the devices' own process once a dial has attached
 // on this computer: before that no home is looked at. It writes the daemon's own and adopted homes at the service's
-// start and at each attach, and each Codex home the open scan finds a session in. Each skills folder it writes is in
-// dial-setup.json, its own record, so a `disable` finds it, and a moment that reads the engine removed takes them out
-// again itself, which catches up on a `disable` a write raced.
+// start and at each attach, a default home made since at the next scan, and each Codex home the open scan finds a
+// session in. Each skills folder it writes is in dial-setup.json, its own record, so a `disable` finds it, and a moment
+// that reads the engine removed takes them out again itself, which catches up on a `disable` a write raced. A recorded
+// folder is written once: after that only Harness's own file is brought current, and one the person removed stays so.
 import { realpathSync, statSync } from 'node:fs'
-import { join } from 'node:path'
-import { ownDirectory, removeSkill, skillsFolderOf, skillWanted, writeSkill } from '../devices/dialSkill.js'
-import { DIAL_SKILL_FILE, MAX_HOMES, listable, readSetup, readWritten, writeSetup, type DialEngine, type DialRemoved, type DialSetupRecord } from '../devices/dialSkillFiles.js'
+import { dirname, join } from 'node:path'
+import { ownDirectory, refreshSkill, removeSkill, skillsFolderOf, skillWanted, writeSkill } from '../devices/dialSkill.js'
+import { DIAL_SKILL_FILE, MAX_HOMES, listable, readSetup, readWritten, writeSetup, type DialEngine, type DialRemoved, type DialSetupRecord, type SetupCount } from '../devices/dialSkillFiles.js'
 import { rolloutHome, takesOwner, type RolloutOwner } from './codexRolloutHome.js'
 
 export interface DialHomeSetupDeps {
@@ -20,6 +21,10 @@ export interface DialHomeSetupDeps {
   adopted(): { claude: string[]; codex: string[] }
   /** dial-skill.json's removals, read anew at each call. */
   removed(): DialRemoved
+  /** A monotonic clock in ms. */
+  now(): number
+  /** One event in the day's tally; [reason] a fixed word, never a path. */
+  count(engine: DialEngine, kind: SetupCount, reason?: string): void
   log(line: string): void
 }
 
@@ -39,8 +44,8 @@ export interface DialHomeSetup {
 }
 
 type Counts = Record<DialEngine, { wrote: number; removed: number; failed: number }>
-/** What became of one home: written, or found holding a skill (`done`); given none for a reason the next scan would
- *  meet again (`refused`); or the engine read removed and was handled as off (`off`). */
+/** What became of one home: written, found holding a skill, or left as the person made it (`done`); given none for a
+ *  reason the next try would meet again (`refused`); or the engine read removed and was handled as off (`off`). */
 type Outcome = 'done' | 'refused' | 'off'
 
 const ENGINES: readonly DialEngine[] = ['claude', 'codex']
@@ -48,6 +53,8 @@ const OTHER: Record<DialEngine, DialEngine> = { claude: 'codex', codex: 'claude'
 
 /** Lines a run says once: the refused shape, a full list per engine, and each refused home, so the log stays bounded. */
 const MAX_SAID = 2 * MAX_HOMES
+/** A home that could not be written waits this long before a scan tries it again. */
+const RETRY_MS = 3_600_000
 
 export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
   const removedFile = join(deps.dataDir, DIAL_SKILL_FILE)
@@ -58,27 +65,38 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
   const defaultHome: Record<DialEngine, string> = { claude: deps.claudeHome, codex: deps.codexHome }
   // The devices process is the record's one writer: it is read at the start and at an attach, and saved whole.
   let record: DialSetupRecord = { dial: false, homes: { claude: [], codex: [] } }
-  /** Codex homes done while it was on: a scan passes them with a set lookup. Claude Code gets no home from the scan. */
-  const handled = new Set<string>()
-  /** Codex homes given no skill for a reason the next scan would meet again (no skills folder, a full list, a write
-   *  that failed): passed the same way until the stamp changes. */
+  /** Homes done while their engine was on: a scan passes them with a set lookup. */
+  const handled: Record<DialEngine, Set<string>> = { claude: new Set(), codex: new Set() }
+  /** Homes given no skill for a reason the next try would meet again (no skills folder, a full list, a write that
+   *  failed): passed the same way until the stamp changes or the set is an hour old. */
   const refused = new Set<string>()
+  let refusedAt = 0
+  /** Engines on at the last pass: a scan looks at their default home without reading whether they still are, which
+   *  only a changed stamp can change. */
+  const onAtPass = new Set<DialEngine>()
+  /** Recorded folders counted left removed in this run, by engine. */
+  const leftCounted = new Set<string>()
+  /** dial-skill.json as it was when each engine's removal was counted. */
+  const removalCounted: Partial<Record<DialEngine, string>> = {}
   const said = new Set<string>()
   let stamp = ''
 
   /** Read only once a dial is recorded: a pass never runs before. */
   const on = (engine: DialEngine): boolean => skillWanted(engine, deps.removed()[engine] === true, settingsFile)
 
-  /** dial-skill.json and Claude Code's settings as of now: a removal then enable between two scans, or the plugin
-   *  uninstalled through /plugin, is a new stamp, whatever the files hold. */
-  const stampNow = (): string => [removedFile, settingsFile].map((file) => {
+  /** A file's inode, size and time, so a rewrite is a new stamp whatever it holds. */
+  const stampOf = (file: string): string => {
     try {
       const info = statSync(file)
       return `${info.ino} ${info.size} ${info.mtimeMs}`
     } catch {
       return 'missing'
     }
-  }).join(' ')
+  }
+
+  /** dial-skill.json and Claude Code's settings as of now: a removal then enable between two scans, or the plugin
+   *  uninstalled through /plugin, is a new stamp. */
+  const stampNow = (): string => `${stampOf(removedFile)} ${stampOf(settingsFile)}`
 
   const sayOnce = (key: string, line: string): void => {
     if (said.has(key) || said.size >= MAX_SAID) return
@@ -86,19 +104,45 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
     deps.log(line)
   }
 
-  /** One file's result, in the pass's counts. */
+  /** A recorded folder the person emptied, counted once a run: every pass after leaves it so. */
+  const leftRemoved = (engine: DialEngine, skills: string): void => {
+    const key = `${engine} ${skills}`
+    if (leftCounted.has(key) || leftCounted.size >= MAX_SAID) return
+    leftCounted.add(key)
+    deps.count(engine, 'left removed')
+  }
+
+  /** One file's result, in the pass's line and the day's tally. */
   const tally = (counts: Counts, engine: DialEngine, result: string): void => {
-    if (result === 'written') counts[engine].wrote++
+    if (result === 'written' || result === 'updated') counts[engine].wrote++
     else if (result === 'removed') counts[engine].removed++
-    else if (result === 'failed') counts[engine].failed++
+    else if (result === 'failed') {
+      counts[engine].failed++
+      deps.count(engine, 'failed', 'write')
+    }
+    if (result === 'updated') deps.count(engine, 'updated')
   }
 
   /** The whole record, so the dial and the plugin's version stay beside the homes. */
   const save = (counts: Counts, engine: DialEngine): boolean => {
     if (writeSetup(deps.dataDir, record) === undefined) return true
     counts[engine].failed++
+    deps.count(engine, 'failed', 'save')
     return false
   }
+
+  /** A home is passed by the scans after while it is done, or refused until the set is an hour old. */
+  const settle = (engine: DialEngine, home: string, outcome: 'done' | 'refused'): void => {
+    const set = outcome === 'done' ? handled[engine] : refused
+    if (set.size >= MAX_HOMES) return
+    if (set === refused && refused.size === 0) refusedAt = deps.now()
+    set.add(home)
+  }
+
+  /** A recorded folder leaves the record only with its home, a throwaway one that is gone: a skills folder the person
+   *  deleted in a home still there stays, so it is not made again. */
+  const homeGone = (skills: string, state = ownDirectory(skills, deps.uid)): boolean =>
+    state === 'missing' && ownDirectory(dirname(skills), deps.uid) === 'missing'
 
   /** The folders [engine]'s skill may be in: its record, the folders the command recorded and its default home's. */
   const foldersOf = (engine: DialEngine): Set<string | null> =>
@@ -109,7 +153,16 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
    *  recorded, so a later disable still finds it. A folder the other engine holds its skill in while on
    *  (~/.codex/skills linked to ~/.claude/skills) only leaves this engine's record. */
   const turnOff = (engine: DialEngine, counts: Counts): void => {
-    if (engine === 'codex') handled.clear()
+    onAtPass.delete(engine)
+    handled[engine].clear()
+    if (deps.removed()[engine] === true) {
+      // Once a removal: another disable writes dial-skill.json again.
+      const at = stampOf(removedFile)
+      if (removalCounted[engine] !== at) {
+        removalCounted[engine] = at
+        deps.count(engine, 'left removed')
+      }
+    }
     const shared = on(OTHER[engine]) ? foldersOf(OTHER[engine]) : new Set()
     const failed = new Set<string>()
     for (const skills of foldersOf(engine)) {
@@ -141,23 +194,35 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
     }
     const listed = record.homes[engine]
     const found = skillsFolderOf(home, false, deps.uid)
-    // Homes linked to one skills folder (an Orca profile's) are one write, recorded once.
+    // Homes linked to one skills folder (an Orca profile's) are one write, recorded once. Recorded, it is only brought
+    // current: a skill the person deleted stays deleted.
     if (found !== null && listed.includes(found)) {
-      const result = writeSkill(found)
+      const result = refreshSkill(found)
       tally(counts, engine, result)
+      if (result === 'gone') leftRemoved(engine, found)
       if (result === 'failed') return 'refused'
-      return result === 'written' && !stillOn(engine, counts) ? 'off' : 'done'
+      return result === 'updated' && !stillOn(engine, counts) ? 'off' : 'done'
+    }
+    // The person deleted the recorded skills folder itself: it is not made again.
+    const deleted = found === null ? join(realOr(home), 'skills') : null
+    if (deleted !== null && listed.includes(deleted)) {
+      leftRemoved(engine, deleted)
+      return 'done'
     }
     // A throwaway home that is gone makes room first; a record still full writes nothing, so every file Harness wrote
     // stays in it.
-    record.homes[engine] = listed.filter((folder) => ownDirectory(folder, deps.uid) !== 'missing')
+    record.homes[engine] = listed.filter((folder) => !homeGone(folder))
     if (record.homes[engine].length >= MAX_HOMES) {
       sayOnce(`full ${engine}`, `dial skill: ${engine} list full (${MAX_HOMES})`)
+      deps.count(engine, 'failed', 'full')
       return 'refused'
     }
     // Made only now: a home the record has no room for gets no empty folder either.
     const skills = found ?? skillsFolderOf(home, true, deps.uid)
-    if (!skills) return 'refused'
+    if (!skills) {
+      deps.count(engine, 'failed', 'write')
+      return 'refused'
+    }
     // Through its link the folder can be one no record holds: written, it would be one a disable never finds.
     if (!listable(skills)) {
       sayOnce('shape', 'dial skill: path refused (shape)')
@@ -175,6 +240,7 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
       if (result === 'written') tally(counts, engine, removeSkill(skills))
       return 'refused'
     }
+    if (result === 'written') deps.count(engine, 'set up')
     return stillOn(engine, counts) ? 'done' : 'off'
   }
 
@@ -182,23 +248,30 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
   const startPass = (counts: Counts): void => {
     // Taken before on is read, so a disable after it is a changed file at the next scan.
     stamp = stampNow()
-    handled.clear()
+    for (const engine of ENGINES) handled[engine].clear()
     refused.clear()
+    onAtPass.clear()
     const adopted = deps.adopted()
     for (const engine of ENGINES) {
       if (!on(engine)) {
         turnOff(engine, counts)
         continue
       }
-      // A recorded folder that no longer exists is dropped, never made again; one that cannot be looked at now stays,
-      // unwritten.
+      onAtPass.add(engine)
+      // A recorded folder is brought current, never written anew; one that cannot be looked at now stays, unwritten.
       let wrote = false
       const kept = record.homes[engine].filter((skills) => {
         const state = ownDirectory(skills, deps.uid)
-        if (state !== 'ok') return state !== 'missing'
-        const result = writeSkill(skills)
+        if (state === 'missing') {
+          if (homeGone(skills, state)) return false
+          leftRemoved(engine, skills)
+          return true
+        }
+        if (state !== 'ok') return true
+        const result = refreshSkill(skills)
         tally(counts, engine, result)
-        wrote ||= result === 'written'
+        if (result === 'gone') leftRemoved(engine, skills)
+        wrote ||= result === 'updated'
         return true
       })
       if (kept.length !== record.homes[engine].length) {
@@ -206,9 +279,12 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
         save(counts, engine)
       }
       if (wrote && !stillOn(engine, counts)) continue
-      // Only the command makes a default home that is missing.
+      // Only the command makes a default home that is missing: the scans write it once it is there.
       for (const home of [defaultHome[engine], ...adopted[engine]]) {
-        if (ownDirectory(home, deps.uid) === 'ok' && writeHome(engine, home, counts) === 'off') break
+        if (ownDirectory(home, deps.uid) !== 'ok') continue
+        const outcome = writeHome(engine, home, counts)
+        if (outcome === 'off') break
+        settle(engine, home, outcome)
       }
     }
   }
@@ -259,7 +335,16 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
       // A removal or enable since, or the plugin turned on or off: every home is written again, or taken out, without
       // a restart.
       if (stampNow() !== stamp) startPass(counts)
-      // Codex only: Claude Code's sessions are read only under the default and adopted homes, written at the start.
+      // A home that cannot be written is not tried at every scan.
+      if (refused.size > 0 && deps.now() - refusedAt >= RETRY_MS) refused.clear()
+      // An engine installed since the pass: its default home is written once it is there.
+      for (const engine of ENGINES) {
+        const home = defaultHome[engine]
+        if (!onAtPass.has(engine) || handled[engine].has(home) || refused.has(home) || ownDirectory(home, deps.uid) !== 'ok') continue
+        const outcome = writeHome(engine, home, counts)
+        if (outcome !== 'off') settle(engine, home, outcome)
+      }
+      // Codex only: Claude Code's sessions are read only under the default and adopted homes.
       for (const owner of owners) {
         if (!takesOwner(owner)) continue
         const home = rolloutHome(owner.record, realDataDir)
@@ -267,7 +352,7 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
           sayOnce('shape', 'dial skill: path refused (shape)')
           continue
         }
-        if (handled.has(home) || refused.has(home) || handled.size >= MAX_HOMES) continue
+        if (handled.codex.has(home) || refused.has(home) || handled.codex.size >= MAX_HOMES) continue
         const state = ownDirectory(home, deps.uid)
         if (state !== 'ok') {
           sayOnce(home, `dial skill: path refused (${state})`)
@@ -275,8 +360,7 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
         }
         const outcome = writeHome('codex', home, counts)
         if (outcome === 'off') break
-        if (outcome === 'done') handled.add(home)
-        else if (refused.size < MAX_HOMES) refused.add(home)
+        settle('codex', home, outcome)
       }
       report(counts)
     },
