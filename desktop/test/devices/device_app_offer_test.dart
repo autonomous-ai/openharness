@@ -363,6 +363,22 @@ void main() {
     expect(fixture.lines.last, 'device app: install failed install');
   });
 
+  test('an installer that throws before its future is a failed install step', () async {
+    final probe = FakeDeviceAppProbe();
+    final offer = DeviceAppOffer(
+      supported: true,
+      probe: probe,
+      install: () => throw StateError('disk full'),
+      open: FakeDeviceAppOpen().call,
+    );
+    addTearDown(offer.dispose);
+    offer.dialChanged(true);
+    await pumpEventQueue();
+    await offer.install();
+    expect(offer.state, DeviceAppOfferState.failed);
+    expect(offer.failedStep, DeviceAppInstallStep.install);
+  });
+
   test('Not now hides the band for good and keeps the row', () async {
     final store = MemoryKeyValueStore();
     final fixture = await _attached(store: store);
