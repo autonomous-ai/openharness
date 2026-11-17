@@ -19,10 +19,12 @@ enum HarnessDeviceApp {
         result(FlutterMethodNotImplemented)
         return
       }
-      result([
-        "paths": NSWorkspace.shared.urlsForApplications(withBundleIdentifier: bundleIdentifier).map(\.path),
-        "running": !NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).isEmpty,
-      ])
+      // LaunchServices took 37 ms on a first call: off the main thread, the window keeps drawing meanwhile.
+      DispatchQueue.global(qos: .utility).async {
+        let paths = NSWorkspace.shared.urlsForApplications(withBundleIdentifier: bundleIdentifier).map(\.path)
+        let running = !NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).isEmpty
+        DispatchQueue.main.async { result(["paths": paths, "running": running]) }
+      }
     }
     Self.channel = channel
   }
