@@ -183,15 +183,18 @@ class DeviceAppOffer extends ChangeNotifier {
       _log?.call('device app: install failed ${failed.name}');
     }
     _notify();
-    if (failed == null) unawaited(_look());
+    if (failed == null) unawaited(_look(afterInstall: true));
   }
 
-  Future<void> _look() {
+  /// [afterInstall]: asked right after an install that opened the app. Joining a lookup already asked drops it, as
+  /// that lookup's answer is not believed.
+  Future<void> _look({bool afterInstall = false}) {
     if (!_supported || !_attached || _disposed) return Future.value();
-    return _lookup ??= _lookUp().whenComplete(() => _lookup = null);
+    return _lookup ??= _lookUp(afterInstall: afterInstall)
+        .whenComplete(() => _lookup = null);
   }
 
-  Future<void> _lookUp() async {
+  Future<void> _lookUp({required bool afterInstall}) async {
     final asked = _actionsEnded;
     final DeviceAppPresence answer;
     try {
@@ -209,7 +212,10 @@ class DeviceAppOffer extends ChangeNotifier {
     } else if (_awaitingRegistration) {
       return;
     }
-    _presence = answer;
+    // AppKit may not list the launch the install just made yet: its running stands.
+    _presence = afterInstall && answer.installed
+        ? const DeviceAppPresence(installed: true, running: true)
+        : answer;
     _notify();
   }
 
