@@ -51,6 +51,7 @@ import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter } from '../cable/hosts/vscode.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
+import { createEngineTally } from '../cable/engineTally.js'
 import { Notices, type NoticeCaller } from '../cable/notices.js'
 import { NOTIFY_MODE_FILE, NotifyModeStore, type NotifyMode } from '../cable/notifyMode.js'
 import { PetStore } from '../cable/pets/store.js'
@@ -911,7 +912,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     close: (agentId, id) => inOrder(agentId, () => { void cable.questionClose(agentId, id) }),
     uuid: randomUUID,
     now: monotonic,
-    log,
+    count: createEngineTally('[device] notify', ['claude', 'codex', 'agent'], ['shown', 'no dial', 'limited'], log),
   })
   /** That agent's next turn started, a tap opened it, or it left: its card goes. */
   const endNotice = (agentId: string): void => part.call('notices', () => notices.ended(agentId))
