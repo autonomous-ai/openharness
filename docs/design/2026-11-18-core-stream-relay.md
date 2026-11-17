@@ -423,5 +423,5 @@ socket saturation, physical-close ownership, late callbacks and service cleanup.
 passed 90 tests at per-file 100% statements/branches/functions/lines. TypeScript passed. A full core/services run
 passed 5614 cases and exposed two obsolete test expectations (optional transport quota and deleted inline exports).
 Both were corrected and passed in the following 43-case focused run, together with the new frame-count and byte
-quota regressions; the transport queue reached per-file 100% coverage. No measurement has yet been run from the
-new attribution fixture. The final combined full gate remains the integration owner's responsibility.
+quota regressions; the transport queue reached per-file 100% coverage. The fixed attribution and its corrected fixture are recorded in
+[the performance evidence](../performance/2026-11-18-core-stream-relay.md); native and absolute-memory acceptance remain open. The final combined full gate remains the integration owner's responsibility.

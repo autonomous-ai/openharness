@@ -71,7 +71,8 @@ function fixture(modules: Modules, agents: number, slots: Slot[], pending = fals
         return true
       }, binary: () => true, closed: () => {}, control: () => {}, refused: () => {},
     })
-    const relay = modules.createClientStreams!({ endpoint, disabled: () => false, send: (_service: string, ...args: any[]) => send(args[0], args[1], args[2]),
+    const endpoints = new Map(['agentBrowser', 'viewers'].map(service => [service, endpoint(service)]))
+    const relay = modules.createClientStreams!({ endpoint: (service: string) => endpoints.get(service) ?? null, disabled: () => false, send: (_service: string, ...args: any[]) => send(args[0], args[1], args[2]),
       sendBinary: (_service: string, connection: string, bytes: Uint8Array) => binary(connection, bytes), wake: () => tally.wakes++, log: () => {} })
     browserSink = relay.connected('agentBrowser'); relay.serving('agentBrowser')
     if (!firstStart) { viewerSink = relay.connected('viewers'); relay.serving('viewers') }
@@ -82,15 +83,15 @@ function fixture(modules: Modules, agents: number, slots: Slot[], pending = fals
     close = () => relay.closed()
   } else {
     let browser: any
-    browser = modules.createBrowserStreams!({ frame: (id: string) => rows.get(id) ?? {}, asker: () => OWNER, send, sendBinary: binary, log: () => {},
-      port: () => ({ stream: (connection: string, type: string, payload: Payload) => {
+    const browserPort = { stream: (connection: string, type: string, payload: Payload) => {
         tally.down++
         if (type === 'agent_browser_open') {
           const slot = byRequest.get(payload.requestId)!; slot.grant = slot.id
           if (!pending) browser.frame(connection, 'agent_browser_open_result', { requestId: payload.requestId, streamId: slot.id })
         }
         return true
-      }, streamInput: () => true, streamClosed: () => {}, streamRoute: () => {}, streamTransportError: () => {}, streamRefused: () => {} }) })
+      }, streamInput: () => true, streamClosed: () => {}, streamRoute: () => {}, streamTransportError: () => {}, streamRefused: () => {} }
+    browser = modules.createBrowserStreams!({ frame: (id: string) => rows.get(id) ?? {}, asker: () => OWNER, send, sendBinary: binary, log: () => {}, port: () => browserPort })
     let viewer: any
     viewer = modules.createViewersLink!({ agents: {}, clients: { viewerFrame: send } }, (event: Payload) => {
       if (event.payload.kind === 'stream') {
@@ -107,7 +108,7 @@ function fixture(modules: Modules, agents: number, slots: Slot[], pending = fals
       else if (type === 'agent_browser_close') browser.close(slot.connection, payload)
       else streams.frame(slot.connection, type, payload)
     }
-    upstream = (slot, type, payload) => viewer.notice({ kind: 'viewer', connId: slot.connection, type, payload })
+    upstream = (slot, type, payload) => viewer.notice({ kind: 'viewer', connId: slot.connection, type, payload: { ...payload, streamId: slot.id } })
     screen = bytes => { expectedBytes = bytes; assert.equal(browser.bytes(bytes), true) }
     ready = () => viewer.connected()
     close = () => {
