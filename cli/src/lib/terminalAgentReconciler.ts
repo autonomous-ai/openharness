@@ -1,5 +1,6 @@
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import type { RegisteredSession } from './registry.js'
+import { AtomicWriteUnconfirmed, RegistryPersistenceUnavailable } from './registryPersistence.js'
 import {
   probeTerminalAgents,
   targetForRuntime,
@@ -265,7 +266,36 @@ export class TerminalAgentReconciler {
   private async drain(): Promise<void> {
     while (this.pending) {
       this.pending = false
+      this.refused = false
       await this.reconcileOnce()
+      if (!this.refused) this.outageSaid = false
+    }
+  }
+
+  /** A batch of this pass was refused by storage. */
+  private refused = false
+  /** The outage has been said: one line until a pass is refused nothing. Per pass, not per batch: a pass's
+   *  first batch has usually nothing of its own to save, and reset there the line came every 5 s. */
+  private outageSaid = false
+
+  /**
+   * One batch of a pass. Storage that refuses it ends neither the pass nor the hook waiting on it.
+   *
+   * A pass that rejected was an HTTP 500 for the hook that asked for it, before its admission could show its
+   * hold, and an unhandled rejection every 5 s from the timer for as long as the outage lasted
+   * (e2e/hookclient.e2e.ts, e2e/diskfull.e2e.ts, 2026-11-17). What the pass observed stays in the registry's
+   * rows and is saved by a later pass. No "saved again" line: a batch that resolves may have written nothing.
+   * Any other failure, an owner that changed among them, still fails the pass.
+   */
+  private async batch(saved: Promise<void>): Promise<void> {
+    try {
+      await saved
+    } catch (error) {
+      if (!(error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed)) throw error
+      this.refused = true
+      // The message is a fixed category (registry.ts persistenceFailure): no path, no content.
+      if (!this.outageSaid) console.warn(`[discovery] observations not saved, kept for the next pass · ${error.message}`)
+      this.outageSaid = true
     }
   }
 
@@ -318,7 +348,7 @@ export class TerminalAgentReconciler {
         }
       }
     }
-    if (this.deps.transaction) await this.deps.transaction(markVerifiedPlacements)
+    if (this.deps.transaction) await this.batch(this.deps.transaction(markVerifiedPlacements))
     else await markVerifiedPlacements()
     if (!probe.processTableAvailable) {
       console.warn('[discovery] process table unavailable; keeping existing terminal agents')
@@ -492,7 +522,7 @@ export class TerminalAgentReconciler {
       }
     }
 
-    if (this.deps.transaction) await this.deps.transaction(apply)
+    if (this.deps.transaction) await this.batch(this.deps.transaction(apply))
     else await apply()
     // Readiness is published last: clients must never observe ready=true between the inventory read and
     // the authoritative availability/registry update.
