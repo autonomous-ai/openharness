@@ -445,6 +445,29 @@ describe('run-eval.mjs with claude', () => {
     ])
   })
 
+  it('adds the spend of a claude run that failed and was retried to the row of the run that scored', () => {
+    const failed = join(tmp, 'agent-failed')
+    fakeClaude(String.raw`if (!require('node:fs').existsSync(${JSON.stringify(failed)})) {
+  require('node:fs').writeFileSync(${JSON.stringify(failed)}, '')
+  for (const event of [
+    { type: 'assistant', parent_tool_use_id: null, message: { model: 'claude-opus-5-5', content: [] } },
+    { type: 'result', subtype: 'error_during_execution', is_error: true, usage: { input_tokens: 5, output_tokens: 1 } },
+  ]) console.log(JSON.stringify(event))
+  console.error('API Error: 529 overloaded')
+  process.exitCode = 1
+} else {
+${agent('claude-opus-5-5')}
+}`)
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'add-version-flag', '--approve-harness'])
+
+    expect(out.status, out.stderr).toBe(0)
+    // The failed run's 5 + 1, then the scored run's 7 + 3.
+    expect(jsonl('baseline', 'results.jsonl')).toMatchObject([
+      { prompt_id: 'add-version-flag.claude', meta: { retries: 1 }, usage: { input_tokens: 12, output_tokens: 4 } },
+    ])
+  })
+
   it('keeps the model and usage of a claude run that failed on its own on its error row', () => {
     fakeClaude(String.raw`for (const event of [
   { type: 'system', subtype: 'init', model: 'claude-opus-5-5' },
