@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { AgentNotifications } from './agentNotifications.js'
+import { AgentNotifications, DONE_QUIET_MS } from './agentNotifications.js'
 import { CommanderMirror, type CommanderFrame, type CommanderMirrorOpts } from './commander.js'
 import type { LiveEvent } from './normalize.js'
 
@@ -98,6 +98,35 @@ describe('one completed-result decision for desktop and device', () => {
     mirror.ingest(turn.slice(1), 's')
     await vi.runAllTimersAsync()
     expect(desktop[0].payload.notification.kind).toBe('done')
+  })
+})
+
+describe('Finished after 1.5 s of quiet', () => {
+  it("the dial's summary card and the apps' turn_summary carry the notification only once 1.5 s have passed", async () => {
+    const { mirror, device, desktop } = setup()
+    mirror.ingest(turn, 's')
+    await vi.advanceTimersByTimeAsync(DONE_QUIET_MS - 1)
+    expect(desktop).toEqual([])
+    expect(device.map(f => f.payload.kind)).toEqual(['turn_started', 'processing', 'reply_text', 'done'])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(desktop).toHaveLength(1)
+    expect(desktop[0].payload.notification.kind).toBe('done')
+    expect(device.at(-1)?.payload).toMatchObject({ kind: 'summary', notification: desktop[0].payload.notification })
+  })
+
+  it("a /goal pass that opens inside the window: the recap is told silent before the next pass's Processing card, and nothing rings", async () => {
+    const decideTier = vi.fn(async () => 'alert' as const)
+    const { mirror, device, desktop } = setup({ decideTier })
+    mirror.ingest(turn, 's')
+    await vi.advanceTimersByTimeAsync(DONE_QUIET_MS / 2)
+    mirror.ingest([turn[0]], 's')
+    await vi.runAllTimersAsync()
+    expect(device.map(f => f.payload.kind)).toEqual(
+      ['turn_started', 'processing', 'reply_text', 'done', 'summary', 'turn_started', 'processing'])
+    expect(device[4].payload).toMatchObject({ notification: null, tier: 'silent' })
+    expect(desktop).toHaveLength(1)
+    expect(desktop[0].payload).toMatchObject({ notification: null, tier: 'silent' })
+    expect(decideTier).not.toHaveBeenCalled()
   })
 })
 
