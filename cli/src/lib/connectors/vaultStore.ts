@@ -56,10 +56,20 @@ function snapshot(documents: Map<string, Document>): Snapshot {
 /** One writer slot survives an expired reply until every accepted OS operation has actually settled. */
 export class VaultStore {
   private busy = false
+  /** A failed close has unknown OS ownership. No later attempt may allocate another descriptor. */
+  private readonly unclosed = new Set<FileHandle>()
   private needsDurability = true
   /** At most this attempt's three temporary files and one lock; no new mutation while any remain. */
   private cleanup: Cleanup | null = null
   constructor(readonly root: string, private readonly io: StoreIo = vaultStoreIo) {}
+
+  private async close(handle: FileHandle): Promise<void> {
+    try { await handle.close() }
+    catch {
+      this.unclosed.add(handle)
+      throw new VaultStoreError('STORE_CLEANUP_UNCONFIRMED')
+    }
+  }
 
   private async pinDirectory(expected: string): Promise<FileHandle | null> {
     if (process.platform === 'win32') return null
@@ -68,7 +78,7 @@ export class VaultStore {
       const stat = await handle.stat({ bigint: true })
       if (!stat.isDirectory() || fileIdentity(stat) !== expected) throw new VaultStoreError('STORE_CHANGED')
       return handle
-    } catch (error) { await handle.close(); throw error }
+    } catch (error) { await this.close(handle); throw error }
   }
 
   private async durable(handle: FileHandle | null): Promise<void> {
@@ -129,11 +139,12 @@ export class VaultStore {
       const document: unknown = JSON.parse(buffer.toString('utf8', 0, bytes))
       if (!document || typeof document !== 'object' || Array.isArray(document)) throw new VaultStoreError('STORE_UNAVAILABLE')
       return { document: document as Document, version: identity(before) }
-    } finally { await handle.close() }
+    } finally { await this.close(handle) }
   }
 
   /** Merge after the old-format lock is acquired; never overwrite a renewal made while HTTP was pending. */
   async merge(theirs: Snapshot, current: () => void, changed: () => void = () => {}): Promise<Snapshot> {
+    if (this.unclosed.size) throw new VaultStoreError('STORE_CLEANUP_UNCONFIRMED')
     if (this.busy) throw new VaultStoreError('STORE_BUSY')
     this.busy = true
     const lock = join(this.root, '.lock')
@@ -155,7 +166,7 @@ export class VaultStore {
           const handle = await this.io.open(lock, 'wx', 0o600)
           owned = null
           try { const stat = await handle.stat({ bigint: true }); owned = fileIdentity(stat) }
-          finally { await handle.close() }
+          finally { await this.close(handle) }
           break
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
@@ -210,7 +221,7 @@ export class VaultStore {
           temporary.set(file, fileIdentity(stat))
           current(); await handle.writeFile(contents); current(); await handle.sync(); current()
         }
-        finally { await handle.close() }
+        finally { await this.close(handle) }
         current(); prepared.push({ from: file, to: join(this.root, name) })
       }
       // Only bounded metadata probes and <=3 renames are synchronous. No content read, write or fsync here.
@@ -240,15 +251,14 @@ export class VaultStore {
     } finally {
       // Every async OS operation has settled before this bounded, identity-checked namespace cleanup.
       // A failure remains owned and blocks another mutation; it cannot silently accumulate secret files.
-      let closeFailed = false
-      try { await directoryHandle?.close() } catch { closeFailed = true }
+      try { if (directoryHandle) await this.close(directoryHandle) } catch { /* Retained below after namespace cleanup. */ }
       try {
         if (temporary.size || owned !== undefined) {
           this.cleanup = { directory, files: temporary, ...(owned !== undefined ? { lock: { file: lock, identity: owned } } : {}),
             ...(published && projectionChanged ? { changed } : {}) }
           this.reconcile()
         }
-        if (closeFailed) throw new VaultStoreError(published ? 'STORE_WRITE_UNCONFIRMED' : 'STORE_UNAVAILABLE')
+        if (this.unclosed.size) throw new VaultStoreError('STORE_CLEANUP_UNCONFIRMED')
       } finally { this.busy = false }
     }
   }
