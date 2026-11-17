@@ -331,6 +331,18 @@ describe('claudeRun', () => {
     expect(await claudeRun()!(['--version'], 200)).toMatchObject({ code: null })
   })
 
+  // A `claude` that does not end on TERM (a shell trapping it, a node stuck in a synchronous call) ends at its time too.
+  it('a call past its time ends though claude ignores TERM', async () => {
+    const dir = throwawayPath()
+    const script = join(dir, 'claude')
+    writeFileSync(script, "#!/bin/sh\ntrap '' TERM\n/bin/sleep 5\n")
+    chmodSync(script, 0o755)
+    const started = Date.now()
+    // A second for the shell to set its trap before the time runs out, however slow the computer is to start it.
+    expect(await claudeRun()!(['--version'], 1_000)).toMatchObject({ code: null })
+    expect(Date.now() - started).toBeLessThan(4_000)
+  })
+
   it('is null when no claude is found', () => {
     throwawayPath()
     expect(claudeRun()).toBeNull()
