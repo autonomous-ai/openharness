@@ -376,6 +376,21 @@ describe('run-eval.mjs with claude', () => {
     expect(trace[0]).toEqual({ role: 'system', content: 'no skill' })
   })
 
+  it.each([
+    ['--no-skill over rows run with the skill', [], ['--no-skill']],
+    ['with the skill over rows run under --no-skill', ['--no-skill'], []],
+  ])('refuses to resume a pass %s', (_, first, second) => {
+    expect(runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'add-version-flag', ...first, '--approve-harness']).status).toBe(0)
+    const before = callsMade()
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'add-version-flag,fix-off-by-one', ...second, '--approve-harness'])
+
+    expect(out.status).toBe(2)
+    expect(out.stderr).toMatch(/skill/)
+    expect(callsMade()).toEqual(before)
+    expect(jsonl('baseline', 'results.jsonl')).toHaveLength(1)
+  })
+
   it('marks a run whose transcript reaches the answer key invalid', () => {
     fakeClaude(agent('claude-opus-5-5', 'Read ../scenario.json'))
 
