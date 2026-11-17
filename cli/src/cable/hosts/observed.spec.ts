@@ -85,7 +85,7 @@ describe('ObservedSource states', () => {
   beforeEach(() => { vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers() })
 
-  it('drives each event to the spec table', () => {
+  it('drives each event to the spec table', async () => {
     const { src, clock, ev } = setup()
     src.ingest(ev('session-start'))
     expect(src.list()[0]).toMatchObject({ state: 'idle', name: 'proj', engine: 'claude', host: 'terminal' })
@@ -101,6 +101,7 @@ describe('ObservedSource states', () => {
     src.ingest(ev('turn-error'))
     expect(src.list()[0].state).toBe('error')
     src.ingest(ev('turn-stop'))
+    await graced()
     expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
   })
 
@@ -123,9 +124,10 @@ describe('ObservedSource states', () => {
     expect(changes).toHaveBeenCalledTimes(2)
   })
 
-  it('markSeen clears unseenDone and tells listeners once', () => {
+  it('markSeen clears unseenDone and tells listeners once', async () => {
     const { src, changes, ev } = setup()
     src.ingest(ev('turn-stop'))
+    await graced()
     const id = src.list()[0].id
     changes.mockClear()
     src.markSeen(id)
@@ -159,9 +161,8 @@ describe('ObservedSource states', () => {
     const { src, answers, ev } = setup()
     answers.set('/t/s.jsonl', 'Fixed the bug.')
     src.ingest(ev('turn-stop', { transcriptPath: '/t/s.jsonl' }))
-    expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
     await graced()
-    expect(src.list()[0].lastAnswer).toBe('Fixed the bug.')
+    expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true, lastAnswer: 'Fixed the bug.' })
   })
 
   it("reads the last answer once the core's Stop grace is over: Claude's transcript can lag its Stop hook", async () => {
@@ -1177,6 +1178,7 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
 }
 
 describe('ObservedSource actions', () => {
+  afterEach(() => { vi.useRealTimers() })
   const withHandle = { hostHints: { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE } }
 
   it('keeps a handle that is term_<uuid> and ignores any other', () => {
@@ -1287,10 +1289,13 @@ describe('ObservedSource actions', () => {
   // A working turn may show a permission prompt the daemon has not heard of yet (Codex has no hook for its approval, which
   // takes `y` or Enter; Claude Code's comes a few hundred ms late): the words and their Enter would answer it.
   it.each(['claude', 'codex'] as const)('with no mod, %s is typed into only at its prompt: busy while it works, waiting while it asks', async (engine) => {
+    vi.useFakeTimers()
     const { actions } = fakeActions()
     const { src, ev } = setup({ actions })
     const after = async (event: ObservedHookEvent['event'], text: string) => {
       src.ingest(ev(event, { engine, ...withHandle }))
+      // A Stop is its turn's end once it waits out its grace.
+      if (event === 'turn-stop') await graced()
       return src.send(src.list()[0], text)
     }
     expect(await after('session-start', 'one')).toEqual({ ok: true })
@@ -1305,11 +1310,13 @@ describe('ObservedSource actions', () => {
 
   // No scan or transcript reads another engine's turn: it is at its prompt only once a hook said its turn ended.
   it('another engine is typed into only after a hook said its turn ended', async () => {
+    vi.useFakeTimers()
     const { actions } = fakeActions()
     const { src, ev } = setup({ actions })
     const busy = { ok: false, reason: 'proj is busy. Say it when it is done.' }
     const after = async (event: ObservedHookEvent['event'], text: string) => {
       src.ingest(ev(event, { engine: 'grok', ...withHandle }))
+      if (event === 'turn-stop') await graced()
       return src.send(src.list()[0], text)
     }
     expect(await after('session-start', 'one')).toEqual(busy)
@@ -1326,6 +1333,7 @@ describe('ObservedSource actions', () => {
 
   // The scan lists another engine's agent idle though its turn may run: its first hook with a handle is no turn's end.
   it('another engine the scan found is busy until a hook said its turn ended', async () => {
+    vi.useFakeTimers()
     const { actions } = fakeActions()
     const { src, open, owners, externals, ev } = setup({ actions })
     open.set('s1', 'terminal')
@@ -1337,6 +1345,7 @@ describe('ObservedSource actions', () => {
     expect(await src.send(src.list()[0], 'yes do it')).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
     expect(actions.orcaSend).not.toHaveBeenCalled()
     src.ingest(ev('turn-stop', { engine: 'grok', ...withHandle }))
+    await graced()
     expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
     src.ingest(ev('turn-start', { engine: 'grok', ...withHandle }))
     expect(await src.send(src.list()[0], 'later')).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
@@ -3215,6 +3224,7 @@ describe('ObservedSource and what a turn\'s start was', () => {
 // A permission prompt that waits (deviceClaude/asked.ts): the dial shows the agent waiting and for what, and the prompt is
 // answered in its own app.
 describe('ObservedSource and a waiting prompt', () => {
+  afterEach(() => { vi.useRealTimers() })
   const asked = (over: Partial<ObservedAsked> = {}): ObservedAsked => ({
     engine: 'claude', sessionId: 's1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/elsewhere', ...over,
   })
@@ -3287,15 +3297,19 @@ describe('ObservedSource and a waiting prompt', () => {
   })
 
   it.each(['turn-start', 'turn-stop', 'turn-error', 'session-end'] as const)(
-    'the session\'s own %s clears it, and another session\'s does not', (event) => {
+    'the session\'s own %s clears it, and another session\'s does not', async (event) => {
+      vi.useFakeTimers()
       const { src, ev } = setup()
       src.ingest(ev('turn-start'))
       src.ingest(ev('turn-start', { sessionId: 's2' }))
       src.ingest(asked())
       const id = observedAgentId('claude', 's1')
       src.ingest(ev(event, { sessionId: 's2' }))
+      await graced()
       expect(src.waitingOn(id)).toBe('npm test')
       src.ingest(ev(event))
+      // A Stop ends the turn once it waits out its grace.
+      await graced()
       expect(src.waitingOn(id)).toBeUndefined()
     })
 

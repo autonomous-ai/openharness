@@ -25,8 +25,14 @@ const NO_GENERATION_TTL_MS = 12 * 60 * 60 * 1000
 /** The dial's card is small; keep what it can show. */
 const ANSWER_CHARS = 300
 /** The core's Stop grace (STOP_HOOK_GRACE_MS, core/turns/turnHooks.ts, which this process must not load): Claude's
- *  transcript can lag its Stop hook, and an answer read at once is the last turn's or none. */
+ *  transcript can lag its Stop hook, and an answer read at once is the last turn's or none. A turn is told done only
+ *  once it passed with no word of the turn going on: a Stop another Stop hook keeps going is followed at once by a
+ *  prompt or a next turn, and the dial would sound for a turn that never ended. */
 const ANSWER_GRACE_MS = 1_500
+/** A lead's subagents counted at most, as the core counts a pane's (SUBAGENTS_MAX, core/turns/turnHooks.ts). */
+const SUBAGENTS_MAX = 64
+/** A lead heard nothing of for this long lost a SubagentStop: none is counted, as the core does (SUBAGENT_TIMEOUT_MS). */
+const SUBAGENT_TIMEOUT_MS = 600_000
 /** A turn's hook runs before the engine marks the turn begun in its record: a turn younger than this may still read idle. */
 const TURN_SETTLE_MS = 2_000
 /** The tool call's line reaches the transcript just after its permission hook ran, and nobody answers a prompt sooner than
@@ -174,8 +180,12 @@ interface Entry {
   title?: string
   generation?: string
   endAt?: number
-  /** The read of the last answer, waiting out the grace. */
-  answerTimer?: ReturnType<typeof setTimeout>
+  /** Its Stop, waiting out the grace before it is told as done and its answer is read. */
+  heldStop?: ReturnType<typeof setTimeout>
+  /** How many of Claude Code's subagents run for it, the lead: its Stop while one runs does not end its turn. */
+  subagents: number
+  /** It sent a Stop in this run: its Finished comes from that, so its owner reading idle with none is a turn stopped. */
+  sentStop?: boolean
   /** When the dial's words reached it, oldest first, each until a turn starts for it. */
   dialPrompts: { at: number }[]
 }
@@ -584,6 +594,7 @@ export class ObservedSource implements HostSource {
     if (e.transcriptPath) entry.transcriptPath = e.transcriptPath
     if (e.event === 'session-end') {
       entry.endAt = now
+      this.dropStop(entry)
       this.clearAsked(entry)
       this.emit()
       return
@@ -597,31 +608,72 @@ export class ObservedSource implements HostSource {
         // A start must not undo a state a faster event already set.
         break
       case 'turn-start':
+        this.dropStop(entry)
         this.setState(entry, 'working', now)
         a.unseenDone = false
         // The last turn's answer is not this one's: cleared, the same answer at this turn's end is a change the dial hears.
         a.lastAnswer = undefined
+        // A SubagentStop that was lost keeps the count no longer, as the core's pane turns (core/turns/turnHooks.ts).
+        entry.subagents = 0
         source = this.promptSource(entry, e, now)
         break
       case 'needs-input':
         // In every state: the hook hears a prompt only (hook/notify.mjs, never the idle notice), and one can open in any.
         // An agent the open scan found reads idle until its next hook though its turn may run, the quota's resume asks
         // after its turn stopped, and a turn another Stop hook keeps going asks after its Stop.
+        this.dropStop(entry)
         this.setState(entry, 'needs-you', now)
         break
       case 'turn-error':
+        this.dropStop(entry)
         this.setState(entry, 'error', now)
         break
+      case 'turn-aborted':
+        // Codex's Interrupt: the person stopped the turn, and nothing is told as done, as a Claude turn stopped with Esc.
+        this.dropStop(entry)
+        this.setState(entry, 'idle', now)
+        a.unseenDone = false
+        break
       case 'turn-stop':
-        this.setState(entry, 'done', now)
-        a.unseenDone = true
-        clearTimeout(entry.answerTimer)
-        entry.answerTimer = setTimeout(() => { void this.readAnswer(entry) }, ANSWER_GRACE_MS)
-        entry.answerTimer.unref()
+        entry.sentStop = true
+        clearTimeout(entry.heldStop)
+        entry.heldStop = setTimeout(() => { this.finish(entry) }, ANSWER_GRACE_MS)
+        entry.heldStop.unref()
+        break
+      case 'subagent-start':
+        if (entry.subagents < SUBAGENTS_MAX) entry.subagents++
+        // Fixed words: never the session.
+        else this.deps.log(`[observed] subagent not counted · ${SUBAGENTS_MAX} running`)
+        break
+      case 'subagent-stop':
+        // One started before the devices did can stop now.
+        if (entry.subagents) entry.subagents--
         break
     }
     this.emit()
     return source
+  }
+
+  /** Its Stop passed the grace with no word of the turn going on: done, unless its subagents still run. */
+  private finish(entry: Entry): void {
+    entry.heldStop = undefined
+    if (entry.subagents || this.entries.get(entry.agent.id) !== entry) return
+    this.setState(entry, 'done', this.deps.now())
+    entry.agent.unseenDone = true
+    this.emit()
+    void this.readAnswer(entry)
+  }
+
+  /** Its turn goes on, or is over without a Finished: the Stop it held is not told. */
+  private dropStop(entry: Entry): void {
+    clearTimeout(entry.heldStop)
+    entry.heldStop = undefined
+  }
+
+  /** No longer listed: a Stop it held is told of nothing. */
+  private remove(entry: Entry): void {
+    this.dropStop(entry)
+    this.entries.delete(entry.agent.id)
   }
 
   private promptSource(entry: Entry, e: ObservedHookEvent, now: number): PromptSource | undefined {
@@ -642,6 +694,7 @@ export class ObservedSource implements HostSource {
     const entry = this.entries.get(observedAgentId(e.engine, e.sessionId))
     if (!entry || !this.live(entry)) return
     const now = this.deps.now()
+    this.dropStop(entry)
     this.setState(entry, 'needs-you', now)
     // A new prompt, though the agent may still read needs-you for the last one: what was written before is not its answer.
     entry.since = now
@@ -673,11 +726,14 @@ export class ObservedSource implements HostSource {
     const id = observedAgentId(engine, sessionId)
     // Harness's own session (the voice router's Claude Code runs in the data folder, outside a pane) is never an agent
     // outside it: one first heard of without its folder (a hook cut to its bound) goes once the folder is known.
+    const have = this.entries.get(id)
     if (init.cwd && this.deps.excluded.some((dir) => within(dir, init.cwd!))) {
-      if (this.entries.delete(id)) this.emit()
+      if (have) {
+        this.remove(have)
+        this.emit()
+      }
       return undefined
     }
-    const have = this.entries.get(id)
     if (have) return have
     if (this.entries.size >= MAX_SESSIONS && !this.evict()) {
       this.deps.log(`[observed] full; dropped ${engine} session`)
@@ -697,6 +753,7 @@ export class ObservedSource implements HostSource {
       hints: {},
       panes: [],
       dialPrompts: [],
+      subagents: 0,
       ...(init.transcriptPath ? { transcriptPath: init.transcriptPath } : {}),
     }
     this.entries.set(id, entry)
@@ -711,7 +768,7 @@ export class ObservedSource implements HostSource {
         .sort((x, y) => x.agent.lastActivityAt - y.agent.lastActivityAt)[0]
     const victim = oldest(['idle']) ?? oldest(['done', 'error'])
     if (!victim) return false
-    this.entries.delete(victim.agent.id)
+    this.remove(victim)
     return true
   }
 
@@ -853,15 +910,16 @@ export class ObservedSource implements HostSource {
       else if (gen) gone = gen !== e.generation
       // No generation to tell a reused pid by: running, and heard from in the last 12 h.
       else gone = !this.deps.alive(e.pid) || now - e.agent.lastActivityAt >= NO_GENERATION_TTL_MS
-      if (gone) { this.entries.delete(id); changed = true }
+      if (gone) { this.remove(e); changed = true }
     }
     if (changed) this.emit()
   }
 
   /**
    * The turns no hook moves, every 3 s. A person who answers a prompt in their own terminal sends no hook: the transcript
-   * growing past the moment the agent began waiting says the turn goes on. Codex sends no end-of-turn hook, and a Claude
-   * turn stopped with Esc gets no Stop: the owner's record reading idle says each is over.
+   * growing past the moment the agent began waiting says the turn goes on. An older Codex sends no end-of-turn hook, and a
+   * turn stopped with Esc gets no Stop: the owner's record reading idle says each is over. A Stop waiting out its grace,
+   * and a lead's subagents, are the hooks' word that the turn goes on, whatever the record reads.
    */
   async checkWorking(): Promise<void> {
     const all = [...this.entries.values()]
@@ -877,18 +935,26 @@ export class ObservedSource implements HostSource {
       this.emit()
     }
     const at = this.deps.now()
+    for (const e of all) {
+      if (!e.subagents || at - e.agent.lastActivityAt < SUBAGENT_TIMEOUT_MS) continue
+      e.subagents = 0
+      // Fixed words: never the session.
+      this.deps.log('[observed] subagent count reset · no event in 10 min')
+    }
+    const ownerEnds = (e: Entry): boolean => e.agent.state === 'working' && e.heldStop === undefined && !e.subagents
     const turns = all.filter((e) => (e.agent.engine === 'codex' || e.agent.engine === 'claude')
-      && e.agent.state === 'working' && at - e.since >= TURN_SETTLE_MS)
+      && ownerEnds(e) && at - e.since >= TURN_SETTLE_MS)
     if (!turns.length) return
     const owners = await this.deps.openSessions.owners()
     for (const e of turns) {
       // Not found says nothing (a process read that timed out finds nobody): only an owner that reads idle ends a turn.
       const owner = owners.get(e.agent.sessionId ?? '')
       if (!owner || await this.deps.openSessions.busy(owner)) continue
-      if (e.agent.state !== 'working' || this.entries.get(e.agent.id) !== e) continue
+      if (!ownerEnds(e) || this.entries.get(e.agent.id) !== e) continue
       const now = this.deps.now()
       e.agent.lastActivityAt = now
-      if (e.agent.engine === 'claude') {
+      // Only an older Codex, which sends no Stop, is told done here.
+      if (e.agent.engine === 'claude' || e.sentStop) {
         // Stopped with Esc: no answer, nothing to tell as done.
         this.setState(e, 'idle', now)
         this.emit()

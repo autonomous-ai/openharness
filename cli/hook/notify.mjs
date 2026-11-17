@@ -622,9 +622,16 @@ function observedEvent(engine, event, input) {
   }
   // agy's call of its model, and Command Code's tool call, are the only signs those engines give of a turn running.
   if (name === 'PreInvocation' || (engine === 'commandcode' && (name === 'PreToolUse' || name === 'preToolUse'))) return 'turn-start'
-  // Grok writes its Stop before the turn's last words (its branch in main()). Codex's Stop is installed for its panes'
-  // turn ends; outside a pane the devices hear nothing of it, as before, so the dial does not sound at every Codex turn.
-  if ((engine === 'grok' || engine === 'codex') && name === 'Stop') return null
+  // Grok writes its Stop before the turn's last words (its branch in main()).
+  if (engine === 'grok' && name === 'Stop') return null
+  // Codex's Stop says Finished outside a pane as Claude Code's does (the devices hold it 1.5 s for a next turn), and its
+  // Interrupt is a turn the person stopped, with nothing to tell as done.
+  if (engine === 'codex' && name === 'Interrupt') return 'turn-aborted'
+  // A lead's subagents keep it working past its Stop. Codex's are not counted: its SubagentStop fires at each child
+  // turn's end and never for a failed one (facts-codex §2).
+  if (engine === 'claude' && (name === 'SubagentStart' || name === 'SubagentStop')) {
+    return countsSubagent(name, input) ? (name === 'SubagentStart' ? 'subagent-start' : 'subagent-stop') : null
+  }
   // Claude Code also says idle_prompt a minute after a finished turn, and auth_success: no answer is waited for, and a
   // done agent stays done. One too old to name its type sends that idle notice untyped too, so it says nothing.
   if (name === 'Notification') return NEEDS_INPUT.includes(input.notification_type) ? 'needs-input' : null
