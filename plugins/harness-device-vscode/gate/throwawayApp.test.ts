@@ -181,25 +181,23 @@ describe('the throwaway\'s own preferences, caches and HTTP storage', () => {
   })
   const deleted = { status: 0, stderr: '' }
 
-  it('deletes the gate\'s own domain through defaults, and no other', () => {
+  it('deletes the gate\'s own domain through defaults, and no other, then the empty file defaults leaves', () => {
     const calls: [string, readonly string[]][] = []
     forgetPreferences(root, (file, args) => {
       calls.push([file, args])
-      // As cfprefsd does once the domain is gone.
-      unlinkSync(plist())
       return deleted
     })
     expect(calls).toEqual([['/usr/bin/defaults', ['delete', GATE_ID]]])
     expect(JSON.stringify(calls)).not.toContain('com.microsoft')
+    expect(existsSync(plist())).toBe(false)
   })
 
-  it('passes a domain already gone, and fails on another failure or a file still there', () => {
-    unlinkSync(plist())
+  it('passes a domain already gone, removing the empty file it leaves, and fails on any other failure', () => {
+    // What defaults says of a domain an earlier delete emptied, whose file cfprefsd kept.
     const notFound = { status: 1, stderr: `defaults[1:2] \nDomain (${GATE_ID}) not found.\nDefaults have not been changed.\n` }
     expect(() => forgetPreferences(root, () => notFound)).not.toThrow()
+    expect(existsSync(plist())).toBe(false)
     expect(() => forgetPreferences(root, () => ({ status: 1, stderr: 'Could not write domain' }))).toThrow(/defaults delete/)
-    writeFileSync(plist(), '')
-    expect(() => forgetPreferences(root, () => deleted)).toThrow(/still there/)
   })
 
   it('removes each folder named the id, or the id and a dot, and none other', () => {
