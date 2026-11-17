@@ -90,6 +90,13 @@ describe('summarize', () => {
     expect(summarize(flow).variants.v1.splits.val).toMatchObject({ mean: 2.625, n: 4 })
   })
 
+  it('skips a line that is not JSON, as a torn last write is, and warns of it', () => {
+    appendFileSync(join(flow, 'v1', 'results.jsonl'), '{"prompt_id":"h.claude","rep":0,"gra')
+    const s = summarize(flow)
+    expect(s.variants.v1.splits.val).toMatchObject({ mean: 2.625, n: 4 })
+    expect(s.warnings).toEqual([`${join(flow, 'v1', 'results.jsonl')}:14: not JSON, skipped`])
+  })
+
   it('counts truncated, invalid and failed attempts and keeps them out of the rates', () => {
     const { baseline, v1 } = summarize(flow).variants
     expect(baseline.truncated).toBe(1)
@@ -197,7 +204,7 @@ describe('writeSummaries', () => {
   })
 
   it('rewrites the status and aggregate tables between their markers and keeps the rest', () => {
-    const headline = writeSummaries(flow)
+    const { headline } = writeSummaries(flow)
     writeSummaries(flow)
     const narrative = readFileSync(join(flow, 'narrative.md'), 'utf8')
     expect(narrative.startsWith('# Dial skill hill-climb\n\n<!-- status -->\n')).toBe(true)
@@ -218,6 +225,11 @@ describe('writeSummaries', () => {
 
     expect(headline).toContain('v1 val 1.00 -> 2.63')
     expect(headline).toContain('within noise')
+  })
+
+  it('gives the warnings with the headline, for the command to show', () => {
+    appendFileSync(join(flow, 'baseline', 'errors.jsonl'), 'not json\n')
+    expect(writeSummaries(flow).warnings).toEqual([`${join(flow, 'baseline', 'errors.jsonl')}:2: not JSON, skipped`])
   })
 
   it('refuses a file whose markers are missing', () => {
