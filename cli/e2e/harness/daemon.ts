@@ -15,7 +15,7 @@
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, symlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -371,9 +371,13 @@ export class IsolatedDaemon {
     // never turned guest access on.
     await writeFile(join(dirs.bin, 'sudo'), '#!/bin/sh\necho "sudo: a password is required" >&2\nexit 1\n', { mode: 0o755 })
     // Nor does it ever reach the real Orca app on the Mac the tests run on, which every session here may be running
-    // inside: with no `orca` on its PATH a daemon runs the Orca app's own, and a listed Orca agent asks it for a list.
-    // Refused, until a test writes its own (harness/fakeOrca.ts).
-    await writeFile(join(dirs.bin, 'orca'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    // inside: with no Orca launcher on its PATH a daemon runs the Orca app's own, and a listed Orca agent asks it for a
+    // list. A launcher is an `orca` whose real path is in Orca's install (devices/orcaHomes.ts), so the stub sits in
+    // one, linked from bin. Refused, until a test writes its own through the link (harness/fakeOrca.ts).
+    const orcaLauncher = join(own, 'orca-app', 'resources', 'bin', 'orca')
+    await mkdir(dirname(orcaLauncher), { recursive: true })
+    await writeFile(orcaLauncher, '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    await symlink(orcaLauncher, join(dirs.bin, 'orca'))
     // A pick on the dial brings that app forward with `open -b` (services/devices), and dialAppFilter.e2e.ts taps and
     // picks VS Code and Ghostty: with the real open, a dial test on a Mac would bring the developer's own apps forward.
     // Out of bin: the devices run open by its path, never by name. One line of arguments per run, for `opens()`.
