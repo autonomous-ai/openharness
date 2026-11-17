@@ -254,7 +254,8 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
     show: (terminal, tap) => {
       const window = windows.get(terminal.window)
       if (!window) return false
-      window.show = { shell: terminal.shell, raise: tap }
+      // A rest on the shell a tap waits to show keeps the tap's raise: the window holding it still comes forward.
+      window.show = { shell: terminal.shell, raise: tap || (window.show?.shell === terminal.shell && window.show.raise) }
       write(window)
       count(tap ? 'taps' : 'shows')
       return true
