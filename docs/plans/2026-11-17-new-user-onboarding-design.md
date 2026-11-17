@@ -1,7 +1,12 @@
 # Harness Device: a new user's first run
 
-Status: approved (the orchestrator, 2026-11-17). Branch `fix/new-user-onboarding`, from main at b9a7280863.
-Four pull requests (below).
+Status: approved (the orchestrator, 2026-11-17). Branch `fix/new-user-onboarding`, from main at b9a7280863, rebased
+onto main after #4399. Four pull requests (below).
+
+Revised 2026-11-17 after #4399 ("Claude Code and Codex reach the dial with no setting", merged 06:32 UTC): the devices
+process now sets up Claude Code's plugin and Codex's skill by itself once a dial has attached, and the menu has no agent
+rows. Item 1's first-run screens are dropped (decision 1), and the plugin in Orca homes joins #4399's automatic setup
+(decision 9).
 
 ## What and why
 
@@ -30,22 +35,20 @@ from the app's log (`~/Library/Logs/ai.autonomous.harness.device/app-20261117.lo
 Done when, on a Mac with a dial, a brand-new user who installs Harness Device:
 - sees a step line on Setting up Harness ("Installing tmux…", then "Downloading Harness…") instead of a spinner alone;
 - gets tmux without Homebrew running (no update, no cleanup, no formula installed) when the Mac has no tmux;
-- is asked once, after Sign in, to turn on Claude Code (and Codex, when Codex is on this computer);
-- with Claude Code on, sees the Claude Code sessions Orca runs under its own accounts on the dial, and their waiting
+- with a dial attached once, sees the Claude Code sessions Orca runs under its own accounts on the dial, and their waiting
   prompts;
 - has an app log with step lines and results only;
 - after removing `~/.harness` and installing again, gets a new machine named as the Mac is in System Settings.
 
 ## Decisions (orchestrator, 2026-11-17)
 
-1. The Claude Code and Codex first-run screens come back (1A). This reverses #4389's "no offer screen" for a first run
-   only. The menu's Turn on stays as it is.
+1. ~~The Claude Code and Codex first-run screens come back (1A).~~ Dropped after #4399, which sets both agents up with no
+   click once a dial attaches. Item 1 is fixed there.
 2. On a Mac without tmux, the managed tmux always: Homebrew is never run (2A). A tmux Homebrew already installed is
    still found and used. Every command the script runs that can read stdin gets `</dev/null`.
-3. Orca: the open scan reads Orca's Claude Code and Codex account homes. `harness device claude enable` and `disable`
-   turn the plugin on and off in each Orca Claude Code home too. Out of scope, as follow-ups: Harness's session and turn
-   hooks in Orca homes (installing them means the core's home adoption, so it is a core change), and the plugin for an
-   Orca account added after Turn on (it gets the plugin at the next Turn on).
+3. Orca: the open scan reads Orca's Claude Code and Codex account homes. The plugin reaches each Orca Claude Code home
+   (decision 9). Out of scope, as a follow-up: Harness's session and turn hooks in Orca homes (installing them means the
+   core's home adoption, so it is a core change).
 4. The step line is fixed copy chosen by the app from the script's step lines. A line of the script's output is never
    shown as it is.
 5. The app logs step lines (`▸`, `✓`, `✗`) and each run's result. On a failure it also logs the last lines, which are
@@ -54,16 +57,18 @@ Done when, on a Mac with a dial, a brand-new user who installs Harness Device:
    cherry-picked onto `origin/main` in a branch of its own:
    - **A. Installer:** `cli/scripts/install.sh`, its spec, and the desktop app's copy about how tmux is obtained (the
      same cause: the desktop runs this script's `--host`). It carries this spec and the plan.
-   - **B. Device app:** `device-app/`: items 1, 3 and 5.
+   - **B. Device app:** `device-app/`: items 3 and 5.
    - **C. Orca homes:** `cli/src/` (devices process and `harness device` command): item 2.
    - **D. Machine name:** `cli/src/lib/computerName.ts` and the four places that send a new machine's label (below).
 7. Added 2026-11-17: a new machine is named by macOS's ComputerName when there is one, with the hostname as the
    fallback (PR D). The Desktop's suggestion to move from an offline machine to its replacement is a follow-up.
 8. Answers to the plan's questions (2026-11-17): an Orca home is turned off with `claude plugin disable`, and only the
-   default home uninstalls; the app's 60 s deadline for Turn on stays; a turn-on failure shows the last non-empty line,
-   as `engine::reason` picks it today, cleaned as an install line and cut at 120 characters; a successful Turn on from
-   the menu records `askedClaude` / `askedCodex` too; a Codex session in an Orca Codex home gets its last answer from
-   the same roots the scan uses; the managed tmux check uses a local `file://` manifest, never the published download.
+   default home uninstalls; a Codex session in an Orca Codex home gets its last answer from the same roots the scan
+   uses; the managed tmux check uses a local `file://` manifest, never the published download. (The answers about the
+   first-run screens went with decision 1.)
+9. After #4399 (orchestrator, 2026-11-17): Orca Claude Code homes join #4399's automatic setup, each with its own
+   record; a home where the person turned the plugin off stays off; `harness device claude enable` and `disable` cover
+   the Orca homes; an Orca home needs only `claude plugin enable`, since `plugins/` is shared with `~/.claude`.
 
 ## Goals, non-goals, anti-goals
 
@@ -113,40 +118,10 @@ Tests (red first), in `cli/src/scripts/install.spec.ts`:
 
 ## B. Device app (`device-app/`)
 
-### First run: Claude Code, then Codex
+### First run
 
-`Screen::Claude` and `Screen::Codex` come back with their offer, working and failed phases, built on what #4389
-removed (`git show e1f84bdfde^`), and fitted to today's app:
-- **Due:** once the CLI is found and Sign in has been answered (signed in, Later, or the window closed on it), Claude
-  Code's screen when `harness device claude status --json` says `supported && !enabled` (`supported` already means a
-  Claude Code new enough is on this computer; `installed` there is the plugin's, so a new user has it false) and
-  `state.json` has no `askedClaude: true`. Then Codex's screen when `harness device codex status --json` says
-  `supported && installed && !enabled` (Codex's `installed` is Codex itself) and there is no `askedCodex: true`.
-  Neither shows when its engine is not on this computer, or is on already.
-- **Saved:** `askedClaude` and `askedCodex` are `#[serde(default)]` fields of `Saved`, so a 0.1.1 `state.json` (which
-  has neither) still reads as itself rather than being reset. A test reads Diego's shape of file (no `askedClaude`).
-- **Turn on** runs the same enable effect as the menu's Turn on, with the window on the working phase. Success records
-  the answer and moves on to the next screen due, or closes the window. A failure shows its message with **Retry**:
-  `Event::ClaudeSet` and `Event::CodexSet` carry `Result<(), String>` again (the last non-empty line, as `engine::reason`
-  picks it, cleaned as an install line is and cut at 120 characters), where #4389 made them a bool. The menu's row keeps
-  reading as it does now.
-- **Not now**, or closing the window on an offer or a failure, records the answer (`askedClaude` / `askedCodex`) and is
-  never asked again. The menu's Turn on stays for later, and a successful Turn on from the menu records the answer too.
-- Someone who upgrades from 0.1.1 has no `askedClaude`: with Claude Code installed and off, they are asked once. That
-  is intended. Someone who turned it on from the menu is not asked.
-
-Copy (the dial approves nothing any more, so the old "asks its approvals" goes):
-
-| Screen | Heading | Body | Buttons |
-|---|---|---|---|
-| Claude offer | Claude Code | The dial shows when Claude Code needs you, and takes a prompt you say. | Not now · **Turn on** |
-| Claude working | Claude Code | spinner | none |
-| Claude failed | Claude Code | the error line | **Retry** |
-| Codex offer | Codex | Codex can ring the dial when it needs you. | Not now · **Turn on** |
-| Codex working / failed | Codex | spinner / the error line | none / **Retry** |
-
-The webview's action names grow from four to six again (`turn_on`, `not_now`). `device-app/AGENTS.md` says so. Each
-is fixed in Rust, as today.
+No change. #4399 removed the agent rows and sets Claude Code and Codex up from the devices process, so the first-run
+screens this spec first brought back (decision 1) are not built.
 
 ### Setting up Harness shows its step
 
@@ -181,14 +156,13 @@ Every line still passes `log::redact`. brew's output, a script's source text, an
 never logged.
 
 Tests (red first): `install.rs` (the steps a streamed run yields, the log of a long run, the failure's lines, arrival
-order across stdout and stderr), `app.rs` (the screens due, each answer recorded, closing as Not now, Turn on's
-effect, a failure's Retry, the step shown), `ui/src/screens.test.ts` (each new face, the step under the spinner), the
-gallery with every new state in both themes.
+order across stdout and stderr), `app.rs` (the step shown, kept across a retry), `ui/src/screens.test.ts` (the step
+under the spinner), the gallery with the step in both themes.
 
 ### Docs
 
-`docs/plans/2026-11-13-device-menubar-design.md` (the screens and the first run) and the "no offer" lines of
-`docs/plans/2026-11-16-dial-skill-every-home-design.md`, each with a line naming this decision. `device-app/AGENTS.md`.
+`docs/plans/2026-11-13-device-menubar-design.md` (the install's step and its log), `device-app/AGENTS.md` (the log
+holds step lines and results only), and the design doc's Harness Device section with its gallery.
 
 ## C. Orca homes (`cli/src/`)
 
@@ -223,26 +197,37 @@ AdoptionPlaces }`, which replaces that engine's places. With none, as the search
 
 ### The dial skill
 
-The dial skill writer's `adopted()` returns the adopted homes plus the Orca homes from the last read (synchronous: it
-reads the cached list). The service awaits the first Orca read (at most its 5 s deadline) before the writer's start
-pass, and runs the start pass again when a later read changes the list. So Orca's Codex homes get the dial skill while
-Codex is On, and Claude Code's homes do too where `skills/` is not already linked (a linked one is one folder, written
-once, as today).
+#4399's `cable/dialHomeSetup.ts` writes the skill in each home it knows once a dial has attached, records each folder it
+wrote in `dial-setup.json`, and leaves a recorded folder the person emptied alone. Its `adopted()` returns the adopted
+homes plus the Orca homes from the last read (synchronous: it reads the cached list). The service awaits the first Orca
+read (at most its 5 s deadline) before the setup's start pass; a later read that changes the list is used at the next
+scan. So each Orca Codex home gets the skill once, as any adopted Codex home does, and an Orca Claude Code home's
+`skills/`, linked to `~/.claude/skills`, is the same folder, written once.
 
 ### The plugin
 
-`ClaudeRun` becomes `(args, timeoutMs, env?)`, where `env` is added to the child's environment alone.
-`harness device claude enable` turns the plugin on in the default home first, as today. Then, for each Orca Claude Code
-home, it runs the same `claudeEnable` steps with `{ CLAUDE_CONFIG_DIR: <home> }`. The marketplace and the plugin's
-files are in `plugins/`, which Orca links to `~/.claude/plugins`, so after the first home each one is mostly a settings
-write. A home that fails prints one line, `Could not turn on Claude Code in one Orca account.`, and the command still
-exits 0 when the default home succeeded.
+**Automatic (devices process).** #4399's `cable/dialPluginSetup.ts` installs and turns on the plugin in the default home
+once, records the CLI version that did, and brings it current once per CLI update. Orca homes join it:
+- Once the default home's plugin is recorded as set up, each Orca Claude Code home not yet in the record gets
+  `claude plugin enable harness-device@openharness --scope user`, run with `CLAUDE_CONFIG_DIR=<home>` on that child
+  alone. The files are already there: `plugins/` is linked to `~/.claude/plugins` (check 8). Success records the home
+  (its real path) in `dial-setup.json`.
+- A recorded home is never enabled again: one where the person turned the plugin off through `/plugin` stays off, and a
+  home Orca no longer lists is dropped from the record at the next read.
+- An Orca account added later is set up at the next scan once the Orca read names it.
+- The default home's update (shared `plugins/`) brings every home's files current: no per-home update.
+- A home that fails is counted (`failed`, a fixed step word) and tried again no sooner than an hour, as #4399's
+  default home is. Counts only, never a path.
+- When `disable` has removed Claude Code (the record says not wanted), the pass runs nothing in Orca homes: the command
+  did it.
 
-`disable` runs `claude plugin disable` in each Orca home first, then uninstalls in the default home as today. Since
-`plugins/` is shared, an uninstall in one home removes the files every home names, and the other homes' own uninstall
-would then find nothing and leave their entry on. Disabled first, each Orca home's entry reads off. A home that fails
-prints `Could not turn off Claude Code in one Orca account.`, and the command exits 1, so the menu says "Could not turn
-off" and offers it again. `status` is unchanged (the default home's).
+**The commands.** `harness device claude enable` sets up the default home as today, then runs `claude plugin enable` in
+each Orca home and records it. A home that fails prints `Could not turn on Claude Code in one Orca account.`, and the
+command still exits 0 when the default home succeeded. `disable` runs `claude plugin disable` in each Orca home first,
+then removes the default home's plugin as today and records the removal. Since `plugins/` is shared, an uninstall in one
+home removes the files every home names, and the other homes' own uninstall would then find nothing and leave their
+entry on; disabled first, each Orca home's entry reads off (check 8). A home that fails prints `Could not turn off
+Claude Code in one Orca account.`, and the command exits 1. `status` is unchanged (the default home's).
 
 The hook (`asked`) and the mod's `link` already check the plugin in the settings of their own `CLAUDE_CONFIG_DIR`, so
 an Orca session's hook reaches the dial with no change.
@@ -258,9 +243,10 @@ Tests (red first): `orcaHomes.spec.ts` (a fake `orca` printing a fixed answer: h
 relative or missing home refused, the bound, a failed run, a timeout), `observed`/devices tests with a temporary HOME
 holding an Orca-like home whose `sessions/` has a record (the scan finds it, `1 found`), `recordName.spec.ts` (a record
 in an Orca home's `sessions/` is named; one outside every records folder is refused), `externals/index.spec.ts` (no
-places: today's providers), `dialSkillWriter.spec.ts` (an
-Orca Codex home gets the skill), `deviceClaude/command.spec.ts` (enable runs the plugin steps once per Orca home with
-`CLAUDE_CONFIG_DIR` set on that child alone, a failed home's line, disable in each home). Every test uses throwaway
+places: today's providers), `dialHomeSetup.spec.ts` (an Orca Codex home gets the skill once), `dialPluginSetup.spec.ts`
+(each Orca home enabled once with `CLAUDE_CONFIG_DIR` on that child alone and recorded; a recorded home turned off is
+left off; a new Orca home at the next scan; a failure waits an hour; nothing while removed), `deviceClaude/command.spec.ts`
+(enable and disable in each Orca home, a failed home's line). Every test uses throwaway
 homes and a fake `orca` and `claude`: never Diego's real `~/.claude` or Orca profiles.
 
 ## D. Machine name (`cli/src/`)
@@ -294,7 +280,6 @@ differ.
 ## Follow-ups (not this branch)
 
 - Harness's session and turn hooks in Orca homes (a core change: home adoption).
-- The plugin for an Orca account added after Turn on.
 - **The Desktop: move from an offline machine to its replacement.** When a machine's tab is offline and the same
   account has a newer online machine with the same name, the Desktop could suggest moving to it. Matching by the same
   hardware needs a hardware id the backend does not keep (a backend change). Matching by the same name works without
@@ -306,21 +291,22 @@ differ.
 
 Reviewed revision: this draft. Reviewer: the orchestrator.
 
-1. Growth: two new state fields, `askedClaude` and `askedCodex` in `state.json` (one boolean each, set once, never
-   deleted, as `askedSignIn`). Orca homes are in memory only. The dial skill's homes list keeps its bound (`MAX_HOMES`).
+1. Growth: `dial-setup.json` gains the Orca Claude Code homes the plugin was turned on in (real paths, at most
+   `MAX_HOMES`, a home Orca no longer lists dropped). The Orca homes list itself is in memory only. The dial skill's homes
+   list keeps its bound (`MAX_HOMES`).
 2. Concurrency: the step is written only by the install's runner thread through the app's event queue. The Orca homes
    cache is one value replaced whole. The `claude plugin` runs are one at a time.
 3. Read cost: one `orca account list` (about 5 KB for 5 accounts) at start and at most every 5 min. The scan reads one
    more `sessions/` folder per Orca home (a few small JSON files each).
 4. Scale: at 10x accounts (50), still one call and 50 small folders per scan. `MAX_HOMES` (64) bounds it.
-5. Compatibility: `state.json` stays version 1, and an older app ignores the new fields. A CLI without this change
-   still works with the new app. A new app's install log no longer has the full output.
-6. Migration and rollback: none. Rolling back the app keeps the answers it does not read. Rolling back the CLI drops
-   the Orca homes.
+5. Compatibility: `dial-setup.json` from #4399 (no Orca field) reads as no Orca home set up, so each is enabled once. An
+   older CLI ignores the field. A new app's install log no longer has the full output.
+6. Migration and rollback: none. Rolling back the CLI drops the Orca homes; their plugin entries stay as they were.
 7. Audience: local only. The Orca answer carries emails: only `home` is kept, and nothing of it is logged.
 8. Identity: every command runs as the person, in their own session. `CLAUDE_CONFIG_DIR` is set on our own child only.
 9. Failure: an install failure shows its last lines with Retry, as today. An Orca failure logs one line and lists the
-   default home's sessions as today. A failed plugin home prints one line.
+   default home's sessions as today. A failed plugin home is counted and retried after an hour; from the command, it
+   prints one line.
 10. Platforms: macOS for everything. Linux gets the apt `</dev/null` and the scan (Orca on Linux lists accounts the same
     way). Windows: no change (the app installs nothing there, and the scan has no records folder change).
 
@@ -334,14 +320,14 @@ Reviewed revision: this draft. Reviewer: the orchestrator.
 - A: the installer spec (Linux CI and a Mac), and on this Mac `install.sh --host` in a throwaway HOME with a PATH that
   has no tmux and a recording `brew`: the managed tmux lands in that HOME and `brew` is never called.
 - B: `cargo test --lib`, `npm test`, `npm run typecheck`, the gallery. Then a debug build on this Mac with
-  `HARNESS_DEVICE_CLI` pointing at a fake CLI (a throwaway data dir): first run shows the step lines, then Sign in,
-  Claude Code and Codex. Checked by a person for the look.
+  `HARNESS_DEVICE_CLI` pointing at a fake CLI (a throwaway data dir): first run shows the step lines, then Sign in.
+  Checked by a person for the look.
 - C: the unit tests, plus an end-to-end run of the devices service with a throwaway HOME, a fake `orca` naming a
   throwaway home and a fake Claude Code record in it. The scan finds it.
 - C, before the disable task: a real `claude` in two throwaway homes sharing one `plugins/` folder (Orca's layout),
   pointed at a local copy of the marketplace. Turn on, then Turn off: every home's entry reads off.
 - D: the unit tests. On this Mac, `computerName()` gives the Mac's ComputerName (read, never changed).
-- Checked by the person (it needs real Orca): with this branch's CLI, Orca's Claude Code sessions show on the dial
-  after Turn on.
+- Checked by the person (it needs real Orca): with this branch's CLI and a dial attached, Orca's Claude Code sessions
+  show on the dial with nothing pressed.
 - Not checked here: whether `orca account list` launches Orca when it is not running. This Mac's Orca is running and
   is where this work runs. The call's 5 s deadline bounds it either way.
