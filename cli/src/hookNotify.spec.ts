@@ -2252,14 +2252,20 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
 describe('hook notify: a session outside a pane', () => {
   /** The environment names the hook may send as host hints, and nothing else (spec: The hook). */
   const HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE',
-    'HC_TERMINAL_ID', 'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE',
-    'CLAUDE_CODE_HOST_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT']
-  /** HINTS as this platform's hook sends them: HC_TERMINAL_ID on macOS alone, the one platform the devices try Herdr's
-   *  window on, though hc runs on Linux too (spec Q5). */
-  const SENT = HINTS.filter((name) => name !== 'HC_TERMINAL_ID' || process.platform === 'darwin')
+    'HC_TERMINAL_ID', 'CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID', 'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID',
+    'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT']
+  /** The hints sent on macOS alone: the one platform the devices try Herdr's window on, though hc runs on Linux too
+   *  (spec Q5), and the one cmux runs on. */
+  const CMUX_IDS = ['CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID']
+  const MAC_ONLY = ['HC_TERMINAL_ID', ...CMUX_IDS]
+  /** HINTS as this platform's hook sends them. */
+  const SENT = HINTS.filter((name) => !MAC_ONLY.includes(name) || process.platform === 'darwin')
   /** The names a session outside a pane can set, as many as the hook sends: runHook sets no TMUX_PANE without a pane, and
-   *  in a herdr pane the hook sends no hc address. */
-  const panelessHints = SENT.filter((name) => name !== 'TMUX_PANE' && name !== 'HC_TERMINAL_ID').slice(0, MAX_HINTS)
+   *  in a herdr pane the hook sends no hc address and none of cmux's ids. */
+  const panelessHints = SENT.filter((name) => !['TMUX_PANE', 'HC_TERMINAL_ID', ...CMUX_IDS].includes(name)).slice(0, MAX_HINTS)
+  /** A cmux terminal's surface and workspace. */
+  const SURFACE = '0f7c1e52-3a8b-4d2e-9c61-5b2a7e4d9f10'
+  const WORKSPACE = '6d2b9a4e-1c7f-4e85-b3a0-8f1d2c6e7b54'
   /** The hint names unset, so the environment this test runs in sends none of its own. */
   const noHints = Object.fromEntries(HINTS.map((name) => [name, '']))
   const folder = (prefix: string): string => {
@@ -2362,13 +2368,14 @@ describe('hook notify: a session outside a pane', () => {
     expect(requests).toEqual([])
   })
 
-  // herdr's pane is the nearer host: the hc address beside it is left out.
+  // herdr's pane is the nearer host: the hc address and cmux's ids beside it are left out.
   it('sends the first MAX_HINTS of the names set, in the list\'s order', async () => {
     const { port, requests } = await collect()
     const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE').map((name, index) => [name, `hint-${index}`]))
     await runHook({ port, ...own, env: set, input: typed })
     expect(HINTS.length).toBeGreaterThan(MAX_HINTS)
-    expect(Object.keys(requests[0].body.hostHints as object)).toEqual(HINTS.filter((name) => name !== 'HC_TERMINAL_ID').slice(0, MAX_HINTS))
+    expect(Object.keys(requests[0].body.hostHints as object))
+      .toEqual(SENT.filter((name) => !['HC_TERMINAL_ID', ...CMUX_IDS].includes(name)).slice(0, MAX_HINTS))
   })
 
   it('says how Claude Code was started, beside the app it runs in', async () => {
@@ -2608,13 +2615,13 @@ describe('hook notify: a session outside a pane', () => {
   })
 
   // Left out before the cap counts it: a pane id never sent would cost the farthest hint its place, and so would the hc
-  // address beside it.
-  it('a named herdr session\'s pane id, and the hc address beside it, take none of the MAX_HINTS', async () => {
+  // address and cmux's ids beside it.
+  it('a named herdr session\'s pane id, and the hc address and cmux\'s ids beside it, take none of the MAX_HINTS', async () => {
     const { port, requests } = await collect()
     const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE').map((name, index) => [name, `hint-${index}`]))
     await runHook({ port, env: { ...set, HERDR_SESSION: 'side' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
     expect(Object.keys(requests[0].body.hostHints as object))
-      .toEqual(HINTS.filter((name) => !['TMUX_PANE', 'HERDR_PANE_ID', 'HC_TERMINAL_ID'].includes(name)).slice(0, MAX_HINTS))
+      .toEqual(SENT.filter((name) => !['TMUX_PANE', 'HERDR_PANE_ID', 'HC_TERMINAL_ID', ...CMUX_IDS].includes(name)).slice(0, MAX_HINTS))
   })
 
   // herdr started in an hc terminal keeps that terminal's HC_TERMINAL_ID, and is the nearer host. A named herdr session
@@ -2662,22 +2669,58 @@ describe('hook notify: a session outside a pane', () => {
     expect(JSON.stringify(requests[0].body)).not.toMatch(/side/)
   })
 
-  // Left out before the cap counts it: an address never sent would cost the farthest hint its place.
-  // No herdr pane in either: a herdr pane leaves the address out of its own.
-  it.runIf(process.platform === 'darwin')('a named hc session\'s address takes none of the MAX_HINTS', async () => {
+  // Left out before the cap counts it: an address never sent would cost the farthest hint its place, and so would cmux's
+  // ids beside it. No herdr pane in either: a herdr pane leaves the address out of its own.
+  it.runIf(process.platform === 'darwin')('a named hc session\'s address, and cmux\'s ids beside it, take none of the MAX_HINTS', async () => {
     const { port, requests } = await collect()
     const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE' && name !== 'HERDR_PANE_ID').map((name, index) => [name, `hint-${index}`]))
     await runHook({ port, env: { ...set, HC_SESSION: 'side' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
     expect(Object.keys(requests[0].body.hostHints as object))
-      .toEqual(HINTS.filter((name) => !['TMUX_PANE', 'HERDR_PANE_ID', 'HC_TERMINAL_ID'].includes(name)).slice(0, MAX_HINTS))
+      .toEqual(SENT.filter((name) => !['TMUX_PANE', 'HERDR_PANE_ID', 'HC_TERMINAL_ID', ...CMUX_IDS].includes(name)).slice(0, MAX_HINTS))
   })
 
-  it.runIf(process.platform !== 'darwin')('off macOS HC_TERMINAL_ID is left out, and takes none of the MAX_HINTS', async () => {
+  it.runIf(process.platform !== 'darwin')('off macOS HC_TERMINAL_ID and cmux\'s ids are left out, and take none of the MAX_HINTS', async () => {
     const { port, requests } = await collect()
     const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE' && name !== 'HERDR_PANE_ID').map((name, index) => [name, `hint-${index}`]))
     await runHook({ port, env: set, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
     expect(Object.keys(requests[0].body.hostHints as object))
-      .toEqual(HINTS.filter((name) => !['TMUX_PANE', 'HERDR_PANE_ID', 'HC_TERMINAL_ID'].includes(name)).slice(0, MAX_HINTS))
+      .toEqual(HINTS.filter((name) => !['TMUX_PANE', 'HERDR_PANE_ID', ...MAC_ONLY].includes(name)).slice(0, MAX_HINTS))
+  })
+
+  // cmux sets TERM_PROGRAM=ghostty: its surface and workspace ids (UUIDs, no credential) tell its terminal from Ghostty's.
+  // The rest of its variables stay in this process, CMUX_SOCKET_PASSWORD first of all.
+  it.runIf(process.platform === 'darwin')('sends cmux\'s surface and workspace from a cmux terminal, and no other CMUX_ name', async () => {
+    const { port, requests } = await collect()
+    await runHook({
+      port,
+      env: {
+        ...noHints, TERM_PROGRAM: 'ghostty', CMUX_SURFACE_ID: SURFACE, CMUX_WORKSPACE_ID: WORKSPACE, CMUX_TAB_ID: SURFACE,
+        CMUX_PANEL_ID: SURFACE, CMUX_SOCKET_PATH: '/x/cmux.sock', CMUX_SOCKET_PASSWORD: 'secret',
+      },
+      input: { hook_event_name: 'Stop', session_id: 'sess-1' },
+    })
+    expect(requests[0].body.hostHints).toEqual({ TERM_PROGRAM: 'ghostty', CMUX_SURFACE_ID: SURFACE, CMUX_WORKSPACE_ID: WORKSPACE })
+    expect(JSON.stringify(requests[0].body)).not.toMatch(/TAB_ID|PANEL_ID|SOCKET|secret/)
+  })
+
+  // herdr or hc started in a cmux terminal keeps cmux's ids, and is the nearer host. A named session of either sends no
+  // pane id or address, and cmux's ids alone would read as cmux's own terminal (hostDetect.ts inCmux): the dial's words
+  // would be pasted into herdr's screen, or a shell.
+  it.runIf(process.platform === 'darwin')('leaves out cmux\'s ids under herdr or hc, its session named or not', async () => {
+    const nearer: Array<[Record<string, string>, Record<string, string>]> = [
+      [{ HERDR_PANE_ID: 'w1:p2' }, { TERM_PROGRAM: 'ghostty', HERDR_PANE_ID: 'w1:p2' }],
+      [{ HERDR_PANE_ID: 'w1:p2', HERDR_SESSION: 'side' }, { TERM_PROGRAM: 'ghostty' }],
+      [{ HC_TERMINAL_ID: 't7' }, { TERM_PROGRAM: 'ghostty', HC_TERMINAL_ID: 't7' }],
+      [{ HC_TERMINAL_ID: 't1', HC_SESSION: 'side' }, { TERM_PROGRAM: 'ghostty' }],
+    ]
+    for (const [host, sent] of nearer) {
+      const { port, requests } = await collect()
+      await runHook({
+        port, env: { ...noHints, TERM_PROGRAM: 'ghostty', CMUX_SURFACE_ID: SURFACE, CMUX_WORKSPACE_ID: WORKSPACE, ...host },
+        input: { hook_event_name: 'Stop', session_id: 'sess-1' },
+      })
+      expect(requests[0].body.hostHints, JSON.stringify(host)).toEqual(sent)
+    }
   })
 
   // The core reads 4096 bytes of a body at most (hookServer.ts): the transcript's path goes first, then the folder.

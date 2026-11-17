@@ -191,6 +191,37 @@ describe.skipIf(process.platform === 'win32')('another program\'s Unix socket', 
     expect(() => watchSocket({ socketPath: join(home, 'none', 'herdr', 'herdr.sock'), home: join(home, 'none') }, () => {})()).not.toThrow()
   })
 
+  /** A watch of <config>/herdr in a home of its own, the folder made or not, and how many times it told `name`. */
+  async function watchedFor(name: string, made: boolean) {
+    const home = await mkdtemp(join(tmpdir(), 'hw-'))
+    const config = join(home, '.config')
+    const folder = join(config, 'herdr')
+    await mkdir(made ? folder : config, { recursive: true })
+    let told = 0
+    const stopWatch = watchSocket({ socketPath: join(folder, 'herdr.sock'), home }, (file) => {
+      if (file === name) told++
+    })
+    return { folder, count: () => told, stop: stopWatch }
+  }
+
+  it('tells the name of the file that changed in the folder it holds', async () => {
+    const { folder, count, stop: stopWatch } = await watchedFor('claude-hook-sessions.json', true)
+    try {
+      await toldOf(count, () => writeFile(join(folder, 'claude-hook-sessions.json'), '{}'))
+    } finally {
+      stopWatch()
+    }
+  })
+
+  it('from the parent it tells the name of what changed there', async () => {
+    const { folder, count, stop: stopWatch } = await watchedFor('herdr', false)
+    try {
+      await toldOf(count, () => mkdir(folder))
+    } finally {
+      stopWatch()
+    }
+  })
+
   /** A watch of <config>/herdr in a home of its own, and how many changes it told. */
   async function watchedHerdr() {
     const home = await mkdtemp(join(tmpdir(), 'hw-'))

@@ -149,6 +149,16 @@ describe('opening an agent outside Harness from the dial', () => {
     expect(bundleOf(detectHost(vscode), vscode)).toBe('com.microsoft.VSCode')
   })
 
+  // cmux is built on Ghostty, and its terminals may carry Ghostty's bundle id: after a failed cmux link, Ghostty would
+  // come forward instead of cmux.
+  it('an agent in cmux brings cmux, whatever bundle id its terminal carries', () => {
+    const cmux = { CMUX_SURFACE_ID: '6F1C2B3A-4D5E-4F60-8172-93A4B5C6D7E8', CMUX_WORKSPACE_ID: '0A1B2C3D-4E5F-4061-8273-94A5B6C7D8E9' }
+    for (const bundle of [undefined, 'com.mitchellh.ghostty', 'com.cmuxterm.app']) {
+      const hints = { ...cmux, TERM_PROGRAM: 'ghostty', ...(bundle ? { __CFBundleIdentifier: bundle } : {}) }
+      expect(bundleOf(detectHost(hints), hints), String(bundle)).toBe('com.cmuxterm.app')
+    }
+  })
+
   it('an app with no known bundle id opens nothing', async () => {
     const { calls, opener } = recorder()
     const none: Array<Record<string, string>> = [{}, { TERM_PROGRAM: 'tmux' }, { ZELLIJ: '0' }, { REX_BLOCK: 'x' }, { __CFBundleIdentifier: 'com.example.unknown' }]

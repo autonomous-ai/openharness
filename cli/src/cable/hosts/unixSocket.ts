@@ -75,9 +75,12 @@ export function socketStampOf(path: string, uid: number): string | undefined {
 }
 
 /** Calls `changed` on each change in the nearest existing folder of the socket's folder, its parent and `home`, moving
- *  to a nearer one as it appears, and out of one that is removed. Returns its stop. Never throws: a watch that cannot be
- *  held tells nothing. */
-export function watchSocket(where: { socketPath: string; home: string }, changed: () => void): () => void {
+ *  to a nearer one as it appears, and out of one that is removed. `file` is the name the OS gave for what changed in the
+ *  folder held, none when it gave none: cmuxSource.ts, which watches cmux's stores' folder through a path in it, reads
+ *  only the store that changed. Returns its stop. Never throws: a watch that cannot be held tells nothing. */
+export function watchSocket(
+  where: { socketPath: string; home: string }, changed: (file?: string) => void,
+): () => void {
   const folders = [dirname(where.socketPath), dirname(dirname(where.socketPath)), where.home]
   let held: { watcher: FSWatcher; at: number } | undefined
   const hold = () => {
@@ -89,9 +92,9 @@ export function watchSocket(where: { socketPath: string; home: string }, changed
     for (let at = 0; at < (held?.at ?? folders.length); at++) {
       let watcher: FSWatcher
       try {
-        watcher = watch(folders[at], { persistent: false }, () => {
+        watcher = watch(folders[at], { persistent: false }, (_event, file) => {
           hold()
-          changed()
+          changed(file ?? undefined)
         })
       } catch {
         continue
