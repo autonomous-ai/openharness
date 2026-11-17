@@ -643,6 +643,16 @@ describe("the opencode source (docs/plans/2026-11-17-dial-opencode-design.md)", 
       expect(s.timers).toEqual([])
     })
 
+    it('a sub-agent\'s session.created, with a parentID, asks for no list', async () => {
+      server.session(API)
+      const s = setup()
+      await live(s)
+      server.event('session.created', { sessionID: 'ses_child', parentID: 'ses_a1' })
+      await heard(s)
+      expect(s.timers).toEqual([])
+      expect(count(server, LIST)).toBe(1)
+    })
+
     it('session.deleted and session.archived drop the row at once, with no list', async () => {
       server.session(API)
       server.session({ id: 'ses_b1', title: 'Web', updated: WALL - 1000 })
