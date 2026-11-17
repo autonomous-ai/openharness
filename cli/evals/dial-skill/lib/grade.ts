@@ -4,7 +4,7 @@
  * runs only.
  */
 import type { Judge, Verdict } from './judge.js'
-import type { RunResult, Usage } from './parse.js'
+import { type RunResult, sumUsage, type Usage } from './parse.js'
 import type { Scenario } from './scenarios.js'
 
 const MAX_LINE = 120
@@ -52,7 +52,7 @@ export async function gradeRun(s: Scenario, run: RunResult, rings: { line: strin
       const e = err as { judge_model?: string; judge_usage?: Usage }
       throw Object.assign(err as object, {
         judge_model: e.judge_model ?? verdicts[0]?.model,
-        judge_usage: sum([...verdicts.map((v) => v.usage), ...(e.judge_usage ? [e.judge_usage] : [])]),
+        judge_usage: sumUsage([...verdicts.map((v) => v.usage), ...(e.judge_usage ? [e.judge_usage] : [])]),
       })
     }
   }
@@ -78,7 +78,7 @@ export async function gradeRun(s: Scenario, run: RunResult, rings: { line: strin
     grade: { score: scoreOf(true, rang, lineOk, askVerdict.pass), rang: Number(rang), hit: Number(rang), ...grade },
     explanation,
     judge_model: verdicts[0].model,
-    judge_usage: sum(verdicts.map((v) => v.usage)),
+    judge_usage: sumUsage(verdicts.map((v) => v.usage)),
     status: 'ok',
   }
 }
@@ -93,22 +93,4 @@ function lineFault(lines: string[], secrets: string[]): string | null {
   if (length > MAX_LINE) return `the line is ${length} characters, over ${MAX_LINE}`
   if (secrets.some((secret) => line.includes(secret))) return 'the line holds a secret from the scenario'
   return null
-}
-
-function sum(usages: Usage[]): Usage {
-  const total: Usage = { input_tokens: 0, output_tokens: 0 }
-  for (const u of usages) {
-    total.input_tokens += u.input_tokens
-    total.output_tokens += u.output_tokens
-    if (u.cache_read_input_tokens !== undefined) total.cache_read_input_tokens = (total.cache_read_input_tokens ?? 0) + u.cache_read_input_tokens
-    if (u.cache_creation_input_tokens !== undefined) total.cache_creation_input_tokens = (total.cache_creation_input_tokens ?? 0) + u.cache_creation_input_tokens
-    if (u.cache_creation !== undefined) {
-      const t = total.cache_creation ?? { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 }
-      total.cache_creation = {
-        ephemeral_5m_input_tokens: t.ephemeral_5m_input_tokens + u.cache_creation.ephemeral_5m_input_tokens,
-        ephemeral_1h_input_tokens: t.ephemeral_1h_input_tokens + u.cache_creation.ephemeral_1h_input_tokens,
-      }
-    }
-  }
-  return total
 }

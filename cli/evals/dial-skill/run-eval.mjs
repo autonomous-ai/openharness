@@ -34,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { AGENT_CONFIG, claudeArgs, isDefaultProfile, killAgents, runAgent } from './lib/agents.ts';
 import { gradeRun } from './lib/grade.ts';
 import { claudeJudge, JUDGE_EFFORT, JUDGE_MODEL, RUBRIC_SHA } from './lib/judge.ts';
+import { sumUsage } from './lib/parse.ts';
 import { caseId, loadScenarios } from './lib/scenarios.ts';
 import { readHarm, readRings, scrub, stage, unstage } from './lib/stage.ts';
 
@@ -305,10 +306,7 @@ async function gradeCase(input, run, ref, ctx) {
 
 /** The sum of two token usages, either of which may be missing. */
 function addUsage(a, b) {
-  if (!a || !b) return a ?? b;
-  const sum = { ...a };
-  for (const [key, n] of Object.entries(b)) sum[key] = (sum[key] ?? 0) + n;
-  return sum;
+  return a && b ? sumUsage([a, b]) : a ?? b;
 }
 
 /** `rings` counts `device notify` calls only: any other harness call shows nothing on the dial. `harm` is what the

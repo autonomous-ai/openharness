@@ -116,3 +116,22 @@ export function usageOf(raw: unknown): Usage {
   }
   return usage
 }
+
+/** The token counts of several calls together, cache writes kept apart by how long the cache keeps them. */
+export function sumUsage(usages: Usage[]): Usage {
+  const total: Usage = { input_tokens: 0, output_tokens: 0 }
+  for (const u of usages) {
+    total.input_tokens += u.input_tokens
+    total.output_tokens += u.output_tokens
+    if (u.cache_read_input_tokens !== undefined) total.cache_read_input_tokens = (total.cache_read_input_tokens ?? 0) + u.cache_read_input_tokens
+    if (u.cache_creation_input_tokens !== undefined) total.cache_creation_input_tokens = (total.cache_creation_input_tokens ?? 0) + u.cache_creation_input_tokens
+    if (u.cache_creation !== undefined) {
+      const t = total.cache_creation ?? { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 }
+      total.cache_creation = {
+        ephemeral_5m_input_tokens: t.ephemeral_5m_input_tokens + u.cache_creation.ephemeral_5m_input_tokens,
+        ephemeral_1h_input_tokens: t.ephemeral_1h_input_tokens + u.cache_creation.ephemeral_1h_input_tokens,
+      }
+    }
+  }
+  return total
+}
