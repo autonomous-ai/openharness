@@ -154,7 +154,8 @@ export const EXIT = { ok: 0, failed: 1, usage: 2, needsInput: 3, stopped: 4, ref
  *  `GOAL_LIMIT`, `GOAL_DONE` and `GOAL_FULL` are `harness goal`'s (services/goals.ts): retried, they are refused the
  *  same. `NOT_IDLE` is not among them: once the harness has finished, the reply is taken. */
 export const REFUSED_CODES: ReadonlySet<string> = new Set(['SPAWN_LIMIT', 'TURNED_OFF', 'NOT_YOURS', 'TELL_OFF', 'NOT_RUNNING', 'REPLY_OFF',
-  'NOT_HACHI', 'GOAL_EMPTY', 'GOAL_LIMIT', 'GOAL_DONE', 'GOAL_FULL', 'BAD_TOKEN_FILE', 'NAME_TAKEN'])
+  'NOT_HACHI', 'GOAL_EMPTY', 'GOAL_LIMIT', 'GOAL_DONE', 'GOAL_FULL', 'BAD_TOKEN_FILE', 'NAME_TAKEN',
+  'ENGINE_NOT_READY'])
 
 /** What a refused caller may do instead: close one of its own when it is at its limit; otherwise the message says. */
 export function refusalNext(env: NodeJS.ProcessEnv, error: AgentClientError): NextStep[] {

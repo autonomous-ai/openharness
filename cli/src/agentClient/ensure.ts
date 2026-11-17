@@ -12,6 +12,8 @@ import {
 } from './commands.js'
 import { AgentClientError, type Daemon } from './daemon.js'
 import type { Frame } from './model.js'
+import type { AgentEngine } from '../engines/types.js'
+
 import { PROGRAM_TOKEN_FLAG, withProgramLock, type ProgramHarness } from './program.js'
 
 export const ENSURE_USAGE = `Usage: harness ensure <engine> --name <name> ${PROGRAM_TOKEN_FLAG} <path> [--local <dir>] [--fresh] [<folder>] [--json]
@@ -33,6 +35,9 @@ export interface EnsureDeps extends ClientDeps {
   /** Brings this computer's daemon up when it is down, for a program (contract E, #4393): whether it started it and how
    *  long that took. Absent: a daemon that is down is said, as every verb says it. */
   daemonUp?: () => Promise<{ started: boolean; ms: number }>
+  /** Whether a live harness's engine still runs: true, false (its pane is gone, or no engine runs in it), or null when
+   *  that cannot be told. `engineRuns` when left out. */
+  engineAlive?: (frame: Frame) => Promise<boolean | null>
 }
 
 type EnsureResult = 'live' | 'resumed' | 'new'
@@ -83,15 +88,24 @@ export function ensureCommand(argv: readonly string[], deps: EnsureDeps): Promis
           s.out(json ? JSON.stringify(answer) : `${name}: ${result}${why ? ` (${why})` : ''} · ${engineName(engine)} · ${state} · ${s.now() - began} ms`)
           return EXIT.ok
         }
-        if (live && !flags.has('--fresh')) return say('live', live.frame)
-        if (live) {
+        // Live by its row, and its engine checked: the daemon learns of an engine killed, or of its pane gone, only on a
+        // later pass, and a program told "live" then has its next reply refused NOT_RUNNING.
+        const dead = !!live && !flags.has('--fresh') && live.frame.launch?.state !== 'starting'
+          && await (deps.engineAlive ?? engineRuns)(live.frame) === false
+        if (live && !flags.has('--fresh') && !dead) return say('live', live.frame)
+        if (live && dead) {
+          // Its stale row closed first, so the resume below is a closed harness's, as on any later pass. A close the
+          // daemon refuses is left to the resume, which checks the engine again itself.
+          await o.daemon.request('agent_close', { agentId: live.frame.id, sessionId: live.frame.sessionId ?? '', createdAt: live.frame.createdAt ?? '', mode: 'now' }, 60_000)
+            .catch(() => null)
+        } else if (live) {
           const closed = await o.daemon.request('agent_close', { agentId: live.frame.id, sessionId: live.frame.sessionId ?? '', createdAt: live.frame.createdAt ?? '', mode: 'now' }, 60_000)
           if (closed.error) throw new AgentClientError(String(closed.error), `${name} could not be closed for a fresh start (${String(closed.error)}).`)
         }
         // Closed: opened again with its conversation, unless a fresh one is asked for.
-        const closedOne = flags.has('--fresh') ? undefined : same[0]
+        const closedOne = flags.has('--fresh') ? undefined : dead ? live : same[0]
         if (closedOne) {
-          const resumed = await resumeOwned(s, o, closedOne.frame).catch((error: unknown) => error instanceof AgentClientError ? error : Promise.reject(error))
+          const resumed = await resumeWhileBusy(s, o, closedOne.frame, name)
           if (!(resumed instanceof AgentClientError)) {
             p.records.started(closedOne.frame.id, s.now())
             return resumed.resumed
@@ -102,7 +116,10 @@ export function ensureCommand(argv: readonly string[], deps: EnsureDeps): Promis
             p.records.started(closedOne.frame.id, s.now())
             return say('resumed', closedOne.frame, 'its conversation is not confirmed yet')
           }
-          // Not opened again at all: forgotten as the program's, and a new one started in its place.
+          // Only a harness that can never be opened again is let go: its record gone, or its conversation. Anything else
+          // (a launch that failed, a folder not there just now) is said, and the next ensure tries it again: a new
+          // harness in its place would lose the conversation for good.
+          if (!GONE_FOR_GOOD.has(resumed.code)) throw resumed
           p.records.forget(closedOne.frame.id)
           return created(`the earlier harness could not be opened again (${resumed.message})`)
         }
@@ -128,6 +145,29 @@ export function ensureCommand(argv: readonly string[], deps: EnsureDeps): Promis
   })
 }
 
+/** A resume refusal that no later try can change: the harness is gone from this machine, or its conversation is. */
+const GONE_FOR_GOOD: ReadonlySet<string> = new Set(['AGENT_NOT_FOUND', 'RESUME_UNAVAILABLE'])
+/** How long ensure tries a resume again while the last engine is still stopping (AGENT_BUSY), and how often. */
+export const BUSY_WAIT_MS = 30_000
+const BUSY_STEP_MS = 1_000
+
+/**
+ * The closed harness opened again, tried again every second while the daemon answers AGENT_BUSY: its last engine is
+ * still exiting, or the process table could not be read (lib/resumeStoppedAgent.ts `canLaunch`), both for a moment.
+ * Still busy after BUSY_WAIT_MS: ENGINE_NOT_READY, nothing started. Any other refusal is returned, for the caller.
+ */
+async function resumeWhileBusy(s: Setup, o: Opened, frame: Frame, name: string): Promise<{ frame: Frame; resumed: boolean } | AgentClientError> {
+  const deadline = s.now() + BUSY_WAIT_MS
+  for (;;) {
+    const result = await resumeOwned(s, o, frame).catch((error: unknown) => error instanceof AgentClientError ? error : Promise.reject(error))
+    if (!(result instanceof AgentClientError) || result.code !== 'AGENT_BUSY') return result
+    if (s.now() >= deadline) {
+      throw new AgentClientError('ENGINE_NOT_READY', `${name}'s last engine is still stopping; nothing was started. Try harness ensure again.`)
+    }
+    await s.sleep(BUSY_STEP_MS)
+  }
+}
+
 /** A live harness's state for `ensure`: idle, working, or still starting (no words taken since its engine started, and
  *  not idle yet). */
 async function stateNow(t: { daemon: Daemon; frame: Frame }, record: ProgramHarness | null): Promise<'idle' | 'working' | 'starting'> {
@@ -151,3 +191,19 @@ async function resumeOwned(s: Setup, o: Opened, frame: Frame): Promise<{ frame: 
   return { frame: { ...frame, ...agent }, resumed: reply.resumed !== false }
 }
 
+/**
+ * Whether [frame]'s engine still runs in its tmux pane, read as the daemon reads it (lib/paneEngineProcess.ts): false
+ * when tmux has no such pane or no engine process runs under it, null when that cannot be read (no tmux pane, a probe
+ * that failed), and the row is then believed.
+ */
+export async function engineRuns(frame: Frame): Promise<boolean | null> {
+  const runtimes = frame.terminal?.runtimes ?? []
+  const paneId = runtimes.find((r) => r.backend === 'tmux' && r.paneId)?.paneId ?? (runtimes.length ? null : frame.tmuxPane ?? null)
+  if (!paneId || !/^%\d+$/.test(paneId) || !frame.engine) return null
+  // Loaded only here: the process table and tmux are a live harness's check alone.
+  const [{ lookupPaneEngineProcess }, { tmuxPanePid }] = await Promise.all([import('../lib/paneEngineProcess.js'), import('../lib/tmux.js')])
+  const found = await lookupPaneEngineProcess({ rootProcess: (runtime) => tmuxPanePid(runtime.paneId) }, { backend: 'tmux', paneId }, frame.engine as AgentEngine)
+    .catch(() => null)
+  if (!found) return null
+  return found.ok ? true : found.unknown ? null : false
+}
