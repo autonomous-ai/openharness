@@ -30,6 +30,10 @@ export interface ExecutionArtifact {
 interface ArtifactOptions extends LeanWrite { directory: string }
 type ImagePaths = Omit<ExecutionArtifact, 'release'>
 
+class SourceCloseUnsettled extends Error {
+  constructor() { super('worker_artifact_source_close_unsettled') }
+}
+
 /** The descriptor pins an atomic publication; size and reads refer to that same file. */
 function readSource(path: string): Buffer {
   try {
@@ -46,8 +50,13 @@ function readSource(path: string): Buffer {
       // Never accept a truncated prefix if an in-place writer grows the opened file.
       if (readSync(fd, Buffer.allocUnsafe(1), 0, 1, null) !== 0) throw new Error()
       return bytes
-    } finally { closeSync(fd) }
-  } catch { throw new Error('worker_artifact_source_unavailable') }
+    } finally {
+      try { closeSync(fd) } catch { throw new SourceCloseUnsettled() }
+    }
+  } catch (error) {
+    if (error instanceof SourceCloseUnsettled) throw error
+    throw new Error('worker_artifact_source_unavailable')
+  }
 }
 
 function release(entry: string, options: ArtifactOptions): void {
@@ -74,7 +83,12 @@ export function createExecutionArtifacts(options: ArtifactOptions): { prepare(or
   let unsettled = false
   // Kept out of the release closure: no source bytes, inflated payload or file map survives preparation.
   function prepareImage(originalScript: string, expected: string): ImagePaths {
-    const bytes = readSource(originalScript)
+    let bytes: Buffer
+    try { bytes = readSource(originalScript) } catch (error) {
+      // A failed close may already have released/reused its fd. Never retry that number or open another.
+      if (error instanceof SourceCloseUnsettled) unsettled = true
+      throw error
+    }
     const selected = digest(bytes)
     if (selected !== expected) throw new Error('worker_artifact_source_changed')
     const lean = readLeanBundle(bytes)

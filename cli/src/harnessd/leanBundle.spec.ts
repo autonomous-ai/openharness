@@ -17,6 +17,7 @@ const fsHooks = vi.hoisted(() => ({
   failWrite: null as null | ((path: string) => boolean),
   beforeLstat: null as null | ((path: string) => void),
   failRename: null as null | ((from: string, to: string) => boolean),
+  failReadDir: null as null | ((path: string) => boolean),
 }))
 const renames = { set before(step: null | ((from: string, to: string) => void)) { fsHooks.beforeRename = step } }
 vi.mock('node:fs', async (real) => {
@@ -34,6 +35,10 @@ vi.mock('node:fs', async (real) => {
       fsHooks.onRead?.(String(path))
       return (fs.readFileSync as (...args: unknown[]) => unknown)(path, ...rest)
     }) as typeof fs.readFileSync,
+    readdirSync: ((path: string, ...rest: unknown[]) => {
+      if (fsHooks.failReadDir?.(String(path))) throw Object.assign(new Error('EACCES: unreadable claims'), { code: 'EACCES' })
+      return (fs.readdirSync as (...args: unknown[]) => unknown)(path, ...rest)
+    }) as typeof fs.readdirSync,
     lstatSync: ((path: string, ...rest: unknown[]) => {
       fsHooks.beforeLstat?.(String(path))
       return (fs.lstatSync as (...args: unknown[]) => unknown)(path, ...rest)
@@ -115,6 +120,7 @@ describe('writing the lean bundle out', () => {
     fsHooks.failWrite = null
     fsHooks.beforeLstat = null
     fsHooks.failRename = null
+    fsHooks.failReadDir = null
     rmSync(join(dir, '..'), { recursive: true, force: true })
   })
   /** A cleaner's clock, past the minute it leaves anything that just changed alone. */
@@ -172,6 +178,84 @@ describe('writing the lean bundle out', () => {
     expect(readFileSync(join(dir, `${name}.200.tmp`, LEAN_ENTRY), 'utf8')).toBe(FILES[LEAN_ENTRY])
     expect(existsSync(join(dir, `${name}.200.old`, '.claim-100'))).toBe(true)
     expect(existsSync(join(dir, `${name}.200.tmp`, '.claim-200'))).toBe(true)
+  })
+
+  it('keeps retained rollback copies until every foreign live claimant has gone', () => {
+    const bundle = lean()
+    const name = bundle.sha256.slice(0, 16)
+    const entry = writeLeanBundle(dir, bundle, { pid: 200, alive: alive(200) })
+    writeFileSync(entry, 'the prior image')
+    fsHooks.failRename = (from, to) => !existsSync(to) && (from.endsWith('.100.tmp') || from.endsWith('.100.old'))
+    expect(() => writeLeanBundle(dir, bundle, { pid: 100, alive: alive(100, 200) })).toThrow('LEAN_RESTORE_FAILED')
+    fsHooks.failRename = null
+    const next = lean({ [LEAN_ENTRY]: 'the next master' })
+    writeLeanBundle(dir, next, { pid: 300, alive: alive(200, 300), now: later })
+    expect(readFileSync(join(dir, `${name}.100.old`, LEAN_ENTRY), 'utf8')).toBe('the prior image')
+    expect(existsSync(join(dir, `${name}.100.tmp`, '.claim-200'))).toBe(true)
+    writeLeanBundle(dir, next, { pid: 300, alive: alive(300), now: later })
+    expect(readdirSync(dir)).toEqual([next.sha256.slice(0, 16)])
+  })
+
+  it.each(['listing', 'claim stat'])('preserves a retained rollback image with unknown %s', (failure) => {
+    const bundle = lean()
+    const name = bundle.sha256.slice(0, 16)
+    const entry = writeLeanBundle(dir, bundle, { pid: 200, alive: alive(200) })
+    writeFileSync(entry, 'the prior image')
+    fsHooks.failRename = (from, to) => !existsSync(to) && (from.endsWith('.100.tmp') || from.endsWith('.100.old'))
+    expect(() => writeLeanBundle(dir, bundle, { pid: 100, alive: alive(100, 200) })).toThrow('LEAN_RESTORE_FAILED')
+    fsHooks.failRename = null
+    const old = join(dir, `${name}.100.old`)
+    if (failure === 'listing') fsHooks.failReadDir = (path) => path === old
+    else fsHooks.beforeLstat = (path) => { if (path === join(old, '.claim-200')) throw new Error('unreadable claim') }
+    const next = lean({ [LEAN_ENTRY]: 'another image' })
+    writeLeanBundle(dir, next, { pid: 300, alive: alive(200, 300), now: later })
+    expect(readFileSync(join(old, LEAN_ENTRY), 'utf8')).toBe('the prior image')
+    fsHooks.failReadDir = null
+    fsHooks.beforeLstat = null
+    writeLeanBundle(dir, next, { pid: 300, alive: alive(300), now: later })
+    expect(readdirSync(dir)).toEqual([next.sha256.slice(0, 16)])
+  })
+
+  it('refuses replacement when the prior complete image has unreadable claims', () => {
+    const bundle = lean()
+    const entry = writeLeanBundle(dir, bundle, { pid: 200, alive: alive(200) })
+    writeFileSync(entry, 'the prior image')
+    fsHooks.failReadDir = (path) => path === folderOf(bundle)
+    expect(() => writeLeanBundle(dir, bundle, { pid: 100, alive: alive(100, 200) })).toThrow('LEAN_CLAIMS_UNAVAILABLE')
+    expect(readFileSync(entry, 'utf8')).toBe('the prior image')
+    expect(existsSync(join(folderOf(bundle), '.claim-200'))).toBe(true)
+    expect(readdirSync(dir)).toEqual([bundle.sha256.slice(0, 16)])
+  })
+
+  it.each(['live foreign claim', 'unknown inventory'])('refuses to replace its existing scratch with %s', (failure) => {
+    const bundle = lean()
+    const name = bundle.sha256.slice(0, 16)
+    const entry = writeLeanBundle(dir, bundle, { pid: 200, alive: alive(200) })
+    writeFileSync(entry, 'the prior image')
+    fsHooks.failRename = (from, to) => !existsSync(to) && (from.endsWith('.100.tmp') || from.endsWith('.100.old'))
+    expect(() => writeLeanBundle(dir, bundle, { pid: 100, alive: alive(100, 200) })).toThrow('LEAN_RESTORE_FAILED')
+    fsHooks.failRename = null
+    const scratch = join(dir, `${name}.100.tmp`)
+    if (failure === 'unknown inventory') fsHooks.failReadDir = (path) => path === scratch
+    expect(() => writeLeanBundle(dir, bundle, { pid: 100, alive: alive(100, 200) })).toThrow('LEAN_SCRATCH_CLAIMED')
+    expect(readFileSync(join(scratch, LEAN_ENTRY), 'utf8')).toBe(FILES[LEAN_ENTRY])
+    expect(readFileSync(join(dir, `${name}.100.old`, LEAN_ENTRY), 'utf8')).toBe('the prior image')
+  })
+
+  it('does not turn an unknown folder age or disappearing claim into permission to remove its image', () => {
+    const older = lean({ [LEAN_ENTRY]: 'older complete image' })
+    writeLeanBundle(dir, older, { pid: 200, alive: alive(200) })
+    const claim = join(folderOf(older), '.claim-200')
+    fsHooks.beforeLstat = (path) => { if (path === claim) rmSync(claim, { force: true }) }
+    const next = lean()
+    writeLeanBundle(dir, next, { pid: 300, alive: alive(300), now: later })
+    expect(existsSync(join(folderOf(older), LEAN_ENTRY))).toBe(true)
+    fsHooks.beforeLstat = (path) => { if (path === folderOf(older)) throw new Error('unknown image age') }
+    writeLeanBundle(dir, next, { pid: 300, alive: alive(300), now: later })
+    expect(existsSync(join(folderOf(older), LEAN_ENTRY))).toBe(true)
+    fsHooks.beforeLstat = null
+    writeLeanBundle(dir, next, { pid: 300, alive: alive(300), now: later })
+    expect(readdirSync(dir)).toEqual([next.sha256.slice(0, 16)])
   })
 
   it('writes its files into a folder of its own, for its owner alone, claimed by this master, and returns its entry', () => {

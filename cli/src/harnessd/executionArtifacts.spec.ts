@@ -41,6 +41,7 @@ vi.mock('node:fs', async (load) => {
       return fs.readSync(fd, buffer, offset ?? 0, Math.min(length ?? buffer.length, hooks.readLimit), position ?? null)
     }) as typeof fs.readSync,
     closeSync: (fd: number) => {
+      if (hooks.fail === 'close-unsettled') throw new Error('private source path')
       fs.closeSync(fd)
       hooks.opened.delete(fd)
       if (hooks.fail === 'close') throw new Error('private source path')
@@ -245,11 +246,38 @@ describe('one owned execution artifact', () => {
     second.release()
   })
 
-  it.each(['open', 'stat', 'read', 'close'])('closes source ownership and publishes nothing on %s failure', (failure) => {
+  it.each(['open', 'stat', 'read'])('closes source ownership and publishes nothing on %s failure', (failure) => {
     const expected = selected()
     hooks.fail = failure
     expect(() => owner().prepare(original, expected)).toThrow('worker_artifact_source_unavailable')
     expect(existsSync(directory)).toBe(false)
+  })
+
+  it('opens no further source after an uncertain close, and never retries that descriptor', async () => {
+    const expected = selected()
+    const artifacts = owner()
+    hooks.fail = 'close-unsettled'
+    try {
+      expect(() => artifacts.prepare(original, expected)).toThrow('worker_artifact_source_close_unsettled')
+      expect(hooks.opened.size).toBe(1)
+      expect(() => artifacts.prepare(original, expected)).toThrow('worker_artifact_cleanup_unsettled')
+      expect(hooks.opened.size).toBe(1)
+      expect(existsSync(directory)).toBe(false)
+    } finally {
+      // Only this injected fault knows no close was attempted. Product code cannot make that assumption.
+      const fs = await vi.importActual<typeof import('node:fs')>('node:fs')
+      for (const fd of hooks.opened) fs.closeSync(fd)
+      hooks.opened.clear()
+    }
+  })
+
+  it('also retains uncertain ownership when close reports failure after the kernel closed it', () => {
+    const expected = selected()
+    const artifacts = owner()
+    hooks.fail = 'close'
+    expect(() => artifacts.prepare(original, expected)).toThrow('worker_artifact_source_close_unsettled')
+    expect(() => artifacts.prepare(original, expected)).toThrow('worker_artifact_cleanup_unsettled')
+    expect(hooks.opened.size).toBe(0)
   })
 
   it.each([-1, 128 * 1024 * 1024 + 1, 1.5])('rejects source length %s before reading or allocating its image', (size) => {

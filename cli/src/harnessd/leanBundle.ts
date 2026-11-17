@@ -154,14 +154,24 @@ function holds(folder: string, lean: LeanBundle): boolean {
 }
 
 const removeQuietly = (path: string): void => { try { rmSync(path, { recursive: true, force: true }) } catch { /* the next master tries again */ } }
-const changedAt = (path: string): number => { try { return lstatSync(path).mtimeMs } catch { return 0 } }
+const changedAt = (path: string): number | null => { try { return lstatSync(path).mtimeMs } catch { return null } }
 
-/** The pids that claim [folder], with when each claimed it. */
-function claimsIn(folder: string): Array<{ pid: number; at: number }> {
-  return safeList(folder).flatMap((file) => {
+/** Null means ownership is unknown, never permission to replace or delete a complete image. */
+function claimsIn(folder: string): Array<{ pid: number; at: number }> | null {
+  let names: string[]
+  try { names = readdirSync(folder) } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    return code === 'ENOENT' || code === 'ENOTDIR' ? [] : null
+  }
+  const claims: Array<{ pid: number; at: number }> = []
+  for (const file of names) {
     const claim = CLAIM.exec(file)
-    return claim ? [{ pid: Number(claim[1]), at: changedAt(join(folder, file)) }] : []
-  })
+    if (!claim) continue
+    const at = changedAt(join(folder, file))
+    if (at === null) return null
+    claims.push({ pid: Number(claim[1]), at })
+  }
+  return claims
 }
 
 /** Claim [folder] for [claim], then check it holds [lean]: from the moment its bytes are found good, a
@@ -196,6 +206,8 @@ export function writeLeanBundle(dir: string, lean: LeanBundle, options: LeanWrit
     // unclaimed, so two masters of one build starting at once (a second `harness start`) never see each
     // other's half, and no cleaner takes it between the rename and the claim.
     const scratch = join(dir, `${name}.${pid}.tmp`)
+    const priorScratch = claimsIn(scratch)
+    if (priorScratch === null || priorScratch.some((other) => other.pid !== pid && live(other))) throw new Error('LEAN_SCRATCH_CLAIMED')
     removeQuietly(scratch)
     try {
       mkdirSync(scratch, { mode: 0o700 })
@@ -217,7 +229,9 @@ export function writeLeanBundle(dir: string, lean: LeanBundle, options: LeanWrit
         // it. One starting a service from it in that instant finds no file and starts it from cli.js.
         const aside = join(dir, `${name}.${pid}.old`)
         try {
-          for (const other of claimsIn(folder)) {
+          const claims = claimsIn(folder)
+          if (claims === null) throw new Error('LEAN_CLAIMS_UNAVAILABLE')
+          for (const other of claims) {
             if (other.pid !== pid && live(other)) writeFileSync(join(scratch, `.claim-${other.pid}`), '', { mode: 0o600 })
           }
         } catch (copyError) {
@@ -242,16 +256,24 @@ export function writeLeanBundle(dir: string, lean: LeanBundle, options: LeanWrit
       }
     }
   }
-  const settled = (path: string): boolean => now() - changedAt(path) >= LEAN_RECENT_MS
+  const settled = (path: string): boolean => {
+    const at = changedAt(path)
+    return at !== null && now() - at >= LEAN_RECENT_MS
+  }
   for (const entry of safeList(dir)) {
     const path = join(dir, entry)
     const scratch = SCRATCH.exec(entry)
     if (scratch) {
-      if (Number(scratch[1]) === pid || (!alive(Number(scratch[1])) && settled(path))) removeQuietly(path)
+      // A failed rollback leaves complete copies here, possibly the last one another master claims.
+      const claims = claimsIn(path)
+      if (claims === null) continue
+      const claimedElsewhere = claims.some((other) => other.pid !== pid && live(other))
+      if (!claimedElsewhere && (Number(scratch[1]) === pid || (!alive(Number(scratch[1])) && settled(path)))) removeQuietly(path)
       continue
     }
     if (!FOLDER.test(entry)) continue
     const claims = claimsIn(path)
+    if (claims === null) continue
     if (entry === name) {
       for (const other of claims) if (other.pid !== pid && !live(other)) removeQuietly(join(folder, `.claim-${other.pid}`))
     } else if (resolve(path) !== keepFolder && !claims.some((other) => other.pid !== pid && live(other)) && settled(path)) {
