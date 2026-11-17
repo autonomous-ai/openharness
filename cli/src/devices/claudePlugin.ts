@@ -28,7 +28,7 @@ export interface ClaudeStatus {
 }
 
 /** Which call failed: a fixed word the devices count, where Claude Code's own line could name a path. */
-export type ClaudeStep = 'unsupported' | 'marketplace' | 'install' | 'enable' | 'uninstall' | 'update'
+export type ClaudeStep = 'unsupported' | 'list' | 'marketplace' | 'install' | 'enable' | 'uninstall' | 'update'
 export type ClaudeResult = { ok: true } | { ok: false; error: string; step: ClaudeStep }
 export type ClaudeUpdate = { ok: true; outcome: 'updated' | 'current' | 'absent' } | { ok: false; error: string; step: ClaudeStep }
 type ClaudeFailure = Extract<ClaudeResult, { ok: false }>
@@ -41,6 +41,7 @@ const LOCAL_MS = 15_000
 const MAX_OUTPUT_BYTES = 1024 * 1024
 const UNSUPPORTED: ClaudeFailure = { ok: false, error: `Claude Code ${MIN_CLAUDE} or later is needed.`, step: 'unsupported' }
 const NO_ANSWER = 'Claude Code did not answer.'
+const UNLISTED = 'Claude Code did not list its plugins.'
 
 /** [bin] run with no shell, its stdin closed; [env] the child's environment, the process's own by default. Its time
  *  ends it with SIGKILL, as the engine lookup's shell: a `claude` that does not end on TERM would hold the pass. */
@@ -107,46 +108,57 @@ async function supportedRun({ run, platform }: ClaudeDeps): Promise<ClaudeRun | 
   return run && supports(platform, await versionOf(run)) ? run : null
 }
 
-async function jsonList(run: ClaudeRun, args: string[]): Promise<Record<string, unknown>[]> {
-  const { code, stdout } = await run(args, LOCAL_MS)
-  if (code !== 0) return []
-  try {
-    const value: unknown = JSON.parse(stdout)
-    return Array.isArray(value) ? value.filter((entry) => !!entry && typeof entry === 'object') : []
-  } catch {
-    return []
+/** A call's failure: the first line Claude Code wrote about it, or [none] when it wrote nothing. */
+function failure(stderr: string, step: ClaudeStep, none = NO_ANSWER): ClaudeFailure {
+  return { ok: false, error: stderr.split('\n').map((line) => line.trim()).find(Boolean) ?? none, step }
+}
+
+/** A list that failed, ran out of time or is not JSON says nothing of what is there: a failure, never an empty list. */
+async function jsonList(run: ClaudeRun, args: string[]): Promise<Record<string, unknown>[] | ClaudeFailure> {
+  const { code, stdout, stderr } = await run(args, LOCAL_MS)
+  if (code === 0) {
+    try {
+      const value: unknown = JSON.parse(stdout)
+      if (Array.isArray(value)) return value.filter((entry) => !!entry && typeof entry === 'object')
+    } catch { /* not JSON: the failure below */ }
   }
+  return failure(stderr, 'list', UNLISTED)
 }
 
 /** A project-scope entry turns the plugin on for one repository only; the dial needs it in every session. */
-async function userEntry(run: ClaudeRun): Promise<Record<string, unknown> | undefined> {
-  return (await jsonList(run, ['plugin', 'list', '--json'])).find((plugin) => plugin.id === DIAL_PLUGIN_ID && plugin.scope === 'user')
+async function userEntry(run: ClaudeRun): Promise<{ ok: true; entry?: Record<string, unknown> } | ClaudeFailure> {
+  const plugins = await jsonList(run, ['plugin', 'list', '--json'])
+  if (!Array.isArray(plugins)) return plugins
+  return { ok: true, entry: plugins.find((plugin) => plugin.id === DIAL_PLUGIN_ID && plugin.scope === 'user') }
 }
 
+/** A list that cannot be read shows the plugin as not installed: the status has no failure to give. */
 export async function claudeStatus({ run, platform }: ClaudeDeps): Promise<ClaudeStatus> {
   if (!run) return { supported: false, installed: false, enabled: false, claudeVersion: null }
   const claudeVersion = await versionOf(run)
-  const entry = await userEntry(run)
+  const listed = await userEntry(run)
+  const entry = listed.ok ? listed.entry : undefined
   return { supported: supports(platform, claudeVersion), installed: !!entry, enabled: entry?.enabled === true, claudeVersion }
 }
 
 /** Runs one call that changes something; a failure is the first line Claude Code wrote about it, and the call's step. */
 async function change(run: ClaudeRun, args: string[], timeoutMs: number, step: ClaudeStep): Promise<ClaudeFailure | null> {
   const { code, stderr } = await run(args, timeoutMs)
-  if (code === 0) return null
-  return { ok: false, error: stderr.split('\n').map((line) => line.trim()).find(Boolean) ?? NO_ANSWER, step }
+  return code === 0 ? null : failure(stderr, step)
 }
 
 export async function claudeEnable(deps: ClaudeDeps): Promise<ClaudeResult> {
   const run = await supportedRun(deps)
   if (!run) return UNSUPPORTED
-  const entry = await userEntry(run)
-  if (entry) {
-    if (entry.enabled === true) return { ok: true }
+  const listed = await userEntry(run)
+  if (!listed.ok) return listed
+  if (listed.entry) {
+    if (listed.entry.enabled === true) return { ok: true }
     return await change(run, ['plugin', 'enable', DIAL_PLUGIN_ID, '--scope', 'user'], LOCAL_MS, 'enable') ?? { ok: true }
   }
+  // Marketplaces that cannot be read are taken as none: at worst the add runs again, and its own failure is counted.
   const marketplaces = await jsonList(run, ['plugin', 'marketplace', 'list', '--json'])
-  const cloned = marketplaces.some((marketplace) => marketplace.name === MARKETPLACE)
+  const cloned = Array.isArray(marketplaces) && marketplaces.some((marketplace) => marketplace.name === MARKETPLACE)
   if (!cloned) {
     // Only the two folders the plugin lives in: the rest of the repository is never cloned onto the person's computer.
     const failed = await change(run, ['plugin', 'marketplace', 'add', 'autonomous-ai/openharness', '--sparse', '.claude-plugin', 'plugins'], FETCH_MS, 'marketplace')
@@ -160,10 +172,12 @@ export async function claudeEnable(deps: ClaudeDeps): Promise<ClaudeResult> {
 }
 
 /** Uninstalls the plugin and keeps the marketplace, which the harness plugin may come from too. */
-export async function claudeDisable(deps: ClaudeDeps): Promise<ClaudeResult> {
-  const status = await claudeStatus(deps)
-  if (!status.installed || !deps.run) return { ok: true }
-  return await change(deps.run, ['plugin', 'uninstall', DIAL_PLUGIN_ID, '--scope', 'user'], LOCAL_MS, 'uninstall') ?? { ok: true }
+export async function claudeDisable({ run }: ClaudeDeps): Promise<ClaudeResult> {
+  if (!run) return { ok: true }
+  const listed = await userEntry(run)
+  if (!listed.ok) return listed
+  if (!listed.entry) return { ok: true }
+  return await change(run, ['plugin', 'uninstall', DIAL_PLUGIN_ID, '--scope', 'user'], LOCAL_MS, 'uninstall') ?? { ok: true }
 }
 
 /**
@@ -175,10 +189,12 @@ export async function claudeUpdate(deps: ClaudeDeps): Promise<ClaudeUpdate> {
   const run = await supportedRun(deps)
   if (!run) return UNSUPPORTED
   const before = await userEntry(run)
-  if (before?.enabled !== true) return { ok: true, outcome: 'absent' }
+  if (!before.ok) return before
+  if (before.entry?.enabled !== true) return { ok: true, outcome: 'absent' }
   const failed = await change(run, ['plugin', 'marketplace', 'update', MARKETPLACE], FETCH_MS, 'marketplace')
     ?? await change(run, ['plugin', 'update', DIAL_PLUGIN_ID, '--scope', 'user'], FETCH_MS, 'update')
   if (failed) return failed
   const after = await userEntry(run)
-  return { ok: true, outcome: after?.version !== before.version ? 'updated' : 'current' }
+  if (!after.ok) return after
+  return { ok: true, outcome: after.entry?.version !== before.entry.version ? 'updated' : 'current' }
 }
