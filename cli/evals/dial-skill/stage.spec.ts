@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { homedir, tmpdir, userInfo } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -262,6 +262,14 @@ describe('stage', () => {
     const st = staging('claude', { skill: true })
 
     expect(scrub(`cd ${st.root}/repo && cat ${homedir()}/notes`, st)).toBe('cd <run>/repo && cat ~/notes')
+  })
+
+  it('scrubs the user name out of the owner column of a file listing', () => {
+    const st = staging('claude', { skill: true })
+    const user = userInfo().username
+
+    expect(scrub(`drwxr-xr-x@ 4 ${user}  staff  128 Nov 17 14:26 .claude`, st))
+      .toBe('drwxr-xr-x@ 4 <user>  staff  128 Nov 17 14:26 .claude')
   })
 
   it('unstage removes the run root', () => {
