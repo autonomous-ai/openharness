@@ -8,7 +8,7 @@ export default function DevicePage() {
         <div className={styles.badge}>
           <Download size={21} strokeWidth={2} />
         </div>
-        <h1 className={styles.title}>Harness Device</h1>
+        <h1 className={styles.title}>Harness</h1>
         <p className={styles.description}>The menu-bar app for the dial. macOS 13 or later.</p>
         <a className={styles.download} href="/device/download-macos">
           <Download size={18} aria-hidden="true" />

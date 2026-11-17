@@ -1,9 +1,11 @@
-# Harness Device
+# Harness Device (device-app)
 
-A menu-bar app for the round dial, for people who do not use the Harness desktop app. It installs the `harness` CLI,
-keeps the daemon running, shows the dial's state in its menu, and offers sign-in once. It has no row for Claude Code or
-Codex: the devices service sets them up. Rust and Tauri 2 in `src-tauri/`; the window's two screens are plain
-TypeScript in `ui/`.
+A menu-bar app for the round dial, for people who do not use the Harness desktop app. People see it as **Harness**:
+only its file stays `Harness Device.app` (`productName`), beside the desktop app's `Harness.app`, and the bundle id,
+binary, release files and update path keep the Harness Device name, so installed apps keep updating. It installs the
+`harness` CLI, keeps the daemon running, shows the dial's state in its menu, and offers sign-in once. It has no row for
+Claude Code or Codex: the devices service sets them up. Rust and Tauri 2 in `src-tauri/`; the window's two screens are
+plain TypeScript in `ui/`.
 
 ## Toolchain
 

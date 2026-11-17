@@ -46,7 +46,7 @@ describe("GET /device/download-macos", () => {
     const res = await GET();
 
     expect(res.status).toBe(503);
-    expect(await res.text()).toBe("Harness Device download is temporarily unavailable (manifest HTTP 403).\n");
+    expect(await res.text()).toBe("Harness download is temporarily unavailable (manifest HTTP 403).\n");
   });
 
   it("reports 503 when the manifest cannot be fetched", async () => {
@@ -65,7 +65,7 @@ describe("GET /device/download-macos", () => {
     const res = await GET();
 
     expect(res.status).toBe(503);
-    expect(await res.text()).toBe("Harness Device download is temporarily unavailable (manifest unreadable).\n");
+    expect(await res.text()).toBe("Harness download is temporarily unavailable (manifest unreadable).\n");
   });
 
   // A bucket that never answers must not hold the visitor's request open.
