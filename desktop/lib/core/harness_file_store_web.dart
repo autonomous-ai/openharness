@@ -22,8 +22,7 @@ class HarnessFileStore
   ];
   Future<void>? _migration;
 
-  Future<void>
-  _ready() => _migration ??= withBrowserLock('migration', () async {
+  Future<void> _ready() => _migration ??= withBrowserLockSync('migration', () {
     final local = web.window.localStorage;
     final legacy = web.window.sessionStorage;
     if (local.getItem(_migrated) == null &&
@@ -77,7 +76,7 @@ class HarnessFileStore
     }
 
     if (_credentials.contains(key)) {
-      await withBrowserLock('migration', () async => write());
+      await withBrowserLockSync('migration', write);
     } else {
       write();
     }
@@ -95,7 +94,7 @@ class HarnessFileStore
     }
 
     if (_credentials.contains(key)) {
-      await withBrowserLock('migration', () async => remove());
+      await withBrowserLockSync('migration', remove);
     } else {
       remove();
     }

@@ -447,8 +447,11 @@ void main() {
     },
   );
 
+  // A computer's browser in a window as narrow as a phone. A phone or tablet (Flutter's test default is Android) gets
+  // the store bar instead of this download button (S9, `browserHasAppStore`), so the platform is pinned.
   testWidgets(
-    'web landing keeps a large sign-in action and download visible on a phone',
+    'web landing keeps a large sign-in action and download visible in a phone-width window',
+    variant: TargetPlatformVariant.only(TargetPlatform.macOS),
     (tester) async {
       final app = AppNotifier(
         config: AppConfig.dev,
