@@ -180,6 +180,7 @@ export class RelayGateway implements GatewayPort {
   groupSync: { handle: (peerPub: string, payload: Record<string, unknown>) => Record<string, unknown> } | null = null
   /** The account's device key log grew (lib/e2ee/deviceLogSyncer.ts): re-read it from this machine's head. */
   onDeviceKeysChanged: (() => void) | null = null
+  onConnectorsChanged: ((revision: number) => void) | null = null
   /** This machine's key was taken out of the account's device key log (`machine_revoked` says so). */
   onDeviceRemoved: ((pub: string) => void) | null = null
   /** Whether [pub] is this machine's own device key. Set, a `machine_revoked` naming another key (an earlier
@@ -822,6 +823,7 @@ export class RelayGateway implements GatewayPort {
     // re-reads and merges them. Backend-only, like desk_changed.
     if (type === 'connectors_changed') {
       const revision = (typeof frame.payload === 'object' && frame.payload !== null ? (frame.payload as { revision?: unknown }).revision : undefined)
+      this.onConnectorsChanged?.(typeof revision === 'number' ? revision : 0)
       this.core.notice({ type, revision: typeof revision === 'number' ? revision : 0 })
       return
     }

@@ -29,6 +29,10 @@ function stubGateway() {
     stop: vi.fn(async () => {}),
   } satisfies GatewayPort
   const answer = { status: 200, body: { ok: true } }
+  const legacyConnectorVault = {
+      seal: vi.fn(async (plaintext: string) => { if (!plaintext) throw new Error('nothing to seal'); return { sealed: plaintext } }),
+      open: vi.fn(async (envelope: unknown) => ((envelope as { sealed?: string })?.sealed ? { plaintext: (envelope as { sealed: string }).sealed, complete: true } : null)),
+    }
   const ops = {
     accessToken: vi.fn(async () => 'never asked: the process answers the core from its own renewal'),
     backend: vi.fn(async (_method: string, _path: string, _body?: unknown) => answer),
@@ -44,10 +48,8 @@ function stubGateway() {
       publicKey: vi.fn(async () => 'cHVi'),
       signWelcome: vi.fn(async (_m: string, shareId: string) => { if (shareId === 'bad') throw new Error('not a welcome to an observer'); return 'c2ln' }),
     },
-    connectorVault: {
-      seal: vi.fn(async (plaintext: string) => { if (!plaintext) throw new Error('nothing to seal'); return { sealed: plaintext } }),
-      open: vi.fn(async (envelope: unknown) => ((envelope as { sealed?: string })?.sealed ? { plaintext: (envelope as { sealed: string }).sealed, complete: true } : null)),
-    },
+    connectorSync: vi.fn(async () => ({ shared: true })),
+
     tabKey: new TabSessions(() => alice, () => 'alice-mac'),
     tabRelay: { open: vi.fn(async () => {}), send: vi.fn(async (_tab: string, to: string) => to === 'alice-mac'), close: vi.fn() },
     sharedTrust: vi.fn(async (desired: { pins?: unknown[]; keys?: unknown[] }) => {
@@ -68,7 +70,7 @@ function stubGateway() {
     }),
   } satisfies WindowRelay
   const requests = { gateway_http: vi.fn(async (payload: Record<string, unknown>) => ({ status: 200, body: { devices: [], asked: payload.target } })) }
-  return { port, ops, windowRelay, requests, sessions, stop: vi.fn(async () => {}) }
+  return { port, ops, legacyConnectorVault, windowRelay, requests, sessions, stop: vi.fn(async () => {}) }
 }
 
 function wire() {
@@ -436,17 +438,23 @@ describe('the gateway\'s process, spoken to by the core', () => {
     }
   })
 
-  it('seals and opens the account\'s connections with the identity it holds, and none while it is not running', async () => {
+  it('keeps old-core vault RPC only in the gateway and gives the new core metadata only', async () => {
     const w = wire()
-    const vault = w.link.ops.connectorVault
-    await expect(vault.seal('{}')).rejects.toThrow(/not running/)
-    expect(await vault.open({ sealed: '{}' })).toBeNull()
+    const call = (payload: Record<string, unknown>) => w.options().requests[GATEWAY_CALLS.connectorVault](payload, { local: true, owner: true })
+    expect(await call({ op: 'seal', plaintext: '{}' })).toEqual({ error: 'CONNECTORS_SYNC_UNAVAILABLE' })
+    await expect(w.link.ops.connectorSync(true)).rejects.toThrow('CONNECTORS_SYNC_UNAVAILABLE')
     w.connect()
-    expect(await vault.seal('{"v":1}')).toEqual({ sealed: '{"v":1}' })
-    expect(await vault.open({ sealed: '{"v":1}' })).toEqual({ plaintext: '{"v":1}', complete: true })
-    expect(await vault.open({ other: 1 })).toBeNull()
-    await expect(vault.seal('')).rejects.toThrow('nothing to seal')
-    expect(await w.options().requests[GATEWAY_CALLS.connectorVault]({ op: 'nothing' }, { local: true, owner: true })).toEqual({ error: 'UNKNOWN_OP' })
+    expect(await w.link.ops.connectorSync(true)).toEqual({ shared: true })
+    expect(await call({ op: 'sync', refresh: true, requestId: 'wire-request' })).toEqual({ shared: true })
+    expect(await call({ op: 'sync', refresh: true, requestId: {} })).toEqual({ error: 'UNKNOWN_OP' })
+    expect(await call({ op: 'sync', refresh: true, requestId: 'x'.repeat(129) })).toEqual({ error: 'UNKNOWN_OP' })
+    expect(await call({ op: 'seal', plaintext: '{"v":1}' })).toEqual({ envelope: { sealed: '{"v":1}' } })
+    expect(await call({ op: 'open', envelope: { sealed: '{"v":1}' } })).toEqual({ plaintext: '{"v":1}', complete: true })
+    expect(await call({ op: 'open', envelope: { other: 1 } })).toEqual({})
+    expect(await call({ op: 'seal', plaintext: '' })).toEqual({ error: 'nothing to seal' })
+    expect(await call({ op: 'nothing' })).toEqual({ error: 'UNKNOWN_OP' })
+    expect(await call({ op: 'sync', refresh: 'yes' })).toEqual({ error: 'UNKNOWN_OP' })
+    expect(await call({ op: 'sync', refresh: true, plaintext: 'synthetic' })).toEqual({ error: 'UNKNOWN_OP' })
   })
 
   it('makes the trust stores hold what sharing asks, only the parts it sent, valid peers only', async () => {

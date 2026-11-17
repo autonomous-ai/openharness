@@ -1,0 +1,255 @@
+/** Async synchronization of the existing connector files; the bridge/CLI keep their existing lock and format. */
+import * as fs from 'node:fs/promises'
+import { constants, lstatSync, renameSync, unlinkSync, type BigIntStats } from 'node:fs'
+import type { FileHandle } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { join } from 'node:path'
+import { CODE, MAX_BYTES, cleanClient, removalsIn, tokensIn } from './store.js'
+import { fingerprint, merge, type Snapshot } from './vaultSnapshot.js'
+import { transport } from './rest.js'
+
+type Document = Record<string, unknown>
+const FILES = ['removed.json', 'clients.json', 'tokens.json'] as const
+const LOCK_MS = 5_000
+const STALE_LOCK_MS = 60_000
+const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT'
+const identity = (s: BigIntStats) => [s.dev, s.ino, s.size, s.mtimeNs, s.ctimeNs, s.mode, s.uid, s.nlink].join(':')
+const fileIdentity = (s: BigIntStats) => `${s.dev}:${s.ino}:${s.birthtimeNs}`
+
+export class VaultStoreError extends Error {
+  constructor(readonly code: 'STORE_UNAVAILABLE' | 'STORE_BUSY' | 'STORE_CHANGED' | 'STORE_WRITE_UNCONFIRMED' | 'STORE_CLEANUP_UNCONFIRMED') {
+    super(code); this.name = 'VaultStoreError'
+  }
+}
+
+/** Explicit IO dependencies let caller tests hold actual operation settlement, not just a reply timer. */
+export const vaultStoreIo = {
+  open: fs.open, mkdir: fs.mkdir, lstat: fs.lstat, chmod: fs.chmod,
+  rename: renameSync, statNow: (file: string) => lstatSync(file, { bigint: true }), unlink: unlinkSync,
+  wait: (ms: number) => new Promise<void>(resolve => { setTimeout(resolve, ms) }),
+}
+type StoreIo = typeof vaultStoreIo
+interface Cleanup {
+  directory: string
+  files: Map<string, string | null>
+  lock?: { file: string; identity: string | null }
+  changed?: () => void
+}
+
+function privateFile(stat: BigIntStats): void {
+  if (!stat.isFile() || stat.nlink !== 1n || stat.size > BigInt(MAX_BYTES)
+    || (process.getuid && stat.uid !== BigInt(process.getuid()))
+    || (process.platform !== 'win32' && (stat.mode & 0o077n) !== 0n)) throw new VaultStoreError('STORE_UNAVAILABLE')
+}
+
+function snapshot(documents: Map<string, Document>): Snapshot {
+  const result: Snapshot = { v: 1, connections: {}, removed: {} }
+  const clients = documents.get('clients.json')!
+  for (const [code, token] of Object.entries(tokensIn(documents.get('tokens.json')!))) {
+    const client = token.source === 'dcr' && token.issuer ? cleanClient(clients[token.issuer]) : undefined
+    result.connections[code] = { token, ...(client ? { client } : {}) }
+  }
+  result.removed = removalsIn(documents.get('removed.json')!)
+  return result
+}
+
+/** One writer slot survives an expired reply until every accepted OS operation has actually settled. */
+export class VaultStore {
+  private busy = false
+  private needsDurability = true
+  /** At most this attempt's three temporary files and one lock; no new mutation while any remain. */
+  private cleanup: Cleanup | null = null
+  constructor(readonly root: string, private readonly io: StoreIo = vaultStoreIo) {}
+
+  private async pinDirectory(expected: string): Promise<FileHandle | null> {
+    if (process.platform === 'win32') return null
+    const handle = await this.io.open(this.root, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0))
+    try {
+      const stat = await handle.stat({ bigint: true })
+      if (!stat.isDirectory() || fileIdentity(stat) !== expected) throw new VaultStoreError('STORE_CHANGED')
+      return handle
+    } catch (error) { await handle.close(); throw error }
+  }
+
+  private async durable(handle: FileHandle | null): Promise<void> {
+    if (handle) await handle.sync()
+    this.needsDurability = false
+  }
+
+  private reconcile(changed?: () => void): void {
+    const cleanup = this.cleanup
+    if (!cleanup) return
+    // A renamed root still contains our credential files. Missing paths in a replacement root do not discharge ownership.
+    try {
+      if (fileIdentity(this.io.statNow(this.root)) !== cleanup.directory) throw new Error('replaced directory')
+    } catch { throw new VaultStoreError('STORE_CLEANUP_UNCONFIRMED') }
+    const remove = (file: string, expected: string | null): boolean => {
+      try {
+        const actual = this.io.statNow(file)
+        if (expected === null) return false // Creation succeeded but its identity could not be established.
+        if (fileIdentity(actual) !== expected) return true // Another owner's replacement is never removed.
+        this.io.unlink(file)
+        return true
+      } catch (error) { return missing(error) }
+    }
+    for (const [file, expected] of cleanup.files) if (remove(file, expected)) cleanup.files.delete(file)
+    // Retain the lock while our credential-bearing temporary files still need cleanup.
+    if (!cleanup.files.size && cleanup.lock && remove(cleanup.lock.file, cleanup.lock.identity)) delete cleanup.lock
+    if (cleanup.files.size || cleanup.lock) throw new VaultStoreError('STORE_CLEANUP_UNCONFIRMED')
+    this.cleanup = null
+    if (cleanup.changed) { try { (changed ?? cleanup.changed)() } catch { /* Edge reconnect/Refresh recovers the projection. */ } }
+  }
+
+  private async directory(): Promise<string> {
+    await this.io.mkdir(this.root, { recursive: true, mode: 0o700 })
+    const stat = await this.io.lstat(this.root, { bigint: true })
+    if (!stat.isDirectory() || stat.isSymbolicLink() || (process.getuid && stat.uid !== BigInt(process.getuid()))) {
+      throw new VaultStoreError('STORE_UNAVAILABLE')
+    }
+    await this.io.chmod(this.root, 0o700)
+    return fileIdentity(stat)
+  }
+
+  private async read(name: string): Promise<{ document: Document; version: string | null }> {
+    let handle: FileHandle
+    try { handle = await this.io.open(join(this.root, name), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)) }
+    catch (error) { if (missing(error)) return { document: {}, version: null }; throw error }
+    try {
+      const before = await handle.stat({ bigint: true })
+      privateFile(before)
+      // One extra byte detects growth after fstat without ever reading an unbounded file.
+      const buffer = Buffer.alloc(Number(before.size) + 1)
+      let bytes = 0
+      while (bytes < buffer.length) {
+        const part = await handle.read(buffer, bytes, buffer.length - bytes, bytes)
+        if (!part.bytesRead) break
+        bytes += part.bytesRead
+      }
+      if (bytes > MAX_BYTES || identity(before) !== identity(await handle.stat({ bigint: true }))) throw new VaultStoreError('STORE_CHANGED')
+      const document: unknown = JSON.parse(buffer.toString('utf8', 0, bytes))
+      if (!document || typeof document !== 'object' || Array.isArray(document)) throw new VaultStoreError('STORE_UNAVAILABLE')
+      return { document: document as Document, version: identity(before) }
+    } finally { await handle.close() }
+  }
+
+  /** Merge after the old-format lock is acquired; never overwrite a renewal made while HTTP was pending. */
+  async merge(theirs: Snapshot, current: () => void, changed: () => void = () => {}): Promise<Snapshot> {
+    if (this.busy) throw new VaultStoreError('STORE_BUSY')
+    this.busy = true
+    const lock = join(this.root, '.lock')
+    const temporary = new Map<string, string | null>()
+    let owned: string | null | undefined
+    let published = false
+    let attempted = false
+    let projectionChanged = false
+    let directory = '', directoryHandle: FileHandle | null = null
+    try {
+      this.reconcile(changed)
+      current()
+      directory = await this.directory()
+      current()
+      const expires = performance.now() + LOCK_MS
+      for (;;) {
+        current()
+        try {
+          const handle = await this.io.open(lock, 'wx', 0o600)
+          owned = null
+          try { const stat = await handle.stat({ bigint: true }); owned = fileIdentity(stat) }
+          finally { await handle.close() }
+          break
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+          try {
+            const stat = await this.io.lstat(lock, { bigint: true })
+            if (Date.now() - Number(stat.mtimeMs) > STALE_LOCK_MS) {
+              // Compare immediately before removal; never remove a replacement lock observed during the await.
+              if (identity(this.io.statNow(lock)) === identity(stat)) this.io.unlink(lock)
+              continue
+            }
+          } catch (error) { if (!missing(error)) throw error }
+          if (performance.now() >= expires) throw new VaultStoreError('STORE_BUSY')
+          await this.io.wait(20)
+        }
+      }
+      current()
+      const documents = new Map<string, Document>(), versions = new Map<string, string | null>()
+      for (const name of FILES) {
+        const read = await this.read(name)
+        current(); documents.set(name, read.document); versions.set(name, read.version)
+      }
+      const mine = snapshot(documents), merged = merge(mine, theirs)
+      // Pin the exact directory before publication; reopening the pathname afterward could fsync a replacement.
+      directoryHandle = await this.pinDirectory(directory)
+      current()
+      if (fingerprint(mine) === fingerprint(merged)) {
+        if (this.needsDurability) await this.durable(directoryHandle)
+        return merged
+      }
+      const codes = (value: Snapshot) => Object.entries(value.connections).filter(([, entry]) => transport(entry.token) !== 'none').map(([code]) => code).sort().join('|')
+      projectionChanged = codes(mine) !== codes(merged)
+      const tokens = { ...documents.get('tokens.json')! }
+      const clients: Document = Object.assign(Object.create(null), documents.get('clients.json')!)
+      for (const code of Object.keys(tokens)) if (CODE.test(code)) delete tokens[code]
+      for (const [code, entry] of Object.entries(merged.connections)) {
+        tokens[code] = entry.token
+        if (entry.client && entry.token.issuer) clients[entry.token.issuer] = entry.client
+      }
+      const replacements: Document[] = [merged.removed, clients, tokens]
+      const prepared: Array<{ from: string; to: string }> = []
+      for (let i = 0; i < FILES.length; i++) {
+        const name = FILES[i], document = replacements[i]
+        if (JSON.stringify(documents.get(name)) === JSON.stringify(document)) continue
+        const contents = JSON.stringify(document, null, 2) + '\n'
+        if (Buffer.byteLength(contents) > MAX_BYTES) throw new VaultStoreError('STORE_UNAVAILABLE')
+        const file = join(this.root, `.incoming-${randomUUID()}`)
+        const handle = await this.io.open(file, 'wx', 0o600)
+        temporary.set(file, null)
+        try {
+          const stat = await handle.stat({ bigint: true })
+          privateFile(stat)
+          temporary.set(file, fileIdentity(stat))
+          current(); await handle.writeFile(contents); current(); await handle.sync(); current()
+        }
+        finally { await handle.close() }
+        current(); prepared.push({ from: file, to: join(this.root, name) })
+      }
+      // Only bounded metadata probes and <=3 renames are synchronous. No content read, write or fsync here.
+      current()
+      const lockStat = this.io.statNow(lock), dirStat = this.io.statNow(this.root)
+      privateFile(lockStat)
+      if (fileIdentity(lockStat) !== owned || fileIdentity(dirStat) !== directory
+        || !dirStat.isDirectory() || dirStat.isSymbolicLink()
+        || (process.getuid && dirStat.uid !== BigInt(process.getuid()))
+        || (process.platform !== 'win32' && (dirStat.mode & 0o077n) !== 0n)) throw new VaultStoreError('STORE_CHANGED')
+      for (const name of FILES) {
+        let version: string | null = null
+        try { version = identity(this.io.statNow(join(this.root, name))) } catch (error) { if (!missing(error)) throw error }
+        if (version !== versions.get(name)) throw new VaultStoreError('STORE_CHANGED')
+      }
+      current()
+      for (const file of prepared) {
+        attempted = true; this.needsDurability = true
+        this.io.rename(file.from, file.to); published = true
+      }
+      // Publication already happened under the checked generation. Durability may settle after invalidation.
+      await this.durable(directoryHandle)
+      return merged
+    } catch (error) {
+      if (attempted) throw new VaultStoreError('STORE_WRITE_UNCONFIRMED')
+      throw error instanceof VaultStoreError ? error : new VaultStoreError('STORE_UNAVAILABLE')
+    } finally {
+      // Every async OS operation has settled before this bounded, identity-checked namespace cleanup.
+      // A failure remains owned and blocks another mutation; it cannot silently accumulate secret files.
+      let closeFailed = false
+      try { await directoryHandle?.close() } catch { closeFailed = true }
+      try {
+        if (temporary.size || owned !== undefined) {
+          this.cleanup = { directory, files: temporary, ...(owned !== undefined ? { lock: { file: lock, identity: owned } } : {}),
+            ...(published && projectionChanged ? { changed } : {}) }
+          this.reconcile()
+        }
+        if (closeFailed) throw new VaultStoreError(published ? 'STORE_WRITE_UNCONFIRMED' : 'STORE_UNAVAILABLE')
+      } finally { this.busy = false }
+    }
+  }
+}

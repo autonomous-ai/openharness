@@ -433,27 +433,19 @@ describe('the gateway in its own process, as the core sees it', () => {
     }
   })
 
-  it('asks the gateway to seal and open the account\'s connections, and says none is sealed while it cannot answer', async () => {
-    let answer: Record<string, unknown> = { envelope: { v: 1 } }
+  it('requests metadata-only connector sync and refuses unavailable or malformed replies', async () => {
+    let answer: Record<string, unknown> = { shared: true, plaintext: 'synthetic-not-to-core' }
     const { link, call } = setup({ call: async () => answer })
-    expect(await link.ops.connectorVault.seal('{}')).toEqual({ v: 1 })
-    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.connectorVault, { op: 'seal', plaintext: '{}' }, LANE_WAIT_MS)
-    answer = { error: 'the device key log is frozen' }
-    await expect(link.ops.connectorVault.seal('{}')).rejects.toThrow('frozen')
-    for (const error of ['SERVICE_UNAVAILABLE', undefined]) {
-      answer = error ? { error } : {}
-      await expect(link.ops.connectorVault.seal('{}')).rejects.toThrow(/not running/)
+    expect(await link.ops.connectorSync(true)).toEqual({ shared: true })
+    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.connectorVault, { op: 'sync', refresh: true }, 16_000)
+    answer = { shared: false }
+    expect(await link.ops.connectorSync(false)).toEqual({ shared: false })
+    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.connectorVault, { op: 'sync', refresh: false }, 16_000)
+    for (const invalid of [{ error: 'synthetic-private-error' }, {}, { shared: 'yes' }, { shared: true, error: 'frozen' }]) {
+      answer = invalid
+      await expect(link.ops.connectorSync(true)).rejects.toThrow('CONNECTORS_SYNC_UNAVAILABLE')
     }
-    answer = { plaintext: '{"v":1}', complete: true }
-    expect(await link.ops.connectorVault.open({ v: 1 })).toEqual({ plaintext: '{"v":1}', complete: true })
-    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.connectorVault, { op: 'open', envelope: { v: 1 } }, LANE_WAIT_MS)
-    answer = { plaintext: 'x' }
-    expect(await link.ops.connectorVault.open({})).toEqual({ plaintext: 'x', complete: false })
-    answer = {}
-    expect(await link.ops.connectorVault.open({})).toBeNull()
-    // Sealed by or for no machine of the account: said as such, so the connectors service writes over it.
-    answer = { stranded: true }
-    expect(await link.ops.connectorVault.open({})).toEqual({ stranded: true })
+    expect('connectorVault' in link.ops).toBe(false)
   })
 
   it('asks the gateway to hold what sharing trusts, and says it could not while the gateway is not running', async () => {

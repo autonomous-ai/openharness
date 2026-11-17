@@ -66,7 +66,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       observerKey: { publicKey: vi.fn(async () => 'cHVi'), signWelcome: vi.fn(async () => 'c2ln') },
       tabKey: TAB_KEY_OFF,
       tabRelay: TAB_RELAY_OFF,
-      connectorVault: { seal: vi.fn(async () => ({})), open: vi.fn(async () => null) },
+      connectorSync: vi.fn(async () => ({ shared: true })),
       onNotice: vi.fn(() => () => {}),
       signedIn: vi.fn(() => true),
       environment: vi.fn(() => 'prod'),
