@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import { createStoreLink } from './storeLink.js'
+import { dshThrough } from './agents/dshThrough.js'
 
 describe('the Store in its own process, as the core hears it', () => {
   afterEach(() => vi.useRealTimers())
@@ -89,8 +90,10 @@ describe('checked Store launch replies', () => {
     for (const bad of [...common, { ok: true }, { ok: true, launch: { env: [] } },
       { ok: true, launch: { env: { KEY: 3 }, args: [] } }, { ok: true, launch: { env: {}, args: [1] } }]) {
       call.mockResolvedValue(bad)
-      await expect(link.port.dshLaunch(request)).rejects.toThrow('the store service is unavailable')
+      expect(await dshThrough({ store: () => link.port, nameOf: () => undefined, account: () => ({}) }).launch(request))
+        .toMatchObject({ ok: false, error: 'DSH_UNAVAILABLE' })
     }
-    await expect(createStoreLink(fakeCore()).port.dshLaunch(request)).rejects.toThrow('the store service is unavailable')
+    expect(await dshThrough({ store: () => createStoreLink(fakeCore()).port, nameOf: () => undefined, account: () => ({}) }).launch(request))
+      .toMatchObject({ ok: false, error: 'DSH_UNAVAILABLE' })
   })
 })

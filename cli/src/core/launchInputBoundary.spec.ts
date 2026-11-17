@@ -18,21 +18,55 @@ import { prepareHarnessLaunch } from '../dsh/runtime.js'
 import type { InstalledDsh } from '../dsh/installed.js'
 import { PROCESS_ENGINES } from '../engines/types.js'
 import { createGuestCreate } from './agents/guestCreate.js'
-import { GUEST_LAUNCH_UNAVAILABLE } from './api.js'
+import { GUEST_LAUNCH_UNAVAILABLE, type GuestLaunch, type GuestLaunchInput } from './api.js'
 
 const override = { networkId: 'test-grid', networkName: 'Test', baseUrl: 'https://fixture.invalid/relay/v1', apiKey: 'synthetic-key', model: 'test-model' }
 const request = (engine: AgentEngine = 'claude'): GridLaunchRequest => ({ engine, override, machine: { hermesSystemManaged: false, grokHome: '/private/fixture/grok' } })
 const built = (input: GridLaunchRequest) => answerGridLaunch(input, value => ({ override: value }))
-const models = (answer: unknown) => createModelsLink(fakeCore(), async () => answer as Record<string, unknown>, () => true).port
+const modelsPort = (answer: unknown) => createModelsLink(fakeCore(), async () => answer as Record<string, unknown>, () => true).port
+const models = (answer: unknown) => ({ gridLaunch: gridLaunchThrough(() => modelsPort(answer)) })
 const storeRequest = { dsh: 'test/draw', workspace: '/private/fixture/work', engine: 'claude' as const, key: 'session', account: {} }
 const storeReply = (env: Record<string, string> = {}, args: string[] = []) => ({ ok: true as const, launch: { env: { HARNESS_DSH: 'test/draw', ...env } as Record<string, string>, args } })
 const store = (answer: unknown) => createStoreLink(fakeCore(), async () => answer as Record<string, unknown>).port
+const storeLaunch = (answer: unknown) => dshThrough({ store: () => store(answer), nameOf: () => undefined, account: () => ({}) }).launch(storeRequest)
 const guestRequest = { email: 'test@fixture.invalid', engine: 'claude', bypassPermission: false, permissionFlags: ['--permission-mode', 'auto'], prompt: '-literal prompt' }
 const guestReply = (platform: NodeJS.Platform = process.platform) => {
   const workspace = guestWorkspaceFor(guestRequest.email, platform)
   const account = { user: guestUserFor(guestRequest.email), home: join(workspace, '..'), workspace }
   return { ok: true as const, workspace, ...guestPaneCommand({ ...guestRequest, engine: 'claude', account, platform }),
     ...(platform === 'win32' ? { guestHostUser: account.user } : {}) }
+}
+
+async function guestCreate(answer: unknown, input: GuestLaunchInput = guestRequest, mode: 'inline' | 'linked' = 'linked') {
+  // A real caller reaches this backend only after admission. The fake fails before opening any pane.
+  const open = vi.fn(async (_input: unknown) => ({ state: 'failed' as const, dispatch: 'not_started' as const, reason: 'fixture stopped before pane open' }))
+  const backend = { create: open, kill: vi.fn() }
+  const tmuxBackend = vi.fn(() => backend), guestBackend = vi.fn(() => backend as never)
+  const ensureEngine = vi.fn(async () => ({ ok: true as const })), register = vi.fn()
+  const launch = mode === 'inline' ? async () => answer
+    : createSharedMachinesLink(async () => answer as Record<string, unknown>).guestLaunch
+  const create = createGuestCreate({ launch, tmuxBackend, guestBackend, ensureEngine,
+    resolveEngine: (_engine, argv) => [...argv],
+    registry: { openPendingAgent: register }, announceSession: vi.fn(), watchNewPane: vi.fn() })
+  const result = await create({ engine: input.engine, permissionMode: 'auto', prompt: input.prompt, cwd: input.cwd }, input.email)
+  return { result, open, tmuxBackend, guestBackend, ensureEngine, register }
+}
+
+async function guestAdmitted(answer: Extract<GuestLaunch, { ok: true }>, input: GuestLaunchInput = guestRequest) {
+  for (const mode of ['inline', 'linked'] as const) {
+    const run = await guestCreate(answer, input, mode)
+    expect(run.open).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ command: answer.argv, env: answer.env, cwd: answer.workspace }))
+    if (answer.guestHostUser) expect(run.guestBackend).toHaveBeenCalledExactlyOnceWith(answer.guestHostUser)
+    else expect(run.guestBackend).not.toHaveBeenCalled()
+  }
+}
+
+async function guestRefused(answer: unknown, input: GuestLaunchInput = guestRequest) {
+  for (const mode of ['inline', 'linked'] as const) {
+    const run = await guestCreate(answer, input, mode)
+    expect(run.result).toEqual(GUEST_LAUNCH_UNAVAILABLE)
+    for (const effect of [run.open, run.tmuxBackend, run.guestBackend, run.ensureEngine, run.register]) expect(effect).not.toHaveBeenCalled()
+  }
 }
 
 const roots: string[] = []
@@ -45,7 +79,6 @@ describe('Models launch authority', () => {
         machine: { ...request(engine).machine, opencodeMajor: modern ? 2 : 1, hermesSystemManaged: modern } }
       const answer = built(input)
       expect(await models(answer).gridLaunch(input)).toEqual(answer)
-      expect(await gridLaunchThrough(() => models(answer))(input)).toEqual(answer)
     }
   })
 
@@ -56,7 +89,7 @@ describe('Models launch authority', () => {
       if (!decoded) throw Error('fixture request failed')
       return { ...built(decoded) }
     }, () => true).port
-    expect(await port.gridLaunch(input)).toEqual(built(input))
+    expect(await gridLaunchThrough(() => port)(input)).toEqual(built(input))
   })
 
   it.each([null, 7, 'x\0y', 'x'.repeat(65537)])('refuses a malformed native home in the service request parser', grokHome => {
@@ -68,7 +101,7 @@ describe('Models launch authority', () => {
     const atLimit = { ...request('grok'), machine: { hermesSystemManaged: false, grokHome: '/' + 'x'.repeat(65526) } }
     expect(await models(built(atLimit)).gridLaunch(atLimit)).toEqual(built(atLimit))
     const tooLong = { ...atLimit, machine: { ...atLimit.machine, grokHome: atLimit.machine.grokHome + 'x' } }
-    await expect(models(built(tooLong)).gridLaunch(tooLong)).rejects.toThrow('the models service is unavailable')
+    await expect(models(built(tooLong)).gridLaunch(tooLong)).resolves.toMatchObject({ ok: false, error: 'GRID_UNAVAILABLE', unavailable: 'models' })
   })
 
   it.each([
@@ -84,7 +117,7 @@ describe('Models launch authority', () => {
     const answer = built(request())
     if (!answer.ok) throw Error('fixture launch failed')
     change(answer.launch)
-    await expect(models(answer).gridLaunch(request())).rejects.toThrow('the models service is unavailable')
+    await expect(models(answer).gridLaunch(request())).resolves.toMatchObject({ ok: false, error: 'GRID_UNAVAILABLE', unavailable: 'models' })
     const held = await gridLaunchThrough(() => ({ gridLaunch: async () => answer }))(request())
     expect(held).toMatchObject({ ok: false, error: 'GRID_UNAVAILABLE', unavailable: 'models' })
   })
@@ -94,7 +127,7 @@ describe('Models launch authority', () => {
     const input = request('grok'), answer = built(input)
     if (!answer.ok) throw Error('fixture launch failed')
     answer.launch.configDir!.files[0]!.name = name
-    await expect(models(answer).gridLaunch(input)).rejects.toThrow('the models service is unavailable')
+    await expect(models(answer).gridLaunch(input)).resolves.toMatchObject({ ok: false, error: 'GRID_UNAVAILABLE', unavailable: 'models' })
   })
 
   it('refuses a borrowed directory outside the native home captured in the request', async () => {
@@ -102,7 +135,7 @@ describe('Models launch authority', () => {
     const input = request('grok'), answer = built(input)
     if (!answer.ok) throw Error('fixture launch failed')
     answer.launch.configDir!.links![0]!.target = '/outside/sessions'
-    await expect(models(answer).gridLaunch(input)).rejects.toThrow('the models service is unavailable')
+    await expect(models(answer).gridLaunch(input)).resolves.toMatchObject({ ok: false, error: 'GRID_UNAVAILABLE', unavailable: 'models' })
   })
 
   it('refuses a Codex configuration key the contribution does not own', async () => {
@@ -110,7 +143,7 @@ describe('Models launch authority', () => {
     const input = request('codex'), answer = built(input)
     if (!answer.ok) throw Error('fixture launch failed')
     answer.launch.args.push('-c', 'notify=["outside"]')
-    await expect(models(answer).gridLaunch(input)).rejects.toThrow('the models service is unavailable')
+    await expect(models(answer).gridLaunch(input)).resolves.toMatchObject({ ok: false, error: 'GRID_UNAVAILABLE', unavailable: 'models' })
   })
 
   it('retains request identity while allowing the saved API producer to refresh its endpoint and key', async () => {
@@ -120,7 +153,7 @@ describe('Models launch authority', () => {
     if (!refreshed.ok) throw Error('fixture launch failed')
     refreshed.override.networkId = 'api:another'
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    await expect(models(refreshed).gridLaunch(input)).rejects.toThrow('the models service is unavailable')
+    await expect(models(refreshed).gridLaunch(input)).resolves.toMatchObject({ ok: false, error: 'API_UNAVAILABLE', unavailable: 'models' })
   })
 
   it('keeps the pre-await native directory when an inline producer changes the request object', async () => {
@@ -144,14 +177,14 @@ describe('Models launch authority', () => {
       (copy: typeof answer) => { copy.launch.args = Array.from({ length: 15 }, () => ['-m', 'x'.repeat(65536)]).flat(); copy.launch.configDir!.files[0]!.content = 'x'.repeat(65536) },
     ]) {
       const copy = structuredClone(answer); change(copy)
-      await expect(models(copy).gridLaunch(input)).rejects.toThrow('the models service is unavailable')
+      await expect(models(copy).gridLaunch(input)).resolves.toMatchObject({ ok: false, error: 'GRID_UNAVAILABLE', unavailable: 'models' })
     }
     const largeInput = { ...request(), override: { ...override, apiKey: 'x'.repeat(65536) } }
     const large = built(largeInput)
     if (!large.ok) throw Error('fixture launch failed')
     large.launch.env = {}
     large.launch.args = [...Array.from({ length: 15 }, () => ['--append-system-prompt', 'x'.repeat(65536)]).flat(), '--append-system-prompt', 'x'.repeat(50000)]
-    await expect(models(large).gridLaunch(largeInput)).rejects.toThrow('the models service is unavailable')
+    await expect(models(large).gridLaunch(largeInput)).resolves.toMatchObject({ ok: false, error: 'GRID_UNAVAILABLE', unavailable: 'models' })
     const empty = await gridLaunchThrough(() => ({ gridLaunch: async () => null as never }))(request())
     expect(empty).toMatchObject({ ok: false, error: 'GRID_UNAVAILABLE' })
     const defaultHome = { ...request('grok'), machine: { hermesSystemManaged: false } }
@@ -172,7 +205,7 @@ describe('Models launch authority', () => {
 describe('Store contribution bounds preserve the installed package contract', () => {
   it('keeps manifest-defined variables and arguments, including the catalog’s Codex hook and Python path use', async () => {
     const answer = storeReply({ PYTHONPATH: '/package/toolchain', PACKAGE_CUSTOM: 'value' }, ['-c', 'hooks.Stop=[{hooks=[{type="command",command="tool"}]}]'])
-    expect(await store(answer).dshLaunch(storeRequest)).toEqual(answer)
+    expect(await storeLaunch(answer)).toEqual(answer)
   })
 
   it('keeps every real Store adapter, canonical workspace and former package snapshot identity', async () => {
@@ -222,7 +255,7 @@ describe('Store contribution bounds preserve the installed package contract', ()
   ] as const)('refuses %s through service and inline callers', async (_name, make) => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const answer = make()
-    await expect(store(answer).dshLaunch(storeRequest)).rejects.toThrow('the store service is unavailable')
+    await expect(storeLaunch(answer)).resolves.toMatchObject({ ok: false, error: 'DSH_UNAVAILABLE' })
     const through = dshThrough({ store: () => ({ dshDescribe: async () => ({ ok: false, error: 'unused', detail: '' }), dshLaunch: async () => answer, dshMaterialize: async () => ({ ok: true, created: [], kept: [], warnings: [] }) }), nameOf: () => 'Drawing', account: () => ({}) })
     expect(await through.launch(storeRequest)).toMatchObject({ ok: false, error: 'DSH_UNAVAILABLE' })
   })
@@ -231,9 +264,9 @@ describe('Store contribution bounds preserve the installed package contract', ()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const remaining = 1024 * 1024 - Buffer.byteLength('HARNESS_DSHtest/draw')
     const answer = storeReply({}, [...Array(15).fill('x'.repeat(65536)), 'x'.repeat(remaining - 15 * 65536)])
-    expect(await store(answer).dshLaunch(storeRequest)).toEqual(answer)
+    expect(await storeLaunch(answer)).toEqual(answer)
     answer.launch.args[15] += 'x'
-    await expect(store(answer).dshLaunch(storeRequest)).rejects.toThrow('the store service is unavailable')
+    await expect(storeLaunch(answer)).resolves.toMatchObject({ ok: false, error: 'DSH_UNAVAILABLE' })
   })
 
   it('accepts the count and individual string boundaries, then detaches the reply', async () => {
@@ -241,7 +274,7 @@ describe('Store contribution bounds preserve the installed package contract', ()
     const answer = storeReply(env, Array(1024).fill('x'))
     answer.launch.env.PACKAGE_0 = 'x'.repeat(65536)
     const expected = structuredClone(answer)
-    const admitted = await store(answer).dshLaunch(storeRequest)
+    const admitted = await storeLaunch(answer)
     answer.launch.env.PACKAGE_0 = 'changed'; answer.launch.args[0] = 'changed'
     expect(admitted).toEqual(expected)
   })
@@ -250,26 +283,26 @@ describe('Store contribution bounds preserve the installed package contract', ()
 describe('Guest launch contribution authority', () => {
   it('keeps the exact requested guest, permission and literal prompt on the real producer', async () => {
     const answer = guestReply()
-    expect(await createSharedMachinesLink(async () => answer).guestLaunch(guestRequest)).toEqual(answer)
+    await guestAdmitted(answer)
   })
 
   it('keeps the Windows guest host and the default when a requested folder is not shared', async () => {
     const answer = guestReply('win32')
-    expect(await createSharedMachinesLink(async () => answer).guestLaunch(guestRequest)).toEqual(answer)
+    await guestAdmitted(answer)
     const fallback = guestReply()
-    expect(await createSharedMachinesLink(async () => fallback).guestLaunch({ ...guestRequest, cwd: '/not-shared' })).toEqual(fallback)
+    await guestAdmitted(fallback, { ...guestRequest, cwd: '/not-shared' })
   })
 
   it('accepts only the Windows request folder on the derived guest host, with no inherited environment', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const input = { ...guestRequest, cwd: 'C:\\shared\\project' }
     const answer = { ...guestReply('win32'), workspace: input.cwd }
-    expect(await createSharedMachinesLink(async () => answer).guestLaunch(input)).toEqual(answer)
-    expect(await createSharedMachinesLink(async () => ({ ...answer, env: { NODE_OPTIONS: 'outside' } })).guestLaunch(input)).toEqual(GUEST_LAUNCH_UNAVAILABLE)
-    expect(await createSharedMachinesLink(async () => null as never).guestLaunch(input)).toEqual(GUEST_LAUNCH_UNAVAILABLE)
+    await guestAdmitted(answer, input)
+    await guestRefused({ ...answer, env: { NODE_OPTIONS: 'outside' } }, input)
+    await guestRefused(null, input)
     const posix = guestReply('darwin')
     vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
-    expect(await createSharedMachinesLink(async () => posix).guestLaunch(input)).toEqual(GUEST_LAUNCH_UNAVAILABLE)
+    await guestRefused(posix, input)
   })
 
   it('refuses an inline substituted command before selecting a backend or installing an engine', async () => {
@@ -292,6 +325,6 @@ describe('Guest launch contribution authority', () => {
   ] as const)('refuses a changed %s before returning a launch', async (_name, change) => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const answer = guestReply(); change(answer)
-    expect(await createSharedMachinesLink(async () => answer).guestLaunch(guestRequest)).toEqual(GUEST_LAUNCH_UNAVAILABLE)
+    await guestRefused(answer)
   })
 })

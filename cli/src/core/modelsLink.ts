@@ -178,12 +178,7 @@ export function createModelsLink(core: Pick<CoreApi, 'agents' | 'account' | 'cli
       if (!assignments) throw new ServiceUnavailableError('models')
       return assignments
     },
-    gridLaunch: async (request) => {
-      const captured = { ...request, override: { ...request.override }, machine: { ...request.machine } }
-      const answer = gridLaunchAnswerIn(await ask('gridLaunch', { ...request }), captured)
-      if (!answer) { console.warn('[models] LAUNCH_CONTRIBUTION_REFUSED'); throw new ServiceUnavailableError('models') }
-      return answer
-    },
+    gridLaunch: (request) => ask('gridLaunch', { ...request }),
     apiTarget: async (request) => {
       const answer = await ask('apiTarget', { ...request })
       const target = launchIn(answer.target)

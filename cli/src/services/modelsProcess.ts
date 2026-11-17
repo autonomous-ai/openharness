@@ -184,7 +184,8 @@ export function runModelsService(options: ModelsServiceOptions): ServiceProcess 
     },
     gridLaunch: async (payload) => {
       const request = gridLaunchRequestIn(payload)
-      return request ? { ...await models.gridLaunch(request) } : { ok: false, error: 'INVALID_GRID', detail: 'This launch could not be read.' }
+      const answer = request ? await models.gridLaunch(request) : { ok: false, error: 'INVALID_GRID', detail: 'This launch could not be read.' }
+      return isRecord(answer) ? answer : {}
     },
     apiTarget: async (payload) => ({ ...await models.apiTarget({ connectionId: text(payload.connectionId), model: text(payload.model) }) }),
     privateGridName: async () => ({ name: await models.privateGridName() }),

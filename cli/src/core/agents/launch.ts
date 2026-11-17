@@ -30,7 +30,7 @@ import type { registry, RegisteredSession } from '../../lib/registry.js'
 export function gridLaunchThrough(models: () => Pick<ModelsPort, 'gridLaunch'>) {
   return async (request: GridLaunchRequest): Promise<GridLaunchAnswer> => {
     const captured = { ...request, override: { ...request.override }, machine: { ...request.machine } }
-    let answer: GridLaunchAnswer
+    let answer: unknown
     try { answer = await models().gridLaunch(request) } catch { return gridUnavailable(request.engine, request.override) }
     const checked = gridLaunchAnswerIn(answer, captured)
     if (!checked) console.warn('[models] LAUNCH_CONTRIBUTION_REFUSED')

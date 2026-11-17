@@ -166,3 +166,52 @@ The service now preserves that bounded request field; the borrowed target itself
 also observes the text bound. Against `1c5b2c2497`, the actual request/reply wire
 case, malformed native-home cases and just-over-limit target case failed first
 (6 failed / 47 passed, exit 1; `/tmp/harness-launch-boundary-wire-red.log`).
+
+## One mandatory caller check
+
+The fixed actual-caller comparison of `be06331d6c` and `5f4ab6c5db` accepted 56
+samples. Valid Models, Store and guest contributions added paired median CPU of
+25.0, 18.1 and 13.5 microseconds respectively. The separate diagnostic profiles
+showed the full validators on both the process-link and actual-caller stacks;
+those profiles are not timing acceptance runs.
+
+The correction makes only these three core port replies `unknown`. Their process
+links transport the reply; `gridLaunchThrough`, `dshThrough` and `createGuestCreate`
+remain the mandatory admission points for both subprocess and inline modes. All
+caller request/identity snapshots, bounds, policy checks, copied accepted data,
+failure states and content-free refusal logs remain before any launch effect.
+Store description/materialization checks and captured session identity are unchanged.
+There is no trust marker, cache or second admission path.
+
+The Store's local producer retains its concrete return type for its own readiness
+logic. Models/shared-machines process handlers require only the object envelope
+their response protocol carries; a non-object result is sent as an empty envelope
+and refused at the caller. This adds no wire or disk schema, migration, dependency,
+retained state, timer, retry, access change or platform-specific behavior.
+
+Validation moves link-only refusal assertions to the caller or existing pure guard,
+retaining every malformed, forged, oversized and mutation case. Guest cases reach
+the real creator in both modes and prove refusal before backend/install/pane effects.
+The launch goldens' test composition also sends raw replies to the caller. The
+selected types, affected coverage, full core gate, architecture and native checks
+remain required. The same fixed cost workload must run again on final source in a
+separate quiet window; no cost improvement is claimed before that measurement.
+
+Correction validation on integrated Store/API base `30837ce3519a368b5c5082e8fb64cb0b6d987b5f`
+used pinned Node 24.22.2 on macOS and at most two Vitest workers. The first affected
+run passed 294 of 295 tests in 15 files. The remaining migrated assertion incorrectly
+expected `GRID_UNAVAILABLE` for a saved API; it now expects the unchanged caller's
+`API_UNAVAILABLE`. Typechecking also caught a missing `dispatch: 'not_started'` in
+the new fake backend. These fixes changed tests only; typechecking then passed.
+The corrected boundary suite passed in the selected golden/bootstrap run.
+
+That run passed 70 of 71 tests in five files. Its one failure is recorded rather
+than waived: the Store extraction's unchanged `dshDescribe` path says a missing
+fork package "is not installed", while the existing golden expects "is no longer
+installed". The correction changes neither that producer text nor fork handling.
+Logs: `/tmp/harness-launch-validation-correction-affected-1.log`,
+`/tmp/harness-launch-validation-correction-types-2.log` and
+`/tmp/harness-launch-validation-correction-goldens-2.log`. Root owns the integrated
+core gate, this Store compatibility follow-up and repeated fixed cost acceptance.
+The guest bootstrap uses a fixture helper, not a configured OS guest; real guest
+parity and native Windows/Linux execution are not claimed by these checks.

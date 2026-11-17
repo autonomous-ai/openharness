@@ -12,7 +12,7 @@
  * - legacy installed/prepared notices. Package admission now asks this process for bounded facts;
  *   only this process reads the installed index, and partial preparation is never announced ready.
  */
-import type { CoreApi, ServiceRequest, ServiceRequests, StorePort } from '../core/api.js'
+import type { CoreApi, ServiceRequest, ServiceRequests } from '../core/api.js'
 import type { DshMaterializeRequest, DshLaunchRequest } from '../dsh/launchWire.js'
 import { DSH_ID_RE } from '../dsh/id.js'
 import { PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
@@ -30,7 +30,7 @@ export interface StoreServiceOptions {
   run?: typeof runServiceProcess
   /** Swapped in tests for a Store that clones and installs nothing. */
   start?: (core: CoreApi) => ServiceRequests
-  launch?: StorePort
+  launch?: ReturnType<typeof storeLaunchPort>
   /** The fixed bundled preparation, replaced by controlled outcomes in process tests. */
   prepare?: StorePreparation
 }

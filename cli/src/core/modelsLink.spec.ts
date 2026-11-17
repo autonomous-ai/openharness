@@ -4,6 +4,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { createModelsLink, glancesIn } from './modelsLink.js'
 import { ServiceUnavailableError } from './serviceHost.js'
+import { gridLaunchThrough } from './agents/launch.js'
 import type { ServiceFrame } from './serviceLinks.js'
 
 const RELAY = 'https://fixture.invalid/g/net-own/relay/v1'
@@ -109,7 +110,7 @@ describe('models in its own process, as the core reaches it', () => {
       await expect(setup({ gridAssignments: {} }).port.gridAssignments(processes)).rejects.toBeInstanceOf(ServiceUnavailableError)
     })
 
-    it("a grid or saved-API launch, as models built it and checked as far as the core hands it on; unavailable when it is not one", async () => {
+    it("transports grid or saved-API replies; the launch caller refuses unusable contributions", async () => {
       const request = { engine: 'claude' as const, override: LAUNCH, machine: { hermesSystemManaged: false }, refresh: true }
       const launch = { env: { ANTHROPIC_MODEL: 'Small-Q4' }, args: ['--mcp-config', '{}'], webSearch: 'on' }
       const built = { ok: true, launch, override: LAUNCH }
@@ -138,7 +139,8 @@ describe('models in its own process, as the core reaches it', () => {
         { ...built, launch: { ...launch, configDir: { files: [] } } }, { ...built, launch: { ...launch, configDir: { ...files, arg: '-e' } } },
         { ...built, launch: { ...launch, configDir: { arg: 7, files: [] } } },
       ]
-      for (const answer of unusable) await expect(setup({ gridLaunch: answer }).port.gridLaunch(request), JSON.stringify(answer)).rejects.toBeInstanceOf(ServiceUnavailableError)
+      for (const answer of unusable) expect(await gridLaunchThrough(() => setup({ gridLaunch: answer }).port)(request), JSON.stringify(answer))
+        .toMatchObject({ ok: false, error: 'GRID_UNAVAILABLE', unavailable: 'models' })
       await expect(setup().port.gridLaunch(request)).rejects.toBeInstanceOf(ServiceUnavailableError)
     })
 

@@ -82,11 +82,7 @@ export function createStoreLink(core: Pick<CoreApi, 'clients'>,
       if (!answer) throw new ServiceUnavailableError('store')
       return answer
     },
-    dshLaunch: async request => {
-      const answer = dshLaunchAnswerIn(await call('dshLaunch', { ...request }), request)
-      if (!answer) { console.warn('[store] LAUNCH_CONTRIBUTION_REFUSED'); throw new ServiceUnavailableError('store') }
-      return answer
-    },
+    dshLaunch: request => call('dshLaunch', { ...request }),
   }
   return {
     port,

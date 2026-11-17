@@ -24,7 +24,7 @@ import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import type { AutonomousDeviceAgent, AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'
 import type { StoreAgent } from '../lib/autonomous-device/store.js'
-import type { DshDescribeAnswer, DshDescribeRequest, DshLaunchAnswer, DshLaunchRequest, DshMaterializeAnswer, DshMaterializeRequest } from '../dsh/launchWire.js'
+import type { DshDescribeAnswer, DshDescribeRequest, DshLaunchRequest, DshMaterializeAnswer, DshMaterializeRequest } from '../dsh/launchWire.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { GridAccess } from '../lib/gridAttach.js'
 import type { createHarnessResourcesReader } from '../lib/harnessResources.js'
@@ -32,7 +32,7 @@ import type { createHarnessStorageReader } from '../lib/harnessTelemetry.js'
 import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 import { GRID_FLEET_MAX_TIMEOUT_MS } from '../lib/gridFleetProtocol.js'
-import type { GridLaunchAnswer, GridLaunchOverride, GridLaunchRequest } from '../lib/gridLaunchWire.js'
+import type { GridLaunchOverride, GridLaunchRequest } from '../lib/gridLaunchWire.js'
 import type { NewAgentModel } from '../lib/newAgentModel.js'
 import type { LastTurnText, LiveEvent } from '../engines/kit/events.js'
 import type { SessionRecaps } from '../lib/recapReads.js'
@@ -745,7 +745,8 @@ export type GuestLaunch =
 
 /** The core's call into shared machines: a guest's launch (docs/plans/2026-10-19-guest-machine-sharing-plan.md). */
 export interface SharedMachinesCorePort {
-  guestLaunch(input: GuestLaunchInput): Promise<GuestLaunch>
+  /** Untrusted contribution; createGuestCreate checks it against the captured guest request before any effect. */
+  guestLaunch(input: GuestLaunchInput): Promise<unknown>
   /** The service stopping: its reads stop. */
   stop(): Promise<void> | void
 }
@@ -1225,7 +1226,8 @@ export interface ModelsPort {
    * `refresh`. An engine that cannot be pointed there is answered with the reason. The core builds no grid launch
    * itself (docs/design/2026-10-08-launch-port.md).
    */
-  gridLaunch(request: GridLaunchRequest): Promise<GridLaunchAnswer>
+  /** Untrusted contribution; gridLaunchThrough checks and detaches it in both process and inline modes. */
+  gridLaunch(request: GridLaunchRequest): Promise<unknown>
   /** Fresh process evidence, batched; core never waits for it to discover or bind a session. */
   gridAssignments(processes: readonly GridAssignmentProcess[]): Promise<GridAssignmentAnswer[]>
   /** Where an agent moved onto a saved API's model sends its inference: the key travels only into its launch. The
@@ -2139,7 +2141,8 @@ export interface WindowRelay {
 export interface StorePort {
   dshDescribe(request: DshDescribeRequest): Promise<DshDescribeAnswer>
   dshMaterialize(request: DshMaterializeRequest): Promise<DshMaterializeAnswer>
-  dshLaunch(request: DshLaunchRequest): Promise<DshLaunchAnswer>
+  /** Untrusted contribution; dshThrough checks it against captured request and session identity. */
+  dshLaunch(request: DshLaunchRequest): Promise<unknown>
 }
 
 export const STORE_FALLBACKS: PortFallbacks<StorePort> = { dshDescribe: later(FAIL), dshMaterialize: later(FAIL), dshLaunch: later(FAIL) }

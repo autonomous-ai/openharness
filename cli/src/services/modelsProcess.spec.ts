@@ -108,6 +108,10 @@ describe('models in its own process', () => {
     expect(await options.requests.gridLaunch!({ engine: 'claude', override: 'nope', machine }, asker))
       .toEqual({ ok: false, error: 'INVALID_GRID', detail: 'This launch could not be read.' })
     expect(models.port.gridLaunch).toHaveBeenCalledOnce()
+    for (const answer of [null, [], 'not a reply']) {
+      models.port.gridLaunch.mockResolvedValueOnce(answer as never)
+      expect(await options.requests.gridLaunch!({ engine: 'claude', override: LAUNCH, machine }, asker)).toEqual({})
+    }
     expect(await options.requests.gridAssignments!({ processes: [] }, asker)).toEqual({ assignments: [] })
     expect(await options.requests.gridAssignments!({ processes: 'invalid' }, asker)).toEqual({ error: 'INVALID_PROCESSES' })
     expect(await options.requests.apiTarget!({ connectionId: 'openrouter', model: 'q' }, asker)).toEqual({ target: LAUNCH, apiBase: RELAY })

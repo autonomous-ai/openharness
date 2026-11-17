@@ -9,12 +9,17 @@ import { prepareInstructionWrites } from '../scm/instructionWrites.js'
 import { dshPinnedPermissionMode } from '../dsh/manifest.js'
 import { incompatibleHarnessEngine } from '../dsh/compatibility.js'
 import { BUNDLED_HARNESSES } from '../dsh/builtinIds.js'
-import { dshUnavailable } from '../dsh/launchWire.js'
+import { dshUnavailable, type DshLaunchAnswer, type DshLaunchRequest } from '../dsh/launchWire.js'
+
+/** The producer knows what it builds; core receives it as unknown until the caller checks it. */
+interface StoreLaunchPort extends StorePort {
+  dshLaunch(request: DshLaunchRequest): Promise<DshLaunchAnswer>
+}
 
 const detail = (error: unknown) => error instanceof Error ? error.message : String(error)
 
 export function storeLaunchPort(installedDsh: typeof lookup = lookup,
-  prepare: PrepareDsh = dshPreparations(join(dshRootDir(), '.preparations')), prepared: (id?: string) => boolean = () => true): StorePort {
+  prepare: PrepareDsh = dshPreparations(join(dshRootDir(), '.preparations')), prepared: (id?: string) => boolean = () => true): StoreLaunchPort {
   const missing = (id: string) => ({ ok: false as const, error: 'DSH_NOT_INSTALLED', detail: `${id} is not installed on this machine` })
   const find = (id: string) => {
     const ready = prepared(id)

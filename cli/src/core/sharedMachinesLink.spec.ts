@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { GUEST_LAUNCH_UNAVAILABLE } from './api.js'
 import { guestPaneCommand } from '../lib/guestPaneCommand.js'
 import { guestUserFor, guestWorkspaceFor } from '../lib/guestUser.js'
-import { createSharedMachinesLink } from './sharedMachinesLink.js'
+import { createSharedMachinesLink, guestLaunchIn } from './sharedMachinesLink.js'
 
 describe('a guest\'s launch, asked of shared machines\' process', () => {
   const input = { email: 'kim@acme.io', engine: 'claude', bypassPermission: true }
@@ -28,17 +27,16 @@ describe('a guest\'s launch, asked of shared machines\' process', () => {
     expect(await createSharedMachinesLink(async () => ({ ok: false, error: 'GUEST_INVALID' })).guestLaunch(input)).toEqual({ ok: false, error: 'GUEST_INVALID' })
   })
 
-  it('passes on the guest\'s own host when the launch names one, and nothing else', async () => {
+  it('the launch guard admits only the guest\'s own host', () => {
     const answer = reply('win32')
-    expect(await createSharedMachinesLink(async () => answer).guestLaunch(input)).toEqual(answer)
+    expect(guestLaunchIn(answer, input)).toEqual(answer)
     // A name that is not a guest's is not a host this core may start a pane on.
     for (const guestHostUser of ['DELL', 'hg_x', '', 7, null]) {
-      expect(await createSharedMachinesLink(async () => ({ ...answer, guestHostUser })).guestLaunch(input), String(guestHostUser))
-        .toEqual(GUEST_LAUNCH_UNAVAILABLE)
+      expect(guestLaunchIn({ ...answer, guestHostUser }, input), String(guestHostUser)).toBeNull()
     }
   })
 
-  it('runs nothing it cannot trust the shape of: a process down, failing, or answering oddly', async () => {
+  it('the launch guard refuses a process down, failing, or answering oddly', () => {
     for (const answer of [
       { error: 'SERVICE_UNAVAILABLE' },
       { ok: true, workspace: '/g/work', argv: [], env: {} },
@@ -49,7 +47,7 @@ describe('a guest\'s launch, asked of shared machines\' process', () => {
       { ok: true, argv: ['sh'], env: {} },
       { ok: false },
     ]) {
-      expect(await createSharedMachinesLink(async () => answer as Record<string, unknown>).guestLaunch(input), JSON.stringify(answer)).toEqual(GUEST_LAUNCH_UNAVAILABLE)
+      expect(guestLaunchIn(answer, input), JSON.stringify(answer)).toBeNull()
     }
   })
 })

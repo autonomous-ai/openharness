@@ -2,10 +2,10 @@
  * Shared machines in their own process (the edge host; services/sharedMachinesProcess.ts), as the core
  * reaches it: a guest's harness (`guestLaunch`), asked when a guest's New Harness arrives and never in a
  * connection's line. An answer that does not come (the process is down, or slower than its wait,
- * core/api.ts `LONG_ANSWERS`), or one not shaped as a launch, is the fallback: guest access unavailable.
- * The fixed command must match the request's guest, engine, permissions and prompt before a pane can run it.
+ * core/api.ts `LONG_ANSWERS`), or one not shaped as a launch, becomes guest access unavailable at the caller.
+ * createGuestCreate checks the fixed command against its captured request before any backend or pane effect.
  */
-import { GUEST_LAUNCH_UNAVAILABLE, type GuestLaunch, type GuestLaunchInput, type SharedMachinesCorePort } from './api.js'
+import type { GuestLaunch, GuestLaunchInput, SharedMachinesCorePort } from './api.js'
 import { guestUserFor, guestWorkspaceFor } from '../lib/guestUser.js'
 import { GUEST_HELPER_PATH, GUEST_PANE_BOOTSTRAP, guestEngineArgv } from '../lib/guestLaunchWire.js'
 import { launchContributionIn, launchRecord, launchText } from '../lib/launchContribution.js'
@@ -48,12 +48,7 @@ export function guestLaunchIn(value: unknown, input: GuestLaunchInput): GuestLau
 
 export function createSharedMachinesLink(call: CallSharedMachines): SharedMachinesCorePort {
   return {
-    guestLaunch: async (input): Promise<GuestLaunch> => {
-      const captured = { ...input, ...(input.permissionFlags ? { permissionFlags: [...input.permissionFlags] } : {}) }
-      const answer = guestLaunchIn(await call('guestLaunch', { ...input }), captured)
-      if (!answer) console.warn('[shared-machines] LAUNCH_CONTRIBUTION_REFUSED')
-      return answer ?? GUEST_LAUNCH_UNAVAILABLE
-    },
+    guestLaunch: (input) => call('guestLaunch', { ...input }),
     // The process stops its own relay.
     stop: () => {},
   }

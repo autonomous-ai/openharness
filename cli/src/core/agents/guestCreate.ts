@@ -10,7 +10,7 @@
  * conversation to resume, an engine's named agent — is refused before anything starts, rather than
  * half-applied. A first message goes to the engine as its first prompt. A grid or a saved API never reaches here (the policy refuses it).
  */
-import { GUEST_LAUNCH_UNAVAILABLE, type GuestLaunch, type GuestLaunchInput } from '../api.js'
+import { GUEST_LAUNCH_UNAVAILABLE, type SharedMachinesCorePort } from '../api.js'
 import { guestLaunchIn } from '../sharedMachinesLink.js'
 import type { AgentEngine } from '../../engines/types.js'
 import { createAndRegisterPane, type CreateAgentPaneDeps } from '../../lib/createAgentPane.js'
@@ -29,7 +29,7 @@ export type GuestCreateResult =
   | { ok: false; error: string; detail?: string }
 
 export interface GuestCreateDeps {
-  launch: (input: GuestLaunchInput) => Promise<GuestLaunch>
+  launch: SharedMachinesCorePort['guestLaunch']
   /** The tmux backend; null where the configuration lists no tmux. */
   tmuxBackend: () => CreateAgentPaneDeps['tmuxBackend'] | null
   /** The pane backend of a guest's own host, for a launch that must not be made by this account (Windows: the

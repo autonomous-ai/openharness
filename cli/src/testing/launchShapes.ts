@@ -14,7 +14,6 @@ import { dshThrough } from '../core/agents/dshThrough.js'
 import { createStoreLink } from '../core/storeLink.js'
 import { storeLaunchPort } from '../services/storeLaunch.js'
 import { dshLaunchRequestIn, dshMaterializeRequestIn } from '../services/storeProcess.js'
-import { gridLaunchAnswerIn } from '../core/modelsLink.js'
 import { ApiConnections } from '../lib/apiConnections.js'
 import { ApiConnectionMetadata } from '../lib/apiConnectionMetadata.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
@@ -70,9 +69,7 @@ export function launchShapes(world: LaunchWorld) {
     gridLaunch: async (request) => {
       const asked = gridLaunchRequestIn(wire(request))
       if (!asked) throw new Error('models could not read the launch it was asked for')
-      const answer = gridLaunchAnswerIn(wire(await models(asked)), request)
-      if (!answer) throw new Error('the core could not read the launch models built')
-      return answer
+      return wire(await models(asked))
     },
   }))
   const store = storeLaunchPort()

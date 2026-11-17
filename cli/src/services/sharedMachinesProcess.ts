@@ -13,6 +13,7 @@ import { runServiceProcess, type CoreConnection, type ServiceProcess } from './p
 import { processCoreApi } from './processCoreApi.js'
 import { guestLaunchInput, startSharedMachines } from './sharedMachines.js'
 import { sharedMachinesPortOf } from '../lib/sharedMachinesPort.js'
+import { launchRecord } from '../lib/launchContribution.js'
 
 export interface SharedMachinesServiceOptions {
   dataDir: string
@@ -48,7 +49,8 @@ export function runSharedMachinesService(options: SharedMachinesServiceOptions):
       // Asked only by the core (core/sharedMachinesLink.ts): never a type an app's request is routed by.
       guestLaunch: async (payload) => {
         const input = guestLaunchInput(payload)
-        return input && guests ? guests.guestLaunch(input) : GUEST_LAUNCH_UNAVAILABLE
+        const answer = input && guests ? await guests.guestLaunch(input) : GUEST_LAUNCH_UNAVAILABLE
+        return launchRecord(answer) ? answer : {}
       },
     },
     onEvent: (payload) => {
