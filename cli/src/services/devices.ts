@@ -734,6 +734,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (!cable.isConnected) { ended.delete(agentId); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, false); return }
       const turn = ended.get(agentId) // a sub-agent's summary leaves the main turn's numbers alone
       ended.delete(agentId)
+      // Its notice rang for this turn: the dial keeps one drawer row an agent, so a summary that rang or listed would
+      // replace the notice's line. A failed turn still rings (docs/plans/2026-11-17-dial-one-ring-per-turn-design.md).
+      if (event.failed !== true && notices.pending(agentId)) { noted('silent', 'notice'); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, false); return }
       const who = cableHost.describe(agentId)
       const needsYou = notifyMode.get() === 'you'
       // Decided once already, by the recaps (services/recaps.ts) or another machine, for the phone as well: the dial
