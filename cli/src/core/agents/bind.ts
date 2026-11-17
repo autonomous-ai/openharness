@@ -21,7 +21,7 @@ import type { AutonomousDeviceInput } from '../deviceInput.js'
 import { isRecentlyDeleted } from '../../lib/deletedSessions.js'
 import { transcriptIsFirstTurn } from '../../lib/firstTurnReplay.js'
 import { sid } from '../../lib/log.js'
-import { projectDisplayName, type registry, type RegisteredSession } from '../../lib/registry.js'
+import { matchesLaunchReceipt, projectDisplayName, type registry, type RegisteredSession } from '../../lib/registry.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
 import { findLiveSession, findResumedTranscript } from '../../lib/sessionRepair.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
@@ -76,9 +76,9 @@ export type RegisteredMeta = {
 }
 
 export interface BindDeps {
-  registry: Pick<typeof registry, 'inheritName' | 'unbindSession' | 'byAgent' | 'byProcess' | 'register' | 'has' | 'bySession' | 'setIdentityHold' | 'revalidateBinding' | 'setOpenclawStateDir' | 'takeFirstTask' | 'afterTransaction'>
+  registry: Pick<typeof registry, 'inheritName' | 'confirmSessionUnbound' | 'byAgent' | 'byProcess' | 'register' | 'has' | 'bySession' | 'setIdentityHold' | 'revalidateBinding' | 'setOpenclawStateDir' | 'takeFirstTask' | 'afterTransaction'>
   mirror: Pick<TurnRecaps, 'inheritSummary'>
-  forgetSession: (id: string, opts?: { force?: boolean; keepAgent?: boolean; agentId?: string }) => void
+  forgetSession: (id: string, opts?: { force?: boolean; keepAgent?: boolean; agentId?: string }) => Promise<void>
   /** The app. */
   clients: { send(frame: { type: string; payload: Record<string, unknown> }): void }
   attachSession: (session: RegisteredSession, reset?: boolean, replayCursorFromStart?: boolean, replayFromStart?: boolean) => Promise<boolean>
@@ -113,7 +113,7 @@ export interface BindDeps {
 interface BindPass {
   current: () => boolean
   hold: (error: unknown) => boolean
-  commit: (input: Parameters<BindDeps['registry']['register']>[0]) => ReturnType<BindDeps['registry']['register']> | null
+  commit: (input: Parameters<BindDeps['registry']['register']>[0]) => ReturnType<BindDeps['registry']['register']>
   /** `empty` says when a completed read read nothing, so it counts as none: an OpenClaw pane with no screen. */
   read: <T>(work: () => Promise<T>, empty?: (value: T) => boolean) => Promise<{ value: T } | null>
   mayClaim: (id: string) => boolean
@@ -186,12 +186,14 @@ export function createBinding({
     if (meta.rebound) {
       registry.inheritName(meta.rebound, entry.sessionId)
       mirror.inheritSummary(meta.rebound, entry.sessionId)
-      forgetSession(meta.rebound, { force: true, keepAgent: true })
+      await forgetSession(meta.rebound, { force: true, keepAgent: true, agentId: entry.agentId })
+      if (!current()) return
       clients.send({ type: 'session_reset', payload: { staleSessionId: meta.rebound } })
       console.log(`[agent] ${sid(entry.agentId)} rebound ${sid(meta.rebound)} → ${sid(entry.sessionId)}`)
     } else if (meta.evicted) {
 
-      forgetSession(meta.evicted, { force: true })
+      await forgetSession(meta.evicted, { force: true })
+      if (!current()) return
     }
     // The agent this bind emptied out — `claude --resume` in a second pane, with
     // the first one's engine already gone. The registry dropped it; without this
@@ -201,10 +203,11 @@ export function createBinding({
     // Not part of the chain above: a rebound bind can orphan an agent too, so
     // this has to be asked independently of which branch ran.
     if (meta.orphaned) {
-      forgetSession(meta.orphaned.agentId, {
+      await forgetSession(meta.orphaned.agentId, {
         force: true,
         agentId: meta.orphaned.agentId,
       })
+      if (!current()) return
     }
 
     // Registration is complete before any optional history reader runs. In particular a stalled
@@ -298,7 +301,15 @@ export function createBinding({
       // The October 6 TUI picker exit/resume incident: a verified engine exited while its startup
       // attach was pending. Unbinding here erased the conversation before discovery retired it, so
       // Open started a fresh one under the saved title. Keep that verified id for the existing lifecycle.
-      if (!changing(entry.agentId) && !entry.processIdentity) registry.unbindSession(entry.sessionId)
+      if (!changing(entry.agentId) && !entry.processIdentity) {
+        const publication = await registry.confirmSessionUnbound(entry.agentId, entry.sessionId, {
+          current: () => current() && !changing(entry.agentId),
+        })
+        if (publication.state !== 'confirmed' || !publication.entry || changing(entry.agentId)
+          || !matchesLaunchReceipt(registry.byAgent(entry.agentId), publication.entry)) return
+        announceSession(publication.entry)
+        return
+      }
       announceSession(entry)
       return
     }
@@ -343,15 +354,20 @@ export function createBinding({
     // the daemon restarts.
     if (agent.identityHold && agent.sessionId && agent.transcriptPath
       && !(OTHER_ENGINE_HOLDS.has(agent.identityHold) && followsLive(agent.sessionId))) {
+      const selected = paneReadIdentity(agent)
+      const lifecycle = () => !changing(agent.agentId) && !isRecentlyDeleted(agent.agentId)
+      const current = () => lifecycle() && paneReadIdentity(registry.byAgent(agent.agentId)) === selected
       try {
         const previous = agent.sessionId
-        const retried = registry.revalidateBinding(agent.agentId)
-        if (!retried) return
+        const retried = await registry.revalidateBinding(agent.agentId, { current })
+        if (!retried || !lifecycle() || !matchesLaunchReceipt(registry.byAgent(agent.agentId), retried)) return
         agent = retried
-        if (!agent.sessionId) forgetSession(previous, { force: true, keepAgent: true, agentId: agent.agentId })
+        if (!agent.sessionId) await forgetSession(previous, { force: true, keepAgent: true, agentId: agent.agentId })
         else followRegistered(agent, { isNew: false, evicted: null, rebound: null, recovered: true })
+        if (!lifecycle() || !matchesLaunchReceipt(registry.byAgent(agent.agentId), retried)) return
         announceSession(agent)
       } catch (error) {
+        if (!current()) return
         const reason = error instanceof Error ? error.message : String(error)
         if (registry.setIdentityHold(agent.agentId, reason)) announceSession(agent)
         return
@@ -374,8 +390,8 @@ export function createBinding({
       console.log(`[discovery] ${sid(agent.agentId)} binding held · ${reason}`)
       return set
     }
-    const commit = (input: Parameters<typeof registry.register>[0]) => {
-      try { return registry.register(input) }
+    const commit = async (input: Parameters<typeof registry.register>[0]) => {
+      try { return await registry.register(input, { current }) }
       catch (error) { hold(error); return null }
     }
     // Only native reads are contained here. A rejected lookup cannot end the serial
@@ -476,7 +492,7 @@ export function createBinding({
         if (!current()) return
         if (stateDir && registry.setOpenclawStateDir(agent.agentId, stateDir) && streamMayDiffer) {
           console.log(`[discovery] ${sid(agent.agentId)} openclaw · state folder changed`)
-          forgetSession(agent.sessionId, { force: true, keepAgent: true })
+          await forgetSession(agent.sessionId, { force: true, keepAgent: true, agentId: agent.agentId })
           return
         }
       }
@@ -489,7 +505,7 @@ export function createBinding({
       const owner = registry.bySession(key)
       if (owner && owner.agentId !== agent.agentId) return
       const moved = !!agent.sessionId
-      const bound = commit({
+      const bound = await commit({
         engine: 'openclaw',
         sessionId: key,
         cwd: observed.cwd,
@@ -531,7 +547,7 @@ export function createBinding({
         // `/new`, `/resume`, a branch and a compression split all rewrite the record: the rotation the Copilot switch
         // takes, so the reader, the recaps and the apps see a session change as they saw one from a hook.
         const was = agent.sessionId
-        const rotated = commit({
+        const rotated = await commit({
           engine: 'hermes',
           sessionId: answer.sessionId,
           cwd: observed.cwd,
@@ -567,7 +583,7 @@ export function createBinding({
         const transcript = located.value
         if (!current() || !mayClaim(next)) return
         console.log(`[discovery] ${sid(agent.agentId)} switched copilot session ${sid(agent.sessionId)} → ${sid(next)} (/resume)`)
-        const rotated = commit({
+        const rotated = await commit({
           engine: 'copilot',
           sessionId: next,
           transcriptPath: transcript ?? undefined,
@@ -597,7 +613,7 @@ export function createBinding({
           || registry.has(continuation.sessionId) || isRecentlyDeleted(continuation.sessionId)) return
         if (!current()) return
         console.log(`[discovery] ${sid(agent.agentId)} ${observed.engine} session continued ${sid(agent.sessionId)} → ${sid(continuation.sessionId)}`)
-        const rotated = commit({
+        const rotated = await commit({
           engine: observed.engine,
           sessionId: continuation.sessionId,
           transcriptPath: continuation.transcriptPath,
@@ -664,7 +680,7 @@ export function createBinding({
 
     if (!current() || !mayClaim(sessionId)) return
     const previousOwner = registry.bySession(sessionId)
-    const result = commit({
+    const result = await commit({
       engine: observed.engine,
       sessionId,
       transcriptPath,

@@ -22,7 +22,7 @@ describe('workspaces in their own process', () => {
     let api: CoreApi | null = null
     let options: ServiceProcessOptions | null = null
     const port = {
-      nameBranches: vi.fn(), ready: vi.fn(() => true),
+      stop: vi.fn(), nameBranches: vi.fn(), ready: vi.fn(() => true),
       prepareFolder: vi.fn(async (): Promise<PreparedFolder> => ({ ok: true, cwd: '/h/harnesses/repo' })),
       describeWorkspace: vi.fn(async (): Promise<WorkspaceInspection | null> => null),
       reviewWorktree: vi.fn(async (): Promise<WorktreeAnswer> => ({ ok: false, reason: 'No separate worktree. This folder is not a Git worktree.' })),
@@ -55,12 +55,13 @@ describe('workspaces in their own process', () => {
     const { options } = setup()
     const { core, query } = connection()
     options.onConnected!(core)
-    expect(query.mock.calls).toEqual([['folders']])
+    expect(query.mock.calls).toEqual([['follow_agents', { each: true, frames: true }], ['folders']])
     options.onConnected!({ query: vi.fn(async () => { throw new Error('the core went away') }) })
     options.onConnected!({ query: vi.fn(async () => { throw 'closed' }) })
     await flush()
     expect(warn.mock.calls).toEqual([['[workspaces] could not tell the core this process makes folders · the core went away'],
-      ['[workspaces] could not tell the core this process makes folders · closed']])
+      ['[workspaces] could not tell the core this process makes folders · closed'],
+      ['[agents] the core did not answer what agents to follow (no answer): none is heard of as it runs']])
     warn.mockRestore()
   })
 
@@ -142,14 +143,50 @@ describe('workspaces in their own process', () => {
     options.onConnected!(core)
     options.onEvent!({ kind: 'sweep' })
     await flush()
-    expect(query.mock.calls).toEqual([['folders']])
+    expect(query.mock.calls).toEqual([['follow_agents', { each: true, frames: true }], ['folders']])
     expect(port.nameBranches).not.toHaveBeenCalled()
   })
 
   it('stops its connection when stopped', () => {
-    const { handle, service } = setup()
+    const { handle, service, port } = setup()
     handle.stop()
     expect(service.stop).toHaveBeenCalledOnce()
+    expect(port.stop).toHaveBeenCalledOnce()
+  })
+
+  it('follows leased views, reads cached usage, publishes facts and revokes them on disconnect', async () => {
+    const { api, options } = setup()
+    const source = { ...agent(), registeredAt: 1, transcriptPath: '/fixture/transcript', frameEpoch: 'core:1' }
+    const heard = vi.fn()
+    api.agents.follow!(heard, { each: true, frames: true })
+    expect(await api.usage!(source)).toBeNull()
+    const query = vi.fn(async (name: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
+      if (name === 'follow_agents') return { agents: [source] }
+      if (name === 'agentUsage') return { target: payload.target, value: { totalTokens: 3, updatedAt: '2026-11-16T01:00:00Z' } }
+      if (name === 'frame_part') return { error: 'UNKNOWN_QUERY' }
+      return { ok: true }
+    })
+    options.onConnected!({ query })
+    await vi.waitFor(() => expect(heard).toHaveBeenCalledWith({ kind: 'running', session: source }))
+    expect(await api.usage!(source)).toEqual({ totalTokens: 3, updatedAt: '2026-11-16T01:00:00Z' })
+    api.agents.publishFrame!(source, { project: { cwd: source.cwd } })
+    await vi.waitFor(() => expect(query).toHaveBeenCalledWith('branchNamed', { agentId: source.agentId }))
+    options.onEvent!({ kind: 'nameBranches', agents: [agent('legacy')] })
+    expect(api.agents.live()).toEqual([source])
+    const changed = { ...source, cwd: '/fixture/next' }
+    options.onEvent!({ kind: 'agent', event: { kind: 'running', session: changed } })
+    options.onEvent!({ kind: 'agent', event: { kind: 'running', session: { ...agent('b'), frameEpoch: undefined } } })
+    options.onEvent!({ kind: 'agent', event: { kind: 'stopped', agentId: 'b' } })
+    options.onEvent!({ kind: 'agent', event: { kind: 'purged', agentId: 'b', sessionIds: ['s-b'] } })
+    expect(api.agents.live()).toEqual([changed])
+    options.onDisconnected!()
+    expect(api.agents.live()).toEqual([])
+    expect(heard).toHaveBeenLastCalledWith({ kind: 'ended', agentId: source.agentId })
+    expect(await api.usage!(source)).toBeNull()
+    api.agents.publishFrame!(source, { project: null })
+    const count = query.mock.calls.length
+    await Promise.resolve()
+    expect(query).toHaveBeenCalledTimes(count)
   })
 
   it('does not run without workspaces: the master starts it again, or parks it', () => {

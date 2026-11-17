@@ -278,7 +278,6 @@ export function probeMaster(config: { env: NodeJS.ProcessEnv; execArgv: string[]
 export function runMaster(config: MasterConfig): Supervisor {
   ignoreLogWriteErrors()
   const { env: given, exit, onSignal, execve } = masterDefaults(config)
-  process.title = 'harnessd'
   // What the master this process was a moment ago handed on, if it was one (./reexec.ts). Taken out of
   // the environment every child is given: a core or service has no use for it, and a later re-exec
   // writes its own.

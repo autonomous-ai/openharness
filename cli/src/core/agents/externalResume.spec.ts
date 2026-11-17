@@ -33,7 +33,7 @@ function setup() {
   const conflict: ExternalResumeDeps['registry']['externalConflict'] = (ids, except) => [...rows.values()].find(row => row.agentId !== except && externalReservations(row).some(id => ids.includes(id)))
   const registry: ExternalResumeDeps['registry'] = {
     byAgent: id => rows.get(id), list: () => [...rows.values()], externalConflict: conflict,
-    openPendingAgent: vi.fn(given => {
+    openPendingAgent: vi.fn(async given => {
       if (conflict(externalReservations({ sessionId: '', externalResume: given.externalResume }))) return null
       const row = { ...given, schemaVersion: 2, agentId: `agent-${++next}`, sessionId: '', registeredAt: 1,
         boundAt: null, processIdentity: null, active: false, launch: { state: 'held', service: 'search', detail: externalUnavailable().detail },
@@ -41,14 +41,16 @@ function setup() {
       } as RegisteredSession
       rows.set(row.agentId, row); return row
     }),
-    setExternalResume: vi.fn((id, intent) => {
+    setExternalResume: vi.fn(async (id, intent, authority) => {
+      await authority?.refresh?.()
+      if (authority?.current?.() === false) return null
       const old = rows.get(id)
       if (!old || conflict(externalReservations({ sessionId: intent.phase === 'admitted' ? intent.session!.sessionId : '', externalResume: intent }), id)) return null
       const row = { ...old, externalResume: structuredClone(intent), ...(intent.phase === 'admitted' ? { sessionId: intent.session!.sessionId, cwd: intent.session!.cwd, resumeOnly: true as const } : {}) }
       rows.set(id, row); return row
     }),
     setLaunch: vi.fn((id, launch) => { const row = rows.get(id); if (!row) return null; row.launch = launch; return row }),
-    finishExternalCancellation: vi.fn(id => rows.delete(id)),
+    finishExternalCancellation: vi.fn(async id => rows.delete(id)),
   }
   let paneSequence = 0
   const create = vi.fn<NonNullable<ExternalResumeDeps['backend']>['create']>(async request => {
@@ -69,10 +71,10 @@ function setup() {
     stopped: vi.fn(() => []), cancelled: () => cancelled,
     waiting: vi.fn(async row => panes.get(row.tmuxPane) === row.externalResume?.token),
     preflight: vi.fn(async () => null), announce: vi.fn(), launch: vi.fn(),
-    forget: vi.fn(id => { expect(rows.has(id)).toBe(false) }),
+    forget: vi.fn(async id => { expect(rows.has(id)).toBe(false) }),
     stopOwner: vi.fn(async (_owner, control) => {
       if (!control.current() || !await control.same()) return false
-      control.beforeSignal?.('SIGTERM'); control.afterSignal?.('SIGTERM')
+      await control.beforeSignal?.('SIGTERM'); await control.afterSignal?.('SIGTERM')
       inspect.mockImplementation(async request => free(request))
       return true
     }),
@@ -85,6 +87,26 @@ function setup() {
   }
   return { deps, registry, rows, panes, inspect, create, killHeld, controller, stage, cancelWork: () => { cancelled = true } }
 }
+
+it.each(['conversation', 'cancelled', 'signal owner'] as const)('holds external effects when %s changes during durable preparation', async change => {
+  const test = setup()
+  const persist = vi.mocked(test.registry.setExternalResume).getMockImplementation()!
+  if (change === 'signal owner') test.inspect.mockImplementation(async request => held(request))
+  vi.mocked(test.registry.setExternalResume).mockImplementation(async (id, intent, authority) => {
+    if (change === 'signal owner' ? intent.signal === 'prepared' : intent.phase === 'admitted') {
+      if (change === 'cancelled') test.cancelWork()
+      else test.inspect.mockImplementation(async request => change === 'signal owner'
+        ? { ...held(request), owner: { ...processOwner, pid: 8 } } as ExternalSessionAnswer
+        : { ...free(request), session: { ...fact, transcriptPath: join(cwd, 'replacement.jsonl') } } as ExternalSessionAnswer)
+    }
+    return persist(id, intent, authority)
+  })
+  const id = await test.stage(change === 'signal owner' ? { takeOver: 'now' } : {})
+  await test.controller.settled()
+  expect(test.rows.get(id)?.externalResume?.phase).not.toBe('admitted')
+  expect(test.rows.get(id)?.externalResume?.signal).not.toBe('sent')
+  expect(test.deps.launch).not.toHaveBeenCalled()
+})
 
 it('opens no conversation of an agent a stopped move may still run beside, by its id or an alias the search names', async () => {
   for (const [asked, aliases] of [['conversation', []], ['other', ['conversation']]] as const) {
@@ -176,8 +198,8 @@ it('checks the prepared executable after durably saving a signal intent before t
   test.inspect.mockImplementation(async request => held(request))
   vi.mocked(test.deps.preflight).mockResolvedValue({ current: () => nativeCurrent })
   const save = vi.mocked(test.registry.setExternalResume).getMockImplementation()!
-  vi.mocked(test.registry.setExternalResume).mockImplementation((id, intent) => {
-    const row = save(id, intent)
+  vi.mocked(test.registry.setExternalResume).mockImplementation(async (id, intent, authority) => {
+    const row = await save(id, intent, authority)
     if (intent.signal === 'prepared') nativeCurrent = false
     return row
   })
@@ -281,7 +303,7 @@ it.each(['binding', 'stopped'] as const)('a new %s fences signals even after the
     if (kind === 'binding') test.rows.set('other', { agentId: 'other', sessionId: 'conversation' } as RegisteredSession)
     else vi.mocked(test.deps.stopped).mockReturnValue([{ sessionId: 'conversation' }])
     expect(control.current()).toBe(false)
-    expect(() => control.beforeSignal?.('SIGTERM')).toThrow('Signal intent could not be saved')
+    await expect(control.beforeSignal?.('SIGTERM')).rejects.toThrow('Signal intent could not be saved')
     return false
   })
   const id = await test.stage({ takeOver: 'idle' }); await test.controller.settled()
@@ -359,7 +381,7 @@ it('holds storage/preflight failures and known late refusals without launching o
   for (const mode of ['storage', 'null-commit', 'preflight', 'throws', 'late-missing'] as const) {
     const test = setup()
     if (mode === 'storage') vi.mocked(test.registry.setExternalResume).mockImplementation(() => { throw new Error('disk full') })
-    if (mode === 'null-commit') vi.mocked(test.registry.setExternalResume).mockReturnValue(null)
+    if (mode === 'null-commit') vi.mocked(test.registry.setExternalResume).mockResolvedValue(null)
     if (mode === 'preflight') vi.mocked(test.deps.preflight).mockResolvedValue({ detail: 'Engine unavailable.' })
     if (mode === 'throws') vi.mocked(test.deps.preflight).mockRejectedValue(new Error('preparation unreadable'))
     if (mode === 'late-missing') test.inspect.mockImplementationOnce(async request => free(request)).mockImplementation(async request => ({ ...free(request), session: null }))
@@ -372,7 +394,7 @@ it('holds storage/preflight failures and known late refusals without launching o
 it('does not begin stopping an owner when the quitting journal cannot commit', async () => {
   const test = setup(); test.inspect.mockImplementation(async request => held(request))
   const save = test.registry.setExternalResume
-  test.registry.setExternalResume = (id, intent) => intent.phase === 'quitting' ? null : save(id, intent)
+  test.registry.setExternalResume = async (id, intent, authority) => intent.phase === 'quitting' ? null : save(id, intent, authority)
   const id = await test.stage({ takeOver: 'idle' }); await test.controller.settled()
   expect(test.rows.get(id)?.externalResume?.phase).toBe('waiting')
   expect(test.deps.stopOwner).not.toHaveBeenCalled()
@@ -385,7 +407,7 @@ it('reserves stopped conversations before any pane exists and cleans up an alloc
   expect(await test.controller.create(input())).toMatchObject({ error: 'SESSION_IN_HARNESS' })
   expect(test.create).not.toHaveBeenCalled()
   vi.mocked(test.deps.stopped).mockReturnValue([])
-  vi.mocked(test.registry.openPendingAgent).mockReturnValue(null)
+  vi.mocked(test.registry.openPendingAgent).mockResolvedValue(null)
   expect(await test.controller.create(input())).toMatchObject({ ok: false })
   expect(test.panes.size).toBe(0)
   expect(test.killHeld).toHaveBeenCalledTimes(3)
@@ -425,10 +447,10 @@ it('refuses every unverified cancellation boundary without forgetting or archivi
     const test = setup(); test.inspect.mockResolvedValue(externalUnavailable())
     const id = await test.stage(); await test.controller.settled()
     const row = test.rows.get(id)!
-    if (failure === 'save') vi.mocked(test.registry.setExternalResume).mockReturnValue(null)
+    if (failure === 'save') vi.mocked(test.registry.setExternalResume).mockResolvedValue(null)
     if (failure === 'tmux') test.deps.backend = null
     if (failure === 'route') row.runtimes = []
-    if (failure === 'commit') vi.mocked(test.registry.finishExternalCancellation).mockReturnValue(false)
+    if (failure === 'commit') vi.mocked(test.registry.finishExternalCancellation).mockResolvedValue(false)
     if (failure === 'replaced-during-close') test.killHeld.mockImplementation(async () => {
       test.rows.get(id)!.runtimes = [{ backend: 'tmux', paneId: '%99' }]
       return { state: 'succeeded', dispatch: 'executed' }
@@ -463,13 +485,13 @@ it('keeps exact signal intent and receipt failures from admitting an external co
     const test = setup(); test.inspect.mockImplementation(async request => held(request))
     vi.mocked(test.deps.stopOwner!).mockImplementation(async (_owner, control) => {
       expect(await control.same()).toBe(true)
-      if (failure === 'kill') { control.beforeSignal?.('SIGKILL'); control.afterSignal?.('SIGKILL'); return false }
+      if (failure === 'kill') { await control.beforeSignal?.('SIGKILL'); await control.afterSignal?.('SIGKILL'); return false }
       if (failure === 'cancel-then-false' || failure === 'cancel-then-true') { test.cancelWork(); return failure === 'cancel-then-true' }
-      if (failure === 'before') vi.mocked(test.registry.setExternalResume).mockReturnValue(null)
+      if (failure === 'before') vi.mocked(test.registry.setExternalResume).mockResolvedValue(null)
       if (failure === 'cancel-before') test.cancelWork()
-      control.beforeSignal?.('SIGTERM')
-      if (failure === 'after') vi.mocked(test.registry.setExternalResume).mockReturnValue(null)
-      control.afterSignal?.('SIGTERM')
+      await control.beforeSignal?.('SIGTERM')
+      if (failure === 'after') vi.mocked(test.registry.setExternalResume).mockResolvedValue(null)
+      await control.afterSignal?.('SIGTERM')
       return true
     })
     const id = await test.stage({ takeOver: 'idle' }); await test.controller.settled()
@@ -492,7 +514,7 @@ it('fences the last read, the last pane check, and a failed final durable admiss
     let paneChecks = 0
     vi.mocked(test.deps.waiting).mockImplementation(async () => { if (++paneChecks === 2 && point === 'pane') test.cancelWork(); return true })
     const persist = test.registry.setExternalResume
-    if (point === 'commit') test.registry.setExternalResume = (id, intent) => intent.phase === 'admitted' ? null : persist(id, intent)
+    if (point === 'commit') test.registry.setExternalResume = async (id, intent, authority) => intent.phase === 'admitted' ? null : persist(id, intent, authority)
     await test.stage(); await test.controller.settled()
     expect(test.deps.launch).not.toHaveBeenCalled()
     test.controller.stop()

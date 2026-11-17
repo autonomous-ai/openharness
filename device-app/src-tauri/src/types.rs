@@ -54,25 +54,6 @@ pub enum CliState {
     Removed,
 }
 
-/// `harness device claude status --json`.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct ClaudeStatus {
-    pub supported: bool,
-    pub installed: bool,
-    pub enabled: bool,
-    pub claude_version: Option<String>,
-}
-
-/// `harness device codex status --json`.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
-pub struct CodexStatus {
-    pub supported: bool,
-    pub installed: bool,
-    pub enabled: bool,
-}
-
 /// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "loginItem" }`. Default: version 1, all false. The keys of
 /// the Claude Code and Codex offers an older app wrote are ignored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,16 +109,13 @@ pub enum Action {
 pub enum MenuAction {
     Install,
     SignIn,
-    ClaudeOn,
-    ClaudeOff,
-    CodexOn,
-    CodexOff,
     SoundOn,
     SoundOff,
     NotifyFull,
     NotifyYou,
     Update,
     OpenHarness,
+    About,
     Quit,
 }
 
@@ -171,15 +149,6 @@ pub enum AppUpdate {
     Blocked(String),
 }
 
-/// A Claude Code or Codex change, as its menu rows show it. Running(true) turns on; Failed(true) was a turn-on.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum EngineChange {
-    #[default]
-    None,
-    Running(bool),
-    Failed(bool),
-}
-
 /// What the menu is drawn from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppState {
@@ -187,13 +156,11 @@ pub struct AppState {
     pub daemon: Daemon,
     pub dial: Option<DialStatus>,
     pub signed_in: Option<bool>,
-    pub claude: Option<ClaudeStatus>,
-    pub codex: Option<CodexStatus>,
     pub desktop_installed: bool,
     pub saved: Saved,
     pub app_update: AppUpdate,
-    pub claude_change: EngineChange,
-    pub codex_change: EngineChange,
+    /// What `harness --version` printed, for the About panel.
+    pub cli_version: Option<String>,
 }
 
 /// AuthorizeUrl holds an `https:` URL only (account.rs lets no other through).
@@ -204,8 +171,7 @@ pub enum LoginEvent {
     Done(Result<(), String>),
 }
 
-/// What happened. WatchExit(None): ended by a signal. UpdateChecked(Some): a strictly newer release. ClaudeSet and
-/// CodexSet: whether the change was made; the runner logged why not.
+/// What happened. WatchExit(None): ended by a signal. UpdateChecked(Some): a strictly newer release.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     Tick { now: u64, desktop_running: bool },
@@ -216,11 +182,8 @@ pub enum Event {
     StartDone { ok: bool },
     InstallDone(Result<(), Vec<String>>),
     Auth(Option<bool>),
-    Claude(Option<ClaudeStatus>),
-    Codex(Option<CodexStatus>),
+    CliVersion(Option<String>),
     Login(LoginEvent),
-    ClaudeSet(bool),
-    CodexSet(bool),
     LoginItem(bool),
     Menu(MenuAction),
     Act(Action),
@@ -230,7 +193,8 @@ pub enum Event {
     UpdateFailed(UpdateFailure),
 }
 
-/// What to do about it. Show(None) hides the window. Menu, Show, Quit and Relaunch are the binary's.
+/// What to do about it. Show(None) hides the window. ShowAbout: the About panel, with its credits line. Menu, Show,
+/// ShowAbout, Quit and Relaunch are the binary's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     FindCli,
@@ -239,12 +203,9 @@ pub enum Effect {
     RunStart,
     RunInstall,
     ReadAuth,
-    ReadClaude,
-    ReadCodex,
+    ReadVersion,
     RunLogin,
     CancelLogin,
-    SetClaude(bool),
-    SetCodex(bool),
     /// `true` turns the dial's sound on.
     SetSound(bool),
     SetNotify(NotifyMode),
@@ -257,6 +218,7 @@ pub enum Effect {
     InstallUpdate,
     Menu(Vec<MenuItem>),
     Show(Option<View>),
+    ShowAbout(Option<String>),
     Quit,
     Relaunch,
 }
@@ -407,18 +369,6 @@ mod tests {
         let keys = json!({ "version": 1, "cliSeen": false, "askedSignIn": false, "loginItem": false });
         assert_eq!(serde_json::to_value(Saved::default()).unwrap(), keys);
         assert_eq!(serde_json::from_value::<Saved>(keys).unwrap(), Saved::default());
-    }
-
-    #[test]
-    fn claude_status_reads_camel_case() {
-        let status: ClaudeStatus =
-            serde_json::from_str(r#"{"supported":true,"installed":true,"enabled":false,"claudeVersion":"2.1.0"}"#)
-                .unwrap();
-        assert_eq!(
-            status,
-            ClaudeStatus { supported: true, installed: true, enabled: false, claude_version: Some("2.1.0".into()) }
-        );
-        assert_eq!(serde_json::from_str::<ClaudeStatus>("{}").unwrap(), ClaudeStatus::default());
     }
 
     #[test]

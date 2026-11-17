@@ -21,7 +21,7 @@ function setup(over: Partial<GuestCreateDeps> & { answer?: GuestLaunch; spawn?: 
     tmuxBackend: () => tmux as never,
     ensureEngine: vi.fn(async () => ({ ok: true as const })),
     resolveEngine: vi.fn((_engine: string, argv: readonly string[]) => [...argv]),
-    registry: { openPendingAgent: vi.fn(() => over.register === false ? null : session) },
+    registry: { openPendingAgent: vi.fn(async () => over.register === false ? null : session) },
     announceSession: vi.fn(),
     watchNewPane: vi.fn(async () => {}) as never,
     ...over,

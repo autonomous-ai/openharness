@@ -16,27 +16,32 @@ import { sid } from '../lib/log.js'
 import { sessionDisplayTitle } from '../lib/registry.js'
 import { worktreeAnswers } from '../lib/worktreeDeletion.js'
 import { forgetScmProject, renameScmProject } from '../scm/scmProjects.js'
+import { startWorkspaceFrames } from './workspaceFrames.js'
 
 export function startWorkspaces(core: CoreApi, ports: CorePorts): void {
+  const frames = startWorkspaceFrames(core)
+  let stopped = false
   // A worktree branch Harness made up at Start takes its session's name once it has one
   // (lib/branchNaming.ts). Each agent is looked at once per daemon; the git reads are the cost.
   const branchNamed = new Set<string>()
   const nameSessionBranches = (): void => {
+    if (stopped) return
     for (const session of core.agents.live()) {
       const title = sessionDisplayTitle(session)
       if (!title || !session.cwd || branchNamed.has(session.agentId)) continue
       branchNamed.add(session.agentId)
       const cwd = session.cwd
       void renameScmProject(cwd, title).then((renamed) => {
-        if (!renamed) return
+        if (!renamed || stopped) return
         console.log(`[worktrees] agent ${sid(session.agentId)} branch named ${renamed}`)
         forgetScmProject(cwd)
         const current = core.agents.byAgent(session.agentId)
-        if (current) core.agents.sync(current)
+        if (current && current.cwd === cwd && current.sessionId === session.sessionId) { frames.refresh(current); core.agents.sync(current) }
       }).catch(() => {})
     }
   }
   ports.workspaces = {
+    stop: () => { stopped = true; frames.stop(); branchNamed.clear() },
     nameBranches: nameSessionBranches,
     ready: () => true,
     prepareFolder: gitFolderAnswer,

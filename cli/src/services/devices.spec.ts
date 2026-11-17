@@ -2,7 +2,7 @@
 // they say reaches the core through its API alone, and the fleet failing costs the dial nothing.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
 import { AppFilter, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
@@ -18,8 +18,10 @@ import { routeVoiceTask } from '../lib/voiceRouter.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, ServiceUnavailableError, type CoreApi, type CorePorts, type DevicesPort } from '../core/api.js'
 import type { ObservedAsked, ObservedHookEvent } from '../core/observedHook.js'
 import { createServiceHost } from '../core/serviceHost.js'
+import * as claudePlugin from '../devices/claudePlugin.js'
+import type { ClaudeRun } from '../devices/claudePlugin.js'
 import { DIAL_SKILL } from '../devices/dialSkill.js'
-import { writeAnswer } from '../devices/dialSkillFiles.js'
+import { readSetup, writeSetup } from '../devices/dialSkillFiles.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { STOP_HOOK_GRACE_MS } from '../core/turns/turnHooks.js'
 import type { FleetEvent } from '../cable/machineFleet.js'
@@ -43,6 +45,8 @@ const seen = vi.hoisted(() => ({
   voice: { sessions: vi.fn(), connected: vi.fn(), shutdown: vi.fn() },
 }))
 
+// A copy of the module, so a spec can watch the daemon's own lookup of Claude Code run.
+vi.mock('../devices/claudePlugin.js', async (real) => ({ ...await real<object>() }))
 vi.mock('../cable/cableHost.js', async (real) => {
   const actual = await real<typeof import('../cable/cableHost.js')>()
   return {
@@ -314,7 +318,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty'] } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const ports: CorePorts = emptyPorts()
   const onExit = vi.fn()
@@ -340,6 +344,8 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     onCoreGone: (run) => { gone.push(run) },
     listen: over.listen,
     tty: over.tty,
+    // A `claude` that finds none unless the spec gives its own: no spec runs the developer's. null leaves it out.
+    claude: over.claude === null ? undefined : over.claude ?? (async () => null),
   })
   return { core, ports, port: ports.devices as DevicesPort, requests, onExit, gone }
 }
@@ -5035,6 +5041,74 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     })
   })
 
+  // One ring a turn: the notice rang already, and the dial keeps one drawer row an agent, so a summary that rings or
+  // lists would take the notice's row.
+  describe('its agent\'s turn end (docs/plans/2026-11-17-dial-one-ring-per-turn-design.md)', () => {
+    const summary = (port: DevicesPort, agentId: string, payload: Record<string, unknown> = {}) =>
+      port.card({ type: 'commander_event', agentId, payload: { kind: 'summary', text: 'done', recap: 'Built.', ...payload } })
+    const tiers = () => calls('summary').map(([agentId, , , tier]) => [agentId, tier])
+
+    it.each(['full', 'you'])('is silent while the card is pending, decided upstream or here (Notifications %s)', async (mode) => {
+      const { port, listener } = devices({ core: bound(), decideTier: null })
+      if (mode === 'you') expect(listener.notify('you')).toEqual({ mode: 'you' })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      summary(port, 'h1', { tier: 'alert' })
+      summary(port, 'h1')
+      await vi.waitFor(() => expect(tiers()).toEqual([['h1', 'silent'], ['h1', 'silent']]))
+      expect(logs.filter((line) => line.includes('rule:notice'))).toEqual(Array(2).fill('[cable] notify · silent · rule:notice · notice · 0ms'))
+      expect(calls('questionClose')).toEqual([])
+    })
+
+    it('a failed turn still rings', async () => {
+      const { port, listener } = devices({ core: bound(), decideTier: null })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      summary(port, 'h1', { tier: 'alert', failed: true })
+      summary(port, 'h1', { failed: true })
+      await vi.waitFor(() => expect(tiers()).toEqual([['h1', 'alert'], ['h1', 'alert']]))
+    })
+
+    // A message sent while the agent worked starts its next turn the moment this one ends, while the summary still waits
+    // behind the done, whose tokens are being read: the card is gone by the time the summary's turn comes.
+    it('is silent when its next turn starts while it waits behind its turn\'s done', async () => {
+      let finish!: (reading: { input: number; cached: number; output: number }) => void
+      let n = 0
+      const readUsage = vi.fn((_id: string) => (++n === 2
+        ? new Promise<{ input: number; cached: number; output: number }>((resolve) => { finish = resolve })
+        : Promise.resolve({ input: 1, cached: 0, output: 1 })))
+      const { port, listener } = devices({ core: bound(), decideTier: null, readUsage })
+      const card = (payload: Record<string, unknown>) => port.card({ type: 'commander_event', agentId: 'h1', payload })
+      card({ kind: 'turn_started' })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      card({ kind: 'done', text: 'done' })
+      summary(port, 'h1', { tier: 'alert' })
+      card({ kind: 'turn_started' })
+      finish({ input: 2, cached: 0, output: 2 })
+      await vi.waitFor(() => expect(calls('questionClose')).toHaveLength(1))
+      expect(tiers()).toEqual([['h1', 'silent']])
+      expect(seen.cable.calls.map(([name]) => name).filter((name) => name === 'summary' || name === 'questionClose'))
+        .toEqual(['summary', 'questionClose'])
+    })
+
+    it('another agent\'s turn end rings as before', async () => {
+      const { port, listener } = devices({ core: bound(), decideTier: null })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      summary(port, 'a2')
+      await vi.waitFor(() => expect(tiers()).toEqual([['a2', 'alert']]))
+    })
+
+    it('rings again once the card went, at its next turn or a tap', async () => {
+      const { port, listener } = devices({ core: bound(), decideTier: null })
+      port.observed(hook('turn-start'))
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+      await host().openAgent(ID)
+      summary(port, 'h1')
+      summary(port, ID)
+      await vi.waitFor(() => expect(tiers()).toEqual([['h1', 'alert'], [ID, 'alert']]))
+    })
+  })
+
   // A Harness agent's turn_started is sent only while a dial is attached (services/recaps.ts): a turn during the unplug
   // would leave its card to ring again on the next plug-in.
   it('a Harness agent\'s card goes with the last dial, an outside agent\'s stays', () => {
@@ -5101,10 +5175,18 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1', folder: 'secret-folder' })
     ;(seen.cable as unknown as { connected: boolean }).connected = false
     listener.notice({ text: LINE, engine: 'codex', sessionId: 'sess-2', folder: 'secret-folder' })
-    expect(logs.filter((line) => line.startsWith('[device] notify'))).toEqual([
+    expect(logs.filter((line) => line.startsWith('[device] notify') && !line.includes(' · day '))).toEqual([
       '[device] notify · claude · shown', '[device] notify · claude · limited', '[device] notify · codex · no dial',
     ])
     expect(logs.filter((line) => ['VPN', 'sess-1', 'sess-2', 'secret-folder'].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  it('a notice is counted in the day\'s tally, by engine', () => {
+    const { listener } = devices()
+    ;(seen.cable as unknown as { connected: boolean }).connected = false
+    expect(listener.notice({ text: LINE })).toEqual({ result: 'no dial' })
+    expect(logs).toContain('[device] notify · agent · no dial')
+    expect(logs).toContainEqual(expect.stringMatching(/^\[device\] notify · day \d{4}-\d\d-\d\d · claude shown 0 no dial 0 limited 0 · codex shown 0 no dial 0 limited 0 · agent shown 0 no dial 1 limited 0$/))
   })
 })
 
@@ -5528,7 +5610,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
   })
 })
 
-describe('the dial skill, written from the devices\' own process (cable/dialSkillWriter.ts)', () => {
+describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', () => {
   let homes: string
   let saved: { claude: string; codex: string }
   beforeEach(() => {
@@ -5537,7 +5619,6 @@ describe('the dial skill, written from the devices\' own process (cable/dialSkil
     env.CLAUDE_PROJECTS_DIR = join(homes, 'claude', 'projects')
     env.CODEX_HOME = join(homes, 'codex')
     mkdirSync(env.CODEX_HOME)
-    writeAnswer(dataDir, 'codex', true)
   })
   afterEach(() => {
     env.CLAUDE_PROJECTS_DIR = saved.claude
@@ -5548,13 +5629,59 @@ describe('the dial skill, written from the devices\' own process (cable/dialSkil
     const file = join(home, 'skills', 'dial', 'SKILL.md')
     return existsSync(file) ? readFileSync(file, 'utf8') : undefined
   }
+  const claudeHome = () => dirname(env.CLAUDE_PROJECTS_DIR)
+  /** A dial attached on this computer once. */
+  const dialOnce = () => writeSetup(dataDir, { dial: true, homes: { claude: [], codex: [] } })
+  /** A `claude` 2.1.287 with no plugin yet: each call recorded, and each home it was looked for in. */
+  const fakeClaude = () => {
+    const calls: string[] = []
+    const looked: string[] = []
+    const run: ClaudeRun = async (args) => {
+      calls.push(args.join(' '))
+      return { code: 0, stdout: args[0] === '--version' ? '2.1.287 (Claude Code)\n' : args.includes('--json') ? '[]' : '', stderr: '' }
+    }
+    const found: NonNullable<DevicesDeps['claude']> = async (home) => {
+      looked.push(home)
+      return run
+    }
+    return { calls, looked, found }
+  }
 
-  it('the dial skill is written as the devices start', () => {
+  it('a dial\'s first attach sets the agents up', async () => {
+    const claude = fakeClaude()
+    start({ faults: ['fleet'], listen: fakeListener().listen, claude: claude.found })
+    expect(held(env.CODEX_HOME)).toBeUndefined()
+
+    seen.host.watching!(true)
+
+    expect(held(env.CODEX_HOME)).toBe(DIAL_SKILL)
+    await vi.waitFor(() => expect(claude.calls).toContain('plugin install harness-device@openharness --scope user'))
+    expect(claude.looked).toEqual([claudeHome()])
+    expect(logs).toContain('[device] dial setup · codex · set up')
+    expect(logs).toContainEqual(expect.stringMatching(/^\[device\] dial setup · day \d{4}-\d\d-\d\d · claude set up 0 updated 0 failed 0 left removed 0 · codex set up 1 updated 0 failed 0 left removed 0$/))
+  })
+
+  it('the devices\' start on a computer that never had a dial writes nothing', () => {
+    // Claude Code's plugin already on, as a person may have turned it on by hand.
+    mkdirSync(claudeHome())
+    writeFileSync(join(claudeHome(), 'settings.json'), JSON.stringify({ enabledPlugins: { 'harness-device@openharness': true } }))
+    const claude = fakeClaude()
+
+    start({ faults: ['fleet'], listen: fakeListener().listen, claude: claude.found })
+
+    expect(held(env.CODEX_HOME)).toBeUndefined()
+    expect(held(claudeHome())).toBeUndefined()
+    expect(existsSync(join(dataDir, 'dial-setup.json'))).toBe(false)
+    expect(claude.looked).toEqual([])
+  })
+
+  it('once a dial attached, the devices\' start sets the homes up', () => {
+    dialOnce()
     start({ faults: ['fleet'], listen: fakeListener().listen })
     expect(held(env.CODEX_HOME)).toBe(DIAL_SKILL)
   })
 
-  it('a scan\'s owners reach the dial skill writer', async () => {
+  it('a scan\'s owners reach the dial setup', async () => {
     vi.useFakeTimers()
     // A Codex app-server: no terminal, and no row, in a home the daemon does not know.
     const other = join(homes, 'codex-other')
@@ -5568,30 +5695,54 @@ describe('the dial skill, written from the devices\' own process (cable/dialSkil
     await vi.waitFor(() => expect(held(other)).toBe(DIAL_SKILL))
   })
 
+  it('with no claude given, the daemon\'s own lookup is used and finds none', async () => {
+    // An empty PATH and home: no `claude` of the developer's is found, or run.
+    const empty = mkdtempSync(join(homes, 'path-'))
+    vi.stubEnv('PATH', empty)
+    vi.stubEnv('HOME', empty)
+    dialOnce()
+    const lookup = vi.spyOn(claudePlugin, 'claudeFound')
+
+    start({ faults: ['fleet'], listen: fakeListener().listen, claude: null })
+
+    expect(held(env.CODEX_HOME)).toBe(DIAL_SKILL)
+    // The start's lookup, the process's first: the login shell's PATH is read with it.
+    expect(lookup.mock.calls).toEqual([[claudeHome(), true]])
+    expect(await lookup.mock.results[0].value).toBeNull()
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(readSetup(dataDir).plugin).toBeUndefined()
+    expect(logs.filter((line) => line.startsWith('[device] dial setup · claude'))).toEqual([])
+  })
+
   it('a process with no uid writes the dial skill into no home', () => {
     // No uid owns a home, so none is taken as this user's.
     vi.spyOn(process, 'getuid').mockReturnValue(undefined as unknown as number)
     start({ faults: ['fleet'], listen: fakeListener().listen })
+    seen.host.watching!(true)
     expect(held(env.CODEX_HOME)).toBeUndefined()
   })
 
-  it('with the devices inside the core the dial skill is not written', () => {
-    start({ faults: ['fleet'] })
+  it('with the devices inside the core nothing is set up', () => {
+    const claude = fakeClaude()
+    start({ faults: ['fleet'], claude: claude.found })
+    seen.host.watching!(true)
     expect(held(env.CODEX_HOME)).toBeUndefined()
+    expect(existsSync(join(dataDir, 'dial-setup.json'))).toBe(false)
+    expect(claude.looked).toEqual([])
   })
 
-  it('a dial skill writer that fails costs the dial nothing', async () => {
+  it('a dial setup that fails costs the dial nothing', async () => {
     vi.useFakeTimers()
     readers.known.set('sess-9', 'terminal')
     readers.owners.set('sess-9', { engine: 'codex', pid: 77 })
     readers.rows.set('sess-9', { cwd: '/work/web', transcriptPath: null })
     readers.working.set('sess-9', false)
     start({ faults: ['fleet', 'skill'], listen: fakeListener().listen })
-    expect(held(env.CODEX_HOME)).toBeUndefined()
     expect(logs).toContain('[devices] skill failed · injected fault: skill')
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
-    // The scan goes on past the writer to list what it found.
+    // The scan goes on past the setup to list what it found.
     seen.host.watching!(true)
+    expect(held(env.CODEX_HOME)).toBeUndefined()
     await vi.waitFor(() => expect(readers.apps.mock.calls).toEqual([[[77]]]))
   })
 })

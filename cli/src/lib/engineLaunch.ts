@@ -779,7 +779,7 @@ export const ENGINE_INPUT_DRAIN_SH = '  if harness_tty=$(stty -g 2>/dev/null) &&
  * pane does not die with it: `harness_after` records the exit status on the pane (`ENGINE_EXIT_PANE_OPTION`,
  * which is how the daemon tells "the engine left" from "the install is still running") and `exec`s
  * the user's interactive shell in its place, exactly as a terminal opened with ⌘⇧T is. The daemon
- * then turns the row back into a terminal (`registry.releaseEngine`) rather than deleting it, and
+ * then turns the row back into a terminal (`registry.confirmEngineExit`) rather than deleting it, and
  * typing the engine's name into that shell adopts it again (`adoptEngine`). A 127 is the one exit
  * that still ends the pane: the command was not found at all, and "not installed" needs to stay
  * a failure the app can name rather than a prompt with an error above it.

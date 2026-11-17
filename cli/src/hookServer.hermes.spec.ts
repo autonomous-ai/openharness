@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import type { Server } from 'node:http'
 
 const failures = vi.hoisted(() => new Map<string, string>())
-const inspection = vi.hoisted(() => ({ read: undefined as ((path: string) => void) | undefined }))
+const inspection = vi.hoisted(() => ({ read: undefined as ((path: string) => void) | undefined, prepare: undefined as (() => Promise<void>) | undefined, captured: undefined as (() => void) | undefined }))
 vi.mock('node:fs/promises', async original => {
   const fs = await original<typeof import('node:fs/promises')>()
   const guarded = (name: 'lstat' | 'opendir') => async (path: string, ...args: unknown[]) => {
@@ -16,25 +16,45 @@ vi.mock('node:fs/promises', async original => {
     inspection.read?.(path)
     return result
   }
-  return { ...fs, lstat: guarded('lstat'), opendir: guarded('opendir') }
+  return { ...fs, lstat: guarded('lstat'), opendir: guarded('opendir'), open: async (...args: Parameters<typeof fs.open>) => {
+    const handle = await fs.open(...args), sync = handle.sync.bind(handle)
+    handle.sync = async () => {
+      await sync()
+      if (String(args[0]).includes('registry.json.') && String(args[0]).endsWith('.tmp')) await inspection.prepare?.()
+    }
+    return handle
+  } }
 })
 
 let root = ''
 let server: Server | undefined
+let registryForCleanup: typeof import('./lib/registry.js')['registry'] | undefined
 afterEach(async () => {
   if (server) await new Promise<void>(resolve => server!.close(() => resolve()))
   server = undefined
+  inspection.prepare = undefined
+  inspection.captured = undefined
+  await registryForCleanup?.flush().catch(() => {})
+  registryForCleanup = undefined
   vi.restoreAllMocks(); vi.unstubAllEnvs()
   failures.clear()
   inspection.read = undefined
   if (root) rmSync(root, { recursive: true, force: true })
 })
-async function fixture(options: { waitOnResolution?: number } = {}) {
+async function fixture(options: { waitOnResolution?: number; sharedGateway?: boolean } = {}) {
   root = mkdtempSync(join(tmpdir(), 'hermes-admission-'))
   for (const [key, value] of Object.entries({ HOME: join(root, 'home'), HERMES_HOME: join(root, 'home', '.hermes'),
     ADAPTER_DATA_DIR: join(root, 'data'), ADAPTER_RUNTIME_DIR: join(root, 'runtime') })) vi.stubEnv(key, value)
   vi.resetModules()
+  // A hoisted mock keeps the old error class after resetModules; each fixture needs the real module it loads.
+  const pool = await import('./engines/kit/storePool.js'), readStorePool = pool.readStorePool
+  vi.spyOn(pool, 'readStorePool').mockImplementation(async (...args) => {
+    const result = await readStorePool(...args)
+    if (args[2].capture) inspection.captured?.()
+    return result
+  })
   const { registry } = await import('./lib/registry.js')
+  registryForCleanup = registry
   const { startHookServer } = await import('./hookServer.js')
   const { readHookCredential } = await import('./lib/hookAuth.js')
   const { markDeleted } = await import('./lib/deletedSessions.js')
@@ -53,14 +73,30 @@ async function fixture(options: { waitOnResolution?: number } = {}) {
     for (const row of rows) insert.run(...(created ? [row[0], row[1], row[2] ?? null] : row) as string[])
     db.close()
   }
+  const policy = (session: string, pane: string) => {
+    const db = new DatabaseSync(join(home, 'state.db'))
+    db.exec('CREATE TABLE IF NOT EXISTS state_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+    db.prepare('INSERT OR REPLACE INTO state_meta VALUES (?, ?)').run(`gateway.local_policy.v1:${session}`,
+      JSON.stringify({ session_id: session, policy: { client_env_json: JSON.stringify({ TMUX_PANE: pane }), source: 'cli' } }))
+    db.close()
+  }
   const processIdentity = { pid: 4242, startMarker: 'Thu Oct 8 12:00:00 2026', executable: 'hermes' }
-  const { entry: agent } = registry.openProcessAgent({ engine: 'hermes', tmuxPane: '%1', cwd: root, processIdentity })!
+  const { entry: agent } = (await registry.openProcessAgent({ engine: 'hermes', tmuxPane: '%1', cwd: root, processIdentity }))!
+  await registry.flush()
   const registered = vi.fn()
+  // Match core's callback: admission state lives on the current row, not the detached commit reply.
+  const admissionHeld = vi.fn((id: string, reason: string | undefined) => {
+    const row = registry.byAgent(id)
+    if (!row) return
+    if (reason) row.admissionHold = reason
+    else delete row.admissionHold
+  })
   const logs: string[] = []
   vi.spyOn(console, 'log').mockImplementation((...args) => { logs.push(args.map(String).join(' ')) })
   let resume!: () => void
   let resolutions = 0
-  const started = await startHookServer(0, { onRegistered: registered, onSessionEnd: () => {},
+  const started = await startHookServer(0, { onRegistered: registered, onSessionEnd: () => {}, onAdmissionHeld: admissionHeld,
+    ...(options.sharedGateway ? { hookViaSharedProcess: async () => true } : {}),
     ...(options.waitOnResolution ? { resolveHookAgent: async ({ onWait }: { onWait?: () => void }) => {
       if (++resolutions === options.waitOnResolution) { onWait?.(); await new Promise<void>(resolve => { resume = resolve }) }
       return registry.byAgent(agent.agentId) ?? null
@@ -72,7 +108,7 @@ async function fixture(options: { waitOnResolution?: number } = {}) {
     const response = await fetch(`http://127.0.0.1:${started.port}/api/hook/session-start`, {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-harness-hook-token': readHookCredential(join(root, 'data'))!,
         'x-harness-hook-fired-at': String(fired) },
-      body: JSON.stringify({ engine: 'hermes', tmuxPane: '%1', sessionId, cwd: root, hookEvent: 'SessionStart' }),
+      body: JSON.stringify({ engine: 'hermes', tmuxPane: '%1', sessionId, cwd: root, hookEvent: 'SessionStart', ...(options.sharedGateway ? { callerPid: 4242 } : {}) }),
     })
     expect(response.status).toBe(status)
     const body = await response.json()
@@ -80,7 +116,7 @@ async function fixture(options: { waitOnResolution?: number } = {}) {
     return body
   }
   const current = () => registry.byAgent(agent.agentId)!
-  return { home, store, hook, current, registered, logs, markDeleted, resume: () => resume(),
+  return { home, store, policy, hook, current, registered, admissionHeld, logs, markDeleted, resume: () => resume(), flush: () => registry.flush(),
     knownHome: (home: string) => registry.setHermesHome(agent.agentId, home),
     seed: (sessionId: string) => registry.register({ engine: 'hermes', sessionId, tmuxPane: '%1', cwd: root, processIdentity }),
   }
@@ -111,6 +147,25 @@ it('holds a local session until Hermes stamps its creator, then binds the CLI\'s
   f.store(f.home, [[own, 'local', 'cli']])
   await vi.waitFor(() => expect(f.current().sessionId).toBe(own), { timeout: 4_000 })
   expect(f.registered).toHaveBeenCalledOnce()
+  const registered = f.registered.mock.calls[0]![0]
+  expect(registered.admissionHold).toBeUndefined()
+  const { agentFrame } = await import('./lib/agentFrame.js')
+  expect((await agentFrame(registered, { selectedModel: null, terminalAvailable: true })).identityHold).toBeUndefined()
+})
+
+it('does not notify a different hook owner after clearing its recovered admission hold', async () => {
+  const f = await fixture(), own = local(41), replacement = local(42)
+  f.store(f.home, [[own, 'local', 'unknown']])
+  await f.hook(own)
+  await vi.waitFor(() => expect(f.current().admissionHold).toBeDefined())
+  f.admissionHeld.mockImplementationOnce((_id, reason) => {
+    expect(reason).toBeUndefined()
+    delete f.current().admissionHold
+    f.current().sessionId = replacement
+  })
+  f.store(f.home, [[own, 'local', 'cli']])
+  await vi.waitFor(() => expect(f.current().sessionId).toBe(replacement), { timeout: 4_000 })
+  expect(f.registered).not.toHaveBeenCalled()
 })
 
 it.each(['cli', 'tui'])('binds a local session its %s created, in a store that also holds an older session', async surface => {
@@ -156,7 +211,7 @@ it('holds an unreadable store without binding and retries after the store recove
   writeFileSync(join(f.home, 'state.db'), 'not SQLite')
   const wanted = '20261009_120000_aaaaaa'
   await f.hook(wanted)
-  await vi.waitFor(() => expect(f.logs.some(line => line.includes('held · Hermes session source is unavailable'))).toBe(true))
+  await vi.waitFor(() => expect(f.logs.some(line => line.includes('held · Hermes session source is unavailable')), f.logs.join('\n')).toBe(true))
   expect(f.current().sessionId).toBe(previous)
   expect(f.current().hermesHome).toBeNull()
   expect(f.registered).not.toHaveBeenCalled()
@@ -350,7 +405,7 @@ it('starts with the existing binding as authority when no hook watermark exists 
   const f = await fixture()
   const a = '20261009_120000_aaaaaa', b = '20261009_120000_bbbbbb'
   f.store(f.home, [[a, 'cli'], [b, 'cli']])
-  f.seed(b)
+  await f.seed(b)
   const boundAt = f.current().boundAt!
   await f.hook(a, 200, boundAt - 1)
   await vi.waitFor(() => expect(f.logs.some(line => line.includes('ignored · stale_hook'))).toBe(true))
@@ -358,4 +413,52 @@ it('starts with the existing binding as authority when no hook watermark exists 
   await f.hook(a, 200, boundAt + 1)
   await vi.waitFor(() => expect(f.current().sessionId).toBe(a))
   expect(f.registered).toHaveBeenCalledOnce()
+})
+
+it('does not admit a Hermes source that became delegated while the durable image was held', async () => {
+  const f = await fixture(), session = local(77)
+  f.store(f.home, [[session, 'local', 'cli']])
+  let entered!: () => void, release!: () => void
+  const arrived = new Promise<void>(resolve => { entered = resolve })
+  const held = new Promise<void>(resolve => { release = resolve })
+  inspection.prepare = async () => { inspection.prepare = undefined; entered(); await held }
+  try {
+    await f.hook(session)
+    await arrived
+    f.store(f.home, [[session, 'local', 'subagent']])
+  } finally { release() }
+  await f.flush()
+  expect(f.current().sessionId).toBe('')
+  expect(f.registered).not.toHaveBeenCalled()
+})
+
+it('rechecks the captured Hermes source after the refreshed query returns', async () => {
+  const f = await fixture(), session = local(78)
+  f.store(f.home, [[session, 'local', 'cli']])
+  inspection.captured = () => {
+    inspection.captured = undefined
+    f.store(f.home, [[session, 'local', 'subagent']])
+  }
+  await f.hook(session)
+  await vi.waitFor(() => expect(inspection.captured).toBeUndefined())
+  await f.flush()
+  expect(f.current().sessionId).toBe('')
+  expect(f.registered).not.toHaveBeenCalled()
+})
+
+it('does not admit a shared Hermes hook whose creation pane changed during image preparation', async () => {
+  const f = await fixture({ sharedGateway: true }), session = local(79)
+  f.store(f.home, [[session, 'local', 'cli']]); f.policy(session, '%1')
+  let entered!: () => void, release!: () => void
+  const arrived = new Promise<void>(resolve => { entered = resolve })
+  const held = new Promise<void>(resolve => { release = resolve })
+  inspection.prepare = async () => { inspection.prepare = undefined; entered(); await held }
+  try {
+    await f.hook(session)
+    await arrived
+    f.policy(session, '%2')
+  } finally { release() }
+  await f.flush()
+  expect(f.current().sessionId).toBe('')
+  expect(f.registered).not.toHaveBeenCalled()
 })

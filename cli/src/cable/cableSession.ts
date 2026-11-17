@@ -2797,10 +2797,16 @@ export class CableSession {
     this.questionInbox.forget()
     this.greeting = false
     for (const { agentId, id, questions } of this.questionInbox.open()) {
-      if (this.liveTurns.get(agentId) === 'question' && this.questionInbox.ask(agentId, id)) {
+      if (this.owed(agentId, id) && this.questionInbox.ask(agentId, id)) {
         await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
       }
     }
+  }
+
+  /** Whether a dial that lost its questions is asked this one again. A real question whose turn moved on without a close
+   *  is not. A notice or a wait is: its owner closes it, and it stays on the dial after its turn ends. */
+  private owed(agentId: string, id: string): boolean {
+    return id.startsWith(SHOWN_ONLY_PREFIX) || this.liveTurns.get(agentId) === 'question'
   }
 
   /**
@@ -3274,6 +3280,11 @@ export class CableSession {
     // reconnect: one the inbox holds is asked once until the dial loses it. One it cannot hold is sent as it comes.
     if (this.questionInbox.read(agentId).ok && (this.greeting || !this.questionInbox.ask(agentId, id))) return
     await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
+  }
+  /** What this dial would be asked again had it lost its questions, by the same rule: for a dial plugged in beside this
+   *  one, which nothing else asks. */
+  owedQuestions(): ReturnType<QuestionInbox['open']> {
+    return this.questionInbox.open().filter(({ agentId, id }) => this.owed(agentId, id))
   }
   /** A turn ended: its agent is no longer live. */
   private endLive(agentId: string): void {

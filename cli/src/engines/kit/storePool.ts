@@ -45,7 +45,9 @@ export async function readStorePool(
     /** The statement, or one built from the store's own (non-hidden) columns: the stores of a pool may differ. */
     sql: string | ((columns: ReadonlySet<string>) => string)
     params: SqliteParam[]; maxRows: number; maxBuffer: number;
-    columns: readonly string[]; pointKey?: string; knownHome?: string },
+    columns: readonly string[]; pointKey?: string; knownHome?: string;
+    /** Retain only for this authority operation, then recheck synchronously after its awaits. */
+    capture?: (verify: () => void) => void },
 ): Promise<StorePoolRow[]> {
   const deadline = performance.now() + 2_000
   const remaining = (): number => {
@@ -143,7 +145,10 @@ export async function readStorePool(
   remaining()
   // Recheck negative claims and directory membership before the selected store's metadata.
   const selected = found.length === 1 ? declared.store(found[0].home) : null
-  verify(evidence.filter(item => item.path !== selected && item.path !== `${selected}-wal` && item.path !== `${selected}-journal`))
-  if (selected) verify(evidence.filter(item => item.path === selected || item.path === `${selected}-wal` || item.path === `${selected}-journal`))
+  const otherEvidence = evidence.filter(item => item.path !== selected && item.path !== `${selected}-wal` && item.path !== `${selected}-journal`)
+  const selectedEvidence = selected ? evidence.filter(item => item.path === selected || item.path === `${selected}-wal` || item.path === `${selected}-journal`) : []
+  const verifyResult = () => { remaining(); verify(otherEvidence); verify(selectedEvidence) }
+  verifyResult()
+  query.capture?.(verifyResult)
   return found
 }

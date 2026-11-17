@@ -70,15 +70,52 @@ function setup(live: RegisteredSession | null = agent(), terminalAvailable = tru
   const unfollow = vi.fn()
   const follow = vi.fn((listener: (event: AgentLife) => void) => { heard = listener; return unfollow })
   const core = fakeCore({
-    agents: { byAgent: vi.fn(() => live ?? undefined), terminalAvailable: vi.fn(() => terminalAvailable), sync: vi.fn(), follow },
+    agents: { byAgent: vi.fn(() => live ?? undefined), terminalAvailable: vi.fn(() => terminalAvailable), sync: vi.fn(), publishFrame: vi.fn(), follow },
   })
   const ports = emptyPorts()
   startViewers(core, ports)
-  return { core, port: ports.viewers as ViewersPort, ledger: built.ledger[0], viewers: built.viewers[0], verdicts: built.verdicts[0], forwarder: built.forwarders[0], surfaces: built.surfaces[0],
+  const published = (session: RegisteredSession = agent()) => { heard({ kind: 'running', session }); return vi.mocked(core.agents.publishFrame!).mock.calls.at(-1)?.[1] }
+  return { published, core, port: ports.viewers as ViewersPort, ledger: built.ledger[0], viewers: built.viewers[0], verdicts: built.verdicts[0], forwarder: built.forwarders[0], surfaces: built.surfaces[0],
     follow, unfollow, attach: (session: RegisteredSession) => heard({ kind: 'running', session }), detach: (agentId: string) => heard({ kind: 'ended', agentId }), heard: (event: AgentLife) => heard(event) }
 }
 
 describe('the DSH viewers service', () => {
+  it('ends publication before stopping a viewer and resumes without waiting for its watch to close', async () => {
+    const { attach, detach, viewers, core } = setup()
+    const old = { ...agent(), frameEpoch: 'run-1' }, next = { ...agent(), frameEpoch: 'run-2' }
+    attach(old)
+    let finish!: () => void
+    viewers.stop.mockImplementationOnce(() => {
+      viewers.deps.onUrl('a1', null)
+      return new Promise<void>(resolve => { finish = resolve })
+    })
+    vi.mocked(core.agents.publishFrame!).mockClear()
+    detach('a1')
+    expect(core.agents.publishFrame).not.toHaveBeenCalled()
+    attach(next)
+    expect(viewers.start).toHaveBeenCalledTimes(2)
+    viewers.deps.onUrl('a1', 'http://127.0.0.1:8000')
+    expect(core.agents.publishFrame).toHaveBeenLastCalledWith(next, expect.objectContaining({ viewerUrl: 'http://127.0.0.1:8000' }))
+    finish()
+    viewers.stop.mockRejectedValueOnce(new Error('stop failed'))
+    detach('a1')
+    await vi.waitFor(() => expect(console.warn).toHaveBeenCalledWith('[viewers] VIEWER_STOP_FAILED'))
+  })
+  it('a new core lease replaces producers before accepting their next asynchronous result', () => {
+    const { attach, viewers, verdicts, core } = setup()
+    const old = { ...agent(), frameEpoch: 'old-core:1' }, next = { ...agent(), frameEpoch: 'new-core:1' }
+    attach(old)
+    viewers.stop.mockImplementationOnce(async () => { viewers.deps.onUrl('a1', null) })
+    vi.mocked(core.agents.publishFrame!).mockClear()
+    attach(next)
+    expect(viewers.stop).toHaveBeenCalledWith('a1')
+    expect(verdicts.unwatch).toHaveBeenCalledWith('a1')
+    expect(viewers.start).toHaveBeenCalledTimes(2)
+    expect(core.agents.publishFrame).toHaveBeenCalledTimes(1)
+    expect(core.agents.publishFrame).toHaveBeenLastCalledWith(next, expect.objectContaining({ viewerUrl: null }))
+    attach({ ...next })
+    expect(viewers.stop).toHaveBeenCalledOnce()
+  })
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -97,8 +134,8 @@ describe('the DSH viewers service', () => {
 
   describe('an agent\'s frame', () => {
     it('names its harness and its viewer, with no viewer or verdict until they arrive', () => {
-      const { port } = setup()
-      expect(port.frameContext(agent())).toEqual({ id: 'blender', name: 'Blender', viewerUrl: null, viewerName: 'Blender view', verdict: null })
+      const { published } = setup()
+      expect(published(agent())).toEqual({ dsh: 'blender', dshName: 'Blender', viewerUrl: null, viewerName: 'Blender view', verdict: null })
       const [manifest, nameOf] = vi.mocked(dshViewerName).mock.calls[0]
       expect(manifest).toBe(blender.manifest)
       expect(nameOf('blender')).toBe('Blender')
@@ -108,38 +145,40 @@ describe('the DSH viewers service', () => {
     })
 
     it('carries the catalog\'s name, or none, for a harness this machine does not have', () => {
-      const { port } = setup()
+      const { published } = setup()
       vi.mocked(installedDsh).mockReturnValue(undefined)
       vi.mocked(catalogEntry).mockReturnValueOnce({ name: 'Blender (store)' } as never)
-      expect(port.frameContext(agent())).toEqual({ id: 'blender', name: 'Blender (store)', viewerUrl: null, viewerName: null, verdict: null })
-      expect(port.frameContext(agent())).toMatchObject({ name: null })
+      expect(published(agent())).toEqual({ dsh: 'blender', dshName: 'Blender (store)', viewerUrl: null, viewerName: null, verdict: null })
+      expect(published(agent())).toMatchObject({ dshName: null })
     })
 
     it('has nothing to say for an agent without a harness', () => {
-      expect(setup().port.frameContext(agent({ dsh: undefined }))).toBeNull()
+      expect(setup().published(agent({ dsh: undefined }))).toEqual({})
     })
   })
 
   describe('news from a viewer or a verdict', () => {
     it('a viewer URL is forwarded to the windows and pushed on the frame of an agent whose terminal is attached', () => {
-      const { core, port, viewers } = setup()
+      const { core, published, viewers, attach } = setup()
+      attach(agent())
       viewers.deps.onUrl('a1', 'http://127.0.0.1:7000')
       expect(core.clients.viewerChanged).toHaveBeenCalledWith('a1')
-      expect(core.agents.sync).toHaveBeenCalledWith(agent())
-      expect(port.frameContext(agent())).toMatchObject({ viewerUrl: 'http://127.0.0.1:7000' })
+      expect(core.agents.publishFrame).toHaveBeenCalledWith(agent(), expect.objectContaining({ viewerUrl: 'http://127.0.0.1:7000' }))
+      expect(published(agent())).toMatchObject({ viewerUrl: 'http://127.0.0.1:7000' })
     })
 
     it('a verdict points the viewer at its artifact, or at none', () => {
-      const { core, port, viewers, verdicts } = setup()
+      const { core, published, viewers, verdicts, attach } = setup()
+      attach(agent())
       const verdict = { status: 'pass', artifact: 'render.png', preview: 'http://127.0.0.1:5173/' }
       verdicts.deps.onChange('a1', verdict)
       expect(viewers.setVerdictArtifact).toHaveBeenCalledWith('a1', 'render.png')
       expect(viewers.setVerdictPreview).toHaveBeenCalledWith('a1', 'http://127.0.0.1:5173/')
-      expect(port.frameContext(agent())).toMatchObject({ verdict })
+      expect(published(agent())).toMatchObject({ verdict })
       verdicts.deps.onChange('a1', null)
       expect(viewers.setVerdictArtifact).toHaveBeenLastCalledWith('a1', null)
       expect(viewers.setVerdictPreview).toHaveBeenLastCalledWith('a1', null)
-      expect(core.agents.sync).toHaveBeenCalledTimes(2)
+      expect(core.agents.publishFrame).toHaveBeenLastCalledWith(agent(), expect.objectContaining({ verdict: null }))
     })
 
     it('never takes this daemon\'s own API port for an agent\'s preview', () => {
@@ -173,14 +212,14 @@ describe('the DSH viewers service', () => {
     })
 
     it('watches the verdict file in the agent\'s folder and starts its viewer', () => {
-      const { port, viewers, verdicts, attach, detach } = setup()
+      const { port, published, viewers, verdicts, attach, detach } = setup()
       attach(agent())
       expect(verdicts.watch).toHaveBeenCalledWith('a1', join('/work/scene', '.harness/verdict.json'))
       expect(viewers.start).toHaveBeenCalledWith('a1', blender, '/work/scene')
     })
 
     it('watches only the verdict of a harness with no viewer', () => {
-      const { port, viewers, verdicts, attach, detach } = setup()
+      const { port, published, viewers, verdicts, attach, detach } = setup()
       vi.mocked(installedDsh).mockReturnValueOnce({ id: 'cad', manifest: { name: 'CAD' } } as never)
       attach(agent({ dsh: 'cad' }))
       expect(verdicts.watch).toHaveBeenCalled()
@@ -201,7 +240,7 @@ describe('the DSH viewers service', () => {
       const { port, verdicts, attach, detach } = setup()
       attach(agent({ dsh: undefined }))
       attach(agent({ cwd: undefined }))
-      expect(installedDsh).not.toHaveBeenCalled()
+      // A frame may still name the installed harness; no watch is started without a folder.
       expect(verdicts.watch).not.toHaveBeenCalled()
     })
 
@@ -215,13 +254,13 @@ describe('the DSH viewers service', () => {
       expect(console.warn).toHaveBeenCalledWith('[dsh] blender viewer failed to start · no python')
     })
 
-    it('detaching stops the watch and the viewer and forgets what the frame said', () => {
-      const { port, viewers, verdicts, attach, detach } = setup()
+    it('detaching stops the watch and the viewer and forgets what the frame said', async () => {
+      const { port, published, viewers, verdicts, attach, detach } = setup()
       viewers.deps.onUrl('a1', 'http://127.0.0.1:7000')
       detach('a1')
       expect(verdicts.unwatch).toHaveBeenCalledWith('a1')
       expect(viewers.stop).toHaveBeenCalledWith('a1')
-      expect(port.frameContext(agent())).toMatchObject({ viewerUrl: null })
+      await vi.waitFor(() => expect(published(agent())).toMatchObject({ viewerUrl: null }))
     })
   })
 

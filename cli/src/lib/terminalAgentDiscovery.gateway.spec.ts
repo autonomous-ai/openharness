@@ -110,8 +110,8 @@ describe('gateway detection on the live terminal discovery path', () => {
       for (const agent of probe.agents) {
         const observed = { engine: agent.engine, runtimes: agent.runtimes, primaryRuntimeKey: agent.primaryRuntimeKey,
           cwd: agent.cwd, processIdentity: agent.processIdentity }
-        registry.openProcessAgent({ ...observed, gateway: 'ori' })
-        registry.openProcessAgent({ ...observed, gateway: agent.gateway })
+        ;(await registry.openProcessAgent({ ...observed, gateway: 'ori' }))
+        ;(await registry.openProcessAgent({ ...observed, gateway: agent.gateway }))
       }
       expect(Object.fromEntries(probe.agents.map((agent) => [agent.engine, registry.byProcess(agent.engine, agent.processIdentity)?.gateway])))
         .toEqual({ pi: null, grok: null, kilo: null, claude: 'ori' })

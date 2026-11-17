@@ -70,8 +70,8 @@ describe('MoveGate', () => {
   })
 })
 
-describe('MoveGate.releaseAll', () => {
-  it('delivers what every held agent has waiting, in order, and lets all go; a hold already draining is waited for', async () => {
+describe('MoveGate.refuseAll', () => {
+  it('refuses queued work and waits for an already-started delivery to settle', async () => {
     const gate = new MoveGate()
     const written: string[] = []
     let unblock!: () => void
@@ -81,17 +81,17 @@ describe('MoveGate.releaseAll', () => {
     gate.enqueue('b', async () => { await new Promise<void>((resolve) => { unblock = resolve }); written.push('b1') })
     gate.enqueue('b', async () => { written.push('b2') })
     expect(gate.held().sort()).toEqual(['a', 'b'])
-    // b's own release is under way: releaseAll waits for it too.
+    // b's first delivery already started; refusal must still wait for its actual settlement.
     const draining = gate.release('b')
     let done = false
-    const all = gate.releaseAll().then(() => { done = true })
-    await new Promise((resolve) => setTimeout(resolve, 10))
-    expect(written).toEqual(['a1'])
+    const all = gate.refuseAll().then(() => { done = true })
+    await Promise.resolve()
+    expect(written).toEqual([])
     expect(done).toBe(false)
     unblock()
     await all
     await draining
-    expect(written).toEqual(['a1', 'b1', 'b2'])
+    expect(written).toEqual(['b1'])
     expect(gate.held()).toEqual([])
   })
 })

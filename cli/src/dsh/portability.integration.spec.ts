@@ -4,7 +4,8 @@
  * setup assets are represented by tiny skills so it is deterministic and offline.
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -37,7 +38,9 @@ const installed = (dir: string): InstalledDsh => {
     ref: null, commit: null, linked: true, installedAt: 1 }
 }
 beforeEach(() => { root = realpathSync(mkdtempSync(join(tmpdir(), 'harness-portability-e2e-'))) })
-afterEach(() => rmSync(root, { recursive: true, force: true }))
+// The store matrix makes hundreds of per-engine skill links. Delete them off the event loop,
+// with a bounded cleanup budget independent of the product's deadlines.
+afterEach(async () => { await rm(root, { recursive: true, force: true }) }, 30_000)
 
 describe('the whole store × engine matrix', () => {
   for (const name of readdirSync(store).sort().filter(name => existsSync(join(store, name, 'harness.json')))) {
@@ -139,7 +142,7 @@ for (const engine of HARNESS_ENGINES) it(`${engine}: prepare → spawn → tool 
   const created = await createAndRegisterPane({ engine, cwd: workspace, sessionLabel: 'created',
     argv: [process.execPath, fixture], env: launch.env, dsh: pkg.id, dshRuntime: 'created',
     tmuxBackend: { create: async input => { run(input.env!); return { state: 'succeeded', dispatch: 'executed', runtime: { backend: 'tmux', paneId: '%1' } } }, kill: async () => ({ state: 'succeeded', dispatch: 'executed' }) },
-    registry: { openPendingAgent: input => { recorded = input; return { ...input, agentId: 'registered' } as RegisteredSession } } })
+    registry: { openPendingAgent: async input => { recorded = input; return { ...input, agentId: 'registered' } as RegisteredSession } } })
   expect(created.ok).toBe(true)
   expect(recorded).toMatchObject({ engine, dsh: pkg.id, dshRuntime: 'created', cwd: workspace })
   expect(JSON.parse(readFileSync(join(workspace, '.harness/verdict.json'), 'utf8'))).toEqual({ ready: true, artifact: 'scene.txt' })

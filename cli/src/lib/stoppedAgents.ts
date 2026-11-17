@@ -116,7 +116,7 @@ export class StoppedAgentStore {
   save(session: RegisteredSession): void {
     if (!SAFE_ID.test(session.agentId)) throw new Error('Invalid stopped harness identity.')
     // An exited engine leaves its pane as a shell. Stopping that shell must keep
-    // the conversation saved before releaseEngine cleared its binding/profile.
+    // the conversation saved before confirmEngineExit cleared its binding/profile.
     const previous = this.get(session.agentId)
     if (isTerminalEngine(session.engine) && previous) return
     // A temporarily unbound observation of the SAME process cannot erase a known conversation.

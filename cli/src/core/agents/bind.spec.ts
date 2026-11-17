@@ -61,8 +61,11 @@ function setup(over: Partial<BindDeps> = {}) {
   const deps: BindDeps = {
     registry: {
       inheritName: vi.fn(),
-      unbindSession: vi.fn(() => true),
-      byAgent: vi.fn((agentId: string) => byAgent.get(agentId) ?? vi.mocked(deps.registry.register).mock.results.at(-1)?.value?.entry),
+      confirmSessionUnbound: vi.fn(async (id: string) => { const row = byAgent.get(id)!; row.sessionId = ''; return { state: 'confirmed', entry: structuredClone(row) } }),
+      byAgent: vi.fn((agentId: string) => {
+        const settled = vi.mocked(deps.registry.register).mock.settledResults.at(-1)
+        return byAgent.get(agentId) ?? (settled?.type === 'fulfilled' ? settled.value?.entry : undefined)
+      }),
       byProcess: vi.fn(() => undefined),
       register: vi.fn(() => null),
       setIdentityHold: vi.fn((id: string, reason?: string) => {
@@ -112,6 +115,41 @@ function registered(run: ReturnType<typeof setup>, entry: RegisteredSession, met
 }
 
 describe('binding a registered session to its agent', () => {
+  it.each(['rebound', 'evicted', 'orphaned'] as const)('stops attachment when %s cleanup replaces the selected binding', async phase => {
+    const run = setup(), entry = agent()
+    vi.mocked(run.deps.forgetSession).mockImplementationOnce(async () => { run.byAgent.set('a1', agent({ sessionId: 'replacement' })) })
+    await registered(run, entry, meta(phase === 'rebound' ? { rebound: 'old' } : phase === 'evicted' ? { evicted: 'old' }
+      : { orphaned: { agentId: 'old' } as RegisteredSession }))
+    expect(run.deps.attachSession).not.toHaveBeenCalled()
+    expect(run.deps.announceSession).not.toHaveBeenCalled()
+    expect(run.deps.clients.send).not.toHaveBeenCalled()
+  })
+
+  it.each(['same', 'changing', 'replaced', 'not-published', 'empty', 'receipt changed'] as const)(
+    'only announces a failed attach unbind with confirmed current authority: %s', async change => {
+      let changing = false
+      const run = setup(), entry = agent()
+      run.binding.whileChanging(() => changing)
+      vi.mocked(run.deps.attachSession).mockResolvedValue(false)
+      const publish = vi.mocked(run.deps.registry.confirmSessionUnbound).getMockImplementation()!
+      vi.mocked(run.deps.registry.confirmSessionUnbound).mockImplementation(async (id, session, authority) => {
+        vi.mocked(run.deps.announceSession).mockClear()
+        expect(authority?.current?.()).toBe(true)
+        if (change === 'changing') changing = true
+        if (change === 'replaced') run.byAgent.set('a1', agent({ sessionId: 'replacement' }))
+        if (change === 'changing' || change === 'replaced') {
+          expect(authority?.current?.()).toBe(false)
+          return { state: 'not-published' }
+        }
+        if (change === 'not-published') return { state: 'not-published' }
+        if (change === 'empty') return { state: 'confirmed', entry: null }
+        const result = await publish(id, session, authority)
+        if (change === 'receipt changed') run.byAgent.set('a1', agent({ sessionId: 'replacement' }))
+        return result
+      })
+      await registered(run, entry, meta())
+      expect(run.deps.announceSession).toHaveBeenCalledTimes(change === 'same' ? 1 : 0)
+    })
   beforeEach(() => { vi.spyOn(console, 'log').mockImplementation(() => {}) })
   afterEach(() => {
     vi.restoreAllMocks()
@@ -200,7 +238,7 @@ describe('binding a registered session to its agent', () => {
     expect(run.deps.announceSession).not.toHaveBeenCalled()
     expect(run.deps.stoppedAgents.save).not.toHaveBeenCalled()
     expect(run.deps.registry.inheritName).not.toHaveBeenCalled()
-    expect(run.deps.registry.unbindSession).not.toHaveBeenCalled()
+    expect(run.deps.registry.confirmSessionUnbound).not.toHaveBeenCalled()
   })
 
   it('does not start an optional reader if the binding changes during the transcript birth read', async () => {
@@ -235,9 +273,26 @@ describe('binding a registered session to its agent', () => {
     const run = setup({ attachSession: vi.fn(async () => false) })
     const entry = agent()
     await registered(run, entry, meta({ isNew: true }))
-    expect(run.deps.registry.unbindSession).toHaveBeenCalledWith('s1')
+    expect(run.deps.registry.confirmSessionUnbound).toHaveBeenCalledWith('a1', 's1', expect.any(Object))
     expect(run.deps.announceSession).toHaveBeenCalledWith(entry)
     expect(run.deps.syncRecapPool).toHaveBeenCalled()
+  })
+
+  it('keeps an attach-failure unbind announcement behind its durable publication', async () => {
+    const run = setup({ attachSession: vi.fn(async () => false) }), entry = agent()
+    let release!: () => void, entered!: () => void
+    const held = new Promise<void>(done => { release = done }), publishing = new Promise<void>(done => { entered = done })
+    Object.assign(run.deps.registry, { confirmSessionUnbound: vi.fn(async () => {
+      entered(); await held
+      entry.sessionId = ''
+      return { state: 'confirmed', entry: structuredClone(entry) }
+    }) })
+    const pending = registered(run, entry, meta())
+    try {
+      expect(await Promise.race([publishing.then(() => 'publishing'), pending.then(() => 'finished')])).toBe('publishing')
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
+    } finally { release(); await pending }
+    expect(run.deps.announceSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: '' }))
   })
 
   it('keeps the verified conversation when a native exit beats its pending startup attach', async () => {
@@ -248,7 +303,7 @@ describe('binding a registered session to its agent', () => {
     await vi.waitFor(() => expect(run.deps.attachSession).toHaveBeenCalled())
     finish(false)
     await pending
-    expect(run.deps.registry.unbindSession).not.toHaveBeenCalled()
+    expect(run.deps.registry.confirmSessionUnbound).not.toHaveBeenCalled()
     expect(entry.sessionId).toBe('s1')
     expect(run.deps.announceSession).toHaveBeenCalledWith(entry)
     expect(run.deps.stoppedAgents.save).toHaveBeenCalledWith(entry)
@@ -264,11 +319,11 @@ describe('binding a registered session to its agent', () => {
     const entry = agent()
     await registered(run, entry, meta())
     expect(changing).toHaveBeenCalledWith('a1')
-    expect(run.deps.registry.unbindSession).not.toHaveBeenCalled()
+    expect(run.deps.registry.confirmSessionUnbound).not.toHaveBeenCalled()
     expect(run.deps.announceSession).toHaveBeenCalledWith(entry)
     // An agent nothing owns is unbound as before.
     await registered(run, agent({ agentId: 'a2', sessionId: 's2' }), meta())
-    expect(run.deps.registry.unbindSession).toHaveBeenCalledWith('s2')
+    expect(run.deps.registry.confirmSessionUnbound).toHaveBeenCalledWith('a2', 's2', expect.any(Object))
   })
 
   it('hands a rebound agent its name and recap, and lets the stale session go', async () => {
@@ -276,7 +331,7 @@ describe('binding a registered session to its agent', () => {
     await registered(run, agent({ sessionId: 's2' }), meta({ rebound: 's1' }))
     expect(run.deps.registry.inheritName).toHaveBeenCalledWith('s1', 's2')
     expect(run.deps.mirror.inheritSummary).toHaveBeenCalledWith('s1', 's2')
-    expect(run.deps.forgetSession).toHaveBeenCalledWith('s1', { force: true, keepAgent: true })
+    expect(run.deps.forgetSession).toHaveBeenCalledWith('s1', { force: true, keepAgent: true, agentId: 'a1' })
     expect(run.deps.clients.send).toHaveBeenCalledWith({ type: 'session_reset', payload: { staleSessionId: 's1' } })
   })
 
@@ -364,7 +419,7 @@ describe('binding a running process to its session', () => {
   it('does not wait for optional transcript attachment before completing binding', async () => {
     const run = setup({ attachSession: vi.fn(() => new Promise<boolean>(() => {})) })
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ sessionId: '' }))
-    vi.mocked(run.deps.registry.register).mockReturnValue({ entry: agent(), ...meta({ isNew: true }) } as never)
+    vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: agent(), ...meta({ isNew: true }) } as never)
     let done = false
     void run.binding.bindObservedAgent(observed({ resumeSessionId: 'resumed' })).then(() => { done = true })
     await vi.waitFor(() => expect(done).toBe(true), { timeout: 1000 })
@@ -375,6 +430,7 @@ describe('binding a running process to its session', () => {
   it.each([new Error('saved header is incomplete'), 'saved header is incomplete'])(
     'keeps a saved binding visibly held until its own evidence recovers: %s', async error => {
       const run = setup(), row = agent({ transcriptPath: '/t/s1.jsonl', identityHold: 'previous hold' })
+      run.byAgent.set(row.agentId, row)
       vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
       vi.mocked(run.deps.registry.revalidateBinding).mockImplementationOnce(() => { throw error })
         .mockImplementationOnce(() => { throw error })
@@ -383,7 +439,7 @@ describe('binding a running process to its session', () => {
       expect(row).toMatchObject({ sessionId: 's1', transcriptPath: '/t/s1.jsonl', identityHold: 'saved header is incomplete' })
       expect(run.deps.announceSession).toHaveBeenCalledOnce()
       expect(continuationOf).not.toHaveBeenCalled()
-      expect(run.deps.registry.unbindSession).not.toHaveBeenCalled()
+      expect(run.deps.registry.confirmSessionUnbound).not.toHaveBeenCalled()
       expect(run.deps.stoppedAgents.save).not.toHaveBeenCalled()
       await run.binding.bindObservedAgent(observed())
       expect(row).not.toHaveProperty('identityHold')
@@ -394,17 +450,35 @@ describe('binding a running process to its session', () => {
   it('does not follow a saved binding removed while its retry commits', async () => {
     const run = setup(), row = agent({ transcriptPath: '/t/s1.jsonl', identityHold: 'unavailable' })
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
-    vi.mocked(run.deps.registry.revalidateBinding).mockReturnValue(null)
+    vi.mocked(run.deps.registry.revalidateBinding).mockResolvedValue(null)
     await run.binding.bindObservedAgent(observed())
     expect(run.deps.announceSession).not.toHaveBeenCalled()
     expect(continuationOf).not.toHaveBeenCalled()
+  })
+
+  it.each(['cleanup', 'rejected preparation'] as const)('does not announce an old revalidation after %s changes its owner', async phase => {
+    const run = setup(), row = agent({ transcriptPath: '/t/s1.jsonl', identityHold: 'unavailable' })
+    run.byAgent.set('a1', row)
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    if (phase === 'cleanup') {
+      vi.mocked(run.deps.registry.revalidateBinding).mockImplementationOnce(async () => {
+        row.sessionId = ''; delete row.identityHold; return structuredClone(row)
+      })
+      vi.mocked(run.deps.forgetSession).mockImplementationOnce(async () => { run.byAgent.set('a1', agent({ sessionId: 'replacement' })) })
+    } else vi.mocked(run.deps.registry.revalidateBinding).mockImplementationOnce(async () => {
+      run.byAgent.set('a1', agent({ sessionId: 'replacement' }))
+      throw new Error('preparation revoked')
+    })
+    await run.binding.bindObservedAgent(observed())
+    expect(run.deps.announceSession).not.toHaveBeenCalled()
+    expect(run.deps.registry.setIdentityHold).not.toHaveBeenCalled()
   })
 
   it.each(['repaired', 'same', 'absent'] as const)('updates transcript attachment after a held binding is conclusively %s', async outcome => {
     const run = setup(), row = agent({ transcriptPath: '/t/child.jsonl', identityHold: 'unavailable' })
     run.byAgent.set(row.agentId, row)
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
-    vi.mocked(run.deps.registry.revalidateBinding).mockImplementation(() => {
+    vi.mocked(run.deps.registry.revalidateBinding).mockImplementation(async () => {
       Object.assign(row, { sessionId: outcome === 'absent' ? '' : 's1', transcriptPath: outcome === 'absent' ? null : outcome === 'same' ? row.transcriptPath : '/t/parent.jsonl' })
       delete row.identityHold
       return row
@@ -443,7 +517,7 @@ describe('binding a running process to its session', () => {
     run.byAgent.set(row.agentId, row)
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
     await run.binding.bindObservedAgent(observed({ engine: 'copilot' }))
-    expect(run.deps.registry.revalidateBinding).toHaveBeenCalledWith('a1')
+    expect(run.deps.registry.revalidateBinding).toHaveBeenCalledWith('a1', { current: expect.any(Function) })
     expect(run.deps.followsLive).toHaveBeenCalledWith('s1')
     expect(row).not.toHaveProperty('identityHold')
     await vi.waitFor(() => expect(run.deps.attachSession).toHaveBeenCalledWith(row, true, false, false))
@@ -468,7 +542,7 @@ describe('binding a running process to its session', () => {
     expect(row).toMatchObject({ sessionId: '', identityHold: 'binding evidence changed' })
     expect(run.deps.registry.revalidateBinding).not.toHaveBeenCalled()
     expect(run.deps.stoppedAgents.save).not.toHaveBeenCalled()
-    vi.mocked(run.deps.registry.register).mockReturnValue({ entry: agent(), ...meta({ isNew: true }) } as never)
+    vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: agent(), ...meta({ isNew: true }) } as never)
     await run.binding.bindObservedAgent(observed({ resumeSessionId: 'resumed' }))
     expect(run.deps.attachSession).toHaveBeenCalledOnce()
   })
@@ -570,11 +644,11 @@ describe('binding a running process to its session', () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {})
     const run = setup({ attachSession: vi.fn(async () => { throw error }) })
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ sessionId: '' }))
-    vi.mocked(run.deps.registry.register).mockReturnValue({ entry: agent(), ...meta({ isNew: true }) } as never)
+    vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: agent(), ...meta({ isNew: true }) } as never)
     await run.binding.bindObservedAgent(observed({ resumeSessionId: 'resumed' }))
     await vi.waitFor(() => expect(log).toHaveBeenCalledWith('[agent] a1 transcript attachment is unavailable: reader unavailable'))
     expect(run.deps.registry.register).toHaveBeenCalledOnce()
-    expect(run.deps.registry.unbindSession).not.toHaveBeenCalled()
+    expect(run.deps.registry.confirmSessionUnbound).not.toHaveBeenCalled()
   })
 
   it.each(['binding', 'process', 'stop', 'changing'] as const)('discards a delayed lookup after %s changed its authority', async change => {
@@ -655,7 +729,7 @@ describe('binding a running process to its session', () => {
       expect(run.deps.registry.register).not.toHaveBeenCalled()
       vi.mocked(processSessionOf).mockResolvedValue('s2')
       const rotated = agent({ engine: 'copilot', sessionId: 's2' } as Partial<RegisteredSession>)
-      vi.mocked(run.deps.registry.register).mockReturnValueOnce({ entry: rotated, ...meta({ isNew: true }) } as never)
+      vi.mocked(run.deps.registry.register).mockResolvedValueOnce({ entry: rotated, ...meta({ isNew: true }) } as never)
       await run.binding.bindObservedAgent(observed({ engine: 'copilot' }))
       expect(processSessionOf).toHaveBeenLastCalledWith('copilot', '/copilot', 42)
       expect(transcriptOf).toHaveBeenLastCalledWith('copilot', '/copilot', 's2')
@@ -663,7 +737,7 @@ describe('binding a running process to its session', () => {
       expect(run.deps.attachSession).toHaveBeenCalledWith(rotated, true, false, false)
       // Not new to the registry, or no transcript yet: registered as it is, attached by its hook later.
       vi.mocked(transcriptOf).mockResolvedValueOnce(null)
-      vi.mocked(run.deps.registry.register).mockReturnValueOnce({ entry: rotated, ...meta() } as never)
+      vi.mocked(run.deps.registry.register).mockResolvedValueOnce({ entry: rotated, ...meta() } as never)
       await run.binding.bindObservedAgent(observed({ engine: 'copilot' }))
       expect(vi.mocked(run.deps.registry.register).mock.calls[1][0]).toMatchObject({ transcriptPath: undefined })
       expect(run.deps.attachSession).toHaveBeenCalledTimes(1)
@@ -681,12 +755,12 @@ describe('binding a running process to its session', () => {
       for (let i = 0; i < 3; i++) await run.binding.bindObservedAgent(observed())
       expect(run.deps.registry.register).not.toHaveBeenCalled()
       vi.mocked(continuationOf).mockResolvedValue({ sessionId: 's2', transcriptPath: '/t/s2.jsonl' } as never)
-      vi.mocked(run.deps.registry.register).mockReturnValueOnce({ entry: agent({ sessionId: 's2' }), ...meta({ isNew: true }) } as never)
+      vi.mocked(run.deps.registry.register).mockResolvedValueOnce({ entry: agent({ sessionId: 's2' }), ...meta({ isNew: true }) } as never)
       await run.binding.bindObservedAgent(observed())
       expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({ engine: 'claude', sessionId: 's2', source: 'claude-continuation', hookEvent: 'ClaudeContinuation' })
       expect(continuationOf).toHaveBeenCalledWith('claude', '/t/s1.jsonl')
       expect(run.deps.attachSession).toHaveBeenCalledTimes(1)
-      vi.mocked(run.deps.registry.register).mockReturnValueOnce(null)
+      vi.mocked(run.deps.registry.register).mockResolvedValueOnce(null)
       await run.binding.bindObservedAgent(observed())
       expect(run.deps.attachSession).toHaveBeenCalledTimes(1)
     })
@@ -788,7 +862,7 @@ describe('binding a running process to its session', () => {
       vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ sessionId: '' }))
       const previous = agent({ agentId: 'old', processIdentity: { pid: 1, startMarker: '2026-10-04T09:00:00Z' } } as Partial<RegisteredSession>)
       run.bySession.set('r', previous)
-      vi.mocked(run.deps.registry.register).mockReturnValue({ entry: agent({ sessionId: 'r' }), ...meta({ isNew: true }) } as never)
+      vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: agent({ sessionId: 'r' }), ...meta({ isNew: true }) } as never)
       await run.binding.bindObservedAgent(observed({ resumeSessionId: 'r' } as Partial<DiscoveredTerminalAgent>))
       expect(run.deps.input.forget).toHaveBeenCalledWith('old')
       expect(run.deps.deviceInput.forget).toHaveBeenCalledWith('old')
@@ -844,7 +918,7 @@ describe('binding a running process to its session', () => {
       const run = setup()
       vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ sessionId: '', codexHome: '/codex', hermesHome: '/hermes' } as Partial<RegisteredSession>))
       vi.mocked(findLiveSession).mockResolvedValueOnce({ sessionId: 'found', transcriptPath: '/t/found.jsonl', hermesHome: '/hermes' } as never)
-      vi.mocked(run.deps.registry.register).mockReturnValue({ entry: agent({ sessionId: 'found' }), ...meta({ isNew: true }) } as never)
+      vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: agent({ sessionId: 'found' }), ...meta({ isNew: true }) } as never)
       await run.binding.bindObservedAgent(observed({ engine: 'hermes' }))
       expect(findLiveSession).toHaveBeenCalledWith('hermes', '/work', expect.any(Number), expect.objectContaining({ hermesHome: '/hermes' }))
       expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({
@@ -869,7 +943,7 @@ describe('binding a running process to its session', () => {
       await run.binding.bindObservedAgent(observed())
       // Registered but not new: nothing more to do.
       vi.mocked(findLiveSession).mockResolvedValueOnce({ sessionId: 'same' } as never)
-      vi.mocked(run.deps.registry.register).mockReturnValueOnce({ entry: agent({ sessionId: 'same' }), ...meta() } as never)
+      vi.mocked(run.deps.registry.register).mockResolvedValueOnce({ entry: agent({ sessionId: 'same' }), ...meta() } as never)
       await run.binding.bindObservedAgent(observed())
       expect(run.deps.registry.register).toHaveBeenCalledTimes(1)
       expect(run.deps.attachSession).not.toHaveBeenCalled()
@@ -913,7 +987,7 @@ describe('binding a running process to its session', () => {
       follow.mockResolvedValue({ sessionId: 'S' })
       await run.binding.bindObservedAgent(hermes({ sandbox: { cwd: '/work' } }))
       expect(follow).toHaveBeenCalledWith(entry, expect.objectContaining({ sandboxed: true }), expect.anything())
-      expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'S', source: 'hermes-terminal' }))
+      expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'S', source: 'hermes-terminal' }), { current: expect.any(Function) })
     })
 
     it('binds an unbound Hermes to the session its record names, without the repair', async () => {
@@ -926,7 +1000,7 @@ describe('binding a running process to its session', () => {
       expect(findLiveSession).not.toHaveBeenCalled()
       expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ engine: 'hermes', sessionId: 'S', hermesHome: '/data/agents/a1/.hermes',
         cwd: '/data/work/p1', source: 'hermes-terminal', hookEvent: 'HermesTerminal', runtimes: seen.runtimes,
-        primaryRuntimeKey: seen.primaryRuntimeKey, processIdentity: seen.processIdentity }))
+        primaryRuntimeKey: seen.primaryRuntimeKey, processIdentity: seen.processIdentity }), { current: expect.any(Function) })
       expect(vi.mocked(run.deps.registry.register).mock.calls.at(-1)![0]).not.toHaveProperty('hermesHomeDerived')
       expect(run.deps.attachSession).toHaveBeenCalledOnce()
       expect(said()).toEqual(['[discovery] bound hermes session S via tmux:%0'])
@@ -937,7 +1011,7 @@ describe('binding a running process to its session', () => {
       const { run } = withRecord()
       follow.mockResolvedValue({ sessionId: 'S', hermesHome: '/data/agents/a1/.hermes' })
       await run.binding.bindObservedAgent(hermes({ hermesHomeDerived: true }))
-      expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ hermesHome: '/data/agents/a1/.hermes', hermesHomeDerived: true }))
+      expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ hermesHome: '/data/agents/a1/.hermes', hermesHomeDerived: true }), { current: expect.any(Function) })
       // No home given: no mark of its own.
       follow.mockResolvedValue({ sessionId: 'T' })
       await run.binding.bindObservedAgent(hermes({ hermesHomeDerived: true }))
@@ -963,11 +1037,11 @@ describe('binding a running process to its session', () => {
       await run.binding.bindObservedAgent(seen)
       expect(said()).toEqual(['[discovery] a1 switched hermes session old → S'])
       expect(run.deps.registry.register).toHaveBeenCalledExactlyOnceWith({ engine: 'hermes', sessionId: 'S', cwd: '/work', source: 'hermes-terminal',
-        runtimes: seen.runtimes, primaryRuntimeKey: seen.primaryRuntimeKey, processIdentity: seen.processIdentity, hookEvent: 'HermesTerminal' })
+        runtimes: seen.runtimes, primaryRuntimeKey: seen.primaryRuntimeKey, processIdentity: seen.processIdentity, hookEvent: 'HermesTerminal' }, { current: expect.any(Function) })
       expect(run.deps.attachSession).toHaveBeenCalledOnce()
       expect(findLiveSession).not.toHaveBeenCalled()
       // A rotation the registry refused, or one that was not new, attaches nothing more.
-      vi.mocked(run.deps.registry.register).mockReturnValueOnce(null).mockReturnValueOnce({ entry: agent({ engine: 'hermes', sessionId: 'S' }), ...meta() } as never)
+      vi.mocked(run.deps.registry.register).mockResolvedValueOnce(null).mockReturnValueOnce({ entry: agent({ engine: 'hermes', sessionId: 'S' }), ...meta() } as never)
       await run.binding.bindObservedAgent(seen)
       await run.binding.bindObservedAgent(seen)
       expect(run.deps.attachSession).toHaveBeenCalledOnce()
@@ -977,10 +1051,10 @@ describe('binding a running process to its session', () => {
 
     it('confirms a resumed Hermes without a switch', async () => {
       const { run } = withRecord({ sessionId: 'S', resumeOnly: true, lastHookAt: 0 })
-      vi.mocked(run.deps.registry.register).mockReturnValue({ entry: agent({ engine: 'hermes', sessionId: 'S' }), ...meta() } as never)
+      vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: agent({ engine: 'hermes', sessionId: 'S' }), ...meta() } as never)
       follow.mockResolvedValue({ sessionId: 'S' })
       await run.binding.bindObservedAgent(hermes())
-      expect(run.deps.registry.register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: 'S', source: 'hermes-terminal', hookEvent: 'HermesTerminal' }))
+      expect(run.deps.registry.register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: 'S', source: 'hermes-terminal', hookEvent: 'HermesTerminal' }), { current: expect.any(Function) })
       expect(said()).toEqual([])
       expect(run.deps.attachSession).not.toHaveBeenCalled()
     })
@@ -1011,12 +1085,12 @@ describe('binding a running process to its session', () => {
       vi.mocked(findLiveSession).mockResolvedValueOnce({ sessionId: 'found' } as never)
       await run.binding.bindObservedAgent(hermes({ cwd: '/data/work/p1', sandbox: { cwd: '/work' } }))
       expect(findLiveSession).toHaveBeenCalledWith('hermes', '/work', expect.any(Number), expect.anything())
-      expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/data/work/p1', source: 'process-repair' }))
+      expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/data/work/p1', source: 'process-repair' }), { current: expect.any(Function) })
       expect(fellBack).toHaveBeenCalledExactlyOnceWith('a1')
       // Found nothing, or bound nothing new: nothing said.
       await run.binding.bindObservedAgent(hermes())
       vi.mocked(findLiveSession).mockResolvedValueOnce({ sessionId: 'again' } as never)
-      vi.mocked(run.deps.registry.register).mockReturnValueOnce({ entry: agent({ engine: 'hermes', sessionId: 'again' }), ...meta() } as never)
+      vi.mocked(run.deps.registry.register).mockResolvedValueOnce({ entry: agent({ engine: 'hermes', sessionId: 'again' }), ...meta() } as never)
       await run.binding.bindObservedAgent(hermes())
       expect(fellBack).toHaveBeenCalledOnce()
     })
@@ -1025,7 +1099,7 @@ describe('binding a running process to its session', () => {
       const { run } = withRecord({ engine: 'claude' })
       vi.mocked(findLiveSession).mockResolvedValueOnce({ sessionId: 'found', transcriptPath: '/t/found.jsonl' } as never)
       await run.binding.bindObservedAgent(observed())
-      expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ engine: 'claude', source: 'process-repair' }))
+      expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ engine: 'claude', source: 'process-repair' }), { current: expect.any(Function) })
       expect(follow).not.toHaveBeenCalled()
       expect(fellBack).not.toHaveBeenCalled()
       // A Hermes in a sandbox it cannot see, with no record's judgment, is left to the repair as before.
@@ -1358,7 +1432,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     const run = setup({ capturePane: vi.fn(async () => screen('screen-two-panes-main-a')), openclawStateDir: vi.fn(async () => '/h/.openclaw-work') })
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane())
     const bound = pane({ sessionId: 'agent:main:main' })
-    vi.mocked(run.deps.registry.register).mockReturnValue({ entry: bound, ...meta({ isNew: true }) } as never)
+    vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: bound, ...meta({ isNew: true }) } as never)
     await run.binding.bindObservedAgent(tui())
     // `main` existed long before this TUI started, and is bound all the same: no repair by birth time.
     expect(findLiveSession).not.toHaveBeenCalled()
@@ -1402,7 +1476,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     expect(run.deps.registry.register).not.toHaveBeenCalled()
     // The same pane reconnected to this machine's Gateway: the state goes, and the key is bound.
     shown = screen('screen-plain')
-    vi.mocked(run.deps.registry.register).mockReturnValue({ entry: pane({ sessionId: 'agent:main:plain' }), ...meta({ isNew: true }) } as never)
+    vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: pane({ sessionId: 'agent:main:plain' }), ...meta({ isNew: true }) } as never)
     await run.binding.bindObservedAgent(tui())
     expect(row).not.toHaveProperty('identityHold')
     expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({ sessionId: 'agent:main:plain' })
@@ -1416,7 +1490,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     expect(run.deps.registry.register).not.toHaveBeenCalled()
     shown = screen('screen-reset-new')
     const moved = pane({ sessionId: 'agent:main:tui-652cc362-2631-416e-bf1c-6ac369311a20' })
-    vi.mocked(run.deps.registry.register).mockReturnValue({ entry: moved, ...meta({ isNew: true, rebound: 'agent:main:reset' }) } as never)
+    vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: moved, ...meta({ isNew: true, rebound: 'agent:main:reset' }) } as never)
     await run.binding.bindObservedAgent(tui())
     expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({
       sessionId: 'agent:main:tui-652cc362-2631-416e-bf1c-6ac369311a20', source: 'openclaw-new', hookEvent: 'OpenclawNew',
@@ -1439,7 +1513,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     expect(long).not.toContain('agent:main:main')
     const run = setup({ capturePane: vi.fn(async () => long) })
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane())
-    vi.mocked(run.deps.registry.register).mockReturnValue({ entry: pane({ sessionId: 'agent:main:main' }), ...meta({ isNew: true }) } as never)
+    vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: pane({ sessionId: 'agent:main:main' }), ...meta({ isNew: true }) } as never)
     await run.binding.bindObservedAgent(tui())
     expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({ sessionId: 'agent:main:main' })
   })
@@ -1461,7 +1535,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     expect(run.deps.registry.register).not.toHaveBeenCalled()
     // Drawn: its own key, bound as a new binding, so nothing renames it after the old agent.
     shown += ` openclaw tui - ws://127.0.0.1:18789 - agent main - session other\n connected | idle\n agent main | session other | m/m | deliver:off | tokens ?\n${'─'.repeat(40)}\n\n${'─'.repeat(40)}\n`
-    vi.mocked(run.deps.registry.register).mockReturnValue({ entry: pane({ sessionId: 'agent:main:other' }), ...meta({ isNew: true }) } as never)
+    vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: pane({ sessionId: 'agent:main:other' }), ...meta({ isNew: true }) } as never)
     await run.binding.bindObservedAgent(tui({ processIdentity: { pid: 7800, startMarker: '2026-11-10T08:00:00Z', executable: 'openclaw' } }))
     expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({ sessionId: 'agent:main:other', source: 'openclaw-footer' })
   })
@@ -1794,7 +1868,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     it('a first task is handed over on the first pass that reads the pane ready', async () => {
       const error = vi.spyOn(console, 'error').mockImplementation(() => {})
       const run = handing(() => ready)
-      vi.mocked(run.deps.registry.takeFirstTask).mockReturnValue(TASK)
+      vi.mocked(run.deps.registry.takeFirstTask).mockResolvedValue(TASK)
       await run.binding.bindObservedAgent(tui())
       await vi.waitFor(() => expect(run.deps.submitAgent).toHaveBeenCalled())
       // The person's own message to the agent, where its confirmation arrives (core/turns/funnel.ts): no delivery id.
@@ -1833,7 +1907,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     it('ready, busy, ready hands it over once', async () => {
       let shown = ready
       const run = handing(() => shown)
-      vi.mocked(run.deps.registry.takeFirstTask).mockReturnValueOnce(TASK).mockReturnValue(null)
+      vi.mocked(run.deps.registry.takeFirstTask).mockResolvedValueOnce(TASK).mockResolvedValue(null)
       await run.binding.bindObservedAgent(tui())
       shown = running
       await run.binding.bindObservedAgent(tui())
@@ -1866,7 +1940,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     it('a submit that throws is said', async () => {
       const error = vi.spyOn(console, 'error').mockImplementation(() => {})
       const run = handing(() => ready, { submitAgent: vi.fn(() => { throw new Error('pane gone') }) })
-      vi.mocked(run.deps.registry.takeFirstTask).mockReturnValue(TASK)
+      vi.mocked(run.deps.registry.takeFirstTask).mockResolvedValue(TASK)
       await run.binding.bindObservedAgent(tui())
       await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[agent] a1 first task not typed · pane gone'))
     })
@@ -1878,7 +1952,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       const run = handing(() => ready)
       vi.mocked(run.deps.registry.afterTransaction).mockImplementation(((action: () => unknown) =>
         new Promise((resolve) => { commit = () => resolve(action()) })) as never)
-      vi.mocked(run.deps.registry.takeFirstTask).mockReturnValue(TASK)
+      vi.mocked(run.deps.registry.takeFirstTask).mockResolvedValue(TASK)
       await run.binding.bindObservedAgent(tui())
       expect(run.deps.registry.afterTransaction).toHaveBeenCalledOnce()
       expect(run.deps.registry.takeFirstTask).not.toHaveBeenCalled()
@@ -1890,13 +1964,13 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     it('a pane that moved to another key binds first', async () => {
       // `/new` before the task was typed: the pane shows a session the agent is not bound to yet.
       const run = handing(() => ready.replace(/session plain/g, 'session other'))
-      vi.mocked(run.deps.registry.register).mockReturnValue({ entry: pane({ sessionId: 'agent:main:other', firstTask: TASK }), ...meta({ isNew: true }) } as never)
+      vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: pane({ sessionId: 'agent:main:other', firstTask: TASK }), ...meta({ isNew: true }) } as never)
       await run.binding.bindObservedAgent(tui())
       expect(run.deps.registry.takeFirstTask).not.toHaveBeenCalled()
       expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({ sessionId: 'agent:main:other', source: 'openclaw-new' })
       // The next pass reads the row bound to the key the pane shows, and hands the task to that session.
       vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:other', firstTask: TASK }))
-      vi.mocked(run.deps.registry.takeFirstTask).mockReturnValue(TASK)
+      vi.mocked(run.deps.registry.takeFirstTask).mockResolvedValue(TASK)
       await run.binding.bindObservedAgent(tui())
       await vi.waitFor(() => expect(run.deps.submitAgent).toHaveBeenCalledWith('a1', TASK))
     })
@@ -1931,7 +2005,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
         emit: vi.fn(),
       })
       const run = handing(() => ready, { input: inputs.input, submitAgent: inputs.submitAgent })
-      vi.mocked(run.deps.registry.takeFirstTask).mockReturnValue(TASK)
+      vi.mocked(run.deps.registry.takeFirstTask).mockResolvedValue(TASK)
       await run.binding.bindObservedAgent(tui())
       await vi.advanceTimersByTimeAsync(1_000)
       expect(typed).toEqual([TASK])
@@ -1960,7 +2034,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       await run.binding.bindObservedAgent(tui())
       expect(run.deps.openclawStateDir).toHaveBeenCalledWith(7714)
       expect(run.deps.registry.setOpenclawStateDir).toHaveBeenCalledWith('a1', '/new')
-      expect(vi.mocked(run.deps.forgetSession).mock.calls).toEqual([['agent:main:plain', { force: true, keepAgent: true }]])
+      expect(vi.mocked(run.deps.forgetSession).mock.calls).toEqual([['agent:main:plain', { force: true, keepAgent: true, agentId: 'a1' }]])
       expect(console.log).toHaveBeenCalledWith('[discovery] a1 openclaw · state folder changed')
       // The task waits for the session read from the new folder: the next pass binds it again, then hands it over.
       expect(run.deps.registry.afterTransaction).not.toHaveBeenCalled()
@@ -1978,7 +2052,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       // Relaunched since, its stream's store is the one the TUI before it named: the new folder is read again.
       vi.mocked(run.deps.openclawStateDir).mockResolvedValue('/new')
       await run.binding.bindObservedAgent(tui({ processIdentity: { pid: 7715, startMarker: '2026-11-10T09:00:00Z', executable: 'openclaw' } }))
-      expect(vi.mocked(run.deps.forgetSession).mock.calls).toEqual([['agent:main:plain', { force: true, keepAgent: true }]])
+      expect(vi.mocked(run.deps.forgetSession).mock.calls).toEqual([['agent:main:plain', { force: true, keepAgent: true, agentId: 'a1' }]])
     })
 
     it('the folder is read once per TUI process', async () => {
@@ -2041,7 +2115,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
 
     it('a local run\'s first task is typed once its pane reads local ready', async () => {
       const run = running(() => local('local ready | idle'), { firstTask: 'Fix the parser' })
-      vi.mocked(run.deps.registry.takeFirstTask).mockReturnValue('Fix the parser')
+      vi.mocked(run.deps.registry.takeFirstTask).mockResolvedValue('Fix the parser')
       await run.binding.bindObservedAgent(tui())
       await vi.waitFor(() => expect(run.deps.submitAgent).toHaveBeenCalled())
       expect(vi.mocked(run.deps.submitAgent).mock.calls).toEqual([['a1', 'Fix the parser']])
@@ -2098,7 +2172,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       let shown = local('local ready | idle')
       const run = running(() => shown, { sessionId: '' })
       const bound = pane({ sessionId: 'agent:main:plain', openclawLocal: FOLDER, openclawStateDir: FOLDER } as Partial<RegisteredSession>)
-      vi.mocked(run.deps.registry.register).mockReturnValue({ entry: bound, ...meta({ isNew: true }) } as never)
+      vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: bound, ...meta({ isNew: true }) } as never)
       await run.binding.bindObservedAgent(tui())
       expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({ sessionId: 'agent:main:plain', source: 'openclaw-footer' })
       // A pass under a new TUI process, the row bound.

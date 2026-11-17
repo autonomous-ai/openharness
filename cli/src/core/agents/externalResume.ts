@@ -42,7 +42,7 @@ export interface ExternalResumeDeps {
   preflight(row: RegisteredSession, session: NonNullable<ExternalResumeIntent['session']>, current?: () => boolean): Promise<{ detail: string } | { current(): boolean } | null>
   announce(row: RegisteredSession): void
   launch(): void
-  forget(agentId: string): void
+  forget(agentId: string): Promise<void>
   stopOwner?: typeof stopExternalOwner
   /** The agent whose conversation [sessionId] is, when a move a dead daemon left may still run its engine (main.ts
    *  `moveHeld`): adopted, it would get a second engine beside that one. Null for any other. */
@@ -66,10 +66,11 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
     let row = initial
     const current = () => !stopped && !deps.cancelled(row.agentId) && !occupied(row)
       && identity(deps.registry.byAgent(row.agentId)) === identity(row)
-    const commit = (intent: ExternalResumeIntent) => {
+    const commit = async (intent: ExternalResumeIntent, refresh?: () => Promise<void>) => {
       if (!current()) return false
-      const changed = deps.registry.setExternalResume(row.agentId, intent)
-      if (!changed) return false
+      const changed = await deps.registry.setExternalResume(row.agentId, intent, { current, refresh })
+      if (!changed || stopped || deps.cancelled(changed.agentId) || occupied(changed)
+        || identity(deps.registry.byAgent(changed.agentId)) !== identity(changed)) return false
       row = { ...changed }
       return true
     }
@@ -88,7 +89,7 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
     if (intent.session && owner && (!intent.owner || !sameOwner(intent.owner, owner))) {
       hold(row, 'The conversation moved to another process. Close it there, then open it here again.'); return
     }
-    if (!commit({ ...intent, session, ...(owner ? { owner } : {}) })) return
+    if (!await commit({ ...intent, session, ...(owner ? { owner } : {}) })) return
     if (owner && decision.busy && intent.takeOver === 'wait') { hold(row, activityUnknown(answer) ? ACTIVITY_UNKNOWN : 'Waiting for the conversation’s current turn to finish in its terminal.'); return }
     const refusal = await deps.preflight(row, session, current)
     if (!current()) return
@@ -97,7 +98,7 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
     if (!nativeCurrent()) { hold(row, 'Waiting to confirm the prepared native launch.'); return }
     if (owner) {
       // Journal the exact target before a signal. A crash or a later process cannot inherit consent.
-      if (!commit({ ...row.externalResume!, phase: 'quitting', owner })) return
+      if (!await commit({ ...row.externalResume!, phase: 'quitting', owner })) return
       let interrupted = false
       const same = async () => {
         // The pane probe can wait on tmux. Take the decisive owner/turn evidence after it.
@@ -113,14 +114,14 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
           && (intent.takeOver === 'now' || !answer.busy)
       }
       if (!await (deps.stopOwner ?? stopExternalOwner)(owner, { current: () => current() && nativeCurrent(), same,
-        beforeSignal: signal => {
+        beforeSignal: async signal => {
           // KILL needs the same locked conflict check after TERM's grace period, even when the
           // durable intent is unchanged. A daemon-down hook can bind another owner meanwhile.
           const next = signal === 'SIGTERM' ? { ...row.externalResume!, signal: 'prepared' as const, continue: interrupted ? true as const : undefined } : row.externalResume!
-          if (!commit(next)) throw new Error('Signal intent could not be saved')
+          if (!await commit(next, async () => { if (!await same()) throw new Error('The external owner changed during signal preparation') })) throw new Error('Signal intent could not be saved')
         },
-        afterSignal: signal => {
-          if (signal === 'SIGTERM' && !commit({ ...row.externalResume!, signal: 'sent' })) throw new Error('Signal receipt could not be saved')
+        afterSignal: async signal => {
+          if (signal === 'SIGTERM' && !await commit({ ...row.externalResume!, signal: 'sent' })) throw new Error('Signal receipt could not be saved')
         },
       })) {
         if (current()) hold(row, 'Waiting to confirm the original terminal stopped. Close it there to continue.'); return
@@ -143,7 +144,18 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
       || JSON.stringify(answer.session.launchArgs) !== JSON.stringify(session.launchArgs)) {
       hold(row, 'The conversation changed while preparing to open it. Waiting to verify it again.'); return
     }
-    if (!commit({ ...row.externalResume!, phase: 'admitted', session: answer.session })) return
+    const finalSession = answer.session
+    if (!await commit({ ...row.externalResume!, phase: 'admitted', session: finalSession }, async () => {
+      const refreshed = await inspect(intent.request)
+      if (!current() || !nativeCurrent()) throw new Error('The adoption changed during persistence preparation')
+      const decision = adoptionDecision(intent.request.sessionId, intent.request.engine, intent.takeOver, refreshed, id => held(id, row.agentId))
+      if (!decision.ok || !refreshed.ok || !refreshed.session || refreshed.owner
+        || refreshed.session.sessionId !== finalSession.sessionId || refreshed.session.cwd !== finalSession.cwd
+        || refreshed.session.transcriptPath !== finalSession.transcriptPath
+        || JSON.stringify(refreshed.session.launchArgs) !== JSON.stringify(finalSession.launchArgs)) {
+        throw new Error('The external conversation changed during persistence preparation')
+      }
+    })) return
     deps.announce(row)
     deps.launch()
   }
@@ -207,7 +219,7 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
     const target = identity(initial)
     const current = () => allowed() && identity(deps.registry.byAgent(initial.agentId)) === target
     if (!current()) throw new Error('The adoption changed before cancellation.')
-    const cancelled = deps.registry.setExternalResume(initial.agentId, { ...initial.externalResume!, phase: 'cancelled' })
+    const cancelled = await deps.registry.setExternalResume(initial.agentId, { ...initial.externalResume!, phase: 'cancelled' }, { current })
     if (!cancelled) throw new Error('The adoption cancellation could not be saved.')
     const saved = identity(cancelled)
     const owns = () => allowed() && identity(deps.registry.byAgent(initial.agentId)) === saved
@@ -218,8 +230,8 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
       const result = await backend!.killHeld!(runtime, cancelled.externalResume!.token, owns)
       if (!owns() || result.state !== 'succeeded') throw new Error('The waiting pane could not be verified. Adoption stays cancelled.')
     }
-    if (!deps.registry.finishExternalCancellation(initial.agentId)) throw new Error('The cancellation could not be committed.')
-    deps.forget(initial.agentId)
+    if (!await deps.registry.finishExternalCancellation(initial.agentId)) throw new Error('The cancellation could not be committed.')
+    await deps.forget(initial.agentId)
     return true
   }
   return { create, cancel, wake, open: () => { opened = true; wake() }, stop: () => { stopped = true; if (timer) clearTimeout(timer) },

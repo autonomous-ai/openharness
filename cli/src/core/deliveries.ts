@@ -54,6 +54,9 @@ export const ACK_DEFAULT_MS = 30_000
 export const ACK_MIN_MS = 1_000
 export const ACK_MAX_MS = 120_000
 
+/** An input id a program may name its own input by: `program:` and a UUID. */
+const PROGRAM_INPUT_ID = /^program:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
 const ackWindow = (value: unknown): number =>
   Math.min(ACK_MAX_MS, Math.max(ACK_MIN_MS, typeof value === 'number' && Number.isFinite(value) ? value : ACK_DEFAULT_MS))
 
@@ -138,18 +141,26 @@ export function createDeliveries(deps: DeliveriesDeps) {
     if (!agentId || !content.trim()) { answer({ error: 'INVALID_INPUT' }); return }
     const ackMs = ackWindow(payload.ackMs)
     const takenMs = ackWindow(payload.takenMs)
-    const inputId = `program:${(deps.newId ?? randomUUID)()}`
+    // The program's own id for its input when it gave one, so it can follow the input even if this answer is lost.
+    const inputId = typeof payload.inputId === 'string' && PROGRAM_INPUT_ID.test(payload.inputId) ? payload.inputId : `program:${(deps.newId ?? randomUUID)()}`
     const now = deps.now ?? Date.now
     const began = now()
+    // The latest answer: a paste that comes late leaves its turn less of [takenMs], never more, so the caller (which
+    // waits ackMs + takenMs and some) always hears this answer rather than its own request's timeout.
+    const last = began + ackMs + takenMs
     let pastedAt: number | null = null
     let cancelling = false
+    let done = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const arm = (ms: number, fire: () => void): void => {
       clearTimeout(timer)
+      if (done) return
       timer = setTimeout(fire, ms)
       timer.unref()
     }
     const finish = (result: Payload): void => {
+      if (done) return
+      done = true
       clearTimeout(timer)
       stop()
       const end = now()
@@ -161,7 +172,7 @@ export function createDeliveries(deps: DeliveriesDeps) {
     const late = (): void => finish({ state: 'timeout', cancelled: false, written: pastedAt !== null })
     const stop = turns.onDelivery((event) => {
       if (event.deliveryId !== inputId) return
-      if (event.state === 'delivered') { pastedAt = now(); arm(takenMs, late) }
+      if (event.state === 'delivered') { pastedAt = now(); arm(Math.max(0, Math.min(takenMs, last - pastedAt)), late) }
       else if (event.state === 'started') finish({ state: 'taken', takenAt: now() })
       // A delivery taken back at the deadline is said `rejected` at once: the deadline's answer, not a refusal.
       else if (event.state === 'rejected') { if (!cancelling) finish({ state: 'rejected', reason: event.reason ?? 'rejected' }) }

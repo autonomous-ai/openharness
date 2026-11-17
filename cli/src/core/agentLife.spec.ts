@@ -104,8 +104,8 @@ describe('what happens to agents, for the services that follow them', () => {
       hub.ended('plain')
       hub.ended('h1')
       expect(heard).toEqual([
-        { kind: 'running', session: agent('h1', { dsh: 'acme/blender' }) },
-        { kind: 'running', session: agent('h1', { dsh: 'acme/blender' }) },
+        { kind: 'running', session: { ...agent('h1', { dsh: 'acme/blender' }), frameEpoch: expect.any(String) } },
+        { kind: 'running', session: { ...agent('h1', { dsh: 'acme/blender' }), frameEpoch: expect.any(String) } },
         { kind: 'ended', agentId: 'h1' },
       ])
     })
@@ -205,12 +205,12 @@ describe('what happens to agents, for the services that follow them', () => {
   describe('a service in its own process', () => {
     it('asks to follow as it connects: answered its catch-up, then told each change on its link', () => {
       const { hub, notify } = setup([agent('h1', { dsh: 'acme/blender' }), agent('plain')])
-      expect(hub.followed('viewers', { each: true, having: ['dsh'] })).toEqual({ agents: [agent('h1', { dsh: 'acme/blender' })] })
+      expect(hub.followed('viewers', { ...VIEWERS_FOLLOW })).toEqual({ agents: [{ ...agent('h1', { dsh: 'acme/blender' }), frameEpoch: expect.any(String) }] })
       hub.running(agent('h1', { dsh: 'acme/blender' }))
       hub.running(agent('plain'))
       hub.ended('h1')
       expect(toldTo(notify, 'viewers')).toEqual([
-        { type: 'service_event', payload: { kind: 'agent', event: { kind: 'running', session: agent('h1', { dsh: 'acme/blender' }) } } },
+        { type: 'service_event', payload: { kind: 'agent', event: { kind: 'running', session: { ...agent('h1', { dsh: 'acme/blender' }), frameEpoch: expect.any(String) } } } },
         { type: 'service_event', payload: { kind: 'agent', event: { kind: 'ended', agentId: 'h1' } } },
       ])
     })

@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from './testing/registryFixtures.js'
 // `session_get` for an engine with no pages of its own reads its transcript from the end, bounded
 // (lib/transcriptTail.ts `tailFileCapped`): a transcript past the cap shows its newest history, and every
 // reply says so. A real file over the cap is 64 MB; the reader is made to cut short instead.
@@ -49,20 +50,20 @@ describe('session_get past the cap, for an engine without pages', () => {
   })
   afterEach(async () => {
     reader.cut = false
-    for (const agentId of agents.splice(0)) registry.removeAgent(agentId)
+    for (const agentId of agents.splice(0)) (await removeRegistryAgent(registry, agentId))
     await socket.stop()
     vi.restoreAllMocks()
   })
 
-  const bind = (engine: 'muse' | 'pi', root: string, write: (file: string) => void): string => {
+  const bind = async (engine: 'muse' | 'pi', root: string, write: (file: string) => void): Promise<string> => {
     const dir = join(root, `capped-${++pane}`)
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'session.jsonl')
     write(file)
     const paneId = `%${pane}`
-    agents.push(registry.openPendingAgent({ engine, runtimes: [{ backend: 'tmux', paneId }], cwd: dir })!.agentId)
+    agents.push((await registry.openPendingAgent({ engine, runtimes: [{ backend: 'tmux', paneId }], cwd: dir }))!.agentId)
     const sessionId = `${engine}-capped-${pane}`
-    registry.register({ engine, sessionId, transcriptPath: file, tmuxPane: paneId, cwd: dir })
+    ;(await registry.register({ engine, sessionId, transcriptPath: file, tmuxPane: paneId, cwd: dir }))
     expect(registry.resolve(sessionId)?.transcriptPath, 'bound to the transcript under test').toBe(file)
     return sessionId
   }
@@ -78,7 +79,7 @@ describe('session_get past the cap, for an engine without pages', () => {
 
   it('says so in the whole read and the whole page, and leaves a transcript under the cap as it was', async () => {
     const fixture = fileURLToPath(new URL('./lib/__fixtures__/muse-session.jsonl', import.meta.url))
-    const sessionId = bind('muse', roots.muse, (file) => copyFileSync(fixture, file))
+    const sessionId = (await bind('muse', roots.muse, (file) => copyFileSync(fixture, file)))
     const whole = await ask({ sessionId })
     expect(whole.truncated).toBeUndefined()
     reader.cut = true
@@ -90,7 +91,7 @@ describe('session_get past the cap, for an engine without pages', () => {
   })
 
   it('says so in a window and in a stale cursor\'s answer', async () => {
-    const sessionId = bind('pi', roots.pi, (file) => writeFileSync(file, Array.from({ length: 6 }, (_, i) => JSON.stringify({ type: 'message', id: `m${i}` })).join('\n') + '\n'))
+    const sessionId = (await bind('pi', roots.pi, (file) => writeFileSync(file, Array.from({ length: 6 }, (_, i) => JSON.stringify({ type: 'message', id: `m${i}` })).join('\n') + '\n')))
     reader.cut = true
     expect(await ask({ sessionId, limit: 10 })).toMatchObject({ engine: 'pi', truncated: true })
     expect(await ask({ sessionId, limit: 10, before: 'no-such-cursor' })).toMatchObject({ staleCursor: true, truncated: true })

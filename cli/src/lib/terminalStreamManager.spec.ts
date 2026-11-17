@@ -1845,6 +1845,25 @@ describe('TerminalStreamManager', () => {
       expect(sent.filter((f) => f.type === 'terminal_error')).toEqual([])
     })
 
+    it('refuses queued and direct terminal input after an uncertain move frees its transient queue', async () => {
+      let refused = false
+      await manager.stop()
+      gate = new MoveGate(() => refused)
+      manager = newManager({ moveGate: gate })
+      await openFrame('web-1')
+      const streamId = readyFor('web-1')
+      gate.hold('agent-1')
+      await input('web-1', streamId, 0, 'queued')
+      await paste('web-1', streamId, 'queued paste')
+      refused = true
+      await gate.release('agent-1')
+      await input('web-1', streamId, 1, 'direct')
+      await paste('web-1', streamId, 'direct paste')
+      expect(opens[0].stream.order).toEqual([])
+      expect(rawWrites).toEqual([])
+      expect(sent.filter(frame => frame.type === 'terminal_error')).toHaveLength(4)
+    })
+
     it('held input whose stream closed during the move still reaches the row\'s pane', async () => {
       await openFrame('web-1')
       const streamId = readyFor('web-1')

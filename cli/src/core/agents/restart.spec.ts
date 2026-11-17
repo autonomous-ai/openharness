@@ -8,7 +8,9 @@ import { AgentRestartCoordinator, bypassPermissionFor, restartAgent } from '../.
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { processLaunchArgs } from '../../lib/processTable.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
-import { createAgentRestarter, type RestartDeps } from './restart.js'
+import { commitRelaunchedEngine, createAgentRestarter, type RestartDeps } from './restart.js'
+import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
+import type { RestartTarget } from '../../lib/terminalBackend.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 
@@ -28,6 +30,7 @@ vi.mock('../../lib/processTable.js', async (real) => ({
   processLaunchArgs: vi.fn(async () => '/bin/claude --model opus -c model_provider=grid'),
 }))
 vi.mock('../../lib/workspaceCheck.js', () => ({ workspaceMissing: vi.fn(() => null) }))
+vi.mock('../../lib/paneEngineProcess.js', () => ({ resolvePaneEngineProcess: vi.fn() }))
 
 const runtime = { backend: 'tmux' as const, paneId: '%4' }
 /** The pane's backend handing the pane back to its default disposal (`TerminalBackend.releaseHold`). */
@@ -49,9 +52,13 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RestartDep
     registry: {
       resolve: vi.fn(() => row ?? undefined),
       byAgent: vi.fn(() => refreshed ?? undefined),
-      updateProcessIdentity: vi.fn(),
-      setActive: vi.fn(),
-      setLaunchArgs: vi.fn(() => true),
+      confirmLaunch: vi.fn<RestartDeps['registry']['confirmLaunch']>(async (_id, input, authority) => {
+        if (!refreshed || authority?.current?.() === false) return { state: 'not-published' }
+        const { gridLaunchRecord, ...fields } = input
+        Object.assign(refreshed, Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)), { active: true, launch: { state: 'ready' } },
+          gridLaunchRecord === undefined ? {} : { gridLaunch: gridLaunchRecord?.override ?? null, gridWebSearch: gridLaunchRecord?.webSearch ?? null })
+        return { state: 'confirmed', entry: structuredClone(refreshed) }
+      }),
     } as unknown as RestartDeps['registry'],
     purgeBusy: vi.fn(() => false),
     stopJobs: new Map(),
@@ -64,7 +71,6 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RestartDep
     refreshGridAssignment: vi.fn(),
     relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: { env: { GRID_KEY: 'k' } } })) as never,
     downgradedPermission: vi.fn(async (_s, bypass: boolean) => ({ bypassPermission: bypass, permissionMode: 'auto' })) as never,
-    refreshGridWebSearch: vi.fn() as never,
     liveBypassPermission: vi.fn(async () => true),
     paneSwapDeps: vi.fn(() => ({ swap: true })) as never,
     restartHeld: vi.fn(() => null),
@@ -74,6 +80,58 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RestartDep
 }
 
 const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed or stopped during restart.' }
+
+describe('durable restart publication', () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
+
+  it.each(['cancelled', 'missing', 'empty receipt', 'replaced receipt'] as const)('keeps the hold without readiness when %s', async phase => {
+    const run = setup()
+    const place = { runtime, backend: run.tmuxBackend } as unknown as RestartTarget
+    if (phase === 'missing') vi.mocked(run.deps.registry.byAgent).mockReturnValue(undefined)
+    if (phase === 'empty receipt') vi.mocked(run.deps.registry.confirmLaunch).mockResolvedValue({ state: 'confirmed', entry: null })
+    if (phase === 'replaced receipt') vi.mocked(run.deps.registry.confirmLaunch).mockResolvedValue({ state: 'confirmed', entry: agent({ sessionId: 'another' }) })
+    expect(await commitRelaunchedEngine(run.deps, 'a1', newProcess, null, place, () => phase !== 'cancelled'))
+      .toBe(phase === 'cancelled' ? 'changed' : phase === 'missing' ? 'vanished' : 'changed after commit')
+    expect(releaseHold).not.toHaveBeenCalled()
+    expect(run.deps.announceSession).not.toHaveBeenCalled()
+    expect(run.deps.refreshGridAssignment).not.toHaveBeenCalled()
+  })
+
+  it.each(['same', 'gone', 'replaced', 'executable'] as const)('rechecks native readiness before publication: %s', async proof => {
+    const run = setup()
+    const publish = vi.mocked(run.deps.registry.confirmLaunch).getMockImplementation()!
+    vi.mocked(run.deps.registry.confirmLaunch).mockImplementation(async (id, input, authority) => {
+      await authority?.refresh?.()
+      return publish(id, input, authority)
+    })
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(proof === 'gone' ? null : proof === 'replaced' ? { ...newProcess, startMarker: 'replacement' }
+      : proof === 'executable' ? { ...newProcess, executable: 'other' } : newProcess)
+    const result = commitRelaunchedEngine(run.deps, 'a1', newProcess, null, { runtime, backend: run.tmuxBackend } as unknown as RestartTarget, () => true)
+    if (proof === 'same') expect(await result).toMatchObject({ processIdentity: newProcess })
+    else {
+      await expect(result).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+      expect(releaseHold).not.toHaveBeenCalled()
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
+    }
+  })
+
+  it.each(['alive', 'gone', 'unknown', 'dead'] as const)('rechecks a replacement shell: %s', async proof => {
+    const run = setup(terminal())
+    const paneState = vi.fn(async () => proof === 'gone' || proof === 'unknown' ? proof : { dead: proof === 'dead', engineExit: null })
+    const publish = vi.mocked(run.deps.registry.confirmLaunch).getMockImplementation()!
+    vi.mocked(run.deps.registry.confirmLaunch).mockImplementation(async (id, input, authority) => {
+      await authority?.refresh?.()
+      return publish(id, input, authority)
+    })
+    const result = commitRelaunchedEngine(run.deps, 'a1', null, null, { runtime, backend: { ...run.tmuxBackend, paneState } } as unknown as RestartTarget, () => true)
+    if (proof === 'alive') expect(await result).toMatchObject({ engine: 'terminal' })
+    else {
+      await expect(result).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+      expect(releaseHold).not.toHaveBeenCalled()
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
+    }
+  })
+})
 
 describe('restarting an agent', () => {
   beforeEach(() => { vi.spyOn(console, 'log').mockImplementation(() => {}) })
@@ -159,7 +217,7 @@ describe('restarting an agent', () => {
     })
     expect(await run.restart('a1')).toMatchObject({ ok: false, error: stage === 'inspection' ? 'AGENT_CHANGED' : 'NATIVE_LAUNCH_HELD' })
     expect(restartAgent).not.toHaveBeenCalled()
-    expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+    expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
   })
 
   it('holds native installation before killing the live process, without an independent shell probe', async () => {
@@ -199,7 +257,7 @@ describe('restarting an agent', () => {
     expect(await run.restart('a1')).toMatchObject({ ok: false, error: 'RESTART_FAILED' })
     expect(respawn).toHaveBeenCalledExactlyOnceWith(['fixture-engine', 's1'])
     expect(keepAbandoned).not.toHaveBeenCalled()
-    expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+    expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
   })
 
   describe('with new launch words', () => {
@@ -210,12 +268,14 @@ describe('restarting an agent', () => {
       const run = setup(agent(), {
         relaunchOverrides: vi.fn(async () => { order.push('build'); return { ok: true as const, overrides: { env: {}, extraArgs: [], clearEnv: [] } } }),
       })
-      vi.mocked(run.deps.registry.setLaunchArgs).mockImplementation(() => { order.push('save'); return true })
+      const publish = run.deps.registry.confirmLaunch
+      const implementation = vi.mocked(publish).getMockImplementation()!
+      vi.mocked(publish).mockImplementation(async (...args) => { order.push('save'); return implementation(...args) })
       vi.mocked(restartAgent).mockImplementationOnce(async () => { order.push('restart'); return { ok: true, resumed: true, processIdentity: newProcess } })
       expect(await run.restart('a1', WORDS)).toMatchObject({ ok: true })
       expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ agentId: 'a1', launchArgs: WORDS }), expect.any(Function), undefined)
       expect(order).toEqual(['build', 'restart', 'save'])
-      expect(run.deps.registry.setLaunchArgs).toHaveBeenCalledExactlyOnceWith('a1', WORDS)
+      expect(run.deps.registry.confirmLaunch).toHaveBeenCalledExactlyOnceWith('a1', expect.objectContaining({ launchArgs: WORDS }), expect.anything())
       // Asked as its own variant of a restart, so another ask with other words is not answered by this launch.
       expect(run.deps.restartJobs.run).toHaveBeenCalledWith('a1', expect.any(Function), 'restart', JSON.stringify(WORDS))
     })
@@ -224,15 +284,16 @@ describe('restarting an agent', () => {
       const run = setup(agent({ launchArgs: ['--old'] } as Partial<RegisteredSession>))
       expect(await run.restart('a1', [])).toMatchObject({ ok: true })
       expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ launchArgs: [] }), expect.any(Function), undefined)
-      expect(run.deps.registry.setLaunchArgs).toHaveBeenCalledExactlyOnceWith('a1', [])
+      expect(run.deps.registry.confirmLaunch).toHaveBeenCalledExactlyOnceWith('a1', expect.objectContaining({ launchArgs: [] }), expect.anything())
     })
 
     it('without them, relaunches from the row itself and never writes the record', async () => {
       const row = agent({ launchArgs: ['--saved'] } as Partial<RegisteredSession>)
       const run = setup(row)
       expect(await run.restart('a1')).toMatchObject({ ok: true })
-      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(row, row, expect.any(Function), undefined)
-      expect(run.deps.registry.setLaunchArgs).not.toHaveBeenCalled()
+      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ agentId: row.agentId }), expect.objectContaining({ launchArgs: ['--saved'] }), expect.any(Function), undefined)
+      expect(vi.mocked(run.deps.registry.confirmLaunch).mock.calls[0]![1].launchArgs).toBeUndefined()
+      expect(run.deps.registry.byAgent('a1')?.launchArgs).toEqual(['--saved'])
       expect(run.deps.restartJobs.run).toHaveBeenCalledWith('a1', expect.any(Function), 'restart', undefined)
     })
 
@@ -249,7 +310,7 @@ describe('restarting an agent', () => {
     ])('saves nothing when the restart ends %s', async (_why, make) => {
       const run = make()
       expect(await run.restart('a1', WORDS)).toMatchObject({ ok: false })
-      expect(run.deps.registry.setLaunchArgs).not.toHaveBeenCalled()
+      expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
     })
 
     // The coordinator joins asks of the same words and refuses the others, so the record is what the one launch used.
@@ -267,7 +328,7 @@ describe('restarting an agent', () => {
       release()
       expect(await first).toMatchObject({ ok: true })
       expect(await joined).toMatchObject({ ok: true })
-      expect(run.deps.registry.setLaunchArgs).toHaveBeenCalledExactlyOnceWith('a1', ['--first'])
+      expect(run.deps.registry.confirmLaunch).toHaveBeenCalledExactlyOnceWith('a1', expect.objectContaining({ launchArgs: ['--first'] }), expect.anything())
       expect(restartAgent).toHaveBeenCalledOnce()
     })
   })
@@ -370,7 +431,7 @@ describe('restarting an agent', () => {
       const clock = vi.spyOn(Date, 'now').mockReturnValue(0)
       vi.mocked(commandAvailableInInteractiveShell).mockImplementationOnce(async () => { clock.mockReturnValue(5_000); return false })
       const run = setup()
-      expect(await run.restart('a1')).toEqual({ ok: true, session: agent(), resumed: true })
+      expect(await run.restart('a1')).toEqual({ ok: true, session: expect.objectContaining({ agentId: 'a1', launch: { state: 'ready' }, processIdentity: newProcess }), resumed: true })
       expect(restartAgent).toHaveBeenCalled()
     })
 
@@ -421,7 +482,7 @@ describe('restarting an agent', () => {
       expect(await run.restart('a1')).toMatchObject({ ok: true, resumed: false })
       expect(run.deps.terminals.backendFor).toHaveBeenCalledWith(pty)
       expect(backend.respawn).toHaveBeenCalledExactlyOnceWith(pty, { command: ['zsh', '-l'], cwd: homedir() })
-      expect(backend.releaseHold).toHaveBeenCalledWith(pty)
+      expect(backend.releaseHold).toHaveBeenCalledWith(pty, expect.any(Function))
       expect(run.tmuxBackend.respawn).not.toHaveBeenCalled()
       expect(releaseHold).not.toHaveBeenCalled()
       expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalledWith(terminalRouteKey(pty), null)
@@ -433,7 +494,7 @@ describe('restarting an agent', () => {
       const run = setup(row, { terminals: { backendFor: () => backend as never } })
       expect(await run.restart('a1')).toMatchObject({ ok: true, resumed: true })
       expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(row, { backend, runtime: pty }, { env: { GRID_KEY: 'k' } }, 'auto', expect.any(Function))
-      expect(backend.releaseHold).toHaveBeenCalledWith(pty)
+      expect(backend.releaseHold).toHaveBeenCalledWith(pty, expect.any(Function))
       expect(releaseHold).not.toHaveBeenCalled()
       expect(run.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(terminalRouteKey(pty))
     })
@@ -450,12 +511,12 @@ describe('restarting an agent', () => {
 
     it('restarts as a fresh shell in the same pane, opened like a new terminal tile', async () => {
       const run = setup(terminal())
-      expect(await run.restart('a1')).toEqual({ ok: true, session: terminal(), resumed: false })
+      expect(await run.restart('a1')).toEqual({ ok: true, session: expect.objectContaining({ agentId: 'a1', engine: 'terminal', launch: { state: 'ready' }, processIdentity: null }), resumed: false })
       expect(buildEngineLaunchArgv).toHaveBeenCalledWith('terminal', { cwd: '/work', terminalHint: { machineName: 'studio' } })
       expect(run.tmuxBackend.respawn).toHaveBeenCalledWith(runtime, { command: ['zsh', '-l'], cwd: homedir() })
-      expect(releaseHold).toHaveBeenCalledWith(runtime)
-      expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', true)
-      expect(run.deps.announceSession).toHaveBeenCalledWith(terminal())
+      expect(releaseHold).toHaveBeenCalledWith(runtime, expect.any(Function))
+      expect(run.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.anything(), expect.anything())
+      expect(run.deps.announceSession).toHaveBeenCalledWith(expect.objectContaining({ engine: 'terminal', launch: { state: 'ready' }, processIdentity: null }))
       expect(console.log).toHaveBeenCalledWith('[restart] a1 terminal · fresh shell')
       expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalledWith(routeKey, null)
       expect(run.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(routeKey)
@@ -495,12 +556,12 @@ describe('restarting an agent', () => {
       const cleared = setup(terminal())
       releaseHold.mockImplementationOnce(async () => { cleared.state.live = false })
       expect(await cleared.restart('a1')).toEqual(changed)
-      expect(cleared.deps.registry.setActive).not.toHaveBeenCalled()
+      expect(cleared.deps.announceSession).not.toHaveBeenCalled()
     })
 
     it('fails, without announcing, when the row vanished mid-restart', async () => {
       const run = setup(terminal(), {}, null)
-      expect(await run.restart('a1')).toEqual({ ok: false, error: 'RESTART_FAILED', detail: 'agent vanished from the registry mid-restart' })
+      expect(await run.restart('a1')).toEqual(changed)
       expect(run.deps.announceSession).not.toHaveBeenCalled()
     })
   })
@@ -508,23 +569,23 @@ describe('restarting an agent', () => {
   describe('an engine', () => {
     it('comes back in the same pane with its launch, its permission and its conversation', async () => {
       const run = setup()
-      expect(await run.restart('a1')).toEqual({ ok: true, session: agent(), resumed: true })
-      expect(bypassPermissionFor).toHaveBeenCalledWith(agent(), expect.any(Function))
-      expect(run.deps.liveBypassPermission).toHaveBeenCalledWith(agent())
-      expect(run.deps.downgradedPermission).toHaveBeenCalledWith(agent(), true, 'restart', undefined)
-      expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(agent(), { backend: run.tmuxBackend, runtime }, { env: { GRID_KEY: 'k' } }, 'auto', expect.any(Function))
+      expect(await run.restart('a1')).toEqual({ ok: true, session: expect.objectContaining({ agentId: 'a1', launch: { state: 'ready' }, processIdentity: newProcess }), resumed: true })
+      expect(bypassPermissionFor).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', engine: 'claude' }), expect.any(Function))
+      expect(run.deps.liveBypassPermission).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', engine: 'claude' }))
+      expect(run.deps.downgradedPermission).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', engine: 'claude' }), true, 'restart', undefined)
+      expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', sessionId: 's1' }), { backend: run.tmuxBackend, runtime }, { env: { GRID_KEY: 'k' } }, 'auto', expect.any(Function))
       const [target, bypass, swapDeps] = vi.mocked(restartAgent).mock.calls[0]
       expect(target).toEqual({ engine: 'claude', sessionId: 's1' })
       expect(bypass).toBe(true)
       expect(swapDeps).toMatchObject({ swap: true })
-      expect(swapDeps.isCurrent?.()).toBe(true)
-      expect(run.deps.refreshGridWebSearch).toHaveBeenCalledWith('a1', { env: { GRID_KEY: 'k' } })
+      expect(swapDeps.isCurrent?.()).toBe(false)
+      expect(vi.mocked(run.deps.registry.confirmLaunch).mock.calls[0]![1].gridLaunchRecord).toBeUndefined()
       // Its command line, where a Codex or pi grid's address and model are: never its executable alone.
-      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, undefined, null)
-      expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', true)
-      expect(releaseHold).toHaveBeenCalledWith(runtime)
-      expect(run.deps.announceSession).toHaveBeenCalledWith(agent())
-      expect(run.deps.refreshGridAssignment).toHaveBeenCalledWith(agent())
+      expect(run.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ processIdentity: newProcess, grid: null }), expect.anything())
+      expect(run.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.anything(), expect.anything())
+      expect(releaseHold).toHaveBeenCalledWith(runtime, expect.any(Function))
+      expect(run.deps.announceSession).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', launch: { state: 'ready' }, processIdentity: newProcess }))
+      expect(run.deps.refreshGridAssignment).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', launch: { state: 'ready' }, processIdentity: newProcess }))
       expect(console.log).toHaveBeenCalledWith('[restart] a1 claude · resumed')
       expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalledWith(routeKey, null)
       expect(run.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(routeKey)
@@ -548,18 +609,18 @@ describe('restarting an agent', () => {
         relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [], gridLaunchRecord: { override, webSearch: 'on' } } })) as never,
       })
       await onGrid.restart('a1')
-      expect(onGrid.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, undefined, { baseUrl: 'https://saved.example/now/v1', model: 'm' })
+      expect(onGrid.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ processIdentity: newProcess, grid: { baseUrl: 'https://saved.example/now/v1', model: 'm' } }), expect.anything())
       // A row discovery adopted from a relay URL the person set in their own shell: its relaunch runs on its own login.
       const adopted = setup(agent({ grid: old, gridLaunch: null } as Partial<RegisteredSession>))
       await adopted.restart('a1')
-      expect(adopted.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, undefined, null)
+      expect(adopted.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ processIdentity: newProcess, grid: null }), expect.anything())
     })
 
     it('says why the swap failed, and lets the route go', async () => {
       vi.mocked(restartAgent).mockResolvedValueOnce({ ok: false, detail: 'could not re-arm the pane' } as never)
       const run = setup()
       expect(await run.restart('a1')).toEqual({ ok: false, error: 'RESTART_FAILED', detail: 'could not re-arm the pane' })
-      expect(run.deps.refreshGridWebSearch).not.toHaveBeenCalled()
+      expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
       expect(run.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(routeKey)
     })
 
@@ -572,13 +633,13 @@ describe('restarting an agent', () => {
       const swapped = setup()
       vi.mocked(restartAgent).mockImplementationOnce(async () => { swapped.state.live = false; return { ok: true, resumed: true, processIdentity: newProcess } as never })
       expect(await swapped.restart('a1')).toEqual(changed)
-      expect(swapped.deps.refreshGridWebSearch).not.toHaveBeenCalled()
+      expect(swapped.deps.registry.confirmLaunch).not.toHaveBeenCalled()
       expect(swapped.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(routeKey)
 
       const committing = setup()
-      vi.mocked(committing.deps.refreshGridWebSearch).mockImplementationOnce(() => { committing.state.live = false })
+      vi.mocked(committing.deps.registry.confirmLaunch).mockImplementationOnce(async () => { committing.state.live = false; return { state: 'not-published' } })
       expect(await committing.restart('a1')).toEqual(changed)
-      expect(committing.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+      expect(committing.deps.announceSession).not.toHaveBeenCalled()
 
       const cleared = setup()
       releaseHold.mockImplementationOnce(async () => { cleared.state.live = false })
@@ -588,9 +649,9 @@ describe('restarting an agent', () => {
 
     it('fails, without announcing, when the row vanished mid-restart', async () => {
       const run = setup(agent(), {}, null)
-      expect(await run.restart('a1')).toEqual({ ok: false, error: 'RESTART_FAILED', detail: 'agent vanished from the registry mid-restart' })
+      expect(await run.restart('a1')).toEqual(changed)
       expect(run.deps.announceSession).not.toHaveBeenCalled()
-      expect(run.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(routeKey)
+      expect(run.deps.agentReconciler.holdRoute).not.toHaveBeenCalled()
     })
   })
 })

@@ -164,8 +164,8 @@ fn run_loop(
     // `asked`: the effects answer a menu click.
     let run = |effects: Vec<Effect>, asked: bool| {
         for effect in effects {
-            // Menu, Show, Quit and Relaunch are AppKit's, on the main thread, which runs them in the order they are
-            // handed over.
+            // Menu, Show, ShowAbout, Quit and Relaunch are AppKit's, on the main thread, which runs them in the order
+            // they are handed over.
             if let Some(effect) = runner.run(effect) {
                 let (drawing, log) = (handle.clone(), log.clone());
                 let _ = handle.run_on_main_thread(move || {
@@ -204,6 +204,7 @@ fn draw(handle: &AppHandle, effect: Effect, asked: bool) -> tauri::Result<()> {
                 None => window.hide()?,
             }
         }
+        Effect::ShowAbout(credits) => show_about(credits.as_deref()),
         // The daemon is left running: the app only ever watched it.
         Effect::Quit => handle.exit(0),
         Effect::Relaunch => handle.restart(),
@@ -211,6 +212,38 @@ fn draw(handle: &AppHandle, effect: Effect, asked: bool) -> tauri::Result<()> {
     }
     Ok(())
 }
+
+/// macOS's standard About panel, its name and version from the bundle's Info.plist, and the credits line under them.
+/// Tauri's predefined About opens it without bringing the app forward: an Accessory app is never active by itself, so
+/// the panel would open behind the app in front.
+#[cfg(target_os = "macos")]
+fn show_about(credits: Option<&str>) {
+    use objc2::MainThreadMarker;
+    use objc2::runtime::AnyObject;
+    use objc2_app_kit::{NSAboutPanelOptionCredits, NSApplication};
+    use objc2_foundation::{NSAttributedString, NSDictionary, NSString};
+
+    let Some(main) = MainThreadMarker::new() else { return };
+    let app = NSApplication::sharedApplication(main);
+    // `activate`, its replacement, is macOS 14 and later; the app runs from 13.
+    #[allow(deprecated)]
+    app.activateIgnoringOtherApps(true);
+    let options = match credits {
+        Some(credits) => {
+            let text = NSAttributedString::from_nsstring(&NSString::from_str(credits));
+            let value: &AnyObject = &text;
+            // SAFETY: a static AppKit defines, read on the main thread.
+            NSDictionary::from_slices(&[unsafe { NSAboutPanelOptionCredits }], &[value])
+        }
+        None => NSDictionary::new(),
+    };
+    // SAFETY: the one key is NSAboutPanelOptionCredits, with the NSAttributedString the panel takes for it.
+    unsafe { app.orderFrontStandardAboutPanelWithOptions(&options) };
+}
+
+/// Only macOS is released.
+#[cfg(not(target_os = "macos"))]
+fn show_about(_credits: Option<&str>) {}
 
 /// Whether showing `next` after `last` raises the window and takes the keyboard: a new screen, or one the menu asked
 /// for, which may be behind another app's windows. A phase or its lines only redraw, so a sign-in's `Waiting` never
@@ -253,39 +286,22 @@ fn menu_id(action: MenuAction) -> &'static str {
     match action {
         MenuAction::Install => "install",
         MenuAction::SignIn => "sign_in",
-        MenuAction::ClaudeOn => "claude_on",
-        MenuAction::ClaudeOff => "claude_off",
-        MenuAction::CodexOn => "codex_on",
-        MenuAction::CodexOff => "codex_off",
         MenuAction::SoundOn => "sound_on",
         MenuAction::SoundOff => "sound_off",
         MenuAction::NotifyFull => "notify_full",
         MenuAction::NotifyYou => "notify_you",
         MenuAction::Update => "update",
         MenuAction::OpenHarness => "open_harness",
+        MenuAction::About => "about",
         MenuAction::Quit => "quit",
     }
 }
 
 fn menu_action(id: &str) -> Option<MenuAction> {
     use MenuAction::*;
-    [
-        Install,
-        SignIn,
-        ClaudeOn,
-        ClaudeOff,
-        CodexOn,
-        CodexOff,
-        SoundOn,
-        SoundOff,
-        NotifyFull,
-        NotifyYou,
-        Update,
-        OpenHarness,
-        Quit,
-    ]
-    .into_iter()
-    .find(|action| menu_id(*action) == id)
+    [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit]
+        .into_iter()
+        .find(|action| menu_id(*action) == id)
 }
 
 #[cfg(test)]
@@ -300,28 +316,13 @@ mod tests {
     #[test]
     fn every_menu_action_has_its_own_id() {
         use MenuAction::*;
-        let actions = [
-            Install,
-            SignIn,
-            ClaudeOn,
-            ClaudeOff,
-            CodexOn,
-            CodexOff,
-            SoundOn,
-            SoundOff,
-            NotifyFull,
-            NotifyYou,
-            Update,
-            OpenHarness,
-            Quit,
-        ];
+        let actions = [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit];
         for action in actions {
             assert_eq!(menu_action(menu_id(action)), Some(action));
         }
         let ids: std::collections::HashSet<_> = actions.into_iter().map(menu_id).collect();
-        assert_eq!(ids.len(), 13);
-        assert_eq!(menu_id(CodexOn), "codex_on");
-        assert_eq!(menu_id(CodexOff), "codex_off");
+        assert_eq!(ids.len(), 10);
+        assert_eq!(menu_id(About), "about");
         assert_eq!(menu_id(NotifyFull), "notify_full");
         assert_eq!(menu_id(NotifyYou), "notify_you");
         assert_eq!(menu_action("sound"), None);

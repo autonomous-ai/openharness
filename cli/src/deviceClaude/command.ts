@@ -1,32 +1,35 @@
 /**
- * `harness device claude …`: the menu-bar app's status, enable and disable, and two words the harness-device plugin runs
+ * `harness device claude …` and `harness device codex …`: status, enable and disable, the way to take away or bring back
+ * what the devices service sets up by itself once a dial has attached here, and two words the harness-device plugin runs
  * that a person never types: `asked` (its PermissionRequest hook) and `link` (its mod, for the daemon's socket and the
- * devices' listener's). `harness device codex …`: the menu-bar app's status, enable and disable for Codex. For both,
- * `enable` saves On in dial-skill.json, with the folder it writes the dial skill into: the engine's default home's;
- * `disable` saves Off, then removes Harness's skill from that home, from each folder an enable saved and from each the
- * devices service listed, which writes the skill into the other homes while the engine is On. `harness device orca
- * link` is Orca's plugin's word, never typed either: whether the daemon is up and where the devices' socket is, so the
- * plugin builds no path. `harness device notify` is an agent's, from the dial skill (devices/notice.ts). This runs only
- * in the `harness` command's own process; nothing the core or a service loads imports this folder.
+ * devices' listener's). `disable` marks the engine removed in dial-skill.json, which the devices service then leaves
+ * alone, and removes Harness's skill from the engine's default home, from each folder an enable wrote and from each the
+ * service recorded in dial-setup.json. `enable` clears the mark and writes the skill into the engine's default home and
+ * back into each folder the service recorded; a folder an earlier enable wrote with another home is not written again.
+ * `harness device orca link` is Orca's plugin's word, never typed either: whether the daemon is up and where the
+ * devices' socket is, so the plugin builds no path. `harness device notify` is an agent's, from the dial skill (devices/notice.ts). This
+ * runs only in the `harness` command's own process; nothing the core or a service loads imports this folder.
  */
+import { mkdirSync } from 'node:fs'
 import { connect, type Socket } from 'node:net'
 import { dirname } from 'node:path'
-import { removeSkill, skillOn, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
-import { listable, MAX_HOMES, readAnswers, readHomes, readWritten, writeAnswer, type DialEngine } from '../devices/dialSkillFiles.js'
+import { claudeDisable, claudeEnable, claudeStatus, type ClaudeResult, type ClaudeRun } from '../devices/claudePlugin.js'
+import { claudePluginState, ownDirectory, removeSkill, skillsFolderOf, skillWanted, writeSkill } from '../devices/dialSkill.js'
+import { listable, MAX_HOMES, readRemoved, readSetup, readWritten, writeRemoved, type DialEngine } from '../devices/dialSkillFiles.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { NOTICE_USAGE, runNotice } from '../devices/notice.js'
 import { localSocketRoute, socketIsPrivate } from '../lib/localTransport.js'
 import { daemonPost, runAsked } from './asked.js'
-import { claudeDisable, claudeEnable, claudePluginOn, claudeSettingsPath, claudeStatus, type ClaudeResult, type ClaudeRun } from './plugin.js'
+import { claudePluginOn, claudeSettingsPath } from './plugin.js'
 
 /** `asked`, `link` and `orca link` are left out: they are the plugins', and typed by hand they only wait on stdin or print a path. */
-export const DEVICE_USAGE = `Harness device (the dial shows Claude Code's waiting prompts in any terminal, takes a spoken prompt, and rings when an agent needs you):
-  harness device claude status [--json]  whether the dial is on for Claude Code (its harness-device plugin on, and not turned off), and its version
-  harness device claude enable           install the plugin, or turn it on, and write the dial skill (Claude Code 2.1.287 or later)
-  harness device claude disable          uninstall the plugin and remove the dial skill
+export const DEVICE_USAGE = `Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it; disable takes that away, enable brings it back):
+  harness device claude status [--json]  whether the dial is on for Claude Code (its harness-device plugin on, and not removed), and its version
+  harness device claude enable           set Claude Code up again: the plugin and the dial skill (Claude Code 2.1.287 or later)
+  harness device claude disable          remove the plugin and the dial skill; Harness leaves them removed
   harness device codex status [--json]   whether the dial is on for Codex
-  harness device codex enable            write the dial skill into Codex's home
-  harness device codex disable           remove the dial skill Harness wrote into Codex's homes
+  harness device codex enable            set Codex up again: the dial skill in its homes
+  harness device codex disable           remove the dial skill Harness wrote; Harness leaves it removed
   ${NOTICE_USAGE}`
 
 export interface DeviceDeps {
@@ -58,8 +61,8 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
   switch (verb) {
     case 'status': {
       const plugin = await claudeStatus({ run: deps.claude(), platform: deps.platform })
-      // Off once Turn off saved it, even when the uninstall after it failed: the devices service writes no skill then.
-      const status = { ...plugin, enabled: plugin.enabled && readAnswers(deps.dataDir).claude !== false }
+      // Off once disable marked it, even when the uninstall after it failed: the devices service sets nothing up then.
+      const status = { ...plugin, enabled: plugin.enabled && readRemoved(deps.dataDir).claude !== true }
       deps.out(json ? JSON.stringify(status) : JSON.stringify(status, null, 2))
       return 0
     }
@@ -70,18 +73,24 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
       return 1
     }
     case 'disable':
-      return turnOff('claude', claudeHome(), deps, () => claudeDisable({ run: deps.claude(), platform: deps.platform }))
+      return turnOff('claude', claudeHome(), deps, async () => {
+        const run = deps.claude()
+        // With no `claude` to uninstall it, a plugin on in these settings stays installed: the person is told.
+        if (!run && claudePluginState(claudeSettingsPath()) === 'on') return { ok: false, error: PLUGIN_LEFT_ON, step: 'uninstall' }
+        return claudeDisable({ run, platform: deps.platform })
+      })
     case 'asked': {
-      // A session started before `disable` still runs the hook: with the plugin off, its stdin is read and nothing told.
-      const post = claudePluginOn(claudeSettingsPath()) ? daemonPost(deps.dataDir, deps.port) : async () => {}
+      // A session started before `disable` still runs the hook: with the plugin off or removed, its stdin is read and
+      // nothing told.
+      const post = pluginActs(deps.dataDir) ? daemonPost(deps.dataDir, deps.port) : async () => {}
       // Prints nothing, ever: what the hook prints, Claude Code reads as its decision.
       return runAsked({ stdin: deps.stdin, post })
     }
     case 'link': {
       // The socket alone: a request over it is trusted by the filesystem, so the mod is handed no credential. Where
-      // there is none (Windows), or the plugin is off, no answer, and the mod tries again later.
+      // there is none (Windows), or the plugin is off or removed, no answer, and the mod tries again later.
       const socketPath = localSocketRoute(deps.dataDir, deps.port, deps.platform)
-      if (!socketPath || !claudePluginOn(claudeSettingsPath())) return 1
+      if (!socketPath || !pluginActs(deps.dataDir)) return 1
       // The mod posts its session id to the devices' listener: handed only when that socket is this account's own, never
       // one another account made or can reach. None there, or not private (no dial yet): left out, and the mod asks
       // again at an attach.
@@ -99,7 +108,7 @@ async function codexCommand(verb: string, json: boolean, deps: DeviceDeps): Prom
   const supported = deps.platform === 'darwin' || deps.platform === 'linux'
   switch (verb) {
     case 'status': {
-      const status = { supported, installed: deps.codex(), enabled: readAnswers(deps.dataDir).codex === true }
+      const status = { supported, installed: deps.codex(), enabled: setUp('codex', deps.dataDir) }
       deps.out(json ? JSON.stringify(status) : JSON.stringify(status, null, 2))
       return 0
     }
@@ -121,6 +130,18 @@ async function codexCommand(verb: string, json: boolean, deps: DeviceDeps): Prom
 const ENGINE_NAMES: Record<DialEngine, string> = { claude: 'Claude Code', codex: 'Codex' }
 const OTHER: Record<DialEngine, DialEngine> = { claude: 'codex', codex: 'claude' }
 const SAVE_FAILED = 'Could not save the dial setting.'
+/** dial-setup.json is there but could not be read: the homes the devices service set up were passed by. */
+const SETUP_UNREAD = 'Could not read the dial setup.'
+const PLUGIN_LEFT_ON = 'Claude Code was not found, so its harness-device plugin is still on; /plugin in Claude Code removes it.'
+
+/**
+ * Whether the plugin's hook and mod act: its entry on in this command's Claude Code settings, and `disable` has not
+ * removed Claude Code. The devices service installs the plugin into the daemon's Claude Code home, which may not be the
+ * one a `disable` ran with: the plugin stays on there, and the removal alone keeps the dial off it.
+ */
+function pluginActs(dataDir: string): boolean {
+  return claudePluginOn(claudeSettingsPath()) && readRemoved(dataDir).claude !== true
+}
 
 /** The command's own Claude Code home, where Claude Code's user settings are. */
 function claudeHome(): string {
@@ -128,46 +149,81 @@ function claudeHome(): string {
 }
 
 /**
- * On is saved before anything is made: the devices service writes the other homes from it, and a failed save leaves
- * nothing behind. The skills folder is then recorded before the skill is written, so a Turn off run with another home
- * still finds it; a folder the record cannot hold gets no skill. The default home is made when missing, as a fresh
- * install has none yet; a person's own dial skill there stays, and On still holds for the other homes.
+ * Whether Harness keeps [engine]'s skill on this computer: wanted (not removed, and for Claude Code its plugin on) and
+ * set up, by a dial attached here once or an enable that wrote a folder. A copy found in a home sets nothing up: it may
+ * be one the old menu left.
+ */
+function setUp(engine: DialEngine, dataDir: string): boolean {
+  return skillWanted(engine, readRemoved(dataDir)[engine] === true, claudeSettingsPath())
+    && (readSetup(dataDir).dial || readWritten(dataDir)[engine].length > 0)
+}
+
+/**
+ * The removal is cleared before anything is made: the devices service sets the engine up again from then on, and a
+ * failed save leaves nothing behind. The default home's skills folder is then recorded before the skill is written, so
+ * a disable run with another home still finds it; a folder the record cannot hold gets no skill. The default home is
+ * made when missing, as a fresh install has none yet; a person's own dial skill there stays. Last, each folder the
+ * devices service recorded gets the skill again, since the service leaves alone one the person removed: a skills folder
+ * deleted whole is made again while its home is there, and one whose home is gone is not. A record that cannot be read
+ * names no folder, and is said.
  */
 function turnOn(engine: DialEngine, home: string, deps: DeviceDeps): number {
-  if (writeAnswer(deps.dataDir, engine, true) !== undefined) {
+  if (writeRemoved(deps.dataDir, engine, false) !== undefined) {
     deps.err(SAVE_FAILED)
     return 1
   }
   const skills = skillsFolderOf(home, true)
   const written = readWritten(deps.dataDir)[engine]
   const recorded = skills !== null && listable(skills) && (written.includes(skills) || written.length < MAX_HOMES)
-  if (recorded && !written.includes(skills) && writeAnswer(deps.dataDir, engine, true, [...written, skills]) !== undefined) {
+  if (recorded && !written.includes(skills) && writeRemoved(deps.dataDir, engine, false, [...written, skills]) !== undefined) {
     deps.err(SAVE_FAILED)
     return 1
   }
   const result = recorded ? writeSkill(skills) : 'failed'
   if (result === 'theirs') deps.err(`${ENGINE_NAMES[engine]} already has a skill named dial that Harness did not write; it stays.`)
-  if (result !== 'failed') return 0
-  deps.err(`Could not write the ${ENGINE_NAMES[engine]} skill.`)
+  let failed = result === 'failed'
+  const setup = readSetup(deps.dataDir)
+  for (const folder of setup.homes[engine]) {
+    const there = ownDirectory(folder)
+    const remade = there === 'missing' && ownDirectory(dirname(folder)) === 'ok'
+    if (there !== 'ok' && !remade) continue
+    if ((remade && !madeFolder(folder)) || writeSkill(folder) === 'failed') failed = true
+  }
+  const error = failed ? `Could not write the ${ENGINE_NAMES[engine]} skill.` : setup.unread ? SETUP_UNREAD : undefined
+  if (error === undefined) return 0
+  deps.err(error)
   return 1
 }
 
+/** Not recursive: the home above it was checked to be this account's own folder, and nothing is made past it. */
+function madeFolder(folder: string): boolean {
+  try {
+    mkdirSync(folder, { mode: 0o700 })
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
- * Off is saved first, so the devices service writes no new copy while these are removed: the default home, each folder
- * the command recorded and each one the devices service listed. Each step runs whatever the one before did, so a
- * failed one leaves no more behind than it must; the first error is the one printed. A folder the other engine holds
- * its skill in while On (~/.codex/skills linked to ~/.claude/skills) keeps it. The command's record then keeps only the
- * folders whose removal failed, for the next Turn off. The homes list is only read: its one writer is the devices
- * service, which empties it once it reads Off.
+ * The removal is marked first, so the devices service writes no new copy while these are removed, and leaves the engine
+ * alone after: the default home, each folder an enable wrote and each one the devices service recorded, at most 129
+ * folders (the default home and the 64 each record holds). Each step runs whatever the one before did, so a failed one
+ * leaves no more behind than it must; the first error is the one printed. A folder the other engine holds its skill in
+ * (~/.codex/skills linked to ~/.claude/skills) keeps it. The command's record then keeps only the folders whose removal
+ * failed, for the next disable. The service's record is only read: its one writer is the devices service, which empties
+ * that engine's folders once it reads the mark; one that cannot be read names no folder, and is said.
  */
 async function turnOff(engine: DialEngine, home: string, deps: DeviceDeps, plugin?: () => Promise<ClaudeResult>): Promise<number> {
-  let error = writeAnswer(deps.dataDir, engine, false) === undefined ? undefined : SAVE_FAILED
+  let error = writeRemoved(deps.dataDir, engine, true) === undefined ? undefined : SAVE_FAILED
   const uninstalled = await plugin?.()
   if (uninstalled && !uninstalled.ok) error ??= uninstalled.error
   const written = readWritten(deps.dataDir)
-  const listed = readHomes(deps.dataDir)
+  const setup = readSetup(deps.dataDir)
+  if (setup.unread) error ??= SETUP_UNREAD
+  const listed = setup.homes
   const other = OTHER[engine]
-  const shared = skillOn(other, readAnswers(deps.dataDir)[other], claudeSettingsPath())
+  const shared = setUp(other, deps.dataDir)
     ? new Set([skillsFolderOf(other === 'claude' ? claudeHome() : deps.codexHome, false), ...written[other], ...listed[other]])
     : new Set()
   const failed = new Set<string>()
@@ -178,7 +234,7 @@ async function turnOff(engine: DialEngine, home: string, deps: DeviceDeps, plugi
     error ??= `Could not remove the ${ENGINE_NAMES[engine]} skill.`
   }
   const kept = written[engine].filter((skills) => failed.has(skills))
-  if (kept.length !== written[engine].length && writeAnswer(deps.dataDir, engine, false, kept) !== undefined) error ??= SAVE_FAILED
+  if (kept.length !== written[engine].length && writeRemoved(deps.dataDir, engine, true, kept) !== undefined) error ??= SAVE_FAILED
   if (error === undefined) return 0
   deps.err(error)
   return 1

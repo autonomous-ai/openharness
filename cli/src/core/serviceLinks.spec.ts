@@ -26,6 +26,55 @@ describe('service links', () => {
   beforeEach(() => { vi.useFakeTimers(); ids = 0; lines = [] })
   afterEach(() => vi.useRealTimers())
 
+  it('a query can recheck its exact connection after asynchronous dispatch', async () => {
+    let release!: () => void
+    let current!: () => boolean
+    const links = make({ answer: async (_service, _query, _payload, authority) => {
+      current = authority.current!
+      await new Promise<void>(resolve => { release = resolve })
+      return { kept: current() }
+    } })
+    const firstSink = sink(), secondSink = sink()
+    const first = links.accept('search', TOKEN, firstSink, vi.fn())!
+    first.receive({ type: 'service_query', payload: { requestId: 'one', query: 'frame_part' } })
+    await Promise.resolve()
+    expect(current()).toBe(true)
+    links.accept('search', TOKEN, secondSink, vi.fn())
+    expect(current()).toBe(false)
+    release()
+    await vi.waitFor(() => expect(firstSink.sent).toContainEqual({ type: 'service_query_result', payload: { requestId: 'one', kept: false } }))
+    expect(secondSink.sent).not.toContainEqual(expect.objectContaining({ type: 'service_query_result' }))
+  })
+
+  it('holds request authority to its service, exact payload, owner, deadline and connection', async () => {
+    let clock = 0
+    const authorities = new Map<string, import('./serviceLinks.js').ServiceQueryAuthority>()
+    const links = make({ owned: { search: ['session_search'], store: ['dsh_list'] }, now: () => clock,
+      answer: (service, _query, _payload, authority) => { authorities.set(service, authority); return {} },
+    })
+    const first = links.accept('search', TOKEN, sink(), vi.fn())!
+    const store = links.accept('store', TOKEN, sink(), vi.fn())!
+    first.receive({ type: 'service_query', payload: { query: 'check' } })
+    store.receive({ type: 'service_query', payload: { query: 'check' } })
+    await Promise.resolve()
+    const authority = authorities.get('search')!
+    links.route('session_search', { agentId: 'a' }, ASKER, vi.fn())
+    expect(authority.ownsRequest('route-1', 'session_search', { agentId: 'a' })).toBe(true)
+    expect(authority.ownsRequest('missing', 'session_search', {})).toBe(false)
+    expect(authority.ownsRequest('route-1', 'wrong_type', {})).toBe(false)
+    expect(authority.ownsRequest('route-1', 'session_search', { agentId: 'other' })).toBe(false)
+    expect(authorities.get('store')!.ownsRequest('route-1', 'session_search', {})).toBe(false)
+    clock = 5_001
+    expect(authority.ownsRequest('route-1', 'session_search', {})).toBe(false)
+    clock = 0
+    links.route('session_search', {}, { local: false, owner: false }, vi.fn())
+    expect(authority.ownsRequest('route-2', 'session_search', {})).toBe(false)
+    first.closed()
+    links.accept('search', TOKEN, sink(), vi.fn())
+    links.route('session_search', { agentId: 'a' }, ASKER, vi.fn())
+    expect(authority.ownsRequest('route-3', 'session_search', {})).toBe(false)
+  })
+
   it('lets in only a service it runs out of process, with the master\'s token', () => {
     const links = make()
     expect(links.accept('search', 'wrong-token-of-the-same-length-xxxxxxxxxxxxxxxx', sink(), vi.fn())).toBeNull()
@@ -65,7 +114,7 @@ describe('service links', () => {
     // Without the hooks, the same frames are taken and nothing is said.
     const bare = make({ owned: { gateway: [] } })
     const quiet = bare.accept('gateway', TOKEN, sink(), vi.fn())!
-    quiet.receive({ type: 'service_notice', payload: {} })
+    quiet.receive({ type: 'service_notice' })
     quiet.receiveBinary(Uint8Array.of(1))
     quiet.closed()
     plain.closed()
@@ -543,6 +592,7 @@ describe('service links', () => {
     const retired = links.accept('search', TOKEN, old, vi.fn())!
     retired.receive({ type: 'service_query', payload: { requestId: 'queued', query: 'agents' } })
     const current = links.accept('search', TOKEN, sink(), vi.fn())!
+    retired.receive({ type: 'service_query', payload: { requestId: 'late', query: 'frame_part' } })
     retired.receiveBinary(Buffer.from('old')); current.receiveBinary(Buffer.from('current'))
     await vi.waitFor(() => expect(old.sent).toHaveLength(1))
     expect(answer).not.toHaveBeenCalled()

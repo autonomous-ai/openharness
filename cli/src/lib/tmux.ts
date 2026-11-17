@@ -509,8 +509,8 @@ export function sendToTmux(pane: string, text: string, beforeEnter?: () => Promi
  * settings list opens a row as soon as the filter narrows to one, so the Enter `sendToTmux` appends would
  * land on the row that just opened and pick whatever was already highlighted.
  */
-export function sendLiteralToTmux(pane: string, text: string): Promise<boolean> {
-  return tmuxPasteText(pane, text, false).then((result) => result === 'pasted')
+export function sendLiteralToTmux(pane: string, text: string, allowed?: () => boolean): Promise<boolean> {
+  return tmuxPasteText(pane, text, false, allowed).then((result) => result === 'pasted')
 }
 
 /**
@@ -529,7 +529,8 @@ export function pasteRawIntoTmux(pane: string, text: string, allowed?: () => boo
   return tmuxPasteText(pane, text, true, allowed).then((result) => result === 'pasted')
 }
 
-export function sendKeyToTmux(pane: string, key: string): Promise<boolean> {
+export function sendKeyToTmux(pane: string, key: string, allowed?: () => boolean): Promise<boolean> {
+  if (allowed?.() === false) return Promise.resolve(false)
   return new Promise((resolve) => {
     run('tmux', ['send-keys', '-t', pane, key], { timeout: 2000 }, (err) => resolve(!err))
   })

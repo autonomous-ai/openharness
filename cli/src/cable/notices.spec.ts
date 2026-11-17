@@ -7,7 +7,7 @@ type Call = ['ask', string, string, unknown] | ['close', string, string]
 function desk(opts: { connected?: boolean; host?: string; hosts?: Record<string, string>; who?: NoticeCaller['who'] } = {}) {
   const state = { connected: opts.connected ?? true, at: 0, ids: 0, resolved: 0, held: new Set<string>() }
   const calls: Call[] = []
-  const log: string[] = []
+  const counted: Array<[string, string]> = []
   const notices = new Notices({
     connected: () => state.connected,
     resolve: (ask) => {
@@ -20,9 +20,9 @@ function desk(opts: { connected?: boolean; host?: string; hosts?: Record<string,
     close: (agentId, id) => calls.push(['close', agentId, id]),
     uuid: () => `u${++state.ids}`,
     now: () => state.at,
-    log: (line) => log.push(line),
+    count: (engine, result) => counted.push([engine, result]),
   })
-  return { notices, state, calls, log, asks: () => calls.filter((c) => c[0] === 'ask') }
+  return { notices, state, calls, counted, asks: () => calls.filter((c) => c[0] === 'ask') }
 }
 
 const VPN = 'Connect the VPN so I can run the staging tests'
@@ -31,11 +31,11 @@ const notice = (text: string, sessionId = 'a1', engine: NoticeAsk['engine'] = 'c
 
 describe('Notices', () => {
   it('a notice is one shown-only question: the line, and where to answer it', () => {
-    const { notices, calls, log } = desk()
+    const { notices, calls, counted } = desk()
     expect(notices.notify(notice(VPN))).toBe('shown')
     expect(calls).toEqual([['ask', 'a1', expect.stringMatching(/^shown:/),
       [{ key: 'notice', q: VPN, options: ['In Orca'] }]]])
-    expect(log).toEqual(['[device] notify · claude · shown'])
+    expect(counted).toEqual([['claude', 'shown']])
   })
 
   it('letters the round dial cannot draw become ?', () => {
@@ -57,22 +57,14 @@ describe('Notices', () => {
     expect((asks()[1][3] as Array<{ q: string }>)[0].q).toBe(fits)
   })
 
-  it('no line of the log holds the text, a session id or a folder', () => {
-    const { notices, state, log } = desk()
+  // What is counted is the engine and the outcome only: the text, session and folder are the person's own.
+  it('each answer is counted by its engine, agent for a caller that names none', () => {
+    const { notices, state, counted } = desk()
     notices.notify(notice(VPN, 'sess-7f3a'))
     notices.notify(notice(VPN, 'sess-7f3a'))
     state.connected = false
     notices.notify({ text: VPN })
-    expect(log).toEqual([
-      '[device] notify · claude · shown',
-      '[device] notify · claude · limited',
-      '[device] notify · agent · no dial',
-    ])
-    for (const line of log) {
-      expect(line).not.toContain('VPN')
-      expect(line).not.toContain('sess-7f3a')
-      expect(line).not.toContain('staging-api')
-    }
+    expect(counted).toEqual([['claude', 'shown'], ['claude', 'limited'], ['agent', 'no dial']])
   })
 
   it('with no dial nothing is asked, resolved or counted', () => {
@@ -190,6 +182,17 @@ describe('Notices', () => {
     const listed = desk()
     listed.notices.notify(notice(VPN))
     expect(listed.notices.from('a1')).toBeUndefined()
+  })
+
+  it('a card is pending from its notice until it ends, held back or not', () => {
+    const { notices, state } = desk()
+    expect(notices.pending('a1')).toBe(false)
+    state.held.add('a1')
+    notices.notify(notice(VPN))
+    expect(notices.pending('a1')).toBe(true)
+    expect(notices.pending('a2')).toBe(false)
+    notices.ended('a1')
+    expect(notices.pending('a1')).toBe(false)
   })
 
   it('the twenty-first pending card closes the oldest', () => {

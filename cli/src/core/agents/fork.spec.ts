@@ -9,7 +9,7 @@ import { enginePathOverride } from '../../lib/engineBin.js'
 import { windowsAfterExit } from '../../lib/windows/engineStart.js'
 import { buildEngineLaunchArgv, engineLaunchEnv, refusePermissionFlagIfUnsupported, supportsNamedAgent } from '../../lib/engineLaunch.js'
 import { planFork } from '../../lib/forkAgent.js'
-import { prepareInstructionWrites } from '../../scm/scmProjects.js'
+import { prepareInstructionWrites } from '../../scm/launch.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createAgentForker, type ForkAgentDeps } from './fork.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
@@ -39,8 +39,8 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   refusePermissionFlagIfUnsupported: vi.fn(async () => null),
   supportsNamedAgent: vi.fn(() => true),
 }))
-vi.mock('../../scm/scmProjects.js', async (real) => {
-  const actual = await real<typeof import('../../scm/scmProjects.js')>()
+vi.mock('../../scm/launch.js', async (real) => {
+  const actual = await real<typeof import('../../scm/launch.js')>()
   return { ...actual, prepareInstructionWrites: vi.fn(actual.prepareInstructionWrites) }
 })
 vi.mock('../../engines/kit/notifyHooks.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))

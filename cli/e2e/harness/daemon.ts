@@ -28,7 +28,7 @@ import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 import { endRootProcesses } from '../../src/testing/rootProcesses.js'
 import { assertSocketPathFits } from '../../src/testing/socketPathRoom.js'
-import { alive } from '../../src/testing/spawnedRuns.js'
+import { alive, processTable } from '../../src/testing/spawnedRuns.js'
 import { assertNodeAlone } from '../../src/testing/testNode.js'
 import { forgetGroup, forgetTmux, leaderGone, watchGroup, watchTmux } from './reaper.js'
 
@@ -76,6 +76,8 @@ export interface DaemonOptions {
   heapMiB?: number
   /** Models the fake engines report. */
   claudeModel?: string
+  /** The release the fake Claude Code reports (fakeEngine.mjs's own by default, older than its plugin needs). */
+  claudeVersion?: string
   /** Pause model commands at a disposable file gate for worker failure tests. */
   modelControlGate?: boolean
   /** Note every submitted prompt and hold a `!latestart` turn's start at a file gate (submission tests). */
@@ -132,6 +134,15 @@ async function freePort(): Promise<number> {
 export function listeningPort(output: string): number | null {
   const said = [...output.matchAll(/\[hooks\] listening on 127\.0\.0\.1:(\d+) \(/g)]
   return said.length ? Number(said[said.length - 1][1]) : null
+}
+
+/** The pids of the master's `[harnessd] service <name> started (pid N)` lines in [log], in order and once each, that
+ *  are still [master]'s children in [table]: a pid it logged can be a stranger's once that process has gone. */
+export function loggedServicePids(log: string, name: string, master: number | null, table: ReadonlyArray<{ pid: number; ppid: number }>): number[] {
+  if (master === null) return []
+  const children = new Set(table.filter((row) => row.ppid === master).map((row) => row.pid))
+  const logged = [...log.matchAll(new RegExp(`\\[harnessd\\] service ${name} started \\(pid (\\d+)\\)`, 'g'))].map((match) => Number(match[1]))
+  return [...new Set(logged)].filter((pid) => children.has(pid))
 }
 
 /** listeningPort of [output]; before the daemon said one, an error by name rather than a guess. */
@@ -339,7 +350,10 @@ export class IsolatedDaemon {
       ...(options.trustPrompt ? { trustPrompt: true } : {}),
       ...(options.graphicsQuery ? { graphicsQuery: options.graphicsQuery } : {}),
     }
-    for (const name of ['claude', 'codex'] as const) await writeFile(join(dirs.bin, name), fakeEngineShim(name, config), { mode: 0o755 })
+    for (const name of ['claude', 'codex'] as const) {
+      const shimConfig = { ...config, ...(name === 'claude' && options.claudeVersion ? { version: options.claudeVersion } : {}) }
+      await writeFile(join(dirs.bin, name), fakeEngineShim(name, shimConfig), { mode: 0o755 })
+    }
     // A daemon never finds the developer's own gh (shared tabs' tasks run it): a stub that refuses, until a test writes its own.
     await writeFile(join(dirs.bin, 'gh'), GH_FORBIDDEN_STUB, { mode: 0o755 })
     // Engine probes and usage readers must not consult the person's macOS
@@ -487,6 +501,10 @@ export class IsolatedDaemon {
     return [...this.output.matchAll(/\[harnessd\] core started/g)].length
   }
   log(): string { return this.output }
+  /** The service process [name]'s pids (`search`, `edge`, `models`, `gateway`, `devices`, `agentBrowser`), started by
+   *  its own master, by the pid it logged, and still its child. Not by name: no process sets a title, and a daemon under
+   *  test runs on a Node with no name link, so `ps` shows `node` for every one of them. */
+  servicePids(name: string): number[] { return loggedServicePids(this.output, name, this.pid, processTable()) }
 
   /** `ready: 'port'` returns as soon as the port answers, the way a client sees a restarting daemon;
    *  `'none'` as soon as the process is started. */

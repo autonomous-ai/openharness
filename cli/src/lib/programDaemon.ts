@@ -21,6 +21,7 @@ import { join, resolve } from 'node:path'
 import { AgentClientError } from '../agentClient/daemon.js'
 import { processAlive } from './daemonState.js'
 import { platformDaemonDeps } from './platformDaemon.js'
+import { ownProcessGroup } from './windows/noWindow.js'
 
 /** How long a program's command waits for the daemon it started: well past a cold start on a lamp's board (a few
  *  seconds), well short of `harness start`'s own wait for a platform unit (PLATFORM_START_WAIT_MS, 60 s). */
@@ -130,7 +131,7 @@ export function systemdFragment(run: typeof spawnSync = spawnSync): string | nul
   return fragment || null
 }
 
-/** `harness start` with this process's CLI and environment, detached, so a start past the bound goes on. */
+/** `harness start` with this process's CLI and environment, in its own process group, so a start past the bound goes on. */
 function runHarnessStart(dataDir: string): Promise<{ code: number | null; output: string }> {
   const logPath = join(dataDir, PROGRAM_START_LOG)
   let fd: number | 'ignore' = 'ignore'
@@ -140,7 +141,7 @@ function runHarnessStart(dataDir: string): Promise<{ code: number | null; output
   } catch { /* started all the same, without its words */ }
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [...process.execArgv, process.argv[1], 'start'], {
-      detached: true, stdio: ['ignore', fd, fd], env: process.env, windowsHide: true,
+      ...ownProcessGroup(), stdio: ['ignore', fd, fd], env: process.env,
     })
     if (typeof fd === 'number') closeSync(fd)
     const done = (code: number | null) => {

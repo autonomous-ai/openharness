@@ -100,11 +100,11 @@ export async function startServiceProcess(named: string | undefined, deps: Servi
     console.error(`[service] ${names.join(',')}: the core has no local socket to reach`)
     return exit(2)
   }
-  // The master names the process (`edge` for the services it shares); a process started by hand is named
-  // for what it runs. The same name as the hard link it was exec'd through (harnessd/processName.ts): one
-  // name in ps and Activity Monitor.
-  const title = harnessdEnv().HARNESSD_SERVICE || names.join(',')
-  process.title = `harnessd-${title}`
+  // The master names the process (`edge` for the services it shares); a process started by hand is named for what
+  // it runs. The name is on its lines in the log. What ps and Activity Monitor call it is the hard link it was
+  // exec'd through (harnessd/processName.ts), never a title: on macOS a title put the process's environment where
+  // `pgrep -f` reads its arguments (architecture.processTitle.spec.ts).
+  const processName = harnessdEnv().HARNESSD_SERVICE || names.join(',')
   // Its lines share the daemon's log with the master's: a write a full disk refuses is dropped, not fatal.
   ignoreLogWriteErrors()
   // As every daemon process did at load: a service that runs `ps` or `git` must not get mangled output.
@@ -133,7 +133,7 @@ export async function startServiceProcess(named: string | undefined, deps: Servi
     }
   }
   if (!running.length) throw failure
-  const host = (deps.host ?? hostServices)({ name: title, services: names })
+  const host = (deps.host ?? hostServices)({ name: processName, services: names })
   for (const service of running) host.add(service)
   return {
     stop: () => Promise.allSettled(running.map((service) => Promise.resolve().then(() => service.stop()))).then(() => {}),

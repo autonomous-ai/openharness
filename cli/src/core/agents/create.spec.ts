@@ -19,7 +19,7 @@ import { loadEngine } from '../../engines/inProcess.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { SessionOwner } from '../../lib/sessionSearch/external.js'
 import { createAgentCreator, type CreateAgentDeps } from './create.js'
-import { prepareInstructionWrites } from '../../scm/scmProjects.js'
+import { prepareInstructionWrites } from '../../scm/launch.js'
 import { opencodeMajorVersion } from '../../engines/launchControl.js'
 import { installOpencodePlugin } from '../../engines/nativeHooks.js'
 import { missingHookScript } from '../../engines/kit/notifyHooks.js'
@@ -36,7 +36,7 @@ vi.mock('../../lib/projectFolder.js', async real => {
   return { ...actual, projectsRoot: vi.fn(actual.projectsRoot) }
 })
 
-vi.mock('../../scm/scmProjects.js', async real => ({ ...await real<object>(), prepareInstructionWrites: vi.fn(async () => {}) }))
+vi.mock('../../scm/launch.js', async real => ({ ...await real<object>(), prepareInstructionWrites: vi.fn(async () => {}) }))
 vi.mock('node:fs', async real => {
   const actual = await real<typeof import('node:fs')>()
   return { ...actual, opendirSync: vi.fn(actual.opendirSync) }

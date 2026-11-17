@@ -1,9 +1,11 @@
+import { validProjectPath } from './projectPath.js'
 import { execFile, spawn } from 'node:child_process'
 import { cp, lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, normalize } from 'node:path'
 import { promisify } from 'node:util'
-import { placeholderBranch, plausibleBranchName, worktreeFolderName } from './agentNames.js'
+import { plausibleBranchName } from './agentNames.js'
+import { placeholderBranch, worktreeFolderName } from './branchNames.js'
 import { redactSecretsInText } from './redactSecrets.js'
 import { withinRoots } from './pathContainment.js'
 import { ownProcessGroup } from './windows/noWindow.js'
@@ -19,10 +21,6 @@ function diskFull(error: unknown): boolean {
   const failure = error as { code?: string; stderr?: string }
   return failure?.code === 'ENOSPC' || failure?.code === 'EDQUOT' ||
     /no space left on device|disk quota exceeded/i.test(failure?.stderr ?? '')
-}
-
-export function validGitPath(path: unknown): path is string {
-  return typeof path === 'string' && isAbsolute(path) && path.length <= 4096 && !/[\x00-\x1f\x7f]/.test(path)
 }
 
 async function git(path: string, args: string[], timeout = 4000): Promise<string> {
@@ -135,7 +133,7 @@ async function refreshBranches(path: string): Promise<Map<string, string[] | nul
  * whatever the name said, so the containment is measured on the real path and git is pointed at it.
  */
 export async function readGitProject(requested: string, options: { refresh?: boolean; knownRoots?: string[] } = {}) {
-  if (!validGitPath(requested)) return { error: 'INVALID_PATH' }
+  if (!validProjectPath(requested)) return { error: 'INVALID_PATH' }
   let path: string
   // A folder that is gone reads as "not a Git project", which is what running git in it used to
   // report (exit 128) — a deleted folder is not a malformed request.
@@ -225,7 +223,7 @@ export type GitProjectOptions = {
  * other is switched to, only in a folder with nothing uncommitted. With `branchName` the folder moves
  * to that new branch, made where it is now, uncommitted changes and all. */
 export async function prepareGitProject(source: string, options: GitProjectOptions): Promise<string> {
-  if (!validGitPath(source) || (options.branchName !== undefined && !plausibleBranchName(options.branchName))
+  if (!validProjectPath(source) || (options.branchName !== undefined && !plausibleBranchName(options.branchName))
       || (options.existingBranch && !options.branchName)) {
     throw new GitProjectError('INVALID_PROJECT_SOURCE', 'Choose a Git project folder.')
   }

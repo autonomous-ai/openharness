@@ -117,7 +117,7 @@ import { installedDsh, invalidateInstalledDsh } from '../dsh/installed.js'
 import { dshThrough } from './agents/dshThrough.js'
 import { ApiConnectionMetadata } from '../lib/apiConnectionMetadata.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
-import type { AgentBrowserFrame, AgentDshContext } from '../lib/agentFrame.js'
+import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
 import { confirmHomes, sessionCodexHome } from '../lib/engineHomes.js'
 import { sessionStoreContracts } from '../engines/sessionStoreContracts.js'
@@ -204,9 +204,10 @@ import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn
 import { createCursorDiscovery } from './engines/cursorDiscovery.js'
 import { createStoreOf } from './transcripts/stores.js'
 import { createOtherStreams } from './engines/otherStreams.js'
-import { transcriptReadIdentity } from './transcripts/readIdentity.js'
+import { paneReadIdentity, transcriptReadIdentity } from './transcripts/readIdentity.js'
 import { isOtherEngine, OTHER_ENGINE_STATES, OTHER_ENGINES_SERVICE } from '../engines/otherEngines.js'
 import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, GOALS_REQUESTS, TURN_DELIVERERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, ENGINE_PROBE_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type WindowFocus } from './api.js'
+import { createFrameParts } from './frameParts.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
 import { createServiceLinks, READER_START_MS, type ServiceLinks } from './serviceLinks.js'
@@ -269,7 +270,6 @@ import { TranscriptPager } from '../lib/transcriptPages.js'
 import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
 import { agentFrame, lastActivityAt, type AgentFrame } from '../lib/agentFrame.js'
 import { transcriptActivityAt } from '../lib/transcriptActivity.js'
-import { forgetAgentProject } from '../lib/agentProject.js'
 import { createUsageLink } from './usageLink.js'
 import type { UsageSnapshots } from './usageLink.js'
 import { usageTarget, validUsage, validUsageTarget, type AgentUsageTarget } from '../lib/agentUsageWire.js'
@@ -441,9 +441,7 @@ let activityFrameContextRef: ((s: RegisteredSession) => ActivityFrame | null) | 
 /** Set by runForeground once the input is built: what a message to an agent waits for (core/input.ts), for every frame. */
 let waitingForRef: ((s: RegisteredSession) => 'engine' | null) | null = null
 
-let dshFrameContextRef: ((s: RegisteredSession) => AgentDshContext | null) | null = null
-/** Set by runForeground once the agent browser can be asked: an agent's browser, for its frame (services/agentBrowser.ts). */
-let browserFrameRef: ((agentId: string) => AgentBrowserFrame | undefined) | null = null
+let framePartsRef: ((s: RegisteredSession) => () => Readonly<Record<string, unknown>>) | null = null
 
 /** Aggregate snapshots only; populated after the optional usage port is composed. */
 let usagePortRef: UsageSnapshots | null = null
@@ -457,11 +455,10 @@ function projectFrame(s: RegisteredSession, selectedModel: string | null, worksp
     selectedModel,
     workspace,
     terminalAvailable: registry.terminalAvailable(s.agentId),
-    dsh: dshFrameContextRef?.(s) ?? null,
+    parts: framePartsRef?.(s),
     activity: () => activityFrameContextRef?.(s) ?? null,
     waitingFor: () => waitingForRef?.(s) ?? null,
     gridAnnotation: (grid) => gridAnnotationRef?.(grid) ?? null,
-    browser: browserFrameRef?.(s.agentId),
   })
 }
 
@@ -523,10 +520,18 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // agent's input waits in while it changes host, and the agents a move a dead daemon left may still run beside
   // (`removeOrphanMovePanes` below), held this start: neither restored, nor discovered, nor moved.
   const hostQuiet = new QuietClock({ now: Date.now })
-  const moveGate = new MoveGate()
   const moveHeld = new Set<string>()
   /** The conversations of the agents in [moveHeld]: an adoption of one would start a second engine on it too. */
   const moveHeldConversations = new Map<string, string>()
+  const moveGate = new MoveGate(id => moveHeld.has(id), id => {
+    moveHeld.add(id)
+    const conversation = registry.byAgent(id)?.sessionId
+    if (conversation) moveHeldConversations.set(conversation, id)
+    restartJobs.cancel(id)
+    invalidateTerminalControl(id)
+    input.refuse(id)
+    console.warn(moveHeldLine(id))
+  })
   let hostMover: HostMover | null = null
   // Every removal of a row goes through here: its clocks go with it.
   const forgetRestartRevision = (agentId: string): void => { restartJobs.forget(agentId); hostQuiet.forget(agentId) }
@@ -600,9 +605,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (engines/inProcess.ts).
   registry.onEnter = preloadEngine
   registry.load()
-  // Bindings can finish before full teardown exists, or during its awaits. Cover every owned exit,
-  // including a staged update received during startup, without touching a different daemon's table.
-  process.on('exit', () => registry.flush({ exiting: true }))
   // Persisted locators are hints until this process has observed their terminal root and PID/start marker.
   // Mark them dormant before the backend socket can publish anything; the first authoritative reconcile
   // reactivates matching process agents without changing their public identity or session binding.
@@ -711,7 +713,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
 
   // Reading and writing panes through control leases (core/terminals/control.ts).
-  const terminalControl = createTerminalControl({ resolve: (target) => registry.resolve(target), terminals })
+  const terminalControl = createTerminalControl({ resolve: (target) => registry.resolve(target), terminals, refused: id => moveGate.refused(id) })
   const pinnedControls = terminalControl.pinnedControls
   restoreCancelled = (agentId) => pinnedControls.has(agentId) || moveHeld.has(agentId)
   const invalidateTerminalControl = terminalControl.invalidateTerminalControl
@@ -1041,7 +1043,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const runtime = primaryRuntime(session)
       return terminals.backendFor(runtime)?.paneInfo(runtime).then(info => info?.pid ?? null) ?? Promise.resolve(null)
     },
-    dsh: (session) => backendRef?.dshFrameProvider?.(session) ?? null,
+    dsh: (session) => {
+      const part = frameParts.read(session.agentId)
+      return session.dsh && typeof part.dsh === 'string' ? { id: part.dsh, name: part.dshName, viewerUrl: part.viewerUrl,
+        viewerName: part.viewerName, verdict: part.verdict } as AgentDshContext : null
+    },
     windows: (frame) => backendRef?.sendLocal(frame),
     daemon: { command: daemonCommand(), port: env.PORT, machineId: () => backendRef?.machineId ?? '', autonomousEnv: session?.autonomousEnv ?? env.AUTONOMOUS_ENV },
     // Share: its observers' frames to the relay, and its welcomes signed by the gateway, which holds the identity.
@@ -1077,8 +1083,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Each service starts and is called through the host, so one that fails is logged and left off and
   // the core carries on without it (core/serviceHost.ts).
   const serviceHost = createServiceHost(ports, { faults: testFaults(harnessd.HARNESSD_TEST_FAULTS) })
-  // The DSH companions: each harness agent's viewer and verdict watch (services/viewers.ts), started below.
-  dshFrameContextRef = (s) => ports.viewers?.frameContext(agentView(s)) ?? null
+  // Services publish bounded display fields without putting their state or interpretation in the core.
+  const frameParts = createFrameParts({ core: coreApi, epoch: agentLife.frameEpoch, available: service => !serviceHost.isOff(service) })
+  framePartsRef = frameParts.forFrame
+  for (const service of frameParts.services) serviceHost.onOff(service, () => frameParts.disabled(service))
   // Models (services/models.ts), started below: what an agent's frame says of its grid, from memory.
   gridAnnotationRef = (grid) => (ports.models ?? MODELS_OFF).annotation(grid)
   // A look at a live agent, for the services that follow agents (core/agentLife.ts): a create, a fork, a resume, a
@@ -1267,7 +1275,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (services/agentBrowser/streams.ts): the core passes its frames on, decides who may open one, and holds each to the
   // connection that opened it (core/browserStreams.ts).
   const browserStreams = createBrowserStreams({
-    port: () => ports.agentBrowser,
+    port: () => ports.agentBrowser, frame: frameParts.read,
     asker: (connId) => backend.askerFor(connId),
     send: (connId, type, payload) => backend.sendTerminalTo(connId, type, payload),
     sendBinary: (connId, frame) => backend.sendTerminalLocalFrameTo(connId, frame),
@@ -1347,10 +1355,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   const emitSessionEvents = funnel.emit
   const announceTurnAborted = funnel.announceTurnAborted
-  const cursorDiscovery = createCursorDiscovery(cursorDataDir(), (sessionId, transcriptPath) => {
+  const cursorDiscovery = createCursorDiscovery(cursorDataDir(), async (sessionId, transcriptPath) => {
     const existing = registry.bySession(sessionId)
     if (!existing || existing.engine !== 'cursor' || existing.transcriptPath === transcriptPath) return
-    const result = registry.register({
+    const authority = paneReadIdentity(existing)
+    const result = await registry.register({
       engine: 'cursor',
       sessionId,
       transcriptPath,
@@ -1363,6 +1372,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       cliVersion: existing.cliVersion ?? undefined,
       processIdentity: existing.processIdentity ?? undefined,
       hookEvent: 'TranscriptDiscovered',
+    }, { current: () => paneReadIdentity(registry.byAgent(existing.agentId)) === authority }).catch(() => {
+      console.error('[cursor-discovery] binding held: registration could not be committed')
+      return null
     })
     if (!result) return
     // The file is authoritative now. Publishing its binding must not wait for an optional reader.
@@ -1576,7 +1588,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     { wake: (why) => viewersWake.ask('viewers', why) })
   // How the core tells workspaces in their own process what to do, and answers them (core/workspacesLink.ts).
   const workspacesLink = createWorkspacesLink(coreApi, (frame) => serviceLinks.notify('workspaces', frame),
-    (type, payload, waitMs) => serviceLinks.call('workspaces', type, payload, waitMs), forgetAgentProject)
+    (type, payload, waitMs) => serviceLinks.call('workspaces', type, payload, waitMs))
   // Agent Messages in its own process: which of its deliveries may be written, as it last said, and what it may ask
   // and hear of the core (core/messagesLink.ts).
   // A roster change it tells (`observers`) goes to Share: to its process, which a call starts while it is off, or to its
@@ -1651,6 +1663,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const agentBrowserLink = createAgentBrowserLink({ core: coreApi, notify: (frame) => serviceLinks.notify('agentBrowser', frame),
     notifyBinary: (bytes) => serviceLinks.notifyBinary('agentBrowser', bytes), streamsGone: () => browserStreams.gone(), want: () => coreLink.want('agentBrowser') })
   const usageLink = createUsageLink({ call: payload => ports.usage?.read(payload.target as AgentUsageTarget) ?? Promise.resolve({}), changed: agentEvents.onTokenUsageChanged })
+  coreApi.usage = target => usageLink.readSnapshot(target, coreApi.agents.all())
+  coreApi.usageFresh = async (agentId) => {
+    const row = registry.byAgent(agentId)
+    const target = row && usageTarget(row)
+    if (!target || !validUsageTarget(target)) return null
+    const answer = await ports.usage?.read(target)
+    return answer && validUsage(answer.value) ? answer.value : null
+  }
   const serviceLinks = createServiceLinks({
     token: serviceToken,
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
@@ -1670,7 +1690,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     startWaits: Object.fromEntries([...Object.values(READER_SERVICES), OTHER_ENGINES_SERVICE].map(service => [service, READER_START_MS])),
     want: (service) => experimentHooks.want(service),
     // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
-    answer: async (service, query, payload, authority) => await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
+    answer: async (service, query, payload, authority) => frameParts.answer(service, query, payload, () => authority.current?.() === true) ?? await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
       // Agent Messages is answered what it uses and nothing more, never what an experiment may ask (core/messagesLink.ts).
       ?? (service === 'messages' ? await messagesLink.answer(query, payload) : null)
       // What happens to agents, for a service that follows them (core/agentLife.ts): the live agents' rows, which only a
@@ -1778,10 +1798,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (outOfProcess.has('viewers')) {
     ports.viewers = viewersLink.port
     viewersLink.follow()
-  } else serviceHost.start('viewers', inline!.startViewers, coreApi, VIEWERS_FALLBACKS)
+  } else serviceHost.start('viewers', inline!.startViewers, frameParts.scope('viewers', coreApi), VIEWERS_FALLBACKS)
   // Workspaces: in this process, or in the edge host (services/workspacesProcess.ts), told what to do and when.
   if (outOfProcess.has('workspaces')) ports.workspaces = workspacesLink.port
-  else serviceHost.start('workspaces', inline!.startWorkspaces, coreApi, WORKSPACES_FALLBACKS)
+  else serviceHost.start('workspaces', inline!.startWorkspaces, frameParts.scope('workspaces', coreApi), WORKSPACES_FALLBACKS)
   // The orchestrator, an experiment (services/orchestrator.ts): in this process, or in its own once it is on,
   // as the core sees it there (core/orchestratorLink.ts). It reads its Directors' turns from the frames sent.
   if (outOfProcess.has('orchestrator')) ports.orchestrator = orchestratorLink.port
@@ -1812,14 +1832,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   else serviceHost.start('usage', inline!.startUsageInCore, coreApi, USAGE_FALLBACKS, USAGE_REQUESTS)
   usagePortRef = usageLink.port
   backend.tokenUsageProvider = target => usageLink.port.get(target)
-  coreApi.usage = target => usageLink.readSnapshot(target, coreApi.agents.all())
-  coreApi.usageFresh = async (agentId) => {
-    const row = registry.byAgent(agentId)
-    const target = row && usageTarget(row)
-    if (!target || !validUsageTarget(target)) return null
-    const answer = await ports.usage?.read(target)
-    return answer && validUsage(answer.value) ? answer.value : null
-  }
+
 
   // This machine's and each agent's resources, for the Monitor and the list's readings (services/monitor.ts):
   // in this process, or in the edge host (services/monitorProcess.ts), asked through its port (core/monitorLink.ts).
@@ -1862,9 +1875,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (outOfProcess.has('agentBrowser')) {
     ports.agentBrowser = agentBrowserLink.port
     agentBrowserLink.follow()
-  } else serviceHost.start('agentBrowser', inline!.startAgentBrowser, coreApi, AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS)
-  browserFrameRef = (agentId) => ports.agentBrowser?.frameContext(agentId)
-  backend.browserFrameProvider = browserFrameRef
+  } else serviceHost.start('agentBrowser', inline!.startAgentBrowser, frameParts.scope('agentBrowser', coreApi), AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS)
   // Models: grid access and its pin, the model pictures on agents' frames, the keystroke prewarm, where an
   // agent on a grid model sends its inference, and the models requests the apps send (services/models.ts):
   // in this process, or in its own (services/modelsProcess.ts), reached through core/modelsLink.ts.
@@ -1896,7 +1907,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   backend.runtimeProfileProvider = (session) => runtimeProfiles.selectedModel(session)
   backend.workspaceProvider = (session) => runtimeProfiles.workspace(session)
-  backend.dshFrameProvider = (s) => ports.viewers?.frameContext(agentView(s)) ?? null
+  backend.framePartsProvider = frameParts.forFrame
   // `harness remote` names the tile it was typed in by its pane; the registry knows whose it is (lib/terminalHandoff.ts).
   backend.onTerminalHandoff = (pane) => handoffAgentId(registry.advertised(), pane)
   // A rename, a model and effort, or an app opening an agent (core/agents/update.ts).
@@ -2057,6 +2068,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // What the reconciler's scans mean for the registry (core/agents/discovery.ts).
   const discovery = createDiscoveryHandlers({
     registry,
+    current: id => !launchCancelled(id),
     attach: agentHere,
     taken: (from, to) => agentLife.taken(from, to),
     forgetSession,
@@ -2552,7 +2564,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // continues in the background, the same way `agent_create` does it.
   for (const entry of registry.list()) {
     const saved = isTerminalEngine(entry.engine) ? stoppedAgents.get(entry.agentId) : null
-    if (saved && !isTerminalEngine(saved.engine)) retainExitedSession(entry, true)
+    if (saved && !isTerminalEngine(saved.engine)) await retainExitedSession(entry, true)
   }
   // What restore asks of the terminals, each pane of its own backend, and the launch it builds (both shared with a move
   // to another pty host, core/agents/hostMove.ts). Every pane question asked of the pane's own backend, as every other
@@ -2791,6 +2803,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Watching a pane create or fork just opened until its engine is up, or why not (core/agents/newPane.ts).
   const watchNewPane = createPaneWatcher({
     registry,
+    revision: restoreRevision, cancelled: launchCancelled,
     announceSession,
     triggerHint: async (runtime, engine) => { await agentReconciler.triggerHint(runtime, engine) },
     captureTerminal,
@@ -2999,7 +3012,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     announceSession,
     relaunchOverrides,
     downgradedPermission,
-    refreshGridWebSearch,
     liveBypassPermission,
     paneSwapDeps,
     restartHeld: (agentId) => heldLaunches.restartHeld(agentId),
@@ -3171,7 +3183,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // A straight-line assignment, never a wait: if the body never reaches this line the handler stays
   // `bootHandoff`, and the fix still lands.
   const updateTeardown = (): TeardownStep[] => { heldLaunches.close(); installedHooks?.close(); externalResumes?.stop(); launches.stop(); return [
-    ['the registry', () => registry.flush({ exiting: true })], ['the updater', () => daemonBoot.updaterBeside?.()],
+    ['the updater', () => daemonBoot.updaterBeside?.()],
     ['the reconciler', () => agentReconciler.stop()],
     // The connection alone: the host and its panes stay up for the successor to reattach.
     ['the pty host connection', () => { ptyHostBackend?.dispose(); ptyDrain?.dispose() }],
@@ -3185,8 +3197,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ['the hook connections', () => (hookServer as unknown as { closeAllConnections?: () => void }).closeAllConnections?.()],
     ['Share', () => ports.sharing?.stop()],
     ['the local websocket', () => localWsServer.close()], ['the hook server', () => hookServer.close()],
-    // The claim just before the socket: a successor that saw the socket go must find the folder free.
-    ['the data folder claim', () => dataFolderClaim?.release()], ['the local socket', () => localSocket?.close()],
     ['Codex activity', () => nativeControls.close()],
     // The serial ports, the lane and the voice router's worker: a port held through the handoff makes the
     // next daemon's dial, and esptool, fail as if the hardware had died.
@@ -3196,7 +3206,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ['usage observations', () => { usageLink.port.stop(); ports.usage?.stop() }],
     ['the viewers', () => ports.viewers?.stop()], ['the gateway', () => gateway.stop()],
     // A graceful close releases the backend's one-machine claim, given a moment before the reclaim.
-    ['the backend', () => backend.stop()], ['a grace', () => new Promise((r) => setTimeout(r, 1000))],
+    ['the backend', () => backend.stop()],
+    // Producers have stopped. Seal admission and retain ownership through actual writer cleanup.
+    ['the registry', () => registry.flush({ exiting: true })],
+    // The claim just before the socket: a successor that saw the socket go must find the folder free.
+    ['the data folder claim', () => dataFolderClaim?.release()], ['the local socket', () => localSocket?.close()],
+    ['a grace', () => new Promise((r) => setTimeout(r, 1000))],
   ] }
   daemonBoot.applyStagedUpdate = (v) => updateHandoff.restartForUpdate(v, updateTeardown())
   // A core an older release's own handoff started (it spawned this `cli.js __run` and judged it) has no
@@ -3215,8 +3230,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     externalResumes?.stop()
     launches.stop()
     console.log(`\n[cli] ${signal} — shutting down`)
-    // A slow teardown may exhaust the master's grace. Persist already acknowledged bindings first.
-    registry.flush({ exiting: true })
     const leave = (): never => {
       try { if (readPid() === process.pid) rmSync(PID_FILE, { force: true }) } catch { /* ignore */ }
       process.exit(coreLink.supervised && stopsForGood(signal) ? CORE_EXIT_STOP : 0)
@@ -3251,11 +3264,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     runtimeProfiles.stop()
     deadline.at('Share')
     await ports.sharing?.stop()
-    // The data folder's socket first: a successor waiting for this core to leave (lib/localSocket.ts) can
-    // start as soon as it is gone, whatever the clients below take to close.
-    deadline.at('the local socket')
-    dataFolderClaim?.release()
-    await localSocket?.close()
     deadline.at('the local websocket')
     await localWsServer.close()
     hookServer.close()
@@ -3268,6 +3276,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     await gateway.stop()
     deadline.at('the backend')
     await backend.stop()
+    // Stop producers before sealing, then retain the claim/socket until actual I/O settlement.
+    deadline.at('the registry')
+    try { await registry.flush({ exiting: true }) }
+    catch { console.error('[registry] shutdown flush failed') }
+    deadline.at('the local socket')
+    dataFolderClaim?.release()
+    await localSocket?.close()
     leave()
   }
   daemonBoot.stopHere = (why) => void shutdown(why)

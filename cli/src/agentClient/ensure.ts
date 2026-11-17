@@ -11,7 +11,7 @@ import {
   type ClientDeps, type Opened, type Setup,
 } from './commands.js'
 import { AgentClientError, type Daemon } from './daemon.js'
-import type { Frame } from './model.js'
+import { outsideCaller, stateOf, type Frame } from './model.js'
 import type { AgentEngine } from '../engines/types.js'
 
 import { PROGRAM_TOKEN_FLAG, withProgramLock, type ProgramHarness } from './program.js'
@@ -37,7 +37,7 @@ export interface EnsureDeps extends ClientDeps {
   daemonUp?: () => Promise<{ started: boolean; ms: number }>
   /** Whether a live harness's engine still runs: true, false (its pane is gone, or no engine runs in it), or null when
    *  that cannot be told. `engineRuns` when left out. */
-  engineAlive?: (frame: Frame) => Promise<boolean | null>
+  engineAlive?: (frame: Frame) => Promise<boolean | 'pane-gone' | null>
 }
 
 type EnsureResult = 'live' | 'resumed' | 'new'
@@ -60,20 +60,24 @@ export function ensureCommand(argv: readonly string[], deps: EnsureDeps): Promis
     const [engine, folder] = names
     const json = flags.has('--json')
     const began = s.now()
+    // The token read, and an agent outside Harness refused, before anything is started for them.
+    const p = programOf(flags, s.where().dataDir)!
+    refuseAgentWithToken({ caller: outsideCaller(s.env, ''), orphan: false } as Opened)
     const up = deps.daemonUp ? await deps.daemonUp() : { started: false, ms: 0 }
     const o = await opened(s)
     try {
       refuseAgentWithToken(o)
-      const p = programOf(flags, o.where.dataDir)!
+      // Waited for past the longest a holder takes: a close (60 s), a busy resume (BUSY_WAIT_MS) and its start (STARTING_MS).
       return await withProgramLock(o.where.dataDir, name, async () => {
         // Read again under the lock: an ensure that held it before may have made the harness.
         o.frames = await list(o.daemon, true)
         o.stopped = true
         const frames = named(o.frames)
         const byId = new Map(frames.map((f) => [f.id, f]))
-        // A record whose harness was deleted outright (the person's Delete) is no longer anyone's.
-        try { p.records.prune(new Set(frames.map((f) => f.id))) } catch { /* read past below */ }
-        const mine = p.records.named(name, p.hash).flatMap((record) => { const frame = byId.get(record.agentId); return frame ? [{ record, frame }] : [] })
+        // Never pruned from this one read: a harness being resumed, or one the stopped list leaves out, is missing from it
+        // for a moment. One not listed is asked to resume like a closed one; only the daemon's AGENT_NOT_FOUND lets it go.
+        const mine = p.records.named(name, p.hash).map((record) => ({ record,
+          frame: byId.get(record.agentId) ?? { id: record.agentId, name: record.name, engine: record.engine, status: 'stopped' } as Frame }))
         const other = mine.find((x) => x.record.engine !== engine && x.frame.status !== 'stopped')
         if (other) {
           throw new AgentClientError('NAME_TAKEN', `"${name}" is your ${engineName(other.record.engine)} harness. Close it (harness close ${name} ${PROGRAM_TOKEN_FLAG} <path>) before keeping a ${engineName(engine)} one by that name.`)
@@ -91,14 +95,19 @@ export function ensureCommand(argv: readonly string[], deps: EnsureDeps): Promis
         }
         // Live by its row, and its engine checked: the daemon learns of an engine killed, or of its pane gone, only on a
         // later pass, and a program told "live" then has its next reply refused NOT_RUNNING.
-        const dead = !!live && !flags.has('--fresh') && live.frame.launch?.state !== 'starting'
-          && await (deps.engineAlive ?? engineRuns)(live.frame) === false
+        const runs = live && !flags.has('--fresh') && live.frame.launch?.state !== 'starting' ? await (deps.engineAlive ?? engineRuns)(live.frame) : null
+        // No engine found in a pane that is still there is believed only while the row says it is not working: a caller
+        // that cannot see the engine's process (another namespace, hidepid) must not close it mid-turn.
+        const dead = !!live && (runs === 'pane-gone' || (runs === false && stateOf(live.frame) !== 'working'))
         if (live && !flags.has('--fresh') && !dead) return say('live', live.frame)
         if (live && dead) {
-          // Its stale row closed first, so the resume below is a closed harness's, as on any later pass. A close the
-          // daemon refuses is left to the resume, which checks the engine again itself.
-          await o.daemon.request('agent_close', { agentId: live.frame.id, sessionId: live.frame.sessionId ?? '', createdAt: live.frame.createdAt ?? '', mode: 'now' }, 60_000)
-            .catch(() => null)
+          // Its stale row closed first, so the resume below is a closed harness's, as on any later pass. A row the daemon
+          // would not close would be found live by the resume, which would then start nothing: said, nothing started.
+          const closed = await o.daemon.request('agent_close', { agentId: live.frame.id, sessionId: live.frame.sessionId ?? '', createdAt: live.frame.createdAt ?? '', mode: 'now' }, 60_000)
+            .catch((error: unknown) => ({ error: error instanceof AgentClientError ? error.code : 'FAILED' }))
+          if (closed.error) {
+            throw new AgentClientError('ENGINE_NOT_READY', `${name}'s engine has stopped, and Harness could not close it yet (${String(closed.error)}); nothing was started. Try harness ensure again.`)
+          }
         } else if (live) {
           const closed = await o.daemon.request('agent_close', { agentId: live.frame.id, sessionId: live.frame.sessionId ?? '', createdAt: live.frame.createdAt ?? '', mode: 'now' }, 60_000)
           if (closed.error) throw new AgentClientError(String(closed.error), `${name} could not be closed for a fresh start (${String(closed.error)}).`)
@@ -139,15 +148,22 @@ export function ensureCommand(argv: readonly string[], deps: EnsureDeps): Promis
             throw new AgentClientError(code, detail)
           }
           const agent = (line.agent ?? {}) as Frame
+          // Recorded by harness new; written here when it could not be, so the harness just made stays the program's.
+          if (agent.id && !p.records.get(agent.id)) {
+            try { p.records.put({ agentId: agent.id, tokenHash: p.hash, name, engine: agent.engine ?? engine, createdAt: s.now(), startedAt: s.now(), inputs: [] }) }
+            catch { /* said by harness new already */ }
+          }
           return say('new', { ...agent, engine: agent.engine ?? engine }, why)
         }
-      })
+      }, LOCK_WAIT_MS)
     } finally { o.daemon.close() }
   })
 }
 
 /** A resume refusal that no later try can change: the harness is gone from this machine, or its conversation is. */
 const GONE_FOR_GOOD: ReadonlySet<string> = new Set(['AGENT_NOT_FOUND', 'RESUME_UNAVAILABLE'])
+/** How long an ensure waits for another of the same name: longer than a holder can take. */
+const LOCK_WAIT_MS = 10 * 60_000
 /** How long ensure tries a resume again while the last engine is still stopping (AGENT_BUSY), and how often. */
 export const BUSY_WAIT_MS = 30_000
 const BUSY_STEP_MS = 1_000
@@ -197,7 +213,7 @@ async function resumeOwned(s: Setup, o: Opened, frame: Frame): Promise<{ frame: 
  * when tmux has no such pane or no engine process runs under it, null when that cannot be read (no tmux pane, a probe
  * that failed), and the row is then believed.
  */
-export async function engineRuns(frame: Frame): Promise<boolean | null> {
+export async function engineRuns(frame: Frame): Promise<boolean | 'pane-gone' | null> {
   const runtimes = frame.terminal?.runtimes ?? []
   const paneId = runtimes.find((r) => r.backend === 'tmux' && r.paneId)?.paneId ?? (runtimes.length ? null : frame.tmuxPane ?? null)
   if (!paneId || !/^%\d+$/.test(paneId) || !frame.engine) return null
@@ -206,5 +222,5 @@ export async function engineRuns(frame: Frame): Promise<boolean | null> {
   const found = await lookupPaneEngineProcess({ rootProcess: (runtime) => tmuxPanePid(runtime.paneId) }, { backend: 'tmux', paneId }, frame.engine as AgentEngine)
     .catch(() => null)
   if (!found) return null
-  return found.ok ? true : found.unknown ? null : false
+  return found.ok ? true : found.unknown ? null : /has no pane$/.test(found.reason) ? 'pane-gone' : false
 }

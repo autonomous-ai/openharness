@@ -14,12 +14,24 @@ function setup() {
     job: vi.fn(async (): Promise<number | null | 'unknown'> => 7), kill: vi.fn(() => { alive = false }), sleep: vi.fn(async () => {}) }
   return { deps, gone: () => { alive = false }, cancel: () => { valid = false }, replace: () => { marker = 'ps:2' } }
 }
+it('waits for the durable signal journal and refuses consent revoked during that wait', async () => {
+  const test = setup()
+  let release!: () => void, entered!: () => void
+  const journal = new Promise<void>(resolve => { release = resolve })
+  const preparing = new Promise<void>(resolve => { entered = resolve })
+  const stopped = stopExternalOwner(owner, { ...test.deps, beforeSignal: () => { entered(); return journal } })
+  await preparing
+  test.cancel()
+  release()
+  expect(await stopped).toBe(false)
+  expect(test.deps.kill).not.toHaveBeenCalled()
+})
 it('rechecks conversation after foreground lookup, journals at the signal and stops only its verified group', async () => {
   const test = setup(), order: string[] = []
   test.deps.job.mockImplementation(async () => { order.push('job'); return 7 })
   test.deps.same.mockImplementation(async () => { order.push('same'); return true })
   const result = await stopExternalOwner(owner, { ...test.deps,
-    beforeSignal: () => order.push('intent'), afterSignal: () => order.push('sent') })
+    beforeSignal: () => { order.push('intent') }, afterSignal: () => { order.push('sent') } })
   expect(result).toBe(true)
   expect(order).toEqual(['job', 'same', 'intent', 'sent'])
   expect(test.deps.kill).toHaveBeenCalledWith(-7, 'SIGTERM')

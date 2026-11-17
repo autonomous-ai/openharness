@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { closeCommand, EXIT, replyCommand, resumeCommand, type ClientDeps } from './commands.js'
+import { closeCommand, EXIT, replyCommand, resumeCommand, waitCommand, type ClientDeps } from './commands.js'
 import { AgentClientError, type Daemon, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
 import { ProgramRecords } from './program.js'
@@ -79,7 +79,7 @@ describe('harness reply to a program\'s own harness (#4393)', () => {
     const h = harness(d)
     expect(await reply(h)).toBe(EXIT.ok)
     expect(JSON.parse(h.out[0])).toEqual({ state: 'taken', inputId: 'program:x1', takenAt: new Date(NOW + 400).toISOString() })
-    expect(d.requests.find((r) => r.type === 'input_ack')!.payload).toEqual({ agentId: 'a1', text: 'turn on the light', ackMs: 30_000, takenMs: 30_000 })
+    expect(d.requests.find((r) => r.type === 'input_ack')!.payload).toEqual({ agentId: 'a1', text: 'turn on the light', ackMs: 30_000, takenMs: 30_000, inputId: expect.stringMatching(/^program:[0-9a-f-]{36}$/) })
     expect(new ProgramRecords(dir).get('a1')!.inputs).toEqual([{ id: 'program:x1', takenAt: NOW + 400 }])
   })
 
@@ -130,18 +130,55 @@ describe('harness reply to a program\'s own harness (#4393)', () => {
     d.extra.input_ack = () => ({ inputId: 'program:x4', state: 'unknown', reason: 'dispatch_ambiguous' })
     const h2 = harness(d)
     expect(await reply(h2)).toBe(EXIT.timeout)
-    expect(JSON.parse(h2.out[0])).toMatchObject({ error: 'TIMEOUT', cancelled: false, inputId: 'program:x4' })
+    expect(JSON.parse(h2.out[0])).toMatchObject({ error: 'TIMEOUT', cancelled: false, inputId: 'program:x4', reason: 'dispatch_ambiguous' })
+    // Kept for `wait --after`, as not seen taken.
+    expect(new ProgramRecords(dir).get('a1')!.inputs.at(-1)).toEqual({ id: 'program:x4', takenAt: NOW, unconfirmed: true })
     d.extra.input_ack = () => ({ inputId: 'program:x5', state: 'rejected', reason: 'runtime_gone_pre_paste' })
     const h3 = harness(d)
     expect(await reply(h3)).toBe(EXIT.stopped)
     d.extra.input_ack = () => ({ inputId: 'program:x6', state: 'rejected', reason: 'enter_withheld' })
     const h4 = harness(d)
-    expect(await reply(h4)).toBe(EXIT.refused)
-    expect(JSON.parse(h4.out[0]).error).toBe('ENGINE_NOT_READY')
+    // Enter held back: the words may be in its box. Followed, never sent again.
+    expect(await reply(h4)).toBe(EXIT.timeout)
+    expect(JSON.parse(h4.out[0])).toMatchObject({ error: 'TIMEOUT', cancelled: false, inputId: 'program:x6', reason: 'enter_withheld' })
+    d.extra.input_ack = () => ({ inputId: 'program:x7', state: 'rejected', reason: 'question_open' })
+    const h6 = harness(d)
+    expect(await reply(h6)).toBe(EXIT.refused)
+    expect(JSON.parse(h6.out[0]).error).toBe('ENGINE_NOT_READY')
     d.extra.input_ack = () => ({ error: 'UNSUPPORTED' })
     const h5 = harness(d)
     expect(await reply(h5)).toBe(EXIT.failed)
     expect(JSON.parse(h5.out[0]).error).toBe('DAEMON_TOO_OLD')
+  })
+
+  it('says TIMEOUT with its own input id to follow when the daemon never answers, and keeps it for wait --after', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('a1')]
+    own('a1')
+    d.extra.input_ack = () => { throw new AgentClientError('TIMEOUT', 'Harness did not answer input_ack in time. Try again.') }
+    const h = harness(d)
+    expect(await reply(h)).toBe(EXIT.timeout)
+    const asked = String(d.requests.find((r) => r.type === 'input_ack')!.payload.inputId)
+    expect(JSON.parse(h.out[0])).toMatchObject({ error: 'TIMEOUT', cancelled: false, inputId: asked, reason: 'no_answer' })
+    expect(new ProgramRecords(dir).get('a1')!.inputs).toEqual([{ id: asked, takenAt: NOW, unconfirmed: true }])
+    // Any other failure of the line is said as it is.
+    d.extra.input_ack = () => { throw new AgentClientError('DAEMON_UNREACHABLE', 'Harness is not running.') }
+    const down = harness(d)
+    expect(await reply(down)).toBe(EXIT.failed)
+  })
+
+  it('follows an input not seen taken with wait --after: idle only once it was seen working', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('a1')]
+    own('a1', 'lamp-openclaw', { inputs: [{ id: 'program:u1', takenAt: NOW, unconfirmed: true }, { id: 'program:t1', takenAt: NOW }] })
+    const wait = (id: string, extra: string[] = []) => { const h = harness(d); return waitCommand(['lamp-openclaw', '--program-token-file', token, '--after', id, '--json', ...extra], h.deps).then((code) => ({ code, out: h.out })) }
+    // Taken: its turn started, so the first idle after it is its end.
+    d.screens = ['idle']
+    expect((await wait('program:t1')).code).toBe(EXIT.ok)
+    // Not seen taken, idle all along: still waited on.
+    expect((await wait('program:u1', ['--timeout', '5s'])).code).toBe(EXIT.timeout)
+    d.screens = ['working', 'working', 'idle']
+    expect((await wait('program:u1')).code).toBe(EXIT.ok)
   })
 
   it('refuses an agent even with the token, a harness the token does not own, and a bad token file', async () => {

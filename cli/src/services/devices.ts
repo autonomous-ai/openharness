@@ -51,13 +51,15 @@ import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter } from '../cable/hosts/vscode.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
+import { createEngineTally } from '../cable/engineTally.js'
 import { Notices, type NoticeCaller } from '../cable/notices.js'
 import { NOTIFY_MODE_FILE, NotifyModeStore, type NotifyMode } from '../cable/notifyMode.js'
 import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
 import { DialVerdicts } from '../cable/dialPortVerdicts.js'
-import { createDialSkillWriter } from '../cable/dialSkillWriter.js'
-import { readAnswers } from '../devices/dialSkillFiles.js'
+import { createDialSetup } from '../cable/dialSetup.js'
+import { claudeFound, type ClaudeRun } from '../devices/claudePlugin.js'
+import { readRemoved, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
 import { WindowForm } from '../cable/windowForm.js'
 import { createWindowRouter } from '../cable/windowRoute.js'
 import { WindowSelection } from '../cable/windowSelection.js'
@@ -71,6 +73,7 @@ import { externalProviders } from '../lib/sessionSearch/externals/index.js'
 import { fileStamp, listProcesses, processAlive } from '../lib/sessionSearch/externals/support.js'
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
 import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
+import { VERSION } from '../version.js'
 import { createPartGuard } from './devicesGuard.js'
 import { attachHandler, dialStream, frontHandler, noticeHandler, notifyHandler, tabHandler, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
 import { FLEET_FALLBACKS, startFleet, type Fleet } from './fleet.js'
@@ -126,6 +129,9 @@ export interface DevicesDeps {
   listen?: (handlers: Readonly<Record<string, ListenerHandler | ListenerStreamHandler>>, log: (line: string) => void) => Promise<DevicesListener | null>
   /** For this service's tests: how an agent's tty is read; `ps` by default (cable/hosts/tabs.ts). */
   tty?: (pid: number) => Promise<string | undefined>
+  /** For this service's tests: how Claude Code is found for a Claude Code home; the daemon's own lookup by default
+   *  (devices/claudePlugin.ts claudeFound). */
+  claude?: (home: string, shell: boolean) => Promise<ClaudeRun | null>
 }
 
 /** ⌘K's answer while the fleet is not running: it never started, so there is no list to weigh. */
@@ -410,18 +416,23 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The route or the refusal of the dial's words, and why a queue failed: never the words, the session, the terminal or a
    *  path. */
   const voiced = (what: string): void => log(`[device] voice · ${what}`)
-  // The dial skill in each home an engine's sessions use (cable/dialSkillWriter.ts), from the devices' own process alone:
-  // inside the core's (`HARNESSD_SERVICES=none`) there is no listener, so a skill would name a `harness device notify`
-  // that cannot ring. A part of its own, so a throw in a person's home is never the dial's.
-  const skill = deps.listen ? createDialSkillWriter({
+  // The dial skill in each home an engine's sessions use and Claude Code's plugin, set up once a dial has attached on this
+  // computer (cable/dialSetup.ts), in the devices' own process alone: inside the core's (`HARNESSD_SERVICES=none`) there
+  // is no listener, so a skill would name a `harness device notify` that cannot ring. A part of its own, so a throw in a
+  // person's home is never the dial's.
+  const skill = deps.listen ? createDialSetup({
     dataDir: core.dataDir,
     platform: apps.platform,
     uid: process.getuid?.() ?? -1,
     claudeHome: dirname(env.CLAUDE_PROJECTS_DIR),
     codexHome: env.CODEX_HOME,
     adopted: movedEngineHomes,
-    answers: () => readAnswers(core.dataDir),
+    removed: () => readRemoved(core.dataDir),
+    now: monotonic,
+    count: createEngineTally('[device] dial setup', ['claude', 'codex'], SETUP_COUNTS, log),
     log,
+    claude: deps.claude ?? claudeFound,
+    version: VERSION,
   }) : null
   if (skill) part.call('skill', () => skill.started())
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, {
@@ -531,6 +542,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     environment: () => core.account.environment(),
     watching: (on) => {
       core.clients.dialWatching(on)
+      // Before the scan the attach starts, so that scan finds the dial recorded.
+      if (on && skill) part.call('skill', () => skill.attached())
       dialAttached(on)
       part.call('dialStream', () => dial.attached(on))
     },
@@ -698,8 +711,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
 
   /** One card for the dial, in its four calls. A remote machine's and this computer's are the same calls,
-   *  so a new kind of card lands on both the day it lands on either. */
-  const dispatch = (event: DialEvent): void | Promise<void> => {
+   *  so a new kind of card lands on both the day it lands on either. [notice]: its agent's notice was pending as the
+   *  card came (toDial). */
+  const dispatch = (event: DialEvent, notice: boolean): void | Promise<void> => {
     if (event.kind !== 'processing') latestUpdate.delete(event.agentId)
     if (event.kind === 'processing') {
       if (event.update) latestUpdate.set(event.agentId, event.update)
@@ -734,6 +748,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (!cable.isConnected) { ended.delete(agentId); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, false); return }
       const turn = ended.get(agentId) // a sub-agent's summary leaves the main turn's numbers alone
       ended.delete(agentId)
+      // Its notice rang for this turn: the dial keeps one drawer row an agent, so a summary that rang or listed would
+      // replace the notice's line. A failed turn still rings (docs/plans/2026-11-17-dial-one-ring-per-turn-design.md).
+      if (event.failed !== true && notice) { noted('silent', 'notice'); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, false); return }
       const who = cableHost.describe(agentId)
       const needsYou = notifyMode.get() === 'you'
       // Decided once already, by the recaps (services/recaps.ts) or another machine, for the phone as well: the dial
@@ -809,7 +826,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const toDial = (event: DialEvent): void => {
     // The last streamed text goes out before the turn's end, in the same per-agent order.
     if (event.kind !== 'processing') endReplies(event.agentId, true)
-    inOrder(event.agentId, () => dispatch(event))
+    // Read as the card comes, not as its turn in the queue does: a summary can wait up to 2 s behind its turn's done
+    // (TOKENS_WAIT_MS), and the next turn's start, a message sent while the agent worked, ends the notice meanwhile.
+    const notice = event.kind === 'summary' && notices.pending(event.agentId)
+    inOrder(event.agentId, () => dispatch(event, notice))
   }
 
   // A remote machine's cards reach the dial through the same calls. The fleet has already noted which
@@ -904,7 +924,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     close: (agentId, id) => inOrder(agentId, () => { void cable.questionClose(agentId, id) }),
     uuid: randomUUID,
     now: monotonic,
-    log,
+    count: createEngineTally('[device] notify', ['claude', 'codex', 'agent'], ['shown', 'no dial', 'limited'], log),
   })
   /** That agent's next turn started, a tap opened it, or it left: its card goes. */
   const endNotice = (agentId: string): void => part.call('notices', () => notices.ended(agentId))

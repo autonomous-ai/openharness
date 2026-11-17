@@ -612,7 +612,7 @@ describe('what a hook says of its own environment', () => {
       processIdentity: { pid: 4242, startMarker: 'fixture', executable: `<${engine}>` } } as RegisteredSession
     vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
     const register = vi.spyOn(registry, 'register')
-      .mockReturnValue({ entry: agent, isNew: true, evicted: null, rebound: null, orphaned: null, ...result })
+      .mockResolvedValue({ entry: agent, isNew: true, evicted: null, rebound: null, orphaned: null, ...result })
     const { base, headers } = await start({ resolveHookAgent: async () => agent })
     const post = (extra: Record<string, string>) => fetch(`${base}/api/hook/session-start`, {
       method: 'POST', headers: { ...headers, ...extra },
@@ -709,7 +709,9 @@ describe('what a hook says of its own environment', () => {
     await vi.waitFor(() => expect(register).toHaveBeenCalledOnce())
     await post({ 'X-Harness-Hook-Next': '1' })
     await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(2))
-    expect(register.mock.calls[1]).toEqual(register.mock.calls[0])
+    expect(register.mock.calls[1][0]).toEqual(register.mock.calls[0][0])
+    expect(register.mock.calls[0][1]?.current).toBeTypeOf('function')
+    expect(register.mock.calls[1][1]).toEqual({ ...register.mock.calls[0][1], current: expect.any(Function) })
   })
 })
 
