@@ -1,0 +1,89 @@
+# TEMPORARY: removed before this branch merges (docs/plans/2026-11-16-hook-driven-agent-status-plan.md, Task 23).
+# The hook round trip and the core's CPU at rest and while agents turn, before (main at e9670ffd23, the branch's
+# merge-base) and after (this commit), on one runner: cli/e2e/perf.e2e.ts, isolated daemons, fake engines, no
+# backend, no secret. Both builds run this commit's perf.e2e.ts and fake engines, so the workload is the same.
+name: tmp hook-driven agent status
+on:
+  push:
+    branches: [feat/hook-driven-agent-status]
+permissions:
+  contents: read
+concurrency:
+  group: tmp-hook-driven-agent-status
+  cancel-in-progress: true
+# The managed runtime the CLI ships on, as cli-e2e.yml pins it.
+env:
+  CLI_NODE_VERSION: 24.22.2
+jobs:
+  perf:
+    runs-on: ubuntu-latest
+    # Three perf runs (three 60-second phases each, after a warm-up), two installs and two bundles.
+    timeout-minutes: 50
+    defaults:
+      run:
+        working-directory: cli
+    env:
+      LANG: C.UTF-8
+      SHELL: /bin/zsh
+      PERF: '1'
+      PERF_AGENTS: '8'
+      PERF_ACTIVE: '4'
+      PERF_SECONDS: '60'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - name: tmux, the shells and lsof, as cli-e2e.yml installs them
+        run: |
+          sudo bash ../scripts/apt-install.sh tmux zsh tcsh dash lsof
+          sudo sysctl -w fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=524288
+          insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
+          if [ -n "$insecure" ]; then
+            echo "$insecure" | xargs sudo chown root:root
+            echo "$insecure" | xargs sudo chmod g-w,o-w
+          fi
+          zsh -fc 'autoload -U compaudit && compaudit'
+      - run: npm ci --no-audit --no-fund
+      - name: The baseline bundle (main at e9670ffd23)
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/base" e9670ffd23
+          cd "$RUNNER_TEMP/base/cli"
+          npm ci --no-audit --no-fund
+          BUNDLE_OUT_DIR="$RUNNER_TEMP/base-bundle" node build-bundle.mjs
+      - name: Before
+        env:
+          E2E_BUNDLE_PATH: ${{ runner.temp }}/base-bundle/cli.js
+          PERF_BUNDLE_SOURCE: e9670ffd23
+          PERF_REPORT: ${{ runner.temp }}/perf/before.json
+        run: npx vitest run --config vitest.e2e.config.ts e2e/perf.e2e.ts
+      - name: Before, again (the noise between two runs of one build)
+        env:
+          E2E_BUNDLE_PATH: ${{ runner.temp }}/base-bundle/cli.js
+          PERF_BUNDLE_SOURCE: e9670ffd23
+          PERF_REPORT: ${{ runner.temp }}/perf/before-again.json
+        run: npx vitest run --config vitest.e2e.config.ts e2e/perf.e2e.ts
+      - name: After
+        env:
+          E2E_BUNDLE: '1'
+          PERF_REPORT: ${{ runner.temp }}/perf/after.json
+        run: npx vitest run --config vitest.e2e.config.ts e2e/perf.e2e.ts
+      - name: The numbers, side by side
+        run: |
+          node -e '
+            const fs = require("fs"), path = require("path"), dir = process.argv[1]
+            for (const name of ["before", "before-again", "after"]) {
+              const report = JSON.parse(fs.readFileSync(path.join(dir, name + ".json"), "utf8"))
+              for (const phase of report.phases) console.log(name, phase.label ?? "", "cpu%", phase.cpu.percent.toFixed(2),
+                "hooks/turn", phase.hooks?.perTurn, "round trip p50/p95 ms", phase.hooks?.roundTripMs.p50, phase.hooks?.roundTripMs.p95)
+            }' "$RUNNER_TEMP/perf"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: tmp-hook-driven-agent-status-perf
+          path: ${{ runner.temp }}/perf/
+          retention-days: 7
