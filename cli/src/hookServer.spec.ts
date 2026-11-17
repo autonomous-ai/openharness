@@ -560,8 +560,10 @@ describe('process-owned hook server', () => {
       const { base, headers } = await start({ onSubagent, resolveHookAgent })
       expect((await hook(base, headers, '/api/hook/subagent', { hookEvent: 'SubagentStart' })).status).toBe(200)
       expect(onSubagent).toHaveBeenLastCalledWith({ sessionId: 'real-session', started: true })
-      expect((await hook(base, headers, '/api/hook/subagent', { hookEvent: 'SubagentStop' })).status).toBe(200)
-      expect(onSubagent).toHaveBeenLastCalledWith({ sessionId: 'real-session', started: false })
+      // With when its engine ran it: a stop can be taken before its start (core/turns/turnHooks.ts).
+      expect((await hook(base, { ...headers, 'x-harness-hook-fired-at': '1700000000000' }, '/api/hook/subagent',
+        { hookEvent: 'SubagentStop' })).status).toBe(200)
+      expect(onSubagent).toHaveBeenLastCalledWith({ sessionId: 'real-session', started: false, firedAt: 1_700_000_000_000 })
       onSubagent.mockClear()
       resolveHookAgent.mockClear()
       for (const extra of [{ hookEvent: 'Stop' }, { hookEvent: 'subagentstart' }, {}]) {

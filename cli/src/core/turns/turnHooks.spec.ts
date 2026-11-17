@@ -1071,6 +1071,17 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
       expect(run.hooks.atWork('s1')).toBe(false)
     })
 
+    // Each hook is a process of its own: a slow daemon can take a subagent's stop before its start. Counted, that start
+    // kept the lead working for 10 minutes.
+    it('a stop taken before its start, at zero: that start, run before it, is not counted; the next is', async () => {
+      const run = await hookDriven()
+      run.hooks.onSubagent({ sessionId: 's1', started: false, firedAt: 2_000 })
+      run.hooks.onSubagent({ sessionId: 's1', started: true, firedAt: 1_000 })
+      expect(run.hooks.atWork('s1')).toBe(false)
+      run.hooks.onSubagent({ sessionId: 's1', started: true, firedAt: 1_500 })
+      expect(run.hooks.atWork('s1')).toBe(true)
+    })
+
     it('a prompt hook sets it to zero', async () => {
       const run = await leading()
       run.hooks.onPromptHook('s1', 1)
