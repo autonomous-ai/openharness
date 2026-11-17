@@ -248,6 +248,18 @@ describe('claudeUpdate', () => {
     expect(await claudeUpdate({ run, platform: 'darwin' })).toEqual({ ok: false, error: UNLISTED, step: 'list' })
   })
 
+  // Counted updated only for a version seen to change: a plugin gone from the list after it changed nothing seen.
+  it('an update after which the plugin is not listed is current, not updated', async () => {
+    const claude = fakeClaude({ 'plugin list --json': list(USER_ON) })
+    let updated = false
+    const run: ClaudeRun = async (args, timeoutMs) => {
+      if (args.join(' ') === update) updated = true
+      if (args.join(' ') === 'plugin list --json' && updated) return { code: 0, stdout: '[]', stderr: '' }
+      return claude.run(args, timeoutMs)
+    }
+    expect(await claudeUpdate({ run, platform: 'darwin' })).toEqual({ ok: true, outcome: 'current' })
+  })
+
   it('update with an old Claude Code, or none, asks its version and nothing else', async () => {
     const claude = fakeClaude({ 'plugin list --json': list(USER_ON) }, '2.1.286 (Claude Code)')
     const unsupported = { ok: false, error: 'Claude Code 2.1.287 or later is needed.', step: 'unsupported' }
