@@ -24,7 +24,7 @@ that process listens.
 
 ## Turn it on and off
 
-On: **Turn on VS Code** in Harness Device's menu, or:
+On: **Turn on VS Code** in Harness's menu-bar menu, or:
 
 ```
 harness device vscode enable
