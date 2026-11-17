@@ -1,13 +1,14 @@
 import { EventEmitter, once } from 'node:events'
 import type { IncomingMessage } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { hostname } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { env } from '../config/env.js'
 import { AuthSessionError } from '../lib/authSession.js'
 import { UpstreamLink } from './upstream.js'
 
-// The computer's name is macOS's to give, which a test cannot set.
+// A computer's name that is not its hostname, so the adapter-ws label below shows which one it sends.
 vi.mock('../lib/computerName.js', () => ({ computerName: () => 'Test Lab Mac' }))
 
 // A stand-in backend on loopback. `onConnection` decides what each accepted link gets; `refuse` answers
@@ -200,7 +201,8 @@ describe('UpstreamLink reconnect backoff', () => {
     expect(refreshes).toBe(3)
   })
 
-  it('the adapter-ws dial names the computer as its person named it', async () => {
+  // The backend writes this label to Machine.hostname on every connect, and the apps read it as the hostname.
+  it('the adapter-ws dial is labelled with the hostname, not the computer\'s name', async () => {
     let dialed = ''
     await serve({ onConnection: (_ws, request) => { dialed = request.url ?? '' } })
     const { link, signals } = open()
@@ -209,7 +211,7 @@ describe('UpstreamLink reconnect backoff', () => {
     link.connect()
     await up
 
-    expect(dialed).toContain('label=Test%20Lab%20Mac')
+    expect(new URL(dialed, 'ws://backend').searchParams.get('label')).toBe(hostname())
   })
 
   it.each(['stop', 'close'] as const)('cancels a pending redial on %s', async (end) => {
