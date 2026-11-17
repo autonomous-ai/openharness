@@ -194,21 +194,25 @@ async function loadCases(ctx) {
     if (unknown !== undefined) throw new Error(`no scenario '${unknown}'`);
     filters.push(new Set(ctx.cases.map(scenarioOf)));
   }
-  writeSummary(ctx, env);
+  const claudeVersion = execFileSync(AGENT_CONFIG.claudeBin, ['--version'], { env, encoding: 'utf8', timeout: JUDGE_TIMEOUT_MS }).trim();
+  writeSummary(ctx, claudeVersion);
   return scenarios.filter(s => filters.every(f => f.has(s.id))).flatMap(s => ctx.agents.map(agent => ({
     id: caseId(s.id, agent), prompt: s.prompt, tags: [s.need, s.kind, agent],
-    // Only claude gets the skill staged (lib/stage.ts).
-    meta: { scenario: s.id, agent, skill: agent === 'claude' && ctx.skill, rubric_sha: RUBRIC_SHA },
+    // Only claude gets the skill staged (lib/stage.ts). A resumed pass may run under another harness or claude than the
+    // rows before it, so each row records its own.
+    meta: { scenario: s.id, agent, skill: agent === 'claude' && ctx.skill, rubric_sha: RUBRIC_SHA,
+      harness_sha: ctx.state.harness_sha, claude_version: claudeVersion },
     scenario: s,
   })));
 }
 
 /**
- * Records in <variant>/summary.json the environment the pass runs under, written once the pass is past the harness gate
- * and its cases are known, so rows are only compared with rows run the same way. A round's own description, label and
+ * Records in <variant>/summary.json the environment the latest pass ran under, written once the pass is past the harness
+ * gate and its cases are known. A resumed or partial pass rewrites it, so the rows it did not run may have run under
+ * another: each row's meta keeps the harness sha and claude version it ran under. A round's own description, label and
  * target are kept.
  */
-function writeSummary(ctx, env) {
+function writeSummary(ctx, claudeVersion) {
   const path = join(ctx.flow, ctx.variant, 'summary.json');
   const lockfile = fileURLToPath(new URL('../../package-lock.json', import.meta.url));
   const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
@@ -220,7 +224,7 @@ function writeSummary(ctx, env) {
       commit: git('rev-parse', 'HEAD'),
       lockfile: relative(git('rev-parse', '--show-toplevel'), lockfile),
       lockfile_sha256: createHash('sha256').update(readFileSync(lockfile)).digest('hex'),
-      claude_version: execFileSync(AGENT_CONFIG.claudeBin, ['--version'], { env, encoding: 'utf8', timeout: JUDGE_TIMEOUT_MS }).trim(),
+      claude_version: claudeVersion,
       model: AGENT_CONFIG.claudeModel,
       effort: AGENT_CONFIG.claudeEffort,
       max_turns: AGENT_CONFIG.maxTurns,
