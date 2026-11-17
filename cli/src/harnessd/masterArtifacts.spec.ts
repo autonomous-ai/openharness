@@ -171,6 +171,19 @@ describe('owned packaged child execution', { timeout: 15_000 }, () => {
     } finally { await master.stop() }
   })
 
+  it.each([new Error('private preparation details'), 'private preparation details'])('sanitizes an unexpected helper failure (%#)', async failure => {
+    writeFileSync(selected, body())
+    const artifacts = owner()
+    artifacts.prepare.mockImplementation(() => { throw failure })
+    const master = start(artifacts)
+    try {
+      await vi.waitFor(() => expect(master.supervisor.status().lastExit).toBe('bundle admission refused'))
+      expect(master.lines.some(line => line.includes('worker_artifact_prepare_failed'))).toBe(true)
+      expect(master.lines.join('\n')).not.toContain('private preparation details')
+      expect(records()).toEqual([])
+    } finally { await master.stop() }
+  })
+
   it('keeps synchronous core and service spawn failures inside their no-PID backoff owners', async () => {
     writeFileSync(selected, body())
     const artifacts = owner()
@@ -240,6 +253,26 @@ describe('owned packaged child execution', { timeout: 15_000 }, () => {
       expect(artifacts.prepare).toHaveBeenCalledTimes(2)
       expect(artifacts.prepare.mock.calls[0]).toEqual(artifacts.prepare.mock.calls[1])
       expect(artifacts.releases).toEqual([1])
+    } finally { await master.stop() }
+    expect(artifacts.releases).toEqual([1, 2])
+  })
+
+  it('refuses selection that changes while the failed-exec payload is being reacquired', async () => {
+    writeFileSync(selected, body())
+    const artifacts = owner(), prepare = artifacts.prepare.getMockImplementation()!
+    artifacts.prepare.mockImplementation((original, expected) => {
+      const artifact = prepare(original, expected)
+      if (artifacts.prepare.mock.calls.length === 2) writeFileSync(selected, `${body()}\n// published during reacquisition`)
+      return artifact
+    })
+    const execve = vi.fn(() => { throw new Error('exec arguments rejected') })
+    const master = start(artifacts, { bundleFingerprint: 'prior', reexecMarkerFile: join(directory, 'marker'), execve })
+    try {
+      await vi.waitFor(() => expect(master.supervisor.status().lastExit).toBe('bundle admission refused'))
+      expect(execve).toHaveBeenCalledTimes(1)
+      expect(artifacts.prepare).toHaveBeenCalledTimes(2)
+      expect(records()).toEqual([])
+      expect(master.supervisor.status().corePid).toBeNull()
     } finally { await master.stop() }
     expect(artifacts.releases).toEqual([1, 2])
   })

@@ -105,4 +105,29 @@ describe('bounded descriptor fingerprints', () => {
     expect(closeSync).toHaveBeenCalledTimes(1)
     expect(refused.mock.calls).toEqual([['bundle_fingerprint_close_unsettled'], ['bundle_fingerprint_close_unsettled']])
   })
+
+  it('reports restart guidance and starts no child when the master fingerprint close is uncertain', async () => {
+    const { runMaster } = await import('./master.js')
+    vi.mocked(closeSync).mockImplementationOnce(fd => { fs.closeSync(fd); throw new Error('private close detail') })
+    const lines: string[] = [], signals = new Map<string, () => void>()
+    const exit = vi.fn(), prepare = vi.fn()
+    vi.spyOn(console, 'log').mockImplementation(line => { lines.push(String(line)) })
+    const supervisor = runMaster({
+      nodePath: process.execPath, execArgv: [], scriptPath: file, pidFile: join(directory, 'pid'),
+      env: { HARNESSD_SERVICES: 'none', HOME: directory, USERPROFILE: directory },
+      restoreUpdate: () => {}, confirmUpdate: () => {}, execve: null, exit,
+      onSignal: (signal, listener) => { signals.set(signal, listener) }, executionArtifacts: { prepare },
+    })
+    try {
+      await vi.waitFor(() => expect(supervisor.status().lastExit).toBe('bundle admission refused'))
+      expect(lines.some(line => line.includes('bundle_fingerprint_close_unsettled — restart the supervisor'))).toBe(true)
+      expect(lines.join('\n')).not.toContain('private close detail')
+      expect(prepare).not.toHaveBeenCalled()
+      expect(supervisor.status().corePid).toBeNull()
+      expect(openSync).toHaveBeenCalledTimes(1)
+    } finally {
+      signals.get('SIGTERM')!()
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledExactlyOnceWith(0))
+    }
+  })
 })

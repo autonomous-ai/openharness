@@ -236,6 +236,7 @@ describe('coreHandle', () => {
     const reaped = vi.fn()
     handle.onExit(reaped)
     child.emit('error', new Error('ENOENT'))
+    child.emit('error', new Error('a second failure notification'))
     expect(reaped).toHaveBeenCalledExactlyOnceWith(1, null)
   })
 
