@@ -7,7 +7,7 @@
  * config file, keyed by the settings file in the real path of the engine's home, the event, the block and
  * the hook, holding the hash the engine computes of the hook. The hash is the engine's: the hook normalized
  * (its matcher only where the engine honours one, a timeout always, `async`), every object's keys sorted,
- * compact JSON, sha256. It is matched against `codex app-server` `hooks/list` of codex-cli 0.162.0
+ * compact JSON, sha256. It is matched against `codex app-server` `hooks/list` of codex-cli 0.169.0
  * (hookReview.spec.ts). Should an engine hash differently, it sees a changed hook and asks again, which is
  * where it was before.
  *
