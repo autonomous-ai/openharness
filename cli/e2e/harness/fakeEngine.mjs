@@ -52,7 +52,8 @@
 // the config) takes the prompt off the composer and holds its turn's start, the prompt hook and the record,
 // until the test's release file exists, as a CLI does whose hooks or first record are slow, `!latestop` (Claude
 // Code) has its Stop and the next prompt's hook reach the daemon only after that prompt's turn is on disk (see
-// `lateStop`), `!heldstop` has the turn's Stop reach the daemon only once the test writes `held-stop.release`, `!fail`
+// `lateStop`), `!heldstop` has the turn's Stop reach the daemon only once the test writes `held-stop.release`, alone or
+// before another directive (`!heldstop !permit printf hi`), `!fail`
 // (Codex) ends the turn in an error, with no Stop, `!elicit` (Claude Code) has an MCP tool's server ask for input in its
 // own dialog, `!spawn [name] [helper|resume]` (Claude Code) starts a background subagent that runs past its lead's Stop
 // until the test writes `<name>.release` (see the directive), `!exit` ends the process. A task `harness new` started it with is read for its directive below the line
@@ -928,6 +929,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
   let runningTool = null
   // A Codex turn stopped and not yet written aborted, its Interrupt hooks running: the next prompt waits for it.
   let aborting = undefined
+  // The open turn's Stop, held until the test's release file exists (`!heldstop`, `runHookCommand`), or null.
+  let heldStop = null
   /** An interrupt key taken (every Ctrl-C, an Esc that stops a turn), noted in `interrupts` under the test's root with
    *  this pid: the proof a test has of how many the engine took. */
   const noteInterrupt = (key) => appendFileSync(join(config.root, 'interrupts'), `${key} ${process.pid}\n`)
@@ -1411,8 +1414,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
   }
   // [thought]: the final message thought first. Claude Code writes each block of a message as a line of its own, each with the
   // message's stop reason (2.1.322): its thinking, then its text, both `end_turn`, under one message id.
-  // [stopHeld]: the Stop reaches the daemon only once its file exists (`!heldstop`, `runHookCommand`).
-  const finish = async (text, thought = false, stopHeld = null) => {
+  const finish = async (text, thought = false) => {
     if (latePrompt) {
       const { release, hooks } = latePrompt
       latePrompt = null
@@ -1431,7 +1433,9 @@ export async function run(engine, config = {}, { native = false } = {}) {
     // The Stop hooks run once the answer is in, and the CLI waits for them before it takes the next prompt; an
     // interrupt or an error ends a turn without them. Codex runs them before it writes the turn's task_complete
     // (0.144.0 and 0.169.0, facts-codex §2), so its end is never read before its Stop has come.
-    await runHooks('Stop', { stop_hook_active: false, ...(engine === 'codex' ? { turn_id: ended } : {}) }, stopHeld)
+    const held = heldStop
+    heldStop = null
+    await runHooks('Stop', { stop_hook_active: false, ...(engine === 'codex' ? { turn_id: ended } : {}) }, held)
     if (engine === 'codex') codex('event_msg', { type: 'task_complete', turn_id: ended, last_agent_message: text })
   }
   /**
@@ -1617,7 +1621,13 @@ export async function run(engine, config = {}, { native = false } = {}) {
       codex('event_msg', { type: 'item_completed', turn_id: open, item: { type: 'UserMessage', id: open, content: [{ type: 'text', text: prompt, text_elements: [] }] } })
       codex('response_item', { type: 'reasoning', summary: [{ type: 'summary_text', text: `considering: ${prompt}` }] })
     }
-    const directive = /^!(\w+)\s*(.*)$/.exec(prompt.replace(START_HEADER, ''))
+    // `!heldstop`: this turn's Stop reaches the daemon only once the test writes `held-stop.release` (a second in one
+    // test removes it first), and the CLI waits for it all that time: Codex writes its task_complete only after it. What
+    // follows it is the turn's prompt, so a turn that asks the person can have its Stop held too.
+    const asked = prompt.replace(START_HEADER, '')
+    const holding = /^!heldstop(?:\s+|$)/.exec(asked)
+    heldStop = holding ? { file: join(config.root, 'held-stop.release') } : null
+    const directive = /^!(\w+)\s*(.*)$/.exec(asked.slice(holding ? holding[0].length : 0))
     if (directive?.[1] === 'grow' || directive?.[1] === 'burst') {
       // `grow` writes the way Codex compacts — a snapshot at a time, with the engine still working in
       // between — so a live tail sees a few MiB per read. `burst` writes it all at once.
@@ -1861,12 +1871,6 @@ export async function run(engine, config = {}, { native = false } = {}) {
       say(`\r\nanswer ${turn}: ${prompt}\r\n\r\n`)
       const stop = hookHeld()
       lateStop = { stop: runHooks('Stop', { stop_hook_active: false }, stop), release: stop.release }
-      return
-    }
-    if (directive?.[1] === 'heldstop') {
-      // The turn's Stop reaches the daemon only once the test writes `held-stop.release` (a second `!heldstop` in one
-      // test removes it first). The CLI waits for it all that time: Codex writes its task_complete only after it.
-      await finish(`answer ${turn}: ${prompt}`, false, { file: join(config.root, 'held-stop.release') })
       return
     }
     if (engine === 'codex' && directive?.[1] === 'fail') {
