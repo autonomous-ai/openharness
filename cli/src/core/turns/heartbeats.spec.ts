@@ -16,6 +16,7 @@ function setup(over: Partial<HeartbeatDeps> = {}) {
     turnActivity: { check: vi.fn(async () => {}), snapshot: vi.fn(() => activity), forget: vi.fn() },
     mirror: { heartbeat: vi.fn(() => deviceBusy) },
     clients: { send: vi.fn() },
+    turns: { beat: vi.fn() },
     ...over,
   }
   return {
@@ -103,6 +104,21 @@ describe('turn heartbeats', () => {
     await vi.advanceTimersByTimeAsync(5_000)
     expect(beats.heartbeats.has('s1')).toBe(false)
     expect(deps.runtimeActivity.forget).toHaveBeenCalledWith('s1')
+  })
+
+  // A turn whose Stop never came ends at a beat (core/turns/turnHooks.ts, R6): the turn it closes is not checked.
+  it('each beat of an active session tells the turn hooks first', async () => {
+    const run = setup()
+    vi.mocked(run.deps.turns.beat).mockImplementation(() => run.set({ turnOpen: false }))
+    run.beats.startHeartbeat('s1')
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(run.deps.turns.beat).toHaveBeenCalledExactlyOnceWith('s1')
+    expect(run.deps.turnActivity.check).not.toHaveBeenCalled()
+    expect(run.beats.heartbeats.has('s1')).toBe(false)
+    run.beats.startHeartbeat('s1')
+    run.set({ active: false })
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(run.deps.turns.beat).toHaveBeenCalledOnce()
   })
 
   it('stops for a session that is no longer active, and forgets its activity', async () => {

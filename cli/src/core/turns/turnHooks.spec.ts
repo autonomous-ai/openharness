@@ -4,7 +4,7 @@ import type { TurnState } from '../../lib/normalize.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createSessionNormalizers } from '../transcripts/normalizers.js'
 import { noOtherStreams } from '../../testing/otherStreams.js'
-import { createTurnHooks, HOOKS_KEPT, STOP_HOOK_GRACE_MS, type TurnHookDeps } from './turnHooks.js'
+import { createTurnHooks, HOOK_SILENCE_MS, HOOKS_KEPT, STOP_HOOK_GRACE_MS, type TurnHookDeps } from './turnHooks.js'
 import { engineHooks } from '../../engines/hooks.js'
 import type { HookTurnContext } from '../../engines/facets/hooks.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
@@ -760,6 +760,43 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     run.hooks.onTurnStop({ sessionId: 's1' })
     await vi.advanceTimersByTimeAsync(0)
     expect(run.hooks.withheld('s1')).toBe(true)
+  })
+
+  // A Stop hook that failed to run would leave the turn open for ever (R6).
+  it('a missing Stop: the held end is delivered at the first beat 2 minutes after it was read, with one line', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const run = await hookDriven()
+    vi.advanceTimersByTime(30_000)
+    run.hooks.transcript('s1', END, { turn: turnOf('t1') })
+    vi.advanceTimersByTime(HOOK_SILENCE_MS - 1); run.hooks.beat('s1')
+    expect(run.deps.emit).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1); run.hooks.beat('s1')
+    expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', END)
+    expect(run.hooks.held('s1')).toBe(false)
+    run.hooks.beat('s1')
+    expect(run.deps.emit).toHaveBeenCalledOnce()
+    expect(log.mock.calls.map(call => String(call[0]))).toEqual(['[turn] s1 ended by its transcript · no Stop in 2 min'])
+  })
+
+  it('a hook in between starts the 2 minutes again', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const run = await hookDriven()
+    run.hooks.transcript('s1', END, { turn: turnOf('t1', 2_000) })
+    vi.advanceTimersByTime(60_000)
+    // A late Stop of an earlier turn: it delivers nothing, and the engine is still sending hooks.
+    run.hooks.onTurnStop({ sessionId: 's1', firedAt: 1_000 })
+    await vi.advanceTimersByTimeAsync(HOOK_SILENCE_MS - 1); run.hooks.beat('s1')
+    expect(run.deps.emit).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1); run.hooks.beat('s1')
+    expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', END)
+  })
+
+  it('nothing held, or a session with no record: a beat does nothing', async () => {
+    const run = await hookDriven()
+    vi.advanceTimersByTime(HOOK_SILENCE_MS)
+    run.hooks.beat('s1')
+    run.hooks.beat('nobody')
+    expect(run.deps.emit).not.toHaveBeenCalled()
   })
 })
 
