@@ -64,7 +64,8 @@ export function leanServices(deps: LeanServicesDeps): LeanServices {
   /** Why the lean bundle cannot be used now; null when it can. */
   const unusable = (lean: string): string | null => {
     if (!deps.sameBundle()) return `${scriptPath} is no longer the bundle it came from`
-    if (deps.leanFingerprint === undefined) return deps.exists(lean) ? null : 'it is gone'
+    if (!deps.exists(lean)) return 'it is gone'
+    if (deps.leanFingerprint === undefined) return null
     const found = deps.folderFingerprint(dirname(lean))
     return found === deps.leanFingerprint ? null : found === null ? 'it is gone' : 'its files changed'
   }
@@ -72,8 +73,9 @@ export function leanServices(deps: LeanServicesDeps): LeanServices {
     scriptFor: (name) => {
       if (!leanPath || leanPath === scriptPath) return scriptPath
       if ((earlyDeaths.get(name) ?? 0) >= LEAN_EARLY_DEATHS) return scriptPath
-      const why = unusable(leanPath)
-      if (why === null) { said = null; return name === CORE ? join(dirname(leanPath), LEAN_CORE_ENTRY) : leanPath }
+      const entry = name === CORE ? join(dirname(leanPath), LEAN_CORE_ENTRY) : leanPath
+      const why = unusable(entry)
+      if (why === null) { said = null; return entry }
       // Said once per reason, not on every restart.
       if (said !== why) deps.log(`[harnessd] the lean bundle ${leanPath} cannot be used (${why}): the core and the services start from ${scriptPath}`)
       said = why

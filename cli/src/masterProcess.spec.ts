@@ -169,14 +169,14 @@ describe('a master started on cli.js', () => {
     }
   })
 
-  it('runs from cli.js, with the services still from the lean bundle, where this Node cannot re-execute', () => {
+  it('keeps the master on cli.js with the verified original lean claim when Node cannot re-execute', () => {
     const { given, calls } = deps({ execve: null })
     startMasterFromBundle('/cli/cli.js', given)
-    expect(calls.starts).toEqual([{ scriptPath: '/cli/cli.js', serviceScriptPath: '/data/lean/harnessd-aaaa.mjs', leanFingerprint: PRINT }])
-    expect(calls.logs).toEqual(['[harnessd] this Node cannot re-execute the master: it runs from /cli/cli.js, the core and the services from /data/lean/harnessd-aaaa.mjs'])
+    expect(calls.starts).toEqual([{ scriptPath: '/cli/cli.js', packaged: true, serviceScriptPath: '/data/lean/harnessd-aaaa.mjs', leanFingerprint: PRINT }])
+    expect(calls.logs).toEqual(['[harnessd] this Node cannot re-execute the master: it runs from /cli/cli.js'])
     const failing = deps({ execve: () => { throw new Error('E2BIG') } })
     startMasterFromBundle('/cli/cli.js', failing.given)
-    expect(failing.calls.starts).toEqual([{ scriptPath: '/cli/cli.js', serviceScriptPath: '/data/lean/harnessd-aaaa.mjs', leanFingerprint: PRINT }])
+    expect(failing.calls.starts).toEqual([{ scriptPath: '/cli/cli.js', packaged: true, serviceScriptPath: '/data/lean/harnessd-aaaa.mjs', leanFingerprint: PRINT }])
     expect(failing.calls.logs[0]).toContain('could not re-execute on /data/lean/harnessd-aaaa.mjs (E2BIG)')
     const thrown = deps({ execve: () => { throw 'refused' } })
     startMasterFromBundle('/cli/cli.js', thrown.given)
@@ -190,17 +190,17 @@ describe('a master started on cli.js', () => {
       const { given, calls } = deps({ exists: (path) => path !== gone })
       startMasterFromBundle('/cli/cli.js', given)
       expect(calls.execs).toEqual([])
-      expect(calls.starts).toEqual([{ scriptPath: '/cli/cli.js' }])
-      expect(calls.logs).toEqual([`[harnessd] ${gone} is not there to re-execute on: the master, the core and the services run from /cli/cli.js`])
+      expect(calls.starts).toEqual([{ scriptPath: '/cli/cli.js', packaged: true }])
+      expect(calls.logs).toEqual([`[harnessd] ${gone} is not there to re-execute on: the master runs from /cli/cli.js`])
     }
   })
 
   it('runs everything from cli.js while the lean-off file is in the data folder: a switch a launchd or systemd master sees', () => {
     const { given, calls } = deps({ leanOff: () => true })
     startMasterFromBundle('/cli/cli.js', given)
-    expect(calls.starts).toEqual([{ scriptPath: '/cli/cli.js' }])
+    expect(calls.starts).toEqual([{ scriptPath: '/cli/cli.js', packaged: true }])
     expect(calls.probes).toEqual([])
-    expect(calls.logs).toEqual([`[harnessd] ${LEAN_OFF_FILE} is there: the master, the core and the services run from /cli/cli.js`])
+    expect(calls.logs).toEqual([`[harnessd] ${LEAN_OFF_FILE} is there: the master runs from /cli/cli.js`])
   })
 
   it('runs everything from cli.js when the lean bundle is not there to use, and says why', () => {
@@ -212,21 +212,21 @@ describe('a master started on cli.js', () => {
     for (const [over, said] of cases) {
       const { given, calls } = deps(over)
       startMasterFromBundle('/cli/cli.js', given)
-      expect(calls.starts).toEqual([{ scriptPath: '/cli/cli.js' }])
+      expect(calls.starts).toEqual([{ scriptPath: '/cli/cli.js', packaged: true }])
       expect(calls.execs).toEqual([])
       expect(calls.logs[0]).toContain(said)
     }
     leanBundle.read.mockReturnValue(null)
     const none = deps()
     startMasterFromBundle('/cli/cli.js', none.given)
-    expect(none.calls.starts).toEqual([{ scriptPath: '/cli/cli.js' }])
-    expect(none.calls.logs).toEqual(['[harnessd] no lean bundle in /cli/cli.js: the master, the core and the services run from it'])
+    expect(none.calls.starts).toEqual([{ scriptPath: '/cli/cli.js', packaged: true }])
+    expect(none.calls.logs).toEqual(['[harnessd] no lean bundle in /cli/cli.js: the master runs from it'])
   })
 
   it('runs everything from cli.js, quietly, with HARNESSD_LEAN=off', () => {
     const { given, calls } = deps({ env: { HARNESSD_LEAN: 'off' } })
     startMasterFromBundle('/cli/cli.js', given)
-    expect(calls.starts).toEqual([{ scriptPath: '/cli/cli.js' }])
+    expect(calls.starts).toEqual([{ scriptPath: '/cli/cli.js', packaged: true }])
     expect(calls.logs).toEqual([])
     expect(calls.probes).toEqual([])
   })
@@ -256,7 +256,7 @@ describe('the master on Windows', () => {
   it('runs from cli.js alone: the lean bundle relies on hard links, which Windows does not give it', () => {
     const { given, calls } = deps({ platform: 'win32' })
     startMasterFromBundle('C:\\h\\cli\\0.5.0\\cli.js', given)
-    expect(calls.starts).toEqual([{ scriptPath: 'C:\\h\\cli\\0.5.0\\cli.js' }])
+    expect(calls.starts).toEqual([{ scriptPath: 'C:\\h\\cli\\0.5.0\\cli.js', packaged: true }])
     expect(calls.probes).toEqual([])
     expect(calls.execs).toEqual([])
   })
@@ -503,6 +503,23 @@ describe('the probe of a lean bundle', () => {
 })
 
 describe('starting the master', () => {
+  it('injects immutable ownership only for packaged entries and retains existing lean choices', () => {
+    runMaster.mockClear()
+    startMaster({ scriptPath: '/source/cli.ts' }, () => {}, 'darwin')
+    expect(runMaster.mock.calls.at(-1)![0].executionArtifacts).toBeUndefined()
+    for (const platform of ['darwin', 'win32'] as const) {
+      startMaster({ scriptPath: '/cli/cli.js', packaged: true }, () => {}, platform, () => ({}))
+      const config = runMaster.mock.calls.at(-1)![0]
+      expect(config.executionArtifacts).toEqual({ prepare: expect.any(Function) })
+      expect(config.leanArtifacts).toBe(platform === 'darwin')
+    }
+    vi.stubEnv('HARNESSD_LEAN', 'off')
+    try {
+      startMaster({ scriptPath: '/cli/cli.js', packaged: true, serviceScriptPath: '/lean/harnessd.mjs' }, () => {}, 'darwin')
+      expect(runMaster.mock.calls.at(-1)![0].leanArtifacts).toBe(false)
+    } finally { vi.unstubAllEnvs() }
+  })
+
   it('runs it on the paths it is given, with the daemon\'s files and update backups', () => {
     runMaster.mockClear()
     expect(startMaster({ scriptPath: '/cli/cli.js', serviceScriptPath: '/lean.mjs', bundleFingerprint: 'f' })).toBe('supervisor')
@@ -647,7 +664,7 @@ describe('starting the master', () => {
     expect(logs).toEqual([])
     // Already none: nothing to change or say.
     const none = { HARNESSD_SERVICES: 'none' }
-    expect(masterEnv(none, null, (line) => logs.push(line))).toBe(none)
+    expect(masterEnv(none, null, (line) => logs.push(line))).toEqual(process.platform === 'win32' ? { ...none, HARNESSD_SERVICES_EXPLICIT: '1' } : none)
     expect(logs).toHaveLength(0)
     // Its own log line goes to the master's console, which is the daemon's log.
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -660,6 +677,16 @@ describe('starting the master', () => {
     runMaster.mockClear()
     startMaster({ scriptPath: '/cli/cli.js' })
     expect((runMaster.mock.calls[0][0] as { env: NodeJS.ProcessEnv }).env).toMatchObject({ PATH: process.env.PATH })
+  })
+
+  it('recomputes the Windows default after a legacy handover and carries an explicit none choice', () => {
+    const resume = JSON.stringify({ restarts: 1, lastExit: 'code 75', lastExitReason: 'update', update: 'pending', claimed: true, reexecs: 1, unproven: 1 })
+    const legacy = { HARNESSD_RESUME: resume, HARNESSD_SERVICES: 'none' }
+    expect(masterEnv(legacy, null, () => {}, 'win32').HARNESSD_SERVICES).toBeUndefined()
+    expect(legacy.HARNESSD_SERVICES).toBe('none')
+    const fresh = masterEnv({ HARNESSD_SERVICES: 'none' }, null, () => {}, 'win32')
+    expect(fresh).toMatchObject({ HARNESSD_SERVICES: 'none', HARNESSD_SERVICES_EXPLICIT: '1' })
+    expect(masterEnv({ ...fresh, HARNESSD_RESUME: resume }, null, () => {}, 'win32')).toMatchObject(fresh)
   })
 
   it('gives up its claim on the lean bundle as it exits cleanly', () => {

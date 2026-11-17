@@ -83,6 +83,14 @@ describe('the file a service, or the core, starts from', () => {
     expect(lean.scriptFor('search')).toBe(CLI)
   })
 
+  it('falls back when the dedicated core entry is absent even if the service entry and folder match', () => {
+    for (const leanFingerprint of [undefined, 'f']) {
+      const { lean } = make({ leanFingerprint, exists: path => path !== LEAN_CORE })
+      expect(lean.scriptFor('search')).toBe(LEAN)
+      expect(lean.scriptFor(CORE)).toBe(CLI)
+    }
+  })
+
   it('is cli.js for a service that died twice running from the lean bundle before it ever beat', () => {
     const { lean, logs } = make()
     for (let death = 1; death <= LEAN_EARLY_DEATHS; death++) {

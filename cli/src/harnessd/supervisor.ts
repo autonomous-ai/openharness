@@ -32,7 +32,8 @@ export interface CoreHandle {
 
 export interface SupervisorDeps {
   /** Start a core with these extra environment variables. */
-  spawnCore(env: Record<string, string>): CoreHandle
+  /** Null refuses code before a child exists; the same admission restore/backoff applies. */
+  spawnCore(env: Record<string, string>): CoreHandle | null
   /** A monotonic clock, in ms: durations only, untouched by sleep and clock changes. */
   now(): number
   /** The wall clock, in ms: what the status says things happened at. */
@@ -115,7 +116,7 @@ export interface ResumeState {
  * would not, for a reason that is not the bundle's (`kept`); or the bundle's master did not answer its
  * probe (`refused`), which fails an update to it.
  */
-export type ReexecOutcome = 'same' | 'kept' | 'refused'
+export type ReexecOutcome = 'same' | 'kept' | 'refused' | 'unsupported'
 
 /** Who this master is: its code's version, and what the master it replaced handed on. */
 export interface SupervisorIdentity {
@@ -344,8 +345,29 @@ export class Supervisor {
         this.next()
         return
       }
+      if (outcome === 'unsupported') {
+        this.admissionRefused()
+        return
+      }
       this.spawn()
     })
+  }
+
+  /** A code refusal has no PID to kill or reap, and never becomes a fictitious core crash. */
+  private admissionRefused(): void {
+    if (this.update === 'pending') {
+      this.update = null
+      this.deps.restoreUpdate()
+      this.deps.log('[harnessd] the new bundle\'s master would not start — rolled back to the previous bundle; restarting')
+      this.next()
+      return
+    }
+    this.lastExit = 'bundle admission refused'
+    this.lastExitReason = 'did-not-bind'
+    const delay = Math.max(1_000, this.backoff)
+    this.backoff = Math.min(delay * 2, this.options.maxBackoffMs)
+    this.deps.log(`[harnessd] the selected bundle has no supported worker cohort — restore a supported build; retrying in ${delay} ms`)
+    this.scheduleSpawn(delay)
   }
 
   /**
@@ -439,6 +461,7 @@ export class Supervisor {
     this.ptyStagedSinceSpawn = false
     const core = this.deps.spawnCore(env)
     this.core = core
+    if (!core) { this.admissionRefused(); return }
     core.onMessage((message) => { if (this.core === core && isCoreMessage(message)) this.onMessage(core, message) })
     core.onExit((code, signal) => { if (this.core === core) this.onExit(code, signal) })
     this.deps.log(`[harnessd] core started (pid ${core.pid ?? '?'})${this.restarts ? ` · restart ${this.restarts}` : ''}${this.safeMode ? ` · safe mode: ${this.safeMode}` : ''}`)

@@ -100,6 +100,38 @@ describe('Supervisor', () => {
     expect(core().sent.at(-1)).toMatchObject({ type: 'harnessd:status', status: { services: [{ name: 'engine-others', pid: null }] } })
   })
 
+  it('backs off a pre-spawn core refusal without inventing a child, and stop cancels its retry', () => {
+    const spawnCore = vi.fn(() => null) as unknown as SupervisorDeps['spawnCore']
+    const supervisor = make({}, { spawnCore })
+    supervisor.start()
+    expect(supervisor.status()).toMatchObject({ state: 'restarting', corePid: null, lastExit: 'bundle admission refused' })
+    expect(cores).toEqual([])
+    expect(spawnCore).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(999)
+    expect(spawnCore).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(1)
+    expect(spawnCore).toHaveBeenCalledTimes(2)
+    supervisor.stop('test')
+    vi.runOnlyPendingTimers()
+    expect(spawnCore).toHaveBeenCalledTimes(2)
+    expect(exited).toEqual([0])
+  })
+
+  it('restores pending probation when the core is refused before spawn', () => {
+    let refused = true
+    const restored = vi.fn(() => { refused = false; calls.push('restore') })
+    const spawnCore = vi.fn((env: Record<string, string>) => {
+      if (refused) return null
+      const next = new FakeCore(1000, env); cores.push(next); return next
+    }) as unknown as SupervisorDeps['spawnCore']
+    const supervisor = make({}, { spawnCore, restoreUpdate: restored }, { unjudgedUpdate: 'pending' })
+    supervisor.start()
+    expect(restored).toHaveBeenCalledTimes(1)
+    expect(cores).toHaveLength(1)
+    expect(supervisor.status().corePid).toBe(1000)
+    supervisor.stop('test'); core().exit(0)
+  })
+
   it('starts one core, claims the pid file once it is bound, and runs it once it is ready', () => {
     const supervisor = make()
     expect(new Supervisor({ wallClock: () => 7 } as never).status())
@@ -939,6 +971,33 @@ describe('Supervisor', () => {
       crash()
       asked[3].proceed('refused')
       expect(cores).toHaveLength(3)
+    })
+
+    it('restores an unsupported update and never spawns an unsupported manual replacement', () => {
+      const { asked, deps } = reexecs()
+      const supervisor = make({ initialBackoffMs: 0, maxBackoffMs: 2_000 }, deps)
+      supervisor.start()
+      asked[0].proceed('same')
+      core().up()
+      core().exit(CORE_EXIT_UPDATE)
+      vi.advanceTimersByTime(0)
+      asked[1].proceed('unsupported')
+      expect(calls).toEqual(['claim', 'up', 'restore'])
+      expect(cores).toHaveLength(1)
+      asked[2].proceed('unsupported')
+      expect(supervisor.status()).toMatchObject({ state: 'restarting', corePid: null, lastExit: 'bundle admission refused', lastExitReason: 'did-not-bind' })
+      expect(cores).toHaveLength(1)
+      vi.advanceTimersByTime(999)
+      expect(asked).toHaveLength(3)
+      vi.advanceTimersByTime(1)
+      expect(asked).toHaveLength(4)
+      asked[3].proceed('unsupported')
+      vi.advanceTimersByTime(1_999)
+      expect(asked).toHaveLength(4)
+      vi.advanceTimersByTime(1)
+      expect(asked).toHaveLength(5)
+      expect(cores).toHaveLength(1)
+      supervisor.stop('test')
     })
 
     it('rolls a failed update back and asks again, so the master moves back to the bundle restored', () => {

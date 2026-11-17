@@ -319,6 +319,18 @@ const FACETS_FREE_OF_THEM: Array<[string, string]> = [
 ]
 
 describe('the daemon\'s shape', () => {
+  it('admits supervised children before any entry loads runtime, through only the audited generic closure', () => {
+    for (const entry of ['entry.ts', 'cli.ts', 'leanEntry.ts', 'leanCoreEntry.ts']) {
+      const source = ts.createSourceFile(entry, readFileSync(join(SRC, entry), 'utf8'), ts.ScriptTarget.Latest, true)
+      const first = source.statements[0]
+      expect(ts.isImportDeclaration(first) && !first.importClause && ts.isStringLiteral(first.moduleSpecifier)
+        ? first.moduleSpecifier.text : null, `${entry} must admit before imports with effects`).toBe('./harnessd/childEntry.js')
+    }
+    // Every session pays this entry-only closure, which the walk from core/main.ts does not see.
+    expect([...closureOf('harnessd/childEntry.ts').keys()].sort()).toEqual([
+      'harnessd/bundleFingerprint.ts', 'harnessd/childAdmission.ts', 'harnessd/childEntry.ts', 'harnessd/workerContract.ts',
+    ])
+  })
   it('keeps inline hosting, history paging and shared-machine reply parsing outside the default core', () => {
     const loaded = closureOf('core/main.ts')
     for (const file of ['services/inlineHost.ts', 'lib/transcriptPages.ts', 'lib/sharedMachinesPort.ts', 'harnessd/servicePlan.ts']) {

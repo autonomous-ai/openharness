@@ -10,6 +10,7 @@
  * (masterProcess.ts `startMasterFromBundle`) and starts the services from it. The core has an entry of
  * its own, built apart (leanCoreEntry.ts), and the CLI always runs from cli.js.
  */
+import './harnessd/childEntry.js'
 import './lib/connectWait.js'
 import { fileURLToPath } from 'node:url'
 import { LEAN_CORE_SCRIPT_ENV } from './harnessd/protocol.js'
@@ -31,6 +32,7 @@ if (command === '__harnessd') {
   delete process.env[master.LEAN_FINGERPRINT_ENV]
   master.startMaster({
     scriptPath: bundle,
+    packaged: true,
     serviceScriptPath: fileURLToPath(import.meta.url),
     ...(bundleFingerprint ? { bundleFingerprint } : {}),
     ...(leanFingerprint ? { leanFingerprint } : {}),

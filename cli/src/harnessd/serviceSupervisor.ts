@@ -17,7 +17,7 @@ import { describeExit, type CoreHandle } from './supervisor.js'
 export interface ServiceSupervisorDeps {
   changed?(): void
   /** Start a process with these extra environment variables, running every service its spec names. */
-  spawnService(spec: ServiceSpec, env: Record<string, string>): CoreHandle
+  spawnService(spec: ServiceSpec, env: Record<string, string>): CoreHandle | null
   /** A monotonic clock, in ms. */
   now(): number
   /** The wall clock, in ms: what the status says things happened at. */
@@ -134,6 +134,7 @@ class Service {
     this.killReason = null
     this.ending = false
     this.upAt = this.deps.now()
+    if (!child) { this.onExit(null, null, 'not started'); return }
     child.onMessage((message) => { if (this.child === child) this.onMessage(child, message) })
     child.onExit((code, signal) => { if (this.child === child) this.onExit(code, signal) })
     this.deps.log(`[harnessd] service ${this.spec.name} started (pid ${child.pid ?? '?'})${this.restarts ? ` · restart ${this.restarts}` : ''}`)
@@ -199,8 +200,8 @@ class Service {
     this.end('SIGTERM')
   }
 
-  private onExit(code: number | null, signal: NodeJS.Signals | null): void {
-    const exit = describeExit(code, signal)
+  private onExit(code: number | null, signal: NodeJS.Signals | null, refused?: string): void {
+    const exit = refused ?? describeExit(code, signal)
     this.clearTimer('heartbeatTimer')
     this.clearTimer('killTimer')
     this.child = null

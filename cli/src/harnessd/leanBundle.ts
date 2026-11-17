@@ -23,11 +23,11 @@
  * minute. A claim older than the computer's last start is a dead master's, whatever has its pid now.
  */
 import { createHash } from 'node:crypto'
-import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { uptime } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { brotliDecompressSync } from 'node:zlib'
-import { sha256File } from './reexec.js'
+import { sha256File } from './bundleFingerprint.js'
 
 /** As scripts/lib/leanBlock.mjs writes it. Built in two pieces, so this file's own text never matches. */
 const MARKER = Buffer.from('/*@harness-' + 'lean:')
@@ -115,7 +115,7 @@ export function folderFingerprint(folder: string): string | null {
   if (!names.includes(LEAN_ENTRY)) return null
   const hash = createHash('sha256')
   try {
-    // A piece at a time, as cli.js is: before every process a master starts (./reexec.ts `sha256File`).
+    // A piece at a time, as cli.js is: before every process a master starts (./bundleFingerprint.ts).
     for (const name of names) hash.update(`${name}\0${sha256File(join(folder, name))}\n`)
   } catch {
     return null
@@ -145,10 +145,14 @@ export interface LeanWrite {
   bootedAt?: number
 }
 
-/** Whether [folder] holds every file of [lean], byte for byte. */
+/** Whether [folder] holds the verified bytes, without a whole allocation for a corrupt cached file. */
 function holds(folder: string, lean: LeanBundle): boolean {
   for (const [name, code] of lean.files) {
-    try { if (!readFileSync(join(folder, name)).equals(code)) return false } catch { return false }
+    try { if (sha256File(join(folder, name)) !== sha256(code)) return false } catch (error) {
+      // An uncertain open descriptor is not a cache mismatch to repair; its caller retains ownership.
+      if ((error as { code?: unknown }).code === 'bundle_fingerprint_close_unsettled') throw error
+      return false
+    }
   }
   return true
 }

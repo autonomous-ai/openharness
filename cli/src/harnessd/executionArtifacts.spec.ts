@@ -8,6 +8,8 @@ import { LEAN_CORE_ENTRY, LEAN_ENTRY, LEAN_RECENT_MS, folderFingerprint } from '
 
 const hooks = vi.hoisted(() => ({
   opened: new Set<number>(),
+  paths: new Map<number, string>(),
+  failClosePath: '',
   beforeRead: null as null | (() => void),
   readLimit: Infinity,
   statSize: null as number | null,
@@ -25,6 +27,7 @@ vi.mock('node:fs', async (load) => {
       if (hooks.fail === 'open') throw new Error('private source path')
       const fd = fs.openSync(path, flags)
       hooks.opened.add(fd)
+      hooks.paths.set(fd, path)
       return fd
     }) as typeof fs.openSync,
     fstatSync: ((fd: number) => {
@@ -41,9 +44,11 @@ vi.mock('node:fs', async (load) => {
       return fs.readSync(fd, buffer, offset ?? 0, Math.min(length ?? buffer.length, hooks.readLimit), position ?? null)
     }) as typeof fs.readSync,
     closeSync: (fd: number) => {
+      if (hooks.paths.get(fd) === hooks.failClosePath) throw new Error('uncertain cache close')
       if (hooks.fail === 'close-unsettled') throw new Error('private source path')
       fs.closeSync(fd)
       hooks.opened.delete(fd)
+      hooks.paths.delete(fd)
       if (hooks.fail === 'close') throw new Error('private source path')
     },
     writeFileSync: ((path: string, ...rest: unknown[]) => {
@@ -91,6 +96,8 @@ describe('one owned execution artifact', () => {
     hooks.failRename = null
     hooks.failRemove = null
     hooks.failStat = null
+    hooks.failClosePath = ''
+    hooks.paths.clear()
     expect(hooks.opened.size).toBe(0)
     rmSync(root, { recursive: true, force: true })
   })
@@ -413,5 +420,33 @@ describe('one owned execution artifact', () => {
     expect(existsSync(join(directory, old, '.claim-200'))).toBe(true)
     hooks.failRename = null
     first.release()
+  })
+
+  it('retains cached claims and opens nothing further when cache fingerprint close is uncertain', async () => {
+    vi.resetModules()
+    const fresh = await import('./executionArtifacts.js')
+    const expected = selected()
+    const artifacts = fresh.createExecutionArtifacts({ directory, pid: 100, alive: () => true, bootedAt: 0 })
+    const first = artifacts.prepare(original, expected)
+    first.release()
+    writeFileSync(claim(first.fullScript, 200), '')
+    hooks.failClosePath = first.fullScript
+    try {
+      expect(() => artifacts.prepare(original, expected)).toThrow('worker_artifact_cleanup_unsettled')
+      expect(existsSync(claim(first.fullScript))).toBe(true)
+      expect(existsSync(claim(first.fullScript, 200))).toBe(true)
+      expect(readFileSync(first.fullScript, 'utf8')).toBe(CLI)
+      const uncertain = [...hooks.opened]
+      expect(uncertain).toHaveLength(1)
+      expect(() => artifacts.prepare(original, expected)).toThrow('worker_artifact_cleanup_unsettled')
+      expect([...hooks.opened]).toEqual(uncertain)
+      expect(readdirSync(directory)).toEqual([basename(dirname(first.fullScript))])
+    } finally {
+      hooks.failClosePath = ''
+      const fs = await vi.importActual<typeof import('node:fs')>('node:fs')
+      // The injected fault alone knows no kernel close happened; production never retries an uncertain fd.
+      for (const fd of hooks.opened) fs.closeSync(fd)
+      hooks.opened.clear()
+    }
   })
 })

@@ -1,3 +1,4 @@
+import { fingerprint } from './bundleFingerprint.js'
 /**
  * `harness __harnessd`: the master process `harness start` launches (see ./supervisor.ts for what it
  * does). This file is only its wiring to the operating system: the core child, the pid file, the status
@@ -6,15 +7,18 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { ignoreLogWriteErrors, trimLogFile, ts } from '../lib/log.js'
 import { folderFingerprint } from './leanBundle.js'
+import type { ExecutionArtifact } from './executionArtifacts.js'
+import { WORKER_CONTRACT, WORKER_PLAN, WORKER_COHORT_ENV, workerCohortEnvironment } from './workerContract.js'
 import { CORE, leanServices } from './leanServices.js'
 import { platformFromEnv, type PlatformName } from './platform.js'
 import { baseNode, namedNode } from './processName.js'
 import { LEAN_CORE_SCRIPT_ENV, type MasterMessage } from './protocol.js'
 import {
-  PROBE_ANSWER, PROBE_HANDOVER, RESUME_ENV, createReexec, decodeResume, fingerprint, mayClaimPidFile, readHandoverClaimant, readMarker, recoverFailedReexec,
+  PROBE_ANSWER, PROBE_HANDOVER, RESUME_ENV, createReexec, decodeResume, mayClaimPidFile, readHandoverClaimant, readMarker, recoverFailedReexec,
   removeMarker, runProbe, sweepHandovers, takeBackHandover, takeHandover, writeMarker, type HandOverDeps, type ReexecMarker,
 } from './reexec.js'
 import { ServiceSupervisor, serviceOptions } from './serviceSupervisor.js'
@@ -48,6 +52,10 @@ export interface MasterConfig {
    *  `scriptPath` itself but on the lean bundle read from it: the bundle it runs is the one it was read
    *  from, whatever is on disk by the time this master starts. */
   bundleFingerprint?: string
+  /** Installed bundle entry injects the existing-store owner; source development has no publication. */
+  executionArtifacts?: { prepare(originalScript: string, expected: string): ExecutionArtifact }
+  /** Existing lean opt-out/platform decision; the immutable full fallback remains mandatory. */
+  leanArtifacts?: boolean
   pidFile: string
   /** Where the master records its status for `harness status` (see `writeStatusFile`). */
   statusFile?: string
@@ -70,7 +78,7 @@ export interface MasterConfig {
   /** This bundle's version, for the status (`harness status`, `/api/status`). */
   version?: string
   /** Where a master about to re-execute on the bundle on disk leaves its marker (./reexec.ts). Left
-   *  out, the master never re-executes, as before. */
+   *  out, the master never re-executes; child cohort admission still applies. */
   reexecMarkerFile?: string
   /** Replace this process (`process.execve`); defaults to this Node's, null where it has none. */
   execve?: Execve | null
@@ -232,7 +240,7 @@ export function describeMasterStatus(status: MasterStatusFile | null): string | 
 }
 
 /** A child process as the supervisor sees it. A spawn that fails reports as an exit. */
-export function coreHandle(child: ChildProcess): CoreHandle {
+export function coreHandle(child: ChildProcess, log: (line: string) => void = (line) => console.error(line)): CoreHandle {
   let exited = false
   const exits: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = []
   const exit = (code: number | null, signal: NodeJS.Signals | null): void => {
@@ -241,7 +249,10 @@ export function coreHandle(child: ChildProcess): CoreHandle {
     for (const listener of exits) listener(code, signal)
   }
   child.on('exit', exit)
-  child.on('error', () => exit(1, null))
+  child.on('error', () => {
+    if (child.pid === undefined) exit(1, null)
+    else if (!exited) log('[harnessd] child operation failed — retaining ownership until its actual exit')
+  })
   return {
     pid: child.pid,
     // Found by QA after a quiet-machine run: CI lost an update exit 75 to a failed status send.
@@ -267,7 +278,7 @@ export function probeMaster(config: { env: NodeJS.ProcessEnv; execArgv: string[]
     serviceSpecs(config.env, SERVICE_HOSTS)
     const inert = { wallClock: () => Date.now() } as unknown as SupervisorDeps
     const status = new Supervisor(inert, supervisorOptions(config.env, config.execArgv), { version: config.version, resume }).status()
-    say(`${PROBE_ANSWER} · protocol ${status.protocol} · v${status.masterVersion} · ${PROBE_HANDOVER}`)
+    say(`${PROBE_ANSWER} · protocol ${status.protocol} · v${status.masterVersion} · ${PROBE_HANDOVER} · worker-cohort ${WORKER_CONTRACT} ${WORKER_PLAN}`)
     return 0
   } catch (error) {
     say(`harnessd-probe failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -285,6 +296,7 @@ export function runMaster(config: MasterConfig): Supervisor {
   const resume = decodeResume(given[RESUME_ENV])
   const env: NodeJS.ProcessEnv = { ...given }
   delete env[RESUME_ENV]
+  delete env[WORKER_COHORT_ENV]
   const writePidFile = (pid = process.pid): void => { writeFileSync(config.pidFile, `${pid}\n`) }
   const readPid = (): number | null => {
     try { return Number.parseInt(readFileSync(config.pidFile, 'utf8').trim(), 10) || null } catch { return null }
@@ -294,6 +306,10 @@ export function runMaster(config: MasterConfig): Supervisor {
   // The core's stamp, local time (lib/log.ts): in UTC, the master's lines sat hours away from the core's
   // lines around them in the one log they share.
   const log = (line: string) => console.log(`${ts()} ${line}`)
+  const bundleHash = (path: string) => fingerprint(path, reason => {
+    const action = reason === 'bundle_fingerprint_close_unsettled' ? 'restart the supervisor' : 'restore a supported regular build file'
+    log(`[harnessd] ${reason} — ${action}`)
+  })
   // Each process exec'd through a link named after it, so Activity Monitor and `top` tell them apart. The Node this
   // master runs on, until a rollback puts the daemon back on the one before an update (`restoreUpdate`).
   let node = baseNode(config.nodePath)
@@ -316,14 +332,14 @@ export function runMaster(config: MasterConfig): Supervisor {
   const handover = resume?.handover
   if (resume && !handover) log(`[harnessd] master re-executed (pid ${process.pid})${config.version ? ` · now v${config.version}` : ''}`)
   if (config.serviceScriptPath && config.serviceScriptPath !== config.scriptPath) {
-    log(`[harnessd] services run from ${config.serviceScriptPath}${config.bundleFingerprint ? ', as this master does' : ''}`)
+    log(`[harnessd] master runs from ${config.bundleFingerprint ? config.serviceScriptPath : config.scriptPath}`)
   }
   // The bundle this master's code came from, read once, as it starts; the bundle on disk is read
   // again before every core starts.
-  const own = config.bundleFingerprint ?? fingerprint(config.scriptPath)
+  const own = config.bundleFingerprint ?? bundleHash(config.scriptPath)
   // What the next core, service or replacement starts from: the current build (Windows), else this master's bundle.
   const script = (): string => config.currentScript?.() ?? config.scriptPath
-  const bundle = () => fingerprint(script())
+  const bundle = () => bundleHash(script())
   const output = config.output ?? 'inherit'
   const markerFile = config.reexecMarkerFile
   const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true } catch { return false } }
@@ -381,25 +397,86 @@ export function runMaster(config: MasterConfig): Supervisor {
   // A new one every boot, given to the core and to each service: how the core knows a service
   // connection is one this master started, and no other local process.
   const token = randomBytes(24).toString('hex')
-  const lean = leanServices({
+  const sourceLean = leanServices({
     scriptPath: config.scriptPath, leanPath: config.serviceScriptPath, leanFingerprint: config.leanFingerprint,
     folderFingerprint, exists: existsSync, sameBundle: () => bundle() === own, log,
   })
-  const specs = serviceSpecs(env, SERVICE_HOSTS)
+  const ownSpecs = serviceSpecs(env, SERVICE_HOSTS)
+  let specs = ownSpecs
+  type Execution = { artifact: ExecutionArtifact; lean: ReturnType<typeof leanServices> }
+  type Cohort = { bundle: string; script: string; legacy: boolean; execution: Execution | null }
+  let cohort: Cohort | null = own && !config.executionArtifacts
+    ? { bundle: own, script: script(), legacy: false, execution: null } : null
+  let execution: Execution | null = null
+  let releaseFailed = false
+  const releaseExecution = (): boolean => {
+    if (!execution) return true
+    try { execution.artifact.release(); execution = null; return true } catch {
+      releaseFailed = true
+      log('[harnessd] worker_artifact_release_failed — retaining ownership; restart the supervisor before selecting another build')
+      return false
+    }
+  }
+  const prepareExecution = (selected: string): ExecutionArtifact | null => {
+    if (releaseFailed) return null
+    // reexec releases before changing selection. Probe and admission reuse this one prepared handle.
+    if (execution) return execution.artifact
+    try {
+      const artifact = config.executionArtifacts!.prepare(script(), selected)
+      execution = { artifact, lean: leanServices({
+        scriptPath: artifact.fullScript, leanPath: config.leanArtifacts === false ? undefined : artifact.leanScript,
+        leanFingerprint: artifact.leanFingerprint, folderFingerprint, exists: existsSync, sameBundle: () => true, log,
+      }) }
+      return artifact
+    } catch (error) {
+      const reason = error instanceof Error && /^worker_artifact_(source_unavailable|source_changed|source_close_unsettled|reserved_name|publish_failed|cleanup_unsettled|in_use)$/.test(error.message)
+        ? error.message : 'worker_artifact_prepare_failed'
+      const action = reason.endsWith('_unsettled') || reason === 'worker_artifact_in_use' ? 'restart the supervisor' : 'restore a supported selected build'
+      log(`[harnessd] ${reason} — ${action}; no children will start`)
+      return null
+    }
+  }
+  const childScript = (admitted: Cohort, name: string): { file: string; expected: string; cli: string; lean: ReturnType<typeof leanServices> | null } | null => {
+    const refused = (): null => { log('[harnessd] worker_artifact_changed — refusing a child before spawn; restore the selected build'); return null }
+    if (admitted.execution) {
+      const { artifact, lean } = admitted.execution
+      // Historical updater targets the configured install folder and speaks only to its master; every
+      // feature stays inside that historical core. It never starts an updater beside the core on cli.js.
+      const file = admitted.legacy ? name === CORE ? artifact.leanCoreScript : artifact.fullScript : lean.scriptFor(name)
+      const expected = file === artifact.fullScript ? artifact.fullFingerprint
+        : file === artifact.leanCoreScript ? artifact.leanCoreFingerprint : artifact.leanEntryFingerprint
+      if (!file || !expected || bundleHash(file) !== expected) return refused()
+      if (admitted.legacy && name === CORE && artifact.leanFingerprint !== undefined
+        && folderFingerprint(dirname(file)) !== artifact.leanFingerprint) return refused()
+      return { file, expected, cli: artifact.originalScript, lean: admitted.legacy ? null : lean }
+    }
+    const file = config.currentScript ? admitted.script : sourceLean.scriptFor(name)
+    const expected = bundleHash(file)
+    return expected ? { file, expected, cli: config.currentScript ? admitted.script : config.scriptPath, lean: config.currentScript ? null : sourceLean } : refused()
+  }
   // The updater beside them, whatever HARNESSD_SERVICES says: the core neither routes to it nor runs it.
-  const processes = config.updater ? [...specs, { name: UPDATER_PROCESS, ...UPDATER_HOST }] : specs
   let supervisor: Supervisor | null = null
-  const services = new ServiceSupervisor(processes, {
+  const spawnOwned = (name: string, args: string[], environment: NodeJS.ProcessEnv): CoreHandle | null => {
+    let child: ChildProcess
+    try {
+      child = spawn(named(name), args, { env: environment, stdio: ['ignore', output, output, 'ipc'] })
+    } catch {
+      log('[harnessd] child_process_spawn_failed — no PID was created; retrying through the supervisor')
+      return null
+    }
+    return coreHandle(child, log)
+  }
+  const startServices = () => new ServiceSupervisor(config.updater ? [...specs, { name: UPDATER_PROCESS, ...UPDATER_HOST }] : specs, {
     changed: () => supervisor!.servicesChanged(),
     spawnService: (spec, extra) => {
-      // From the lean bundle when it can be (./leanServices.ts); with a current build (Windows), from that.
-      const file = config.currentScript ? script() : lean.scriptFor(spec.name)
+      const chosen = childScript(cohort!, spec.name)
+      if (!chosen) return null
+      const { file, expected, cli, lean } = chosen
       // One process for every service it hosts, each on its own link to the core (services/process.ts).
-      const handle = coreHandle(spawn(named(`harnessd-${spec.name}`), [...coreExecArgv(config.execArgv, spec.heapLimitMiB), file, '__service', spec.services.join(',')], {
-        env: { ...env, ...extra, ...(!config.currentScript && file !== config.scriptPath ? { [LEAN_CORE_SCRIPT_ENV]: config.scriptPath } : {}) },
-        stdio: ['ignore', output, output, 'ipc'],
-      }))
-      if (!config.currentScript) lean.started(spec.name, file, handle)
+      const handle = spawnOwned(`harnessd-${spec.name}`, [...coreExecArgv(config.execArgv, spec.heapLimitMiB), file, '__service', spec.services.join(',')],
+        { ...env, ...extra, ...(!cohort!.legacy ? workerCohortEnvironment(process.pid, expected) : {}),
+          ...(!cohort!.legacy && file !== cli ? { [LEAN_CORE_SCRIPT_ENV]: cli } : {}) })
+      if (handle) lean?.started(spec.name, file, handle)
       return handle
     },
     stopByMessage: config.stopByMessage,
@@ -413,58 +490,79 @@ export function runMaster(config: MasterConfig): Supervisor {
     // HARNESSD_JUDGES_PTY: this master takes a terminal host's staging and judges it on its probation (Windows,
     // services/updaterProcess.ts). An updater under a master from before stages no host: no one would roll it back.
   }, serviceOptions(env), { HARNESSD_SERVICE_TOKEN: token, HARNESSD_JUDGES_PTY: '1' })
+  let services = startServices()
   // The pid file is this master's to remove as it ends: the supervisor says so once it claimed it, and so does a claim
   // as this master hands over (Windows), which the supervisor does not know of.
   let releaseOnExit = false
-  const reexec = markerFile ? createReexec({
+  const reexec = createReexec({
     own, current: bundle, get nodePath() { return named('harnessd') }, execArgv: config.execArgv, get scriptPath() { return script() }, env, pid: process.pid,
-    execve, exists: existsSync,
+    execve: markerFile && execve ? (file, args, environment) => {
+      if (!releaseExecution()) throw new Error('worker_artifact_release_failed')
+      execve(file, args, environment)
+    } : null, exists: existsSync,
     probe: (args, probeEnv) => runProbe(node, args, probeEnv),
-    stopChildren: (done) => services.stop(done),
+    stopChildren: (done) => { cohort = null; services.stop(() => { releaseExecution(); done() }) },
     startChildren: () => services.start(),
-    writeMarker: (marker) => writeMarker(markerFile, marker),
-    removeMarker: () => removeMarker(markerFile),
+    ...(config.executionArtifacts ? { prepareProbe: (selected: string) => prepareExecution(selected)?.probeScript ?? null } : {}),
+    prepareChildren: (selected, checked) => {
+      const worker = checked?.worker
+      const legacy = worker?.kind === 'legacy'
+      if ((config.executionArtifacts || selected !== own) && !legacy
+        && !(worker?.kind === 'modern' && worker.contract === WORKER_CONTRACT && worker.plan === WORKER_PLAN)) return false
+      if (config.executionArtifacts) {
+        const artifact = prepareExecution(selected)
+        if (!artifact || bundleHash(artifact.fullScript) !== artifact.fullFingerprint) return false
+        if (legacy && (!artifact.leanCoreScript || !artifact.leanCoreFingerprint
+          || bundleHash(artifact.leanCoreScript) !== artifact.leanCoreFingerprint
+          || (artifact.leanFingerprint !== undefined && folderFingerprint(dirname(artifact.leanCoreScript)) !== artifact.leanFingerprint))) return false
+      }
+      // A failed exec may have required re-preparing the payload; publication must still name it afterward.
+      if (bundle() !== selected) return false
+      const wanted = legacy ? [] : ownSpecs
+      if (specs !== wanted) { specs = wanted; services = startServices() }
+      cohort = { bundle: selected, script: script(), legacy, execution }
+      if (legacy) log('[harnessd] the selected historical bundle passed its inline contract probe — running its own inline composition')
+      return true
+    },
+    writeMarker: (marker) => writeMarker(markerFile!, marker),
+    removeMarker: () => removeMarker(markerFile!),
     stopping: () => stopping,
     now: () => Date.now(),
     log,
     // Windows, which has no exec: a replacement started beside this master, the handover decided in the marker's folder.
-    ...(config.handOver ? {
+    ...(markerFile && config.handOver ? {
       handOver: {
         ...config.handOver,
         claim: () => { writePidFile(); releaseOnExit = true },
         claimant: (handed: string) => readHandoverClaimant(markerFile, handed),
         takeBack: (handed: string) => takeBackHandover(markerFile, handed, process.pid),
         // This master's end once its replacement holds the pid file: nothing of the daemon's left to stop.
-        leave: () => { stopTrimming(); exit(0) },
+        leave: () => { releaseExecution(); stopTrimming(); exit(0) },
       },
     } : {}),
-  }) : null
+  })
   // A stop, from a signal or from the core (`harnessd:stop`, `harness stop` on Windows): the services go beside the
   // core, inside the same grace `harness stop` gives the whole daemon.
   const stopAll = (why: string): void => {
     stopping = true
-    reexec?.cancel()
+    reexec.cancel()
     services.stop(() => {})
     supervisor!.stop(why)
   }
   supervisor = new Supervisor({
     spawnCore: (extra) => {
-      // From the lean bundle on the core's own code when it can be, as a service is, by the same rules
-      // (./leanServices.ts), and from cli.js otherwise. The supervisor judges the core it is given the
-      // same either way: an update's first core, lean or not, is on probation as before.
-      // With a current build (Windows), from that, and never from the lean bundle.
-      const leanCore = config.currentScript ? null : lean.scriptFor(CORE)
-      const file = leanCore ?? script()
-      const handle = coreHandle(spawn(named('harnessd-core'), [...execArgv, file, '__run'], {
+      const chosen = childScript(cohort!, CORE)
+      if (!chosen) return null
+      const { file, expected, cli, lean } = chosen
+      const handle = spawnOwned('harnessd-core', [...execArgv, file, '__run'], {
         // Told which services this master runs, so it routes to exactly those and runs the rest itself;
         // and, from the lean bundle, which cli.js is its CLI (leanCoreEntry.ts).
-        env: {
-          ...env, ...extra, HARNESSD_SERVICE_TOKEN: token, ...serviceProcessesEnv(specs, process.pid),
-          ...(leanCore !== null && leanCore !== config.scriptPath ? { [LEAN_CORE_SCRIPT_ENV]: config.scriptPath } : {}),
-        },
-        stdio: ['ignore', output, output, 'ipc'],
-      }))
-      if (leanCore !== null) lean.started(CORE, leanCore, handle)
+          ...env, ...extra, HARNESSD_SERVICE_TOKEN: token,
+          ...(cohort?.legacy ? { ...Object.fromEntries(Object.keys(serviceProcessesEnv([], 0)).map((key) => [key, undefined])), HARNESSD_SERVICE_PROCESSES: '', HARNESSD_SERVICES: 'none' } : serviceProcessesEnv(specs, process.pid)),
+          ...(!cohort!.legacy ? workerCohortEnvironment(process.pid, expected) : {}),
+          ...(file !== cli ? { [LEAN_CORE_SCRIPT_ENV]: cli } : {}),
+      })
+      if (handle) lean?.started(CORE, file, handle)
       return handle
     },
     now: () => performance.now(),
@@ -492,7 +590,7 @@ export function runMaster(config: MasterConfig): Supervisor {
     // The services go with the master, after the core: none is left holding the core's socket.
     exit: (code) => {
       stopping = true
-      reexec?.cancel()
+      reexec.cancel()
       // Stopped as it handed over (Windows), and the new master took over: the pid file and the marker are its.
       const end = (handedOver: boolean): void => {
         if (!handedOver) {
@@ -503,18 +601,18 @@ export function runMaster(config: MasterConfig): Supervisor {
           if (markerFile && ownMarker(readMarker(markerFile))) removeMarker(markerFile)
         }
         services.stop(() => {
+          releaseExecution()
           stopTrimming()
           exit(code)
         })
       }
-      if (reexec) reexec.settled(end)
-      else end(false)
+      reexec.settled(end)
     },
-    ...(reexec && markerFile ? { reexec: reexec.reexec } : {}),
+    reexec: reexec.reexec,
     // A core is up. A re-executed master's marker has served. And the master's entry hears it (`MasterConfig.coreUp`),
     // which is never a reason for the master to stop.
     coreUp: () => {
-      if (reexec && markerFile) removeMarker(markerFile)
+      if (markerFile) removeMarker(markerFile)
       try { config.coreUp?.(node) } catch (error) { log(`[harnessd] what the master does after its core came up failed: ${(error as Error).message}`) }
     },
   }, options, { version: config.version, resume, unjudgedUpdate: unjudged })
@@ -531,6 +629,6 @@ export function runMaster(config: MasterConfig): Supervisor {
   // the services ran through the probe and were cut off by the exec, children no one reaps, or ran
   // twice once a refused probe started them again. Whoever goes on starts them: this master if it
   // carries on as itself, the new one if it does not.
-  if (!reexec?.replacing()) services.start()
+  if (cohort && !reexec.replacing()) services.start()
   return supervisor
 }

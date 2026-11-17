@@ -2,13 +2,13 @@
 import { createHash } from 'node:crypto'
 import { closeSync, fstatSync, lstatSync, openSync, readSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { MAX_BUNDLE_BYTES, bundleReadFlags } from './bundleFingerprint.js'
 import {
   LEAN_CORE_ENTRY, LEAN_ENTRY, readLeanBundle, releaseLeanClaim, writeLeanBundle,
   type LeanBundle, type LeanWrite,
 } from './leanBundle.js'
 
 // The largest measured release is 12.47 MB; retain over ten times that headroom without unbounded reads.
-const MAX_SOURCE_BYTES = 128 * 1024 * 1024
 const FULL_ENTRY = 'cohort-cli.mjs'
 const digest = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
 
@@ -37,10 +37,11 @@ class SourceCloseUnsettled extends Error {
 /** The descriptor pins an atomic publication; size and reads refer to that same file. */
 function readSource(path: string): Buffer {
   try {
-    const fd = openSync(path, 'r')
+    if (!lstatSync(path).isFile()) throw new Error()
+    const fd = openSync(path, bundleReadFlags())
     try {
       const stat = fstatSync(fd)
-      if (!stat.isFile() || !Number.isSafeInteger(stat.size) || stat.size < 0 || stat.size > MAX_SOURCE_BYTES) throw new Error()
+      if (!stat.isFile() || !Number.isSafeInteger(stat.size) || stat.size < 0 || stat.size > MAX_BUNDLE_BYTES) throw new Error()
       const bytes = Buffer.allocUnsafe(stat.size)
       for (let offset = 0; offset < bytes.length;) {
         const count = readSync(fd, bytes, offset, Math.min(64 * 1024, bytes.length - offset), null)
@@ -107,7 +108,7 @@ export function createExecutionArtifacts(options: ArtifactOptions): { prepare(or
       writeLeanBundle(options.directory, composite, options)
       if (remains(`${scratch}.tmp`) || remains(`${scratch}.old`)) throw new Error()
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'LEAN_RESTORE_FAILED') unsettled = true
+      if (['LEAN_RESTORE_FAILED', 'bundle_fingerprint_close_unsettled'].includes((error as NodeJS.ErrnoException).code ?? '')) unsettled = true
       else {
         try {
           if (remains(`${scratch}.tmp`) || remains(`${scratch}.old`)) unsettled = true

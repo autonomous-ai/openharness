@@ -52,3 +52,14 @@ it('keeps core dispatch and helper identity on the original CLI', async () => {
   expect(observed).toHaveBeenCalledExactlyOnceWith({ role: 'core', cli,
     argv: [process.execPath, cli, '__run'], metadata: undefined, helper: join(directory, 'notify.mjs') })
 })
+
+
+it.each(['__run', '__service'])('keeps a full snapshot %s on the canonical helper identity before runtime loads', async command => {
+  const cli = join(directory, 'cli.js')
+  process.argv = [process.execPath, '/fixture/immutable/cohort-cli.mjs', command, 'search']
+  process.env[LEAN_CORE_SCRIPT_ENV] = cli
+  await import('./entry.js')
+  expect(observed).toHaveBeenCalledExactlyOnceWith(command === '__run'
+    ? { role: 'core', cli, argv: [process.execPath, cli, command, 'search'], metadata: undefined, helper: join(directory, 'notify.mjs') }
+    : { role: 'search', argv: [process.execPath, cli, command, 'search'], metadata: undefined, helper: join(directory, 'notify.mjs') })
+})

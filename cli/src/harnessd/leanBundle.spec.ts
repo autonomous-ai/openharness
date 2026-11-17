@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, truncateSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { brotliCompressSync } from 'node:zlib'
@@ -14,6 +14,7 @@ import {
 const fsHooks = vi.hoisted(() => ({
   beforeRename: null as null | ((from: string, to: string) => void),
   onRead: null as null | ((path: string) => void),
+  onWholeRead: null as null | ((path: string) => void),
   failWrite: null as null | ((path: string) => boolean),
   beforeLstat: null as null | ((path: string) => void),
   failRename: null as null | ((from: string, to: string) => boolean),
@@ -24,6 +25,10 @@ vi.mock('node:fs', async (real) => {
   const fs = await real<typeof import('node:fs')>()
   return {
     ...fs,
+    openSync: ((path: string, ...rest: unknown[]) => {
+      fsHooks.onRead?.(String(path))
+      return (fs.openSync as (...args: unknown[]) => number)(path, ...rest)
+    }) as typeof fs.openSync,
     renameSync: (from: string, to: string) => {
       if (fsHooks.failRename?.(from, to)) throw Object.assign(new Error('EIO: publication failed'), { code: 'EIO' })
       const step = fsHooks.beforeRename
@@ -32,6 +37,7 @@ vi.mock('node:fs', async (real) => {
       fs.renameSync(from, to)
     },
     readFileSync: ((path: string, ...rest: unknown[]) => {
+      fsHooks.onWholeRead?.(String(path))
       fsHooks.onRead?.(String(path))
       return (fs.readFileSync as (...args: unknown[]) => unknown)(path, ...rest)
     }) as typeof fs.readFileSync,
@@ -117,6 +123,7 @@ describe('writing the lean bundle out', () => {
   afterEach(() => {
     fsHooks.beforeRename = null
     fsHooks.onRead = null
+    fsHooks.onWholeRead = null
     fsHooks.failWrite = null
     fsHooks.beforeLstat = null
     fsHooks.failRename = null
@@ -287,6 +294,18 @@ describe('writing the lean bundle out', () => {
     writeLeanBundle(dir, bundle, { pid: 300, alive: alive(300) })
     expect(readdirSync(folderOf(bundle)).sort()).toEqual(['.claim-300', LEAN_ENTRY, 'master-AB12.mjs'])
     expect(readdirSync(dir)).toEqual([bundle.sha256.slice(0, 16)])
+  })
+
+  it('never allocates a whole oversized cache member while verifying a reused image', () => {
+    const bundle = lean()
+    const entry = writeLeanBundle(dir, bundle, { pid: 100, alive: alive(100) })
+    truncateSync(entry, 128 * 1024 * 1024 + 1)
+    const wholeReads: string[] = []
+    fsHooks.onWholeRead = path => { if (path === entry) { wholeReads.push(path); throw new Error('whole cache read forbidden') } }
+    writeLeanBundle(dir, bundle, { pid: 100, alive: alive(100) })
+    expect(wholeReads).toEqual([])
+    fsHooks.onWholeRead = null
+    expect(readFileSync(entry, 'utf8')).toBe(FILES[LEAN_ENTRY])
   })
 
   it('takes the folder another master of the same build wrote while it was writing its own', () => {

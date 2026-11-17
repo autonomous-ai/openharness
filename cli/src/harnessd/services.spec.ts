@@ -67,6 +67,24 @@ describe('ServiceSupervisor', () => {
   })
   afterEach(() => vi.useRealTimers())
 
+  it('backs off a refused spawn without inventing a child and stops its pending retry', () => {
+    const spawnService = vi.fn(() => null)
+    const supervisor = make([search], {}, {}, true, { spawnService })
+    expect(() => supervisor.start()).not.toThrow()
+    expect(supervisor.status()[0]).toMatchObject({ state: 'restarting', pid: null, lastExit: 'not started', restarts: 1 })
+    expect(spawnService).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(999)
+    expect(spawnService).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(1)
+    expect(spawnService).toHaveBeenCalledTimes(2)
+    expect(children).toEqual([])
+    const done = vi.fn()
+    supervisor.stop(done)
+    expect(done).toHaveBeenCalledOnce()
+    vi.advanceTimersByTime(10_000)
+    expect(spawnService).toHaveBeenCalledTimes(2)
+  })
+
   it('pushes lifecycle changes with the actual child PID and then its confirmed absence', () => {
     const observed: Array<number | null> = []
     const supervisor = make([search], {}, {}, true, { changed: () => observed.push(supervisor.status()[0].pid) })

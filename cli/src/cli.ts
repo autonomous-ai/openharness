@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './harnessd/childEntry.js'
 import './lib/connectWait.js'
 import './config/startHome.js'
 import './config/loadEnv.js'
