@@ -79,8 +79,9 @@ export function programMay(_action: 'reply' | 'resume', _signedIn: boolean): boo
 
 // ── The record ────────────────────────────────────────────────────────────────────────────────────
 
-/** One input a program's reply had taken (`reply` answered `taken`), for `wait --after`. */
-export interface ProgramInput { id: string; takenAt: number }
+/** One input a program's reply typed, for `wait --after`: taken (`reply` answered `taken`), or `unconfirmed` when it
+ *  may have been typed but its turn was not seen to start (`reply` answered TIMEOUT with `cancelled: false`). */
+export interface ProgramInput { id: string; takenAt: number; unconfirmed?: true }
 
 /** A harness a program owns, by its id. */
 export interface ProgramHarness {
@@ -107,7 +108,8 @@ function harnessOf(value: unknown): ProgramHarness | null {
   const v = value as Partial<ProgramHarness> | null
   if (!v || typeof v.agentId !== 'string' || !v.agentId || typeof v.tokenHash !== 'string' || !/^[0-9a-f]{64}$/.test(v.tokenHash)
     || typeof v.name !== 'string' || typeof v.engine !== 'string') return null
-  const inputs = Array.isArray(v.inputs) ? v.inputs.filter((i): i is ProgramInput => !!i && typeof i.id === 'string' && typeof i.takenAt === 'number') : []
+  const inputs = Array.isArray(v.inputs) ? v.inputs.filter((i): i is ProgramInput => !!i && typeof i.id === 'string' && typeof i.takenAt === 'number')
+    .map((i): ProgramInput => ({ id: i.id, takenAt: i.takenAt, ...(i.unconfirmed === true ? { unconfirmed: true } : {}) })) : []
   return { agentId: v.agentId, tokenHash: v.tokenHash, name: v.name, engine: v.engine,
     createdAt: Number(v.createdAt) || 0, startedAt: Number(v.startedAt) || 0, inputs: inputs.slice(-KEPT_INPUTS) }
 }

@@ -89,6 +89,47 @@ describe('acknowledged input (input_ack, #4393)', () => {
     expect(t.answers[1]).toMatchObject({ state: 'timeout', cancelled: false, written: false })
   })
 
+  it('answers by ackMs + takenMs at the latest, however late the paste, so the caller hears it before giving up', () => {
+    vi.useFakeTimers()
+    const t = acked(() => false)
+    t.ack.acknowledged({ agentId: 'agent-1', text: 'a', ackMs: 5_000, takenMs: 5_000 }, t.answer)
+    vi.advanceTimersByTime(8_000)
+    t.tick(8_000)
+    t.ack.settled(event('program:n1', 'delivered'))
+    vi.advanceTimersByTime(1_999)
+    expect(t.answers).toEqual([])
+    vi.advanceTimersByTime(1)
+    expect(t.answers).toEqual([{ inputId: 'program:n1', state: 'timeout', cancelled: false, written: true }])
+    // Pasted later still: answered at once.
+    t.ack.acknowledged({ agentId: 'agent-1', text: 'b', ackMs: 1_000, takenMs: 1_000 }, t.answer)
+    vi.advanceTimersByTime(1_000)
+    t.tick(5_000)
+    t.ack.settled(event('program:n2', 'delivered'))
+    vi.advanceTimersByTime(0)
+    expect(t.answers[1]).toMatchObject({ inputId: 'program:n2', state: 'timeout', written: true })
+  })
+
+  it('answers once, and arms nothing after its answer', () => {
+    vi.useFakeTimers()
+    const t = acked(() => false)
+    // The input settles the delivery while it is asked to take it back: that answer is the one.
+    t.deps.cancel.mockImplementation((id: string) => { t.ack.settled(event(id, 'unknown', 'dispatch_ambiguous')); return false })
+    t.ack.acknowledged({ agentId: 'agent-1', text: 'a', ackMs: 1_000 }, t.answer)
+    vi.advanceTimersByTime(200_000)
+    t.deps.cancel.mockImplementation((id: string) => { t.ack.settled(event(id, 'unknown', 'dispatch_ambiguous')); return true })
+    t.ack.acknowledged({ agentId: 'agent-1', text: 'b', ackMs: 1_000 }, t.answer)
+    vi.advanceTimersByTime(200_000)
+    expect(t.answers).toEqual([{ inputId: 'program:n1', state: 'unknown', reason: 'dispatch_ambiguous' }, { inputId: 'program:n2', state: 'unknown', reason: 'dispatch_ambiguous' }])
+  })
+
+  it('names the input by the program\'s own id when it gave one, and by its own otherwise', () => {
+    const t = acked()
+    const own = 'program:0f8fad5b-d9cb-469f-a165-70867728950e'
+    t.ack.acknowledged({ agentId: 'agent-1', text: 'a', inputId: own }, t.answer)
+    t.ack.acknowledged({ agentId: 'agent-1', text: 'b', inputId: 'team:x' }, t.answer)
+    expect(t.deps.submit.mock.calls.map((c) => c[2])).toEqual([own, 'program:n1'])
+  })
+
   it('takes ten replies in a row into one session, each pasted after a slow runtime check', () => {
     vi.useFakeTimers()
     const t = acked(() => false)
