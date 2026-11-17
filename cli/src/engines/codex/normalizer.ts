@@ -380,8 +380,10 @@ export class CodexNormalizer implements EngineNormalizer {
       const events = this.completeOutstanding(aborted)
       if (!this.open || this.mode === 'replay') return events
       this.open = false
-      // A stopped turn says so, as Claude Code's interrupt does: its end goes on at once, never held for a Stop.
-      return [...events, { type: 'turn_ended', payload: aborted ? { aborted: true } : {} }]
+      // A turn the person stopped says so, as Claude Code's interrupt does. Codex also aborts a turn it replaced, a
+      // review that ended and a spent budget: those are the turn's plain end, told as news (facts-codex §2).
+      const stopped = aborted && string(item.reason) === 'interrupted'
+      return [...events, { type: 'turn_ended', payload: stopped ? { aborted: true } : {} }]
     }
 
     return []
