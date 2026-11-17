@@ -1,9 +1,22 @@
-import { execFileSync, spawnSync } from 'node:child_process'
-import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { once } from 'node:events'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { appBundles, assertRebranded, assertUnchanged, GATE_ID, rebrand, stamp, unregister } from './throwawayApp.js'
+import { basename, join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest'
+import {
+  appBundles,
+  assertRebranded,
+  assertUnchanged,
+  GATE_ID,
+  killThrowaway,
+  rebrand,
+  rootName,
+  stamp,
+  startedAt,
+  sweepLeftovers,
+  unregister,
+} from './throwawayApp.js'
 
 let root: string
 beforeEach(() => {
@@ -67,6 +80,58 @@ describe.runIf(process.platform === 'darwin')('the throwaway VS Code app', () =>
   it('passes over an app LaunchServices never registered, as a helper that never ran', () => {
     expect(() => unregister(vscodeApp().app)).not.toThrow()
   })
+})
+
+describe('the throwaway\'s processes', () => {
+  /** A shell that ignores SIGTERM, as a VS Code that will not quit does, and ends when its input does, so a failed test
+   *  leaves nothing running. */
+  function stubborn(script: string, ...args: string[]) {
+    const child = spawn('/bin/sh', ['-c', `trap "" TERM; ${script}`, ...args], { stdio: ['pipe', 'pipe', 'ignore'] })
+    onTestFinished(() => {
+      child.stdin.destroy()
+    })
+    return child
+  }
+
+  it('kills what carries the root\'s name, its child and a shell still the one reported, and nothing else', async () => {
+    // Its child carries no name once it says it started, and holds the output pipe too: the pipe closes only when both
+    // are gone.
+    const inside = stubborn(`exec 3<&0; /bin/sh -c 'echo started; exec /bin/cat <&3' & wait`, basename(root))
+    const insideStarted = once(inside.stdout, 'data')
+    const insideGone = once(inside, 'close')
+    const reported = stubborn('read line')
+    const reportedEnd = once(reported, 'exit')
+    // Reported too, by its pid but with another start: a process that took a shell's pid after it ended.
+    const outside = stubborn('read line; echo "$line"', 'outside')
+    await Promise.all([insideStarted, once(reported, 'spawn'), once(outside, 'spawn')])
+
+    const names = killThrowaway(root, new Map([[reported.pid!, startedAt(reported.pid!)!], [outside.pid!, 'not when it started']]))
+
+    await insideGone
+    expect((await reportedEnd)[1]).toBe('SIGKILL')
+    const echo = once(outside.stdout, 'data')
+    outside.stdin.end('alive\n')
+    expect(String((await echo)[0])).toBe('alive\n')
+    expect(names).toEqual(expect.arrayContaining(['cat', 'sh']))
+  }, 10_000)
+
+  it('sweeps the root of a run that has ended, and leaves a running run\'s', async () => {
+    const ended = spawnSync('/usr/bin/true').pid
+    const left = mkdtempSync(join(root, rootName(ended)))
+    const live = mkdtempSync(join(root, rootName(process.pid)))
+    const stray = stubborn('read line', basename(left))
+    const strayEnd = once(stray, 'exit')
+    const running = stubborn('read line', basename(live))
+    const runningEnd = once(running, 'exit')
+    await Promise.all([once(stray, 'spawn'), once(running, 'spawn')])
+
+    sweepLeftovers(root)
+
+    expect([existsSync(left), existsSync(live)]).toEqual([false, true])
+    expect((await strayEnd)[1]).toBe('SIGKILL')
+    running.stdin.end('done\n')
+    expect(await runningEnd).toEqual([0, null])
+  }, 10_000)
 })
 
 describe('the developer\'s VS Code preferences, before and after', () => {
