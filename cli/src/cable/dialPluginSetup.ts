@@ -48,21 +48,16 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
     // Not on this computer yet: asked again at the next pass, with nothing counted.
     if (!found) return false
     const claude = { run: found, platform: deps.platform }
-    if (deps.recorded() === undefined) {
-      const setUp = await claudeSetUp(claude)
-      if (!setUp.ok) return failed(setUp.step)
-      // A `disable` that landed while the install ran found nothing to uninstall yet: it is taken out here.
-      if (!deps.wanted()) {
-        const disabled = await claudeDisable(claude)
-        return disabled.ok ? false : failed(disabled.step)
-      }
-      recordAs(COUNTED[setUp.outcome])
-      return setUp.outcome === 'installed'
+    const done = deps.recorded() === undefined ? await claudeSetUp(claude) : await claudeUpdate(claude)
+    if (!done.ok) return failed(done.step)
+    // A `disable` that landed while the install or the update ran found nothing to undo yet: it is undone here, and
+    // nothing recorded.
+    if (!deps.wanted()) {
+      const disabled = await claudeDisable(claude)
+      return disabled.ok ? false : failed(disabled.step)
     }
-    const update = await claudeUpdate(claude)
-    if (!update.ok) return failed(update.step)
-    recordAs(COUNTED[update.outcome])
-    return update.outcome === 'updated'
+    recordAs(COUNTED[done.outcome])
+    return done.outcome === 'installed' || done.outcome === 'updated'
   }
 
   return {
