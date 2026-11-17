@@ -1384,7 +1384,56 @@ The gate does not read where a terminal is scrolled: VS Code's API does not say,
 
 ## Spike findings
 
-(Task 1 writes this section.)
+**2026-11-17, VS Code 1.146.0 (stable) and 1.75.0, macOS 26.6.2 (arm64).**
+
+**Setup.** The throwaway was downloaded with `@vscode/test-electron` into `/tmp/harness-vscode-spike-*` and made ready only by
+the gate's `throwawayApp.ts`: `rebrand` before the first launch, `assertRebranded` and `stamp` before each launch,
+`assertUnchanged` after each launch, and `unregister` before the folder was removed. Every launch had its own
+`--user-data-dir`, `--extensions-dir` and `HOME`, with `VSCODE_*` and `ELECTRON_*` removed. The developer's
+`com.microsoft.VSCode.plist` had the same mtime and hash before and after each of the 122 launches over four runs. After each run `pgrep -f`
+on the root printed nothing.
+
+A probe extension, installed as a `.vsix`, made one terminal in each of two windows (`w1`, `w2`) and took steps over a
+Unix socket. A window counted as raised when `vscode.window.state.focused` turned true in `w1`. The app counted as in
+front when `lsappinfo front` named the throwaway's pid. `w2` was always made the last active window first, by running
+the throwaway's executable again with `w2`. Each candidate then ran from `w1` in two scenarios:
+- **A:** the throwaway is in front.
+- **B:** Finder is in front. After the candidate, the throwaway's executable runs with no folder: the running
+  instance raises its last active window, as `open -b` does. `open -a <throwaway>` with no folder did not activate
+  the throwaway, which had been started by its executable, so it could not stand in for `open -b`.
+
+Only the throwaway's own path was ever run. No `vscode://` link was opened, and no permission prompt appeared.
+
+| # | Candidate | A: `w1` raised | B: `w1` in front after the activation | Needs |
+|---|---|---|---|---|
+| 1 | `Terminal.show(false)` alone | no, 0 of 3 | no, 0 of 3 (`w2` raised) | — |
+| 2 | `show(false)`, then `workbench.action.terminal.focus` | no, 0 of 3 | no, 0 of 3 (`w2` raised) | — |
+| 3 | `show(false)`, then `workbench.action.focusWindow`, the only command the `focusWindow\|window\.focus` filter finds in 1.146.0 | **yes, 3 of 3** | **yes, 3 of 3**: the command alone brings the app in front | nothing new. The command first ships in VS Code **1.128.0** (`FocusWindowAction`, microsoft/vscode `dd6118537b`). Its run is `hostService.focus(getActiveWindow(), { mode: FocusMode.Force })`. 1.75.0 does not have it. |
+| 4 | Outside: the throwaway's CLI, `--reuse-window <w1's folder>` | yes, 3 of 3 | yes, 3 of 3 | sends the folder's path off the window (ruled out, Task 1 step 4) |
+| 5 | From the extension host: `<appRoot>/bin/code --reuse-window <own folder>` | yes, 3 of 3 | yes, 3 of 3 | the extension starting a program other than `link` (ruled out) |
+| 6 | Outside: `open -a <throwaway app> <w1's folder>` | yes, 3 of 3 | yes, 2 of 2 (one setup failed) | sends a path (ruled out). A folder path that differs from the window's only by a symlink (`/tmp` and `/private/tmp`) opens a third window instead. |
+| 7 | `show(false)`, then `vscode.openFolder(<own folder>, { forceReuseWindow: true })` | 2 of 3 | 0 of 3 | unreliable |
+
+Window-related commands outside the filter, `workbench.action.switchWindow` and `workbench.action.quickSwitchWindow`, are
+pickers and were not tried.
+
+**Decision.** Candidate 3, `workbench.action.focusWindow` run in the terminal's own window after `Terminal.show(false)`,
+is the first that works with no new permission. It sends no path and starts no program. It is a command the extension
+runs in its own window, so Task 19 runs as written. Because the command makes `w1` the last active window, the
+devices' `open -b` after the tap keeps `w1` in front, whichever runs first. On VS Code older than 1.128.0 the command
+does not exist. There, a tap on a terminal in a window behind still shows the terminal in that window, without raising it.
+
+**Task 19: runs.**
+- `WindowFacade.raise()` is `vscode.commands.executeCommand('workbench.action.focusWindow')`.
+- The extension runs it only on a tap's show (`"raise":true`), after `Terminal.show(false)`.
+- On VS Code before 1.128.0 the command does not exist and `executeCommand` rejects. `raise()` swallows that: no
+  throw, no log line with a name. The `^1.75.0` engine stays.
+- The pull request says: "With two or more VS Code windows, a tap raises the window that holds the terminal on VS
+  Code 1.128 or later; on older versions it shows the terminal there without raising it."
+- The gate's second window: `runTests`' development host keeps a single window. The spike opened its second window by
+  running the throwaway's executable again, with the same `--user-data-dir`, `--extensions-dir` and `HOME` and a
+  second folder; the running instance took it. A window opened by the driver with `vscode.openFolder(…,
+  { forceNewWindow: true })` also gets the installed extension.
 
 ## Decisions of 2026-11-17 (the draft's open questions, answered by the PM)
 
