@@ -20,7 +20,7 @@ afterEach(() => {
 
 describe("GET /device/download-macos", () => {
   it("redirects to the dmg the manifest names", async () => {
-    const fetchMock = manifest({ version: "0.1.0", platforms: {}, dmg: { url: CDN_DMG, sha256: "x", size: 1 } });
+    const fetchMock = manifest({ version: "0.1.0", platforms: {}, "device-macos-dmg": { url: CDN_DMG, sha256: "x", size: 1 } });
 
     const res = await GET();
 
@@ -31,7 +31,7 @@ describe("GET /device/download-macos", () => {
   });
 
   it("also redirects to the bucket's own address", async () => {
-    manifest({ version: "0.1.0", platforms: {}, dmg: { url: ORIGIN_DMG, sha256: "x", size: 1 } });
+    manifest({ version: "0.1.0", platforms: {}, "device-macos-dmg": { url: ORIGIN_DMG, sha256: "x", size: 1 } });
 
     const res = await GET();
 
@@ -109,13 +109,13 @@ describe("GET /device/download-macos", () => {
       "https://cdn.autonomous.ai/harness/device/0.1.0/Harness-Device.app.tar.gz#.dmg",
       "https://cdn.autonomous.ai/harness/device/0.1.0/Harness-Device.app.tar.gz?.dmg",
     ]) {
-      manifest({ version: "0.1.0", platforms: {}, dmg: { url, sha256: "x", size: 1 } });
+      manifest({ version: "0.1.0", platforms: {}, "device-macos-dmg": { url, sha256: "x", size: 1 } });
 
       const res = await GET();
 
       expect(res.status, url).toBe(503);
       expect(res.headers.get("Location"), url).toBeNull();
-      expect(await res.text(), url).toMatch(/\(no usable dmg entry\)\.\n$/);
+      expect(await res.text(), url).toMatch(/\(no usable device-macos-dmg entry\)\.\n$/);
     }
   });
 
@@ -127,12 +127,19 @@ describe("GET /device/download-macos", () => {
     }
   });
 
+  // The first manifests named the dmg `dmg`; the link reads only Desktop's entry name now.
+  it("reports 503 when the manifest names the dmg only as dmg", async () => {
+    manifest({ version: "0.1.0", platforms: {}, dmg: { url: CDN_DMG, sha256: "x", size: 1 } });
+
+    expect((await GET()).status).toBe(503);
+  });
+
   // Desktop's override must never point the device link at another manifest.
   it("reads one fixed manifest", async () => {
     vi.stubEnv("HARNESS_DESKTOP_METADATA_URL", "https://example.test/m.json");
     vi.resetModules();
     const { GET: freshGET } = await import("./route");
-    const fetchMock = manifest({ dmg: { url: CDN_DMG } });
+    const fetchMock = manifest({ "device-macos-dmg": { url: CDN_DMG } });
 
     await freshGET();
 
