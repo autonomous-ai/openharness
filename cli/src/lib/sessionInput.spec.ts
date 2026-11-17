@@ -15,7 +15,7 @@ import { screenFor } from '../engines/screens.js'
 import { submissionFor } from '../engines/submissions.js'
 import { submissionPolicy } from '../engines/submissionPolicies.js'
 
-function session(engine: 'claude' | 'codex' | 'cursor' | 'commandcode' | 'openclaw' = 'codex'): RegisteredSession {
+function session(engine: 'claude' | 'codex' | 'cursor' | 'commandcode' | 'openclaw' | 'hermes' = 'codex'): RegisteredSession {
   return {
     schemaVersion: 2,
     active: true,
@@ -857,6 +857,50 @@ describe('SessionInputController', () => {
       controller.onTurnStarted('s1', 'hello')
       await vi.advanceTimersByTimeAsync(30_000)
       expect(onError).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
+  })
+
+  // Hermes 0.21.5 (#4393): a new conversation's first message reaches its store only once its agent is initialized, 46 s
+  // after the paste on a loaded Mac, while its pane shows it took the words at once.
+  describe('Hermes taking words its pane shows', () => {
+    const fixtures = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__')
+    const typed = readFileSync(join(fixtures, 'hermes-0.21.5-typed.txt'), 'utf8')
+    const taken = readFileSync(join(fixtures, 'hermes-0.21.5-taken.txt'), 'utf8')
+    const WORDS = 'Reply with exactly the word: bravo'
+    const hermesController = (screen: () => string) => {
+      const sendKey = vi.fn(async () => true)
+      const onError = vi.fn()
+      const onDelivery = vi.fn()
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => session('hermes'), validateRuntime: async () => true, inject: async () => true, sendKey,
+        capture: async () => screen(), onError, onDelivery })
+      return { controller, sendKey, onError, onDelivery }
+    }
+
+    it('its echo of the words, its turn running, is the turn started: no Enter again, and the delivery answered', async () => {
+      vi.useFakeTimers()
+      const { controller, sendKey, onError, onDelivery } = hermesController(() => taken)
+      controller.submit('s1', WORDS, 'program:1')
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(onDelivery).toHaveBeenLastCalledWith({ sessionId: 's1', deliveryId: 'program:1', state: 'started' })
+      const said = onDelivery.mock.calls.length
+      // Its store's turn start, 46 s later, opens the turn as ever and says nothing more of the delivery.
+      await vi.advanceTimersByTimeAsync(43_000)
+      controller.onTurnStarted('s1', WORDS)
+      expect(onDelivery).toHaveBeenCalledTimes(said)
+      expect(sendKey).not.toHaveBeenCalled()
+      expect(onError).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
+
+    it('words still in its composer are retried with Enter, as before', async () => {
+      vi.useFakeTimers()
+      const { controller, sendKey, onDelivery } = hermesController(() => typed)
+      controller.submit('s1', WORDS, 'program:1')
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(sendKey).toHaveBeenCalledWith('h1', 'Enter')
+      expect(onDelivery).not.toHaveBeenCalledWith(expect.objectContaining({ state: 'started' }))
       controller.forget('s1')
     })
   })

@@ -1,6 +1,6 @@
 import { screenFor } from '../engines/screens.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CloseAgentService, inspectCloseActivity as inspectCloseReading, type CloseActivity, type CloseAgentServiceDeps, type AgentCloseRequest } from './closeAgentService.js'
+import { CloseAgentService, inspectCloseActivity as inspectCloseReading, unusedChat, type CloseActivity, type CloseAgentServiceDeps, type AgentCloseRequest } from './closeAgentService.js'
 import { registry, type RegisteredSession } from './registry.js'
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -349,6 +349,40 @@ it('uses a known empty composer, not inactivity, to establish idle', () => {
   expect(inspectCloseActivity(row, '› A draft\n  100% context left', false, false)).toBe('draft')
   expect(inspectCloseActivity(row, `${screen}\n  ◎ /goal active (41m)`, false, false)).toBe('working')
   expect(inspectCloseActivity({ ...row, engine: 'claude' }, '❯\n  2 background tasks', false, false)).toBe('working')
+})
+
+// Hermes 0.21.5 started by `harness ensure` (#4393), its empty composer as captured on a Mac (2026-11-17): Hermes writes
+// its session's row at the first message, so the harness has bound no conversation and no turn state exists yet.
+const HERMES_RULE = '─'.repeat(80)
+const hermesNewChat = `\u001b[38;5;250m\u001b[48;5;234m ☤ \u001b[1m\u001b[38;5;220mgpt-4o-mini\u001b[0m\u001b[38;5;101m\u001b[48;5;234m │ ctx -- │ [░░░░░░░░░░] -- │ 2m │ ⏲ 0s\u001b[38;5;250m \u001b[39m\u001b[49m\n\u001b[38;5;173m${HERMES_RULE}\n\u001b[38;5;230m❯ \u001b[3m\u001b[38;5;136mWhat changed in this repo recently?\u001b[0m\n\u001b[38;5;173m${HERMES_RULE}`
+
+describe('a Hermes started by Harness that has bound no conversation yet (#4393)', () => {
+  const fresh = (over: Partial<RegisteredSession> = {}) =>
+    ({ ...row, engine: 'hermes', sessionId: '', transcriptPath: null, boundAt: null, resumeOnly: false, launch: { state: 'ready' }, ...over }) as RegisteredSession
+
+  it('is idle at its empty composer: a program can give it its first words', () => {
+    expect(inspectCloseActivity(fresh(), hermesNewChat, undefined, false)).toBe('idle')
+    // Opened again by `ensure` with no conversation kept: Hermes starts a new one, as empty.
+    expect(inspectCloseActivity(fresh({ resumeOnly: true }), hermesNewChat, undefined, false)).toBe('idle')
+  })
+
+  it('is not idle once it has a conversation, while it is still starting, nor without a screen to read', () => {
+    expect(inspectCloseActivity(fresh({ sessionId: '20261117_115913_ac5121' }), hermesNewChat, undefined, false)).toBe('unknown')
+    expect(inspectCloseActivity(fresh({ boundAt: 1 }), hermesNewChat, undefined, false)).toBe('unknown')
+    expect(inspectCloseActivity(fresh({ launch: { state: 'starting' } as RegisteredSession['launch'] }), hermesNewChat, undefined, false)).toBe('unknown')
+    expect(inspectCloseActivity(fresh({ launch: undefined }), hermesNewChat, undefined, false)).toBe('unknown')
+    expect(inspectCloseActivity(fresh(), null, undefined, false)).toBe('unknown')
+  })
+
+  it('is no other engine: an OpenClaw or OpenCode chat with no turn state is still unknown', () => {
+    for (const engine of ['openclaw', 'opencode'] as const) {
+      expect(inspectCloseActivity(fresh({ engine }), hermesNewChat, undefined, false), engine).toBe('unknown')
+    }
+  })
+
+  it('is closed as before: idle is not an unused chat to stop without its conversation', () => {
+    expect(unusedChat(fresh())).toBe(false)
+  })
 })
 
 it('reads Codex 0.160\'s goal indicator: pursuing one is working, every other state is not', () => {

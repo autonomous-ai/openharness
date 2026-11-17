@@ -55,6 +55,18 @@ export function unusedChat(session: CloseSession): boolean {
     && (session.launch == null || session.launch.state === 'ready')
 }
 
+/**
+ * A Hermes Harness started that has bound no conversation yet: Hermes 0.21 writes its session's row at the first
+ * message, so until then there is no conversation to bind and no turn state to read, and a program's first words
+ * (`harness reply`, #4393) were refused ENGINE_NOT_READY at its empty composer for good. One opened again with no
+ * conversation to go on (`resumeOnly`, no id kept) starts a new one just the same. Read as idle only; it is not an
+ * `unusedChat`, so a close still stops it as before.
+ */
+function hermesNewChat(session: CloseSession): boolean {
+  return session.engine === 'hermes' && !session.sessionId && !session.transcriptPath && session.boundAt == null
+    && session.launch?.state === 'ready'
+}
+
 /** An empty new chat has no turn state yet. Existing chats still require that state,
  * and neither kind is idle without a recognized empty composer. */
 export function inspectCloseActivity(session: CloseSession, screen: ScreenReading | null,
@@ -67,7 +79,7 @@ export function inspectCloseActivity(session: CloseSession, screen: ScreenReadin
   const hold = screen.teamHold
   if (hold === 'team_waiting_draft') return 'draft'
   if (hold === 'team_waiting_user') return 'needs_input'
-  if (hold || (turnOpen === undefined && !unusedChat(session))) return 'unknown'
+  if (hold || (turnOpen === undefined && !unusedChat(session) && !hermesNewChat(session))) return 'unknown'
   return 'idle'
 }
 

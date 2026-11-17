@@ -2,6 +2,7 @@ import type { ScreenReader } from './screenReader.js'
 import type { SubmissionReader } from './submissionReader.js'
 import { createHash } from 'crypto'
 import { composerHolds, composerShown, normalizedTerminalText, visibleTerminal } from '../engines/kit/submission.js'
+import { hermesTookPrompt } from '../engines/hermes/echo.js'
 import { launchBound } from '../core/engines/sessionBinding.js'
 import type { RegisteredSession } from './registry.js'
 import { sid } from './log.js'
@@ -1040,6 +1041,7 @@ export class SessionInputController {
       // derived turn_started (a new user row in opencode.db) to clear awaitingFingerprint; if it hasn't
       // arrived yet, fall through to a bounded retry-Enter, then error.
       if (!state.awaitingFingerprint || state.turnOpen) return
+      if (session.engine === 'hermes' && await this.hermesTookIt(sessionId, session, state)) return
       if (state.ambiguousDispatch) {
         this.failAmbiguousSubmission(sessionId, state)
         return
@@ -1175,6 +1177,30 @@ export class SessionInputController {
       return true
     }
     console.log(`[inject] ${sid(sessionId)} accepted (${hold} on screen) · engine=${session.engine}`)
+    state.awaitingFingerprint = null
+    state.awaitingContent = null
+    state.observes = 0
+    state.ambiguousDispatch = false
+    this.settle(state, 'taken')
+    return true
+  }
+
+  /**
+   * Hermes's pane showing it took the words (engines/hermes/echo.ts): echoed as its submitted message, out of its
+   * composer, its turn running. Hermes 0.21 records a new conversation's first message only once its agent is
+   * initialized, 46 s after the paste on a loaded Mac (#4393), so its store's turn start comes long after this check
+   * gave up and pressed Enter into the running turn. The echo of these words (their first line) is that turn started: settled
+   * with no Enter, and a delivery answered `started`. Its store's turn start, when it comes, opens the turn as ever.
+   * True when there is nothing more to do here.
+   */
+  private async hermesTookIt(sessionId: string, session: RegisteredSession, state: InputState): Promise<boolean> {
+    const content = state.awaitingContent
+    if (!content) return false
+    const capture = await this.deps.capture?.(session.agentId)
+    if (this.states.get(sessionId) !== state || !state.awaitingFingerprint || state.turnOpen) return true
+    if (!capture || !hermesTookPrompt(capture, content)) return false
+    console.log(`[inject] ${sid(sessionId)} accepted (echoed, turn running) · engine=hermes`)
+    if (state.deliveryId) this.finishDelivery(sessionId, state, 'started')
     state.awaitingFingerprint = null
     state.awaitingContent = null
     state.observes = 0
