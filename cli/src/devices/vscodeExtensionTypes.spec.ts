@@ -38,4 +38,11 @@ describe('the Harness Device extension for VS Code', () => {
     expect(manifest.engines).toEqual({ vscode: '^1.75.0' })
     expect(manifest).not.toHaveProperty('dependencies')
   })
+
+  it('its manifest runs in Restricted Mode, so an agent in an untrusted folder still reaches the dial', () => {
+    // Safe: it reads nothing of the workspace, and runs only the launcher in the home or on the extension host's PATH.
+    // Virtual workspaces keep VS Code's default.
+    const manifest = JSON.parse(readFileSync(join(EXTENSION, 'package.json'), 'utf8'))
+    expect(manifest.capabilities).toEqual({ untrustedWorkspaces: { supported: true } })
+  })
 })
