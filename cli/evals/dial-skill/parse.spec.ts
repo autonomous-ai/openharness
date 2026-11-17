@@ -95,6 +95,16 @@ describe('parseClaudeStream', () => {
     expect(run.limited).toBe(true)
   })
 
+  it('marks a run limited when a rate-limit event rejects it, and makes no turn of rate-limit events', () => {
+    const lines = sample.trimEnd().split('\n')
+    const withEvent = (info: Record<string, unknown>) =>
+      parseClaudeStream([...lines.slice(0, 2), JSON.stringify({ type: 'rate_limit_event', rate_limit_info: info }), ...lines.slice(2)].join('\n'))
+    const allowed = withEvent({ status: 'allowed', overageStatus: 'rejected' })
+    expect(allowed.limited).toBe(false)
+    expect(allowed.transcript).toHaveLength(19)
+    expect(withEvent({ status: 'rejected' }).limited).toBe(true)
+  })
+
   it('ignores a torn last line', () => {
     const run = parseClaudeStream(`${sample}{"type":"assistant","message":{"con`)
     expect(run.transcript).toHaveLength(19)
