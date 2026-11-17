@@ -62,7 +62,10 @@ export function parseClaudeStream(jsonl: string): RunResult {
       run.usage = usageOf(event.usage)
       run.stop_reason = typeof event.stop_reason === 'string' ? event.stop_reason : null
       if (event.subtype === 'error_max_turns') run.status = 'truncated'
-      run.limited = limitedBy(event)
+      run.limited ||= limitedBy(event)
+    } else if (event.type === 'rate_limit_event') {
+      // Only the run's own status: overage may be refused while the plan still allows the run.
+      if ((event.rate_limit_info as { status?: unknown } | undefined)?.status === 'rejected') run.limited = true
     }
   }
   // Thinking with no turn after it still belongs in the transcript.
