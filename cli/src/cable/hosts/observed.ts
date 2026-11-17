@@ -668,7 +668,7 @@ export class ObservedSource implements HostSource {
   /** Its Stop passed the grace with no word of the turn going on: done, unless its subagents still run. */
   private finish(entry: Entry): void {
     entry.heldStop = undefined
-    if (entry.subagents || this.entries.get(entry.agent.id) !== entry) return
+    if (entry.subagents) return
     this.setState(entry, 'done', this.deps.now())
     entry.agent.unseenDone = true
     this.emit()
