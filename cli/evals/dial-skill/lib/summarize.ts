@@ -15,6 +15,7 @@ export interface VariantStats {
 export interface Summary {
   variants: Record<string, VariantStats>
   paired: Record<string, Record<string, Paired>> // vs baseline, per split, on score
+  best: string | null // _state.json's best round, by variant name
   warnings: string[]
 }
 
@@ -132,7 +133,8 @@ function changeOf(flow: string, v: string): string {
 const rate = (rows: Row[], key: string) => mean(rows.flatMap(r => (key in (r.grade ?? {}) ? [r.grade![key]] : [])))
 
 export function summarize(flow: string): Summary {
-  const split = splitOf(readState(flow))
+  const state = readState(flow)
+  const split = splitOf(state)
   const variants: Record<string, VariantStats> = {}
   const means: Record<string, Map<string, number>> = {}
   const warnings: string[] = []
@@ -190,7 +192,8 @@ export function summarize(flow: string): Summary {
       paired[v][sp] = { ...s, significant: s.ci_lo > 0 || s.ci_hi < 0 }
     }
   }
-  return { variants, paired, warnings }
+  const round = (state.best as { round?: unknown } | undefined)?.round
+  return { variants, paired, best: typeof round === 'number' ? (round === 0 ? 'baseline' : `v${round}`) : null, warnings }
 }
 
 const fmt = (x: number, digits = 2) => (Number.isFinite(x) ? x.toFixed(digits) : 'n/a')
@@ -270,11 +273,12 @@ export function aggregateTable(s: Summary): string {
   return out.join('\n')
 }
 
-// The newest round against the baseline, on test once it has run, else on val.
+// The best round against the baseline on test, once test has run on it: test runs on baseline and the best round
+// only, so a newer round that was not kept has none. Until then the newest round, on val.
 export function headline(s: Summary): string {
   const names = Object.keys(s.variants)
   if (!names.length) return 'no variants'
-  const v = names[names.length - 1]
+  const v = s.best !== null && s.variants[s.best]?.splits.test ? s.best : names[names.length - 1]
   const x = s.variants[v]
   const sp = x.splits.test ? 'test' : x.splits.val ? 'val' : Object.keys(x.splits)[0]
   if (!sp) return `${v}: no scored rows`
