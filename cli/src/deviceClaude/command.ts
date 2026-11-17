@@ -11,8 +11,11 @@
  * `disable` turns those off first and never uninstalls there: an uninstall takes the files every home names, and another
  * home's entry would then stay on with nothing left to turn off (check 8).
  * `harness device orca link` and `harness device vscode link` are Orca's plugin's word and Harness's VS Code extension's,
- * never typed either: whether the daemon is up and where the devices' socket is, so neither builds a path. `harness device notify` is an agent's, from the dial skill (devices/notice.ts). This
- * runs only in the `harness` command's own process; nothing the core or a service loads imports this folder.
+ * never typed either: whether the daemon is up and where the devices' socket is, so neither builds a path.
+ * `harness device vscode status|enable|disable` are Harness Device's menu's (Turn on VS Code) and support's: whether
+ * Harness's VS Code extension is on, and VS Code's own install and uninstall of it (devices/vscodeExtension.ts). `harness
+ * device notify` is an agent's, from the dial skill (devices/notice.ts). This runs only in the `harness` command's own
+ * process; nothing the core or a service loads imports this folder.
  */
 import { mkdirSync, realpathSync } from 'node:fs'
 import { connect, type Socket } from 'node:net'
@@ -22,11 +25,13 @@ import { claudePluginState, ownDirectory, removeSkill, skillsFolderOf, skillWant
 import { listable, MAX_HOMES, readRemoved, readSetup, readWritten, writePluginHomes, writeRemoved, type DialEngine } from '../devices/dialSkillFiles.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { NOTICE_USAGE, runNotice } from '../devices/notice.js'
+import { vscodeDisable, vscodeEnable, vscodeStatus, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 import { localSocketRoute, socketIsPrivate } from '../lib/localTransport.js'
 import { daemonPost, runAsked } from './asked.js'
 import { claudePluginOn, claudeSettingsPath } from './plugin.js'
 
-/** `asked`, `link`, `orca link` and `vscode link` are left out: they are the plugins', and typed by hand they only wait on stdin or print a path. */
+/** `asked`, `link`, `orca link` and `vscode link` are left out: they are the plugins', and typed by hand they only wait on
+ *  stdin or print a path. `vscode status`, `enable` and `disable` are too: Harness Device's menu turns the extension on. */
 export const DEVICE_USAGE = `Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it; disable takes that away, enable brings it back):
   harness device claude status [--json]  whether the dial is on for Claude Code (its harness-device plugin on, and not removed), and its version
   harness device claude enable           set Claude Code up again: the plugin and the dial skill (Claude Code 2.1.287 or later), in each Orca account too
@@ -54,6 +59,8 @@ export interface DeviceDeps {
   codexHome: string
   /** Whether Codex is on this computer: looked for only by `codex status` and `codex enable`. */
   codex(): boolean
+  /** What VS Code's words read and run: asked for only by `vscode status`, `enable` and `disable`. */
+  vscode(): VscodeExtensionDeps
   /** The command's own environment and folder: `notify` reads its caller from them. */
   env: NodeJS.ProcessEnv
   cwd: string
@@ -68,6 +75,7 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
   const json = argv.includes('--json')
   if (words.length === 2 && (words[0] === 'orca' || words[0] === 'vscode') && words[1] === 'link') return devicesLink(deps)
   if (words.length === 2 && words[0] === 'codex') return codexCommand(words[1], json, deps)
+  if (words.length === 2 && words[0] === 'vscode') return vscodeCommand(words[1], json, deps)
   const verb = words.length === 2 && words[0] === 'claude' ? words[1] : null
   switch (verb) {
     case 'status': {
@@ -144,6 +152,30 @@ async function codexCommand(verb: string, json: boolean, deps: DeviceDeps): Prom
     case 'disable':
       // Removing the skill looks for no Codex: it may be gone already.
       return turnOff('codex', deps.codexHome, deps)
+    default:
+      deps.err(DEVICE_USAGE)
+      return 1
+  }
+}
+
+/** Each answer is one JSON line on stdout, failures too: Harness Device reads the word that says why. */
+async function vscodeCommand(verb: string, json: boolean, deps: DeviceDeps): Promise<number> {
+  switch (verb) {
+    case 'status': {
+      const status = vscodeStatus(deps.vscode())
+      deps.out(json ? JSON.stringify(status) : JSON.stringify(status, null, 2))
+      return 0
+    }
+    case 'enable': {
+      const result = await vscodeEnable(deps.vscode())
+      deps.out(JSON.stringify(result))
+      return result.vscode === 'on' ? 0 : 1
+    }
+    case 'disable': {
+      const result = await vscodeDisable(deps.vscode())
+      deps.out(JSON.stringify(result))
+      return 'error' in result ? 1 : 0
+    }
     default:
       deps.err(DEVICE_USAGE)
       return 1
