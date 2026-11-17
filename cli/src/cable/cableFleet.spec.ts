@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import { CableFleet as SourceFleet, testDialDiscovery, type CableFleetOptions } from './cableFleet.js'
-import { CableSession, type CableHost, type CablePort } from './cableSession.js'
+import { CableSession, SHOWN_ONLY_PREFIX, type CableHost, type CablePort } from './cableSession.js'
 import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
 import { DialVerdicts } from './dialPortVerdicts.js'
@@ -425,6 +425,71 @@ describe('USB dial fleet', () => {
       await vi.waitFor(() => expect(late.isOpen).toBe(false))
       expect(f.fleet.isConnected).toBe(false)
       expect(f.host.onDialAttached).not.toHaveBeenCalled()
+    } finally { await f.fleet.stop() }
+  })
+})
+
+describe('a dial plugged in beside one already attached', () => {
+  const asked = [{ key: 'k', q: 'Run it?', options: ['Yes', 'No'], multi: false }]
+  const notice = [{ key: 'n', q: 'Done', options: ['In harness'], multi: false }]
+  const noticeId = `${SHOWN_ONLY_PREFIX}n1`
+  const questions = (peer: Peer) => peer.sent.filter(m => m.t === 'question').map(m => `${m.agentId} ${m.id}`)
+  // Lets whatever the frames above set off reach the ports before counting what each got.
+  const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)) }
+  async function firstAlone() {
+    const f = fixture()
+    f.setPorts([device('/dev/tim', 'AA:01')])
+    f.fleet.start()
+    await vi.waitFor(() => expect(f.ports).toHaveLength(1))
+    await f.greet([f.ports[0]])
+    return f
+  }
+  async function plugSecond(f: ReturnType<typeof fixture>) {
+    f.setPorts([device('/dev/tim', 'AA:01'), device('/dev/tux', 'BB:02')])
+    await f.fleet['scan']()
+    await vi.waitFor(() => expect(f.ports).toHaveLength(2))
+    await f.greet([f.ports[1]])
+  }
+
+  it('is asked the open questions and notices, each once, and the first dial is not asked again', async () => {
+    const f = await firstAlone()
+    try {
+      await f.fleet.question('a', 'q1', asked)
+      await f.fleet.question('b', noticeId, notice)
+      expect(questions(f.ports[0])).toEqual(['a q1', `b ${noticeId}`])
+      await plugSecond(f)
+      await vi.waitFor(() => expect(questions(f.ports[1])).toHaveLength(2))
+      await flush()
+      expect(questions(f.ports[1]).sort()).toEqual(['a q1', `b ${noticeId}`])
+      expect(questions(f.ports[0])).toEqual(['a q1', `b ${noticeId}`])
+      expect(f.host.onDialAttached).toHaveBeenCalledTimes(1)
+    } finally { await f.fleet.stop() }
+  })
+
+  it('is shown a notice whose turn has ended', async () => {
+    const f = await firstAlone()
+    try {
+      await f.fleet.question('a', noticeId, notice)
+      await f.fleet.summary('a', 'Done', 'Done')
+      await plugSecond(f)
+      await vi.waitFor(() => expect(questions(f.ports[1])).toHaveLength(1))
+      await flush()
+      expect(questions(f.ports[1])).toEqual([`a ${noticeId}`])
+    } finally { await f.fleet.stop() }
+  })
+
+  it('is shown that notice again, once, by the first dial greeting again after its turn ended', async () => {
+    const f = await firstAlone()
+    try {
+      const [dial] = f.ports
+      await f.fleet.question('a', noticeId, notice)
+      await f.fleet.summary('a', 'Done', 'Done')
+      dial.sent.length = 0
+      // Another firmware image: a dial with nothing on its screen, not a keepalive.
+      dial.say({ t: 'hello', product: 'harness', mac: dial.path, fw: 'fixture-2', proto: 3 })
+      await vi.waitFor(() => expect(questions(dial)).toHaveLength(1))
+      await flush()
+      expect(questions(dial)).toEqual([`a ${noticeId}`])
     } finally { await f.fleet.stop() }
   })
 })
