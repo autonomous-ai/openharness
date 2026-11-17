@@ -248,9 +248,28 @@ jobs:
           expect CFBundleShortVersionString 0.1.3
           expect CFBundleIdentifier "$ID"
           expect CFBundleName Harness
-          expect CFBundleDisplayName Harness
           expect LSHasLocalizedDisplayName true
 
+          # The plist's CFBundleDisplayName stays Tauri's "Harness Device": macOS shows the localized name only while
+          # it matches the bundle's file name. The name shown comes from these strings.
+          strings="$APP/Contents/Resources/en.lproj/InfoPlist.strings"
+          if [[ -f "$strings" ]]; then
+            echo "en.lproj/InfoPlist.strings:"
+            plutil -p "$strings"
+            for key in CFBundleName CFBundleDisplayName; do
+              got="$(plutil -convert json -o - "$strings" | python3 -c 'import json, sys; print(json.load(sys.stdin).get(sys.argv[1], "<missing>"))' "$key")"
+              if [[ "$got" != Harness ]]; then
+                echo "::error::InfoPlist.strings $key is '$got', not 'Harness'"
+                failed=1
+              fi
+            done
+          else
+            echo "::error::$strings is missing"
+            failed=1
+          fi
+
+          # LaunchServices may still hold the name it registered for 0.1.2 at this path.
+          /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP"
           printf '%s\n' 'import Foundation' 'print(FileManager.default.displayName(atPath: CommandLine.arguments[1]))' \
             > "$WORK/display-name.swift"
           shown="$(swift "$WORK/display-name.swift" "$APP")"
@@ -275,10 +294,6 @@ jobs:
           echo "The plugin's temp folders left in ${TMPDIR:-/tmp}:"
           find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'tauri_*' -print
 
-          if [[ -f "$APP/Contents/Resources/en.lproj/InfoPlist.strings" ]]; then
-            echo "en.lproj/InfoPlist.strings:"
-            plutil -p "$APP/Contents/Resources/en.lproj/InfoPlist.strings"
-          fi
           exit "$failed"
 
       - name: The app's log
