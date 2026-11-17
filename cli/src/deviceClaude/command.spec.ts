@@ -387,6 +387,28 @@ describe('the dial skill', () => {
     expect(readFileSync(join(dataDir, 'dial-setup.json'))).toEqual(setup)
   })
 
+  it('a dial-setup.json that cannot be read: disable and enable do the rest, say so and exit 1', async () => {
+    for (const engine of ['claude', 'codex'] as const) {
+      const dataDir = folder()
+      const codexHome = folder()
+      const home = engine === 'claude' ? claudeHome : codexHome
+      const listed = folder()
+      recorded(dataDir, { [engine]: [skillIn(listed)] })
+      // Stands for any read error: EACCES, EIO, EMFILE. Read as no homes, the folders it lists would be passed by.
+      chmodSync(join(dataDir, 'dial-setup.json'), 0o000)
+      cleanup.push(() => chmodSync(join(dataDir, 'dial-setup.json'), 0o600))
+      skillIn(home)
+      const unread = { code: 1, out: [], err: ['Could not read the dial setup.'] }
+      expect(await device([engine, 'disable'], { dataDir, codexHome, claude: () => fakeClaude() }), engine).toEqual(unread)
+      expect(existsSync(skillAt(home)), engine).toBe(false)
+      expect(answers(dataDir), engine).toEqual({ removed: { [engine]: true } })
+
+      rmSync(skillAt(listed))
+      expect(await device([engine, 'enable'], { dataDir, codexHome }), engine).toEqual(unread)
+      expect(readFileSync(skillAt(home), 'utf8'), engine).toBe(DIAL_SKILL)
+    }
+  })
+
   it('disable removes the skill an enable run with another home wrote', async () => {
     // A person may run the command with CODEX_HOME or CLAUDE_CONFIG_DIR set, Device 0.1.1's menu with neither.
     const dataDir = folder()
