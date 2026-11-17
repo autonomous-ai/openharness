@@ -56,7 +56,7 @@ import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
 import { createTmuxAdapter } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
-import { createVscodeAdapter } from '../cable/hosts/vscode.js'
+import { createVscodeAdapter, NO_WINDOWS } from '../cable/hosts/vscode.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
 import { createEngineTally } from '../cable/engineTally.js'
 import { Notices, type NoticeCaller } from '../cable/notices.js'
@@ -439,7 +439,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // No echo to guard: the Codex app sends no attach for the follow to take as a person's.
     createCodexAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'codex', log }),
     // No echo to guard: VS Code sends no attach for the follow to take as a person's.
-    createVscodeAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode' }),
+    createVscodeAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode', terminals: NO_WINDOWS }),
     createTabsAdapter({
       isOpen: () => tabs.isOpen(),
       select: (tab, raise) => {
