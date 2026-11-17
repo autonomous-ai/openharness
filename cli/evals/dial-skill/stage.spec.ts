@@ -18,7 +18,7 @@ const README_FIX = `diff --git a/README.md b/README.md
 -# Orders service
 +# Orders service.
 `
-const ALLOWED = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'TERM', 'TMPDIR', 'GIT_CONFIG_GLOBAL', 'npm_config_userconfig', 'CLAUDE_CONFIG_DIR']
+const ALLOWED = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'TERM', 'TMPDIR', 'GIT_CONFIG_GLOBAL', 'npm_config_userconfig', 'npm_config_cache', 'CLAUDE_CONFIG_DIR']
 
 let base: string
 let scenarios: string
@@ -154,6 +154,12 @@ describe('stage', () => {
     }
     expect(claude.env.CLAUDE_CONFIG_DIR).toBe(PROFILE)
     expect(oracle.env.CLAUDE_CONFIG_DIR).toBeUndefined()
+  })
+
+  it("keeps npm's cache and logs in the run's tmp/, where the sandbox lets it write, never in ~/.npm", () => {
+    const st = staging('claude', { skill: true })
+
+    expect(sh(st, 'npm config get cache').stdout.trim()).toBe(join(st.root, 'tmp', 'npm-cache'))
   })
 
   it('refuses claude without CLAUDE_CONFIG_DIR, so the default profile is never used', () => {
