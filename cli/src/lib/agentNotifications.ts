@@ -39,7 +39,8 @@ export class AgentNotifications {
   /** The turn ended now: its done notification is decided DONE_QUIET_MS from here. */
   ended(sessionId: string): void {
     const turn = this.turns.get(sessionId)
-    if (turn) turn.endedAt = Date.now()
+    // The monotonic clock: a wall clock set back inside the window would hold Finished back by the jump.
+    if (turn) turn.endedAt = performance.now()
   }
 
   /**
@@ -58,7 +59,8 @@ export class AgentNotifications {
       turn.pending = undefined
       tell(this.questions.has(sessionId) ? null : { id: turn.id, kind: 'done' })
     }
-    const wait = DONE_QUIET_MS - (Date.now() - (turn.endedAt ?? 0))
+    // An end this policy never heard is long past: decided at once.
+    const wait = DONE_QUIET_MS - (performance.now() - (turn.endedAt ?? -Infinity))
     if (wait <= 0) return decided()
     const timer = setTimeout(decided, wait)
     timer.unref()
