@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 export interface SplitStats { mean: number; ci_lo: number; ci_hi: number; n: number }
@@ -290,19 +290,25 @@ export function headline(s: Summary): string {
     + `change: ${x.change}`
 }
 
+// Runs an agent took part in write into the flow folder, so a symlink planted there must not carry a write elsewhere.
+function writeNoFollow(path: string, text: string): void {
+  if (lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error(`${path} is a symlink: not written`)
+  writeFileSync(path, text)
+}
+
 function replaceBlock(path: string, [open, close]: readonly [string, string], body: string): void {
   const text = existsSync(path) ? readFileSync(path, 'utf8') : ''
   const start = text.indexOf(open)
   const end = text.indexOf(close, start)
   if (start < 0 || end < 0) throw new Error(`${path}: needs the markers ${open} and ${close}`)
-  writeFileSync(path, `${text.slice(0, start + open.length)}\n${body}\n${text.slice(end)}`)
+  writeNoFollow(path, `${text.slice(0, start + open.length)}\n${body}\n${text.slice(end)}`)
 }
 
 // Writes every variant's table.md, the status table in narrative.md and the aggregate table in metrics.md;
 // returns the headline line and the lines it skipped.
 export function writeSummaries(flow: string): { headline: string; warnings: string[] } {
   const s = summarize(flow)
-  for (const v of Object.keys(s.variants)) writeFileSync(join(flow, v, 'table.md'), runTable(flow, v))
+  for (const v of Object.keys(s.variants)) writeNoFollow(join(flow, v, 'table.md'), runTable(flow, v))
   replaceBlock(join(flow, 'narrative.md'), STATUS, statusTable(s))
   replaceBlock(join(flow, 'metrics.md'), AGGREGATE, aggregateTable(s))
   return { headline: headline(s), warnings: s.warnings }
