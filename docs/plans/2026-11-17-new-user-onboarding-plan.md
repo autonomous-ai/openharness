@@ -280,6 +280,8 @@ Longest chain: 13a (or 13b) → 13c → 13e, three tasks. 13c and 13d share no f
 
 ### Task 13c: The devices turn the plugin on in each Orca home
 
+> Decision 10 (2026-11-17, after this plan): the Orca step runs only while the default home's plugin reads on in its settings; a home in either `dial-setup.json`'s or `dial-skill.json`'s `pluginHomes` counts as recorded, and the devices write only `dial-setup.json`. Where this task's text below differs, decision 10 wins.
+
 **PR:** C. **Layer:** the devices process. **Depends on:** 13a (`claudeHomeEnable`, `claudeHomeDisable`, `ClaudeStep`), 13b (`pluginHomes`, `recordPluginHomes`, `readPluginHomes`). **Effort:** `xhigh` (a stored record, a pass that runs `claude` against other accounts' settings, a file under the 100% gate).
 
 **Red test:** `cli/src/cable/dialPluginSetup.spec.ts`, `cli/src/cable/dialSetup.spec.ts`, `cli/src/devices/orcaHomes.spec.ts`, `cli/src/services/devices.spec.ts`.
