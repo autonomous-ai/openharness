@@ -13,6 +13,9 @@ const READ_EVERY_SECS: u64 = 60;
 /// The app asks for its own update at most this often: as often as the CLI's updater.
 const CHECK_EVERY_SECS: u64 = 60;
 
+/// The longest a version whose download, signature or install failed waits to be tried again.
+const RETRY_MAX_SECS: u64 = 3_600;
+
 /// Where a person whose app cannot replace itself gets the new one. Fixed: nothing of the manifest reaches `open`.
 const DEVICE_PAGE: &str = "https://harness.autonomous.ai/device";
 
@@ -47,6 +50,8 @@ pub struct App {
     found: Option<String>,
     /// The version last logged as not writable, so it is said once.
     skipped: Option<String>,
+    /// The version whose download, signature or install failed, how often, and when last.
+    failed: Option<Failed>,
     /// An update is installed: the app relaunches on the first tick with nothing running.
     relaunch: bool,
 }
@@ -79,6 +84,7 @@ impl App {
             updating: false,
             found: None,
             skipped: None,
+            failed: None,
             relaunch: false,
         };
         let mut effects = Vec::new();
@@ -259,7 +265,20 @@ impl App {
             }
             // Installed even while a sign-in runs: only the relaunch waits for it.
             Event::UpdateChecked(Some(version)) => {
-                effects.push(Effect::Log(format!("update: found {version}")));
+                // Checked every minute, a release that fails the same way was downloaded whole each minute: it waits
+                // two checks, then four, eight, up to an hour, as the CLI's updater waits on a build it refused. A
+                // newer version is tried at once.
+                if let Some(failed) = self.failed.as_ref().filter(|failed| failed.version == version) {
+                    let wait = (CHECK_EVERY_SECS << failed.tries.min(6)).min(RETRY_MAX_SECS);
+                    if self.now.abs_diff(failed.at) < wait {
+                        self.updating = false;
+                        return;
+                    }
+                }
+                // Said once per version: the check repeats every minute.
+                if self.found.as_ref() != Some(&version) {
+                    effects.push(Effect::Log(format!("update: found {version}")));
+                }
                 // A version already blocked keeps its row while it is tried again, so the menu does not flip.
                 if self.state.app_update != AppUpdate::Blocked(version.clone()) {
                     self.state.app_update = AppUpdate::Installing;
@@ -300,6 +319,13 @@ impl App {
             }
         };
         effects.push(Effect::Log(format!("update: failed {word}")));
+        if failure != UpdateFailure::Check
+            && let Some(version) = self.found.clone()
+        {
+            let tries =
+                self.failed.as_ref().filter(|failed| failed.version == version).map_or(1, |failed| failed.tries + 1);
+            self.failed = Some(Failed { version, tries, at: self.now });
+        }
         if self.state.app_update == AppUpdate::Installing {
             self.state.app_update = AppUpdate::None;
         }
@@ -478,6 +504,13 @@ impl App {
             self.menu = items;
         }
     }
+}
+
+/// A version whose download, signature or install failed `tries` times, the last at `at`.
+struct Failed {
+    version: String,
+    tries: u32,
+    at: u64,
 }
 
 fn screen_at(screen: Screen, phase: Phase, lines: Vec<String>) -> View {
@@ -1312,7 +1345,7 @@ mod tests {
                 assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::InstallUpdate));
                 app.handle(Event::UpdateFailed(kind));
                 // Still checked every minute; the same version is neither fetched nor said, and the menu stays.
-                assert!(has(&app.handle(tick(at + wait - 5)), &Effect::CheckUpdate), "{kind:?} {wait}");
+                assert!(has(&app.handle(tick(at + wait - M1)), &Effect::CheckUpdate), "{kind:?} {wait}");
                 assert!(app.handle(Event::UpdateChecked(Some("0.1.3".into()))).is_empty(), "{kind:?} {wait}");
                 at += wait;
             }
