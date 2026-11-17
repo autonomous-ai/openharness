@@ -150,7 +150,8 @@ class DeviceAppOffer extends ChangeNotifier {
   Future<void> _runInstall() async {
     DeviceAppInstallResult result;
     try {
-      result = await _install();
+      // Future.sync, so an installer that throws at once still ends after [install] has set [_installing].
+      result = await Future.sync(_install);
     } catch (_) {
       result = const DeviceAppInstallResult.failed(
         DeviceAppInstallStep.install,
