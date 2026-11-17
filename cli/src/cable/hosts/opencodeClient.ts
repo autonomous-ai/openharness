@@ -129,22 +129,30 @@ const parsed = (text: string): OpencodeAnswer => {
 
 const outcome = (fault: OpencodeFault): OpencodePrompt => fault === 'not_found' ? 'gone' : 'failed'
 
-/** One request on a connection of its own, to the service's loopback address, with its password when it has one. */
+/** One request on a connection of its own, to the service's loopback address, with its password when it has one. None
+ *  when http will not make it: `failed` is then told in a later turn, as every other failure is. */
 function send(
   service: Service, method: string, path: string, payload: string | undefined,
   answered: (response: IncomingMessage) => void, failed: () => void,
-): ClientRequest {
-  const request = httpRequest({
-    hostname: service.hostname,
-    port: service.port,
-    method,
-    path,
-    agent: false,
-    headers: {
-      ...(service.authorization === undefined ? {} : { authorization: service.authorization }),
-      ...(payload === undefined ? {} : { 'content-type': 'application/json' }),
-    },
-  }, answered)
+): ClientRequest | undefined {
+  let request: ClientRequest
+  try {
+    request = httpRequest({
+      hostname: service.hostname,
+      port: service.port,
+      method,
+      path,
+      agent: false,
+      headers: {
+        ...(service.authorization === undefined ? {} : { authorization: service.authorization }),
+        ...(payload === undefined ? {} : { 'content-type': 'application/json' }),
+      },
+    }, answered)
+  } catch {
+    // http throws for a request it will not send, a path with a space among them: nothing went out.
+    queueMicrotask(failed)
+    return undefined
+  }
   // Another program's connection never keeps the devices process up.
   request.on('socket', (socket) => socket.unref())
   request.on('error', failed)
@@ -155,16 +163,17 @@ function send(
 /** One request, 10 s for its whole answer. */
 const call = (service: Service, method: 'GET' | 'POST', path: string, body?: unknown) => new Promise<OpencodeAnswer>((resolve) => {
   let done = false
+  let request: ClientRequest | undefined
   const finish = (answer: OpencodeAnswer) => {
     if (done) return
     done = true
     clearTimeout(deadline)
-    request.destroy()
+    request?.destroy()
     resolve(answer)
   }
   const deadline = setTimeout(() => finish({ ok: false, fault: 'timeout' }), RUN_TIMEOUT_MS)
   deadline.unref()
-  const request = send(service, method, path, body === undefined ? undefined : JSON.stringify(body), (response) => {
+  request = send(service, method, path, body === undefined ? undefined : JSON.stringify(body), (response) => {
     const status = response.statusCode ?? 0
     // A redirect is a fault like any other status, never followed: the password would go wherever it points.
     if (status < 200 || status > 299) return finish({ ok: false, fault: faultOf(status) })
