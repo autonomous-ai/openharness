@@ -1736,6 +1736,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
   // display only (docs/specs/2026-11-13-device-claude-orca.md, "Waiting for permission").
   const shownAs = (q: string) => [{ key: 'prompt', q, options: ['In Orca'] }]
   it('asked also reaches the dial as a question it only shows, ahead of the line, and its wait clearing closes it', async () => {
+    vi.useFakeTimers()
     const { core, port } = start({ faults: ['fleet'] })
     port.observed(hook('turn-start'))
     // A Notification alone names no prompt: its line, and no question.
@@ -1755,6 +1756,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect(questions).toEqual(shownAs('npm run build · answer in Orca'))
     // The session's next event clears the wait, and the question with it.
     port.observed(hook('turn-stop'))
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
     expect(calls('questionClose')).toEqual([[ID, first], [ID, second]])
     // Its session ending clears it too.
     port.observed(hook('turn-start'))
@@ -1767,12 +1769,14 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
   })
 
   it('a dial that attaches again is asked again what still waits, under the same id', async () => {
+    vi.useFakeTimers()
     const { port } = start({ faults: ['fleet'] })
     port.observed(hook('turn-start'))
     port.observed(hook('turn-start', { sessionId: 'sess-2' }))
     port.observed(asked())
     port.observed(asked({ sessionId: 'sess-2', summary: 'ls' }))
     port.observed(hook('turn-stop', { sessionId: 'sess-2' }))
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
     expect(calls('question')).toHaveLength(2)
     const [[, id]] = calls('question') as [[string, string]]
     // Its drawer and questions live in its RAM: a dial that comes back has neither.
@@ -1808,14 +1812,17 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
   })
 
   it('the session\'s next event clears the line; another session\'s does not', async () => {
+    vi.useFakeTimers()
     const { port } = start({ faults: ['fleet'] })
     const other = observedAgentId('claude', 'sess-2')
     port.observed(hook('turn-start'))
     port.observed(hook('turn-start', { sessionId: 'sess-2' }))
     port.observed(asked())
     port.observed(hook('turn-stop', { sessionId: 'sess-2' }))
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
     expect(await host().activityText(ID)).toBe('npm test · answer in Orca')
     port.observed(hook('turn-stop'))
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
     expect(await host().activityText(ID)).toBeNull()
     expect(calls('turnDone')).toEqual([[other], [ID]])
   })
@@ -4453,6 +4460,7 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
 
   // herdr's done is any finished turn in a pane it has not focused: each plug-in, reconnect and unfold lists it again.
   it('a herdr agent first listed done is no card, its next turn\'s done is; an observed agent first heard done is one', async () => {
+    vi.useFakeTimers()
     const { port, live, status } = withHerdr()
     await live([listing({ agent_status: 'done' })])
     const [{ id }] = await listed()
@@ -4462,6 +4470,7 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     expect(calls('turnDone')).toEqual([[id]])
     const other = observedAgentId('claude', 'sess-2')
     port.observed({ ...hook('turn-stop'), sessionId: 'sess-2', hostHints: {} })
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
     expect(calls('turnDone')).toEqual([[id], [other]])
   })
 
@@ -4935,6 +4944,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
   })
 
   it('its card goes when that agent\'s next turn starts, and with nothing before it', async () => {
+    vi.useFakeTimers()
     const { port, listener } = devices({ core: bound() })
     port.observed(hook('turn-start'))
     listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })
@@ -4945,6 +4955,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     // A prompt it waits on is a question of its own, which comes and goes.
     port.observed({ engine: 'claude', sessionId: 'sess-1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/work/api' })
     port.observed(hook('turn-stop'))
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
     port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'processing', text: 'Working' } })
     port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'summary', text: 'done', recap: 'Built.' } })
     await vi.waitFor(() => expect(calls('summary')).toHaveLength(1))
@@ -5011,7 +5022,8 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     const asked = (sessionId: string): ObservedAsked => ({ engine: 'claude', sessionId, event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/work/api' })
     const asks = () => (calls('question') as Array<[string, string]>).map(([agentId, id]) => [agentId, id])
 
-    it('asked after the notice covers it, and the notice is asked again as that one closes', () => {
+    it('asked after the notice covers it, and the notice is asked again as that one closes', async () => {
+      vi.useFakeTimers()
       const { port, listener } = devices({ core: bound() })
       port.observed(hook('turn-start'))
       listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
@@ -5022,11 +5034,13 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       port.observed(asked('sess-1'))
       const wait = ids()[4]
       port.observed(hook('turn-stop'))
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
       expect(asks()).toEqual([['h1', own], [ID, outside], ['h1', 'r1'], ['h1', own], [ID, wait], [ID, outside]])
       expect(calls('questionClose')).toEqual([['h1', 'r1'], [ID, wait]])
     })
 
-    it('open as the notice comes holds it back until it closes', () => {
+    it('open as the notice comes holds it back until it closes', async () => {
+      vi.useFakeTimers()
       const { port, listener } = devices({ core: bound() })
       port.card({ type: 'commander_question', agentId: 'h1', payload: { requestId: 'r1', questions: QUESTIONS } })
       expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual({ result: 'shown' })
@@ -5040,6 +5054,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       expect(calls('replaceNotifications')).toEqual([[[expect.objectContaining({ agentId: ID, text: expect.not.stringContaining('VPN') })]]])
       port.card({ type: 'commander_question_close', agentId: 'h1', payload: { requestId: 'r1' } })
       port.observed(hook('turn-stop'))
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
       expect(asks()).toEqual([['h1', 'r1'], [ID, wait], ['h1', expect.stringMatching(/^shown:/)], [ID, expect.stringMatching(/^shown:/)]])
       expect(calls('question').slice(2).map(([, , questions]) => questions)).toEqual([card('Harness'), card('Orca')])
     })

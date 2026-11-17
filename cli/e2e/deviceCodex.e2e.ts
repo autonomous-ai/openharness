@@ -59,7 +59,7 @@ describe('the dial talks to Codex outside Harness through codex queue', () => {
     const row = await dial.next((m) => m.t === 'agent' && m.id === codex.id, 45_000, 'the agent listed')
     expect(row.caps).toContain('v')
 
-    // 2. Working: Codex sends no end-of-turn hook, and no process of its own reads idle.
+    // 2. Working: it runs no Stop hook, and no process of its own reads idle.
     let since = dial.messages.length
     await codex.hook('UserPromptSubmit', { prompt: 'work on it' })
     await dial.next((m) => m.t === 'turn.started' && m.agentId === codex.id, 45_000, 'its turn started', since)

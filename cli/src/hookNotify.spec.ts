@@ -3096,13 +3096,49 @@ describe('hook notify: waits, turn ends and subagents from a pane', () => {
     }
   })
 
-  it('outside a pane, a codex Stop posts nothing', async () => {
+  // Outside a pane the devices hear Codex's own turn end and interrupt as Claude Code's Stop, and none of its words.
+  it('outside a pane, a codex Stop tells the devices turn-stop, and its Interrupt turn-aborted', async () => {
     const { port, requests } = await collect()
-    await runHook({ port, engine: 'codex', input: { hook_event_name: 'Stop', session_id: 'sess-1', turn_id: 't1' } })   // no tmuxPane
+    for (const event of ['Stop', 'Interrupt']) {
+      expect(await runHook({ port, engine: 'codex', input: {   // no tmuxPane
+        hook_event_name: event, session_id: 'sess-1', turn_id: 't1', cwd: '/w', last_assistant_message: 'text-secret',
+      } })).toBe('')
+    }
+    expect(requests.map((request) => [request.url, request.body.engine, request.body.sessionId, request.body.event])).toEqual([
+      ['/api/hook/observed', 'codex', 'sess-1', 'turn-stop'], ['/api/hook/observed', 'codex', 'sess-1', 'turn-aborted'],
+    ])
+    expect(JSON.stringify(requests)).not.toContain('text-secret')
+  })
+
+  // A lead outside a pane stays working while its subagents run: each event carries the lead's session_id.
+  it('outside a pane, claude SubagentStart and a typed SubagentStop tell the devices, with the lead\'s session and no title', async () => {
+    const { port, requests } = await collect()
+    for (const event of ['SubagentStart', 'SubagentStop'] as const) {
+      expect(await runHook({ port, input: subagent(event, { cwd: '/w', session_title: 'Tho', last_assistant_message: 'text-secret' }) })).toBe('')
+    }
+    expect(requests.map((request) => [request.url, request.body.sessionId, request.body.event])).toEqual([
+      ['/api/hook/observed', 'lead-1', 'subagent-start'], ['/api/hook/observed', 'lead-1', 'subagent-stop'],
+    ])
+    for (const { body } of requests) expect([body.title, body.relayed]).toEqual([undefined, undefined])
+    expect(JSON.stringify(requests)).not.toContain('text-secret')
+  })
+
+  it.each([[''], [undefined]])('outside a pane, claude SubagentStop with agent_type %j posts nothing', async (agentType) => {
+    const { port, requests } = await collect()
+    expect(await runHook({ port, input: subagent('SubagentStop', { agent_type: agentType, cwd: '/w' }) })).toBe('')
     expect(requests).toEqual([])
   })
 
-  it.each(NEW_EVENTS)('outside a pane, %s %s posts nothing', async (engine, _event, input) => {
+  // Codex's subagents are not counted outside a pane either (facts-codex §2).
+  it.each(['SubagentStart', 'SubagentStop'] as const)('outside a pane, codex %s posts nothing', async (event) => {
+    const { port, requests } = await collect()
+    await runHook({ port, engine: 'codex', input: subagent(event, { cwd: '/w' }) })
+    expect(requests).toEqual([])
+  })
+
+  /** What a session outside a pane tells the devices of NEW_EVENTS: the waits are its Notification's to say. */
+  const TOLD_OUTSIDE = ['SubagentStart', 'SubagentStop', 'Stop', 'Interrupt']
+  it.each(NEW_EVENTS.filter(([, event]) => !TOLD_OUTSIDE.includes(event)))('outside a pane, %s %s posts nothing', async (engine, _event, input) => {
     const { port, requests } = await collect()
     await runHook({ port, engine, input: { ...input, session_id: 'sess-1', cwd: '/w' } })
     expect(requests).toEqual([])
