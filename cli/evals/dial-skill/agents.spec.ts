@@ -102,6 +102,15 @@ describe('claudeArgs', () => {
     expect(sandbox.network.allowedDomains).not.toContain('*')
   })
 
+  it("denies the tools that reach the person's phone or accounts", () => {
+    const argv = claudeArgs(AGENT_CONFIG, staged(), 'Fix it.')
+    const { permissions } = JSON.parse(argv[argv.indexOf('--settings') + 1])
+    expect(permissions.deny).toEqual(expect.arrayContaining([
+      'PushNotification', 'RemoteTrigger', 'DesignSync',
+      'mcp__claude_ai_Gmail', 'mcp__claude_ai_Google_Calendar', 'mcp__claude_ai_Microsoft_365', 'mcp__claude_ai_Claude_Docs',
+    ]))
+  })
+
   it('never skips permissions', () => {
     const argv = claudeArgs(AGENT_CONFIG, staged(), 'Fix it.').join(' ')
     for (const flag of ['--dangerously-skip-permissions', 'bypassPermissions', '--bare']) expect(argv).not.toContain(flag)
