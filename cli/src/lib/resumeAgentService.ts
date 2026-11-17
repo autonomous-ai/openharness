@@ -452,11 +452,17 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           }
           return resumeChanged
         }
+        if (!matchesLaunchReceipt(registry.byAgent(pending.agentId), pending)) return resumeChanged
         refreshGridWebSearch(pending.agentId, built.overrides)
-        announceSession(pending)
-        if (isTerminalEngine(saved.engine)) return await waitForResume(pending, current, pending.grid ?? null, launchArgs)
-        attach(pending)
-        return await waitForResume(pending, current, launchedGrid(built.overrides.gridLaunchRecord?.override), launchArgs)
+        const refreshed = registry.byAgent(pending.agentId)
+        // Admission replies are detached. Only the two launch metadata fields above may have changed.
+        if (!current() || !refreshed || !matchesLaunchReceipt(refreshed, { ...pending,
+          gridLaunch: refreshed.gridLaunch, gridWebSearch: refreshed.gridWebSearch })) return resumeChanged
+        const resumed = structuredClone(refreshed)
+        announceSession(resumed)
+        if (isTerminalEngine(saved.engine)) return await waitForResume(resumed, current, resumed.grid ?? null, launchArgs)
+        attach(resumed)
+        return await waitForResume(resumed, current, launchedGrid(built.overrides.gridLaunchRecord?.override), launchArgs)
       } catch (error) {
         if (error instanceof IdentityReadUnavailable) return { ok: false,
           error: allocationAttempted ? 'RESUME_UNCONFIRMED' : error.code, detail: error.message }

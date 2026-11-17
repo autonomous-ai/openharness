@@ -435,6 +435,61 @@ describe('the grid a resumed harness is on', () => {
   const savedOnGrid = () => rewrite({ grid: { baseUrl: 'https://saved.example/then/v1', model: 'm' },
     gridLaunch: { ...override, baseUrl: 'https://saved.example/then/v1' } })
 
+  it('announces the refreshed web-search status in the first detached resume frame', async () => {
+    savedOnGrid()
+    rewrite({ gridWebSearch: 'unsupported' })
+    vi.mocked(deps.relaunchOverrides).mockResolvedValueOnce({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [],
+      gridLaunchRecord: { override, webSearch: 'on' } } })
+    vi.mocked(deps.refreshGridWebSearch).mockImplementation((id, options) => { registry.setGridLaunch(id, options.gridLaunchRecord ?? null) })
+    expect(await start()).toMatchObject({ ok: true })
+    const first = vi.mocked(deps.announceSession).mock.calls[0]![0]
+    expect(first.gridWebSearch).toBe('on')
+    expect(first.gridLaunch).toEqual(override)
+    const { agentFrame } = await import('./agentFrame.js')
+    expect((await agentFrame(first, { selectedModel: null, terminalAvailable: true })).grid?.webSearch).toBe('on')
+  })
+
+  it('does not announce or attach a different owner after refreshing resume metadata', async () => {
+    vi.mocked(deps.refreshGridWebSearch).mockImplementationOnce(id => { registry.byAgent(id)!.sessionId = 'replacement-conversation' })
+    expect(await start()).toEqual(resumeChanged)
+    expect(deps.announceSession).not.toHaveBeenCalled()
+    expect(deps.attach).not.toHaveBeenCalled()
+    expect(waitForResumedAgent).not.toHaveBeenCalled()
+    expect(registry.byAgent(saved.agentId)?.sessionId).toBe('replacement-conversation')
+  })
+
+  it('does not refresh metadata after its detached admission owner was replaced', async () => {
+    const resumePendingAgent = registry.resumePendingAgent.bind(registry)
+    const admission = vi.spyOn(registry, 'resumePendingAgent').mockImplementationOnce(async (...args) => {
+      const pending = await resumePendingAgent(...args)
+      registry.byAgent(saved.agentId)!.sessionId = 'replacement-conversation'
+      return pending
+    })
+    try {
+      expect(await start()).toEqual(resumeChanged)
+      expect(deps.refreshGridWebSearch).not.toHaveBeenCalled()
+      expect(deps.announceSession).not.toHaveBeenCalled()
+      expect(deps.attach).not.toHaveBeenCalled()
+      expect(waitForResumedAgent).not.toHaveBeenCalled()
+    } finally { admission.mockRestore() }
+  })
+
+  it.each(['cancelled', 'missing'] as const)('does not publish a %s resume after refreshing metadata', async change => {
+    let missing = false
+    const byAgent = registry.byAgent.bind(registry)
+    const lookup = vi.spyOn(registry, 'byAgent').mockImplementation(id => missing && id === saved.agentId ? undefined : byAgent(id))
+    vi.mocked(deps.refreshGridWebSearch).mockImplementationOnce(() => {
+      if (change === 'cancelled') deps.restartJobs.cancel(saved.agentId)
+      else missing = true
+    })
+    try {
+      expect(await start()).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+      expect(deps.announceSession).not.toHaveBeenCalled()
+      expect(deps.attach).not.toHaveBeenCalled()
+      expect(waitForResumedAgent).not.toHaveBeenCalled()
+    } finally { lookup.mockRestore() }
+  })
+
   it('is its launch record\'s, as this launch refreshed it, written with its process', async () => {
     savedOnGrid()
     vi.mocked(deps.relaunchOverrides).mockResolvedValueOnce({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [],

@@ -849,6 +849,13 @@ export function startHookServer(
         const notify = () => {
           const result = committed!
           clearHold()
+          const owner = live()
+          if (!owner || !current() || paneReadIdentity(owner) !== committedIdentity) {
+            console.warn('[hooks] committed admission notification skipped: owner changed')
+            return
+          }
+          // Core cleared the live admission hold; the durable commit reply is a detached snapshot.
+          result.entry = structuredClone(owner)
           console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=${result.entry.engine} · isNew=${result.isNew}`
             + (engine === 'hermes' ? ` · after a source check${result.entry.hermesHome ? ` · home=${result.entry.hermesHome}` : ''}` : ''))
           const optional = (call: () => void | Promise<void>) => {

@@ -28,10 +28,14 @@ beforeEach(async () => {
   const codexHome = join(root, 'profile'), cwd = join(root, 'project')
   mkdirSync(join(codexHome, 'sessions'), { recursive: true }); mkdirSync(cwd)
   session = (await registry.openPendingAgent({ engine: 'codex', cwd, codexHome, runtimes: [{ backend: 'tmux', paneId: '%77' }] }))!
-  Object.assign(session, { sessionId: 'selected-session', launch: { state: 'ready' }, transcriptPath: join(codexHome, 'sessions', 'selected-session.jsonl') })
-  writeFileSync(session.transcriptPath!, JSON.stringify({ type: 'session_meta', payload: {
-    id: session.sessionId, cwd, source: 'cli',
+  const transcriptPath = join(codexHome, 'sessions', 'selected-session.jsonl')
+  writeFileSync(transcriptPath, JSON.stringify({ type: 'session_meta', payload: {
+    id: 'selected-session', cwd, source: 'cli',
   } }) + '\n')
+  const bound = await registry.register({ engine: 'codex', sessionId: 'selected-session', tmuxPane: '%77', cwd, codexHome, transcriptPath })
+  expect(bound?.entry.agentId).toBe(session.agentId)
+  session = registry.byAgent(session.agentId)!
+  registry.setLaunch(session.agentId, { state: 'ready' })
   writeFileSync(join(codexHome, 'sessions', 'other.jsonl'), 'another conversation')
   writeFileSync(join(cwd, 'project.txt'), 'project files stay')
   stopped = new StoppedAgentStore(join(root, 'stopped'))

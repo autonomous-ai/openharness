@@ -26,15 +26,6 @@ vi.mock('node:fs/promises', async original => {
   } }
 })
 
-vi.mock('./engines/kit/storePool.js', async original => {
-  const pool = await original<typeof import('./engines/kit/storePool.js')>()
-  return { ...pool, readStorePool: async (...args: Parameters<typeof pool.readStorePool>) => {
-    const result = await pool.readStorePool(...args)
-    if (args[2].capture) inspection.captured?.()
-    return result
-  } }
-})
-
 let root = ''
 let server: Server | undefined
 let registryForCleanup: typeof import('./lib/registry.js')['registry'] | undefined
@@ -55,6 +46,13 @@ async function fixture(options: { waitOnResolution?: number; sharedGateway?: boo
   for (const [key, value] of Object.entries({ HOME: join(root, 'home'), HERMES_HOME: join(root, 'home', '.hermes'),
     ADAPTER_DATA_DIR: join(root, 'data'), ADAPTER_RUNTIME_DIR: join(root, 'runtime') })) vi.stubEnv(key, value)
   vi.resetModules()
+  // A hoisted mock keeps the old error class after resetModules; each fixture needs the real module it loads.
+  const pool = await import('./engines/kit/storePool.js'), readStorePool = pool.readStorePool
+  vi.spyOn(pool, 'readStorePool').mockImplementation(async (...args) => {
+    const result = await readStorePool(...args)
+    if (args[2].capture) inspection.captured?.()
+    return result
+  })
   const { registry } = await import('./lib/registry.js')
   registryForCleanup = registry
   const { startHookServer } = await import('./hookServer.js')
@@ -86,11 +84,18 @@ async function fixture(options: { waitOnResolution?: number; sharedGateway?: boo
   const { entry: agent } = (await registry.openProcessAgent({ engine: 'hermes', tmuxPane: '%1', cwd: root, processIdentity }))!
   await registry.flush()
   const registered = vi.fn()
+  // Match core's callback: admission state lives on the current row, not the detached commit reply.
+  const admissionHeld = vi.fn((id: string, reason: string | undefined) => {
+    const row = registry.byAgent(id)
+    if (!row) return
+    if (reason) row.admissionHold = reason
+    else delete row.admissionHold
+  })
   const logs: string[] = []
   vi.spyOn(console, 'log').mockImplementation((...args) => { logs.push(args.map(String).join(' ')) })
   let resume!: () => void
   let resolutions = 0
-  const started = await startHookServer(0, { onRegistered: registered, onSessionEnd: () => {},
+  const started = await startHookServer(0, { onRegistered: registered, onSessionEnd: () => {}, onAdmissionHeld: admissionHeld,
     ...(options.sharedGateway ? { hookViaSharedProcess: async () => true } : {}),
     ...(options.waitOnResolution ? { resolveHookAgent: async ({ onWait }: { onWait?: () => void }) => {
       if (++resolutions === options.waitOnResolution) { onWait?.(); await new Promise<void>(resolve => { resume = resolve }) }
@@ -111,7 +116,7 @@ async function fixture(options: { waitOnResolution?: number; sharedGateway?: boo
     return body
   }
   const current = () => registry.byAgent(agent.agentId)!
-  return { home, store, policy, hook, current, registered, logs, markDeleted, resume: () => resume(), flush: () => registry.flush(),
+  return { home, store, policy, hook, current, registered, admissionHeld, logs, markDeleted, resume: () => resume(), flush: () => registry.flush(),
     knownHome: (home: string) => registry.setHermesHome(agent.agentId, home),
     seed: (sessionId: string) => registry.register({ engine: 'hermes', sessionId, tmuxPane: '%1', cwd: root, processIdentity }),
   }
@@ -142,6 +147,25 @@ it('holds a local session until Hermes stamps its creator, then binds the CLI\'s
   f.store(f.home, [[own, 'local', 'cli']])
   await vi.waitFor(() => expect(f.current().sessionId).toBe(own), { timeout: 4_000 })
   expect(f.registered).toHaveBeenCalledOnce()
+  const registered = f.registered.mock.calls[0]![0]
+  expect(registered.admissionHold).toBeUndefined()
+  const { agentFrame } = await import('./lib/agentFrame.js')
+  expect((await agentFrame(registered, { selectedModel: null, terminalAvailable: true })).identityHold).toBeUndefined()
+})
+
+it('does not notify a different hook owner after clearing its recovered admission hold', async () => {
+  const f = await fixture(), own = local(41), replacement = local(42)
+  f.store(f.home, [[own, 'local', 'unknown']])
+  await f.hook(own)
+  await vi.waitFor(() => expect(f.current().admissionHold).toBeDefined())
+  f.admissionHeld.mockImplementationOnce((_id, reason) => {
+    expect(reason).toBeUndefined()
+    delete f.current().admissionHold
+    f.current().sessionId = replacement
+  })
+  f.store(f.home, [[own, 'local', 'cli']])
+  await vi.waitFor(() => expect(f.current().sessionId).toBe(replacement), { timeout: 4_000 })
+  expect(f.registered).not.toHaveBeenCalled()
 })
 
 it.each(['cli', 'tui'])('binds a local session its %s created, in a store that also holds an older session', async surface => {
@@ -187,7 +211,7 @@ it('holds an unreadable store without binding and retries after the store recove
   writeFileSync(join(f.home, 'state.db'), 'not SQLite')
   const wanted = '20261009_120000_aaaaaa'
   await f.hook(wanted)
-  await vi.waitFor(() => expect(f.logs.some(line => line.includes('held · Hermes session source is unavailable'))).toBe(true))
+  await vi.waitFor(() => expect(f.logs.some(line => line.includes('held · Hermes session source is unavailable')), f.logs.join('\n')).toBe(true))
   expect(f.current().sessionId).toBe(previous)
   expect(f.current().hermesHome).toBeNull()
   expect(f.registered).not.toHaveBeenCalled()

@@ -35,11 +35,9 @@ async function fixture() {
   const store = new StoppedAgentStore(join(directory, 'stopped-agents'))
   const project = join(directory, 'repo')
   mkdirSync(join(project, 'cli'), { recursive: true })
-  const open = async (id: string, pane: string, cwd: string, extra: Partial<RegisteredSession> = {}): Promise<RegisteredSession> => {
-    const row = (await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: pane }], cwd, defaultName: `Agent ${id}` }))!
-    Object.assign(row, extra)
-    return row
-  }
+  const open = async (id: string, pane: string, cwd: string, extra: Pick<Partial<RegisteredSession>, 'forkedFrom'> = {}): Promise<RegisteredSession> =>
+    (await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: pane }], cwd,
+      defaultName: `Agent ${id}`, forkedFrom: extra.forkedFrom }))!
   const bind = async (row: RegisteredSession, sessionId: string, cwds: string[], under = project): Promise<RegisteredSession> => {
     const cwd = row.cwd!
     const path = transcript(under, sessionId, cwds)
