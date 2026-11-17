@@ -9,8 +9,8 @@
  * note); `off`, turned off; and `defaults`, never turned at all, as most accounts are (off). After a warm-up
  * (FOOTPRINT_WARMUP_SECONDS, 20) each stays idle for FOOTPRINT_SECONDS (30) while `ps` reads, every second, the
  * resident memory of every process under the master: the master (`harnessd`), the core (`harnessd-core`), each
- * service process (`harnessd-<name>`) and the engine workers. Each is named by its process title, or by the pid the
- * master logged it under. Reported per process as the mean over the window, and in total: a readable table on stdout
+ * service process (`harnessd-<name>`) and the engine workers. Each is named by the hard link it runs through, in a
+ * release, or by the pid the master logged it under. Reported per process as the mean over the window, and in total: a readable table on stdout
  * for each, and JSON of all of them to FOOTPRINT_REPORT when it is set. Processes that are not the daemon's own (a `ps`
  * the monitor ran at that moment) are listed apart and left out of the total. FOOTPRINT_ENGINES names the agents
  * instead, comma-separated, or `none` for a daemon at rest with no agent.
@@ -74,9 +74,9 @@ function tree(rows: Row[], root: number): Row[] {
 }
 
 /**
- * What a process is called: its title (`harnessd`, `harnessd-core`, `harnessd-edge`…), which the master's hard links
- * give it in a release (harnessd/processName.ts) and a service sets itself (serviceProcess.ts); else the name the
- * master logged its pid under; else `other: <program>`.
+ * What a process is called: the name of the hard link it runs through (`harnessd`, `harnessd-core`, `harnessd-edge`…),
+ * which the master gives it in a release (harnessd/processName.ts); else the name the master logged its pid under;
+ * else `other: <program>`.
  */
 function nameOf(row: Row, logged: ReadonlyMap<number, string>): string {
   const program = basename(row.command.split(/\s+/)[0] ?? '')
