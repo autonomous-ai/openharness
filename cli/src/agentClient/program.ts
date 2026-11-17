@@ -77,23 +77,6 @@ export function programMay(_action: 'reply' | 'resume', _signedIn: boolean): boo
   return true
 }
 
-/** U+200B ZERO WIDTH SPACE: not whitespace to JavaScript's `trim`, so it stays first in what the TUI reads. */
-const ZERO_WIDTH_SPACE = '​'
-
-/**
- * A program's words as the OpenClaw TUI sends them as a message, never as a command. The TUI's editor trims what is
- * submitted (pi-tui `submitValue`), and then reads a single line that starts with `!` as a local shell command, after
- * an "Allow local shell commands?" prompt that blocks the pane, and one that starts with `/` (after `trimStart`) as a
- * TUI command, such as `/new` or `/reset` (OpenClaw 2026.11.2 `resolveEditorSubmitAction`; 2026.3.2 reads them the
- * same way). Spoken words or a skill's text can start with either. A trailing newline does not help, since the trim
- * removes it. So such a line goes with a zero-width space first, which neither check trims and OpenClaw does not strip
- * from a chat message. Any other text, and every text of more than one line (always a message), goes as written.
- */
-export function openclawMessage(text: string): string {
-  const line = text.trim()
-  return !line.includes('\n') && /^[!/]/.test(line) ? `${ZERO_WIDTH_SPACE}${line}` : text
-}
-
 // ── The record ────────────────────────────────────────────────────────────────────────────────────
 
 /** One input a program's reply had taken (`reply` answered `taken`), for `wait --after`. */

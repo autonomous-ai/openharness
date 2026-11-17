@@ -33,7 +33,7 @@ import { messagesRpc, type Rpc } from '../messages/rpc.js'
 import { PERSON_AGENT_ID, REPLY_OFF_TEXT } from '../messages/replyLocal.js'
 import { TELL_OFF_TEXT } from '../messages/tell.js'
 import { sendPane } from '../messages/command.js'
-import { openclawMessage, PROGRAM_TOKEN_FLAG, ProgramRecords, programMay, readProgramToken, sameHash, type ProgramHarness } from './program.js'
+import { PROGRAM_TOKEN_FLAG, ProgramRecords, programMay, readProgramToken, sameHash, type ProgramHarness } from './program.js'
 import { asSaid, callerOf, clip, cloudMeta, cloudTurn, failureOf, forAgent, isAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type CloudMeta, type Failure, type Frame, type HistoryEvent, type Row, type State } from './model.js'
 
 export interface ClientDeps {
@@ -623,9 +623,7 @@ async function programReply(s: Setup, o: Opened, t: ProgramTarget, text: string,
   // What is left of [timeoutMs] bounds the wait for the paste; the turn's start then has [timeoutMs] from the paste.
   const ackMs = Math.max(1_000, deadline - s.now())
   const takenMs = Math.max(1_000, timeoutMs)
-  // Always a message to its engine: an OpenClaw line starting `!` or `/` would run as a shell or TUI command.
-  const words = t.frame.engine === 'openclaw' ? openclawMessage(text) : text
-  const reply = await o.daemon.request('input_ack', { agentId: t.frame.id, text: words, ackMs, takenMs }, ackMs + takenMs + 10_000)
+  const reply = await o.daemon.request('input_ack', { agentId: t.frame.id, text, ackMs, takenMs }, ackMs + takenMs + 10_000)
   if (reply.error === 'UNSUPPORTED') return programFailure(s, json, 'DAEMON_TOO_OLD', 'This Harness daemon cannot acknowledge a reply. Restart Harness on this version.', EXIT.failed)
   if (typeof reply.error === 'string') return programFailure(s, json, reply.error, `${name} did not take the words (${reply.error}).`, EXIT.failed)
   const inputId = String(reply.inputId ?? '')
@@ -634,7 +632,7 @@ async function programReply(s: Setup, o: Opened, t: ProgramTarget, text: string,
     try { t.record.inputs.push({ id: inputId, takenAt }); t.record.inputs.length && new ProgramRecords(o.where.dataDir).taken(t.frame.id, { id: inputId, takenAt }) }
     catch { /* `wait --after` then does not know it, and says so */ }
     // As a tell's: `wait` and `show` hold the answer to the work before until a turn asked with these words is seen.
-    try { o.ledger.append({ at: s.now(), by: { machineId: o.where.machineId, agentId: PERSON_AGENT_ID }, told: { machineId: t.machineId, agentId: t.frame.id }, probe: flat(words).slice(0, PROBE_CHARS) }) }
+    try { o.ledger.append({ at: s.now(), by: { machineId: o.where.machineId, agentId: PERSON_AGENT_ID }, told: { machineId: t.machineId, agentId: t.frame.id }, probe: flat(text).slice(0, PROBE_CHARS) }) }
     catch { /* `wait` then reads its last answer as it would without the line */ }
     s.out(json ? JSON.stringify({ state: 'taken', inputId, takenAt: new Date(takenAt).toISOString() })
       : `${name} took it (${inputId}). Wait for its answer: harness wait ${name} --after ${inputId}`)
