@@ -6,7 +6,11 @@
  * installed index again rather than from its two-second cache (dsh/installed.ts): the create that follows
  * an install must find the harness just installed.
  */
-import type { DshLaunchAnswer, DshMaterializeAnswer, DshRefusal } from '../dsh/launchWire.js'
+import { createHash } from 'node:crypto'
+import { join } from 'node:path'
+import { DSH_SESSION_ENV } from '../dsh/launch.js'
+import { launchContributionIn, launchText } from '../lib/launchContribution.js'
+import type { DshLaunchRequest, DshLaunchAnswer, DshMaterializeAnswer, DshRefusal } from '../dsh/launchWire.js'
 import type { CoreApi, StorePort } from './api.js'
 import { ServiceUnavailableError } from './serviceHost.js'
 
@@ -15,9 +19,9 @@ const text = (value: unknown): value is string => typeof value === 'string'
 const texts = (value: unknown): value is string[] => Array.isArray(value) && value.every(text)
 
 function refusal(value: Record<string, unknown>): DshRefusal | null {
-  if (value.ok !== false || !text(value.error) || !text(value.detail)) return null
+  if (value.ok !== false || !launchText(value.error) || !launchText(value.detail)) return null
   if (value.unavailable !== undefined && value.unavailable !== 'store') return null
-  if (value.thrown !== undefined && !text(value.thrown)) return null
+  if (value.thrown !== undefined && !launchText(value.thrown)) return null
   if (value.holdScope !== undefined && value.holdScope !== 'workspace') return null
   return { ok: false, error: value.error, detail: value.detail,
     ...(value.unavailable ? { unavailable: value.unavailable } : {}),
@@ -33,12 +37,23 @@ export function dshMaterializeAnswerIn(value: unknown): DshMaterializeAnswer | n
     ? { ok: true, created: value.created, kept: value.kept, warnings: value.warnings } : null
 }
 
-export function dshLaunchAnswerIn(value: unknown): DshLaunchAnswer | null {
+/** Captured from an existing installed-package lookup and the launch's existing workspace observation.
+ * Restore/fork lack this identity until installed-index extraction supplies it; a returned alias is no proof. */
+export interface DshLaunchIdentity { ids: readonly string[]; workspace: string }
+
+export function dshLaunchAnswerIn(value: unknown, request: DshLaunchRequest, identity?: DshLaunchIdentity): DshLaunchAnswer | null {
   if (!record(value)) return null
   if (value.ok !== true) return refusal(value)
-  const launch = value.launch
-  if (!record(launch) || !record(launch.env) || !Object.values(launch.env).every(text) || !texts(launch.args)) return null
-  return { ok: true, launch: { env: launch.env as Record<string, string>, args: launch.args } }
+  const launch = launchContributionIn(value.launch)
+  if (!launch || Object.keys(launch.env).some(name => name.startsWith('HARNESS_') && !(DSH_SESSION_ENV as readonly string[]).includes(name))) return null
+  const env = launch.env
+  if (env.HARNESS_PRIVATE_GRID !== undefined && env.HARNESS_PRIVATE_GRID !== request.account.privateGrid) return null
+  if (identity) {
+    const runtime = join(identity.workspace, '.harness', 'runtime', createHash('sha256').update(request.key).digest('hex'))
+    if (!identity.ids.includes(env.HARNESS_DSH!) || env.HARNESS_WORKSPACE !== identity.workspace
+      || env.HARNESS_CONTEXT_FILE !== join(runtime, 'CONTEXT.md') || env.HARNESS_SKILLS_DIR !== join(runtime, 'skills')) return null
+  }
+  return { ok: true, launch }
 }
 
 type CallStore = (type: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>
@@ -53,8 +68,8 @@ export function createStoreLink(core: Pick<CoreApi, 'clients'>, installedChanged
       return answer
     },
     dshLaunch: async request => {
-      const answer = dshLaunchAnswerIn(await call('dshLaunch', { ...request }))
-      if (!answer) throw new ServiceUnavailableError('store')
+      const answer = dshLaunchAnswerIn(await call('dshLaunch', { ...request }), request)
+      if (!answer) { console.warn('[store] LAUNCH_CONTRIBUTION_REFUSED'); throw new ServiceUnavailableError('store') }
       return answer
     },
   }

@@ -17,6 +17,7 @@ import { dropPermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
 import { gridUnavailable, type GridLaunchAnswer, type GridLaunchRequest } from '../../lib/gridLaunchWire.js'
 import { buildLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps, type LaunchOverridesResult, type LaunchSource } from '../../lib/launchOverrides.js'
 import type { ModelsPort } from '../api.js'
+import { gridLaunchAnswerIn } from '../modelsLink.js'
 import { sid } from '../../lib/log.js'
 import { prepareInstructionWrites } from '../../scm/launch.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
@@ -29,9 +30,12 @@ import type { registry, RegisteredSession } from '../../lib/registry.js'
  */
 export function gridLaunchThrough(models: () => Pick<ModelsPort, 'gridLaunch'>) {
   return async (request: GridLaunchRequest): Promise<GridLaunchAnswer> => {
+    const captured = { ...request, override: { ...request.override }, machine: { ...request.machine } }
     let answer: GridLaunchAnswer
     try { answer = await models().gridLaunch(request) } catch { return gridUnavailable(request.engine, request.override) }
-    return answer
+    const checked = gridLaunchAnswerIn(answer, captured)
+    if (!checked) console.warn('[models] LAUNCH_CONTRIBUTION_REFUSED')
+    return checked ?? gridUnavailable(request.engine, request.override)
   }
 }
 

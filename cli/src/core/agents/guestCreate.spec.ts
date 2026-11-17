@@ -1,14 +1,23 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { GuestLaunch } from '../api.js'
+import type { GuestLaunch, GuestLaunchInput } from '../api.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { TmuxRuntimeRef } from '../../lib/terminalTypes.js'
 import { createGuestCreate, type GuestCreateDeps } from './guestCreate.js'
+import { guestPaneCommand } from '../../lib/guestPaneCommand.js'
+import { guestUserFor, guestWorkspaceFor } from '../../lib/guestUser.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 
 // A guest's New Harness: the launch shared machines builds, opened as a pane and recorded as the guest's
 // (docs/plans/2026-10-19-guest-machine-sharing-plan.md). The pane is a fake tmux's; nothing runs.
 const runtime = { backend: 'tmux', paneId: '%7' } satisfies TmuxRuntimeRef
-const launched: GuestLaunch = { ok: true, workspace: '/Users/Shared/HarnessGuests/hg_0123456789ab/work', argv: ['/bin/sh', '-c', 'boot'], env: { TERM: 'xterm-256color' } }
+const EMAIL = 'kim@acme.io'
+const USER = guestUserFor(EMAIL)
+const guestFixture = (input: GuestLaunchInput = { email: EMAIL, engine: 'claude', bypassPermission: true, permissionFlags: ['--permission-mode', 'auto'] }): Extract<GuestLaunch, { ok: true }> => {
+  const workspace = guestWorkspaceFor(input.email)
+  return { ok: true, workspace, ...guestPaneCommand({ ...input, engine: input.engine as 'claude' | 'codex', cwd: workspace,
+    account: { user: guestUserFor(input.email), home: workspace.slice(0, -5), workspace } }) }
+}
+const launched = guestFixture()
 
 function setup(over: Partial<GuestCreateDeps> & { answer?: GuestLaunch; spawn?: 'ok' | 'fail'; register?: boolean } = {}) {
   const session = { agentId: 'agent-1', sessionId: '', engine: 'claude', guest: 'kim@acme.io' } as RegisteredSession
@@ -17,7 +26,7 @@ function setup(over: Partial<GuestCreateDeps> & { answer?: GuestLaunch; spawn?: 
     kill: vi.fn(async () => {}),
   }
   const deps: GuestCreateDeps = {
-    launch: vi.fn(async () => over.answer ?? launched),
+    launch: vi.fn(async input => over.answer ?? guestFixture(input)),
     tmuxBackend: () => tmux as never,
     ensureEngine: vi.fn(async () => ({ ok: true as const })),
     resolveEngine: vi.fn((_engine: string, argv: readonly string[]) => [...argv]),
@@ -42,12 +51,12 @@ describe('a guest\'s New Harness', () => {
     // Auto-approve, a harness's default: the engine's own auto mode, never Skip all checks.
     expect(deps.launch).toHaveBeenCalledWith({ email: 'kim@acme.io', engine: 'claude', bypassPermission: true,
       permissionFlags: ['--permission-mode', 'auto'], cwd: '/Users/owner/secret' })
-    expect(tmux.create).toHaveBeenCalledWith(expect.objectContaining({ cwd: launched.ok && launched.workspace, command: ['/bin/sh', '-c', 'boot'], env: { TERM: 'xterm-256color' } }))
+    expect(tmux.create).toHaveBeenCalledWith(expect.objectContaining({ cwd: launched.ok && launched.workspace, command: launched.argv, env: launched.env }))
     expect(deps.registry.openPendingAgent).toHaveBeenCalledWith(expect.objectContaining({ engine: 'claude', cwd: launched.ok && launched.workspace,
       guest: 'kim@acme.io', defaultName: 'Notes', bypassPermission: true, permissionMode: 'auto' }))
     expect(deps.announceSession).toHaveBeenCalledWith(session)
     // Watched as any pane, with no install: the pane installs a missing engine for the guest itself.
-    expect(deps.watchNewPane).toHaveBeenCalledWith('claude', session, expect.objectContaining({ runtime }), ['/bin/sh', '-c', 'boot'], undefined)
+    expect(deps.watchNewPane).toHaveBeenCalledWith('claude', session, expect.objectContaining({ runtime }), launched.argv, undefined)
     expect(log).toHaveBeenCalledWith('[agent] create guest pane open · claude · agent agent-1')
   })
 
@@ -82,17 +91,17 @@ describe('a guest\'s New Harness', () => {
   it('makes a launch that names the guest\'s own host there, never the owner\'s pane', async () => {
     said()
     // Windows: the guest's panes come from its own host, whose processes already run as that account.
-    const windows: GuestLaunch = { ok: true, workspace: 'C:\\Users\\hg_0123456789ab\\work', argv: ['claude'], env: {},
-      guestHostUser: 'hg_0123456789ab' }
+    const windows: GuestLaunch = { ok: true, workspace: `C:\\Users\\${USER}\\work`, argv: ['claude', '--permission-mode', 'auto'], env: {},
+      guestHostUser: USER }
     const runtime = { backend: 'ptyhost', instance: 'p3', paneId: '%1' } as const
     const host = { create: vi.fn(async () => ({ state: 'succeeded' as const, runtime })), kill: vi.fn(async () => {}) }
     const guestBackend = vi.fn(() => host as never)
     const run = setup({ answer: windows, guestBackend })
     expect(await run.create({ engine: 'claude' }, 'kim@acme.io')).toEqual({ ok: true, session: run.session })
-    expect(guestBackend).toHaveBeenCalledWith('hg_0123456789ab')
+    expect(guestBackend).toHaveBeenCalledWith(USER)
     expect(run.tmux.create).not.toHaveBeenCalled()
     // The pane is made on the guest's host, starts in its workspace, and becomes the guest's shell when the engine goes.
-    expect(host.create).toHaveBeenCalledWith(expect.objectContaining({ cwd: windows.workspace, command: ['claude'], afterExit: expect.any(Object) }))
+    expect(host.create).toHaveBeenCalledWith(expect.objectContaining({ cwd: windows.workspace, command: ['claude', '--permission-mode', 'auto'], afterExit: expect.any(Object) }))
     expect(run.deps.registry.openPendingAgent).toHaveBeenCalledWith(expect.objectContaining({ runtimes: [runtime], guest: 'kim@acme.io' }))
     // A host that is gone is said as such: the owner's pane is never a fallback (it would run as the owner).
     const missing = setup({ answer: windows, guestBackend: () => null })
@@ -102,8 +111,8 @@ describe('a guest\'s New Harness', () => {
 
   it('installs the guest\'s engine before its pane, once even for two launches at once, and reports a failed install', async () => {
     said()
-    const windows: GuestLaunch = { ok: true, workspace: 'C:\\Users\\hg_0123456789ab\\work', argv: ['claude'], env: {},
-      guestHostUser: 'hg_0123456789ab' }
+    const windows: GuestLaunch = { ok: true, workspace: `C:\\Users\\${USER}\\work`, argv: ['claude', '--permission-mode', 'auto'], env: {},
+      guestHostUser: USER }
     const host = { create: vi.fn(async () => ({ state: 'succeeded' as const, runtime })), kill: vi.fn(async () => {}) }
     let open: () => void = () => {}
     const ensureEngine = vi.fn(async () => { await new Promise<void>((resolve) => { open = resolve }); return { ok: true as const } })
@@ -114,7 +123,7 @@ describe('a guest\'s New Harness', () => {
     open()
     await Promise.all([first, second])
     // One install for both: the second pane waits for the first rather than running npm beside it.
-    expect(ensureEngine).toHaveBeenCalledWith(host, { user: 'hg_0123456789ab', engine: 'claude', cwd: windows.workspace, prefix: 'C:\\ProgramData\\HarnessGuests\\hosts\\hg_0123456789ab\\engines' })
+    expect(ensureEngine).toHaveBeenCalledWith(host, { user: USER, engine: 'claude', cwd: windows.workspace, prefix: `C:\\ProgramData\\HarnessGuests\\hosts\\${USER}\\engines` })
     expect(host.create).toHaveBeenCalledTimes(2)
     // A failed install is the person's answer: no pane, no registration, and npm's own words.
     const refused = setup({ answer: windows, guestBackend: () => host as never,
@@ -150,8 +159,8 @@ describe('a guest\'s New Harness', () => {
 
   it('installs through the guest host when no one hands in an installer', async () => {
     said()
-    const windows: GuestLaunch = { ok: true, workspace: 'C:\\Users\\hg_0123456789ab\\work', argv: ['claude'], env: {},
-      guestHostUser: 'hg_0123456789ab' }
+    const windows: GuestLaunch = { ok: true, workspace: `C:\\Users\\${USER}\\work`, argv: ['claude', '--permission-mode', 'auto'], env: {},
+      guestHostUser: USER }
     let checked = false
     const host = {
       create: vi.fn(async (_request: { command?: string[]; label?: string }) => ({ state: 'succeeded' as const, dispatch: 'executed' as const, runtime: { backend: 'ptyhost', instance: 'p3-0.5.55-gu0123456789ab', paneId: '%1' } })),
