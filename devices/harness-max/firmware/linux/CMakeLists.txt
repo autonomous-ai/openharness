@@ -82,7 +82,7 @@ else()
     target_link_libraries(harness-max PRIVATE PkgConfig::DRM PkgConfig::ALSA)
 endif()
 
-# Host tests of the Linux layer: the picture and touch arithmetic, the settings file, the cable at both far ends.
+# Host tests of the Linux layer: the picture and touch arithmetic, the settings file, the cable at each far end.
 enable_testing()
 function(max_host_test name)
     add_executable(${name} ${ARGN})
@@ -98,4 +98,12 @@ add_test(NAME nvs COMMAND test_nvs)
 max_host_test(test_cable_linux test/test_cable_linux.c cable/cable_linux.c esp/esp.c ${PRO_MAIN}/cable/cable_frame.c)
 add_test(NAME cable_demo COMMAND test_cable_linux demo)
 add_test(NAME cable_tcp COMMAND test_cable_linux tcp)
-set_tests_properties(glass_fit nvs cable_demo cable_tcp PROPERTIES TIMEOUT 60)   # a hung link fails, not stalls
+add_test(NAME cable_usb COMMAND test_cable_linux usb)
+set_tests_properties(glass_fit nvs cable_demo cable_tcp cable_usb PROPERTIES TIMEOUT 60)   # a hung link fails, not stalls
+# The bar's microphone choice, where ALSA is: its null device stands in for a microphone.
+if(MAX_LINUX_OUTPUT STREQUAL "drm")
+    max_host_test(test_audio_alsa test/test_audio_alsa.c audio/audio_alsa.c esp/esp.c)
+    target_link_libraries(test_audio_alsa PRIVATE PkgConfig::ALSA)
+    add_test(NAME audio_alsa COMMAND test_audio_alsa)
+    set_tests_properties(audio_alsa PROPERTIES TIMEOUT 60)
+endif()

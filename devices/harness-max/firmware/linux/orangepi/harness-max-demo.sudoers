@@ -1,3 +1,0 @@
-# Lets deploy-orangepi.sh switch the bar to Harness Max without a password, as /etc/sudoers.d/near-app lets near-demo
-# switch it back. Installed by deploy-orangepi.sh as /etc/sudoers.d/harness-max-demo (mode 440, checked by visudo).
-orangepi ALL=(root) NOPASSWD: /usr/bin/systemctl start harness-max-demo, /usr/bin/systemctl stop harness-max-demo, /usr/bin/systemctl restart harness-max-demo

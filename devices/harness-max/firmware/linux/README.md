@@ -10,10 +10,12 @@ list of portable sources; `../main/CMakeLists.txt` adds the ESP32-P4 drivers to 
 - `display/`: `pro_display.h` over an SDL window (`MAX_LINUX_OUTPUT=sdl`, the mouse is the finger) or DRM/KMS plus
   evdev touch (`MAX_LINUX_OUTPUT=drm`, `/dev/dri/card0`). `glass_fit.c` scales and turns the glass to the output, and
   maps a touch back.
-- `audio/`: `audio/audio_capture.h` and the beep over SDL (macOS) or ALSA's `default` device (Linux). No microphone:
-  recording fails as on a device whose codec does not answer.
-- `cable/`: `cable_link.h` with the far end picked when the program starts: `--demo` (the default) runs the scripted
-  daemon in `../main/demo` inside the program, `--live` takes a real daemon over TCP in the USB framing.
+- `audio/`: `audio/audio_capture.h` and the beep over SDL (macOS) or ALSA (Linux): the microphone is the capture device
+  `HARNESS_MAX_MIC` names (`default` when unset), the beep plays on `default`. No microphone: recording fails as on a
+  device whose codec does not answer.
+- `cable/`: `cable_link.h` with the far end picked when the program starts: `--live` (the default) takes a real daemon
+  over TCP in the USB framing, `--usb` a real daemon over the USB cable through a gadget's serial port (`/dev/ttyGS0`),
+  `--demo` runs the scripted daemon in `../main/demo` inside the program.
 
 The glass is 1920 x 415 by default, the Orange Pi bar's shape at the device's width (1480 x 320 scaled by 0.771);
 `-DMAX_GLASS_H=480` builds the ESP32-P4 panel's 1920 x 480.
@@ -28,16 +30,20 @@ at build time), and ESP-IDF's cJSON (`~/esp/esp-idf-5.5.4`, else `-DCJSON_DIR=..
 cmake -S devices/harness-max/firmware/linux -B build/max-sim            # -DMAX_GLASS_H=480 for the panel's glass
 cmake --build build/max-sim -j
 ctest --test-dir build/max-sim                                         # the host tests of this directory
-build/max-sim/harness-max                                              # the demo
-build/max-sim/harness-max --live                                       # waits for a daemon on port 7531
-build/max-sim/harness-max --screenshot 8 lanes.bmp                     # saves the glass after 8 s and quits
+build/max-sim/harness-max                                              # waits for a daemon on port 7531
+build/max-sim/harness-max --demo                                       # the demo
+build/max-sim/harness-max --demo --screenshot 8 lanes.bmp              # saves the glass after 8 s and quits
 ```
 
 A daemon reaches `--live` with `HARNESS_CABLE_TCP=localhost:7531` (or `<address>:7531` for a board), the dev-only TCP
 transport of `cli/src/cable/cableTcp.ts`. `--port N` listens on another port.
 
 **`--live` is for development only.** The port is open on every interface with no authentication: anyone on the
-network can drive the bar and read what the daemon sends to it. Use it on a trusted network.
+network can drive the bar and read what the daemon sends to it. Use it on a trusted network. For the same reason the
+daemon answers no permission prompt over TCP: approving takes `--usb`.
+
+The daemon here is the branch's: `cli/scripts/install-cli.sh` installs this tree's CLI as `harness` on the Mac (a
+`-dev` build that no release replaces on its own; `harness update --force` goes back to the release).
 
 ## The Orange Pi 4 Pro's bar
 
@@ -45,23 +51,31 @@ The bar is the 11.9" 1480 x 320 HDMI panel, which the board drives as 320 x 1480
 picture a quarter and scales 1920 x 415 to 1480 x 320, and turns touch back. From the Mac:
 
 ```sh
-devices/harness-max/firmware/linux/deploy-orangepi.sh            # the demo
-devices/harness-max/firmware/linux/deploy-orangepi.sh --live     # a daemon on the Mac drives it
+devices/harness-max/firmware/linux/deploy-orangepi.sh                    # the Mac's daemon over the USB cable
+devices/harness-max/firmware/linux/deploy-orangepi.sh --live             # the Mac's daemon over TCP
+devices/harness-max/firmware/linux/deploy-orangepi.sh --demo --no-build  # the demo, without building again
 ```
 
 It copies the sources to the board, builds there (`MAX_LINUX_OUTPUT=drm`), runs the host tests, installs
-`~/harness-max/bin/harness-max` and restarts `harness-max-demo.service` (`orangepi/`), which starts it through the
-Phase 0 boot wrapper for its fbcon and HDMI hotplug handling. The board comes from `HARNESS_MAX_BOARD` /
-`HARNESS_MAX_SSH_OPTS` or near-demo's `~/.config/near/board.env`. The first run asks for the board's sudo password once
-to install the unit and a sudoers rule for switching. The board needs `cmake pkg-config libdrm-dev libasound2-dev
-python3-pil` from apt.
+`~/harness-max/bin/harness-max` and restarts `harness-max.service` (`orangepi/`), which starts it through the Phase 0
+boot wrapper for its fbcon and HDMI hotplug handling. `--no-build` only switches the installed bar to the mode. The
+board comes from `HARNESS_MAX_BOARD` / `HARNESS_MAX_SSH_OPTS` or near-demo's `~/.config/near/board.env`. The first run
+asks for the board's sudo password once to install the unit, the USB gadget's script (`orangepi/harness-max-usb`) and a
+sudoers rule for switching. The board needs `cmake pkg-config libdrm-dev libasound2-dev python3-pil` from apt.
+
+With `--usb` the bar is a USB device on the board's one Type-C port, with the Harness devices' USB ids: the cable to the
+Mac carries the cable protocol, as a Harness Max's does, and powers the board (the port is also its power input). The
+gadget exists while the app runs. The microphone is the USB one Near's voice service uses, which stops while the bar
+runs (`HARNESS_MAX_MIC` in the unit).
 
 Switching the bar (each service stops the other; there is one DRM master at a time):
 
 | To | On the Mac | On the board |
 | --- | --- | --- |
-| Harness Max | `deploy-orangepi.sh` | `sudo systemctl start harness-max-demo` |
+| Harness Max | `deploy-orangepi.sh [--usb / --live / --demo] --no-build` | `sudo systemctl start harness-max` |
 | Near | `near-demo` | `sudo systemctl start near-app` |
+
+The demo (`--demo`, `../main/demo`) is temporary: it goes once this branch is merged into main.
 
 The unit has no `[Install]`: a reboot comes back to Near.
 

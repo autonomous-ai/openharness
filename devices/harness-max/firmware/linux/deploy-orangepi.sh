@@ -2,17 +2,20 @@
 # Builds Harness Max for the Orange Pi 4 Pro's bar on the board itself, installs it and switches the bar to it. Runs on
 # the Mac, from any directory.
 #
-#   deploy-orangepi.sh [--demo | --live] [ssh-host]
+#   deploy-orangepi.sh [--usb | --live | --demo] [--no-build] [ssh-host]
 #
-# --demo (the default): the scripted demo daemon runs inside the program. --live: the bar waits for a real daemon on
-# TCP port 7531 (on the Mac: HARNESS_CABLE_TCP=<board address>:7531).
+# --usb (the default): the bar is a USB device on the board's Type-C port, which the Mac's daemon finds as it finds a
+# Harness Max; the cable to the Mac also powers the board. --live: the bar waits for a daemon on TCP port 7531 (on the
+# Mac: HARNESS_CABLE_TCP=<board address>:7531), which answers no permission prompt. --demo: the scripted demo daemon
+# runs inside the program, no computer needed. --no-build switches the bar that is installed to the mode, in seconds.
 #
 # Board: the ssh-host argument or HARNESS_MAX_BOARD / HARNESS_MAX_SSH_OPTS; when none is set, near-demo's board
 # (NEAR_BOARD / NEAR_SSH_OPTS, else ~/.config/near/board.env); otherwise plain `opi`. Nothing about the board is kept in
 # the repository. cJSON comes from ESP-IDF, as on the device: CJSON_DIR, else $IDF_PATH or ~/esp/esp-idf-5.5.4.
 #
-# The first run asks for the board's sudo password once, to install orangepi/harness-max-demo.service and the sudoers
-# rule that lets later runs switch without it. A run that changes the unit asks again.
+# The first run asks for the board's sudo password once, to install orangepi/harness-max.service, the USB gadget's
+# script and the sudoers rule that lets later runs switch without it. A run that changes the unit or the script asks
+# again.
 #
 # Back to Near: `near-demo` on the Mac, or on the board `sudo systemctl start near-app` (each stops the other).
 set -eu
@@ -20,16 +23,21 @@ LINUX=$(cd "$(dirname "$0")" && pwd)
 DEVICES=$(cd "$LINUX/../../.." && pwd)
 
 usage() {
-    echo "usage: deploy-orangepi.sh [--demo | --live] [ssh-host]"
+    echo "usage: deploy-orangepi.sh [--usb | --live | --demo] [--no-build] [ssh-host]"
 }
 
-ARGS=--demo
-case ${1:-} in
-    --demo) shift ;;
-    --live) ARGS=--live; shift ;;
-    -h|--help) usage; exit 0 ;;
-    -*) usage >&2; exit 2 ;;
-esac
+ARGS=--usb
+BUILD=1
+while [ $# -gt 0 ]; do
+    case $1 in
+        --usb|--live|--demo) ARGS=$1 ;;
+        --no-build) BUILD=0 ;;
+        -h|--help) usage; exit 0 ;;
+        -*) usage >&2; exit 2 ;;
+        *) break ;;
+    esac
+    shift
+done
 if [ $# -gt 1 ]; then
     usage >&2
     exit 2
@@ -67,7 +75,9 @@ main() {
     set -eu
     cd
     case $1 in
-        build) build "$2" ;;
+        build) build ;;
+        installed) [ -x harness-max/bin/harness-max ] ;;
+        mode) mode "$2" ;;
         check) check ;;
         switch) switch ;;
     esac
@@ -82,36 +92,39 @@ build() {
     # A new file renamed over the old one: a running copy keeps its own until the restart.
     install -m 755 harness-max/build/harness-max harness-max/bin/harness-max.new
     mv harness-max/bin/harness-max.new harness-max/bin/harness-max
-    # The unit reads the mode from here (EnvironmentFile=), so switching it needs no sudo.
-    if [ "$1" = --demo ]; then
-        rm -f harness-max/mode.env
-    else
-        echo "HARNESS_MAX_ARGS=$1" > harness-max/mode.env
-    fi
 }
 
-# Exit 10 when the unit is missing or not the one in the sources, or switching would need a password.
+# The unit reads the mode from here (EnvironmentFile=), so switching it needs no sudo.
+mode() {
+    echo "HARNESS_MAX_ARGS=$1" > harness-max/mode.env
+}
+
+# Exit 10 when the unit or the gadget's script is missing or not the one in the sources, the unit from before the
+# rename is still there, or switching would need a password.
 check() {
-    cmp -s harness-max/src/devices/harness-max/firmware/linux/orangepi/harness-max-demo.service \
-        /etc/systemd/system/harness-max-demo.service || exit 10
-    sudo -n -l 2>/dev/null < /dev/null | grep -q "NOPASSWD:.*/usr/bin/systemctl restart harness-max-demo" || exit 10
+    cmp -s harness-max/src/devices/harness-max/firmware/linux/orangepi/harness-max.service \
+        /etc/systemd/system/harness-max.service || exit 10
+    cmp -s harness-max/src/devices/harness-max/firmware/linux/orangepi/harness-max-usb \
+        /usr/local/sbin/harness-max-usb || exit 10
+    [ ! -e /etc/systemd/system/harness-max-demo.service ] || exit 10
+    sudo -n -l 2>/dev/null < /dev/null | grep -qE "NOPASSWD:.*/usr/bin/systemctl restart harness-max(,|$)" || exit 10
 }
 
 switch() {
     t0=$(date +%s)
-    sudo -n systemctl restart harness-max-demo < /dev/null
+    sudo -n systemctl restart harness-max < /dev/null
     for _ in $(seq 30); do
         sleep 1
-        if journalctl -u harness-max-demo --since "@$t0" --no-pager -o cat < /dev/null | grep -q "app: first frame at"
+        if journalctl -u harness-max --since "@$t0" --no-pager -o cat < /dev/null | grep -q "app: first frame at"
         then
-            journalctl -u harness-max-demo --since "@$t0" --no-pager -o cat < /dev/null \
-                | grep -E "board: |drm: |cable: link up|app: first frame" || true
+            journalctl -u harness-max --since "@$t0" --no-pager -o cat < /dev/null \
+                | grep -E "board: |drm: |audio: mic|cable: link up|app: first frame" || true
             return 0
         fi
-        systemctl is-active -q harness-max-demo || break
+        systemctl is-active -q harness-max || break
     done
-    echo "harness-max-demo shows no first frame; its log:" >&2
-    journalctl -u harness-max-demo --since "@$t0" --no-pager -n 40 < /dev/null >&2
+    echo "harness-max shows no first frame; its log:" >&2
+    journalctl -u harness-max --since "@$t0" --no-pager -n 40 < /dev/null >&2
     exit 6
 }
 
@@ -120,29 +133,39 @@ BOARD
 }
 
 say "board $HOST${OPTS:+ ($OPTS)}"
-say "copying the sources to $HOST:harness-max/src"
-$SSH "$HOST" mkdir -p harness-max/src/devices harness-max/src/cJSON
-(
-    cd "$DEVICES"
-    rsync -aR --delete --exclude __pycache__ --exclude .DS_Store -e "$SSH" \
-        harness-max/firmware/sources.cmake harness-max/firmware/main harness-max/firmware/linux \
-        harness-pro/firmware/main harness-pro/firmware/scripts/gen_fonts.py harness-pro/firmware/fonts \
-        "$HOST:harness-max/src/devices/"
-)
-rsync -a -e "$SSH" "$CJSON/cJSON.c" "$CJSON/cJSON.h" "$HOST:harness-max/src/cJSON/"
+if [ "$BUILD" = 1 ]; then
+    say "copying the sources to $HOST:harness-max/src"
+    $SSH "$HOST" mkdir -p harness-max/src/devices harness-max/src/cJSON
+    (
+        cd "$DEVICES"
+        rsync -aR --delete --exclude __pycache__ --exclude .DS_Store -e "$SSH" \
+            harness-max/firmware/sources.cmake harness-max/firmware/main harness-max/firmware/linux \
+            harness-pro/firmware/main harness-pro/firmware/scripts/gen_fonts.py harness-pro/firmware/fonts \
+            "$HOST:harness-max/src/devices/"
+    )
+    rsync -a -e "$SSH" "$CJSON/cJSON.c" "$CJSON/cJSON.h" "$HOST:harness-max/src/cJSON/"
 
-say "building on the board (about two minutes from clean) and running its host tests"
-board build "$ARGS"
+    say "building on the board (about two minutes from clean) and running its host tests"
+    board build
+elif ! board installed; then
+    echo "deploy-orangepi: Harness Max is not installed on $HOST: run without --no-build first" >&2
+    exit 1
+fi
+board mode "$ARGS"
 
 set +e
 board check
 rc=$?
 set -e
 if [ "$rc" = 10 ]; then
-    say "installing the unit and the switching rule: the board's sudo password, once"
-    $SSH -t "$HOST" "sudo install -m 644 $UNIT_SRC/harness-max-demo.service /etc/systemd/system/harness-max-demo.service" \
-        "&& sudo visudo -cqf $UNIT_SRC/harness-max-demo.sudoers" \
-        "&& sudo install -m 440 $UNIT_SRC/harness-max-demo.sudoers /etc/sudoers.d/harness-max-demo" \
+    say "installing the unit, the USB gadget's script and the switching rule: the board's sudo password, once"
+    # The unit from before the rename (harness-max-demo) goes, with its rule.
+    $SSH -t "$HOST" "sudo install -m 644 $UNIT_SRC/harness-max.service /etc/systemd/system/harness-max.service" \
+        "&& sudo install -m 755 $UNIT_SRC/harness-max-usb /usr/local/sbin/harness-max-usb" \
+        "&& sudo visudo -cqf $UNIT_SRC/harness-max.sudoers" \
+        "&& sudo install -m 440 $UNIT_SRC/harness-max.sudoers /etc/sudoers.d/harness-max" \
+        "&& { sudo systemctl stop harness-max-demo 2>/dev/null || true; }" \
+        "&& sudo rm -f /etc/systemd/system/harness-max-demo.service /etc/sudoers.d/harness-max-demo" \
         "&& sudo systemctl daemon-reload"
 elif [ "$rc" != 0 ]; then
     exit "$rc"
@@ -151,6 +174,7 @@ fi
 say "switching the bar to Harness Max ($ARGS)"
 board switch
 say "done: Harness Max ($ARGS) is on $HOST's bar. Back to Near: near-demo (on the board: sudo systemctl start near-app)"
-if [ "$ARGS" = --live ]; then
-    say "a daemon on this Mac drives it with HARNESS_CABLE_TCP=<board address>:7531"
-fi
+case $ARGS in
+    --usb) say "the board's USB-C port to the Mac (it powers the board): the daemon there finds the bar" ;;
+    --live) say "a daemon on this Mac drives it: HARNESS_CABLE_TCP=<board address>:7531 harness start --restart" ;;
+esac

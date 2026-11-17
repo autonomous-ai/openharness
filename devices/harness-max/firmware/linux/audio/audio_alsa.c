@@ -1,11 +1,13 @@
-// The Pro's audio/audio_capture.h on ALSA: the "default" capture device, opened for each recording as the device opens
-// its codec, and the beep on the "default" output from a thread of its own. No microphone (or one another program
-// holds): recording fails, as on a device whose codec does not answer.
+// The Pro's audio/audio_capture.h on ALSA: the capture device HARNESS_MAX_MIC names (an ALSA PCM, as `arecord -L` lists
+// them; "default" when unset), opened for each recording as the device opens its codec, and the beep on the "default"
+// output from a thread of its own. No microphone (or one another program holds): recording fails, as on a device whose
+// codec does not answer.
 #include "audio/audio_capture.h"
 
 #include <alsa/asoundlib.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdlib.h>
 
 #include "audio/beep_tone.h"
 
@@ -15,6 +17,7 @@
 static const char *TAG = "audio";
 
 #define DEVICE "default"
+#define MIC_ENV "HARNESS_MAX_MIC"
 #define LATENCY_US 100000   // ALSA's buffer: 100 ms, the device's DMA headroom
 
 static snd_pcm_t *s_mic;   // the recording's; open between start and stop
@@ -25,14 +28,22 @@ static pthread_cond_t s_beep_cv = PTHREAD_COND_INITIALIZER;
 static bool s_beep_due, s_beep_ready;
 static int16_t s_tone[BEEP_TONE_SAMPLES];
 
+// A board's default card need not be the one with a microphone (the Orange Pi's is its codec, with none wired).
+static const char *mic_name(void)
+{
+    const char *name = getenv(MIC_ENV);
+    return name && *name ? name : DEVICE;
+}
+
 static snd_pcm_t *open_pcm(snd_pcm_stream_t stream)
 {
+    const char *name = stream == SND_PCM_STREAM_CAPTURE ? mic_name() : DEVICE;
     snd_pcm_t *pcm = NULL;
-    int err = snd_pcm_open(&pcm, DEVICE, stream, 0);
+    int err = snd_pcm_open(&pcm, name, stream, 0);
     if (err == 0) err = snd_pcm_set_params(pcm, SND_PCM_FORMAT_S16_LE, SND_PCM_ACCESS_RW_INTERLEAVED, 1,
                                            AUDIO_SAMPLE_RATE, 1, LATENCY_US);
     if (err < 0) {
-        ESP_LOGW(TAG, "%s %s: %s", DEVICE, stream == SND_PCM_STREAM_CAPTURE ? "capture" : "playback", snd_strerror(err));
+        ESP_LOGW(TAG, "%s %s: %s", name, stream == SND_PCM_STREAM_CAPTURE ? "capture" : "playback", snd_strerror(err));
         if (pcm) snd_pcm_close(pcm);
         return NULL;
     }
@@ -50,7 +61,7 @@ bool audio_capture_init(void)
         return false;
     }
     snd_pcm_close(probe);
-    ESP_LOGI(TAG, "mic (ALSA %s) ready", DEVICE);
+    ESP_LOGI(TAG, "mic (ALSA %s) ready", mic_name());
     return true;
 }
 

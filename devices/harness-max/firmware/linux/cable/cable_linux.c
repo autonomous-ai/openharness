@@ -1,23 +1,27 @@
 // The Pro's cable/cable_link.h on Linux: one reader thread delivers frames and ticks pro_cable as the device's reader
-// task does, from either far end (cable_linux.h).
+// task does, from any far end (cable_linux.h).
 //
-// Demo: the device's frames are queued and handed to the fake daemon on the reader thread, which is the one thread that
-// calls main/demo (it is not thread-safe); its frames go straight to the frame callback, which may send and so only
-// queues. TCP: the bytes of one connection, through the same decoder as USB.
+// TCP: the bytes of one connection, through the same decoder as USB. USB: the bytes of the gadget's serial port, the
+// same way; the port is opened again whenever it dies (a host that leaves hangs it up). Demo: the device's frames are
+// queued and handed to the fake daemon on the reader thread, which is the one thread that calls main/demo (it is not
+// thread-safe); its frames go straight to the frame callback, which may send and so only queues.
 #include "cable_linux.h"
 
 #include "cable/cable_link.h"
 #include "demo/max_demo.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <termios.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -35,9 +39,14 @@ static const char *TAG = "cable";
 #define READ_CHUNK 256
 // The device's frames waiting for the demo, by payload bytes: a recording's PCM is the most that queues.
 #define DEMO_QUEUE_BYTES (64 * 1024)
+// How soon a USB port that would not open, or died, is tried again.
+#define USB_REOPEN_US INT64_C(1000000)
 
-static enum { USE_DEMO, USE_TCP } s_use = USE_DEMO;
+static enum { USE_TCP, USE_USB, USE_DEMO } s_use = USE_TCP;
 static int s_port = CABLE_LINUX_PORT;
+static const char *s_usb_port = CABLE_LINUX_USB_PORT;
+static char s_udc_state[256];   // empty: no controller, so never a host
+static atomic_bool s_usb_host;   // the reader's last reading of s_udc_state
 static cable_frame_cb s_cb;
 static cable_tick_cb s_tick;
 static void *s_ctx;
@@ -50,6 +59,24 @@ void cable_linux_use_tcp(int port)
 {
     s_use = USE_TCP;
     s_port = port;
+}
+
+void cable_linux_use_usb(const char *port, const char *udc_state)
+{
+    s_use = USE_USB;
+    s_usb_port = port;
+    s_udc_state[0] = 0;
+    if (udc_state) {
+        snprintf(s_udc_state, sizeof s_udc_state, "%s", udc_state);
+        return;
+    }
+    DIR *dir = opendir("/sys/class/udc");
+    for (struct dirent *e; dir && (e = readdir(dir));) {
+        if (e->d_name[0] == '.') continue;
+        snprintf(s_udc_state, sizeof s_udc_state, "/sys/class/udc/%.200s/state", e->d_name);
+        break;
+    }
+    if (dir) closedir(dir);
 }
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
@@ -179,7 +206,7 @@ static void *demo_reader(void *arg)
     return NULL;
 }
 
-// ── TCP ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── TCP and USB: a descriptor of bytes in the USB framing ───────────────────────────────────────────────────────
 
 static cable_decoder_t s_decoder;            // the reader's
 static int s_listen = -1;
@@ -271,15 +298,106 @@ static void *tcp_reader(void *arg)
     return NULL;
 }
 
+// Whether a host has configured the gadget: the controller's state file says "configured".
+static bool udc_configured(void)
+{
+    if (!s_udc_state[0]) return false;
+    FILE *f = fopen(s_udc_state, "r");
+    if (!f) return false;
+    char state[32] = "";
+    const bool configured = fgets(state, sizeof state, f) && !strncmp(state, "configured", 10);
+    fclose(f);
+    return configured;
+}
+
+static int open_usb_port(void)
+{
+    const int fd = open(s_usb_port, O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if (fd < 0) return -1;
+    struct termios t;
+    if (tcgetattr(fd, &t) == 0) {   // raw bytes: no echo, no line editing, no CR/LF translation
+        cfmakeraw(&t);
+        tcsetattr(fd, TCSANOW, &t);
+    }
+    return fd;
+}
+
+// Start over on the port: what is half read or still unsent belongs to a host that is gone (or to no host at all).
+static void usb_flush(void)
+{
+    pthread_mutex_lock(&s_tx_mu);
+    if (s_client >= 0) tcflush(s_client, TCIOFLUSH);
+    pthread_mutex_unlock(&s_tx_mu);
+    cable_decoder_reset(&s_decoder);
+}
+
+static void *usb_reader(void *arg)
+{
+    (void)arg;
+    uint8_t chunk[READ_CHUNK];
+    int64_t last_rx_us = esp_timer_get_time(), reopen_at_us = 0;
+    bool told_closed = false;
+    for (;;) {
+        const bool host = udc_configured();
+        if (host != atomic_load(&s_usb_host)) {
+            // Sends stop before the flush when the host goes, and start only after it when one comes.
+            ESP_LOGI(TAG, "usb: %s", host ? "a host configured the gadget" : "the host is gone");
+            if (!host) atomic_store(&s_usb_host, false);
+            usb_flush();
+            if (host) atomic_store(&s_usb_host, true);
+        }
+        // Without root the gadget cannot be re-enumerated: a re-plug drops what is in flight and keeps the port.
+        if (atomic_exchange(&s_replug, false)) {
+            ESP_LOGW(TAG, "re-plug: starting over on %s", s_usb_port);
+            usb_flush();
+        }
+        if (s_client < 0 && esp_timer_get_time() >= reopen_at_us) {
+            const int fd = open_usb_port();
+            if (fd >= 0) {
+                ESP_LOGI(TAG, "usb: %s open", s_usb_port);
+                set_client(fd);
+                told_closed = false;
+            } else {
+                if (!told_closed) ESP_LOGW(TAG, "usb: %s: %s (trying again each second)", s_usb_port, strerror(errno));
+                told_closed = true;
+                reopen_at_us = esp_timer_get_time() + USB_REOPEN_US;
+            }
+        }
+        int n = 0;
+        struct pollfd p = {.fd = s_client, .events = POLLIN};
+        if (poll(&p, s_client >= 0 ? 1 : 0, READ_WAIT_MS) > 0 && (p.revents & (POLLIN | POLLHUP | POLLERR))) {
+            n = (int)read(s_client, chunk, sizeof chunk);
+            if (n == 0 || (n < 0 && errno != EAGAIN && errno != EINTR)) {
+                // Hung up (the host left, or the gadget went away): this descriptor is done; a new open serves the next.
+                ESP_LOGI(TAG, "usb: %s closed", s_usb_port);
+                set_client(-1);
+                reopen_at_us = esp_timer_get_time() + USB_REOPEN_US;
+            }
+            if (n < 0) n = 0;
+        }
+        if (s_decoder.len && esp_timer_get_time() - last_rx_us >= FRAME_IDLE_US) {
+            cable_decoder_expire(&s_decoder, deliver, s_ctx);
+            last_rx_us = esp_timer_get_time();
+        }
+        if (n > 0) {
+            atomic_fetch_add_explicit(&s_rx_bytes, (unsigned)n, memory_order_relaxed);
+            cable_decoder_feed(&s_decoder, chunk, (size_t)n, deliver, s_ctx);
+            last_rx_us = esp_timer_get_time();
+        }
+        if (s_tick) s_tick(s_ctx);
+    }
+    return NULL;
+}
+
 // Write all of `len` bytes to the connection within `wait_ms`. Under s_tx_mu.
 static bool write_all(const uint8_t *data, size_t len, uint32_t wait_ms)
 {
     const uint32_t deadline = now_ms() + wait_ms;
     while (len && s_client >= 0) {
 #ifdef MSG_NOSIGNAL
-        const ssize_t n = send(s_client, data, len, MSG_NOSIGNAL);
+        const ssize_t n = s_use == USE_TCP ? send(s_client, data, len, MSG_NOSIGNAL) : write(s_client, data, len);
 #else
-        const ssize_t n = send(s_client, data, len, 0);
+        const ssize_t n = s_use == USE_TCP ? send(s_client, data, len, 0) : write(s_client, data, len);
 #endif
         if (n > 0) {
             data += n;
@@ -295,8 +413,10 @@ static bool write_all(const uint8_t *data, size_t len, uint32_t wait_ms)
     return len == 0;
 }
 
-static bool tcp_send(uint8_t type, const uint8_t *payload, size_t len, bool nowait)
+static bool fd_send(uint8_t type, const uint8_t *payload, size_t len, bool nowait)
 {
+    // A gadget's port takes bytes with no host behind it and keeps them for the next one: say nothing to nobody.
+    if (s_use == USE_USB && !atomic_load(&s_usb_host)) return false;
     if (nowait ? pthread_mutex_trylock(&s_tx_mu) != 0 : pthread_mutex_lock(&s_tx_mu) != 0) return false;
     bool ok = false;
     const int n = cable_frame_encode(type, payload, len, s_tx_frame, sizeof s_tx_frame);
@@ -319,13 +439,16 @@ bool cable_link_start(cable_frame_cb cb, cable_tick_cb tick, void *ctx)
     if (s_use == USE_TCP && !tcp_listen()) return false;
     atomic_store(&s_running, true);   // before the reader: a frame may arrive before pthread_create returns
     pthread_t reader;
-    if (pthread_create(&reader, NULL, s_use == USE_TCP ? tcp_reader : demo_reader, NULL) != 0) {
+    void *(*const run)(void *) = s_use == USE_TCP ? tcp_reader : s_use == USE_USB ? usb_reader : demo_reader;
+    if (pthread_create(&reader, NULL, run, NULL) != 0) {
         atomic_store(&s_running, false);
         ESP_LOGE(TAG, "reader thread not started: no link to the daemon");
         return false;
     }
     pthread_detach(reader);
     if (s_use == USE_TCP) ESP_LOGI(TAG, "link up: waiting for a daemon on TCP port %d", s_port);
+    else if (s_use == USE_USB) ESP_LOGI(TAG, "link up: waiting for a host on %s (%s)", s_usb_port,
+                                        s_udc_state[0] ? s_udc_state : "no USB device controller");
     else ESP_LOGI(TAG, "link up: the demo daemon");
     return true;
 }
@@ -333,13 +456,13 @@ bool cable_link_start(cable_frame_cb cb, cable_tick_cb tick, void *ctx)
 bool cable_link_send(uint8_t type, const uint8_t *payload, size_t len)
 {
     if (!atomic_load(&s_running)) return false;
-    return s_use == USE_TCP ? tcp_send(type, payload, len, false) : demo_send(type, payload, len, false);
+    return s_use == USE_DEMO ? demo_send(type, payload, len, false) : fd_send(type, payload, len, false);
 }
 
 bool cable_link_send_nowait(uint8_t type, const uint8_t *payload, size_t len)
 {
     if (!atomic_load(&s_running)) return false;
-    return s_use == USE_TCP ? tcp_send(type, payload, len, true) : demo_send(type, payload, len, true);
+    return s_use == USE_DEMO ? demo_send(type, payload, len, true) : fd_send(type, payload, len, true);
 }
 
 // The log stays on stderr (the journal): the daemon files a Linux build's lines nowhere.
@@ -350,12 +473,13 @@ bool cable_link_host_present(void)
     if (!atomic_load(&s_running)) return false;
     if (s_use == USE_DEMO) return true;   // the demo daemon is always plugged in
     pthread_mutex_lock(&s_tx_mu);
-    const bool present = s_client >= 0;
+    const bool present = s_client >= 0 && (s_use == USE_TCP || atomic_load(&s_usb_host));
     pthread_mutex_unlock(&s_tx_mu);
     return present;
 }
 
-// The reader acts on it: the demo starts over, or the TCP connection is dropped for the daemon to dial again.
+// The reader acts on it: the demo starts over, the TCP connection is dropped for the daemon to dial again, or the USB
+// port starts over.
 void cable_link_replug(void)
 {
     if (!atomic_load(&s_running)) return;

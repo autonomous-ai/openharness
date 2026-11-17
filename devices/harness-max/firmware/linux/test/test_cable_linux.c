@@ -1,7 +1,9 @@
-// The Linux cable (linux/cable/cable_linux.c) as pro_cable sees it, at either far end. One far end per process (the
+// The Linux cable (linux/cable/cable_linux.c) as pro_cable sees it, at each far end. One far end per process (the
 // link starts once): `test_cable_linux demo` runs against a fake of main/demo defined here, `test_cable_linux tcp`
-// against a daemon played by this test over a socket.
+// against a daemon played by this test over a socket, `test_cable_linux usb` against a host played over a pty.
+#define _GNU_SOURCE   // glibc's posix_openpt and ptsname
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
@@ -419,14 +421,89 @@ static void test_tcp(void)
     CHECK(cable_link_stats().frames_ok == 4);
 }
 
+// ── the USB far end: this test as the host, over a pseudo-terminal in place of the gadget's serial port ─────────
+
+static char s_state_path[64];
+
+// What the gadget's controller says of the host (/sys/class/udc/*/state).
+static void set_udc_state(const char *state)
+{
+    FILE *f = fopen(s_state_path, "w");
+    CHECK(f && fputs(state, f) >= 0 && fclose(f) == 0);
+}
+
+static void test_usb(void)
+{
+    const int host = posix_openpt(O_RDWR | O_NOCTTY);
+    CHECK(host >= 0 && grantpt(host) == 0 && unlockpt(host) == 0);
+    char port[128];
+    snprintf(port, sizeof port, "%s", ptsname(host));
+    snprintf(s_state_path, sizeof s_state_path, "/tmp/test_cable_usb.%d", (int)getpid());
+    set_udc_state("not attached\n");
+    cable_linux_use_usb(port, s_state_path);
+    CHECK(cable_link_start(on_frame, on_tick, &s_got));
+    CHECK(!cable_link_host_present());   // the port is open, but no host has configured the gadget
+    CHECK(!send_text("nobody"));
+
+    // A host configures it: frames go both ways in the USB framing, a frame split over two reads arriving once.
+    set_udc_state("configured\n");
+    WAIT_FOR(cable_link_host_present());
+    CHECK(cable_link_host_present());
+    write_frame(host, "{\"t\":\"welcome\"}", 7);
+    WAIT_FOR(got_count() == 1);
+    CHECK(got_is(0, CABLE_TYPE_JSON, "{\"t\":\"welcome\"}"));
+    CHECK(send_text("{\"t\":\"hello\"}"));
+    CHECK(!strcmp(read_frame(host), "{\"t\":\"hello\"}"));
+
+    check_idle_ticks();
+
+    // The host goes: nothing is sent to nobody, and a frame it left half written is not glued to the next host's.
+    uint8_t frame[64];
+    const int n = cable_frame_encode(CABLE_TYPE_JSON, (const uint8_t *)"cut", 3, frame, sizeof frame);
+    CHECK(write(host, frame, (size_t)n - 2) == n - 2);
+    sleep_ms(50);
+    set_udc_state("not attached\n");
+    WAIT_FOR(!cable_link_host_present());
+    CHECK(!cable_link_host_present());
+    CHECK(!send_text("gone"));
+    set_udc_state("configured\n");
+    WAIT_FOR(cable_link_host_present());
+    write_frame(host, "fresh", 99);
+    WAIT_FOR(got_count() == 2);
+    CHECK(got_is(1, CABLE_TYPE_JSON, "fresh"));
+    CHECK(send_text("to-fresh"));
+    CHECK(!strcmp(read_frame(host), "to-fresh"));
+
+    // A re-plug cannot re-enumerate without root: it drops what is half read and keeps the port.
+    CHECK(write(host, frame, (size_t)n - 2) == n - 2);
+    sleep_ms(50);
+    cable_link_replug();
+    sleep_ms(200);
+    CHECK(!cable_link_rx_pending());
+    CHECK(cable_link_host_present());
+    write_frame(host, "after-replug", 99);
+    WAIT_FOR(got_count() == 3);
+    CHECK(got_is(2, CABLE_TYPE_JSON, "after-replug"));
+
+    // The port itself goes (the gadget taken down): the host is gone with it.
+    close(host);
+    WAIT_FOR(!cable_link_host_present());
+    CHECK(!cable_link_host_present());
+    CHECK(!send_text("no-port"));
+
+    unlink(s_state_path);
+    CHECK(!atomic_load(&s_off_reader));   // frames and ticks all on the one reader thread
+}
+
 int main(int argc, char **argv)
 {
-    if (argc != 2 || (strcmp(argv[1], "demo") && strcmp(argv[1], "tcp"))) {
-        fprintf(stderr, "usage: test_cable_linux demo|tcp\n");
+    if (argc != 2 || (strcmp(argv[1], "demo") && strcmp(argv[1], "tcp") && strcmp(argv[1], "usb"))) {
+        fprintf(stderr, "usage: test_cable_linux demo|tcp|usb\n");
         return 2;
     }
     if (!strcmp(argv[1], "demo")) test_demo();
-    else test_tcp();
+    else if (!strcmp(argv[1], "tcp")) test_tcp();
+    else test_usb();
     printf("test_cable_linux %s: %d checks passed\n", argv[1], checks);
     return 0;
 }

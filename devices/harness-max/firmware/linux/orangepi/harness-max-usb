@@ -1,0 +1,47 @@
+#!/bin/sh
+# The bar's USB side on the Orange Pi 4 Pro: with --usb among its arguments, a CDC-ACM gadget on the board's Type-C
+# port (its one OTG port, which also powers it) with the Harness devices' USB ids, so the Mac's daemon finds the bar as
+# it finds a Harness Max (cli/src/cable/serial.ts) and the app talks through /dev/ttyGS0. Without --usb, or with
+# --down, the gadget is taken down. Run as root by harness-max.service; installed by deploy-orangepi.sh as
+# /usr/local/sbin/harness-max-usb.
+set -eu
+G=/sys/kernel/config/usb_gadget/harness-max
+# Allwinner's switch for the Type-C port's data role. It boots as a host and does not turn device for a Mac by itself.
+ROLE=/sys/devices/platform/soc@3000000/10.usbc0/otg_role
+
+down() {
+    if [ -d "$G" ]; then
+        echo "" > "$G/UDC" 2>/dev/null || true
+        rm -f "$G/configs/c.1/acm.usb0"
+        rmdir "$G/configs/c.1/strings/0x409" "$G/configs/c.1" "$G/functions/acm.usb0" "$G/strings/0x409" "$G"
+    fi
+    if [ -w "$ROLE" ]; then echo usb_host > "$ROLE"; fi
+}
+
+case " $* " in
+    *" --down "*) down; exit 0 ;;
+    *" --usb "*) ;;
+    *) down; exit 0 ;;
+esac
+
+[ -d /sys/kernel/config/usb_gadget ] || mount -t configfs none /sys/kernel/config
+UDC=$(ls /sys/class/udc | head -n 1)
+if [ -z "$UDC" ]; then
+    echo "harness-max-usb: no USB device controller" >&2
+    exit 1
+fi
+if [ ! -d "$G" ]; then
+    mkdir "$G"
+    echo 0x303a > "$G/idVendor"    # serial.ts DIAL_VENDOR_ID
+    echo 0x1001 > "$G/idProduct"   # serial.ts DIAL_PRODUCT_ID
+    mkdir "$G/strings/0x409"
+    echo Autonomous > "$G/strings/0x409/manufacturer"
+    echo "Harness Max" > "$G/strings/0x409/product"
+    # The daemon tells two bars apart by it: this board's own, which stays across boots.
+    cut -c1-16 /etc/machine-id > "$G/strings/0x409/serialnumber"
+    mkdir "$G/functions/acm.usb0" "$G/configs/c.1" "$G/configs/c.1/strings/0x409"
+    echo "Harness cable" > "$G/configs/c.1/strings/0x409/configuration"
+    ln -s "$G/functions/acm.usb0" "$G/configs/c.1/"
+fi
+[ -n "$(cat "$G/UDC")" ] || echo "$UDC" > "$G/UDC"
+if [ -w "$ROLE" ]; then echo usb_device > "$ROLE"; fi
