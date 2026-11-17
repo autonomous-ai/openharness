@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import { windowFacade } from './facade'
 import { fakeVscode } from './testing/fakeVscode'
+import type { ApiTerminal } from './vscodeApi'
 
 // A processId resolves in a promise, so once the queue is drained the facade has heard every answer.
 const flush = () => new Promise<void>((done) => setImmediate(done))
@@ -50,6 +51,37 @@ describe('windowFacade', () => {
     w.vscode.close(shell.terminal)
     expect(w.facade.state().terminals).toEqual([])
     expect(w.changes()).toBe(2)
+  })
+
+  // VS Code keeps the Terminal when it relaunches its shell (an environment change, Relaunch Active Terminal, a task's
+  // terminal used again), and its processId answers the new shell's pid.
+  it.each([
+    ['its state changes', (vscode: ReturnType<typeof fakeVscode>, relaunched: ApiTerminal) => vscode.changeState(relaunched)],
+    ['it becomes active', (vscode: ReturnType<typeof fakeVscode>, relaunched: ApiTerminal) => vscode.activate(relaunched)],
+    ['another terminal opens', (vscode: ReturnType<typeof fakeVscode>) => void vscode.open()],
+    ['another terminal closes', (vscode: ReturnType<typeof fakeVscode>) => vscode.close(vscode.open().terminal)],
+  ])("a terminal whose shell was relaunched is listed and shown by the new shell's pid once %s, and the change is told", async (_case, event) => {
+    const w = watched()
+    const shell = w.vscode.open()
+    shell.resolve(101)
+    await flush()
+    const heard: number[][] = []
+    w.facade.onChange(() => heard.push(w.facade.state().terminals))
+    shell.relaunch(202)
+    event(w.vscode, shell.terminal)
+    await flush()
+    expect([w.facade.state().terminals, heard.at(-1)]).toEqual([[202], [202]])
+    expect([w.facade.show(101), w.facade.show(202), shell.shown]).toEqual([false, true, [false]])
+  })
+
+  it('a terminal event that finds every pid as it was tells nothing more', async () => {
+    const w = watched()
+    const shell = w.vscode.open()
+    shell.resolve(101)
+    await flush()
+    w.vscode.changeState(shell.terminal)
+    await flush()
+    expect([w.facade.state().terminals, w.changes()]).toEqual([[101], 1])
   })
 
   it("the active terminal is its shell's pid, null while that is not known", async () => {
@@ -128,7 +160,7 @@ describe('windowFacade', () => {
 
   it('dispose takes every listener back', async () => {
     const w = watched()
-    expect(w.vscode.listeners()).toBe(4)
+    expect(w.vscode.listeners()).toBe(5)
     const shell = w.vscode.open()
     w.facade.dispose()
     expect(w.vscode.listeners()).toBe(0)

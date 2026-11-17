@@ -15,6 +15,7 @@ export interface VscodeApi {
     onDidOpenTerminal(listener: (terminal: ApiTerminal) => void): Disposable
     onDidCloseTerminal(listener: (terminal: ApiTerminal) => void): Disposable
     onDidChangeActiveTerminal(listener: (terminal: ApiTerminal | undefined) => void): Disposable
+    onDidChangeTerminalState(listener: (terminal: ApiTerminal) => void): Disposable
     onDidChangeWindowState(listener: (state: { readonly focused: boolean }) => void): Disposable
     createOutputChannel(name: string): { appendLine(line: string): void; dispose(): void }
   }
