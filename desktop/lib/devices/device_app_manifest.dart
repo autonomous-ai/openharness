@@ -60,11 +60,14 @@ DeviceAppRelease? _release(Object? entry) {
   return DeviceAppRelease(url: url, sha256: sha256.toLowerCase(), size: size);
 }
 
-/// Under one of [deviceAppUrlPrefixes] once a server has read it: a `..` or
-/// `%2e%2e` segment changes the normal form, a server may read `\` as `/`, and
-/// nothing may ride along in a query, a fragment, user info or a port.
+/// Under one of [deviceAppUrlPrefixes] once a server has read it: a `..`
+/// segment changes the normal form, a server may read `\` as `/` and decode a
+/// `%` (`..%2F`, `%252e%252e`, `%3F`) into either, and nothing may ride along
+/// in a query, a fragment, user info or a port.
 bool _fetchable(String url) {
-  if (!deviceAppUrlPrefixes.any(url.startsWith) || url.contains(r'\')) {
+  if (!deviceAppUrlPrefixes.any(url.startsWith) ||
+      url.contains(r'\') ||
+      url.contains('%')) {
     return false;
   }
   final uri = Uri.tryParse(url);
