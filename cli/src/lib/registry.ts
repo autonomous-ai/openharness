@@ -571,11 +571,15 @@ function persistenceFailure(error: unknown, names = false): Error {
   if (error instanceof IdentityReadUnavailable || error instanceof RegistryPersistenceUnavailable) return error
   const subject = names ? 'name storage' : 'registry storage'
   const code = (error as NodeJS.ErrnoException | null)?.code
+  // The master tells a full disk from a broken build by these codes (harnessd/supervisor.ts namesTheDisk).
+  // Without them a good build whose core could not save on a full disk was rolled back
+  // (e2e/updateHostile.e2e.ts, 2026-11-17). A code names no path.
   const category = error instanceof SyntaxError ? 'contains invalid JSON'
-    : code === 'ENOSPC' || code === 'EDQUOT' ? 'has no available space'
-      : code === 'EACCES' || code === 'EPERM' ? 'access was refused'
-        : code === 'ENOENT' ? 'is unavailable'
-          : code === 'ELOOP' ? 'has an unsafe file type' : 'write failed'
+    : code === 'ENOSPC' || code === 'EDQUOT' ? `has no available space (${code})`
+      : code === 'EROFS' ? 'is read-only (EROFS)'
+        : code === 'EACCES' || code === 'EPERM' ? 'access was refused'
+          : code === 'ENOENT' ? 'is unavailable'
+            : code === 'ELOOP' ? 'has an unsafe file type' : 'write failed'
   const failure = new RegistryPersistenceUnavailable(`${subject} ${category}`)
   return error instanceof AtomicWriteUnconfirmed ? new AtomicWriteUnconfirmed(failure) : failure
 }
