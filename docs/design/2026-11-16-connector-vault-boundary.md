@@ -120,3 +120,23 @@ This dependency is concrete remaining work, not an authorization to add competin
 - Existing Store/OAuth/REST/schema consumers: `/tmp/core-secret-boundary-store-consumers-20261116.log`, 3 files / 66 tests passed, 10.43 seconds. These include the existing local provider behaviors after shared client validation was reconstructed.
 - Final TypeScript receipt: `/tmp/core-secret-boundary-typecheck-covered-final-20261116.log`, exit 0 after correcting that notice fixture's type. `git diff --check` passed. The local-check selector reports only `cli-core` for this diff; final clean-commit attestation remains the integrating coordinator's step.
 - No before/after cost claim yet. `/tmp/core-connector-vault-cost/` holds the prepared native and protocol workloads plus the review notes, not a completed measurement. Final independent review, coordinated measurements and clean-commit release evidence remain open. Grid registry/stopped credential custody remains outside this completed connector implementation.
+
+### Unconfirmed descriptor close correction (2026-11-17)
+
+Final review found that a rejected FileHandle.close could release the writer's admission while the
+OS descriptor's release remained unknown. All handles opened by this writer use one close helper.
+A failed close retains that exact handle and permanently refuses further writes in this writer
+instance with STORE_CLEANUP_UNCONFIRMED; it never retries a possibly reused numeric descriptor.
+The first failure aborts preparation, with at most the already pinned directory also needing close,
+so at most two failed handles remain in the existing single writer instance until the process ends.
+Normal filesystem cleanup still attempts every owned temporary and lock; it cannot clear failed
+descriptor ownership. There is no new durable state, protocol, retry loop or background work.
+Growth, audience, identity, old-file compatibility and publication semantics remain unchanged.
+This applies to every platform; caller tests inject lock/read/temp/directory close failures and prove
+that a later merge opens no handle. Earlier passing receipts remain scoped to their original source.
+
+The four exact close-failure caller cases failed before the correction because another merge
+succeeded and opened fresh handles (`/tmp/core-secret-close-red-exact.log`). With retained ownership,
+all five affected suites pass: 79 tests in 8.55 seconds; TypeScript passes. The first read-failure
+fixture selected a file that was absent; it was corrected to the existing clients document before
+the exact RED. The earlier fixture failure and all original evidence remain retained.

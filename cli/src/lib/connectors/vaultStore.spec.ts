@@ -32,6 +32,30 @@ describe('gateway connector storage under the legacy lock', () => {
   })
   afterEach(() => { rmSync(home, { recursive: true, force: true }) })
 
+  it.each(['lock', 'read', 'temporary', 'directory'] as const)('retains admission after unconfirmed %s descriptor close', async stage => {
+    if (stage === 'directory' && process.platform === 'win32') return
+    let failed: FileHandle | undefined
+    const open = vi.fn(async (...args: Parameters<typeof vaultStoreIo.open>) => {
+      const handle = await vaultStoreIo.open(...args), path = String(args[0])
+      const chosen = stage === 'lock' ? path.endsWith('/.lock') : stage === 'read' ? path.endsWith('/clients.json')
+        : stage === 'temporary' ? path.includes('.incoming-') : path === root
+      if (!chosen || failed) return handle
+      return new Proxy(handle, { get(target, property) {
+        if (property === 'close') return async () => { failed = target; throw new Error('synthetic-close-unconfirmed') }
+        const value = Reflect.get(target, property, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      } })
+    })
+    const writer = new VaultStore(root, { ...vaultStoreIo, open })
+    try {
+      await expect(writer.merge(remote(), noGuard)).rejects.toHaveProperty('code')
+      expect(failed).toBeDefined()
+      const count = open.mock.calls.length
+      await expect(writer.merge(remote(), noGuard)).rejects.toMatchObject({ code: 'STORE_CLEANUP_UNCONFIRMED' })
+      expect(open).toHaveBeenCalledTimes(count)
+    } finally { await failed?.close() }
+  })
+
   it('merges only after the old writer releases its lock, preserving a concurrent renewal', async () => {
     closeSync(openSync(join(root, '.lock'), 'wx', 0o600))
     const wait = vi.fn(async () => {
