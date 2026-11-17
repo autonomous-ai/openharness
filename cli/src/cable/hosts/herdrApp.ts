@@ -15,6 +15,10 @@
  * runs on Diego's Mac, 2026-11-17), so it has 2 s, where a focus's 10 s would freeze a stroke. One run at a time per
  * terminal, the lines that come meanwhile carried by the next: a fast stroke costs one process per round trip, not one
  * per dial frame. Its queue is its own: a scroll that joined an `agent.focus` run would lose its lines.
+ *
+ * Which terminal is on screen is the window's alone: hc's terminal facts have no focus or viewer. So a stroke asks
+ * `herdr-app status` (one run took 0.04 s) and reads its `agent` alone: the rest names the person's spaces and layouts.
+ * One read at a time, shared by every ask meanwhile: a dial may send `down` after `down` faster than it answers.
  */
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { HC_TERMINAL, hcPaneKey, type HcClient, type HcPrompt } from './hcClient.js'
@@ -57,6 +61,7 @@ export interface HerdrAppAdapter extends HostAdapter {
   /** Where `herdr-app` is: on PATH, else Herdr.app's own binary. None: Herdr is not installed. */
   binary(): string | null
   canScroll(pane: Pane): boolean
+  onScreen(pane: Pane): Promise<boolean>
   scroll(pane: Pane, lines: number): void
 }
 
@@ -79,6 +84,10 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
   const scrolling = new Map<string, Scrolling>()
   // A stroke sends many lines: the failure is said once until a scroll run succeeds, not once a frame.
   let scrollFailedSaid = false
+  // The `status` read under way, which every ask meanwhile joins: its agent, or null.
+  let reading: Promise<string | null> | undefined
+  // As a scroll's: said once until a read succeeds.
+  let statusFailedSaid = false
 
   const binary = (): string | null => deps.onPath('herdr-app') ?? (deps.exists(HERDR_APP) ? HERDR_APP : null)
 
@@ -129,6 +138,38 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
     }
     scrolling.delete(address)
     deps.log(`[herdr-app] scroll · ${queue.lines} lines · ${queue.runs} runs · ${queue.failed} failed`)
+  }
+
+  // A failed read is undefined: no binary, an exit that is not 0, a rejection, or a stdout that is no JSON object.
+  const readStatus = async (): Promise<Record<string, unknown> | undefined> => {
+    const herdrApp = binary()
+    if (herdrApp === null) return undefined
+    try {
+      const { code, stdout } = await deps.run(herdrApp, ['status'], SCROLL_TIMEOUT_MS)
+      const status: unknown = code === 0 ? JSON.parse(stdout) : undefined
+      return typeof status === 'object' && status !== null && !Array.isArray(status) ? status as Record<string, unknown> : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  // A Herdr that changes what `status` prints must be seen, so a stdout that is no object is said; an agent missing or
+  // another is a terminal not on screen, and says nothing.
+  const readAgent = async (): Promise<string | null> => {
+    const status = await readStatus()
+    if (status === undefined) {
+      if (!statusFailedSaid) deps.log('[herdr-app] status · failed')
+      statusFailedSaid = true
+      return null
+    }
+    statusFailedSaid = false
+    return typeof status.agent === 'string' ? status.agent : null
+  }
+
+  const onScreen = async (pane: Pane): Promise<boolean> => {
+    if (!mac || !HC_TERMINAL.test(pane.id)) return false
+    reading ??= readAgent().finally(() => { reading = undefined })
+    return (await reading) === pane.id
   }
 
   const scroll = (pane: Pane, lines: number): void => {
@@ -187,6 +228,7 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
     } : {}),
     // Asked at each stroke's down: the PATH lookup last, so it runs only for a pane that passed the rest.
     canScroll: (pane) => mac && HC_TERMINAL.test(pane.id) && deps.inFront() && deps.shows(pane.id) && binary() !== null,
+    onScreen,
     scroll,
     paneKey: (pane) => hcPaneKey(pane.id),
     prompt,
