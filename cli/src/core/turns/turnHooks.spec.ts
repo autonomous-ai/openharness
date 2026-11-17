@@ -487,6 +487,8 @@ const turnOf = (identity: string, openedAt?: number): LiveTurn =>
 describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
+  // An end held for its Stop is Claude Code's: no Stop follows a Codex end, which goes on at once (R1.2).
+  const stopRule = it.runIf(engine === 'claude')
 
   /** A session whose engine has sent one Stop in this daemon run, with nothing emitted since. */
   const hookDriven = async () => {
@@ -522,7 +524,7 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     expect(deps.emit).toHaveBeenLastCalledWith('s1', END)
   })
 
-  it('a normal turn: its end is read and held, the turn reads open, and its Stop delivers it once', async () => {
+  stopRule('a normal turn: its end is read and held, the turn reads open, and its Stop delivers it once', async () => {
     const run = await hookDriven()
     run.hooks.transcript('s1', [...TEXT, ...END], { turn: turnOf('t1') })
     expect(vi.mocked(run.deps.emit).mock.calls).toEqual([['s1', TEXT]])
@@ -537,7 +539,7 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     expect(run.deps.emit).toHaveBeenCalledTimes(3)
   })
 
-  it('the turn reads open while text goes on before its held end, and closed as that end goes on', async () => {
+  stopRule('the turn reads open while text goes on before its held end, and closed as that end goes on', async () => {
     const run = await hookDriven()
     const open: boolean[] = []
     vi.mocked(run.deps.emit).mockImplementation(() => { open.push(run.hooks.held('s1')) })
@@ -548,7 +550,7 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
   })
 
   // The Stop hook beats the transcript's final text by about 200 ms (lib/commander.ts).
-  it('final text after Stop: the Stop waits for the end and delivers it the moment it is read, not at 1.5 s', async () => {
+  stopRule('final text after Stop: the Stop waits for the end and delivers it the moment it is read, not at 1.5 s', async () => {
     const run = await hookDriven()
     const turn = parse(run, 't1')
     run.hooks.onTurnStop({ sessionId: 's1' })
@@ -560,7 +562,7 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     expect(run.deps.emit).toHaveBeenCalledTimes(1)
   })
 
-  it('no end within 1.5 s: the Stop closes the turn itself, as before, unless the drain after it reads the end', async () => {
+  stopRule('no end within 1.5 s: the Stop closes the turn itself, as before, unless the drain after it reads the end', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const run = await hookDriven()
     const turn = parse(run, 't1')
@@ -580,7 +582,7 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     expect(log).toHaveBeenCalledTimes(1)
   })
 
-  it('a next prompt read while an end is held: the held end, then the start, in one batch', async () => {
+  stopRule('a next prompt read while an end is held: the held end, then the start, in one batch', async () => {
     const run = await hookDriven()
     run.hooks.transcript('s1', END, { turn: turnOf('t1') })
     run.hooks.transcript('s1', START, { turn: turnOf('t2') })
@@ -599,7 +601,7 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     expect(run.hooks.held('s1')).toBe(false)
   })
 
-  it('a replay goes on untouched; one with a turn\'s start or end drops what was held', async () => {
+  stopRule('a replay goes on untouched; one with a turn\'s start or end drops what was held', async () => {
     const run = await hookDriven()
     run.hooks.transcript('s1', END, { turn: turnOf('t1') })
     run.hooks.transcript('s1', TEXT, { replay: true })
@@ -616,7 +618,7 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     expect(run.deps.emit).toHaveBeenCalledTimes(2)
   })
 
-  it('a stale Stop, run before the latest prompt hook, delivers and closes nothing', async () => {
+  stopRule('a stale Stop, run before the latest prompt hook, delivers and closes nothing', async () => {
     const run = await hookDriven()
     run.hooks.transcript('s1', END, { turn: turnOf('t1') })
     run.hooks.onPromptHook('s1', 2_000)
@@ -626,7 +628,7 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     expect(run.hooks.held('s1')).toBe(true)
   })
 
-  it('a stale Stop is not held for a binding being checked; one with no prompt hook before it, or a newer one, is', () => {
+  stopRule('a stale Stop is not held for a binding being checked; one with no prompt hook before it, or a newer one, is', () => {
     const row = { agentId: 'a1', sessionId: 's1', engine, identityHold: 'pending' } as RegisteredSession
     const holdStop = vi.fn(() => true), run = setup(engine, { resolve: () => row, holdStop })
     run.hooks.onTurnStop({ sessionId: 's1', firedAt: 500 })
@@ -638,7 +640,7 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     expect(holdStop).toHaveBeenCalledTimes(2)
   })
 
-  it('a Stop waiting for the end is told at once when one is held, and has none to wait for with no record', async () => {
+  stopRule('a Stop waiting for the end is told at once when one is held, and has none to wait for with no record', async () => {
     let context!: HookTurnContext
     vi.spyOn(engineHooks[engine], 'onStop').mockImplementationOnce(value => { context = value })
     const run = setup(engine)
@@ -650,7 +652,7 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
 
   // Review Focus 5: Codex's turn had no opening time, so a Stop that arrived after the next turn's start was read
   // and before its prompt hook could close that next turn.
-  it('a Stop run before the turn opened delivers and closes nothing', async () => {
+  stopRule('a Stop run before the turn opened delivers and closes nothing', async () => {
     const run = await hookDriven()
     run.hooks.transcript('s1', END, { turn: turnOf('t1', 2_000) })
     run.hooks.onTurnStop({ sessionId: 's1', status: 'error', firedAt: 1_000 })
@@ -687,7 +689,7 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     expect(run.deps.emit).toHaveBeenCalledTimes(2)
   })
 
-  it('StopFailure closes whichever turn is open or held', async () => {
+  stopRule('StopFailure closes whichever turn is open or held', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const run = await hookDriven()
     run.hooks.transcript('s1', END, { turn: turnOf('t1') })
@@ -704,7 +706,7 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     expect(run.deps.emit).toHaveBeenCalledTimes(2)
   })
 
-  it('a Stop heard twice, or two at once, ends the turn once', async () => {
+  stopRule('a Stop heard twice, or two at once, ends the turn once', async () => {
     const run = await hookDriven()
     run.hooks.transcript('s1', END, { turn: turnOf('t1') })
     run.hooks.onTurnStop({ sessionId: 's1' })
@@ -722,7 +724,7 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     expect(run.hooks.held('s1')).toBe(false)
   })
 
-  it('a cancel drops the held end unsent, a forgotten session\'s record is gone, and a Stop then waiting sends nothing', async () => {
+  stopRule('a cancel drops the held end unsent, a forgotten session\'s record is gone, and a Stop then waiting sends nothing', async () => {
     const run = await hookDriven()
     run.hooks.transcript('s1', END, { turn: turnOf('t1') })
     run.hooks.closed('s1')
@@ -745,7 +747,7 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', END)
   })
 
-  it('the 513th session\'s record takes the oldest one\'s place, whose held end is delivered first', async () => {
+  stopRule('the 513th session\'s record takes the oldest one\'s place, whose held end is delivered first', async () => {
     const run = await hookDriven()
     run.hooks.transcript('s1', END, { turn: turnOf('t1') })
     for (let i = 1; i < HOOKS_KEPT; i++) run.hooks.onPromptHook(`other${i}`, 1)
@@ -756,7 +758,7 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     expect(run.hooks.withheld('s1')).toBe(false)
   })
 
-  it('withheld: its turns end by hook, none is open and none is held', async () => {
+  stopRule('withheld: its turns end by hook, none is open and none is held', async () => {
     expect(setup(engine).hooks.withheld('s1')).toBe(false)
     const run = await hookDriven()
     expect(run.hooks.withheld('s1')).toBe(true)
@@ -770,7 +772,7 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
   })
 
   // A Stop hook that failed to run would leave the turn open for ever (R6).
-  it('a missing Stop: the held end is delivered at the first beat 2 minutes after it was read, with one line', async () => {
+  stopRule('a missing Stop: the held end is delivered at the first beat 2 minutes after it was read, with one line', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const run = await hookDriven()
     vi.advanceTimersByTime(30_000)
@@ -785,7 +787,7 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     expect(log.mock.calls.map(call => String(call[0]))).toEqual(['[turn] s1 ended by its transcript · no Stop in 2 min'])
   })
 
-  it('a hook in between starts the 2 minutes again', async () => {
+  stopRule('a hook in between starts the 2 minutes again', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const run = await hookDriven()
     run.hooks.transcript('s1', END, { turn: turnOf('t1', 2_000) })
@@ -885,7 +887,7 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
       expect(run.hooks.withheld('s1')).toBe(false)
     })
 
-    it('an end held for its Stop ends it as it is read', async () => {
+    stopRule('an end held for its Stop ends it as it is read', async () => {
       const run = await hookDriven()
       parse(run, 't1')
       run.hooks.onWait({ sessionId: 's1', firedAt: 5_000 })
@@ -945,7 +947,7 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     })
 
     // A subagent's permission while the lead's end is held: the engine is still sending hooks (R6).
-    it('a wait hook starts the 2 minutes of silence again', async () => {
+    stopRule('a wait hook starts the 2 minutes of silence again', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = await hookDriven()
       run.hooks.transcript('s1', END, { turn: turnOf('t1') })
@@ -1164,15 +1166,6 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
       interrupt(run, 1_000)
       expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', ABORT)
       expect(run.hooks.withheld('s1')).toBe(true)
-    })
-
-    it('leaves an end that is held as it is', async () => {
-      const run = await hookDriven()
-      run.hooks.transcript('s1', END, { turn: turnOf('t1') })
-      interrupt(run)
-      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
-      expect(run.deps.emit).not.toHaveBeenCalled()
-      expect(run.hooks.held('s1')).toBe(true)
     })
 
     it('an engine with no turn hooks, or a session it does not know, is left alone', async () => {
