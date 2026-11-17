@@ -76,6 +76,8 @@ export interface DaemonOptions {
   heapMiB?: number
   /** Models the fake engines report. */
   claudeModel?: string
+  /** The release the fake Claude Code reports (fakeEngine.mjs's own by default, older than its plugin needs). */
+  claudeVersion?: string
   /** Pause model commands at a disposable file gate for worker failure tests. */
   modelControlGate?: boolean
   /** Note every submitted prompt and hold a `!latestart` turn's start at a file gate (submission tests). */
@@ -339,7 +341,10 @@ export class IsolatedDaemon {
       ...(options.trustPrompt ? { trustPrompt: true } : {}),
       ...(options.graphicsQuery ? { graphicsQuery: options.graphicsQuery } : {}),
     }
-    for (const name of ['claude', 'codex'] as const) await writeFile(join(dirs.bin, name), fakeEngineShim(name, { ...config }), { mode: 0o755 })
+    for (const name of ['claude', 'codex'] as const) {
+      const shimConfig = { ...config, ...(name === 'claude' && options.claudeVersion ? { version: options.claudeVersion } : {}) }
+      await writeFile(join(dirs.bin, name), fakeEngineShim(name, shimConfig), { mode: 0o755 })
+    }
     // A daemon never finds the developer's own gh (shared tabs' tasks run it): a stub that refuses, until a test writes its own.
     await writeFile(join(dirs.bin, 'gh'), GH_FORBIDDEN_STUB, { mode: 0o755 })
     // Engine probes and usage readers must not consult the person's macOS

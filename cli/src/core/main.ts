@@ -3174,6 +3174,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     inputs.messageRequest(payload, receipt)
   }
   backend.onCancelOrchestratorMessage = id => input.cancelDelivery(id)
+  backend.inputAckProvider = deliveries.acknowledged
   deliveries.ready() // The input is wired: what was delivered meanwhile (Agent Messages' queue resuming) is written now.
 
   // Keep the log file under its cap. This daemon writes it through an inherited stdout fd, so a size

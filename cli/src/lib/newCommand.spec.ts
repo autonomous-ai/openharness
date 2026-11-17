@@ -13,7 +13,7 @@ const env = { cwd: '/work/repo', home: '/home/me', platform: 'linux' as const }
 describe('harness new: the words', () => {
   it('asks nothing: claude, here, on this machine', () => {
     expect(parseNewArgs([], env)).toEqual({
-      agent: 'claude', machine: null, cwd: '/work/repo', projectName: null, mode: null, prompt: null, name: null, repo: null, acuLimit: null, model: null, local: null, goal: null, json: false,
+      agent: 'claude', machine: null, cwd: '/work/repo', projectName: null, mode: null, prompt: null, name: null, repo: null, acuLimit: null, model: null, local: null, goal: null, programTokenFile: null, json: false,
     })
   })
 

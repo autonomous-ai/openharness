@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto'
-import { env } from '../config/env.js'
+import { env, env as config } from '../config/env.js'
 import { openLocalWs } from './localTransport.js'
 import { statSync } from 'node:fs'
 import { readdir, readFile, realpath } from 'node:fs/promises'
 import { dirname, isAbsolute, join, posix, resolve, win32 } from 'node:path'
 import { addressOf, atMachineRefusal, EXIT, machineOption, refusalNext, REFUSED_CODES, step, VIA_MCP_ENV } from '../agentClient/commands.js'
 import { AgentClientError } from '../agentClient/daemon.js'
+import { ProgramRecords, readProgramToken } from '../agentClient/program.js'
 import { formatNext, type NextStep } from '../agentClient/next.js'
 import { folderTrust } from '../engines/launchPrep.js'
 import { ENGINES, type AgentEngine } from '../engines/types.js'
@@ -56,6 +57,8 @@ export interface NewArgs {
   local: string | null
   /** The Hachi goal it is started for (`harness goal open`), recorded under it once made; null for none. */
   goal: string | null
+  /** A program's token file (`--program-token-file`, agentClient/program.ts): the harness is that program's own. */
+  programTokenFile: string | null
   json: boolean
 }
 
@@ -88,6 +91,8 @@ export const NEW_USAGE = [
   '                 (Cursor Cloud needs one; Devin Cloud works without)',
   '  --acu-limit <n>  the most ACUs Devin Cloud may spend (1-1000; 5 when left out)',
   '  --goal <id>    Hachi only: the goal it is started for (harness goal open), recorded under it',
+  '  --program-token-file <p>  a program\'s own harness, proven by the token in <p> (0600, yours, 32+ bytes):',
+  '                 it replies, resumes and closes it with the same file (harness ensure keeps one by name)',
   '  --json         print the result as one JSON line',
   '',
   'An agent refused (its limits, or the person has not let agents start agents) exits 5: do not retry.',
@@ -119,6 +124,7 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
   let model: string | null = null
   let local: string | null = null
   let goal: string | null = null
+  let programTokenFile: string | null = null
   let json = false
   const value = (flag: string, index: number): string => {
     const next = argv[index + 1]
@@ -147,6 +153,10 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
       i++
     }
     else if (word === '--local') { local = value(word, i); i++ }
+    else if (word === '--program-token-file') {
+      programTokenFile = value(word, i)
+      i++
+    }
     else if (word === '--goal') {
       goal = value(word, i).trim()
       if (!goal) throw new NewUsageError('--goal needs a value.')
@@ -234,7 +244,9 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
     if (machine === null) cwd = env.cwd
     else projectName = ''
   }
-  return { agent: words[0] ?? 'claude', machine, cwd, projectName, mode, prompt, name, repo, acuLimit, model, local, goal, json }
+  if (programTokenFile !== null && machine !== null) throw new NewUsageError('--program-token-file is for a harness on this computer: leave out --machine.')
+  if (programTokenFile !== null) programTokenFile = path.resolve(env.cwd, programTokenFile)
+  return { agent: words[0] ?? 'claude', machine, cwd, projectName, mode, prompt, name, repo, acuLimit, model, local, goal, programTokenFile, json }
 }
 
 /** The `agent_create` payload for [args]: the same fields the app's box sends. [baseEngine] is the
@@ -372,6 +384,8 @@ export interface NewCommandDeps {
   /** The caller's environment: whether `harness mcp` runs this, and where its engines keep their folder trust.
    *  This process's when left out. */
   env?: NodeJS.ProcessEnv
+  /** The data folder a program's harness is recorded in (agentClient/program.ts); this CLI's when left out. */
+  dataDir?: string
 }
 
 /** A harness the caller already has by the name it asks for again (`NewOrigin.existing`). */
@@ -582,7 +596,11 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
   const clock = deps.now ?? Date.now
   const began = clock()
   try {
+    // A program's own harness (#4393): its token read first, so a file that proves nothing starts nothing.
+    const program = args.programTokenFile !== null ? readProgramToken(args.programTokenFile) : null
     const origin = (await deps.origin?.()) ?? null
+    // An agent never starts a program's harness, even holding its token: the token is the program's.
+    if (program && origin) throw new AgentClientError('NOT_YOURS', 'A program-owned harness is its program\'s alone: an agent may not start one, even with its token.')
     // A terminal is the person's: `ps`, `show`, `wait` and `close` never list one (agentClient/model.ts `isAgent`). An
     // agent that started one was told "Read it: harness show vt1", then "No harness named vt1", could not close it, and
     // had it count toward its eight for as long as it stayed open; its task would be typed into a shell, header and all
@@ -772,6 +790,20 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
           : `Harness could not confirm the harness started (${String(result.state)}). Check with \`${psThere}\` before starting another.`)
       }
       const agent = (result.agent ?? {}) as Record<string, unknown>
+      // Recorded as the program's (agentClient/program.ts), by its id: a restart, a sign-in or a sign-out keeps it.
+      if (program && typeof agent.id === 'string' && agent.id) {
+        const at = clock()
+        const record = { agentId: agent.id, tokenHash: program.hash, name: args.name?.trim() || String(agent.name ?? agent.id),
+          engine: String(agent.engine ?? payload.engine), createdAt: at, startedAt: at, inputs: [] }
+        // Tried a few times: the record's lock held a moment by another program command. A harness started and never
+        // recorded is no program's, and its name would be refused to the program for good. `harness ensure` writes it
+        // again for one it has just made.
+        for (let tries = 1; ; tries++) {
+          try { new ProgramRecords(deps.dataDir ?? config.ADAPTER_DATA_DIR).put(record); break } catch (error) {
+            if (tries >= 3) { deps.error(`${record.name} started, but Harness could not record it as the program's: ${error instanceof Error ? error.message : String(error)}`); break }
+          }
+        }
+      }
       const warning = await origin?.created(machineId, agent, creationId)
       if (warning) deps.error(warning)
       if (args.goal !== null && typeof agent.id === 'string') {
