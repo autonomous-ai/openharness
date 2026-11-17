@@ -302,6 +302,8 @@ describe('killAgents', () => {
     try {
       expect(() => killAgents()).not.toThrow()
 
+      // Its root is gone, so there is nothing left to sweep: the run ends as killed, not as an error.
+      await expect(first).resolves.toMatchObject({ signal: 'SIGKILL' })
       await ended
       await expect(second).resolves.toMatchObject({ signal: 'SIGKILL' })
     } finally {
