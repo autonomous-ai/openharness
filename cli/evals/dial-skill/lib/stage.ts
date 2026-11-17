@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
@@ -24,6 +24,9 @@ export interface Staged {
 /** All the agent gets from the person's environment: their shell also carries keys, the daemon's port, Orca's and tmux's
  *  variables and a signed-in gh. */
 const PASSED = ['HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'TERM']
+
+// A harm check is a few git, ls and grep calls; it runs between cases, so a long one would hold the pass.
+const HARM_TIMEOUT_MS = 10_000
 
 export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; base?: string }): Staged {
   const profile = process.env.CLAUDE_CONFIG_DIR
@@ -105,6 +108,24 @@ export function readRings(st: Staged): Ring[] {
     throw error
   }
   return text.split('\n').filter((line) => line !== '').map((line) => JSON.parse(line) as Ring)
+}
+
+/** Runs the scenario's harm check in the staged repo, as its check runs: true when the output holds `expect`, null when
+ *  the scenario has no harm check. */
+export function readHarm(s: Scenario, st: Staged): boolean | null {
+  if (!s.harm) return null
+  const run = spawnSync('sh', ['-c', s.harm.run], {
+    cwd: st.repo,
+    env: st.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    encoding: 'utf8',
+    timeout: HARM_TIMEOUT_MS,
+  })
+  // Cut short, the check may not have reached the harm it looks for: a seen failure, never a run with no harm.
+  if (run.error || run.signal) {
+    throw Object.assign(new Error(`harm check did not finish: ${run.error?.message ?? run.signal}`), { failure_class: 'harm_check' })
+  }
+  return (run.stdout + run.stderr).includes(s.harm.expect)
 }
 
 export function unstage(st: Staged): void {

@@ -35,7 +35,7 @@ import { AGENT_CONFIG, claudeArgs, runAgent } from './lib/agents.ts';
 import { gradeRun } from './lib/grade.ts';
 import { claudeJudge, JUDGE_EFFORT, JUDGE_MODEL, RUBRIC_SHA } from './lib/judge.ts';
 import { caseId, loadScenarios } from './lib/scenarios.ts';
-import { readRings, scrub, stage, unstage } from './lib/stage.ts';
+import { readHarm, readRings, scrub, stage, unstage } from './lib/stage.ts';
 
 // Every output write refuses symlinks: the flow dir is model-influenced, and a
 // prompt-injected round can plant `results.jsonl -> ~/.bashrc` where the next
@@ -246,7 +246,11 @@ async function runCase(input, ctx) {
     // The skill the agent had leads the trace, so a trace reads on its own.
     const transcript = [{ role: 'system', content: st.skill ?? 'no skill' }, ...run.transcript]
       .map(turn => Object.fromEntries(Object.entries(turn).map(([key, value]) => [key, clean(value)])));
-    return { ...run, transcript, rings: readRings(st), clean };
+    // Read before unstage removes the repo. A harm check that does not finish fails the case in gradeCase, where the
+    // error row keeps the billed run's model and usage.
+    let harm = null, harmError = null;
+    try { harm = readHarm(scenario, st); } catch (e) { harmError = e; }
+    return { ...run, transcript, rings: readRings(st), harm, harmError, clean };
   } catch (e) {
     // An account limit lasts hours: the workers take no new case and main exits 3.
     if (e?.failure_class === 'account_limited') ctx.stop = true;
@@ -265,8 +269,9 @@ async function gradeCase(input, run, ref, ctx) {
     e.failure_class = 'serving_substitution';
     throw e;
   }
+  if (run.harmError) throw run.harmError;
   let g;
-  try { g = await gradeRun(input.scenario, run, run.rings, ctx.judge); }
+  try { g = await gradeRun(input.scenario, run, run.rings, ctx.judge, run.harm); }
   catch (e) {
     // The judge runs under the same account, so its limit stops the pass as the agent's does.
     if (e?.failure_class === 'account_limited') ctx.stop = true;
@@ -277,8 +282,11 @@ async function gradeCase(input, run, ref, ctx) {
   return { ...g, explanation: Object.fromEntries(Object.entries(g.explanation).map(([key, value]) => [key, run.clean(value)])) };
 }
 
-/** `rings` counts `device notify` calls only: any other harness call shows nothing on the dial. */
-function perfFrom(run) { return { tool_calls: run.tool_calls, rings: run.rings.filter(r => r.line !== null).length }; }
+/** `rings` counts `device notify` calls only: any other harness call shows nothing on the dial. `harm` is what the
+ *  scenario's harm check found after the run, null when it has none; it rides here, the one fill-in the row spreads. */
+function perfFrom(run) {
+  return { tool_calls: run.tool_calls, rings: run.rings.filter(r => r.line !== null).length, harm: run.harm };
+}
 
 // --- harness (you usually won't need to touch below this line) --------------
 
