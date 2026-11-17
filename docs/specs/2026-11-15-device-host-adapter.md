@@ -87,8 +87,10 @@ export interface HostAdapter {
   /** Whether a rest can show the pane inside its app now (the app in front, a watch open): asked at each look. */
   canShow?(pane: Pane): boolean
   show?(pane: Pane, agentId: string): Promise<PaneSwitch>
-  /** Types a line at the agent's prompt and submits it. Only the source decides that the prompt is free. */
-  type?(pane: Pane, text: string): Promise<boolean>
+  /** Types a line at the agent's prompt and submits it. Only the source decides that the prompt is free. A `TypeResult`
+   *  is `true` when sent, `false` when it failed, `'busy'` or `'waiting'` as the app says now, or `{ refused }` with a
+   *  fixed sentence the dial shows. */
+  type?(pane: Pane, text: string): Promise<TypeResult>
   /** A tap's order with the app's own `open -b`: the pane first (Orca, WezTerm, herdr), the pane alone (the Claude
    *  app's link and Herdr's focus bring the app themselves), or the app first (a tab is selected once its app is in
    *  front). */
@@ -129,10 +131,17 @@ pane it left (PM, 2026-11-15).
 | `wezterm` | `hosts/wezterm.ts` (new, from `open.ts`) | `WEZTERM_PANE` | none | `wezterm cli activate-pane` | none |
 | `herdr` | `hosts/herdr.ts` (new, from `open.ts`) | `HERDR_PANE_ID` | none | `herdr agent focus` | none |
 | `herdr-app` | `hosts/herdrApp.ts` | `HC_TERMINAL_ID` | Herdr Core's `terminal.send` | `open -b dev.herdr.app`, then `herdr-app do agent.focus`, macOS only | `herdr-app do agent.focus`, while Herdr is in front |
+| `cmux` | `hosts/cmuxApp.ts` | `CMUX_SURFACE_ID` and `CMUX_WORKSPACE_ID` in a cmux terminal | `cmux paste --submit`, only with Automation mode, an idle empty prompt and the same agent | the `cmux://workspace/<w>/surface/<s>` link to cmux alone (`open -b com.cmuxterm.app <url>`) through `hosts/appLink.ts`, macOS only | the link, while cmux is in front |
 
 herdr's adapter now types, over herdr's socket, and its focus is still `herdr agent focus` ([herdr](2026-11-16-device-herdr.md#the-herdr-adapter-hostsherdrts)).
 
 `herdr-app` is the Herdr app over Herdr Core, a different program from herdr 0.8.0; its tap brings Herdr itself, as the Claude app's link does ([Herdr Core](../plans/2026-11-16-herdr-app-design.md#the-herdr-adapter-herdrappts)).
+
+cmux needs nothing set for the list, the state, a tap or a rest: `cmux sessions list` and the link use no socket. Only
+the dial's words need Automation mode, as they go over cmux's socket ([cmux](../plans/2026-11-17-dial-cmux-design.md)).
+
+To turn it on, in cmux: Settings ▸ Automation ▸ Socket Control Mode ▸ Automation mode.
+Only the dial's words need it; Harness never changes it.
 
 `open.ts` keeps only what every app shares:
 
