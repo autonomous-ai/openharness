@@ -50,6 +50,7 @@ import { LocalModels } from './lib/localModels.js'
 import { STRICT_DOWN_TYPES, encryptDownFrame, encryptDownFrameFor, encryptRpcResult } from './lib/e2ee/applicationFrames.js'
 import { CloseAgentService } from './lib/closeAgentService.js'
 import { env } from './config/env.js'
+import * as builtins from './dsh/builtins.js'
 
 describe('safe session close RPC', () => {
   it('seals cleanup previews and passes the open-tab condition to Close', async () => {
@@ -244,6 +245,7 @@ describe('reviewed permanent deletion RPCs', () => {
 describe('local model lifecycle RPCs', () => {
   afterEach(() => vi.restoreAllMocks())
   it('a slow catalog never blocks terminal or agent inventory, and errors stay redacted', async () => {
+    vi.spyOn(builtins, 'ensureBundledModelManager').mockReturnValue(true)
     const socket = relaySocket('fixture')
     bindAgentList(socket)
     socket.setHarnessGridName('home')
@@ -668,18 +670,6 @@ vi.mock('node:fs', async (real) => {
 vi.mock('./lib/gridAttach.js', async (real) => ({
   ...await real<object>(),
   createGridAccess: () => ({ ensure: async () => ({ status: 'converged', name: null, detail: 'set up already' }) }),
-}))
-// Never the person's real ~/.claude.json or ~/.codex/config.toml: creating an agent records folder trust,
-// and an unmocked run of these specs used to write test paths into the developer's own config.
-const claudeTrust = vi.hoisted(() => ({
-  claudeTrusts: vi.fn((_path: string) => false), codexTrusts: vi.fn((_path: string, _profile?: string | null) => false),
-  preTrustClaudeProject: vi.fn((_path: string) => 'trusted' as const), preTrustCodexProject: vi.fn((_path: string, _profile?: string | null) => 'trusted' as const),
-}))
-vi.mock('./engines/launchPrep.js', async (real) => ({
-  ...await real<object>(),
-  folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
-    ? { trusts: (path: string) => claudeTrust.claudeTrusts(path), record: (path: string) => claudeTrust.preTrustClaudeProject(path) }
-    : engine === 'codex' ? { trusts: (path: string) => claudeTrust.codexTrusts(path, profile), record: (path: string) => claudeTrust.preTrustCodexProject(path, profile) } : null,
 }))
 
 function parseSent(ws: InstanceType<typeof wsMock.MockWebSocket>): Array<Record<string, unknown>> {
@@ -2227,29 +2217,29 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it.each([
-    { name: 'a new empty folder', project: { projectSource: 'new' }, sourceTrusted: false, trusts: true },
-    { name: 'a clone', project: { projectSource: 'remote', repositoryUrl: 'owner/repo' }, sourceTrusted: false, trusts: false },
-    { name: 'the person\'s own repo (branch)', project: { projectSource: 'branch', gitSource: '/work/repo', branchRef: 'refs/heads/feature' }, sourceTrusted: true, trusts: false },
-    { name: 'a worktree of an untrusted repo', project: { projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main' }, sourceTrusted: false, trusts: false },
-    { name: 'a worktree of a repo Claude already trusts', project: { projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main' }, sourceTrusted: true, trusts: true },
-  ])('records Claude trust for $name: $trusts', async ({ project, sourceTrusted, trusts }) => {
-    // Only a folder the daemon made empty, or a worktree of a repo already trusted, is trusted for the person.
+    { name: 'a new empty folder', project: { projectSource: 'new' }, preparedTrust: true, prepares: true },
+    { name: 'a clone', project: { projectSource: 'remote', repositoryUrl: 'owner/repo' }, preparedTrust: false, prepares: false },
+    { name: 'the person\'s own repo (branch)', project: { projectSource: 'branch', gitSource: '/work/repo', branchRef: 'refs/heads/feature' }, preparedTrust: false, prepares: false },
+    { name: 'a worktree whose source is untrusted', project: { projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main' }, preparedTrust: false, prepares: true },
+    { name: 'a worktree whose source is trusted', project: { projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main' }, preparedTrust: true, prepares: true },
+  ])('asks the trust component only for eligible folders: $name', async ({ project, preparedTrust, prepares }) => {
+    // Core decides eligibility; the component interprets the source's native trust.
     const socket = relaySocket('token')
     // A worktree is made where Harness makes them; the other folders' places do not matter to their trust.
     const folder = project.projectSource === 'worktree' ? join(projectFolder.projectsRoot(), 'worktrees', 'repo', 'prepared') : '/work/prepared'
-    bindLaunchRequests(socket, { workspaces: preparingWorkspaces(async () => prepared(folder)) })
+    const prepareFolderTrust = vi.fn(async () => preparedTrust)
+    bindLaunchRequests(socket, { workspaces: preparingWorkspaces(async () => prepared(folder)), prepareFolderTrust })
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:trust', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
     vi.spyOn(projectFolder, 'prepareNewFolder').mockResolvedValue(folder)
-    vi.mocked(claudeTrust.claudeTrusts).mockReturnValue(sourceTrusted)
-    vi.mocked(claudeTrust.preTrustClaudeProject).mockClear()
     socket.onCreateAgent = vi.fn(async () => ({ ok: false as const, error: 'TMUX_UNAVAILABLE' }))
     try {
       socket.handleLocalFrame('local:trust', { type: 'agent_create', payload: { requestId: 'r', creationId: randomUUID(), engine: 'claude', ...project } })
       await vi.waitFor(() => expect(socket.onCreateAgent).toHaveBeenCalled())
-      if (trusts) expect(claudeTrust.preTrustClaudeProject).toHaveBeenCalledExactlyOnceWith(folder)
-      else expect(claudeTrust.preTrustClaudeProject).not.toHaveBeenCalled()
-      if (project.projectSource === 'worktree') expect(claudeTrust.claudeTrusts).toHaveBeenCalledWith('/work/repo')
+      if (prepares) expect(prepareFolderTrust).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        engine: 'claude', cwd: folder, ...(project.projectSource === 'new' ? { empty: true } : { source: '/work/repo' }),
+      }), expect.any(Function))
+      else expect(prepareFolderTrust).not.toHaveBeenCalled()
     } finally {
       await socket.unregisterLocalClient('local:trust')
       await socket.stop()
@@ -2260,7 +2250,7 @@ describe('BackendSocket outbound queue', () => {
     { name: 'an empty workspace the app just made', contents: [] as string[], nested: false, trusts: true },
     { name: 'a workspace that already has something', contents: ['Makefile'], nested: false, trusts: false },
     { name: 'an empty folder outside the projects root', contents: [] as string[], nested: true, trusts: false },
-  ])('records Claude trust for $name: $trusts', async ({ contents, nested, trusts }) => {
+  ])('asks for empty-workspace trust for $name: $trusts', async ({ contents, nested, trusts }) => {
     // A plain cwd on the LOCAL machine is the desktop handing over a workspace it just made. Trust is
     // recorded only on evidence (the readdir) and only directly inside the projects root: trust inherits
     // downward, so an empty folder the person merely browsed to would cover everything cloned under it.
@@ -2270,15 +2260,15 @@ describe('BackendSocket outbound queue', () => {
     for (const item of contents) writeFileSync(join(dir, item), 'x')
     vi.spyOn(projectFolder, 'projectsRoot').mockReturnValue(root)
     const socket = relaySocket('token')
-    bindLaunchRequests(socket)
+    const prepareFolderTrust = vi.fn(async () => true)
+    bindLaunchRequests(socket, { prepareFolderTrust })
     socket.registerLocalClient('local:cwd-trust', { sendFrame: () => true, sendBinary: () => true })
-    vi.mocked(claudeTrust.preTrustClaudeProject).mockClear()
     socket.onCreateAgent = vi.fn(async () => ({ ok: false as const, error: 'TMUX_UNAVAILABLE' }))
     try {
       socket.handleLocalFrame('local:cwd-trust', { type: 'agent_create', payload: { requestId: 'r', creationId: randomUUID(), engine: 'claude', cwd: dir } })
       await vi.waitFor(() => expect(socket.onCreateAgent).toHaveBeenCalled())
-      if (trusts) expect(claudeTrust.preTrustClaudeProject).toHaveBeenCalledExactlyOnceWith(dir)
-      else expect(claudeTrust.preTrustClaudeProject).not.toHaveBeenCalled()
+      if (trusts) expect(prepareFolderTrust).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ engine: 'claude', cwd: dir, empty: true }), expect.any(Function))
+      else expect(prepareFolderTrust).not.toHaveBeenCalled()
     } finally {
       await socket.unregisterLocalClient('local:cwd-trust')
       await socket.stop()
@@ -2286,7 +2276,7 @@ describe('BackendSocket outbound queue', () => {
     }
   })
 
-  it('does NOT record Claude trust for an empty workspace named by a relayed frame', async () => {
+  it('does not ask for trust for an empty workspace named by a relayed frame', async () => {
     // agent_create is not backend-only, so a relay frame is E2EE-unwrapped and reaches the same pre-trust
     // path. Everything else about this frame would qualify — the folder is empty AND in the projects root —
     // so the LOCAL gate is the only thing refusing it.
@@ -2295,7 +2285,8 @@ describe('BackendSocket outbound queue', () => {
     mkdirSync(dir)
     vi.spyOn(projectFolder, 'projectsRoot').mockReturnValue(root)
     const socket = relaySocket('token')
-    bindLaunchRequests(socket)
+    const prepareFolderTrust = vi.fn(async () => true)
+    bindLaunchRequests(socket, { prepareFolderTrust })
     const internals = socket as unknown as {
       e2ee: { unwrapDown: (connId: string, frame: unknown) => unknown }
       dispatchDown: (frame: unknown, connId: string, transport: string) => Promise<void>
@@ -2303,13 +2294,12 @@ describe('BackendSocket outbound queue', () => {
     vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue({
       type: 'agent_create', payload: { requestId: 'r', creationId: randomUUID(), engine: 'claude', cwd: dir },
     })
-    vi.mocked(claudeTrust.preTrustClaudeProject).mockClear()
     socket.onCreateAgent = vi.fn(async () => ({ ok: false as const, error: 'TMUX_UNAVAILABLE' }))
     try {
       await dispatchDown(socket, { type: 'agent_create', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }, 'web-1', 'relay')
       // The create ran, so the pre-trust branch was reached and declined — not skipped earlier by the gate.
       await vi.waitFor(() => expect(socket.onCreateAgent).toHaveBeenCalled())
-      expect(claudeTrust.preTrustClaudeProject).not.toHaveBeenCalled()
+      expect(prepareFolderTrust).not.toHaveBeenCalled()
     } finally {
       await socket.stop()
       rmSync(root, { recursive: true, force: true })

@@ -133,7 +133,7 @@ export function bindHandoffRequest(socket: BackendSocket, prepare: ((req: Handof
   }
 }
 
-type Launcher = { describeDsh: LaunchRequestDeps['describeDsh'] | null; resume: ResumeAgent | null; restart: RestartAgent | null; modelTarget: LaunchRequestDeps['modelTarget'] | null; workspaces: WorkspacesPort | null }
+type Launcher = { describeDsh: LaunchRequestDeps['describeDsh'] | null; resume: ResumeAgent | null; restart: RestartAgent | null; modelTarget: LaunchRequestDeps['modelTarget'] | null; workspaces: WorkspacesPort | null; prepareFolderTrust?: LaunchRequestDeps['prepareFolderTrust'] }
 const launchers = new WeakMap<BackendSocket, Launcher>()
 
 /** Workspaces that make every folder a create asks git for with [prepare], and nothing else. */
@@ -160,6 +160,8 @@ export function bindLaunchRequests(socket: BackendSocket, over: Partial<Launcher
       byAgent: (id) => registry.byAgent(id), stoppedAgent: (id) => stoppedAgents.get(id) ?? undefined, toProject: (s) => socket.toProject(s),
       modelTarget: (selection) => (state.modelTarget ?? MODELS_OFF.launchTarget)(selection),
       workspaces: () => state.workspaces,
+      // Trust tests supply this boundary; never write the person's native configuration.
+      prepareFolderTrust: (input, current) => state.prepareFolderTrust?.(input, current) ?? Promise.resolve(false),
     })
     socket.createProvider = launches.create
     socket.createStatusProvider = launches.createStatus
