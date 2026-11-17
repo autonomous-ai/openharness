@@ -79,7 +79,8 @@ export interface OpencodeEvent { type: string; data: Record<string, unknown> }
 export interface OpencodeClient {
   /** service.json as it is now, every file check passed, with nothing sent: its stamp, never logged. */
   registration(): { stamp: string } | { fault: 'no_service' | 'not_local' }
-  /** Reads the registration and asks it who it is. A stamp: the calls below go to that service until the next find. */
+  /** Reads the registration and asks it who it is. A stamp: the calls below go to that service until the next find. Only
+   *  the latest find holds one: an earlier find that answers after it is no_service. */
   find(): Promise<{ stamp: string } | { fault: OpencodeFault }>
   request(method: 'GET' | 'POST', path: string, body?: unknown): Promise<OpencodeAnswer>
   events(onEvent: (event: OpencodeEvent) => void, onClose: (reason: OpencodeFault | 'ended') => void): { close(): void }
@@ -183,6 +184,7 @@ const call = (service: Service, method: 'GET' | 'POST', path: string, body?: unk
 
 export function createOpencodeClient(deps: OpencodeClientDeps): OpencodeClient {
   let held: Service | undefined
+  let finds = 0
 
   /** The file's text while it is a plain file of this user's within its bound; else none. */
   const readService = (): string | undefined => {
@@ -239,6 +241,7 @@ export function createOpencodeClient(deps: OpencodeClientDeps): OpencodeClient {
   }
 
   const find = async (): Promise<{ stamp: string } | { fault: OpencodeFault }> => {
+    const mine = ++finds
     held = undefined
     const found = service()
     if ('fault' in found) return found
@@ -250,6 +253,8 @@ export function createOpencodeClient(deps: OpencodeClientDeps): OpencodeClient {
     if (pid !== found.pid || (found.version !== undefined && version !== found.version)) return { fault: 'not_ours' }
     const major = typeof version === 'string' ? /^(\d+)\./.exec(version) : null
     if (!major || Number(major[1]) < 2) return { fault: 'old_version' }
+    // A find made since has read the file anew: only its answer is held, never an older one's.
+    if (mine !== finds) return { fault: 'no_service' }
     held = found
     return { stamp: found.stamp }
   }
