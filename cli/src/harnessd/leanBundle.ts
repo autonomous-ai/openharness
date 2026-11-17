@@ -25,7 +25,7 @@
 import { createHash } from 'node:crypto'
 import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { uptime } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { brotliDecompressSync } from 'node:zlib'
 import { sha256File } from './reexec.js'
 
@@ -53,8 +53,13 @@ export interface LeanBundle {
 
 const sha256 = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
 
-/** The lean bundle [bundle] carries; null when it carries none, or one that does not match its checksum. */
-export function readLeanBundle(bundle: Buffer): LeanBundle | null {
+interface LeanRead {
+  maxPayloadBytes?: number
+  maxFiles?: number
+}
+
+/** The lean bundle [bundle] carries; null when absent, corrupt or outside its decode bounds. */
+export function readLeanBundle(bundle: Buffer, limits: LeanRead = {}): LeanBundle | null {
   const start = bundle.lastIndexOf(MARKER)
   if (start < 0) return null
   const end = bundle.indexOf(END, start + MARKER.length)
@@ -65,15 +70,23 @@ export function readLeanBundle(bundle: Buffer): LeanBundle | null {
   const expected = body.slice(0, colon)
   if (colon < 0 || !/^[0-9a-f]{64}$/.test(expected)) return null
   let payload: Buffer
-  try { payload = brotliDecompressSync(Buffer.from(body.slice(colon + 1), 'base64')) } catch { return null }
+  // The measured maximum is 12.61 MB / 471 files; each bound leaves more than ten times that headroom.
+  try { payload = brotliDecompressSync(Buffer.from(body.slice(colon + 1), 'base64'), { maxOutputLength: limits.maxPayloadBytes ?? 128 * 1024 * 1024 }) } catch { return null }
   if (sha256(payload) !== expected) return null
   let named: unknown
   try { named = JSON.parse(payload.toString('utf8')) } catch { return null }
   if (!named || typeof named !== 'object' || Array.isArray(named)) return null
+  const names = Object.keys(named)
+  if (names.length > (limits.maxFiles ?? 8192)) return null
   const files = new Map<string, Buffer>()
-  for (const [name, code] of Object.entries(named)) {
+  const folded = new Set<string>()
+  for (const name of names) {
+    const code = (named as Record<string, unknown>)[name]
     // Names become paths: nothing that could leave the folder, or be taken for a claim or scratch.
     if (!FILE_NAME.test(name) || typeof code !== 'string') return null
+    const key = name.toLowerCase()
+    if (folded.has(key)) return null
+    folded.add(key)
     files.set(name, Buffer.from(code, 'utf8'))
   }
   if (!files.has(LEAN_ENTRY)) return null
@@ -120,6 +133,8 @@ export function releaseLeanClaim(entry: string, pid: number = process.pid): void
 export const LEAN_RECENT_MS = 60_000
 
 export interface LeanWrite {
+  /** One original master image this PID still executes while separately claiming a child cohort. */
+  keepMasterEntry?: string
   /** This master: what its claim is under. */
   pid?: number
   alive?: (pid: number) => boolean
@@ -174,6 +189,7 @@ export function writeLeanBundle(dir: string, lean: LeanBundle, options: LeanWrit
   const claim = `.claim-${pid}`
   const name = lean.sha256.slice(0, 16)
   const folder = join(dir, name)
+  const keepFolder = options.keepMasterEntry ? resolve(dirname(options.keepMasterEntry)) : null
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   if (!claimed(folder, claim, lean)) {
     // Written whole, claimed, then renamed into place: a folder there is always complete and never
@@ -199,19 +215,30 @@ export function writeLeanBundle(dir: string, lean: LeanBundle, options: LeanWrit
       } else {
         // One that changed on disk is replaced, and keeps the claims of the masters still running from
         // it. One starting a service from it in that instant finds no file and starts it from cli.js.
-        for (const other of claimsIn(folder)) {
-          if (other.pid !== pid && live(other)) writeFileSync(join(scratch, `.claim-${other.pid}`), '', { mode: 0o600 })
-        }
         const aside = join(dir, `${name}.${pid}.old`)
         try {
+          for (const other of claimsIn(folder)) {
+            if (other.pid !== pid && live(other)) writeFileSync(join(scratch, `.claim-${other.pid}`), '', { mode: 0o600 })
+          }
+        } catch (copyError) {
+          removeQuietly(scratch)
+          throw copyError
+        }
+        try {
           renameSync(folder, aside)
-          renameSync(scratch, folder)
         } catch {
           removeQuietly(scratch)
           throw error
-        } finally {
-          removeQuietly(aside)
         }
+        try { renameSync(scratch, folder) } catch {
+          try { renameSync(aside, folder) } catch {
+            // Both copies are complete and claimed. Keep them until this owner is actually gone.
+            throw Object.assign(new Error('LEAN_RESTORE_FAILED'), { code: 'LEAN_RESTORE_FAILED' })
+          }
+          removeQuietly(scratch)
+          throw error
+        }
+        removeQuietly(aside)
       }
     }
   }
@@ -227,7 +254,7 @@ export function writeLeanBundle(dir: string, lean: LeanBundle, options: LeanWrit
     const claims = claimsIn(path)
     if (entry === name) {
       for (const other of claims) if (other.pid !== pid && !live(other)) removeQuietly(join(folder, `.claim-${other.pid}`))
-    } else if (!claims.some((other) => other.pid !== pid && live(other)) && settled(path)) {
+    } else if (resolve(path) !== keepFolder && !claims.some((other) => other.pid !== pid && live(other)) && settled(path)) {
       // A claim of this master's own on another folder is one it held before it re-executed on this one.
       removeQuietly(path)
     }

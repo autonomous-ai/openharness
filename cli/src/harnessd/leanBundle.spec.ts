@@ -16,6 +16,7 @@ const fsHooks = vi.hoisted(() => ({
   onRead: null as null | ((path: string) => void),
   failWrite: null as null | ((path: string) => boolean),
   beforeLstat: null as null | ((path: string) => void),
+  failRename: null as null | ((from: string, to: string) => boolean),
 }))
 const renames = { set before(step: null | ((from: string, to: string) => void)) { fsHooks.beforeRename = step } }
 vi.mock('node:fs', async (real) => {
@@ -23,6 +24,7 @@ vi.mock('node:fs', async (real) => {
   return {
     ...fs,
     renameSync: (from: string, to: string) => {
+      if (fsHooks.failRename?.(from, to)) throw Object.assign(new Error('EIO: publication failed'), { code: 'EIO' })
       const step = fsHooks.beforeRename
       fsHooks.beforeRename = null
       step?.(from, to)
@@ -58,6 +60,16 @@ const CLI = '#!/usr/bin/env node\nconsole.log("the whole CLI")\n/*! a dependency
 const blockOf = (payload: string): string => `\n${LEAN_MARKER}${sha256(payload)}:${brotliCompressSync(Buffer.from(payload)).toString('base64')}*/\n`
 
 describe('the lean bundle cli.js carries', () => {
+  it('bounds the inflated payload before decoding and the number of published files', () => {
+    const bundle = Buffer.from(CLI + leanBlock(FILES))
+    expect(readLeanBundle(bundle, { maxPayloadBytes: 8, maxFiles: 10 })).toBeNull()
+    expect(readLeanBundle(bundle, { maxPayloadBytes: 1024, maxFiles: 1 })).toBeNull()
+    expect(readLeanBundle(bundle, { maxPayloadBytes: 1024, maxFiles: 2 })?.files.size).toBe(2)
+  })
+
+  it('rejects file names that collide on case-insensitive filesystems', () => {
+    expect(readLeanBundle(Buffer.from(CLI + leanBlock({ ...FILES, 'HARNESSD.mjs': 'different entry' })))).toBeNull()
+  })
   it('is read back as the build wrote it, file by file, with the sha256 of the whole cli.js it came from', () => {
     const bundle = Buffer.from(CLI + leanBlock(FILES))
     const lean = readLeanBundle(bundle)!
@@ -102,6 +114,7 @@ describe('writing the lean bundle out', () => {
     fsHooks.onRead = null
     fsHooks.failWrite = null
     fsHooks.beforeLstat = null
+    fsHooks.failRename = null
     rmSync(join(dir, '..'), { recursive: true, force: true })
   })
   /** A cleaner's clock, past the minute it leaves anything that just changed alone. */
@@ -113,6 +126,53 @@ describe('writing the lean bundle out', () => {
   })
   const folderOf = (bundle: LeanBundle): string => join(dir, bundle.sha256.slice(0, 16))
   const alive = (...pids: number[]) => (pid: number) => pids.includes(pid)
+
+  it('keeps the one original master image while that master owns a separate execution cohort', () => {
+    const master = lean({ [LEAN_ENTRY]: 'the running master' })
+    const retired = lean({ [LEAN_ENTRY]: 'a retired cohort' })
+    const masterEntry = writeLeanBundle(dir, master, { pid: 100, alive: alive(100) })
+    writeLeanBundle(dir, retired, { pid: 100, alive: alive(100) })
+    writeLeanBundle(dir, lean(), { pid: 100, alive: alive(100), now: later, keepMasterEntry: masterEntry })
+    expect(existsSync(masterEntry)).toBe(true)
+    expect(existsSync(join(folderOf(master), '.claim-100'))).toBe(true)
+    expect(existsSync(folderOf(retired))).toBe(false)
+    expect(readdirSync(dir).sort()).toEqual([master.sha256.slice(0, 16), lean().sha256.slice(0, 16)].sort())
+  })
+
+  it('preserves the prior complete image if copying another live claim fails', () => {
+    const bundle = lean()
+    const entry = writeLeanBundle(dir, bundle, { pid: 100, alive: alive(100) })
+    writeFileSync(entry, 'the prior image')
+    fsHooks.failWrite = (path) => path.endsWith('.claim-100') && path.includes('.200.tmp/')
+    expect(() => writeLeanBundle(dir, bundle, { pid: 200, alive: alive(100, 200) })).toThrow('ENOSPC')
+    expect(readFileSync(entry, 'utf8')).toBe('the prior image')
+    expect(existsSync(join(folderOf(bundle), '.claim-100'))).toBe(true)
+    expect(readdirSync(dir)).toEqual([bundle.sha256.slice(0, 16)])
+  })
+
+  it('restores the prior complete image and claims when replacing it fails', () => {
+    const bundle = lean()
+    const entry = writeLeanBundle(dir, bundle, { pid: 100, alive: alive(100) })
+    writeFileSync(entry, 'the prior image')
+    fsHooks.failRename = (from, to) => from.endsWith('.200.tmp') && !existsSync(to)
+    expect(() => writeLeanBundle(dir, bundle, { pid: 200, alive: alive(100, 200) })).toThrow()
+    expect(readFileSync(entry, 'utf8')).toBe('the prior image')
+    expect(existsSync(join(folderOf(bundle), '.claim-100'))).toBe(true)
+    expect(readdirSync(dir)).toEqual([bundle.sha256.slice(0, 16)])
+  })
+
+  it('keeps both complete images and claims when restoring a failed replacement also fails', () => {
+    const bundle = lean()
+    const name = bundle.sha256.slice(0, 16)
+    const entry = writeLeanBundle(dir, bundle, { pid: 100, alive: alive(100) })
+    writeFileSync(entry, 'the prior image')
+    fsHooks.failRename = (from, to) => !existsSync(to) && (from.endsWith('.200.tmp') || from.endsWith('.200.old'))
+    expect(() => writeLeanBundle(dir, bundle, { pid: 200, alive: alive(100, 200) })).toThrow('LEAN_RESTORE_FAILED')
+    expect(readFileSync(join(dir, `${name}.200.old`, LEAN_ENTRY), 'utf8')).toBe('the prior image')
+    expect(readFileSync(join(dir, `${name}.200.tmp`, LEAN_ENTRY), 'utf8')).toBe(FILES[LEAN_ENTRY])
+    expect(existsSync(join(dir, `${name}.200.old`, '.claim-100'))).toBe(true)
+    expect(existsSync(join(dir, `${name}.200.tmp`, '.claim-200'))).toBe(true)
+  })
 
   it('writes its files into a folder of its own, for its owner alone, claimed by this master, and returns its entry', () => {
     const bundle = lean()
