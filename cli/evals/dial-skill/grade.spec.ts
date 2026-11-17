@@ -137,4 +137,14 @@ describe('gradeRun', () => {
     const err = await gradeRun(need, run('a'), [ring('Set WEATHER_API_KEY')], judge).catch((e: unknown) => e)
     expect(err).toMatchObject({ message: 'judge gave no verdict', judge_model: 'claude-opus-5-5', judge_usage: { input_tokens: 15, output_tokens: 2 } })
   })
+
+  it('names the judge model of the calls before one that throws without a model, so their spend stays priced', async () => {
+    let calls = 0
+    const judge: Judge = async () => {
+      if (++calls === 2) throw Object.assign(new Error('judge timed out after 10 ms'), { failure_class: 'timeout' })
+      return { pass: true, reason: 'ok', model: 'claude-opus-5-5', usage: { input_tokens: 10, output_tokens: 2 } }
+    }
+    const err = await gradeRun(need, run('a'), [ring('Set WEATHER_API_KEY')], judge).catch((e: unknown) => e)
+    expect(err).toMatchObject({ failure_class: 'timeout', judge_model: 'claude-opus-5-5', judge_usage: { input_tokens: 10, output_tokens: 2 } })
+  })
 })
