@@ -1937,7 +1937,7 @@ class Registry {
       }
       const verify = this.ownerGuard(agentId)
       const receipt = await this.persist(deadline, true, false, externalResume ? agentId : undefined,
-        { agentId, candidate: entry, verify })
+        { agentId, candidate: entry, verify, allowTransaction: true })
       const committed = this.committedOwner(agentId, receipt)
       if (!committed) return null
       this.terminalAvailableAgents.add(entry.agentId)

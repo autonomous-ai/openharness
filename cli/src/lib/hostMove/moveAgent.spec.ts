@@ -320,7 +320,7 @@ describe('moveAgent', () => {
     const movedButSlow = harness({
       retarget: vi.fn(() => never<void>()), releaseHold: vi.fn(() => never<void>()), killPane: vi.fn(() => never<boolean>()),
     })
-    expect(await run(movedButSlow.deps)).toEqual({ moved: true, resumed: true })
+    expect(await run(movedButSlow.deps)).toEqual({ moved: false, fellBack: false, reason: 'the confirmed destination remains held' })
     expect(movedButSlow.heldMs()!).toBeLessThan(100_000)
   })
 

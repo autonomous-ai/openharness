@@ -9,7 +9,12 @@ import type { RegisteredSession } from './lib/registry.js'
 
 vi.mock('node:child_process', () => {
   const forbidden = () => { throw Error('Host binaries are forbidden in the hook admission golden') }
-  return { exec: forbidden, execSync: forbidden, execFile: forbidden, execFileSync: forbidden,
+  // The simulated platform cannot probe the host's process generation.
+  const execFile = (file: string, args: string[], _options: unknown, callback: (error: Error | null, stdout: string) => void) => {
+    if (file !== 'ps' || JSON.stringify(args) !== JSON.stringify(['-p', String(process.pid), '-o', 'lstart='])) return forbidden()
+    queueMicrotask(() => callback(null, 'fixture-start'))
+  }
+  return { exec: forbidden, execSync: forbidden, execFile, execFileSync: forbidden,
     spawn: forbidden, spawnSync: forbidden, fork: forbidden }
 })
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
