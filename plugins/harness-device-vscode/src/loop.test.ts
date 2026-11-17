@@ -564,6 +564,24 @@ describe('startLoop', () => {
     expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 2 states sent, 0 not sent, 0 scroll lines, 3 dropped')
   })
 
+  it('a run ends once its terminal is no longer the active one', async () => {
+    const win = fakeWindow({ terminals: [101, 202], active: 101 })
+    const { w, stream } = await connected(win)
+    win.scrollReplies.push('held')
+    stream.send('{"scroll":-5,"pid":101}\n')
+    await w.until(() => win.scrolls.length === 1)
+    // The person clicks another terminal, or a show makes it active, while a line is in VS Code's hands.
+    win.set({ active: 202 })
+    win.release()
+    await flush()
+    expect(win.scrolls).toEqual([true])
+    // A line for the terminal now active runs.
+    stream.send('{"scroll":2,"pid":202}\n')
+    await w.until(() => win.scrolls.length === 3)
+    await flush()
+    expect(win.scrolls).toEqual([true, false, false])
+  })
+
   it('lines that come during a run are one next run for the same terminal, 100 at most', async () => {
     const win = fakeWindow({ terminals: [101, 202], active: 101 })
     const { w, stream } = await connected(win)
