@@ -172,6 +172,8 @@ describe('what an experiment in its own process may ask of the core', () => {
     expect(Object.keys(EXPERIMENT_BACKEND_ROUTES).sort()).toEqual(Object.keys(EXPERIMENTS).sort())
     for (const service of ['orchestrator', 'memory', 'cloud']) expect(EXPERIMENT_BACKEND_ROUTES[service]).toEqual([])
     expect(experimentBackendAllowed('messages', 'GET', '/api/agent-messages')).toBe(false)
+    expect(experimentBackendAllowed('router', 'POST', '/api/route/jev')).toBe(true)
+    expect(experimentBackendAllowed('router', 'GET', '/api/route/jev')).toBe(false)
   })
 
   // A route a service starts to call and does not declare fails here, not on a person's computer: every backend path written

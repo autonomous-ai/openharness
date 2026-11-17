@@ -12,7 +12,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { agentsIn, isSession } from './processCoreApi.js'
 
 type Payload = Record<string, unknown>
-type Query = (query: string, payload?: Payload) => Promise<Payload>
+type Query = (query: string, payload: Payload) => Promise<Payload>
 
 const isId = (value: unknown): value is string => typeof value === 'string' && value.length > 0
 

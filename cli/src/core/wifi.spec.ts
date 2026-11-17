@@ -25,6 +25,22 @@ function harness() {
 const settled = async (): Promise<void> => { for (let i = 0; i < 4; i++) await Promise.resolve() }
 
 describe('the Wi-Fi device, as the core keeps it', () => {
+  it('forwards intact lifecycle batches before recap filtering, and no ordinary output batch', () => {
+    const { wifi, port, off } = harness()
+    const output = { type: 'text', payload: { text: 'answer' } } as unknown as LiveEvent
+    const started = { type: 'turn_started', payload: {} } as LiveEvent
+    const ended = { type: 'turn_ended', payload: {} } as LiveEvent
+    wifi.feed.events('a', [output])
+    expect(port.events).not.toHaveBeenCalled()
+    const batch = [ended, started, output]
+    wifi.feed.events('a', batch)
+    expect(port.events).toHaveBeenCalledExactlyOnceWith('a', batch)
+    wifi.feed.events('a', [started])
+    expect(port.events).toHaveBeenCalledTimes(2)
+    off()
+    expect(() => wifi.feed.events('a', [ended])).not.toThrow()
+    expect(port.events).toHaveBeenCalledTimes(2)
+  })
   it('counts a device as watching only while its app said hello on a session still its own, with the service there', () => {
     const { wifi, clients, gateway } = harness()
     clients.set('c1', device('id-1', true))

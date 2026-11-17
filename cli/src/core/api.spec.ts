@@ -675,8 +675,10 @@ describe('the core API services stand on', () => {
   it('answers for workspaces while they are off: branches keep their names, a create waits, and no worktree is read or removed', async () => {
     const project = { source: 'worktree' as const, gitSource: '/work/app' }
     const target = { cwd: '/work/app-wt' }
+    expect(WORKSPACES_OFF.stop()).toBeUndefined()
     expect(WORKSPACES_OFF.nameBranches()).toBeUndefined()
     expect(WORKSPACES_OFF.ready()).toBe(false)
+    expect(await WORKSPACES_OFF.prepareInstructions('/work/app-wt', 'claude')).toBe(false)
     const folder = { ok: false, error: 'SERVICE_UNAVAILABLE', detail: `Could not make the project folder. ${WORKSPACES_UNAVAILABLE}` }
     expect(await WORKSPACES_OFF.prepareFolder(project, { cloneFallback: true })).toEqual(folder)
     expect(await WORKSPACES_OFF.describeWorkspace(target, [])).toBeNull()

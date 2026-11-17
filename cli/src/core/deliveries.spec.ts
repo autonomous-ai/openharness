@@ -18,6 +18,33 @@ const setup = (over: Partial<Pick<DeliveriesDeps, 'submit' | 'cancel' | 'deliver
 const event = (deliveryId: string, state: TurnDelivery['state'] = 'queued'): TurnDelivery => ({ deliveryId, sessionId: 'agent-1', state })
 
 describe('delivered turns', () => {
+  it('rejects malformed shared operations and a dead connection before admitting input', () => {
+    const { deps, deliveries } = setup()
+    const payload = { version: 1, agentId: 'a', text: 'hello', deliveryId: 'd', when: 'composer' }
+    for (const invalid of [{ ...payload, version: 2 }, { ...payload, when: 'guess' }, { ...payload, retry: true }]) {
+      expect(deliveries.answer('orchestrator', 'input', invalid)).toEqual({ error: 'INVALID_INPUT' })
+    }
+    expect(deliveries.answer('orchestrator', 'input', payload, { current: () => false, ownsRequest: () => false })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+    expect(deps.submit).not.toHaveBeenCalled()
+    expect(deliveries.answer('orchestrator', 'input', payload)).toEqual({})
+    expect(deps.submit).toHaveBeenCalledWith('a', 'hello', 'd', { when: 'composer' })
+    const current = () => true
+    deliveries.turns.deliver('a', 'inline', 'inline', { current })
+    expect(deps.submit).toHaveBeenLastCalledWith('a', 'inline', 'inline', { current })
+  })
+
+  it('isolates failed input listeners and removes an inline subscription when it stops', () => {
+    const { deps, deliveries } = setup(), heard = vi.fn()
+    const stopFailure = deliveries.turns.onInput!(() => { throw new Error('private caller detail') })
+    const stop = deliveries.turns.onInput!(heard)
+    const fact = { agentId: 'a', when: 'composer' as const, phase: 'written' as const }
+    deliveries.input(fact)
+    expect(heard).toHaveBeenCalledExactlyOnceWith(fact)
+    expect(deps.log).toHaveBeenCalledExactlyOnceWith('[input] an input listener failed')
+    stop(); stopFailure()
+    deliveries.input(fact)
+    expect(heard).toHaveBeenCalledOnce()
+  })
   it('probes a versioned input contract and keeps the original maker authority through dispatch', () => {
     const { deps, deliveries } = setup({ deliverers: new Set(['wifi', 'orchestrator']) })
     let connected = true

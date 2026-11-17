@@ -53,6 +53,77 @@ function started(over: Parameters<typeof fakeCore>[0] = {}) {
 const KEY = Buffer.alloc(32, 7).toString('base64')
 
 describe('the Wi-Fi device, with the dials', () => {
+  it.each([null, { agentId: 'other', sessionId: 's1', engine: 'claude' }])('refuses input when the fresh agent read is %j', async resolved => {
+    const { core, port, hello, ask } = started({ conversations: { resolve: vi.fn(async () => resolved as never) } })
+    await hello()
+    const reply = await ask({ type: 'turn.send', machineId: 'machine-1', agentId: 'agent', idempotencyKey: 'missing', text: 'hello' })
+    expect(reply.receipt).toMatchObject({ state: 'rejected' })
+    expect(core.turns.deliver).not.toHaveBeenCalled()
+    await port.stop()
+  })
+
+  it('feeds inline input, delivery, and agent lifecycle facts to the receipt owner and releases subscriptions on stop', async () => {
+    const core = fakeCore({ dataDir, conversations: { resolve: vi.fn(async () => ({ ...agent, sessionId: 's1' } as never)) },
+      agents: { follow: vi.fn(() => () => {}) },
+      wifi: { view: vi.fn(async () => ({ agents: [agent], store: [], hasWindow: true })) } })
+    const stopInput = vi.fn(), stopDelivery = vi.fn(), stopAgents = vi.fn()
+    vi.mocked(core.turns.onInput!).mockReturnValue(stopInput)
+    vi.mocked(core.turns.onDelivery).mockReturnValue(stopDelivery)
+    vi.mocked(core.agents.follow!).mockReturnValue(stopAgents)
+    let service!: AutonomousDeviceService
+    const ports = emptyPorts()
+    startWifi(core, ports, { service: options => service = new AutonomousDeviceService(options) })
+    await ports.wifi!.resume({ sessions: [], helloed: [], focus: null })
+    const request = { type: 'turn.send', requestId: randomUUID(), machineId: 'machine-1', agentId: 'agent', idempotencyKey: 'shared-facts', text: 'hello' }
+    const reply = await service.request('device', request)
+    expect(reply).toMatchObject({ receipt: { state: 'queued' } })
+    const deliveryId = vi.mocked(core.turns.deliver).mock.calls[0][2]
+    const input = vi.mocked(core.turns.onInput!).mock.calls[0][0]
+    const fact = { agentId: 'agent', deliveryId, sessionId: 's1', when: 'composer' as const, phase: 'dispatching' as const, content: 'hello' }
+    input(fact)
+    expect(service.watchesTranscript('agent')).toBe(true)
+    expect(core.wifi.watching).toHaveBeenLastCalledWith(['agent'])
+    const watches = vi.mocked(core.wifi.watching).mock.calls.length
+    input(fact)
+    input({ ...fact, content: undefined })
+    input({ ...fact, deliveryId: undefined })
+    input({ ...fact, phase: 'written' })
+    expect(core.wifi.watching).toHaveBeenCalledTimes(watches)
+    vi.mocked(core.turns.onDelivery).mock.calls[0][0]({ sessionId: 'agent', deliveryId, state: 'unknown' })
+    ports.wifi!.disconnected()
+    expect(await service.request('device', request)).toMatchObject({ receipt: { state: 'unknown', error: { code: 'CORE_DISCONNECTED' } } })
+    vi.mocked(core.agents.follow!).mock.calls[0][0]({ kind: 'ended', agentId: 'agent' })
+    expect(service.watchesTranscript('agent')).toBe(false)
+    await ports.wifi!.stop()
+    expect(stopInput).toHaveBeenCalledOnce()
+    expect(stopDelivery).toHaveBeenCalledOnce()
+    expect(stopAgents).toHaveBeenCalledOnce()
+  })
+
+  it('submits and cancels through the process adapter, with the same bound context and live receipt authority', async () => {
+    const core = fakeCore({ dataDir, conversations: { resolve: vi.fn(async () => null) },
+      wifi: { view: vi.fn(async () => ({ agents: [agent], store: [], hasWindow: true })) } })
+    let service!: AutonomousDeviceService
+    const ports = emptyPorts(), cancel = vi.fn()
+    const submit = vi.fn(async (_agentId: string, _text: string, _deliveryId: string, context: (agent: never) => void, current?: () => boolean) => {
+      expect(current!()).toBe(true)
+      context({ ...agent, sessionId: 's1' } as never)
+    })
+    startWifi(core, ports, { service: options => service = new AutonomousDeviceService(options), submit, cancel })
+    await ports.wifi!.resume({ sessions: [], helloed: [], focus: null })
+    await service.request('device', { type: 'turn.send', requestId: randomUUID(), machineId: 'machine-1', agentId: 'agent', idempotencyKey: 'adapter', text: 'hello' })
+    const deliveryId = submit.mock.calls[0][2]
+    expect(core.conversations.resolve).not.toHaveBeenCalled()
+    expect(core.turns.onInput).not.toHaveBeenCalled()
+    expect(core.turns.onDelivery).not.toHaveBeenCalled()
+    ports.wifi!.input({ agentId: 'agent', sessionId: 's1', deliveryId, when: 'composer', phase: 'dispatching', content: 'hello' })
+    expect(service.watchesTranscript('agent')).toBe(true)
+    service.revoke('device')
+    expect(cancel).toHaveBeenCalledWith(deliveryId)
+    expect(core.turns.cancelDelivery).not.toHaveBeenCalled()
+    await ports.wifi!.stop()
+  })
+
   it('withdraws an input revoked while its fresh agent read is pending', async () => {
     let release!: (value: never) => void
     const core = fakeCore({ dataDir,

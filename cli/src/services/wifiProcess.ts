@@ -210,7 +210,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     const machine = await origin.query('machine', {})
     if (core !== origin) return
     const port = build(text(machine.id))
-    if (core === sharedCore) await following.connected((query, payload) => origin.query(query, payload ?? {}))
+    if (core === sharedCore) await following.connected((query, payload) => origin.query(query, payload))
     if (core !== origin) return
     await port?.resume({
       sessions: list<WifiResume['sessions'][number]>(state.sessions),

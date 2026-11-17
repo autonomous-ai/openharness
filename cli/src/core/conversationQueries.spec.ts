@@ -131,7 +131,8 @@ it('publishes only with a live core-owned originating request and preserves held
     if (!permit.current(request)) throw new HandoffError('HANDOFF_UNAVAILABLE')
     return { cwd: '/work', file: null, gitRepo: false, degraded: [] }
   })
-  const core = fakeCore({ conversations: { publish } })
+  const core = fakeCore({ conversations: conversationReads({ resolve: () => null, readHistory: () => undefined,
+    recentAsks: () => [], lastFullText: () => undefined, publish }) })
   const payload = { prepared, originRequestId: 'routed-request' }, authority = { ownsRequest }
   expect(await answerConversationQuery(core, 'publish', payload, authority)).toEqual({ value: { cwd: '/work', file: null, gitRepo: false, degraded: [] } })
   expect(ownsRequest).toHaveBeenCalledWith('routed-request', 'agent_handoff_prepare', request)

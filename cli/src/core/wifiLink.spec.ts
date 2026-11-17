@@ -14,6 +14,36 @@ function link() {
 }
 
 describe('the Wi-Fi device in the devices\' process, as the core sees it', () => {
+  it('forwards shared input facts and disconnects without legacy interpretation', () => {
+    const { wifi, sent } = link()
+    const progress = { agentId: 'a', deliveryId: 'd', when: 'composer' as const, phase: 'written' as const }
+    wifi.port.input(progress)
+    wifi.port.disconnected()
+    expect(sent).toEqual([
+      { type: 'service_event', payload: { kind: 'input', event: progress } },
+      { type: 'service_event', payload: { kind: 'disconnected' } },
+    ])
+  })
+
+  it.each([
+    ['claude', '2.0.0', 's', 'waiting_for_writer', true, 'daemon_queue', 'waiting_for_writer'],
+    ['claude', '2.0.0', 's', 'dispatching', false, 'direct', 'submitted'],
+    ['codex', '0.106.0', 's', 'written', true, 'steering', 'submitted'],
+    ['codex', '1.0.0', 's', 'composer_available', true, 'steering', 'accepted'],
+    ['codex', '0.105.0', 's', 'unconfirmed', true, 'native_input', 'unconfirmed'],
+    ['codex', undefined, 's', 'written', true, 'native_input', 'submitted'],
+    ['commandcode', '1.0.0', 's', 'written', true, 'native_input', 'submitted'],
+    ['codex', '0.106.0', 'different', 'written', true, 'native_input', 'submitted'],
+    [undefined, undefined, 's', 'written', true, 'native_input', 'submitted'],
+  ])('translates retained-worker progress for %s %s bound to %s during %s', (engine, cliVersion, sessionId, phase, duringTurn, mode, legacyPhase) => {
+    const { wifi, core, sent } = link()
+    vi.mocked(core.agents.byAgent).mockReturnValue(engine ? { agentId: 'a', sessionId: 's', engine, cliVersion } as never : undefined)
+    const progress = { agentId: 'a', sessionId, deliveryId: 'd', when: 'composer', phase, duringTurn } as Parameters<typeof wifi.input>[0]
+    wifi.input({ ...progress, deliveryId: undefined })
+    expect(sent).toEqual([])
+    wifi.input(progress)
+    expect(sent).toEqual([{ type: 'service_event', payload: { kind: 'inputStatus', event: { sessionId: 'a', deliveryId: 'd', mode, phase: legacyPhase } } }])
+  })
   it('tells an error-ignoring old worker its input was refused through the legacy receipt event', async () => {
     const { wifi, deliveries, sent } = link()
     deliveries.answer.mockReturnValueOnce({ error: 'INVALID_INPUT' })

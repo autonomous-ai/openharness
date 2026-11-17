@@ -77,6 +77,28 @@ const delivery = (deliveryId: string) => ({ deliveryId }) as unknown as SessionI
 describe('the session input controller\'s dependencies', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it.each(['entry', 'validation', 'capture', 'screen', 'enter'])('refuses a writer whose caller leaves during %s', async boundary => {
+    const run = deps()
+    let current = boundary !== 'entry'
+    const originalRead = run.deps.readScreen
+    if (boundary === 'validation') vi.mocked(run.deps.terminal.validateTerminal).mockImplementationOnce(async () => { current = false; return true })
+    if (boundary === 'capture') vi.mocked(run.deps.terminal.captureTerminal).mockImplementationOnce(async () => { current = false; return READY_PANE })
+    let reads = 0
+    run.deps.readScreen = async (...args) => {
+      const screen = await originalRead(...args)
+      if (++reads === (boundary === 'enter' ? 2 : 1) && ['screen', 'enter'].includes(boundary)) current = false
+      return screen
+    }
+    vi.mocked(run.deps.terminal.submitTerminalAction).mockImplementationOnce(async (_id, _text, options) => {
+      expect(await options!.beforeEnter!()).toBe('caller_gone')
+      return { state: 'unknown', dispatch: 'possibly_executed', reason: 'caller_gone' }
+    })
+    const result = await messageWriter(run.deps)('a1', 'caller text', undefined, () => current)
+    expect(result).toMatchObject({ reason: 'caller_gone', dispatch: boundary === 'enter' ? 'possibly_executed' : 'not_started' })
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledTimes(boundary === 'enter' ? 1 : 0)
+    if (boundary === 'entry') expect(run.deps.terminal.validateTerminal).not.toHaveBeenCalled()
+  })
+
   it('finds a session and checks its pane through what it was given', async () => {
     const { deps: given } = deps()
     const wired = sessionInputDeps(given)

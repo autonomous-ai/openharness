@@ -73,6 +73,105 @@ function setup(over: { startThrows?: boolean; leavesOff?: boolean } = {}) {
 afterEach(() => vi.restoreAllMocks())
 
 describe('the Wi-Fi device in the devices\' process', () => {
+  it('delivers only validated shared input facts and current agent lifecycle notices', async () => {
+    const f = setup()
+    f.answer('input_contract', { version: 1 }); f.answer('follow_agents', { agents: [] })
+    f.connect(); f.event({ kind: 'resume' })
+    const drain = () => f.options().requests!.wifi_http({}, { local: true, owner: true })
+    await drain()
+    const follow = vi.fn(), stop = f.api().agents.follow!(follow)
+    const event = { agentId: 'a', deliveryId: 'd', when: 'composer', phase: 'written' }
+    f.event({ kind: 'agent', event: { kind: 'ended', agentId: 'a' } })
+    f.event({ kind: 'input', event: { ...event, phase: 'invented' } })
+    f.event({ kind: 'input', event })
+    f.event({ kind: 'dispatched', agentId: 'a', deliveryId: 'd', text: 'duplicate' })
+    f.event({ kind: 'inputStatus', event: {} })
+    f.event({ kind: 'disconnected' })
+    await drain()
+    expect(follow).toHaveBeenCalledExactlyOnceWith({ kind: 'ended', agentId: 'a' })
+    expect(f.log.filter(line => line.includes(' input '))).toEqual([`machine-1 input [${JSON.stringify(event)}]`])
+    expect(f.log.some(line => line.includes('dispatched') || line.includes('inputStatus'))).toBe(false)
+    expect(f.ports[0].disconnected).toHaveBeenCalledOnce()
+    f.adapter().consumed!('a', 'already interpreted by shared input')
+    expect(f.notices).toEqual([])
+    f.event({ kind: 'input', event })
+    f.event({ kind: 'agent', event: { kind: 'ended', agentId: 'b' } })
+    f.disconnect(); f.connect()
+    await drain()
+    expect(follow).toHaveBeenCalledOnce()
+    expect(f.log.filter(line => line.includes(' input '))).toHaveLength(1)
+    stop()
+  })
+
+  it.each(['input_contract', 'machine', 'follow_agents'])('abandons a resume whose original connection ends during %s', async blocked => {
+    const f = setup(), query = vi.mocked(f.connection.query), original = query.getMockImplementation()!
+    f.answer('input_contract', { version: 1 })
+    let release!: (answer: Record<string, unknown>) => void
+    const held = new Promise<Record<string, unknown>>(resolve => { release = resolve })
+    query.mockImplementation((name, payload) => name === blocked ? held : original(name, payload))
+    f.connect(); f.event({ kind: 'resume' })
+    await vi.waitFor(() => expect(query).toHaveBeenCalledWith(blocked, expect.any(Object)))
+    f.disconnect()
+    release(blocked === 'input_contract' ? { version: 1 } : blocked === 'machine' ? { id: 'machine-1' } : { agents: [] })
+    await f.options().requests!.wifi_http({}, { local: true, owner: true })
+    expect(f.ports.every(port => vi.mocked(port.resume).mock.calls.length === 0)).toBe(true)
+    expect(f.start).toHaveBeenCalledTimes(blocked === 'follow_agents' ? 1 : 0)
+  })
+
+  it('abandons a resume when the socket closes immediately after opening', async () => {
+    const f = setup()
+    f.connect(); f.event({ kind: 'resume' })
+    // Let the resume reach its already-open socket before that socket closes.
+    await Promise.resolve()
+    f.disconnect()
+    expect(await f.options().requests!.wifi_http({}, { local: true, owner: true })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+    expect(f.connection.query).not.toHaveBeenCalled()
+  })
+
+  it.each(['revoked', 'reconnected'])('does not send after context binding leaves the caller %s', async boundary => {
+    const f = setup()
+    f.answer('input_contract', { version: 1 }); f.answer('follow_agents', { agents: [] })
+    f.answer('resolve', { value: { agentId: 'a', sessionId: 's', engine: 'claude' } })
+    f.connect(); f.event({ kind: 'resume' })
+    await f.options().requests!.wifi_http({}, { local: true, owner: true })
+    let current = true
+    const writing = f.adapter().submit!('a', 'hello', 'd', () => {
+      if (boundary === 'revoked') current = false
+      else { f.disconnect(); f.connect() }
+    }, () => current)
+    if (boundary === 'revoked') await writing
+    else await expect(writing).rejects.toThrow('original core connection ended')
+    expect(vi.mocked(f.connection.query).mock.calls.filter(([name]) => name === 'input')).toEqual([])
+  })
+
+  it('refuses disconnected input, and cancels only through the original shared contract', async () => {
+    const f = setup()
+    f.answer('input_contract', { version: 1 }); f.answer('follow_agents', { agents: [] })
+    f.answer('resolve', { value: { agentId: 'a', sessionId: 's', engine: 'claude' } })
+    f.answer('input', { error: 'SERVICE_UNAVAILABLE' })
+    f.connect(); f.event({ kind: 'resume' })
+    await f.options().requests!.wifi_http({}, { local: true, owner: true })
+    await f.adapter().submit!('a', 'hello', 'd', () => {})
+    expect(f.log).toContain('machine-1 delivery [{"sessionId":"a","deliveryId":"d","state":"unknown","reason":"NOT_CONFIRMED"}]')
+    f.adapter().cancel!('d')
+    await vi.waitFor(() => expect(f.connection.query).toHaveBeenCalledWith('cancel_delivery', { deliveryId: 'd' }))
+    vi.mocked(f.connection.query).mockClear()
+    const writing = f.adapter().submit!('a', 'hello', 'not-started', () => {})
+    f.adapter().cancel!('cancel-after-disconnect')
+    f.disconnect()
+    await expect(writing).rejects.toThrow('original core connection ended')
+    await expect(f.adapter().submit!('a', 'hello', 'offline', () => {})).rejects.toThrow('not connected to the core')
+    f.adapter().cancel!('offline')
+    expect(f.connection.query).not.toHaveBeenCalled()
+    f.connect()
+    f.answer('input_contract', new Error('connection failed'))
+    f.adapter().cancel!('failed-contract')
+    await vi.waitFor(() => expect(f.connection.query).toHaveBeenCalledWith('input_contract', {}))
+    // A failed contract is consumed by the cancel path and never turns into a legacy notice.
+    await f.options().requests!.wifi_http({}, { local: true, owner: true })
+    expect(f.notices).toEqual([])
+  })
+
   it('probes before input, reads one agent, and submits through the shared operation', async () => {
     const f = setup(), context = vi.fn()
     f.answer('input_contract', { version: 1 })
@@ -235,6 +334,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.event({ kind: 'turnEnded', agentId: 'a' })
     f.event({ kind: 'stream', agentId: 'a', events: [{ type: 'text_delta' }] })
     f.event({ kind: 'stream', agentId: 'a', events: 'none' })
+    f.event({ kind: 'input_events', agentId: 'a', events: [] })
     f.event({ kind: 'transcript', agentId: 'a', sessionId: 's', engine: 'claude', line: '{}' })
     f.event({ kind: 'delivery', event: { deliveryId: 'd' } })
     f.event({ kind: 'dispatched', agentId: 'a', deliveryId: 'd', text: 'hi', sessionId: 's' })
