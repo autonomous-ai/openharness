@@ -30,7 +30,7 @@ export interface ClaudeStatus {
 }
 
 /** Which call failed: a fixed word the devices count, where Claude Code's own line could name a path. */
-export type ClaudeStep = 'unsupported' | 'list' | 'marketplace' | 'install' | 'enable' | 'uninstall' | 'update'
+export type ClaudeStep = 'unsupported' | 'list' | 'marketplace' | 'install' | 'enable' | 'disable' | 'uninstall' | 'update'
 export type ClaudeResult = { ok: true } | { ok: false; error: string; step: ClaudeStep }
 /** What the devices' setup did: installed or updated the plugin; found it current, on as it should be; or found it absent,
  *  not on as the person left it, and ran nothing for it. */
@@ -66,6 +66,12 @@ export function claudeRunner(bin: string, env?: NodeJS.ProcessEnv): ClaudeRun {
 export function claudeRun(): ClaudeRun | null {
   const bin = installedEngineBin('claude')
   return bin ? claudeRunner(bin) : null
+}
+
+/** Claude Code as claudeRun() finds it, pointed at [home]: CLAUDE_CONFIG_DIR on this child alone. null: no `claude`. */
+export function claudeRunIn(home: string): ClaudeRun | null {
+  const bin = installedEngineBin('claude')
+  return bin ? claudeRunner(bin, { ...process.env, CLAUDE_CONFIG_DIR: home }) : null
 }
 
 /**
@@ -210,6 +216,32 @@ export async function claudeDisable({ run }: ClaudeDeps): Promise<ClaudeResult> 
   if (!listed.ok) return listed
   if (!listed.entry) return { ok: true }
   return await change(run, ['plugin', 'uninstall', DIAL_PLUGIN_ID, '--scope', 'user'], LOCAL_MS, 'uninstall') ?? { ok: true }
+}
+
+/*
+ * A home that shares `plugins/` with the default home (an Orca account's) only ever has the plugin turned on or off:
+ * an uninstall there removes the files every home names, and the other homes' entries then stay on with nothing to
+ * turn off (check 8). Installs, updates and the uninstall are the default home's alone.
+ */
+
+/** Turns the plugin on in a home that shares `plugins/` with the default home (an Orca account's): its files are
+ *  there already, so only this home's settings change. One already on there runs nothing more. */
+export async function claudeHomeEnable(deps: ClaudeDeps): Promise<ClaudeResult> {
+  const run = await supportedRun(deps)
+  if (!run) return UNSUPPORTED
+  const listed = await userEntry(run)
+  if (!listed.ok) return listed
+  if (listed.entry?.enabled === true) return { ok: true }
+  return await change(run, ['plugin', 'enable', DIAL_PLUGIN_ID, '--scope', 'user'], LOCAL_MS, 'enable') ?? { ok: true }
+}
+
+/** Turns it off in such a home's settings and leaves its files: an uninstall here would remove what every home names. */
+export async function claudeHomeDisable({ run }: ClaudeDeps): Promise<ClaudeResult> {
+  if (!run) return { ok: true }
+  const listed = await userEntry(run)
+  if (!listed.ok) return listed
+  if (listed.entry?.enabled !== true) return { ok: true }
+  return await change(run, ['plugin', 'disable', DIAL_PLUGIN_ID, '--scope', 'user'], LOCAL_MS, 'disable') ?? { ok: true }
 }
 
 /**
