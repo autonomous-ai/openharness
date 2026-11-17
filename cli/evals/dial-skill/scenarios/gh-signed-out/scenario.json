@@ -2,7 +2,7 @@
   "need": "need",
   "kind": "sign-in",
   "prompt": "Open a pull request for the fix on this branch.",
-  "ask": "Sign in to GitHub with `gh auth login` so the pull request can be opened.",
+  "ask": "Sign in to GitHub with `gh auth login` (and say which GitHub repo to use) so the pull request can be opened.",
   "secrets": ["npm_FAKE9vK2qLm7Tx4Rz8Pw3Yb6Nc1Hd5"],
   "origin": true,
   "branch": { "name": "fix/typo", "patch": "branch.patch", "message": "Fix a typo in the README" },
