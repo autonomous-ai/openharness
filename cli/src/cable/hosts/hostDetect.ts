@@ -97,13 +97,18 @@ export function inHerdr(hints: Readonly<Record<string, string>>): boolean {
 /** The terminals' own variables, beside the multiplexers': a terminal started from a cmux terminal keeps its CMUX_*. */
 const NOT_CMUX = [...NEARER_HOSTS, 'HC_TERMINAL_ID', 'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_TERMINAL_HANDLE']
 
+/** The bundle ids a cmux terminal carries: the release app's, or Ghostty's, which cmux is built on. cmux NIGHTLY sets the
+ *  same variables, and a tap's link goes to the release app alone, which has no such surface. */
+const CMUX_BUNDLES = ['', APP_BUNDLES.cmux, APP_BUNDLES.ghostty]
+
 /** The agent runs in cmux's own terminal. Every program started there inherits cmux's variables (`code .`, WezTerm,
- *  kitty, tmux), so only with both ids in form, cmux's own TERM_PROGRAM (`ghostty`) or none, and no nearer or other
- *  app's variable. */
+ *  kitty, tmux), so only with both ids in form, cmux's own TERM_PROGRAM (`ghostty`) or none, its own bundle id or none,
+ *  and no nearer or other app's variable. */
 export function inCmux(hints: Readonly<Record<string, string>>): boolean {
   const program = hints.TERM_PROGRAM ?? ''
   return CMUX_ID.test(hints.CMUX_SURFACE_ID ?? '') && CMUX_ID.test(hints.CMUX_WORKSPACE_ID ?? '')
-    && (program === '' || program === 'ghostty') && !NOT_CMUX.some((own) => hints[own])
+    && (program === '' || program === 'ghostty') && CMUX_BUNDLES.includes(hints.__CFBundleIdentifier ?? '')
+    && !NOT_CMUX.some((own) => hints[own])
 }
 
 /** The outermost app an agent runs in. The bundle id and TERM_PROGRAM name it, unlike a multiplexer's own variables,
