@@ -16,7 +16,7 @@ import { devicesListenerPath } from '../devices/listenerPath.js'
 import { listenLocalSocket, unixSocketPath } from '../lib/localSocket.js'
 import { socketIsPrivate } from '../lib/localTransport.js'
 import { DEVICE_USAGE, runDeviceCommand, takesConnect, type DeviceDeps } from './command.js'
-import type { ClaudeRun } from './plugin.js'
+import type { ClaudeRun } from '../devices/claudePlugin.js'
 
 const SRC = fileURLToPath(new URL('..', import.meta.url))
 /** Names the daemon's socket only: the daemon here listens on a socket in a throwaway folder. */
