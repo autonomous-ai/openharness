@@ -168,8 +168,8 @@ describe('run-eval.mjs pass', () => {
       })
     }
     expect(rows.find((r) => r.prompt_id === 'board-unplugged.oracle').judge_model).toBe('claude-opus-5-5')
-    // Two judge calls for each need row, none for no-need rows, and no agent ever started.
-    expect(callsMade()).toEqual(['judge', 'judge', 'judge', 'judge'])
+    // The oracle's line and answer, the null's answer (it never rang), nothing for no-need rows, and no agent started.
+    expect(callsMade()).toEqual(['judge', 'judge', 'judge'])
   })
 
   it('resumes: a second run starts nothing and adds no row', () => {
