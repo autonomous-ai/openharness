@@ -27,7 +27,7 @@ showPane and its ObservedActions members". Those two pull requests also conflict
 | Source interface | `HostSource`: `list`, `capabilities`, `send?`, `focus?`, `markSeen?`; `hasPane?`, `showPane?` from #4311 | `cable/hosts/types.ts:57-68` |
 | Sources | `HarnessSource` (Harness agents, tmux and pty panes included: a pane's hook registers with the core, `hook/notify.mjs` paneless branch) and `ObservedSource` (every agent outside a pane, from its hooks and the open-session scan) | `hosts/harness.ts:28`, `hosts/observed.ts:106`, `services/devices.ts:352` |
 | Apps inside `ObservedSource` | Orca terminal (type, switch), Claude app session (link), terminal tab by tty (watch select), WezTerm and herdr pane (focus), any app by bundle id (`open -b`), Claude Code mod (words) | `observed.ts:148-201`, `open.ts:34-110`, `orca.ts`, #4326 `claudeShow`, #4331 `tabs.ts` |
-| De-duplication | Merged list keyed by engine + session id, else by caller pid; Harness beats a host adapter beats observed. A Harness agent carries its bound session id, and the scan skips Harness's own sessions. Now Harness, then observed, then a listing source ([herdr](2026-11-16-device-herdr.md#one-agent-one-row-the-merge-key-4341-left-to-this-pull-request)) | `hosts/registry.ts:4-42` and its spec; `cableHost.ts:690-698`; `observed.ts:386` |
+| De-duplication | Merged list keyed by engine + session id, else by caller pid; Harness beats a host adapter beats observed. A Harness agent carries its bound session id, and the scan skips Harness's own sessions. Now Harness, then observed, then a listing source ([herdr](2026-11-16-device-herdr.md#one-agent-one-row-the-merge-key-4341-left-to-this-pull-request), opencode) | `hosts/registry.ts:4-42` and its spec; `cableHost.ts:690-698`; `observed.ts:386` |
 | Capabilities to the dial | Per agent, not through `cable_features`: `caps` letters `svfa` on each machine-view row. The daemon refuses what an agent lacks; firmware parses them and hides or refuses voice and focus | `types.ts:70`, `cableHost.ts:562,698`, `cableSession.ts:1431,1470,1616`, firmware `cable_client.c:951,993`, `ui_habitat.c:1188,1400,2347,2625,3045` |
 | Answer on the dial | Firmware never reads `CABLE_CAP_A`. A shown-only prompt of an outside agent offers [choices], "In Orca", [send]; the daemon then refuses with "Answer it in Orca." | `ui_habitat.c:1400-1418,2232`; `cableSession.ts:1616-1623`; `services/devices.ts` `showWaits` |
 
@@ -145,6 +145,8 @@ the dial's words need Automation mode, as they go over cmux's socket ([cmux](../
 
 To turn it on, in cmux: Settings ▸ Automation ▸ Socket Control Mode ▸ Automation mode.
 Only the dial's words need it; Harness never changes it.
+
+opencode's sessions come from a listing source alone, with no adapter ([opencode](../plans/2026-11-17-dial-opencode-design.md)).
 
 `open.ts` keeps only what every app shares:
 

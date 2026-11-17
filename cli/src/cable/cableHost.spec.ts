@@ -1121,9 +1121,9 @@ describe('the dial that shows one app at a time', () => {
     ] })
   })
 
-  it('18 apps with agents send 16 rows, the shown one kept', async () => {
+  it('19 apps with agents send 16 rows, the shown one kept', async () => {
     const appIds = (snapshot: { apps?: { apps: Array<{ id: string }> } }): string[] | undefined => snapshot.apps?.apps.map((a) => a.id)
-    // The last two ids, codex and the unknown app, are past the 16 rows: the last is picked.
+    // The last three ids, codex, opencode and the unknown app, are past the 16 rows: the last is picked.
     const last = APP_IDS[APP_IDS.length - 1]
     // A second agent in Ghostty, so Ghostty is shown with no draw.
     const host = setup([...APP_IDS.map((app) => agent(`a-${app}`, app)), agent('g2', 'ghostty')])
