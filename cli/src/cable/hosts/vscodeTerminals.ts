@@ -10,10 +10,8 @@
  * `ps -axo pid=,ppid=` table gives pids and parents alone. A running pid's parents never change, so an agent's chain is
  * read once and kept until it leaves, and one read serves every agent that needs one.
  */
-import { execFile } from 'node:child_process'
-import { patientExec } from '../../lib/patientExec.js'
 import { REFUSED, type ListenerHandler, type ListenerStream, type ListenerStreamHandler } from '../../services/devicesListener.js'
-import { parentChain, PS_MAX_BYTES, PS_TIMEOUT_MS, type Exec, type ProcessName } from './scannedApp.js'
+import { execText, parentChain, PS_MAX_BYTES, PS_TIMEOUT_MS, type Exec, type ProcessName } from './scannedApp.js'
 
 export const VSCODE_WINDOWS = 8
 export const VSCODE_TERMINALS = 32
@@ -37,13 +35,8 @@ const PARENT_ROW = /^\s*(\d+)\s+(\d+)\s*$/
 
 type ProcessParent = Pick<ProcessName, 'pid' | 'ppid'>
 
-// A held event loop must not turn the timeout into an empty table (patientExec.ts).
-const patient = patientExec(execFile)
-const execText: Exec = (command, args, options) => new Promise((resolve) => {
-  patient(command, args, options, (error, stdout) => resolve(error ? null : stdout))
-})
-
-/** Each process's pid and parent, from one `ps -axo pid=,ppid=` read; rejects when `ps` could not be read. */
+/** Each process's pid and parent, from one `ps -axo pid=,ppid=` read through scannedApp.ts's patient exec; rejects when
+ *  `ps` could not be read. */
 export async function readProcessParents(exec: Exec = execText): Promise<ProcessParent[]> {
   const out = await exec('ps', ['-axo', 'pid=,ppid='], { timeout: PS_TIMEOUT_MS, maxBuffer: PS_MAX_BYTES })
   const rows: ProcessParent[] = []

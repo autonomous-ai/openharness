@@ -48,7 +48,7 @@ export type Exec = (command: string, args: readonly string[], options: { timeout
 
 // A held event loop must not turn the timeout into an empty table, or a bundle with no id (patientExec.ts).
 const patient = patientExec(execFile)
-const execText: Exec = (command, args, options) => new Promise((resolve) => {
+export const execText: Exec = (command, args, options) => new Promise((resolve) => {
   patient(command, args, options, (error, stdout) => resolve(error ? null : stdout))
 })
 
