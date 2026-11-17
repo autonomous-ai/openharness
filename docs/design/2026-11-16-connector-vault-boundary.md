@@ -140,3 +140,72 @@ succeeded and opened fresh handles (`/tmp/core-secret-close-red-exact.log`). Wit
 all five affected suites pass: 79 tests in 8.55 seconds; TypeScript passes. The first read-failure
 fixture selected a file that was absent; it was corrected to the existing clients document before
 the exact RED. The earlier fixture failure and all original evidence remain retained.
+
+
+### Observed file watermark correction — Design (2026-11-17)
+
+The fixed ABBA exposed extra gateway work during idle. A separate private diagnostic found no
+backend vault reads in either control idle window, but one at the candidate's first five-second
+file check and none in its next window. CPU profiles show exchange/merge/decryption only in that
+first candidate window. The extracted sync owner no longer records the file versions it has
+successfully synchronized. This correction addresses that cause; it does not explain the separate
+core CPU delta or replace the pending corrected-source performance comparison.
+
+1. Growth: the existing `filesAt` watermark remains one bounded string for exactly three local
+   documents plus its already-owned directory identity. The merge reply gains those versions only for the lifetime of its existing operation;
+   no new cache, durable state, timer, process or retention policy.
+2. Concurrency: the existing legacy lock and single writer still own reads/publication. A merge
+   returns its snapshot and exact observed versions. Unchanged documents retain their verified
+   descriptor read versions. Prepared documents record post-write descriptor metadata; immediately
+   after each rename, while still in the existing non-yielding publication section, the destination
+   must be the same owned file with unchanged content/version metadata (ctime alone may reflect the
+   rename). Only that checked version enters the reply. Never sample arbitrary paths after releasing
+   the lock and call them synchronized: another writer's unseen edit must trigger the next check.
+3. Read cost: no extra content reads. There are at most three additional descriptor metadata reads
+   during preparation and at most six bounded prepared/destination metadata checks during publication. The existing
+   five-second check uses matching bigint lstat versions and one root lstat to reject directory aliases or ownership/permission changes; no frequency change. A probe whose observed
+   watermark was superseded while awaiting metadata is discarded; the next existing check sees any
+   subsequent edit. Successful startup, Refresh and backend-triggered publications cause no echo exchange.
+4. Scale: the count is always three regardless of connector count, with existing file/plaintext
+   limits unchanged. The diagnosed 1,101-connector fixture and the original mixed ABBA remain recorded;
+   corrected-source CPU, memory, loop delay and latency must be measured separately before acceptance.
+5. Compatibility: this is an internal gateway writer result, never IPC. Stored documents, locks,
+   encryption, public clients, old writers and the supported rolling-upgrade contracts are unchanged.
+6. Migration/rollback: none, because no persisted format changes. Rolling back restores the redundant
+   synchronization but reads the same files.
+7. Audience: no versions or content leave the gateway. Existing backend/account and private-file
+   checks remain; diagnostics use fixed error codes without paths or contents.
+8. Identity: the same current OS owner and verified account generation. The sync owner advances the
+   successful watermark only after the exchange completes and its current-authority check passes.
+9. Failure: busy, uncertain close/publication, revoked authority, failed backend exchange or failed
+   metadata checks never advance the successful watermark. Only ENOENT is absence; another metadata
+   error is logged as synchronization unavailable and remains unknown. Existing cleanup ownership,
+   actual-settlement admission, bounded retries and visible Refresh failure remain intact.
+10. Platforms: shared TypeScript for macOS, Linux and Windows. Use bigint lstat fields already used by
+    the writer; ignore only ctime when comparing an owned prepared file across rename, then retain the
+    actual post-rename ctime for later checks. Local tests run on macOS; native Linux/Windows are not
+    claimed by these local results.
+
+Selected caller checks before implementation: unchanged startup and warm Refresh have no first/second
+poll backend read; a successful changed envelope has no publication echo; a concurrent edit is either
+included or detected later; a replacement with preserved mtime, removal and missing-to-present file
+change are detected; failed or revoked exchanges do not acknowledge metadata. Keep all existing
+writer close, cleanup, publication-prefix and account-epoch cases. Focused suites use one worker;
+full gates/native/cost acceptance remain the coordinator's work after review.
+
+
+The initial meaningful caller RED has eight expected failures and three passing controls
+(`/tmp/core-connector-watermark-red-callers.log`, exit 1). Earlier ESM-spy setup and recursive-spy
+attempts are retained separately and are not behavior evidence. The correction also reproduced a
+probe-admission bug before fixing it: a failed metadata read released the check while another read
+was held, doubling issued probes from four to eight (`/tmp/core-connector-watermark-probe-retention-red.log`).
+All three probes now settle before that check can release its admission.
+
+Final runtime source passes all four selected files: 57 cases
+(`/tmp/core-connector-watermark-green-reviewed.log`), followed by the complete observed-version file
+with its additional stale-probe/concurrent-publication control: 15 cases
+(`/tmp/core-connector-watermark-observed-final.log`). That covers 58 unique cases across the two runs,
+not a single 58-case run. Final TypeScript and diff checks pass. The first selected green attempt
+retained one old result-shape assertion; it was adapted to the new internal snapshot/version reply,
+without weakening its publication assertion. Native platform proof, full gates and a new quiet cost
+comparison remain the coordinator's work. The earlier core idle CPU delta is still unexplained.
