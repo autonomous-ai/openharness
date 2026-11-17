@@ -592,6 +592,10 @@ export class ObservedSource implements HostSource {
     if (!entry) return
     const a = entry.agent
     a.lastActivityAt = now
+    // Its own hook places it now, and with a caller it is never paired again. The pairing's Herdr is given back first:
+    // no hook said it, so until the caller's parents answer it keeps the app the scan gave it.
+    if (entry.paired) a.app = entry.paired.app
+    entry.paired = undefined
     // A hook says where a session runs: one the open scan found is not known yet until its first, unless its parent
     // processes named its app. A hook whose hints name no app (the Codex app's own Codex) learns it from its caller's
     // parents.
@@ -602,8 +606,6 @@ export class ObservedSource implements HostSource {
     // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
     entry.hints = e.hostHints
     entry.caller = e.callerPid
-    // Its own hook places it now, and with a caller it is never paired again.
-    entry.paired = undefined
     this.locate(entry)
     entry.bundle = bundleOf(a.host, e.hostHints)
     if (e.cwd) a.cwd = e.cwd
