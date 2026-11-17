@@ -251,6 +251,16 @@ describe('startLoop', () => {
     expect(homeless.runs.map((run) => run.file)).toEqual(['harness'])
   })
 
+  // A relative folder, or an empty one, is the extension host's working folder, which can be the folder VS Code opened:
+  // in Restricted Mode an untrusted one, whose own `harness` must never run.
+  it("only PATH's absolute folders, and only a home that is absolute, are looked in", async () => {
+    const w = world([MISSING, MISSING], fakeWindow(), { path: 'node_modules/.bin::/usr/bin:.:/bin:', home: 'h' })
+    await w.until(() => w.states.length > 0)
+    expect(w.runs.map(({ file, args, path, timeoutMs, maxBytes }) => ({ file, args, path, timeoutMs, maxBytes }))).toEqual([
+      { file: 'harness', ...LINK },
+    ])
+  })
+
   it.each([
     ['no launcher', 'noHarness', [MISSING, MISSING]],
     ['a run that failed', 'notRunning', [null]],
