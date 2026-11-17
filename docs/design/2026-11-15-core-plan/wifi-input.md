@@ -2,10 +2,16 @@
 
 ## Dependent compatibility cutover design (2026-11-18)
 
-Status: the coordinator authorized implementation as an isolated dependent draft. Immutable worker
-cohort review and native startup/update/rollback proof are mandatory integration and publication
-gates and have not yet passed. This branch must not ship alone. No admission-only release has been
-published; if that changes, the executed private worker contract must advance before this cutover.
+Status (2026-11-18): the coordinator accepted the private compatibility integration gate after
+independent source review and packaged macOS startup/fallback/restart checks, an actual historical
+parent refusing a modern child before effects, and a retained modern master changing new → old → new
+builds after reaping the old core and workers. The historical transition uses a manually selected
+canonical build and an exec-unavailable shim; it does not prove native updater decisions, a canonical
+master-load race, Linux or Windows. The seven-case packaged suite has six passes and one real failure:
+master RSS is 155.46 MiB against the unchanged 100 MiB ceiling. That failure, final combined validation,
+cost acceptance and platform evidence still block publication. Cleanup passed for all nine instances.
+This cutover and worker admission must ship together. No admission-only release has been published;
+if that changes, the executed private worker contract must advance before this cutover.
 The freshness owner confirms `WORKER_CONTRACT=1` represents that combined unpublished release.
 
 The shared-input comparison still sends each correlated operation's generic facts and obsolete
@@ -42,12 +48,13 @@ forced end, unknown receipts, held-writer wakeups and inline single delivery. Ru
 files at 100% per-file coverage, types and architecture. Native integration and cost require the
 coordinator's reviewed frozen sources and quiet slot. The cost fixture needs an explicit version
 adapter for each source's composition; disclose that fixture delta while preserving all nine workload
-cases, counts, bounds and deadlines. Neither this draft nor focused tests satisfy the cohort gate.
+cases, counts, bounds and deadlines. Focused tests alone do not satisfy the compatibility gate;
+the scoped integration evidence above is separate from final publication acceptance.
 
 ## Shared input cutover design (2026-11-17)
 
-This records the integrated transitional design. The dependent amendment above supersedes its
-private compatibility policy only after the stated integration and publication gates pass.
+This records the earlier transitional design. The accepted dependent amendment above supersedes its
+private compatibility policy in the combined integration; publication remains subject to its gates.
 
 Ordinary messages, tracked whole turns and correlated composer input converge on the session input
 operation. Scheduling is `composer` or `turn`; a delivery id asks for correlation, not a device-specific
