@@ -12,8 +12,8 @@ a pane only when its adapter has `show` and `canShow` (`observed.ts` `rest`, `ca
 `[device] swipe ·` line: nothing was asked to run.
 
 The rest of what Diego and a customer asked (VS Code moving the dial, scroll, a session in VS Code's integrated
-terminal) needs a Harness VS Code extension. It is its own spec and branch (PM, 2026-11-17); the research is handed over
-in `docs/plans/2026-11-17-vscode-extension-research.md`.
+terminal) needs a Harness VS Code extension. It is its own spec and branch (PM, 2026-11-17), which carries the research
+done for it here.
 
 ## What the extension offers (read in Claude Code extension 2.1.326)
 
