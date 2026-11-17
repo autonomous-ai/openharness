@@ -6605,18 +6605,16 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     })
 
     // The stop awaits its listener's close before the cable stops, and the dial still sends frames meanwhile.
-    it.each(['t7', 't9'])('a stroke begun while the devices stop is dropped too: answered %s', async (agent) => {
-      const { core, port, screen, answer } = inHerdr()
-      screen.held = true
+    it('a stroke begun while the devices stop goes to the windows, and herdr-app is not asked', async () => {
+      const { core, port } = inHerdr()
       shows(await listedId())
       const stopping = port.stop()
       host().scrolled('down', 0, 0)
       host().scrolled('move', 8, 0)
       await stopping
-      answer(agent)
       await vi.advanceTimersByTimeAsync(5_000)
-      expect(orcaRuns).toEqual([STATUS])
-      expect(dialScrolls(core)).toEqual([])
+      expect(orcaRuns).toEqual([])
+      expect(dialScrolls(core)).toEqual([toWindows('down', 0, 0), toWindows('move', 8, 0)])
       expect(scrollSaid()).toEqual([])
     })
 
