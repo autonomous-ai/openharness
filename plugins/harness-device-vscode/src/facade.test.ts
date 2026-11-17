@@ -60,6 +60,8 @@ describe('windowFacade', () => {
     ['it becomes active', (vscode: ReturnType<typeof fakeVscode>, relaunched: ApiTerminal) => vscode.activate(relaunched)],
     ['another terminal opens', (vscode: ReturnType<typeof fakeVscode>) => void vscode.open()],
     ['another terminal closes', (vscode: ReturnType<typeof fakeVscode>) => vscode.close(vscode.open().terminal)],
+    // VS Code 1.75 flips a terminal's state only once, so a relaunch there can come with no terminal event at all.
+    ["the window's focus changes", (vscode: ReturnType<typeof fakeVscode>) => vscode.focus(true)],
   ])("a terminal whose shell was relaunched is listed and shown by the new shell's pid once %s, and the change is told", async (_case, event) => {
     const w = watched()
     const shell = w.vscode.open()
