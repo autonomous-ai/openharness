@@ -2,10 +2,12 @@
  * Claude Code and Codex set up to ring the dial from its first attach (docs/plans/2026-11-17-dial-agents-always-on-design.md),
  * on the real daemon with a fake dial on the desk (harness/desk.ts), homes of the test's own and a fake Claude Code
  * recent enough for its plugin, whose `claude plugin` notes each call (harness/fakeEngine.mjs):
- * - the first attach, with no command run, installs Claude Code's plugin and writes the skill in both default homes;
- * - a Codex in another home gets the skill once the open scan sees the rollout it holds; a skill the person deletes stays
- *   deleted, `disable` removes every copy Harness wrote and leaves a person's own, and `enable` brings it back with no
- *   restart;
+ * - a computer with no dial gets nothing; the first attach, with no command run, installs Claude Code's plugin and
+ *   writes the skill in both default homes;
+ * - a Codex in another home gets the skill once the open scan sees the rollout it holds, and a file 0.6.58 wrote in the
+ *   default home is brought current; a skill the person deletes stays deleted, `disable` removes every copy Harness
+ *   wrote and leaves a person's own, and `enable` brings it back with no restart;
+ * - Claude Code's `disable` stays through an attach, and its `enable` brings the plugin and the skill back;
  * - the plugin uninstalled with Claude Code's own `claude plugin` is never installed again, and its skill goes;
  * - with a real Codex binary (E2E_REAL_CODEX), the app-server that holds its rollout gives its home.
  *
@@ -22,6 +24,7 @@ import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { DIAL_PLUGIN_ID, DIAL_SKILL } from '../src/devices/dialSkill.js'
 import { placeNode } from '../src/testing/placeNode.js'
 import { SYSTEM_FOLDERS } from '../src/testing/testPath.js'
+import { VERSION } from '../src/version.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { FakeDial } from './harness/fakeDial.js'
@@ -49,6 +52,8 @@ const skillOf = (home: string): string => join(home, 'skills', 'dial', 'SKILL.md
 const read = (file: string): string | null => existsSync(file) ? readFileSync(file, 'utf8') : null
 const rollout = (folder: string): string => join(folder, `rollout-2026-11-16T00-00-00-${randomUUID()}.jsonl`)
 const INSTALL = `plugin install ${DIAL_PLUGIN_ID} --scope user`
+/** A skill file as 0.6.58 wrote it, its marker line the old one: Harness's own. */
+const OLD_SKILL = '---\nname: dial\ndescription: older\n# Written by Harness. Turn off the agent in Harness Device to remove it.\n---\n\nOlder.\n'
 
 /** Each `claude plugin` call the daemon's fake Claude Code took, one line of its words. */
 const pluginCalls = (d: IsolatedDaemon): string[] => read(join(d.root, 'claude-plugin-calls'))?.split('\n').filter(Boolean) ?? []
@@ -56,6 +61,9 @@ const setupRecord = (d: IsolatedDaemon): { dial?: boolean; plugin?: string; home
   const text = read(join(d.dataDir, 'dial-setup.json'))
   return text === null ? null : JSON.parse(text)
 }
+/** Whether the plugin is on in [claudeHome]'s user settings, Claude Code's own record. */
+const pluginOn = (claudeHome: string): boolean =>
+  JSON.parse(read(join(claudeHome, 'settings.json')) ?? '{}').enabledPlugins?.[DIAL_PLUGIN_ID] === true
 /** The log's lines that hold [text]. */
 const logLines = (d: IsolatedDaemon, text: string): string[] => d.log().split('\n').filter((line) => line.includes(text))
 /** The setup's lines and the tally's say counts and fixed words, never a path. */
@@ -126,9 +134,9 @@ esac
     return dial
   }
 
-  /** The real command from source, with the daemon's environment. */
-  async function device(d: IsolatedDaemon, ...words: string[]): Promise<{ code: number | null; err: string }> {
-    const child = spawn(process.execPath, [...CLI_ENTRY, 'device', ...words], { cwd: d.root, env: d.env, stdio: ['ignore', 'ignore', 'pipe'] })
+  /** The real command from source, with the daemon's environment, or [env] beside it. */
+  async function device(d: IsolatedDaemon, words: string[], env: Record<string, string> = {}): Promise<{ code: number | null; err: string }> {
+    const child = spawn(process.execPath, [...CLI_ENTRY, 'device', ...words], { cwd: d.root, env: { ...d.env, ...env }, stdio: ['ignore', 'ignore', 'pipe'] })
     children.push(child)
     let err = ''
     child.stderr!.on('data', (chunk: Buffer) => { err += chunk.toString('utf8') })
@@ -157,12 +165,19 @@ esac
   it('a dial\'s first attach sets Claude Code and Codex up, with no command run', async () => {
     const { d, desk } = await fresh()
     const claudeHome = dirname(d.env.CLAUDE_PROJECTS_DIR!)
+    // With no dial, no devices' process runs (core/devicesWake.ts): once the other services are up, nothing is set up.
+    await until('the services to connect', () => d.log().includes('[services] search connected'), 30_000, 100)
+    expect(d.log()).not.toContain('[harnessd] service devices started')
+    expect(setupRecord(d)).toBeNull()
+    expect([read(skillOf(claudeHome)), read(skillOf(d.env.CODEX_HOME!))]).toEqual([null, null])
+    expect(pluginCalls(d)).toEqual([])
+
     await plugged(desk)
     await until('Codex\'s skill', () => read(skillOf(d.env.CODEX_HOME!)) === DIAL_SKILL, 45_000, 100)
     // Written once the plugin is on: Claude Code's own settings say so.
     await until('Claude Code\'s skill', () => read(skillOf(claudeHome)) === DIAL_SKILL, 45_000, 100)
     expect(pluginCalls(d)).toContain(INSTALL)
-    expect(setupRecord(d)).toMatchObject({ dial: true, plugin: expect.any(String) })
+    expect(setupRecord(d)).toMatchObject({ dial: true, plugin: VERSION })
     await until('the day\'s tally', () => logLines(d, '[device] dial setup · day ').length > 0, 30_000, 50)
     noPathLogged(d)
   })
@@ -174,6 +189,8 @@ esac
     const theirs = '---\nname: dial\ndescription: my own\n---\n\nMine.\n'
     mkdirSync(dirname(skillOf(mine)), { recursive: true })
     writeFileSync(skillOf(mine), theirs)
+    mkdirSync(dirname(skillOf(codexHome)), { recursive: true })
+    writeFileSync(skillOf(codexHome), OLD_SKILL)
     const day = ['sessions', '2026', '11', '16']
     await hold(d, rollout(join(other, ...day)))
     await hold(d, rollout(join(mine, ...day)))
@@ -184,6 +201,7 @@ esac
     const leftRemoved = (): number => logLines(d, '[device] dial setup · codex · left removed').length
 
     await plugged(desk)
+    await until('0.6.58\'s file brought current', () => read(skillOf(codexHome)) === DIAL_SKILL, 45_000, 100)
     await until('the skill in the other home', () => read(skillOf(other)) === DIAL_SKILL, 45_000, 100)
     await until('both homes recorded', () => recorded().join() === [join(codexHome, 'skills'), join(other, 'skills')].sort().join(), 30_000, 50)
     // The attach's pass wrote the default home, the scan's the other: each pass reports once it is over, so every
@@ -201,7 +219,7 @@ esac
 
     // Taken before the disable: a scan may read the removal before the next attach does.
     const before = leftRemoved()
-    expect(await device(d, 'codex', 'disable')).toMatchObject({ code: 0, err: '' })
+    expect(await device(d, ['codex', 'disable'])).toMatchObject({ code: 0, err: '' })
     expect(existsSync(skillOf(codexHome))).toBe(false)
     expect(existsSync(skillOf(other))).toBe(false)
     expect(read(skillOf(mine))).toBe(theirs)
@@ -215,12 +233,44 @@ esac
     expect(existsSync(skillOf(other))).toBe(false)
 
     // Enabled, and an attach runs a scan: the same daemon, never restarted.
-    expect(await device(d, 'codex', 'enable')).toMatchObject({ code: 0, err: '' })
+    expect(await device(d, ['codex', 'enable'])).toMatchObject({ code: 0, err: '' })
     expect(read(skillOf(codexHome))).toBe(DIAL_SKILL)
     await desk.unplug('E2E-A')
     await plugged(desk)
     await until('the skill in the other home again', () => read(skillOf(other)) === DIAL_SKILL, 45_000, 100)
     expect(read(skillOf(mine))).toBe(theirs)
+    noPathLogged(d)
+  })
+
+  it('Claude Code\'s disable stays through an attach, and its enable brings the plugin and the skill back', async () => {
+    const { d, desk } = await fresh()
+    const claudeHome = dirname(d.env.CLAUDE_PROJECTS_DIR!)
+    // As the person would, from a shell whose Claude Code home is the daemon's.
+    const shell = { CLAUDE_CONFIG_DIR: claudeHome }
+    const leftRemoved = (): number => logLines(d, '[device] dial setup · claude · left removed').length
+    await plugged(desk)
+    await until('Claude Code\'s skill', () => read(skillOf(claudeHome)) === DIAL_SKILL, 45_000, 100)
+    await until('the plugin recorded', () => setupRecord(d)?.plugin === VERSION, 30_000, 50)
+
+    // Taken before the disable: a scan may read the removal before the next attach does.
+    const before = leftRemoved()
+    expect(await device(d, ['claude', 'disable'], shell)).toMatchObject({ code: 0, err: '' })
+    expect(existsSync(skillOf(claudeHome))).toBe(false)
+    expect(pluginOn(claudeHome)).toBe(false)
+    const calls = pluginCalls(d)
+
+    // Plugged in again: the removal is read, no `claude plugin` is run and no skill written.
+    await desk.unplug('E2E-A')
+    await plugged(desk)
+    await until('the removal read', () => leftRemoved() > before && setupRecord(d)?.homes?.claude.length === 0, 30_000, 50)
+    expect(pluginCalls(d)).toEqual(calls)
+    expect(pluginOn(claudeHome)).toBe(false)
+    expect(existsSync(skillOf(claudeHome))).toBe(false)
+
+    expect(await device(d, ['claude', 'enable'], shell)).toMatchObject({ code: 0, err: '' })
+    expect(pluginOn(claudeHome)).toBe(true)
+    expect(read(skillOf(claudeHome))).toBe(DIAL_SKILL)
+    expect(pluginCalls(d).filter((call) => call === INSTALL)).toEqual([INSTALL, INSTALL])
     noPathLogged(d)
   })
 
