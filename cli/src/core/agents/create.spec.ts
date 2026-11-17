@@ -189,6 +189,12 @@ function setup(over: Partial<CreateAgentDeps> = {}) {
 const installed = (over: Record<string, unknown> = {}) => ({ id: 'autonomous/blender', manifest: { name: 'Blender', kind: 'agent' }, ...over })
 
 describe('creating an agent', () => {
+  it('holds a native create with no preparation owner even when no permission flag was requested', async () => {
+    const run = setup({ native: undefined })
+    expect(await run.create(request())).toMatchObject({ ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native' })
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
+    expect(run.deps.prepareInstructions).not.toHaveBeenCalled()
+  })
   beforeEach(() => {
     vi.mocked(projectsRoot).mockReset()
     vi.mocked(opendirSync).mockReset()

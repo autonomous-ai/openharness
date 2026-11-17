@@ -61,6 +61,17 @@ function setup(over: Partial<PaneWatcherDeps> = {}) {
 }
 
 describe('watching a new pane', () => {
+  it('reports an unverified prepared executable without another shell lookup after the pane died', async () => {
+    const { deps, watch } = setup()
+    paneState.mockResolvedValue({ dead: true, engineExit: null } as never)
+    const current = vi.fn(() => false)
+    await watch('claude', pending, spawned, ['claude'], { executable: { current } } as never)
+    expect(current).toHaveBeenCalledOnce()
+    expect(commandAvailableInInteractiveShell).not.toHaveBeenCalled()
+    expect(deps.registry.setLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({
+      state: 'failed', error: 'ENGINE_DID_NOT_START', detail: expect.stringContaining('could not verify'),
+    }))
+  })
   it.each(['process', 'executable'] as const)('rejects replacement of a process already selected when the watcher started: %s', async change => {
     const entry = { ...pending, processIdentity: identity }
     const { deps, rows, watch } = setup()

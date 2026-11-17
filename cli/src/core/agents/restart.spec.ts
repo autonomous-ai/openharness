@@ -81,6 +81,13 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RestartDep
 
 const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed or stopped during restart.' }
 
+it('holds restart without its native preparation owner before stopping the running engine', async () => {
+  const run = setup(agent(), { native: undefined })
+  expect(await run.restart('a1')).toMatchObject({ ok: false, error: 'NATIVE_LAUNCH_HELD' })
+  expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+  expect(run.deps.paneSwapDeps).not.toHaveBeenCalled()
+})
+
 describe('durable restart publication', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 

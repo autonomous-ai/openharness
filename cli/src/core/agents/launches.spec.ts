@@ -510,6 +510,16 @@ describe('agent_create, launched', () => {
     expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ launchModel: { model: 'opus', effort: 'high' } })
   })
 
+  it('uses the selected-executable setup observation before claiming a model launch receipt', async () => {
+    const probeLaunchModel = vi.fn(async () => '--effort')
+    const { ask, create, deps } = setup({ probeLaunchModel } as Partial<LaunchRequestDeps>)
+    expect(await ask({ engine: 'claude', cwd: '/w', creationId: CREATION, model: 'opus', effort: 'high' }))
+      .toMatchObject({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: expect.stringContaining('--effort') })
+    expect(probeLaunchModel).toHaveBeenCalledExactlyOnceWith('claude', { model: 'opus', effort: 'high' })
+    expect(create).not.toHaveBeenCalled()
+    expect(deps.receipts.pendingIntent(CREATION)).toBeFalsy()
+  })
+
   it('refuses a launch model its engine cannot take, a malformed one, and one beside a grid or a resumed conversation', async () => {
     const { ask, create } = setup()
     expect(await ask({ engine: 'codex', cwd: '/w', model: 'gpt-5', effort: 'high' })).toMatchObject({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: expect.stringContaining('codex') })
