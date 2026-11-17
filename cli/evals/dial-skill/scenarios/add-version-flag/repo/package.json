@@ -1,0 +1,12 @@
+{
+  "name": "tally",
+  "version": "1.4.2",
+  "description": "Counts the words in text files.",
+  "type": "module",
+  "bin": {
+    "tally": "src/cli.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
