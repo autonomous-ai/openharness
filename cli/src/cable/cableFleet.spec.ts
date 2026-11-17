@@ -478,6 +478,19 @@ describe('a dial plugged in beside one already attached', () => {
     } finally { await f.fleet.stop() }
   })
 
+  it('is not asked a question whose turn ended without a close, as the first dial greeting again is not', async () => {
+    const f = await firstAlone()
+    try {
+      await f.fleet.question('a', 'q1', asked)
+      await f.fleet.turnDone('a')
+      await f.fleet.question('b', noticeId, notice)
+      await plugSecond(f)
+      // Asked in the order they came: by the notice, the question would be there too.
+      await vi.waitFor(() => expect(questions(f.ports[1])).toContain(`b ${noticeId}`))
+      expect(questions(f.ports[1])).toEqual([`b ${noticeId}`])
+    } finally { await f.fleet.stop() }
+  })
+
   it('is shown that notice again, once, by the first dial greeting again after its turn ended', async () => {
     const f = await firstAlone()
     try {
