@@ -1,59 +1,101 @@
-// The dial skill's two files in the daemon's data folder, which outlive the devices' process. dial-skill.json says
-// whether each engine is On, and the skills folders the command wrote into; its one writer is the `harness device`
-// command. dial-skill-homes.json lists the skills folders the devices service wrote into; its one writer is that
-// service. A Turn off finds every folder in both.
-import { closeSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+// The dial skill's two files in the daemon's data folder, which outlive the devices' process. dial-skill.json says what
+// `harness device <engine> disable` removed, and the skills folders the command wrote into; its one writer is that
+// command, and the devices service leaves what it removed alone. dial-setup.json is the devices service's own record of
+// a dial's setup: a dial attached here once, the CLI version that last set Claude Code's plugin up, and the skills
+// folders it wrote into; its one writer is that service. A `disable` finds every folder in both.
+import { randomUUID } from 'node:crypto'
+import { closeSync, fsyncSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 export type DialEngine = 'claude' | 'codex'
 
 export const DIAL_SKILL_FILE = 'dial-skill.json'
-export const DIAL_SKILL_HOMES_FILE = 'dial-skill-homes.json'
+export const DIAL_SETUP_FILE = 'dial-setup.json'
 /** Folders an engine's list holds at most: a few homes today, so ten times that still fits. */
 export const MAX_HOMES = 64
+/** What a day's tally counts of each engine's setup, in the order its line says them. */
+export const SETUP_COUNTS = ['set up', 'updated', 'failed', 'left removed'] as const
+export type SetupCount = typeof SETUP_COUNTS[number]
 
-/** Two full lists of the longest paths, with room for JSON's quotes and escapes: each file holds two lists. */
+/** Two full lists of the longest paths, with room for JSON's quotes: each file holds two lists. Paths whose characters
+ *  JSON escapes can outgrow it, and such a file is not written. */
 const MAX_FILE_BYTES = 256 * 1024
 const MAX_PATH_BYTES = 1024
 const CONTROL = /\p{Cc}/u
-
-/** A key is absent when the file gives that engine no answer. */
-export interface DialSkillAnswers { claude?: boolean; codex?: boolean }
+/** A CLI version: a value edited by hand is compared with this CLI's own, so nothing but a version is kept. */
+const VERSION = /^[0-9A-Za-z.+-]{1,64}$/
 
 export interface DialSkillHomes { claude: string[]; codex: string[] }
 
-/** [file] parsed as JSON; undefined when it is missing, unreadable, longer than [max] bytes or not JSON. */
+/** What `harness device <engine> disable` removed; a key is absent when it removed nothing. */
+export interface DialRemoved { claude?: true; codex?: true }
+
+export interface DialSetupRecord { dial: boolean; plugin?: string; homes: DialSkillHomes }
+
+/** A file read: [unread] when it is there but could not be read (EACCES, EIO, EMFILE), so it reads as empty, and
+ *  nothing may be written from that read: it would lose what the file holds. */
+export type Read<T> = T & { unread?: true }
+
+const codeOf = (error: unknown): string => (error as NodeJS.ErrnoException).code ?? 'FAILED'
+
+/** [file] parsed as JSON; undefined when it is missing, longer than [max] bytes or not JSON. One that is there but
+ *  cannot be read throws. */
 const readJson = (file: string, max: number): unknown => {
+  let fd: number
   try {
-    const fd = openSync(file, 'r')
-    try {
-      // One byte past the limit tells a file at the limit from a longer one.
-      const buffer = Buffer.alloc(max + 1)
-      let length = 0
-      while (length < buffer.length) {
-        const read = readSync(fd, buffer, length, buffer.length - length, null)
-        if (read === 0) break
-        length += read
-      }
-      return length > max ? undefined : JSON.parse(buffer.toString('utf8', 0, length))
-    } finally {
-      closeSync(fd)
+    fd = openSync(file, 'r')
+  } catch (error) {
+    if (codeOf(error) === 'ENOENT') return undefined
+    throw error
+  }
+  // One byte past the limit tells a file at the limit from a longer one.
+  const buffer = Buffer.alloc(max + 1)
+  let length = 0
+  try {
+    while (length < buffer.length) {
+      const read = readSync(fd, buffer, length, buffer.length - length, null)
+      if (read === 0) break
+      length += read
     }
+  } finally {
+    closeSync(fd)
+  }
+  if (length > max) return undefined
+  try {
+    return JSON.parse(buffer.toString('utf8', 0, length))
   } catch {
     return undefined
   }
 }
 
-/** Written whole and renamed into place, so a reader never sees half a file. */
-const writeJson = (file: string, value: unknown): string | undefined => {
-  const temporary = `${file}.${process.pid}.tmp`
+/** [read], or [empty] said unread when its file could not be read. */
+const orUnread = <T extends object>(read: () => T, empty: T): Read<T> => {
   try {
-    writeFileSync(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600 })
+    return read()
+  } catch {
+    return { ...empty, unread: true }
+  }
+}
+
+/** Written whole and on disk before it is renamed into place, so a reader, or a crash, never sees half a file. One a
+ *  read would drop as too long is not written: EFBIG. */
+const writeJson = (file: string, value: unknown): string | undefined => {
+  const text = `${JSON.stringify(value)}\n`
+  if (Buffer.byteLength(text) > MAX_FILE_BYTES) return 'EFBIG'
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    const fd = openSync(temporary, 'wx', 0o600)
+    try {
+      writeFileSync(fd, text)
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
     renameSync(temporary, file)
     return undefined
   } catch (error) {
     rmSync(temporary, { force: true })
-    return (error as NodeJS.ErrnoException).code ?? 'FAILED'
+    return codeOf(error)
   }
 }
 
@@ -61,7 +103,7 @@ const fields = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {}
 
 /**
- * A path a list holds: Turn off removes from every folder a list holds, so only a path that names one folder exactly
+ * A path a list holds: a `disable` removes from every folder a list holds, so only a path that names one folder exactly
  * is kept. Equal to its own resolve(): absolute, with no `..`, `.`, `//` or trailing `/`; no control character; at most
  * 1024 bytes. A skill goes only into a folder that passes, so none is written that a list would drop.
  */
@@ -81,47 +123,72 @@ const homesOf = (value: unknown): string[] => {
 
 const settingOf = (dataDir: string): Record<string, unknown> => fields(readJson(join(dataDir, DIAL_SKILL_FILE), MAX_FILE_BYTES))
 
-const answersOf = (file: Record<string, unknown>): DialSkillAnswers => {
-  const answers: DialSkillAnswers = {}
-  if (typeof file.claude === 'boolean') answers.claude = file.claude
-  if (typeof file.codex === 'boolean') answers.codex = file.codex
-  return answers
-}
-
 const writtenOf = (file: Record<string, unknown>): DialSkillHomes => {
   const homes = fields(file.homes)
   return { claude: homesOf(homes.claude), codex: homesOf(homes.codex) }
 }
 
-export function readAnswers(dataDir: string): DialSkillAnswers {
-  return answersOf(settingOf(dataDir))
+/** The skills folders the command wrote into: a `disable` removes from them too, whatever home the command that runs it
+ *  has (its own CODEX_HOME or CLAUDE_CONFIG_DIR). */
+export function readWritten(dataDir: string): Read<DialSkillHomes> {
+  return orUnread(() => writtenOf(settingOf(dataDir)), { claude: [], codex: [] })
 }
 
-/** The skills folders the command wrote into: a Turn off removes from them too, whatever home the command that runs it
- *  has (its own CODEX_HOME or CLAUDE_CONFIG_DIR). */
-export function readWritten(dataDir: string): DialSkillHomes {
-  return writtenOf(settingOf(dataDir))
+/** Only true is a removal: the old menu's booleans at the top of the file are another thing and are not read. */
+const removedOf = (file: Record<string, unknown>): DialRemoved => {
+  const marks = fields(file.removed)
+  const removed: DialRemoved = {}
+  if (marks.claude === true) removed.claude = true
+  if (marks.codex === true) removed.codex = true
+  return removed
+}
+
+export function readRemoved(dataDir: string): Read<DialRemoved> {
+  return orUnread(() => removedOf(settingOf(dataDir)), {})
 }
 
 /**
  * undefined once saved; else the error's code (EACCES), never its message, which names the path. [written], when given,
- * becomes the folders the command wrote into for [engine]; else they stay.
+ * becomes the folders the command wrote into for [engine]; else they stay. The old menu's answers are not carried, so
+ * they leave the file at its next write.
  */
-export function writeAnswer(dataDir: string, engine: DialEngine, on: boolean, written?: string[]): string | undefined {
-  // Read right before the write, so the other engine's answer and folders stay.
-  const file = settingOf(dataDir)
+export function writeRemoved(dataDir: string, engine: DialEngine, removed: boolean, written?: string[]): string | undefined {
+  // Read right before the write, so the other engine's removal and folders stay; one that cannot be read is left.
+  let file: Record<string, unknown>
+  try {
+    file = settingOf(dataDir)
+  } catch (error) {
+    return codeOf(error)
+  }
+  const marks = removedOf(file)
+  if (removed) marks[engine] = true
+  else delete marks[engine]
   const homes = writtenOf(file)
   if (written) homes[engine] = homesOf(written)
-  const setting = { ...answersOf(file), [engine]: on, ...(homes.claude.length || homes.codex.length ? { homes } : {}) }
-  return writeJson(join(dataDir, DIAL_SKILL_FILE), setting)
+  return writeJson(join(dataDir, DIAL_SKILL_FILE), {
+    ...(marks.claude || marks.codex ? { removed: marks } : {}),
+    ...(homes.claude.length || homes.codex.length ? { homes } : {}),
+  })
 }
 
-export function readHomes(dataDir: string): DialSkillHomes {
-  const file = fields(readJson(join(dataDir, DIAL_SKILL_HOMES_FILE), MAX_FILE_BYTES))
-  return { claude: homesOf(file.claude), codex: homesOf(file.codex) }
+/** A record damaged or edited by hand keeps only what it may hold, and one is written as a read keeps it, so the file
+ *  never holds a folder a `disable` would not find. */
+const setupOf = (value: unknown): DialSetupRecord => {
+  const file = fields(value)
+  return {
+    dial: file.dial === true,
+    ...(typeof file.plugin === 'string' && VERSION.test(file.plugin) ? { plugin: file.plugin } : {}),
+    homes: writtenOf(file),
+  }
 }
 
-/** Kept as a read keeps them, so the file never holds a folder a Turn off would not find. */
-export function writeHomes(dataDir: string, homes: DialSkillHomes): string | undefined {
-  return writeJson(join(dataDir, DIAL_SKILL_HOMES_FILE), { claude: homesOf(homes.claude), codex: homesOf(homes.codex) })
+export function readSetup(dataDir: string): Read<DialSetupRecord> {
+  return orUnread(() => setupOf(readJson(join(dataDir, DIAL_SETUP_FILE), MAX_FILE_BYTES)), setupOf(undefined))
+}
+
+/** undefined once saved; else the error's code: EINVAL for a plugin value a read would drop, so the plugin would read
+ *  as never set up. */
+export function writeSetup(dataDir: string, record: DialSetupRecord): string | undefined {
+  if (record.plugin !== undefined && !VERSION.test(record.plugin)) return 'EINVAL'
+  return writeJson(join(dataDir, DIAL_SETUP_FILE), setupOf(record))
 }

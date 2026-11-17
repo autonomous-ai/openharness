@@ -5,6 +5,8 @@
 //   - as `codex app-server`, reads its stdin, answers nothing and ends when that stdin ends;
 //   - as `codex queue --thread <id> --message=<text>`, notes the call in `codex-queue` under the test's root when that
 //     thread's rollout is in its CODEX_HOME, else exits 1 having noted nothing, as 0.167 does;
+//   - as `claude plugin …`, adds, installs, turns on, uninstalls and lists the harness-device plugin as 2.1.326 does,
+//     noting each call in `claude-plugin-calls` under the test's root (`claudePlugin`);
 //   - runs the hooks its own settings carry, as the real CLIs run them: the commands the daemon
 //     installed (lib/hooks.ts), through a shell, from inside the pane, with the event on stdin, killed at
 //     their timeout and waited for. So the real `hook/notify.mjs` is what reaches the daemon, with its
@@ -160,6 +162,95 @@ function holdUnreadableDescriptor(config, ms) {
   setTimeout(() => closeSync(fd), ms).unref()
 }
 
+/** The one marketplace the fake knows, and the plugin in it: what devices/claudePlugin.ts adds and installs. */
+const FAKE_MARKETPLACE = { name: 'openharness', source: 'github', repo: 'autonomous-ai/openharness' }
+const FAKE_PLUGIN = 'harness-device@openharness'
+/** The marketplace's commit: its plugins carry no version of their own, so Claude Code lists this. */
+const FAKE_PLUGIN_VERSION = 'e2e0c0de1234'
+
+/**
+ * `claude plugin …` as Claude Code 2.1.326 answers the words devices/claudePlugin.ts runs: `list --json`, `marketplace
+ * list --json`, `marketplace add`, `marketplace update`, `install`, `enable`, `uninstall` and `update`. What is added and
+ * installed is kept per Claude Code home, as the real one keeps it, in `plugins/` of CLAUDE_CONFIG_DIR, else of
+ * ~/.claude: a plugin installed in one home is not in another. Whether a plugin is on is Claude Code's own record,
+ * `enabledPlugins` in that home's user settings, which install, enable and uninstall write. Each call is noted in
+ * `claude-plugin-calls` under the test's root, one line of its words. A home outside the root throws: it would be the
+ * person's own Claude Code.
+ */
+function claudePlugin(config, argv) {
+  if (!config.root) throw new Error('fake claude plugin: the wrapper names no test root')
+  const home = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')
+  if (!within(config.root, home)) throw new Error('fake claude plugin outside its throwaway home')
+  const settingsFile = join(home, 'settings.json')
+  appendFileSync(join(config.root, 'claude-plugin-calls'), `${argv.join(' ')}\n`)
+  const args = argv.slice(1)
+  const stateFile = join(home, 'plugins', 'fake-plugin-state.json')
+  const state = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, 'utf8')) : { marketplaces: [], installed: [] }
+  const settings = existsSync(settingsFile) ? JSON.parse(readFileSync(settingsFile, 'utf8')) : {}
+  const saveState = () => {
+    mkdirSync(dirname(stateFile), { recursive: true })
+    writeFileSync(stateFile, JSON.stringify(state))
+  }
+  const turn = (id, on) => {
+    const enabledPlugins = { ...settings.enabledPlugins }
+    if (on) enabledPlugins[id] = true
+    else delete enabledPlugins[id]
+    mkdirSync(dirname(settingsFile), { recursive: true })
+    writeFileSync(settingsFile, `${JSON.stringify({ ...settings, enabledPlugins }, null, 2)}\n`)
+  }
+  const fail = (line) => {
+    process.stderr.write(`✘ ${line}\n`)
+    process.exit(1)
+  }
+  const said = (line) => process.stdout.write(`✔ ${line}\n`)
+  const id = args[1]
+  const words = args.filter((arg) => !arg.startsWith('-')).slice(0, 2).join(' ')
+  switch (words) {
+    case 'list':
+      process.stdout.write(`${JSON.stringify(state.installed.map((plugin) => ({
+        id: plugin, version: FAKE_PLUGIN_VERSION, scope: 'user', enabled: settings.enabledPlugins?.[plugin] === true,
+      })), null, 2)}\n`)
+      return
+    case 'marketplace list':
+      process.stdout.write(`${JSON.stringify(state.marketplaces.map(() => FAKE_MARKETPLACE), null, 2)}\n`)
+      return
+    case 'marketplace add':
+      if (args[2] !== FAKE_MARKETPLACE.repo) fail(`Failed to add marketplace: ${args[2]} is not a marketplace`)
+      if (!state.marketplaces.includes(FAKE_MARKETPLACE.name)) state.marketplaces.push(FAKE_MARKETPLACE.name)
+      saveState()
+      said(`Successfully added marketplace: ${FAKE_MARKETPLACE.name}`)
+      return
+    case 'marketplace update':
+      if (!state.marketplaces.includes(args[2])) fail(`Failed to update marketplace: Marketplace '${args[2]}' not found`)
+      said(`Successfully updated marketplace: ${args[2]}`)
+      return
+  }
+  const verb = args[0]
+  if (!['install', 'enable', 'uninstall', 'update'].includes(verb)) fail(`error: unknown command '${verb}'`)
+  if (id !== FAKE_PLUGIN || !state.marketplaces.includes(FAKE_MARKETPLACE.name)) {
+    fail(`Failed to ${verb} plugin "${id}": Plugin "${id}" not found in any configured marketplace`)
+  }
+  const installed = state.installed.includes(id)
+  if (verb === 'install') {
+    if (!installed) state.installed.push(id)
+    saveState()
+    turn(id, true)
+    said(`Successfully installed plugin: ${id} (scope: user)`)
+  } else if (!installed) {
+    fail(`Failed to ${verb} plugin "${id}": Plugin "${id}" is not installed`)
+  } else if (verb === 'enable') {
+    turn(id, true)
+    said(`Successfully enabled plugin: ${id} (scope: user)`)
+  } else if (verb === 'uninstall') {
+    state.installed = state.installed.filter((plugin) => plugin !== id)
+    saveState()
+    turn(id, false)
+    said(`Successfully uninstalled plugin: ${id} (scope: user)`)
+  } else {
+    said(`Plugin "${id}" is already at the latest version (${FAKE_PLUGIN_VERSION}).`)
+  }
+}
+
 export async function run(engine, config = {}, { native = false } = {}) {
   if (engine === 'codex' && !native) return codexWrapper(config)
   const args = process.argv.slice(2)
@@ -249,6 +340,11 @@ export async function run(engine, config = {}, { native = false } = {}) {
       process.exit(1)
     }
     appendFileSync(join(config.root, 'codex-queue'), `${JSON.stringify({ args, codexHome: process.env.CODEX_HOME ?? null })}\n`)
+    return
+  }
+  // `claude plugin …` changes or lists plugins and starts no session: no launch, kept out of the launch-argv ledger.
+  if (engine === 'claude' && args[0] === 'plugin') {
+    claudePlugin(config, args)
     return
   }
   // Every launch's argv, for a test to read what an agent was started with.
