@@ -14,6 +14,8 @@ export interface WindowFacade {
   onChange(changed: () => void): () => void
   /** Shows the terminal whose shell has that pid, with focus; false when none has. */
   show(pid: number): boolean
+  /** One line toward older lines (`up`) or newer, in the active terminal. */
+  scrollLine(up: boolean): Promise<void>
 }
 
 /** The first 32 distinct shells whose pid is known (an integer in 2..2^31-1), in order; `active` only when it is one of them. */

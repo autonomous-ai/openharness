@@ -1,6 +1,6 @@
 // The loop behind the extension: it asks `harness device vscode link` where the devices' socket is, holds this window's
-// `vscode` stream open on it, reports the window's shells on connections of their own, and shows the terminal a line
-// names. Nothing of `vscode` is loaded here: the end to end test runs this file outside VS Code.
+// `vscode` stream open on it, reports the window's shells on connections of their own, and shows or scrolls the terminal
+// a line names. Nothing of `vscode` is loaded here: the end to end test runs this file outside VS Code.
 import { basename, dirname } from 'node:path'
 import { MISSING, type LoopInputs, type Ran } from './inputs'
 import type { WindowFacade } from './window'
@@ -35,9 +35,14 @@ const REPORT_MS = 250
 // The listener refuses the state of a window whose stream it no longer holds: a stream opened again sends it again.
 const REFUSED_IN_A_ROW = 3
 const COUNTS_MS = 60_000
+// The devices write at most this many lines in one scroll line (VSCODE_SCROLL_MAX): no more runs from one, or from what
+// waits.
+const SCROLL_MAX = 100
 
 type Link = { ready: false; socket?: string } | { ready: true; socket: string }
-type Counts = { shows: number; notFound: number; skipped: number; sent: number; notSent: number }
+type Counts = { shows: number; notFound: number; skipped: number; sent: number; notSent: number; scrollLines: number; dropped: number }
+/** Whole lines for the terminal of the shell `pid`, from `from` scroll lines of the stream. */
+type Scroll = { pid: number; n: number; from: number }
 
 const decoder = new TextDecoder()
 
@@ -63,6 +68,9 @@ export function startLoop(
   let watching: { socket: string; close(): void } | null = null
   let counts = noCounts()
   let cancelCounts: (() => void) | null = null
+  // One scroll run at a time; what comes during it waits, as one run.
+  let scrolling = false
+  let waiting: Scroll | null = null
 
   function log(line: string): void {
     if (!stopped) tell.log(line)
@@ -77,16 +85,49 @@ export function startLoop(
   }
 
   // The minute's counts are logged a minute after its first event, so a quiet window logs nothing.
-  function count(what: keyof Counts): void {
+  function count(what: keyof Counts, by = 1): void {
     if (stopped) return
-    counts[what] += 1
+    counts[what] += by
     if (cancelCounts) return
     cancelCounts = inputs.after(COUNTS_MS, () => {
-      const { shows, notFound, skipped, sent, notSent } = counts
+      const { shows, notFound, skipped, sent, notSent, scrollLines, dropped } = counts
       counts = noCounts()
       cancelCounts = null
-      log(`in the last minute: ${shows} shows, ${notFound} not found, ${skipped} lines skipped, ${sent} states sent, ${notSent} not sent`)
+      log(
+        `in the last minute: ${shows} shows, ${notFound} not found, ${skipped} lines skipped, ${sent} states sent, ${notSent} not sent, ${scrollLines} scroll lines, ${dropped} dropped`
+      )
     })
+  }
+
+  // Lines for the shell that waits are added to it; lines for another shell replace it, and what it held ran nothing.
+  function scroll(next: Scroll): void {
+    if (!scrolling) return void run(next)
+    if (waiting?.pid === next.pid) waiting = { pid: next.pid, n: held(waiting.n + next.n), from: waiting.from + next.from }
+    else {
+      if (waiting) count('dropped', waiting.from)
+      waiting = next
+    }
+  }
+
+  // VS Code's scroll commands act on the active terminal, so lines run only while it is the one they name.
+  async function run(first: Scroll): Promise<void> {
+    scrolling = true
+    for (let next: Scroll | null = first; next; next = waiting) {
+      waiting = null
+      let ran = 0
+      if (window.state().active === next.pid) {
+        try {
+          for (; ran < Math.abs(next.n) && !stopped; ran += 1) {
+            await window.scrollLine(next.n < 0)
+            count('scrollLines')
+          }
+        } catch {
+          // VS Code refused its command: the rest of the run would be refused as well.
+        }
+      }
+      if (ran === 0) count('dropped', next.from)
+    }
+    scrolling = false
   }
 
   function start(): void {
@@ -158,6 +199,7 @@ export function startLoop(
   // Ends the loop for good: by stop, or by a line that says another holder has this window's id.
   function halt(): void {
     stopped = true
+    waiting = null
     cancelNext()
     cancelCounts?.()
     unwatch()
@@ -213,7 +255,9 @@ export function startLoop(
       return false
     }
     if (value && Number.isInteger(value.show)) count(window.show(value.show as number) ? 'shows' : 'notFound')
-    else count('skipped')
+    else if (value && Number.isInteger(value.scroll) && value.scroll !== 0 && Number.isInteger(value.pid)) {
+      scroll({ pid: value.pid as number, n: held(value.scroll as number), from: 1 })
+    } else count('skipped')
     return true
   }
 
@@ -289,7 +333,11 @@ export function startLoop(
 }
 
 function noCounts(): Counts {
-  return { shows: 0, notFound: 0, skipped: 0, sent: 0, notSent: 0 }
+  return { shows: 0, notFound: 0, skipped: 0, sent: 0, notSent: 0, scrollLines: 0, dropped: 0 }
+}
+
+function held(n: number): number {
+  return Math.max(-SCROLL_MAX, Math.min(SCROLL_MAX, n))
 }
 
 // link's answer: null for anything but a daemon that is up and a devices' socket that is absent or an absolute path.

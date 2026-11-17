@@ -52,6 +52,9 @@ export function windowFacade(api: VscodeApi): WindowFacade & Disposable {
       terminal.show(false)
       return true
     },
+    async scrollLine(up) {
+      await api.commands.executeCommand(up ? 'workbench.action.terminal.scrollUp' : 'workbench.action.terminal.scrollDown')
+    },
     dispose() {
       disposed = true
       listeners.clear()

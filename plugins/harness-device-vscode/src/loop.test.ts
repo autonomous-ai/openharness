@@ -522,12 +522,12 @@ describe('startLoop', () => {
     // Another terminal of the window, then a pid no terminal has.
     stream.send('{"scroll":-3,"pid":202}\n{"scroll":2,"pid":303}\n')
     await flush()
-    // No active terminal.
+    // No active terminal: the window sends that state too.
     win.set({ active: null })
     stream.send('{"scroll":-1,"pid":101}\n')
     await w.to(60_000)
     expect(win.scrolls).toEqual([])
-    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 scroll lines, 3 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 2 states sent, 0 not sent, 0 scroll lines, 3 dropped')
   })
 
   it('lines that come during a run are one next run for the same terminal, 100 at most', async () => {

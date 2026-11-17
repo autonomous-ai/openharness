@@ -6,9 +6,10 @@ Lets the Harness dial reach Claude Code and Codex running in VS Code's integrate
 
 - **Tap** a session on the dial: VS Code comes forward and shows that session's own terminal.
 - **Swipe** and rest on a session while VS Code is in front: VS Code switches to that terminal.
+- **Scroll** on the dial while VS Code is in front: that terminal scrolls, line by line.
 
-Each window tells the devices process on this computer which shells its terminals run, and shows the terminal the
-devices process names. It asks `harness device vscode link` (`~/.local/bin/harness`, then `harness` on `PATH`) where
+Each window tells the devices process on this computer which shells its terminals run, and shows or scrolls the
+terminal the devices process names. It asks `harness device vscode link` (`~/.local/bin/harness`, then `harness` on `PATH`) where
 that process listens.
 
 ## What it never does

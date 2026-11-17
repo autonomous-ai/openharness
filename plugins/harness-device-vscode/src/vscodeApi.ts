@@ -7,6 +7,7 @@ export interface ApiTerminal { readonly processId: PromiseLike<number | undefine
 
 export interface VscodeApi {
   env: { readonly remoteName: string | undefined }
+  commands: { executeCommand(command: string): PromiseLike<unknown> }
   window: {
     readonly terminals: readonly ApiTerminal[]
     readonly activeTerminal: ApiTerminal | undefined
