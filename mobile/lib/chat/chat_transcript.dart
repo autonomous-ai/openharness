@@ -329,20 +329,29 @@ class ChatConversations {
       '$machineId\u0000$agentId\u0000$sessionId';
 
   /// [agentId]'s conversation [sessionId], opened (and its history read) if it is not already.
+  ///
+  /// A null [sessionId] is an agent nobody has talked to yet — OpenCode makes its session at the first message: an
+  /// empty chat, read from nowhere. Its first message gives the agent a session, and the page opens that one instead.
   ChatConversation open(
     String machineId,
     String agentId,
-    String sessionId, {
+    String? sessionId, {
     bool streamsText = false,
   }) {
-    final key = _key(machineId, agentId, sessionId);
+    final key = _key(machineId, agentId, sessionId ?? '');
     // Asked on every build of the page showing it: only a conversation not yet held reads anything.
     // A failed read is asked again from its Retry, never by a rebuild.
     final held = _open.remove(key);
     final conversation =
         held ??
         ChatConversation(
-          read: reader(machineId, sessionId),
+          read: sessionId == null
+              ? (_) async => (
+                  events: const <Map<String, dynamic>>[],
+                  hasMore: false,
+                  oldestCursor: null,
+                )
+              : reader(machineId, sessionId),
           streamsText: streamsText,
         );
     _open[key] = conversation;

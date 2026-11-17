@@ -2,6 +2,7 @@
 import { join } from 'node:path'
 import { sessionClaudeHome } from '../../lib/engineHomes.js'
 import type { EngineRuntime, RuntimeContext, RuntimeModelOption, RuntimeRecord, RuntimeSession, RuntimeState } from '../facets/runtime.js'
+import { listClaudeModels } from './lists.js'
 import { addOption, currentPaneUi, encodeRuntimeProfile, flattenContent, parseVersion, readJson, record, showEffort, stripAnsi, text, versionAtLeast } from '../kit/runtime.js'
 
 const CLAUDE_EFFORTS = new Set(['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'])
@@ -196,7 +197,16 @@ async function models(session: RuntimeSession, state: RuntimeState | undefined):
   const output: RuntimeModelOption[] = []
   const seen = new Set<string>()
   const allowed = await claudeAvailableModels(session)
-  for (const model of CLAUDE_ALIASES) {
+  // Claude Code's own `/model` list, names and lines included; the aliases below only when it could not be asked.
+  const listed = await listClaudeModels(session)
+  for (const entry of listed ?? []) {
+    if (!availableModelMatches(entry.value, allowed)) continue
+    addOption(output, seen, session, entry.value, 'auto', entry.displayName, entry.description)
+    const efforts = entry.efforts.length && versionAtLeast(session.cliVersion, CLAUDE_ULTRACODE_MIN_VERSION)
+      ? [...entry.efforts, 'ultracode'] : entry.efforts
+    for (const effort of efforts) addOption(output, seen, session, entry.value, effort, entry.displayName, entry.description)
+  }
+  for (const model of listed ? [] : CLAUDE_ALIASES) {
     if (model === 'fable' && !versionAtLeast(session.cliVersion, [2, 1, 170])) continue
     if (!availableModelMatches(model, allowed)) continue
     addOption(output, seen, session, model, 'auto')
