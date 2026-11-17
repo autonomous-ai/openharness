@@ -19,6 +19,15 @@ describe('shared desktop/device notification policy', () => {
     vi.advanceTimersByTime(1); expect(tell).toHaveBeenCalledExactlyOnceWith({ id: expect.any(String), kind: 'done' })
   })
 
+  it('a wall clock set back inside the window does not hold done back', () => {
+    const policy = new AgentNotifications(); const tell = vi.fn()
+    policy.started('s'); policy.ended('s')
+    vi.setSystemTime(Date.now() - 3_600_000)
+    policy.decide('s', 'Finished.', false, tell)
+    vi.advanceTimersByTime(DONE_QUIET_MS)
+    expect(tell).toHaveBeenCalledExactlyOnceWith({ id: expect.any(String), kind: 'done' })
+  })
+
   it('a result that came after the window is decided at once', () => {
     const policy = new AgentNotifications()
     policy.started('s'); policy.ended('s')
