@@ -211,7 +211,7 @@ describe('the core API services stand on', () => {
       desk: [], foreground: false, swarms: null, unread: [], focus: { voice: null, form: null }, engines: [], commanders: false,
     }) })
     replies.push(await devices.answer('view', {}))
-    const workspaces = createWorkspacesLink(core, frame => { replies.push(frame.payload ?? {}); return true }, async () => ({}), () => {})
+    const workspaces = createWorkspacesLink(core, frame => { replies.push(frame.payload ?? {}); return true }, async () => ({}))
     workspaces.port.nameBranches()
     const browserEvents: unknown[] = []
     const life = createAgentLife({ live: () => [live], hears: {},

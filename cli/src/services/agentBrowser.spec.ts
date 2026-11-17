@@ -9,6 +9,7 @@ import { PassThrough } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAgentLife } from '../core/agentLife.js'
 import { emptyPorts, type AgentBrowserPort, type Asker, type CoreApi, type CorePorts, type ServiceRequests, type TurnDelivery } from '../core/api.js'
+import type { AgentBrowserFrame } from '../lib/agentFrame.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { decodeTerminalLocal } from '../lib/terminalBinary.js'
 import { fakeCore } from '../testing/fakeCore.js'
@@ -70,6 +71,7 @@ async function stopAll() {
 /** The port, and what the core tells the service of agents as it follows them (core/agentLife.ts): a look at a live
  *  agent, its end, its purge and a new agent in the pane one ended in. */
 type Port = AgentBrowserPort & {
+  published(agentId: string): AgentBrowserFrame | undefined
   running(session: RegisteredSession): void
   ended(agentId: string): void
   purged(agentId: string): void
@@ -77,6 +79,12 @@ type Port = AgentBrowserPort & {
 }
 
 function start(core: CoreApi = fakeCore({ dataDir }), options: AgentBrowserOptions = {}, hub = createAgentLife({ live: () => [], notify: () => true, hears: {} })) {
+  const published = new Map<string, AgentBrowserFrame>()
+  core.agents.publishFrame = vi.fn((session, fields) => {
+    if (fields.browser) published.set(session.agentId, fields.browser as AgentBrowserFrame)
+    else published.delete(session.agentId)
+  })
+  hub.follow(event => { if (event.kind === 'ended' || event.kind === 'purged') published.delete(event.agentId) })
   // A core the spec lends no following follows through [hub].
   core.agents.follow ??= hub.follow
   const ports = emptyPorts()
@@ -90,7 +98,7 @@ function start(core: CoreApi = fakeCore({ dataDir }), options: AgentBrowserOptio
     everyAgent: async () => null,
     ...options,
   }) as ServiceRequests
-  const port: Port = { ...ports.agentBrowser!, running: hub.running, ended: hub.ended, purged: (agentId) => hub.purged(agentId, []), taken: hub.taken }
+  const port: Port = { ...ports.agentBrowser!, published: id => published.get(id), running: hub.running, ended: id => { published.delete(id); hub.ended(id) }, purged: id => { published.delete(id); hub.purged(id, []) }, taken: hub.taken }
   return { port, requests, core, hub }
 }
 
@@ -100,8 +108,8 @@ const asked = () => fake.calls().map(call => call.args.join(' ')).filter(line =>
 /** Each fake podman call starts a Node process: a few of them in a row take longer than waitFor's default second. */
 const eventually = (check: () => void) => vi.waitFor(check, { timeout: 15_000 })
 
-async function ready(port: CorePorts['agentBrowser'], agentId: string) {
-  await eventually(() => expect(port!.frameContext(agentId)).toEqual({ state: 'ready' }))
+async function ready(port: Port, agentId: string) {
+  await eventually(() => expect(port!.published(agentId)).toEqual({ state: 'ready' }))
 }
 
 /** The fake podman, with its event stream watched: that child reads stdin to its end, so the fake never logs it. */
@@ -249,7 +257,7 @@ describe('the agent browser service', () => {
     port.running(session('a1'))
     port.running(session('a2', { browser: undefined }))
     await ready(port, 'a1')
-    expect(port.frameContext('a2')).toBeUndefined()
+    expect(port.published('a2')).toBeUndefined()
     expect(asked().filter(line => line.includes('harness-browser-a2'))).toEqual([])
     expect(asked().filter(line => line.startsWith('create '))).toHaveLength(1)
     expect(count.mock.calls.filter(([name]) => name === 'agent_browser_enabled')).toEqual([['agent_browser_enabled']])
@@ -280,7 +288,7 @@ describe('the agent browser service', () => {
     await eventually(() => expect(asked()).toContain('network rm harness-browser-a1'))
     expect(asked()).toContain('rm --force --time 10 harness-browser-a1')
     expect(asked()).not.toContain('volume rm harness-browser-a1')
-    expect(port.frameContext('a1')).toBeUndefined()
+    expect(port.published('a1')).toBeUndefined()
     // The proxy secret lives only while its container does.
     const secretRemoves = () => asked().filter(line => line === 'secret rm harness-proxy-a1').length
     await eventually(() => expect(secretRemoves()).toBe(2))
@@ -326,7 +334,7 @@ describe('the agent browser service', () => {
     fake.reply('info --format json', { stdout: JSON.stringify({ version: { Version: '4.3.0' }, host: { memTotal: 8 * GiB } }) })
     const old = start(fakeCore({ dataDir: mkdtempSync(join(dataDir, 'old-')), clients: v.core.clients }))
     old.port.running(session('a2'))
-    await eventually(() => expect(old.port.frameContext('a2')).toEqual({ state: 'failed', error: 'podman_old' }))
+    await eventually(() => expect(old.port.published('a2')).toEqual({ state: 'failed', error: 'podman_old' }))
     expect(v.open(old.port, 'a2')).toBe('NOT_READY')
   })
 
@@ -407,27 +415,14 @@ describe('the agent browser service', () => {
     await eventually(() => expect(v.pipes[0]!.stdin.writableEnded).toBe(true))
   })
 
-  it('frameContext follows state and calls core.agents.sync on change', async () => {
+  it('publishes Browser state through the shared service API', async () => {
     const row = session('a1')
-    const sync = vi.fn()
-    const { port } = start(fakeCore({ dataDir, agents: { sync, byAgent: (agentId: string) => (agentId === 'a1' ? row : undefined) } }))
+    const { port, core } = start(fakeCore({ dataDir }))
     port.running(row)
     await ready(port, 'a1')
-    expect(sync).toHaveBeenCalledWith(row)
-    expect(sync.mock.calls.length).toBeGreaterThanOrEqual(2)
-  })
-
-  it('out of its process it tells the core instead', async () => {
-    const told = vi.fn()
-    const sync = vi.fn()
-    const { port } = start(fakeCore({ dataDir, agents: { sync } }), { told })
-    port.running(session('a1'))
-    await ready(port, 'a1')
-    expect(told).toHaveBeenCalledWith('a1', { state: 'starting' })
-    expect(told).toHaveBeenLastCalledWith('a1', { state: 'ready' })
-    port.ended('a1')
-    await eventually(() => expect(told).toHaveBeenLastCalledWith('a1', undefined))
-    expect(sync).not.toHaveBeenCalled()
+    expect(core.agents.publishFrame).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', frameEpoch: expect.any(String) }), { browser: { state: 'starting' } })
+    expect(core.agents.publishFrame).toHaveBeenLastCalledWith(expect.objectContaining({ agentId: 'a1' }), { browser: { state: 'ready' } })
+    expect(core.agents.sync).not.toHaveBeenCalled()
   })
 
   it('setup refuses a non-local asker', async () => {
@@ -452,9 +447,9 @@ describe('the agent browser service', () => {
         podman: missing, setup: { which, run, interactive: () => interactive },
       })
       port.running(session('a1'))
-      await eventually(() => expect(port.frameContext('a1')).toEqual({ state: 'failed', error: 'needs_setup' }))
+      await eventually(() => expect(port.published('a1')).toEqual({ state: 'failed', error: 'needs_setup' }))
       expect(await requests.agent_browser_setup!({}, LOCAL)).toEqual({ ok: true })
-      await eventually(() => expect(port.frameContext('a1')).toEqual({ state: 'failed', error }))
+      await eventually(() => expect(port.published('a1')).toEqual({ state: 'failed', error }))
       const installs = run.mock.calls.length
       // Start of a failed browser is its Retry, with the same rule.
       for (const type of ['agent_browser_retry', 'agent_browser_start']) {
@@ -463,7 +458,7 @@ describe('the agent browser service', () => {
         }
       }
       // The refusal is decided before anything runs: setup was not asked again.
-      expect(port.frameContext('a1')).toEqual({ state: 'failed', error })
+      expect(port.published('a1')).toEqual({ state: 'failed', error })
       expect(run).toHaveBeenCalledTimes(installs)
       expect(await requests.agent_browser_retry!({ agentId: 'a1' }, LOCAL)).toEqual({ ok: true })
       if (interactive) await eventually(() => expect(run).toHaveBeenCalledTimes(installs + 1))
@@ -480,7 +475,7 @@ describe('the agent browser service', () => {
     port.running(session('a1'))
     port.ended('a1')
     port.purged('a1')
-    expect(port.frameContext('a1')).toBeUndefined()
+    expect(port.published('a1')).toBeUndefined()
     // No stream is taken: the core refuses the open at once (core/browserStreams.ts), and the rest is told to nothing.
     expect(port.stream('local:w', 'agent_browser_open', { requestId: 'r-1', agentId: 'a1' }, LOCAL)).toBe(false)
     port.streamInput('s', Uint8Array.of(1))
@@ -563,7 +558,7 @@ describe('the agent browser service', () => {
     const read = await requests.agent_browser_settings!({ agentId: 'a1' }, LOCAL)
     expect(read).toEqual({ ...defaultSettings(HOST), proxy: { scheme: 'socks5', host: 'proxy.example', port: 1080, username: 'kim', passwordSet: true } })
     expect(JSON.stringify(read)).not.toContain('pw-secret')
-    expect(JSON.stringify(port.frameContext('a1'))).not.toContain('proxy')
+    expect(JSON.stringify(port.published('a1'))).not.toContain('proxy')
     // The password goes to Podman on stdin only, never in an argument.
     expect(fake.calls().find(call => call.args[0] === 'secret' && call.args[1] === 'create')!.stdin).toContain('pw-secret')
     expect(fake.calls().some(call => call.args.join(' ').includes('pw-secret'))).toBe(false)
@@ -621,7 +616,7 @@ describe('the agent browser service', () => {
     saveState({ a1: { ...defaultSettings(HOST), proxy } })
     const { port, requests } = start()
     port.running(session('a1'))
-    await eventually(() => expect(port.frameContext('a1')).toBeDefined())
+    await eventually(() => expect(port.published('a1')).toBeDefined())
     const { password: _password, ...sent } = proxy
     expect(await requests.agent_browser_proxy_test!({ agentId: 'a1', proxy: sent }, LOCAL)).toMatchObject({ ok: true })
     expect(heard.at(-1)).toContain(`Basic ${Buffer.from('kim:stored').toString('base64')}`)
@@ -639,7 +634,7 @@ describe('the agent browser service', () => {
     saveState({ a1: { ...defaultSettings(HOST), proxy: stored } })
     const { port, requests } = start()
     port.running(session('a1'))
-    await eventually(() => expect(port.frameContext('a1')).toBeDefined())
+    await eventually(() => expect(port.published('a1')).toBeDefined())
     const other = { scheme: 'http', host: '127.0.0.1', port: (server.address() as AddressInfo).port, username: 'kim' }
     expect(await requests.agent_browser_proxy_test!({ agentId: 'a1', proxy: other }, LOCAL)).toMatchObject({ ok: true })
     expect(heard).toHaveLength(1)
@@ -683,7 +678,7 @@ describe('the agent browser service', () => {
     fake.reply('info --format json', { stdout: JSON.stringify({ version: { Version: '4.3.0' }, host: { memTotal: 8 * GiB } }) })
     const { port, requests } = start(fakeCore({ dataDir, agents: { ofPane: async () => ({ agentId: 'a1', guest: false }) } }))
     port.running(session('a1'))
-    await eventually(() => expect(port.frameContext('a1')).toEqual({ state: 'failed', error: 'podman_old' }))
+    await eventually(() => expect(port.published('a1')).toEqual({ state: 'failed', error: 'podman_old' }))
     expect(await requests.agent_browser_state!({ pane: '%7' }, LOCAL)).toMatchObject({ agentId: 'a1', state: 'failed', error: 'podman_old' })
   })
 
@@ -693,7 +688,7 @@ describe('the agent browser service', () => {
     const { port, requests } = start(fakeCore({ dataDir }), { everyAgent: async () => [session('a1')] })
     port.running(session('a1'))
     expect(await requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)).toEqual({ error: 'STATE_UNREADABLE' })
-    expect(port.frameContext('a1')).toBeUndefined()
+    expect(port.published('a1')).toBeUndefined()
     expect(await requests.agent_browser_settings!({ agentId: 'a1' }, LOCAL)).toEqual({ error: 'STATE_UNREADABLE' })
     const log = vi.spyOn(console, 'log')
     port.purged('a1')
@@ -775,7 +770,7 @@ describe('the agent browser service', () => {
     port.running(session('a1'))
     await ready(port, 'a1')
     hub.stopped('a1')
-    expect(port.frameContext('a1')).toEqual({ state: 'ready' })
+    expect(port.published('a1')).toEqual({ state: 'ready' })
   })
 
   it('a Stop when nothing was ever turned on answers ok', async () => {
@@ -791,7 +786,7 @@ describe('the agent browser service', () => {
     const { port, requests } = start(fakeCore({ dataDir, agents: { ofPane: async () => ({ agentId: 'a1', guest: false }) } }), { podman: broken })
     await expect(requests.agent_browser_available!({}, LOCAL)).rejects.toThrow('a bug')
     port.running(session('a1'))
-    await eventually(() => expect(port.frameContext('a1')).toEqual({ state: 'failed', error: 'podman_down' }))
+    await eventually(() => expect(port.published('a1')).toEqual({ state: 'failed', error: 'podman_down' }))
     await expect(requests.agent_browser_state!({ pane: '%7' }, LOCAL)).rejects.toThrow('a bug')
   })
 
@@ -836,7 +831,7 @@ describe('the agent browser service', () => {
     const missing = createPodman({ resolve: async () => null, exists: () => false, platform: 'linux' })
     const { port, requests } = start(fakeCore({ dataDir, agents: { ofPane: async () => ({ agentId: 'a1', guest: false }) } }), { podman: missing })
     port.running(session('a1'))
-    await eventually(() => expect(port.frameContext('a1')).toEqual({ state: 'failed', error: 'needs_setup' }))
+    await eventually(() => expect(port.published('a1')).toEqual({ state: 'failed', error: 'needs_setup' }))
     expect(await requests.agent_browser_state!({ pane: '%7' }, LOCAL)).toEqual({ agentId: 'a1', state: 'failed', error: 'needs_setup', podman: '', human: 'normal' })
   })
 
@@ -881,7 +876,7 @@ describe('the person\'s Start and Stop', () => {
     await ready(sw.port, 'a1')
     expect(await sw.requests.agent_browser_stop!({ agentId: 'a1' }, OTHER_DESKTOP)).toEqual({ ok: true })
     expect(turnedOn()).toEqual({})
-    expect(sw.port.frameContext('a1')).toBeUndefined()
+    expect(sw.port.published('a1')).toBeUndefined()
   })
 
   it('a Stop supersedes a Start waiting for catch-up, and a later Start can still turn it on', async () => {
@@ -893,7 +888,7 @@ describe('the person\'s Start and Stop', () => {
     caughtUp(true)
     await first
     expect(turnedOn()).toEqual({})
-    expect(sw.port.frameContext('a1')).toBeUndefined()
+    expect(sw.port.published('a1')).toBeUndefined()
     expect(asked().some(call => call.startsWith('create '))).toBe(false)
     await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
     await ready(sw.port, 'a1')
@@ -923,7 +918,7 @@ describe('the person\'s Start and Stop', () => {
     else sw.port.stop()
     answer(true)
     await started
-    expect(sw.port.frameContext('a1')).toBeUndefined()
+    expect(sw.port.published('a1')).toBeUndefined()
     expect(asked().some(call => call.startsWith('create '))).toBe(false)
   })
 
@@ -933,7 +928,7 @@ describe('the person\'s Start and Stop', () => {
     sw.rows.set('a1', session('a1'))
     sw.attach('a1')
     expect(turnedOn()).toEqual({})
-    expect(sw.port.frameContext('a1')).toBeUndefined()
+    expect(sw.port.published('a1')).toBeUndefined()
     expect(savedState()).toMatchObject({ adopted: { a1: true } })
   })
 
@@ -967,7 +962,7 @@ describe('the person\'s Start and Stop', () => {
     fake.reply('ps', { stdout: JSON.stringify([{ Names: ['harness-browser-other'], Labels: { 'harness.agent': 'other', 'harness.daemon': daemonIdOf(dataDir) }, State: 'running' }]) })
     const sw = startSwitching()
     await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
-    await eventually(() => expect(sw.port.frameContext('a1')).toEqual({ state: 'failed', error: 'browser_limit' }))
+    await eventually(() => expect(sw.port.published('a1')).toEqual({ state: 'failed', error: 'browser_limit' }))
     fake.reply('ps', { stdout: '[]' })
     expect(await sw.requests.agent_browser_start!({ agentId: 'a1' }, OTHER_DESKTOP)).toEqual({ ok: true })
     await ready(sw.port, 'a1')
@@ -981,7 +976,7 @@ describe('the person\'s Start and Stop', () => {
     expect(await sw.requests.agent_browser_start!({}, LOCAL)).toEqual({ error: 'NOT_RUNNING' })
     expect(await sw.requests.agent_browser_start!({ agentId: 'kim' }, LOCAL)).toEqual({ error: 'NOT_ALLOWED' })
     expect(existsSync(join(dataDir, 'agent-browser.json'))).toBe(false)
-    expect(sw.port.frameContext('kim')).toBeUndefined()
+    expect(sw.port.published('kim')).toBeUndefined()
     expect(count).not.toHaveBeenCalled()
     expect(fake.calls()).toEqual([])
   })
@@ -993,7 +988,7 @@ describe('the person\'s Start and Stop', () => {
     await ready(sw.port, 'a1')
     expect(await sw.requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)).toEqual({ ok: true })
     expect(turnedOn()).toEqual({})
-    expect(sw.port.frameContext('a1')).toBeUndefined()
+    expect(sw.port.published('a1')).toBeUndefined()
     await eventually(() => expect(secretsRemoved('a1')).toBe(2))
     expect(asked()).toContain('rm --force --time 10 harness-browser-a1')
     expect(asked()).toContain('network rm harness-browser-a1')
@@ -1005,6 +1000,39 @@ describe('the person\'s Start and Stop', () => {
     expect(count.mock.calls.filter(([metric]) => metric === 'agent_browser_stopped')).toHaveLength(1)
   })
 
+  it('a fresh lease for an agent with Browser off starts no browser work', () => {
+    let heard!: (event: import('../core/api.js').AgentLife) => void
+    const row = { ...session('a1', { browser: undefined }), frameEpoch: 'first:1' }
+    const core = fakeCore({ dataDir, agents: { follow: listener => { heard = listener; listener({ kind: 'running', session: row }); return () => {} } } })
+    start(core)
+    heard({ kind: 'running', session: { ...row, frameEpoch: 'second:1' } })
+    expect(core.agents.publishFrame).toHaveBeenLastCalledWith({ ...row, frameEpoch: 'second:1' }, {})
+    expect(asked()).toEqual([])
+  })
+
+  it('a core restart regenerates a pending Browser result without lending it the new lease', async () => {
+    let heard!: (event: import('../core/api.js').AgentLife) => void
+    const old = { ...session('a1'), frameEpoch: 'old-core:1' }
+    const next = { ...old, frameEpoch: 'new-core:1' }
+    let oldReady!: (ready: boolean) => void, nextReady!: (ready: boolean) => void
+    const checked = vi.spyOn(Containers.prototype, 'ready')
+      .mockImplementationOnce(() => new Promise(resolve => { oldReady = resolve }))
+      .mockImplementationOnce(() => new Promise(resolve => { nextReady = resolve }))
+    const core = fakeCore({ dataDir, agents: { follow: listener => { heard = listener; listener({ kind: 'running', session: old }); return () => {} } } })
+    const sw = start(core)
+    await eventually(() => expect(oldReady).toEqual(expect.any(Function)))
+    heard({ kind: 'running', session: next })
+    vi.mocked(core.agents.publishFrame!).mockClear()
+    oldReady(true)
+    await eventually(() => expect(checked).toHaveBeenCalledTimes(2))
+    expect(core.agents.publishFrame).not.toHaveBeenCalledWith(next, { browser: { state: 'ready' } })
+    nextReady(true)
+    await ready(sw.port, 'a1')
+    expect(core.agents.publishFrame).toHaveBeenLastCalledWith(next, { browser: { state: 'ready' } })
+    heard({ kind: 'running', session: next })
+    expect(core.agents.publishFrame).toHaveBeenLastCalledWith(next, { browser: { state: 'ready' } })
+  })
+
   it('stop while it starts ends the start without a container; start right after stop waits for it', async () => {
     const sw = startSwitching()
     await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
@@ -1012,7 +1040,7 @@ describe('the person\'s Start and Stop', () => {
     // The stop runs after the start in the agent's queue: once it has, the start has ended.
     await eventually(() => expect(asked()).toContain('network rm harness-browser-a1'))
     expect(asked().filter(call => call.startsWith('create '))).toEqual([])
-    expect(sw.port.frameContext('a1')).toBeUndefined()
+    expect(sw.port.published('a1')).toBeUndefined()
     await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
     await sw.requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)
     await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
@@ -1070,7 +1098,7 @@ describe('the person\'s Start and Stop', () => {
     const sw = startSwitching()
     mkdirSync(join(dataDir, `agent-browser.json.${process.pid}.tmp`), { recursive: true })
     await expect(sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)).rejects.toThrow('EISDIR')
-    expect(sw.port.frameContext('a1')).toBeUndefined()
+    expect(sw.port.published('a1')).toBeUndefined()
     expect(asked().filter(call => call.startsWith('create '))).toEqual([])
   })
 
@@ -1082,7 +1110,7 @@ describe('the person\'s Start and Stop', () => {
     const log = vi.spyOn(console, 'log')
     mkdirSync(join(dataDir, `agent-browser.json.${process.pid}.tmp`))
     expect(await sw.requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)).toEqual({ ok: true })
-    expect(sw.port.frameContext('a1')).toBeUndefined()
+    expect(sw.port.published('a1')).toBeUndefined()
     expect(log).toHaveBeenCalledWith(expect.stringMatching(/^agent browser a1: its Stop was not kept: /))
     await eventually(() => expect(secretsRemoved('a1')).toBe(2))
   })
@@ -1093,7 +1121,7 @@ describe('the person\'s Start and Stop', () => {
     await ready(sw.port, 'a1')
     sw.hear(sw.typed[0]!.deliveryId, 'started')
     sw.end('a1')
-    expect(sw.port.frameContext('a1')).toBeUndefined()
+    expect(sw.port.published('a1')).toBeUndefined()
     await eventually(() => expect(secretsRemoved('a1')).toBe(2))
     expect(turnedOn()).toEqual({ a1: true })
     expect(savedState().told).toEqual({ a1: true })
@@ -1151,7 +1179,7 @@ describe('the person\'s Start and Stop', () => {
     sw.end('a1')
     sw.attach('a1')
     expect(turnedOn()).toEqual({})
-    expect(sw.port.frameContext('a1')).toBeUndefined()
+    expect(sw.port.published('a1')).toBeUndefined()
     // A purge takes it out of the file, browser or not.
     sw.purge('a1')
     await eventually(() => expect(savedState()).toMatchObject({ adopted: {} }))
@@ -1398,7 +1426,7 @@ describe('the agent\'s commands', () => {
     const c = await commands()
     expect(await c.run('snapshot', {}, { pane: '%8' })).toEqual({ error: 'OFF' })
     await c.requests.agent_browser_start!({ agentId: 'a2' }, LOCAL)
-    await eventually(() => expect(c.port.frameContext('a2')).toEqual({ state: 'starting' }))
+    await eventually(() => expect(c.port.published('a2')).toEqual({ state: 'starting' }))
     expect(await c.run('snapshot', {}, { pane: '%8' })).toEqual({ error: 'NOT_READY', state: 'starting' })
     expect(c.tools).toEqual([])
 
@@ -1412,10 +1440,10 @@ describe('the agent\'s commands', () => {
     })
     const runThere = (requests: ServiceRequests) => requests.agent_browser_run!({ pane: '%7', ancestors: ANCESTORS, command: 'snapshot', args: {} }, LOCAL)
     unset.port.running(session('a1'))
-    await eventually(() => expect(unset.port.frameContext('a1')).toEqual({ state: 'failed', error: 'needs_setup' }))
+    await eventually(() => expect(unset.port.published('a1')).toEqual({ state: 'failed', error: 'needs_setup' }))
     expect(await runThere(unset.requests)).toEqual({ error: 'NOT_READY', state: 'needs_setup' })
     await unset.requests.agent_browser_setup!({}, LOCAL)
-    await eventually(() => expect(unset.port.frameContext('a1')).toEqual({ state: 'setup', step: 'installing' }))
+    await eventually(() => expect(unset.port.published('a1')).toEqual({ state: 'setup', step: 'installing' }))
     expect(await runThere(unset.requests)).toEqual({ error: 'NOT_READY', state: 'setup' })
     expect(spawn.mock.calls.filter(([args]) => args[0] === 'exec')).toEqual([])
 
@@ -1424,7 +1452,7 @@ describe('the agent\'s commands', () => {
     const old = podmanWithTools()
     const failed = start(fakeCore({ dataDir: mkdtempSync(join(dataDir, 'old-')), agents: { ofPane } }), { podman: old.podman })
     failed.port.running(session('a1'))
-    await eventually(() => expect(failed.port.frameContext('a1')).toEqual({ state: 'failed', error: 'podman_old' }))
+    await eventually(() => expect(failed.port.published('a1')).toEqual({ state: 'failed', error: 'podman_old' }))
     expect(await runThere(failed.requests)).toEqual({ error: 'NOT_READY', state: 'podman_old' })
     expect(old.tools).toEqual([])
     expect(asked().filter(call => call.includes('browser-tools.mjs'))).toEqual([])
@@ -1613,7 +1641,7 @@ describe('the window', () => {
     expect(await c.requests.agent_browser_window!({ agentId: 'a2', width: 1200, height: 800 }, LOCAL)).toEqual({ error: 'NO_BROWSER' })
     expect(await c.requests.agent_browser_window!({ width: 1200, height: 800 }, LOCAL)).toEqual({ error: 'NO_BROWSER' })
     await c.requests.agent_browser_start!({ agentId: 'a2' }, LOCAL)
-    await eventually(() => expect(c.port.frameContext('a2')).toEqual({ state: 'starting' }))
+    await eventually(() => expect(c.port.published('a2')).toEqual({ state: 'starting' }))
     expect(await c.requests.agent_browser_window!({ agentId: 'a2', width: 1200, height: 800 }, LOCAL)).toEqual({ error: 'NOT_READY' })
     expect(c.tools).toEqual([])
   })
@@ -1730,7 +1758,7 @@ describe('the browser moves with its pane', () => {
     sw.move('a1', 'b1')
     await eventually(() => expect(Object.keys(savedState().browsers)).toEqual(['b1']))
     expect(turnedOn()).toEqual({})
-    expect(sw.port.frameContext('b1')).toBeUndefined()
+    expect(sw.port.published('b1')).toBeUndefined()
     expect(created()).toHaveLength(1)
     expect(await sw.requests.agent_browser_start!({ agentId: 'b1' }, LOCAL)).toEqual({ ok: true })
     await ready(sw.port, 'b1')
@@ -1775,7 +1803,7 @@ describe('the browser moves with its pane', () => {
     await eventually(() => expect(log).toHaveBeenCalledWith('agent browser b1: browser_move_failed (state_unwritable)'))
     expect(readFileSync(join(dataDir, 'agent-browser.json'), 'utf8')).toBe(before)
     expect(turnedOn()).toEqual({ a1: true })
-    expect(sw.port.frameContext('b1')).toBeUndefined()
+    expect(sw.port.published('b1')).toBeUndefined()
     expect(sw.typed).toEqual([lineTo('a1', READY_LINE, 'ready')])
     expect(created()).toHaveLength(1)
     // One that cannot be read is named so.
@@ -1798,7 +1826,7 @@ describe('the browser moves with its pane', () => {
     await new Promise(done => setImmediate(done))
     expect(Object.keys(savedState().browsers).sort()).toEqual(['a1', 'b1'])
     expect(turnedOn()).toEqual({ a1: true, b1: true })
-    expect(sw.port.frameContext('kim')).toBeUndefined()
+    expect(sw.port.published('kim')).toBeUndefined()
   })
 
   it('a destination purge during a pending move cannot recreate its saved profile', async () => {
@@ -1827,7 +1855,7 @@ describe('the browser moves with its pane', () => {
     await Promise.all(deleted.mock.results.map(result => result.value))
     expect(savedState().browsers.b1).toBeUndefined()
     expect(turnedOn()).toEqual({})
-    expect(sw.port.frameContext('b1')).toBeUndefined()
+    expect(sw.port.published('b1')).toBeUndefined()
     expect(created()).toHaveLength(0)
   })
 
@@ -1848,7 +1876,7 @@ describe('the browser moves with its pane', () => {
     await Promise.all(deleted.mock.results.map(result => result.value))
     expect(savedState().browsers.b1).toBeUndefined()
     expect(turnedOn()).toEqual({})
-    expect(sw.port.frameContext('b1')).toBeUndefined()
+    expect(sw.port.published('b1')).toBeUndefined()
     expect(created()).toHaveLength(1)
   })
 
@@ -1879,7 +1907,7 @@ describe('the browser moves with its pane', () => {
     await eventually(() => expect(Object.keys(savedState().browsers)).toEqual(['b1']))
     expect(savedState().browsers.b1).toMatchObject({ profile: 'a1' })
     expect(turnedOn()).toEqual({})
-    expect(sw.port.frameContext('b1')).toBeUndefined()
+    expect(sw.port.published('b1')).toBeUndefined()
     expect(created()).toHaveLength(0)
   })
 
@@ -1908,7 +1936,7 @@ describe('the browser moves with its pane', () => {
     expect(turnedOn()).toEqual(on ? { c1: true } : {})
     expect(everyAgent).toHaveBeenCalledOnce()
     if (on) await ready(sw.port, 'c1')
-    else expect(sw.port.frameContext('c1')).toBeUndefined()
+    else expect(sw.port.published('c1')).toBeUndefined()
   })
 
   it('an older core moves its Browser flag before the destination starts on the same profile', async () => {
@@ -1946,7 +1974,7 @@ describe('the browser moves with its pane', () => {
     expect(await move('a1', session('c1', { browser: undefined }), false)).toBe(true)
     expect(savedState().browsers.c1).toMatchObject({ profile: 'a1' })
     expect(turnedOn()).toEqual({ b1: true })
-    expect(sw.port.frameContext('c1')).toBeUndefined()
+    expect(sw.port.published('c1')).toBeUndefined()
   })
 
   it('a stopped agent\'s flag from before goes with its pane', async () => {
@@ -1972,7 +2000,7 @@ describe('the browser moves with its pane', () => {
     expect(readFileSync(join(dataDir, 'agent-browser.json'), 'utf8')).toBe(before)
     expect(log).toHaveBeenCalledWith('agent browser b1: browser_move_failed (migration_unavailable)')
     expect(turnedOn()).toEqual({})
-    expect(sw.port.frameContext('b1')).toBeUndefined()
+    expect(sw.port.published('b1')).toBeUndefined()
     sw.move('a1', 'b1')
     await ready(sw.port, 'b1')
     expect(turnedOn()).toEqual({ b1: true })
@@ -1987,7 +2015,7 @@ describe('the browser moves with its pane', () => {
     await move.mock.results[0]!.value
     expect(savedState().browsers.b1).toMatchObject({ profile: 'a1' })
     expect(turnedOn()).toEqual({})
-    expect(sw.port.frameContext('b1')).toBeUndefined()
+    expect(sw.port.published('b1')).toBeUndefined()
   })
 
   it.each(['Stop', 'purge'] as const)('%s of the source during an unresolved migration prevents a stale flag from returning', async action => {
@@ -2007,7 +2035,7 @@ describe('the browser moves with its pane', () => {
     if (action === 'Stop') expect(savedState().browsers.b1).toMatchObject({ profile: 'a1' })
     else await eventually(() => expect(savedState().browsers).toEqual({}))
     expect(turnedOn()).toEqual({})
-    expect(sw.port.frameContext('b1')).toBeUndefined()
+    expect(sw.port.published('b1')).toBeUndefined()
   })
 
   it('a move of an agent with no entry makes no Podman call', async () => {

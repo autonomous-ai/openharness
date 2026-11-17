@@ -2,24 +2,8 @@
  * The DSH viewers in their own process, as the core sees them (`HARNESSD_SERVICES=viewers`; the
  * process's side is services/viewersProcess.ts).
  *
- * The core asks the viewers two things while it builds an agent's frame: what its DSH context is (its
- * harness's name, its viewer URL, its verdict) and where the windows' viewer pane forwards to. A frame
- * cannot wait on another process, so the viewers tell the core each agent's answers whenever they change
- * (a `service_query` of kind `context`), the core keeps the last of them here, and the port answers from
- * that: while the process is down, with what it last knew, or the fallbacks for an agent it never heard
- * of. Each change then does in the core what the viewers did in their process: the frame of an agent
- * whose terminal is attached goes out again. (A viewer that moved used to move the core's streams to it
- * too; they are the viewers' own now, and follow it in their process.)
- *
- * Which agents have a harness the process hears as every service that follows agents does (core/agentLife.ts): it
- * follows those with a `dsh` at every look at them, and their end, and catches up each time it connects
- * (`follow_agents`), which a restarted process needs anyway, since it starts holding nothing. An end it missed while
- * down that catch-up finds, so nothing is held for it.
- *
- * The core keeps what it hears only for the agents with a harness it was told of and not since told ended (it follows
- * them here the same way): what the process says of an agent after its end must not bring the forgotten agent's viewer
- * back. The process says everything again on each look it hears, which is how the core's first word on an agent arrives
- * after a core restart, when the process connects before the core has looked at anyone.
+ * Display fields use the shared publisher (core/frameParts.ts). This link holds forwarding targets only for live
+ * harness agents; those targets survive a process disconnect, and are refreshed on each followed observation.
  *
  * A client served a viewer over its connection (core/viewerStreams.ts): each frame of its stream is told
  * to the process as it comes, never held (a stream dies with the process that held it), and refused
@@ -37,7 +21,6 @@
  * Held, a stream that woke a process with no viewer yet is refused by the viewers themselves; one that came while a
  * running process reconnects to a core that restarted is served.
  */
-import type { AgentDshContext } from '../lib/agentFrame.js'
 import { viewerStreamId } from '../lib/viewerFrames.js'
 import { VIEWERS_FOLLOW, VIEWERS_UNAVAILABLE, type CoreApi, type ViewersPort } from './api.js'
 import { ON_DEMAND_START_MS, type ServiceFrame } from './serviceLinks.js'
@@ -83,7 +66,6 @@ interface Held {
 
 /** What the viewers last said of one agent. */
 interface Known {
-  context: AgentDshContext | null
   forwardingUrl: string | null
 }
 
@@ -134,7 +116,6 @@ export function createViewersLink(core: Pick<CoreApi, 'agents' | 'clients'>, not
   }
 
   const port: ViewersPort = {
-    frameContext: (session) => (session.dsh ? known.get(session.agentId)?.context ?? null : null),
     forwardingUrl: (agentId) => known.get(agentId)?.forwardingUrl ?? null,
     // The viewers are the process's: a core restarting or stopping leaves them running for the next core,
     // and the master stops the process itself when the daemon stops.
@@ -160,21 +141,16 @@ export function createViewersLink(core: Pick<CoreApi, 'agents' | 'clients'>, not
     }
   }
 
-  /** The process says what one agent's frame says of its harness now. */
+  /** The process reports only the current forwarding target for a live harness. */
   const heard = (payload: Record<string, unknown>): Record<string, unknown> => {
     const agentId = typeof payload.agentId === 'string' ? payload.agentId : ''
     if (!attached.has(agentId)) return { kept: false }
     const next: Known = {
-      context: payload.context && typeof payload.context === 'object' ? payload.context as AgentDshContext : null,
       forwardingUrl: typeof payload.forwardingUrl === 'string' ? payload.forwardingUrl : null,
     }
     const before = known.get(agentId)
     if (JSON.stringify(before) === JSON.stringify(next)) return { kept: true }
     known.set(agentId, next)
-    // Only once the agent's terminal is attached: a frame with none reads to the desktop as "agent gone"
-    // (services/viewers.ts, `syncCompanion`). The attach's own sync carries what arrived first.
-    const session = core.agents.byAgent(agentId)
-    if (session && core.agents.terminalAvailable(agentId)) core.agents.sync(session)
     return { kept: true }
   }
 
@@ -203,7 +179,7 @@ export function createViewersLink(core: Pick<CoreApi, 'agents' | 'clients'>, not
     },
     /** The core's answers to the viewers' questions (core/serviceLinks.ts `answer`, for `viewers`). */
     answer(query: string, payload: Record<string, unknown>): Record<string, unknown> {
-      if (query === 'context') return heard(payload)
+      if (query === 'viewer_target') return heard(payload)
       return { error: 'UNKNOWN_QUERY' }
     },
   }

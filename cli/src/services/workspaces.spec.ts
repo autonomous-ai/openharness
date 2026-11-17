@@ -39,6 +39,25 @@ describe('the workspaces service', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
   describe('naming made-up branches after their sessions', () => {
+    it('a completed rename cannot act after stop or after its session moves', async () => {
+      let renamed!: (branch: string) => void
+      vi.mocked(nameBranchAfterSession).mockReturnValueOnce(new Promise(resolve => { renamed = resolve }))
+      const stopped = setup([agent({})])
+      stopped.port.nameBranches()
+      stopped.port.stop()
+      stopped.port.nameBranches()
+      renamed('renamed')
+      await settle()
+      expect(stopped.core.agents.sync).not.toHaveBeenCalled()
+      for (const change of [{ cwd: '/work/other' }, { sessionId: 'other' }]) {
+        vi.mocked(nameBranchAfterSession).mockResolvedValueOnce('renamed')
+        const moved = setup([agent({})], [], agent(change))
+        moved.port.nameBranches()
+        await settle()
+        expect(moved.core.agents.sync).not.toHaveBeenCalled()
+        moved.port.stop()
+      }
+    })
     it('renames once per agent, then forgets the cached project and re-sends the agent\'s frame', async () => {
       vi.mocked(nameBranchAfterSession).mockResolvedValueOnce('fix-login')
       const { core, port } = setup([agent({})])
@@ -78,7 +97,7 @@ describe('the workspaces service', () => {
   // #4166: it swept clean, week-idle worktrees twice a day when the core said, the ones their person chose to keep too.
   it('removes no worktree on its own: only a purge the core asks for removes one', () => {
     const { core, port } = setup([agent({ cwd: '/h/live' })])
-    expect(Object.keys(port)).toEqual(['nameBranches', 'ready', 'prepareFolder', 'describeWorkspace', 'reviewWorktree', 'removeWorktree'])
+    expect(Object.keys(port)).toEqual(['stop', 'nameBranches', 'ready', 'prepareFolder', 'describeWorkspace', 'reviewWorktree', 'removeWorktree'])
     expect(core.agents.all).not.toHaveBeenCalled()
     expect(worktrees.removeWorktree).not.toHaveBeenCalled()
   })

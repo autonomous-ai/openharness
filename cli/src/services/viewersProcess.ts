@@ -8,10 +8,8 @@
  * holds exactly the viewers the core's agents should have; then it hears each look at one and its end
  * (`service_event` kind `agent`).
  *
- * What the core used to read from the service while it builds a frame (an agent's DSH context, where the
- * windows' viewer pane forwards) is told to the core whenever it changes (`service_query context`), and
- * the core keeps it (core/viewersLink.ts). Where the service would push a frame or move the windows'
- * viewer panes in the core's process, it tells the core here, and the core does both as before.
+ * Agent display fields go through the shared frame publisher. The separate `viewer_target` query reports where a
+ * managed viewer forwards; the core keeps that target while this process is down.
  *
  * The viewer servers, the watches on every harness's workspace and their restarts are this process's
  * alone: a crash or a leak costs the viewers, and the master starts them again. A new process stops the
@@ -29,6 +27,7 @@ import { ACCOUNT_BACKEND_OFF, CONVERSATIONS_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNO
 import type { RegisteredSession } from '../lib/registry.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { UNASKED } from './processCoreApi.js'
+import { createFramePublisher } from './framePublisher.js'
 import { startViewers } from './viewers.js'
 
 export interface ViewersServiceOptions {
@@ -124,12 +123,12 @@ export function runViewersService(options: ViewersServiceOptions): ServiceProces
     const session = sessions.get(agentId)
     // A detached agent is the core's to forget: nothing said after its detach may bring it back.
     if (!core || !session) return
-    const state = { agentId, context: viewers.frameContext(session), forwardingUrl: viewers.forwardingUrl(agentId) }
+    const state = { agentId, forwardingUrl: viewers.forwardingUrl(agentId) }
     const said = JSON.stringify(state)
     if (told.get(agentId) === said) return
     told.set(agentId, said)
     // Lost only with the connection; the next connection is told everything again.
-    void core.query('context', state).catch(() => {})
+    void core.query('viewer_target', state).catch(() => {})
   }
 
   /** A stream's frame for one client: through the core, which alone holds the client's connection. */
@@ -138,7 +137,11 @@ export function runViewersService(options: ViewersServiceOptions): ServiceProces
     core.notice('viewer', { connId, type, payload })
     return true
   }
-  ;(options.start ?? startViewers)(viewersCoreApi(options.dataDir, sessions, tell, viewerFrame, follow), ports)
+  const publisher = createFramePublisher((session, fields) => ({ query: 'context', payload: { agentId: session.agentId,
+    context: typeof fields.dsh === 'string' ? { id: fields.dsh, name: fields.dshName, viewerUrl: fields.viewerUrl,
+      viewerName: fields.viewerName, verdict: fields.verdict } : null, forwardingUrl: ports.viewers?.forwardingUrl(session.agentId) ?? null } }))
+  const api = publisher.scope(viewersCoreApi(options.dataDir, sessions, tell, viewerFrame, follow))
+  ;(options.start ?? startViewers)(api, ports)
   if (!ports.viewers) throw new Error('the viewers did not start')
   const viewers = ports.viewers
 
@@ -216,10 +219,11 @@ export function runViewersService(options: ViewersServiceOptions): ServiceProces
     },
     onConnected: (connection) => {
       core = connection
+      publisher.connected(connection)
       told.clear()
       heard.clear()
       // The catch-up attaches every agent the core lists, and each attach tells the core that agent's
-      // context: a new core hears everything, and one that only dropped the connection what changed.
+      // projection: a new core hears everything, and one that only dropped the connection what changed.
       // A core from before agents were followed (2026-11-15) does not know `follow_agents`, and answers the agents with a
       // harness as it was always asked (`agents`). Delete on or after 2026-12-18.
       void connection.query('follow_agents', { ...VIEWERS_FOLLOW })
@@ -229,6 +233,7 @@ export function runViewersService(options: ViewersServiceOptions): ServiceProces
     // Every client's connection was that core's: their streams and surfaces end with it.
     onDisconnected: () => {
       core = null
+      publisher.disconnected()
       viewers.closed()
     },
   })

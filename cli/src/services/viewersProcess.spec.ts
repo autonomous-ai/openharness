@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentLife, CoreApi, CorePorts, ViewersPort } from '../core/api.js'
-import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcessOptions } from './process.js'
 import { runViewersService, viewersCoreApi } from './viewersProcess.js'
@@ -11,15 +10,12 @@ vi.mock('./process.js', () => ({ runServiceProcess: vi.fn(() => ({ stop: vi.fn()
 const agent = (agentId = 'a1', over: Partial<RegisteredSession> = {}) =>
   ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', dsh: 'acme/blender', cwd: `/work/${agentId}`, ...over }) as RegisteredSession
 
-/** Viewers that start nothing: what each agent's frame says is whatever the test sets, and what they hear of agents
- *  (`attach`, `detach`) is recorded. */
+/** Viewers that start nothing: their forwarding targets are controlled here, and lifecycle events recorded. */
 function fakeViewers() {
-  const contexts = new Map<string, AgentDshContext>()
   const urls = new Map<string, string>()
   const attach = vi.fn((_session: RegisteredSession) => {})
   const detach = vi.fn((_agentId: string) => {})
   const port = {
-    frameContext: vi.fn((session: RegisteredSession) => contexts.get(session.agentId) ?? null),
     forwardingUrl: vi.fn((agentId: string) => urls.get(agentId) ?? null),
     stop: vi.fn(async () => {}),
     stream: vi.fn((_connId: string, _type: string, _payload: Record<string, unknown>) => true),
@@ -34,7 +30,7 @@ function fakeViewers() {
     })
     ports.viewers = port
   }
-  return { port, contexts, urls, attach, detach, start }
+  return { port, urls, attach, detach, start }
 }
 
 /** What the core tells a service of agents (core/agentLife.ts): a look at one, and its end. */
@@ -46,7 +42,7 @@ const ended = (agentId: unknown) => ({ kind: 'agent', event: { kind: 'ended', ag
 function connection(listed: unknown = { agents: [] }, older = false) {
   const query = vi.fn(async (name: string, _payload?: Record<string, unknown>) => (
     name === 'follow_agents' ? (older ? { error: 'UNKNOWN_QUERY' } : listed) : name === 'agents' ? listed : { kept: true }) as Record<string, unknown>)
-  const told = () => query.mock.calls.filter(([name]) => name === 'context').map(([, payload]) => payload)
+  const told = () => query.mock.calls.filter(([name]) => name === 'viewer_target').map(([, payload]) => payload)
   return { core: { query } satisfies CoreConnection, query, told }
 }
 
@@ -74,6 +70,35 @@ describe('the viewers in their own process', () => {
     expect(options).toMatchObject({ name: 'viewers', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
     // Only the core's own question, which no client's request is routed as (core/viewersLink.ts).
     expect(Object.keys(options.requests)).toEqual(['surface'])
+  })
+
+  it('publishes frame fields separately from the forwarding target, with the current lifecycle lease', () => {
+    const { api, options } = setup()
+    const core = connection()
+    options.onConnected!(core.core)
+    const row = { ...agent(), frameEpoch: 'core:1' }
+    options.onEvent!(running(row))
+    const fields = { dsh: 'acme/blender', dshName: 'Blender', viewerUrl: null, viewerName: null, verdict: null }
+    api.agents.publishFrame!(row, fields)
+    expect(core.query).toHaveBeenCalledWith('frame_part', { agentId: 'a1', frameEpoch: 'core:1', fields })
+    expect(core.query).toHaveBeenCalledWith('viewer_target', { agentId: 'a1', forwardingUrl: null })
+  })
+
+  it('an older core receives the complete dated context adapter only after UNKNOWN_QUERY', async () => {
+    const { api, options, viewers } = setup()
+    const query = vi.fn(async (name: string) => name === 'frame_part' || name === 'viewer_target' ? { error: 'UNKNOWN_QUERY' } : { agents: [] })
+    options.onConnected!({ query })
+    const row = agent()
+    options.onEvent!(running(row))
+    viewers.urls.set('a1', 'http://127.0.0.1:7000')
+    api.agents.publishFrame!(row, { dsh: 'renamed', dshName: 'Name', viewerUrl: null, viewerName: null, verdict: null })
+    await vi.waitFor(() => expect(query).toHaveBeenCalledWith('context', {
+      agentId: 'a1', context: { id: 'renamed', name: 'Name', viewerUrl: null, viewerName: null, verdict: null }, forwardingUrl: 'http://127.0.0.1:7000',
+    }))
+    const other = agent('a2')
+    options.onEvent!(running(other))
+    api.agents.publishFrame!(other, {})
+    await vi.waitFor(() => expect(query).toHaveBeenCalledWith('context', { agentId: 'a2', context: null, forwardingUrl: null }))
   })
 
   it('serves a client\'s viewer stream through the core: its frames in, its answers out to that connection', async () => {
@@ -118,17 +143,16 @@ describe('the viewers in their own process', () => {
     expect(api.clients.viewerFrame('c1', 'viewer_data', { streamId: 's1' })).toBe(false)
   })
 
-  it('attaches what the core attaches, tells the core what the agent\'s frame says, and detaches what it detaches', async () => {
+  it('attaches what the core attaches, reports its forwarding target, and detaches what it detaches', async () => {
     const { viewers, api, options } = setup()
     const core = connection()
     options.onConnected!(core.core)
     await flush()
-    viewers.contexts.set('a1', { id: 'acme/blender', name: 'Blender', viewerUrl: null, viewerName: 'Blender Viewer', verdict: null })
     options.onEvent!(running(agent()))
     expect(viewers.attach).toHaveBeenCalledWith(agent())
     expect(api.agents.byAgent('a1')).toEqual(agent())
     expect(api.agents.resolve('a1')).toEqual(agent())
-    expect(core.told()).toEqual([{ agentId: 'a1', context: viewers.contexts.get('a1'), forwardingUrl: null }])
+    expect(core.told()).toEqual([{ agentId: 'a1', forwardingUrl: null }])
     options.onEvent!(ended('a1'))
     expect(viewers.detach).toHaveBeenCalledWith('a1')
     expect(api.agents.byAgent('a1')).toBeUndefined()
@@ -143,33 +167,30 @@ describe('the viewers in their own process', () => {
     options.onConnected!(core.core)
     options.onEvent!(running(agent()))
     // A viewer came up: its URL, and where the windows' pane forwards.
-    viewers.contexts.set('a1', { id: 'acme/blender', name: 'Blender', viewerUrl: 'http://127.0.0.1:7001/', verdict: null })
     viewers.urls.set('a1', 'http://127.0.0.1:7001/')
     api.clients.viewerChanged('a1')
     api.agents.sync(agent())
     expect(core.told()).toEqual([
-      { agentId: 'a1', context: null, forwardingUrl: null },
-      { agentId: 'a1', context: viewers.contexts.get('a1'), forwardingUrl: 'http://127.0.0.1:7001/' },
+      { agentId: 'a1', forwardingUrl: null },
+      { agentId: 'a1', forwardingUrl: 'http://127.0.0.1:7001/' },
     ])
-    // A verdict: the frame changes, and the core hears it.
-    viewers.contexts.set('a1', { ...viewers.contexts.get('a1')!, verdict: { ready: true, summary: null, errors: 0, warnings: 0, artifact: null, preview: null, phases: [], updatedAt: null } })
+    // A repeated sync does not send an unchanged forwarding target.
     api.agents.sync(agent())
-    expect(core.told()).toHaveLength(3)
+    expect(core.told()).toHaveLength(2)
     // Said again on every attach, changed or not: a core that restarted keeps nothing until it attaches.
     options.onEvent!(running(agent()))
-    expect(core.told()).toHaveLength(4)
+    expect(core.told()).toHaveLength(3)
   })
 
   it('says nothing before it is connected, then everything the core lists once it has caught up', async () => {
     const { viewers, options } = setup()
-    viewers.contexts.set('a1', { id: 'acme/blender', name: 'Blender', viewerUrl: null, verdict: null })
     options.onEvent!(running(agent()))
     expect(viewers.attach).toHaveBeenCalledOnce()
     const core = connection({ agents: [agent()] })
     options.onConnected!(core.core)
     expect(core.told()).toEqual([])
     await flush()
-    expect(core.told()).toEqual([{ agentId: 'a1', context: viewers.contexts.get('a1'), forwardingUrl: null }])
+    expect(core.told()).toEqual([{ agentId: 'a1', forwardingUrl: null }])
   })
 
   it('catches up with the core\'s agents on every connection: attaches what is missing, detaches what is gone', async () => {
@@ -191,7 +212,7 @@ describe('the viewers in their own process', () => {
     const core = connection()
     options.onConnected!(core.core)
     await flush()
-    expect(core.query).toHaveBeenCalledWith('follow_agents', { each: true, having: ['dsh'] })
+    expect(core.query).toHaveBeenCalledWith('follow_agents', { each: true, having: ['dsh'], frames: true })
     expect(core.query).not.toHaveBeenCalledWith('agents')
   })
 
@@ -243,17 +264,16 @@ describe('the viewers in their own process', () => {
   it('a word lost with its connection is said again on the next one', async () => {
     const { viewers, options } = setup()
     const lost = vi.fn(async (name: string) => {
-      if (name === 'context') throw new Error('the core went away')
+      if (name === 'viewer_target') throw new Error('the core went away')
       return { agents: [agent()] }
     })
-    viewers.contexts.set('a1', { id: 'acme/blender', name: 'Blender', viewerUrl: 'http://127.0.0.1:7001/', verdict: null })
     options.onConnected!({ query: lost })
     options.onEvent!(running(agent()))
     await flush()
     const core = connection({ agents: [agent()] })
     options.onConnected!(core.core)
     await flush()
-    expect(core.told()).toEqual([{ agentId: 'a1', context: viewers.contexts.get('a1'), forwardingUrl: null }])
+    expect(core.told()).toEqual([{ agentId: 'a1', forwardingUrl: null }])
   })
 
   it('hands what it hears of agents to the service\'s follower, the latest; an earlier one\'s end changes nothing', () => {

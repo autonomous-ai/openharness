@@ -5035,6 +5035,74 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     })
   })
 
+  // One ring a turn: the notice rang already, and the dial keeps one drawer row an agent, so a summary that rings or
+  // lists would take the notice's row.
+  describe('its agent\'s turn end (docs/plans/2026-11-17-dial-one-ring-per-turn-design.md)', () => {
+    const summary = (port: DevicesPort, agentId: string, payload: Record<string, unknown> = {}) =>
+      port.card({ type: 'commander_event', agentId, payload: { kind: 'summary', text: 'done', recap: 'Built.', ...payload } })
+    const tiers = () => calls('summary').map(([agentId, , , tier]) => [agentId, tier])
+
+    it.each(['full', 'you'])('is silent while the card is pending, decided upstream or here (Notifications %s)', async (mode) => {
+      const { port, listener } = devices({ core: bound(), decideTier: null })
+      if (mode === 'you') expect(listener.notify('you')).toEqual({ mode: 'you' })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      summary(port, 'h1', { tier: 'alert' })
+      summary(port, 'h1')
+      await vi.waitFor(() => expect(tiers()).toEqual([['h1', 'silent'], ['h1', 'silent']]))
+      expect(logs.filter((line) => line.includes('rule:notice'))).toEqual(Array(2).fill('[cable] notify · silent · rule:notice · notice · 0ms'))
+      expect(calls('questionClose')).toEqual([])
+    })
+
+    it('a failed turn still rings', async () => {
+      const { port, listener } = devices({ core: bound(), decideTier: null })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      summary(port, 'h1', { tier: 'alert', failed: true })
+      summary(port, 'h1', { failed: true })
+      await vi.waitFor(() => expect(tiers()).toEqual([['h1', 'alert'], ['h1', 'alert']]))
+    })
+
+    // A message sent while the agent worked starts its next turn the moment this one ends, while the summary still waits
+    // behind the done, whose tokens are being read: the card is gone by the time the summary's turn comes.
+    it('is silent when its next turn starts while it waits behind its turn\'s done', async () => {
+      let finish!: (reading: { input: number; cached: number; output: number }) => void
+      let n = 0
+      const readUsage = vi.fn((_id: string) => (++n === 2
+        ? new Promise<{ input: number; cached: number; output: number }>((resolve) => { finish = resolve })
+        : Promise.resolve({ input: 1, cached: 0, output: 1 })))
+      const { port, listener } = devices({ core: bound(), decideTier: null, readUsage })
+      const card = (payload: Record<string, unknown>) => port.card({ type: 'commander_event', agentId: 'h1', payload })
+      card({ kind: 'turn_started' })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      card({ kind: 'done', text: 'done' })
+      summary(port, 'h1', { tier: 'alert' })
+      card({ kind: 'turn_started' })
+      finish({ input: 2, cached: 0, output: 2 })
+      await vi.waitFor(() => expect(calls('questionClose')).toHaveLength(1))
+      expect(tiers()).toEqual([['h1', 'silent']])
+      expect(seen.cable.calls.map(([name]) => name).filter((name) => name === 'summary' || name === 'questionClose'))
+        .toEqual(['summary', 'questionClose'])
+    })
+
+    it('another agent\'s turn end rings as before', async () => {
+      const { port, listener } = devices({ core: bound(), decideTier: null })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      summary(port, 'a2')
+      await vi.waitFor(() => expect(tiers()).toEqual([['a2', 'alert']]))
+    })
+
+    it('rings again once the card went, at its next turn or a tap', async () => {
+      const { port, listener } = devices({ core: bound(), decideTier: null })
+      port.observed(hook('turn-start'))
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'turn_started' } })
+      await host().openAgent(ID)
+      summary(port, 'h1')
+      summary(port, ID)
+      await vi.waitFor(() => expect(tiers()).toEqual([['h1', 'alert'], [ID, 'alert']]))
+    })
+  })
+
   // A Harness agent's turn_started is sent only while a dial is attached (services/recaps.ts): a turn during the unplug
   // would leave its card to ring again on the next plug-in.
   it('a Harness agent\'s card goes with the last dial, an outside agent\'s stays', () => {

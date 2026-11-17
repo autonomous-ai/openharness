@@ -5,7 +5,7 @@ import type { GridLaunchAnswer, GridLaunchOverride, GridLaunchRequest } from '..
 import { dropPermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
 import { buildLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps } from '../../lib/launchOverrides.js'
 import { loadEngine } from '../../engines/inProcess.js'
-import { prepareInstructionWrites } from '../../scm/scmProjects.js'
+import { prepareInstructionWrites } from '../../scm/launch.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createLaunchHelpers, gridLaunchThrough, type LaunchHelperDeps } from './launch.js'
 
@@ -17,8 +17,8 @@ vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
-vi.mock('../../scm/scmProjects.js', async (real) => {
-  const actual = await real<typeof import('../../scm/scmProjects.js')>()
+vi.mock('../../scm/launch.js', async (real) => {
+  const actual = await real<typeof import('../../scm/launch.js')>()
   return { ...actual, prepareInstructionWrites: vi.fn(async () => {}) }
 })
 vi.mock('../../lib/launchOverrides.js', async (real) => ({ ...await real<object>(), buildLaunchOverrides: vi.fn(async () => ({ ok: true })) }))

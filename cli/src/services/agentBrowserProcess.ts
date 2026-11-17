@@ -6,7 +6,7 @@
  * It hears what happens to agents as every service that follows them does (services/followLink.ts): it asks to follow
  * them each time it connects (`follow_agents`), and hears each start and end, a purge and a pane's new agent (decision
  * 19), the last two held for it while it is down. The core reads each browser's state from what this process last told
- * it (`browser_state`, core/agentBrowserLink.ts), so a frame never waits on it. Whose Browser is on is this process's
+ * it through the shared frame publisher (services/framePublisher.ts), so a frame never waits on it. Whose Browser is on is this process's
  * own (services/agentBrowser.ts). It asks the core what only the core knows, as any service may: every agent here
  * (`agents`), the agent of a pane and whether it is a guest's, held to the parents of the command that names it
  * (`agent_of_pane`), and to hand on a product counter (`count`). And it has the core type its two lines into an agent
@@ -24,8 +24,8 @@ import type { Asker, BrowserRoute, CoreApi, CorePorts } from '../core/api.js'
 import { decodeTerminalLocal, TerminalBinaryKind } from '../lib/terminalBinary.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import { createFramePublisher } from './framePublisher.js'
 import { startAgentBrowser } from './agentBrowser.js'
-import type { BrowserState } from './agentBrowser/browsers.js'
 import { followLink, type FollowLink } from './followLink.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { agentsIn, isSession, processCoreApi } from './processCoreApi.js'
@@ -123,13 +123,10 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
   } } }
   const ports: Pick<CorePorts, 'agentBrowser'> = { agentBrowser: null }
   // Every agent as it starts and ends here, and a purge and a pane's new agent, held for it while it is down.
-  const follow = followLink({})
+  const follow = followLink({ frames: true })
   let legacyMove: ((from: string, session: RegisteredSession, on: boolean) => Promise<boolean>) | undefined
   /** What each browser last showed: a new core, or the same one after this link dropped, hears all of it again. */
-  const shown = new Map<string, BrowserState>()
-  const tell = (agentId: string, state: BrowserState | undefined) => {
-    void ask('browser_state', { agentId, ...(state ? { state } : {}) }).catch(() => {})
-  }
+  const publisher = createFramePublisher((session, fields) => ({ query: 'browser_state', payload: { agentId: session.agentId, ...(fields.browser ? { state: fields.browser } : {}) } }))
   /** The connections that asked anything of a stream and are still open. The core that goes forgets every stream it
    *  held (core/browserStreams.ts `gone`), so each is told ended here: an exec left piping a still screen would hold
    *  one of its browser's few viewer places for good. */
@@ -142,12 +139,8 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
     },
     bytes: frame => core?.sendBinary?.(frame) ?? false,
   }
-  const requests = (options.start ?? startAgentBrowser)(agentBrowserCoreApi(options.dataDir, ask, deliveries, sinks, follow), ports, {
-    told: (agentId, state) => {
-      if (state) shown.set(agentId, state)
-      else shown.delete(agentId)
-      tell(agentId, state)
-    },
+  const api = publisher.scope(agentBrowserCoreApi(options.dataDir, ask, deliveries, sinks, follow))
+  const requests = (options.start ?? startAgentBrowser)(api, ports, {
     followed: () => follow.ready(FOLLOWED_WAIT_MS),
     // The rollback core still owns its Browser flags. Kept entirely in this process, never a new core port.
     // Delete on or after 2026-12-18.
@@ -227,14 +220,15 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
     onConnected: (connection) => {
       connectionGeneration++
       core = connection
+      publisher.connected(connection)
       // Said to each core it connects to: it takes viewers' streams (core/agentBrowserLink.ts `streams`).
       void ask('streams', {}).catch(() => {})
-      for (const [agentId, state] of shown) tell(agentId, state)
       void follow.connected(connection.query)
     },
     onDisconnected: () => {
       connectionGeneration++
       core = null
+      publisher.disconnected()
       follow.disconnected()
       for (const connId of viewers) port.streamClosed(connId)
       viewers.clear()

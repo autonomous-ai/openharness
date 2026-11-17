@@ -128,6 +128,12 @@ export class Browsers {
     return this.queue(agentId, () => this.launch(agentId, generation))
   }
 
+  /** A new core lease must recheck the live browser; work from the old lease cannot publish into it. */
+  refresh(agentId: string): Promise<void> {
+    this.forget(agentId)
+    return this.start(agentId)
+  }
+
   /** Runs setup from its recorded step, then starts every browser waiting on it. One run at a time. */
   setUp(): Promise<void> {
     return this.setupRun ??= this.runSetup().finally(() => { this.setupRun = null })

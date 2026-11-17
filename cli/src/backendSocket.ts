@@ -34,7 +34,7 @@ import { isApiLaunch, parseGridLaunchOverride, type GridLaunchOverride } from '.
 import type { LaunchModel } from './lib/launchModel.js'
 import type { ScmLaunchRecord } from './scm/types.js'
 import type { StartedBy } from './lib/agentAttribution.js'
-import { agentFrame, type AgentBrowserFrame, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
+import { agentFrame, type AgentFrame } from './lib/agentFrame.js'
 import type { ProductUsageMetric } from './lib/productUsageContract.js'
 import { createUsageOutcomes } from './core/usageOutcomes.js'
 import type { AgentTokenUsage } from './lib/agentUsageWire.js'
@@ -230,9 +230,8 @@ export class BackendSocket {
   activityFrameProvider: ((session: RegisteredSession) => ActivityFrame | null) | null = null
   /** What a message to an agent waits for now (core/input.ts `waitingFor`): its frame says so. */
   waitingForProvider: ((session: RegisteredSession) => 'engine' | null) | null = null
-  dshFrameProvider: ((session: RegisteredSession) => AgentDshContext | null) | null = null
-  /** An agent's sandboxed browser, as the agent browser last said (core/api.ts `AgentBrowserPort.frameContext`). */
-  browserFrameProvider: ((agentId: string) => AgentBrowserFrame | undefined) | null = null
+  /** Captures a run's service projection before asynchronous frame work. */
+  framePartsProvider: ((session: RegisteredSession) => () => Readonly<Record<string, unknown>>) | null = null
   /** This machine's viewers, served to a client over its connection: the viewers' (core/viewerStreams.ts). */
   viewerStreams: ViewerStreams | null = null
   /** A viewer stream's frame to the one connection that opened it: false when it cannot reach it. */
@@ -1456,8 +1455,8 @@ export class BackendSocket {
 
   /** A stopped agent's frame: no pane, no terminal, nothing to fork. */
   async toStoppedProject(s: RegisteredSession): Promise<AgentFrame> {
-    const frame = await agentFrame(s, { selectedModel: s.model, terminalAvailable: false, dsh: this.dshFrameProvider?.(s) ?? null,
-      tokenUsage: this.tokenUsageProvider?.(s) ?? null, gridAnnotation: this.gridAnnotation, browser: this.browserFrameProvider?.(s.agentId) })
+    const frame = await agentFrame(s, { selectedModel: s.model, terminalAvailable: false, parts: this.framePartsProvider?.(s),
+      tokenUsage: this.tokenUsageProvider?.(s) ?? null, gridAnnotation: this.gridAnnotation })
     return {
       ...frame,
       status: 'stopped',
@@ -1475,11 +1474,10 @@ export class BackendSocket {
       selectedModel: this.runtimeProfileProvider?.(s) ?? null,
       workspace: this.workspaceProvider?.(s) ?? null,
       terminalAvailable: registry.terminalAvailable(s.agentId),
-      dsh: this.dshFrameProvider?.(s) ?? null,
+      parts: this.framePartsProvider?.(s),
       activity: () => this.activityFrameProvider?.(s) ?? null,
       waitingFor: () => this.waitingForProvider?.(s) ?? null,
       gridAnnotation: this.gridAnnotation,
-      browser: this.browserFrameProvider?.(s.agentId),
     })
   }
 
