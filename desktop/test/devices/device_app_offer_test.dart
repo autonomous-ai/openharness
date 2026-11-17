@@ -201,6 +201,20 @@ void main() {
     expect(fixture.offer.state, DeviceAppOfferState.offer);
   });
 
+  test('the lookup right after an install that opened the app keeps it running', () async {
+    final fixture = await _attached();
+    // Registered at once, but AppKit does not list the launch yet.
+    fixture.probe.presence = installedNotRunning;
+    await fixture.offer.install();
+    await pumpEventQueue();
+    expect(fixture.probe.lookups, 2);
+    expect(fixture.offer.state, DeviceAppOfferState.hidden);
+
+    // Only that answer: the next is believed.
+    await fixture.offer.refresh();
+    expect(fixture.offer.state, DeviceAppOfferState.notRunning);
+  });
+
   test('an answer asked before an install ended is not believed', () async {
     final fixture = await _attached();
     fixture.install.gate = Completer<void>();
