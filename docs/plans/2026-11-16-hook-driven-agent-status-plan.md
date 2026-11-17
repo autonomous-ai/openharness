@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use devcrew phase 3 to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** plan review answered (Ken, 2026-11-17) and folded in; the Codex facts answers (Ken, 2026-11-17) folded in: Interrupt written with a 3 s timeout (Task 20), Codex ends with no Stop marked `over` (Task 25), subagents counted for Claude Code only (Tasks 13, 14, 19, 20, 22, R5).
+**Status:** plan review answered (Ken, 2026-11-17) and folded in; the Codex facts answers (Ken, 2026-11-17) folded in: Interrupt written with a 3 s timeout (Task 20), every Codex end marked `over` (Task 25), subagents counted for Claude Code only (Tasks 13, 14, 19, 20, 22, R5); the final review's answers (Ken, 2026-11-17) folded in: a Codex Stop never waits or closes a turn (R2), only a Codex `turn_aborted` with reason Interrupted is aborted (Task 5), a SubagentStop read before its SubagentStart (R5).
 
 **Goal:** For Claude Code and Codex in Harness panes, a turn ends when the engine's own hook says so, a wait on the person stops reading as working at its hook and its question shows at the next poll, a lead stays working while its subagents run, and "Finished" is announced once, after 1.5 s of quiet.
 
@@ -50,7 +50,7 @@ About 365 lines, no new file. Cut since the draft (about 400): the pane read at 
 
 - **The subagent count** is `HookTurn.subagents`, one integer. The core has no per-session turn record today: the parser's turn is its worker's, and the core holds a cursor on it (the parser itself only under an older master). The nearest is `promptFiredAt` in `turnHooks.ts`, one number a session. The spec's record (§2) is that entry widened, in the same map with the same bound, and the count is one field of it: no second map, no list, no record of its own. It is the smallest place because the three hooks that write it and the Stop rule that reads it already meet in `turnHooks.ts`, which already makes and drops that entry.
 - **Not a boundary or a wait, and still in the core (Ken, 2026-11-17):** the installer's prune. `installHookSettings` runs in the core (launch waits for it) and is the one writer of the person's settings file; a prune anywhere else is a second writer of that file. It is the spec's §1 and about 35 lines in three files the core already loads. The other is the lease reading that subagents run (`atWork`, 6 lines in `core/turns/activity.ts`): the spec's §2 keeps the lead working from the count, and the lease is the core's.
-- **In a component, not the core:** when a record was written and whether the engine's own record ends the turn (engine-claude and engine-codex workers, Task 6); Codex's aborted end (engine-codex, Task 5); a Codex end with no Stop after it (engine-codex, Task 25); the quiet window (recaps service, Task 9); which event is which, and that nothing new is sent from outside a pane (the hook process, Task 13). The devices are untouched.
+- **In a component, not the core:** when a record was written and whether the engine's own record ends the turn (engine-claude and engine-codex workers, Task 6); Codex's aborted end (engine-codex, Task 5); every Codex end, its Stop already come (engine-codex, Task 25); the quiet window (recaps service, Task 9); which event is which, and that nothing new is sent from outside a pane (the hook process, Task 13). The devices are untouched.
 - **Measured, not estimated, in the pull request:** the core's line count at `e9670ffd23` (92 229, the sum of the files `architecture.coreFiles.txt` lists, measured 2026-11-17) and at the head (check 8).
 
 ## File structure
@@ -62,7 +62,7 @@ About 365 lines, no new file. Cut since the draft (about 400): the pane read at 
 | `cli/src/hookServer.ts` | core | the two new routes |
 | `cli/src/lib/turnActivity.ts`, `cli/src/core/turns/activity.ts` | core | the lease: withheld, at work |
 | `cli/src/lib/questionController.ts`, `cli/src/core/questions.ts` | core | a dialog is coming; the pane read clear |
-| `cli/src/engines/claude/normalize.ts`, `live.ts`, `cli/src/engines/codex/normalizer.ts`, `live.ts`, `cli/src/engines/worker/liveStreams.ts` | engine workers | a record's time, the engine's own end, Codex's aborted end, a Codex end with no Stop |
+| `cli/src/engines/claude/normalize.ts`, `live.ts`, `cli/src/engines/codex/normalizer.ts`, `live.ts`, `cli/src/engines/worker/liveStreams.ts` | engine workers | a record's time, the engine's own end, Codex's aborted end, every Codex end told at once |
 | `cli/src/lib/agentNotifications.ts`, `cli/src/lib/commander.ts` | recaps service | the quiet window |
 | `cli/hook/notify.mjs` | the hook's own process | event to route, in a pane only |
 | `cli/src/engines/kit/hookSettings.ts`, `notifyHooks.ts`, `hookReview.ts`, the two `hookContract.ts` | core (installer) | the events installed, pruned, reviewed |
@@ -91,14 +91,14 @@ The tasks cite these by number.
 - **R0 Ends by hook.** A session's turns end by hook from the first Stop, StopFailure or Interrupt it sends in this daemon run. Until then every read goes to the funnel as it came.
 - **R1 The pass** (a live read of a session whose turns end by hook):
   1. a replay goes on as it came; when it carries a turn's start or end, what is held is dropped (the transcript was read again);
-  2. an aborted end, or the end of a read the engine marked `over`, goes on at once. `over` is an end no Stop follows: Claude Code's `turn_duration` (a paused `/goal` pass, Task 6); Codex's turn that ended in an error or was stopped by a prompt hook (Codex runs no Stop for either and has no StopFailure, Task 25);
+  2. an aborted end, or the end of a read the engine marked `over`, goes on at once. `over` is an end no Stop follows: Claude Code's `turn_duration` (a paused `/goal` pass, Task 6); every Codex end, since Codex runs its Stop and waits for it before it writes the end, and runs none for a turn that ended in an error or was stopped by a prompt hook (it has no StopFailure, Task 25);
   3. any other end is held, with its turn's identity and opening time, and Stops waiting for it are answered;
   4. a turn's start with an end held sends the held end first, in the same batch, in order;
   5. everything else goes on, in order.
-- **R2 Stop.** Which turn it is about is taken before the first await: the turn whose end is held, else the parser's open turn. Then drain. A Stop its engine ran before the session's latest prompt hook, or before that turn's opening record, closes nothing. Otherwise: an end held → delivered; none held → wait up to 1 500 ms for it, deliver it the moment it is read; none by then → drain, then close as today's fallback does. A continued `/goal` pass is closed by its own Stop. A StopFailure closes whichever turn is open or held.
+- **R2 Stop.** A Codex Stop never waits and closes nothing: it only makes the session end by hook (R0), and its turn ends at its `over` end, which Codex writes after it (Ken, 2026-11-17). For Claude Code: which turn it is about is taken before the first await: the turn whose end is held, else the parser's open turn. Then drain. A Stop its engine ran before the session's latest prompt hook, or before that turn's opening record, closes nothing. Otherwise: an end held → delivered; none held → wait up to 1 500 ms for it, deliver it the moment it is read; none by then → drain, then close as today's fallback does. A continued `/goal` pass is closed by its own Stop. A StopFailure closes whichever turn is open or held.
 - **R3 Interrupt** (Codex; it arrives on `/api/hook/turn-stop` with `status: 'interrupted'`). Closes the parser's open turn at once as `turn_ended { aborted: true }` through the funnel, the path Claude Code's interrupt line takes: no drain, no wait, no key. The same two stale rules as R2.
-- **R4 Wait.** Opens with the hook's `firedAt`, unless it ran before the latest prompt hook. At once: the Working claim is withdrawn and told, and the question watcher is told a dialog is coming. No pane is read at the hook (the engine draws its dialog after the hook returns): the question shows at the watcher's next 1.5 s poll, as today. Ends on: the watcher (a question closed, or two polls in a row read the pane with no dialog); any turn end; a turn start; progress of the lead (no `parentToolUseId`, not `subagent_finished`) whose record's `at` is after `firedAt`. A read with no `at` ends nothing.
-- **R5 Subagents (Claude Code only).** Codex installs no SubagentStart or SubagentStop hook, so its count stays 0 and its subagents keep today's behaviour (its SubagentStop fires per child turn and never for an interrupted or failed one, facts-codex §2). Start +1 (not past 64, said once), stop −1 (not below 0), a prompt hook sets 0. A Stop while any runs leaves the end held. The first Stop with none running ends the turn; when its held end was read before an earlier hook, it waits 1 500 ms and drains again first (the lead's wrap-up lands after its Stop: `lib/commander.ts`, `SUBAGENT_TEXT_SETTLE_MS`). A StopFailure ignores the count. 600 000 ms with no hook and no progress while any runs: 0, one line, the held end delivered.
+- **R4 Wait.** Opens with the hook's `firedAt`, unless it ran before the latest prompt hook. At once: the Working claim is withdrawn and told, and the question watcher is told a dialog is coming. No pane is read at the hook (the engine draws its dialog after the hook returns, or, for Claude Code's PermissionRequest, beside it, so a read would find nothing or race the drawing): the question shows at the watcher's next 1.5 s poll, as today. Ends on: the watcher (a question closed, or two polls in a row read the pane with no dialog); any turn end; a turn start; progress of the lead (no `parentToolUseId`, not `subagent_finished`) whose record's `at` is after `firedAt`. A read with no `at` ends nothing.
+- **R5 Subagents (Claude Code only).** Codex installs no SubagentStart or SubagentStop hook, so its count stays 0 and its subagents keep today's behaviour (its SubagentStop fires per child turn and never for an interrupted or failed one, facts-codex §2). Start +1 (not past 64, said once), stop −1 (not below 0), a prompt hook sets 0. A SubagentStop read before its SubagentStart (two hook processes, a slow daemon) is handled with one extra number in the record: a stop that finds the count at 0 keeps when it fired, and a start fired before that is not counted (Ken, 2026-11-17). A Stop while any runs leaves the end held. The first Stop with none running ends the turn; when its held end was read before an earlier hook, it waits 1 500 ms and drains again first (the lead's wrap-up lands after its Stop: `lib/commander.ts`, `SUBAGENT_TEXT_SETTLE_MS`). A StopFailure ignores the count. 600 000 ms with no hook and no progress while any runs: 0, one line, the held end delivered.
 - **R6 Silence.** An end held for 120 000 ms with no hook since (measured from the later of the last hook and when the end was read) is delivered, with one line. Not while subagents run: R5's timeout governs then.
 - **R7 Open.** A session's turn is open while its parser says so or its end is held.
 - **R8 Working.** `lib/turnActivity.ts` stays the one place. Working is withheld while a wait is open, and for a session whose turns end by hook with none open: progress read then claims nothing, a turn's start still does.
@@ -122,7 +122,7 @@ The spec's §8 answers the checklist. What this plan adds to it: nothing is stor
 | 1 | Facts: Claude Code's hooks | none | high |
 | 2 | Facts: Codex's hooks, labels and hashes | none | high |
 | 3 | Facts: a rollback is harmless | none | medium |
-| 4 | Perf: hook requests and the round trip in the report | none | medium |
+| 4 | Perf: hook processes, by event, in the report | none | medium |
 | 5 | Codex: a stopped turn ends as aborted | none | medium |
 | 6 | Engine workers: a record's time, the engine's own end, Codex's opening time | none | high |
 | 7 | The lease: withheld, and at work | none | high |
@@ -143,7 +143,7 @@ The spec's §8 answers the checklist. What this plan adds to it: nothing is stor
 | 22 | End to end | 5, 9, 13, 14, 16, 18, 19, 20, 21, 25 | high |
 | 23 | Temporary workflow: the numbers before and after | 4, 22 | medium |
 | 24 | Real Claude Code check, opt-in | none | high |
-| 25 | Codex: an end with no Stop after it goes on at once | none (5, 6 landed) | high |
+| 25 | Codex: every end goes on at once | none (5, 6 landed) | high |
 
 Longest chain: 6 → 11 → 15 → 17 → 19 → 22 → 23 (seven). Files shared without a dependency, so those tasks run one at a time: 16 to 19 (`turnHooks.ts`; 17 to 19 also `core/main.ts`), each after 15; 5, 6 and 25 (`codex/normalizer.ts`; 6 and 25 `codex/live.ts`, `codex/live.spec.ts`); 12, 20 and 21 (the installers' golden fixture, and 12 and 20 `hookReview.spec.ts`, `hookSettings.ts`, `hookSettings.spec.ts`); 15, 20 and 21 (`engines/hooks.spec.ts`, and 15 and 20 `codex/hookContract.ts`); 15, 19 and 20 (`engines/facets/hooks.ts`).
 
@@ -192,18 +192,18 @@ The targeted Codex is the newest stable `@openai/codex` on the day this task run
 - [ ] **Step 3:** The file's first line is `Rollback: harmless`, or what breaks. Not harmless: stop and report (spec §7: the prune then ships in a release first). The Codex Stop outside a pane of Step 2 is written down as found, not judged here: it is a Known gap of the pull request (Verification).
 - [ ] **Step 4: Commit** `Docs: an older CLI with the new hook blocks`.
 
-### Task 4: Perf: hook requests and the round trip in the report
+### Task 4: Perf: hook processes, by event, in the report
 
 **Depends on:** none. **Effort:** medium. **Failing test:** none: measurement tooling; one commit.
 
 **Files:**
 - Modify: `cli/e2e/perf.e2e.ts`
 
-Each phase of the report gains `hooks: { count, perTurn, roundTripMs: { p50, p95 }, byEvent }`, read from the fake engines' hook log (`d.hookLog()`), whose lines are `<ISO time> <engine> pid=<pid> <Event>[(<source>)] session=<id> ran in <ms> ms · exit=<code>`. Only lines whose time is inside the phase's window count. `perTurn` is `count / completedTurns`, null with no turn.
+Each phase of the report gains `hooks: { count, killed, p50Ms, p95Ms, perTurn, byEvent: { <Event>: { count, killed, p50Ms, p95Ms } } }`, read from the fake engines' hook log (`d.hookLog()`), whose lines are `<ISO time> <engine> pid=<pid> <Event>[(<source>)] session=<id> ran in <ms> ms · exit=<code>`, or `ended after it was killed in` for a hook killed at its timeout (counted in `killed`). The time is the hook process's, from its spawn to its exit: what the engine waits for each hook it waits on, by event (Codex's PermissionRequest and PreToolUse with `PERF_QUESTIONS`; Claude Code's SubagentStart, which a turning Claude Code agent's every fourth turn, `!bgagent`, runs). Only lines whose time is inside the phase's window count. `perTurn` is `count / completedTurns`, null with no turn.
 
 - [ ] **Step 1: Add it.**
-- [ ] **Step 2: Run** `cd cli && PERF=1 E2E_BUNDLE=1 PERF_AGENTS=4 PERF_ACTIVE=2 PERF_SECONDS=10 PERF_WARMUP_SECONDS=0 PERF_HISTORY_MIB=0 PERF_REPORT="$SCRATCH/perf.json" npx vitest run --config vitest.e2e.config.ts e2e/perf.e2e.ts`. Expected: PASS, and the `active` phase's `hooks.count` is above 0 with `roundTripMs.p95` a number.
-- [ ] **Step 3: Commit** `CLI: the perf report counts hook requests and their round trip`.
+- [ ] **Step 2: Run** `cd cli && PERF=1 E2E_BUNDLE=1 PERF_AGENTS=4 PERF_ACTIVE=2 PERF_SECONDS=10 PERF_WARMUP_SECONDS=0 PERF_HISTORY_MIB=0 PERF_REPORT="$SCRATCH/perf.json" npx vitest run --config vitest.e2e.config.ts e2e/perf.e2e.ts`. Expected: PASS, and the `active` phase's `hooks.count` is above 0 with `p95Ms` a number.
+- [ ] **Step 3: Commit** `CLI: the perf report counts hook requests and their process time`.
 
 ### Task 5: Codex: a stopped turn ends as aborted
 
@@ -229,7 +229,7 @@ it('an abort with no turn open, or on a replay, ends nothing', …)
 ```
 
 - [ ] **Step 2: Run** `cd cli && npx vitest run src/engines/codex/normalizer.spec.ts`. Expected: FAIL (`payload: {}`).
-- [ ] **Step 3: Implement** in `CodexNormalizer.ingest`: the end `turn_aborted` emits carries `aborted: true`. For every Codex session, hook-driven or not.
+- [ ] **Step 3: Implement** in `CodexNormalizer.ingest`: the end `turn_aborted` emits carries `aborted: true` when its reason is Interrupted (Esc, Ctrl-C, an app's interrupt); Replaced, ReviewEnded and BudgetLimited are plain ends, told at once (Ken, 2026-11-17). For every Codex session, hook-driven or not.
 - [ ] **Step 4: Run** the same. Expected: PASS.
 - [ ] **Step 5: Commit** `Codex: a turn the person stopped ends as aborted`.
 
@@ -250,7 +250,8 @@ export interface LiveRead {
   failure?: string
   /** When the engine wrote this record (its own `timestamp`), epoch ms. Absent when it says none. */
   at?: number
-  /** This record is the engine's own word that its turn is over, and no Stop follows it (Claude Code's `turn_duration`). */
+  /** This record is the engine's own word that its turn is over, and no Stop follows it (Claude Code's `turn_duration`;
+   *  every Codex end: its Stop came before it). */
   over?: true
 }
 // engines/worker/liveProtocol.ts: LiveFrame gains the same two, and livePage checks them
@@ -623,7 +624,7 @@ As the facts files say the real CLIs do; where they differ from the lines below,
 - `!fail` (Codex): the turn ends with a `task_complete` carrying an `error`, as `codexTaskError` reads it, and no Stop.
 - `!spawn` and the background sub-agent (Claude Code): SubagentStart as the child starts and SubagentStop as it ends.
 - Config `withoutHooks: string[]`: the events this release does not have.
-- `!heldstop`: the turn's Stop reaches the daemon only once the test writes `held-stop.release` (`hookHeld`, as `!latestop` holds one).
+- `!heldstop`: the turn's Stop reaches the daemon only once the test writes `held-stop.release` (`hookHeld`, as `!latestop` holds one); before another directive (`!heldstop !permit printf hi`) that turn's Stop is held the same way.
 - Each interrupt key it takes is noted in `interrupts` under the test's root, with its pid.
 - The header's list of directives and events says all of this.
 
@@ -1026,11 +1027,12 @@ it('installs Claude Code\'s wait and subagent hooks beside the person\'s own', a
 Each test has its own `IsolatedDaemon` and a `LocalClient`, as `e2e/turns.e2e.ts` does. A first plain turn makes the session's turns end by hook. No fixed sleep: "not yet" is asserted after an `agents_list` round trip that follows the last frame awaited.
 
 ```ts
-it.each(engines)('%s: a turn\'s end is told at its Stop, not when its transcript ends', …)      // !heldstop: no turn_ended until the release, then one
+it('claude: a turn\'s end is told at its Stop, not when its transcript ends', …)      // !heldstop: no turn_ended until the release, then one (Codex: the task_complete case below)
 it.each(engines)('%s: Esc typed in the pane ends the turn as aborted, and nothing is announced', …)
 it.each(engines)('%s: a cancel from the app types one Ctrl-C, and the next message is a fresh turn', …)   // `interrupts` holds one line
-it.each(engines)('%s: a permission asked: the agent stops reading as working at the hook, the question is shown at the next poll, and an answer sets it working again', …)
-it('claude: AskUserQuestion, and codex: request_user_input, the same', …)
+it.each(engines)('%s: a permission asked: the agent stops reading as working at the hook, the question is shown at the next poll, and an answer sets it working again', …)   // `!heldstop !permit`: working read before the release
+it.each(engines)('%s: a question through the engine\'s own tool (AskUserQuestion, request_user_input), the same', …)
+it('claude: an MCP server asking for input (Elicitation), the same', …)
 it('claude: a lead whose subagent still runs stays working past its own Stop, and ends at its Stop after the subagent stops', …)
 it('codex: a lead with a subagent ends once, as today: no subagent hook is installed or waited for', …)   // `!spawn`; hooks.json holds no SubagentStart or SubagentStop
 it('codex: a turn that ends in an error is told at once, with no Stop and no 2-minute wait', …)   // `!fail` after a first plain turn (Task 25)
@@ -1038,11 +1040,11 @@ it('codex: a turn\'s Stop reaches the daemon before its task_complete is written
 it('claude: a /goal loop announces nothing between its passes, and Finished once at its end', …)   // turn_summary.notification, once
 it.each(engines)('%s: Finished comes once, no sooner than 1.5 s after the turn ends', …)
 it.each(engines)('%s: an engine that sends no Stop ends its turns from the transcript, as before', …)   // withoutHooks
-it('the oldest supported, Claude Code 2.1.209 and Codex 0.144.0: the events they lack are never waited for, and their turns end from the transcript as today', …)   // the fakes at those versions, withoutHooks as Tasks 1 and 2 found (Codex 0.144.0: ['Interrupt'], facts-codex §3)
+it.each(['claude 2.1.209', 'codex 0.144.0'])('the oldest supported, %s: the events it lacks are never waited for, and each turn ends at once, one stopped by Esc among them', …)   // the fakes at those versions, withoutHooks as Tasks 1 and 2 found (Codex 0.144.0: ['Interrupt'], facts-codex §3)
 ```
 
 - [ ] **Step 1: Write the file.**
-- [ ] **Step 2: Show it red on `main`'s daemon.** `git worktree add "$SCRATCH/base" e9670ffd23`; in `"$SCRATCH/base/cli"`: `npm ci && BUNDLE_OUT_DIR="$SCRATCH/base-bundle" node build-bundle.mjs`; then in `cli`: `E2E_BUNDLE_PATH="$SCRATCH/base-bundle/cli.js" npx vitest run --config vitest.e2e.config.ts e2e/hookStatus.e2e.ts`. Expected: FAIL in every test but the older-engine ones, Codex's lead with a subagent and Codex's errored turn (today's behaviour, kept). Then `git worktree remove "$SCRATCH/base"`, that worktree and no other.
+- [ ] **Step 2: Show it red on `main`'s daemon.** `git worktree add "$SCRATCH/base" e9670ffd23`; in `"$SCRATCH/base/cli"`: `npm ci && BUNDLE_OUT_DIR="$SCRATCH/base-bundle" node build-bundle.mjs`; then in `cli`: `E2E_BUNDLE_PATH="$SCRATCH/base-bundle/cli.js" npx vitest run --config vitest.e2e.config.ts e2e/hookStatus.e2e.ts`. Expected: FAIL in every test but the older-engine ones, the cancel from the app, Codex's lead with a subagent and Codex's errored turn (today's behaviour, kept). Then `git worktree remove "$SCRATCH/base"`, that worktree and no other.
 - [ ] **Step 3: Run** `E2E_BUNDLE=1 npx vitest run --config vitest.e2e.config.ts e2e/hookStatus.e2e.ts e2e/turns.e2e.ts e2e/questions.e2e.ts e2e/subagents.e2e.ts`. Expected: PASS.
 - [ ] **Step 4: Commit** `Tests: hook-driven status, end to end`.
 
@@ -1053,91 +1055,15 @@ it('the oldest supported, Claude Code 2.1.209 and Codex 0.144.0: the events they
 **Files:**
 - Create: `.github/workflows/tmp-hook-driven-agent-status.yml`
 
-```yaml
-# TEMPORARY: removed before this branch merges (docs/plans/2026-11-16-hook-driven-agent-status-plan.md, Task 23).
-# The hook round trip and the core's CPU at rest and while agents turn, before (main at e9670ffd23) and after (this
-# commit), on one runner: cli/e2e/perf.e2e.ts, isolated daemons, fake engines, no backend, no secret.
-name: tmp hook-driven agent status
-on:
-  push:
-    branches: [feat/hook-driven-agent-status]
-permissions:
-  contents: read
-concurrency:
-  group: tmp-hook-driven-agent-status
-  cancel-in-progress: true
-jobs:
-  perf:
-    runs-on: ubuntu-latest
-    timeout-minutes: 50
-    defaults:
-      run:
-        working-directory: cli
-    env:
-      LANG: C.UTF-8
-      SHELL: /bin/zsh
-      PERF: '1'
-      PERF_AGENTS: '8'
-      PERF_ACTIVE: '4'
-      PERF_SECONDS: '60'
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24.22.2
-          cache: npm
-          cache-dependency-path: cli/package-lock.json
-      - name: tmux, the shells and lsof, as cli-e2e.yml installs them
-        run: |
-          sudo bash ../scripts/apt-install.sh tmux zsh tcsh dash lsof
-          sudo sysctl -w fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=524288
-          insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
-          if [ -n "$insecure" ]; then
-            echo "$insecure" | xargs sudo chown root:root
-            echo "$insecure" | xargs sudo chmod g-w,o-w
-          fi
-      - run: npm ci --no-audit --no-fund
-      - name: The baseline bundle (main at e9670ffd23)
-        run: |
-          git worktree add "$RUNNER_TEMP/base" e9670ffd23
-          cd "$RUNNER_TEMP/base/cli"
-          npm ci --no-audit --no-fund
-          BUNDLE_OUT_DIR="$RUNNER_TEMP/base-bundle" node build-bundle.mjs
-      - name: Before
-        env:
-          E2E_BUNDLE_PATH: ${{ runner.temp }}/base-bundle/cli.js
-          PERF_BUNDLE_SOURCE: e9670ffd23
-          PERF_REPORT: ${{ runner.temp }}/perf/before.json
-        run: npx vitest run --config vitest.e2e.config.ts e2e/perf.e2e.ts
-      - name: Before, again (the noise between two runs of one build)
-        env:
-          E2E_BUNDLE_PATH: ${{ runner.temp }}/base-bundle/cli.js
-          PERF_BUNDLE_SOURCE: e9670ffd23
-          PERF_REPORT: ${{ runner.temp }}/perf/before-again.json
-        run: npx vitest run --config vitest.e2e.config.ts e2e/perf.e2e.ts
-      - name: After
-        env:
-          E2E_BUNDLE: '1'
-          PERF_REPORT: ${{ runner.temp }}/perf/after.json
-        run: npx vitest run --config vitest.e2e.config.ts e2e/perf.e2e.ts
-      - name: The numbers, side by side
-        run: |
-          node -e '
-            const fs = require("fs"), dir = process.argv[1]
-            for (const name of ["before", "before-again", "after"]) {
-              const report = JSON.parse(fs.readFileSync(`${dir}/${name}.json`, "utf8"))
-              for (const phase of report.phases) console.log(name, phase.label ?? "", "cpu%", phase.cpu.percent.toFixed(2),
-                "hooks/turn", phase.hooks?.perTurn, "round trip p50/p95 ms", phase.hooks?.roundTripMs.p50, phase.hooks?.roundTripMs.p95)
-            }' "$RUNNER_TEMP/perf"
-      - uses: actions/upload-artifact@v4
-        if: ${{ !cancelled() }}
-        with:
-          name: tmp-hook-driven-agent-status-perf
-          path: ${{ runner.temp }}/perf/
-          retention-days: 7
-```
+One job on `ubuntu-latest`, on each push to `feat/hook-driven-agent-status`, with `contents: read` and no secret:
+tmux, the shells and lsof as `cli-e2e.yml` installs them; `main` at `e9670ffd23` bundled in a worktree under
+`$RUNNER_TEMP`; then `cli/e2e/perf.e2e.ts` with `PERF_AGENTS=8 PERF_ACTIVE=4 PERF_SECONDS=60 PERF_QUESTIONS=1`, run
+before (that bundle), after (this commit), before again and after again, each writing its report under
+`$RUNNER_TEMP/perf/`. Both builds run this commit's `perf.e2e.ts` and fake engines, so the workload is the same; the
+runs alternate so that a runner warming up over the job does not always favour the build run last. The last step
+prints each before-after pair side by side: each phase's CPU, hooks a turn, the hook process time, and that of the
+hooks an engine waits for (PermissionRequest, PreToolUse, SubagentStart). The reports are uploaded as an artifact.
+
 
 - [ ] **Step 1: Add the file.** If a phase's label is under another name in the report, the last step reads that name.
 - [ ] **Step 2: Check** it with `actionlint` where installed. Expected: no finding.
@@ -1177,7 +1103,7 @@ it('a background subagent keeps the lead working past its Stop, and the turn end
 - [ ] **Step 2: Run** `cd cli && npx vitest run --config vitest.e2e.config.ts e2e/hookStatusRealClaude.e2e.ts` with neither variable set. Expected: every case skipped. Then `npm run typecheck`. Expected: PASS. Do not run it with the variables: the tester does (check 7).
 - [ ] **Step 3: Commit** `Tests: an opt-in check of hook-driven status with the real Claude Code`.
 
-### Task 25: Codex: an end with no Stop after it goes on at once
+### Task 25: Codex: every end goes on at once
 
 **Depends on:** none (Tasks 5 and 6, which changed these files, have landed). **Effort:** high. Must land before Task 22.
 
@@ -1224,7 +1150,7 @@ PR CI runs by itself on the pull request and needs no start: `cli-typecheck`, `c
 | 2 | **The Windows hook specs**, locally: `cd cli && npx vitest run src/engines/kit/windowsHooks.spec.ts src/engines/kit/hookRemoval.spec.ts src/engines/removeHooks.spec.ts src/engines/kit/notifyHooks.spec.ts src/engines/kit/hookSettings.spec.ts src/engines/kit/hookReview.spec.ts src/hookNotify.spec.ts --maxWorkers=1` | a Mac or Linux, locally | throwaway homes; `win32` is a parameter | all pass |
 | 3 | **The same on real Windows**, by hand, once, at the final head: `gh workflow run windows.yml --ref feat/hook-driven-agent-status` (Actions → Windows → Run workflow, `release` off). Its step "Contract suite against the real host, and the Windows CLI specs" runs `windowsHooks.spec.ts`, `hookRemoval.spec.ts` and `removeHooks.spec.ts` | GitHub, `windows-latest` and `windows-11-arm` | the runner's own profile; nothing of a person's | both `windows-pty` jobs green |
 | 4 | **CLI end to end**, the whole suite once at the final head: `gh workflow run cli-e2e.yml --ref feat/hook-driven-agent-status` (Actions → CLI end to end → Run workflow) | GitHub, eight Linux shards and the macOS runner | each daemon under a throwaway root on its own port, a private tmux server, fake Claude Code and Codex; no backend, never port 18473 | every shard green; `e2e-summary` lists `e2e/hookStatus.e2e.ts` passed. Every file's daemon now installs the new hook blocks and every fake Codex sends a Stop: a file red here and green in `main`'s last nightly run is this change's |
-| 5 | **The numbers** (Task 23's temporary workflow, started by each push to the branch): the hook round trip, hooks a turn, and the core's CPU in `populated-idle` and `active`, before, before again, and after | GitHub, one Linux runner | isolated daemons, fake engines, no secret | the last step prints the three runs side by side. "After" is within the gap between the two "before" runs for CPU at rest; hooks a turn rises by Codex's Stop and by nothing a tool call. The printout goes into the pull request |
+| 5 | **The numbers** (Task 23's temporary workflow, started by each push to the branch): the hook process time, overall and of each hook an engine waits for (Codex's PermissionRequest and PreToolUse, Claude Code's SubagentStart), hooks a turn, and the core's CPU in `populated-idle`, `active` and `questions`, before, after, before again and after again | GitHub, one Linux runner | isolated daemons, fake engines, no secret | the last step prints each before-after pair side by side. "After" is within the gap between the two "before" runs for CPU at rest; hooks a turn rises by Codex's Stop and by nothing a tool call. The printout goes into the pull request |
 | 6 | **Codex's new events through PowerShell, on the Windows VM** (`docs/testing/windows-cli-e2e.md`; test user `hxe2e`, `PORT=18474`, this branch's build from the fake CDN, `HARNESS_ALLOW_UNSIGNED=1`). (a) `%USERPROFILE%\.codex\hooks.json` holds a block for each of the six events, each the PowerShell line, Interrupt with `timeout: 3`, and none for SubagentStart or SubagentStop. (b) `codex app-server` `hooks/list` reports each trusted: its `currentHash` is the `trusted_hash` in `config.toml`; Interrupt's `timeoutSec` is 3 and no `clamping Interrupt hook timeout` warning is listed. No sign-in. (c) From a Harness pane, each line run as Codex runs it, `powershell.exe -NoProfile -Command "<line>"` with the event's JSON on stdin, exits 0 and leaves one line in the daemon's log | the VM, locally; no GitHub workflow starts a Codex on Windows | the test user's own profile and daemon on the VM | six blocks; six trusted, no warning; a log line an event |
 | 7 | **Real Claude Code on an isolated daemon** (Task 24), run by the tester once at the final head: `cd cli && E2E_REAL_CLAUDE="$(command -v claude)" E2E_CLAUDE_PROFILE="$CLAUDE_CONFIG_DIR" E2E_BUNDLE=1 TMPDIR=/tmp npx vitest run --config vitest.e2e.config.ts e2e/hookStatusRealClaude.e2e.ts`. Before it, check that `$CLAUDE_CONFIG_DIR` is set and is not `~/.claude`, and that `claude --version` is 2.1.209 or later. **Needs the user's own sign-in:** it runs on this session's Claude profile, as the dial skill eval does; five short turns of model use | this Mac, locally: it needs the real engine and a signed-in profile; no runner has either | `IsolatedDaemon` (throwaway root, own port, private tmux, backend `127.0.0.1:9`, never port 18473); the profile is used for its sign-in only: `--setting-sources project` keeps its own hooks off, only the isolated daemon's hooks run (`--settings`), its `settings.json` is the same before and after, and `~/.claude`, `~/.codex` and `~/.harness` are never read or written | every case passes, or is reported skipped with its reason (a model that starts no background subagent), never as passed. The log line with the time from the dialog's first capture to the wait hook goes into the pull request |
 | 8 | **The core's lines, before and after**, at the final head, after the final review: `core_lines() { git show "$1:cli/src/architecture.coreFiles.txt" \| grep -v '^#' \| sed '/^[[:space:]]*$/d' \| while IFS= read -r f; do git show "$1:cli/src/$f"; done \| wc -l; }`, then `core_lines e9670ffd23` (92 229 on 2026-11-17) and `core_lines HEAD`; and `git diff --stat e9670ffd23 HEAD -- $(sed -e '/^#/d' -e '/^[[:space:]]*$/d' -e 's#^#cli/src/#' cli/src/architecture.coreFiles.txt)` for each file's share | anywhere, locally | none needed: it reads git only | both totals and their difference, and the per-file stat, in the pull request body; the difference is within the Core footprint's estimate (about 365) or the body says why |
@@ -1240,6 +1166,9 @@ In the pull request: the red-then-green commits, checks 1 to 8 with their output
 **Known gaps**, a section of the pull request body:
 1. **Codex subagents are not counted** (Ken, 2026-11-17): a Codex lead whose subagents run reads as today. Measured on Codex 0.169.0 (facts-codex §2): SubagentStart fires once a child, on its first turn; SubagentStop fires at the end of every turn the child finishes, a later message to a running child giving another and no start; an interrupted or failed child turn fires neither. A count would reach 0 while a child works again, or hold Working for the 10-minute timeout, which is worse than none. So Harness installs no Codex subagent hooks.
 2. **A rollback, outside panes** (facts-rollback.md): an older CLI does not prune the new Codex Stop block, and its `notify.mjs` tells the devices every Codex Stop outside a pane as `turn-stop` until the person updates again. In a pane a rollback is harmless.
+3. **Claude Code before 2.1.311 can stop reading as working about 30 s early** while a background subagent runs: those releases also send a SubagentStop about every 30 s for it, and the payload names no version to filter by (facts-claude §5; spec, Decided). Claude Code updates itself, so they fade out.
+4. **Codex's automatic review reads as not working for a moment per command it approves itself:** its PermissionRequest fires with no dialog (facts-codex §2), so the agent goes from working to unknown at that hook until the command's progress is read or two polls find no dialog.
+5. **An inert `config.toml` record after a rollback from a newer release:** the prune removes a Harness block from a Codex event this release does not declare, but not that block's review record when this release does not list the event's label (`reviewed.events`). Codex ignores a record with no hook.
 
 **After a release, by hand on Ken's Mac (a note, not this pull request's evidence):** his own Claude Code and Codex. (a) A turn shows Finished once, about 1.5 s after it ends, and not while it still works. (b) A permission prompt in each engine: the agent stops showing working at once, the question shows, and after the answer it works again. (c) Esc in a Codex pane: no Finished, no sound. (d) Claude Code with a background subagent: working until its wrap-up, then Finished once. (e) Codex starts with no "Hooks need review".
 

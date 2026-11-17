@@ -141,10 +141,12 @@ thread and all descendant threads", `Session::session_id`, `codex-rs/core/src/se
 1. **Stop (Step 4): Interrupt's hash.** It cannot be matched with labels and `matcherEvents` while the block is
    written with timeout 5. Needed: Interrupt written with a timeout of at most 3, or `reviewHash` clamping Interrupt
    (and SessionEnd) to 1..3 as Codex does. Either changes Task 20's contract or `hookReview.ts`; not decided here.
+   Decided since: Interrupt is written with a 3 s timeout (the spec's Decided, the plan's Task 20).
 2. **A Codex turn that ends in an error has no Stop.** Under R1, from the session's first Stop its errored turn's end
    is held, and only R6 delivers it, after 120 s. The transcript cannot single that end out (0.144.0 records no error),
    so every Codex end goes on at once (§5, Task 25).
-3. **SubagentStart is dropped by `isCodexSubagent` today** (its transcript is the child's). Task 13.
+3. **SubagentStart is dropped by `isCodexSubagent` today** (its transcript is the child's). Task 13. Decided since:
+   Harness installs no Codex subagent hooks (the spec's Decided), so this does not arise.
 4. **SubagentStop fires per child turn**, SubagentStart once per child; an interrupted or failed child turn fires
    neither. R5's count is not exact for Codex.
 5. **Interrupt runs before `turn_aborted` is written** and Codex waits for it (at most 3 s), so R3's close comes first

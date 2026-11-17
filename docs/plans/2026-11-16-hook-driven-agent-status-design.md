@@ -114,9 +114,8 @@ announcing a state it cannot prove.
 All run `notify.mjs`. Only end and wait events are added; there is no hook per tool call.
 
 - **Claude:** keep today's events. Add PreToolUse with matcher `AskUserQuestion`. Permission and elicitation waits
-  use the Notification block already installed (`permission_prompt`, `elicitation_dialog`,
-  `elicitation_url_dialog`): `notify.mjs` now also sends them for a pane session, to a wait route. If the builder
-  measures Notification firing later than the dialog opens, PermissionRequest and Elicitation replace it instead.
+  use PermissionRequest and Elicitation (Variant P): Notification fires only once a dialog has waited 6 s, not as it
+  opens (facts-claude §1). The Notification block stays as installed, and `notify.mjs` still ignores it in a pane.
   Add SubagentStart and SubagentStop (section 2, Subagents). No PostToolBatch or ElicitationResult: a wait ends on
   what follows it (section 3). Never PreCompact.
 - **Codex:** add Stop, PermissionRequest, PreToolUse with matcher `request_user_input`, and Interrupt. No subagent
@@ -157,13 +156,19 @@ All run `notify.mjs`. Only end and wait events are added; there is no hook per t
     waits for it before it writes `task_complete` (source of 0.144.0 and 0.169.0, lines in the Codex facts file), so
     once the end is read, any Stop has already come; and an errored or prompt-hook-stopped turn sends no Stop and
     reads the same as a finished one. Holding a Codex end would only delay those. A fake-engine test pins the order.
-  - Stop: drain; if the parser's end is held, deliver it now. If not, wait up to 1.5 s for it, then close as today's
-    fallback does. The stale-Stop rules stay: a Stop run before the latest prompt hook, or before the open turn's
-    opening record, closes nothing. A continued `/goal` pass is closed by its own Stop like any turn.
+  - Stop (Claude): drain; if the parser's end is held, deliver it now. If not, wait up to 1.5 s for it, then close as
+    today's fallback does. The stale-Stop rules stay: a Stop run before the latest prompt hook, or before the open
+    turn's opening record, closes nothing. A continued `/goal` pass is closed by its own Stop like any turn.
+  - A Codex Stop never waits and never closes a turn: it only marks the session as ending by hook. Its turn ends at
+    the end Codex writes after it, delivered at once. A blocking Stop hook of someone else's continues the turn, and
+    post-turn compaction can run between the Stop and `task_complete`: neither reads as an early end.
   - StopFailure closes whichever turn is open, as today.
-  - An aborted end (Claude's interrupt line, Codex `turn_aborted`) closes at once as `aborted`, Stop or not.
+  - An aborted end (Claude's interrupt line, Codex `turn_aborted` for an interrupt) closes at once as `aborted`, Stop
+    or not.
   - Codex Interrupt closes as `aborted` at once.
-  - Codex `turn_aborted` now emits `turn_ended {aborted: true}`, for every Codex session.
+  - Codex `turn_aborted` with reason Interrupted (Esc, Ctrl-C, an app's interrupt) now emits
+    `turn_ended {aborted: true}`, for every Codex session. Its other reasons (Replaced, ReviewEnded, BudgetLimited)
+    are plain ends, delivered at once: a `/goal` stopped by its budget or a review that ended still gets its recap.
 - **Subagents (Claude Code only).** Codex keeps today's behavior: its SubagentStart fires once per child but its
   SubagentStop at the end of every child turn and never for an interrupted or failed one (measured on Codex 0.169.0),
   so a count would stop early or hold Working for the full timeout, which is worse than none (Ken, 2026-11-17).
@@ -178,6 +183,9 @@ All run `notify.mjs`. Only end and wait events are added; there is no hook per t
     A resumed subagent or a teammate's message sends a start with its own stop, so the count stays even.
   - SubagentStart adds one, SubagentStop takes one away, never below zero (a child started before this daemon run
     can stop in it). The count is capped at 64; past that, a start is not counted, with one log line.
+  - Each event runs its own hook process, so a SubagentStop can reach a slow daemon before its SubagentStart. That is
+    handled with one extra number in the turn record: a stop that finds the count at zero keeps when it fired, and a
+    start fired before it is not counted.
   - A lead's Stop while the count is above zero does not end the turn: its end stays held and the agent stays
     working. The turn ends at the lead's first Stop with the count at zero, which comes after the lead's wrap-up.
     That Stop waits the 1.5 s grace before delivering, since the wrap-up lands about 200 ms after it.
@@ -198,10 +206,11 @@ All run `notify.mjs`. Only end and wait events are added; there is no hook per t
 
 ### 3. Waiting from hooks
 
-- A wait hook (Claude's permission or elicitation Notification, PreToolUse AskUserQuestion; Codex PermissionRequest,
+- A wait hook (Claude's PermissionRequest, Elicitation and PreToolUse AskUserQuestion; Codex PermissionRequest,
   PreToolUse `request_user_input`) opens a wait on the session in the core, with the hook's `firedAt`.
 - The pane reader stays the one way to build a question, at its usual 1.5 s poll: the hooks run before the engine
-  draws its dialog, so reading the pane at the hook would find nothing. The `commander_question` frame is unchanged. No question is built from the hook's
+  draws its dialog, or (Claude's PermissionRequest) beside it, so reading the pane at the hook would find nothing or
+  race the drawing. The `commander_question` frame is unchanged. No question is built from the hook's
   payload, so there is never a second question, a second notification, or an answer refused as stale.
 - While the wait is open the lease's working claim is withdrawn (read as `unknown` while the turn is open, as an
   expired lease is), and progress does not renew it.
@@ -300,6 +309,12 @@ All run `notify.mjs`. Only end and wait events are added; there is no hook per t
   every Codex end is delivered at once, never held, on the assumption that Codex runs and waits for Stop before
   `task_complete` (pinned by a fake-engine test), no core change; subagents counted
   for Claude Code only, Codex as today, recorded in the pull request's Known gaps with the measured Codex behavior.
+- Final review answers (Ken, 2026-11-17):
+  - Claude waits use PermissionRequest and Elicitation (Variant P), not Notification.
+  - A Codex Stop never waits or closes a turn; it only marks the session as ending by hook.
+  - Only a Codex `turn_aborted` with reason Interrupted is aborted; Replaced, ReviewEnded and BudgetLimited are plain
+    ends, delivered at once.
+  - A SubagentStop that arrives before its SubagentStart is handled with one extra number in the turn record.
 - Plan review answers (Ken, 2026-11-17): `cancel.ts` is not split, Interrupt takes the keyless aborted path; oldest
   supported Claude Code 2.1.209 and Codex 0.144.0; no pane read at the hook; a wait also ends on two clear polls; a
   paused `/goal` end is never held; the lead's last Stop waits the grace and silence does not run while subagents
@@ -321,7 +336,8 @@ All run `notify.mjs`. Only end and wait events are added; there is no hook per t
 
 ## Left to the builder
 
-- Whether Claude's Notification fires as the permission dialog opens; if not, PermissionRequest and Elicitation.
+- Whether Claude's Notification fires as the permission dialog opens; if not, PermissionRequest and Elicitation
+  (answered: it fires 6 s later, so Variant P; Decided).
 - What Claude Code 2.1.209 and Codex 0.144.0 do with an unknown hook event.
 - Codex's review labels and hashes for Stop, PermissionRequest, PreToolUse, Interrupt, SubagentStart and SubagentStop
   on the targeted Codex.
