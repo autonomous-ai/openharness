@@ -6325,13 +6325,17 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       host().scrolled('down', 0, 0)
       await vi.waitFor(() => expect(orcaRuns).toEqual([STATUS]))
       // 20 px toward older lines twice (one line each, 8 px kept), then 60 px toward newer: 52 px, three lines.
-      for (const [i, dy] of [8, 8, -24].entries()) {
+      // The dial's pace: each move's run ends before the next move.
+      for (const dy of [8, 8, -24]) {
         host().scrolled('move', dy, 0)
-        await vi.waitFor(() => expect(drained()).toHaveLength(i + 1))
+        await vi.advanceTimersByTimeAsync(32)
       }
       host().scrolled('up', 0, 0)
       expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1), scrolled('t7', -1), scrolled('t7', 3)])
       expect(dialScrolls(core)).toEqual([])
+      // One tally for the stroke, once its terminal has been quiet for 1 s.
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(drained()).toEqual(['[herdr-app] scroll · 5 lines · 3 runs · 0 failed'])
     }
 
     it('with Herdr in front, the dial on an agent hc lists and its terminal on screen, a stroke\'s lines go to herdr-app and the windows hear no dial_scroll', async () => {
@@ -6409,9 +6413,9 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       host().front('ghostty')
       shows('h1')
       host().scrolled('move', 8, 0)
-      await vi.waitFor(() => expect(drained()).toHaveLength(1))
+      await vi.advanceTimersByTimeAsync(32)
       host().scrolled('move', 8, 0)
-      await vi.waitFor(() => expect(drained()).toHaveLength(2))
+      await vi.advanceTimersByTimeAsync(32)
       host().scrolled('up', 0, 0)
       expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1), scrolled('t7', -1)])
       expect(dialScrolls(core)).toEqual([])
@@ -6458,11 +6462,13 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       host().scrolled('move', 8, 0)
       host().scrolled('move', 8, 0)
       answer('t7')
-      await vi.waitFor(() => expect(drained()).toHaveLength(1))
+      await vi.advanceTimersByTimeAsync(32)
       expect(orcaRuns).toEqual([STATUS, scrolled('t7', -2)])
       host().scrolled('move', 8, 0)
-      await vi.waitFor(() => expect(drained()).toHaveLength(2))
+      await vi.advanceTimersByTimeAsync(32)
       expect(orcaRuns).toEqual([STATUS, scrolled('t7', -2), scrolled('t7', -1)])
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(drained()).toEqual(['[herdr-app] scroll · 3 lines · 2 runs · 0 failed'])
     })
 
     it.each([
@@ -6543,10 +6549,10 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       host().scrolled('down', 0, 0)
       await vi.waitFor(() => expect(orcaRuns).toEqual([STATUS]))
       host().scrolled('up', 8, 900)
-      await vi.waitFor(() => expect(drained()).toHaveLength(1))
       await vi.advanceTimersByTimeAsync(5_000)
       expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1)])
       expect(dialScrolls(core)).toEqual([])
+      expect(drained()).toEqual(['[herdr-app] scroll · 1 lines · 1 runs · 0 failed'])
     })
 
     it('the Wi-Fi device\'s stroke takes the same route', async () => {
@@ -6637,7 +6643,8 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       const { screen } = inHerdr()
       shows(await listedId())
       stroke([8, 8])
-      await vi.waitFor(() => expect(drained()).toEqual(['[herdr-app] scroll · 2 lines · 1 runs · 0 failed']))
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(drained()).toEqual(['[herdr-app] scroll · 2 lines · 1 runs · 0 failed'])
       screen.agent = 't9'
       stroke([8])
       await vi.waitFor(() => expect(scrollSaid()).toEqual([NOT_ON_SCREEN]))
