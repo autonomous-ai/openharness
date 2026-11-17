@@ -177,9 +177,20 @@ describe('detectApp', () => {
     expect(detectHost(hints)).toBe('terminal')
   })
 
-  it('APP_IDS has 17 ids, and every one has a display name', () => {
-    expect(APP_IDS).toHaveLength(17)
+  it("cmux's bundle id is the app cmux, read cmux", () => {
+    expect(detectApp({ __CFBundleIdentifier: 'com.cmuxterm.app' })).toBe('cmux')
+    expect(hostDisplayName('cmux')).toBe('cmux')
+    expect(appDisplayName('cmux')).toBe('cmux')
+  })
+
+  it('cmux NIGHTLY names nothing', () => {
+    expect(detectApp({ __CFBundleIdentifier: 'com.cmuxterm.app.nightly' })).toBe(UNKNOWN_APP)
+  })
+
+  it('APP_IDS has 18 ids, and every one has a display name', () => {
+    expect(APP_IDS).toHaveLength(18)
     expect(APP_IDS.indexOf('codex')).toBe(APP_IDS.indexOf('claude') + 1)
+    expect(APP_IDS.indexOf('cmux')).toBe(APP_IDS.indexOf('ghostty') + 1)
     for (const id of APP_IDS) expect(appDisplayName(id)).toMatch(/\S/)
   })
 
@@ -188,7 +199,7 @@ describe('detectApp', () => {
     expect(appDisplayName('terminal-app')).toBe('Terminal')
     expect(hostDisplayName('terminal')).toBe('Terminal')
     const others = APP_IDS.filter((id) => id !== 'terminal' && id !== 'terminal-app')
-    expect(others).toHaveLength(15)
+    expect(others).toHaveLength(16)
     for (const id of others) expect(appDisplayName(id)).toBe(hostDisplayName(id))
   })
 })
