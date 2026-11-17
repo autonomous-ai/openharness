@@ -200,7 +200,8 @@ export function runTable(flow: string, variant: string): string {
   const errs = readJsonl<ErrorRow>(join(flow, variant, 'errors.jsonl'))
   const reps = Math.max(0, ...[...rows, ...errs].map(r => r.rep + 1))
   const repCols = Array.from({ length: reps }, (_, k) => k)
-  const ids = [...new Set(rows.map(r => r.prompt_id))].sort()
+  // Error rows too: a case whose every attempt failed has a row that says so.
+  const ids = [...new Set([...rows, ...errs].map(r => r.prompt_id))].sort()
   const agentOf = new Map(rows.map(r => [r.prompt_id, r.meta?.agent ?? '']))
   const scoreAt = (id: string, k: number) => {
     const r = rows.find(x => x.prompt_id === id && x.rep === k)
