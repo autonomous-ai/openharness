@@ -158,6 +158,16 @@ describe('headline', () => {
     rmSync(join(flow, 'v1'), { recursive: true })
     expect(headline(summarize(flow))).toBe('no variants')
   })
+
+  it('leads with the best round on test once the test split has run, not a newer round', () => {
+    const state = JSON.parse(readFileSync(join(flow, '_state.json'), 'utf8'))
+    writeFileSync(join(flow, '_state.json'), JSON.stringify({ ...state, best: { round: 1 } }))
+    appendFileSync(join(flow, 'v1', 'results.jsonl'), jsonl([row('h.claude', 0, need(2, 1, 0, 0)), row('h.claude', 1, need(2, 1, 0, 0))]))
+    // A later round that was not kept runs train and val only.
+    mkdirSync(join(flow, 'v2'))
+    writeFileSync(join(flow, 'v2', 'results.jsonl'), jsonl([row('d.claude', 0, need(4, 1, 1, 1))]))
+    expect(headline(summarize(flow))).toMatch(/^v1 test 4\.00 -> 2\.00, paired -2\.00 /)
+  })
 })
 
 describe('spend', () => {
