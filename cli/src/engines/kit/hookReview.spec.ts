@@ -43,8 +43,15 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
     // Codex keeps PreToolUse's matcher in the hash.
     expect(reviewHash(record, 'PreToolUse', 'other', { command: COMMAND, timeout: 5 })).not.toBe(CODEX_0_169.pre_tool_use)
     expect(reviewHash(record, 'Interrupt', undefined, { command: COMMAND, timeout: 3 })).toBe(CODEX_0_169.interrupt)
-    // Why Interrupt is written with 3: at 5 its record never matches, and Codex asks about it at every start.
-    expect(reviewHash(record, 'Interrupt', undefined, { command: COMMAND, timeout: 5 })).not.toBe(CODEX_0_169.interrupt)
+  })
+
+  it('hashes an Interrupt hook at the 1-3 s Codex clamps it to, whatever timeout the file names', () => {
+    // A person's own timeout: Codex lists 3 s, so the record must hold the 3 s hash or Codex asks at every start.
+    expect(reviewHash(record, 'Interrupt', undefined, { command: COMMAND, timeout: 5 })).toBe(CODEX_0_169.interrupt)
+    expect(reviewHash(record, 'Interrupt', undefined, { command: COMMAND, timeout: 30 })).toBe(CODEX_0_169.interrupt)
+    // None named: Codex lists 1 s, not the 600 s of every other event.
+    expect(reviewHash(record, 'Interrupt', undefined, { command: COMMAND })).toBe(reviewHash(record, 'Interrupt', undefined, { command: COMMAND, timeout: 1 }))
+    expect(reviewHash(record, 'Interrupt', undefined, { command: COMMAND })).not.toBe(CODEX_0_169.interrupt)
   })
 
   it('installs every declared event, Interrupt with a 3 s timeout, and records each as reviewed with the hash the targeted Codex lists', async () => {
