@@ -4,12 +4,15 @@
  * Claude Code, and a fake dial on the desk lists it with no hook, follows its state, speaks to it, and switches Herdr's
  * window to it with a swipe and a tap. A core started after the dial comes with no daemon restart, and goes when it stops.
  * A Claude Code session the scan finds in a Herdr terminal is paired with it, and listed once there, with its last answer.
+ * With Herdr in front, a stroke scrolls Herdr's view of the shown agent's terminal while Herdr shows it on screen
+ * (docs/plans/2026-11-17-dial-herdr-scroll-design.md), and goes to Harness's windows otherwise.
  *
- * Herdr's real window is never driven. The daemon's `herdr-app` is a fake first on its PATH that records its arguments,
- * and its `open` is the harness's fake (HARNESS_OPEN_BIN, harness/daemon.ts): each is checked to be the one the daemon
- * finds before anything runs, since with no `herdr-app` on PATH it would run Herdr.app's own binary. The daemon finds the
- * private core's socket as hcClient.ts does, from the HC_SOCKET and XDG_RUNTIME_DIR it is given, both in the core's
- * root: it inherits no HC_* and no XDG_* (testing/daemonEnvironment.ts), so it never reaches the person's own core.
+ * Herdr's real window is never driven. The daemon's `herdr-app` is a fake first on its PATH that records its arguments
+ * and answers `status` with the terminal the test put on its screen (`herdr-app.screen`), or none; its `open` is the
+ * harness's fake (HARNESS_OPEN_BIN, harness/daemon.ts): each is checked to be the one the daemon finds before anything
+ * runs, since with no `herdr-app` on PATH it would run Herdr.app's own binary. The daemon finds the private core's socket
+ * as hcClient.ts does, from the HC_SOCKET and XDG_RUNTIME_DIR it is given, both in the core's root: it inherits no HC_*
+ * and no XDG_* (testing/daemonEnvironment.ts), so it never reaches the person's own core.
  *
  * Skipped where Herdr Core is not installed, as on every GitHub runner, and off macOS.
  */
@@ -20,6 +23,8 @@ import { dirname, isAbsolute, join, relative } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { resolveBinaryOnPath } from '../src/lib/binaryOnPath.js'
+import { herdrAppStatus } from '../src/testing/herdrAppStatus.js'
+import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
@@ -70,7 +75,9 @@ describe.skipIf(!hcBinary)("Herdr's agents on the dial, from a private Herdr Cor
   let backend: FakeBackend | undefined
   const cores: PrivateHc[] = []
   const children: ChildProcess[] = []
+  const clients: LocalClient[] = []
   afterEach(async () => {
+    for (const client of clients.splice(0)) client.close()
     // Each core through its own session, before the daemon, and whatever the test did: a check that fails here fails the
     // test once everything else is closed.
     const stops = await Promise.allSettled(cores.splice(0).map((core) => core.stop()))
@@ -99,7 +106,18 @@ describe.skipIf(!hcBinary)("Herdr's agents on the dial, from a private Herdr Cor
     daemon = d
     // Before anything runs: with no herdr-app on its PATH the daemon runs Herdr.app's own, which drives the real window.
     const fake = join(dirname(d.env.CLAUDE_PATH!), 'herdr-app')
-    writeFileSync(fake, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${join(d.root, 'herdr-app.log')}'\n`, { mode: 0o755 })
+    // `status` prints what Herdr 0.1.16 prints, its `agent` the screen file's address. Shell built-ins alone, so the
+    // daemon's PATH is not relied on; `read` answers false for a line with no newline.
+    const [head, tail] = herdrAppStatus('@').split('"@"')
+    const screen = join(d.root, 'herdr-app.screen')
+    writeFileSync(fake, [
+      '#!/bin/sh',
+      `printf '%s\\n' "$*" >> '${join(d.root, 'herdr-app.log')}'`,
+      '[ "$1" = status ] || exit 0',
+      'agent=null',
+      `[ -s '${screen}' ] && IFS= read -r address < '${screen}' && agent="\\"$address\\""`,
+      `printf '%s%s%s\\n' '${head}' "$agent" '${tail}'`,
+    ].join('\n') + '\n', { mode: 0o755 })
     expect(resolveBinaryOnPath('herdr-app', d.env)).toBe(fake)
     const file = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = file
@@ -310,4 +328,108 @@ describe.skipIf(!hcBinary)("Herdr's agents on the dial, from a private Herdr Cor
     expect(log).not.toMatch(new RegExp(`(^|[^A-Za-z0-9_])${t}([^A-Za-z0-9_]|$)`, 'm'))
     for (const secret of [planned.root, sessionId, 'answer 1', 'run the paired words']) expect(log).not.toContain(secret)
   })
+
+  it("a stroke with Herdr in front scrolls Herdr's view of the shown agent's terminal, and Harness's windows hear none of it", async () => {
+    const planned = PrivateHc.plan()
+    const { d, desk } = await fresh(planned)
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a', FILTER)
+    await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
+    const onScreen = (address: string) => writeFileSync(join(d.root, 'herdr-app.screen'), `${address}\n`)
+
+    // 1. As the swipe's case: Orca holds more agents than Herdr, so each change of the app in front is seen as a ring.
+    for (const folder of ['a', 'b']) {
+      const session = new InOrca(d, folder, children, { ORCA_TERMINAL_HANDLE: `term_${randomUUID()}`, __CFBundleIdentifier: ORCA })
+      const since = dial.messages.length
+      await session.hook('SessionStart', { source: 'startup' })
+      await dial.next((m) => m.t === 'agent' && m.id === session.id, 45_000, `${folder} listed`, since)
+    }
+    let since = dial.messages.length
+    const hc = await coreFor(planned)
+    const t = await hc.agent('api')
+    await dial.next((m) => m.t === 'apps' && m.shown === 'orca'
+      && (m.apps as Array<{ id: string; count: number }>).some((app) => app.id === 'herdr' && app.count === 1), 45_000, 'Herdr counted', since)
+    const window = await LocalClient.connect(d, { machineId: ME.machineId })
+    clients.push(window)
+    onScreen(t)
+
+    // 2. Herdr in front, and the dial on its agent.
+    const watch = spawn(process.execPath, [...CLI_ENTRY, 'hardware', 'watch', '--json'], {
+      cwd: CLI_ROOT, env: { ...d.env, TMUX_PANE: '' }, stdio: ['pipe', 'ignore', 'ignore'],
+    })
+    children.push(watch)
+    since = dial.messages.length
+    watch.stdin!.write(`${JSON.stringify({ front: HERDR })}\n`)
+    const ring = await dial.next((m) => m.t === 'apps' && m.shown === 'herdr', 45_000, "Herdr's ring", since)
+    const row = await rowOf(dial, 'api', dial.messages.indexOf(ring))
+    dial.send({ t: 'focus', agentId: row.id })
+    await said(d, '[device] swipe · ok')
+
+    // Each stroke: a down, three moves of 8 (60 px, three lines of 16 toward older ones, scrollLines.ts) and an up, taken
+    // once the devices logged its up.
+    const ups = () => d.log().split('\n').filter((line) => line.includes('cable: scroll ↑')).length
+    let strokes = 0
+    const stroke = async (): Promise<void> => {
+      dial.send({ t: 'scroll', phase: 'down', dy: 0, v: 0 })
+      for (let move = 0; move < 3; move++) dial.send({ t: 'scroll', phase: 'move', dy: 8, v: 0 })
+      dial.send({ t: 'scroll', phase: 'up', dy: 0, v: 0 })
+      strokes += 1
+      await until('the stroke taken to its up', () => ups() === strokes, 30_000, 10)
+    }
+    const prefix = `do terminal.scroll --terminal ${t} --lines `
+    const scrolls = () => herdrApps(d).filter((run) => run.startsWith(prefix)).map((run) => Number(run.slice(prefix.length)))
+    const sum = (values: number[]) => values.reduce((total, value) => total + value, 0)
+    const statuses = () => herdrApps(d).filter((run) => run === 'status').length
+    const dialScrolls = () => window.frames.filter((f) => f.type === 'dial_scroll').map((f) => f.payload as { phase: string; dy: number })
+    const drained = () => d.log().split('\n').flatMap((line) => {
+      const counts = /\[herdr-app\] scroll · (\d+) lines · (\d+) runs · (\d+) failed$/.exec(line)
+      return counts ? [{ lines: Number(counts[1]), failed: Number(counts[3]) }] : []
+    })
+
+    // 3. On screen: the lines go to herdr-app, however many runs carry them. The number of runs depends on how many frames
+    // came while a run was under way, so it is printed, not held.
+    const started = performance.now()
+    await stroke()
+    await until('three lines scrolled', () => sum(scrolls()) === -3, 30_000, 5)
+    console.log(`[herdr scroll] stroke 1 · ${scrolls().length} runs · ${Math.round(performance.now() - started)} ms`)
+    await until('the queue drained', () => sum(drained().map((tally) => tally.lines)) === 3, 30_000, 50)
+    const firstRuns = scrolls()
+
+    // 4. Herdr shows another terminal: the whole stroke goes to the windows, and herdr-app scrolls nothing.
+    onScreen('t9999')
+    await stroke()
+    await said(d, '[device] scroll · herdr-app · not on screen')
+    await window.waitFor((f) => f.type === 'dial_scroll' && f.payload?.phase === 'up', 30_000, "stroke 2's up in Harness's window")
+
+    // 5. Orca in front: the stroke goes to the windows as it came, and herdr-app is not asked.
+    onScreen(t)
+    since = dial.messages.length
+    watch.stdin!.write(`${JSON.stringify({ front: ORCA })}\n`)
+    await dial.next((m) => m.t === 'apps' && m.shown === 'orca', 45_000, "Orca's ring", since)
+    const before = dialScrolls().length
+    await stroke()
+    await until("stroke 3's up in Harness's window", () => dialScrolls().slice(before).some((f) => f.phase === 'up'), 30_000, 50)
+
+    // 6. Harness's window hears the devices' frames in order: stroke 1 reached none of it, stroke 2 came as its down, its
+    // held travel and its up, stroke 3 as it came.
+    const heard = dialScrolls()
+    const second = heard.slice(0, heard.findIndex((f) => f.phase === 'up') + 1)
+    expect(second[0].phase).toBe('down')
+    expect(second.at(-1)!.phase).toBe('up')
+    const moves = second.slice(1, -1)
+    expect(moves.length).toBeGreaterThanOrEqual(1)
+    expect(moves.length).toBeLessThanOrEqual(3)
+    expect(moves.every((f) => f.phase === 'move')).toBe(true)
+    expect(sum(moves.map((f) => f.dy))).toBe(24)
+    expect(heard.slice(second.length).map((f) => f.phase)).toEqual(['down', 'move', 'move', 'move', 'up'])
+    expect(scrolls()).toEqual(firstRuns)
+    expect(statuses()).toBe(2)
+    const tallies = drained()
+    expect(tallies.every((tally) => tally.failed === 0)).toBe(true)
+    expect(sum(tallies.map((tally) => tally.lines))).toBe(3)
+    const log = d.log()
+    expect(log.split('\n').filter((line) => line.endsWith('[device] scroll · herdr-app · not on screen'))).toHaveLength(1)
+    expect(log).not.toContain('[herdr-app] scroll · failed')
+    expect(log).not.toContain('[herdr-app] status · failed')
+    expect(log).not.toMatch(new RegExp(`(^|[^A-Za-z0-9_])${t}([^A-Za-z0-9_]|$)`, 'm'))
+  }, 180_000)
 })
