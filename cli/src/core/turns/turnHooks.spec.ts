@@ -4,7 +4,7 @@ import type { TurnState } from '../../lib/normalize.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createSessionNormalizers } from '../transcripts/normalizers.js'
 import { noOtherStreams } from '../../testing/otherStreams.js'
-import { createTurnHooks, HOOK_SILENCE_MS, HOOKS_KEPT, STOP_HOOK_GRACE_MS, type TurnHookDeps } from './turnHooks.js'
+import { createTurnHooks, HOOK_SILENCE_MS, HOOKS_KEPT, STOP_HOOK_GRACE_MS, SUBAGENT_TIMEOUT_MS, SUBAGENTS_MAX, type TurnHookDeps } from './turnHooks.js'
 import { engineHooks } from '../../engines/hooks.js'
 import { live as codexLive } from '../../engines/codex/live.js'
 import type { HookTurnContext } from '../../engines/facets/hooks.js'
@@ -955,6 +955,137 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
       expect(run.deps.emit).not.toHaveBeenCalled()
       vi.advanceTimersByTime(1); run.hooks.beat('s1')
       expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', END)
+    })
+  })
+
+  // A lead stays working while its subagents run (R5). Claude Code only: Codex installs no subagent hooks.
+  describe.runIf(engine === 'claude')('subagents', () => {
+    const subagent = (run: ReturnType<typeof setup>, started: boolean) => run.hooks.onSubagent({ sessionId: 's1', started })
+    const lines = (log: { mock: { calls: unknown[][] } }) => log.mock.calls.map(call => String(call[0]))
+    /** A lead whose end is read and held, with one subagent started before it. */
+    const leading = async () => {
+      const run = await hookDriven()
+      subagent(run, true)
+      run.hooks.transcript('s1', END, { turn: turnOf('t1') })
+      return run
+    }
+
+    it('a background subagent: the lead\'s Stop leaves its turn open while one runs, and its first Stop after the last one stops ends it', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      const run = await leading()
+      run.hooks.onTurnStop({ sessionId: 's1' }); await vi.runAllTimersAsync()
+      expect(run.deps.emit).not.toHaveBeenCalled()
+      expect(run.hooks.held('s1')).toBe(true)
+      expect(lines(log)).toEqual(['[turn] s1 Stop left its turn open · subagents run'])
+      subagent(run, false)
+      run.hooks.onTurnStop({ sessionId: 's1' }); await vi.runAllTimersAsync()
+      expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', END)
+    })
+
+    it('a Stop that beats the lead\'s end while one runs does not close its turn after the grace', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const run = await hookDriven()
+      const turn = parse(run, 't1')
+      subagent(run, true)
+      run.hooks.onTurnStop({ sessionId: 's1' }); await vi.runAllTimersAsync()
+      expect(turn.turnOpen).toBe(true)
+      end(run, turn)
+      expect(run.deps.emit).not.toHaveBeenCalled()
+      expect(run.hooks.held('s1')).toBe(true)
+    })
+
+    // The lead's wrap-up lands about 200 ms after the Stop that follows its last subagent (lib/commander.ts).
+    it('that last Stop waits 1.5 s and drains again before it delivers, the wrap-up read in it first', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const run = await leading()
+      run.hooks.onTurnStop({ sessionId: 's1' }); await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(60_000)
+      subagent(run, false)
+      vi.mocked(run.deps.drain).mockClear()
+      run.hooks.onTurnStop({ sessionId: 's1' })
+      await vi.advanceTimersByTimeAsync(200)
+      run.hooks.transcript('s1', [...TEXT, ...END], { turn: turnOf('t1') })
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS - 201)
+      expect(vi.mocked(run.deps.emit).mock.calls).toEqual([['s1', TEXT]])
+      expect(run.deps.drain).toHaveBeenCalledOnce()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(run.deps.drain).toHaveBeenCalledTimes(2)
+      expect(vi.mocked(run.deps.emit).mock.calls).toEqual([['s1', TEXT], ['s1', END]])
+    })
+
+    it('a stop with none running stays at zero; the 65th start is not counted, said once', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      const run = await hookDriven()
+      subagent(run, false)
+      subagent(run, true)
+      expect(run.hooks.atWork('s1')).toBe(true)
+      subagent(run, false)
+      expect(run.hooks.atWork('s1')).toBe(false)
+      for (let i = 0; i <= SUBAGENTS_MAX; i++) subagent(run, true)
+      expect(lines(log)).toEqual(['[turn] s1 subagent not counted · 64 running'])
+      for (let i = 1; i < SUBAGENTS_MAX; i++) subagent(run, false)
+      expect(run.hooks.atWork('s1')).toBe(true)
+      subagent(run, false)
+      expect(run.hooks.atWork('s1')).toBe(false)
+    })
+
+    it('a prompt hook sets it to zero', async () => {
+      const run = await leading()
+      run.hooks.onPromptHook('s1', 1)
+      expect(run.hooks.atWork('s1')).toBe(false)
+      run.hooks.onTurnStop({ sessionId: 's1' }); await vi.advanceTimersByTimeAsync(0)
+      expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', END)
+    })
+
+    // A lost SubagentStop keeps no agent working for more than 10 minutes.
+    it('10 minutes with no hook and no progress: zero, one line, and the held end is delivered', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      const run = await leading()
+      run.hooks.onTurnStop({ sessionId: 's1' }); await vi.advanceTimersByTimeAsync(0)
+      log.mockClear()
+      vi.advanceTimersByTime(SUBAGENT_TIMEOUT_MS - 1); run.hooks.beat('s1')
+      expect(run.deps.emit).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(1); run.hooks.beat('s1')
+      expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', END)
+      expect(run.hooks.atWork('s1')).toBe(false)
+      run.hooks.beat('s1')
+      expect(lines(log)).toEqual(['[turn] s1 subagent count reset · no hook or progress in 10 min'])
+    })
+
+    it('progress or a hook inside the 10 minutes starts them again', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const run = await leading()
+      vi.advanceTimersByTime(SUBAGENT_TIMEOUT_MS - 1)
+      run.hooks.transcript('s1', [{ type: 'tool_start', payload: { id: 'sub', tool: 'Read', input: {}, parentToolUseId: 'task' } }], {})
+      vi.advanceTimersByTime(SUBAGENT_TIMEOUT_MS - 1); run.hooks.beat('s1')
+      subagent(run, true)
+      vi.advanceTimersByTime(SUBAGENT_TIMEOUT_MS - 1); run.hooks.beat('s1')
+      expect(run.hooks.held('s1')).toBe(true)
+      expect(run.hooks.atWork('s1')).toBe(true)
+      vi.advanceTimersByTime(1); run.hooks.beat('s1')
+      expect(run.hooks.held('s1')).toBe(false)
+    })
+
+    it('2 minutes of silence do not end a turn whose subagents run', async () => {
+      const run = await leading()
+      vi.advanceTimersByTime(HOOK_SILENCE_MS); run.hooks.beat('s1')
+      expect(run.deps.emit).not.toHaveBeenCalled()
+      expect(run.hooks.held('s1')).toBe(true)
+    })
+
+    it('a StopFailure ends the turn whatever runs', async () => {
+      const run = await leading()
+      run.hooks.onTurnStop({ sessionId: 's1', status: 'error' }); await vi.advanceTimersByTimeAsync(0)
+      expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', END)
+    })
+
+    it('atWork while any runs', () => {
+      const run = setup(engine)
+      expect(run.hooks.atWork('s1')).toBe(false)
+      subagent(run, true)
+      expect(run.hooks.atWork('s1')).toBe(true)
+      subagent(run, false)
+      expect(run.hooks.atWork('s1')).toBe(false)
     })
   })
 

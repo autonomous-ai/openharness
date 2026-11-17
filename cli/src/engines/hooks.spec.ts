@@ -113,7 +113,7 @@ it('does not emit an end when core rejects a stale closure proposal', async () =
   await engineHooks.claude.onStop!({
     turnState: () => parser.snapshot(), closeTurn, latestPromptAt: () => undefined,
     drain: async () => {}, noteEngineStopped: () => {}, emit, graceMs: 0,
-    heldEnd: () => undefined, heldEndWithin: async () => false, deliverHeldEnd: () => false,
+    heldEnd: () => undefined, heldEndWithin: async () => false, deliverHeldEnd: () => false, subagentsRun: () => false, heldBeforeHook: false,
   }, { sessionId: 'session' })
   expect(closeTurn).toHaveBeenCalledWith('session', parser.snapshot().identity)
   expect(emit).not.toHaveBeenCalled()
