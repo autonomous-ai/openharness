@@ -36,11 +36,12 @@ export class AgentNotifications {
     if (turn?.replay) { turn.replay = false; turn.eligible = true }
   }
 
-  /** The turn ended now: its done notification is decided DONE_QUIET_MS from here. */
+  /** The turn ended now: its done notification is decided DONE_QUIET_MS from here. A second end heard for the same
+   * turn (its transcript and its Stop) keeps the first's window. */
   ended(sessionId: string): void {
     const turn = this.turns.get(sessionId)
     // The monotonic clock: a wall clock set back inside the window would hold Finished back by the jump.
-    if (turn) turn.endedAt = performance.now()
+    if (turn) turn.endedAt ??= performance.now()
   }
 
   /**

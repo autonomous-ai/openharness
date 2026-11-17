@@ -525,7 +525,8 @@ export class CommanderMirror {
 
         case 'turn_ended':
           if (options?.replay) this.notifications.cancelled(sessionId)
-          else if (!e.payload.aborted) this.notifications.ended(sessionId)
+          // A held end is stamped when the hold lets it go: that is when the person's answer is in.
+          else if (!e.payload.aborted && !st.agents.some(holdsTurn)) this.notifications.ended(sessionId)
           if (options?.quiet) st.quiet = true
           // A killed turn takes the cancel path, not the recap path: clear the tile and stay silent. There
           // is nothing to summarize, and a beep for output the user just threw away is worse than nothing.
@@ -662,6 +663,7 @@ export class CommanderMirror {
     if (!st.endPending) return
     this.clearEndTimers(st)
     st.endPending = false
+    this.notifications.ended(sessionId)
     this.onTurnEnded(sessionId, st)
   }
 
