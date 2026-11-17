@@ -589,42 +589,37 @@ describe('process-owned hook server', () => {
       expect(resolveHookAgent).not.toHaveBeenCalled()
     })
 
-    // A pane whose binding went stale sends one on every turn: one line says it, not one a hook.
-    it('says an unbound hook once a session, and answers each one 403', async () => {
+    // A pane whose binding went stale sends one on every turn: a line a minute says it, as a refused host is said, on
+    // every route, whichever session and route it was for.
+    it('says an unbound hook at most once a minute on any route, and answers each one 403', async () => {
       const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      const handlers = { onWait: vi.fn(), onSubagent: vi.fn(), onTurnStop: vi.fn() }
-      const { base, headers } = await start(handlers)
-      const unbound = async (path: string, sessionId: string) => {
-        const refused = await hook(base, headers, path, { sessionId, hookEvent: 'SubagentStart' })
-        expect(refused.status).toBe(403)
-        expect(await refused.json()).toEqual({ error: 'UNBOUND_HOOK' })
-      }
-      await unbound('/api/hook/wait', 'gone0001')
-      await unbound('/api/hook/wait', 'gone0001')
-      await unbound('/api/hook/subagent', 'gone0001')
-      await unbound('/api/hook/turn-stop', 'gone0001')
-      await unbound('/api/hook/turn-stop', 'gone0002')
-      await unbound('/api/hook/subagent', 'gone0003')
-      expect(said.mock.calls.filter(([line]) => String(line).includes('unbound'))).toEqual([
-        ['[hooks] gone0001 wait refused · unbound'],
-        ['[hooks] gone0002 turn-stop refused · unbound'],
-        ['[hooks] gone0003 subagent refused · unbound'],
-      ])
-      for (const handler of Object.values(handlers)) expect(handler).not.toHaveBeenCalled()
-    })
-
-    it('keeps at most 512 sessions it said, the oldest dropped first', async () => {
-      const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      const { base, headers } = await start()
-      const unbound = (sessionId: string) => hook(base, headers, '/api/hook/wait', { sessionId })
-      const lines = () => said.mock.calls.filter(([line]) => String(line).includes('gone0001')).length
-      await unbound('gone0001')
-      for (let other = 0; other < 511; other++) await unbound(`other-${other}`)
-      await unbound('gone0001')
-      expect(lines()).toBe(1)
-      await unbound('other-511')
-      await unbound('gone0001')
-      expect(lines()).toBe(2)
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const handlers = { onWait: vi.fn(), onSubagent: vi.fn(), onTurnStop: vi.fn(), onSessionEnd: vi.fn(), onToolStart: vi.fn(),
+          onTurnStart: vi.fn() }
+        const { base, headers } = await start(handlers)
+        const unbound = async (path: string, sessionId: string) => {
+          const refused = await hook(base, headers, path, { sessionId, hookEvent: 'SubagentStart', toolUseId: 'tool-1', toolName: 'Read' })
+          expect(refused.status).toBe(403)
+          expect(await refused.json()).toEqual({ error: 'UNBOUND_HOOK' })
+        }
+        await unbound('/api/hook/session-end', 'gone0001')
+        await unbound('/api/hook/wait', 'gone0002')
+        for (const [path, sessionId] of [['/api/hook/tool-start', 'gone0001'], ['/api/hook/turn-start', 'gone0002'],
+          ['/api/hook/turn-stop', 'gone0001'], ['/api/hook/subagent', 'gone0003'], ['/api/hook/wait', 'gone0003']]) {
+          vi.setSystemTime(Date.now() + 60_001)
+          await unbound(path, sessionId)
+        }
+        expect(said.mock.calls.filter(([line]) => String(line).includes('unbound'))).toEqual([
+          ['[hooks] gone0001 session-end refused · unbound'],
+          ['[hooks] gone0001 tool-start refused · unbound'],
+          ['[hooks] gone0002 turn-start refused · unbound'],
+          ['[hooks] gone0001 turn-stop refused · unbound'],
+          ['[hooks] gone0003 subagent refused · unbound'],
+          ['[hooks] gone0003 wait refused · unbound'],
+        ])
+        for (const handler of Object.values(handlers)) expect(handler).not.toHaveBeenCalled()
+      } finally { vi.useRealTimers() }
     })
 
     it('needs the hook token on each', async () => {
