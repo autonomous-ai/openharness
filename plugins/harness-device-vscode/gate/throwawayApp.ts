@@ -7,7 +7,7 @@
  */
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs'
 import { userInfo } from 'node:os'
 import { basename, dirname, join, relative } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
@@ -18,8 +18,34 @@ const LSREGISTER = '/System/Library/Frameworks/CoreServices.framework/Frameworks
 /** kLSApplicationNotFoundErr: `lsregister -u` fails with it for a bundle never registered, as a helper that never ran. */
 const NOT_REGISTERED = '-10814'
 
-/** The real home's, not $HOME's: the test setup points $HOME at a throwaway, and macOS does not. */
-export const VSCODE_PREFERENCES = join(userInfo().homedir, 'Library', 'Preferences', `${MICROSOFT}.plist`)
+/** The real home's, not $HOME's: the test setup points $HOME at a throwaway, and macOS and cfprefsd do not. */
+const LIBRARY = join(userInfo().homedir, 'Library')
+export const VSCODE_PREFERENCES = join(LIBRARY, 'Preferences', `${MICROSOFT}.plist`)
+
+export type Run = (file: string, args: readonly string[]) => { status: number | null; stderr: string }
+const run: Run = (file, args) => spawnSync(file, args, { encoding: 'utf8' })
+
+/** Removes the throwaway's own preferences, which macOS keeps under GATE_ID after the run: through `defaults`, as
+ *  cfprefsd holds a domain and would write a removed file back, and after the kill, as a quitting app writes its domain
+ *  again. GATE_ID's domain and no other: it takes none. */
+export function forgetPreferences(library = LIBRARY, defaults: Run = run): void {
+  const deleted = defaults('/usr/bin/defaults', ['delete', GATE_ID])
+  // Exit 1 with "Domain (…) not found": nothing to remove.
+  if (deleted.status !== 0 && !/Domain \(.*\) not found/.test(deleted.stderr)) {
+    throw new Error(`defaults delete ${GATE_ID} failed: ${deleted.stderr.trim()}`)
+  }
+  if (existsSync(join(library, 'Preferences', `${GATE_ID}.plist`))) throw new Error(`~/Library/Preferences/${GATE_ID}.plist is still there`)
+}
+
+/** Removes the throwaway's caches and HTTP storage, which macOS files by GATE_ID: each folder named the id, or the id
+ *  and a '.' (its updater's), and none other. */
+export function removeOwnFolders(library = LIBRARY): void {
+  for (const folder of ['Caches', 'HTTPStorages'].map((name) => join(library, name)).filter(existsSync)) {
+    for (const name of readdirSync(folder)) {
+      if (name === GATE_ID || name.startsWith(`${GATE_ID}.`)) rmSync(join(folder, name), { recursive: true, force: true })
+    }
+  }
+}
 
 /** Every bundle's Info.plist in the app: its own, its helpers' and its frameworks'. */
 function infoPlists(app: string): string[] {

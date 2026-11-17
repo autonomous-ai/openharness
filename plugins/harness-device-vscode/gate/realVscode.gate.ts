@@ -3,9 +3,10 @@
  * real VS Code downloaded into a temporary root and run with its own user data, extensions and home, against the
  * devices' real listener and VS Code half (vscodeTerminals.ts). Never the developer's VS Code, its settings, its
  * extensions or their daemon: everything it starts or writes is under the root, which it removes. On a Mac the copy
- * carries a bundle id of its own, LaunchServices forgets it after the run, and the run fails if the developer's VS Code's
- * preferences changed (throwawayApp.ts). The clean-up kills what the throwaway still runs and runs each of its steps
- * whatever the others did (cleanup.ts); a run clears the roots of runs that ended without theirs (Ctrl+C).
+ * carries a bundle id of its own; after the run LaunchServices forgets it, its own preferences, caches and HTTP storage
+ * go, and the run fails if the developer's VS Code's preferences changed (throwawayApp.ts). The clean-up kills what the
+ * throwaway still runs and runs each of its steps whatever the others did (cleanup.ts); a run clears the roots of runs
+ * that ended without theirs (Ctrl+C).
  *
  * The driver (driver/run.cjs) runs as VS Code's extension tests and is the gate's hands: it makes the terminals and says
  * which is active. What the extension reports, and what it does with a `show`, is read at the listener.
@@ -25,8 +26,10 @@ import { cleanUp, within } from './cleanup.js'
 import {
   assertRebranded,
   assertUnchanged,
+  forgetPreferences,
   killThrowaway,
   rebrand,
+  removeOwnFolders,
   rootName,
   stamp,
   startedAt,
@@ -188,6 +191,12 @@ describe('the extension in a real, throwaway VS Code', () => {
       }],
       // What was killed may still be letting go of its files.
       ['the root', () => rmSync(root, { recursive: true, force: true, maxRetries: 5 })],
+      ['the throwaway\'s preferences', () => {
+        if (app !== undefined) forgetPreferences()
+      }],
+      ['the throwaway\'s caches', () => {
+        if (app !== undefined) removeOwnFolders()
+      }],
       ['the developer\'s VS Code\'s preferences', () => {
         if (preferences !== undefined) assertUnchanged(VSCODE_PREFERENCES, preferences)
       }],
