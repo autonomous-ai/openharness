@@ -195,6 +195,15 @@ describe('ObservedSource states', () => {
     expect(src.list()[0].lastAnswer).toBe(`${'a'.repeat(298)}😀…`)
   })
 
+  it('a read that fails logs a count and no error text: it can hold a path', async () => {
+    const { src, ev, logs } = setup({ lastAnswer: async () => { throw new Error('EACCES /Users/someone/.claude/projects/x.jsonl') } })
+    src.ingest(ev('turn-stop', { transcriptPath: '/t/s.jsonl' }))
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
+    expect(src.list()[0].lastAnswer).toBeUndefined()
+    expect(logs).toEqual(['[observed] last answer · not read'])
+  })
+
   it('does not read a transcript for other engines', async () => {
     const lastAnswer = vi.fn(async () => 'x')
     const { src, ev } = setup({ lastAnswer })
