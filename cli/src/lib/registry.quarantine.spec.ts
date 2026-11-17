@@ -38,6 +38,18 @@ describe('a registry no version can load', () => {
   })
   afterEach(() => { vi.restoreAllMocks() })
 
+  it.each([false, 'error'] as const)('does not log malformed Registry content when quarantine fails=%s', async fails => {
+    const content = 'secret123'
+    writeFileSync(join(dataDir, 'registry.json'), content, { mode: 0o600 })
+    rename.fails = fails
+    const registry = await loadRegistry()
+    await registry.load()
+    expect(error).toHaveBeenCalled()
+    expect(error.mock.calls.flat().join(' ')).not.toContain(content)
+    const retained = fails ? 'registry.json' : readdirSync(dataDir).find(name => name.startsWith('registry.json.corrupt-'))!
+    expect(readFileSync(join(dataDir, retained), 'utf8')).toBe(content)
+  })
+
   it('with two rows claiming one agent: moved aside, and the registry starts empty and writable', async () => {
     const registry = await loadRegistry()
     await registry.load()
@@ -65,7 +77,7 @@ describe('a registry no version can load', () => {
     rename.fails = 'error'
     const registry = await loadRegistry()
     await registry.load()
-    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry is not JSON \(.*\), and it could not be moved aside \(EXDEV: cross-device link not permitted\); refusing to overwrite it$/))
+    expect(error).toHaveBeenCalledWith('[registry] registry is not JSON, and it could not be moved aside (EXDEV: cross-device link not permitted); refusing to overwrite it')
     ;(await registry.openProcessAgent({ agentId: 'must-not-write', engine: 'claude', tmuxPane: '%9', processIdentity: processIdentity(109) }))
     expect(readFileSync(file, 'utf8')).toBe('[{"agentId":')
     expect(readdirSync(dataDir).filter((name) => name.startsWith('registry.json.corrupt-'))).toEqual([])

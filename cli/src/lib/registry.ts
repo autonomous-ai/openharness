@@ -1665,7 +1665,7 @@ class Registry {
       if (ownModes) atomicWriteJson(OWN_MODES_FILE, Date.now())
     } catch (error) {
       if (error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed) throw error
-      if (error instanceof SyntaxError) await this.quarantine(`is not JSON (${error.message})`, originalContents!)
+      if (error instanceof SyntaxError) await this.quarantine('is not JSON', originalContents!)
       else if (existsSync(FILE)) {
         this.writeBlocked = true
         console.error('[registry] registry is unreadable; refusing to overwrite it:', error instanceof Error ? error.message : error)

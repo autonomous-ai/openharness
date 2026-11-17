@@ -47,4 +47,44 @@ the two read sites changed, initialization, Registry, persistence and private-fi
 tests pass 185 cases (two existing skips); recovery and growing-file cases pass another
 23 (one existing skip). Typechecking passes. All commands settled normally with actual exit
 zero. Logs: `/tmp/registry-image-read-{red,green,recovery,types}.log`. Fixed startup cost
-comparison, independent review and combined integration are still pending.
+comparison, independent review and combined integration were pending at that commit.
+
+## Startup comparison
+
+The unchanged 16/160/1,600-row workload completed its twelve fixed A1/B1/B2/A2
+cases on the same Node 24.22.2 macOS x64 host. A is `787c737db6`; B is `263e001cb1`.
+Only the two Registry read sites differ in the imported runtime closure. Every case
+exited zero with stdout/stderr EOF, child/group/guardian disappearance and private
+directory cleanup verified. No timed case was retried. Two path-normalization
+preflight failures and a missing quiet-marker refusal occurred before any workload;
+their original records remain retained.
+
+| Rows | Load ms A → B | CPU ms A → B | Largest loop hold ms A → B | RSS MiB A → B |
+| --- | --- | --- | --- | --- |
+| 16 | 64.148 → 73.179 | 30.741 → 32.323 | 41.459 → 49.604 | 54.242 → 54.059 |
+| 160 | 143.480 → 145.452 | 118.922 → 116.373 | 43.433 → 47.219 | 61.318 → 60.941 |
+| 1,600 | 804.489 → 812.786 | 855.772 → 863.140 | 67.675 → 60.495 | 104.393 → 108.813 |
+
+Values are arithmetic means of the two runs per side, not significance claims. Both
+1,600-row pairs reduce the largest loop hold; both increase CPU and retained RSS.
+This is an I/O responsiveness tradeoff, not a universal speed or memory improvement.
+Independent review and acceptance remain open before integration. JSON parsing and
+whole-image retention remain in core. Receipts are in
+`/tmp/registry-image-read-startup-abba-v1`; manifest SHA-256 is
+`03ca91c35d41b42d743ea0fcc85ab9ce50a89fc15d5d23406e4136e485f9ab56`.
+
+## Corruption diagnostic privacy
+
+Review found that a JSON parser exception can quote the private Registry image in
+its message. Startup quarantine now reports only the fixed reason `is not JSON`.
+This follows the existing sanitization for persistence failures. The same fixed
+reason covers successful quarantine and quarantine failure; neither log nor caller
+error receives the parser's content. Recovery behavior and retained file bytes are
+unchanged. There is no new storage, audience, migration or runtime dependency.
+
+Two synthetic sentinel tests first failed with content in the diagnostic, on the
+successful-rename and failed-rename paths. A sandbox attempt also encountered the
+existing native lock probe restriction; the isolated unsandboxed RED retained both
+expected content failures. After the correction, all 17 quarantine and initialization
+tests pass with actual exit zero. Logs are
+`/tmp/registry-quarantine-content-{red,red-native,green}.log`.
