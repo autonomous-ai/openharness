@@ -187,7 +187,11 @@ impl Runner {
                 let shared = shared.clone();
                 thread::spawn(move || {
                     let result = match &shared.doors.shell {
-                        Some(shell) => install::install(&**shell, &*shared.doors.log, &|| shared.find_cli()),
+                        Some(shell) => {
+                            install::install(&**shell, &*shared.doors.log, &|| shared.find_cli(), &mut |step| {
+                                shared.answer(Event::InstallStep(step))
+                            })
+                        }
                         None => Err(vec![NOT_SUPPORTED.into()]),
                     };
                     shared.answer(Event::InstallDone(result));

@@ -1,5 +1,6 @@
 //! The app's rules: a pure reducer from an event to the effects it asks for.
 
+use crate::install::GETTING_READY;
 use crate::keepalive::{Keep, KeepAlive};
 use crate::model::{about_credits, due, menu, menu_log};
 use crate::types::{
@@ -31,6 +32,8 @@ pub struct App {
     window: Option<View>,
     /// The sign-in that runs, as its screen draws it.
     login: Option<View>,
+    /// The install's step, kept after it ends until the first screen is chosen.
+    step: &'static str,
     /// The CLI was found and the account has not answered since: its first answer chooses the first screen.
     awaiting_account: bool,
     /// The last time an event told, for the keep-alive.
@@ -75,6 +78,7 @@ impl App {
             menu: Vec::new(),
             window: None,
             login: None,
+            step: GETTING_READY,
             awaiting_account: false,
             now,
             last_read: now,
@@ -192,6 +196,12 @@ impl App {
                 self.keep.start_done(ok);
                 effects.push(Effect::SpawnWatch);
             }
+            // A step that comes late, or again, draws nothing.
+            Event::InstallStep(step) if self.state.cli == CliState::Installing && step != self.step => {
+                self.step = step;
+                self.redraw(Screen::Install, effects);
+            }
+            Event::InstallStep(_) => {}
             // The runner found a CLI after it. The window stays on Install until the first screen is chosen.
             Event::InstallDone(Ok(())) => {
                 self.found(effects);
@@ -431,6 +441,7 @@ impl App {
             return;
         }
         self.state.cli = CliState::Installing;
+        self.step = GETTING_READY;
         effects.push(Effect::RunInstall);
         self.show(Some(self.view_of(Screen::Install)), effects);
     }
@@ -464,7 +475,7 @@ impl App {
     /// The screen as it stands: what runs shows its progress, else the offer.
     fn view_of(&self, screen: Screen) -> View {
         match screen {
-            Screen::Install => screen_at(screen, Phase::Working, Vec::new()),
+            Screen::Install => screen_at(screen, Phase::Working, vec![self.step.to_string()]),
             Screen::SignIn => self.login.clone().unwrap_or_else(|| screen_at(screen, Phase::Offer, Vec::new())),
         }
     }
