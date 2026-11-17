@@ -35,6 +35,9 @@ const SCROLL_TIMEOUT_MS = 2_000
 /** The most lines that wait, either way, for a terminal's run under way: a run that hangs to its deadline is followed by a
  *  bounded jump, not by all the travel of the stroke meanwhile. */
 const SCROLL_PENDING_MAX = 100
+/** How long a terminal's scrolling is quiet before its tally is said: a run is faster than the dial's line, so a queue
+ *  drains after almost every line, and a line at each drain would bury the log while scrolling. */
+const SCROLL_QUIET_MS = 1_000
 
 export interface HerdrAppDeps extends OrcaDeps {
   client: Pick<HcClient, 'prompt'>
@@ -69,9 +72,16 @@ export interface HerdrAppAdapter extends HostAdapter {
 /** What a run did: whether Herdr is forward, and whether its window switched to the terminal. */
 interface Run { forward: boolean; switched: boolean }
 
-/** A terminal's scroll queue while a run is under way: the lines that came meanwhile, and what it did since it started,
- *  for the line it says once it drains. */
-interface Scrolling { pending: number; lines: number; runs: number; failed: number }
+/** A terminal's scroll queue until it has been quiet for SCROLL_QUIET_MS: whether a run is under way, the lines that came
+ *  meanwhile, what it did since it started, for the line it says once quiet, and the timer of that quiet. */
+interface Scrolling {
+  running: boolean
+  pending: number
+  lines: number
+  runs: number
+  failed: number
+  quiet?: ReturnType<typeof setTimeout>
+}
 
 export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
   const mac = deps.platform === 'darwin'
@@ -81,7 +91,7 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
   const running = new Map<string, Promise<Run>>()
   // Per terminal, the words under way: two transcripts typed at once would mix in the agent's prompt.
   const prompting = new Set<string>()
-  // Per terminal, its scroll queue while a run is under way.
+  // Per terminal, its scroll queue until it has been quiet for SCROLL_QUIET_MS.
   const scrolling = new Map<string, Scrolling>()
   // A stroke sends many lines: the failure is said once until a scroll run succeeds, not once a frame.
   let scrollFailedSaid = false
@@ -128,6 +138,7 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
     while (lines !== 0) {
       if (!(await scrollRun(address, lines, queue))) {
         queue.failed += Math.abs(lines) + Math.abs(queue.pending)
+        queue.pending = 0
         if (!scrollFailedSaid) deps.log('[herdr-app] scroll · failed')
         scrollFailedSaid = true
         break
@@ -137,8 +148,11 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
       lines = queue.pending
       queue.pending = 0
     }
-    scrolling.delete(address)
-    deps.log(`[herdr-app] scroll · ${queue.lines} lines · ${queue.runs} runs · ${queue.failed} failed`)
+    queue.running = false
+    queue.quiet = setTimeout(() => {
+      scrolling.delete(address)
+      deps.log(`[herdr-app] scroll · ${queue.lines} lines · ${queue.runs} runs · ${queue.failed} failed`)
+    }, SCROLL_QUIET_MS)
   }
 
   // A failed read is undefined: no binary, an exit that is not 0, a rejection, or a stdout that is no JSON object.
@@ -175,14 +189,15 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
 
   const scroll = (pane: Pane, lines: number): void => {
     if (!mac || !HC_TERMINAL.test(pane.id) || lines === 0 || !Number.isSafeInteger(lines)) return
-    const queue = scrolling.get(pane.id)
-    if (queue) {
+    const queue = scrolling.get(pane.id) ?? { running: false, pending: 0, lines: 0, runs: 0, failed: 0 }
+    clearTimeout(queue.quiet)
+    if (queue.running) {
       queue.pending = Math.max(-SCROLL_PENDING_MAX, Math.min(SCROLL_PENDING_MAX, queue.pending + lines))
       return
     }
-    const started: Scrolling = { pending: 0, lines: 0, runs: 0, failed: 0 }
-    scrolling.set(pane.id, started)
-    void drain(pane.id, started, lines)
+    queue.running = true
+    scrolling.set(pane.id, queue)
+    void drain(pane.id, queue, lines)
   }
 
   const prompt = async (address: string, kind: string, text: string): Promise<HcPrompt> => {

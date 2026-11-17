@@ -100,9 +100,11 @@ the active one.
   share: a scroll never joins an `agent.focus` run (it would lose its lines), and a scroll and a focus may run together.
 - A run that fails (non-zero exit, timeout, no binary) drops its lines and what is pending for that terminal, and logs
   `[herdr-app] scroll · failed` once until a run succeeds again (no line per frame). Its words never name the terminal.
-- When a terminal's queue drains (no run under way, nothing pending), the adapter logs one line with what it did since
-  its last such line: `[herdr-app] scroll · <lines> lines · <runs> runs · <failed> failed`. Counts only. A stroke drains
-  once or a few times, at the pace of a hand, so the lines stay bounded; the adapter needs no word of the stroke's end.
+- Once a terminal has been quiet for 1 s (no run under way, nothing pending and no new line for it for 1 s), the adapter
+  logs one line with what it did since its last such line: `[herdr-app] scroll · <lines> lines · <runs> runs · <failed>
+  failed`. Counts only. A run is faster than the dial's line, so the queue drains after almost every line: a line at each
+  drain would be up to ~30 a second. With the quiet second a stroke and its pauses give one line, a long stroke one at
+  its end, so the lines stay bounded; the adapter needs no word of the stroke's end.
 
 ### 4. Routing (services/devices.ts)
 
