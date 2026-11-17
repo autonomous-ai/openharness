@@ -3501,6 +3501,26 @@ describe('hello capabilities', () => {
     } finally { await session.stop() }
   })
 
+  it('a dial that greets anew is shown a notice whose turn ended, but not a question whose turn ended without a close', async () => {
+    const { session, port } = await connect(richHost())
+    const notice = [{ key: 'notice', q: 'Tests pass.', options: ['In Terminal'] }]
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      await session.question('a2', `${SHOWN_ONLY_PREFIX}n2`, notice)
+      await session.turnDone('a1')
+      await session.summary('a2', 'Done.', 'Done.')
+      port.sent.length = 0
+      // Nothing else asks a dial that greets again on the same desk: only its own walk does.
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.1' })
+      // Asked in the order they came: by the notice, the question would be there too.
+      await vi.waitFor(() => expect(port.types()).toContain('question'))
+      await settle()
+      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a2', id: `${SHOWN_ONLY_PREFIX}n2` }])
+    } finally { await session.stop() }
+  })
+
   it('a question the dial holds is not asked of it again, as the core asks it of devices that reconnect', async () => {
     const { session, port } = await connect(richHost())
     const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
@@ -3568,12 +3588,16 @@ describe('hello capabilities', () => {
       await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
       await session.question('a2', 'q2', [{ key: 'k', q: 'Closed?', options: ['yes'] }])
       await session.questionClose('a2', 'q2')
+      // A notice stays on the dial after its turn ends, so a resync carries it too.
+      await session.question('a3', `${SHOWN_ONLY_PREFIX}n3`, [{ key: 'notice', q: 'Tests pass.', options: ['In Terminal'] }])
+      await session.summary('a3', 'Done.', 'Done.')
       port.sent.length = 0
       port.say({ t: 'resync' })
-      await vi.waitFor(() => expect(port.types()).toContain('question'))
+      await vi.waitFor(() => expect(ofType(port, 'question')).toHaveLength(2))
       const types = port.types()
       for (const t of ['machines.begin', 'swarms', 'agents.begin', 'agents.end', 'notif.replace']) expect(types).toContain(t)
-      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a1', id: 'q1' }])   // the closed one is not resent
+      // The closed one is not resent; the notice is.
+      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a1', id: 'q1' }, { agentId: 'a3', id: `${SHOWN_ONLY_PREFIX}n3` }])
       port.sent.length = 0
       port.say({ t: 'resync' })
       await settle()
@@ -4936,6 +4960,32 @@ describe('the app filter', () => {
         expect(vi.mocked(host.sendTurn).mock.calls.map(([id]) => id), `appFilter ${appFilter}`).toEqual(['a2'])
       } finally { await session.stop() }
     }
+  })
+
+  // Orca's ring is pushed again in its tab order (spec 2026-11-16-dial-orca-focus-order): the reorder relies on this.
+  it('the shown app\'s ring sent again in another order: the dial is told its agent again, its echo starts no rest, and the host hears no other agent', async () => {
+    const swipeEnded = vi.fn()
+    const dialShows = vi.fn<NonNullable<CableHost['dialShows']>>()
+    const { host, state } = appHost({ swipeSwitches: () => true, swipeEnded, dialShows })
+    const { session, port } = await greeted(host)
+    // Faked after the greeting, as `resting` does: vi.waitFor is not used while a rest is pending.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      port.say({ t: 'focus', agentId: 'g2' })
+      await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
+      expect(swipeEnded.mock.calls).toEqual([['g2', 'rest']])
+      const pushedAt = port.sent.length
+      state.rings.ghostty = [row('g3', 'ghostty'), row('g1', 'ghostty'), row('g2', 'ghostty')]
+      await session.syncAgents(true)
+      const since = port.sent.slice(pushedAt)
+      expect(since.filter((m) => m.t === 'agent').map((m) => m.id)).toEqual(['g3', 'g1', 'g2'])
+      expect(since.filter((m) => m.t === 'focus').map((m) => m.agentId)).toEqual(['g2'])
+      expect(since.findIndex((m) => m.t === 'focus')).toBeGreaterThan(since.findIndex((m) => m.t === 'agents.end'))
+      port.say({ t: 'focus', agentId: 'g2' })
+      await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
+      expect(swipeEnded).toHaveBeenCalledTimes(1)
+      expect(dialShows.mock.calls.map(([, agent]) => agent)).toEqual([{ name: 'g2', app: 'Ghostty' }])
+    } finally { vi.useRealTimers(); await session.stop() }
   })
 })
 

@@ -29,15 +29,6 @@ export const STATES: { name: string; view: View; focused?: true }[] = [
     view: { screen: 'sign_in', phase: 'browser', lines: ['Harness is finishing an update'] },
   },
   { name: 'Sign in · failed', view: { screen: 'sign_in', phase: 'failed', lines: ['Sign-in did not finish.'] } },
-  { name: 'Claude Code · offer', view: { screen: 'claude', phase: 'offer', lines: [] } },
-  { name: 'Claude Code · working', view: { screen: 'claude', phase: 'working', lines: [] } },
-  {
-    name: 'Claude Code · failed',
-    view: { screen: 'claude', phase: 'failed', lines: ['Could not change Claude Code.'] },
-  },
-  { name: 'Codex · offer', view: { screen: 'codex', phase: 'offer', lines: [] } },
-  { name: 'Codex · working', view: { screen: 'codex', phase: 'working', lines: [] } },
-  { name: 'Codex · failed', view: { screen: 'codex', phase: 'failed', lines: ['Could not change Codex.'] } },
 ]
 
 // The window's size in tauri.conf.json.
