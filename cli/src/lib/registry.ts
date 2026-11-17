@@ -1998,13 +1998,18 @@ class Registry {
     this.writer.assertOpen()
     const selected = this.byAgent(agentId)
     if (!selected || (!isTerminalEngine(selected.engine) && !validProcessIdentity(input.processIdentity))) return { state: 'not-published' }
-    const verifyOwner = this.ownerGuard(agentId, authority.current)
-    const beforeLaunch = launchIdentity(selected)
+    // A peer that confirmed this same process while this write waited (discovery's pass over the pane) published this
+    // launch, not another owner's. Read apart, a resume that discovery beat answered RESUME_UNCONFIRMED over its running
+    // engine (e2e/eagerOpenCode.e2e.ts, 2026-11-17). Any other process or field still ends the write.
+    const owners = [selected, { ...selected, processIdentity: input.processIdentity }].map(ownershipIdentity)
+    const launches = [selected, { ...selected, launch: { state: 'ready' as const } }].map(launchIdentity)
     const requested = structuredClone(input)
     const expires = Math.min(authority.expires ?? Infinity, performance.now() + 5_000)
     const verify = () => {
-      verifyOwner()
-      if (launchIdentity(this.byAgent(agentId)) !== beforeLaunch) {
+      if (authority.current?.() === false || !owners.includes(ownershipIdentity(this.byAgent(agentId)))) {
+        throw new RegistryOwnershipChanged('the registry owner changed while its write was being prepared')
+      }
+      if (!launches.includes(launchIdentity(this.byAgent(agentId)))) {
         throw new RegistryOwnershipChanged('the selected launch changed while its write was being prepared')
       }
     }
