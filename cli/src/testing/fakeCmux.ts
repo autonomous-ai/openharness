@@ -40,8 +40,6 @@ export type FakeCmuxCommand = 'sessions' | 'socket-status' | 'rpc' | 'paste'
 export type FakeCmuxFault = { exit: number } | { raw: string } | { flood: number } | 'hold'
 export interface FakeCmuxState {
   sessions?: FakeCmuxSession[]
-  /** More than were printed, to say some were left out. */
-  totalMatches?: number
   /** `effective_mode`; `cmuxOnly` when unset, as cmux's default. */
   mode?: string
   /** `surface.input_state` by surface id; unset: a terminal with an idle agent at an empty prompt. */
@@ -139,7 +137,7 @@ const sessions = (flags) => {
   }))
   return out({
     state_dir: stateDir, default_codex_home: join(process.env.HOME ?? homedir(), '.codex'), limit: all ? null : 100,
-    total_matches: state.totalMatches ?? records.length, stores, sessions: all ? records : records.slice(0, 100),
+    total_matches: records.length, stores, sessions: all ? records : records.slice(0, 100),
   })
 }
 

@@ -5668,7 +5668,7 @@ describe('cmux\'s agents, from cmux\'s own stores (docs/plans/2026-11-17-dial-cm
       binary: () => fake.found ? CMUX_APP_BINARY : null,
       sessions: async (word) => {
         fake.calls.push(['sessions', word])
-        return { ok: true, sessions: fake.records.filter((one) => word === undefined || one.word === word), unread: 0 }
+        return { ok: true, sessions: fake.records.filter((one) => word === undefined || one.word === word) }
       },
       mode: async () => { fake.calls.push(['mode']); return fake.mode },
       inputState: async (surface) => { fake.calls.push(['inputState', surface]); return IDLE },

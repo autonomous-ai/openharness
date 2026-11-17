@@ -22,7 +22,7 @@ const record = (more: Partial<CmuxSession> = {}): CmuxSession => ({
   sessionId: 'session-1', cwd: '/work/api', ...more,
 })
 const codex = (more: Partial<CmuxSession> = {}) => record({ word: 'codex', kind: 'codex', sessionId: 'codex-1', ...more })
-const ok = (sessions: CmuxSession[], unread = 0): CmuxSessions => ({ ok: true, sessions, unread })
+const ok = (sessions: CmuxSession[]): CmuxSessions => ({ ok: true, sessions })
 /** Lets what the source was answered be taken in. */
 const turn = () => new Promise((resolve) => setImmediate(resolve))
 
@@ -351,15 +351,20 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
       expect(s.asked()).toEqual(['all', 'claude'])
     })
 
-    it('over is said when its number changes, with what cmux matched and did not print', async () => {
+    it('over is said when its number changes, with a run\'s records past the 1,024 it reads', async () => {
       const s = setup()
+      const overs = () => s.log.filter((line) => line.startsWith('[cmux] over'))
       const rows = many(s, 65)
       s.source.start()
-      await s.reply(0, ok(rows, 3))
-      expect(s.log.filter((line) => line.startsWith('[cmux] over'))).toEqual(['[cmux] over · 4 left out'])
+      await s.reply(0, ok(rows))
+      expect(overs()).toEqual(['[cmux] over · 1 left out'])
       s.change()
-      await s.reply(1, ok(rows, 3))
-      expect(s.log.filter((line) => line.startsWith('[cmux] over'))).toEqual(['[cmux] over · 4 left out'])
+      await s.reply(1, ok(rows))
+      expect(overs()).toEqual(['[cmux] over · 1 left out'])
+      // 1,030 records: 1,024 read, of which 64 are listed.
+      s.change()
+      await s.reply(2, ok(many(s, 1030)))
+      expect(overs()).toEqual(['[cmux] over · 1 left out', '[cmux] over · 966 left out'])
     })
 
     it('a failed or too-big run keeps the rows, and says so once until that agent\'s next good run', async () => {
@@ -490,7 +495,7 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
       s.live.add(3000 + at)
       return record({ surface: S(10 + at), pid: 3000 + at, cwd: `/work/api-${at}` })
     })
-    await s.reply(0, ok(rows, 2))
+    await s.reply(0, ok(rows))
     s.change('claude-hook-sessions.json')
     await s.reply(1, { ok: false, fault: 'too-big' })
     s.change('codex-hook-sessions.json')

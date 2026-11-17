@@ -137,7 +137,6 @@ describe.skipIf(process.platform === 'win32')('cmux client (docs/plans/2026-11-1
       const { fake, cmux } = setup({}, { sessions: [{ ...RECORD, agent_lifecycle: 'running', updated_at_unix: 1_700_000_100.5 }] })
       expect(await cmux.sessions()).toEqual({
         ok: true,
-        unread: 0,
         sessions: [{
           word: 'claude', kind: 'claude', surface: S, workspace: W, pid: 4242, lifecycle: 'running', updatedAt: 1_700_000_100.5,
           sessionId: 'sess-1', cwd: '/work/api',
@@ -197,13 +196,6 @@ describe.skipIf(process.platform === 'win32')('cmux client (docs/plans/2026-11-1
       expect(answer).toContain(S)
       expect(answer).not.toContain(transcript)
       expect(answer).not.toContain('their-secret-model')
-    })
-
-    it('total_matches above what was printed is unread', async () => {
-      const { fake, cmux } = setup({}, { sessions: [RECORD, { ...RECORD, surface_id: S2 }], totalMatches: 5 })
-      expect(await cmux.sessions()).toMatchObject({ ok: true, unread: 3 })
-      fake.set({ sessions: [RECORD], totalMatches: 1 })
-      expect(await cmux.sessions()).toMatchObject({ ok: true, unread: 0 })
     })
 
     it('exit 1 and bytes that are no JSON are failed; one byte past 8 MiB is too-big and the child is killed; no answer by the deadline is timeout and the child is killed', async () => {

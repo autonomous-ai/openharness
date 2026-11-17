@@ -67,8 +67,7 @@ export interface CmuxSession {
   lifecycle: CmuxLifecycle; updatedAt: number; sessionId?: string; cwd?: string
 }
 export type CmuxFault = 'no-binary' | 'failed' | 'timeout' | 'too-big'
-/** `unread`: how many records cmux matched and did not print. */
-export type CmuxSessions = { ok: true; sessions: CmuxSession[]; unread: number } | { ok: false; fault: CmuxFault }
+export type CmuxSessions = { ok: true; sessions: CmuxSession[] } | { ok: false; fault: CmuxFault }
 export interface CmuxInputState {
   terminal: boolean; agent: boolean; lifecycle: CmuxLifecycle
   state: 'empty' | 'draft' | 'dialog' | 'unknown'; blocksTyping: boolean
@@ -211,10 +210,7 @@ export function createCmuxClient(deps: CmuxClientDeps): CmuxClient {
       if (!answer.ok) return answer
       const top = parsed(answer)
       if (!top || !Array.isArray(top.sessions)) return { ok: false, fault: 'failed' }
-      const printed = top.sessions.length
-      const total = top.total_matches
-      const sessions = top.sessions.flatMap((record) => sessionOf(record) ?? [])
-      return { ok: true, sessions, unread: typeof total === 'number' && Number.isSafeInteger(total) && total > printed ? total - printed : 0 }
+      return { ok: true, sessions: top.sessions.flatMap((record) => sessionOf(record) ?? []) }
     },
     mode: async () => {
       const file = binary()

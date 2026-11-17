@@ -8,7 +8,7 @@
  * during it give one more after it: one cmux process after another, never a pile.
  *
  * Every listable agent is kept (1,024 at most) and the first 64 are listed, so when one leaves the next is listed with
- * no new run. Those past either bound, and those cmux matched and did not print, are counted in one over line.
+ * no new run. Those past either bound, and a run's records past the 1,024 it reads, are counted in one over line.
  *
  * A log line says only fixed words and counts: cmux's records name people's folders and agents.
  */
@@ -73,9 +73,9 @@ export class CmuxSource implements HostSource {
   /** Every listable agent, by its surface in lower case (cmux prints upper case, a hook or a link may hold lower), in
    *  the order each was first listed. */
   private readonly rows = new Map<string, Row>()
-  /** Each agent's records by cmux's word, and what each run's word (none: all) left unread. */
+  /** Each agent's records by cmux's word, and the records each run's word (none: all) read past the 1,024. */
   private readonly records = new Map<string, Kept>()
-  private readonly unread = new Map<string | undefined, number>()
+  private readonly cut = new Map<string | undefined, number>()
   /** This start's runs under way, by word (none: all); and the cmux processes under way, any start's. */
   private readonly runs = new Map<string | undefined, Run>()
   private active = 0
@@ -231,7 +231,7 @@ export class CmuxSource implements HostSource {
     this.runs.clear()
     this.waiting = false
     this.records.clear()
-    this.unread.clear()
+    this.cut.clear()
     // The next list is said again, even with as many agents as before.
     this.said = undefined
     this.unkept = 0
@@ -285,7 +285,7 @@ export class CmuxSource implements HostSource {
     this.failing.delete(word)
     this.timed(word, ms)
     const before = JSON.stringify(this.list())
-    this.take(word, order, answer.sessions, answer.unread)
+    this.take(word, order, answer.sessions)
     this.counted()
     if (JSON.stringify(this.list()) !== before) this.emit()
   }
@@ -301,9 +301,9 @@ export class CmuxSource implements HostSource {
 
   /** A run's records replace its agent's (every agent's, for an all-agents run), unless a run that started after it
    *  already replaced them; the rows are then made again from every agent's records. */
-  private take(word: string | undefined, order: number, sessions: CmuxSession[], unread: number): void {
+  private take(word: string | undefined, order: number, sessions: CmuxSession[]): void {
     const read = sessions.slice(0, MAX_KEPT)
-    this.unread.set(word, unread + sessions.length - read.length)
+    this.cut.set(word, sessions.length - read.length)
     const byWord = new Map<string, CmuxSession[]>()
     for (const session of read) {
       const same = byWord.get(session.word)
@@ -376,7 +376,7 @@ export class CmuxSource implements HostSource {
   }
 
   /** The listed agents, said when their count changes, and those left out: past the dial's 64, past the 1,024 kept,
-   *  and those cmux matched and did not print. */
+   *  and a run's records past the 1,024 it reads. */
   private counted(): void {
     const count = Math.min(this.rows.size, MAX_AGENTS)
     if (count !== this.said) {
@@ -384,7 +384,7 @@ export class CmuxSource implements HostSource {
       this.deps.log(`[cmux] listed · ${count} agents`)
     }
     let over = this.rows.size - count + this.unkept
-    for (const left of this.unread.values()) over += left
+    for (const left of this.cut.values()) over += left
     if (over !== this.over) {
       this.over = over
       if (over > 0) this.deps.log(`[cmux] over · ${over} left out`)
