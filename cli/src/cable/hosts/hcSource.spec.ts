@@ -672,6 +672,77 @@ describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11
     expect(reported()).toEqual([])
   })
 
+  /** hc's foreground of a terminal: the program running in it now, with that pid. */
+  const foreground = (pid: number): Partial<FakeHcTerminal> =>
+    ({ more: { foreground: { argv: ['/usr/local/bin/node'], cwd: '/work/api', name: 'node', pid } } })
+
+  it('terminalOf answers the one live terminal whose foreground is that pid, shown or not, reporting or not', async () => {
+    // The fake's foreground pids: 4242, then 4243.
+    server.terminals = [agent('t1'), agent('t2', { labels: {}, status: null })]
+    const s = setup()
+    await live(s)
+    expect(s.source.terminalOf(4242)).toBe('t1')
+    expect(s.source.terminalOf(4243)).toBe('t2')
+    expect(s.source.terminalOf(1)).toBeUndefined()
+  })
+
+  it('two terminals whose foreground is the same pid answer none', async () => {
+    server.terminals = [agent('t1', foreground(4242)), agent('t2', { labels: {}, ...foreground(4242) })]
+    const s = setup()
+    await live(s)
+    expect(s.source.terminalOf(4242)).toBeUndefined()
+    server.change('t2', foreground(5000))
+    await s.until(() => s.source.terminalOf(4242) === 't1')
+    expect(s.source.terminalOf(5000)).toBe('t2')
+  })
+
+  it('a terminal that finished or was removed answers none; a missed snapshot replaces every answer', async () => {
+    // The fake's foreground pids: 4242, 4243, 4244.
+    server.terminals = [agent('t1'), agent('t2'), agent('t3')]
+    const s = setup()
+    await live(s)
+    expect([4242, 4243, 4244].map((pid) => s.source.terminalOf(pid))).toEqual(['t1', 't2', 't3'])
+    server.change('t1', { state: 'finished' })
+    await s.until(() => row(s, 't1') === undefined)
+    expect(s.source.terminalOf(4242)).toBeUndefined()
+    server.remove('t2')
+    await s.until(() => row(s, 't2') === undefined)
+    expect(s.source.terminalOf(4243)).toBeUndefined()
+
+    // t3 is gone from hc's list with no line of its own, and another terminal runs its pid now.
+    server.terminals = [agent('t5', foreground(4244))]
+    server.missed()
+    await s.until(() => row(s, 't5') !== undefined)
+    expect(s.source.terminalOf(4244)).toBe('t5')
+  })
+
+  it('a foreground that moves tells one change though no listed row changed; nothing else is logged', async () => {
+    server.terminals = [agent('t1')]
+    const s = setup()
+    await live(s)
+    const changes = s.changes
+    const list = s.source.list()
+    const log = [...s.log]
+    server.change('t1', foreground(5000))
+    await s.until(() => s.source.terminalOf(5000) === 't1')
+    await turn()
+    expect(s.changes).toBe(changes + 1)
+    expect(s.source.list()).toEqual(list)
+    expect(s.log).toEqual(log)
+  })
+
+  it('stopped, it answers none and tells the change, though it listed no row', async () => {
+    server.terminals = [agent('t1', { labels: {} })]
+    const s = setup()
+    await live(s)
+    expect(s.source.list()).toEqual([])
+    expect(s.source.terminalOf(4242)).toBe('t1')
+    const changes = s.changes
+    s.source.stop()
+    expect(s.changes).toBe(changes + 1)
+    expect(s.source.terminalOf(4242)).toBeUndefined()
+  })
+
   it('no log line holds an address, a name, a folder or the words', async () => {
     server.terminals = Array.from({ length: 65 }, (_, at) => agent(`t${at + 1}`, { name: 'secret-name', cwd: '/work/secret-folder' }))
     const s = setup()
