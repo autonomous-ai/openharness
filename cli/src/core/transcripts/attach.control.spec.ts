@@ -70,7 +70,8 @@ function setup(mode: 'inline' | 'worker', content = prompt('T1')) {
     turnActivity: { observe: vi.fn(), snapshot: vi.fn() }, turnStartedAt: new Map(), agentIdFor: () => row.agentId, clients: { send: vi.fn() } })
   const hooks = createTurnHooks({ resolve: () => row, normalizers, others: others.streams, holdStop: attach.holdStop, afterStop: attach.afterStop,
     emit, drain: async () => watcher.pollSession(row.sessionId), announceTurnAborted: vi.fn(),
-    armAgyIdleWatch: vi.fn(), clearAgyIdleWatch: vi.fn(), mirror: { noteEngineStopped: vi.fn() }, log: () => {} })
+    armAgyIdleWatch: vi.fn(), clearAgyIdleWatch: vi.fn(), mirror: { noteEngineStopped: vi.fn() },
+    turnActivity: { withdraw: vi.fn(), snapshot: vi.fn() }, clients: { send: vi.fn() }, agentIdFor: () => row.agentId, awaitDialog: vi.fn(), log: () => {} })
   const hold = () => { row.identityHold = 'native evidence unavailable'; row.evidenceRevision = (row.evidenceRevision ?? 0) + 1 }
   const recover = () => { delete row.identityHold; row.evidenceRevision = (row.evidenceRevision ?? 0) + 1; row.interpretationHold = 'recovering' }
   cleanups.push(async () => { attach.forget(row.sessionId); await watcher.stop(); await others.stop(); rmSync(root, { recursive: true, force: true }) })
