@@ -447,7 +447,9 @@ export class RuntimeProfileState {
   }
 
   async codexCatalog(session: RegisteredSession): Promise<RuntimeCatalogModel[]> {
-    return this.runtimeFor(session.engine)?.catalog?.(session) ?? []
+    const runtime = this.runtimeFor(session.engine)
+    if (runtime) return runtime.catalog?.(session) ?? []
+    return (await this.reader(session.engine))?.modelCatalog?.(session) ?? []
   }
 
   private scheduleChanged(sessionId: string): void {

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encodeRuntimeProfile } from '../kit/runtime.js'
 import { RuntimeProfileControlError, type EngineModelControl, type ModelControlHost } from '../facets/modelControl.js'
 import { engineModelControlRequests } from './modelControlRequests.js'
+import { runtimeContext } from './runtimeProtocol.js'
 import { createModelControlHost } from './modelControlHost.js'
 import { MODEL_CONTROL_APPLY as APPLY, MODEL_CONTROL_CAPABILITIES as CAP, MODEL_CONTROL_VALIDATE as CHECK,
   MODEL_CONTROL_CHECK_MS, MODEL_CONTROL_WAIT_MS, MODEL_CONTROL_QUERY_MS, modelControlCheck, modelControlInput } from './modelControlProtocol.js'
@@ -58,6 +59,14 @@ describe('private model-control worker', () => {
     expect(described?.options).toEqual(input.options)
     expect(modelControlInput({ ...input, options: [{ ...input.options[0], description: 'x'.repeat(257) }] }, 'claude')).toBeNull()
     expect(modelControlCheck({ ...check, pane: { idle: true, draft: false, plan: false, dialog: false } }, 'claude')?.pane?.idle).toBe(true)
+  })
+
+  it('accepts an unbound agent target without accepting unbound conversation control state', () => {
+    const fresh = { ...session, sessionId: '' }
+    expect(modelControlInput({ ...input, session: fresh }, 'claude')?.target).toEqual(target)
+    expect(runtimeContext({ session: fresh, state, control: { target, before: null, modelConfirmed: false, effortConfirmed: false } }, 'claude')).toBeNull()
+    const empty = { ...target, sessionId: '', id: encodeRuntimeProfile({ ...target, sessionId: '' }) }
+    expect(modelControlInput({ ...input, session: fresh, target: empty }, 'claude')).toBeNull()
   })
 
   it('propagates known refusals, and makes no late request after abort or completion', async () => {

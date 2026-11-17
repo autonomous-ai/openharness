@@ -1,9 +1,9 @@
 # Engine model control
 
-Claude Code and Codex choose model commands and walk model/effort pickers in their engine workers.
+Claude Code, Codex and OpenCode choose model commands and walk model/effort pickers in their engine workers.
 The native drivers live in `engines/<engine>/modelControl.ts`, behind `Engine.modelControl`.
 Core still owns the user's requested target, accepted profile, session identity and exclusive input lease.
-Other engines keep their existing controller implementations for their own migration batches.
+The other thirteen engines remain view-only; OpenCode shares their worker, not their control authority.
 
 ## One request, one grant
 
@@ -64,3 +64,50 @@ alongside the existing empty/idle/active windows; compare identical fixtures/too
 
 This completes only model control. Native question-answer navigation, submission verification,
 hook admission/installers, launch/discovery/resume and native control connections remain to migrate.
+
+## OpenCode compatibility (2026-11-17)
+
+### Design
+
+Upstream OpenCode 2.2 switching ships during the core extraction. Its `/models` and `/effort`
+commands, command-list readiness, provider/name filters, single-row selection, automatic variant
+picker and footer confirmation stay in `engines/opencode/modelControl.ts`. The core gains no picker
+parser. The shared `engine-others` worker routes model-control requests only for OpenCode, with the
+same aggregate four-request limit. `ReaderEngine` stays Claude/Codex; model-control eligibility
+adds OpenCode alone.
+
+The existing bounded catalog carries each OpenCode id, display name and variants. The worker derives
+its original provider-aware and model-only filters from those fields. Folder-specific API catalog
+lookup and its older CLI fallback remain in the OpenCode reader process. The other engines do not
+acquire model catalogs or controls. No new stored data or remote API is introduced.
+
+The private host contract adds literal typing without submission and the finite `BSpace` key.
+Literal text has the existing 2,000-character and control-character checks, counts toward the
+32-write budget, and uses the same writer and revocation predicate as other input. A missing
+command listing is removed with bounded backspaces; a revoked grant permits no cleanup effects.
+An older shared worker cannot advertise OpenCode model control, so negotiation fails before any
+terminal effect. Claude/Codex v1 messages remain unchanged; failure never chooses an inline driver.
+
+OpenCode footer-confirmation captures request `observe: true` on the existing capture action.
+Raw captures remain the default: a still-old rendered footer must not replace Codex transcript
+evidence that already confirmed a change. Explicit observations use the existing `capturePane`
+path: core captures under the original
+binding, the runtime worker interprets that snapshot, and core accepts it only if its revision,
+reader connection and binding are still current. This adds one runtime request per explicit confirmation capture,
+with no recurring work. Runtime reads and model control have independent bounded request groups,
+so a model control can await its own worker's runtime read without queueing behind itself.
+
+An agent before its first conversation has no stored profile transaction. Its exclusive input
+lease and per-request grant still fence effects, while the worker confirms the footer. A bound
+agent additionally updates the existing accepted profile through fresh captures. The generic
+profile validator accepts agent-addressed targets without relaxing the requirement that stored
+control state belongs to a conversation.
+
+Validation retains the upstream 50-column picker fixtures through the public controller and real
+core broker/shared-worker routes, including Default and unsupported variants. It also checks
+accepted bound state, rebind/revoke during capture and interpretation, same-worker query progress,
+literal limits, missing capabilities and the remaining engines' view-only behavior. The recorded
+Codex case `confirms a model the catalog does not describe that applied its one effort at once`
+failed when every capture observed its footer; explicit observation restores that transcript-first
+behavior while keeping OpenCode's footer confirmation. Full native,
+failure-isolation and runtime-cost gates are part of the daemon-core integration acceptance run.

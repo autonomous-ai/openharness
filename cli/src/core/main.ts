@@ -730,7 +730,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const questionControlHosted = masterRunsEngineQuestionControl(harnessd, process.ppid)
   const isolatedQuestionControl = (engine: string): boolean => (questionControlHosted && isolatedLive(engine)) || (othersRuntime && isOtherEngine(engine))
   const modelControlHosted = masterRunsEngineModelControl(harnessd, process.ppid)
-  const isolatedModelControl = (engine: string): boolean => modelControlHosted && isolatedLive(engine)
+  const isolatedModelControl = (engine: string): boolean => (modelControlHosted && isolatedLive(engine)) || (othersRuntime && engine === 'opencode')
   const screenHosted = masterRunsEngineScreen(harnessd, process.ppid)
   const isolatedScreen = (engine: string): boolean => (screenHosted && isolatedLive(engine)) || (othersRuntime && isOtherEngine(engine))
   const submissionHosted = masterRunsEngineSubmission(harnessd, process.ppid)
@@ -817,7 +817,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const modelControls = createModelControls({
     handles: isolatedModelControl, inline: engine => inline?.modelControlFor(engine), resolve: id => registry.resolve(id),
     call: (service, method, payload, waitMs) => serviceLinksRef?.call(service, method, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
-    catalog: session => runtimeProfiles.codexCatalog(session), capture: captureTerminal,
+    catalog: session => runtimeProfiles.codexCatalog(session),
+    capture: (session, lines, observe) => observe && session.sessionId
+      ? runtimeProfiles.capturePane(session, captureTerminal, lines, true) : captureTerminal(session.agentId, lines),
+    literal: typeTerminal,
     text: (target, text, allowed) => submitTerminal(target, text, { allowed }), key: keyTerminal,
     waitForModel: (id, ms) => runtimeProfiles.waitForModel(id, ms), waitForProfile: (id, ms) => runtimeProfiles.waitForProfile(id, ms),
     confirmEffort: (id, effort) => runtimeProfiles.confirmEffort(id, effort),

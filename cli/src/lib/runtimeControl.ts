@@ -79,11 +79,11 @@ export class RuntimeProfileController {
       held = inspection.dialog ? 'dialog' : inspection.draft ? 'draft' : 'no prompt'
       if (!inspection.idle) throw new RuntimeProfileControlError('BUSY')
       held = 'switch unfinished'
-      if (!this.deps.manager.beginControl(session, target)) throw new RuntimeProfileControlError('BUSY')
+      if (session.sessionId && !this.deps.manager.beginControl(session, target)) throw new RuntimeProfileControlError('BUSY')
       held = ''
-      controlStarted = true
+      controlStarted = !!session.sessionId
       await native.apply({ target, current, options })
-      this.deps.manager.finishControl(session)
+      if (controlStarted) this.deps.manager.finishControl(session)
       controlStarted = false
     } catch (error) {
       // By the engine session, as beginControl keyed it. `sessionId` is whichever id the request named,

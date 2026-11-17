@@ -3,7 +3,7 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import type { RuntimeContext } from '../facets/runtime.js'
 import type { InlineRuntimeContext, InlineRuntimeReader } from '../facets/inlineRuntime.js'
 import { loadEngine } from '../inProcess.js'
-import { encodeRuntimeProfile, stripAnsi } from '../kit/runtime.js'
+import { blankRuntimeState, encodeRuntimeProfile, stripAnsi } from '../kit/runtime.js'
 import type { RuntimeReader } from '../worker/runtimeRequests.js'
 import type { OtherEngine } from '../otherEngines.js'
 
@@ -45,8 +45,11 @@ export function otherRuntimeReaders() {
         async config(value) { if (!await reader.config?.(context(value, () => {}))) return false },
         selectedModel: (session, state) => state.model && state.effort
           ? encodeRuntimeProfile({ sessionId: session.agentId, engine, model: state.model, effort: state.effort }) : null,
-        // Other engines are view-only. Extraction must not re-enable their dormant model drivers.
-        models: async () => [], supportsControl: () => false,
+        // Only OpenCode has a shipped driver in this worker. The remaining engines stay view-only.
+        models: async (session, state) => engine === 'opencode'
+          ? await reader.models?.(context({ session, state: state ?? blankRuntimeState() }, () => {})) ?? [] : [],
+        catalog: async session => engine === 'opencode' ? await reader.modelCatalog?.(session as RegisteredSession) ?? [] : [],
+        supportsControl: session => engine === 'opencode' && (reader.supportsControl?.(session as RegisteredSession) ?? false),
       }
     },
   }

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
-import type { TerminalActionResult } from '../../lib/terminalTypes.js'
+import { terminalActionNotStarted, type TerminalActionResult } from '../../lib/terminalTypes.js'
 import { createTerminalControl, type TerminalControlBackend } from './control.js'
 
 const ok: TerminalActionResult = { state: 'succeeded', dispatch: 'executed' }
@@ -49,6 +49,24 @@ const resolve = (target: string): RegisteredSession | undefined =>
   target === 'agent-1' || target === 'session-1' ? session : undefined
 
 describe('terminal control', () => {
+  it.each(['lease', 'dispatch'] as const)('fences literal control revoked during %s', async stage => {
+    const { terminals } = backend()
+    let allowed = true
+    const control = createTerminalControl({ resolve, terminals })
+    const acquire = vi.mocked(terminals.acquireLease).getMockImplementation()!
+    if (stage === 'lease') vi.mocked(terminals.acquireLease).mockImplementationOnce(async (...args) => {
+      allowed = false
+      return acquire(...args)
+    })
+    else vi.mocked(terminals.typeLiteralLease).mockImplementationOnce(async (_lease, _text, current) => {
+      allowed = false
+      return current?.() ? ok : terminalActionNotStarted('revoked')
+    })
+    expect(await control.typeTerminal('agent-1', '/models', () => allowed)).toBe(false)
+    if (stage === 'lease') expect(terminals.typeLiteralLease).not.toHaveBeenCalled()
+    expect(terminals.submitTextLease).not.toHaveBeenCalled()
+  })
+
   it('refuses new control immediately while an uncertain move holds the agent', async () => {
     const { terminals } = backend()
     const control = createTerminalControl({ resolve, terminals, refused: () => true })

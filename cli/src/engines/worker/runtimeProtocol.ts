@@ -1,6 +1,6 @@
 /** Private runtime-profile reads and reductions. No registry or terminal capabilities cross this link. */
 import { isAbsolute } from 'node:path'
-import type { RuntimeCatalogModel, RuntimeContext, RuntimeControl, RuntimeModelOption, RuntimeRecord, RuntimeSession, RuntimeState } from '../facets/runtime.js'
+import type { RuntimeCatalogModel, RuntimeContext, RuntimeControl, RuntimeModelOption, RuntimeProfile, RuntimeRecord, RuntimeSession, RuntimeState } from '../facets/runtime.js'
 import { encodeRuntimeProfile } from '../kit/runtime.js'
 import { record, type WorkerEngine } from './protocol.js'
 
@@ -46,16 +46,22 @@ export function runtimeState(value: unknown): value is RuntimeState {
     && (value.settingsEffort === undefined || label(value.settingsEffort))
 }
 
+/** A target can address an agent before its first conversation, without creating control state. */
+export function runtimeProfile(value: unknown, session: RuntimeSession): RuntimeProfile | null {
+  if (!record(value)) return null
+  // Older clients encoded the conversation id; core's controller still accepts that bound alias.
+  if ((value.sessionId !== session.agentId && (!session.sessionId || value.sessionId !== session.sessionId))
+    || value.engine !== session.engine || !text(value.model) || !value.model || !label(value.effort)
+    || value.id !== encodeRuntimeProfile({ sessionId: value.sessionId, engine: session.engine, model: value.model, effort: value.effort })) return null
+  return { id: value.id, sessionId: value.sessionId, engine: session.engine, model: value.model, effort: value.effort }
+}
+
 function controlOf(value: unknown, session: RuntimeSession): RuntimeControl | undefined | null {
   if (value === undefined || value === null) return undefined
-  if (!session.sessionId || !record(value) || !record(value.target) || typeof value.modelConfirmed !== 'boolean' || typeof value.effortConfirmed !== 'boolean'
+  if (!session.sessionId || !record(value) || typeof value.modelConfirmed !== 'boolean' || typeof value.effortConfirmed !== 'boolean'
     || (value.before !== null && !text(value.before, 32_768))) return null
-  const target = value.target
-  // Older clients encoded the conversation id; core's controller still accepts that bound alias.
-  if ((target.sessionId !== session.agentId && target.sessionId !== session.sessionId) || target.engine !== session.engine || !text(target.model) || !target.model || !label(target.effort)
-    || target.id !== encodeRuntimeProfile({ sessionId: target.sessionId, engine: session.engine, model: target.model, effort: target.effort })) return null
-  return { target: { id: target.id, sessionId: target.sessionId, engine: session.engine, model: target.model, effort: target.effort },
-    before: value.before, modelConfirmed: value.modelConfirmed, effortConfirmed: value.effortConfirmed }
+  const target = runtimeProfile(value.target, session)
+  return target ? { target, before: value.before, modelConfirmed: value.modelConfirmed, effortConfirmed: value.effortConfirmed } : null
 }
 
 /** Copy only the facts an engine needs. Workers cannot mutate core's caller-owned snapshot. */

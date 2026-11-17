@@ -1,5 +1,5 @@
 import type { RegisteredSession } from '../../lib/registry.js'
-import type { RuntimeContext, RuntimeModelOption } from './runtime.js'
+import type { RuntimeCatalogModel, RuntimeContext, RuntimeModelOption } from './runtime.js'
 import type { CursorModelTarget } from '../cursor/profileReader.js'
 import type { DevinModelTarget } from '../devin/runtimeProfile.js'
 import type { HermesModelTarget } from '../hermes/runtimeProfile.js'
@@ -19,6 +19,7 @@ export interface InlineRuntimeReaderBase {
   pane?(context: InlineRuntimeContext, text: string): void | false
   /** False means a warm-up or unavailable read, with no state contribution. */
   config?(context: InlineRuntimeContext): Promise<boolean>
+  modelCatalog?(session: RegisteredSession): Promise<RuntimeCatalogModel[]>
   models?(context: InlineRuntimeContext): Promise<RuntimeModelOption[]>
   /** Whether a pick from [models] can be driven into this session's pane; none can where this is absent. */
   supportsControl?(session: RegisteredSession): boolean

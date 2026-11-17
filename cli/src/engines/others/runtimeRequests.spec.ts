@@ -9,6 +9,7 @@ import { createQuestionControls } from '../../core/engines/questionControls.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { SCREEN_CAPABILITIES, SCREEN_READ } from '../worker/screenProtocol.js'
 import { QUESTION_CONTROL_APPLY, QUESTION_CONTROL_CAPABILITIES } from '../worker/questionControlProtocol.js'
+import { MODEL_CONTROL_CAPABILITIES, MODEL_CONTROL_VALIDATE, MODEL_CONTROL_APPLY } from '../worker/modelControlProtocol.js'
 import { RUNTIME_CAPABILITIES, RUNTIME_READ } from '../worker/runtimeProtocol.js'
 import type { ScreenReading } from '../facets/screen.js'
 import * as takeoverScreens from '../../lib/__fixtures__/takeoverScreens.js'
@@ -45,7 +46,7 @@ describe('shared other-engine runtime requests', () => {
     served.clear()
   }, 30_000)
 
-  it.each(OTHER_ENGINES)('keeps %s view-only through the real runtime port', async engine => {
+  it.each(OTHER_ENGINES.filter(engine => engine !== 'opencode'))('keeps %s view-only through the real runtime port', async engine => {
     vi.stubEnv('PATH', '/nonexistent-other-runtime-test')
     const served = otherRuntimeRequests({ query: async () => ({}) })
     const transport = createRuntimeTransport({ call: async (_service, method, payload) =>
@@ -54,12 +55,13 @@ describe('shared other-engine runtime requests', () => {
     const context = { session: { agentId: 'agent', sessionId: 'session', engine, model: null, cliVersion: null, cwd: '/tmp', transcriptPath: null }, state: blankRuntimeState() }
     expect((await transport.read(engine, context, { kind: 'describe' })).supportsControl).toBe(false)
     expect((await transport.read(engine, context, { kind: 'models' })).models).toEqual([])
+    expect(await served.requests[MODEL_CONTROL_CAPABILITIES]({ version: 1, engine }, core)).toMatchObject({ error: 'ENGINE_INVALID_REQUEST' })
     served.clear()
   })
 
   it('rejects every public-client, foreign-engine and malformed request before reading', async () => {
     const served = otherRuntimeRequests({ query: async () => ({}) })
-    for (const method of [SCREEN_CAPABILITIES, SCREEN_READ, RUNTIME_CAPABILITIES, RUNTIME_READ, QUESTION_CONTROL_CAPABILITIES, QUESTION_CONTROL_APPLY]) {
+    for (const method of [SCREEN_CAPABILITIES, SCREEN_READ, RUNTIME_CAPABILITIES, RUNTIME_READ, QUESTION_CONTROL_CAPABILITIES, QUESTION_CONTROL_APPLY, MODEL_CONTROL_CAPABILITIES, MODEL_CONTROL_VALIDATE, MODEL_CONTROL_APPLY]) {
       for (const asker of [{ owner: false, local: true }, { owner: true, local: false }, { ...core, connection: 'client' }]) {
         expect(await served.requests[method]({ version: 1, engine: 'pi' }, asker)).toMatchObject({ error: 'ENGINE_INVALID_REQUEST' })
       }

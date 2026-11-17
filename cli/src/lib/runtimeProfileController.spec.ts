@@ -1031,10 +1031,10 @@ describe('RuntimeProfileController', () => {
 
   it('refuses another engine without a supported native driver, before any key or the input lock', async () => {
     // A catalog alone does not authorize typing: a supported driver must exist too.
-    const value = session('opencode')
+    const value = session('cursor')
     const manager = new RuntimeProfileManager()
     manager.hydrate(value, [])
-    const target = encodeRuntimeProfile({ sessionId: 'h1', engine: 'opencode', model: 'vibe/minimax-m3', effort: 'auto' })
+    const target = encodeRuntimeProfile({ sessionId: 'h1', engine: 'cursor', model: 'vibe/minimax-m3', effort: 'auto' })
     vi.spyOn(manager, 'supportsControl').mockResolvedValue(true)
     vi.spyOn(manager, 'modelsForSession').mockResolvedValue([{ id: target, displayName: 'MiniMax M3' }])
     vi.mocked(loadEngine).mockClear()

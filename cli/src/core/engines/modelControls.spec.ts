@@ -34,6 +34,7 @@ function setup(engine: 'claude' | 'codex' = 'claude', isolated = true, connected
     }),
     catalog: vi.fn(async () => catalog), capture: vi.fn(async () => 'screen' as string | null),
     text: vi.fn(async (_id: string, _text: string, allowed: () => boolean) => allowed()),
+    literal: vi.fn(async (_id: string, _text: string, allowed: () => boolean) => allowed()),
     key: vi.fn(async (_id: string, _key: string, allowed: () => boolean) => allowed()),
     waitForModel: vi.fn(async () => true), waitForProfile: vi.fn(async () => false), confirmEffort: vi.fn(),
   }
@@ -62,7 +63,10 @@ describe('model-control authority', () => {
       expect(input.catalog).toEqual(catalog)
       expect(await host.catalog()).toEqual(catalog)
       expect(await host.capture(80)).toBe('screen')
+      expect(await host.capture(80, true)).toBe('screen')
       expect(await host.text('/model next')).toBe(true)
+      expect(await host.literal('/models')).toBe(true)
+      expect(await host.key('BSpace')).toBe(true)
       expect(await host.key('Enter')).toBe(true)
       expect(await host.waitForModel(1200)).toBe(true)
       expect(await host.waitForProfile(8000)).toBe(false)
@@ -71,9 +75,12 @@ describe('model-control authority', () => {
     await p.validate(s.check)
     await p.validate({ ...s.check, stage: 'scope', pane: { idle: true, draft: false, dialog: false, plan: false } })
     await p.apply(s.input)
+    expect(s.deps.capture).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'agent' }), 80, false)
+    expect(s.deps.capture).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'agent' }), 80, true)
     expect(s.deps.catalog).toHaveBeenCalledTimes(2) // preflight + the explicit refresh
     expect(s.deps.confirmEffort).toHaveBeenCalledWith('session', 'high')
     expect(s.deps.text).toHaveBeenCalledWith('agent', '/model next', expect.any(Function))
+    expect(s.deps.literal).toHaveBeenCalledWith('agent', '/models', expect.any(Function))
     expect(s.deps.inline).not.toHaveBeenCalled()
     expect(s.deps.call.mock.calls.filter(c => c[1] === MODEL_CONTROL_CAPABILITIES)).toHaveLength(1)
     await expect(owned!.key('Escape')).rejects.toMatchObject({ code: 'BUSY' })
@@ -234,7 +241,7 @@ describe('model-control authority', () => {
     s.native.apply = vi.fn(async () => {
       expect(await s.request({ kind: 'key', key: 'Enter' }, {}, 'engine-codex')).toEqual(denied)
       expect(await s.request({ kind: 'key', key: 'Enter' }, { token: 'guess' })).toEqual(denied)
-      for (const action of [{ kind: 'key', key: 'C-c' }, { kind: 'text', text: '/model next\nother' }, { kind: 'capture', lines: 101 }, { kind: 'key', key: 'Enter', target: '%9' }]) {
+      for (const action of [{ kind: 'key', key: 'C-c' }, { kind: 'text', text: '/model next\nother' }, { kind: 'capture', lines: 101 }, { kind: 'capture', lines: 80, observe: false }, { kind: 'capture', lines: 80, observe: 'yes' }, { kind: 'literal', text: '/models\nother' }, { kind: 'literal', text: 'x'.repeat(2001) }, { kind: 'literal', text: '' }, { kind: 'key', key: 'Enter', target: '%9' }]) {
         expect(await s.request(action)).toEqual(denied)
       }
       expect(await s.request({ kind: 'key', key: 'Enter' }, { extra: true })).toEqual(denied)
@@ -246,10 +253,11 @@ describe('model-control authority', () => {
     expect(s.deps.confirmEffort).not.toHaveBeenCalled()
   })
 
-  it.each(['query', 'write'] as const)('limits the %s budget for one granted control', async kind => {
+  it.each(['query', 'write', 'literal'] as const)('limits the %s budget for one granted control', async kind => {
     const s = setup()
     s.native.apply = vi.fn(async () => {
-      const action = kind === 'query' ? { kind: 'capture', lines: 100 } : { kind: 'key', key: 'Enter' }
+      const action = kind === 'query' ? { kind: 'capture', lines: 100 }
+        : kind === 'literal' ? { kind: 'literal', text: '/models' } : { kind: 'key', key: 'Enter' }
       for (let i = 0; i < (kind === 'query' ? 128 : 32); i++) expect(await s.request(action)).not.toHaveProperty('error')
       expect(await s.request(action)).toEqual(denied)
       expect(await s.request({ kind: 'key', key: 'Escape' })).toEqual(denied)

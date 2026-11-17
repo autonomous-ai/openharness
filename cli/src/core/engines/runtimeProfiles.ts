@@ -3,6 +3,7 @@ import type { RuntimeProfileState } from '../../lib/runtimeProfileState.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { LiveFrame } from '../../engines/worker/liveProtocol.js'
 import type { ProfileEvidence, RuntimeProfile, RuntimeRecord } from '../../engines/facets/runtime.js'
+import { modelControlEngine } from '../../engines/worker/modelControlProtocol.js'
 import { EngineReadError, readerEngine } from '../../engines/worker/protocol.js'
 import { createRuntimeSessions } from './runtimeSessions.js'
 import type { RuntimeTransport } from './runtimeTransport.js'
@@ -96,7 +97,7 @@ export function createRuntimeProfiles({ local, handles, resolve, transport }: Ru
       return handles(session.engine) ? observe(session, { kind: 'config' }, silent) : local?.ingestConfig(session, silent) ?? Promise.resolve(false)
     },
     async supportsControl(session: RegisteredSession): Promise<boolean> {
-      if (session.gateway || !readerEngine(session.engine)) return false
+      if (session.gateway || !modelControlEngine(session.engine)) return false
       return handles(session.engine) ? (await remote.read(session, { kind: 'describe' })).supportsControl : local?.supportsControl(session) ?? false
     },
     async effortAllowed(session: RegisteredSession, model: string, effort: string, listed: readonly string[] | null): Promise<boolean> {
@@ -109,7 +110,7 @@ export function createRuntimeProfiles({ local, handles, resolve, transport }: Ru
       return handles(session.engine) ? (await remote.read(session, { kind: 'catalog' })).catalog! : local?.codexCatalog(session) ?? []
     },
     async modelsForSession(session: RegisteredSession) {
-      if (session.gateway || !readerEngine(session.engine)) return []
+      if (session.gateway || !modelControlEngine(session.engine)) return []
       return handles(session.engine) ? (await remote.read(session, { kind: 'models' })).models! : local?.modelsForSession(session) ?? []
     },
     async modelsForSessions(sessions: RegisteredSession[]) {

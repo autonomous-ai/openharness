@@ -14,8 +14,9 @@ export function createModelControlHost(ask: (action: ModelControlAction) => Prom
   }
   return {
     catalog: async () => await call({ kind: 'catalog' }) as RuntimeCatalogModel[],
-    capture: async lines => await call({ kind: 'capture', lines }) as string | null,
+    capture: async (lines, observe) => await call({ kind: 'capture', lines, ...(observe ? { observe: true as const } : {}) }) as string | null,
     text: async text => await call({ kind: 'text', text }) as boolean,
+    literal: async text => await call({ kind: 'literal', text }) as boolean,
     key: async key => await call({ kind: 'key', key }) as boolean,
     waitForModel: async ms => await call({ kind: 'waitForModel', ms }) as boolean,
     waitForProfile: async ms => await call({ kind: 'waitForProfile', ms }) as boolean,

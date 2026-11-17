@@ -31,8 +31,9 @@ export interface ModelControlCheck {
 /** A single operation's revocable authority, never a terminal locator or arbitrary core API. */
 export interface ModelControlHost {
   catalog(): Promise<RuntimeCatalogModel[]>
-  capture(historyLines: number): Promise<string | null>
+  capture(historyLines: number, observe?: boolean): Promise<string | null>
   text(text: string): Promise<boolean>
+  literal(text: string): Promise<boolean>
   key(key: string): Promise<boolean>
   waitForModel(timeoutMs: number): Promise<boolean>
   waitForProfile(timeoutMs: number): Promise<boolean>
