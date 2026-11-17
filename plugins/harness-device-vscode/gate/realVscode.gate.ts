@@ -2,7 +2,9 @@
  * The local gate (`npm run test:vscode` in cli/): the extension, packed as `harness device vscode enable` packs it, in a
  * real VS Code downloaded into a temporary root and run with its own user data, extensions and home, against the
  * devices' real listener and VS Code half (vscodeTerminals.ts). Never the developer's VS Code, its settings, its
- * extensions or their daemon: everything it starts or writes is under the root, which it removes.
+ * extensions or their daemon: everything it starts or writes is under the root, which it removes. On a Mac the copy
+ * carries a bundle id of its own, LaunchServices forgets it after the run, and the run fails if the developer's VS Code's
+ * preferences changed (throwawayApp.ts).
  *
  * The driver (driver/run.cjs) runs as VS Code's extension tests and is the gate's hands: it makes the terminals and says
  * which is active. What the extension reports, and what it does with a `show`, is read at the listener.
@@ -18,6 +20,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { vscodeStreams, type VscodeTerminals } from '../../../cli/src/cable/hosts/vscodeTerminals.js'
 import { buildVersion, packVsix, recordVersion, type VscodeExtensionFiles } from '../../../cli/src/devices/vscodeExtension.js'
 import { openDevicesListener, REFUSED, type DevicesListener, type ListenerStream } from '../../../cli/src/services/devicesListener.js'
+import { assertRebranded, assertUnchanged, rebrand, stamp, unregister, VSCODE_PREFERENCES, type Stamp } from './throwawayApp.js'
 
 // @ts-expect-error — plain ESM with no declaration file
 const { readVscodeExtensionBundle } = await import('../../../cli/scripts/lib/vscodeExtensionBundle.mjs') as {
@@ -33,6 +36,9 @@ for (const name of Object.keys(process.env)) if (name.startsWith('VSCODE_') || n
 
 let root: string
 let executable: string
+/** The Mac's app bundle, rebranded before any launch. */
+let app: string | undefined
+let preferences: Stamp | undefined
 let userData: string
 let extensions: string
 let home: string
@@ -102,6 +108,7 @@ describe('the extension in a real, throwaway VS Code', () => {
   let shells: number[]
 
   beforeAll(async () => {
+    preferences = stamp(VSCODE_PREFERENCES)
     // Short and in /tmp: the devices' socket goes in it, and a Unix socket's path has 96 bytes.
     root = mkdtempSync('/tmp/harness-vscode-gate-')
     userData = join(root, 'user-data')
@@ -109,6 +116,10 @@ describe('the extension in a real, throwaway VS Code', () => {
     home = join(root, 'home')
     executable = macExecutable(await downloadAndUnzipVSCode({ cachePath: join(root, 'vscode'), version: 'stable' }))
     for (const path of [executable, userData, extensions, home]) expect(inside(path), 'a path outside the gate\'s root').toBe(true)
+    if (process.platform === 'darwin') {
+      app = dirname(dirname(dirname(executable)))
+      rebrand(app)
+    }
   })
 
   afterAll(async () => {
@@ -117,7 +128,9 @@ describe('the extension in a real, throwaway VS Code', () => {
     control?.close()
     await launched?.catch(() => {})
     await listener?.close()
+    if (app !== undefined) unregister(app)
     rmSync(root, { recursive: true, force: true })
+    if (preferences !== undefined) assertUnchanged(VSCODE_PREFERENCES, preferences)
   })
 
   it('installs the packed .vsix with the throwaway\'s own CLI, and its record reads as status reads it', async () => {
@@ -128,6 +141,7 @@ describe('the extension in a real, throwaway VS Code', () => {
     const cli = resolveCliPathFromVSCodeExecutablePath(executable)
     expect(inside(cli)).toBe(true)
     mkdirSync(home)
+    if (app !== undefined) assertRebranded(app)
     await promisify(execFile)(cli, ['--install-extension', vsix, '--force', '--user-data-dir', userData, '--extensions-dir', extensions], {
       env: { ...process.env, HOME: home },
     })
@@ -202,6 +216,7 @@ describe('the extension in a real, throwaway VS Code', () => {
     })
     await new Promise<void>((listening) => control!.listen(controlPath, listening))
 
+    if (app !== undefined) assertRebranded(app)
     launched = runTests({
       vscodeExecutablePath: executable,
       extensionDevelopmentPath: fileURLToPath(new URL('driver', import.meta.url)),

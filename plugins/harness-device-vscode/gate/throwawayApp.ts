@@ -1,0 +1,88 @@
+/**
+ * What keeps a throwaway VS Code on a Mac apart from the developer's own. macOS files an app's state by its bundle id,
+ * not its folder: a downloaded copy keeps Microsoft's `com.microsoft.VSCode`, and on 2026-11-17 a gate run rewrote the
+ * developer's `~/Library/Preferences/com.microsoft.VSCode.plist`, and LaunchServices kept the deleted copy under that id.
+ * So before any launch the copy gets ids of its own, after the run LaunchServices forgets it, and the gate checks the
+ * developer's preferences were left as they were.
+ */
+import { execFileSync, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { userInfo } from 'node:os'
+import { basename, dirname, join, relative } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
+
+export const GATE_ID = 'ai.autonomous.harness.vscode-gate'
+const MICROSOFT = 'com.microsoft.VSCode'
+const LSREGISTER = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
+
+/** The real home's, not $HOME's: the test setup points $HOME at a throwaway, and macOS does not. */
+export const VSCODE_PREFERENCES = join(userInfo().homedir, 'Library', 'Preferences', `${MICROSOFT}.plist`)
+
+/** Every bundle's Info.plist in the app: its own, its helpers' and its frameworks'. */
+function infoPlists(app: string): string[] {
+  return readdirSync(app, { recursive: true, encoding: 'utf8' }).filter((path) => basename(path) === 'Info.plist').map((path) => join(app, path))
+}
+
+function plistId(plist: string): string | undefined {
+  const read = spawnSync('plutil', ['-extract', 'CFBundleIdentifier', 'raw', '-o', '-', plist], { encoding: 'utf8' })
+  return read.status === 0 ? read.stdout.trim() : undefined
+}
+
+/** The id the bundle's signature carries, which is the one macOS knows its processes by. */
+function signedId(bundle: string): string | undefined {
+  return /^Identifier=(.+)$/m.exec(spawnSync('codesign', ['-dv', bundle], { encoding: 'utf8' }).stderr)?.[1]
+}
+
+/** Gives the app and every bundle in it whose id is Microsoft's an id under GATE_ID, signs it again ad hoc (the rewrite
+ *  broke Microsoft's signature, and the new one carries the new ids) and checks it. */
+export function rebrand(app: string): void {
+  for (const plist of infoPlists(app)) {
+    const id = plistId(plist)
+    if (id?.startsWith(MICROSOFT)) execFileSync('plutil', ['-replace', 'CFBundleIdentifier', '-string', `${GATE_ID}${id.slice(MICROSOFT.length)}`, plist])
+  }
+  execFileSync('codesign', ['--force', '--deep', '--sign', '-', app], { stdio: 'pipe' })
+  assertRebranded(app)
+}
+
+/** Throws, naming each, if any bundle in the app, or any app's signature, still carries Microsoft's id. */
+export function assertRebranded(app: string): void {
+  const left: string[] = []
+  for (const plist of infoPlists(app)) {
+    const id = plistId(plist)
+    const name = relative(dirname(app), plist)
+    if (id?.startsWith(MICROSOFT)) left.push(`${name} still carries ${id}`)
+    if (basename(dirname(plist)) !== 'Contents') continue
+    const signed = signedId(dirname(dirname(plist)))
+    if (signed === undefined || signed.startsWith(MICROSOFT)) left.push(`${relative(dirname(app), dirname(dirname(plist)))} is signed as ${signed ?? 'nothing'}`)
+  }
+  if (left.length) throw new Error(`refusing to launch the throwaway VS Code: ${left.join('; ')}`)
+}
+
+/** LaunchServices keeps an app it saw launch after its folder is gone: this forgets this one app, and only it, by the
+ *  real path LaunchServices records (/private/tmp for /tmp). */
+export function unregister(app: string): void {
+  execFileSync(LSREGISTER, ['-u', realpathSync(app)])
+}
+
+export type Stamp = { mtimeMs: number; sha256: string } | null
+
+/** The file's mtime and hash, or null when there is none (a VS Code never run leaves none). */
+export function stamp(path: string): Stamp {
+  let mtimeMs: number
+  try {
+    ;({ mtimeMs } = statSync(path))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
+  return { mtimeMs, sha256: createHash('sha256').update(readFileSync(path)).digest('hex') }
+}
+
+/** Throws if the file is not as `before` found it. It says how, never what the file holds. */
+export function assertUnchanged(path: string, before: Stamp): void {
+  const after = stamp(path)
+  if (isDeepStrictEqual(before, after)) return
+  const how = before === null ? 'made' : after === null ? 'removed' : 'rewritten or touched'
+  throw new Error(`the developer's VS Code's preferences changed while the throwaway VS Code ran: ${path} was ${how}`)
+}

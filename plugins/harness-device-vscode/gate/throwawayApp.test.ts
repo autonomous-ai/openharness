@@ -54,7 +54,7 @@ describe.runIf(process.platform === 'darwin')('the throwaway VS Code app', () =>
 
   it('refuses a copy whose signature still carries Microsoft\'s id', () => {
     const { app, helpers } = vscodeApp()
-    execFileSync('codesign', ['--force', '--deep', '--sign', '-', app])
+    execFileSync('codesign', ['--force', '--deep', '--sign', '-', app], { stdio: 'pipe' })
     for (const path of [app, ...helpers]) execFileSync('plutil', ['-replace', 'CFBundleIdentifier', '-string', GATE_ID, join(path, 'Contents', 'Info.plist')])
     expect(() => assertRebranded(app)).toThrow(/signed.*com\.microsoft\.VSCode/)
   })
