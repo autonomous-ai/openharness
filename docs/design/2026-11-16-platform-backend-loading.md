@@ -245,3 +245,14 @@ cover this combined source, and do not provide Linux or signed Windows proof.
 Combined source/bundle loading, host move refusal/cancellation, lifecycle,
 backend and locator callers, and TypeScript checks are selected before running.
 Their receipts will be recorded here; none has passed on this integration yet.
+
+The first combined run at `60b8cc2929` passed 762 affected cases (four existing
+skips), TypeScript and the full release-bundle file, including its real service
+loading and broken-artifact controls. The overall receipt failed because two
+architecture assertions still listed `lib/windows/treeKill.ts` as eagerly loaded.
+Its remaining value consumer is now the selected PTY implementation; the current
+launch extraction had removed the other eager route. The exact warmed list gains
+that file and the cold inventory loses it. This is an inventory correction with
+no further runtime change. The failed receipt is retained at
+`.harness/validation/20261117T233634.407396Z-47883/receipt.json`; only architecture
+needs a follow-up run.

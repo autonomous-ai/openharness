@@ -657,6 +657,7 @@ describe('the daemon\'s shape', () => {
       'lib/ptyHostBackend.ts',
       'lib/terminalEnvironment.ts',
       'lib/windows/guestHostBackend.ts',
+      'lib/windows/treeKill.ts',
     ]
     const closure = closureOf('core/main.ts')
     expect(implementation.filter((file) => closure.has(file)),

@@ -503,7 +503,6 @@ lib/windows/powershell.ts
 lib/windows/processTable.ts
 lib/windows/shell.ts
 lib/windows/storeAppAlias.ts
-lib/windows/treeKill.ts
 lib/workspaceCheck.ts
 lib/wsLiveness.ts
 localWsServer.ts
