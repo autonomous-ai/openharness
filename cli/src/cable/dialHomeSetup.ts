@@ -7,7 +7,7 @@
 import { realpathSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { claudePluginState, ownDirectory, refreshSkill, removeSkill, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
-import { DIAL_SKILL_FILE, MAX_HOMES, listable, readSetup, readWritten, writeSetup, type DialEngine, type DialRemoved, type DialSetupRecord, type SetupCount } from '../devices/dialSkillFiles.js'
+import { DIAL_SKILL_FILE, MAX_HOMES, listable, readSetup, readWritten, writeSetup, type DialEngine, type DialRemoved, type DialSetupRecord, type Read, type SetupCount } from '../devices/dialSkillFiles.js'
 import { rolloutHome, takesOwner, type RolloutOwner } from './codexRolloutHome.js'
 
 export interface DialHomeSetupDeps {
@@ -20,7 +20,7 @@ export interface DialHomeSetupDeps {
   /** The adopted homes, read at each start pass (lib/engineHomes.ts movedEngineHomes). */
   adopted(): { claude: string[]; codex: string[] }
   /** dial-skill.json's removals, read anew at each call. */
-  removed(): DialRemoved
+  removed(): Read<DialRemoved>
   /** A monotonic clock in ms. */
   now(): number
   /** One event in the day's tally; [reason] a fixed word, never a path. */
@@ -56,6 +56,10 @@ const MAX_SAID = 2 * MAX_HOMES
 /** A home that could not be written waits this long before a scan tries it again. */
 const RETRY_MS = 3_600_000
 
+/** dial-skill.json is there but could not be read: what was removed is not known, so the pass stops, writing nothing
+ *  more. */
+class RemovalsUnread extends Error {}
+
 export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
   const removedFile = join(deps.dataDir, DIAL_SKILL_FILE)
   const settingsFile = join(deps.claudeHome, 'settings.json')
@@ -87,9 +91,16 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
    *  moment's bad file does not take the skill out. Off until a read says on. */
   let pluginOn = false
 
+  /** Read only inside a pass. */
+  const removedNow = (): DialRemoved => {
+    const removed = deps.removed()
+    if (removed.unread) throw new RemovalsUnread()
+    return removed
+  }
+
   /** Read only once a dial is recorded: a pass never runs before. */
   const on = (engine: DialEngine): boolean => {
-    if (deps.removed()[engine] === true) return false
+    if (removedNow()[engine] === true) return false
     if (engine === 'codex') return true
     const state = claudePluginState(settingsFile)
     if (state !== 'unknown') pluginOn = state === 'on'
@@ -176,12 +187,12 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
    *  them, and a plugin uninstalled through /plugin runs no disable). After a disable only a recorded folder whose
    *  removal failed stays recorded, so a later disable still finds it. With the plugin off only what Harness took out
    *  leaves the record: a skill the person had deleted stays deleted once the plugin is back. A folder the other engine
-   *  holds its skill in while on (~/.codex/skills linked to ~/.claude/skills) keeps it, and a disable only takes it from
-   *  this engine's record. */
+   *  holds its skill in while on (~/.codex/skills linked to ~/.claude/skills) keeps it, and a disable only takes it
+   *  from this engine's record. */
   const turnOff = (engine: DialEngine, counts: Counts): void => {
     onAtPass.delete(engine)
     handled[engine].clear()
-    const removal = deps.removed()[engine] === true
+    const removal = removedNow()[engine] === true
     if (removal) {
       // Once a removal: another disable writes dial-skill.json again.
       const at = stampOf(removedFile)
@@ -335,24 +346,42 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
 
   const zero = (): Counts => ({ claude: { wrote: 0, removed: 0, failed: 0 }, codex: { wrote: 0, removed: 0, failed: 0 } })
 
-  const pass = (): void => {
+  /** One pass, and its line. */
+  const run = (work: (counts: Counts) => void): void => {
     const counts = zero()
-    startPass(counts)
+    try {
+      work(counts)
+    } catch (error) {
+      if (!(error instanceof RemovalsUnread)) throw error
+      sayOnce('unread', 'dial skill: removals not read')
+      // The next scan reads it again, though neither file's stamp has changed.
+      stamp = ''
+    }
     report(counts)
+  }
+
+  /** The record read anew; false, and said, when it could not be read: written from that read, it would lose the
+   *  plugin's version and the homes. */
+  const readRecord = (): boolean => {
+    const read = readSetup(deps.dataDir)
+    if (read.unread) {
+      deps.log('dial setup: record not read')
+      return false
+    }
+    record = read
+    return true
   }
 
   return {
     started() {
       // The devices listener, which `harness device notify` rings, does not exist on Windows: a skill there would name
       // a command that cannot ring.
-      if (deps.platform === 'win32') return
-      record = readSetup(deps.dataDir)
-      if (record.dial) pass()
+      if (deps.platform === 'win32' || !readRecord()) return
+      if (record.dial) run(startPass)
     },
 
     attached() {
-      if (deps.platform === 'win32') return
-      record = readSetup(deps.dataDir)
+      if (deps.platform === 'win32' || !readRecord()) return
       if (!record.dial) {
         // Saved before any home is touched: a home is written only on a computer that has had a dial.
         const next = { ...record, dial: true }
@@ -362,45 +391,48 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
         }
         record = next
       }
-      pass()
+      run(startPass)
     },
 
     scanned(owners) {
       if (deps.platform === 'win32' || !record.dial) return
-      const counts = zero()
-      // A removal or enable since, or the plugin turned on or off: every home is written again, or taken out, without
-      // a restart.
-      if (stampNow() !== stamp) startPass(counts)
-      // An engine installed since the pass: its default home is written once it is there.
-      for (const engine of ENGINES) {
-        const home = defaultHome[engine]
-        if (!onAtPass.has(engine) || handled[engine].has(home) || isRefused(home) || ownDirectory(home, deps.uid) !== 'ok') continue
-        const outcome = writeHome(engine, home, counts)
-        if (outcome !== 'off') settle(engine, home, outcome)
-      }
-      // Codex only: Claude Code's sessions are read only under the default and adopted homes. Codex read off is passed
-      // until a stamp changes: off, a home only has ours taken out again, which that read did.
-      for (const owner of onAtPass.has('codex') ? owners : []) {
-        if (!takesOwner(owner)) continue
-        const home = rolloutHome(owner.record, realDataDir)
-        if (home === null) {
-          sayOnce('shape', 'dial skill: path refused (shape)')
-          continue
+      run((counts) => {
+        // A removal or enable since, or the plugin turned on or off: every home is written again, or taken out, without
+        // a restart.
+        if (stampNow() !== stamp) startPass(counts)
+        // An engine installed since the pass: its default home is written once it is there.
+        for (const engine of ENGINES) {
+          const home = defaultHome[engine]
+          if (!onAtPass.has(engine) || handled[engine].has(home) || isRefused(home) || ownDirectory(home, deps.uid) !== 'ok') continue
+          const outcome = writeHome(engine, home, counts)
+          if (outcome !== 'off') settle(engine, home, outcome)
         }
-        if (handled.codex.has(home) || isRefused(home) || handled.codex.size >= MAX_HOMES) continue
-        const state = ownDirectory(home, deps.uid)
-        if (state !== 'ok') {
-          sayOnce(home, `dial skill: path refused (${state})`)
-          continue
+        // Codex only: Claude Code's sessions are read only under the default and adopted homes. Codex read off is
+        // passed until a stamp changes: off, a home only has ours taken out again, which that read did.
+        for (const owner of onAtPass.has('codex') ? owners : []) {
+          if (!takesOwner(owner)) continue
+          const home = rolloutHome(owner.record, realDataDir)
+          if (home === null) {
+            sayOnce('shape', 'dial skill: path refused (shape)')
+            continue
+          }
+          if (handled.codex.has(home) || isRefused(home) || handled.codex.size >= MAX_HOMES) continue
+          const state = ownDirectory(home, deps.uid)
+          if (state !== 'ok') {
+            sayOnce(home, `dial skill: path refused (${state})`)
+            continue
+          }
+          const outcome = writeHome('codex', home, counts)
+          if (outcome === 'off') break
+          settle('codex', home, outcome)
         }
-        const outcome = writeHome('codex', home, counts)
-        if (outcome === 'off') break
-        settle('codex', home, outcome)
-      }
-      report(counts)
+      })
     },
 
-    wanted: (engine) => record.dial && deps.removed()[engine] !== true,
+    wanted(engine) {
+      const removed = deps.removed()
+      return record.dial && !removed.unread && removed[engine] !== true
+    },
 
     plugin: () => record.plugin,
 

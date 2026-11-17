@@ -30,25 +30,48 @@ export interface DialRemoved { claude?: true; codex?: true }
 
 export interface DialSetupRecord { dial: boolean; plugin?: string; homes: DialSkillHomes }
 
-/** [file] parsed as JSON; undefined when it is missing, unreadable, longer than [max] bytes or not JSON. */
+/** A file read: [unread] when it is there but could not be read (EACCES, EIO, EMFILE), so it reads as empty, and
+ *  nothing may be written from that read: it would lose what the file holds. */
+export type Read<T> = T & { unread?: true }
+
+const codeOf = (error: unknown): string => (error as NodeJS.ErrnoException).code ?? 'FAILED'
+
+/** [file] parsed as JSON; undefined when it is missing, longer than [max] bytes or not JSON. One that is there but
+ *  cannot be read throws. */
 const readJson = (file: string, max: number): unknown => {
+  let fd: number
   try {
-    const fd = openSync(file, 'r')
-    try {
-      // One byte past the limit tells a file at the limit from a longer one.
-      const buffer = Buffer.alloc(max + 1)
-      let length = 0
-      while (length < buffer.length) {
-        const read = readSync(fd, buffer, length, buffer.length - length, null)
-        if (read === 0) break
-        length += read
-      }
-      return length > max ? undefined : JSON.parse(buffer.toString('utf8', 0, length))
-    } finally {
-      closeSync(fd)
+    fd = openSync(file, 'r')
+  } catch (error) {
+    if (codeOf(error) === 'ENOENT') return undefined
+    throw error
+  }
+  // One byte past the limit tells a file at the limit from a longer one.
+  const buffer = Buffer.alloc(max + 1)
+  let length = 0
+  try {
+    while (length < buffer.length) {
+      const read = readSync(fd, buffer, length, buffer.length - length, null)
+      if (read === 0) break
+      length += read
     }
+  } finally {
+    closeSync(fd)
+  }
+  if (length > max) return undefined
+  try {
+    return JSON.parse(buffer.toString('utf8', 0, length))
   } catch {
     return undefined
+  }
+}
+
+/** [read], or [empty] said unread when its file could not be read. */
+const orUnread = <T extends object>(read: () => T, empty: T): Read<T> => {
+  try {
+    return read()
+  } catch {
+    return { ...empty, unread: true }
   }
 }
 
@@ -61,7 +84,7 @@ const writeJson = (file: string, value: unknown): string | undefined => {
     return undefined
   } catch (error) {
     rmSync(temporary, { force: true })
-    return (error as NodeJS.ErrnoException).code ?? 'FAILED'
+    return codeOf(error)
   }
 }
 
@@ -96,8 +119,8 @@ const writtenOf = (file: Record<string, unknown>): DialSkillHomes => {
 
 /** The skills folders the command wrote into: a `disable` removes from them too, whatever home the command that runs it
  *  has (its own CODEX_HOME or CLAUDE_CONFIG_DIR). */
-export function readWritten(dataDir: string): DialSkillHomes {
-  return writtenOf(settingOf(dataDir))
+export function readWritten(dataDir: string): Read<DialSkillHomes> {
+  return orUnread(() => writtenOf(settingOf(dataDir)), { claude: [], codex: [] })
 }
 
 /** Only true is a removal: the old menu's booleans at the top of the file are another thing and are not read. */
@@ -109,8 +132,8 @@ const removedOf = (file: Record<string, unknown>): DialRemoved => {
   return removed
 }
 
-export function readRemoved(dataDir: string): DialRemoved {
-  return removedOf(settingOf(dataDir))
+export function readRemoved(dataDir: string): Read<DialRemoved> {
+  return orUnread(() => removedOf(settingOf(dataDir)), {})
 }
 
 /**
@@ -118,8 +141,13 @@ export function readRemoved(dataDir: string): DialRemoved {
  * becomes the folders the command wrote into for [engine]; else they stay. The old menu's answers are not carried, so they leave the file at its next write.
  */
 export function writeRemoved(dataDir: string, engine: DialEngine, removed: boolean, written?: string[]): string | undefined {
-  // Read right before the write, so the other engine's removal and folders stay.
-  const file = settingOf(dataDir)
+  // Read right before the write, so the other engine's removal and folders stay; one that cannot be read is left.
+  let file: Record<string, unknown>
+  try {
+    file = settingOf(dataDir)
+  } catch (error) {
+    return codeOf(error)
+  }
   const marks = removedOf(file)
   if (removed) marks[engine] = true
   else delete marks[engine]
@@ -142,8 +170,8 @@ const setupOf = (value: unknown): DialSetupRecord => {
   }
 }
 
-export function readSetup(dataDir: string): DialSetupRecord {
-  return setupOf(readJson(join(dataDir, DIAL_SETUP_FILE), MAX_FILE_BYTES))
+export function readSetup(dataDir: string): Read<DialSetupRecord> {
+  return orUnread(() => setupOf(readJson(join(dataDir, DIAL_SETUP_FILE), MAX_FILE_BYTES)), setupOf(undefined))
 }
 
 /** undefined once saved; else the error's code. */
