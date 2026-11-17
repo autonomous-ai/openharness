@@ -8,6 +8,7 @@ typedef enum { TOUCH_NONE = 0, TOUCH_GT911 } touch_chip_t;
 
 typedef struct {
     const char  *name;          // goes up the cable in `hello.hw`, and into the boot log
+    const char  *kind;          // `hello.board`: which of the daemon's per-board rules apply ("pro")
     int          lcd_rst;       // ST7703 reset GPIO
     int          touch_rst;     // GT911 reset GPIO
     touch_chip_t touch;

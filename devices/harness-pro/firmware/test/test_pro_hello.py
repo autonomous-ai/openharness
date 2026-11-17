@@ -23,8 +23,8 @@ code = r'''
 #include <stdio.h>
 #include <string.h>
 typedef struct cJSON { int unused; } cJSON;
-typedef struct { const char *name; } board_t;
-static const board_t *board(void) { static const board_t b = {"pro-stub"}; return &b; }
+typedef struct { const char *name, *kind; } board_t;
+static const board_t *board(void) { static const board_t b = {"pro-stub", "kind-stub"}; return &b; }
 static cJSON root_obj;
 static const char *pro_cable_fw_version(void) { return "0.0.0"; }
 static bool device_mac_str(char *o, size_t n) { snprintf(o, n, "aa"); return true; }
@@ -73,7 +73,7 @@ assert pairs == [
     ("product", "harness"),
     ("proto", "3"),
     ("hw", "pro-stub"),
-    ("board", "pro"),
+    ("board", "kind-stub"),   # the board table's kind (Harness Max compiles this file and says "max")
     ("swarms", "members-v1"),
     ("recap", "long-v1"),
     ("activity", "steps-v1"),
@@ -88,4 +88,6 @@ for round_only in ("carry", "draft", "speech", "form", "visit", "workspace", "se
     assert round_only not in keys and round_only not in body, f"hello mentions {round_only}"
 # The real hello is not conditional on a board define: nothing in it may be compiled out.
 assert "#if" not in body and "DEVICE_" not in body
+# And the Pro's table names the kind the daemon has always seen from it.
+assert re.search(r'\.kind\s*=\s*"pro"', (main / "board/board_pro.c").read_text()), "board_pro.c: kind is not \"pro\""
 print("Pro hello: fw product proto hw board swarms recap activity stats player ota mac, and no round-dial keys")

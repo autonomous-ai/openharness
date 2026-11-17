@@ -82,6 +82,16 @@ bash "$here/test_ph_perf.sh"
 cc "${cflags[@]}" -Wframe-larger-than=2048 -I"$fw/test/host_esp" -c -o "$out/pro_frame.o" "$disp/pro_frame.c"
 cc "${cflags[@]}" -I"$fw/test/host_esp" -o "$out/test_pro_frame" "$fw/test/test_pro_frame.c" "$out/pro_frame.o" "${objs[@]}"
 "$out/test_pro_frame"
+# The same strip math on Harness Max's 1920 x 480 glass, which compiles pro_frame.c and the compositor at its own size:
+# each axis is checked against its own length.
+wide=(-DHT_WIDTH=1920 -DHT_HEIGHT=480 -DPRO_DISPLAY_W=1920 -DPRO_DISPLAY_H=480 -I"$fw/test/host_esp")
+wide_objs=()
+for src in "$disp/pro_frame.c" "$disp/terminal.c" "$disp/pro_canvas.c" "$pod/pod_draw.c" "$out/pro_fonts.c"; do
+    cc "${cflags[@]}" "${wide[@]}" -c -o "$out/wide_$(basename "$src" .c).o" "$src"
+    wide_objs+=("$out/wide_$(basename "$src" .c).o")
+done
+cc "${cflags[@]}" "${wide[@]}" -o "$out/test_pro_frame_wide" "$fw/test/test_pro_frame.c" "${wide_objs[@]}"
+"$out/test_pro_frame_wide"
 
 # pro_cable: the daemon's JSON in, pro_app_* out. Real cJSON from the ESP-IDF checkout (CI has the sparse one at
 # $IDF_PATH), a recording stub of pro_app_api.h and a stub cable_link (test_pro_cable.c).

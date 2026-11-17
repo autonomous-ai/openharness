@@ -13,7 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "app/pro_app.h"
+#include "app/pro_app_hooks.h"
 #include "audio/audio_capture.h"
 #include "audio/pro_recorder.h"
 #include "cable/pro_cable.h"

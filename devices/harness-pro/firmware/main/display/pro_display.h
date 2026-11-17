@@ -1,10 +1,16 @@
 // The Pro's glass: a 720 x 720 RGB565 panel and its GT911 touch, in the panel's own orientation (no turn).
+// Harness Max implements this API for its 1920 x 480 glass and compiles the shared callers with both sizes defined.
 #pragma once
 
 #include <stdbool.h>
 #include <stdint.h>
 
-#define PRO_DISPLAY_PX 720
+#ifndef PRO_DISPLAY_W
+#define PRO_DISPLAY_W 720
+#endif
+#ifndef PRO_DISPLAY_H
+#define PRO_DISPLAY_H 720
+#endif
 
 // Backlight, panel and touch bring-up, in that order. Needs the I2C bus and the power latch
 // (board_pro / power_pro) to have been set up first. Aborts if the panel will not come up; a missing
@@ -30,7 +36,7 @@ void pro_display_power(bool on);
 // Strip buffers: two internal, DMA-capable buffers of PRO_STRIP_PX pixels each. The renderer rasterises into one
 // while the DMA of the other is in flight (A/B).
 #define PRO_STRIP_LINES 24
-#define PRO_STRIP_PX (PRO_DISPLAY_PX * PRO_STRIP_LINES)
+#define PRO_STRIP_PX (PRO_DISPLAY_W * PRO_STRIP_LINES)
 uint16_t *pro_panel_strip(int which);   // 0 or 1
 
 // Push the w*h pixels in strip buffer `buf` (a pro_panel_strip() buffer, rows packed at width w) to the
