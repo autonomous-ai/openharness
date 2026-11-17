@@ -206,14 +206,14 @@ describe('the watcher wiring', () => {
     ])
   })
 
-  it('hands a live line\'s on, with the parser\'s turn after it', () => {
+  it('hands a live line\'s on, with the parser\'s turn after a line that ends one', () => {
     const run = wired({ s1: 'claude' })
     const record = (value: object, timestamp: string) => JSON.stringify({ ...value, timestamp })
     run.watcher.emit('line', line('s1', 'claude', record(JSON.parse(CLAUDE_PROMPT), '2026-11-17T01:00:00.000Z')))
     const parser = run.normalizers.liveParsers.get('s1')!
     const opened = parser.snapshot()
     expect(opened).toMatchObject({ turnOpen: true, openedAt: Date.parse('2026-11-17T01:00:00.000Z') })
-    expect(vi.mocked(run.deps.emit).mock.calls[0][2]).toEqual({ at: Date.parse('2026-11-17T01:00:00.000Z'), turn: opened })
+    expect(vi.mocked(run.deps.emit).mock.calls[0][2]).toStrictEqual({ at: Date.parse('2026-11-17T01:00:00.000Z'), over: undefined, turn: undefined })
     // A paused `/goal` pass: its turn_duration is the engine's own end, with no Stop after it.
     run.watcher.emit('line', line('s1', 'claude', record({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn' } }, '2026-11-17T01:00:00.500Z')))
     run.watcher.emit('line', line('s1', 'claude', record({ type: 'attachment', attachment: { type: 'goal_status', met: false, condition: 'finish' } }, '2026-11-17T01:00:01.000Z')))

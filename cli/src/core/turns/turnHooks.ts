@@ -147,7 +147,7 @@ export function createTurnHooks({
     // A turn an attach picks back up: the end held before it goes on first (R1.4).
     if (read.resumed) { deliver(sessionId); return emit(sessionId, events, { resumed: true }) }
     if (turn?.subagents && events.some(event => isProgressEvent(event.type))) turn.progressAt = Date.now()
-    if (!turn?.endsByHook) return emit(sessionId, events)
+    if (!turn?.endsByHook || (!turn.held && !events.some(event => event.type === 'turn_ended'))) return emit(sessionId, events)
     // An aborted end, one no Stop follows (a paused /goal pass), and one its Stop came for already go on at once.
     const atOnce = read.over || (read.turn && read.turn.identity === turn.stopped)
     const out: LiveEvent[] = []

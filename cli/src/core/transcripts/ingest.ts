@@ -79,7 +79,9 @@ export function createIngest({
     if (!parser || parser.engine !== session.engine || !('ingest' in parser)) { parser = adapter.create(session); liveParsers.set(evt.sessionId, parser) }
     const read = (parser as LiveParser).ingest(evt.text)
     if (read.failure !== undefined) announceTurnAborted(evt.sessionId, session.engine, read.failure)
-    return { events: read.events, read: { at: read.at, over: read.over, turn: parser.snapshot() } }
+    // The turn is what a held end is kept with (core/turns/turnHooks.ts): only a line that ends one reads it.
+    const turn = read.events.some(event => event.type === 'turn_ended') ? parser.snapshot() : undefined
+    return { events: read.events, read: { at: read.at, over: read.over, turn } }
   }
   const ingestLine = (evt: LineEvent): LiveEvent[] | null => readLine(evt)?.events ?? null
   /** Feed what the watcher delivers through `ingestLine` into the funnel. */

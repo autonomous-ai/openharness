@@ -1212,7 +1212,9 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
       expect(run.deps.emit).toHaveBeenLastCalledWith('s1', ABORT)
       read({ type: 'turn_aborted', reason: 'interrupted' })
       await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
-      expect(vi.mocked(run.deps.emit).mock.calls).toEqual([['s1', [{ type: 'turn_started', payload: { userMessage: 'go' } }]], ['s1', ABORT]])
+      // A read with no events is nothing: the funnel drops it.
+      expect(vi.mocked(run.deps.emit).mock.calls.filter(([, events]) => events.length))
+        .toEqual([['s1', [{ type: 'turn_started', payload: { userMessage: 'go' } }]], ['s1', ABORT]])
     })
 
     // Review Focus 5: an interrupt that reaches the daemon after the next turn's start was read is about the turn before.
