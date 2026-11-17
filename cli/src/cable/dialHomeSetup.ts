@@ -201,6 +201,8 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
     // Homes linked to one skills folder (an Orca profile's) are one write, recorded once. Recorded, it is only brought
     // current: a skill the person deleted stays deleted.
     if (found !== null && listed.includes(found)) {
+      // Refused at the pass's look at the record: not tried again before its hour.
+      if (refused.has(found)) return 'refused'
       const result = refreshSkill(found)
       tally(counts, engine, result)
       if (result === 'gone') leftRemoved(engine, found)
