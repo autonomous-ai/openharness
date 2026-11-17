@@ -18,7 +18,7 @@ const ALLOWED_PREFIXES = [
 export async function GET(): Promise<Response> {
   return resolveManifestDownload({
     manifestUrl: MANIFEST_URL,
-    field: "dmg",
+    field: "device-macos-dmg",
     allowedPrefixes: ALLOWED_PREFIXES,
     extension: ".dmg",
     product: "Harness Device",

@@ -70,7 +70,7 @@ The scripts the jobs run: `scripts/release-setup.sh` (the runner's tools), `scri
 ## The manifest
 
 `https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/metadata.json`, read from the bucket, never
-through the CDN. Tauri's static update format, plus `dmg`:
+through the CDN. Tauri's static update format, plus an entry for each file in the shape of Desktop's manifest:
 
 ```json
 {
@@ -81,11 +81,15 @@ through the CDN. Tauri's static update format, plus `dmg`:
     "darwin-aarch64": { "url": "https://cdn.autonomous.ai/harness/device/0.1.0/Harness-Device.app.tar.gz", "signature": "<.sig contents>" },
     "darwin-x86_64": { "url": "https://cdn.autonomous.ai/harness/device/0.1.0/Harness-Device.app.tar.gz", "signature": "<.sig contents>" }
   },
-  "dmg": { "url": "https://cdn.autonomous.ai/harness/device/0.1.0/Harness-Device.dmg", "sha256": "<64 hex>", "size": 12345678 }
+  "device-macos": { "version": "0.1.0", "url": "https://cdn.autonomous.ai/harness/device/0.1.0/Harness-Device.app.tar.gz", "sha256": "<64 hex>", "size": 12000000 },
+  "device-macos-dmg": { "version": "0.1.0", "url": "https://cdn.autonomous.ai/harness/device/0.1.0/Harness-Device.dmg", "sha256": "<64 hex>", "size": 12345678 },
+  "device-macos-arm64": { "version": "0.1.0", "url": "https://cdn.autonomous.ai/harness/device/0.1.0/Harness-Device.app.tar.gz", "sha256": "<64 hex>", "size": 12000000 },
+  "device-macos-arm64-dmg": { "version": "0.1.0", "url": "https://cdn.autonomous.ai/harness/device/0.1.0/Harness-Device.dmg", "sha256": "<64 hex>", "size": 12345678 }
 }
 ```
 
-The app reads `platforms` (its updater ignores `dmg`); the website's download link reads `dmg`.
+The app is universal, so the arm64 pair names the same files as the other pair. The app reads `platforms` (its
+updater ignores the rest); the website's download link reads `device-macos-dmg`.
 
 ## Keys
 
