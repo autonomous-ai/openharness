@@ -700,10 +700,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     | undefined
   const toWindows = (phase: 'down' | 'move' | 'up', dy: number, velocity: number): void =>
     core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } })
-  /** The app's answer, for the stroke that asked it alone: one left behind by a newer stroke, or by the devices stopping,
-   *  is dropped, so nothing of that stroke is sent anywhere. */
+  /** The app's answer, for the stroke that asked it alone: one left behind by a newer stroke, or one that lands once the
+   *  devices began to stop (the dial still sends while the stop awaits its listener), is dropped, so nothing of that
+   *  stroke is sent anywhere. A stroke already decided keeps its route: a window that heard its down hears its up. */
   const decided = (asked: { deciding: ScrollTarget; held: Held }, visible: boolean): void => {
-    if (stroke !== asked) return
+    if (stopped || stroke !== asked) return
     const { deciding: { adapter, pane }, held } = asked
     if (visible) {
       // The travel held meanwhile goes as lines at once; what follows goes line by line.
@@ -1853,10 +1854,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     inboxGone: (pollId) => inboxCalls?.inboxGone(pollId),
     // The serial ports first: a port left held makes esptool fail in a way that reads like dead hardware.
     stop: async () => {
-      // A cable still waiting on the listener never starts.
+      // A cable still waiting on the listener never starts, and a stroke's answer landing from here on sends nothing.
       stopped = true
-      // A stroke still asking its app is dropped: its answer, landing after the stop, sends nothing.
-      stroke = undefined
       // The listener before anything, once it has opened: no front reaches a stopped cable or sets a timer after the
       // timers below are cleared.
       await (await listening)?.close()
