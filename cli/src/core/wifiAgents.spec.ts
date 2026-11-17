@@ -99,34 +99,21 @@ describe('the Wi-Fi device\'s doors into the core', () => {
   function doorsWith(over: { window?: boolean; socket?: boolean; devices?: boolean } = {}) {
     const agents = [agent({ agentId: 'a', sessionId: 's-a', engine: 'codex' })]
     const socket = { hasLocalClient: vi.fn(() => over.window !== false), sendFirstLocal: vi.fn(() => true), onCreateAgent: null }
-    const deviceInput = { submit: vi.fn(), cancelDelivery: vi.fn(() => true), onTurnStarted: vi.fn() }
     const devices = { stepFocus: vi.fn(async () => ({ machineId: 'mac', agentId: 'a' })), scroll: vi.fn() }
     const answer = vi.fn(async () => ({ ok: true }))
     const stop = vi.fn(async () => true)
     const doors = wifiDoors({
       registry: registryOf(agents), machineId: () => 'mac', displayName: () => 'A', running: () => false,
-      socket: () => (over.socket === false ? null : socket), deviceInput: () => deviceInput, answer, stop,
+      socket: () => (over.socket === false ? null : socket), answer, stop,
       devices: () => (over.devices === false ? null : devices),
     })
-    return { doors, socket, deviceInput, devices, answer, stop }
+    return { doors, socket, devices, answer, stop }
   }
 
   it('lists the agents and says whether a window is there', async () => {
     const { doors } = doorsWith()
     expect(await doors.view()).toMatchObject({ agents: [{ agentId: 'a', name: 'A', state: 'idle' }], hasWindow: true })
     expect((await doorsWith({ socket: false }).doors.view()).hasWindow).toBe(false)
-  })
-
-  it('types a device\'s prompt through the pane\'s lock, adapted to the agent\'s engine, and lets go of it as its turn starts', () => {
-    const { doors, deviceInput } = doorsWith()
-    doors.submit('s-a', '/goal ship it', 'd1')
-    expect(deviceInput.submit).toHaveBeenCalledWith('a', expect.any(String), 'd1')
-    doors.submit('gone', 'hello', 'd2')
-    expect(deviceInput.submit).toHaveBeenLastCalledWith('gone', 'hello', 'd2')
-    doors.cancel('d1')
-    expect(deviceInput.cancelDelivery).toHaveBeenCalledWith('d1')
-    doors.started('a', 'hello')
-    expect(deviceInput.onTurnStarted).toHaveBeenCalledWith('a', 'hello')
   })
 
   it('stops a turn and answers a question, never a permission dialog', async () => {

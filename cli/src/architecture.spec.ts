@@ -389,7 +389,7 @@ describe('the daemon\'s shape', () => {
 
   it('screen, submission and native-control brokers and input authority do not load the engines\' native code', () => {
     for (const entry of ['core/input.ts', 'core/questions.ts', 'core/engines/screens.ts', 'core/engines/screenTransport.ts',
-      'core/deviceInput.ts', 'lib/sessionInput.ts', 'core/engines/submissions.ts', 'core/engines/submissionTransport.ts',
+      'lib/sessionInput.ts', 'core/engines/submissions.ts', 'core/engines/submissionTransport.ts',
       'core/engines/nativeControls.ts', 'core/turns/activity.ts']) {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file)), entry).toEqual([])
     }

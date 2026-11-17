@@ -166,7 +166,7 @@ async function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none'
     followsLive: id => others.follows(id),
     mirror: { inheritSummary: vi.fn() }, forgetSession: async id => { forget(id) }, clients: { send }, announceSession: vi.fn(),
     stoppedAgents, syncRecapPool: vi.fn(),
-    input: { forget: vi.fn(), awaitingConfirmation: () => false }, submitAgent: vi.fn(), deviceInput: { forget: vi.fn() },
+    input: { forget: vi.fn(), awaitingConfirmation: () => false }, submitAgent: vi.fn(),
     homes: { copilot: directory, grok: directory, agy: directory }, capturePane: async () => null,
     openclawPaneRead: () => false, openclawPaneDue: () => false, openclawStateDir: async () => null,
   })

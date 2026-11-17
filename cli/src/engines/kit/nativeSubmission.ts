@@ -1,7 +1,7 @@
 /**
  * Claude Code's and Codex's reading of a prompt typed into their composer, in their engine worker. The core's
  * session input judged the composer from its last prompt marker down and the Device's route from Claude Code's
- * `❯` or Codex's `›` alone; both readings moved here verbatim (sessionInput.ts, deviceInput.ts), so each route
+ * `❯` or Codex's `›` alone; both readings moved here verbatim (sessionInput.ts), so each route
  * decides as it did before the move.
  */
 import type { SubmissionReading } from '../facets/submission.js'

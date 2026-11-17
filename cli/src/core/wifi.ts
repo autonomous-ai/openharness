@@ -23,21 +23,17 @@
  *   request or a pairing asks for the process (core/devicesWake.ts).
  */
 import type { LiveEvent } from '../engines/kit/events.js'
-import type { DeviceInputStatus } from './deviceInput.js'
 import type { CoreApi, RemoteClient, WifiPort, WifiResume } from './api.js'
-import type { AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'
 
 /** What the core's own modules tell the Wi-Fi device: its deliveries into the panes (core/input.ts), the
  *  transcript lines (core/transcripts/), the turns and their live events (core/turns/). */
 export interface WifiFeed {
   needsTranscript(agentId: string, sessionId: string, engine: string): boolean
   observeTranscript(agentId: string, sessionId: string, engine: string, line: string): void
-  delivery(event: AutonomousDeviceDelivery): void
   inputDispatched(agentId: string, deliveryId: string, text: string, sessionId?: string): void
-  inputStatus(event: DeviceInputStatus): void
   agentGone(agentId: string): void
-  turnStarted(agentId: string): void
   turnEnded(agentId: string, aborted?: boolean): void
+  events(agentId: string, events: readonly LiveEvent[]): void
   stream(agentId: string, events: readonly LiveEvent[]): void
 }
 
@@ -67,7 +63,7 @@ export interface WifiCoreDeps {
    *  for: the service runs in the core's process, and is there or failed as the core started. */
   want(): boolean
   /** The doors that are one call each into the core's own modules. */
-  doors: Pick<CoreApi['wifi'], 'view' | 'submit' | 'cancel' | 'started' | 'stop' | 'answer' | 'create' | 'stepFocus' | 'scroll' | 'focusApp' | 'reveal'>
+  doors: Pick<CoreApi['wifi'], 'view' | 'stop' | 'answer' | 'create' | 'stepFocus' | 'scroll' | 'focusApp' | 'reveal'>
 }
 
 /** The engines whose transcripts prove a device's turn (lib/autonomous-device/resultEvidence.ts). */
@@ -156,17 +152,18 @@ export function createWifiCore(deps: WifiCoreDeps) {
   const feed: WifiFeed = {
     needsTranscript: (agentId, _sessionId, engine) => up && watched.has(agentId) && PROVEN_BY_TRANSCRIPT.has(engine),
     observeTranscript: (agentId, sessionId, engine, line) => port()?.transcript(agentId, sessionId, engine, line),
-    delivery: (event) => port()?.delivery(event),
     inputDispatched: (agentId, deliveryId, text, sessionId) => {
       // Before the service hears of it: the prompt's first lines may be written before it could ask.
       watched.add(agentId)
       dispatched.set(agentId, (dispatched.get(agentId) ?? 0) + 1)
       port()?.dispatched(agentId, deliveryId, text, sessionId)
     },
-    inputStatus: (event) => port()?.inputStatus(event),
     agentGone: (agentId) => port()?.agentGone(agentId),
-    turnStarted: (agentId) => port()?.turnStarted(agentId),
     turnEnded: (agentId, aborted = false) => port()?.turnEnded(agentId, aborted),
+    // Keep batch adjacency intact for the component; send no extra batch for ordinary output.
+    events: (agentId, events) => {
+      if (events.some(event => event.type === 'turn_started' || event.type === 'turn_ended')) port()?.events(agentId, events)
+    },
     stream: (agentId, events) => {
       if (!up) return
       const tools = streamed.has(agentId)

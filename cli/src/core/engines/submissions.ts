@@ -1,6 +1,6 @@
 /**
  * Core's submission evidence: an engine's reading of its composer after a paste, and of a turn's prompt as
- * it recorded it. Core passes plain text and keeps every verdict (lib/sessionInput.ts, core/deviceInput.ts);
+ * it recorded it. Core passes plain text and keeps every verdict (lib/sessionInput.ts);
  * an answer is fenced to the session binding it was asked under and never cached.
  */
 import { sessionBinding as identity } from './sessionBinding.js'

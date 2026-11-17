@@ -16,9 +16,8 @@ const harness = (over: Partial<CloudHarness> = {}): CloudHarness => {
 function setup(port: CloudPort | null = null) {
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }
   const openQuestions = new Map<string, Record<string, unknown>>()
-  const deviceInput = { setUserAction: vi.fn() }
-  const cloud = createCloudAgents({ port: () => port, clients, openQuestions, deviceInput, log: () => {} })
-  return { cloud, clients, openQuestions, deviceInput }
+  const cloud = createCloudAgents({ port: () => port, clients, openQuestions, log: () => {} })
+  return { cloud, clients, openQuestions }
 }
 
 const port = (): CloudPort & { [K in keyof CloudPort]: ReturnType<typeof vi.fn> } => ({
@@ -159,7 +158,7 @@ describe('agents a service owns', () => {
   })
 
   it('shows its questions where questions show, and closes them', () => {
-    const { cloud, clients, openQuestions, deviceInput } = setup()
+    const { cloud, clients, openQuestions } = setup()
     cloud.doors.publish([harness()])
     cloud.doors.ask('cloud_none', 'cloud_q_1', { text: 'Which?', choices: [] })
     cloud.doors.ask('cloud_1', 'q_1', { text: 'Which?', choices: [] })
@@ -170,7 +169,6 @@ describe('agents a service owns', () => {
     expect(clients.sendLocal).toHaveBeenCalledWith(asked)
     expect(clients.sendCommander).toHaveBeenCalledWith(asked)
     expect(openQuestions.get('cloud_1')).toEqual(asked)
-    expect(deviceInput.setUserAction).toHaveBeenCalledWith('cloud_1', true)
     // One with no choices is the windows' alone: the dial's question screen takes no words.
     clients.sendCommander.mockClear()
     cloud.doors.ask('cloud_1', 'cloud_q_2', { text: 'Sure?', choices: 'x' as never })
@@ -183,7 +181,6 @@ describe('agents a service owns', () => {
     cloud.doors.unask('cloud_1', 'cloud_q_1')
     expect(clients.sendLocal).toHaveBeenLastCalledWith({ type: 'commander_question_close', agentId: 'cloud_1', dbSessionId: 'cloud_1', payload: { requestId: 'cloud_q_1' } })
     expect(openQuestions.has('cloud_1')).toBe(false)
-    expect(deviceInput.setUserAction).toHaveBeenLastCalledWith('cloud_1', false)
   })
 
   it('hands New Harness, words, an answer and Stop for its agents to the service, and nothing else', async () => {
@@ -264,7 +261,7 @@ describe('agents a service owns', () => {
 
   it('logs a question by default', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const cloud = createCloudAgents({ port: () => null, clients: { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, openQuestions: new Map(), deviceInput: { setUserAction: vi.fn() } })
+    const cloud = createCloudAgents({ port: () => null, clients: { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, openQuestions: new Map() })
     cloud.doors.publish([harness()])
     cloud.doors.ask('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] })
     expect(log).toHaveBeenCalledWith(expect.stringContaining('[cloud] cloud_1 asking'))

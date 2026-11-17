@@ -9,7 +9,7 @@ function harness() {
   const port = {
     session: vi.fn(), request: vi.fn(async () => {}), dropped: vi.fn(), revoked: vi.fn(), resume: vi.fn(async () => {}), card: vi.fn(),
     turnStarted: vi.fn(), turnEnded: vi.fn(), stream: vi.fn(), transcript: vi.fn(), delivery: vi.fn(), dispatched: vi.fn(),
-    inputStatus: vi.fn(), agentGone: vi.fn(), appFocus: vi.fn(async () => {}), revealed: vi.fn(), stop: vi.fn(),
+    events: vi.fn(), input: vi.fn(), disconnected: vi.fn(), inputStatus: vi.fn(), agentGone: vi.fn(), appFocus: vi.fn(async () => {}), revealed: vi.fn(), stop: vi.fn(),
   } satisfies WifiPort
   let on: WifiPort | null = port
   const clients = new Map<string, RemoteClient>()
@@ -129,22 +129,16 @@ describe('the Wi-Fi device, as the core keeps it', () => {
 
   it('passes what the agents do and the panes say on to the service, and nothing when it is off', () => {
     const { wifi, port, off } = harness()
-    wifi.feed.delivery({ deliveryId: 'd', sessionId: 'a', state: 'delivered' })
-    wifi.feed.inputStatus({ deliveryId: 'd', sessionId: 'a', mode: 'queued', phase: 'waiting' } as never)
     wifi.feed.agentGone('a')
-    wifi.feed.turnStarted('a')
     wifi.feed.turnEnded('a')
     wifi.feed.turnEnded('b', true)
-    expect(port.delivery).toHaveBeenCalledWith({ deliveryId: 'd', sessionId: 'a', state: 'delivered' })
-    expect(port.inputStatus).toHaveBeenCalled()
     expect(port.agentGone).toHaveBeenCalledWith('a')
-    expect(port.turnStarted).toHaveBeenCalledWith('a')
     expect(port.turnEnded).toHaveBeenCalledWith('a', false)
     expect(port.turnEnded).toHaveBeenCalledWith('b', true)
     off()
-    for (const call of [() => wifi.feed.delivery({ deliveryId: 'd', sessionId: 'a', state: 'delivered' }), () => wifi.feed.agentGone('a'),
+    for (const call of [() => wifi.feed.agentGone('a'),
       () => wifi.feed.observeTranscript('a', 's', 'claude', 'x'), () => wifi.feed.inputDispatched('a', 'd', 't'),
-      () => wifi.feed.inputStatus({} as never), () => wifi.feed.turnStarted('a'), () => wifi.feed.turnEnded('a'),
+      () => wifi.feed.turnEnded('a'),
       () => wifi.card({ type: 'commander_event' }), () => wifi.fromGateway.request('c', {}, null), () => wifi.fromGateway.revoked('i'),
       () => wifi.fromGateway.dropped('c'), () => wifi.fromGateway.session('c', device('i')), () => wifi.started(null)]) expect(call()).toBeUndefined()
     wifi.api.streams(['a'])

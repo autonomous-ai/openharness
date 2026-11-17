@@ -8,7 +8,7 @@
  * The socket's two handlers stay bound there: `answer` (question_response) and `monitorActivity`.
  */
 import { AskQuestionController, QuestionWatcher, type QuestionAnswerPayload, type QuestionAnswerResult } from '../lib/questionController.js'
-import type { AutonomousDeviceInput } from './deviceInput.js'
+import type { SessionInputController } from '../lib/sessionInput.js'
 import { preview, sid } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { TerminalControl } from './terminals/control.js'
@@ -31,11 +31,11 @@ export interface QuestionDeps {
   someoneCanAnswer: () => boolean
   /** Whether an agent's `harness wait` or `watch` follows [agentId] by what is pushed it (core/toolWatches.ts). */
   followedByTool: (agentId: string) => boolean
-  deviceInput: Pick<AutonomousDeviceInput, 'setUserAction'>
+  input: Pick<SessionInputController, 'setUserAction'>
 }
 
 export function createQuestions({
-  questionControlFor, readQuestion, resolve, terminal, acquireTerminalControl, clients, agentIdFor, sessionTurnOpen, someoneCanAnswer, followedByTool, deviceInput,
+  questionControlFor, readQuestion, resolve, terminal, acquireTerminalControl, clients, agentIdFor, sessionTurnOpen, someoneCanAnswer, followedByTool, input,
 }: QuestionDeps) {
   const { captureTerminal, submitTerminal, keyTerminal } = terminal
   // AskUserQuestion bridge: mirrors the question to the device's question screen, and keys the device's
@@ -95,7 +95,7 @@ export function createQuestions({
     hasDevice: (sessionId) => someoneCanAnswer() || followedByTool(agentIdFor(sessionId)),
     isDriving: (sessionId) => questions.isDriving(sessionId),
     onQuestion: (sessionId, requestId, shaped, detail) => {
-      deviceInput.setUserAction(agentIdFor(sessionId), true)
+      input.setUserAction(agentIdFor(sessionId), true)
       questions.remember(requestId, sessionId)
       if (!detail?.permission) pending.set(sessionId, { openedAt: Date.now(), text: shaped[0]?.q ?? '' })
       showAwaitingAnswer(sessionId)
@@ -133,7 +133,7 @@ export function createQuestions({
     onQuestionGone: (sessionId, requestId) => {
       heard?.('answered', sessionId, requestId)
       pending.delete(sessionId)
-      deviceInput.setUserAction(agentIdFor(sessionId), false)
+      input.setUserAction(agentIdFor(sessionId), false)
       const closed = {
         type: 'commander_question_close',
         agentId: agentIdFor(sessionId),

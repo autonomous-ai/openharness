@@ -13,6 +13,33 @@ function fixture(now?: () => number, fullAnswer?: string) {
 }
 
 describe('Autonomous device local-agent service', () => {
+  it('bounds live native reservations in the component without evicting or replaying unknown work', async () => {
+    const submit = vi.fn()
+    const service = new AutonomousDeviceService({ machineId: 'machine', serverInstanceId: 'instance',
+      agents: () => ['agent', 'other'].map(agentId => ({ agentId, name: 'Project', engine: 'claude', state: 'idle' })),
+      submit, stop: async () => true, answer: async () => true, cancelDelivery: () => false, recent: () => [] })
+    const request = (index: number) => ({ type: 'turn.send', requestId: randomUUID(), machineId: 'machine',
+      agentId: index % 2 ? 'other' : 'agent', text: `input ${index}`, idempotencyKey: `intent${index}` })
+    for (let index = 0; index < 64; index++) await service.request('device', request(index))
+    const first = service.receipt('device', 'intent0')!
+    service.delivery({ sessionId: 'agent', deliveryId: first.deliveryId, state: 'unknown', reason: 'dispatch_ambiguous' })
+    expect(await service.request('device', request(64))).toMatchObject({ error: { code: 'BACKPRESSURE' } })
+    expect(submit).toHaveBeenCalledTimes(64)
+    expect(await service.request('device', request(0))).toMatchObject({ status: 'duplicate', receipt: { state: 'unknown', deliveryId: first.deliveryId } })
+    expect(submit).toHaveBeenCalledTimes(64)
+    service.coreDisconnected()
+    service.agentLife({ kind: 'ended', agentId: 'agent' })
+    // Same component generation, even after losing the core and agent: its unknown admissions stay reserved.
+    expect(await service.request('device', request(64))).toMatchObject({ error: { code: 'BACKPRESSURE' } })
+    expect(submit).toHaveBeenCalledTimes(64)
+    // Proven refusal releases a live reservation; uncertainty never does.
+    const second = service.receipt('device', 'intent1')!
+    service.delivery({ sessionId: 'other', deliveryId: second.deliveryId, state: 'rejected', reason: 'queue_full' })
+    expect(await service.request('device', request(64))).toMatchObject({ status: 'accepted' })
+    expect(submit).toHaveBeenCalledTimes(65)
+    expect(service.receipt('device', 'intent0')).toMatchObject({ state: 'unknown', deliveryId: first.deliveryId })
+  })
+
   it('ensures focus through the desktop once for concurrent enables', async () => {
     const requestAppFocus = vi.fn(() => true)
     const submit = vi.fn()

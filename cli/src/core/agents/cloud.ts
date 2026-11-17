@@ -12,7 +12,6 @@
 import type { CloudCore, CloudPort, CloudResult } from '../api.js'
 import { CLOUD_DOWN } from '../api.js'
 import { cloudAgentFrame, cloudHarnessIn, isCloudAgent, type CloudAgentFrame, type CloudHarness } from '../../lib/cloudAgents.js'
-import type { AutonomousDeviceInput } from '../deviceInput.js'
 import type { QuestionAnswerResult } from '../../lib/questionController.js'
 
 type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Record<string, unknown> }
@@ -24,7 +23,6 @@ export interface CloudAgentsDeps {
   clients: { send(frame: Frame): void; sendCommander(frame: Frame): void; sendLocal(frame: Frame): void }
   /** What is still being asked, by agent, for a window that connects later (core/questions.ts). */
   openQuestions: Map<string, Record<string, unknown>>
-  deviceInput: Pick<AutonomousDeviceInput, 'setUserAction'>
   log?: (line: string) => void
 }
 
@@ -49,7 +47,7 @@ const recapOf = (harness: CloudHarness): { recap: string; text: string } | null 
   return { recap: line.slice(0, HEADLINE_MAX), text: line.slice(0, TEXT_MAX) }
 }
 
-export function createCloudAgents({ port, clients, openQuestions, deviceInput, log = (line) => console.log(line) }: CloudAgentsDeps) {
+export function createCloudAgents({ port, clients, openQuestions, log = (line) => console.log(line) }: CloudAgentsDeps) {
   let harnesses = new Map<string, CloudHarness>()
   /** Each open question's agent, by request id: an answer to one of these goes to the service. */
   const asked = new Map<string, string>()
@@ -125,7 +123,6 @@ export function createCloudAgents({ port, clients, openQuestions, deviceInput, l
         // windows take and the dial does not.
         payload: { requestId, questions: [{ key: 'answer', q: question.text.slice(0, 500), options: choices, multi: false, canText: true }], notification: { id: requestId, kind: 'needsYou' } },
       }
-      deviceInput.setUserAction(agentId, true)
       if (choices.length) {
         onDial.add(requestId)
         clients.sendCommander(frame)
@@ -138,7 +135,6 @@ export function createCloudAgents({ port, clients, openQuestions, deviceInput, l
       if (asked.get(requestId) !== agentId) return
       asked.delete(requestId)
       const frame: Frame = { type: 'commander_question_close', agentId, dbSessionId: agentId, payload: { requestId } }
-      deviceInput.setUserAction(agentId, false)
       if (onDial.delete(requestId)) clients.sendCommander(frame)
       clients.sendLocal(frame)
       openQuestions.delete(agentId)

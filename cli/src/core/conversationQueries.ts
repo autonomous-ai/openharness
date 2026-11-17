@@ -44,8 +44,9 @@ export async function answerConversationQuery(core: Pick<CoreApi, 'conversations
   }
   const id = payload.id
   if (query === 'resolve' || query === 'discover' || query === 'lastFullText') {
-    if (!text(id)) return { error: 'BAD_QUERY' }
-    return { value: await reads[query](id) }
+    if (!text(id) || id.length > 200) return { error: 'BAD_QUERY' }
+    const value = await reads[query](id)
+    return authority?.current?.() === false ? { error: 'SERVICE_UNAVAILABLE' } : { value }
   }
   if (query === 'recentAsks' || query === 'recaps') {
     if (!text(id) || !count(payload.n)) return { error: 'BAD_QUERY' }

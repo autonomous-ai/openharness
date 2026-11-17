@@ -24,7 +24,7 @@ function setup(over: Partial<QuestionDeps> = {}) {
     sessionTurnOpen: (sessionId) => sessionId === 'busy',
     someoneCanAnswer: () => true,
     followedByTool: () => false,
-    deviceInput: { setUserAction: vi.fn() },
+    input: { setUserAction: vi.fn() },
     ...over,
   }
   return { deps, asking: createQuestions(deps) }
@@ -114,7 +114,7 @@ describe('questions', () => {
     asking.hearQuestions(heard)
     given(asking.questionWatcher).onQuestion('s1', 'r1', shaped)
     expect(heard).toHaveBeenCalledWith('asked', 's1', 'r1')
-    expect(deps.deviceInput.setUserAction).toHaveBeenCalledWith('a1', true)
+    expect(deps.input.setUserAction).toHaveBeenCalledWith('a1', true)
     expect(remember).toHaveBeenCalledWith('r1', 's1')
     const asked = vi.mocked(deps.clients.sendLocal).mock.calls[0][0]
     expect(asked).toMatchObject({ type: 'commander_question', agentId: 'a1', dbSessionId: 's1', payload: { requestId: 'r1', questions: shaped } })
@@ -147,14 +147,14 @@ describe('questions', () => {
     given(asking.questionWatcher).onQuestionGone('s1', 'r0')
     vi.mocked(deps.clients.sendCommander).mockClear()
     vi.mocked(deps.clients.sendLocal).mockClear()
-    vi.mocked(deps.deviceInput.setUserAction).mockClear()
+    vi.mocked(deps.input.setUserAction).mockClear()
     log.mockClear()
     asking.hearQuestions(answered)
     asking.openQuestions.set('s1', {})
     given(asking.questionWatcher).onQuestionGone('s1', 'r1')
     const closed = { type: 'commander_question_close', agentId: 'a1', dbSessionId: 's1', payload: { requestId: 'r1' } }
     expect(answered).toHaveBeenCalledWith('answered', 's1', 'r1')
-    expect(deps.deviceInput.setUserAction).toHaveBeenCalledWith('a1', false)
+    expect(deps.input.setUserAction).toHaveBeenCalledWith('a1', false)
     expect(deps.clients.sendCommander).toHaveBeenCalledWith(closed)
     expect(deps.clients.sendLocal).toHaveBeenCalledWith(closed)
     expect(deps.clients.sendRemote).toHaveBeenCalledWith(closed)

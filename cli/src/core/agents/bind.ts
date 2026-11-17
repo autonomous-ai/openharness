@@ -17,7 +17,6 @@ import { continuationOf } from '../../engines/sessionFiles.js'
 import { sessionStoreOf } from '../../engines/sessionStoreContracts.js'
 import type { TurnRecaps } from '../turns/recaps.js'
 import { paneReadIdentity } from '../transcripts/readIdentity.js'
-import type { AutonomousDeviceInput } from '../deviceInput.js'
 import { isRecentlyDeleted } from '../../lib/deletedSessions.js'
 import { transcriptIsFirstTurn } from '../../lib/firstTurnReplay.js'
 import { sid } from '../../lib/log.js'
@@ -89,7 +88,6 @@ export interface BindDeps {
   input: Pick<SessionInputController, 'forget' | 'awaitingConfirmation'>
   /** Types a person's message into an agent's pane (core/input.ts `submitAgent`). */
   submitAgent: (agentId: string, content: string) => void
-  deviceInput: Pick<AutonomousDeviceInput, 'forget'>
   /** Where Copilot, Grok and agy keep their sessions. */
   homes: { copilot: string; grok: string; agy: string }
   /** One owner per conversation, stopped harnesses included (conversationOwners.ts). */
@@ -122,7 +120,7 @@ interface BindPass {
 
 export function createBinding({
   registry, mirror, forgetSession, clients, attachSession, captureReader, announceSession, stoppedAgents, syncRecapPool,
-  input, submitAgent, deviceInput, homes, owners, capturePane, openclawPaneRead, openclawPaneDue, openclawStateDir, hermesTerminal,
+  input, submitAgent, homes, owners, capturePane, openclawPaneRead, openclawPaneDue, openclawStateDir, hermesTerminal,
   followsLive,
 }: BindDeps) {
   /**
@@ -718,7 +716,6 @@ export function createBinding({
     if (!result || !result.isNew) return
     if (previousOwner && previousOwner.agentId !== result.entry.agentId) {
       input.forget(previousOwner.agentId)
-      deviceInput.forget(previousOwner.agentId)
       announceSession(previousOwner)
     }
     lastRepairAttempt.delete(agent.agentId)

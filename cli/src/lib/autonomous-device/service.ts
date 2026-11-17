@@ -1,7 +1,9 @@
 import { DeviceResultPayloadSchema } from './resultContract.js'
 import { DeviceResultEvidence, inputHash, type ResultEvidence } from './resultEvidence.js'
 import type { DeviceResultJournal } from './resultJournal.js'
-import type { DeviceInputStatus } from '../../core/deviceInput.js'
+import type { AgentLife, AgentView } from '../../core/api.js'
+import type { SessionInputProgress } from '../sessionInput.js'
+import { submissionPolicy } from '../../engines/submissionPolicies.js'
 import type { AutonomousDeviceStore } from './store.js'
 import { DEVICE_STORE_CAPABILITIES, DeviceStoreError } from './storeContract.js'
 import { DEVICE_ADDON_CAPABILITIES, DeviceAddonError, DeviceAddons } from './addons.js'
@@ -11,6 +13,12 @@ import { AgentStreams, STREAM_KINDS, STREAM_TTL_DEFAULT_SEC, STREAM_TTL_MAX_SEC,
 
 export type AutonomousDeviceFrame = Record<string, unknown> & { type: string }
 export type ReceiptState = 'queued' | 'delivered' | 'started' | 'completed' | 'rejected' | 'unknown'
+export interface DeviceInputStatus {
+  sessionId: string
+  deliveryId: string
+  mode: 'direct' | 'steering' | 'native_queue' | 'native_input' | 'daemon_queue'
+  phase: 'waiting_for_writer' | 'waiting_for_user' | 'waiting_for_turn' | 'submitted' | 'accepted' | 'unconfirmed'
+}
 export interface AutonomousDeviceReceipt {
   idempotencyKey: string; deliveryId: string; operation: string; state: ReceiptState
   agentId: string; machineId: string; serverInstanceId: string; turnId: string | null
@@ -90,6 +98,8 @@ export class AutonomousDeviceService {
   private readonly now: () => number
   private readonly entries = new Map<string, Entry>()
   private readonly deliveries = new Map<string, Entry>()
+  /** Display facts for admitted inputs, retained only as long as their existing receipt entries. */
+  private readonly inputContexts = new WeakMap<Entry, Pick<AgentView, 'agentId' | 'sessionId' | 'engine' | 'cliVersion'>>()
   private readonly turns = new Map<string, Entry>()
   // Transcript adapters expose session boundaries, not engine input/turn IDs. Once
   // inputs overlap, a session-wide done cannot prove which request finished.
@@ -145,6 +155,55 @@ export class AutonomousDeviceService {
     entry.sessionId = sessionId || this.transcriptSessions.get(agentId)
     this.persist()
     this.transcriptAgents.add(agentId)
+  }
+  inputContext(deliveryId: string, context: Pick<AgentView, 'agentId' | 'sessionId' | 'engine' | 'cliVersion'>): void {
+    const entry = this.deliveries.get(deliveryId)
+    if (entry?.receipt.agentId === context.agentId) this.inputContexts.set(entry, { ...context })
+  }
+  inputCurrent(deliveryId: string): boolean {
+    const entry = this.deliveries.get(deliveryId)
+    return !!entry && entry.receipt.serverInstanceId === this.serverInstanceId && !['completed', 'rejected'].includes(entry.receipt.state)
+  }
+  inputProgress(event: SessionInputProgress): void {
+    const entry = event.deliveryId ? this.deliveries.get(event.deliveryId) : undefined
+    if (!entry || entry.receipt.agentId !== event.agentId || entry.receipt.serverInstanceId !== this.serverInstanceId) return
+    if (event.phase === 'dispatching' && event.content !== undefined) this.inputDispatched(event.agentId, event.deliveryId!, event.content, event.sessionId)
+    const context = this.inputContexts.get(entry)
+    const policy = context ? submissionPolicy(context.engine) : undefined
+    const waiting = event.phase.startsWith('waiting_for_')
+    let mode: DeviceInputStatus['mode'] = waiting ? 'daemon_queue' : 'direct'
+    if (!waiting && event.duringTurn) {
+      mode = 'native_input'
+      if (context && context.sessionId === event.sessionId) {
+        mode = policy?.busyInput?.mode ?? 'daemon_queue'
+        const version = context.cliVersion?.match(/(\d+)\.(\d+)\.(\d+)/)
+        const [major, minor] = policy?.busyInput?.steeringSince ?? [Infinity, 0]
+        if (version && (Number(version[1]) > major || Number(version[1]) === major && Number(version[2]) >= minor)) mode = 'steering'
+      }
+    }
+    const phase = event.phase === 'dispatching' || event.phase === 'written' ? 'submitted'
+      : event.phase === 'composer_available' ? 'accepted' : event.phase as DeviceInputStatus['phase']
+    this.inputStatus({ sessionId: event.agentId, deliveryId: event.deliveryId!, mode, phase })
+  }
+  /** A new core is not a new component generation: keep every admission until its own proof settles it. */
+  coreDisconnected(): void {
+    for (const entry of this.entries.values()) {
+      if (entry.receipt.serverInstanceId === this.serverInstanceId && entry.receipt.operation === 'turn.send'
+        && !['completed', 'rejected'].includes(entry.receipt.state)) this.update(entry, 'unknown', 'CORE_DISCONNECTED')
+    }
+  }
+  /** Existing agent lifecycle catch-up fences receipts across a missed end or a changed binding. */
+  agentLife(event: AgentLife): void {
+    if (event.kind !== 'running') {
+      this.agentGone(event.kind === 'taken' ? event.from : event.agentId)
+      return
+    }
+    for (const entry of this.deliveries.values()) {
+      if (entry.receipt.agentId !== event.session.agentId || !entry.sessionId
+        || entry.sessionId === event.session.sessionId || ['completed', 'rejected'].includes(entry.receipt.state)) continue
+      this.agentGone(event.session.agentId)
+      return
+    }
   }
   private consumeInput(agentId: string, text: string, timestamp: number): string | null {
     if (!Number.isFinite(timestamp)) return null
@@ -467,6 +526,8 @@ export class AutonomousDeviceService {
   delivery(event: AutonomousDeviceDelivery): void {
     const entry = this.deliveries.get(event.deliveryId)
     if (!entry || entry.receipt.agentId !== event.sessionId) return
+    // Its engine's transcript proves consumption even if the earlier terminal acknowledgment arrives late.
+    if (entry.evidenceManaged && entry.consumed) return
     this.update(entry, event.state, event.reason)
   }
   revoke(deviceId: string): void {
@@ -627,8 +688,18 @@ export class AutonomousDeviceService {
         return response({ machineId: this.options.machineId, agentId, turns: await this.options.recent(agentId, Number(n)) })
       }
       if (type === 'question.answer' && this.questions.get(agentId)?.requestId !== req.questionRequestId) fail('QUESTION_STALE', 'Question is no longer open')
+      const nativeInput = type === 'turn.send' && ['claude', 'codex'].includes(agent.engine)
+      if (nativeInput) {
+        let live = 0
+        for (const held of this.entries.values()) {
+          if (held.evidenceManaged && held.receipt.serverInstanceId === this.serverInstanceId && !held.consumed
+            && !['completed', 'rejected'].includes(held.receipt.state)) live++
+        }
+        // Unknown is still live: a reconnect cannot make another possibly executed input safe to admit.
+        if (live >= 64) fail('BACKPRESSURE', 'Native input capacity contains unresolved work; reconcile before sending more')
+      }
       this.reserveCapacity()
-      const entry: Entry = { deviceId, digest, ...(type === 'turn.send' && ['claude', 'codex'].includes(agent.engine) ? { promptHash: inputHash(String(req.text)), reservedAt: this.now(), evidenceManaged: true } : {}), receipt: { idempotencyKey: String(req.idempotencyKey), deliveryId: randomUUID(), operation: type,
+      const entry: Entry = { deviceId, digest, ...(nativeInput ? { promptHash: inputHash(String(req.text)), reservedAt: this.now(), evidenceManaged: true } : {}), receipt: { idempotencyKey: String(req.idempotencyKey), deliveryId: randomUUID(), operation: type,
         machineId: this.options.machineId, agentId, state: 'queued', turnId: null, serverInstanceId: this.serverInstanceId, error: null, at: this.now() } }
       this.entries.set(key, entry); this.deliveries.set(entry.receipt.deliveryId, entry); reserved = entry
       this.persist() // durable reservation MUST precede any engine write

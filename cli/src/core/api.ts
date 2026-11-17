@@ -36,7 +36,7 @@ import type { GridLaunchOverride, GridLaunchRequest } from '../lib/gridLaunchWir
 import type { NewAgentModel } from '../lib/newAgentModel.js'
 import type { LastTurnText, LiveEvent } from '../engines/kit/events.js'
 import type { SessionRecaps } from '../lib/recapReads.js'
-import type { SessionInputDelivery } from '../lib/sessionInput.js'
+import type { SessionInputDelivery, SessionInputProgress } from '../lib/sessionInput.js'
 import type { AgentCloseRequest, AgentCloseResult } from '../lib/closeAgentService.js'
 import type { GitProjectFolder } from '../lib/projectFolder.js'
 import type { WorkspaceInspection, WorkspaceTarget, WorktreeReview } from '../lib/worktreeDeletion.js'
@@ -49,7 +49,7 @@ import type { SessionSearchIndex } from '../lib/sessionSearch/indexer.js'
 import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
 import type { TerminalBinaryClear } from '../lib/terminalBinary.js'
 import { VIEWER_UP_TYPES } from '../lib/viewerFrames.js'
-import type { DeviceInputStatus } from './deviceInput.js'
+import type { DeviceInputStatus } from '../lib/autonomous-device/service.js'
 import type { DeviceHookPort } from './deviceHookCalls.js'
 import { FAIL, later, readFallback, ServiceUnavailableError, type PortFallbacks } from './serviceHost.js'
 
@@ -260,6 +260,8 @@ export interface CoreApi {
     /** Hear what becomes of each delivery: queued, written, its turn started, refused and why, or past
      *  knowing. Returns how to stop hearing. */
     onDelivery(listener: (event: TurnDelivery) => void): () => void
+    /** Bounded input facts, without promising a correlated turn from composer evidence. */
+    onInput?(listener: (event: SessionInputProgress) => void): () => void
   }
   questions: {
     /** Answer a live agent's question, keyed by the question keys it asked with. */
@@ -385,13 +387,6 @@ export interface CoreApi {
   wifi: {
     /** What it lists and reads in line (`WifiView`), asked again before each request it answers. */
     view(): Promise<WifiView>
-    /** A device's prompt into a live agent, through the pane's write lock, as delivery `deliveryId`. Settles
-     *  once the lock has taken it: what it said of the prompt meanwhile is the reply's to carry. */
-    submit(agentId: string, text: string, deliveryId: string): Promise<void>
-    /** A queued delivery the device no longer stands behind (it was unpaired). */
-    cancel(deliveryId: string): void
-    /** The agent's transcript shows the device's prompt began its turn: the pane's lock moves on. */
-    started(agentId: string, text: string): void
     /** Stop a live agent's turn; resolves whether it stopped. */
     stop(agentId: string): Promise<boolean>
     /** Answer a live agent's question, never a permission dialog; resolves whether the terminal took it. */
@@ -588,7 +583,12 @@ export const DAEMON_UNKNOWN: DaemonAddress = { command: 'harness', port: 0, mach
 
 /** How a delivery is told apart: `quiet` marks a line a service types for the agent alone: the turn it starts is nobody's
  *  news, and ends with no recap and no notification (core/deliveries.ts, core/turns/recaps.ts). */
-export interface DeliveryOptions { quiet?: true }
+export interface DeliveryOptions {
+  quiet?: true
+  when?: 'composer' | 'turn'
+  /** Core-owned connection authority. The wire contract never accepts this member. */
+  current?: () => boolean
+}
 
 /** What became of a delivered turn (`turns.deliver`), as the core's input says it: `queued`, written
  *  (`delivered`), its turn `started`, `rejected` with why, or `unknown`. `sessionId` is the agent it was
@@ -963,7 +963,7 @@ export const experimentBackendAllowed = (service: string, method: unknown, path:
  *  Agent Messages, which left them for the edge host and still types a message into an idle agent, and the agent
  *  browser, which types its two lines into an agent when its person starts and stops its browser. No other process
  *  may: writing into a pane is no other service's to ask. */
-export const TURN_DELIVERERS: readonly string[] = [...Object.keys(EXPERIMENTS), 'messages', 'agentBrowser']
+export const TURN_DELIVERERS: readonly string[] = [...Object.keys(EXPERIMENTS), 'messages', 'agentBrowser', 'wifi']
 
 /** The core's calls into Share: an observer's frame as the relay handed it over, the relay gone (every observer
  *  with it), and stopping it. */
@@ -1611,13 +1611,17 @@ export interface WifiPort {
   resume(state: WifiResume): Promise<void>
   /** A frame bound for the devices, as it is sent, with the turn's whole answer for a summary. */
   card(frame: Record<string, unknown>, fullText?: string): void
+  /** Compatibility for older cores; new cores send the complete live batch through events. */
   turnStarted(agentId: string): void
   turnEnded(agentId: string, aborted: boolean): void
+  events(agentId: string, events: readonly LiveEvent[]): void
+  input(event: SessionInputProgress): void
+  disconnected(): void
   /** An agent's live events, for the devices that subscribed to it. */
   stream(agentId: string, events: readonly LiveEvent[]): void
   /** A transcript line of an agent the device sent a prompt to, which proves what its turn did. */
   transcript(agentId: string, sessionId: string, engine: string, line: string): void
-  /** Its own deliveries into the panes, as the pane's write lock moves them on (core/deviceInput.ts). */
+  /** Compatibility receipt events for retained workers; new workers consume generic input facts. */
   delivery(event: AutonomousDeviceDelivery): void
   dispatched(agentId: string, deliveryId: string, text: string, sessionId?: string): void
   inputStatus(event: DeviceInputStatus): void
@@ -1632,7 +1636,6 @@ export interface WifiPort {
 /** The Wi-Fi device's doors, for a service that is not it: nothing is listed, sent, made or moved. */
 export const WIFI_OFF: CoreApi['wifi'] = {
   view: async () => ({ agents: [], store: [], hasWindow: false }),
-  submit: async () => {}, cancel: () => {}, started: () => {},
   stop: async () => false, answer: async () => false,
   create: async () => ({ ok: false, error: 'UNSUPPORTED' }),
   stepFocus: async () => 'no_app', scroll: () => false, focusApp: () => false, reveal: () => {},
@@ -1647,6 +1650,7 @@ export const WIFI_OFF: CoreApi['wifi'] = {
 export const WIFI_FALLBACKS: PortFallbacks<WifiPort> = {
   session: undefined, request: later(undefined), dropped: undefined, revoked: undefined, resume: later(undefined), card: undefined,
   turnStarted: undefined, turnEnded: undefined, stream: undefined, transcript: undefined, delivery: undefined,
+  events: undefined, input: undefined, disconnected: undefined,
   dispatched: undefined, inputStatus: undefined, agentGone: undefined, appFocus: later(undefined), revealed: undefined,
   stop: later(undefined),
 }

@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { deviceErrorText } from '../cardText.js'
-import { inlineSubmission } from '../../testing/inlineSubmission.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createEventFunnel, funnelFor, outsideConsumers, type FunnelDeps } from './funnel.js'
 import { createShortTurnGuard } from './shortTurnGuard.js'
@@ -28,9 +27,7 @@ function setup(engine = 'claude', over: Partial<FunnelDeps> = {}) {
     search: { touch: vi.fn(log('search')) },
     turnStartedAt: new Map(),
     input: { onTurnStarted: vi.fn(log('input started')), onTurnEnded: vi.fn(log('input ended')) },
-    deviceInput: { onTurnStarted: vi.fn(log('deviceInput started')), onTurnEnded: vi.fn(log('deviceInput ended')) },
-    submission: inlineSubmission,
-    device: () => ({ turnStarted: vi.fn(log('device started')), turnEnded: vi.fn(log('device ended')), stream: vi.fn(log('device stream')) }),
+    device: () => ({ events: vi.fn(log('device events')), stream: vi.fn(log('device stream')) }),
     startHeartbeat: vi.fn(log('heartbeat')),
     questionWatcher: { start: vi.fn(log('questions start')), noteTurnStart: vi.fn(log('questions pre-turn')), stop: vi.fn(log('questions stop')) },
     mirror: { ingest: vi.fn(log('mirror')) },
@@ -95,15 +92,15 @@ describe('the event funnel', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const boom = (what: string) => vi.fn(() => { throw new Error(`${what} unplugged`) })
     const { funnel, calls } = setup('claude', {
-      device: () => ({ turnStarted: boom('device'), turnEnded: boom('device'), stream: boom('device') }),
+      device: () => ({ events: boom('device'), stream: boom('device') }),
     })
     funnel('s1', [started(), text(), ended()])
     expect(calls).toEqual([
       'send turn_started', 'search',
-      'input started', 'deviceInput started', 'heartbeat', 'questions start', 'questions pre-turn',
+      'input started', 'heartbeat', 'questions start', 'questions pre-turn',
       'send text_delta',
       'send turn_ended', 'search',
-      'deviceInput ended', 'input ended', 'questions stop',
+      'input ended', 'questions stop',
       'mirror',
     ])
     // Once a minute per consumer: the devices failed three times and said so once.
@@ -117,11 +114,11 @@ describe('the event funnel', () => {
     funnel('s1', [started(), text(), ended()])
     expect(calls).toEqual([
       'send turn_started', 'search',
-      'input started', 'deviceInput started', 'device started', 'heartbeat', 'questions start', 'questions pre-turn',
+      'input started', 'heartbeat', 'questions start', 'questions pre-turn',
       'send text_delta',
       'send turn_ended', 'search',
-      'device ended', 'deviceInput ended', 'input ended', 'questions stop',
-      'mirror', 'device stream',
+      'input ended', 'questions stop',
+      'device events', 'mirror', 'device stream',
     ])
   })
 
@@ -132,8 +129,8 @@ describe('the event funnel', () => {
     // Not a turn starting now: a dialog already up belongs to it.
     expect(calls).toEqual([
       'send turn_started', 'search',
-      'input started', 'deviceInput started', 'device started', 'heartbeat', 'questions start',
-      'mirror', 'device stream',
+      'input started', 'heartbeat', 'questions start',
+      'device events', 'mirror', 'device stream',
     ])
     const frame = vi.mocked(deps.clients.send).mock.calls[0][0] as Record<string, any>
     expect(frame.replay).toBe(true)
@@ -211,7 +208,7 @@ describe('the event funnel', () => {
     expect(quietTurnOpen).toHaveBeenCalledWith('s1')
   })
 
-  it('leaves the device\'s input alone across a native turn boundary, and Command Code\'s question watcher running', () => {
+  it('leaves turn-batch interpretation to the component and Command Code\'s question watcher running', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const native = setup('codex')
     native.funnel('s1', [ended(), started()])
@@ -219,7 +216,7 @@ describe('the event funnel', () => {
     const commandcode = setup('commandcode')
     commandcode.funnel('s1', [ended()])
     expect(commandcode.calls).not.toContain('questions stop')
-    expect(commandcode.calls).toContain('device ended')
+    expect(commandcode.calls).toContain('device stream')
   })
 
   it('carries the turn\'s activity, says when a turn ends without a start, and counts OpenCode\'s usage', () => {
@@ -241,8 +238,8 @@ describe('the event funnel', () => {
       bySession: () => lookups++ === 0 ? ({ agentId: 'a1', sessionId: 's1', engine: 'codex', active: true } as RegisteredSession) : undefined,
     })
     expect(() => run.funnel('s1', [ended(), started()])).not.toThrow()
-    // Without its engine, a native turn boundary is not recognised, so the device hears the turn end.
-    expect(run.calls).toContain('device ended')
+    // The full batch still reaches the component; the funnel does not interpret its native boundary.
+    expect(run.calls).toContain('device stream')
     expect(String(log.mock.calls[1][0])).toContain('engine=claude')
   })
 
@@ -259,8 +256,8 @@ describe('the event funnel', () => {
     const { funnel, calls } = setup('claude', { search: null, device: () => undefined })
     funnel('s1', [started(), ended()])
     expect(calls).toEqual([
-      'send turn_started', 'input started', 'deviceInput started', 'heartbeat', 'questions start', 'questions pre-turn',
-      'send turn_ended', 'deviceInput ended', 'input ended', 'questions stop',
+      'send turn_started', 'input started', 'heartbeat', 'questions start', 'questions pre-turn',
+      'send turn_ended', 'input ended', 'questions stop',
       'mirror',
     ])
   })

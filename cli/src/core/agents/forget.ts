@@ -6,7 +6,6 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 10: docs/design/2026-10-03-harnessd.md).
  */
 import type { CursorTranscriptDiscovery } from '../../engines/cursor/discovery.js'
-import type { AutonomousDeviceInput } from '../deviceInput.js'
 import type { TurnRecaps } from '../turns/recaps.js'
 import type { ShortTurnGuard } from '../turns/shortTurnGuard.js'
 import { sid } from '../../lib/log.js'
@@ -47,7 +46,6 @@ export interface ForgetDeps {
   watcher: Pick<Watcher, 'removeSession'>
   stopHeartbeat: (sessionId: string) => void
   input: Pick<SessionInputController, 'forget'>
-  deviceInput: Pick<AutonomousDeviceInput, 'forget'>
   /** The agent no longer runs here: its DSH viewer and its browser let go (core/main.ts `agentEnded`). */
   ended: (agentId: string) => void
   mirror: Pick<TurnRecaps, 'forget'>
@@ -66,7 +64,7 @@ export interface ForgetOptions {
 export function createForgetSession({
   registry, stoppedAgents, syncRecapPool, normalizers, forgetAttach, turnStartedAt, prompts, neverFoldedHistory, replayedFirstTurn, relaunchMarks,
   clearAgyIdleWatch, cursorDiscovery, runtimeProfiles, watcher, stopHeartbeat, input,
-  deviceInput, ended, mirror, clients, onRemoved, owners, shortTurns,
+  ended, mirror, clients, onRemoved, owners, shortTurns,
 }: ForgetDeps) {
   /** Release a mutable session binding, or remove the process-owned agent everywhere. */
   const forgetSession = async (
@@ -135,7 +133,6 @@ export function createForgetSession({
       mirror.forget(sessionId)
     }
     input.forget(announceId)
-    deviceInput.forget(announceId)
     if (!opts.keepAgent) { ended(announceId); onRemoved?.(announceId); prompts.delete(announceId) }
     if (opts.keepAgent) return
     clients.send({ type: 'agent_deleted', payload: { agentId: announceId, retained: !!doomed } }) // web tab

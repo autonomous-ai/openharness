@@ -14,7 +14,6 @@ import { readOpenclawScreen } from '../../engines/openclaw/contract.js'
 import { externalResumePending } from '../../lib/externalResume.js'
 import { paneReadIdentity } from '../transcripts/readIdentity.js'
 import { isTerminalEngine } from '../../engines/types.js'
-import type { AutonomousDeviceInput } from '../deviceInput.js'
 import type { QuestionWatcher } from '../../lib/questionController.js'
 import { sameGridAssignment } from '../../lib/gridAssignmentWire.js'
 import { sid } from '../../lib/log.js'
@@ -44,7 +43,6 @@ export interface DiscoveryDeps {
   attachSession: (session: RegisteredSession) => Promise<boolean>
   invalidateTerminalControl: (agentId: string) => void
   input: Pick<SessionInputController, 'forget'>
-  deviceInput: Pick<AutonomousDeviceInput, 'forget'>
   questionWatcher: Pick<QuestionWatcher, 'stop'>
   stopHeartbeat: (sessionId: string) => void
   retainExitedSession: (agent: RegisteredSession, announce: boolean, authority?: RegistryAuthority) => Promise<LaunchPublication>
@@ -61,7 +59,7 @@ export interface DiscoveryDeps {
 
 export function createDiscoveryHandlers({
   registry, attach, taken, forgetSession, announceSession, bindObservedAgent, syncRecapPool, attachSession,
-  invalidateTerminalControl, input, deviceInput, questionWatcher, stopHeartbeat, retainExitedSession,
+  invalidateTerminalControl, input, questionWatcher, stopHeartbeat, retainExitedSession,
   stoppedAgents, send, restoreDegraded, terminals, current: operationCurrent,
 }: DiscoveryDeps) {
   const observedAuthority = (observed: DiscoveredTerminalAgent, selected?: RegisteredSession) => {
@@ -329,7 +327,6 @@ export function createDiscoveryHandlers({
       && terminals.backendFor(runtime) === backend && matchesLaunchReceipt(registry.byAgent(selected.agentId), selected)
     invalidateTerminalControl(agent.agentId)
     input.forget(agent.agentId)
-    deviceInput.forget(agent.agentId)
     if (agent.sessionId) {
       questionWatcher.stop(agent.sessionId)
       stopHeartbeat(agent.sessionId)

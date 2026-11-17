@@ -10,9 +10,7 @@ import type { AutonomousDeviceAgent } from '../lib/autonomous-device/service.js'
 import type { StoreAgent } from '../lib/autonomous-device/store.js'
 import type { RegisteredSession, registry } from '../lib/registry.js'
 import type { BackendSocket } from '../backendSocket.js'
-import { adaptSlashCommand } from '../lib/goalCommand.js'
 import type { CoreApi, DevicesPort, WifiView } from './api.js'
-import type { AutonomousDeviceInput } from './deviceInput.js'
 import type { WifiCoreDeps } from './wifi.js'
 
 const canonicalPath = (path: string | null): string | null => {
@@ -76,8 +74,6 @@ export interface WifiDoorsDeps extends Pick<WifiAgentsDeps, 'registry' | 'machin
   registry: WifiAgentsDeps['registry'] & Pick<typeof registry, 'resolve'>
   /** The socket, once it exists: the windows on this computer, and how an agent is created. */
   socket(): Pick<BackendSocket, 'hasLocalClient' | 'sendFirstLocal' | 'onCreateAgent'> | null
-  /** The pane writer lock a device's prompts go through (core/deviceInput.ts). */
-  deviceInput(): Pick<AutonomousDeviceInput, 'submit' | 'cancelDelivery' | 'onTurnStarted'>
   /** A device's answer to a question: never a permission dialog's. */
   answer(request: { agentId: string; requestId: string; answers: Record<string, string>; allowPermissions: false }): Promise<{ ok: boolean }>
   /** Stop a live agent's turn, as the stop button does. */
@@ -93,12 +89,6 @@ export function wifiDoors(deps: WifiDoorsDeps): WifiCoreDeps['doors'] {
   const hasWindow = (): boolean => !!socket()?.hasLocalClient()
   return {
     view: async () => wifiView({ ...deps, hasWindow }),
-    submit: async (id, text, deliveryId) => {
-      const session = registry.resolve(id)
-      deps.deviceInput().submit(session?.agentId ?? id, adaptSlashCommand(text, session?.engine ?? 'claude'), deliveryId)
-    },
-    cancel: (deliveryId) => { deps.deviceInput().cancelDelivery(deliveryId) },
-    started: (agentId, text) => deps.deviceInput().onTurnStarted(agentId, text),
     stop: (agentId) => deps.stop(agentId),
     answer: async (agentId, requestId, answers) => (await deps.answer({ agentId, requestId, answers, allowPermissions: false })).ok,
     create: wifiCreate({ registry, machineId, createAgent: () => socket()?.onCreateAgent ?? null }),

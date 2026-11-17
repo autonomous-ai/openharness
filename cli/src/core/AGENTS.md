@@ -58,8 +58,8 @@ The core stays small and secure, in the code and at run time: read
 - `input.ts`, `questions.ts`: messages into a pane; an agent's question and its answer. Core matches an answer to the
   question on screen and holds the lease; each engine's keys for an approved step come from its worker through
   a revocable grant (`engines/questionControls.ts`).
-  `lib/sessionInput.ts`: the shared pane writer every input takes, including a native device dispatch.
-  `deviceInput.ts`: the device's queued turns and receipt checks, pending package 12's input convergence.
+  `lib/sessionInput.ts`: one shared pane writer and bounded session queue for ordinary, whole-turn and correlated composer input.
+  Device admissions, receipt correlation and result evidence live in the device component process.
   `cardText.ts`: an engine's error, rewritten for a device's card.
 - `deliveries.ts`: delivered turns, the Wi-Fi device's, Agent Messages' and the orchestrator's: text written into an
   agent under a delivery id of its maker's, and what became of it, told back to that maker in its process.

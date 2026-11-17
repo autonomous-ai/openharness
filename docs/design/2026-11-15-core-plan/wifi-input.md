@@ -1,11 +1,81 @@
 # Package 12: Wi-Fi input and relay ownership
 
-Status: the root agent reviewed and approved only the shared-writer prerequisite, 2026-11-17, against
-`18360932870c66673a3bceaa5a4a9ba3ef0fc129`. The focused tests and typecheck pass; broader validation
-and before/after cost evidence are pending.
-Package 12 is not complete. No native-input or relay protocol change is approved by this review.
+## Shared input cutover design (2026-11-17)
 
-## Finding
+Ordinary messages, tracked whole turns and correlated composer input converge on the session input
+operation. Scheduling is `composer` or `turn`; a delivery id asks for correlation, not a device-specific
+writer. Its one waiting queue is bounded to eight items, 24 KiB and five minutes. This deliberately
+tightens the old two-queue capacity. A cancelled held callback retains its capacity until consumed.
+The existing connection's `ServiceQueryAuthority.current` fences validation, paste, Enter and events;
+no authority comes from the payload or moves to a replacement connection.
+The legacy `deliver` protocol keeps its existing service-held receipt notifications while its effects
+use that same original authority. Versioned `input` receipts and input facts stay on their exact
+connection; legacy callers do not receive new input-fact traffic.
+
+The devices process retains its existing durable receipt entries, exact prompt hashes, bound sessions
+and unique transcript evidence. It admits at most 64 live native inputs, including queued inputs and
+unknown outcomes; a proven refusal or consumption releases that admission. This tightens the old
+64-dispatched-plus-eight-queued capacity. Its 512-entry durable journal never drops unresolved work
+to make room. Same-process core reconnect marks uncertainty and retains live admission slots. A
+component restart creates a new server instance, retains old durable unknown receipts and never
+replays them. No journal schema or on-disk migration is needed for the admission bound.
+
+New workers probe the versioned shared input contract before effects. An explicit unsupported-query
+answer selects an old-core adapter in the devices process; timeout or an ambiguous write never
+authorizes a fallback write. Retained old workers use a stateless translation through the new shared
+operation: no old queue, retry controller or prompt list survives in the new core. Those workers keep
+their existing 512 durable reservation bound; the new component's 64-live bound cannot be imposed on
+them without core feature state. Existing old-worker receipts stranded by a pre-cutover core loss
+remain unreconciled, with no replay or invented refusal.
+
+Compatibility removal is no earlier than 30 days after the first release carrying the new worker and
+requires proof that all supported update/reconnect paths replace or safely translate old workers.
+This is a removal condition, not a runtime expiry. The no-exec and unproven-limit `reexec` fallbacks
+can keep old workers alive. Legacy `submit` must receive a delivery refusal event when refused:
+old workers ignore an error in that query's reply.
+
+The component reuses `CoreApi.conversations.resolve` for a single bounded agent read; handoff remains
+its existing other consumer. It checks the returned agent/session against the dispatched input.
+Device display modes and same-batch turn-boundary interpretation belong in the component. A core
+turn event requests fresh fenced composer evidence; matching an old prompt body is not permission
+to release the current writer. Relay/session/presence and transcript-subscription extraction remain
+separate residual work.
+
+Status (2026-11-17): root approved the shared operation and old/new worker cutover described above.
+The implementation removes `core/deviceInput.ts`, its pending prompt map and its second queue. Actual
+ordinary and tracked callers now use `SessionInputController.submitInput`. Focused caller, component,
+receipt, and reconnect checks are recorded with this change. Full core coverage, native/platform
+validation and before/after cost acceptance remain integration gates; package 12 is not complete.
+
+The existing `input.forget` composition hooks send a stateless compatibility `agentGone` notification,
+including binding changes. New components also consume the existing generic agent lifecycle catch-up;
+no core receipt map is recreated. Lifecycle batch interpretation reaches the component before recap
+publication, and the existing filtered stream follows the recap. Only batches with turn lifecycle
+content get the additional interpretation message; original adjacency is preserved.
+
+Design for this slice:
+
+1. Growth: one current operation on the existing per-session input state, one aggregate bounded queue,
+   and the existing observation timer. Device labels use weak references to its existing bounded receipt
+   entries. There is no new persisted field, core feature table or second service queue.
+2. Concurrency: a current session binding and the original connection fence every wait and effect.
+   Correlated composer input retains the existing writer through an ambiguous effect until fresh evidence
+   says clear. Personal input keeps its exact-draft recovery; ambiguous correlated composer input never retries Enter.
+3. Read cost: a new worker probes once per connection and resolves one agent before dispatch. No new
+   snapshot API or registry scan. Queue scans are bounded to eight; component receipt scans to 512.
+4. Scale: integration must compare the same ordinary/tracked workload, idle memory/CPU, IPC traffic,
+   and release of writer/queue state at 1, 16 and 160 agents. Focused tests prove bounds, not performance.
+5. Compatibility: new worker/old core uses an adapter only after explicit `UNKNOWN_QUERY` on the probe.
+   Old worker/new core receives translated refusal, dispatch, status and turn events. It keeps its own
+   existing durable bound. Known lost pre-cutover receipt generations stay unknown and are never replayed.
+6. Migration/rollback: journal schema is unchanged. Component restart changes the server instance and
+   restores unresolved receipts as unknown. Core reconnect alone never resets native admission capacity.
+7. Audience: authenticated service identity and `ServiceQueryAuthority` remain authoritative. An input
+   payload cannot carry terminal coordinates, a lease, another connection's token or arbitrary options.
+
+The sections below record the earlier prerequisite and the separately unfinished relay design.
+
+## Earlier finding
 
 `core/deviceInput.ts` is not just the device's delivery queue. Its `legacyWrite` lock is taken by the
 window, phone and Agent Messages input paths in `core/input.ts`; its native-input acceptance check keeps
@@ -48,7 +118,7 @@ The devices process owns:
   authenticated transport session and seals only to its current identity.
 - Native turn-boundary interpretation for device receipts, and all device-only event interpretation.
 
-## Smallest safe first slice
+## Completed writer prerequisite
 
 Before changing the cross-process submit contract, remove the shared writer's dependency on the
 feature controller. Put the existing writer exclusion in `SessionInputController`, which already owns
@@ -75,7 +145,7 @@ The reservation must retain the old writer object while an in-flight operation s
 is idempotent. Queued normal writers register before the next native device writer can reserve. A
 normal operation already validating when reservation is requested must still prevent overlap.
 
-## Required next slice: one input operation, then queue removal
+## Shared operation questions resolved above
 
 The shared native operation has two current consumers: the person's normal message path and the
 Wi-Fi native path. Converge those implementations before exposing it through the existing generic
@@ -83,7 +153,7 @@ delivery door. Retain the existing default of waiting for the turn for Agent Mes
 tracked deliveries. An explicit generic scheduling contract is needed for native input; a Wi-Fi-only
 flag on `CoreApi` or a second private delivery route does not satisfy the boundary.
 
-That contract needs design review of these unresolved choices before implementation:
+The earlier review identified these choices; the approved cutover above resolves them:
 
 1. Use the existing bounded input queue, with the shared native operation as its writer. It already
    has the same item/byte/TTL bounds. Review scheduling and fairness across normal, after-turn and
@@ -97,8 +167,8 @@ That contract needs design review of these unresolved choices before implementat
 4. How disconnect cancels not-yet-dispatched effects and fences async continuations. The existing
    `wifi.submit` query only acknowledges queue admission and has no connection-owned cancellation.
 
-Only after these are resolved should the device queue, pending receipt list and `CoreApi.wifi`
-submit/cancel/started doors be removed. Do not count this design or the writer slice as that removal.
+This change removes the device queue, pending receipt list and `CoreApi.wifi` submit/cancel/started
+doors after that review. The remaining compatibility translation is stateless and separately gated.
 
 ## Relay half
 
@@ -113,7 +183,7 @@ Neither full transcript fan-out nor retaining a duplicate core session map is an
 The direct link requires its own reviewed protocol/skew/restart design and is not included in the first
 writer slice.
 
-## Design (docs/feature-design-rules.md)
+## Earlier writer-prerequisite design (docs/feature-design-rules.md)
 
 Reviewed revision: the writer prerequisite above, 2026-11-17. Reviewer: root agent. This table covers the first writer slice only; the
 unresolved native-operation and relay contracts require a second review before their runtime changes.

@@ -7,12 +7,32 @@ function link() {
   const core = fakeCore()
   const sent: ServiceFrame[] = []
   const log = vi.fn()
-  const wifi = createWifiLink({ core, notify: (frame) => { sent.push(frame); return true }, log })
+  const deliveries = { answer: vi.fn(() => ({})) }
+  const wifi = createWifiLink({ core, deliveries, notify: (frame) => { sent.push(frame); return true }, log })
   const kinds = () => sent.map((frame) => (frame.payload as { kind: string }).kind)
-  return { core, sent, log, wifi, kinds }
+  return { core, sent, log, wifi, kinds, deliveries }
 }
 
 describe('the Wi-Fi device in the devices\' process, as the core sees it', () => {
+  it('tells an error-ignoring old worker its input was refused through the legacy receipt event', async () => {
+    const { wifi, deliveries, sent } = link()
+    deliveries.answer.mockReturnValueOnce({ error: 'INVALID_INPUT' })
+    const authority = { current: () => true, ownsRequest: () => false }
+    // Old wifiProcess.submit awaits the query but discards its returned error.
+    await wifi.answer('submit', { agentId: 'a', deliveryId: 'd', text: '' }, authority)
+    expect(deliveries.answer).toHaveBeenCalledWith('wifi', 'input', { version: 1, agentId: 'a', text: '', deliveryId: 'd', when: 'composer' }, authority)
+    expect(sent).toEqual([{ type: 'service_event', payload: { kind: 'delivery', event: { sessionId: 'a', deliveryId: 'd', state: 'rejected', reason: 'INVALID_INPUT' } } }])
+  })
+
+  it.each(['claude', 'codex', 'commandcode'])('translates %s batches for retained workers without changing the shared batch', engine => {
+    const { wifi, core, sent, kinds } = link()
+    vi.mocked(core.agents.byAgent).mockReturnValue({ agentId: 'a', sessionId: 's', engine } as never)
+    const events = [{ type: 'turn_ended', payload: {} }, { type: 'turn_started', payload: { userMessage: 'next' } }] as never
+    wifi.port.events('a', events)
+    expect(sent[0]).toEqual({ type: 'service_event', payload: { kind: 'input_events', agentId: 'a', events } })
+    expect(kinds()).toEqual(engine === 'commandcode' ? ['input_events', 'turnEnded', 'turnStarted'] : ['input_events', 'turnStarted'])
+  })
+
   it('tells it everything as notices, in the order the core said it', async () => {
     const { wifi, sent, kinds } = link()
     const client = { role: 'device' as const, label: 'Desk', identity: 'id', direct: false }
@@ -45,7 +65,7 @@ describe('the Wi-Fi device in the devices\' process, as the core sees it', () =>
   })
 
   it('answers what it asks through the core\'s Wi-Fi doors', async () => {
-    const { wifi, core } = link()
+    const { wifi, core, deliveries } = link()
     expect(await wifi.answer('machine', {})).toEqual({ id: 'machine-1' })
     expect(await wifi.answer('view', {})).toEqual({ agents: [], store: [], hasWindow: true })
     vi.mocked(core.turns.recent).mockResolvedValueOnce([{ recap: 'done' }] as never)
@@ -65,12 +85,12 @@ describe('the Wi-Fi device in the devices\' process, as the core sees it', () =>
     expect(await wifi.answer('stepFocus', { direction: 'next' })).toEqual({ machineId: 'm', agentId: 'b' })
     expect(core.wifi.stepFocus).toHaveBeenLastCalledWith('next', undefined)
     expect(await wifi.answer('submit', { agentId: 'a', text: 'hi', deliveryId: 'd' })).toEqual({})
-    expect(core.wifi.submit).toHaveBeenCalledWith('a', 'hi', 'd')
+    expect(deliveries.answer).toHaveBeenCalledWith('wifi', 'input', { version: 1, agentId: 'a', text: 'hi', deliveryId: 'd', when: 'composer' }, undefined)
     expect(await wifi.answer('nothing', {})).toEqual({ error: 'UNKNOWN_QUERY' })
   })
 
   it('hears what it tells the core without asking, and says when it hears something else', () => {
-    const { wifi, core, log } = link()
+    const { wifi, core, log, deliveries } = link()
     wifi.notice({ kind: 'cancel', deliveryId: 'd' })
     wifi.notice({ kind: 'started', agentId: 'a', text: 'hi' })
     wifi.notice({ kind: 'scroll', phase: 'move', dy: 3, velocity: 9 })
@@ -88,8 +108,8 @@ describe('the Wi-Fi device in the devices\' process, as the core sees it', () =>
     wifi.notice({ kind: 'transcripts', agentId: 'a', seen: 2 })
     wifi.notice({ kind: 'watching', agentIds: ['a', 4] })
     wifi.notice({ kind: 'streams', agentIds: 'a' })
-    expect(core.wifi.cancel).toHaveBeenCalledWith('d')
-    expect(core.wifi.started).toHaveBeenCalledWith('a', 'hi')
+    expect(deliveries.answer).toHaveBeenCalledWith('wifi', 'cancel_delivery', { deliveryId: 'd' })
+    expect(deliveries.answer).toHaveBeenCalledTimes(1)
     expect(core.wifi.scroll).toHaveBeenCalledTimes(2)
     expect(core.wifi.scroll).toHaveBeenCalledWith('move', 3, 9)
     expect(core.wifi.scroll).toHaveBeenLastCalledWith('up', 0, 0)
@@ -113,7 +133,7 @@ describe('the Wi-Fi device in the devices\' process, as the core sees it', () =>
 
   it('logs to the console by default', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    createWifiLink({ core: fakeCore(), notify: () => true }).notice({ kind: 'nope' })
+    createWifiLink({ core: fakeCore(), deliveries: { answer: () => ({}) }, notify: () => true }).notice({ kind: 'nope' })
     expect(warn).toHaveBeenCalledWith('[services] wifi said nope, which the core does not hear')
     warn.mockRestore()
   })

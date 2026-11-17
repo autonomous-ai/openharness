@@ -10,6 +10,18 @@ const session = { agentId: 'retained', sessionId: 's1', engine: 'claude' } as Re
 const source = { engine: 'claude', sessionId: 's1', transcriptPath: '/claude/s1.jsonl' }
 
 describe('the conversation reads the handoff asks of the core', () => {
+  it('bounds a shared single-agent resolve and discards an answer after its original connection ends', async () => {
+    let resolve!: (value: typeof session) => void
+    let connected = true
+    const core = fakeCore({ conversations: { resolve: vi.fn(() => new Promise<typeof session>(done => { resolve = done })) } })
+    const authority = { current: () => connected, ownsRequest: () => false }
+    for (const id of ['', 'a'.repeat(201)]) expect(await answerConversationQuery(core, 'resolve', { id }, authority)).toEqual({ error: 'BAD_QUERY' })
+    expect(core.conversations.resolve).not.toHaveBeenCalled()
+    const pending = answerConversationQuery(core, 'resolve', { id: 'retained' }, authority)
+    connected = false; resolve(session)
+    expect(await pending).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+  })
+
   it('has explicit empty fallbacks, including a refused transcript path', async () => {
     const reads = CONVERSATIONS_OFF
     expect(await reads.resolve('a')).toBeNull()

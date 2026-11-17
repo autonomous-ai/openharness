@@ -317,7 +317,7 @@ it('binding revalidation cannot change Stop evidence while its prepared image wa
   const store = new StoppedAgentStore(join(directory, 'revalidation-stop')), jobs = new Map<string, Promise<void>>()
   const binding = createBinding({ registry, mirror: { inheritSummary: vi.fn() }, forgetSession: vi.fn(), clients: { send: vi.fn() },
     attachSession: vi.fn(async () => true), captureReader: () => () => false, announceSession: announce, stoppedAgents: store, syncRecapPool: vi.fn(),
-    input: { forget: vi.fn(), awaitingConfirmation: () => false }, submitAgent: vi.fn(), deviceInput: { forget: vi.fn() },
+    input: { forget: vi.fn(), awaitingConfirmation: () => false }, submitAgent: vi.fn(),
     homes: { copilot: directory, grok: directory, agy: directory }, capturePane: async () => null,
     openclawPaneRead: vi.fn(), openclawPaneDue: () => false, openclawStateDir: async () => null, followsLive: () => false })
   binding.whileChanging(id => jobs.has(id))
@@ -355,7 +355,7 @@ it.each(process.platform === 'win32' ? [['prepare', false]] as const
   const forgetSession = createForgetSession({ registry, stoppedAgents: store, syncRecapPool: vi.fn(), normalizers: { forget: vi.fn() },
     forgetAttach: vi.fn(), turnStartedAt: new Map(), prompts: new Map(), neverFoldedHistory: new Set(), replayedFirstTurn: new Set(),
     clearAgyIdleWatch: vi.fn(), cursorDiscovery: { remove: vi.fn() }, runtimeProfiles: { forget: vi.fn() },
-    watcher: { removeSession: vi.fn(async () => {}) }, stopHeartbeat: vi.fn(), input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() },
+    watcher: { removeSession: vi.fn(async () => {}) }, stopHeartbeat: vi.fn(), input: { forget: vi.fn() },
     ended: vi.fn(), mirror: { forget: vi.fn() }, clients: { send, sendCommander: vi.fn() } })
   const stop = createStopAgentService({ registry, stoppedAgents: store, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
     backendFor: () => ({ kill: async () => ({ state: 'succeeded', dispatch: 'executed' }) }),
@@ -399,7 +399,7 @@ it.each(['prepare', 'directory sync'] as const)('Stop keeps a failed %s removal 
   const forgetSession = createForgetSession({ registry, stoppedAgents: store, syncRecapPool: vi.fn(), normalizers: { forget: vi.fn() },
     forgetAttach: vi.fn(), turnStartedAt: new Map(), prompts: new Map(), neverFoldedHistory: new Set(), replayedFirstTurn: new Set(),
     clearAgyIdleWatch: vi.fn(), cursorDiscovery: { remove: vi.fn() }, runtimeProfiles: { forget: vi.fn() },
-    watcher: { removeSession: vi.fn(async () => {}) }, stopHeartbeat: vi.fn(), input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() },
+    watcher: { removeSession: vi.fn(async () => {}) }, stopHeartbeat: vi.fn(), input: { forget: vi.fn() },
     ended: vi.fn(), mirror: { forget: vi.fn() }, clients: { send, sendCommander: vi.fn() } })
   const stop = createStopAgentService({ registry, stoppedAgents: store, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
     backendFor: () => ({ kill: async () => ({ state: 'succeeded', dispatch: 'executed' }) }),
@@ -431,7 +431,7 @@ it.each((['new owner', 'adopted shell', 'archived owner', 'starting owner'] as c
     processIdentity: identity, args: '/fixture/claude', resumeSessionId: null } as DiscoveredTerminalAgent
   const deps: DiscoveryDeps = { registry, attach: vi.fn(), taken: moved, forgetSession: forgotten,
     announceSession: announce, bindObservedAgent: vi.fn(async () => {}), syncRecapPool: vi.fn(), attachSession: async () => true,
-    invalidateTerminalControl: vi.fn(), input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() }, questionWatcher: { stop: vi.fn() },
+    invalidateTerminalControl: vi.fn(), input: { forget: vi.fn() }, questionWatcher: { stop: vi.fn() },
     stopHeartbeat: vi.fn(), retainExitedSession: vi.fn(), stoppedAgents: store, send, restoreDegraded: () => false,
     terminals: { backendFor: () => terminal } }
   const handlers = createDiscoveryHandlers(deps)
@@ -475,7 +475,7 @@ it.each([false, true])('discovery cleans every fully displaced owner (selected=%
   })
   const handlers = createDiscoveryHandlers({ registry, attach: vi.fn(), taken: moved,
     forgetSession: forgotten, announceSession: announce, bindObservedAgent: vi.fn(async () => {}), syncRecapPool: vi.fn(),
-    attachSession: async () => true, invalidateTerminalControl: vi.fn(), input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() },
+    attachSession: async () => true, invalidateTerminalControl: vi.fn(), input: { forget: vi.fn() },
     questionWatcher: { stop: vi.fn() }, stopHeartbeat: vi.fn(), retainExitedSession: vi.fn(), stoppedAgents: store,
     send, restoreDegraded: () => false, terminals: { backendFor: () => terminal } })
   await registry.transaction(() => handlers.onDiscovered({ engine: 'claude', cwd: directory,
@@ -572,7 +572,7 @@ it('discovery cannot retire an engine that appeared while its exit image was pre
     invalidateTerminalControl: vi.fn(), forgetInput: vi.fn(), ended: vi.fn(), syncRecapPool: vi.fn(), warn: vi.fn() })
   const handlers = createDiscoveryHandlers({ registry, attach: vi.fn(), taken: vi.fn(),
     forgetSession: vi.fn(), announceSession: announce, bindObservedAgent: async () => {}, syncRecapPool: vi.fn(), attachSession: async () => true,
-    invalidateTerminalControl: vi.fn(), input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() }, questionWatcher: { stop: vi.fn() },
+    invalidateTerminalControl: vi.fn(), input: { forget: vi.fn() }, questionWatcher: { stop: vi.fn() },
     stopHeartbeat: vi.fn(), retainExitedSession: retain, stoppedAgents: store, send, restoreDegraded: () => false,
     terminals: { backendFor: () => terminal } })
   vi.mocked(resolvePaneEngineProcess).mockResolvedValue(null)

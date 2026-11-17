@@ -41,7 +41,6 @@ function setup() {
     watcher: { removeSession: vi.fn(async () => {}) },
     stopHeartbeat: vi.fn(),
     input: { forget: vi.fn() },
-    deviceInput: { forget: vi.fn() },
     ended: vi.fn(),
     mirror: { forget: vi.fn() },
     clients: { send: vi.fn(), sendCommander: vi.fn() },
@@ -67,7 +66,6 @@ function expectLetGo(deps: ForgetDeps, sessionId: string, agentId: string) {
   expect(deps.watcher.removeSession).toHaveBeenCalledWith(sessionId)
   expect(deps.stopHeartbeat).toHaveBeenCalledWith(sessionId)
   expect(deps.input.forget).toHaveBeenCalledWith(agentId)
-  expect(deps.deviceInput.forget).toHaveBeenCalledWith(agentId)
   expect(deps.mirror.forget).toHaveBeenCalledWith(sessionId)
 }
 
@@ -261,12 +259,10 @@ describe('forgetting a session', () => {
   it('clears agent-keyed input after binding revalidation has already released the session index', async () => {
     const { deps } = setup()
     vi.mocked(deps.registry.resolve).mockReturnValue(undefined)
-    const pending = ['input', 'deviceInput'].map(() => new Map([['a1', 'queued'], ['other', 'keep']]))
-    for (const [index, key] of (['input', 'deviceInput'] as const).entries()) {
-      deps[key].forget = id => { pending[index]!.delete(id) }
-    }
+    const pending = new Map([['a1', 'queued'], ['other', 'keep']])
+    deps.input.forget = id => { pending.delete(id) }
     await createForgetSession(deps)('s1', { force: true, keepAgent: true, agentId: 'a1' })
-    for (const queue of pending) expect([...queue]).toEqual([['other', 'keep']])
+    expect([...pending]).toEqual([['other', 'keep']])
     expect(deps.stoppedAgents.save).not.toHaveBeenCalled()
     expect(deps.registry.confirmEngineExit).not.toHaveBeenCalled()
     expect(deps.normalizers.forget).toHaveBeenCalledWith('s1')

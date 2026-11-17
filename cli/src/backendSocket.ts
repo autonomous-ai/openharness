@@ -1,3 +1,4 @@
+import type { DeliveryOptions } from './core/api.js'
 import type { MessageReceipt } from './lib/sessionInput.js'
 import { isLocalOnly, withoutUpdate } from './lib/cardUpdate.js'
 import { slimForRelay } from './lib/slimForRelay.js'
@@ -286,7 +287,7 @@ export class BackendSocket {
       | { ok: false; error: string; detail?: string }
     >) | null = null
   /** Called when the web/device sends chat input to an agent terminal. */
-  onMessage: ((sessionId: string, content: string, deliveryId?: string) => void) | null = null
+  onMessage: ((sessionId: string, content: string, deliveryId?: string, options?: DeliveryOptions) => void) | null = null
   /** Takes a `message` frame: text a person typed for an agent, into its pane (cli.ts binds core/input.ts).
    *  Agent Messages and the orchestrator deliver through `onMessage` above. [receipt]: what became of it, for
    *  its request's measurement (core/usageOutcomes.ts). */

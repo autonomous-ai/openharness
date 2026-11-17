@@ -68,7 +68,6 @@ function setup(over: Partial<DiscoveryDeps> = {}) {
     attachSession: vi.fn(async () => true),
     invalidateTerminalControl: vi.fn(),
     input: { forget: vi.fn() },
-    deviceInput: { forget: vi.fn() },
     questionWatcher: { stop: vi.fn() },
     stopHeartbeat: vi.fn(),
     retainExitedSession: vi.fn(async () => ({ state: 'confirmed' as const, entry: null })),
@@ -669,7 +668,6 @@ describe('discovery', () => {
       await run.handlers.onDormant(exited, 'engine exited')
       expect(run.deps.invalidateTerminalControl).toHaveBeenCalledWith('a1')
       expect(run.deps.input.forget).toHaveBeenCalledWith('a1')
-      expect(run.deps.deviceInput.forget).toHaveBeenCalledWith('a1')
       expect(run.deps.questionWatcher.stop).toHaveBeenCalledWith('s1')
       expect(run.deps.stopHeartbeat).toHaveBeenCalledWith('s1')
       expect(run.deps.retainExitedSession).toHaveBeenCalledWith(exited, true, expect.any(Object))

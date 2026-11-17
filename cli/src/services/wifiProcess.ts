@@ -9,12 +9,14 @@
  * whichever devices the new core's gateway brings.
  */
 import type { RecentTurn } from '../cable/cableHost.js'
-import { emptyPorts, type CoreApi, type CorePorts, type ForkResult, type RemoteClient, type ServiceRequests, type WifiPort, type WifiResume, type WifiView } from '../core/api.js'
+import { emptyPorts, type AgentView, type CoreApi, type CorePorts, type ForkResult, type RemoteClient, type ServiceRequests, type WifiPort, type WifiResume, type WifiView } from '../core/api.js'
 import type { AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
 import { processCoreApi } from './processCoreApi.js'
 import { startWifi } from './wifi.js'
+import { inputIn } from './turnsLink.js'
+import { followLink } from './followLink.js'
 
 export interface WifiServiceOptions {
   dataDir: string
@@ -31,6 +33,7 @@ const object = (value: unknown): Record<string, unknown> => (value && typeof val
 const list = <T>(value: unknown): T[] => (Array.isArray(value) ? value as T[] : [])
 
 export function runWifiService(options: WifiServiceOptions): ServiceProcess {
+  const following = followLink({})
   let core: CoreConnection | null = null
   /** The core says `resume` as it takes the link, a moment before it says the link is open: what answers it
    *  asks the core, and so waits for that (found end to end: the ask failed, and the service never built). */
@@ -39,6 +42,61 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
   let built: { machineId: string; port: WifiPort; requests: ServiceRequests } | null = null
   /** What the core last listed: whether a window is there to show the device's choice. */
   let lastView: WifiView = { agents: [], store: [], hasWindow: false }
+  const contracts = new WeakMap<CoreConnection, Promise<'shared' | 'legacy'>>()
+  let legacyCore: CoreConnection | null = null
+  let sharedCore: CoreConnection | null = null
+  const inputContract = (origin: CoreConnection): Promise<'shared' | 'legacy'> => {
+    let pending = contracts.get(origin)
+    if (!pending) {
+      pending = origin.query('input_contract', {}).then(answer => {
+        if (core !== origin) throw new Error('the original core connection ended')
+        if (answer.version === 1) { sharedCore = origin; return 'shared' }
+        if (answer.error === 'UNKNOWN_QUERY') { legacyCore = origin; return 'legacy' }
+        throw new Error('the core did not confirm its input contract')
+      })
+      contracts.set(origin, pending)
+    }
+    return pending
+  }
+  const submit = async (agentId: string, text: string, deliveryId: string, context: (agent: AgentView) => void, current: () => boolean = () => true): Promise<void> => {
+    const origin = core
+    if (!origin) throw new Error('the Wi-Fi device is not connected to the core')
+    const contract = await inputContract(origin)
+    if (core !== origin) throw new Error('the original core connection ended')
+    if (!current()) return
+    if (contract === 'shared') {
+      const answer = await origin.query('resolve', { id: agentId })
+      if (core !== origin) throw new Error('the original core connection ended')
+      if (!current()) return
+      const agent = object(answer.value)
+      if (agent.agentId !== agentId || typeof agent.sessionId !== 'string' || typeof agent.engine !== 'string') {
+        built?.port.delivery({ sessionId: agentId, deliveryId, state: 'rejected', reason: 'agent_gone' })
+        return
+      }
+      context(agent as unknown as AgentView)
+    }
+    if (core !== origin) throw new Error('the original core connection ended')
+    if (!current()) return
+    // Older cores ignore a new field on `deliver`; use their explicit old operation only after the probe.
+    // Remove this adapter only after a released worker's 30-day window AND supported-cutover proof.
+    const answer = await origin.query(contract === 'shared' ? 'input' : 'submit', {
+      agentId, text, deliveryId, ...(contract === 'shared' ? { version: 1, when: 'composer' } : {}),
+    })
+    if (core !== origin) throw new Error('the original core connection ended')
+    if (typeof answer.error === 'string') {
+      const refused = ['INVALID_INPUT', 'INVALID_DELIVERY', 'NOT_A_DELIVERER', 'NOT_DELIVERY_OWNER', 'UNKNOWN_QUERY'].includes(answer.error)
+      built?.port.delivery({ sessionId: agentId, deliveryId, state: refused ? 'rejected' : 'unknown', reason: refused ? answer.error : 'NOT_CONFIRMED' })
+    }
+  }
+  const cancel = (deliveryId: string): void => {
+    const origin = core
+    if (!origin) return
+    void inputContract(origin).then(async contract => {
+      if (core !== origin) return
+      if (contract === 'legacy') origin.notice?.('cancel', { deliveryId })
+      else await origin.query('cancel_delivery', { deliveryId })
+    }).catch(() => {})
+  }
 
   const ask = async (query: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
     if (!core) throw new Error('the Wi-Fi device is not connected to the core')
@@ -50,6 +108,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     const unasked = processCoreApi(options.dataDir, 'wifi')
     return {
       ...unasked,
+      agents: { ...unasked.agents, follow: following.follow },
       machine: { id: () => machineId, computerId: () => options.machineId, name: () => '' },
       turns: { ...unasked.turns, recent: async (agentId, n) => list<RecentTurn>((await ask('recent', { agentId, n })).turns) },
       wifi: {
@@ -58,9 +117,6 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
           lastView = { agents: list(answer.agents), store: list(answer.store), hasWindow: answer.hasWindow === true }
           return lastView
         },
-        submit: async (agentId, said, deliveryId) => { await ask('submit', { agentId, text: said, deliveryId }) },
-        cancel: (deliveryId) => tell('cancel', { deliveryId }),
-        started: (agentId, said) => tell('started', { agentId, text: said }),
         stop: async (agentId) => (await ask('stop', { agentId })).ok === true,
         // Not `requestId`: the link's query carries its own under that name.
         answer: async (agentId, questionRequestId, answers) => (await ask('answer', { agentId, questionRequestId, answers })).ok === true,
@@ -106,7 +162,9 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     const ports: CorePorts = emptyPorts()
     let requests: ServiceRequests
     try {
-      requests = (options.start ?? startWifi)(api(machineId), ports)
+      requests = (options.start ?? startWifi)(api(machineId), ports, { submit, cancel,
+        consumed: (agentId, text) => { if (core && core === legacyCore) core.notice?.('started', { agentId, text }) },
+      })
     } catch (error) {
       console.warn(`[wifi] did not start · ${error instanceof Error ? error.message : String(error)}`)
       return null
@@ -131,6 +189,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
       port.dispatched(text(agentId), text(deliveryId), text(said), typeof sessionId === 'string' ? sessionId : undefined),
     inputStatus: (port, { event }) => port.inputStatus(object(event) as unknown as Parameters<WifiPort['inputStatus']>[0]),
     agentGone: (port, { agentId }) => port.agentGone(text(agentId)),
+    disconnected: port => port.disconnected(),
     appFocus: (port, { machineId, agentId, connId }) => port.appFocus(text(machineId), typeof agentId === 'string' ? agentId : null, text(connId)),
     revealed: (port, { operationId, agentId }) => port.revealed(text(operationId), text(agentId)),
   }
@@ -144,8 +203,15 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
   /** The core's first word on each connection: which machine this is, then what it holds for the service. */
   const connected = async (state: Record<string, unknown>): Promise<void> => {
     await link
-    const machine = await ask('machine')
+    const origin = core
+    if (!origin) return
+    await inputContract(origin).catch(() => { /* Only input is unavailable; the other device operations still work. */ })
+    if (core !== origin) return
+    const machine = await origin.query('machine', {})
+    if (core !== origin) return
     const port = build(text(machine.id))
+    if (core === sharedCore) await following.connected((query, payload) => origin.query(query, payload ?? {}))
+    if (core !== origin) return
     await port?.resume({
       sessions: list<WifiResume['sessions'][number]>(state.sessions),
       helloed: list<WifiResume['helloed'][number]>(state.helloed),
@@ -170,12 +236,31 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     onEvent: (payload) => {
       const kind = text(payload.kind)
       if (kind === 'resume') { inOrder(() => connected(payload)); return }
+      const origin = core
+      const whenCurrent = (run: () => unknown): void => inOrder(() => { if (origin && core === origin) return run() })
+      if (kind === 'agent') { whenCurrent(() => following.heard(payload)); return }
+      if (kind === 'input') {
+        const event = inputIn(payload)
+        if (event) whenCurrent(() => built?.port.input?.(event))
+        return
+      }
+      if (kind === 'input_events') { whenCurrent(() => { if (core === sharedCore) built?.port.events?.(text(payload.agentId), list<LiveEvent>(payload.events)) }); return }
       if (!Object.hasOwn(heard, kind)) return
-      inOrder(() => (built ? heard[kind](built.port, payload) : undefined))
+      whenCurrent(() => {
+        if (core === sharedCore && (['dispatched', 'inputStatus'].includes(kind)
+          || payload.legacy === true && (kind === 'turnStarted' || kind === 'turnEnded'))) return
+        if (built) return heard[kind](built.port, payload)
+      })
     },
-    onConnected: (connection) => { core = connection; linked() },
+    // runServiceProcess reuses its query facade across sockets. This callback, not that facade's
+    // object identity, establishes the connection captured by an input operation.
+    onConnected: (connection) => { core = { ...connection }; linked() },
     onDisconnected: () => {
+      following.disconnected()
+      built?.port.disconnected?.()
       core = null
+      legacyCore = null
+      sharedCore = null
       link = new Promise<void>((resolve) => { linked = resolve })
     },
   })

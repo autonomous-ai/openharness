@@ -12,7 +12,9 @@
  * deliveries, told to it until it has them: a delivery it made is its business and no other process's.
  */
 import { randomUUID } from 'node:crypto'
-import type { CoreApi, TurnDelivery } from './api.js'
+import type { CoreApi, DeliveryOptions, TurnDelivery } from './api.js'
+import type { SessionInputProgress } from '../lib/sessionInput.js'
+import type { ServiceQueryAuthority } from './serviceLinks.js'
 
 type Payload = Record<string, unknown>
 
@@ -27,11 +29,12 @@ export const KEPT_DELIVERERS = 10_000
 
 export interface DeliveriesDeps {
   /** Write the text into the agent under the delivery id (core/input.ts `submitAgent`). */
-  submit(agentId: string, text: string, deliveryId: string): void
+  submit(agentId: string, text: string, deliveryId: string, options?: DeliveryOptions): void
   /** Take back a delivery not yet being written (`SessionInputController.cancelDelivery`). */
   cancel(deliveryId: string): boolean
-  /** Tell a service in its own process what became of a delivery it made. */
-  tell(service: string, event: TurnDelivery): void
+  /** Versioned input receipts stay on their connection; legacy deliveries retain their held service receipts. */
+  tell(service: string, event: TurnDelivery, currentOnly?: true): void
+  tellInput?(service: string, event: SessionInputProgress): void
   /** The services in their own processes that may deliver turns: writing into an agent is no other's to ask. */
   deliverers: ReadonlySet<string>
   /** The turn a quiet delivery (`DeliveryOptions.quiet`) started is open in [agentId]: said once, as the input says that
@@ -65,17 +68,23 @@ const text = (value: unknown): string => (typeof value === 'string' ? value : ''
 export function createDeliveries(deps: DeliveriesDeps) {
   const log = deps.log ?? ((line: string) => console.warn(line))
   const listeners = new Set<(event: TurnDelivery) => void>()
+  const inputListeners = new Set<(event: SessionInputProgress) => void>()
   /** Which process made each delivery, oldest first. */
-  const makers = new Map<string, string>()
+  const makers = new Map<string, { service: string; current?: () => boolean }>()
   /**
    * What was delivered before the core's input was wired (`ready`), in order. Agent Messages' mailbox resumes
    * its queue on a timer as soon as it starts, in the core's process or in its own, and the socket held such a
    * turn back with "Agent input is not ready" until then; dropped, it would read as written and never be.
    */
-  let held: Array<{ agentId: string; text: string; deliveryId: string }> | null = []
-  const submit = (agentId: string, content: string, deliveryId: string): void => {
-    if (!held) { deps.submit(agentId, content, deliveryId); return }
-    held.push({ agentId, text: content, deliveryId })
+  let held: Array<{ agentId: string; text: string; deliveryId: string; options?: DeliveryOptions }> | null = []
+  const write = (agentId: string, content: string, deliveryId: string, options?: DeliveryOptions): void => {
+    if (options?.current?.() === false) { settled({ deliveryId, sessionId: agentId, state: 'rejected', reason: 'caller_gone' }); return }
+    if (options) deps.submit(agentId, content, deliveryId, options)
+    else deps.submit(agentId, content, deliveryId)
+  }
+  const submit = (agentId: string, content: string, deliveryId: string, options?: DeliveryOptions): void => {
+    if (!held) { write(agentId, content, deliveryId, options); return }
+    held.push({ agentId, text: content, deliveryId, options })
     if (held.length > HELD_DELIVERIES) {
       const dropped = held.shift()!
       settled({ deliveryId: dropped.deliveryId, sessionId: dropped.agentId, state: 'rejected', reason: 'queue_full' })
@@ -108,19 +117,31 @@ export function createDeliveries(deps: DeliveriesDeps) {
       }
     }
     const maker = makers.get(event.deliveryId)
-    if (maker) deps.tell(maker, event)
+    if (maker && maker.current?.() !== false) {
+      if (maker.current) deps.tell(maker.service, event, true)
+      else deps.tell(maker.service, event)
+    }
   }
 
-  const turns: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery'> = {
+  const input = (event: SessionInputProgress): void => {
+    for (const listener of inputListeners) {
+      try { listener(event) } catch { log('[input] an input listener failed') }
+    }
+    const maker = event.deliveryId ? makers.get(event.deliveryId) : undefined
+    if (maker?.current?.()) deps.tellInput?.(maker.service, event)
+  }
+
+  const turns: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery' | 'onInput'> = {
     deliver: (agentId, content, deliveryId, options) => {
       if (options?.quiet) keep(quiet, deliveryId)
-      submit(agentId, content, deliveryId)
+      submit(agentId, content, deliveryId, options?.when || options?.current ? options : undefined)
     },
     cancelDelivery: (deliveryId) => cancel(deliveryId),
     onDelivery: (listener) => {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
     },
+    onInput: (listener) => { inputListeners.add(listener); return () => { inputListeners.delete(listener) } },
   }
 
   /**
@@ -200,30 +221,42 @@ export function createDeliveries(deps: DeliveriesDeps) {
      *  process that made it is told. A listener that throws costs that listener the event, never the input
      *  that said it or another listener. */
     settled,
+    input,
 
     /** The core's input is wired: what was held is written, in order, and the rest as it comes. */
     ready(): void {
       const waiting = held ?? []
       held = null
-      for (const delivery of waiting) deps.submit(delivery.agentId, delivery.text, delivery.deliveryId)
+      for (const delivery of waiting) write(delivery.agentId, delivery.text, delivery.deliveryId, delivery.options)
     },
 
     /** A service in its own process delivering a turn, or taking one back (`service_query`): null when the
      *  query is not one of these. Refused for a service that is not a deliverer. */
-    answer(service: string, query: string, payload: Payload): Payload | null {
-      if (query !== 'deliver' && query !== 'cancel_delivery') return null
+    answer(service: string, query: string, payload: Payload, authority?: ServiceQueryAuthority): Payload | null {
+      if (!['deliver', 'cancel_delivery', 'input_contract', 'input'].includes(query)) return null
       if (!deps.deliverers.has(service)) return { error: 'NOT_A_DELIVERER' }
+      if (authority?.current?.() === false) return { error: 'SERVICE_UNAVAILABLE' }
+      if (query === 'input_contract') return { version: 1 }
+      if (query === 'input' && (payload.version !== 1 || !['composer', 'turn'].includes(String(payload.when))
+        || Object.keys(payload).some(key => !['requestId', 'query', 'version', 'agentId', 'text', 'deliveryId', 'when', 'quiet'].includes(key)))) return { error: 'INVALID_INPUT' }
       const deliveryId = text(payload.deliveryId)
-      if (!deliveryId) return { error: 'INVALID_DELIVERY' }
+      if (!deliveryId || deliveryId.length > 200) return { error: 'INVALID_DELIVERY' }
+      const maker = makers.get(deliveryId)
+      if (maker && (maker.service !== service || maker.current?.() === false)) return { error: 'NOT_DELIVERY_OWNER' }
       if (query === 'cancel_delivery') return { cancelled: cancel(deliveryId) }
       const agentId = text(payload.agentId)
-      if (!agentId || typeof payload.text !== 'string') return { error: 'INVALID_DELIVERY' }
+      if (!agentId || agentId.length > 200 || typeof payload.text !== 'string' || !payload.text.trim()
+        || Buffer.byteLength(payload.text) > 24 * 1024) return { error: 'INVALID_DELIVERY' }
       // Known before it is written: the input says `queued` as it takes it, and that is the maker's to hear.
       makers.delete(deliveryId)
-      makers.set(deliveryId, service)
+      makers.set(deliveryId, { service, ...(query === 'input' && authority?.current ? { current: authority.current } : {}) })
       if (makers.size > KEPT_DELIVERERS) makers.delete(makers.keys().next().value!)
       if (payload.quiet === true) keep(quiet, deliveryId)
-      submit(agentId, payload.text, deliveryId)
+      const options = query === 'input' || authority?.current ? {
+        when: query === 'input' ? payload.when as 'composer' | 'turn' : 'turn' as const,
+        ...(authority?.current ? { current: authority.current } : {}),
+      } : undefined
+      submit(agentId, payload.text, deliveryId, options)
       return {}
     },
   }

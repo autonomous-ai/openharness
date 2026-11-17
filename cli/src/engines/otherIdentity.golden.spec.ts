@@ -237,7 +237,7 @@ describe('where the core finds the other engines\' conversations', () => {
       mirror: { inheritSummary: () => {} }, forgetSession: async () => {}, clients: { send: () => {} }, attachSession: async () => true,
       captureReader: () => () => false,
       announceSession: () => {}, stoppedAgents: { save: () => {}, finishResume: () => {}, get: () => null } as never, syncRecapPool: () => {},
-      input: { forget: () => {} } as never, submitAgent: () => {}, deviceInput: { forget: () => {} } as never,
+      input: { forget: () => {} } as never, submitAgent: () => {},
       homes: { copilot: home('.copilot'), grok: home('.grok'), agy: home('.gemini', 'antigravity-cli') },
       // OpenClaw's TUI names its session on its screen alone: the footer under its status line, above its composer.
       capturePane: async (agentId: string) => agentId === 'agent-openclaw'

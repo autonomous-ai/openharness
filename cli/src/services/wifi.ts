@@ -15,7 +15,8 @@
  * (lib/autonomous-device/localHttp.ts).
  */
 import { join } from 'node:path'
-import type { CoreApi, CorePorts, RemoteClient, ServiceRequests, WifiPort, WifiView } from '../core/api.js'
+import type { AgentView, CoreApi, CorePorts, RemoteClient, ServiceRequests, WifiPort, WifiView } from '../core/api.js'
+import { submissionPolicy } from '../engines/submissionPolicies.js'
 import { startDevicePart } from '../lib/autonomous-device/parts.js'
 import { deviceRelayOverGateway } from '../lib/autonomous-device/overGateway.js'
 import { DeviceResultJournal } from '../lib/autonomous-device/resultJournal.js'
@@ -29,6 +30,10 @@ export interface WifiDeps {
   /** Swapped in tests, to reach what the service and the Store are given. */
   service?: (options: ConstructorParameters<typeof AutonomousDeviceService>[0]) => AutonomousDeviceService
   store?: typeof createDeviceStore
+  /** Process adapter: captures one core connection through capability probe, read and submit. */
+  submit?: (agentId: string, text: string, deliveryId: string, context: (agent: AgentView) => void, current?: () => boolean) => Promise<void>
+  cancel?: (deliveryId: string) => void
+  consumed?: (agentId: string, text: string) => void
 }
 
 const same = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((item, i) => item === b[i])
@@ -67,15 +72,31 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
   const service = startDevicePart('Wi-Fi device service', () => build({
     store,
     resultJournal: new DeviceResultJournal(join(core.dataDir, 'device-results.json')),
-    inputConsumed: (agentId, text) => core.wifi.started(agentId, text),
+    inputConsumed: deps.consumed,
     machineId,
     requestAppFocus: (agentId, expiresAt, focusRevision) => core.wifi.focusApp(agentId, expiresAt, focusRevision),
     stepFocus: (direction, currentAgentId) => core.wifi.stepFocus(direction, currentAgentId),
     scroll: (phase, dy, velocity) => core.wifi.scroll(phase, dy, velocity),
     agents: () => view.agents,
-    submit: (agentId, text, deliveryId) => core.wifi.submit(agentId, text, deliveryId),
+    submit: async (agentId, text, deliveryId) => {
+      const context = (agent: AgentView): void => service!.inputContext(deliveryId, agent)
+      const current = (): boolean => service!.inputCurrent(deliveryId)
+      if (deps.submit) { await deps.submit(agentId, text, deliveryId, context, current); return }
+      const agent = await core.conversations.resolve(agentId)
+      if (!current()) return
+      if (!agent || agent.agentId !== agentId) {
+        service!.delivery({ sessionId: agentId, deliveryId, state: 'rejected', reason: 'agent_gone' })
+        return
+      }
+      context(agent)
+      core.turns.deliver(agentId, text, deliveryId, { when: 'composer', current })
+    },
     // Told, not asked: the one caller (an unpairing) goes on whatever the answer.
-    cancelDelivery: (deliveryId) => { core.wifi.cancel(deliveryId); return true },
+    cancelDelivery: (deliveryId) => {
+      if (deps.cancel) deps.cancel(deliveryId)
+      else core.turns.cancelDelivery(deliveryId)
+      return true
+    },
     stop: (agentId) => core.wifi.stop(agentId),
     answer: (agentId, requestId, answers) => core.wifi.answer(agentId, requestId, answers),
     recent: (agentId, n) => core.turns.recent(agentId, n),
@@ -83,6 +104,10 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
     emit: (frame, deviceId) => emit(frame, deviceId),
   }))
   if (!service) throw new Error('the Wi-Fi device service could not be started')
+  // Inline composition hears the same facts directly; a process adapter feeds the port below.
+  const stopInput = deps.submit ? undefined : core.turns.onInput?.(event => port.input?.(event))
+  const stopDelivery = deps.submit ? undefined : core.turns.onDelivery(event => service.delivery(event))
+  const stopAgents = core.agents.follow?.(event => service.agentLife(event))
 
   /** Which streams and which transcripts it follows, told to the core as they change. */
   const reportStreams = (): void => {
@@ -160,6 +185,23 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
     },
     turnStarted: (agentId) => service.turnStarted(agentId),
     turnEnded: (agentId, aborted) => service.turnEnded(agentId, aborted),
+    events: (agentId, events) => {
+      const busyInput = submissionPolicy(view.agents.find(agent => agent.agentId === agentId)?.engine)?.typesWhileBusy === true
+      for (let index = 0; index < events.length; index++) {
+        const event = events[index]
+        if (event.type === 'turn_started') service.turnStarted(agentId)
+        else if (event.type === 'turn_ended' && !(busyInput && events[index + 1]?.type === 'turn_started')) service.turnEnded(agentId, event.payload.aborted === true)
+      }
+    },
+    input: (event) => {
+      const watching = service.watchesTranscript(event.agentId)
+      if (event.phase === 'dispatching' && event.deliveryId && event.content !== undefined) seen.set(event.agentId, (seen.get(event.agentId) ?? 0) + 1)
+      service.inputProgress(event)
+      // In the inline composition there is no process maker to arm the existing transcript feed.
+      if (!deps.submit && !watching && service.watchesTranscript(event.agentId)) core.wifi.watching(service.transcriptWatches())
+      reportTranscript(event.agentId)
+    },
+    disconnected: () => service.coreDisconnected(),
     stream: (agentId, events) => service.stream(agentId, events),
     transcript: (agentId, sessionId, engine, line) => {
       service.observeTranscript(agentId, sessionId, engine, line)
@@ -183,7 +225,7 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       return moved
     },
     revealed: (operationId, agentId) => store.acknowledgeReveal(operationId, agentId),
-    stop: async () => store.stopUiDelivery(),
+    stop: async () => { stopInput?.(); stopDelivery?.(); stopAgents?.(); store.stopUiDelivery() },
   }
   store.startUiDelivery()
   ports.wifi = port

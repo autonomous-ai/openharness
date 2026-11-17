@@ -869,9 +869,20 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // built further down: read at a quiet stretch's edge, never now.
   const quietTitles = createQuietTitles({ read: () => syncTerminalTitles(), log: (line) => console.error(line) })
   const deliveries = createDeliveries({
-    submit: (agentId, text, deliveryId) => backendRef?.onMessage?.(agentId, text, deliveryId),
+    submit: (agentId, text, deliveryId, options) => backendRef?.onMessage?.(agentId, text, deliveryId, options),
     cancel: (deliveryId) => backendRef?.onCancelOrchestratorMessage?.(deliveryId) ?? false,
-    tell: (service, event) => { serviceLinksRef?.notify(service, { type: 'service_event', payload: { kind: 'delivery', event } }, { untilDelivered: true }) },
+    tell: (service, event, currentOnly) => {
+      serviceLinksRef?.notify(service, { type: 'service_event', payload: { kind: 'delivery', event } }, currentOnly ? undefined : { untilDelivered: true })
+    },
+    tellInput: (service, event) => {
+      if (service === 'wifi') {
+        if (event.phase === 'dispatching' && event.deliveryId && event.content !== undefined) wifiCore.feed.inputDispatched(event.agentId, event.deliveryId, event.content, event.sessionId)
+        wifiLink.input(event)
+        wifiLink.port.input(event)
+        return
+      }
+      serviceLinksRef?.notify(service, { type: 'service_event', payload: { kind: 'input', event } })
+    },
     // The experiments' turns (the orchestrator's first), and Agent Messages' typed messages (core/api.ts).
     deliverers: new Set(TURN_DELIVERERS),
     // The recaps, built further down: a quiet delivery's turn ends with no recap and no notification, and no title from it names its agent.
@@ -906,7 +917,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     want: () => devicesWake.ask('wifi', 'a Wi-Fi device'),
     doors: wifiDoors({
       registry, machineId: machineIdNow, packageId: session => { const id = frameParts.read(session.agentId).dsh; return typeof id === 'string' ? id : session.dsh ?? null }, displayName: projectDisplayName, running: (sessionId) => turnStartedAt.has(sessionId),
-      socket: () => backendRef ?? null, deviceInput: () => deviceInput, answer: (request) => cloudAgents?.answer(request) ?? questions.answer(request),
+      socket: () => backendRef ?? null, answer: (request) => cloudAgents?.answer(request) ?? questions.answer(request),
       stop: (agentId) => cancelAgent(agentId, true), devices: () => ports.devices,
     }),
   })
@@ -1440,20 +1451,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.sessionsProvider = history.sessionsList
   // An agent whose turns keep ending at once has its automatic writes held a while (core/turns/shortTurnGuard.ts).
   const shortTurns = createShortTurnGuard({ now: Date.now, log: (line) => console.warn(line) })
-  // Everything the core writes into a pane, and the device's pane lock (core/input.ts).
+  // The shared input operation and writer for every pane caller (core/input.ts).
   const inputs = createInput({
     shortTurns,
     readScreen: screens.read,
     submission: submissions,
     resolve: (id) => registry.resolve(id),
-    byAgent: (agentId) => registry.byAgent(agentId),
     terminal: terminalControl,
     deliveries: {
       settled: (event) => deliveries.settled(event),
+      input: event => deliveries.input(event),
       // Whether Agent Messages still wants one of its typed deliveries written (core/messagesLink.ts).
       canWrite: (deliveryId) => ports.messages?.canWrite(deliveryId) ?? false,
     },
-    device: () => wifiCore.feed,
     clients: backend,
     // Declared further down: read when an error is reported, never now.
     agentIdFor: (sessionId) => agentIdFor(sessionId),
@@ -1475,11 +1485,17 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     engineStarting: (engine) => isolatedScreen(engine) ? serviceLinksRef?.whenStarting(READER_SERVICES[engine as ReaderEngine]) ?? null : null,
   })
   const input = inputs.input
+  // Stateless kept-worker compatibility, introduced 2026-11-17: an old worker has receipts for inputs
+  // whose composer is already free. Keep this through the first new-worker release's 30-day window
+  // and supported-cutover proof; forgetting the shared input stores no device state in this process.
+  const inputLifecycle = {
+    forget: (agentId: string): void => { input.forget(agentId); wifiCore.feed.agentGone(agentId) },
+    awaitingConfirmation: (agentId: string): boolean => input.awaitingConfirmation(agentId),
+  }
   // A window that connects while a message waits for its engine reads it off the agent's frame, pushed or listed. A message is
   // sent by an agent's id, or by its session's.
   waitingForRef = (s) => input.waitingFor(s.agentId) ?? input.waitingFor(s.sessionId)
   backend.waitingForProvider = waitingForRef
-  const deviceInput = inputs.deviceInput
 
   // agy's turn closed from its pane when its final Stop never comes (core/turns/agyBackstop.ts).
   const agyBackstop = createAgyBackstop({
@@ -1507,12 +1523,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     sessionTurnOpen,
     someoneCanAnswer,
     followedByTool: (agentId) => backend.followedByTool(agentId),
-    deviceInput,
+    input,
   })
   const questions = asking.questions
   // Cloud harnesses (core/agents/cloud.ts): listed with the rest; their questions shown as the panes' are, and
   // answered through the cloud service.
-  cloudAgents = createCloudAgents({ port: () => ports.cloud, clients: backend, openQuestions: asking.openQuestions, deviceInput })
+  cloudAgents = createCloudAgents({ port: () => ports.cloud, clients: backend, openQuestions: asking.openQuestions })
   const cloud = cloudAgents
   backend.questionProvider = createQuestionResponse((payload) => cloud.answer(payload) ?? asking.answer(payload))
   // An app away from this desk is told what is still being asked as it connects (core/questions.ts).
@@ -1648,7 +1664,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   // The Wi-Fi device in the devices' process (core/wifiLink.ts): its sessions' requests and what the agents do,
   // in order; on each connection, what the core holds for it (core/wifi.ts).
-  const wifiLink = createWifiLink({
+  const wifiLink = createWifiLink({ deliveries,
     core: coreApi,
     notify: (frame) => serviceLinks.notify('wifi', frame),
   })
@@ -1692,11 +1708,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     startWaits: Object.fromEntries([...Object.values(READER_SERVICES), OTHER_ENGINES_SERVICE].map(service => [service, READER_START_MS])),
     want: (service) => experimentHooks.want(service),
     // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
-    answer: async (service, query, payload, authority) => frameParts.answer(service, query, payload, () => authority.current?.() === true) ?? await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
+    answer: async (service, query, payload, authority) => frameParts.answer(service, query, payload, () => authority.current?.() === true) ?? await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload, authority)
       // Agent Messages is answered what it uses and nothing more, never what an experiment may ask (core/messagesLink.ts).
       ?? (service === 'messages' ? await messagesLink.answer(query, payload) : null)
       // What happens to agents, for a service that follows them (core/agentLife.ts): the live agents' rows, which only a
       // service whose answers come after the gateway's and Agent Messages' own may read, as it may read `live`.
+      ?? (query === 'resolve' && TURN_DELIVERERS.includes(service) ? await answerConversationQuery(coreApi, query, payload, authority) : null)
       ?? (query === 'follow_agents' ? agentLife.followed(service, payload) : null)
       ?? await answerConnectorsQuery(coreApi, service, query, payload)
       ?? await answerSharedMachinesQuery(sharedMachinesAccount, service, query, payload)
@@ -1709,7 +1726,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       : service === 'store' ? storeLink.answer(query, payload)
       : service === 'models' ? modelsLink.answer(query, payload)
       : service === 'devices' ? devicesLink.answer(query, payload)
-      : service === 'wifi' ? wifiLink.answer(query, payload)
+      : service === 'wifi' ? wifiLink.answer(query, payload, authority)
       : service === 'handoff' ? answerConversationQuery(coreApi, query, payload, authority)
       : service === 'shell' ? answerShellQuery(coreApi, query, payload)
       : service === 'agentCleanup' ? agentCleanupLink.answer(query, payload)
@@ -1958,8 +1975,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     turnStartedAt,
     prompts: turnPrompts,
     input,
-    deviceInput,
-    submission: submissions,
     device: () => wifiCore.feed,
     startHeartbeat,
     questionWatcher,
@@ -1994,8 +2009,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     runtimeProfiles,
     watcher,
     stopHeartbeat,
-    input,
-    deviceInput,
+    input: inputLifecycle,
     ended: agentEnded,
     mirror,
     clients: backend,
@@ -2010,7 +2024,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // A terminal is never the dial's business, and `syncSession` forces that for it anyway.
     announceSession: session => announceSession(session, { device: false }),
     invalidateTerminalControl,
-    forgetInput: agentId => { forgetRestartRevision(agentId); input.forget(agentId); deviceInput.forget(agentId) },
+    forgetInput: agentId => { forgetRestartRevision(agentId); inputLifecycle.forget(agentId) },
     ended: agentEnded,
     syncRecapPool,
     warn: (message, error) => console.warn(message, error),
@@ -2033,10 +2047,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     announceSession,
     stoppedAgents,
     syncRecapPool,
-    input,
+    input: inputLifecycle,
     // A first task is the person's own message (core/input.ts).
     submitAgent: inputs.submitAgent,
-    deviceInput,
     homes: { copilot: env.COPILOT_HOME, grok: env.GROK_HOME, agy: env.AGY_HOME },
     // OpenClaw's session key is on its TUI's footer and nowhere else. The scrollback above the screen keeps its title,
     // the only place a Gateway on another host shows, a while longer into a conversation.
@@ -2083,8 +2096,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     syncRecapPool,
     attachSession,
     invalidateTerminalControl,
-    input,
-    deviceInput,
+    input: inputLifecycle,
     questionWatcher,
     stopHeartbeat,
     retainExitedSession,
@@ -3156,14 +3168,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   const submitAgent = inputs.submitAgent
   // Words for a cloud harness go to its service, and a delivery among them is settled as the pane's are.
-  backend.onMessage = (id, content, deliveryId) => {
+  backend.onMessage = (id, content, deliveryId, options) => {
+    if (options?.current?.() === false) return
     // An Agent Messages turn its mailbox no longer wants written waits, as a pane's does (core/input.ts).
     if (cloud.owns(id) && deliveryId?.startsWith('team:') && !(ports.messages?.canWrite(deliveryId) ?? false)) {
       deliveries.settled({ deliveryId, sessionId: id, state: 'rejected', reason: 'team_waiting_control' })
       return
     }
     const sent = cloud.deliver(id, content)
-    if (!sent) { submitAgent(id, content, deliveryId); return }
+    if (!sent) { submitAgent(id, content, deliveryId, undefined, options ? { content, deliveryId, when: options.when ?? 'turn', current: options.current } : undefined); return }
     if (deliveryId) void sent.then((result) => deliveries.settled({ deliveryId, sessionId: id, state: result.ok ? 'delivered' : 'rejected', ...(result.ok ? {} : { reason: result.error }) }))
   }
   backend.messageProvider = (payload, receipt) => {

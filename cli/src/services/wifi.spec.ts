@@ -26,6 +26,7 @@ function started(over: Parameters<typeof fakeCore>[0] = {}) {
   const core = fakeCore({
     dataDir,
     ...over,
+    conversations: { resolve: vi.fn(async () => ({ ...agent, sessionId: 's1' } as never)), ...over.conversations },
     wifi: { view: vi.fn(async () => ({ agents: [agent], store: [], hasWindow: true })), ...over.wifi },
   })
   const ports = emptyPorts()
@@ -52,6 +53,42 @@ function started(over: Parameters<typeof fakeCore>[0] = {}) {
 const KEY = Buffer.alloc(32, 7).toString('base64')
 
 describe('the Wi-Fi device, with the dials', () => {
+  it('withdraws an input revoked while its fresh agent read is pending', async () => {
+    let release!: (value: never) => void
+    const core = fakeCore({ dataDir,
+      conversations: { resolve: vi.fn(() => new Promise<never>(done => { release = done })) },
+      wifi: { view: vi.fn(async () => ({ agents: [agent], store: [], hasWindow: true })) },
+    })
+    let service!: AutonomousDeviceService
+    const ports = emptyPorts()
+    startWifi(core, ports, { service: options => service = new AutonomousDeviceService(options) })
+    await ports.wifi!.resume({ sessions: [], helloed: [], focus: null })
+    const sending = service.request('device', { type: 'turn.send', requestId: randomUUID(), machineId: 'machine-1', agentId: 'agent', idempotencyKey: 'revoked', text: 'hello' })
+    await vi.waitFor(() => expect(core.conversations.resolve).toHaveBeenCalledWith('agent'))
+    service.revoke('device')
+    release({ ...agent, sessionId: 's1' } as never)
+    expect(await sending).toMatchObject({ receipt: { state: 'unknown', error: { code: 'REVOKED' } } })
+    expect(core.turns.deliver).not.toHaveBeenCalled()
+    await ports.wifi!.stop()
+  })
+
+  it.each(['claude', 'codex', 'commandcode'])('interprets %s native boundaries in its own component', async engine => {
+    const core = fakeCore({ dataDir, wifi: { view: vi.fn(async () => ({ agents: [{ ...agent, engine }], store: [], hasWindow: true })) } })
+    let service!: AutonomousDeviceService
+    const ports = emptyPorts()
+    startWifi(core, ports, { service: options => service = new AutonomousDeviceService(options) })
+    await ports.wifi!.resume({ sessions: [], helloed: [], focus: null })
+    const end = vi.spyOn(service, 'turnEnded'), start = vi.spyOn(service, 'turnStarted'), stream = vi.spyOn(service, 'stream')
+    const events = [{ type: 'turn_ended', payload: {} }, { type: 'turn_started', payload: { userMessage: 'next' } }] as never
+    ports.wifi!.events('agent', events)
+    expect(end).toHaveBeenCalledTimes(engine === 'commandcode' ? 1 : 0)
+    expect(start).toHaveBeenCalledWith('agent')
+    expect(stream).not.toHaveBeenCalled()
+    ports.wifi!.stream('agent', events)
+    expect(stream).toHaveBeenCalledWith('agent', events)
+    await ports.wifi!.stop()
+  })
+
   it('answers a device\'s hello through the core, which seals it to the session it came on, and counts it as watching', async () => {
     const { core, hello } = started()
     const answer = await hello()
@@ -75,8 +112,8 @@ describe('the Wi-Fi device, with the dials', () => {
     await hello()
     const reply = await ask({ type: 'turn.send', machineId: 'machine-1', agentId: 'agent', idempotencyKey: 'k1', text: 'hello' })
     expect(reply).toMatchObject({ status: 'accepted', receipt: { state: 'queued' } })
-    const deliveryId = vi.mocked(core.wifi.submit).mock.calls[0][2]
-    expect(core.wifi.submit).toHaveBeenCalledWith('agent', 'hello', deliveryId)
+    const deliveryId = vi.mocked(core.turns.deliver).mock.calls[0][2]
+    expect(core.turns.deliver).toHaveBeenCalledWith('agent', 'hello', deliveryId, { when: 'composer', current: expect.any(Function) })
     // The core typed it: the service reads the agent's transcript until the turn is proven.
     port.dispatched('agent', deliveryId, 'hello', 's1')
     expect(core.wifi.transcripts).not.toHaveBeenCalled()
@@ -222,7 +259,7 @@ describe('the Wi-Fi device, with the dials', () => {
     expect(await receipt('k2')).toMatchObject({ status: 200, body: { receipt: { idempotencyKey: 'k2', state: 'queued' } } })
     expect(await receipt('nope')).toEqual({ status: 200, body: { receipt: null } })
     port.revoked(KEY)
-    expect(core.wifi.cancel).toHaveBeenCalled()
+    expect(core.turns.cancelDelivery).toHaveBeenCalled()
     expect(await receipt('k2')).toEqual({ status: 200, body: { receipt: null } })
     await hello('c2')
     port.dropped('c2')
@@ -275,12 +312,11 @@ describe('the Wi-Fi device, with the dials', () => {
     expect(core.wifi.reveal).toHaveBeenCalledWith('op', 'a')
   })
 
-  it('hands the core the device\'s answers to questions and the prompts its transcript proved started', async () => {
+  it('hands question answers to the core and keeps transcript receipt evidence in the component', async () => {
     const core = fakeCore({ dataDir })
     let given: ConstructorParameters<typeof AutonomousDeviceService>[0] | undefined
     startWifi(core, emptyPorts(), { service: (options) => { given = options; return new AutonomousDeviceService(options) } })
-    given!.inputConsumed!('agent', 'hello')
-    expect(core.wifi.started).toHaveBeenCalledWith('agent', 'hello')
+    expect(given!.inputConsumed).toBeUndefined()
     expect(await given!.answer('agent', 'r', { q: 'yes' })).toBe(true)
     expect(core.wifi.answer).toHaveBeenCalledWith('agent', 'r', { q: 'yes' })
   })

@@ -42,7 +42,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
     },
     turns: {
       send: vi.fn(), stop: vi.fn(), recent: vi.fn(async () => []), asks: vi.fn(async () => []),
-      deliver: vi.fn(), cancelDelivery: vi.fn(() => false), onDelivery: vi.fn(() => () => {}),
+      onInput: vi.fn(() => () => {}), deliver: vi.fn(), cancelDelivery: vi.fn(() => false), onDelivery: vi.fn(() => () => {}),
       ...over.turns,
     },
     questions: { answer: vi.fn(), answerReviewed: vi.fn(async () => false), ...over.questions },
@@ -82,7 +82,6 @@ export function fakeCore(over: Overrides = {}): CoreApi {
     daemon: { command: 'harness', port: 18473, machineId: () => 'machine-1', autonomousEnv: 'prod', ...over.daemon },
     wifi: {
       view: vi.fn(async () => ({ agents: [], store: [], hasWindow: true })),
-      submit: vi.fn(async () => {}), cancel: vi.fn(), started: vi.fn(),
       stop: vi.fn(async () => true), answer: vi.fn(async () => true),
       create: vi.fn(async () => ({ ok: false as const, error: 'UNSUPPORTED' })),
       stepFocus: vi.fn(async () => 'no_agents' as const), scroll: vi.fn(() => true), focusApp: vi.fn(() => true), reveal: vi.fn(),

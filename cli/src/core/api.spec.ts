@@ -559,9 +559,7 @@ describe('the core API services stand on', () => {
     expect(await WIFI_OFF.stepFocus('next')).toBe('no_app')
     expect(WIFI_OFF.scroll('down', 0, 0)).toBe(false)
     expect(WIFI_OFF.focusApp('a', 0, 'r')).toBe(false)
-    await expect(WIFI_OFF.submit('a', 't', 'd')).resolves.toBeUndefined()
-    for (const call of [() => WIFI_OFF.cancel('d'), () => WIFI_OFF.started('a', 't'),
-      () => WIFI_OFF.reveal('o', 'a'), () => WIFI_OFF.send('c', 'i', 't', {}), () => WIFI_OFF.hello('c', null), () => WIFI_OFF.joined(), () => WIFI_OFF.ready(),
+    for (const call of [() => WIFI_OFF.reveal('o', 'a'), () => WIFI_OFF.send('c', 'i', 't', {}), () => WIFI_OFF.hello('c', null), () => WIFI_OFF.joined(), () => WIFI_OFF.ready(),
       () => WIFI_OFF.unpaired('i'), () => WIFI_OFF.focus('r'), () => WIFI_OFF.transcripts('a', 0), () => WIFI_OFF.watching([]),
       () => WIFI_OFF.streams([])]) expect(call()).toBeUndefined()
   })

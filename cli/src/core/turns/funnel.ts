@@ -1,6 +1,6 @@
 /**
  * The event funnel: the one place a session's live events fan out from, to the app, search, input, the
- * device's input, the device service, the heartbeat, the question watcher and the recaps. The
+ * device service, the heartbeat, the question watcher and the recaps. The
  * order is exact and it matters: per event, the frame goes to the app before anything acts on it; the
  * recaps hear the whole batch after the loop; the device stream comes last and never on a replay.
  *
@@ -12,9 +12,6 @@
  */
 import { withoutOutputTail } from '../../lib/cardUpdate.js'
 import { correlateAgentEvent } from '../../lib/agentEvent.js'
-import type { AutonomousDeviceInput } from '../deviceInput.js'
-import { isDeviceInputBoundary } from '../deviceInput.js'
-import type { SubmissionReader } from '../../lib/submissionReader.js'
 import type { WifiFeed } from '../wifi.js'
 import type { TurnRecaps } from './recaps.js'
 import type { QuietTitles } from '../agents/quietTitles.js'
@@ -56,10 +53,7 @@ export interface FunnelDeps {
    *  Not cleared when the turn ends: an idle agent with no recap is summarised by its last prompt. */
   prompts?: Map<string, string>
   input: Pick<SessionInputController, 'onTurnStarted' | 'onTurnEnded'>
-  deviceInput: Pick<AutonomousDeviceInput, 'onTurnStarted' | 'onTurnEnded'>
-  /** Which engines take a message typed mid-turn into their own queue (their declared submission policy). */
-  submission: Pick<SubmissionReader, 'policy'>
-  device: () => Pick<WifiFeed, 'turnStarted' | 'turnEnded' | 'stream'> | undefined
+  device: () => Pick<WifiFeed, 'events' | 'stream'> | undefined
   startHeartbeat: (sessionId: string) => void
   questionWatcher: Pick<QuestionWatcher, 'start' | 'noteTurnStart' | 'stop'>
   mirror: Pick<TurnRecaps, 'ingest'>
@@ -114,14 +108,14 @@ export function outsideConsumers(options: {
 /** The funnel itself, over what it feeds. */
 export function funnelFor({
   bySession, tokenUsage, agentIdFor, turnActivity, isSubagentSession, clients, search, turnStartedAt, prompts, input,
-  deviceInput, submission, device, startHeartbeat, questionWatcher, mirror, outside = outsideConsumers(), working, shortTurns,
+  device, startHeartbeat, questionWatcher, mirror, outside = outsideConsumers(), working, shortTurns,
   quietTitles, quietTurnOpen,
 }: FunnelDeps) {
   return (sessionId: string, events: Events, opts?: EmitOptions): void => {
     if (!events.length || !bySession(sessionId)?.active) return
     const usageSession = bySession(sessionId)
     if (usageSession?.engine === 'opencode') tokenUsage.changed(usageSession)
-    for (const [eventIndex, event] of events.entries()) {
+    for (const event of events) {
       const agentId = agentIdFor(sessionId)
       const replay = !!(opts?.resumed || opts?.replay)
       turnActivity.observe(sessionId, event.type, replay)
@@ -164,8 +158,6 @@ export function funnelFor({
         else prompts?.delete(agentId)
         console.log(`[turn] ${sid(sessionId)} started · engine=${bySession(sessionId)?.engine ?? 'claude'} · bytes=${Buffer.byteLength(event.payload.userMessage, 'utf8')}`)
         input.onTurnStarted(agentIdFor(sessionId), event.payload.userMessage)
-        deviceInput.onTurnStarted(agentId, event.payload.userMessage)
-        outside('devices', () => device()?.turnStarted(agentId))
         startHeartbeat(sessionId)
         questionWatcher.start(sessionId)   // Claude opens its dialog INSIDE a turn
         // ...and anything already drawn belongs to the turn BEFORE this one — unless this is a turn the
@@ -181,11 +173,6 @@ export function funnelFor({
           `[turn] ${sid(sessionId)} ended${event.payload.aborted ? ' · aborted (interrupted)' : ''}` +
             `${startedAt ? ` · ${Date.now() - startedAt}ms` : ''}`,
         )
-        // Filter only the Device receipt view; shared normalizers, mirror, and local input stay unchanged.
-        if (!isDeviceInputBoundary(submission.policy(usageSession?.engine ?? ''), events, eventIndex)) {
-          outside('devices', () => device()?.turnEnded(agentId, event.payload.aborted === true))
-          deviceInput.onTurnEnded(agentId)
-        }
         input.onTurnEnded(agentIdFor(sessionId))
         // Command Code asks AFTER the turn: `ask_user_question` ends the turn (its Stop hook fires), the
         // dialog goes up, and the answer opens a NEW turn. Stopping the watcher here is what left the
@@ -197,6 +184,9 @@ export function funnelFor({
         // stops once mirror.heartbeat() reads it idle, which is at once while the recaps are off.
       }
     }
+    // Receipt lifecycle must precede a recap; interpretation stays in the component and sees the
+    // original batch, including events between an end and a start. Streaming still follows the recap.
+    if (!opts?.replay) outside('devices', () => device()?.events(agentIdFor(sessionId), events))
     mirror.ingest(events, sessionId, { replay: !!(opts?.resumed || opts?.replay) })
     // Subscribed devices only (lib/autonomous-device/stream.ts). A transcript re-read is history, not live.
     if (!opts?.replay) outside('devices', () => device()?.stream(agentIdFor(sessionId), events))

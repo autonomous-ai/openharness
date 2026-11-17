@@ -98,7 +98,6 @@ function setup(over: Partial<BindDeps> = {}) {
     syncRecapPool: vi.fn(),
     input: { forget: vi.fn(), awaitingConfirmation: vi.fn(() => false) },
     submitAgent: vi.fn(),
-    deviceInput: { forget: vi.fn() },
     homes: { copilot: '/copilot', grok: '/grok', agy: '/agy' },
     capturePane: vi.fn(async () => null),
     openclawPaneRead: vi.fn(),
@@ -866,7 +865,6 @@ describe('binding a running process to its session', () => {
       vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: agent({ sessionId: 'r' }), ...meta({ isNew: true }) } as never)
       await run.binding.bindObservedAgent(observed({ resumeSessionId: 'r' } as Partial<DiscoveredTerminalAgent>))
       expect(run.deps.input.forget).toHaveBeenCalledWith('old')
-      expect(run.deps.deviceInput.forget).toHaveBeenCalledWith('old')
       expect(run.deps.announceSession).toHaveBeenCalledWith(previous)
       expect(run.deps.attachSession).toHaveBeenCalled()
     })
@@ -1027,7 +1025,6 @@ describe('binding a running process to its session', () => {
       follow.mockResolvedValue({ sessionId: 'S' })
       await run.binding.bindObservedAgent(hermes())
       expect(run.deps.input.forget).toHaveBeenCalledWith('old')
-      expect(run.deps.deviceInput.forget).toHaveBeenCalledWith('old')
       expect(run.deps.announceSession).toHaveBeenCalledWith(previous)
     })
 
@@ -1777,7 +1774,6 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       readScreen: readInlineScreen,
       submission: inlineSubmission,
       resolve: rows,
-      byAgent: rows,
       terminal: {
         captureTerminal: vi.fn(async () => shown),
         validateTerminal: vi.fn(async () => true),
@@ -1786,7 +1782,6 @@ describe('binding an OpenClaw pane, read from its screen', () => {
         pinTerminalControl: vi.fn(() => () => {}),
       },
       deliveries: { settled: vi.fn(), canWrite: vi.fn(() => true) },
-      device: () => undefined,
       clients: { send: vi.fn(), sendCommander: vi.fn() },
       agentIdFor: (sessionId) => rows(sessionId)?.agentId ?? sessionId,
       openTurn: async () => [],
@@ -2000,7 +1995,6 @@ describe('binding an OpenClaw pane, read from its screen', () => {
         readScreen: readInlineScreen,
         submission: inlineSubmission,
         resolve: rows,
-        byAgent: rows,
         terminal: {
           captureTerminal: vi.fn(async () => ready),
           validateTerminal: vi.fn(async () => true),
@@ -2009,7 +2003,6 @@ describe('binding an OpenClaw pane, read from its screen', () => {
           pinTerminalControl: vi.fn(() => () => {}),
         },
         deliveries: { settled: vi.fn(), canWrite: vi.fn(() => true) },
-        device: () => undefined,
         clients,
         agentIdFor: (sessionId) => rows(sessionId)?.agentId ?? sessionId,
         openTurn: async () => [],
