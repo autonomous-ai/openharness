@@ -610,7 +610,7 @@ describe('the devices set the dial skill up', () => {
     expect(readSetup(dataDir).homes.codex).toEqual(listed)
   })
 
-  it('a refused home costs no file work on the next scan, until dial-skill.json changes', () => {
+  it('a refused home costs no file work on the next scan, until an engine is turned off or on', () => {
     const r = rig()
     // No skills folder to be had: a file in its place.
     const noFolder = folder()
@@ -629,8 +629,15 @@ describe('the devices set the dial skill up', () => {
     // Each tried once: the default home set up, then the two that could not be written.
     expect(r.counted).toEqual([['codex', 'set up'], ['codex', 'failed', 'write'], ['codex', 'failed', 'write']])
 
-    // enable writes dial-skill.json: each is tried once more.
+    // dial-skill.json written with nothing changed in it, as an enable with nothing removed writes it: neither is tried.
     chmodSync(join(shut, 'skills', 'dial'), 0o700)
+    writeRemoved(r.dataDir, 'codex', false)
+    r.writer.scanned(owners)
+    expect(existsSync(skillFile(shut))).toBe(false)
+
+    // A disable, then an enable: each is tried once more.
+    writeRemoved(r.dataDir, 'codex', true)
+    r.writer.scanned(owners)
     writeRemoved(r.dataDir, 'codex', false)
     r.writer.scanned(owners)
     expect(hasSkill(shut)).toBe(true)
@@ -972,6 +979,43 @@ describe('what the person removed stays removed, and Harness\'s own is kept curr
     r.writer.scanned([ownerIn(r.codexHome)])
     expect(hasSkill(r.codexHome)).toBe(true)
     expect(r.counted).toEqual([['codex', 'failed', 'write'], ['codex', 'set up']])
+  })
+
+  it('each refused home waits out its own hour', () => {
+    const r = rig()
+    // No skills folder to be had: a file in its place.
+    const [a, b] = [folder(), folder()]
+    for (const home of [a, b]) writeFileSync(join(home, 'skills'), 'mine')
+    const tries = (): number => r.counted.filter(([, kind]) => kind === 'failed').length
+    r.writer.started()
+
+    r.writer.scanned([ownerIn(a)])
+    r.clock.at = 59 * 60_000
+    r.writer.scanned([ownerIn(a), ownerIn(b)])
+    expect(tries()).toBe(2)
+
+    // A's hour is up, B's is not.
+    r.clock.at = 60 * 60_000
+    r.writer.scanned([ownerIn(a), ownerIn(b)])
+    expect(tries()).toBe(3)
+
+    r.clock.at = 119 * 60_000
+    r.writer.scanned([ownerIn(a), ownerIn(b)])
+    expect(tries()).toBe(4)
+  })
+
+  it('Claude Code saving another setting tries no refused home again', () => {
+    const r = rig()
+    const noFolder = folder()
+    writeFileSync(join(noFolder, 'skills'), 'mine')
+    r.writer.started()
+    r.writer.scanned([ownerIn(noFolder)])
+
+    r.clock.at = 60_000
+    writeFileSync(join(r.claudeHome, 'settings.json'), JSON.stringify({ theme: 'dark' }))
+    r.writer.scanned([ownerIn(noFolder)])
+
+    expect(r.counted.filter(([, kind]) => kind === 'failed')).toEqual([['codex', 'failed', 'write']])
   })
 
   it('a home that could not be written waits out its hour through an attach', () => {
