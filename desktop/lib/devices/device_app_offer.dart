@@ -42,7 +42,9 @@ class DeviceAppOffer extends ChangeNotifier {
   bool _installFailed = false;
   Future<void>? _installing;
   Future<void>? _lookup;
-  int _installsEnded = 0;
+
+  /// Installs and opens that have ended; a lookup asked before one ended is not believed.
+  int _actionsEnded = 0;
 
   /// The bundle an install of this run put in place; [open] opens it rather than whichever copy LaunchServices picks.
   String? _installedAt;
@@ -109,6 +111,7 @@ class DeviceAppOffer extends ChangeNotifier {
       // The real opener throws when `open` cannot start or runs out of time: the same refusal to the person.
       opened = false;
     }
+    _actionsEnded++;
     if (opened) {
       _presence = const DeviceAppPresence(installed: true, running: true);
       _failedStep = null;
@@ -158,7 +161,7 @@ class DeviceAppOffer extends ChangeNotifier {
       );
     }
     _installing = null;
-    _installsEnded++;
+    _actionsEnded++;
     final installedAt = result.installedAt;
     if (installedAt != null) {
       _installedAt = installedAt;
@@ -189,7 +192,7 @@ class DeviceAppOffer extends ChangeNotifier {
   }
 
   Future<void> _lookUp() async {
-    final asked = _installsEnded;
+    final asked = _actionsEnded;
     final DeviceAppPresence answer;
     try {
       answer = await _probe.lookup();
@@ -197,8 +200,8 @@ class DeviceAppOffer extends ChangeNotifier {
       _log?.call('device app: lookup failed');
       return;
     }
-    // An answer asked before an install ended describes the computer before it; the install's result stands.
-    if (_disposed || asked != _installsEnded) return;
+    // An answer asked before an install or an open ended describes the computer before it; that result stands.
+    if (_disposed || asked != _actionsEnded) return;
     if (answer.installed) {
       _awaitingRegistration = false;
       _failedStep = null;
