@@ -14,7 +14,7 @@
  * - paired, it starts the devices' process with the daemon, with no dial (core/devicesWake.ts), and what it
  *   sends while that process starts again is held by the core and answered.
  */
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -36,16 +36,28 @@ describe('the Wi-Fi device with the dials', () => {
   let device: FakeWifiDevice | undefined
   let window: LocalClient | undefined
   let desk: Desk | undefined
+  let dialsRoot: string | undefined
   afterEach(async () => {
-    device?.close()
-    window?.close()
-    await desk?.close()
-    await world?.close()
-    world = undefined; device = undefined; window = undefined; desk = undefined
+    try {
+      device?.close()
+      window?.close()
+    } finally {
+      try {
+        await desk?.close()
+      } finally {
+        try { await world?.close() }
+        finally {
+          if (dialsRoot) rmSync(dialsRoot, { recursive: true, force: true })
+          world = undefined; device = undefined; window = undefined; desk = undefined; dialsRoot = undefined
+        }
+      }
+    }
   })
 
   const fresh = async (env: Record<string, string> = {}) => {
-    const dials = join(mkdtempSync(join(tmpdir(), 'wifi-dials-')), 'dials.json')
+    // Owned before startup: startPhoneMachine cleans its resources if it fails, then this test removes ours.
+    dialsRoot = mkdtempSync(join(tmpdir(), 'wifi-dials-'))
+    const dials = join(dialsRoot, 'dials.json')
     writeFileSync(dials, '[]')
     const w = await startPhoneMachine({ wifiDevice: true, env: {
       CABLE_DISABLE: 'false',
