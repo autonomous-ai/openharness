@@ -17,8 +17,7 @@
 //     Interrupt before a stopped turn's turn_aborted; a question runs PreToolUse (AskUserQuestion, request_user_input)
 //     before its dialog; a permission runs PermissionRequest, Codex's before its dialog, Claude Code's beside it (and
 //     for AskUserQuestion's dialog too); Claude Code runs Elicitation before an MCP server's input dialog, Notification
-//     after a permission or input dialog waited 6 s, and SubagentStart and SubagentStop (with `version`) for its
-//     subagents. Codex runs no subagent hook: Harness installs none for it;
+//     after a permission or input dialog waited 6 s, and SubagentStart and SubagentStop for its subagents. Codex runs no subagent hook: Harness installs none for it;
 //   - draws a composer, turns on bracketed paste, and treats Enter as submit; Codex shades its composer as 0.162 does on
 //     a dark pane, or not with `unshadedComposer` in its config, as in a pane that answers no background query;
 //   - writes its conversation to a transcript in the engine's real record shapes, so the daemon's
@@ -76,7 +75,7 @@
 // command starting on a loaded machine, while the daemon has already found the engine and its conversation. `root` is the
 // test's throwaway root, the only place whose hooks it will run, and `hookLog` where it notes every hook
 // it ran. `withoutHooks` lists the hook events this release does not have, which it never runs (Codex 0.144.0:
-// `['Interrupt']`); Claude Code's subagent events carry `version`, so an older one is `version: '2.1.300'`.
+// `['Interrupt']`).
 // `trustPrompt` makes it ask whether to trust a folder its own config has no answer for. Codex
 // refuses to resume a conversation it archived, as the real one does.
 //
@@ -934,8 +933,9 @@ export async function run(engine, config = {}, { native = false } = {}) {
   const noteInterrupt = (key) => appendFileSync(join(config.root, 'interrupts'), `${key} ${process.pid}\n`)
   /**
    * Ends the open turn as the person stops it. Both CLIs write a running tool's output, marked aborted, first; Codex
-   * then runs its Interrupt hooks and waits for them (at most the 3 s it caps them at) before it writes
-   * `turn_aborted` (0.150.0 on, facts-codex §2). No Stop runs for a stopped turn.
+   * then runs its Interrupt hooks and waits for them (here until each ends or is killed at its installed timeout, which
+   * Harness writes as the 3 s Codex caps it at) before it writes `turn_aborted` (0.150.0 on, facts-codex §2). No Stop
+   * runs for a stopped turn.
    */
   const interrupt = () => {
     if (runningTool) {
@@ -1436,12 +1436,11 @@ export async function run(engine, config = {}, { native = false } = {}) {
   }
   /**
    * What Claude Code hands its SubagentStart and SubagentStop hooks (facts-claude §2): the subagent's id and type, and
-   * this release's `version` (the config's), by which notify.mjs leaves out the releases before 2.1.311, whose
-   * SubagentStop also fires every 30 s while a background subagent runs. A stop says whether a Stop hook continued it.
+   * no version. A stop says whether a Stop hook continued it.
    * An empty [type] is one of Claude Code's own forked agents (a prompt suggestion, `/btw`), which ends with no start.
    */
   const subagentInput = (agentId, { type = 'general-purpose', stop = false } = {}) =>
-    ({ agent_id: agentId, agent_type: type, version, ...(stop ? { stop_hook_active: false } : {}) })
+    ({ agent_id: agentId, agent_type: type, ...(stop ? { stop_hook_active: false } : {}) })
 
   // A permission asked for in a turn, answered: the command run (and written as the engine writes it)
   // or not, and the turn over. `turnOf` is the turn that asked.
