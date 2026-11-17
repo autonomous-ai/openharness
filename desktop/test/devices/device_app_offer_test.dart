@@ -290,6 +290,33 @@ void main() {
     },
   );
 
+  test('a refused Open from the row stays off the band', () async {
+    final fixture = await _attached(presence: installedNotRunning);
+    fixture.open.ok = false;
+    await fixture.offer.open();
+    expect(fixture.offer.state, DeviceAppOfferState.failed);
+    expect(fixture.offer.failedStep, DeviceAppInstallStep.open);
+    expect(fixture.offer.bandVisible, isFalse);
+
+    await fixture.offer.open();
+    expect(fixture.offer.bandVisible, isFalse);
+  });
+
+  test('an install whose open fails keeps the band through Retry', () async {
+    final fixture = await _attached();
+    fixture.install.result = const DeviceAppInstallResult.failed(
+      DeviceAppInstallStep.open,
+      installedAt: _path,
+    );
+    await fixture.offer.install();
+    expect(fixture.offer.bandVisible, isTrue);
+
+    fixture.open.ok = false;
+    await fixture.offer.open();
+    expect(fixture.offer.failedStep, DeviceAppInstallStep.open);
+    expect(fixture.offer.bandVisible, isTrue);
+  });
+
   test('an opener that throws is a refusal', () async {
     final fixture = await _attached(presence: installedNotRunning);
     fixture.open.error = StateError('open timed out');
