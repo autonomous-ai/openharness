@@ -41,10 +41,11 @@ beforeEach(() => {
     // A truncated or invalid rep is billed and counted, never scored: its 4 must not reach a mean.
     row('b.claude', 0, need(2, 1, 0, 0)), row('b.claude', 1, need(4, 1, 1, 1), { status: 'truncated' }),
     row('c.claude', 0, noNeed(0, 0)), row('c.claude', 1, noNeed(-1, 1)),
-    row('d.claude', 0, need(4, 1, 1, 1)), row('d.claude', 1, need(4, 1, 1, 1)),
-    row('e.claude', 0, need(-1, 0, null, 1)), row('e.claude', 1, need(4, 1, 1, 1), { status: 'invalid' }),
+    // Harm is what a run did however it ended: the invalid rep's counts; the test split's never moves a round.
+    row('d.claude', 0, need(4, 1, 1, 1), { harm: false }), row('d.claude', 1, need(4, 1, 1, 1), { harm: false }),
+    row('e.claude', 0, need(-1, 0, null, 1)), row('e.claude', 1, need(4, 1, 1, 1), { status: 'invalid', harm: true }),
     row('f.claude', 0, noNeed(0, 0)), row('f.claude', 1, noNeed(0, 0)),
-    row('h.claude', 0, need(4, 1, 1, 1)), row('h.claude', 1, need(4, 1, 1, 1)),
+    row('h.claude', 0, need(4, 1, 1, 1), { harm: true }), row('h.claude', 1, need(4, 1, 1, 1)),
   ]))
   // d.claude rep 1 timed out once before its retry scored; the failed attempt was billed.
   writeFileSync(join(flow, 'baseline', 'errors.jsonl'), jsonl([
@@ -59,7 +60,7 @@ beforeEach(() => {
     v1('a.claude', 0, need(4, 1, 1, 1)), v1('a.claude', 1, need(4, 1, 1, 1)),
     v1('b.claude', 0, need(3, 1, 0, 1)), v1('b.claude', 1, need(3, 1, 0, 1)),
     v1('c.claude', 0, noNeed(0, 0)), v1('c.claude', 1, noNeed(0, 0)),
-    v1('d.claude', 0, need(4, 1, 1, 1)), v1('d.claude', 1, need(4, 1, 1, 1)),
+    { ...v1('d.claude', 0, need(4, 1, 1, 1)), harm: false }, { ...v1('d.claude', 1, need(4, 1, 1, 1)), harm: false },
     v1('e.claude', 0, need(3, 1, 0, 1)),
     v1('f.claude', 0, noNeed(0, 0)), v1('f.claude', 1, noNeed(-1, 1)),
     { ...v1('g.codex', 0, need(4, 1, 1, 1)), model: 'gpt-5.5-codex' },
@@ -102,6 +103,14 @@ describe('summarize', () => {
     const { baseline, v1 } = summarize(flow, PRICES).variants
     expect(baseline.precision).toBeCloseTo(5 / 6, 6)
     expect(v1.precision).toBeCloseTo(9 / 10, 6)
+  })
+
+  it('counts the runs that did the harm, over the train and val runs with a harm check', () => {
+    const { baseline, v1 } = summarize(flow, PRICES).variants
+    expect(baseline.harmed).toBe(1)
+    expect(baseline.harm_rate).toBeCloseTo(1 / 3, 6)
+    expect(v1.harmed).toBe(0)
+    expect(v1.harm_rate).toBe(0)
   })
 
   it('pairs each variant with the baseline over the cases both scored', () => {
@@ -155,17 +164,17 @@ describe('writeSummaries', () => {
     expect(narrative.endsWith('<!-- /status -->\n\nThe story so far.\n')).toBe(true)
     expect(narrative).not.toContain('old status')
     expect(narrative.match(/<!-- status -->/g)).toHaveLength(1)
-    expect(narrative).toContain('| round | change | val | train | test | recall | specificity | line_ok | ask_ok | s/run | tool calls | rings | tokens | $/pass | spend |')
-    expect(narrative).toContain('| 0 | baseline | 1.00 [-5.57, 7.57] | 1.50 [-2.98, 5.98] | 4.00 | 83% | 75% | 60% | 67% | 10.0 | 5.0 | 0.60 | 13100 | $0.29 | $0.29 |')
+    expect(narrative).toContain('| round | change | val | train | test | recall | specificity | line_ok | ask_ok | harmed | s/run | tool calls | rings | tokens | $/pass | spend |')
+    expect(narrative).toContain('| 0 | baseline | 1.00 [-5.57, 7.57] | 1.50 [-2.98, 5.98] | 4.00 | 83% | 75% | 60% | 67% | 1 (33%) | 10.0 | 5.0 | 0.60 | 13100 | $0.29 | $0.29 |')
     expect(narrative).toMatch(/\| 1 \| Ask before waiting on a person \| 2\.63 \[-0\.77, 6\.02\] \| 2\.33 \[-2\.84, 7\.50\] \| {2}\| .* \| not measured \| not measured \|/)
 
     const metrics = readFileSync(join(flow, 'metrics.md'), 'utf8')
     expect(metrics.startsWith('# Metrics\n\nscore: the objective.\n\n<!-- aggregate -->\n')).toBe(true)
     expect(metrics.endsWith('<!-- /aggregate -->\n\nEnd notes.\n')).toBe(true)
     expect(metrics).not.toContain('old aggregate')
-    expect(metrics).toContain('| variant | recall | specificity | precision | line_ok | ask_ok | truncated | invalid | errors |')
-    expect(metrics).toContain('| baseline | 83% | 75% | 83% | 60% | 67% | 1 | 1 | timeout 1 |')
-    expect(metrics).toContain('| v1 | 100% | 75% | 90% | 67% | 100% | 0 | 0 | account_limited 1 |')
+    expect(metrics).toContain('| variant | recall | specificity | precision | line_ok | ask_ok | harmed | truncated | invalid | errors |')
+    expect(metrics).toContain('| baseline | 83% | 75% | 83% | 60% | 67% | 1 (33%) | 1 | 1 | timeout 1 |')
+    expect(metrics).toContain('| v1 | 100% | 75% | 90% | 67% | 100% | 0 (0%) | 0 | 0 | account_limited 1 |')
 
     expect(headline).toContain('v1 val 1.00 -> 2.63')
     expect(headline).toContain('within noise')
