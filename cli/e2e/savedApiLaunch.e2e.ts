@@ -12,7 +12,7 @@ afterEach(async () => { client?.close(); await daemon?.close(); client = undefin
 
 async function fresh() {
   const d = daemon = await IsolatedDaemon.create()
-  onTestFailed(() => console.log(d.log()))
+  onTestFailed(() => console.log([oldKey, newKey].reduce((log, key) => log.replaceAll(key, '[fixture key]'), d.log())))
   await d.start()
   const c = client = await LocalClient.connect(d)
   const saved = await c.request('api_connections', { action: 'save', connection: {
@@ -55,12 +55,16 @@ async function accepted(d: IsolatedDaemon, c: LocalClient, id: string) {
   expect(record?.baseUrl).toBe(newBase)
   // A boolean failure keeps even synthetic credential values out of assertion output.
   expect(record?.apiKey === newKey, 'the durable launch uses the edited key').toBe(true)
+  await c.turn(id, 'the refreshed launch takes a turn', 30_000)
+  noCredentials(d, c)
+  expect(d.coresStarted()).toBe(1)
+}
+
+function noCredentials(d: IsolatedDaemon, c: LocalClient) {
   for (const key of [oldKey, newKey]) {
     expect(JSON.stringify(c.frames).includes(key), 'replies contain no credential').toBe(false)
     expect(d.log().includes(key), 'daemon logs contain no credential').toBe(false)
   }
-  await c.turn(id, 'the refreshed launch takes a turn', 30_000)
-  expect(d.coresStarted()).toBe(1)
 }
 
 it('creates from the current Saved API when the request carries its previous endpoint and key', async () => {
@@ -99,5 +103,6 @@ it('refuses an outdated create after its Saved API was removed, without creating
   const after = await c.request('agents_list', {}, 30_000)
   expect(after.agents.map((row: Record<string, unknown>) => row.id))
     .toEqual(before.agents.map((row: Record<string, unknown>) => row.id))
+  noCredentials(d, c)
   expect(d.coresStarted()).toBe(1)
 })
