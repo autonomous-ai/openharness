@@ -11,10 +11,11 @@ export const hooks: HookContract = {
     // installs again into the chosen profile before spawning such an agent. Idempotent either way.
     home: { setting: 'CODEX_HOME' },
     file: 'hooks.json',
-    // The session's start and prompt bind it; Stop and Interrupt end its turn; PermissionRequest and PreToolUse
-    // (`request_user_input` only, so no hook runs for any other tool) say it waits on the person. No SubagentStart or
-    // SubagentStop: a child's SubagentStop fires for each of its turns and never for an interrupted or failed one, so
-    // their count is not one a lead's turn can wait on (facts-codex §2).
+    // The session's start and prompt bind it; Stop says its turns end by hook and closes none, as Codex waits for it
+    // before it writes the turn's end (no `stopClosesTurns`, facts-codex §5); Interrupt ends its turn; PermissionRequest
+    // and PreToolUse (`request_user_input` only, so no hook runs for any other tool) say it waits on the person. No
+    // SubagentStart or SubagentStop: a child's SubagentStop fires for each of its turns and never for an interrupted or
+    // failed one, so their count is not one a lead's turn can wait on (facts-codex §2).
     events: [{ event: 'SessionStart', matcher: 'startup|resume|clear|compact' }, { event: 'UserPromptSubmit' }, { event: 'Stop' },
       { event: 'PermissionRequest' }, { event: 'PreToolUse', matcher: 'request_user_input' },
       // 3: Codex caps an Interrupt hook at 3 s and hashes the capped value (`normalize_command_hook`, facts-codex §1).
@@ -90,5 +91,4 @@ export const hooks: HookContract = {
   // record names it a child (`source.subagent`). Registered, it would take the parent's pane and transcript,
   // and its prompt would be credited to the parent: refused before either (hookServer.ts, registry.register).
   children: { type: 'session_meta', child: ['payload', 'source', 'subagent'], reason: 'codex_subagent' },
-  stopClosesTurns: true,
 }

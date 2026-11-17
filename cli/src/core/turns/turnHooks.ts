@@ -206,7 +206,7 @@ export function createTurnHooks({
       session.evidenceRevision, session.identityHold])
     const binding = JSON.stringify([session.agentId, session.sessionId, session.engine])
     let retained = false
-    const onStop = hooksFor(session.engine)?.onStop
+    const hooks = hooksFor(session.engine), onStop = hooks?.onStop
     const current = (): boolean => {
       const latest = resolve(sessionId)
       if (!latest || JSON.stringify([latest.agentId, latest.sessionId, latest.engine]) !== binding) return false
@@ -215,7 +215,7 @@ export function createTurnHooks({
       if ((latest.identityHold || latest.interpretationHold || changed) && holdStop) {
         // Claude Code and Codex already supply positive stale-event evidence. A hold does not turn a proven old
         // Stop into an unknown completion that would require cancelling the newer turn.
-        if (onStop && firedAt !== undefined && (turns.get(sessionId)?.promptAt ?? 0) > firedAt) return false
+        if (hooks && firedAt !== undefined && (turns.get(sessionId)?.promptAt ?? 0) > firedAt) return false
         if (!retained) retained = holdStop(latest, changed)
         if (retained) return false
       }
@@ -226,24 +226,25 @@ export function createTurnHooks({
     // its sub-agents; the turn is NOT over, so nothing closes, but the run that proved this necessary also finished its
     // sub-agents and then never sent another Stop, so a backstop watches the pane instead (core/turns/agyBackstop.ts).
     if (rule?.backstop && status === 'waiting') { armAgyIdleWatch(sessionId); return }
-    if (onStop) {
+    if (hooks) {
       // Its engine sends Stops: from this one on, its turns end by hook (R0).
       const turn = record(sessionId)
       // Taken before this Stop counts as a hook: the lead wrote on after its end was read (R5).
       const heldBeforeHook = !!turn.held && turn.held.at < turn.hookAt
       turn.endsByHook = true
       turn.hookAt = Date.now()
-      if (!current()) return
       if (status === 'interrupted') {
         // Codex's Interrupt (R3): Codex waits for it before it writes turn_aborted, so the open turn ends here, before
         // the route answers, as aborted, the way Claude Code's interrupt line ends one: no drain, no wait, no key. The
         // parser, closed, ends nothing at that turn_aborted. One run before the latest prompt hook, or before the open
         // turn opened, is about an earlier turn (kit/stopHook.ts).
         const open = hookTurns.turnState(sessionId)
-        if (open?.turnOpen && !(firedAt !== undefined && Math.max(turn.promptAt ?? 0, open.openedAt ?? 0) > firedAt)
+        if (current() && open?.turnOpen && !(firedAt !== undefined && Math.max(turn.promptAt ?? 0, open.openedAt ?? 0) > firedAt)
           && hookTurns.closeTurn(sessionId, open.identity)) emit(sessionId, [{ type: 'turn_ended', payload: { aborted: true } }])
         return
       }
+      // That is all a Codex Stop says: Codex runs it before it writes the turn's end, which goes on as it is read.
+      if (!onStop || !current()) return
       // Invoke synchronously: the engine snapshots which turn the hook arrived about before draining.
       const failed = (error: unknown): void => {
         console.error(`[hooks] ${session.engine} stop hook failed:`, error instanceof Error ? error.message : error)

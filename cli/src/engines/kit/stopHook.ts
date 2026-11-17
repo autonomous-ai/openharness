@@ -1,6 +1,6 @@
 /**
  * What a Stop or StopFailure hook means for an engine whose contract says its Stop closes turns
- * (facets/hooks.ts `stopClosesTurns`): Claude Code's and Codex's. Turn mechanics only, on core's immutable turn
+ * (facets/hooks.ts `stopClosesTurns`): Claude Code's. Turn mechanics only, on core's immutable turn
  * snapshots, the end it holds for the Stop and its atomic close (core/turns/turnHooks.ts), so it runs in core with
  * no engine code. Moved from engines/claude/hooks.ts.
  */
