@@ -12,7 +12,7 @@ import { failure, type HookFileRemoval } from './hookRemovalOutcome.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
 import { reviewRecords, withoutReviewRecords } from './hookReview.js'
 import { isMessagesBlock } from './messagesHook.js'
-import { foreignHookBlocks, isManagedHookCommand, isOurs, type HookBlock, type Settings } from './notifyHooks.js'
+import { isManagedHookCommand, isOurs, withoutOwnHooks, type HookBlock, type Settings } from './notifyHooks.js'
 import { hostPlatform } from './windowsFiles.js'
 
 export interface JsonHookRemoval {
@@ -47,25 +47,16 @@ export function withoutHarnessHooks(text: string | null, rule: JsonHookRemoval, 
   let removed = 0
   if (events !== undefined) {
     if (!object(events)) throw new HookPreparationHeld(`the ${member} member is not an object`)
-    for (const [event, list] of Object.entries(events)) {
+    if (rule.schema === 'nested') removed = withoutOwnHooks(events, owns, () => true)
+    else for (const [event, list] of Object.entries(events)) {
       if (!Array.isArray(list)) continue
-      let kept: unknown[], gone: number
-      if (rule.schema === 'nested') {
-        const blocks = list as HookBlock[]
-        // foreignHookBlocks refuses a block of unconfirmed shape before anything is counted as removed.
-        kept = foreignHookBlocks(blocks, owns)
-        gone = blocks.reduce((n, b) => n + b.hooks.filter((hook) => owns({ hooks: [hook] })).length, 0)
-      } else {
-        kept = list.filter((entry) => !(object(entry) && isManagedHookCommand(entry.command, platform)))
-        gone = list.length - kept.length
-      }
-      // Replaced only when something of Harness's went (a shared block keeps its length), so an untouched event keeps
-      // its exact value; a replaced one keeps its place among the keys.
-      if (gone) {
-        removed += gone
-        if (kept.length) events[event] = kept
-        else delete events[event]
-      }
+      const kept = list.filter((entry) => !(object(entry) && isManagedHookCommand(entry.command, platform)))
+      // Replaced only when something of Harness's went, so an untouched event keeps its exact value; a replaced one
+      // keeps its place among the keys.
+      if (kept.length === list.length) continue
+      removed += list.length - kept.length
+      if (kept.length) events[event] = kept
+      else delete events[event]
     }
     if (rule.schema === 'named' && Object.keys(events).length === 0 && removed > 0) delete settings[member]
   }

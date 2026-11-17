@@ -41,13 +41,17 @@ it.each(['claude', 'codex'] as const)('%s: a large rewritten file hydrates up to
   ask.token = 'next'
   ask.cursor = null
   const turns: Array<[string, boolean]> = []
+  const overs: string[][] = []
   let prepared = false
   for (let next = await page({ rewritten: true, rewrittenFrom: 'binding' }); ; next = await page({ rewritten: true, rewrittenFrom: 'binding' })) {
     expect(next.cursor.historyUntil).toBeUndefined()
     for (const frame of next.frames) for (const event of frame.events) if (event.type.startsWith('turn_')) turns.push([event.type, frame.replay])
+    for (const frame of next.frames) if (frame.over) overs.push(frame.events.map(event => event.type))
     if (prepared && !next.frames.length) break
     prepared ||= next.prepared === true
   }
   // The history is folded silently; what was appended after the rewrite was found arrives as it would live.
   expect(turns).toEqual([['turn_started', false], ['turn_ended', false]])
+  // Over sends an end on at once (core/turns/turnHooks.ts): only the live end says so, not the history folded silently.
+  expect(overs).toEqual(engine === 'codex' ? [['turn_ended']] : [])
 })

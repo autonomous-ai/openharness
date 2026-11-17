@@ -56,6 +56,8 @@ export interface EngineConfig {
   hookLog: string
   version?: string
   without?: string[]
+  /** The hook events this release does not have: it never runs a hook for one (Codex 0.144.0: `['Interrupt']`). */
+  withoutHooks?: string[]
   startDelayMs?: number
   /** Hold a descriptor the daemon's process reader cannot classify for this long once started (Codex 0.162.1's first seconds). */
   unreadableDescriptorMs?: number

@@ -804,6 +804,10 @@ export interface TurnState {
   /** How many turns this state has opened: a Stop hook closes only the turn that was open as it arrived
    *  (core/turns/turnHooks.ts). */
   opened?: number
+  /** When Claude Code wrote the last record read (its own `timestamp`), epoch ms; absent when it says none. */
+  at?: number
+  /** The last record read was Claude Code's own end of a continued pass (`turn_duration`), which no Stop follows. */
+  over?: boolean
 }
 
 /**
@@ -849,6 +853,8 @@ const TERMINAL_STOP_REASONS = new Set(['end_turn', 'stop_sequence', 'max_tokens'
  *  - assistant stop_reason in TERMINAL_STOP_REASONS with no pending tools → turn_ended
  */
 export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
+  state.at = undefined
+  state.over = false
   if (!rawLine.trim()) return []
   let raw: Record<string, unknown>
   try { raw = JSON.parse(rawLine) as Record<string, unknown> } catch { return [] }
@@ -856,6 +862,8 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
   // property access in compactEventFromRaw / transformLine throw — and on the unguarded watcher path
   // that kills the daemon. Any non-object line has nothing to emit.
   if (!raw || typeof raw !== 'object') return []
+  const at = typeof raw.timestamp === 'string' ? Date.parse(raw.timestamp) : NaN
+  if (Number.isSafeInteger(at)) state.at = at
   // Compaction: emit the boundary indicator; suppress the injected summary/meta lines. The turn state
   // is left untouched, so an auto-compact that fires MID-TURN keeps the open turn open (the assistant
   // continuation after the boundary just streams under it) instead of the summary opening a fake turn.
@@ -882,6 +890,7 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
     if (!state.turnOpen || !state.continued) return []
     state.turnOpen = false
     state.pendingTools.clear()
+    state.over = true
     return [{ type: 'turn_ended', payload: {} }]
   }
   const msg = transformLine(raw)

@@ -13,10 +13,9 @@ function setup(over: Partial<CancelDeps> = {}) {
     stopHeartbeat: vi.fn(),
     questionWatcher: { stop: vi.fn() },
     mirror: { cancel: vi.fn() },
-    turnActivity: { observe: vi.fn(), snapshot: vi.fn(() => ({ state: 'idle' as const, epoch: 'e', revision: 2, validForMs: 0 })) },
+    turnActivity: { observe: vi.fn(() => { calls.push('observe') }) },
     turnStartedAt: new Map([['s1', 1]]),
-    agentIdFor: (sessionId) => (sessionId === 's1' ? 'a1' : sessionId),
-    clients: { send: vi.fn() },
+    tell: vi.fn(() => { calls.push('tell') }),
     ...over,
   }
   return { deps, service, calls, cancelAgent: createCancel(deps) }
@@ -36,18 +35,12 @@ describe('cancelling a turn', () => {
   })
 
   it('tells every window the agent is idle now, without a turn_ended that would recap a killed turn', async () => {
-    const { deps, cancelAgent } = setup()
+    const { deps, calls, cancelAgent } = setup()
     await cancelAgent('a1')
     expect(deps.turnStartedAt.has('s1')).toBe(false)
     expect(deps.turnActivity.observe).toHaveBeenCalledWith('s1', 'turn_ended')
-    expect(deps.clients.send).toHaveBeenCalledTimes(1)
-    expect(deps.clients.send).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'agent_activity', agentId: 'a1', payload: expect.objectContaining({ activity: expect.objectContaining({ state: 'idle' }) }),
-    }))
-    // An agent the tracker no longer knows has no activity to report.
-    const unknown = setup({ turnActivity: { observe: vi.fn(), snapshot: vi.fn(() => undefined) } })
-    await unknown.cancelAgent('a1')
-    expect(unknown.deps.clients.send).not.toHaveBeenCalled()
+    expect(deps.tell).toHaveBeenCalledExactlyOnceWith('s1')
+    expect(calls.slice(-2)).toEqual(['observe', 'tell'])
   })
 
   it('waits for input to confirm a cancel a stop depends on, and answers with what it said', async () => {

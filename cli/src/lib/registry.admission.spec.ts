@@ -779,7 +779,7 @@ it.each(['before-followup', 'during-followup', 'during-registration', 'during-in
   const row = registry.byAgent(owner.agentId)!
   // Only the core's eager cancellation fence is needed. Unexpected attachment
   // or native interpretation would fail this fixture before any external access.
-  const attach = createAttach({ normalizers: createSessionNormalizers(noOtherStreams()), resolve: registry.byAgent } as import('../core/transcripts/attach.js').AttachDeps)
+  const attach = createAttach({ normalizers: createSessionNormalizers(noOtherStreams(), { held: () => false, closed: () => {}, forget: () => {} }), resolve: registry.byAgent } as import('../core/transcripts/attach.js').AttachDeps)
   let laterTurnOpen = false, resolutions = 0
   let finish: (() => void) | undefined
   const onTurnStop = vi.fn(() => { laterTurnOpen = false })

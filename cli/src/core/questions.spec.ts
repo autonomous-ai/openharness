@@ -25,6 +25,7 @@ function setup(over: Partial<QuestionDeps> = {}) {
     someoneCanAnswer: () => true,
     followedByTool: () => false,
     deviceInput: { setUserAction: vi.fn() },
+    waitOver: vi.fn(),
     ...over,
   }
   return { deps, asking: createQuestions(deps) }
@@ -160,6 +161,24 @@ describe('questions', () => {
     expect(deps.clients.sendRemote).toHaveBeenCalledWith(closed)
     expect(asking.openQuestions.has('s1')).toBe(false)
     expect(log.mock.calls[0][0]).toContain('answered elsewhere · closing on every client · req=r1')
+  })
+
+  // A hook said the agent waits on the person (core/turns/turnHooks.ts): the watcher says when it no longer does.
+  it('tells the turn hooks when a question closes and when the pane reads clear', async () => {
+    vi.useFakeTimers()
+    try {
+      const waitOver = vi.fn()
+      const { asking } = setup({ waitOver })
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      given(asking.questionWatcher).onQuestionGone('s1', 'r1')
+      expect(waitOver).toHaveBeenCalledExactlyOnceWith('s1')
+      // A dialog answered before any poll found it: two polls in a row read the pane with none.
+      asking.questionWatcher.start('s1')
+      asking.questionWatcher.awaitDialog('s1')
+      await vi.advanceTimersByTimeAsync(1_500 * 2)
+      expect(waitOver.mock.calls).toEqual([['s1'], ['s1']])
+      asking.questionWatcher.stopAll()
+    } finally { vi.useRealTimers() }
   })
 
   it('tells an app that connects every question still open, then which are open at all', () => {

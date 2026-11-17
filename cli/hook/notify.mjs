@@ -595,6 +595,21 @@ const OBSERVED_EVENTS = new Map([
  *  link, or a resume after the quota ran out. */
 const NEEDS_INPUT = ['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog', 'quota_auto_resume_stale']
 
+/** Claude Code and Codex wait on the person at these, each run before its dialog is drawn: PreToolUse for its question
+ *  tool alone, so a matcher edited by hand cannot turn each tool call into a request to the daemon. */
+function waitsOnPerson(engine, event, input) {
+  if (event === 'PreToolUse') return input.tool_name === (engine === 'claude' ? 'AskUserQuestion' : 'request_user_input')
+  return event === 'PermissionRequest' || (engine === 'claude' && event === 'Elicitation')
+}
+
+/**
+ * Whether a Claude Code subagent event is one the daemon counts. Its own helpers (prompt suggestions, `/btw`) end with a
+ * SubagentStop of no type after no SubagentStart: it is not sent, so the count stays even.
+ */
+function countsSubagent(event, input) {
+  return event !== 'SubagentStop' || !!input.agent_type
+}
+
 /** A paneless hook's event in the devices' words (core/observedHook.ts); null for one that says none of them. */
 function observedEvent(engine, event, input) {
   const name = engine === 'copilot' ? argCopilotEvent() : engine === 'agy' ? argAgyEvent() : engine === 'grok' ? grokHookEvent(event) : event
@@ -607,8 +622,9 @@ function observedEvent(engine, event, input) {
   }
   // agy's call of its model, and Command Code's tool call, are the only signs those engines give of a turn running.
   if (name === 'PreInvocation' || (engine === 'commandcode' && (name === 'PreToolUse' || name === 'preToolUse'))) return 'turn-start'
-  // Grok writes its Stop before the turn's last words (its branch in main()).
-  if (engine === 'grok' && name === 'Stop') return null
+  // Grok writes its Stop before the turn's last words (its branch in main()). Codex's Stop is installed for its panes'
+  // turn ends; outside a pane the devices hear nothing of it, as before, so the dial does not sound at every Codex turn.
+  if ((engine === 'grok' || engine === 'codex') && name === 'Stop') return null
   // Claude Code also says idle_prompt a minute after a finished turn, and auth_success: no answer is waited for, and a
   // done agent stays done. One too old to name its type sends that idle notice untyped too, so it says nothing.
   if (name === 'Notification') return NEEDS_INPUT.includes(input.notification_type) ? 'needs-input' : null
@@ -2071,7 +2087,9 @@ async function main() {
   // nothing.
   const paneless = (!tmuxPane && !PTY_PANE) || await ownPane(tmuxPane)
   // Notification is installed for the session outside a pane, to say it waits for the person. In an agent's pane
-  // nothing is told, as before it was installed; whose pane it is is tmux's to say, so even that asks tmux first.
+  // nothing is told: there PermissionRequest and Elicitation say it, as the dialog opens, where Notification comes only
+  // once the person has not typed for 6 s, and never for a dialog answered sooner (facts-claude §1). Whose pane it is is
+  // tmux's to say, so even that asks tmux first.
   if (!paneless && event === 'Notification') return
   // Before anything reads the data folder or posts: which daemon this pane is (routeToPaneOwner).
   if (!paneless && await routeToPaneOwner(tmuxPane)) port = argPort()
@@ -2290,6 +2308,34 @@ async function main() {
     })
     if (stopped === true) await clearCursorTasks(sessionId)
     return
+  }
+
+  // What Claude Code and Codex tell the daemon of a pane's turn beyond its registration: a wait on the person, a
+  // subagent of Claude Code's, and Codex's own turn end and interrupt. The event and the tool's name only, never a tool's
+  // input or what is asked. Every answer, none included, leaves the hook silent on stdout with exit 0, which both
+  // engines read as no decision (main()'s finally).
+  if (engine === 'claude' || engine === 'codex') {
+    const sessionId = input.session_id
+    if (event === 'PreToolUse' || event === 'PermissionRequest' || event === 'Elicitation') {
+      if (waitsOnPerson(engine, event, input)) {
+        await post(port, '/api/hook/wait', { sessionId, hookEvent: event, toolName: input.tool_name, ...mutationFields })
+      }
+      return
+    }
+    // Codex's subagents are not counted: its SubagentStop fires at each child turn's end and never for a failed one
+    // (facts-codex §2).
+    if (engine === 'claude' && (event === 'SubagentStart' || event === 'SubagentStop')) {
+      // A subagent's events carry its lead's session_id (facts-claude §2).
+      if (countsSubagent(event, input)) await post(port, '/api/hook/subagent', { sessionId, hookEvent: event, ...mutationFields })
+      return
+    }
+    if (engine === 'codex' && (event === 'Stop' || event === 'Interrupt')) {
+      await post(port, '/api/hook/turn-stop', {
+        sessionId, hookEvent: event, transcriptPath: input.transcript_path,
+        status: event === 'Interrupt' ? 'interrupted' : undefined, ...mutationFields,
+      })
+      return
+    }
   }
 
   // Stop / StopFailure (claude): the authoritative turn-close signal, independent of JSONL parsing.
