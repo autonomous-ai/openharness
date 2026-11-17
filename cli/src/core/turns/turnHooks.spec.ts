@@ -26,7 +26,7 @@ const engineState = (turnOpen = true) => {
 }
 
 function setup(engine: string, over: Partial<TurnHookDeps> = {}) {
-  const normalizers = createSessionNormalizers(noOtherStreams())
+  const normalizers = createSessionNormalizers(noOtherStreams(), { held: () => false, closed: () => {}, forget: () => {} })
   const states = new Map<string, ReturnType<typeof engineState>>()
   const others = {
     get: (id: string) => states.get(id) as never,

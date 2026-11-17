@@ -38,7 +38,7 @@ function setup(mode: 'inline' | 'worker', content = prompt('T1')) {
     cwd: root, model: null, cliVersion: null, evidenceRevision: 0 } as RegisteredSession
   // The other engines' streams, their worker in this process (testing/otherStreamsInProcess.ts).
   const others = inProcessOtherStreams({ bySession: () => row, frame: (session, frame) => ingest.acceptStreamFrame(session, frame) })
-  const normalizers = createSessionNormalizers(others.streams), emit = vi.fn(), settled = vi.fn()
+  const normalizers = createSessionNormalizers(others.streams, { held: () => false, closed: () => {}, forget: () => {} }), emit = vi.fn(), settled = vi.fn()
   let worker = engineLiveRequests('claude')
   const transport = createLiveTransport({ call: async (_service, type, payload) =>
     await worker[type](payload, { owner: true, local: true }) as Record<string, unknown> })

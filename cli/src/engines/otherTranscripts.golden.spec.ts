@@ -263,7 +263,7 @@ function livePath(core: Core, session: RegisteredSession, pane: string | null) {
     call: async (type, payload) => json(await requests[type](json(payload), { owner: true, local: true }) as Record<string, unknown>),
     bySession: () => session, frame: (s, frame) => ingest.acceptStreamFrame(s, frame), reattach: () => {}, log: () => {},
   })
-  const normalizers = core.createSessionNormalizers(streams)
+  const normalizers = core.createSessionNormalizers(streams, { held: () => false, closed: () => {}, forget: () => {} })
   const runtimeProfiles = {
     transcriptFields: () => [], beginHydrate: () => ({ ingest: () => {}, commit: () => {} }), hydrate: () => {}, hydrateEvidence: () => {},
     ingest: () => false, evidence: () => false, ingestConfig: async () => {}, ingestPane: () => false,

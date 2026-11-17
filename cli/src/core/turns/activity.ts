@@ -23,9 +23,9 @@ export interface TurnActivityDeps {
   /** What the engine's own server says (Codex's app-server, read in its worker: core/engines/nativeControls.ts). */
   nativeActivity: (session: RegisteredSession) => Promise<ActivityState>
   /** Working is withheld: the turn waits on the person, or the session's turns end by hook and none is open. */
-  withheld?: (sessionId: string) => boolean
+  withheld: (sessionId: string) => boolean
   /** Work is known to go on with nothing in the transcript: the lead's subagents run. */
-  atWork?: (sessionId: string) => boolean
+  atWork: (sessionId: string) => boolean
 }
 
 export function createTurnActivity({ readScreen, terminals, bySession, sessionTurnOpen, drain, nativeActivity, withheld, atWork }: TurnActivityDeps) {
@@ -41,14 +41,14 @@ export function createTurnActivity({ readScreen, terminals, bySession, sessionTu
     runtime: sessionId => {
       const session = bySession(sessionId)
       return session?.active
-        ? { key: activityRuntimeKey(session), turnOpen: sessionTurnOpen(sessionId), withheld: withheld?.(sessionId) }
+        ? { key: activityRuntimeKey(session), turnOpen: sessionTurnOpen(sessionId), withheld: withheld(sessionId) }
         : undefined
     },
     drain: sessionId => drain(sessionId),
     probe: async sessionId => {
       // The hooks know better than the pane: a wait shows no spinner's end, and a lead's subagents run off screen.
-      if (withheld?.(sessionId)) return 'unknown'
-      if (atWork?.(sessionId)) return 'working'
+      if (withheld(sessionId)) return 'unknown'
+      if (atWork(sessionId)) return 'working'
       const session = bySession(sessionId)
       return session?.active ? runtimeActivity.read(session) : 'unknown'
     },

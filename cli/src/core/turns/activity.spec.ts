@@ -18,6 +18,8 @@ function setup(over: Partial<TurnActivityDeps> = {}) {
     sessionTurnOpen: (sessionId) => sessionId === 's1',
     drain: vi.fn(async () => {}),
     nativeActivity: vi.fn(async () => 'idle' as const),
+    withheld: () => false,
+    atWork: () => false,
     ...over,
   }
   return { deps, readers: createTurnActivity(deps) }
@@ -32,7 +34,7 @@ describe('turn activity', () => {
   it('checks only an active session, keyed to the runtime that runs it', async () => {
     const { deps, readers } = setup()
     const turn = given(readers.turnActivity)
-    expect(turn.runtime('s1')).toEqual({ key: activityRuntimeKey(live), turnOpen: true })
+    expect(turn.runtime('s1')).toEqual({ key: activityRuntimeKey(live), turnOpen: true, withheld: false })
     expect(turn.runtime('s2')).toBeUndefined()
     expect(turn.runtime('nobody')).toBeUndefined()
     await turn.drain('s1')
@@ -64,10 +66,9 @@ describe('turn activity', () => {
     expect(read).not.toHaveBeenCalled()
   })
 
-  it('with neither given, the runtime and the probe are today\'s', async () => {
+  it('neither withheld nor at work, the probe reads the pane', async () => {
     const { readers } = setup()
     const turn = given(readers.turnActivity)
-    expect(turn.runtime('s1')).toEqual({ key: activityRuntimeKey(live), turnOpen: true })
     const read = vi.spyOn(readers.runtimeActivity, 'read').mockResolvedValue('idle')
     expect(await turn.probe('s1')).toBe('idle')
     expect(read).toHaveBeenCalledWith(live)

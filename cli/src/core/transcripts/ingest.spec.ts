@@ -16,7 +16,7 @@ const CLAUDE_PROMPT = JSON.stringify({ type: 'user', message: { role: 'user', co
 function setup(engines: Record<string, string>, over: Partial<IngestDeps> = {}) {
   const sessions = new Map(Object.entries(engines).map(([sessionId, engine]) =>
     [sessionId, { agentId: `agent-${sessionId}`, sessionId, engine, transcriptPath: `/t/${sessionId}.jsonl` } as RegisteredSession]))
-  const normalizers = createSessionNormalizers(noOtherStreams())
+  const normalizers = createSessionNormalizers(noOtherStreams(), { held: () => false, closed: () => {}, forget: () => {} })
   const service = { needsTranscript: vi.fn(() => false), observeTranscript: vi.fn() }
   const deps: IngestDeps = {
     liveFor,

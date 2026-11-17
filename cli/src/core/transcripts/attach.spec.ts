@@ -123,7 +123,7 @@ const inWorker = (run: { others: ReturnType<typeof streamsFor> }, sessionId: str
 function setup(over: Partial<AttachDeps> = {}) {
   let deps!: AttachDeps
   const others = streamsFor(() => deps, () => deps.emit)
-  const normalizers = createSessionNormalizers(over.others as never ?? others.streams)
+  const normalizers = createSessionNormalizers(over.others as never ?? others.streams, { held: () => false, closed: () => {}, forget: () => {} })
   const service = { needsTranscript: vi.fn(() => false), observeTranscript: vi.fn() }
   const profile = { ingest: vi.fn(), commit: vi.fn() }
   deps = {
