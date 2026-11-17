@@ -1,6 +1,18 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest'
@@ -8,9 +20,11 @@ import {
   appBundles,
   assertRebranded,
   assertUnchanged,
+  forgetPreferences,
   GATE_ID,
   killThrowaway,
   rebrand,
+  removeOwnFolders,
   rootName,
   stamp,
   startedAt,
@@ -132,6 +146,45 @@ describe('the throwaway\'s processes', () => {
     running.stdin.end('done\n')
     expect(await runningEnd).toEqual([0, null])
   }, 10_000)
+})
+
+describe('the throwaway\'s own preferences, caches and HTTP storage', () => {
+  const plist = (): string => join(root, 'Preferences', `${GATE_ID}.plist`)
+  beforeEach(() => {
+    mkdirSync(join(root, 'Preferences'))
+    writeFileSync(plist(), '')
+  })
+  const deleted = { status: 0, stderr: '' }
+
+  it('deletes the gate\'s own domain through defaults, and no other', () => {
+    const calls: [string, readonly string[]][] = []
+    forgetPreferences(root, (file, args) => {
+      calls.push([file, args])
+      // As cfprefsd does once the domain is gone.
+      unlinkSync(plist())
+      return deleted
+    })
+    expect(calls).toEqual([['/usr/bin/defaults', ['delete', GATE_ID]]])
+    expect(JSON.stringify(calls)).not.toContain('com.microsoft')
+  })
+
+  it('passes a domain already gone, and fails on another failure or a file still there', () => {
+    unlinkSync(plist())
+    const notFound = { status: 1, stderr: `defaults[1:2] \nDomain (${GATE_ID}) not found.\nDefaults have not been changed.\n` }
+    expect(() => forgetPreferences(root, () => notFound)).not.toThrow()
+    expect(() => forgetPreferences(root, () => ({ status: 1, stderr: 'Could not write domain' }))).toThrow(/defaults delete/)
+    writeFileSync(plist(), '')
+    expect(() => forgetPreferences(root, () => deleted)).toThrow(/still there/)
+  })
+
+  it('removes each folder named the id, or the id and a dot, and none other', () => {
+    const others = [`${GATE_ID}x`, `${GATE_ID}-other`, 'com.microsoft.VSCode', 'com.microsoft.VSCode.ShipIt']
+    for (const folder of ['Caches', 'HTTPStorages']) {
+      for (const name of [GATE_ID, `${GATE_ID}.ShipIt`, ...others]) mkdirSync(join(root, folder, name), { recursive: true })
+    }
+    removeOwnFolders(root)
+    for (const folder of ['Caches', 'HTTPStorages']) expect(readdirSync(join(root, folder)).sort()).toEqual([...others].sort())
+  })
 })
 
 describe('the developer\'s VS Code preferences, before and after', () => {
