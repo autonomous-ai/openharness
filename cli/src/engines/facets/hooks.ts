@@ -28,6 +28,10 @@ export interface HookTurnContext {
   heldEndWithin(sessionId: string, ms: number): Promise<boolean>
   /** The held end goes to the funnel. False when none is held. */
   deliverHeldEnd(sessionId: string): boolean
+  /** Subagents of the session run: a Stop leaves its turn open. */
+  subagentsRun(sessionId: string): boolean
+  /** The held end was read before an earlier hook of its turn: what the lead wrote since lands after this Stop. */
+  heldBeforeHook: boolean
 }
 
 export type HookAdmission = { accepted: true } | { accepted: false; reason: string }

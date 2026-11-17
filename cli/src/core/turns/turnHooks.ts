@@ -5,8 +5,9 @@
  * still open — or, for an error, announces why. Claude Code's and Codex's declare theirs as hooks
  * (engines/hooks.ts); the other engines' as Stop rules (engines/otherEngines.ts `STOP_RULES`), applied here
  * with what their worker does to their parsers (core/engines/otherStreams.ts). Once Claude Code or Codex has sent a
- * Stop, the end its transcript reads of a turn is held here for that turn's Stop; and their wait hooks withdraw
- * Working while the person is waited on (docs/plans/2026-11-16-hook-driven-agent-status-plan.md, Turn rules).
+ * Stop, the end its transcript reads of a turn is held here for that turn's Stop; their wait hooks withdraw
+ * Working while the person is waited on; and Claude Code's subagent hooks keep a lead's turn open while its
+ * subagents run (docs/plans/2026-11-16-hook-driven-agent-status-plan.md, Turn rules).
  *
  * Moved verbatim out of the hook server's options in `runForeground` (the core boundary, step 9:
  * docs/design/2026-10-03-harnessd.md).
@@ -34,6 +35,10 @@ export const STOP_HOOK_GRACE_MS = 1_500
 export const HOOKS_KEPT = 512
 /** A held end with no hook for this long had its Stop lost: it goes on, as Orca's 2-minute rule does (R6). */
 export const HOOK_SILENCE_MS = 120_000
+/** Subagents counted at most: a start past it is not counted. */
+export const SUBAGENTS_MAX = 64
+/** Subagents running with no hook and no progress for this long lost a SubagentStop: none is counted (R5). */
+export const SUBAGENT_TIMEOUT_MS = 600_000
 
 /** What a session's hooks have said of its turn. One a session. */
 interface HookTurn {
@@ -49,6 +54,10 @@ interface HookTurn {
   hookAt: number
   /** When the hook of the wait on the person ran, while it is open (R4). */
   waitAt?: number
+  /** How many of its subagents run, by Claude Code's SubagentStart and SubagentStop (R5). */
+  subagents: number
+  /** When progress was last read while they run. */
+  progressAt: number
 }
 
 /** A turn's end, or the lead's own progress: a subagent's tool, or its end, is not the lead writing on (R4). */
@@ -106,7 +115,7 @@ export function createTurnHooks({
   }
   /** The session's record, made the newest. The oldest makes room, its held end delivered first. */
   const record = (sessionId: string): HookTurn => {
-    const turn = turns.get(sessionId) ?? { endsByHook: false, awaiting: [], hookAt: 0 }
+    const turn = turns.get(sessionId) ?? { endsByHook: false, awaiting: [], hookAt: 0, subagents: 0, progressAt: 0 }
     turns.delete(sessionId)
     turns.set(sessionId, turn)
     if (turns.size > HOOKS_KEPT) {
@@ -118,7 +127,10 @@ export function createTurnHooks({
   }
   const onPromptHook = (sessionId: string, firedAt: number): void => {
     if (firedAt <= (turns.get(sessionId)?.promptAt ?? 0)) return
-    record(sessionId).promptAt = firedAt
+    const turn = record(sessionId)
+    turn.promptAt = firedAt
+    // A new prompt: a SubagentStop that was lost keeps the count no longer (R5).
+    turn.subagents = 0
   }
   /** Every transcript read of a session, on its way to the funnel (R1): a turn's end waits for its Stop. */
   const transcript = (sessionId: string, events: LiveEvent[], read: TranscriptRead = {}): void => {
@@ -131,6 +143,7 @@ export function createTurnHooks({
       if (turn?.held && events.some(event => event.type === 'turn_started' || event.type === 'turn_ended')) turn.held = undefined
       return emit(sessionId, events, { replay: true })
     }
+    if (turn?.subagents && events.some(event => isProgressEvent(event.type))) turn.progressAt = Date.now()
     if (!turn?.endsByHook) return emit(sessionId, events)
     const out: LiveEvent[] = []
     for (const event of events) {
@@ -148,7 +161,9 @@ export function createTurnHooks({
     const turn = turns.get(sessionId)
     return !!turn && (turn.waitAt !== undefined || (turn.endsByHook && !turn.held && !liveParsers.get(sessionId)?.turnOpen))
   }
-  const hookTurns: HookTurnContext = {
+  /** The lead's subagents run: work goes on with nothing in its transcript (lib/turnActivity.ts). */
+  const atWork = (sessionId: string): boolean => !!turns.get(sessionId)?.subagents
+  const hookTurns: Omit<HookTurnContext, 'heldBeforeHook'> = {
     turnState: (sessionId) => {
       const parser = liveParsers.get(sessionId)
       return parser && parser.engine === resolve(sessionId)?.engine ? parser.snapshot() : undefined
@@ -178,6 +193,7 @@ export function createTurnHooks({
       turn.awaiting.push(answer)
     }),
     deliverHeldEnd: deliver,
+    subagentsRun: atWork,
   }
   // Cursor's Task tool start: the sub-agent it starts is followed in Cursor's stream, behind a drain of its transcript.
   const onToolStart = ({ sessionId, toolUseId, toolName, input: toolInput }: { sessionId: string; toolUseId: string; toolName: string; input: unknown }): void => {
@@ -213,6 +229,8 @@ export function createTurnHooks({
     if (onStop) {
       // Its engine sends Stops: from this one on, its turns end by hook (R0).
       const turn = record(sessionId)
+      // Taken before this Stop counts as a hook: the lead wrote on after its end was read (R5).
+      const heldBeforeHook = !!turn.held && turn.held.at < turn.hookAt
       turn.endsByHook = true
       turn.hookAt = Date.now()
       if (!current()) return
@@ -230,7 +248,7 @@ export function createTurnHooks({
       const failed = (error: unknown): void => {
         console.error(`[hooks] ${session.engine} stop hook failed:`, error instanceof Error ? error.message : error)
       }
-      const context: HookTurnContext = { ...hookTurns,
+      const context: HookTurnContext = { ...hookTurns, heldBeforeHook,
         turnState: id => current() ? hookTurns.turnState(id) : undefined,
         closeTurn: (id, identity) => current() && hookTurns.closeTurn(id, identity),
         noteEngineStopped: id => { if (current()) hookTurns.noteEngineStopped(id) },
@@ -279,15 +297,34 @@ export function createTurnHooks({
     if (activity) clients.send(correlateAgentEvent({ type: 'agent_activity', payload: { activity } }, sessionId, agentIdFor(sessionId)))
     awaitDialog(sessionId)
   }
-  /** The open turn's heartbeat: an end held with no hook since for HOOK_SILENCE_MS lost its Stop, and goes on (R6). */
+  /** Claude Code's SubagentStart and SubagentStop (R5). One started before this daemon run can stop in it. */
+  const onSubagent = ({ sessionId, started }: { sessionId: string; started: boolean }): void => {
+    const turn = record(sessionId)
+    turn.hookAt = Date.now()
+    if (!started) turn.subagents = Math.max(0, turn.subagents - 1)
+    else if (turn.subagents < SUBAGENTS_MAX) turn.subagents++
+    else log(`[turn] ${sid(sessionId)} subagent not counted · ${SUBAGENTS_MAX} running`)
+  }
+  /**
+   * The open turn's heartbeat. While subagents run, none is counted after SUBAGENT_TIMEOUT_MS with no hook and no
+   * progress, and the held end goes on (R5); else an end held with no hook since for HOOK_SILENCE_MS lost its Stop,
+   * and goes on (R6).
+   */
   const beat = (sessionId: string): void => {
     const turn = turns.get(sessionId)
+    if (turn?.subagents) {
+      if (Date.now() - Math.max(turn.hookAt, turn.progressAt) < SUBAGENT_TIMEOUT_MS) return
+      turn.subagents = 0
+      log(`[turn] ${sid(sessionId)} subagent count reset · no hook or progress in 10 min`)
+      deliver(sessionId)
+      return
+    }
     if (!turn?.held || Date.now() - Math.max(turn.hookAt, turn.held.at) < HOOK_SILENCE_MS) return
     log(`[turn] ${sid(sessionId)} ended by its transcript · no Stop in 2 min`)
     deliver(sessionId)
   }
   return {
-    onTurnStart, onToolStart, onTurnStop, onPromptHook, transcript, withheld, beat, onWait,
+    onTurnStart, onToolStart, onTurnStop, onPromptHook, transcript, withheld, beat, onWait, onSubagent, atWork,
     /** The turn's own end is read and held for its Stop: the turn is still open (R7). */
     held: (sessionId: string): boolean => !!turns.get(sessionId)?.held,
     /** The turn was closed without its end (a cancel): what is held goes, unsent, and its wait ends. */

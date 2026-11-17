@@ -1344,6 +1344,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     drain: (sessionId) => watcher.pollSession(sessionId),
     nativeActivity: (session) => nativeControls.activity(session),
     withheld: (sessionId) => turnHooksRef?.withheld(sessionId) ?? false,
+    atWork: (sessionId) => turnHooksRef?.atWork(sessionId) ?? false,
   })
   const runtimeActivity = activity.runtimeActivity
   const turnActivity = activity.turnActivity
@@ -2285,6 +2286,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onToolStart: turnHooks.onToolStart,
     onTurnStop: turnHooks.onTurnStop,
     onWait: turnHooks.onWait,
+    onSubagent: turnHooks.onSubagent,
     // A paneless agent's event goes on to the devices process and stays nowhere in the core; no devices, no forward.
     onObserved: observedHook.onObserved,
     onInbox: deviceHookCalls.onInbox,

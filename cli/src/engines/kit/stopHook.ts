@@ -10,10 +10,14 @@ import type { LiveTurn } from '../facets/live.js'
 
 /** Capture the arrival's turn before the first await: a drain can open the next turn. */
 export async function closeTurnOnStop(
-  { turnState, closeTurn, latestPromptAt, drain, noteEngineStopped, emit, graceMs, heldEnd, heldEndWithin, deliverHeldEnd }: HookTurnContext,
+  { turnState, closeTurn, latestPromptAt, drain, noteEngineStopped, emit, graceMs, heldEnd, heldEndWithin, deliverHeldEnd,
+    subagentsRun, heldBeforeHook }: HookTurnContext,
   { sessionId, status, firedAt }: HookStop,
 ): Promise<void> {
   const hook = status === 'error' ? 'StopFailure' : 'Stop'
+  // A lead whose subagents run has not finished: its end stays held, and its first Stop with none running, after its
+  // wrap-up, ends the turn. A failure ends it whatever runs.
+  if (hook === 'Stop' && subagentsRun(sessionId)) { console.log(`[turn] ${sid(sessionId)} Stop left its turn open · subagents run`); return }
   // A Stop closes only the turn it is about. Found by the soak run (e2e/endurance.e2e.ts): under load a turn's
   // Stop reached the daemon 6 s late, after the next prompt's turn had opened, and force-closed that turn
   // with a question open in it, which was then never shown. So:
@@ -51,6 +55,9 @@ export async function closeTurnOnStop(
   // on disk — without it the recap fires on its settle timer and can beat claude's closing summary
   // to the punch (measured: recap at 10:18:41, wrap-up written at 10:18:44).
   noteEngineStopped(sessionId)
+  // The lead's wrap-up after its last subagent lands about 200 ms after this Stop (lib/commander.ts): an end held
+  // since before an earlier hook of its turn comes before it.
+  if (heldBeforeHook) { await new Promise(resolve => setTimeout(resolve, graceMs)); await drain(sessionId) }
   if (delivered()) return
   const open = turnState(sessionId)
   if (!open?.turnOpen || !itsTurn(open)) { leftAsLater(open); return } // its end already went on → nothing to do
