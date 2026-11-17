@@ -87,6 +87,10 @@ interface Row {
   reading: boolean
   /** A turn ended while its answer was being read: read once more after it. */
   readAgain: boolean
+  /** opencode's `time.idle` in the last list, and whether a turn's end was heard since: a later one with none heard is
+   *  a turn that ended while no stream was there. */
+  idle?: number
+  endHeard: boolean
 }
 
 /** A list entry, every field checked. */
@@ -131,6 +135,10 @@ const restOf = ({ idle, viewed }: Entry): 'done' | 'idle' => idle !== undefined 
 const stateOf = (row: Row): HostAgentState => row.waits.size > 0 ? 'needs-you' : row.turn
 /** A turn the dial last saw under way. */
 const ended = (row: Row): boolean => row.turn === 'working' || row.waits.size > 0
+/** A shown session's turn that ended with no stream to hear it: one the dial last saw under way, or one whose
+ *  `time.idle` is newer than the last list's with no end heard since. */
+const unheard = (row: Row, { idle }: Entry): boolean =>
+  ended(row) || (!row.endHeard && idle !== undefined && (row.idle === undefined || idle > row.idle))
 
 export class OpencodeSource implements HostSource {
   readonly id = 'opencode'
@@ -387,7 +395,7 @@ export class OpencodeSource implements HostSource {
   private async read(entry: Entry): Promise<Listed> {
     const row = this.rows.get(entry.id)
     if (entry.running) return { entry, waits: await this.waits(entry.id) }
-    if (!row || ended(row)) return { entry, answer: await this.answer(entry.id) }
+    if (!row || unheard(row, entry)) return { entry, answer: await this.answer(entry.id) }
     return { entry }
   }
 
@@ -418,25 +426,21 @@ export class OpencodeSource implements HostSource {
   }
 
   /** Sets the list from a run. A session listed again keeps its id. What the stream told meanwhile is newer than the
-   *  list: a session it dropped is left out, a listed one keeps what it said, and a new one takes it over the list's. */
+   *  list: a session it dropped is left out, and a listed one is set from the list, then told again what it said. */
   private land(listed: Listed[], heard: Heard, over: number): void {
     const before = JSON.stringify(this.list())
     const rows = new Map<string, Row>()
-    const told: Array<[Row, OpencodeEvent[]]> = []
+    const told: Array<[Row, OpencodeEvent[], boolean]> = []
     for (const { entry, waits, answer } of listed) {
       if (heard.dropped.has(entry.id)) continue
       const events = heard.events.get(entry.id)
       const known = this.rows.get(entry.id)
-      if (known && events) {
-        rows.set(entry.id, known)
-        continue
-      }
       const row: Row = known ?? {
         agent: {
           id: this.deps.uuid(), engine: 'opencode', sessionId: entry.id, name: 'opencode', host: 'opencode', app: 'opencode',
           state: 'idle', unseenDone: false, lastActivityAt: entry.updated,
         },
-        turn: 'idle', waits: new Set(), turns: 0, reading: false, readAgain: false,
+        turn: 'idle', waits: new Set(), turns: 0, reading: false, readAgain: false, endHeard: false,
       }
       row.agent.cwd = entry.directory ? entry.directory.slice(0, MAX_CWD) : undefined
       row.agent.name = nameOf(entry.title, row.agent.cwd)
@@ -445,7 +449,7 @@ export class OpencodeSource implements HostSource {
         row.turn = 'working'
         row.waits = waits
         row.agent.unseenDone = false
-      } else if (!known || ended(known)) {
+      } else if (!known || unheard(known, entry)) {
         // A reconnect's list leaves a session still at rest as the stream left it.
         row.turn = restOf(entry)
         row.waits = new Set()
@@ -453,14 +457,17 @@ export class OpencodeSource implements HostSource {
         // An answer read before a turn heard starting is not that turn's.
         if (answer !== undefined && !events?.some(begins)) row.agent.lastAnswer = answer
       }
+      row.idle = entry.idle
+      // An end heard while the list was in flight may be newer than it: told again below, it counts as heard since.
+      row.endHeard = false
       row.agent.state = stateOf(row)
       rows.set(entry.id, row)
       // Listed, it asks again if it leaves and a turn starts in it.
       this.asked.delete(entry.id)
-      if (events) told.push([row, events])
+      if (events) told.push([row, events, known !== undefined])
     }
     this.rows = rows
-    for (const [row, events] of told) for (const event of events) this.apply(row, event)
+    for (const [row, events, again] of told) for (const event of events) this.apply(row, event, again)
     if (rows.size !== this.said) {
       this.said = rows.size
       this.deps.log(`[opencode] listed · ${rows.size} sessions`)
@@ -513,8 +520,9 @@ export class OpencodeSource implements HostSource {
     if (events.length > MAX_HEARD) events.shift()
   }
 
-  /** Sets a listed row from one event; true when what the row shows changed. */
-  private apply(row: Row, event: OpencodeEvent): boolean {
+  /** Sets a listed row from one event; true when what the row shows changed. An event told `again`, to a row a list set
+   *  back, sets its state alone: its turn was counted, and its answer read, when it was first heard. */
+  private apply(row: Row, event: OpencodeEvent, again = false): boolean {
     const { type, data } = event
     const before = JSON.stringify(row.agent)
     const was = row.agent.state
@@ -522,18 +530,18 @@ export class OpencodeSource implements HostSource {
       if (typeof data.title === 'string') row.agent.name = nameOf(data.title, row.agent.cwd)
     } else if (begins(event)) {
       row.turn = 'working'
-      row.turns++
+      if (!again) row.turns++
       row.agent.unseenDone = false
     } else if (type === 'permission.asked') {
       if (typeof data.id === 'string' && OPENCODE_PERMISSION.test(data.id) && row.waits.size < MAX_WAITS) row.waits.add(data.id)
     } else if (type === 'permission.replied') {
       if (typeof data.requestID === 'string') row.waits.delete(data.requestID)
     } else if (type === 'session.execution.failed') {
-      this.end(row, 'error')
+      this.end(row, 'error', again)
     } else if (type === 'session.execution.succeeded' || type === 'session.execution.interrupted'
       // opencode's idle ends only a turn under way: an error stays one.
       || (rests(event) && (was === 'working' || was === 'needs-you'))) {
-      this.end(row, 'done')
+      this.end(row, 'done', again)
     }
     row.agent.state = stateOf(row)
     if (row.agent.state !== was) row.agent.lastActivityAt = this.deps.now()
@@ -541,11 +549,12 @@ export class OpencodeSource implements HostSource {
   }
 
   /** A turn's end ends its waits too: one asked and never answered (Esc at the prompt) is gone with it. */
-  private end(row: Row, turn: 'done' | 'error'): void {
+  private end(row: Row, turn: 'done' | 'error', again: boolean): void {
     row.turn = turn
     row.waits.clear()
     row.agent.unseenDone = turn === 'done'
-    this.recap(row)
+    row.endHeard = true
+    if (!again) this.recap(row)
   }
 
   /** Reads a row's last answer, one read at a time. One that lands after a newer turn started is dropped; a turn that

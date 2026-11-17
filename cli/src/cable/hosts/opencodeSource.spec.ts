@@ -952,6 +952,31 @@ describe("the opencode source (docs/plans/2026-11-17-dial-opencode-design.md)", 
       expect(answers).not.toContain('D.')
     })
 
+    it('a turn heard while a list is in flight keeps the answer read at its end, read after the list lands', async () => {
+      server.session(API)
+      const reads = gated(opencode())
+      const gate = gated(reads.client)
+      const s = setup({ client: gate.client })
+      await live(s)
+      server.session({ id: 'ses_b1', updated: WALL - 1000 })
+      const held = gate.hold((path) => path === '/api/session/active')
+      server.event('session.created', { sessionID: 'ses_b1' })
+      await s.until(() => s.timers.length === 1)
+      s.advance(1000)
+      await held
+      // Its end's read lands after the list: ses_b1's first read is not held.
+      const reading = reads.hold((path) => path.startsWith('/api/session/ses_a1/message'))
+      server.start('ses_a1')
+      server.end('ses_a1', 'succeeded', 'B.')
+      await reading
+      gate.release()
+      await s.until(() => s.log.includes('[opencode] listed · 2 sessions'))
+      reads.release()
+      await turn()
+      expect(row(s, 'ses_a1')).toMatchObject({ state: 'done', lastAnswer: 'B.' })
+      expect(count(server, message('ses_a1'))).toBe(2)
+    })
+
     it('a turn interrupted before any answer keeps the last one, unchanged', async () => {
       server.session(API)
       const gate = gated(opencode())
@@ -1003,6 +1028,29 @@ describe("the opencode source (docs/plans/2026-11-17-dial-opencode-design.md)", 
       await s.until(() => row(s, 'ses_a1')?.lastActivityAt === WALL - 10_000)
       expect(row(s, 'ses_a1')).toMatchObject({ state: 'done', unseenDone: true, lastAnswer: 'Shipped.' })
       expect(count(server, message('ses_a1'))).toBe(2)
+    })
+
+    it('an end heard before the last list hides no later turn that ran unheard', async () => {
+      server.session(API)
+      const s = setup()
+      await live(s)
+      server.session({ ...API, idle: WALL - 20_000, answer: 'B.' })
+      server.event('session.execution.started', { sessionID: 'ses_a1' })
+      server.event('session.execution.succeeded', { sessionID: 'ses_a1' })
+      await s.until(() => row(s, 'ses_a1')?.lastAnswer === 'B.')
+      // A list with the stream up, which shows that end.
+      server.session({ id: 'ses_b1', updated: WALL - 1000 })
+      server.event('session.created', { sessionID: 'ses_b1' })
+      await s.until(() => s.timers.length === 1)
+      s.advance(1000)
+      await s.until(() => s.log.includes('[opencode] listed · 2 sessions'))
+      s.source.markSeen(row(s, 'ses_a1')!.id)
+      server.drop()
+      await s.until(() => s.log.at(-1) === '[opencode] retry · 1')
+      server.session({ ...API, updated: WALL - 10_000, idle: WALL - 10_000, answer: 'C.' })
+      s.advance(1000)
+      await s.until(() => row(s, 'ses_a1')?.lastActivityAt === WALL - 10_000)
+      expect(row(s, 'ses_a1')).toMatchObject({ state: 'done', unseenDone: true, lastAnswer: 'C.' })
     })
 
     it('a session working at the drop whose turn ended unheard is done after the reconnect, though an event of it came while the list was in flight', async () => {
