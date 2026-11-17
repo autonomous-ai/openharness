@@ -108,6 +108,14 @@ describe('summarize', () => {
     expect(baseline.specificity).toBeCloseTo(3 / 4, 6)
   })
 
+  it('leaves a case in no split out of the guardrails, as it is in no round-to-round comparison', () => {
+    appendFileSync(join(flow, 'baseline', 'results.jsonl'), jsonl([row('z.claude', 0, need(-2, 0, null, 0), { harm: true })]))
+    const { baseline } = summarize(flow).variants
+    expect(baseline.recall).toBeCloseTo(5 / 6, 6)
+    expect(baseline.harmed).toBe(1)
+    expect(baseline.harm_rate).toBeCloseTo(1 / 3, 6)
+  })
+
   it('takes precision as rings on need runs over all rings', () => {
     const { baseline, v1 } = summarize(flow).variants
     expect(baseline.precision).toBeCloseTo(5 / 6, 6)
