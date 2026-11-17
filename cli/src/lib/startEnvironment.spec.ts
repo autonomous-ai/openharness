@@ -13,6 +13,7 @@ const OUTSIDERS = {
   SENTINEL_TOKEN: 's', GH_TOKEN: 'g', NODE_OPTIONS: '--require /fake/hook.cjs', CLAUDE_CODE_MESSAGING_TOKEN: 't',
   CODEX_THREAD_ID: 'c', ORCA_PAIRING_CODE: 'p', HARNESS_AGENT_SESSION: '1', TERM: 'xterm-256color',
   HC_SESSION: 'h', TYPESAFE_CREDENTIALS: 'tc', GIT_SSH_COMMAND: 'ssh -i /fake/key',
+  CLAUDE_CODE_OAUTH_TOKEN: 'fake-oauth-sentinel',
 }
 const KEPT = {
   PATH: '/bin', HOME: '/h', LC_ALL: 'C.UTF-8', HTTPS_PROXY: 'http://p:1', https_proxy: 'http://p:1',
@@ -57,7 +58,7 @@ describe('the environment harness start gives the daemon', () => {
   })
   it('drops every name it drops on purpose, each with its reason', () => {
     expect(Object.keys(DROPPED_ON_PURPOSE)).toEqual(expect.arrayContaining(['TERM', 'COLORTERM', 'NODE_OPTIONS', 'TMUX',
-      'TMUX_PANE', 'HC_SESSION', 'TYPESAFE_CREDENTIALS', 'GIT_SSH_COMMAND']))
+      'TMUX_PANE', 'HC_SESSION', 'TYPESAFE_CREDENTIALS', 'GIT_SSH_COMMAND', 'CLAUDE_CODE_OAUTH_TOKEN']))
     for (const [name, why] of Object.entries(DROPPED_ON_PURPOSE)) {
       expect(why.trim(), name).not.toBe('')
       expect(startEnvironment({ [name]: 'x' }, 'linux'), name).toEqual({})

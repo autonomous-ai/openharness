@@ -59,15 +59,17 @@ it. Anything else in that shell never reaches the daemon, its tmux server or a p
 | Provider credentials, for now | `ANTHROPIC_*`, `OPENAI_*`, `AWS_*`, `GOOGLE_*`, `GEMINI_*`, `AZURE_*`, `OPENROUTER_*`, `XAI_*`, `CLAUDE_CODE_USE_*`, `CLOUD_ML_REGION` |
 
 Left out on purpose: `TERM` and `COLORTERM` (tmux sets a pane's own), `NODE_OPTIONS`, `TMUX`, `TMUX_PANE`,
-`HC_SESSION`, `TYPESAFE_CREDENTIALS`, `GIT_SSH_COMMAND`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, and every variable
-that names an agent's own session (`CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`, every `ORCA_*`), under an allowed
-prefix too.
+`HC_SESSION`, `TYPESAFE_CREDENTIALS`, `GIT_SSH_COMMAND`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`,
+`CLAUDE_CODE_OAUTH_TOKEN` (another tool, such as an account switcher, often puts it in the shell that ran the start),
+and every variable that names an agent's own session (`CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`, every `ORCA_*`),
+under an allowed prefix too.
 
 What you export in your shell's startup files still reaches your agents: every pane starts its engine through your
 login shell.
 
-Anything else the daemon or its agents need, `HC_SESSION`, `TYPESAFE_CREDENTIALS` and `GIT_SSH_COMMAND` among them,
-goes in the file `HARNESS_ENV_FILE` names, which every daemon process reads as it starts.
+Anything else the daemon or its agents need, `HC_SESSION`, `TYPESAFE_CREDENTIALS`, `GIT_SSH_COMMAND` and
+`CLAUDE_CODE_OAUTH_TOKEN` among them, goes in the file `HARNESS_ENV_FILE` names, which every daemon process reads as
+it starts.
 
 Provider keys will move to `HARNESS_ENV_FILE` next.
 

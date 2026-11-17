@@ -80,6 +80,7 @@ export const DROPPED_ON_PURPOSE: Readonly<Record<string, string>> = {
   TMUX_PANE: 'the pane the start was typed in, as TMUX',
   HC_SESSION: 'the calling shell\'s Herdr session, not the daemon\'s; put it in HARNESS_ENV_FILE to keep it',
   TYPESAFE_CREDENTIALS: 'a credential; put it in HARNESS_ENV_FILE to keep it',
+  CLAUDE_CODE_OAUTH_TOKEN: 'another tool, such as an account switcher, often injects it into the shell that ran the start, and it must not reach the daemon; put it in HARNESS_ENV_FILE to keep it',
   GIT_SSH_COMMAND: 'a command line every git in every pane would run; put it in HARNESS_ENV_FILE to keep it',
   GIT_CONFIG_GLOBAL: 'git\'s own move of its global config; without it the daemon watches ~/.gitconfig, as under launchd and systemd',
   GIT_CONFIG_SYSTEM: 'git\'s own move of its system config; without it the daemon watches /etc/gitconfig, as under launchd and systemd',
