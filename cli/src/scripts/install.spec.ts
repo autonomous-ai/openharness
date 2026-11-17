@@ -107,6 +107,10 @@ const writeCommand = (directory: string, name: string, lines: string[]) => {
   chmodSync(path, 0o700);
 };
 
+// A `brew` that writes down any call to it, so a test can say Homebrew was never run.
+const writeRecordingBrew = (directory: string, record: string) =>
+  writeCommand(directory, "brew", [`printf '%s\\n' "$*" >> '${record}'`, "exit 99"]);
+
 // What the CLI runs on Linux besides tmux — the only other command step 1 asks about.
 const writeLinuxHostCommands = (directory: string) => {
   writeCommand(directory, "ps", ["exit 0"]);
@@ -373,19 +377,22 @@ describe("scripts/install.sh command contract", () => {
     expect(source).not.toContain("exit 21");
   });
 
-  // The ladder, in source order: tmux is asked about first, Homebrew used only when tmux is missing
-  // and Homebrew is already there, the managed build for everything else.
-  it("asks about Homebrew only without tmux, and downloads the managed build without Homebrew", () => {
+  // The ladder, in source order: tmux is asked about first, a Homebrew prefix's bin only when tmux is
+  // missing, the managed build for everything else. Homebrew itself is never run.
+  it("looks in the Homebrew prefixes only without tmux, then downloads the managed build", () => {
     const source = readFileSync(installer, "utf8");
     const hostStep = source.slice(source.indexOf("# 1. Host requirements"));
     const darwin = hostStep.slice(hostStep.indexOf("  Darwin)"), hostStep.indexOf("  Linux)"));
 
     const tmuxCheck = darwin.indexOf("if tmux_runs; then");
-    const brewCheck = darwin.indexOf("if command -v brew >/dev/null 2>&1; then");
-    const managed = darwin.indexOf("tmux_runs || install_managed_tmux");
+    const prefixes = darwin.indexOf("for brew_prefix in ${HARNESS_HOMEBREW_PREFIXES:-/opt/homebrew /usr/local}; do");
+    const managed = darwin.indexOf("install_managed_tmux");
     expect(tmuxCheck).toBeGreaterThan(-1);
-    expect(brewCheck).toBeGreaterThan(tmuxCheck);
-    expect(managed).toBeGreaterThan(brewCheck);
+    expect(prefixes).toBeGreaterThan(tmuxCheck);
+    expect(managed).toBeGreaterThan(prefixes);
+    for (const brewRun of ["command -v brew", "brew shellenv", "brew install --force-bottle", "Installing tmux via Homebrew"]) {
+      expect(source).not.toContain(brewRun);
+    }
     // The managed archive is checksum-pinned by the manifest and recorded for the daemon.
     expect(source).toContain("harness/runtime/tmux/metadata.json");
     expect(source).toContain('CURRENT_TMUX_FILE="$RUNTIME_DIR/current-tmux"');
@@ -420,38 +427,70 @@ describe("scripts/install.sh command contract", () => {
     }
   });
 
-  it("installs tmux with an existing Homebrew and never fetches the managed build", () => {
-    const source = readFileSync(installer, "utf8");
-    const hostSetup = hostSetupOf(source);
-    const scratch = mkdtempSync(join(tmpdir(), "harness-mac-brew-"));
-    const invocations = join(scratch, "brew-invocations");
-    const fetched = join(scratch, "curl-invoked");
-    const fakeTmux = join(scratch, "tmux");
+  // A Mac whose Homebrew is not on this shell's PATH (a Finder launch has launchd's bare one) and with
+  // nothing to download from: only the prefixes can answer. The tmux first on PATH does not run,
+  // because ubuntu-latest (CI) has a real one in /usr/bin.
+  const prefixMac = (scratch: string) => {
+    const home = join(scratch, "home");
+    mkdirSync(home);
+    writeCommand(scratch, "uname", ["printf 'Darwin\\n'"]);
+    writeCommand(scratch, "tmux", ["exit 127"]);
+    writeCommand(scratch, "curl", [`: > '${join(scratch, "curl-invoked")}'`, "exit 99"]);
+    return home;
+  };
+  const prefixWith = (scratch: string, name: string, tmux?: string) => {
+    const bin = join(scratch, name, "bin");
+    mkdirSync(bin, { recursive: true });
+    writeRecordingBrew(bin, join(scratch, "brew-invocations"));
+    if (tmux) writeCommand(bin, "tmux", [tmux]);
+    return join(scratch, name);
+  };
 
+  it("uses a tmux in a Homebrew prefix that is not on PATH, downloads nothing and runs no Homebrew", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-mac-prefix-"));
     try {
-      writeCommand(scratch, "uname", ["printf 'Darwin\\n'"]);
-      writeCommand(scratch, "brew", [
-        `printf '%s\\n' "$*" >> '${invocations}'`,
-        `if [ "$1" = "shellenv" ]; then exit 0; fi`,
-        `printf '%s\\n' '#!/bin/sh' 'printf "tmux 3.7c\\\\n"' > '${fakeTmux}'`,
-        `/bin/chmod 700 '${fakeTmux}'`,
-      ]);
-      writeCommand(scratch, "curl", [`: > '${fetched}'`, "exit 99"]);
-
-      const result = spawnSync("/bin/sh", ["-c", hostSetup], {
+      const home = prefixMac(scratch);
+      const prefix = prefixWith(scratch, "homebrew", "printf 'tmux 3.7c\\n'");
+      const result = spawnSync("/bin/sh", ["-c", hostSetupOf(readFileSync(installer, "utf8"))], {
         encoding: "utf8",
         env: {
-          ...process.env,
-          INSTALL_MODE: "standalone",
-          PATH: scratch,
-          HARNESS_HOMEBREW_PREFIXES: join(scratch, "no-homebrew"),
+          ...process.env, HOME: home, INSTALL_MODE: "standalone",
+          PATH: `${scratch}:/usr/bin:/bin`, HARNESS_HOMEBREW_PREFIXES: prefix,
         },
       });
 
-      expect(result.status).toBe(0);
-      expect(readFileSync(invocations, "utf8")).toContain("install --force-bottle tmux\n");
-      expect(result.stdout).not.toContain("managed");
-      expect(() => readFileSync(fetched, "utf8")).toThrow();
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("tmux ready (tmux 3.7c)");
+      expect(existsSync(join(home, ".harness", "runtime", "current-tmux"))).toBe(false);
+      expect(existsSync(join(home, ".local", "bin", "tmux"))).toBe(false);
+      expect(existsSync(join(scratch, "curl-invoked"))).toBe(false);
+      expect(existsSync(join(scratch, "brew-invocations"))).toBe(false);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it("takes the first prefix whose tmux runs", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-mac-prefixes-"));
+    try {
+      const home = prefixMac(scratch);
+      const prefixes = [
+        prefixWith(scratch, "no-tmux"),
+        prefixWith(scratch, "homebrew", "printf 'tmux 3.7c\\n'"),
+        prefixWith(scratch, "later", "printf 'tmux 3.8\\n'"),
+      ];
+      const result = spawnSync("/bin/sh", ["-c", hostSetupOf(readFileSync(installer, "utf8"))], {
+        encoding: "utf8",
+        env: {
+          ...process.env, HOME: home, INSTALL_MODE: "standalone",
+          PATH: `${scratch}:/usr/bin:/bin`, HARNESS_HOMEBREW_PREFIXES: prefixes.join(" "),
+        },
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("tmux ready (tmux 3.7c)");
+      expect(existsSync(join(scratch, "curl-invoked"))).toBe(false);
+      expect(existsSync(join(scratch, "brew-invocations"))).toBe(false);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
@@ -468,10 +507,7 @@ describe("scripts/install.sh command contract", () => {
       mkdirSync(bin, { recursive: true });
       try {
         writeCommand(scratch, "uname", ["printf 'Darwin\\n'"]);
-        writeCommand(bin, "brew", [
-          `if [ "$1" = shellenv ]; then printf 'export PATH="${bin}:$PATH"\\n'; fi`,
-          "exit 0",
-        ]);
+        writeRecordingBrew(bin, join(scratch, "brew-invocations"));
         writeCommand(bin, "tmux", [
           'case "$1" in -V) printf "tmux 3.7c\\n" ;; new-session) printf "%%0\\n" ;; esac',
         ]);
@@ -482,6 +518,7 @@ describe("scripts/install.sh command contract", () => {
         expect(installed.status, installed.stderr).toBe(0);
         expect(installed.stdout).toContain("tmux ready (tmux 3.7c)");
         expect(existsSync(join(home, ".harness/runtime/current-tmux"))).toBe(false);
+        expect(existsSync(join(scratch, "brew-invocations"))).toBe(false);
 
         // Found by QA on a quiet machine: a timed-out probe must not change later fixtures' PATH.
         // This is the daemon's environment after the installer exits, so give it its own process.
@@ -618,15 +655,17 @@ describe("scripts/install.sh command contract", () => {
     }
   }, 20_000);
 
-  it("falls back to the managed build when Homebrew cannot install tmux", () => {
-    const source = readFileSync(installer, "utf8");
-    const hostSetup = hostSetupOf(source);
-    const scratch = mkdtempSync(join(tmpdir(), "harness-mac-brew-broken-"));
+  it("installs the managed tmux on a Mac with no tmux, and never runs Homebrew", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-mac-no-brew-run-"));
+    const invocations = join(scratch, "brew-invocations");
 
     try {
       const { home, root } = managedFixture(scratch);
-      writeCommand(scratch, "brew", [`if [ "$1" = "shellenv" ]; then exit 0; fi`, "exit 1"]);
-      const result = spawnSync("/bin/sh", ["-c", hostSetup], {
+      const prefix = join(scratch, "homebrew");
+      mkdirSync(join(prefix, "bin"), { recursive: true });
+      writeRecordingBrew(scratch, invocations);
+      writeRecordingBrew(join(prefix, "bin"), invocations);
+      const result = spawnSync("/bin/sh", ["-c", hostSetupOf(readFileSync(installer, "utf8"))], {
         encoding: "utf8",
         env: {
           ...process.env,
@@ -634,17 +673,66 @@ describe("scripts/install.sh command contract", () => {
           INSTALL_MODE: "standalone",
           PATH: `${scratch}:/usr/bin:/bin`,
           HARNESS_TMUX_METADATA_URL: "https://cdn.example/manifest.json",
-          HARNESS_HOMEBREW_PREFIXES: join(scratch, "no-homebrew"),
+          HARNESS_HOMEBREW_PREFIXES: prefix,
         },
       });
 
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain("No Homebrew tmux bottle for this Mac; using the managed build instead.");
-      expect(readlinkSync(join(home, ".local", "bin", "tmux"))).toContain(root);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("downloading tmux 9.9 (darwin-arm64)");
+      expect(result.stdout).toContain("tmux ready (tmux 9.9)");
+      expect(result.stdout).not.toContain("Homebrew");
+      expect(readlinkSync(join(home, ".local", "bin", "tmux"))).toBe(join(home, ".harness", "runtime", root, "bin", "tmux"));
+      expect(existsSync(invocations)).toBe(false);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
-  }, 20_000);
+  });
+
+  it("passes a Homebrew tmux that does not run and installs the managed build", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-mac-brew-tmux-broken-"));
+    const invocations = join(scratch, "brew-invocations");
+
+    try {
+      const { home, root } = managedFixture(scratch);
+      const prefix = join(scratch, "homebrew");
+      mkdirSync(join(prefix, "bin"), { recursive: true });
+      writeCommand(join(prefix, "bin"), "tmux", ["exit 127"]);
+      writeRecordingBrew(join(prefix, "bin"), invocations);
+      const result = spawnSync("/bin/sh", ["-c", hostSetupOf(readFileSync(installer, "utf8"))], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: home,
+          INSTALL_MODE: "standalone",
+          PATH: `${scratch}:/usr/bin:/bin`,
+          HARNESS_TMUX_METADATA_URL: "https://cdn.example/manifest.json",
+          HARNESS_HOMEBREW_PREFIXES: prefix,
+        },
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("tmux ready (tmux 9.9)");
+      expect(readlinkSync(join(home, ".local", "bin", "tmux"))).toBe(join(home, ".harness", "runtime", root, "bin", "tmux"));
+      expect(existsSync(invocations)).toBe(false);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  // Harness Device turns these lines into its install step's copy by how they start (its fixed table in
+  // the app's Rust): a change to one of them is a change there too.
+  it("keeps the step lines Harness Device names", () => {
+    const source = readFileSync(installer, "utf8");
+    for (const line of [
+      'echo "▸ Installing the managed tmux into',
+      'echo "  ▸ downloading tmux ',
+      'echo "▸ Installing the Harness Node runtime into',
+      'echo "  ▸ downloading Node ',
+      'echo "▸ Installing harness from',
+    ]) {
+      expect(source).toContain(line);
+    }
+  });
 
   it("host mode puts ~/.local/bin on PATH for new shells", () => {
     const source = readFileSync(installer, "utf8");
