@@ -236,10 +236,17 @@ describe('harnessd\'s master and services lean', () => {
     expect(amp).toHaveLength(1)
     delete files[amp[0]!]
     const without = buildWithLean(join(scratch, 'without-others'), bundle, files)
-    // Amp and OpenCode, as far as the daemon can tell: programs that answer their probes and then wait.
+    // The stand-in stays the selected engine while readiness is durably published. Executing sleep
+    // replaced that owner between the first process observation and its required refresh.
     const standIn = (name: string, version: string): string => {
       const path = join(scratch, 'without-others', name)
-      writeFileSync(path, `#!/bin/sh\ncase "$*" in *--version*|*--help*) echo "${version}"; exit 0;; esac\necho "${name} stand-in"\nexec sleep 600\n`, { mode: 0o755 })
+      writeFileSync(path, `#!${process.env.E2E_NODE_PATH}
+if (process.argv.includes('--version') || process.argv.includes('--help')) {
+  console.log(${JSON.stringify(version)}); process.exit(0);
+}
+console.log(${JSON.stringify(`${name} stand-in`)});
+process.stdin.resume();
+`, { mode: 0o755 })
       return path
     }
     const d = await fresh({ AMP_PATH: standIn('amp', '0.0.0'), OPENCODE_PATH: standIn('opencode', 'opencode v2.0.18') }, without)
@@ -256,12 +263,16 @@ describe('harnessd\'s master and services lean', () => {
       const cwd = (name: string): string => { const path = join(d.projectsDir, name); mkdirSync(path, { recursive: true }); return path }
       const created = await client.request('agent_create', { engine: 'amp', cwd: cwd('lean-amp') }, 90_000)
       expect(created.error, JSON.stringify(created)).toBeUndefined()
+      await client.waitFor(frame => frame.type === 'agent_synced' && frame.payload?.agent?.id === created.agent.id
+        && frame.payload.agent.launch?.state === 'ready', 30_000, 'Amp readiness published')
       await until('the other engines worker connected', () => d.log().includes('[services] engine-others connected') || null, 30_000, 200)
-      // Native launch and plugin installation now belong to eager core. Losing the legacy
-      // lazy hooks module cannot prevent an OpenCode launch. Ask needs no probed flag here.
+      // Mandatory launch and plugin installation do not depend on the optional reader copies.
+      // Losing the lazy hooks module cannot prevent an OpenCode launch. Ask needs no probed flag here.
       const launched = await client.request('agent_create', { engine: 'opencode', cwd: cwd('lean-opencode'), permissionMode: 'ask', bypassPermission: false }, 90_000)
       expect(launched.error, JSON.stringify(launched)).toBeUndefined()
       expect(launched.agent.engine).toBe('opencode')
+      await client.waitFor(frame => frame.type === 'agent_synced' && frame.payload?.agent?.id === launched.agent.id
+        && frame.payload.agent.launch?.state === 'ready', 30_000, 'OpenCode readiness published')
       expect(unavailable('hooks')).toBe(0)
     } finally { client.close() }
     await agentWorks(d, 'claude')
