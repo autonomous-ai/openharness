@@ -15,8 +15,8 @@ Done when, on a Mac with no Harness installed:
 1. The app installs the CLI, starts the daemon, and keeps it running (and stops keeping it while `harness flash` or
    `harness uninstall` works, or while the desktop app runs it).
 2. Its menu-bar icon shows the dial's state as the daemon reports it, live, including "Updating to X".
-3. It offers sign-in once (optional), Claude Code voice and approvals once and the Codex skill once (consent first),
-   and each can be changed later from the menu.
+3. It offers sign-in once (optional). Claude Code and Codex are turned on and off in the menu, with no offer
+   ([the dial skill design](2026-11-16-dial-skill-every-home-design.md)).
 4. It starts at login as a login item.
 
 ## Decided (final)
@@ -54,14 +54,15 @@ Taken from the orchestrator's brief; not reopened here.
   `NSRunningApplication.runningApplicationsWithBundleIdentifier`. Elsewhere a process-name check behind the same
   trait (Linux `harness_desktop`/`harness-desktop`, Windows `harness-desktop.exe`; the implementer confirms the names
   from the desktop packaging).
-- **The tray menu is native** (Tauri `tray` + `menu`); the webview window is only for the four screens that need
-  words and a choice: Install, Sign in, Claude Code, Codex. It opens at first run when one of them is due, and from the menu.
+- **The tray menu is native** (Tauri `tray` + `menu`); the webview window is only for the two screens that need
+  words and a choice: Install and Sign in. It opens at first run when one of them is due, and from the menu. Claude
+  Code and Codex have no screen: the menu turns them on ([the dial skill design](2026-11-16-dial-skill-every-home-design.md)).
 
 ## Architecture
 
 ```
 Menu bar ─ Tauri tray (native menu) ─┐
-Window   ─ webview ui/ (4 screens) ──┤ invoke / events
+Window   ─ webview ui/ (2 screens) ──┤ invoke / events
                                      ▼
                          src-tauri lib (Rust)
      cli.rs      find and run `harness`; NDJSON line reader; timeouts
@@ -211,13 +212,13 @@ Firmware update shows "Updating to X" with no percent (a percent is a later cabl
 Commands from wave 1a (until it lands, tested against the fake CLI): `harness device claude status --json` →
 `{ supported, installed, enabled, claudeVersion }`, `harness device claude enable`, `harness device claude disable`.
 
-- Due when `supported && installed && !enabled` and the state file says it was not asked yet. The screen: what turning
-  it on does in two short lines (the dial speaks Claude Code's answers and asks its approvals; Harness adds hooks to
-  Claude Code's settings), buttons **Turn on** / **Not now**. Turn on runs `enable`; failure shows its message and
-  Retry. Not now records the answer and keeps status-only.
-- Menu: when supported and installed: "Claude Code: On" with **Turn off** (runs `disable`), or "Claude Code: Off"
-  with **Turn on…** (opens the screen). Nothing when not supported or not installed. Status is read at start, after
-  enable/disable, and when the menu opens (at most once a minute).
+- No offer and no screen ([the dial skill design](2026-11-16-dial-skill-every-home-design.md)). **Turn on** in the menu is the consent.
+- Menu: when supported (Claude Code 2.1.287 or later on macOS or Linux), also before the plugin is installed:
+  "Claude Code: On" with **Turn off** (runs `disable`), or "Claude Code: Off" with **Turn on** (runs `enable`; no
+  "…", as it opens no window). One change at a time. While it runs: "Claude Code: Turning on…" or "Turning off…",
+  with no action row. After it failed: "Claude Code: Could not turn on" or "Could not turn off", with the action row
+  under it to try again. Nothing when not supported. Status is read at start, after enable/disable, and when the menu
+  opens (at most once a minute).
 
 ### Menu
 
@@ -226,41 +227,43 @@ while the desktop app runs (it has its own `HarnessStatusMenu`).
 
 | Row | Shown |
 |---|---|
-| Dial line (disabled) | "Dial connected" (· fw), "No dial", "Updating to X", the `problem` text, "Starting Harness", "Harness stopped", "Updating Harness", "Setting up Harness", "Harness removed" |
+| Dial line (disabled) | "Dial connected" (no firmware version: About has it), "No dial", "Updating to X", the `problem` text, "Starting Harness", "Harness stopped", "Updating Harness", "Setting up Harness", "Harness removed" |
 | **Install** | when "Harness removed", or when an install failed and its window was closed (the dial line then stays "Setting up Harness") |
 | Account | "Signed in" (disabled), or **Sign in…** |
-| Claude Code | as above; absent when not supported or installed |
-| Codex | "Codex: On" with **Turn off**, or "Codex: Off" with **Turn on…**; absent when Codex is not on this computer |
+| Claude Code | as above; absent when not supported ([the dial skill design](2026-11-16-dial-skill-every-home-design.md)) |
+| Codex | as Claude Code: "Codex: On" with **Turn off**, "Codex: Off" with **Turn on**, "Turning on…", "Could not turn on"; absent when Codex is not on this computer |
 | **Sound** (check item) | only while Harness runs and the dial is attached, not updating, and reports its settings; checked when the dial's sound is on ([design](2026-11-16-device-app-sound-design.md)) |
 | **Notifications** (submenu) | **All** and **Needs you**, the one in force checked; only while Harness runs and the dial is attached and not updating ([design](2026-11-16-dial-agent-notify-design.md)) |
 | "Updating Harness Device…" (disabled) | while the app installs its own update ([design](2026-11-16-device-app-release-design.md)) |
 | **Update X…** | when the app cannot replace its bundle; opens `harness.autonomous.ai/device` ([design](2026-11-16-device-app-release-design.md)) |
 | separator | |
 | **Open Harness** | when the desktop app is installed (`open -b ai.autonomous.harness`) |
+| **About** | macOS's standard About panel, brought to the front: the app's name and version, and one credits line `Dial 0.1.0 · Harness 0.6.58` (`harness --version`, read when the menu opens, at most once a minute), a version the app does not know left out |
 | **Quit** | quits the app; the daemon keeps running |
 
 Copy is short, buttons 1-2 words. An empty state shows nothing extra.
 
 ### Window and UI
 
-`device-app/ui/`: plain TypeScript bundled by esbuild into `ui/dist/`, one HTML page, four screens (Install, Sign
-in, Claude Code, Codex), each a function that renders into the page from the state the Rust side sends. All calls go
+`device-app/ui/`: plain TypeScript bundled by esbuild into `ui/dist/`, one HTML page, two screens (Install and Sign
+in), each a function that renders into the page from the state the Rust side sends. All calls go
 through one `api.ts` over Tauri `invoke` and `listen`, so tests mock it. CSS uses the desktop design doc's tokens
 (system font, its neutrals and blue selection, light and dark). `ui/gallery.html` shows every screen in every state,
 both themes; the design doc gets a short "Harness Device" section that points to it, in the same PR.
 
 Window: 420 × 320, not resizable, centered, closes to the menu bar (closing never quits). No Dock icon: the app lives
 in the menu bar only; the bundle reuses the desktop app's icon. Closing the window on the Sign in offer counts as
-Later, on the Claude Code or Codex offer as Not now (recorded, not offered again); an install or sign-in under way keeps running. Opens at start when the CLI
-is missing, sign-in was not asked, or Claude Code or Codex is due; screens chain in that order; when none is due it closes.
+Later (recorded, not offered again); an install or sign-in under way keeps running. Opens at start when the CLI is
+missing or sign-in was not asked; screens chain in that order; when none is due it closes. Claude Code and Codex open
+no window ([the dial skill design](2026-11-16-dial-skill-every-home-design.md)).
 
 ### State file
 
 In the platform's app data folder (Tauri `app_data_dir`: `~/Library/Application Support/ai.autonomous.harness.device/`
 on macOS), not `~/.harness`, so `harness uninstall` leaves it and the app writes nothing into a folder being removed.
 `state.json`, mode 0600, written atomically (temp file + rename):
-`{ "version": 1, "cliSeen": bool, "askedSignIn": bool, "askedClaude": bool, "askedCodex": bool, "loginItem": bool }`. Unknown or unreadable → defaults
-(all false) and a log line. No email, token or path in it.
+`{ "version": 1, "cliSeen": bool, "askedSignIn": bool, "loginItem": bool }`. Unknown or unreadable → defaults
+(all false) and a log line. An old file's `askedClaude` and `askedCodex` are ignored ([the dial skill design](2026-11-16-dial-skill-every-home-design.md)). No email, token or path in it.
 
 ### Login item
 
@@ -305,7 +308,8 @@ itself. The app's log records the keep-alive's starts and their results.
   slot, desktop running, exit 4, backoff) with a fake clock; `model.rs` every menu state; `state.rs` round trip,
   corrupt file, 0600.
 - **UI (vitest + jsdom):** each screen clicked through as a person does, with `invoke` mocked: install progress →
-  failure → Retry; sign-in → browser → result; Claude Turn on / Not now.
+  failure → Retry; sign-in → browser → result. Claude Code and Codex: no screen; **Turn on** in the menu runs
+  `enable` with no window ([the dial skill design](2026-11-16-dial-skill-every-home-design.md)).
 - **Tester, on this Mac:** build the real app (`cargo tauri build --debug` or `cargo tauri dev`), run it against an
   isolated HOME with the fake CLI and, separately, against a real local CLI with a throwaway data dir, never the
   person's own daemon (port 18473) or `~/.harness`; screenshots of the menu in each state and of each screen in both

@@ -128,6 +128,12 @@ export class Browsers {
     return this.queue(agentId, () => this.launch(agentId, generation))
   }
 
+  /** A new core lease must recheck the live browser; work from the old lease cannot publish into it. */
+  refresh(agentId: string): Promise<void> {
+    this.forget(agentId)
+    return this.start(agentId)
+  }
+
   /** Runs setup from its recorded step, then starts every browser waiting on it. One run at a time. */
   setUp(): Promise<void> {
     return this.setupRun ??= this.runSetup().finally(() => { this.setupRun = null })
@@ -138,6 +144,9 @@ export class Browsers {
     this.deps.state.update(s => { s.setup = step ? { step } : null })
     if (step) this.showSetup({ state: 'setup', step })
   }
+
+  /** A move or Start may be queued before it has a visible browser state. */
+  pending(agentId: string): boolean { return this.queues.has(agentId) }
 
   stop(agentId: string): Promise<void> {
     this.forget(agentId)
@@ -160,17 +169,22 @@ export class Browsers {
   }
 
   /**
-   * [from]'s entry, its profile with it, becomes [to]'s (decision 19): [from]'s browser is stopped first, in both
-   * agents' queues. False, changing nothing, when [from] has no entry or is being deleted, or [to] has an entry of
-   * its own. Rejects when the state file cannot be written: both entries are as they were.
+   * [from]'s entry, its profile with it, becomes [to]'s (decision 19), and so does its Browser being on: [from]'s browser
+   * is stopped first, in both agents' queues. False, changing nothing, when [from] has no entry or is being deleted, or
+   * [to] has an entry of its own. Rejects when the state file cannot be written: both entries are as they were.
    */
-  move(from: string, to: string): Promise<boolean> {
+  move(from: string, to: string, prepare?: () => Promise<void>): Promise<boolean> {
+    const destinationGeneration = this.generation(to)
     return this.inQueues([from, to], async () => {
+      await prepare?.()
       const movable = (s: BrowserStateData) => s.browsers[from] !== undefined && !s.deleting.includes(from) && s.browsers[to] === undefined
       const saved = this.deps.state.read()
       if (!movable(saved)) return false
-      if (this.states.has(from)) {
-        this.forget(from)
+      const running = this.states.has(from)
+      // A preceding move may have queued this agent's Start behind us without publishing state yet. Cancel it too:
+      // once its profile moves on, that queued Start must not recreate a fresh browser for the previous agent.
+      this.forget(from)
+      if (running) {
         this.deps.closeViewers(from)
         // The volume stays: it is what moves.
         await this.deps.containers.stop(saved.browsers[from]!.profile ?? from).catch((error: unknown) => {
@@ -187,6 +201,14 @@ export class Browsers {
         // [from]'s mark goes with its entry, and [to] gets none: a new conversation, owed its ready line once its
         // browser is ready.
         delete s.told?.[from]
+        if (s.on?.[from]) {
+          // A later Stop of the destination keeps its choice while receiving the profile.
+          if (this.generation(to) === destinationGeneration) s.on[to] = true
+          delete s.on[from]
+        }
+        // Both ends now have Browser's decision: [from] gave it away and [to] received it. A later row or consecutive
+        // move must not replace it with a legacy flag. Delete on or after 2026-12-18, with `adopt`.
+        s.adopted = { ...s.adopted, [from]: true, [to]: true }
         moved = true
       })
       if (moved) this.deps.log(`agent browser ${to}: took the browser of ${from}`)
@@ -250,6 +272,25 @@ export class Browsers {
     if (shown === 'ready') void this.queue(agentId, async () => { await this.exitSeen(agentId) })
   }
 
+  /**
+   * One look at what runs, as the service starts: a browser running for an agent [wanted] does not want (not here, not on)
+   * is stopped, and its profile kept. Its agent ended while the service could not hear it.
+   */
+  async stopAllBut(wanted: (agentId: string) => boolean): Promise<void> {
+    let running: string[]
+    try {
+      running = await this.deps.containers.running()
+    } catch (error) {
+      this.deps.log(`agent browser: could not list running browsers: ${(error as Error).message}`)
+      return
+    }
+    for (const agentId of running) {
+      if (wanted(agentId)) continue
+      this.deps.log(`agent browser ${agentId}: stopped, its agent is not here or its Browser is off`)
+      await this.stop(agentId)
+    }
+  }
+
   /** After the event stream reconnects: one look at what runs, for an exit it missed. */
   async reconcile(): Promise<void> {
     let running: Set<string>
@@ -265,10 +306,10 @@ export class Browsers {
   }
 
   /**
-   * At service start. `known` is the core's live and stopped agents, or null when it gave no answer: then only the
-   * deletes already recorded are finished, since a missing answer must never delete a person's login.
+   * At service start, finish only recorded purges. A readable agent list may omit an unreadable archive, so absence
+   * from it is never authority to erase an otherwise intact profile. Unlisted containers can be stopped safely.
    */
-  async resume(known: Set<string> | null): Promise<void> {
+  async resume(): Promise<void> {
     let saved
     try {
       saved = this.deps.state.read()
@@ -278,14 +319,11 @@ export class Browsers {
       return
     }
     for (const agentId of saved.deleting) await this.queue(agentId, () => this.remove(agentId))
-    if (known) {
-      for (const agentId of Object.keys(saved.browsers)) if (!known.has(agentId)) await this.delete(agentId)
-      try {
-        const swept = await this.deps.containers.sweep(new Set(Object.keys(this.deps.state.read().browsers)))
-        if (swept > 0) this.deps.log(`agent browser: removed ${swept} containers this daemon no longer lists`)
-      } catch (error) {
-        this.deps.log(`agent browser: could not sweep containers: ${(error as Error).message}`)
-      }
+    try {
+      const swept = await this.deps.containers.sweep(agentId => Object.hasOwn(this.deps.state.read().browsers, agentId))
+      if (swept > 0) this.deps.log(`agent browser: removed ${swept} containers this daemon no longer lists`)
+    } catch (error) {
+      this.deps.log(`agent browser: could not sweep containers: ${(error as Error).message}`)
     }
     // An install cut off is never run again by itself: it would raise the password dialog nobody asked for.
     if (saved.setup?.step === 'installing') {
@@ -457,8 +495,10 @@ export class Browsers {
     if (profile !== null) await this.deps.containers.remove(profile)
     this.deps.state.update(s => {
       delete s.browsers[agentId]
-      // The agent is gone: nobody is left owing or owed its ready line (notices.ts).
+      // The agent is gone: nobody is left owing or owed its ready line (notices.ts), and nothing of it is on.
       delete s.told?.[agentId]
+      delete s.on?.[agentId]
+      delete s.adopted?.[agentId]
       s.deleting = s.deleting.filter(id => id !== agentId)
     })
   }

@@ -6,6 +6,9 @@ import 'package:xterm/xterm.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/logging/app_log.dart';
+import 'package:harness/logging/log_stream.dart';
+import 'package:harness/logging/log_stream_sinks.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/attached_task_delivery.dart';
 import 'package:harness/state/harness_attachments.dart';
@@ -42,7 +45,7 @@ const _codexHooksReview =
 
 /// Records what a harness's terminal was handed, in order.
 class _RecordingSession extends TerminalSession {
-  _RecordingSession()
+  _RecordingSession({this.refuse = const {}})
     : super(
         machineId: 'box',
         agentId: 'a1',
@@ -57,10 +60,13 @@ class _RecordingSession extends TerminalSession {
 
   final calls = <String>[];
 
+  /// Files this terminal fails to take.
+  final Set<String> refuse;
+
   @override
   Future<bool> pasteFile(String filename, Uint8List content) async {
     calls.add('file:$filename');
-    return true;
+    return !refuse.contains(filename);
   }
 
   @override
@@ -315,6 +321,41 @@ void main() {
         'send:Summarise these',
       ]);
     });
+
+    test(
+      'a file that did not arrive is logged by its place, not its name',
+      () async {
+        final previousLog = appLog;
+        final stream = LogStream();
+        appLog = StreamAppLog(stream);
+        addTearDown(() => appLog = previousLog);
+        final app = _app();
+        addTearDown(app.dispose);
+        final session = _RecordingSession(refuse: {'zebra-orchard.pdf'});
+        app.adoptSessionForTest(session);
+        final problem = await deliverAttachedTask(
+          app,
+          machineId: 'box',
+          agentId: 'a1',
+          files: [_file('shot.png'), _file('zebra-orchard.pdf')],
+          task: 'Summarise these',
+        );
+        expect(
+          problem,
+          'Could not attach zebra-orchard.pdf. Attach it in the pane.',
+        );
+        expect(
+          stream.entries.where(
+            (e) => e.message == 'file 2 of 2 did not reach a1',
+          ),
+          hasLength(1),
+        );
+        expect(
+          stream.entries.where((e) => e.message.contains('zebra-orchard')),
+          isEmpty,
+        );
+      },
+    );
 
     testWidgets('waits for the engine to be ready before handing anything', (
       tester,

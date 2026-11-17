@@ -1,13 +1,13 @@
 //! The app's rules: a pure reducer from an event to the effects it asks for.
 
 use crate::keepalive::{Keep, KeepAlive};
-use crate::model::{due, menu, menu_log};
+use crate::model::{about_credits, due, menu, menu_log};
 use crate::types::{
-    Action, AppState, AppUpdate, CliState, Daemon, Effect, Event, LoginEvent, MenuAction, MenuItem, NotifyMode, Phase,
-    Saved, Screen, UpdateFailure, View,
+    Action, AppState, AppUpdate, CliState, Daemon, Effect, EngineChange, Event, LoginEvent, MenuAction, MenuItem,
+    NotifyMode, Phase, Saved, Screen, UpdateFailure, View,
 };
 
-/// The menu reads the account, Claude Code and Codex again at most this often.
+/// The menu reads the account, Claude Code, Codex and the CLI's version again at most this often.
 const READ_EVERY_SECS: u64 = 60;
 
 /// The app asks for its own update at most this often.
@@ -28,13 +28,8 @@ pub struct App {
     window: Option<View>,
     /// The sign-in that runs, as its screen draws it.
     login: Option<View>,
-    /// The Claude Code change that runs: on or off.
-    setting: Option<bool>,
-    /// The Codex change that runs: on or off. Apart from Claude Code's, so each may run beside the other.
-    codex_setting: Option<bool>,
-    /// Whether the account, Claude Code and Codex answered since the CLI was found; None once the first screen is
-    /// chosen.
-    first_answers: Option<(bool, bool, bool)>,
+    /// The CLI was found and the account has not answered since: its first answer chooses the first screen.
+    awaiting_account: bool,
     /// The last time an event told, for the keep-alive.
     now: u64,
     last_read: u64,
@@ -69,6 +64,9 @@ impl App {
             desktop_installed,
             saved,
             app_update: AppUpdate::None,
+            claude_change: EngineChange::None,
+            codex_change: EngineChange::None,
+            cli_version: None,
         };
         let mut app = App {
             state,
@@ -76,9 +74,7 @@ impl App {
             menu: Vec::new(),
             window: None,
             login: None,
-            setting: None,
-            codex_setting: None,
-            first_answers: None,
+            awaiting_account: false,
             now,
             last_read: now,
             read_when_up: false,
@@ -166,12 +162,13 @@ impl App {
                 if self.login.take().is_some() {
                     effects.push(Effect::CancelLogin);
                 }
-                self.setting = None;
-                self.codex_setting = None;
+                self.state.claude_change = EngineChange::None;
+                self.state.codex_change = EngineChange::None;
                 self.state.signed_in = None;
                 self.state.claude = None;
                 self.state.codex = None;
-                self.first_answers = None;
+                self.state.cli_version = None;
+                self.awaiting_account = false;
                 if self.window.is_some() {
                     self.show(None, effects);
                 }
@@ -217,69 +214,48 @@ impl App {
             // A read that failed keeps the last answer.
             Event::Auth(answer) if self.state.cli == CliState::Found => {
                 self.state.signed_in = answer.or(self.state.signed_in);
-                if let Some((auth, _, _)) = &mut self.first_answers {
-                    *auth = true;
-                }
                 self.first_screen(effects);
             }
             Event::Claude(status) if self.state.cli == CliState::Found => {
                 self.state.claude = status.or(self.state.claude.take());
-                if let Some((_, claude, _)) = &mut self.first_answers {
-                    *claude = true;
-                }
-                self.first_screen(effects);
             }
             Event::Codex(status) if self.state.cli == CliState::Found => {
                 self.state.codex = status.or(self.state.codex.take());
-                if let Some((_, _, codex)) = &mut self.first_answers {
-                    *codex = true;
-                }
-                self.first_screen(effects);
+            }
+            Event::CliVersion(version) if self.state.cli == CliState::Found => {
+                self.state.cli_version = version.or(self.state.cli_version.take());
             }
             // A read of a CLI that went away answers late: nothing reads it.
-            Event::Auth(_) | Event::Claude(_) | Event::Codex(_) => {}
+            Event::Auth(_) | Event::Claude(_) | Event::Codex(_) | Event::CliVersion(_) => {}
             Event::Login(event) => self.login_event(event, effects),
-            Event::ClaudeSet(result) => {
+            Event::ClaudeSet(made) => {
                 // A change that no longer runs (its CLI went away) answers late: nothing reads it.
-                let Some(on) = self.setting.take() else { return };
-                match result {
-                    Ok(()) => {
-                        effects.push(Effect::ReadClaude);
-                        // Every turn-on is the window's: the menu's Turn on… opens it.
-                        if on {
-                            self.remember(|saved| saved.asked_claude = true, effects);
-                            if self.showing(Screen::Claude) {
-                                self.next(effects);
-                            }
-                        }
+                let EngineChange::Running(on) = self.state.claude_change else { return };
+                // Failed or not, the status is read again: a change may have done part of its work. The runner logged
+                // a failure's reason; the menu's row says it failed. A change that ended well shows at once, as the
+                // read may answer late or not at all.
+                effects.push(Effect::ReadClaude);
+                self.state.claude_change = if made {
+                    if let Some(status) = &mut self.state.claude {
+                        status.enabled = on;
                     }
-                    // A failed turn-off shows nothing: the runner logged it.
-                    Err(text) => {
-                        if on && self.showing(Screen::Claude) {
-                            self.show(Some(screen_at(Screen::Claude, Phase::Failed, vec![text])), effects);
-                        }
-                    }
-                }
+                    EngineChange::None
+                } else {
+                    EngineChange::Failed(on)
+                };
             }
             // As Claude Code's.
-            Event::CodexSet(result) => {
-                let Some(on) = self.codex_setting.take() else { return };
-                match result {
-                    Ok(()) => {
-                        effects.push(Effect::ReadCodex);
-                        if on {
-                            self.remember(|saved| saved.asked_codex = true, effects);
-                            if self.showing(Screen::Codex) {
-                                self.next(effects);
-                            }
-                        }
+            Event::CodexSet(made) => {
+                let EngineChange::Running(on) = self.state.codex_change else { return };
+                effects.push(Effect::ReadCodex);
+                self.state.codex_change = if made {
+                    if let Some(status) = &mut self.state.codex {
+                        status.enabled = on;
                     }
-                    Err(text) => {
-                        if on && self.showing(Screen::Codex) {
-                            self.show(Some(screen_at(Screen::Codex, Phase::Failed, vec![text])), effects);
-                        }
-                    }
-                }
+                    EngineChange::None
+                } else {
+                    EngineChange::Failed(on)
+                };
             }
             // A failure is tried again at the next start.
             Event::LoginItem(registered) => {
@@ -290,14 +266,10 @@ impl App {
             Event::Menu(action) => match action {
                 MenuAction::Install => self.install(effects),
                 MenuAction::SignIn => self.show(Some(self.view_of(Screen::SignIn)), effects),
-                MenuAction::ClaudeOn => self.show(Some(self.view_of(Screen::Claude)), effects),
-                MenuAction::ClaudeOff => {
-                    self.set_claude(false, effects);
+                MenuAction::ClaudeOn | MenuAction::ClaudeOff => {
+                    self.set_claude(action == MenuAction::ClaudeOn, effects)
                 }
-                MenuAction::CodexOn => self.show(Some(self.view_of(Screen::Codex)), effects),
-                MenuAction::CodexOff => {
-                    self.set_codex(false, effects);
-                }
+                MenuAction::CodexOn | MenuAction::CodexOff => self.set_codex(action == MenuAction::CodexOn, effects),
                 MenuAction::SoundOn | MenuAction::SoundOff => {
                     effects.push(Effect::SetSound(action == MenuAction::SoundOn));
                     // A native check item flips its own check when clicked: the menu drawn again puts it back
@@ -312,6 +284,7 @@ impl App {
                 }
                 MenuAction::Update => effects.push(Effect::OpenUrl(DEVICE_PAGE.into())),
                 MenuAction::OpenHarness => effects.push(Effect::OpenDesktop),
+                MenuAction::About => effects.push(Effect::ShowAbout(about_credits(&self.state))),
                 MenuAction::Quit => {
                     self.stop_watch(effects);
                     effects.push(Effect::Quit);
@@ -320,15 +293,8 @@ impl App {
             Event::Act(action) => self.act(action, effects),
             // Decision 2: closing answers an offer, and never stops what runs.
             Event::WindowClosed => {
-                match self.window.as_ref().map(|shown| (shown.screen, shown.phase)) {
-                    Some((Screen::SignIn, _)) => self.remember(|saved| saved.asked_sign_in = true, effects),
-                    Some((Screen::Claude, Phase::Offer | Phase::Failed)) => {
-                        self.remember(|saved| saved.asked_claude = true, effects)
-                    }
-                    Some((Screen::Codex, Phase::Offer | Phase::Failed)) => {
-                        self.remember(|saved| saved.asked_codex = true, effects)
-                    }
-                    _ => {}
+                if self.showing(Screen::SignIn) {
+                    self.remember(|saved| saved.asked_sign_in = true, effects);
                 }
                 self.show(None, effects);
             }
@@ -395,8 +361,8 @@ impl App {
     /// waits for them too; a check does not, as the first launch's window is open right after the CLI install.
     fn relaunch_waits(&self) -> bool {
         self.running()
-            || self.setting.is_some()
-            || self.codex_setting.is_some()
+            || matches!(self.state.claude_change, EngineChange::Running(_))
+            || matches!(self.state.codex_change, EngineChange::Running(_))
             || self.keep.starting()
             || self.window.is_some()
     }
@@ -420,24 +386,6 @@ impl App {
                 self.login = None;
                 effects.push(Effect::CancelLogin);
                 self.show(Some(screen_at(Screen::SignIn, Phase::Offer, Vec::new())), effects);
-            }
-            (Screen::Claude, Phase::Offer, Action::TurnOn) | (Screen::Claude, Phase::Failed, Action::Retry) => {
-                if self.set_claude(true, effects) {
-                    self.show(Some(screen_at(Screen::Claude, Phase::Working, Vec::new())), effects);
-                }
-            }
-            (Screen::Claude, Phase::Offer, Action::NotNow) => {
-                self.remember(|saved| saved.asked_claude = true, effects);
-                self.next(effects);
-            }
-            (Screen::Codex, Phase::Offer, Action::TurnOn) | (Screen::Codex, Phase::Failed, Action::Retry) => {
-                if self.set_codex(true, effects) {
-                    self.show(Some(screen_at(Screen::Codex, Phase::Working, Vec::new())), effects);
-                }
-            }
-            (Screen::Codex, Phase::Offer, Action::NotNow) => {
-                self.remember(|saved| saved.asked_codex = true, effects);
-                self.next(effects);
             }
             _ => {}
         }
@@ -488,7 +436,7 @@ impl App {
         self.state.cli = CliState::Found;
         self.remember(|saved| saved.cli_seen = true, effects);
         self.keep = KeepAlive::new();
-        self.first_answers = Some((false, false, false));
+        self.awaiting_account = true;
         self.read(effects);
     }
 
@@ -513,37 +461,34 @@ impl App {
     }
 
     fn read(&mut self, effects: &mut Vec<Effect>) {
-        effects.extend([Effect::ReadAuth, Effect::ReadClaude, Effect::ReadCodex]);
+        effects.extend([Effect::ReadAuth, Effect::ReadClaude, Effect::ReadCodex, Effect::ReadVersion]);
         self.last_read = self.now;
     }
 
-    /// One change at a time: a click while one runs does nothing.
-    fn set_claude(&mut self, on: bool, effects: &mut Vec<Effect>) -> bool {
-        if self.setting.is_some() {
-            return false;
-        }
-        self.setting = Some(on);
-        effects.push(Effect::SetClaude(on));
-        true
-    }
-
-    /// As Claude Code's, with a change of its own.
-    fn set_codex(&mut self, on: bool, effects: &mut Vec<Effect>) -> bool {
-        if self.codex_setting.is_some() {
-            return false;
-        }
-        self.codex_setting = Some(on);
-        effects.push(Effect::SetCodex(on));
-        true
-    }
-
-    /// Once the account, Claude Code and Codex have all answered, the window shows the screen that is due. A window
-    /// that shows another screen keeps it; the Install screen gives way, as its install has finished.
-    fn first_screen(&mut self, effects: &mut Vec<Effect>) {
-        if self.first_answers != Some((true, true, true)) {
+    /// One change at a time: a click while one runs does nothing. A new change clears a failed one's row.
+    fn set_claude(&mut self, on: bool, effects: &mut Vec<Effect>) {
+        if matches!(self.state.claude_change, EngineChange::Running(_)) {
             return;
         }
-        self.first_answers = None;
+        self.state.claude_change = EngineChange::Running(on);
+        effects.push(Effect::SetClaude(on));
+    }
+
+    /// As Claude Code's, with a change of its own, so each may run beside the other.
+    fn set_codex(&mut self, on: bool, effects: &mut Vec<Effect>) {
+        if matches!(self.state.codex_change, EngineChange::Running(_)) {
+            return;
+        }
+        self.state.codex_change = EngineChange::Running(on);
+        effects.push(Effect::SetCodex(on));
+    }
+
+    /// At the account's first answer, the window shows the screen that is due. A window that shows another screen keeps
+    /// it; the Install screen gives way, as its install has finished.
+    fn first_screen(&mut self, effects: &mut Vec<Effect>) {
+        if !std::mem::take(&mut self.awaiting_account) {
+            return;
+        }
         if self.window.as_ref().is_some_and(|shown| shown.screen != Screen::Install) {
             return;
         }
@@ -564,10 +509,6 @@ impl App {
         match screen {
             Screen::Install => screen_at(screen, Phase::Working, Vec::new()),
             Screen::SignIn => self.login.clone().unwrap_or_else(|| screen_at(screen, Phase::Offer, Vec::new())),
-            Screen::Claude if self.setting == Some(true) => screen_at(screen, Phase::Working, Vec::new()),
-            Screen::Claude => screen_at(screen, Phase::Offer, Vec::new()),
-            Screen::Codex if self.codex_setting == Some(true) => screen_at(screen, Phase::Working, Vec::new()),
-            Screen::Codex => screen_at(screen, Phase::Offer, Vec::new()),
         }
     }
 
@@ -627,14 +568,7 @@ mod tests {
     const H6: u64 = 21_600;
 
     /// A CLI seen before and a login item registered: only what each test does is saved.
-    const SEEN: Saved = Saved {
-        version: 1,
-        cli_seen: true,
-        asked_sign_in: false,
-        asked_claude: false,
-        asked_codex: false,
-        login_item: true,
-    };
+    const SEEN: Saved = Saved { version: 1, cli_seen: true, asked_sign_in: false, login_item: true };
 
     fn found() -> App {
         App::new(SEEN, true, false, B).0
@@ -759,22 +693,6 @@ mod tests {
         app
     }
 
-    /// Found, signed in, Claude Code off: the window offers Claude Code.
-    fn on_claude() -> App {
-        let mut app = found();
-        answer(&mut app, true, claude(false));
-        assert_eq!(app.view(), shown(Screen::Claude, Phase::Offer, &[]));
-        app
-    }
-
-    /// Found, signed in, Claude Code on, Codex off: the window offers Codex.
-    fn on_codex() -> App {
-        let mut app = found();
-        answer_all(&mut app, true, claude(true), codex(false));
-        assert_eq!(app.view(), shown(Screen::Codex, Phase::Offer, &[]));
-        app
-    }
-
     #[test]
     fn a_found_cli_is_watched_and_read() {
         let (app, effects) = App::new(Saved::default(), true, false, B);
@@ -784,6 +702,7 @@ mod tests {
             Effect::ReadAuth,
             Effect::ReadClaude,
             Effect::ReadCodex,
+            Effect::ReadVersion,
             Effect::Save(seen),
             Effect::RegisterLoginItem,
         ];
@@ -812,14 +731,14 @@ mod tests {
     fn a_cli_that_was_seen_and_is_gone_is_never_reinstalled() {
         let (app, effects) = App::new(SEEN, false, false, B);
         assert!(effects.iter().all(|effect| matches!(effect, Effect::Menu(_) | Effect::Log(_))), "{effects:?}");
-        assert_eq!(rows(&effects), ["Harness removed", "Install", "Quit"]);
+        assert_eq!(rows(&effects), ["Harness removed", "Install", "About", "Quit"]);
         assert_eq!(app.view(), None);
 
         let mut app = found();
         let effects = app.handle(Event::Cli(false));
         assert!(has(&effects, &Effect::StopWatch));
         assert!(!has(&effects, &Effect::RunInstall));
-        assert_eq!(rows(&effects), ["Harness removed", "Install", "Quit"]);
+        assert_eq!(rows(&effects), ["Harness removed", "Install", "About", "Quit"]);
     }
 
     #[test]
@@ -829,7 +748,7 @@ mod tests {
         let effects = app.handle(Event::Cli(false));
         assert!(has(&effects, &Effect::StopWatch));
         assert_eq!(shows(&effects), [None]);
-        assert_eq!(rows(&effects), ["Harness removed", "Install", "Quit"]);
+        assert_eq!(rows(&effects), ["Harness removed", "Install", "About", "Quit"]);
 
         // The sign-in it was running is gone with it: a CLI that comes back can sign in again.
         app.handle(Event::Cli(true));
@@ -841,10 +760,19 @@ mod tests {
         answer_all(&mut app, true, claude(true), codex(true));
         app.handle(Event::Menu(MenuAction::CodexOff));
         let effects = app.handle(Event::Cli(false));
-        assert_eq!(rows(&effects), ["Harness removed", "Install", "Quit"]);
+        assert_eq!(rows(&effects), ["Harness removed", "Install", "About", "Quit"]);
         app.handle(Event::Cli(true));
         answer_all(&mut app, true, claude(true), codex(true));
-        assert_eq!(app.handle(Event::Menu(MenuAction::CodexOff)), [Effect::SetCodex(false)]);
+        assert!(has(&app.handle(Event::Menu(MenuAction::CodexOff)), &Effect::SetCodex(false)));
+
+        // A failed change goes with it too: its row does not come back with the CLI.
+        let mut app = found();
+        answer(&mut app, true, claude(true));
+        app.handle(Event::Menu(MenuAction::ClaudeOff));
+        app.handle(Event::ClaudeSet(false));
+        app.handle(Event::Cli(false));
+        app.handle(Event::Cli(true));
+        assert_eq!(rows(&answer(&mut app, true, claude(true)))[2..4], ["Claude Code: On", "Turn off"]);
     }
 
     #[test]
@@ -854,7 +782,7 @@ mod tests {
         effects.extend(app.handle(Event::Auth(Some(true))));
         effects.extend(app.handle(Event::Claude(claude(true))));
         effects.extend(app.handle(Event::Codex(codex(true))));
-        assert_eq!(rows(&effects), ["Harness removed", "Install", "Quit"]);
+        assert_eq!(rows(&effects), ["Harness removed", "Install", "About", "Quit"]);
     }
 
     #[test]
@@ -922,22 +850,42 @@ mod tests {
     }
 
     #[test]
-    fn the_first_screen_waits_for_all_three_answers() {
+    fn the_first_screen_waits_for_the_account_alone() {
+        // Claude Code and Codex choose no screen.
         let mut app = found();
-        assert!(shows(&app.handle(Event::Auth(Some(false)))).is_empty());
         assert!(shows(&app.handle(Event::Claude(claude(false)))).is_empty());
-        // A None answer counts: a CLI without Codex's command answers so.
-        assert_eq!(shows(&app.handle(Event::Codex(None))), [shown(Screen::SignIn, Phase::Offer, &[])]);
-
-        // In any order.
-        let mut app = found();
         assert!(shows(&app.handle(Event::Codex(codex(false)))).is_empty());
-        assert!(shows(&app.handle(Event::Claude(claude(true)))).is_empty());
-        assert_eq!(shows(&app.handle(Event::Auth(Some(true)))), [shown(Screen::Codex, Phase::Offer, &[])]);
+        assert_eq!(shows(&app.handle(Event::Auth(Some(false)))), [shown(Screen::SignIn, Phase::Offer, &[])]);
 
-        let asked = Saved { asked_sign_in: true, asked_claude: true, asked_codex: true, ..SEEN };
+        // The account's answer does, before they answer, and once.
+        let mut app = found();
+        assert_eq!(shows(&app.handle(Event::Auth(Some(false)))), [shown(Screen::SignIn, Phase::Offer, &[])]);
+        assert!(shows(&app.handle(Event::Claude(claude(false)))).is_empty());
+        assert!(shows(&app.handle(Event::Codex(codex(false)))).is_empty());
+
+        // The Install screen gives way at it.
+        let mut app = fresh();
+        app.handle(Event::InstallDone(Ok(())));
+        assert_eq!(shows(&app.handle(Event::Auth(Some(true)))), [None]);
+
+        let asked = Saved { asked_sign_in: true, ..SEEN };
         let mut app = App::new(asked, true, false, B).0;
         assert!(shows(&answer_all(&mut app, false, claude(false), codex(false))).is_empty());
+        assert_eq!(app.view(), None);
+    }
+
+    #[test]
+    fn no_offer_screen_at_first_run() {
+        let mut app = found();
+        let effects = answer_all(&mut app, true, claude(false), codex(false));
+        assert!(shows(&effects).is_empty());
+        assert_eq!(app.view(), None);
+        assert_eq!(rows(&effects)[2..6], ["Claude Code: Off", "Turn on", "Codex: Off", "Turn on"]);
+
+        // After the CLI's install too: the Install screen closes.
+        let mut app = fresh();
+        app.handle(Event::InstallDone(Ok(())));
+        assert_eq!(shows(&answer_all(&mut app, true, claude(false), codex(false))), [None]);
         assert_eq!(app.view(), None);
     }
 
@@ -960,13 +908,8 @@ mod tests {
         assert!(has(&effects, &Effect::Save(Saved { asked_sign_in: true, ..SEEN })));
         assert!(has(&effects, &Effect::ReadAuth));
         assert!(rows(&effects).contains(&"Signed in".to_string()));
-        assert_eq!(shows(&effects), [shown(Screen::Claude, Phase::Offer, &[])]);
-
-        // Nothing due after it: the window closes.
-        let mut app = found();
-        answer(&mut app, false, None);
-        app.handle(Event::Act(Action::SignIn));
-        assert_eq!(shows(&app.handle(login(LoginEvent::Done(Ok(()))))), [None]);
+        // Nothing is due after it, Claude Code off or not: the window closes.
+        assert_eq!(shows(&effects), [None]);
     }
 
     #[test]
@@ -999,7 +942,7 @@ mod tests {
         assert!(has(&effects, &Effect::ReadAuth));
         assert!(has(&effects, &Effect::Save(Saved { asked_sign_in: true, ..SEEN })));
         assert!(rows(&effects).contains(&"Signed in".to_string()));
-        assert_eq!(shows(&effects), [shown(Screen::Claude, Phase::Offer, &[])]);
+        assert_eq!(shows(&effects), [None]);
 
         // One that went with its CLI signed in no CLI that is here.
         let mut app = on_sign_in();
@@ -1009,115 +952,145 @@ mod tests {
     }
 
     #[test]
-    fn later_and_not_now_are_remembered() {
+    fn later_is_remembered() {
         let mut app = found();
         answer_all(&mut app, false, claude(false), codex(false));
         let later = Saved { asked_sign_in: true, ..SEEN };
         let effects = app.handle(Event::Act(Action::Later));
         assert!(has(&effects, &Effect::Save(later)));
-        assert_eq!(shows(&effects), [shown(Screen::Claude, Phase::Offer, &[])]);
-
-        let both = Saved { asked_claude: true, ..later };
-        let effects = app.handle(Event::Act(Action::NotNow));
-        assert!(has(&effects, &Effect::Save(both)));
-        assert_eq!(shows(&effects), [shown(Screen::Codex, Phase::Offer, &[])]);
-
-        let all = Saved { asked_codex: true, ..both };
-        let effects = app.handle(Event::Act(Action::NotNow));
-        assert!(has(&effects, &Effect::Save(all)));
         assert_eq!(shows(&effects), [None]);
 
-        let mut app = App::new(all, true, false, B).0;
+        let mut app = App::new(later, true, false, B).0;
         assert!(shows(&answer_all(&mut app, false, claude(false), codex(false))).is_empty());
     }
 
     #[test]
-    fn claude_turns_on_from_the_window() {
-        let mut app = on_claude();
-        let effects = app.handle(Event::Act(Action::TurnOn));
+    fn turn_on_in_the_menu_runs_enable_with_no_window() {
+        let mut app = found();
+        answer_all(&mut app, true, claude(false), codex(false));
+        let effects = app.handle(Event::Menu(MenuAction::ClaudeOn));
         assert!(has(&effects, &Effect::SetClaude(true)));
-        assert_eq!(shows(&effects), [shown(Screen::Claude, Phase::Working, &[])]);
-        let effects = app.handle(Event::ClaudeSet(Ok(())));
+        assert!(shows(&effects).is_empty());
+        assert_eq!(rows(&effects)[2..4], ["Claude Code: Turning on…", "Codex: Off"]);
+        let effects = app.handle(Event::ClaudeSet(true));
         assert!(has(&effects, &Effect::ReadClaude));
-        assert!(has(&effects, &Effect::Save(Saved { asked_claude: true, ..SEEN })));
-        assert_eq!(shows(&effects), [None]);
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_) | Effect::Show(_))), "{effects:?}");
+        assert_eq!(rows(&effects)[2..4], ["Claude Code: On", "Turn off"]);
+        assert!(app.handle(Event::Claude(claude(true))).is_empty());
 
-        let mut app = on_claude();
-        app.handle(Event::Act(Action::TurnOn));
-        let effects = app.handle(Event::ClaudeSet(Err("x".into())));
-        assert_eq!(shows(&effects), [shown(Screen::Claude, Phase::Failed, &["x"])]);
-        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_))));
-        assert!(has(&app.handle(Event::Act(Action::Retry)), &Effect::SetClaude(true)));
+        let effects = app.handle(Event::Menu(MenuAction::CodexOn));
+        assert!(has(&effects, &Effect::SetCodex(true)));
+        assert!(shows(&effects).is_empty());
+        assert_eq!(rows(&effects)[4..6], ["Codex: Turning on…", "About"]);
+        let effects = app.handle(Event::CodexSet(true));
+        assert!(has(&effects, &Effect::ReadCodex));
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_) | Effect::Show(_))), "{effects:?}");
+        assert_eq!(rows(&effects)[4..6], ["Codex: On", "Turn off"]);
+        assert!(app.handle(Event::Codex(codex(true))).is_empty());
+        assert_eq!(app.view(), None);
+    }
+
+    #[test]
+    fn a_failed_enable_shows_the_rows_error_and_no_window() {
+        let mut app = found();
+        answer_all(&mut app, true, claude(false), codex(false));
+        app.handle(Event::Menu(MenuAction::ClaudeOn));
+        let effects = app.handle(Event::ClaudeSet(false));
+        assert!(has(&effects, &Effect::ReadClaude));
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_) | Effect::Show(_))), "{effects:?}");
+        assert_eq!(rows(&effects)[2..4], ["Claude Code: Could not turn on", "Turn on"]);
+        // Its Turn on tries again.
+        assert!(has(&app.handle(Event::Menu(MenuAction::ClaudeOn)), &Effect::SetClaude(true)));
+
+        let mut app = found();
+        answer_all(&mut app, true, claude(true), codex(false));
+        app.handle(Event::Menu(MenuAction::CodexOn));
+        let effects = app.handle(Event::CodexSet(false));
+        assert!(has(&effects, &Effect::ReadCodex));
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_) | Effect::Show(_))), "{effects:?}");
+        assert_eq!(rows(&effects)[4..6], ["Codex: Could not turn on", "Turn on"]);
+        assert!(has(&app.handle(Event::Menu(MenuAction::CodexOn)), &Effect::SetCodex(true)));
+        assert_eq!(app.view(), None);
     }
 
     #[test]
     fn claude_turns_off_from_the_menu() {
         let mut app = found();
         answer(&mut app, true, claude(true));
-        assert_eq!(app.handle(Event::Menu(MenuAction::ClaudeOff)), [Effect::SetClaude(false)]);
-        assert_eq!(app.handle(Event::ClaudeSet(Ok(()))), [Effect::ReadClaude]);
-        let effects = app.handle(Event::Claude(claude(false)));
-        assert_eq!(rows(&effects)[2..4], ["Claude Code: Off", "Turn on…"]);
+        assert!(has(&app.handle(Event::Menu(MenuAction::ClaudeOff)), &Effect::SetClaude(false)));
+        let effects = app.handle(Event::ClaudeSet(true));
+        assert!(has(&effects, &Effect::ReadClaude));
+        assert_eq!(rows(&effects)[2..4], ["Claude Code: Off", "Turn on"]);
         assert!(shows(&effects).is_empty());
-
-        // A failed turn-off changes nothing: the runner logged it.
-        let mut app = found();
-        answer(&mut app, true, claude(true));
-        app.handle(Event::Menu(MenuAction::ClaudeOff));
-        assert!(app.handle(Event::ClaudeSet(Err("x".into()))).is_empty());
-    }
-
-    #[test]
-    fn codex_turns_on_from_the_window() {
-        let mut app = on_codex();
-        let effects = app.handle(Event::Act(Action::TurnOn));
-        assert!(has(&effects, &Effect::SetCodex(true)));
-        assert_eq!(shows(&effects), [shown(Screen::Codex, Phase::Working, &[])]);
-        let effects = app.handle(Event::CodexSet(Ok(())));
-        assert!(has(&effects, &Effect::ReadCodex));
-        assert!(has(&effects, &Effect::Save(Saved { asked_codex: true, ..SEEN })));
-        assert_eq!(shows(&effects), [None]);
-
-        let mut app = on_codex();
-        app.handle(Event::Act(Action::TurnOn));
-        let effects = app.handle(Event::CodexSet(Err("x".into())));
-        assert_eq!(shows(&effects), [shown(Screen::Codex, Phase::Failed, &["x"])]);
-        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_))));
-        let effects = app.handle(Event::Act(Action::Retry));
-        assert!(has(&effects, &Effect::SetCodex(true)));
-        assert_eq!(shows(&effects), [shown(Screen::Codex, Phase::Working, &[])]);
-
-        // The menu's Turn on… opens the offer, asked or not.
-        let asked = Saved { asked_codex: true, ..SEEN };
-        let mut app = App::new(asked, true, false, B).0;
-        answer_all(&mut app, true, claude(true), codex(false));
-        assert_eq!(app.view(), None);
-        assert_eq!(shows(&app.handle(Event::Menu(MenuAction::CodexOn))), [shown(Screen::Codex, Phase::Offer, &[])]);
     }
 
     #[test]
     fn codex_turns_off_from_the_menu() {
         let mut app = found();
         answer_all(&mut app, true, claude(true), codex(true));
-        assert_eq!(app.handle(Event::Menu(MenuAction::CodexOff)), [Effect::SetCodex(false)]);
+        assert!(has(&app.handle(Event::Menu(MenuAction::CodexOff)), &Effect::SetCodex(false)));
         assert!(app.handle(Event::Menu(MenuAction::CodexOff)).is_empty());
-        assert_eq!(app.handle(Event::CodexSet(Ok(()))), [Effect::ReadCodex]);
-        let effects = app.handle(Event::Codex(codex(false)));
-        assert_eq!(rows(&effects)[4..6], ["Codex: Off", "Turn on…"]);
+        let effects = app.handle(Event::CodexSet(true));
+        assert!(has(&effects, &Effect::ReadCodex));
+        assert_eq!(rows(&effects)[4..6], ["Codex: Off", "Turn on"]);
         assert!(shows(&effects).is_empty());
-
-        // A failed turn-off changes nothing: the runner logged it.
-        let mut app = found();
-        answer_all(&mut app, true, claude(true), codex(true));
-        app.handle(Event::Menu(MenuAction::CodexOff));
-        assert!(app.handle(Event::CodexSet(Err("x".into()))).is_empty());
 
         // Apart from Claude Code's: one change of each runs at once.
         let mut app = found();
         answer_all(&mut app, true, claude(true), codex(true));
         let mut effects = app.handle(Event::Menu(MenuAction::ClaudeOff));
         effects.extend(app.handle(Event::Menu(MenuAction::CodexOff)));
-        assert_eq!(effects, [Effect::SetClaude(false), Effect::SetCodex(false)]);
+        let sets: Vec<&Effect> =
+            effects.iter().filter(|effect| matches!(effect, Effect::SetClaude(_) | Effect::SetCodex(_))).collect();
+        assert_eq!(sets, [&Effect::SetClaude(false), &Effect::SetCodex(false)]);
+    }
+
+    #[test]
+    fn a_change_shows_in_the_menu_until_it_ends() {
+        let mut app = found();
+        answer_all(&mut app, true, claude(true), codex(true));
+        let effects = app.handle(Event::Menu(MenuAction::ClaudeOff));
+        assert!(has(&effects, &Effect::SetClaude(false)));
+        assert_eq!(rows(&effects)[2..4], ["Claude Code: Turning off…", "Codex: On"]);
+        // A change that ended well shows at once, and stays when the status read after it fails.
+        let effects = app.handle(Event::ClaudeSet(true));
+        assert!(has(&effects, &Effect::ReadClaude));
+        assert_eq!(rows(&effects)[2..4], ["Claude Code: Off", "Turn on"]);
+        assert!(app.handle(Event::Claude(None)).is_empty());
+
+        let effects = app.handle(Event::Menu(MenuAction::CodexOff));
+        assert!(has(&effects, &Effect::SetCodex(false)));
+        assert_eq!(rows(&effects)[4..6], ["Codex: Turning off…", "About"]);
+        let effects = app.handle(Event::CodexSet(true));
+        assert!(has(&effects, &Effect::ReadCodex));
+        assert_eq!(rows(&effects)[4..6], ["Codex: Off", "Turn on"]);
+        assert!(app.handle(Event::Codex(None)).is_empty());
+    }
+
+    #[test]
+    fn a_failed_change_reads_again_and_shows_its_row() {
+        let mut app = found();
+        answer_all(&mut app, true, claude(true), codex(true));
+        app.handle(Event::Menu(MenuAction::ClaudeOff));
+        let effects = app.handle(Event::ClaudeSet(false));
+        assert!(has(&effects, &Effect::ReadClaude));
+        assert!(shows(&effects).is_empty());
+        assert_eq!(rows(&effects)[2..4], ["Claude Code: Could not turn off", "Turn off"]);
+        // The read keeps the row; the next click clears it.
+        assert!(app.handle(Event::Claude(claude(true))).is_empty());
+        let effects = app.handle(Event::Menu(MenuAction::ClaudeOff));
+        assert!(has(&effects, &Effect::SetClaude(false)));
+        assert_eq!(rows(&effects)[2], "Claude Code: Turning off…");
+
+        app.handle(Event::Menu(MenuAction::CodexOff));
+        let effects = app.handle(Event::CodexSet(false));
+        assert!(has(&effects, &Effect::ReadCodex));
+        assert!(shows(&effects).is_empty());
+        assert_eq!(rows(&effects)[3..5], ["Codex: Could not turn off", "Turn off"]);
+        assert!(app.handle(Event::Codex(codex(true))).is_empty());
+        let effects = app.handle(Event::Menu(MenuAction::CodexOff));
+        assert!(has(&effects, &Effect::SetCodex(false)));
+        assert_eq!(rows(&effects)[3], "Codex: Turning off…");
     }
 
     #[test]
@@ -1142,7 +1115,7 @@ mod tests {
     fn no_claude_row_or_screen_without_the_command() {
         let mut app = found();
         let effects = answer(&mut app, true, None);
-        assert_eq!(rows(&effects), ["Starting Harness", "Signed in", "Quit"]);
+        assert_eq!(rows(&effects), ["Starting Harness", "Signed in", "About", "Quit"]);
         assert!(shows(&effects).is_empty());
 
         let mut app = found();
@@ -1153,19 +1126,20 @@ mod tests {
     #[test]
     fn the_menu_reads_again_at_most_once_a_minute() {
         let reads = |effects: &[Effect]| {
-            (has(effects, &Effect::ReadAuth), has(effects, &Effect::ReadClaude), has(effects, &Effect::ReadCodex))
+            [Effect::ReadAuth, Effect::ReadClaude, Effect::ReadCodex, Effect::ReadVersion]
+                .map(|read| has(effects, &read))
         };
         let opened = |now: u64, desktop_installed: bool| Event::MenuOpened { now, desktop_installed };
         let mut app = found();
-        assert_eq!(reads(&app.handle(opened(B + 10, false))), (false, false, false));
-        assert_eq!(reads(&app.handle(opened(B + 60, false))), (true, true, true));
-        assert_eq!(reads(&app.handle(opened(B + 70, false))), (false, false, false));
+        assert_eq!(reads(&app.handle(opened(B + 10, false))), [false; 4]);
+        assert_eq!(reads(&app.handle(opened(B + 60, false))), [true; 4]);
+        assert_eq!(reads(&app.handle(opened(B + 70, false))), [false; 4]);
 
         let effects = app.handle(opened(B + 80, true));
-        assert_eq!(rows(&effects), ["Starting Harness", "Open Harness", "Quit"]);
-        assert_eq!(rows(&app.handle(opened(B + 90, false))), ["Starting Harness", "Quit"]);
+        assert_eq!(rows(&effects), ["Starting Harness", "Open Harness", "About", "Quit"]);
+        assert_eq!(rows(&app.handle(opened(B + 90, false))), ["Starting Harness", "About", "Quit"]);
 
-        assert_eq!(reads(&removed().handle(opened(B + 120, false))), (false, false, false));
+        assert_eq!(reads(&removed().handle(opened(B + 120, false))), [false; 4]);
     }
 
     #[test]
@@ -1251,7 +1225,7 @@ mod tests {
 
         let effects = app.handle(line(false));
         assert_eq!(checks(&effects), vec![on.clone()]);
-        assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Sound ✓ | Quit".into())));
+        assert!(has(&effects, &Effect::Log("menu: Dial connected | Sound ✓ | About | Quit".into())));
 
         // The click's own check flipped natively: the menu drawn again puts it back where the dial is.
         let effects = app.handle(Event::Menu(MenuAction::SoundOff));
@@ -1260,7 +1234,7 @@ mod tests {
 
         let effects = app.handle(line(true));
         assert_eq!(checks(&effects), [off]);
-        assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Sound | Quit".into())));
+        assert!(has(&effects, &Effect::Log("menu: Dial connected | Sound | About | Quit".into())));
 
         assert!(checks(&app.handle(Event::WatchExit(Some(3)))).is_empty());
     }
@@ -1309,7 +1283,7 @@ mod tests {
 
         let effects = app.handle(notifying(NotifyMode::Full));
         assert_eq!(submenus(&effects), [checked(true, false)]);
-        assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Notifications: All | Quit".into())));
+        assert!(has(&effects, &Effect::Log("menu: Dial connected | Notifications: All | About | Quit".into())));
 
         // The click's own check flipped natively: the menu drawn again puts it back where the watch says.
         let effects = app.handle(Event::Menu(MenuAction::NotifyYou));
@@ -1318,7 +1292,7 @@ mod tests {
 
         let effects = app.handle(notifying(NotifyMode::You));
         assert_eq!(submenus(&effects), [checked(false, true)]);
-        assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Notifications: Needs you | Quit".into())));
+        assert!(has(&effects, &Effect::Log("menu: Dial connected | Notifications: Needs you | About | Quit".into())));
 
         assert!(submenus(&app.handle(Event::WatchExit(Some(3)))).is_empty());
     }
@@ -1337,8 +1311,8 @@ mod tests {
             notify: None,
         };
         let effects = app.handle(Event::WatchLine(line.clone()));
-        assert_eq!(rows(&effects)[0], "Dial connected · 0.0.95");
-        assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Quit".into())));
+        assert_eq!(rows(&effects)[0], "Dial connected");
+        assert!(has(&effects, &Effect::Log("menu: Dial connected | About | Quit".into())));
         assert!(app.handle(Event::WatchLine(line)).is_empty());
 
         assert_eq!(rows(&app.handle(Event::WatchExit(Some(3))))[0], "Starting Harness");
@@ -1392,10 +1366,11 @@ mod tests {
         let mut app = removed();
         assert_eq!(app.handle(tick(B + 5)), [Effect::FindCli, Effect::CheckUpdate]);
         let effects = app.handle(Event::Cli(true));
-        for effect in [Effect::SpawnWatch, Effect::ReadAuth, Effect::ReadClaude, Effect::ReadCodex] {
+        let asked = [Effect::SpawnWatch, Effect::ReadAuth, Effect::ReadClaude, Effect::ReadCodex, Effect::ReadVersion];
+        for effect in asked {
             assert!(has(&effects, &effect), "{effect:?}");
         }
-        assert_eq!(rows(&effects), ["Starting Harness", "Quit"]);
+        assert_eq!(rows(&effects), ["Starting Harness", "About", "Quit"]);
 
         // An install under way is not looked past.
         assert!(!has(&fresh().handle(tick(B + 5)), &Effect::FindCli));
@@ -1411,9 +1386,10 @@ mod tests {
         assert_eq!(count(&effects, &Effect::RunLogin), 1);
         assert_eq!(app.view(), shown(Screen::SignIn, Phase::Working, &[]));
 
-        let mut app = on_claude();
-        let mut effects = app.handle(Event::Act(Action::TurnOn));
-        effects.extend(app.handle(Event::Act(Action::TurnOn)));
+        let mut app = found();
+        answer(&mut app, true, claude(false));
+        let mut effects = app.handle(Event::Menu(MenuAction::ClaudeOn));
+        effects.extend(app.handle(Event::Menu(MenuAction::ClaudeOn)));
         assert_eq!(count(&effects, &Effect::SetClaude(true)), 1);
 
         let mut app = removed();
@@ -1428,7 +1404,7 @@ mod tests {
         assert_eq!(count(&effects, &Effect::SetClaude(false)), 1);
 
         // A button the window does not show does nothing.
-        assert!(found().handle(Event::Act(Action::TurnOn)).is_empty());
+        assert!(found().handle(Event::Act(Action::SignIn)).is_empty());
     }
 
     #[test]
@@ -1436,24 +1412,6 @@ mod tests {
         let mut app = on_sign_in();
         let effects = app.handle(Event::WindowClosed);
         assert!(has(&effects, &Effect::Save(Saved { asked_sign_in: true, ..SEEN })));
-        assert_eq!(shows(&effects), [None]);
-
-        let mut app = on_claude();
-        let effects = app.handle(Event::WindowClosed);
-        assert!(has(&effects, &Effect::Save(Saved { asked_claude: true, ..SEEN })));
-        assert_eq!(shows(&effects), [None]);
-
-        let mut app = on_codex();
-        let effects = app.handle(Event::WindowClosed);
-        assert!(has(&effects, &Effect::Save(Saved { asked_codex: true, ..SEEN })));
-        assert_eq!(shows(&effects), [None]);
-
-        // On its failure too.
-        let mut app = on_codex();
-        app.handle(Event::Act(Action::TurnOn));
-        app.handle(Event::CodexSet(Err("x".into())));
-        let effects = app.handle(Event::WindowClosed);
-        assert!(has(&effects, &Effect::Save(Saved { asked_codex: true, ..SEEN })));
         assert_eq!(shows(&effects), [None]);
     }
 
@@ -1474,8 +1432,29 @@ mod tests {
         let mut app = fresh();
         assert_eq!(app.handle(Event::WindowClosed), [Effect::Show(None)]);
         let effects = app.handle(Event::InstallDone(Err(vec!["x".into()])));
-        assert_eq!(rows(&effects), ["Setting up Harness", "Install", "Quit"]);
+        assert_eq!(rows(&effects), ["Setting up Harness", "Install", "About", "Quit"]);
         assert!(shows(&effects).is_empty());
+    }
+
+    #[test]
+    fn about_shows_the_versions_it_knows() {
+        let about = |app: &mut App| app.handle(Event::Menu(MenuAction::About));
+        let mut app = found();
+        assert_eq!(about(&mut app), [Effect::ShowAbout(None)]);
+        assert!(app.handle(Event::CliVersion(Some("0.6.58".into()))).is_empty());
+        assert_eq!(about(&mut app), [Effect::ShowAbout(Some("Harness 0.6.58".into()))]);
+        app.handle(notifying(NotifyMode::Full));
+        assert_eq!(about(&mut app), [Effect::ShowAbout(Some("Dial 0.0.95 · Harness 0.6.58".into()))]);
+        // A read that failed keeps the last answer.
+        app.handle(Event::CliVersion(None));
+        assert_eq!(about(&mut app), [Effect::ShowAbout(Some("Dial 0.0.95 · Harness 0.6.58".into()))]);
+
+        // A CLI that went away takes its version with it, and its read that answers late is not heard.
+        let mut app = found();
+        app.handle(Event::CliVersion(Some("0.6.58".into())));
+        app.handle(Event::Cli(false));
+        app.handle(Event::CliVersion(Some("0.6.58".into())));
+        assert_eq!(about(&mut app), [Effect::ShowAbout(None)]);
     }
 
     #[test]
@@ -1551,9 +1530,8 @@ mod tests {
         assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::InstallUpdate));
         app.handle(Event::UpdateInstalled);
         assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
+        // Signed in, the window closes: nothing holds the relaunch any more.
         app.handle(login(LoginEvent::Done(Ok(()))));
-        // The window moved on to Claude Code, which holds the relaunch too.
-        app.handle(Event::WindowClosed);
         assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
     }
 
@@ -1571,7 +1549,7 @@ mod tests {
         app.handle(Event::Menu(MenuAction::ClaudeOff));
         installed(&mut app);
         assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
-        app.handle(Event::ClaudeSet(Ok(())));
+        app.handle(Event::ClaudeSet(true));
         assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
     }
 
@@ -1582,7 +1560,7 @@ mod tests {
         app.handle(Event::Menu(MenuAction::CodexOff));
         installed(&mut app);
         assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
-        app.handle(Event::CodexSet(Ok(())));
+        app.handle(Event::CodexSet(true));
         assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
     }
 
@@ -1602,7 +1580,7 @@ mod tests {
 
     #[test]
     fn an_open_window_delays_the_relaunch() {
-        let mut app = on_claude();
+        let mut app = on_sign_in();
         installed(&mut app);
         assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
         app.handle(Event::WindowClosed);
@@ -1611,7 +1589,7 @@ mod tests {
 
     #[test]
     fn an_install_waiting_to_relaunch_checks_no_more() {
-        let mut app = on_claude();
+        let mut app = on_sign_in();
         installed(&mut app);
         // The window stays open past six hours: this process is still the old version, and a check would find the
         // installed one again and install it a second time.

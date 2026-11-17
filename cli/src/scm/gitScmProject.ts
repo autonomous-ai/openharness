@@ -8,6 +8,7 @@
  * marker, the `branch.<name>.harness` mark and `git status --porcelain` all stay behind the wrapped
  * functions, which is the point — a caller of the seam cannot pick one of them up by accident.
  */
+import { gitLaunchContract } from './launch.js'
 import { agentProject, forgetAgentProject } from '../lib/agentProject.js'
 import { nameBranchAfterSession } from '../lib/branchNaming.js'
 import { prepareGitProject, readGitProject } from '../lib/gitProject.js'
@@ -48,8 +49,8 @@ export class GitScmProject implements ScmProject {
   }
 
   /** A worktree is a folder, and the folder is the row's `cwd`: nothing to re-apply. */
-  launchEnv(_record: ScmLaunchRecord): Record<string, string> {
-    return {}
+  launchEnv(record: ScmLaunchRecord): Record<string, string> {
+    return gitLaunchContract.launchEnv(record)
   }
 
   forget(cwd: string): void {

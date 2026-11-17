@@ -2,11 +2,12 @@
  * The agent cleanup in its own process, as the core sees it (services/agentCleanupProcess.ts; in the edge host by
  * default).
  *
- * The core tells the process what happens and goes on: a harness stopped (`service_event closed`), and the person
- * typing into a harness another agent started (`typed`), each held until the process hears it, as one it missed while
- * down would leave a harness open, or close one the person joined. `typed` comes with every keystroke a window sends:
- * it is said once a harness, and only for a harness another agent started, so the person's typing costs two map
- * lookups and never a frame to another process.
+ * The core tells the process what happens and goes on: the person typing into a harness another agent started
+ * (`typed`), held until the process hears it, as one it missed while down would close one the person joined. `typed`
+ * comes with every keystroke a window sends: it is said once a harness, and only for a harness another agent started,
+ * so the person's typing costs two map lookups and never a frame to another process. A harness stopped it hears as
+ * every service that follows agents does (core/agentLife.ts `stopped`), held for it the same way
+ * (harnessd/services.ts `hears`).
  *
  * One thing the core asks and waits for, for a bounded time: that what a harness being deleted was told is erased
  * (`forgetTold`). The agent ledger is the process's to read and lock, never the core's, and a delete whose erase is
@@ -33,7 +34,6 @@ export function createAgentCleanupLink(core: Pick<CoreApi, 'agents' | 'usage' | 
   /** The harnesses the process was told the person joined: it keeps them itself (services/agentCleanup.ts). */
   const told = new Set<string>()
   const port: AgentCleanupPort = {
-    closed: (agentId) => { notify({ type: 'service_event', payload: { kind: 'closed', agentId } }, { untilDelivered: true }) },
     typed: (id) => {
       const session = core.agents.resolve(id)
       if (session?.startedBy !== 'agent' || told.has(session.agentId)) return

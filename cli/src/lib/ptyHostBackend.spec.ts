@@ -81,6 +81,37 @@ async function ready(replies: Record<string, Reply> = {}, options: BackendOption
 const PANE: PtyRuntimeRef = { backend: 'ptyhost', instance: 'p1', paneId: '%1' }
 const UUID = /^[a-f0-9-]{36}$/
 
+describe('durable pane dispatch', () => {
+  it.each(['create', 'respawn'] as const)('%s waits for its journal and rechecks cancellation', async operation => {
+    const { backend, calls } = await ready({ create: { state: 'ok', value: { pane: '%2' } } })
+    let release!: () => void
+    const journal = new Promise<void>(resolve => { release = resolve })
+    let current = true
+    const control = { command: ['sh'], current: () => current, onDispatch: () => journal }
+    const dispatched = operation === 'create' ? backend.create(control) : backend.respawn(PANE, control)
+    const before = calls.filter(call => call.op === operation)
+    current = false
+    release()
+    const result = await dispatched
+    expect(before).toEqual([])
+    expect(result).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(calls.filter(call => call.op === operation)).toEqual([])
+    backend.dispose()
+  })
+
+  it.each(['create', 'respawn'] as const)('%s refuses a host lost while its journal settles', async operation => {
+    const { backend, calls } = await ready({ create: { state: 'ok', value: { pane: '%2' } } })
+    let release!: () => void
+    const journal = new Promise<void>(resolve => { release = resolve })
+    const control = { command: ['sh'], onDispatch: () => journal }
+    const dispatched = operation === 'create' ? backend.create(control) : backend.respawn(PANE, control)
+    backend.dispose()
+    release()
+    expect(await dispatched).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(calls.filter(call => call.op === operation)).toEqual([])
+  })
+})
+
 afterEach(() => {
   vi.useRealTimers()
   lookupPaneEngineProcess.mockReset()
@@ -404,6 +435,12 @@ describe('PtyHostBackend input', () => {
     const { backend, calls } = await ready()
     expect(await backend.pasteInput(PANE, 'a\nb')).toEqual({ state: 'succeeded', dispatch: 'executed' })
     expect(calls).toEqual([{ op: 'paste', pane: '%1', text: 'a\nb', bracketed: true }])
+  })
+
+  it('refuses a revoked key before writing to the PTY host', async () => {
+    const { backend, calls } = await ready()
+    expect(await backend.sendKey(PANE, 'enter', () => false)).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(calls).toEqual([])
   })
 
   it('sendKey sends the tmux name of the key', async () => {

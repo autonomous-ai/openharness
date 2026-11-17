@@ -215,7 +215,7 @@ export interface PurgeDeps {
   checkpoints: SessionCheckpointStore
   stop(id: string, options: StopAgentOptions): Promise<void>
   restarting(id: string): boolean
-  deleted(session: RegisteredSession): void
+  deleted(session: RegisteredSession): void | Promise<void>
   /** Erases what another process keeps of the harness (its told lines, which the agent cleanup holds), before anything
    *  of it is deleted here: that process may be down, and a delete refused for it after the conversation had gone left a
    *  harness with no conversation that would not delete (the review of 2026-11-13). Rejecting refuses the delete with
@@ -478,7 +478,7 @@ export class PurgeAgentService {
               if (!(error instanceof AgentCreationReceiptError)) throw error
               fail(`Harness could not erase this harness's saved launch request.${error.detail ? ` ${error.detail}` : ''} Try deleting it again.`)
             })
-            this.deps.deleted(saved)
+            await this.deps.deleted(saved)
             this.deps.stopped.remove(request.agentId)
             sessionDeleted = true
           }

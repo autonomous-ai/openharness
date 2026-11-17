@@ -41,8 +41,8 @@ describe('a registry no version can load', () => {
   it('with two rows claiming one agent: moved aside, and the registry starts empty and writable', async () => {
     const registry = await loadRegistry()
     registry.load()
-    registry.openProcessAgent({ agentId: 'a1', engine: 'claude', tmuxPane: '%1', processIdentity: processIdentity(101) })
-    registry.openProcessAgent({ agentId: 'a2', engine: 'claude', tmuxPane: '%2', processIdentity: processIdentity(102) })
+    ;(await registry.openProcessAgent({ agentId: 'a1', engine: 'claude', tmuxPane: '%1', processIdentity: processIdentity(101) }))
+    ;(await registry.openProcessAgent({ agentId: 'a2', engine: 'claude', tmuxPane: '%2', processIdentity: processIdentity(102) }))
     const file = join(dataDir, 'registry.json')
     const rows = JSON.parse(readFileSync(file, 'utf8')) as Array<Record<string, unknown>>
     rows[1] = { ...rows[1], agentId: rows[0].agentId }
@@ -55,7 +55,7 @@ describe('a registry no version can load', () => {
     const aside = readdirSync(dataDir).filter((name) => name.startsWith('registry.json.corrupt-'))
     expect(aside).toHaveLength(1)
     expect(readFileSync(join(dataDir, aside[0]), 'utf8')).toBe(duplicated)
-    again.openProcessAgent({ agentId: 'a3', engine: 'claude', tmuxPane: '%3', processIdentity: processIdentity(103) })
+    ;(await again.openProcessAgent({ agentId: 'a3', engine: 'claude', tmuxPane: '%3', processIdentity: processIdentity(103) }))
     expect(again.list().map((s) => s.agentId)).toEqual(['a3'])
   })
 
@@ -66,7 +66,7 @@ describe('a registry no version can load', () => {
     const registry = await loadRegistry()
     registry.load()
     expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry is not JSON \(.*\), and it could not be moved aside \(EXDEV: cross-device link not permitted\); refusing to overwrite it$/))
-    registry.openProcessAgent({ agentId: 'must-not-write', engine: 'claude', tmuxPane: '%9', processIdentity: processIdentity(109) })
+    ;(await registry.openProcessAgent({ agentId: 'must-not-write', engine: 'claude', tmuxPane: '%9', processIdentity: processIdentity(109) }))
     expect(readFileSync(file, 'utf8')).toBe('[{"agentId":')
     expect(readdirSync(dataDir).filter((name) => name.startsWith('registry.json.corrupt-'))).toEqual([])
   })

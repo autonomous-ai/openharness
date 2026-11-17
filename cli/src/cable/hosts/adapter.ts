@@ -54,8 +54,10 @@ export interface HostAdapter {
    *  source has one. */
   paneKey?(pane: Pane): string
   /** A tap's order with the app's own `open -b`: the pane first (Orca, WezTerm, herdr), the pane alone (the Claude
-   *  app's link brings the app itself), or the app first (a tab is selected once its app is in front). A pane that comes
-   *  after its app is raised only when it is the pane a rest would show, so an adapter with `tap: 'after'` needs `show`:
-   *  without it, its `focus` never runs from a tap. */
+   *  app's link brings the app itself, and Herdr's focus opens Herdr before it switches the window), or the app first
+   *  (a tab is selected once its app is in front). A pane that comes after its app is raised only when it is the pane a
+   *  rest would show, so an adapter with `tap: 'after'` needs `show`: without it, its `focus` never runs from a tap. */
   readonly tap: 'before' | 'instead' | 'after'
+  /** Its app's macOS bundle id, for a tap on a pane its caller placed an agent at whose hook never named its app. */
+  readonly bundle?: string
 }

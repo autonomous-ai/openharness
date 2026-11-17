@@ -68,8 +68,8 @@ it.each(['linux', 'darwin'])('preserves healthy native hook admission on %s', as
     const { readHookCredential } = await import('./lib/hookAuth.js')
     const agents = new Map<string, RegisteredSession>()
     for (const [index, engine] of (['claude', 'codex'] as const).entries()) {
-      const { entry } = registry.openProcessAgent({ engine, tmuxPane: `%${index + 1}`, cwd: root,
-        processIdentity: { pid: 4100 + index, startMarker: 'fixture-start', executable: `<${engine}>` } })!
+      const { entry } = (await registry.openProcessAgent({ engine, tmuxPane: `%${index + 1}`, cwd: root,
+        processIdentity: { pid: 4100 + index, startMarker: 'fixture-start', executable: `<${engine}>` } }))!
       agents.set(engine, entry); labels.set(entry.agentId, engine)
     }
     const registered: unknown[] = [], prompts: unknown[] = [], promptHooks: unknown[] = [], turns: unknown[] = [], ends: unknown[] = []

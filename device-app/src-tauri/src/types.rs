@@ -73,31 +73,20 @@ pub struct CodexStatus {
     pub enabled: bool,
 }
 
-/// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "askedClaude", "askedCodex", "loginItem" }`. Default:
-/// version 1, all false.
+/// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "loginItem" }`. Default: version 1, all false. The keys of
+/// the Claude Code and Codex offers an older app wrote are ignored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Saved {
     pub version: u32,
     pub cli_seen: bool,
     pub asked_sign_in: bool,
-    pub asked_claude: bool,
-    /// Absent from a file written before Codex was offered: that file's answers stand, and Codex is not yet asked.
-    #[serde(default)]
-    pub asked_codex: bool,
     pub login_item: bool,
 }
 
 impl Default for Saved {
     fn default() -> Self {
-        Saved {
-            version: 1,
-            cli_seen: false,
-            asked_sign_in: false,
-            asked_claude: false,
-            asked_codex: false,
-            login_item: false,
-        }
+        Saved { version: 1, cli_seen: false, asked_sign_in: false, login_item: false }
     }
 }
 
@@ -106,8 +95,6 @@ impl Default for Saved {
 pub enum Screen {
     Install,
     SignIn,
-    Claude,
-    Codex,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -127,7 +114,7 @@ pub struct View {
     pub lines: Vec<String>,
 }
 
-/// What the window may ask: `"retry" | "sign_in" | "later" | "cancel" | "turn_on" | "not_now"`. Anything else is refused.
+/// What the window may ask: `"retry" | "sign_in" | "later" | "cancel"`. Anything else is refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
@@ -135,8 +122,6 @@ pub enum Action {
     SignIn,
     Later,
     Cancel,
-    TurnOn,
-    NotNow,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -153,6 +138,7 @@ pub enum MenuAction {
     NotifyYou,
     Update,
     OpenHarness,
+    About,
     Quit,
 }
 
@@ -186,6 +172,15 @@ pub enum AppUpdate {
     Blocked(String),
 }
 
+/// A Claude Code or Codex change, as its menu rows show it. Running(true) turns on; Failed(true) was a turn-on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EngineChange {
+    #[default]
+    None,
+    Running(bool),
+    Failed(bool),
+}
+
 /// What the menu is drawn from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppState {
@@ -198,6 +193,10 @@ pub struct AppState {
     pub desktop_installed: bool,
     pub saved: Saved,
     pub app_update: AppUpdate,
+    pub claude_change: EngineChange,
+    pub codex_change: EngineChange,
+    /// What `harness --version` printed, for the About panel.
+    pub cli_version: Option<String>,
 }
 
 /// AuthorizeUrl holds an `https:` URL only (account.rs lets no other through).
@@ -208,7 +207,8 @@ pub enum LoginEvent {
     Done(Result<(), String>),
 }
 
-/// What happened. WatchExit(None): ended by a signal. UpdateChecked(Some): a strictly newer release.
+/// What happened. WatchExit(None): ended by a signal. UpdateChecked(Some): a strictly newer release. ClaudeSet and
+/// CodexSet: whether the change was made; the runner logged why not.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     Tick { now: u64, desktop_running: bool },
@@ -221,9 +221,10 @@ pub enum Event {
     Auth(Option<bool>),
     Claude(Option<ClaudeStatus>),
     Codex(Option<CodexStatus>),
+    CliVersion(Option<String>),
     Login(LoginEvent),
-    ClaudeSet(Result<(), String>),
-    CodexSet(Result<(), String>),
+    ClaudeSet(bool),
+    CodexSet(bool),
     LoginItem(bool),
     Menu(MenuAction),
     Act(Action),
@@ -233,7 +234,8 @@ pub enum Event {
     UpdateFailed(UpdateFailure),
 }
 
-/// What to do about it. Show(None) hides the window. Menu, Show, Quit and Relaunch are the binary's.
+/// What to do about it. Show(None) hides the window. ShowAbout: the About panel, with its credits line. Menu, Show,
+/// ShowAbout, Quit and Relaunch are the binary's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     FindCli,
@@ -244,6 +246,7 @@ pub enum Effect {
     ReadAuth,
     ReadClaude,
     ReadCodex,
+    ReadVersion,
     RunLogin,
     CancelLogin,
     SetClaude(bool),
@@ -260,6 +263,7 @@ pub enum Effect {
     InstallUpdate,
     Menu(Vec<MenuItem>),
     Show(Option<View>),
+    ShowAbout(Option<String>),
     Quit,
     Relaunch,
 }
@@ -385,37 +389,29 @@ mod tests {
             serde_json::to_value(view).unwrap(),
             json!({"screen":"sign_in","phase":"browser","lines":["Waiting"]})
         );
-        assert_eq!(serde_json::to_value(Screen::Codex).unwrap(), json!("codex"));
+        assert_eq!(serde_json::to_value(Screen::Install).unwrap(), json!("install"));
     }
 
     #[test]
-    fn the_window_may_ask_six_things() {
+    fn the_window_may_ask_four_things() {
         let asks = [
             ("retry", Action::Retry),
             ("sign_in", Action::SignIn),
             ("later", Action::Later),
             ("cancel", Action::Cancel),
-            ("turn_on", Action::TurnOn),
-            ("not_now", Action::NotNow),
         ];
         for (name, action) in asks {
             assert_eq!(serde_json::from_value::<Action>(json!(name)).unwrap(), action);
         }
-        for other in [json!("quit"), json!("sh -c x"), json!(1), Value::Null] {
+        // The offers of Claude Code and Codex are gone, and their buttons with them.
+        for other in [json!("turn_on"), json!("not_now"), json!("quit"), json!("sh -c x"), json!(1), Value::Null] {
             assert!(serde_json::from_value::<Action>(other.clone()).is_err(), "{other}");
         }
     }
 
     #[test]
     fn state_json_keys() {
-        let keys = json!({
-            "version": 1,
-            "cliSeen": false,
-            "askedSignIn": false,
-            "askedClaude": false,
-            "askedCodex": false,
-            "loginItem": false
-        });
+        let keys = json!({ "version": 1, "cliSeen": false, "askedSignIn": false, "loginItem": false });
         assert_eq!(serde_json::to_value(Saved::default()).unwrap(), keys);
         assert_eq!(serde_json::from_value::<Saved>(keys).unwrap(), Saved::default());
     }

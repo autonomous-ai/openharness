@@ -9,12 +9,13 @@ import type { HostAdapter, Pane, Place } from './adapter.js'
 import { createAppLink, type AppLinkDeps } from './appLink.js'
 import { CODEX_THREAD } from './codexQueue.js'
 import { APP_BUNDLES } from './hostDetect.js'
-import { OPEN } from './open.js'
+import { openPath } from './open.js'
 import { RUN_TIMEOUT_MS } from './orca.js'
 
 export function createCodexAppAdapter(
   deps: AppLinkDeps & { log(line: string): void },
 ): HostAdapter & Required<Pick<HostAdapter, 'canShow' | 'show'>> {
+  const openBin = openPath(deps.bin)
   return {
     id: 'codex',
     tap: 'instead',
@@ -31,7 +32,7 @@ export function createCodexAppAdapter(
       async forward() {
         // The line the opener writes for every pane's fallback: which app only, never the thread.
         deps.log('[device] open · codex · fallback')
-        return (await deps.run(OPEN, ['-b', APP_BUNDLES.codex], RUN_TIMEOUT_MS)).code === 0
+        return (await deps.run(openBin, ['-b', APP_BUNDLES.codex], RUN_TIMEOUT_MS)).code === 0
       },
     }),
   }

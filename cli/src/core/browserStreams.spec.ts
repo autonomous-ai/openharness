@@ -23,7 +23,7 @@ function setup(served = true) {
   let binaryOk = true
   const port = {
     // The agents' browsers, as their frames show them: a1's and a2's ready, one starting, one failed, and none else.
-    frameContext: vi.fn((agentId: string): AgentBrowserFrame | undefined => ({ a1: { state: 'ready' as const }, a2: { state: 'ready' as const }, starting: { state: 'starting' as const }, failed: { state: 'failed' as const, error: 'podman_old' } })[agentId]),
+    frame: vi.fn((agentId: string): AgentBrowserFrame | undefined => ({ a1: { state: 'ready' as const }, a2: { state: 'ready' as const }, starting: { state: 'starting' as const }, failed: { state: 'failed' as const, error: 'podman_old' } })[agentId]),
     stream: vi.fn((_connId: string, _type: string, _payload: Record<string, unknown>, _asker?: Asker) => true),
     streamInput: vi.fn((_streamId: string, _bytes: Uint8Array) => true),
     streamClosed: vi.fn(), streamRoute: vi.fn(), streamTransportError: vi.fn(), streamRefused: vi.fn(),
@@ -31,7 +31,7 @@ function setup(served = true) {
   const log = vi.fn()
   let current: typeof port | null = served ? port : null
   const streams = createBrowserStreams({
-    port: () => current,
+    port: () => current, frame: id => ({ browser: port.frame(id) }),
     asker: (connId) => ASKERS[connId] ?? { local: false, owner: false },
     send: (connId, type, payload) => { frames.push({ connId, type, payload }); return sendOk },
     sendBinary: (connId, frame) => { binary.push({ connId, frame }); return binaryOk },
@@ -476,7 +476,7 @@ describe('the core\'s own bounds on a browser stream', () => {
   it('logs to the console when it is given no log', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
-      const streams = createBrowserStreams({ port: () => null, asker: () => ({ local: true, owner: true }), send: () => true, sendBinary: () => true })
+      const streams = createBrowserStreams({ port: () => null, frame: () => ({}), asker: () => ({ local: true, owner: true }), send: () => true, sendBinary: () => true })
       streams.bytes(Uint8Array.of(1))
       expect(warn).toHaveBeenCalledOnce()
     } finally {

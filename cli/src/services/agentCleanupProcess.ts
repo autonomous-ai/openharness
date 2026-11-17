@@ -1,15 +1,18 @@
 /**
  * The agent cleanup in its own process (`harness __service agentCleanup`, in the edge host): the same cleanup as in
  * the core's process (services/agentCleanup.ts), on the live agents the core names as each look and each close of a
- * starter's harnesses begins (`service_query live`). The core tells it what happens (`service_event closed`, `typed`)
- * and never waits for it, but for one answer: that a harness being deleted has had what it was told erased
- * (`forgetTold`). It asks the core when a harness last moved (`lastActivity`) and to close one
- * (`closeStarted`), which the core does for a harness another agent started and nothing else (core/agentCleanupLink.ts).
+ * starter's harnesses begins (`service_query live`). The core tells it what happens and never waits for it: a stop, as
+ * every service that follows agents hears one (`service_event` kind `agent`, services/followLink.ts), held for it while
+ * this process is down, and the person typing into a harness another agent started (`typed`). One answer it waits for:
+ * that a harness being deleted has had what it was told erased (`forgetTold`). It asks the core when a harness last moved
+ * (`lastActivity`) and to close one (`closeStarted`), which the core does for a harness another agent started and
+ * nothing else (core/agentCleanupLink.ts).
  */
 import type { CoreApi, DaemonAddress } from '../core/api.js'
 import type { AgentCloseResult } from '../lib/closeAgentService.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { createAgentCleanup } from './agentCleanup.js'
+import { followLink, type FollowLink } from './followLink.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { agentsIn, daemonIn, processCoreApi } from './processCoreApi.js'
 import { removeSwarmLeftovers } from './swarmLeftovers.js'
@@ -25,14 +28,16 @@ export interface AgentCleanupServiceOptions {
   create?: typeof createAgentCleanup
 }
 
-/** The core API the cleanup runs on here: the light services' (processCoreApi.ts), with the two ways it acts. */
+/** The core API the cleanup runs on here: the light services' (processCoreApi.ts), with the two ways it acts, and what
+ *  it hears of agents ([follow], services/followLink.ts). */
 export function agentCleanupCoreApi(dataDir: string, live: () => RegisteredSession[], ask: (query: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>,
-  daemon: () => DaemonAddress | null): CoreApi {
+  daemon: () => DaemonAddress | null, follow?: FollowLink): CoreApi {
   const api = processCoreApi(dataDir, 'agentCleanup', { live, daemon, ask })
   return {
     ...api,
     agents: {
       ...api.agents,
+      ...(follow ? { follow: follow.follow } : {}),
       // Not answered (the core gone, a link that dropped) is not closed: asked again at the next look.
       closeStarted: async (agentId, mode, pastCeiling) =>
         await ask('closeStarted', { agentId, mode, ...(pastCeiling ? { pastCeiling } : {}) }).catch(() => ({ error: 'SERVICE_UNAVAILABLE' })) as AgentCloseResult,
@@ -51,7 +56,9 @@ export function runAgentCleanupService(options: AgentCleanupServiceOptions): Ser
   let daemon: DaemonAddress | null = null
   const ask = (query: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> =>
     core ? core.query(query, payload) : Promise.reject(new Error('no core to ask'))
-  const cleanup = (options.create ?? createAgentCleanup)(agentCleanupCoreApi(options.dataDir, () => agents, ask, () => daemon), {
+  // A stop, which the core holds for this service while its process is down (harnessd/services.ts `hears`).
+  const follow = followLink({ running: false })
+  const cleanup = (options.create ?? createAgentCleanup)(agentCleanupCoreApi(options.dataDir, () => agents, ask, () => daemon, follow), {
     // A core that cannot say leaves none: nothing is closed on a list that may be stale.
     refresh: async () => {
       agents = agentsIn(await ask('live', {}).catch(() => null)) ?? []
@@ -76,9 +83,12 @@ export function runAgentCleanupService(options: AgentCleanupServiceOptions): Ser
       },
     },
     onEvent: (payload) => {
+      if (follow.heard(payload)) return
       if (typeof payload.agentId !== 'string' || !payload.agentId) return
-      if (payload.kind === 'closed') cleanup.port.closed(payload.agentId)
-      else if (payload.kind === 'typed') cleanup.port.typed(payload.agentId)
+      if (payload.kind === 'typed') cleanup.port.typed(payload.agentId)
+      // A core from before stops were told as what happens to agents (2026-11-15) tells one so: what it started still
+      // closes with it. Delete on or after 2026-12-18.
+      else if (payload.kind === 'closed') follow.heard({ kind: 'agent', event: { kind: 'stopped', agentId: payload.agentId } })
     },
     onConnected: (connection) => { core = connection },
     onDisconnected: () => { core = null },

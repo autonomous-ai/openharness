@@ -8,7 +8,11 @@ import type { AgentEngine } from '../engines/types.js'
 
 vi.mock('node:child_process', () => {
   const forbidden = () => { throw Error('Host binaries are forbidden in the control transcript golden') }
-  return { exec: forbidden, execSync: forbidden, execFile: forbidden, execFileSync: forbidden,
+  return { exec: forbidden, execSync: forbidden,
+    execFile: (command: string, args: string[], _options: unknown, done: (error: null, value: string) => void) => {
+      if (command !== 'ps' || JSON.stringify(args) !== JSON.stringify(['-p', String(process.pid), '-o', 'lstart='])) forbidden()
+      done(null, 'fixture-start')
+    }, execFileSync: forbidden,
     spawn: forbidden, spawnSync: forbidden, fork: forbidden }
 })
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
@@ -38,6 +42,7 @@ it.each(['linux', 'darwin'])('keeps complete native capture and checkpoint behav
     if (!RECORD) expect({ key, value: captured[key] }).toEqual({ key, value: expected[key] })
   }
   const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+  let owned: typeof import('./registry.js')['registry'] | undefined
   try {
     Object.defineProperty(process, 'platform', { ...originalPlatform, value: platform })
     vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-10-10T08:00:00Z') })
@@ -66,12 +71,13 @@ it.each(['linux', 'darwin'])('keeps complete native capture and checkpoint behav
     symlinkSync(cases[1].file!, path('alias.jsonl'))
     vi.resetModules()
     const { registry } = await import('./registry.js')
+    owned = registry
     const { captureResumeIdentity } = await import('./captureResumeIdentity.js')
     const { SessionCheckpointStore } = await import('./sessionCheckpoint.js')
     let pane = 0
     for (const fixture of cases) {
-      const entry = registry.openPendingAgent({ engine: fixture.engine, cwd: root,
-        codexHome: fixture.profile, runtimes: [{ backend: 'tmux', paneId: `%${++pane}` }] })!
+      const entry = (await registry.openPendingAgent({ engine: fixture.engine, cwd: root,
+        codexHome: fixture.profile, runtimes: [{ backend: 'tmux', paneId: `%${++pane}` }] }))!
       Object.assign(entry, { sessionId: fixture.id ?? A, transcriptPath: fixture.file ?? null, source: 'fixture' })
       const found = await captureResumeIdentity(entry)
       check(`${fixture.name}:capture`, { engine: found.engine, sessionId: found.sessionId,
@@ -93,6 +99,7 @@ it.each(['linux', 'darwin'])('keeps complete native capture and checkpoint behav
     }
     ;(await import('./engineHomes.js')).resetEngineHomes()
   } finally {
+    await owned?.flush({ exiting: true }).catch(() => {})
     log.mockRestore(); vi.useRealTimers(); vi.unstubAllEnvs(); vi.resetModules()
     Object.defineProperty(process, 'platform', originalPlatform)
     rmSync(root, { recursive: true, force: true })

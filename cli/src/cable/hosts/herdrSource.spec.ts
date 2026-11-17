@@ -10,6 +10,9 @@ const KINDS = [{ type: 'pane.agent_detected' }, { type: 'pane.closed' }, { type:
 const statusEntry = (pane: string) => ({ type: 'pane.agent_status_changed', pane_id: pane })
 /** The wall clock the test starts at. */
 const WALL = 1_700_000_000_000
+/** The stamp (`<inode>:<ctime in ns>`) of a socket made at that wall clock time. A real socket of the fake's is made
+ *  after WALL, so it is never young. */
+const stampAt = (ms: number) => `7:${BigInt(ms) * 1_000_000n}`
 
 const agent = (pane: string, status = 'idle', more: Record<string, unknown> = {}) =>
   ({ pane_id: pane, agent: 'claude', agent_status: status, cwd: '/work/api', ...more })
@@ -20,7 +23,7 @@ const detected = (pane: string, more: Record<string, unknown> = {}) =>
   ({ agent: 'claude', pane_id: pane, type: 'pane_agent_detected', workspace_id: pane.split(':')[0], ...more })
 const refusal = (code: string) => ({ line: { error: { code, message: code } } })
 const method = (request: unknown) => (request as { method: string }).method
-const LOG_LINE = /^\[herdr\] (listed · \d+ agents|over · \d+ left out|list · [a-z_]+|closed · [a-z_]+|retry · \d+)$/
+const LOG_LINE = /^\[herdr\] (listed · \d+ agents|over · \d+ left out|list · [a-z_]+|closed · [a-z_]+|retry · \d+|socket · (none|stale|live))$/
 
 describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026-11-16-device-herdr.md)', () => {
   let server: FakeHerdr
@@ -119,6 +122,10 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
 
   const row = (s: Setup, pane: string): HostAgent | undefined => s.source.list().find((a) => a.paneKeys?.[0] === `herdr:${pane}`)
 
+  /** A source whose socket's stamp holds still: a server that died and left its socket, which the fake's own `stale()`
+   *  would give another stamp. */
+  const holding = (stamp: string) => setup({ client: { ...herdrClient(), socketStamp: () => stamp } })
+
   /** Once the n-th agent.list's answer has been read: the server's end of a connection closes only after the client read
    *  the line and closed its own. */
   async function listRead(n: number): Promise<void> {
@@ -142,15 +149,6 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     await s.until(() => row(s, pane)?.state === (next === 'working' ? 'working' : 'needs-you'))
   }
 
-  /** A stale socket: the seven retries, then the watch alone. */
-  async function giveUp(s: Setup): Promise<void> {
-    for (const seconds of [1, 2, 4, 8, 16, 32, 60]) {
-      await s.until(() => s.log.at(-1) === `[herdr] retry · ${seconds}`)
-      s.advance(seconds * 1000)
-    }
-    await s.until(() => s.watchers.size === 1)
-  }
-
   it('started with herdr running, its agents are listed with their fields', async () => {
     server.agents = [{ pane_id: 'w1:p1', agent: 'claude', agent_status: 'idle', cwd: '/work/api' }]
     const s = setup()
@@ -162,7 +160,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
       unseenDone: false, lastActivityAt: WALL, paneKeys: ['herdr:w1:p1'],
     }])
     expect(s.changes).toBe(1)
-    expect(s.log).toEqual(['[herdr] listed · 1 agents'])
+    expect(s.log).toEqual(['[herdr] socket · live', '[herdr] listed · 1 agents'])
     expect(s.source.capabilities()).toEqual({ status: true, voice: true, focus: true, answer: false })
   })
 
@@ -425,14 +423,14 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     s.source.start()
     await listRead(1)
     expect(s.source.list()).toHaveLength(64)
-    expect(s.log).toEqual(['[herdr] listed · 64 agents', '[herdr] over · 1 left out'])
+    expect(s.log).toEqual(['[herdr] socket · live', '[herdr] listed · 64 agents', '[herdr] over · 1 left out'])
     s.advance(1000)
     const second = await server.got('events.subscribe', 2)
     expect(second.request).toMatchObject({
       params: { subscriptions: [...KINDS, ...Array.from({ length: 64 }, (_, i) => statusEntry(`w${i + 1}:p1`))] },
     })
     await listRead(2)
-    expect(s.log).toEqual(['[herdr] listed · 64 agents', '[herdr] over · 1 left out', '[herdr] over · 1 left out'])
+    expect(s.log).toEqual(['[herdr] socket · live', '[herdr] listed · 64 agents', '[herdr] over · 1 left out', '[herdr] over · 1 left out'])
     server.event('pane_agent_detected', detected('w99:p1'))
     await heard(s, 'w1:p1')
     expect(s.timers).toEqual([])
@@ -604,7 +602,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
 
   it('a dropped subscription keeps its agents until the first retry; that retry failing empties the list', async () => {
     server.agents = [agent('w1:p1')]
-    const s = setup()
+    const s = holding(stampAt(WALL - 60_000))
     await live(s)
     server.drop()
     await s.until(() => s.log.at(-1) === '[herdr] retry · 1')
@@ -648,21 +646,139 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(row(s, 'w1:p1')!.id).not.toBe(was.id)
   })
 
-  it('a refused connection retries after 1, 2, 4, 8, 16, 32 and 60 s, then waits on the watch with no timer', async () => {
+  it('a stale socket is said once, and nothing retries', async () => {
     await server.stale()
+    const s = holding(stampAt(WALL - 60_000))
+    s.source.start()
+    await s.until(() => s.log.length > 0)
+    const still = () => {
+      expect(s.log).toEqual(['[herdr] socket · stale'])
+      expect(s.timers).toEqual([])
+      expect(server.connections).toBe(0)
+      expect(s.watchers.size).toBe(1)
+    }
+    still()
+    s.fire()
+    s.advance(120_000)
+    still()
+  })
+
+  it('a socket younger than 2 s that refuses is tried once more after 1 s, then is stale', async () => {
+    await server.stale()
+    const s = holding(stampAt(WALL - 500))
+    s.source.start()
+    await s.until(() => s.timers.length === 1)
+    expect(s.log).toEqual(['[herdr] retry · 1'])
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
+    s.advance(1000)
+    await s.until(() => s.watchers.size === 1)
+    expect(s.log).toEqual(['[herdr] retry · 1', '[herdr] socket · stale'])
+    expect(s.timers).toEqual([])
+  })
+
+  it('a young socket whose server listens by the retry is followed as any other', async () => {
+    server.agents = [agent('w1:p1')]
+    await server.stale()
+    const s = holding(stampAt(WALL - 500))
+    s.source.start()
+    await s.until(() => s.timers.length === 1)
+    await server.start()
+    s.advance(1000)
+    await s.until(() => s.source.list().length === 1)
+    expect(s.log).toEqual(['[herdr] retry · 1', '[herdr] socket · live', '[herdr] listed · 1 agents'])
+  })
+
+  it('a socket 2 s old, or with a ctime ahead of the clock, is stale at once', async () => {
+    await server.stale()
+    for (const stamp of [stampAt(WALL - 2_000), stampAt(WALL + 5_000)]) {
+      const s = holding(stamp)
+      s.source.start()
+      await s.until(() => s.log.length > 0)
+      expect(s.log, stamp).toEqual(['[herdr] socket · stale'])
+      expect(s.timers, stamp).toEqual([])
+      s.source.stop()
+    }
+  })
+
+  it('a socket gets its one young retry once, across a detach too', async () => {
+    await server.stale()
+    const s = holding(stampAt(WALL - 500))
+    // Refused: given up on, or retried.
+    const refused = () => s.until(() => s.watchers.size === 1 || s.timers.length > 0)
+    s.source.start()
+    await refused()
+    s.advance(1000)
+    await refused()
+    const said = [...s.log]
+    s.source.stop()
+    s.source.start()
+    s.advance(1000)
+    await refused()
+    expect(s.log).toEqual(said)
+    expect(s.timers).toEqual([])
+  })
+
+  it('a socket refused after a subscription started on it keeps the retries, then is stale, said once', async () => {
+    server.agents = [agent('w1:p1')]
+    // Young, which a subscription started on it overrules.
+    const s = holding(stampAt(WALL - 500))
+    await live(s)
+    const from = s.log.length
+    await server.stale()
+    for (const seconds of [1, 2, 4, 8, 16, 32, 60]) {
+      await s.until(() => s.log.at(-1) === `[herdr] retry · ${seconds}`)
+      s.advance(seconds * 1000)
+    }
+    await s.until(() => s.watchers.size === 1)
+    expect(s.log.slice(from)).toEqual([
+      '[herdr] closed · ended', '[herdr] retry · 1',
+      ...[2, 4, 8, 16, 32, 60].flatMap((seconds) => ['[herdr] closed · refused', `[herdr] retry · ${seconds}`]),
+      '[herdr] closed · refused', '[herdr] socket · stale',
+    ])
+    expect(s.timers).toEqual([])
+  })
+
+  it('the socket\'s word is said when it changes, never twice', async () => {
+    await server.stop()
     const s = setup()
     s.source.start()
-    await giveUp(s)
+    expect(s.log).toEqual(['[herdr] socket · none'])
+    s.source.stop()
+    s.source.start()
+    expect(s.log).toEqual(['[herdr] socket · none'])
+
+    server.agents = [agent('w1:p1')]
+    await server.start()
+    s.fire()
+    await listRead(1)
+    expect(s.log).toEqual(['[herdr] socket · none', '[herdr] socket · live', '[herdr] listed · 1 agents'])
+    server.drop()
+    await s.until(() => s.log.at(-1) === '[herdr] retry · 1')
+    s.advance(1000)
+    await listRead(2)
+    expect(s.log).toEqual(['[herdr] socket · none', '[herdr] socket · live', '[herdr] listed · 1 agents', '[herdr] closed · ended', '[herdr] retry · 1'])
+  })
+
+  it('a herdr that answers and never lists is given up on after the last retry, and is not called stale', async () => {
+    server.answer('agent.list', refusal('agent_not_found'))
+    const s = setup()
+    s.source.start()
+    for (const seconds of [1, 2, 4, 8, 16, 32, 60]) {
+      await s.until(() => s.log.at(-1) === `[herdr] retry · ${seconds}`)
+      s.advance(seconds * 1000)
+    }
+    await s.until(() => s.watchers.size === 1)
     expect(s.timers).toEqual([])
-    expect(s.log).toEqual([1, 2, 4, 8, 16, 32, 60].flatMap((seconds) => ['[herdr] closed · refused', `[herdr] retry · ${seconds}`])
-      .concat('[herdr] closed · refused'))
+    expect(s.log).toEqual(['[herdr] socket · live',
+      ...[1, 2, 4, 8, 16, 32, 60].flatMap((seconds) => ['[herdr] list · rejected', `[herdr] retry · ${seconds}`]), '[herdr] list · rejected'])
   })
 
   it('after giving up, a change beside the same stale socket connects nothing; a replaced socket connects at once', async () => {
     await server.stale()
     const s = setup()
     s.source.start()
-    await giveUp(s)
+    await s.until(() => s.log.length > 0)
+    expect(s.watchers.size).toBe(1)
     const said = s.log.length
     // herdr's log beside its socket changes the folder.
     s.fire()
@@ -677,7 +793,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.watchers.size).toBe(0)
     expect(s.timers).toEqual([])
     await s.until(() => s.source.list().length === 1)
-    expect(s.log.slice(said)).toEqual(['[herdr] listed · 1 agents'])
+    expect(s.log.slice(said)).toEqual(['[herdr] socket · live', '[herdr] listed · 1 agents'])
     // The herdr that started again is retried afresh.
     server.drop()
     await s.until(() => s.log.at(-1) === '[herdr] retry · 1')
@@ -735,16 +851,9 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     // What the source reads of herdr's socket: once moved, the socket of a herdr that started again.
     const s = setup({ client: { ...real, socketStamp: () => moved ? 'restarted' : real.socketStamp() } })
     s.source.start()
-    for (const seconds of [1, 2, 4, 8, 16, 32]) {
-      await s.until(() => s.log.at(-1) === `[herdr] retry · ${seconds}`)
-      s.advance(seconds * 1000)
-    }
-    await s.until(() => s.log.at(-1) === '[herdr] retry · 60')
-    const said = s.log.length
-    s.advance(60_000)
-    // The last retry has tried the stale socket; herdr starts again before the refusal comes back.
+    // The source has tried the stale socket; herdr starts again before the refusal comes back.
     moved = true
-    await s.until(() => s.log.length > said)
+    await s.until(() => s.timers.length === 1)
     expect(s.watchers.size).toBe(0)
     expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
     server.agents = [agent('w1:p1')]
@@ -760,7 +869,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     const s = setup()
     s.source.start()
     await s.until(() => s.timers.length > 0)
-    expect(s.log).toEqual(['[herdr] list · rejected', '[herdr] retry · 1'])
+    expect(s.log).toEqual(['[herdr] socket · live', '[herdr] list · rejected', '[herdr] retry · 1'])
     expect(s.watchers.size).toBe(0)
     await server.ended(1)
   })
@@ -771,7 +880,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     s.source.start()
     await s.until(() => s.log.at(-1) === '[herdr] retry · 1')
     // herdr's own code is not said.
-    expect(s.log).toEqual(['[herdr] list · rejected', '[herdr] retry · 1'])
+    expect(s.log).toEqual(['[herdr] socket · live', '[herdr] list · rejected', '[herdr] retry · 1'])
     await server.ended(1)
     expect(s.source.list()).toEqual([])
 
@@ -819,7 +928,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.changes).toBe(0)
     expect(s.timers).toEqual([])
     expect(s.watchers.size).toBe(0)
-    expect(s.log).toEqual([])
+    expect(s.log).toEqual(['[herdr] socket · live'])
   })
 
   it('stop empties the list and tells once; started again, its agents have fresh ids', async () => {

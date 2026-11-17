@@ -14,7 +14,7 @@ import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import { AgentStopError, createStopAgentService, type StopAgentServiceDeps } from '../../lib/stopAgentService.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 
-import { WORKSPACES_OFF, type AgentBrowserPort, type BrowserSwitch, type WorkspacesPort } from '../api.js'
+import { WORKSPACES_OFF, type WorkspacesPort } from '../api.js'
 import type { ResumeAgent } from './launches.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
@@ -41,9 +41,8 @@ export interface LifecycleDeps {
   markDeleted: typeof markDeletedFn
   clearDeleted: typeof clearDeletedFn
   sessionCheckpoints: SessionCheckpointStore
-  /** Where a purged conversation's lines and its search entries are dropped. */
+  /** Where a purged conversation's lines are dropped. Its search entries go as search hears the purge (`purged`). */
   mirror: { deleteHistory(sessionId: string): void }
-  sessionSearch: { deleteHistory(sessionId: string): void } | null
   /** A purge's other records of the harness. Its told lines in the agent ledger, which the agent cleanup erases in the
    *  edge host (core/api.ts `AgentCleanupPort.forgetTold`), before anything of the harness is deleted here
    *  (purgeAgentService.ts `eraseFirst`): false refuses the purge with nothing deleted. */
@@ -63,17 +62,17 @@ export interface LifecycleDeps {
   prepareSessionResume: ResumeAgentServiceDeps['prepareSessionResume']
   stopBackgroundJob?: ResumeAgentServiceDeps['stopBackgroundJob']
   refreshGridWebSearch: ResumeAgentServiceDeps['refreshGridWebSearch']
-  attachDsh: ResumeAgentServiceDeps['attachDsh']
-  attachBrowser?: ResumeAgentServiceDeps['attachBrowser']
+  attach: ResumeAgentServiceDeps['attach']
   attachSession: ResumeAgentServiceDeps['attachSession']
   relaunchMarks?: ResumeAgentServiceDeps['relaunchMarks']
-  /** An agent was stopped: closed (`agent_close`), Stop Harness, or purged. The harnesses it started close with it
-   *  (services/agentCleanup.ts `closed`). Its browser hears it from the forget the stop ends with
-   *  (`createAgentBrowserLifecycle`), as for every other way an agent ends. */
+  /** An agent was stopped: closed (`agent_close`), Stop Harness, or purged. The services that follow agents hear it
+   *  (core/agentLife.ts `stopped`): the harnesses it started close with it (services/agentCleanup.ts). Its browser hears
+   *  that it ended from the forget the stop ends with, as for every other way an agent ends. */
   stopped?: (agentId: string) => void
-  /** An agent was purged: its conversation is gone for good, and with it its agent browser's profile
-   *  (services/agentBrowser.ts `deleted`). A stop keeps the profile, so the login survives a resume. */
-  purged?: (agentId: string) => void
+  /** An agent was purged, with [sessionIds], every conversation it had: gone for good, and the services that follow
+   *  agents hear it (core/agentLife.ts `purged`): its search entries go, and so do its agent browser's profile. A stop
+   *  keeps the profile, so the login survives a resume. */
+  purged?: (agentId: string, sessionIds: string[]) => void
   /** An agent a move a dead daemon left may still run beside (main.ts `moveHeld`): no engine of it starts this start. */
   moveHeld?: (agentId: string) => boolean
 }
@@ -84,8 +83,8 @@ export const TOLD_NOT_ERASED = 'Harness could not erase what this harness was to
 
 export function createAgentLifecycle({
   registry, stoppedAgents, restartJobs, createBackend, noBackendCode, backendFor, agentReconciler, forgetSession, markDeleted, clearDeleted, stopNative, settlePane, cancelExternal,
-  sessionCheckpoints, mirror, sessionSearch, forgetTold, scrubCreated, workspaces, send, pinnedControls, retainExitedSession, announceSession,
-  relaunchOverrides, prepareSessionResume, stopBackgroundJob, refreshGridWebSearch, attachDsh, attachBrowser, attachSession, relaunchMarks, stopped, purged, atFolderTrust, atEmptyComposer, moveHeld,
+  sessionCheckpoints, mirror, forgetTold, scrubCreated, workspaces, send, pinnedControls, retainExitedSession, announceSession,
+  relaunchOverrides, prepareSessionResume, stopBackgroundJob, refreshGridWebSearch, attach, attachSession, relaunchMarks, stopped, purged, atFolderTrust, atEmptyComposer, moveHeld,
 }: LifecycleDeps) {
   /**
    * Stop Harness (`agent_delete`) archives its conversation and launch settings, removes the live
@@ -116,20 +115,20 @@ export function createAgentLifecycle({
     // The person reads what was not erased; the cleanup's log has why (services/agentCleanup.ts).
     eraseFirst: async (s) => { if (!await forgetTold(s.agentId)) throw new Error(TOLD_NOT_ERASED) },
     eraseRecords: async (s) => { await scrubCreated(s.agentId) },
-    deleted: s => {
+    deleted: async s => {
       // Every conversation the harness had: a run that moved on (`/new`) leaves nothing under its earlier keys.
       const keys = [s.sessionId, ...(s.earlierSessionIds ?? [])].filter(Boolean)
-      for (const key of keys) { mirror.deleteHistory(key); sessionSearch?.deleteHistory(key) }
-      registry.deleteSavedNames([s.agentId, ...keys])
+      for (const key of keys) mirror.deleteHistory(key)
+      await registry.deleteSavedNames([s.agentId, ...keys])
       send({ type: 'agent_deleted', payload: { agentId: s.agentId, retained: false } })
-      purged?.(s.agentId)
+      purged?.(s.agentId, keys)
     },
   })
 
   const resume = createResumeAgentService({
     registry, stoppedAgents, createBackend, noBackendCode, backendFor, restartJobs, stopJobs, pinnedControls,
     retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume, stopBackgroundJob,
-    refreshGridWebSearch, clearDeleted, attachDsh, attachBrowser, attachSession, relaunchMarks,
+    refreshGridWebSearch, clearDeleted, attach, attachSession, relaunchMarks,
   })
   const resumeAgent: ResumeAgent = (id, permissionMode, launchArgs) => {
     // A pane a stopped move left may still run this conversation's engine, which no record names (its pid was never
@@ -146,101 +145,6 @@ export function createAgentLifecycle({
     : purgeAgentService.busy(id) || purgeAgentService.blocksFolder(stoppedAgents.get(id)?.cwd)
       ? Promise.resolve({ ok: false, error: 'AGENT_BUSY' }) : resume(id, permissionMode, launchArgs)
   return { stopJobs, stopAgent, purgeAgentService, resumeAgent }
-}
-
-/**
- * The agent browser (services/agentBrowser.ts) as its agent starts and ends here. `ended` is reached from every
- * way an agent stops running: a stop, a purge and every other forget (agents/forget.ts), and an engine that exits
- * or crashes by itself (lib/retainExitedSession.ts). Only a stop used to tell the browser, so the 2 GB container of
- * an agent whose engine exited on its own kept running and held a limit slot (review, 2026-11-10). One end is
- * seen more than once (an exit, then the forget of the same id), so the browser is told once per start.
- *
- * `set` is its person's Start and Stop, which the agent browser asks of the core (`CoreApi.agents.setBrowser`): the
- * row's flag, then the browser's own start or stop, in one turn, so the flag changes in the order the service's
- * queue asked. A browser left on comes back when its agent runs again; one turned off does not.
- *
- * How it comes back (decision 14): create, resume and daemon start attach it at once, before the engine is seen, so
- * the browser starts with its agent. Every other path is caught at the next scan: the reconciler's look at each
- * running agent (agents/discovery.ts `onObserved`) says `observed`. Only those three paths were handed `attached`, so
- * an agent back from the archive (a restore that could not see its engine, or two missed scans) ran on with its flag
- * set and no browser, and its Browser button was gone for good (a teammate's Mac, released build, 2026-11-11).
- *
- * The one case a flag changes id (decision 19): a new agent takes the pane its previous agent ended in (agents/
- * discovery.ts: an engine typed into the shell an exit left, or a scan that opens a new agent over a bound one).
- * `taken` tells the browser both ids; the agent browser moves the settings entry and its profile first, in its queue,
- * and then asks `move` (`CoreApi.agents.moveBrowser`), so a move that fails there leaves both flags as they were.
- * [stopped] is where a stopped agent's flag is written: the agent that ended is stopped by then, and so may the new one
- * be.
- */
-export function createAgentBrowserLifecycle(
-  browser: () => Pick<AgentBrowserPort, 'attached' | 'stopped' | 'moved'> | null,
-  rows: { byAgent(agentId: string): RegisteredSession | undefined; setBrowser(agentId: string, on: boolean): RegisteredSession | null },
-  stopped: Pick<StoppedAgentStore, 'get' | 'patch'>,
-) {
-  // Only agents whose Browser is on that run here: bounded by them, not by every agent the daemon ever saw.
-  const running = new Set<string>()
-  const attached = (session: RegisteredSession): void => {
-    if (session.browser) running.add(session.agentId)
-    browser()?.attached(session)
-  }
-  const ended = (agentId: string): void => {
-    if (running.delete(agentId)) browser()?.stopped(agentId)
-  }
-  // Said on every scan of every running agent, while the daemon is idle: a browser already attached costs one lookup.
-  const observed = (session: RegisteredSession): void => {
-    if (session.browser && !running.has(session.agentId)) attached(session)
-  }
-  return {
-    attached,
-    ended,
-    observed,
-    set(agentId: string, on: boolean): BrowserSwitch {
-      const row = rows.byAgent(agentId)
-      if (!on) {
-        // A Stop of a browser that is off, or of an agent gone since, is done already.
-        if (!row?.browser) return { ok: true, changed: false }
-        rows.setBrowser(agentId, false)
-        ended(agentId)
-        return { ok: true, changed: true }
-      }
-      if (!row) return { error: 'NOT_RUNNING' }
-      // The machine's Podman, memory and network are its owner's: never a guest's agent's.
-      if (row.guest) return { error: 'NOT_ALLOWED' }
-      const changed = !row.browser
-      // The row byAgent just gave, in the same turn: it is still live. Every Start attaches, as every look at an agent
-      // does (`AgentBrowserPort.attached` is idempotent).
-      attached(rows.setBrowser(agentId, true)!)
-      return { ok: true, changed }
-    },
-    /** [to] took the pane [from] ended in. A guest's agent gets nothing of the owner's; one whose Browser is on keeps its
-     *  own, and [from] keeps its flag and its logins. No flag changes here. */
-    taken(from: string, to: RegisteredSession, on: boolean): void {
-      if (to.guest || to.browser) return
-      browser()?.moved(from, to, on)
-    },
-    /** The agent browser moved [from]'s entry to [to], and [from]'s Browser was on: the flag follows it. */
-    move(from: string, to: string): BrowserSwitch {
-      const live = rows.byAgent(to)
-      if (!live && !stopped.get(to)) return { error: 'NOT_RUNNING' }
-      // [from] runs again only if it was resumed since; an evicted agent is in neither list, and has nothing to clear.
-      const back = rows.byAgent(from)
-      const record = back ? null : stopped.get(from)
-      if (record) stopped.patch(from, { browser: undefined })
-      if (!live) {
-        // Its resume brings the browser. A record that cannot be written puts [from]'s back: whole or not at all.
-        try { stopped.patch(to, { browser: true }) } catch (error) {
-          if (record) stopped.patch(from, { browser: record.browser })
-          throw error
-        }
-      }
-      if (back) {
-        rows.setBrowser(from, false)
-        ended(from)
-      }
-      if (live) attached(rows.setBrowser(to, true)!)
-      return { ok: true, changed: true }
-    },
-  }
 }
 
 /**

@@ -247,20 +247,16 @@ async function move(rig: Rollover, duringStop: () => Promise<void> = async () =>
   const moveOne = createHostMove({
     registry: {
       byAgent: (id) => rows.get(id),
-      transaction: async (apply) => apply(),
-      updateRuntimes: (id, runtimes, primaryRuntimeKey) => {
+      confirmLaunch: async (id, input, authority) => {
         const row = rows.get(id)
-        if (!row) return false
-        rows.set(id, { ...row, runtimes: [...runtimes], ...(primaryRuntimeKey ? { primaryRuntimeKey } : {}) })
-        return true
+        if (!row || authority?.current?.() === false) return { state: 'not-published' }
+        await authority?.refresh?.()
+        if (authority?.current?.() === false) return { state: 'not-published' }
+        const ready = { ...row, ...input, runtimes: [...(input.runtimes ?? row.runtimes)], active: true, launch: { state: 'ready' as const },
+          ...(input.runtimes ? { runtimes: [...input.runtimes], primaryRuntimeKey: terminalRouteKey(input.runtimes[0]!) } : {}) }
+        rows.set(id, ready)
+        return { state: 'confirmed', entry: structuredClone(ready) }
       },
-      updateProcessIdentity: (id, identity) => {
-        const row = rows.get(id)
-        if (!row) return false
-        rows.set(id, { ...row, processIdentity: identity })
-        return true
-      },
-      setActive: () => true,
     },
     terminals,
     createBackend: () => rig.create,

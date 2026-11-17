@@ -162,12 +162,14 @@ impl Runner {
         self.0.find_cli()
     }
 
-    /// Menu, Show, Quit and Relaunch come back for the binary. Everything else is done here, anything slow on a thread,
-    /// and answers through `send`.
+    /// Menu, Show, ShowAbout, Quit and Relaunch come back for the binary. Everything else is done here, anything slow on
+    /// a thread, and answers through `send`.
     pub fn run(&self, effect: Effect) -> Option<Effect> {
         let shared = &self.0;
         match effect {
-            Effect::Menu(_) | Effect::Show(_) | Effect::Quit | Effect::Relaunch => return Some(effect),
+            Effect::Menu(_) | Effect::Show(_) | Effect::ShowAbout(_) | Effect::Quit | Effect::Relaunch => {
+                return Some(effect);
+            }
             Effect::FindCli => shared.answer(Event::Cli(shared.find_cli())),
             Effect::SpawnWatch => shared.spawn_watch(),
             // Its child then exits 0 by itself, and its WatchExit(Some(0)) is the answer.
@@ -195,6 +197,7 @@ impl Runner {
             Effect::ReadAuth => shared.with_cli(|cli| Event::Auth(account::auth_status(cli))),
             Effect::ReadClaude => shared.with_cli(|cli| Event::Claude(engine::status(cli, Engine::Claude))),
             Effect::ReadCodex => shared.with_cli(|cli| Event::Codex(engine::status(cli, Engine::Codex))),
+            Effect::ReadVersion => shared.with_cli(|cli| Event::CliVersion(cli::version(cli))),
             Effect::RunLogin => shared.run_login(),
             Effect::CancelLogin => {
                 let login = shared.login.lock().unwrap().take();
@@ -209,7 +212,7 @@ impl Runner {
                     if let Err(message) = &result {
                         log.line(&format!("claude: {message}"));
                     }
-                    Event::ClaudeSet(result)
+                    Event::ClaudeSet(result.is_ok())
                 });
             }
             Effect::SetCodex(on) => {
@@ -219,7 +222,7 @@ impl Runner {
                     if let Err(message) = &result {
                         log.line(&format!("codex: {message}"));
                     }
-                    Event::CodexSet(result)
+                    Event::CodexSet(result.is_ok())
                 });
             }
             // On the caller's thread: one short write, to the watch running now. With none the change has nowhere to
@@ -466,8 +469,8 @@ mod tests {
     use crate::tabs::{NoTabs, Selected, TabApp, TabError, TabScripts};
     use crate::testing::{Fake, alive, fake_harness, wait_gone};
     use crate::types::{
-        ClaudeStatus, CodexStatus, DialStatus, Effect, Event, LoginEvent, MenuItem, NotifyMode, Output, Saved,
-        UpdateFailure,
+        ClaudeStatus, CodexStatus, DialStatus, Effect, Event, LoginEvent, MenuAction, MenuItem, NotifyMode, Output,
+        Saved, UpdateFailure,
     };
     use crate::update::AppUpdater;
     use std::collections::VecDeque;
@@ -862,10 +865,12 @@ mod tests {
         w.fake.script("device claude status --json", &[r#"{"supported":true,"installed":true,"enabled":true}"#]);
         let on = ClaudeStatus { supported: true, installed: true, enabled: true, claude_version: None };
         assert_eq!(w.answer(Effect::ReadClaude), Event::Claude(Some(on)));
+        w.fake.script("--version", &["0.6.58"]);
+        assert_eq!(w.answer(Effect::ReadVersion), Event::CliVersion(Some("0.6.58".into())));
         w.fake.script("device claude enable", &[]);
-        assert_eq!(w.answer(Effect::SetClaude(true)), Event::ClaudeSet(Ok(())));
+        assert_eq!(w.answer(Effect::SetClaude(true)), Event::ClaudeSet(true));
         w.fake.script("device claude disable", &["@err Claude Code is busy.", "@exit 1"]);
-        assert_eq!(w.answer(Effect::SetClaude(false)), Event::ClaudeSet(Err("Claude Code is busy.".into())));
+        assert_eq!(w.answer(Effect::SetClaude(false)), Event::ClaudeSet(false));
         assert!(w.logged("claude: Claude Code is busy."));
         w.fake.script("login --json", &[URL, SUCCESS]);
         assert_eq!(w.answer(Effect::RunLogin), browser());
@@ -884,6 +889,7 @@ mod tests {
                 "start --if-down",
                 "auth status --json",
                 "device claude status --json",
+                "--version",
                 "device claude enable",
                 "device claude disable",
                 "login --json",
@@ -900,9 +906,9 @@ mod tests {
         let off = CodexStatus { supported: true, installed: true, enabled: false };
         assert_eq!(w.answer(Effect::ReadCodex), Event::Codex(Some(off)));
         w.fake.script("device codex enable", &[]);
-        assert_eq!(w.answer(Effect::SetCodex(true)), Event::CodexSet(Ok(())));
+        assert_eq!(w.answer(Effect::SetCodex(true)), Event::CodexSet(true));
         w.fake.script("device codex disable", &["@err Codex is busy.", "@exit 1"]);
-        assert_eq!(w.answer(Effect::SetCodex(false)), Event::CodexSet(Err("Codex is busy.".into())));
+        assert_eq!(w.answer(Effect::SetCodex(false)), Event::CodexSet(false));
         assert!(w.logged("codex: Codex is busy."));
         assert_eq!(w.fake.calls(), ["device codex status --json", "device codex enable", "device codex disable"]);
     }
@@ -950,6 +956,7 @@ mod tests {
             Effect::ReadAuth,
             Effect::ReadClaude,
             Effect::ReadCodex,
+            Effect::ReadVersion,
             Effect::RunLogin,
             Effect::SetClaude(true),
             Effect::SetCodex(true),
@@ -1011,10 +1018,11 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn the_binary_gets_its_three_effects_back() {
+    fn the_binary_gets_its_four_effects_back() {
         let w = world();
         assert!(w.runner.find_cli());
-        for effect in [Effect::Menu(vec![MenuItem::Separator]), Effect::Show(None), Effect::Quit] {
+        let about = Effect::ShowAbout(Some("Harness 0.6.58".into()));
+        for effect in [Effect::Menu(vec![MenuItem::Separator]), Effect::Show(None), about, Effect::Quit] {
             assert_eq!(w.runner.run(effect.clone()), Some(effect));
         }
         let others = [
@@ -1026,6 +1034,7 @@ mod tests {
             Effect::ReadAuth,
             Effect::ReadClaude,
             Effect::ReadCodex,
+            Effect::ReadVersion,
             Effect::RunLogin,
             Effect::CancelLogin,
             Effect::SetClaude(true),
@@ -1480,23 +1489,25 @@ mod tests {
         let w = world();
         w.fake.script("hardware watch --json", &[r#"{"attached":true,"fw":"0.0.95"}"#, "@stdin"]);
         w.fake.script("auth status --json", &[r#"{"loggedIn":true}"#]);
+        w.fake.script("--version", &["0.6.58"]);
         // No Claude Code or Codex script: this CLI has no such commands.
         let (mut app, mut effects) = App::new(Saved::default(), w.runner.find_cli(), false, B);
-        let connected = MenuItem::Text("Dial connected · 0.0.95".into());
-        let (mut dial, mut auth, mut claude, mut codex) = (false, false, false, false);
+        let connected = MenuItem::Text("Dial connected".into());
+        let (mut dial, mut auth, mut claude, mut codex, mut version) = (false, false, false, false, false);
         loop {
             for effect in effects {
                 if let Some(Effect::Menu(items)) = w.runner.run(effect) {
                     dial |= items.first() == Some(&connected);
                 }
             }
-            if dial && auth && claude && codex {
+            if dial && auth && claude && codex && version {
                 break;
             }
             let event = w.next();
             auth |= event == Event::Auth(Some(true));
             claude |= event == Event::Claude(None);
             codex |= event == Event::Codex(None);
+            version |= event == Event::CliVersion(Some("0.6.58".into()));
             effects = app.handle(event);
         }
         let mut calls = w.fake.calls();
@@ -1504,12 +1515,64 @@ mod tests {
         assert_eq!(
             calls,
             [
+                "--version",
                 "auth status --json",
                 "device claude status --json",
                 "device codex status --json",
                 "hardware watch --json"
             ]
         );
+    }
+
+    /// Runs the effects, and hands the app each event, until `last` has been handled; gives what came back for the
+    /// binary.
+    fn drive(w: &World, app: &mut App, mut effects: Vec<Effect>, last: impl Fn(&Event) -> bool) -> Vec<Effect> {
+        let mut back = Vec::new();
+        loop {
+            back.extend(effects.into_iter().filter_map(|effect| w.runner.run(effect)));
+            let event = w.next();
+            let done = last(&event);
+            effects = app.handle(event);
+            if done {
+                back.extend(effects.into_iter().filter_map(|effect| w.runner.run(effect)));
+                return back;
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn turn_on_from_the_menu_runs_enable_and_opens_no_window() {
+        let status = |enabled: bool| format!(r#"{{"supported":true,"installed":true,"enabled":{enabled}}}"#);
+        let w = world();
+        w.fake.script("hardware watch --json", &[r#"{"attached":true,"fw":"0.0.95"}"#, "@stdin"]);
+        w.fake.script("auth status --json", &[r#"{"loggedIn":true}"#]);
+        w.fake.script("device claude status --json", &[&status(false)]);
+        w.fake.script("device claude enable", &[]);
+        let (mut app, effects) = App::new(Saved::default(), w.runner.find_cli(), false, B);
+        let off = ClaudeStatus { supported: true, installed: true, enabled: false, claude_version: None };
+        let mut back = drive(&w, &mut app, effects, |event| *event == Event::Claude(Some(off.clone())));
+
+        let effects = app.handle(Event::Menu(MenuAction::ClaudeOn));
+        w.fake.script("device claude status --json", &[&status(true)]);
+        let on = ClaudeStatus { enabled: true, ..off.clone() };
+        back.extend(drive(&w, &mut app, effects, |event| *event == Event::Claude(Some(on.clone()))));
+
+        assert!(!back.iter().any(|effect| matches!(effect, Effect::Show(Some(_)))), "{back:?}");
+        let mut rows: Vec<String> = back
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::Menu(items) => items.iter().find_map(|item| match item {
+                    MenuItem::Text(label) if label.starts_with("Claude Code:") => Some(label.clone()),
+                    _ => None,
+                }),
+                _ => None,
+            })
+            .collect();
+        rows.dedup();
+        // The change shows as soon as it ends well, before the status read after it answers.
+        assert_eq!(rows, ["Claude Code: Off", "Claude Code: Turning on…", "Claude Code: On"]);
+        assert_eq!(w.fake.calls().iter().filter(|call| *call == "device claude enable").count(), 1);
     }
 
     #[cfg(unix)]

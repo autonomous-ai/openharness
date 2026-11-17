@@ -1,21 +1,14 @@
-import { rmSync, watch, type FSWatcher } from 'node:fs'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
 import { connect } from 'node:net'
-import { homedir, tmpdir } from 'node:os'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeHerdr, RECORDED, type FakeHerdr } from '../../testing/fakeHerdr.js'
 import {
-  createHerdrClient, herdrClientDeps, herdrSocketPath, MAX_LINE_BYTES, watchHerdrSocket,
+  createHerdrClient, herdrClientDeps, herdrSocketPath, MAX_LINE_BYTES,
   type HerdrClientDeps, type HerdrEntry, type HerdrSubscriber,
 } from './herdrClient.js'
-
-// Each watch as it is, recorded, so a spec can make one fail.
-vi.mock('node:fs', async (real) => {
-  const fs = await real<typeof import('node:fs')>()
-  return { ...fs, watch: vi.fn(fs.watch) }
-})
 
 const ENTRIES: HerdrEntry[] = [{ type: 'pane.agent_detected' }, { type: 'pane.closed' }, { type: 'pane.exited' }]
 
@@ -43,27 +36,6 @@ function subscriber() {
     else waits.push({ n, resolve })
   })
   return { calls, to, told }
-}
-
-/** Makes a change once every watch started so far is live, then waits until `count` grows. On macOS fs.watch starts its
- *  stream on another thread, one stream for every folder the process watches (libuv's FSEvents), so a change made at
- *  once can go untold: a watch started after, once it has told of a change of its own, says the stream holds the rest. */
-async function toldOf(count: () => number, change: () => Promise<unknown>): Promise<void> {
-  const folder = await mkdtemp(join(tmpdir(), 'ws-'))
-  let live = false
-  const sentinel = watch(folder, () => { live = true })
-  try {
-    let n = 0
-    await vi.waitFor(async () => {
-      await mkdir(join(folder, String(n++)))
-      expect(live).toBe(true)
-    }, { timeout: 10_000 })
-    const before = count()
-    await change()
-    await vi.waitFor(() => expect(count()).toBeGreaterThan(before), { timeout: 10_000 })
-  } finally {
-    sentinel.close()
-  }
 }
 
 describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026-11-16-device-herdr.md)', () => {
@@ -454,78 +426,5 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
     expect(left).toEqual(expect.any(String))
     await server.start()
     expect(client().socketStamp()).not.toBe(left)
-  })
-
-  it('the watch tells of the nearest existing folder', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'hw-'))
-    const config = join(home, '.config')
-    const folder = join(config, 'herdr')
-    const deps = { socketPath: join(folder, 'herdr.sock'), home }
-    let told = 0
-    const stop = watchHerdrSocket(deps, () => { told++ })
-    const count = () => told
-    try {
-      // With no <config>, a change in home is told.
-      await toldOf(count, () => mkdir(join(home, 'a')))
-      // <config> appears in home, and the watch moves there: a change in it is told.
-      await toldOf(count, () => mkdir(config))
-      await toldOf(count, () => mkdir(join(config, 'b')))
-      // So does <config>/herdr.
-      await toldOf(count, () => mkdir(folder))
-      await toldOf(count, () => mkdir(join(folder, 'c')))
-    } finally {
-      stop()
-    }
-    // After its stop nothing is: another watch of the same folder tells of the change.
-    const stopped = told
-    let seen = 0
-    const other = watchHerdrSocket(deps, () => { seen++ })
-    try {
-      await toldOf(() => seen, () => mkdir(join(folder, 'd')))
-    } finally {
-      other()
-    }
-    expect(told).toBe(stopped)
-    // A watch that cannot be held tells nothing, and throws nothing.
-    expect(() => watchHerdrSocket({ socketPath: join(home, 'none', 'herdr', 'herdr.sock'), home: join(home, 'none') }, () => {})()).not.toThrow()
-  })
-
-  /** A watch of <config>/herdr in a home of its own, and how many changes it told. */
-  async function watchedHerdr() {
-    const home = await mkdtemp(join(tmpdir(), 'hw-'))
-    const config = join(home, '.config')
-    const folder = join(config, 'herdr')
-    await mkdir(folder, { recursive: true })
-    let told = 0
-    const stop = watchHerdrSocket({ socketPath: join(folder, 'herdr.sock'), home }, () => { told++ })
-    return { config, folder, count: () => told, stop }
-  }
-
-  // inotify ends the watch of a folder that is removed: a herdr that made it again and started would never be seen.
-  it('the watch moves out of a folder that is removed, and back in once it is made again', async () => {
-    const { config, folder, count, stop } = await watchedHerdr()
-    try {
-      await toldOf(count, () => rm(folder, { recursive: true }))
-      // <config> is the nearest existing folder now.
-      await toldOf(count, () => mkdir(join(config, 'b')))
-      await toldOf(count, () => mkdir(folder))
-      await toldOf(count, () => mkdir(join(folder, 'c')))
-    } finally {
-      stop()
-    }
-  })
-
-  it('a watch that fails as its folder goes moves out too', async () => {
-    const { config, folder, count, stop } = await watchedHerdr()
-    try {
-      const { calls, results } = vi.mocked(watch).mock
-      const held = results[calls.findLastIndex(([path]) => path === folder)].value as FSWatcher
-      // Failed before its folder's change is told, which it then never is.
-      rmSync(folder, { recursive: true })
-      held.emit('error', new Error('gone'))
-      await toldOf(count, () => mkdir(join(config, 'b')))
-    } finally {
-      stop()
-    }
   })
 })

@@ -213,7 +213,8 @@ export class DshViewerManager {
     const current = this.states.get(agentId)
     if (current && viewerKey(current.dsh, current.viewer, current.workspace) === key) return
     // A restart keeps what the verdict last said; only stop() forgets it.
-    if (current) await this.halt(current)
+    // halt removes the old child and URL synchronously; its watch cleanup must not queue a stale start.
+    if (current) void this.halt(current)
     const state: ViewerState = {
       agentId, dsh, viewer, workspace, port: null, child: null, url: null,
       verdictArtifact: this.verdictArtifacts.get(agentId) ?? null, scannedArtifact: null, watcher: null, rescanTimer: null,
@@ -274,6 +275,7 @@ export class DshViewerManager {
   }
 
   private publish(state: ViewerState): void {
+    if (state.stopping || this.states.get(state.agentId) !== state) return
     const url = state.port === null || !state.child ? null
       : state.preview && state.previewUp ? state.preview
         : buildViewerUrl(state.viewer.url, state.port, this.effectiveArtifact(state))
@@ -291,6 +293,7 @@ export class DshViewerManager {
         && path.slice(state.workspace.length).split(/[\\/]/).some((segment) => segment && (isArtifactDirIgnored(segment) || segment.startsWith('.'))),
     })
     const bump = (path: string): void => {
+      if (state.stopping) return
       // Judged inside the workspace: a workspace under a `build/` or `inputs/` folder is not ignored.
       if (!isCandidateArtifact(relative(state.workspace, path), extensions)) return
       if (state.rescanTimer) clearTimeout(state.rescanTimer)
@@ -412,7 +415,6 @@ export class DshViewerManager {
     state.stopping = true
     this.states.delete(agentId)
     if (state.rescanTimer) clearTimeout(state.rescanTimer)
-    if (state.watcher) await state.watcher.close().catch(() => undefined)
     const child = state.child
     state.child = null
     state.port = null
@@ -420,6 +422,17 @@ export class DshViewerManager {
     if (state.url !== null) {
       state.url = null
       this.deps.onUrl(agentId, null)
+    }
+    // Invalidate the old child and URL before awaiting a watch: a same-id resume may start meanwhile.
+    if (state.watcher) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        await Promise.race([state.watcher.close(), new Promise<void>(resolve => {
+          timer = setTimeout(() => { this.log('[viewers] VIEWER_WATCH_CLOSE_TIMEOUT'); resolve() }, 10_000)
+          timer.unref?.()
+        })])
+      } catch { this.log('[viewers] VIEWER_WATCH_CLOSE_FAILED') }
+      finally { clearTimeout(timer) }
     }
   }
 

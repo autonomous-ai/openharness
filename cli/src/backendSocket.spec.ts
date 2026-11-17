@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from './testing/registryFixtures.js'
 import { USAGE_FALLBACKS } from './core/api.js'
 import * as gitPullRequest from './lib/gitPullRequest.js'
 import * as sessionGitPullRequest from './lib/sessionGitPullRequest.js'
@@ -84,14 +85,22 @@ describe('safe session close RPC', () => {
         sendBinary: () => true,
       })
     }
-    const row = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%7302' }], cwd: '/tmp' })!
-    row.sessionId = sessionId
+    let row = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%7302' }], cwd: '/tmp' }))!
+    if (sessionId) {
+      const sessions = join(env.CODEX_HOME, 'sessions')
+      mkdirSync(sessions, { recursive: true })
+      const transcriptPath = join(sessions, 'rollout-close-history.jsonl')
+      writeFileSync(transcriptPath, JSON.stringify({ type: 'session_meta', payload: { id: sessionId, cwd: '/tmp', source: 'cli' } }) + '\n')
+      const bound = await registry.register({ engine: 'codex', tmuxPane: '%7302', sessionId, transcriptPath })
+      expect(bound?.entry.agentId).toBe(row.agentId)
+      row = bound!.entry
+    }
     const checkpoint = vi.fn(async () => {})
     const stop = vi.fn(async (_agentId, options) => {
       await options.checkpoint(row, 'before')
       await options.beforeStop(row)
       expect(options.current()).toBe(true)
-      registry.removeAgent(row.agentId)
+      ;(await removeRegistryAgent(registry, row.agentId))
     })
     socket.closeAgentService = new CloseAgentService({
       registry, activity: async () => activity, checkpoint, stop, changed: () => {},
@@ -135,7 +144,7 @@ describe('safe session close RPC', () => {
       expect(stop).toHaveBeenCalledOnce()
       expect(registry.byAgent(row.agentId)).toBeUndefined()
     } finally {
-      registry.removeAgent(row.agentId)
+      ;(await removeRegistryAgent(registry, row.agentId))
       await socket.stop()
     }
   })
@@ -298,7 +307,7 @@ describe('agent_update opened: one "last used" for every app', () => {
   let frames: any[]
   let agentId = ''
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks()
     // Only the clock: the dispatch queue and vi.waitFor still run on real timers.
     vi.useFakeTimers({ toFake: ['Date'] })
@@ -307,11 +316,11 @@ describe('agent_update opened: one "last used" for every app', () => {
     bindAgentUpdate(socket)
     frames = []
     socket.registerLocalClient('local:opened', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
-    agentId = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%7301' }], cwd: '/tmp/opened' })!.agentId
+    agentId = (await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%7301' }], cwd: '/tmp/opened' }))!.agentId
   })
 
   afterEach(async () => {
-    registry.removeAgent(agentId)
+    ;(await removeRegistryAgent(registry, agentId))
     vi.useRealTimers()
     vi.restoreAllMocks()
     await socket.stop()
@@ -345,6 +354,21 @@ describe('agent_update opened: one "last used" for every app', () => {
     expect(pushes()).toHaveLength(1)
     expect(pushes()[0].payload.agent).toEqual(reply.agent)
     expect(commander).not.toHaveBeenCalled()
+  })
+
+  it('answers and pushes the same service frame fields, including their null and omission defaults', async () => {
+    let part: Record<string, unknown> = { dsh: 'drawing', dshName: 'Drawing', viewerUrl: 'http://127.0.0.1:7000',
+      viewerName: 'Preview', verdict: null, browser: { state: 'ready' } }
+    socket.framePartsProvider = () => () => part
+    const shown = await update({ agentId, opened: true }, 'parts-on')
+    expect(shown.agent).toMatchObject(part)
+    expect(JSON.stringify(pushes()[0].payload.agent)).toBe(JSON.stringify(shown.agent))
+    part = {}
+    vi.setSystemTime(OPENED + AGENT_OPENED_THROTTLE_MS)
+    const hidden = await update({ agentId, opened: true }, 'parts-off')
+    expect(hidden.agent).toMatchObject({ dshName: null, viewerUrl: null, viewerName: null, verdict: null })
+    expect(hidden.agent).not.toHaveProperty('browser')
+    expect(JSON.stringify(pushes().at(-1).payload.agent)).toBe(JSON.stringify(hidden.agent))
   })
 
   it('answers a repeat inside the throttle with the current frame, and stamps and tells no one', async () => {

@@ -201,7 +201,7 @@ describe('a failing service never takes the core down', () => {
 
   it('with services in the core failing on every call, they are switched off and every turn still reaches the client', async () => {
     daemon = await IsolatedDaemon.create({
-      env: { HARNESSD_TEST_FAULTS: 'search.touch,search.session_search,viewers.frameContext,viewers.attach,workspaces.nameBranches', ...IN_THE_CORE },
+      env: { HARNESSD_TEST_FAULTS: 'search.touch,search.session_search,viewers.surface,workspaces.nameBranches', ...IN_THE_CORE },
     })
     onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-120).join('\n')}`) })
     await daemon.start()
@@ -211,10 +211,13 @@ describe('a failing service never takes the core down', () => {
     // Each turn calls search at its start and its end: the fifth failure switches search off, and the
     // turns after it are delivered exactly as the ones before.
     for (let i = 1; i <= 4; i++) await turn(client, agentId, `turn ${i}`)
+    // Viewer projections no longer call a feature port. Exercise its remaining public surface boundary.
+    for (let i = 0; i < 5; i++) expect(await client.request('viewer_surface', { surfaceId: `fault-${i}`, agentId, op: 'close' }))
+      .toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'viewers' })
     await until('search to be switched off', () => daemon!.log().includes('[services] search switched off after 5 failures'), 15_000)
     await until('the viewers to be switched off', () => daemon!.log().includes('[services] viewers switched off after 5 failures'), 15_000)
     expect(daemon.log()).toContain('[services] search.touch failed · injected fault: search.touch')
-    expect(daemon.log()).toContain('[services] viewers.frameContext failed · injected fault: viewers.frameContext')
+    expect(daemon.log()).toContain('[services] viewers.surface failed · injected fault: viewers.surface')
 
     // Off, search says so; the agent's row still carries everything the core owns.
     expect(await client.request('session_search', { query: 'turn' })).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'search' })

@@ -339,7 +339,7 @@ export class IsolatedDaemon {
       ...(options.trustPrompt ? { trustPrompt: true } : {}),
       ...(options.graphicsQuery ? { graphicsQuery: options.graphicsQuery } : {}),
     }
-    for (const name of ['claude', 'codex'] as const) await writeFile(join(dirs.bin, name), fakeEngineShim(name, config), { mode: 0o755 })
+    for (const name of ['claude', 'codex'] as const) await writeFile(join(dirs.bin, name), fakeEngineShim(name, { ...config }), { mode: 0o755 })
     // A daemon never finds the developer's own gh (shared tabs' tasks run it): a stub that refuses, until a test writes its own.
     await writeFile(join(dirs.bin, 'gh'), GH_FORBIDDEN_STUB, { mode: 0o755 })
     // Engine probes and usage readers must not consult the person's macOS
@@ -349,6 +349,10 @@ export class IsolatedDaemon {
     // helper (lib/guestAccounts.ts), which may be installed on the Mac the tests run on. Refused, as for an owner who
     // never turned guest access on.
     await writeFile(join(dirs.bin, 'sudo'), '#!/bin/sh\necho "sudo: a password is required" >&2\nexit 1\n', { mode: 0o755 })
+    // Nor does it ever reach the real Orca app on the Mac the tests run on, which every session here may be running
+    // inside: with no `orca` on its PATH a daemon runs the Orca app's own, and a listed Orca agent asks it for a list.
+    // Refused, until a test writes its own (harness/fakeOrca.ts).
+    await writeFile(join(dirs.bin, 'orca'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
     // A pick on the dial brings that app forward with `open -b` (services/devices), and dialAppFilter.e2e.ts taps and
     // picks VS Code and Ghostty: with the real open, a dial test on a Mac would bring the developer's own apps forward.
     // Out of bin: the devices run open by its path, never by name. One line of arguments per run, for `opens()`.

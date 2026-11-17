@@ -117,3 +117,32 @@ registry merely to remove unused budget properties.
 No test, build or benchmark runs during the coordinator's Resume quiet window.
 Runtime edits wait for review of this exact scope; the RED execution precedes
 the implementation when that window is released.
+
+
+## Current integration and selected acceptance (17 November)
+
+Integrate Registry `16fd6142ce11ccb5060d9c3282572e45af9c5f08`, which contains
+main `3bde21130396d338645e7589cb8ceab640564b53`, into the existing extraction
+`6c28d2927d29827c66a21f00f320394cbccbc9eb`. Preserve the new generic frame
+parts and held agent-life declarations. Inline frame parts use the optional
+inline host's existing disabled state and callbacks; default out-of-process
+routing remains on service links. The master selection stays outside core.
+Registry ownership, durable publication, hook recovery and detached-result
+caller corrections are copied unchanged from that exact parent.
+
+The retained focused and boundary RED receipts describe the original extraction.
+The old full-core log lacks a captured process exit and is not a completed gate.
+Fresh acceptance selects the mapped core, harnessd and portability gates (two
+workers), source and selected E2E types, architecture/environment/lean-entry
+checks, and an exact-source bundle. Native acceptance selects the complete
+services and history files and six engine-reader cases: inline runtime profiles
+(two engines), mixed service mode, no-master mode, default paging/recaps, and
+killed/frozen reader recovery. Every run records actual exit, pipe EOF and
+private-fixture cleanup. This does not claim Windows native execution.
+
+The fixture helper copies its typed engine configuration into the plain-record
+argument expected by fakeEngineShim, matching the already reviewed correction
+used by paste and combined-engine validation. No production launch behavior or
+engine fixture values change. Cost preparation retains separate startup and
+16/160-transcript caller measurements; timings run only in a coordinator-owned
+quiet window, after final source and input hashes are frozen.

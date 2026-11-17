@@ -192,6 +192,17 @@ describe('Notices', () => {
     expect(listed.notices.from('a1')).toBeUndefined()
   })
 
+  it('a card is pending from its notice until it ends, held back or not', () => {
+    const { notices, state } = desk()
+    expect(notices.pending('a1')).toBe(false)
+    state.held.add('a1')
+    notices.notify(notice(VPN))
+    expect(notices.pending('a1')).toBe(true)
+    expect(notices.pending('a2')).toBe(false)
+    notices.ended('a1')
+    expect(notices.pending('a1')).toBe(false)
+  })
+
   it('the twenty-first pending card closes the oldest', () => {
     const { notices, state, calls } = desk()
     for (let i = 1; i <= 20; i++) expect(notices.notify(notice(VPN, `a${i}`))).toBe('shown')

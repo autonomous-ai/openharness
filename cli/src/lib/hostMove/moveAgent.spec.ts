@@ -4,6 +4,7 @@ import type { TerminalBackend } from '../terminalBackend.js'
 import type { ProcessIdentity, TerminalInventoryResult, TerminalRuntimeRef } from '../terminalTypes.js'
 import { terminalRouteKey } from '../terminalRuntime.js'
 import { MoveGate } from './gate.js'
+import { AtomicWriteUnconfirmed } from '../registryPersistence.js'
 import { MOVE_MARKER_ENV, MOVE_STEP_TIMEOUT_MS, moveAgent, moveCreateRequest, removeOrphanMovePanes, type MoveAgentDeps, type MoveOutcome } from './moveAgent.js'
 
 const OLD: TerminalRuntimeRef = { backend: 'ptyhost', instance: 'p2', paneId: '%1' }
@@ -44,7 +45,8 @@ function harness(overrides: Partial<MoveAgentDeps> = {}) {
     prepareResume: vi.fn(async () => { events.push('prepare') }),
     respawn: vi.fn(async () => { events.push('respawn'); return { ok: true } }),
     probeProcess: vi.fn(async () => ID),
-    swap: vi.fn((_agentId: string, runtime: TerminalRuntimeRef) => { events.push('swap'); row.runtime = runtime }),
+    swap: vi.fn(async (_agentId: string, runtime: TerminalRuntimeRef) => { events.push('swap'); row.runtime = runtime; return { state: 'confirmed' as const, entry: { ...session(), runtimes: [runtime] } } }),
+    complete: vi.fn(),
     retarget: vi.fn(async (_agentId: string, to: TerminalRuntimeRef) => {
       events.push(row.runtime === to ? 'retarget(row names it)' : 'retarget(row names the old pane)')
     }),
@@ -74,6 +76,41 @@ beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { vi.useRealTimers() })
 
 describe('moveAgent', () => {
+  it('awaits destination publication before moving streams or releasing either pane', async () => {
+    let entered!: () => void, publish!: () => void
+    const started = new Promise<void>(resolve => { entered = resolve })
+    const pending = new Promise<void>(resolve => { publish = resolve })
+    const h = harness()
+    h.deps.swap = vi.fn(async () => { entered(); await pending; h.row.runtime = NEW; return { state: 'confirmed' as const, entry: { ...session(), runtimes: [NEW] } } })
+    const moving = moveAgent(session(), h.deps)
+    await vi.advanceTimersByTimeAsync(500)
+    await started
+    try {
+      expect(h.deps.retarget).not.toHaveBeenCalled()
+      expect(h.deps.releaseHold).not.toHaveBeenCalled()
+      expect(h.deps.killPane).not.toHaveBeenCalled()
+    } finally { publish(); await vi.advanceTimersByTimeAsync(300_000); await moving }
+  })
+
+  it('keeps both panes and refuses input when destination publication is unconfirmed', async () => {
+    const h = harness({ swap: vi.fn(() => { throw new AtomicWriteUnconfirmed(new Error('directory sync unconfirmed')) }) })
+    const delivered = vi.fn(async () => {})
+    h.deps.stopEngine = vi.fn(async () => { h.gate.enqueue('a1', delivered); return 'terminated' as const })
+    expect(await run(h.deps)).toMatchObject({ moved: false, fellBack: false })
+    expect(h.deps.killPane).not.toHaveBeenCalled()
+    expect(h.deps.relaunchOld).not.toHaveBeenCalled()
+    expect(h.deps.releaseHold).not.toHaveBeenCalled()
+    expect(delivered).not.toHaveBeenCalled()
+    expect([...h.routes.keys()]).toEqual([terminalRouteKey(NEW), terminalRouteKey(OLD)])
+  })
+
+  it('reports a confirmed destination whose hold could not be released as incomplete', async () => {
+    const h = harness({ releaseHold: vi.fn(async () => { throw new Error('release failed') }) })
+    expect(await run(h.deps)).toMatchObject({ moved: false, fellBack: false })
+    expect(h.deps.relaunchOld).not.toHaveBeenCalled()
+    expect(h.deps.killPane).not.toHaveBeenCalled()
+  })
+
   it('moves an idle conversation agent and keeps its id', async () => {
     const h = harness()
     const outcome = await run(h.deps)

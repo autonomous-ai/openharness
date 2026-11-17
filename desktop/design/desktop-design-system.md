@@ -696,11 +696,11 @@ Off (Settings ▸ Experimental ▸ Hachi), none of them is drawn and ⇧⌘H is 
 ## Harness Device
 
 Harness Device is the menu-bar app for the dial (`device-app/`). It sets up
-Harness, keeps it running and shows the dial's state; it offers sign-in,
-Claude Code and Codex once.
+Harness, keeps it running and shows the dial's state; sign-in is the one
+thing it offers. Claude Code and Codex are turned on and off in the menu.
 
-Its menu is the native menu. Its window has four screens, Install, Sign in,
-Claude Code and Codex, at 420 × 320, in plain HTML and CSS (`device-app/ui/src/styles.css`)
+Its menu is the native menu. Its window has two screens, Install and Sign in,
+at 420 × 320, in plain HTML and CSS (`device-app/ui/src/styles.css`)
 with this document's tokens and type. Hover and press fills are precomputed per
 theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
 
@@ -728,6 +728,30 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   the check, a label that never changes. Sound is the first.
 - A choice among named options in the menu is one native submenu of check items,
   the one in force checked. Notifications is the first.
+- An agent in the menu is a disabled status row, then one action row. The
+  status reads `Claude Code: On`, `Off`, `Turning on…`, `Turning off…`,
+  `Could not turn on` or `Could not turn off` (the same after `Codex:`). The
+  action is **Turn on** or **Turn off**; while a change runs there is none.
+  An action that opens no window has no `…`.
+- The dial line names no firmware version: only `Updating to <version>`
+  while the dial updates. **About** opens macOS's standard About panel,
+  brought to the front, with the app's name and version and one credits line,
+  `Dial 0.1.0 · Harness 0.6.58`, a version the app does not know left out.
+
+The menu, top to bottom:
+
+```text
+  Dial connected
+  Signed in
+  Claude Code: On
+  Turn off
+✓ Sound
+  Notifications ▸
+──────────
+  Open Harness
+  About
+  Quit
+```
 
 The [gallery](../../device-app/ui/gallery.html) shows every screen in every
 state, light and dark, the primary button focused, and the menu-bar icon on

@@ -4931,7 +4931,12 @@ class AppNotifier extends ChangeNotifier {
             timeout: const Duration(seconds: 5),
           )
           .catchError((Object error) {
-            appLog.debug('ws', 'theme_set not applied on $machineId: $error');
+            appLog.record(
+              AppLogLevel.debug,
+              'ws',
+              'theme_set not applied on $machineId',
+              error: error,
+            );
             return <String, dynamic>{};
           }),
     );
@@ -15363,13 +15368,14 @@ class AppNotifier extends ChangeNotifier {
         made.folder,
         keepBranch: made.keepBranch,
       )) {
-        appLog.info('worktree', 'kept after cancel: ${made.folder}');
+        appLog.info('worktree', 'kept after cancel');
       }
     } catch (error) {
+      // A filesystem error quotes the path, named after the person's branch.
       appLog.warn(
         'worktree',
-        'not removed after cancel: ${made.folder}',
-        error: error,
+        'not removed after cancel',
+        error: error.runtimeType,
       );
     }
   }
@@ -21786,7 +21792,11 @@ class AppNotifier extends ChangeNotifier {
                 );
               }
             } catch (error) {
-              appLog.warn('device', 'Could not reveal prepared agent: $error');
+              appLog.warn(
+                'device',
+                'Could not reveal prepared agent',
+                error: error,
+              );
             }
           }());
         }

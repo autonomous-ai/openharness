@@ -271,4 +271,21 @@ describe('DshVerdictWatcher, event by event', () => {
     await settle(400)
     expect(seen).toEqual([])
   }, 10_000)
+
+  it('an old watch cannot publish into the same agent after it is watched again', async () => {
+    const seen: string[] = []
+    const first = join(workspace, 'first', 'verdict.json'), next = join(workspace, 'next', 'verdict.json')
+    watcher = new DshVerdictWatcher({ onChange: (_id, value) => seen.push(value?.summary ?? '') })
+    watcher.watch('a', first)
+    const oldChange = innerWatcher(watcher, 'a').listeners('change')[0] as (path: string) => void
+    watcher.unwatch('a')
+    watcher.watch('a', next)
+    vi.useFakeTimers()
+    try {
+      writeFileSync(first, verdict('old run'))
+      oldChange(first)
+      await vi.advanceTimersByTimeAsync(200)
+      expect(seen).toEqual([])
+    } finally { vi.useRealTimers() }
+  })
 })

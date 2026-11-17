@@ -1,7 +1,7 @@
 /**
  * `<data dir>/agent-browser.json`: every browser this daemon created with its settings and the profile its names come
- * from, any delete in progress, the setup step (spec § Lifecycle), and the agents told their browser is ready. It holds
- * proxy passwords, so it is the person's alone (0600).
+ * from, any delete in progress, the setup step (spec § Lifecycle), the agents told their browser is ready, and the
+ * agents whose Browser is on. It holds proxy passwords, so it is the person's alone (0600).
  */
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { PodmanError } from './podman.js'
@@ -23,6 +23,12 @@ export interface BrowserStateData {
   connection?: string | null
   /** The agents typed the ready line since their person's last Start (notices.ts); absent in a file from before it. */
   told?: Record<string, true>
+  /** The agents whose Browser is on: their person's Start, until their Stop (services/agentBrowser.ts). Absent in a file
+   *  from before 2026-11-15, when the core kept it on each agent's row. */
+  on?: Record<string, true>
+  /** The agents whose row's flag from before then was taken in (services/agentBrowser.ts `adopt`). Delete on or after
+   *  2026-12-18, with the row's field. */
+  adopted?: Record<string, true>
 }
 
 export class StateFile {

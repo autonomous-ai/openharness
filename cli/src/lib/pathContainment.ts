@@ -11,10 +11,8 @@
  * rather than sharing one global allowance.
  */
 import { realpath } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { isAbsolute, relative } from 'node:path'
 import { env } from '../config/env.js'
-import { agentTmpRoot } from './agentTmp.js'
 
 /**
  * Whether `path` IS `root` or sits below it. Both are compared as text, so both must already be real
@@ -47,14 +45,4 @@ export async function withinRoots(target: string, roots: readonly string[]): Pro
   if (env.HARNESS_FS_BROWSE_UNRESTRICTED === '1') return true
   const resolved = await Promise.all(roots.map((root) => realpath(root).catch(() => '')))
   return resolved.some((root) => root && within(root, target))
-}
-
-/**
- * Where agents drop the files they make. macOS gives each user a private `/var/folders/…` as
- * `tmpdir()`, but an agent told to "save it to /tmp" writes to `/tmp` itself, so both are roots, beside the folder
- * Harness keeps for its agents' files (./agentTmp.ts), which the daemon's `tmpdir()` is not.
- */
-export function tempRoots(): string[] {
-  const agents = agentTmpRoot()
-  return [tmpdir(), '/tmp', ...agents ? [agents] : []]
 }
