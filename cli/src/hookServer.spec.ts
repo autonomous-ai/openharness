@@ -478,6 +478,8 @@ describe('process-owned hook server', () => {
     ['/api/hook/turn-start', {}, 'onTurnStart'],
     ['/api/hook/tool-start', { toolUseId: 'tool-1', toolName: 'Task' }, 'onToolStart'],
     ['/api/hook/turn-stop', { status: 'error' }, 'onTurnStop'],
+    ['/api/hook/wait', { hookEvent: 'PermissionRequest' }, 'onWait'],
+    ['/api/hook/subagent', { hookEvent: 'SubagentStart' }, 'onSubagent'],
   ] as const)('rejects a forged bound-session mutation on %s', async (path, extra, handlerName) => {
     const handler = vi.fn()
     const resolveHookAgent = vi.fn(async () => ({
@@ -525,6 +527,114 @@ describe('process-owned hook server', () => {
     for (const value of [undefined, '', 'soon', '-5', '0', '1.5', '1e400']) {
       expect(hookFiredAt({ headers: { 'x-harness-hook-fired-at': value } })).toBeUndefined()
     }
+  })
+
+  describe('the wait and subagent routes', () => {
+    const hook = (base: string, headers: Record<string, string>, path: string, extra: Record<string, unknown> = {}) =>
+      fetch(`${base}${path}`, { method: 'POST', headers,
+        body: JSON.stringify({ engine: 'claude', sessionId: 'real-session', tmuxPane: '%1', callerPid: 123, ...extra }) })
+    /** The session bound to the pane its hook ran in: the process the hook resolves to is its agent's. */
+    const bound = () => {
+      const agent = { engine: 'claude', sessionId: 'real-session', agentId: 'agent-1', runtimes: [], processIdentity: null } as unknown as RegisteredSession
+      vi.spyOn(registry, 'bySession').mockReturnValue(agent)
+      vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
+      return vi.fn(async () => agent)
+    }
+
+    it('hands a wait on with when its engine ran it', async () => {
+      const onWait = vi.fn()
+      const { base, headers } = await start({ onWait, resolveHookAgent: bound() })
+      const waited = await hook(base, { ...headers, 'x-harness-hook-fired-at': '1700000000000' }, '/api/hook/wait',
+        { hookEvent: 'PermissionRequest', toolName: 'Bash' })
+      expect(waited.status).toBe(200)
+      expect(await waited.json()).toEqual({ ok: true })
+      expect(onWait).toHaveBeenLastCalledWith({ sessionId: 'real-session', firedAt: 1_700_000_000_000 })
+      // A hook client too old to say: the wait is handed on with no time.
+      expect((await hook(base, headers, '/api/hook/wait', { hookEvent: 'PermissionRequest' })).status).toBe(200)
+      expect(onWait.mock.lastCall).toStrictEqual([{ sessionId: 'real-session' }])
+    })
+
+    it('a subagent hook says started or stopped by its event, and any other event is refused', async () => {
+      const onSubagent = vi.fn()
+      const resolveHookAgent = bound()
+      const { base, headers } = await start({ onSubagent, resolveHookAgent })
+      expect((await hook(base, headers, '/api/hook/subagent', { hookEvent: 'SubagentStart' })).status).toBe(200)
+      expect(onSubagent).toHaveBeenLastCalledWith({ sessionId: 'real-session', started: true })
+      expect((await hook(base, headers, '/api/hook/subagent', { hookEvent: 'SubagentStop' })).status).toBe(200)
+      expect(onSubagent).toHaveBeenLastCalledWith({ sessionId: 'real-session', started: false })
+      onSubagent.mockClear()
+      resolveHookAgent.mockClear()
+      for (const extra of [{ hookEvent: 'Stop' }, { hookEvent: 'subagentstart' }, {}]) {
+        const refused = await hook(base, headers, '/api/hook/subagent', extra)
+        expect(refused.status).toBe(400)
+        expect(await refused.json()).toEqual({ error: 'invalid hook body' })
+      }
+      expect(onSubagent).not.toHaveBeenCalled()
+      expect(resolveHookAgent).not.toHaveBeenCalled()
+    })
+
+    // What the person is asked is theirs: a wait says only that the engine waits, and when.
+    it('refuses a wait that carries a tool\'s input or a prompt', async () => {
+      const onWait = vi.fn()
+      const resolveHookAgent = bound()
+      const { base, headers } = await start({ onWait, resolveHookAgent })
+      for (const extra of [{ input: { command: 'ls' } }, { prompt: 'go on' }]) {
+        const refused = await hook(base, headers, '/api/hook/wait', { hookEvent: 'PermissionRequest', ...extra })
+        expect(refused.status).toBe(400)
+        expect(await refused.json()).toEqual({ error: 'invalid hook body' })
+      }
+      expect(onWait).not.toHaveBeenCalled()
+      expect(resolveHookAgent).not.toHaveBeenCalled()
+    })
+
+    // A pane whose binding went stale sends one on every turn: one line says it, not one a hook.
+    it('says an unbound hook once a session, and answers each one 403', async () => {
+      const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const handlers = { onWait: vi.fn(), onSubagent: vi.fn(), onTurnStop: vi.fn() }
+      const { base, headers } = await start(handlers)
+      const unbound = async (path: string, sessionId: string) => {
+        const refused = await hook(base, headers, path, { sessionId, hookEvent: 'SubagentStart' })
+        expect(refused.status).toBe(403)
+        expect(await refused.json()).toEqual({ error: 'UNBOUND_HOOK' })
+      }
+      await unbound('/api/hook/wait', 'gone0001')
+      await unbound('/api/hook/wait', 'gone0001')
+      await unbound('/api/hook/subagent', 'gone0001')
+      await unbound('/api/hook/turn-stop', 'gone0001')
+      await unbound('/api/hook/turn-stop', 'gone0002')
+      await unbound('/api/hook/subagent', 'gone0003')
+      expect(said.mock.calls.filter(([line]) => String(line).includes('unbound'))).toEqual([
+        ['[hooks] gone0001 wait refused · unbound'],
+        ['[hooks] gone0002 turn-stop refused · unbound'],
+        ['[hooks] gone0003 subagent refused · unbound'],
+      ])
+      for (const handler of Object.values(handlers)) expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('keeps at most 512 sessions it said, the oldest dropped first', async () => {
+      const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const { base, headers } = await start()
+      const unbound = (sessionId: string) => hook(base, headers, '/api/hook/wait', { sessionId })
+      const lines = () => said.mock.calls.filter(([line]) => String(line).includes('gone0001')).length
+      await unbound('gone0001')
+      for (let other = 0; other < 511; other++) await unbound(`other-${other}`)
+      await unbound('gone0001')
+      expect(lines()).toBe(1)
+      await unbound('other-511')
+      await unbound('gone0001')
+      expect(lines()).toBe(2)
+    })
+
+    it('needs the hook token on each', async () => {
+      const handlers = { onWait: vi.fn(), onSubagent: vi.fn() }
+      const { base } = await start({ ...handlers, resolveHookAgent: bound() })
+      for (const path of ['/api/hook/wait', '/api/hook/subagent']) {
+        const refused = await hook(base, { 'content-type': 'application/json' }, path, { hookEvent: 'SubagentStart' })
+        expect(refused.status).toBe(401)
+        expect(await refused.json()).toEqual({ error: 'UNAUTHORIZED' })
+      }
+      for (const handler of Object.values(handlers)) expect(handler).not.toHaveBeenCalled()
+    })
   })
 
   it('answers a proxied control-plane read whose handler throws, instead of hanging it', async () => {
@@ -1210,7 +1320,7 @@ describe('the daemon socket', () => {
   })
 })
 
-it.each(['/api/hook/session-end', '/api/hook/turn-start', '/api/hook/tool-start', '/api/hook/turn-stop'])(
+it.each(['/api/hook/session-end', '/api/hook/turn-start', '/api/hook/tool-start', '/api/hook/turn-stop', '/api/hook/wait', '/api/hook/subagent'])(
   'refuses a binding changed during process resolution on %s', async path => {
     const row = { engine: 'claude', sessionId: 'race-session', agentId: 'race-agent', runtimes: [], processIdentity: null,
       evidenceRevision: 1 } as unknown as RegisteredSession
@@ -1218,10 +1328,11 @@ it.each(['/api/hook/session-end', '/api/hook/turn-start', '/api/hook/tool-start'
     vi.spyOn(registry, 'byAgent').mockReturnValue(row)
     const mutation = vi.fn()
     const { base, headers } = await start({ onSessionEnd: mutation, onTurnStart: mutation, onToolStart: mutation, onTurnStop: mutation,
+      onWait: mutation, onSubagent: mutation,
       resolveHookAgent: async () => { await Promise.resolve(); row.evidenceRevision = 2; return row } })
     const response = await fetch(`${base}${path}`, { method: 'POST', headers,
       body: JSON.stringify({ engine: 'claude', sessionId: row.sessionId, tmuxPane: '%1', callerPid: 4242,
-        toolUseId: 'fixture-tool', toolName: 'Task' }) })
+        toolUseId: 'fixture-tool', toolName: 'Task', hookEvent: 'SubagentStart' }) })
     expect(response.status).toBe(403)
     expect(mutation).not.toHaveBeenCalled()
   },
