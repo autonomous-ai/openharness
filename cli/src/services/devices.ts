@@ -478,6 +478,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     count: createEngineTally('[device] dial setup', ['claude', 'codex'], SETUP_COUNTS, log),
     log,
     claude: deps.claude ?? claudeFound,
+    orcaClaude: () => ({ homes: orcaHomes.get().claude, answered: orcaHomes.answered() }),
     version: VERSION,
   }) : null
   /** The dial setup's start pass, after a read of Orca's homes: the first, and each that changes them. A read that lands

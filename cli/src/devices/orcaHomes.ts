@@ -120,6 +120,9 @@ export async function readOrcaHomes(deps: OrcaHomesDeps): Promise<OrcaHomesRead>
 export interface OrcaHomesCache {
   /** The last read's homes: none before the first read, and none after a failed one. */
   get(): OrcaHomes
+  /** Whether the last read gave Orca's answer: false before the first read and after a failed one, whose none is not
+   *  Orca listing none. */
+  answered(): boolean
   /** Reads when there is no read yet or the last is ORCA_HOMES_REFRESH_MS old, and joins a read under way. Resolves
    *  true when the list changed. Never rejects. */
   refresh(): Promise<boolean>
@@ -129,6 +132,7 @@ const sameList = (a: string[], b: string[]): boolean => a.length === b.length &&
 
 export function createOrcaHomesCache(deps: { read(): Promise<OrcaHomesRead>; now(): number; platform: NodeJS.Platform; log(line: string): void }): OrcaHomesCache {
   let homes = none()
+  let answered = false
   let readAt: number | undefined
   let reading: Promise<boolean> | undefined
 
@@ -143,6 +147,7 @@ export function createOrcaHomesCache(deps: { read(): Promise<OrcaHomesRead>; now
 
   return {
     get: () => homes,
+    answered: () => answered,
     refresh() {
       // Windows gives a folder no owner uid to check (ownDirectory), so no home could be kept: nothing is run for none.
       if (deps.platform === 'win32') return Promise.resolve(false)
@@ -153,6 +158,7 @@ export function createOrcaHomesCache(deps: { read(): Promise<OrcaHomesRead>; now
         reading = undefined
         const changed = !sameList(homes.claude, next.homes.claude) || !sameList(homes.codex, next.homes.codex)
         homes = next.homes
+        answered = next.failure === undefined
         deps.log(next.failure === undefined
           ? `[observed] orca homes · ${homes.claude.length} claude · ${homes.codex.length} codex`
           : `[observed] orca homes · not read · ${next.failure}`)
