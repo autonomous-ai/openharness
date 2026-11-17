@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { hermesTookPrompt } from './echo.js'
+import { hermesTookPrompt } from './contract.js'
 
 // Hermes 0.21.5 on a Mac (2026-11-17), a program's reply typed into it (#4393): the words in its composer before Enter,
 // and its pane a moment after, the words echoed above the composer and its turn running.

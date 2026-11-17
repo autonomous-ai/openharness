@@ -2,7 +2,7 @@ import type { ScreenReader } from './screenReader.js'
 import type { SubmissionReader } from './submissionReader.js'
 import { createHash } from 'crypto'
 import { composerHolds, composerShown, normalizedTerminalText, visibleTerminal } from '../engines/kit/submission.js'
-import { hermesTookPrompt } from '../engines/hermes/echo.js'
+import { hermesTookPrompt } from '../engines/hermes/contract.js'
 import { launchBound } from '../core/engines/sessionBinding.js'
 import type { RegisteredSession } from './registry.js'
 import { sid } from './log.js'
@@ -1211,7 +1211,7 @@ export class SessionInputController {
   }
 
   /**
-   * Hermes's pane showing it took the words (engines/hermes/echo.ts): echoed as its submitted message, out of its
+   * Hermes's pane showing it took the words (engines/hermes/contract.ts `hermesTookPrompt`): echoed as its submitted message, out of its
    * composer, its turn running. Hermes 0.21 records a new conversation's first message only once its agent is
    * initialized, 46 s after the paste on a loaded Mac (#4393), so its store's turn start comes long after this check
    * gave up and pressed Enter into the running turn. The echo of these words (their first line) is that turn started: settled
