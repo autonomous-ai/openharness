@@ -74,6 +74,7 @@ import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { createObservedHook } from './observedHook.js'
 import { createDeviceHookCalls } from './deviceHookCalls.js'
 import { buildEngineLaunchArgv, engineLaunchEnv, supportsFirstPrompt, typedFirstPrompt } from '../lib/engineLaunch.js'
+import { launchSettingsArgs } from '../engines/kit/launchValues.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../lib/windows/engineStart.js'
 import { createGuestHostBackend } from '../lib/windows/guestHostBackend.js'
 import { workspaceMissing } from '../lib/workspaceCheck.js'
@@ -2636,22 +2637,27 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const firstPrompt = entry.externalResume?.continue && entry.externalResume.signal === 'sent' && !entry.externalResume.dispatched && supportsFirstPrompt(entry.engine) ? 'continue' : undefined
       // An engine that takes it typed gets it on its row with the dispatch instead (lib/restoreAgents.ts).
       const firstTask = typedFirstPrompt(entry.engine, firstPrompt)
-      const argv = buildEngineLaunchArgv(entry.engine, {
+      const selectedArgs = launchSettingsArgs(entry.engine, extraArgs, overrides.settings)
+      const launchOptions = {
         ...opts,
         ...(overrides.native ? { native: overrides.native } : {}),
         ...(firstPrompt ? { firstPrompt } : {}),
         bypassPermission: permission.bypassPermission === true,
         ...(permission.permissionMode ? { permissionMode: permission.permissionMode } : {}),
         ...(entry.cwd ? { cwd: entry.cwd } : {}),
-        ...(extraArgs.length ? { extraArgs } : {}),
+        ...(selectedArgs.length ? { extraArgs: selectedArgs } : {}),
         // The owner's own launch words, last on the command line (engineLaunch.ts `ownerArgs`).
         ...(ownerArgs?.length ? { ownerArgs } : {}),
         ...(clearEnv.length ? { clearEnv } : {}),
         ...(launchEnv.HARNESS_DSH ? { harnessNode: true } : {}),
-      })
+      }
+      const argv = buildEngineLaunchArgv(entry.engine, launchOptions)
       // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
       const paneEnv = { ...launchEnv, ...engineLaunchEnv(entry.engine, overrides.native) }
-      return { argv, ...(overrides.native ? { nativeToken: overrides.native.token, current: overrides.native.current } : {}), ...(Object.keys(paneEnv).length ? { env: paneEnv } : {}),
+      return { argv, onDispatch: () => () => {
+        const selectedArgs = launchSettingsArgs(entry.engine, extraArgs, overrides.settings)
+        return buildEngineLaunchArgv(entry.engine, { ...launchOptions, extraArgs: selectedArgs.length ? selectedArgs : undefined })
+      }, ...(overrides.native ? { nativeToken: overrides.native.token, current: overrides.native.current } : {}), ...(Object.keys(paneEnv).length ? { env: paneEnv } : {}),
         ...(firstTask ? { firstTask } : {}),
         // Windows: the workspace to start in and the shell the pane becomes after the engine (lib/windows/engineStart.ts).
         paneLaunch: windowsPaneLaunch(entry.engine, { cwd: entry.cwd, clearEnv, native: overrides.native, held: isWindowsHeldPane(argv) }) }

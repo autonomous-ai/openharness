@@ -13,6 +13,7 @@ import { checkSessionRuntime, resolvePaneEngineProcess } from './paneEngineProce
 import { engineBin } from './engineBin.js'
 import type { ClearBackgroundJob } from '../engines/facets/backgroundJob.js'
 import { buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, engineLaunchEnv, permissionModeApproves, permissionModeFlags, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
+import { launchSettingsArgs } from '../engines/kit/launchValues.js'
 import { workspaceMissing } from './workspaceCheck.js'
 import { buildHarnessSessionLabel } from './harnessSessionLabel.js'
 import { createAndRegisterPane, type CreateAgentPaneDeps } from './createAgentPane.js'
@@ -318,6 +319,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           catch (error) { sourceError = error; return false }
         }
         const built = await relaunchOverrides(saved, launchArgs ? { ...saved, launchArgs } : saved, sourceCurrent)
+        const settings = built.ok ? await built.overrides.native?.prepareSettings?.(cwd, sourceCurrent) : null
         if (sourceError) throw sourceError
         transcript?.verify()
         if (!built.ok) return built.error === 'DSH_NOT_INSTALLED'
@@ -387,6 +389,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           transcript?.verify()
           if (!current()) return resumeChanged
         }
+        const selectedArgs = launchSettingsArgs(saved.engine, extraArgs, settings)
         const options = {
           ...(built.overrides.native ? { native: built.overrides.native } : {}),
           resumeSessionId,
@@ -394,7 +397,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           bypassPermission: permission.bypassPermission === true,
           ...(permission.permissionMode ? { permissionMode: permission.permissionMode } : {}),
           cwd,
-          ...(extraArgs.length ? { extraArgs } : {}),
+          ...(selectedArgs.length ? { extraArgs: selectedArgs } : {}),
           ...(ownerArgs?.length ? { ownerArgs } : {}),
           ...(clearEnv.length ? { clearEnv } : {}),
           ...(launchEnv.HARNESS_DSH ? { harnessNode: true } : {}),
@@ -413,7 +416,13 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         const result = await createAndRegisterPane({
           current: () => sourceCurrent() && built.overrides.native?.current() !== false,
           ...(built.overrides.native ? { nativeToken: built.overrides.native.token } : {}),
-          onDispatch: () => { allocationAttempted = true },
+          onDispatch: () => {
+            allocationAttempted = true
+            return () => {
+              const selectedArgs = launchSettingsArgs(saved.engine, extraArgs, settings)
+              return buildEngineLaunchArgv(saved.engine, { ...options, extraArgs: selectedArgs.length ? selectedArgs : undefined })
+            }
+          },
           tmuxBackend: { ...createBackend, create: async request => {
             const result = await createBackend.create(request)
             if (result.dispatch !== 'not_started') allocationAttempted = true

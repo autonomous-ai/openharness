@@ -29,7 +29,7 @@ function deps(over: Overrides = {}): RestartAgentDeps & { calls: string[] } {
     ...(over.stopConflictingJob ? { stopConflictingJob: async () => { calls.push('stopConflictingJob'); await over.stopConflictingJob!() } } : {}),
     holdOpen: async () => { calls.push('holdOpen'); return holdOpenImpl() },
     terminate: async (checkAfterMs) => { calls.push('terminate'); return terminateImpl(checkAfterMs) },
-    respawn: async (argv) => { calls.push('respawn'); return respawnImpl(argv) },
+    respawn: async (argv, command) => { calls.push('respawn'); return respawnImpl(argv, command) },
     waitForProcess: async () => { calls.push('waitForProcess'); return waitForProcessImpl() },
     buildArgv: (opts) => { calls.push('buildArgv'); return buildArgvImpl(opts) },
     log: () => {},
@@ -38,6 +38,20 @@ function deps(over: Overrides = {}): RestartAgentDeps & { calls: string[] } {
 }
 
 describe('restartAgent', () => {
+  it('keeps final command selection bound to the prepared resume after a dispatch wait', async () => {
+    let optional = true
+    const seen: unknown[] = []
+    const buildArgv = vi.fn(opts => { seen.push(opts); return ['claude', ...(optional ? ['optional'] : [])] })
+    const d = deps({ buildArgv })
+    d.respawn = async (argv, command) => {
+      expect(argv).toEqual(['claude', 'optional'])
+      optional = false
+      expect(command()).toEqual(['claude'])
+      return { ok: true }
+    }
+    expect(await restartAgent({ engine: 'claude', sessionId: 'selected-session' }, false, d)).toMatchObject({ ok: true })
+    expect(seen).toEqual(Array(2).fill({ bypassPermission: false, resumeSessionId: 'selected-session' }))
+  })
   it('prepares history after its writer stops and before the resume launch', async () => {
     const d = deps({ prepareResume: vi.fn() })
     await restartAgent({ engine: 'codex', sessionId: 's1' }, false, d)

@@ -9,6 +9,7 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
 import { randomUUID } from 'node:crypto'
+import { launchSettingsArgs } from '../../engines/kit/launchValues.js'
 import { statSync } from 'node:fs'
 import type { BackendSocket } from '../../backendSocket.js'
 import { harnessEnvToClear } from '../../dsh/sessionEnv.js'
@@ -136,8 +137,7 @@ export function createAgentForker({ opencodeMajor,
     // engines/codex/launch.ts) and the model it had before the grid (`-m`), and a profile gets
     // its hooks. A fork was launched without any of them, and came back on Codex's default model where a
     // restart of its source came back on the source's own (e2e/forks.e2e.ts). The harness and the named
-    // agent are the fork's own (a new runtime, above and below), so they are not rebuilt here. A fork is started by
-    // whoever forks it, not by the agent that started its source: its pull requests carry no line for that.
+    // agent are the fork's own (a new runtime, above and below), so they are not rebuilt here.
     const built = await relaunchOverrides(source, { ...source, dsh: null, agent: null, startedBy: null }, owner, native, label)
     if (!current()) return changed
     if (!built.ok) return built
@@ -147,6 +147,9 @@ export function createAgentForker({ opencodeMajor,
     }
     if (!current()) return changed
     const dispatchCurrent = () => current() && built.overrides.native?.current() !== false
+    const settings = built.overrides.native?.prepareSettings
+      ? await built.overrides.native.prepareSettings(source.cwd, owner) : built.overrides.settings
+    if (!dispatchCurrent()) return changed
     // Same guard as a relaunch (`buildLaunchOverrides`): an opencode agent recorded on v1 forks on v2
     // as a general session rather than handing the v2 TUI an `--agent` it exits on.
     const forkMajor = built.overrides.native ? built.overrides.native.opencodeMajor : engine === 'opencode' ? await opencodeMajor?.() ?? null : null
@@ -156,7 +159,7 @@ export function createAgentForker({ opencodeMajor,
     const firstTask = typedFirstPrompt(engine, firstPrompt)
     // The fork's own id, chosen before its pane, as create chooses one (engineLaunch.ts `agentId`).
     const forkId = randomUUID()
-    const launchOptions = {
+    const baseOptions = {
       agentId: forkId,
       ...(built.overrides.native ? { native: built.overrides.native } : {}),
       clearEnv: harnessEnvToClear(dshEnv),
@@ -170,7 +173,7 @@ export function createAgentForker({ opencodeMajor,
     }
     // Same refusal as create: the clone inherits the source's permission mode, and an engine that
     // has since been downgraded would hand back a pane of help text instead of a harness.
-    const forkRefusal = await refusePermissionFlagIfUnsupported(engine, launchOptions, built.overrides.native)
+    const forkRefusal = await refusePermissionFlagIfUnsupported(engine, baseOptions, built.overrides.native)
     if (!dispatchCurrent()) return changed
     if (forkRefusal) {
       console.warn(`[agent] fork refused · ${engine} · ${forkRefusal.detail}`)
@@ -179,15 +182,25 @@ export function createAgentForker({ opencodeMajor,
     await prepareInstructions(source.cwd, engine)
     if (!dispatchCurrent()) return changed
     // Windows refuses a batch-file engine whose arguments cmd.exe would read (lib/windows/launch.ts), before any pane.
+    try {
+      buildEngineCommandArgv(engine, { ...baseOptions, extraArgs: launchSettingsArgs(engine, extraArgs, settings) })
+    } catch (error) { return windowsLaunchRefusal(error) }
+    return { ok: true, dispatch: async () => {
+    if (!dispatchCurrent()) return changed
+    const launchOptions = baseOptions
     let command: string[], argv: string[]
     try {
       command = buildEngineCommandArgv(engine, launchOptions)
       argv = buildEngineLaunchArgv(engine, launchOptions)
     } catch (error) { return windowsLaunchRefusal(error) }
-    return { ok: true, dispatch: async () => {
-    if (!dispatchCurrent()) return changed
     const result = await createAndRegisterPane({
       current: dispatchCurrent, agentId: forkId, ...(built.overrides.native ? { nativeToken: built.overrides.native.token } : {}),
+      onDispatch: () => () => {
+        const selectedArgs = launchSettingsArgs(engine, extraArgs, settings)
+        const selected = { ...baseOptions, extraArgs: selectedArgs.length ? selectedArgs : undefined }
+        command = buildEngineCommandArgv(engine, selected)
+        return buildEngineLaunchArgv(engine, selected)
+      },
       tmuxBackend: createBackend,
       registry,
       engine,

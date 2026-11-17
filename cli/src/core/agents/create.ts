@@ -26,7 +26,7 @@ import {
   refusePermissionFlagIfUnsupported, supportsFirstPrompt, supportsNamedAgent, typedFirstPrompt, NamedAgentUnsupportedError,
 } from '../../lib/engineLaunch.js'
 import { setUpWithin } from '../../lib/setUpWithin.js'
-import { agentLaunchArgs, joinedInstructions } from '../../lib/agentAttribution.js'
+import { joinedInstructions, launchSettingsArgs } from '../../engines/kit/launchValues.js'
 import { machineMcpLaunchArgs } from '../../lib/machineMcp.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { describeGridLaunch, gridConfigHandOff, gridConflictingEnvToClear, type GridLaunchAnswer, type GridLaunchMachine, type GridLaunchRequest, type GridWebSearchStatus } from '../../lib/gridLaunchWire.js'
@@ -330,14 +330,12 @@ export function createAgentCreator({
     // The named agent takes the same argv slot on every relaunch (`buildLaunchOverrides` appends it
     // from the row's `agent`, after the grid's and the DSH's argv, exactly as here). The engine was
     // checked for a contract at the wire (AGENT_UNSUPPORTED, opencode v2 included), so this cannot throw.
-    // A harness another agent started says so in the pull requests it opens (lib/agentAttribution.ts), last, as every
-    // relaunch appends it (`buildLaunchOverrides`), and read from the person's settings where this launch reads them.
-    // What Harness tells the agent (its instructions, and the pull request line for one another agent started), last.
-    const told = agentLaunchArgs(engine, startedBy, { cwd, profile: codexHome, environment: native?.environment })
+    const settings = await native?.prepareSettings?.(cwd, authority.current)
+    if (!current()) return stale()
     // The person's machine MCP servers (lib/machineMcp.ts, #1872), beside the grid's and their own: read at each launch,
     // as every relaunch reads them again (`buildLaunchOverrides`).
     const machineMcp = machineMcpLaunchArgs(engine, cwd)
-    const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native?.opencodeMajor ?? null) : []), ...machineMcp, ...told])
+    const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native?.opencodeMajor ?? null) : []), ...machineMcp])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
     const firstPrompt = prompt
@@ -345,12 +343,10 @@ export function createAgentCreator({
     const firstTask = typedFirstPrompt(engine, firstPrompt ?? undefined)
     // Chosen before the pane, so the launch can name its session after the agent (engineLaunch.ts `agentId`).
     const agentId = randomUUID()
-    const launchOptions = { agentId, ...(native ? { native } : {}), bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(firstPrompt ? { firstPrompt } : {}), ...(launchModel ? { launchModel } : {}), terminalHint: { machineName: terminalHintMachineName() } }
+    const baseOptions = { agentId, ...(native ? { native } : {}), bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(firstPrompt ? { firstPrompt } : {}), ...(launchModel ? { launchModel } : {}), terminalHint: { machineName: terminalHintMachineName() } }
     // Windows refuses a batch-file engine whose arguments cmd.exe would read (lib/windows/launch.ts), before any pane.
-    let command: string[], argv: string[]
     try {
-      command = buildEngineCommandArgv(engine, launchOptions)
-      argv = buildEngineLaunchArgv(engine, launchOptions)
+      buildEngineCommandArgv(engine, { ...baseOptions, extraArgs: launchSettingsArgs(engine, extraArgs, settings) })
     } catch (error) { return windowsLaunchRefusal(error) }
     // A tmux route is enough to stream its screen. Register it before looking for a process so both
     // loopback and relayed Desktop clients can attach while the login shell is still busy.
@@ -367,8 +363,20 @@ export function createAgentCreator({
     if (!current()) return stale()
     return { ok: true, dispatch: async () => {
     if (!current()) return stale()
+    const launchOptions = baseOptions
+    let command: string[], argv: string[]
+    try {
+      command = buildEngineCommandArgv(engine, launchOptions)
+      argv = buildEngineLaunchArgv(engine, launchOptions)
+    } catch (error) { return windowsLaunchRefusal(error) }
     const result = await createAndRegisterPane({
       current, agentId, ...(native ? { nativeToken: native.token } : {}),
+      onDispatch: () => () => {
+        const selectedArgs = launchSettingsArgs(engine, extraArgs, settings)
+        const selected = { ...baseOptions, extraArgs: selectedArgs.length ? selectedArgs : undefined }
+        command = buildEngineCommandArgv(engine, selected)
+        return buildEngineLaunchArgv(engine, selected)
+      },
       tmuxBackend: createBackend,
       registry,
       engine,

@@ -220,6 +220,8 @@ export function createAgentRetargeter({ opencodeMajor: readOpencodeMajor,
       const built = await relaunchOverrides(session, target, current, native)
       if (!current()) return changed()
       if (!built.ok) return { ok: false, error: built.error, detail: built.detail }
+      const settings = await built.overrides.native?.prepareSettings?.(session.cwd ?? null, current)
+      if (settings) built.overrides = { ...built.overrides, settings }
       const dispatchCurrent = () => current() && native?.current() !== false && built.overrides.native?.current() !== false
       const preparationChanged = () => current()
         ? failed('NATIVE_LAUNCH_HELD', 'Waiting for fresh executable and hook evidence.') : changed()

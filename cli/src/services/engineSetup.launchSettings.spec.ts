@@ -63,3 +63,76 @@ describe('optional launch values on existing file preparation', () => {
     expect(setup.prepareFiles).not.toHaveBeenCalled()
   })
 })
+
+it('uses one optional deadline for prepare and commit, including a late reply', async () => {
+  let now = 100
+  const clock = vi.spyOn(performance, 'now').mockImplementation(() => now)
+  try {
+    const call = vi.fn(async (type: string) => {
+      if (type === 'setup_files_prepare') { now = 3100; return { preparation: 'prepared' } }
+      now = 5100
+      return { files: candidate() }
+    })
+    expect(await createNativeSetupLink(call).prepareFiles!(input(), 'deadline', () => true)).toBeNull()
+    expect(call.mock.calls[0]).toEqual(['setup_files_prepare', expect.any(Object), 5000])
+    expect(call.mock.calls[1]).toEqual(['setup_files_commit', expect.any(Object), 2000])
+  } finally { clock.mockRestore() }
+})
+
+it('keeps required setup admission available while optional renderers remain unsettled', async () => {
+  const settle: ((value: null) => void)[] = []
+  setup.prepareFiles = vi.fn(() => new Promise<null>(resolve => settle.push(resolve)))
+  const pending = Array.from({ length: 7 }, (_, index) => request('setup_files_prepare', { request: `held-${index}`, ...input() }))
+  try {
+    expect(await request('setup_files_prepare', { request: 'overflow', ...input() })).toMatchObject({ error: 'SETUP_BUSY' })
+    expect(await request('setup_download', { engine: 'codex' })).toEqual({ downloading: false })
+    expect(setup.downloading).toHaveBeenCalledOnce()
+  } finally { settle.forEach(done => done(null)); await Promise.all(pending) }
+})
+
+it('reserves native file preparation space when seven optional commits are outstanding', async () => {
+  setup.prepareFiles = vi.fn(async given => 'purpose' in given ? candidate() : { version: 1 as const, files: [{ index: 0, content: '{}' }] })
+  const tokens = await Promise.all(Array.from({ length: 7 }, (_, index) => request('setup_files_prepare', { request: `optional-${index}`, ...input() })))
+  expect(tokens.every(token => typeof token.preparation === 'string')).toBe(true)
+  expect(await request('setup_files_prepare', { request: 'optional-overflow', ...input() })).toMatchObject({ error: 'SETUP_BUSY' })
+  const hook = { engine: 'codex', environment: { HOME: '/fixture/home' }, port: 1234,
+    files: [{ file: '/fixture/config.toml', directory: '/fixture', content: null }] }
+  const ready = await request('setup_files_prepare', { request: 'required', ...hook })
+  expect(ready.preparation).toBeTypeOf('string')
+  expect(await request('setup_files_commit', { ...ready, engine: 'codex', request: 'required', allowed: true }))
+    .toEqual({ files: { version: 1, files: [{ index: 0, content: '{}' }] } })
+})
+
+it('binds an optional preparation token to its purpose and refuses unknown purposes', async () => {
+  setup.prepareFiles = vi.fn(async () => candidate())
+  const ready = await request('setup_files_prepare', { request: 'purpose', ...input() })
+  expect(await request('setup_files_commit', { ...ready, engine: 'codex', request: 'purpose', allowed: true })).toEqual({ files: null })
+  expect(await request('setup_files_commit', { ...ready, purpose: 'unknown', engine: 'codex', request: 'purpose', allowed: true })).toEqual({ files: null })
+  expect(await request('setup_files_commit', { ...ready, purpose: 'launchSettings', engine: 'codex', request: 'purpose', allowed: true })).toEqual({ files: candidate() })
+  expect(await request('setup_files_prepare', { request: 'unknown', ...input(), purpose: 'unknown' })).toEqual({ files: null })
+})
+
+it('expires optional replies promptly while retaining unsettled ownership and required admission', async () => {
+  vi.useFakeTimers()
+  const settle: ((value: null) => void)[] = []
+  setup.prepareFiles = vi.fn(() => new Promise<null>(resolve => settle.push(resolve)))
+  const pending = Array.from({ length: 7 }, (_, index) => request('setup_files_prepare', { request: `expiry-${index}`, ...input() }))
+  try {
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(await Promise.all(pending)).toEqual(Array(7).fill({ files: null }))
+    expect(await request('setup_files_prepare', { request: 'still-owned', ...input() })).toMatchObject({ error: 'SETUP_BUSY' })
+    expect(await request('setup_download', { engine: 'codex' })).toEqual({ downloading: false })
+  } finally { settle.forEach(done => done(null)); await Promise.all(pending); vi.useRealTimers() }
+})
+
+it('refuses missing renderers and invalid settings inputs without preparing, and names renderer failure without content', async () => {
+  expect(await request('setup_files_prepare', { request: 'missing', ...input() })).toEqual({ files: null })
+  setup.prepareFiles = vi.fn(async () => { throw Error('private fixture content') })
+  expect(await request('setup_files_prepare', { request: 'invalid', ...input(), argv: ['outside'] })).toEqual({ files: null })
+  expect(setup.prepareFiles).not.toHaveBeenCalled()
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  try {
+    expect(await request('setup_files_prepare', { request: 'throws', ...input() })).toEqual({ files: null })
+    expect(warning).toHaveBeenCalledExactlyOnceWith('[engine-setup] SETTINGS_PREPARATION_FAILED')
+  } finally { warning.mockRestore() }
+})

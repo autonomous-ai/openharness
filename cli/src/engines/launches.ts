@@ -1,13 +1,9 @@
-import type { AttributionContract, EngineLaunch, StatusLineContract } from './facets/launch.js'
+import type { EngineLaunch } from './facets/launch.js'
 import type { AgentEngine } from './types.js'
 import { launch as claude } from './claude/launch.js'
 import { launch as codex } from './codex/launch.js'
-import { attributionArgsIn, attributionInstruction, instructionsArgsIn, type Instruction } from './kit/attribution.js'
-import { contextArgsOf, envArgsOf, fill, ownProviderArgs, readConfig } from './kit/launchArgs.js'
-import { joinedSettings, statusLineSetting } from './kit/statusLine.js'
-import { claudeCodeGitBash } from '../lib/windows/claudeCodeGitBash.js'
-import { env } from '../config/env.js'
-import { launchHome, launchHomeOf, launchPersonalHome } from '../lib/engineHomes.js'
+import { contextArgsOf, envArgsOf, ownProviderArgs } from './kit/launchArgs.js'
+import { launchHome } from '../lib/engineHomes.js'
 
 /**
  * Launch metadata has no transcript imports: preparing argv must not load transcript readers. The contracts
@@ -60,72 +56,4 @@ export function ownLoginProviderArgs(
 ): string[] {
   const own = launchContract(engine)?.ownProvider
   return own ? ownProviderArgs(own, launchHome(own.home, profile, deps.env), deps.read) : []
-}
-
-/** Where a launch reads the person's settings from, for `attributionArgs`. */
-export interface AttributionPlace {
-  /** The harness's folder, or null where it has none. */
-  cwd: string | null
-  /** The agent's own engine home (a Codex agent's profile), where the engine's home takes one. */
-  profile?: string | null
-  /** The launch's environment as its shell set it (a native launch's); the daemon's launch environment when absent. */
-  environment?: NodeJS.ProcessEnv
-  /** A seam, like `readCodexConfig`: a spec's launch reads no settings of the machine it runs on. The real file when absent. */
-  read?: (path: string) => string | null
-}
-
-/**
- * The argv that has `engine` add `line` to the pull requests it opens (`EngineLaunch.attribution`), from the person's
- * settings as this launch would read them: nothing for an engine that declares no way to, or where they hid the
- * engine's own attribution (kit/attribution.ts). Read at each launch, as the person may change them in between.
- */
-export function attributionArgs(engine: AgentEngine | string, line: string, place: AttributionPlace): string[] {
-  const contract = launchContract(engine)?.attribution
-  return contract ? attributionArgsIn(contract, line, attributionFiles(contract, place)) : []
-}
-
-const attributionFiles = (contract: AttributionContract, place: AttributionPlace) => ({
-  home: launchHomeOf(contract.home, place.profile, place.environment), personal: launchPersonalHome(place.environment),
-  cwd: place.cwd, read: place.read ?? readConfig,
-})
-
-/**
- * The argv that tells `engine` Harness's own instructions ([instructions], `EngineLaunch.harnessInstructions`) and, with
- * [prLine], has it add that line to its pull requests (`attributionArgs`): for an engine that keeps both in one config
- * value (Codex), in one argument, as two of the same `-c` would leave only the last. Nothing for what the engine declares
- * no way to take, or where the person's settings say not to.
- */
-export function agentInstructionArgs(engine: AgentEngine | string, said: { instructions: string | null; prLine: string | null }, place: AttributionPlace): string[] {
-  const launch = launchContract(engine)
-  const attribution = launch?.attribution
-  const told = launch?.harnessInstructions
-  const status = statusLineArgs(launch?.statusLine, place)
-  if (!attribution && !told) return status
-  said = { ...said, instructions: said.instructions && told?.also ? `${said.instructions} ${told.also}` : said.instructions }
-  if (attribution?.kind === 'instruction') {
-    const instructions: Instruction[] = [
-      ...(said.instructions && told?.kind === 'attribution' ? [{ text: said.instructions, mark: said.instructions }] : []),
-      ...(said.prLine ? [attributionInstruction(attribution, said.prLine)] : []),
-    ]
-    return [...instructionsArgsIn(attribution, instructions, attributionFiles(attribution, place)), ...status]
-  }
-  const setting = said.prLine && attribution ? attributionArgsIn(attribution, said.prLine, attributionFiles(attribution, place)) : []
-  // Only beside the setting it backs: where the person's settings hide the engine's attribution, neither is given.
-  const reminder = setting.length && attribution?.instruction ? attributionInstruction({ instruction: attribution.instruction }, said.prLine!).text : null
-  const texts = told?.kind === 'append' ? [said.instructions, reminder].filter((text): text is string => !!text) : []
-  const args = [...setting, ...status, ...(texts.length && told?.kind === 'append' ? told.args.map((arg) => fill(arg, 'text', texts.join('\n\n'))) : [])]
-  return launch?.statusLine ? joinedSettings(launch.statusLine.args[0]!, args) : args
-}
-
-/**
- * The argv that gives a launch Harness's status line (kit/statusLine.ts): every session of an engine that declares one,
- * the person's own or an agent's.
- */
-function statusLineArgs(contract: StatusLineContract | undefined, place: AttributionPlace): string[] {
-  if (!contract) return []
-  const files = { home: launchHomeOf(contract.home, place.profile, place.environment), personal: launchPersonalHome(place.environment),
-    cwd: place.cwd, read: place.read ?? readConfig }
-  const setting = statusLineSetting(contract, files, env.ADAPTER_DATA_DIR, process.platform,
-    () => claudeCodeGitBash({ env: place.environment ?? process.env }))
-  return setting ? contract.args.map((arg) => fill(arg, 'settings', JSON.stringify(setting))) : []
 }

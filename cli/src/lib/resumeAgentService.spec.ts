@@ -594,9 +594,10 @@ describe('production resume handler', () => {
   })
 
   it('carries the captured native launch and token through permission, argv and registration', async () => {
+    const prepareSettings = vi.fn(async () => ({ values: { instructions: 'owner optional', settings: null }, current: () => true }))
     const native: NativeLaunch = { token: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', opencodeMajor: null,
       environment: {}, proofs: [], current: vi.fn(() => true),
-      prepareHooks: vi.fn(async () => true), permission: vi.fn(async () => 'supported' as const) }
+      prepareHooks: vi.fn(async () => true), permission: vi.fn(async () => 'supported' as const), prepareSettings }
     vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: true,
       overrides: { env: {}, extraArgs: [], clearEnv: [], native } })
     const starting = vi.fn()
@@ -605,11 +606,16 @@ describe('production resume handler', () => {
     })
     create.mockImplementationOnce(async request => {
       expect(request.current()).toBe(true)
+      expect(prepareSettings).toHaveBeenCalledOnce()
+      const command = await request.onDispatch?.()
+      command?.()
       return { state: 'succeeded', runtime: { backend: 'tmux', paneId: pane } }
     })
     expect(await start()).toMatchObject({ ok: true, resumed: true })
     expect(dropPermissionFlagIfUnsupported).toHaveBeenCalledWith('codex', expect.any(Object), native)
     expect(buildEngineLaunchArgv).toHaveBeenCalledWith('codex', expect.objectContaining({ native }))
+    expect(prepareSettings).toHaveBeenCalledOnce()
+    expect(vi.mocked(buildEngineLaunchArgv).mock.lastCall![1]?.extraArgs).toContain('developer_instructions="owner optional"')
     expect(starting).toHaveBeenCalledExactlyOnceWith(native.token)
   })
 

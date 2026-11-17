@@ -5,7 +5,9 @@ import type { NativeSetup, NativeSetupProbes } from '../engines/kit/nativeSetup.
 
 const setup: NativeSetupProbes & Pick<NativeSetup, 'prepareFiles'> = {
   ...nativeSetupProbes,
-  prepareFiles: async (input, _request, current) => (await import('../services/nativeSetupFiles.js')).prepareNativeHookFiles(input, current),
+  prepareFiles: async (input, _request, current) => 'purpose' in input
+    ? (await import('../services/nativeLaunchSettings.js')).prepareNativeLaunchSettings(input, current)
+    : (await import('../services/nativeSetupFiles.js')).prepareNativeHookFiles(input, current),
 }
 
 export const inspectNativeLaunch: typeof inspect = (engine, source, deps) =>

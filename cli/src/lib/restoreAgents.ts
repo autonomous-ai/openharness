@@ -48,6 +48,7 @@ import { resumesConversation } from './resumeCapability.js'
 export interface RestoreLaunch {
   nativeToken?: string
   current?(): boolean
+  onDispatch?: TerminalDispatchControl['onDispatch']
   argv: string[]
   env?: Record<string, string>
   /** Windows: the folder the engine starts in and the shell its pane becomes after it (lib/windows/engineStart.ts

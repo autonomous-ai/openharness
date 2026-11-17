@@ -17,7 +17,7 @@ import type { GridLaunchRecord } from './gridLaunchWire.js'
 import type { ScmLaunchRecord } from '../scm/types.js'
 import type { ForkOrigin, RegisteredSession } from './registry.js'
 import type { TerminalBackend } from './terminalBackend.js'
-import type { TerminalCreateResult, TerminalRuntimeRef } from './terminalTypes.js'
+import type { TerminalCreateResult, TerminalRuntimeRef, TerminalDispatchControl } from './terminalTypes.js'
 import { terminalRouteKey } from './terminalRuntime.js'
 import type { ExternalResumeIntent } from './externalResume.js'
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
@@ -118,7 +118,7 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
   openclawLocal?: string
   /** Rechecked by the backend after its gates and immediately before process dispatch. */
   current?: () => boolean
-  onDispatch?: () => void | Promise<void>
+  onDispatch?: TerminalDispatchControl['onDispatch']
   maxAttempts?: number
 }
 

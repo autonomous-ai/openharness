@@ -218,6 +218,9 @@ export function createAgentRestarter({
     const built = await relaunchOverrides(session, launchArgs ? { ...session, launchArgs } : session, current, native)
     if (!current()) return changed
     if (!built.ok) return built
+    const settings = await built.overrides.native?.prepareSettings?.(session.cwd ?? null, current)
+    if (!current()) return changed
+    if (settings) built.overrides = { ...built.overrides, settings }
 
     // Shell startup and native checks can outlast the reconciler's default 30-second hold.
     // Keep this route through publication, and release only this operation's own reservation.

@@ -9,7 +9,7 @@ import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
 import { windowsAfterExit } from '../../lib/windows/engineStart.js'
-import { buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from '../../lib/engineLaunch.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from '../../lib/engineLaunch.js'
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { describeGridLaunch, type GridLaunchAnswer, type GridLaunchRequest } from '../../lib/gridLaunchWire.js'
@@ -23,7 +23,6 @@ import { missingHookScript } from '../../engines/kit/hookScript.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
-import { agentLaunchArgs } from '../../lib/agentAttribution.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { ApiConnections } from '../../lib/apiConnections.js'
 import { refreshApiFor } from '../../lib/apiModels.js'
@@ -85,11 +84,6 @@ const trust = vi.hoisted(() => ({
 }))
 const { preTrustClaudeProject, preTrustCodexProject } = trust
 vi.mock('../../lib/createAgentPane.js', () => ({ createAndRegisterPane: vi.fn() }))
-// The pull request line (lib/agentAttribution.ts) reads the person's engine settings: never this machine's here.
-vi.mock('../../lib/agentAttribution.js', () => ({
-  agentLaunchArgs: vi.fn((_engine: string, startedBy: string | null | undefined) => startedBy === 'agent' ? ['--settings', '{"attribution":{}}'] : []),
-  joinedInstructions: vi.fn((_engine: string, args: string[]) => args),
-}))
 vi.mock('../../lib/engineBin.js', async (real) => ({ ...await real<object>(), enginePathOverride: vi.fn(() => null) }))
 vi.mock('../../lib/engineInstall.js', async (real) => ({ ...await real<object>(), engineInstallRecipe: vi.fn(() => ({ install: 'recipe' })) }))
 vi.mock('../../lib/engineLaunch.js', async (real) => ({
@@ -183,6 +177,32 @@ function setup(over: Partial<CreateAgentDeps> = {}) {
 const installed = (over: Record<string, unknown> = {}) => ({ id: 'autonomous/blender', manifest: { name: 'Blender', kind: 'agent' }, ...over })
 
 describe('creating an agent', () => {
+  it('does not dispatch a create revoked while optional settings are preparing', async () => {
+    let active = true
+    const launch = preparedNative({}, { prepareSettings: async () => { active = false; return null } } as Partial<NativeLaunch>)
+    const run = setup({ native: async () => ({ ok: true, launch }) })
+    expect(await run.create.prepare(request(), { id: 'optional', label: 'optional', current: () => active, hold: () => {} }))
+      .toMatchObject({ ok: false, error: 'LAUNCH_AUTHORITY_CHANGED' })
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
+  })
+  it.each(['current', 'instructions wait', 'receipt wait'] as const)('uses one optional settings snapshot at dispatch after %s', async stage => {
+    let valid = true
+    const proof = vi.fn(() => valid)
+    const prepareSettings = vi.fn(async () => ({ values: { instructions: 'optional fixture', settings: null }, current: proof }))
+    const launch = preparedNative({}, { prepareSettings } as Partial<NativeLaunch>)
+    const run = setup({ native: async () => ({ ok: true, launch }), prepareInstructions: async () => {
+      if (stage === 'instructions wait') valid = false
+    } })
+    const prepared = await run.create.prepare(request(), { id: 'optional', label: 'optional', current: () => true, hold: () => {} })
+    expect(prepareSettings).toHaveBeenCalledOnce()
+    if (!prepared.ok) throw Error('fixture held')
+    if (stage === 'receipt wait') valid = false
+    proof.mockClear(); vi.mocked(buildEngineLaunchArgv).mockClear()
+    expect(await prepared.dispatch()).toMatchObject({ ok: true })
+    expect(proof).toHaveBeenCalledTimes(1)
+    const args = vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]!.extraArgs ?? []
+    expect(args.includes('optional fixture')).toBe(stage === 'current')
+  })
   it('holds a native create with no preparation owner even when no permission flag was requested', async () => {
     const run = setup({ native: undefined })
     expect(await run.create(request())).toMatchObject({ ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native' })
@@ -201,7 +221,11 @@ describe('creating an agent', () => {
     vi.mocked(opendirSync).mockReset()
     vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    vi.mocked(createAndRegisterPane).mockReset().mockResolvedValue({ ok: true, spawned: { runtime: { paneId: '%1' } }, pending } as never)
+    vi.mocked(createAndRegisterPane).mockReset().mockImplementation(async request => {
+      const command = await request.onDispatch?.()
+      command?.()
+      return { ok: true, spawned: { runtime: { paneId: '%1' } }, pending } as never
+    })
   })
   // A launch or an installed harness one test queued and never used answers no other test.
   afterEach(() => { workspaceRead.afterStat = undefined; vi.restoreAllMocks(); vi.clearAllMocks(); launchDsh.mockReset(); vi.mocked(installedDsh).mockReset() })
@@ -725,13 +749,13 @@ describe('creating an agent', () => {
       expect(recoverBackend).not.toHaveBeenCalled()
     })
 
-    it('a batch-file engine on Windows whose first message cmd.exe would read, by name; other errors are not refusals', async () => {
-      vi.mocked(buildEngineLaunchArgv).mockImplementationOnce(() => { throw new WindowsBatchLaunchRefused('claude', 'C:\\tools\\claude.cmd') })
+    it.each([['preflight', buildEngineCommandArgv], ['dispatch', buildEngineLaunchArgv]] as const)('refuses a Windows batch-file engine during %s before opening a pane', async (_phase, builder) => {
+      vi.mocked(builder).mockImplementationOnce(() => { throw new WindowsBatchLaunchRefused('claude', 'C:\\tools\\claude.cmd') })
       expect(await setup().create(request({ prompt: 'fix&calc' }))).toEqual({
         ok: false, error: 'ENGINE_LAUNCH_REFUSED', detail: expect.stringMatching(/^Harness cannot start claude on Windows .*claude\.cmd is a batch file/),
       })
       expect(createAndRegisterPane).not.toHaveBeenCalled()
-      vi.mocked(buildEngineLaunchArgv).mockImplementationOnce(() => { throw new Error('fixture') })
+      vi.mocked(builder).mockImplementationOnce(() => { throw new Error('fixture') })
       await expect(setup().create(request())).rejects.toThrow('fixture')
     })
 
@@ -1077,7 +1101,7 @@ describe('creating an agent', () => {
       expect(options).toMatchObject({ launchModel: { model: 'opus', effort: 'high' } })
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ launchModel: { model: 'opus', effort: 'high' } })
       await create(request())
-      expect(vi.mocked(buildEngineLaunchArgv).mock.calls[1][1]).not.toHaveProperty('launchModel')
+      expect(vi.mocked(buildEngineLaunchArgv).mock.lastCall![1]).not.toHaveProperty('launchModel')
       expect(vi.mocked(createAndRegisterPane).mock.calls[1][0]).not.toHaveProperty('launchModel')
     })
 
@@ -1100,7 +1124,7 @@ describe('creating an agent', () => {
         const { create } = setup()
         await create(request({ startedBy: 'agent' }))
         expect((vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as Record<string, unknown>).extraArgs).toEqual([
-          `--mcp-config=${JSON.stringify({ mcpServers: { lamp: { type: 'stdio', command: 'lamp-mcp', args: [] } } })}`, '--settings', '{"attribution":{}}'])
+          `--mcp-config=${JSON.stringify({ mcpServers: { lamp: { type: 'stdio', command: 'lamp-mcp', args: [] } } })}`])
       } finally { rmSync(join(env.ADAPTER_DATA_DIR, 'mcp-servers.json'), { force: true }) }
     })
 
@@ -1129,14 +1153,13 @@ describe('creating an agent', () => {
       } finally { rmSync(join(env.ADAPTER_DATA_DIR, 'mcp-servers.json'), { force: true }) }
     })
 
-    it('started by another agent: its pull request line after every other argument, and who started it on the row', async () => {
+    it('records who started the session without reviving retired PR branding', async () => {
       const { create } = setup()
       const cwd = folder()
       await create(request({ cwd, startedBy: 'agent', parentAgentId: 'lead-1' }))
-      expect(vi.mocked(agentLaunchArgs)).toHaveBeenCalledWith('claude', 'agent', { cwd, profile: null, environment: { HOME: root } })
-      expect((vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as Record<string, unknown>).extraArgs).toEqual(['--settings', '{"attribution":{}}'])
+      expect((vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as Record<string, unknown>).extraArgs).toBeUndefined()
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ startedBy: 'agent', parentAgentId: 'lead-1' })
-      // The person's: no line, and nothing recorded.
+      // A session the person starts has no agent origin.
       await create(request())
       expect((vi.mocked(buildEngineLaunchArgv).mock.calls[1][1] as Record<string, unknown>).extraArgs).toBeUndefined()
       expect(vi.mocked(createAndRegisterPane).mock.calls[1][0]).toMatchObject({ startedBy: null, parentAgentId: null })

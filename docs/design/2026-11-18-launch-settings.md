@@ -13,13 +13,13 @@ Boundary proposal
 4. engineSetup alone loads the legacy instruction text, agent-settings parser, vendor JSON/TOML parsing, statusline script bytes and value rendering. Existing tests for user/project/local precedence, Codex ancestor overrides, Windows Git Bash/PowerShell and preserved statusline properties move with that implementation. It returns at most two bounded value slots (instruction value and settings JSON value, each <=64 KiB) and at most one indexed script content entry. Core uses source-declared templates to place each value: no returned flag or argv array can authorize anything. Keep inline --settings JSON and its existing position/merging semantics.
 5. Keep only the small existing pure argv-composition mechanics in core: applying literal declared templates, joining repeated append-system-prompt values, and merging declared inline --settings objects (already needed when grid/DSH args share that flag). Split those mechanics from statusLine.ts so core loads no script renderer, filesystem publication or vendor settings-source parser. This is session argv construction, not a generic new command broker.
 6. The existing native publisher owns final script publication and indexed-path validation. Recheck the current launch/environment and captured-source proofs after worker awaits and immediately before publication. Cancellation, executable/home replacement, wrong indices, unknown keys, oversized replies or changed sources discard the optional candidate, never publish elsewhere or revive an old launch. Required hook preparation stays separate so optional feature failure cannot veto a healthy session. Final caller handling must omit an optional candidate whose proof is lost rather than inject stale settings.
-7. create and buildLaunchOverrides await this preparation at the old agentLaunchArgs position, after final harness environment/home selection, before final argv construction. Production always has NativeLaunch after slice 1; no fallback imports old in-core implementation. Explicit inline/no-master uses the same service preparation implementation through its existing door.
+7. Each final launch owner awaits this preparation once after its last required native preparation and selected environment, before final argv construction. The base buildLaunchOverrides does not prepare optional values. Production always has NativeLaunch after slice 1; no fallback imports old in-core implementation. Explicit inline/no-master uses the same service preparation implementation through its existing door.
 
 Design checklist
 No new stored schema, endpoint, account, credentials, timer, success cache or persistent optional state. File path is the same existing script path; input data and old configuration stay private under the same login. Outside settings content is data. Existing error omission semantics remain: optional quota/instructions absence must leave the user's own status line/instructions intact and session launch available. One bounded setup round trip per eligible launch, existing concurrency bound; measure exact added capture/IPC cost after source freeze before accepting this path.
 
 RED tests before edits
-- Default core closure excludes attribution.ts and statusLine.ts implementation, agent-settings parser and bundled statusline script; pure argv composition retains exact repeated-flag bytes.
+- Default core closure excludes attribution.ts and statusLine.ts implementation and the bundled statusline script; engines/launches.ts no longer depends on agent-settings parsing. The core experiment owner still uses agentSettings.ts, so that module remains in the closure. Pure argv composition retains exact repeated-flag bytes.
 - Worker values cannot choose argv flags, executable or publication path; unknown fields/indices/over-limit values rejected.
 - Current executable/home/launch/source mutation at every await/publication boundary leaves user files untouched and produces no stale optional values.
 - Setup absent/timeout/old protocol + required native ready launches successfully with user's settings unchanged.
@@ -39,3 +39,94 @@ RED before runtime edits
 `engineSetup.launchSettings.spec.ts`: 3 intended failures and 7 passes, actual 1 (`/tmp/core-launch-settings-red.log`). Existing file preparation refuses both declared-value replies and the Codex zero-output candidate; no infrastructure failure. Ordinary hooks still reject zero-output input.
 
 The captured agent-settings source also needs the current sign-in's existing non-secret account/machine/epoch identity. Its owner check must match readAgentSettings, be rechecked at final optional value use, and never pass authentication tokens to setup. Source snapshots may use the existing bounded native-file evidence; read-only files never become publication destinations.
+
+### Protocol and publication checkpoint
+
+The settings variant now uses the existing file preparation/commit operations with a `launchSettings` purpose bound
+through commit. Its reply has exactly `instructions` and `settings` nullable string slots, each at most 64 KiB; the
+settings object may contain only the engine's declared `statusLine` key. Nested user status-line properties are kept.
+Codex publishes no file. Claude's one script is the ordinary owner of its own existing publication reservation, so
+`publishNativeFiles` and required hook input/reply limits are unchanged. Sources are bounded read-only observations,
+not output indices. Optional proof invalidation omits values and does not enter `NativeLaunch.current()`.
+
+Protocol RED (`/tmp/core-launch-settings-red.log`): 3 intended failures and 7 passes, actual 1. Protocol GREEN
+(`/tmp/core-launch-settings-protocol-green.log`): 10 passes, actual 0. Publication behavior RED
+(`/tmp/core-launch-settings-publication-red2.log`): 3 failures and 3 passes, actual 1 (the preceding initial diagnostic
+failed on the not-yet-created module). Publication GREEN (`/tmp/core-launch-settings-publication-green.log`): 6 passes,
+actual 0. Final literal-argv composition RED (`/tmp/core-launch-settings-values-red.log`): 2 failures and 1 pass,
+actual 1; GREEN (`/tmp/core-launch-settings-values-green.log`): 3 passes, actual 0.
+
+A single five-second optional preparation/commit deadline matches existing optional trust preparation. Settings
+work may occupy at most seven of the existing eight preparation and request slots, leaving admission for required
+installation/hook work even when canceled optional work has not settled. Actual work keeps its slot until settlement.
+Native preparation revision, selected environment object and non-secret sign-in identity must be bound in the
+optional proof. Final dispatch selects that proof once for command and terminal argv, after instruction and receipt
+awaits. Added capture, IPC and proof cost remains to be measured after caller migration/source freeze.
+
+### Final dispatch selection
+
+The caller audit found two later waits: registration retry after pane cleanup, and terminal backends awaiting
+`onDispatch` receipt publication. Optional values cannot change identity, cwd, env, Windows handoff or held-token
+facts, so the existing callback now may return only an owner-owned `() => string[]` command factory. The backend
+awaits the existing publication, rechecks required owner/host/client authority, invokes that factory once, rechecks
+required authority, then serializes and sends with no intervening await. Throwing refuses with `not_started`.
+Literal callers still return void and keep the same command bytes. No worker supplies a command or callback.
+Create already forwards this callback on each retry; restore composes it after its receipt control, and swap passes
+the original accepted launch options through the same final command builder. Optional proof is checked inside that
+last synchronous builder, after all dispatch waits. This narrow extension was explicitly reviewed before runtime edits.
+
+Backend RED (`/tmp/core-launch-settings-backends-red.log`): 8 intended failures, 174 skipped, actual 1, on the real
+TmuxBackend with a recording fixture executable and PtyHostBackend with a captured client frame. Initial retry RED
+(`/tmp/core-launch-settings-retry-red.log`): 2 failures, actual 1, used an earlier full-launch fixture, superseded by
+the approved command-only existing callback. Final dispatch checks (`/tmp/core-launch-settings-dispatch-green3.log`):
+14 passed, 243 skipped, actual 0. Restart factory forwarding had 2 RED before implementation
+(`/tmp/core-launch-settings-restart-red.log`). Restore forwarding's negative control (original control-only forwarding)
+had 2 failures (`/tmp/core-launch-settings-restore-red.log`) before restoring the composed callback. Restore's two
+production controls publish receipts and return void (`restoreAgents.ts`); host move supplies no separate control.
+The final factory is invoked only once after publication, including registration retries. Typecheck
+`/tmp/core-launch-settings-types4.log` found one test-only optional-command type, corrected for the next run.
+
+### One optional preparation per final owner
+
+Source review found that preparing values inside `buildLaunchOverrides` then re-preparing after fork's final native
+environment would add two optional capture/IPC waits. The approved correction removes preparation from the base
+override builder, without adding a flag or cache. Each final launch owner prepares once after its last required native
+environment is selected: create after `prepareHooks` and profile synchronization; fork after its combined DSH/native
+`prepareNative`; Resume after relaunch preparation and before its final argv; restart and retarget after base native
+preparation and before stopping the old process; restore after the native override/permission checks and before building
+the launch. Host move reuses restore's captured values through deferred preparation and fallback. Retries recheck the
+same captured proof at the final command factory; they never re-request optional settings. Required hook ordering is
+unchanged. The optional prepare+commit pair has one 5 s deadline per launch attempt.
+
+The first combined Resume/restore validation under the sandbox hit the already documented registry EPERM restriction.
+The authorized bounded rerun with isolated fixtures (`/tmp/core-launch-settings-resume-restore-owned.log`) passed
+283/283, actual 0, 72.10 s, with zero remaining owned process-group members. The failed sandbox receipt is retained
+in `/tmp/core-launch-settings-owner-checks3.log`. No installed daemon, personal home or global tmux was used.
+
+### Final selected validation
+
+The one-preparation regression first failed at each intended owner (5 failures, 212 skipped, actual 1,
+`/tmp/core-launch-settings-once-red.log`). Final selected coverage passed 425/425 tests across 14 files, actual 0
+(`/tmp/core-launch-settings-coverage2.log`): all nine changed covered runtime files have 100% statements, branches,
+functions and lines. The six core files are create, fork, restart, retarget, swap and restoreLaunch; the three service
+files are engineSetup, nativeSetup and nativeLaunchSettings. Coverage outputs are retained in
+`/tmp/core-launch-settings-coverage2/`.
+
+The affected helper, architecture and argv checks passed 150/150 across 11 files, actual 0
+(`/tmp/core-launch-settings-affected-final.log`). The launch argv golden file was unchanged. Backend compatibility
+passed 168 tests with 16 native connection cases deliberately excluded from this selected gate, actual 0
+(`/tmp/core-launch-settings-backend-compat-final.log`); native gates remain the coordinator's separate validation.
+The final Resume rerun passed 175/175, actual 0, 67.02 s, with zero owned process-group members left
+(`/tmp/core-launch-settings-resume-final-owned.log`). Its authorized isolated process wrapper used no personal home
+or installed daemon. The earlier combined Resume/restore 283/283 result above remains the restore evidence.
+
+These changes affect macOS, Linux and Windows launch composition. Selected macOS tests cover Windows argv refusal
+and literal settings behavior through existing platform seams; they are not native Windows or Linux runs. Added
+capture, prepare/commit IPC and final proof selection cost is still unmeasured at this checkpoint. The approved
+separate cost packet will use the frozen runtime commit and preserve full-daemon and native validation as separate
+scopes. No performance improvement is claimed from the dependency inventory shrinking by one file.
+
+Final TypeScript validation passed, actual 0, 5.995 s, with zero owned process-group members left
+(`/tmp/core-launch-settings-types9.log` and `/tmp/core-launch-settings-types9-receipt.json`). The prior typecheck8
+log is empty but its terminal exit was lost across context compaction, so it is retained as exit-unknown and is not
+counted as a pass. No runtime source changed while typecheck9 ran.

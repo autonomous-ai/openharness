@@ -50,27 +50,6 @@ export const launch: EngineLaunch = {
       approved: 'enabledMcpjsonServers', rejected: 'disabledMcpjsonServers', approveAll: 'enableAllProjectMcpServers' },
   },
   /**
-   * Claude Code's `attribution.pr`: the text it adds to a pull request it opens. Set, it replaces Claude Code's own
-   * line, so the value keeps that line first (2.1.296 `rro`: `pr: h.pr ?? <own line>`). `--settings` overrides the
-   * person's user, project and local settings key by key (lodash `mergeWith`), so their `attribution.commit` stays.
-   * `attribution: false`, a `pr` of "" and the older `includeCoAuthoredBy: false` each hide the line: nothing is added
-   * then, and the last would otherwise bring the commit trailer back (setting `pr` ends it).
-   */
-  attribution: {
-    kind: 'setting',
-    home: { variable: 'CLAUDE_CONFIG_DIR', otherwise: { folder: '.claude' } }, file: 'settings.json',
-    folder: ['.claude/settings.json', '.claude/settings.local.json'],
-    key: 'attribution', field: 'pr', legacy: { key: 'includeCoAuthoredBy', until: ['commit', 'pr'] },
-    own: '🤖 Generated with [Claude Code](https://claude.com/claude-code)',
-    args: ['--settings', '{settings}'],
-    // Told as well: Claude Code 2.1.296, started by another agent and asked for "a short body saying it fixes a typo",
-    // opened the pull request with that body and neither line (2026-10-11, in a clean VM). Codex, told in these words,
-    // kept ours.
-    instruction: 'When you create or update a pull request, its body must include this exact line once, near the end and '
-      + 'after any other attribution line: `{line}` It says another agent started this session in Harness. Do not add it '
-      + 'to commit messages.',
-  },
-  /**
    * Harness's status line, which records the rate limits Claude Code reports to it and then shows the person's own
    * (kit/statusLine.ts). Theirs is read from the files Claude Code reads it from, a later one over an earlier.
    */

@@ -36,7 +36,8 @@ import { harnessEnvToClear } from '../dsh/sessionEnv.js'
 import type { DshLaunchAnswer } from '../dsh/launchWire.js'
 import { scmLaunchEnv } from '../scm/launch.js'
 import type { ScmLaunchRecord } from '../scm/types.js'
-import { agentLaunchArgs, joinedInstructions, type StartedBy } from './agentAttribution.js'
+import type { StartedBy } from './agentAttribution.js'
+import type { PreparedLaunchSettings } from '../engines/kit/nativeLaunchSettings.js'
 import { machineMcpLaunchArgs } from './machineMcp.js'
 import { checkLaunchWords } from './launchArgs.js'
 import type { CreationAuthority } from './agentCreationReceipt.js'
@@ -47,6 +48,7 @@ import { OPENCLAW_LOCAL } from '../engines/openclaw/contract.js'
 
 export interface LaunchOverrides {
   native?: NativeLaunch
+  settings?: PreparedLaunchSettings | null
   /** Layered over the pane's inherited environment. The grid key lives here, and only here. */
   env: Record<string, string>
   /** Appended to the engine's argv (`-c model_providers…`, `-m …`, `--mcp-config …`). */
@@ -114,9 +116,6 @@ export interface LaunchOverridesDeps {
   /** Prepare the saved harness context before restarting. Missing or broken packages refuse the
    * relaunch: starting a plain agent would silently change the user's chosen harness. */
   dshLaunch?: (dsh: string, workspace: string, engine: AgentEngine, runtimeKey: string) => Promise<DshLaunchAnswer>
-  /** Read an engine's settings for the pull request line (engines/launches.ts `attributionArgs`). A seam, like
-   *  `readCodexConfig`: absent ⇒ the real file. */
-  readAttribution?: (path: string) => string | null
 }
 
 /** Where the agent should come back: the registry row, or an override the desktop just sent. */
@@ -316,12 +315,6 @@ export async function prepareLaunchOverrides(
       if (checked.ok) overrides = { ...overrides, ownerArgs: [...source.launchArgs] }
       else console.warn(`[launch] ${configKey.slice(0, 8)} saved launch flags not applied · ${checked.detail}`)
     }
-    // What Harness tells the agent rides every relaunch, in the slot `agent_create` gave it: last. Read again each
-    // time, with the person's switches and settings as they are now.
-    const told = agentLaunchArgs(engine, source.startedBy, {
-      cwd: source.cwd ?? null, profile: source.codexHome, environment: native?.environment, read: deps.readAttribution,
-    })
-    if (told.length) overrides = { ...overrides, extraArgs: joinedInstructions(engine, [...overrides.extraArgs, ...told]) }
     const launchEnv = { ...overrides.env, ...native?.environment }
     return { ok: true, overrides: { ...overrides, ...(native ? { native } : {}), env: launchEnv, clearEnv: [...overrides.clearEnv, ...harnessEnvToClear(overrides.env)] } }
   } }

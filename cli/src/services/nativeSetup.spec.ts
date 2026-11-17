@@ -95,3 +95,16 @@ it('observes a failed installer preload once and keeps the same failure for a su
   expect(createNativeInstallations).toHaveBeenCalledOnce()
   expect(warning).toHaveBeenCalledExactlyOnceWith('[engine-setup] INSTALLATION_MODULE_UNAVAILABLE')
 })
+
+it('keeps optional settings rendering inside explicit local setup with zero publication files', async () => {
+  const setup = createLocalNativeSetup('/fixture/data')
+  const input = { purpose: 'launchSettings' as const, engine: 'codex' as const,
+    environment: { HOME: '/fixture' }, cwd: null, dataDir: '/fixture/data', runtimeNode: '/fixture/node',
+    platform: 'linux' as const, gitBash: null, owner: { machineId: 'machine', accountId: 'account' },
+    sources: [{ file: '/fixture/data/agent-settings.json', content: '{"machineId":"machine","accountId":"account","agentsStartAgents":true}' },
+      { file: '/fixture/.codex/config.toml', content: null }], files: [] }
+  expect(await setup.prepareFiles!(input, 'optional-values', () => true)).toMatchObject({ version: 1,
+    values: { instructions: expect.stringContaining('You are running in Harness'), settings: null }, files: [] })
+  expect(await setup.prepareFiles!(input, 'cancelled-values', () => false)).toBeNull()
+  expect(createNativeInstallations).not.toHaveBeenCalled(); expect(createWindowsInstallations).not.toHaveBeenCalled()
+})

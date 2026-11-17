@@ -78,6 +78,19 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RestartDep
 
 const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed or stopped during restart.' }
 
+it.each(['/work', null])('prepares optional values once for the final restart owner with cwd %s before any stop', async cwd => {
+  try {
+  const run = setup(agent({ cwd }))
+  const settings = { values: { instructions: 'owner optional', settings: null }, current: () => true }
+  const prepareSettings = vi.fn(async () => { expect(run.deps.paneSwapDeps).not.toHaveBeenCalled(); return settings })
+  const native = { current: () => true, prepareSettings } as never
+  vi.mocked(run.deps.relaunchOverrides).mockResolvedValue({ ok: true, overrides: { native, env: {}, extraArgs: [], clearEnv: [] } })
+  await run.restart('a1')
+  expect(prepareSettings).toHaveBeenCalledOnce()
+  expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(expect.any(Object), expect.any(Object), expect.objectContaining({ native, settings }), 'auto', expect.any(Function))
+  } finally { vi.clearAllMocks() }
+})
+
 it('holds restart without its native preparation owner before stopping the running engine', async () => {
   const run = setup(agent(), { native: undefined })
   expect(await run.restart('a1')).toMatchObject({ ok: false, error: 'NATIVE_LAUNCH_HELD' })
@@ -208,9 +221,9 @@ describe('restarting an agent', () => {
     expect(restartAgent).not.toHaveBeenCalled()
   })
 
-  it.each(['inspection', 'permission', 'snapshot'] as const)('preserves the live process when restart loses %s evidence', async stage => {
+  it.each(['inspection', 'settings', 'permission', 'snapshot'] as const)('preserves the live process when restart loses %s evidence', async stage => {
     let nativeCurrent = true
-    const launch = { current: () => nativeCurrent } as never
+    const launch = { current: () => nativeCurrent, prepareSettings: async () => { if (stage === 'settings') run.state.live = false; return null } } as never
     const run = setup(agent(), {
       native: async () => { if (stage === 'inspection') run.state.live = false; return { ok: true, launch } },
       relaunchOverrides: async () => ({ ok: true, overrides: { native: launch, env: {}, extraArgs: [], clearEnv: [] } }),
@@ -219,7 +232,7 @@ describe('restarting an agent', () => {
         return { bypassPermission: false, ...(stage === 'permission' ? { nativeHold: 'Waiting for native flags.' } : {}) }
       },
     })
-    expect(await run.restart('a1')).toMatchObject({ ok: false, error: stage === 'inspection' ? 'AGENT_CHANGED' : 'NATIVE_LAUNCH_HELD' })
+    expect(await run.restart('a1')).toMatchObject({ ok: false, error: stage === 'inspection' || stage === 'settings' ? 'AGENT_CHANGED' : 'NATIVE_LAUNCH_HELD' })
     expect(restartAgent).not.toHaveBeenCalled()
     expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
   })
@@ -257,7 +270,7 @@ describe('restarting an agent', () => {
       waitForProcess: async () => null, buildArgv, keepAbandoned, log: () => {},
     }) })
     expect(await run.restart('a1')).toMatchObject({ ok: false, error: 'RESTART_FAILED' })
-    expect(respawn).toHaveBeenCalledExactlyOnceWith(['fixture-engine', 's1'])
+    expect(respawn).toHaveBeenCalledExactlyOnceWith(['fixture-engine', 's1'], expect.any(Function))
     expect(keepAbandoned).not.toHaveBeenCalled()
     expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
   })

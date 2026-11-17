@@ -20,6 +20,20 @@ const setup = () => {
   return { deps, build: createRestoreLaunch(deps) }
 }
 
+it.each([undefined, false] as const)('prepares optional values once for the final restore or move owner, prepare=%s', async prepare => {
+  const { deps, build } = setup()
+  const settings = { values: { instructions: 'optional owner', settings: null }, current: () => true }
+  const prepareSettings = vi.fn(async () => settings)
+  const native = { current: () => true, prepareSettings } as unknown as NativeLaunch
+  deps.relaunchOverrides.mockResolvedValue({ ok: true, overrides: { ...built.overrides, native } })
+  const row = { ...entry, cwd: prepare === false ? null : '/workspace' }
+  const result = await build(row, { current: () => true, prepare, resumeSessionId: 'conversation' })
+  expect(prepareSettings).toHaveBeenCalledExactlyOnceWith(row.cwd, expect.any(Function))
+  expect(deps.launch).toHaveBeenCalledWith(row, expect.any(Object), expect.objectContaining({ native, settings }), expect.any(Object))
+  if ('argv' in result && result.deferred) await result.deferred.prepare()
+  expect(prepareSettings).toHaveBeenCalledOnce()
+})
+
 describe('a guest\'s harness at boot', () => {
   it('is never relaunched as the owner: refused before a workspace or service is touched', async () => {
     const { deps, build } = setup()

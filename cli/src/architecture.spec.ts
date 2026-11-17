@@ -178,6 +178,8 @@ const DECLARED = new Set(['engines/claude/hookAuthority.ts', 'engines/codex/hook
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
   /^dsh\/(installed|manifest|compatibility|launch)\.ts$/,
+  // Optional settings interpretation and generated status-line source are setup's.
+  /^engines\/kit\/(attribution|statusLine)\.ts$/,
   // Setup owns installation and engine probes; trusted executable/location selection remains core launch authority.
   /^engines\/kit\/(downloadMarker|nativeInstall|installationScript|interactiveProbe|nativeVersion|nativeProbe|windowsInstall|setupProbe)\.ts$/,
   /^engines\/hermesRecord\.ts$/, /^engines\/opencode\/version\.ts$/,
@@ -331,6 +333,17 @@ describe('the daemon\'s shape', () => {
       'harnessd/bundleFingerprint.ts', 'harnessd/childAdmission.ts', 'harnessd/childEntry.ts', 'harnessd/workerContract.ts',
     ])
   })
+  it('keeps optional settings interpretation outside the core launch path', () => {
+    const optional = ['engines/kit/attribution.ts', 'engines/kit/statusLine.ts', 'services/nativeLaunchSettings.ts']
+    for (const entry of ['core/main.ts', 'engines/launches.ts', 'lib/launchOverrides.ts', 'core/agents/create.ts']) {
+      const closure = closureOf(entry)
+      for (const file of optional) expect(closure.has(file), `${entry} loads ${file}`).toBe(false)
+    }
+    // Experiments still owns the settings copy; this extraction removes only the launch reader.
+    expect(closureOf('engines/launches.ts').has('lib/agentSettings.ts')).toBe(false)
+    expect(closureOf('services/engineSetup.ts').has('services/nativeLaunchSettings.ts')).toBe(true)
+  })
+
   it('keeps installer scripts and interactive engine probes outside the core', () => {
     const loaded = closureOf('core/main.ts')
     for (const file of ['engines/kit/installationScript.ts', 'engines/kit/interactiveProbe.ts']) {

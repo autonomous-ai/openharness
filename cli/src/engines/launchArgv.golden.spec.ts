@@ -40,6 +40,10 @@ import { GRID_CONFLICTING_ENV_VARS, type GridLaunchOverride } from '../lib/gridL
 import { buildLaunchOverrides, type LaunchOverridesDeps, type LaunchSource } from '../lib/launchOverrides.js'
 import { ENGINES, type AgentEngine } from './types.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
+import { prepareNativeLaunchSettings } from '../services/nativeLaunchSettings.js'
+import { launchSettingsArgs } from './kit/launchValues.js'
+import { LAUNCH_LOCATION_VARIABLES, nativeHookLocations } from './kit/nativeLocations.js'
+import { launchContract } from './launches.js'
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/launch-argv.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_LAUNCH_GOLDEN === '1'
@@ -402,7 +406,8 @@ const CODEX_CONFIGS: Record<string, string | null> = {
 
 async function overridesCases(): Promise<Record<string, unknown>> {
   const cases: Record<string, unknown> = {}
-  const run = async (engine: AgentEngine, source: LaunchSource, config: string | null = null, deps: Partial<LaunchOverridesDeps> = {}) => {
+  const run = async (engine: AgentEngine, source: LaunchSource, config: string | null = null,
+    { settingsSources = {}, ...deps }: Partial<LaunchOverridesDeps> & { settingsSources?: Record<string, string> } = {}) => {
     const calls: string[] = []
     const result = await buildLaunchOverrides({
       machine: () => ({ hermesSystemManaged: false, opencodeMajor: null }), gridLaunch: gridLaunchInProcess(),
@@ -419,6 +424,22 @@ async function overridesCases(): Promise<Record<string, unknown>> {
       },
       ...deps,
     }, engine, source, 'agent-0001')
+    // The record compares final launch values. Optional interpretation now comes from setup, after base overrides.
+    if (result.ok && (engine === 'claude' || engine === 'codex')) {
+      const environment = { HOME: homedir(), ...Object.fromEntries(Object.entries(result.overrides.env)
+        .filter(([name]) => LAUNCH_LOCATION_VARIABLES.includes(name as typeof LAUNCH_LOCATION_VARIABLES[number]))) }
+      const homes = nativeHookLocations(environment)
+      const rule = launchContract(engine)?.statusLine
+      const paths = [join(dataDir, 'agent-settings.json'), ...(rule ? [join(homes.CLAUDE_HOME, rule.file),
+        ...(source.cwd ? rule.folder.map(file => join(source.cwd!, file)) : [])] : [])]
+      const prepared = await prepareNativeLaunchSettings({ purpose: 'launchSettings', engine, environment,
+        cwd: source.cwd ?? null, dataDir, runtimeNode: baseNode(process.execPath), platform: process.platform as 'darwin' | 'linux',
+        gitBash: null, owner: null, sources: paths.map(file => ({ file, content: settingsSources[file] ?? null })),
+        files: rule ? [{ file: join(dataDir, 'statusline/statusline.mjs'), directory: join(dataDir, 'statusline'), content: null }] : [],
+      }, () => true)
+      expect(prepared).not.toBeNull()
+      result.overrides.extraArgs = launchSettingsArgs(engine, result.overrides.extraArgs, { values: prepared!.values, current: () => true })
+    }
     return JSON.parse(placeholders(JSON.stringify({ result, calls })))
   }
   for (const engine of ['claude', 'codex', 'opencode', 'pi'] as const) {
@@ -453,9 +474,8 @@ async function overridesCases(): Promise<Record<string, unknown>> {
   cases['codex · profile · the profile\'s file'] = await run('codex', { codexHome: profile }, null, { readCodexConfig: undefined })
   cases['codex · profile without a file'] = await run('codex', { codexHome: join(root, 'no-such-profile') }, null, { readCodexConfig: undefined })
   rmSync(join(daemonHome, 'config.toml'))
-  // Started by another agent: the pull request line last, from the person's settings as each engine reads them
-  // (lib/agentAttribution.ts, kit/attribution.ts), and none for an engine with no way to say it.
-  const settings = (files: Record<string, string>) => ({ readAttribution: (path: string) => files[path.split(homedir()).join('<home>')] ?? null })
+  // Origin and retired attribution preferences never add branding; final optional settings are prepared separately.
+  const settings = (settingsSources: Record<string, string>) => ({ settingsSources })
   for (const engine of ['claude', 'codex', 'opencode'] as const) {
     cases[`${engine} · started by an agent`] = await run(engine, { startedBy: 'agent', cwd: '/work/app' }, null, settings({}))
     cases[`${engine} · started by an agent, a harness on a grid as a named agent`] = await run(engine,

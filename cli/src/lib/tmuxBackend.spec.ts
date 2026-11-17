@@ -1169,3 +1169,39 @@ describe.skipIf(!resolveBinaryOnPath('tmux'))('session variables on a real tmux 
     expect(await showing(token)).toEqual([])
   })
 })
+
+it.each(['create', 'respawn'] as const)('selects the final owner command after the %s receipt wait', async operation => {
+  const tmux = scriptTmux()
+  let release!: () => void, entered!: () => void, optionalCurrent = true
+  const journal = new Promise<void>(resolve => { release = resolve })
+  const preparing = new Promise<void>(resolve => { entered = resolve })
+  const finalCommand = vi.fn(() => optionalCurrent ? ['stale-optional'] : ['current-base', 'owner-word'])
+  const request = { command: ['stale-preflight'], label: 'owner-final', env: { OWNER_VALUE: 'private-fixture' }, current: () => true,
+    onDispatch: () => { entered(); return journal.then(() => finalCommand) } }
+  const backend = new TmuxBackend(undefined, () => 'private-test-owner', () => {})
+  const pending = operation === 'create' ? backend.create(request as never) : backend.respawn({ backend: 'tmux', paneId: '%42' }, request as never)
+  await preparing; optionalCurrent = false; release()
+  expect(await pending).toMatchObject({ state: 'succeeded', dispatch: 'executed' })
+  expect(finalCommand).toHaveBeenCalledTimes(1)
+  expect(tmux.calls()[0]).toBe('start-server ; source-file -')
+  const dispatch = tmux.stdin()
+  expect(dispatch).toContain('current-base')
+  expect(dispatch).toContain('owner-word')
+  expect(dispatch).toContain('OWNER_VALUE=private-fixture')
+  if (operation === 'create') expect(dispatch).toContain('private-test-owner')
+  expect(dispatch).not.toContain('stale-')
+})
+
+it.each(['create', 'respawn'] as const)('refuses %s when the final command factory revokes required authority or throws', async operation => {
+  for (const failure of ['required', 'throws'] as const) {
+    const calls = recordingTmux()
+    let current = true
+    const finalCommand = vi.fn(() => { if (failure === 'throws') throw Error('owner preparation failed'); current = false; return ['never-executed'] })
+    const request = { command: ['never-preflight'], current: () => current, onDispatch: () => finalCommand }
+    const backend = new TmuxBackend(undefined, () => 'private-test-owner', () => {})
+    const result = operation === 'create' ? await backend.create(request as never) : await backend.respawn({ backend: 'tmux', paneId: '%42' }, request as never)
+    expect(result).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(finalCommand).toHaveBeenCalledTimes(1)
+    expect(calls().some(call => call.includes('new-session') || call.includes('respawn-pane'))).toBe(false)
+  }
+})

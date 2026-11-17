@@ -180,14 +180,12 @@ engines/grok/contract.ts
 engines/hermes/contract.ts
 engines/hooks.ts
 engines/identities.ts
-engines/kit/attribution.ts
 engines/kit/continuation.ts
 engines/kit/controlIdentity.ts
 engines/kit/exactTranscript.ts
 engines/kit/hermesRecordHomes.ts
 engines/kit/homeAdoption.ts
 engines/kit/homeCatalog.ts
-engines/kit/hookCommand.ts
 engines/kit/hookHeld.ts
 engines/kit/hookRules.ts
 engines/kit/hookScript.ts
@@ -196,7 +194,9 @@ engines/kit/identityScan.ts
 engines/kit/launchArgs.ts
 engines/kit/launchExecutable.ts
 engines/kit/launchScreen.ts
+engines/kit/launchSettingsWire.ts
 engines/kit/launchStartup.ts
+engines/kit/launchValues.ts
 engines/kit/nativeDescriptors.ts
 engines/kit/nativeEvidence.ts
 engines/kit/nativeExecutable.ts
@@ -208,6 +208,7 @@ engines/kit/nativeHookHomes.ts
 engines/kit/nativeHookPublication.ts
 engines/kit/nativeHookWire.ts
 engines/kit/nativeLaunchGuard.ts
+engines/kit/nativeLaunchSettings.ts
 engines/kit/nativeLocations.ts
 engines/kit/nativePaths.ts
 engines/kit/nativeSessionModel.ts
@@ -224,7 +225,6 @@ engines/kit/screen.ts
 engines/kit/sessionIdentity.ts
 engines/kit/sessionLocation.ts
 engines/kit/sessionRecords.ts
-engines/kit/statusLine.ts
 engines/kit/stopHook.ts
 engines/kit/storePool.ts
 engines/kit/storeSource.ts
@@ -276,7 +276,6 @@ harnessd/protocol.ts
 harnessd/services.ts
 hookServer.ts
 lib/activitySummary.ts
-lib/agentAttribution.ts
 lib/agentCreateDiagnosis.ts
 lib/agentCreationReceipt.ts
 lib/agentEvent.ts

@@ -88,10 +88,13 @@ export type TerminalActionResult =
   | { state: 'failed'; dispatch: 'not_started' | 'rejected'; reason: string }
   | { state: 'unknown'; dispatch: 'possibly_executed'; reason: string }
 
-/** Optional core authority, checked after backend waits immediately before a command is sent. */
+/** Synchronous owner-built command selected after receipt publication; never supplied by a service. */
+export type TerminalDispatchCommand = () => string[]
+/** Core authority is rechecked after backend waits immediately before a command is sent. */
 export interface TerminalDispatchControl {
   current?: () => boolean
-  onDispatch?: () => void | Promise<void>
+  /** The owner may return its final command builder, selected after this publication wait and before dispatch. */
+  onDispatch?: () => void | TerminalDispatchCommand | Promise<void | TerminalDispatchCommand>
   /** A held adoption may replace only its exact inert shell, checked inside tmux. */
   expectedHeldToken?: string
 }

@@ -21,6 +21,11 @@ import { parseMajor, type NativeExecutableSnapshot } from './kit/versionData.js'
 import { OPENCLAW_LAUNCH, openclawRuntimeState } from './openclaw/contract.js'
 import { OPENCODE_VERSION } from './opencode/contract.js'
 import { type AgentEngine, isTerminalEngine } from './types.js'
+import { prepareLaunchSettings, type PreparedLaunchSettings } from './kit/nativeLaunchSettings.js'
+import { readAuthSession } from '../lib/authSession.js'
+import { managedNodePath } from '../lib/nodeRuntime.js'
+import { claudeCodeGitBash } from '../lib/windows/claudeCodeGitBash.js'
+import { env } from '../config/env.js'
 
 export interface NativeLaunchSource extends PermissionLaunchChoice {
   codexHome?: string | null
@@ -51,6 +56,7 @@ export interface NativeLaunch {
   ready?(): boolean
   current(): boolean
   prepareHooks(port: number, current: () => boolean, environment?: Readonly<Record<string, string>>, clear?: readonly string[]): Promise<boolean>
+  prepareSettings?(cwd: string | null, current: () => boolean): Promise<PreparedLaunchSettings | null>
   permission(choice: PermissionLaunchChoice): Promise<'supported' | 'unsupported' | 'unknown'>
 }
 export type NativeLaunchResult =
@@ -184,6 +190,26 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
     ...(openclawLocal ? { openclawLocal } : {}),
     get environment() { return selectedEnvironment },
     get proofs() { return [...dependencies, ...proofs] },
+    async prepareSettings(cwd, ownerCurrent) {
+      if (engine !== 'claude' && engine !== 'codex') return null
+      const selectedRevision = revision, selected = selectedEnvironment
+      const identity = () => {
+        const session = readAuthSession()
+        return session?.machineId ? { machineId: session.machineId,
+          ...(session.signInAcct ? { accountId: session.signInAcct } : {}),
+          ...(session.signInEpoch ? { epoch: session.signInEpoch } : {}) } : null
+      }
+      const owner = identity(), ownerKey = JSON.stringify(owner)
+      // Required native proof can recover after another hook preparation; optional values from that old revision cannot.
+      const optionalCurrent = () => selectedRevision === revision && selected === selectedEnvironment && current()
+        && ownerCurrent() && JSON.stringify(identity()) === ownerKey
+      return prepareLaunchSettings(engine, selected, cwd, setup, {
+        dataDir: env.ADAPTER_DATA_DIR, runtimeNode: managedNodePath(),
+        platform: process.platform as 'darwin' | 'linux' | 'win32',
+        gitBash: process.platform === 'win32' ? claudeCodeGitBash({ env: selected }) : null,
+        owner, current: optionalCurrent,
+      })
+    },
     retain(proof) {
       if (!current() || dependencies.length >= 16 || !proof.current()) return false
       dependencies.push(proof); return true

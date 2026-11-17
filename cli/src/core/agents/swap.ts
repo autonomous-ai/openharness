@@ -6,6 +6,8 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
 import { homedir } from 'node:os'
+import { launchSettingsArgs } from '../../engines/kit/launchValues.js'
+import type { PreparedLaunchSettings } from '../../engines/kit/nativeLaunchSettings.js'
 import { checkPidRuntime, terminateDeletedAgent } from '../../lib/deleteAgentFallback.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv } from '../../lib/engineLaunch.js'
 import { engineBin } from '../../lib/engineBin.js'
@@ -56,7 +58,7 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
     session: RegisteredSession,
     /** The row's own pane and the backend it is on (`restartTargetOf`): a swap runs where the row is. */
     { backend, runtime }: RestartTarget,
-    launch: { native?: import('../../engines/nativeLaunch.js').NativeLaunch; env?: Record<string, string>; extraArgs?: readonly string[]; ownerArgs?: readonly string[]; clearEnv?: readonly string[]
+    launch: { native?: import('../../engines/nativeLaunch.js').NativeLaunch; settings?: PreparedLaunchSettings | null; env?: Record<string, string>; extraArgs?: readonly string[]; ownerArgs?: readonly string[]; clearEnv?: readonly string[]
       /** Names the respawn takes out of what the pane was created with, on a backend with no `clearEnv()` of its own
        *  (the pty host): a retarget home's grid variables. */
       clearPaneEnv?: readonly string[] } = {},
@@ -69,7 +71,9 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
     const identity = paneReadIdentity(target)
     const ownsOriginal = () => current?.() !== false && sameRestartTarget(target)
       && paneReadIdentity(byAgent(target.agentId)) === identity
-    const relaunchOptions = (opts: RelaunchArgvOptions) => ({
+    const relaunchOptions = (opts: RelaunchArgvOptions) => {
+      const extraArgs = launchSettingsArgs(session.engine, launch.extraArgs ?? [], launch.settings)
+      return {
       ...opts,
       // A fresh start of an engine whose sessions Harness names reopens the agent's own (engineLaunch.ts `agentId`).
       agentId: session.agentId,
@@ -78,7 +82,7 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
       // Plan or Accept edits would come back as Ask without it.
       ...(permissionMode ? { permissionMode } : {}),
       ...(session.cwd ? { cwd: session.cwd } : {}),
-      ...(launch.extraArgs?.length ? { extraArgs: launch.extraArgs } : {}),
+      ...(extraArgs.length ? { extraArgs } : {}),
       // The owner's own words, which the argv builder puts last (engineLaunch.ts `ownerArgs`).
       ...(launch.ownerArgs?.length ? { ownerArgs: launch.ownerArgs } : {}),
       // A pane swap onto a grid has to clear the same vendor credentials a fresh create does, for the
@@ -92,7 +96,7 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
       // clears nothing. There the user's own variables are the point.
       ...(launch.clearEnv?.length ? { clearEnv: launch.clearEnv } : {}),
       ...(launch.env?.HARNESS_DSH ? { harnessNode: true } : {}),
-    })
+    } }
     return {
       ...(current ? { isCurrent: current } : {}),
       // The history is replaced only while the swap holds, as `restartAgent` judges it (`isCurrent`).
@@ -121,11 +125,12 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
           current: ownsOriginal,
         }, checkAfterMs)
       },
-      respawn: async (argv) => {
+      respawn: async (argv, command) => {
         // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
         const env = mergedLaunchEnv(launch.env, engineLaunchEnv(session.engine, launch.native))
         const result = await backend.respawn(runtime, {
           command: argv,
+          onDispatch: () => command,
           ...(current ? { current } : {}),
           cwd: homedir(),
           // Windows: the workspace to start in, what this launch alone must not inherit from the host (its own

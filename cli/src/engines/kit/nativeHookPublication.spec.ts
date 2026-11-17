@@ -32,7 +32,7 @@ beforeEach(() => {
   file = join(root, 'settings.json'); writeFileSync(file, '{}')
 })
 afterEach(() => { filesystem.reads = undefined; filesystem.total = undefined; filesystem.onStat = undefined; filesystem.onSync = undefined; rmSync(fixtureRoot, { recursive: true, force: true }) })
-const prepared = (input: NativeHookInput) => ({ version: 1 as const, files: input.files.map((entry, index) => ({ index, content: `${entry.content ?? ''} prepared` })) })
+const prepared = (input: Pick<NativeHookInput, 'files'>) => ({ version: 1 as const, files: input.files.map((entry, index) => ({ index, content: `${entry.content ?? ''} prepared` })) })
 
 it('bounds filesystem reads during a worker authority check for unchanged native files', async () => {
   const artifact = join(root, 'hook.mjs')

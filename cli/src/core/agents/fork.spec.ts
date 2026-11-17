@@ -8,7 +8,7 @@ import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
 import { windowsAfterExit } from '../../lib/windows/engineStart.js'
-import { buildEngineLaunchArgv, engineLaunchEnv, refusePermissionFlagIfUnsupported, supportsNamedAgent } from '../../lib/engineLaunch.js'
+import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, refusePermissionFlagIfUnsupported, supportsNamedAgent } from '../../lib/engineLaunch.js'
 import { planFork } from '../../lib/forkAgent.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createAgentForker, type ForkAgentDeps } from './fork.js'
@@ -90,7 +90,11 @@ describe('forking an agent', () => {
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    vi.mocked(createAndRegisterPane).mockReset().mockResolvedValue({ ok: true, spawned: { runtime: { paneId: '%3' } }, pending } as never)
+    vi.mocked(createAndRegisterPane).mockReset().mockImplementation(async request => {
+      const command = await request.onDispatch?.()
+      command?.()
+      return { ok: true, spawned: { runtime: { paneId: '%3' } }, pending } as never
+    })
   })
   // A launch or an installed harness one test queued and never used answers no other test.
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); launchDsh.mockReset(); vi.mocked(installedDsh).mockReset() })
@@ -110,11 +114,11 @@ describe('forking an agent', () => {
     expect(createAndRegisterPane).not.toHaveBeenCalled()
   })
 
-  it.each(['initial', 'source', 'inspect', 'workspace', 'description', 'harness', 'overrides', 'hooks', 'permission', 'instructions'] as const)(
+  it.each(['initial', 'source', 'inspect', 'workspace', 'description', 'harness', 'overrides', 'hooks', 'settings', 'permission', 'instructions'] as const)(
     'cannot dispatch a fork whose original owner is revoked during %s', async stage => {
       let current = stage !== 'initial'
       const revoke = (at: string) => { if (stage === at) current = false }
-      const launch = { current: () => stage !== 'workspace', environment: { HOME: root }, opencodeMajor: 1 } as unknown as NativeLaunch
+      const launch = { current: () => stage !== 'workspace', environment: { HOME: root }, opencodeMajor: 1, prepareSettings: async () => { revoke('settings'); return null } } as unknown as NativeLaunch
       vi.mocked(installedDsh).mockReturnValue({ manifest: { name: 'Fixture' } } as never)
       vi.mocked(refusePermissionFlagIfUnsupported).mockImplementation(async () => { revoke('permission'); return null })
       const run = setup(source({ dsh: 'fixture/tools' }), {
@@ -188,7 +192,8 @@ describe('forking an agent', () => {
 
   it('prepares final fork locations with one snapshot and retains ownership until dispatch', async () => {
     vi.mocked(installedDsh).mockReturnValueOnce({ manifest: { name: 'Fixture' } } as never)
-    const launch = { current: () => true, opencodeMajor: 2, environment: { HOME: '/fixture/home', CODEX_HOME: '/fixture/profile' }, token: 'fixture-native' } as unknown as NativeLaunch
+    const prepareSettings = vi.fn(async () => { expect(prepareNative).toHaveBeenCalledOnce(); return null })
+    const launch = { current: () => true, opencodeMajor: 2, environment: { HOME: '/fixture/home', CODEX_HOME: '/fixture/profile' }, token: 'fixture-native', prepareSettings } as unknown as NativeLaunch
     const native = vi.fn(async () => ({ ok: true as const, launch }))
     const prepareNative = vi.fn(async () => true)
     const relaunchOverrides = vi.fn(async () => ({ ok: true as const, overrides: { native: launch, env: { CODEX_HOME: '/fixture/profile' }, extraArgs: [], clearEnv: [] } }))
@@ -200,6 +205,7 @@ describe('forking an agent', () => {
     expect(native).toHaveBeenCalledOnce()
     expect(relaunchOverrides).toHaveBeenCalledWith(expect.any(Object), expect.any(Object), expect.any(Function), launch, authority.label)
     expect(prepareNative).toHaveBeenCalledWith(launch, expect.any(Function), expect.objectContaining({ CODEX_HOME: '/fixture/profile', HARNESS_DSH: 'blender' }), expect.any(Array))
+    expect(prepareSettings).toHaveBeenCalledOnce()
     expect(createAndRegisterPane).not.toHaveBeenCalled()
     current = false
     if (!prepared.ok) throw Error('fixture held')
@@ -277,11 +283,11 @@ describe('forking an agent', () => {
       ...(cleared.length ? { clearInherited: cleared } : {}), env: { GRID_NO_UPDATE_CHECK: '1' } })
   })
 
-  it('refuses a batch-file engine on Windows whose first message cmd.exe would read, by name', async () => {
-    vi.mocked(buildEngineLaunchArgv).mockImplementationOnce(() => { throw new WindowsBatchLaunchRefused('claude', 'C:\\tools\\claude.cmd') })
+  it.each([['preflight', buildEngineCommandArgv], ['dispatch', buildEngineLaunchArgv]] as const)('refuses a Windows batch-file fork during %s before opening a pane', async (_phase, builder) => {
+    vi.mocked(builder).mockImplementationOnce(() => { throw new WindowsBatchLaunchRefused('claude', 'C:\\tools\\claude.cmd') })
     expect(await setup(source()).fork({ agentId: 'a1', name: null, prompt: 'a & b' })).toMatchObject({ ok: false, error: 'ENGINE_LAUNCH_REFUSED', detail: expect.stringContaining('claude.cmd') })
     expect(createAndRegisterPane).not.toHaveBeenCalled()
-    vi.mocked(buildEngineLaunchArgv).mockImplementationOnce(() => { throw new Error('fixture') })
+    vi.mocked(builder).mockImplementationOnce(() => { throw new Error('fixture') })
     await expect(setup(source()).fork({ agentId: 'a1', name: null, prompt: null })).rejects.toThrow('fixture')
   })
 

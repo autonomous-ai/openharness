@@ -13,6 +13,7 @@ import type { AgentEngine } from '../engines/types.js'
 import type { RegisteredSession, ProcessIdentity } from './registry.js'
 import type { TerminateOutcome } from './deleteAgentFallback.js'
 import { permissionModeApproves } from './engineLaunch.js'
+import type { TerminalDispatchCommand } from './terminalTypes.js'
 
 /**
  * Whether the relaunch approves on its own — from the ROW first, and the live process only for a row
@@ -99,7 +100,7 @@ export interface RestartAgentDeps {
   /** Validate + SIGTERM/SIGKILL the saved process. Same contract as `terminateDeletedAgent`. */
   terminate: (checkAfterMs?: number) => Promise<TerminateOutcome>
   /** `tmux respawn-pane -k` (or the pty host's `respawn`, the same in place) with a fully-built argv. */
-  respawn: (argv: string[]) => Promise<{ ok: boolean; reason?: string }>
+  respawn: (argv: string[], command: TerminalDispatchCommand) => Promise<{ ok: boolean; reason?: string }>
   /** Why `respawn` would be refused here (a tmux too old for what the relaunch needs), asked before
    *  anything is stopped; null when it would try. Left out, never refused. */
   respawnRefusal?: () => Promise<string | null>
@@ -189,8 +190,9 @@ export async function restartAgent(
   }
   const spawnAndWait = async (withResume: boolean): Promise<ProcessIdentity | null> => {
     if (!current()) return null
-    const argv = deps.buildArgv({ bypassPermission, ...(!withResume ? {} : preparedFork ? { resumeSessionId: preparedFork } : reopen(resumeSessionId)) })
-    const spawned = await deps.respawn(argv)
+    const options = { bypassPermission, ...(!withResume ? {} : preparedFork ? { resumeSessionId: preparedFork } : reopen(resumeSessionId)) }
+    const command = () => deps.buildArgv(options)
+    const spawned = await deps.respawn(command(), command)
     if (!current()) return null
     if (!spawned.ok) {
       deps.log(`[restart] ${session.engine} respawn-pane failed: ${spawned.reason ?? 'unknown reason'}`)

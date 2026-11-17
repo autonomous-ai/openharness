@@ -105,6 +105,16 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RetargetDe
 }
 
 describe('retargeting an agent', () => {
+  it.each(['/work', null])('prepares optional values once for the final retarget owner with cwd %s before any stop', async cwd => {
+    const run = setup(agent({ cwd }))
+    const settings = { values: { instructions: 'owner optional', settings: null }, current: () => true }
+    const prepareSettings = vi.fn(async () => { expect(run.deps.paneSwapDeps).not.toHaveBeenCalled(); return settings })
+    const native = { current: () => true, prepareSettings } as never
+    vi.mocked(run.deps.relaunchOverrides).mockResolvedValue({ ok: true, overrides: { native, env: {}, extraArgs: [], clearEnv: [] } })
+    await run.retarget({ agentId: 'a1', grid: null })
+    expect(prepareSettings).toHaveBeenCalledOnce()
+    expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(expect.any(Object), expect.any(Object), expect.objectContaining({ native, settings }), null, expect.any(Function))
+  })
   it.each(['rotated', 'deleted', 'deleted after preflight'] as const)('Saved API freshness keeps retarget assignment consistent with a %s source', async state => {
     const directory = mkdtempSync(join(tmpdir(), 'retarget-api-'))
     try {
@@ -115,7 +125,7 @@ describe('retargeting an agent', () => {
         machine: () => ({ hermesSystemManaged: false }),
         gridLaunch: gridLaunchThrough(() => ({ gridLaunch: async input => answerGridLaunch(input, refreshApiFor(store)) })),
         capabilities: async () => ({ sessionEnv: true }), writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(),
-        readCodexConfig: () => null, readAttribution: () => null,
+        readCodexConfig: () => null,
       }
       const actual = await vi.importActual<typeof import('../../lib/launchOverrides.js')>('../../lib/launchOverrides.js')
       vi.mocked(validateLaunchOverrides).mockImplementationOnce(actual.validateLaunchOverrides)
@@ -259,7 +269,7 @@ describe('retargeting an agent', () => {
       waitForProcess: async () => null, buildArgv, keepAbandoned, log: () => {},
     }) })
     expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'RESPAWN_FAILED' })
-    expect(respawn).toHaveBeenCalledExactlyOnceWith(['fixture-engine', 's1'])
+    expect(respawn).toHaveBeenCalledExactlyOnceWith(['fixture-engine', 's1'], expect.any(Function))
     expect(keepAbandoned).not.toHaveBeenCalled()
     expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
   })

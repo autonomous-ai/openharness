@@ -3,6 +3,7 @@ import type { NativeInstallation } from './nativeInstall.js'
 import type { NativeSetup, NativeProbeOutput } from './nativeSetup.js'
 import { boundedHookInput, hookCandidate } from './nativeHookWire.js'
 import { boundedTrustInput } from './nativeTrustWire.js'
+import { boundedLaunchSettingsInput, launchSettingsCandidate, LAUNCH_SETTINGS_TIMEOUT_MS } from './launchSettingsWire.js'
 import { noteMissingHookScript } from './hookScript.js'
 
 type Payload = Record<string, unknown>
@@ -33,6 +34,20 @@ export function createNativeSetupLink(call: (type: string, payload: Payload, wai
       return allowed && current() && performance.now() < deadline ? hookCandidate(result.files, captured.files.length, result) : null
     },
     async prepareFiles(input, request, current) {
+      if ('purpose' in input) {
+        if (!current() || !boundedLaunchSettingsInput(input)) return null
+        const captured = { ...input, environment: { ...input.environment }, owner: input.owner && { ...input.owner },
+          sources: input.sources.map(source => ({ ...source })), files: input.files.map(file => ({ ...file })) }
+        const deadline = performance.now() + LAUNCH_SETTINGS_TIMEOUT_MS
+        const answer = await call('setup_files_prepare', { request, ...captured }, LAUNCH_SETTINGS_TIMEOUT_MS)
+        if (!text(answer.preparation, 128) || !answer.preparation) return null
+        const allowed = current()
+        const remaining = Math.floor(deadline - performance.now())
+        if (remaining <= 0) return null
+        const result = await call('setup_files_commit', { preparation: answer.preparation,
+          purpose: captured.purpose, engine: captured.engine, request, allowed }, remaining)
+        return allowed && current() && performance.now() < deadline ? launchSettingsCandidate(result.files, captured, result) : null
+      }
       if (!current() || !boundedHookInput(input)) return null
       const captured = { ...input, environment: { ...input.environment }, files: input.files.map(file => ({ ...file })) }
       const answer = await call('setup_files_prepare', { request, ...captured })
