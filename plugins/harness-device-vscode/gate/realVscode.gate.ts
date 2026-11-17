@@ -331,7 +331,9 @@ describe('the extension in a real, throwaway VS Code', () => {
   })
 
   it('a show selects the terminal it names', async () => {
-    for (const shell of [shells[1]!, shells[0]!]) {
+    for (let show = 0; show < 2; show++) {
+      // The terminal not active, so only the show can make it active; the second show names the other one.
+      const shell = (await ask('active')).active === shells[0] ? shells[1]! : shells[0]!
       expect(streams.show({ window: opened[0]!.window, shell }, false)).toBe(true)
       await until(`a state whose active is the shown shell`, () => (states.at(-1)?.active === shell ? true : undefined))
       expect((await ask('active')).active).toBe(shell)
@@ -341,8 +343,8 @@ describe('the extension in a real, throwaway VS Code', () => {
   // VS Code's API does not say where a terminal is scrolled: the extension's count says whether its scroll command ran.
   // Each sum comes a minute after that minute's first event, so the two steps take up to two minutes.
   it('a scroll line runs VS Code\'s scroll command on the active terminal, and nothing on one not active', async () => {
-    // The last show made shells[0] active.
-    const [active, inactive] = [shells[0]!, shells[1]!]
+    const active = (await ask('active')).active as number
+    const inactive = shells.find((shell) => shell !== active)!
     const file = channelFile()
     // The file, not its folder: a recursive watch of the logs heard none of the extension's writes on a Mac.
     logsWatch = watch(file, changed)
