@@ -130,6 +130,8 @@ async function codexCommand(verb: string, json: boolean, deps: DeviceDeps): Prom
 const ENGINE_NAMES: Record<DialEngine, string> = { claude: 'Claude Code', codex: 'Codex' }
 const OTHER: Record<DialEngine, DialEngine> = { claude: 'codex', codex: 'claude' }
 const SAVE_FAILED = 'Could not save the dial setting.'
+/** dial-setup.json is there but could not be read: the homes the devices service set up were passed by. */
+const SETUP_UNREAD = 'Could not read the dial setup.'
 const PLUGIN_LEFT_ON = 'Claude Code was not found, so its harness-device plugin is still on; /plugin in Claude Code removes it.'
 
 /**
@@ -162,7 +164,8 @@ function setUp(engine: DialEngine, dataDir: string): boolean {
  * a disable run with another home still finds it; a folder the record cannot hold gets no skill. The default home is
  * made when missing, as a fresh install has none yet; a person's own dial skill there stays. Last, each folder the
  * devices service recorded gets the skill again, since the service leaves alone one the person removed: a skills folder
- * deleted whole is made again while its home is there, and one whose home is gone is not.
+ * deleted whole is made again while its home is there, and one whose home is gone is not. A record that cannot be read
+ * names no folder, and is said.
  */
 function turnOn(engine: DialEngine, home: string, deps: DeviceDeps): number {
   if (writeRemoved(deps.dataDir, engine, false) !== undefined) {
@@ -179,14 +182,16 @@ function turnOn(engine: DialEngine, home: string, deps: DeviceDeps): number {
   const result = recorded ? writeSkill(skills) : 'failed'
   if (result === 'theirs') deps.err(`${ENGINE_NAMES[engine]} already has a skill named dial that Harness did not write; it stays.`)
   let failed = result === 'failed'
-  for (const folder of readSetup(deps.dataDir).homes[engine]) {
+  const setup = readSetup(deps.dataDir)
+  for (const folder of setup.homes[engine]) {
     const there = ownDirectory(folder)
     const remade = there === 'missing' && ownDirectory(dirname(folder)) === 'ok'
     if (there !== 'ok' && !remade) continue
     if ((remade && !madeFolder(folder)) || writeSkill(folder) === 'failed') failed = true
   }
-  if (!failed) return 0
-  deps.err(`Could not write the ${ENGINE_NAMES[engine]} skill.`)
+  const error = failed ? `Could not write the ${ENGINE_NAMES[engine]} skill.` : setup.unread ? SETUP_UNREAD : undefined
+  if (error === undefined) return 0
+  deps.err(error)
   return 1
 }
 
@@ -207,14 +212,16 @@ function madeFolder(folder: string): boolean {
  * leaves no more behind than it must; the first error is the one printed. A folder the other engine holds its skill in
  * (~/.codex/skills linked to ~/.claude/skills) keeps it. The command's record then keeps only the folders whose removal
  * failed, for the next disable. The service's record is only read: its one writer is the devices service, which empties
- * that engine's folders once it reads the mark.
+ * that engine's folders once it reads the mark; one that cannot be read names no folder, and is said.
  */
 async function turnOff(engine: DialEngine, home: string, deps: DeviceDeps, plugin?: () => Promise<ClaudeResult>): Promise<number> {
   let error = writeRemoved(deps.dataDir, engine, true) === undefined ? undefined : SAVE_FAILED
   const uninstalled = await plugin?.()
   if (uninstalled && !uninstalled.ok) error ??= uninstalled.error
   const written = readWritten(deps.dataDir)
-  const listed = readSetup(deps.dataDir).homes
+  const setup = readSetup(deps.dataDir)
+  if (setup.unread) error ??= SETUP_UNREAD
+  const listed = setup.homes
   const other = OTHER[engine]
   const shared = setUp(other, deps.dataDir)
     ? new Set([skillsFolderOf(other === 'claude' ? claudeHome() : deps.codexHome, false), ...written[other], ...listed[other]])
