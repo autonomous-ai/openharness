@@ -18,6 +18,7 @@
 import { execFile } from 'node:child_process'
 import { join } from 'node:path'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
+import { ensureBundledMemories } from '../dsh/builtins.js'
 import { MEMORIES_ID } from '../dsh/builtinIds.js'
 import { installedDsh } from '../dsh/installed.js'
 
@@ -85,9 +86,10 @@ export function startMemory(_core: CoreApi, deps: MemoryDeps = DEFAULTS): Servic
   }
   let reading: Promise<Record<string, unknown>> | null = null
   const mem = async (args: string[], input?: string): Promise<Record<string, unknown>> => {
-    const dir = deps.packageDir()
-    if (!dir) return { error: 'MEMORIES_NOT_INSTALLED', detail: 'Memories is not installed on this machine.' }
     try {
+      if (deps === DEFAULTS && !ensureBundledMemories()) return { error: 'MEMORIES_NOT_INSTALLED', detail: 'Memories is not installed on this machine. Try again.' }
+      const dir = deps.packageDir()
+      if (!dir) return { error: 'MEMORIES_NOT_INSTALLED', detail: 'Memories is not installed on this machine.' }
       const { stdout } = await deps.run(dir, args, input)
       return { ok: true, value: JSON.parse(stdout) as unknown }
     } catch (error) { return failed(error) }

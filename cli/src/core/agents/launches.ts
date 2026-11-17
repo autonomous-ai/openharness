@@ -13,8 +13,8 @@ import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, sep } from 'node:path'
 import type { BackendSocket } from '../../backendSocket.js'
 import { WORKSPACES_OFF, type Asker, type WorkspacesPort } from '../api.js'
-import { installedDsh } from '../../dsh/installed.js'
-import { DSH_ID_RE, dshSupportedEngines } from '../../dsh/manifest.js'
+import { DSH_ID_RE } from '../../dsh/id.js'
+import { dshUnavailable, type DshDescribeAnswer, type DshDescription } from '../../dsh/launchWire.js'
 import { homeIsAbsolute } from '../../engines/kit/homeAdoption.js'
 import { folderTrust } from '../../engines/launchPrep.js'
 import type { NativeLaunchResult, NativeLaunchSource } from '../../engines/nativeLaunch.js'
@@ -59,6 +59,8 @@ export type RestartAgent = (agentId: string, launchArgs?: string[]) => Promise<
 export type ResumeAgent = (agentId: string, permissionMode?: string, launchArgs?: string[]) => ReturnType<RestartAgent>
 
 export interface LaunchRequestDeps {
+  /** Bounded facts from the Store; never the installed index in core. */
+  describeDsh?: (dsh: string, engine: CreateInput['engine']) => Promise<DshDescribeAnswer>
   /** The receipts of launches asked for with a `creationId`. */
   receipts: Pick<AgentCreationReceipts, 'run' | 'status' | 'createdLaunchModel' | 'creator' | 'has' | 'runIntent' | 'pendingIntents' | 'pendingIntent' | 'cancelIntent'>
   /** Each launch, read when a request comes in: null on a machine that cannot launch agents. */
@@ -100,7 +102,7 @@ export const WORKSPACES_WAIT_MS = 10 * 60_000
 const WORKSPACES_GONE = { state: 'failed' as const, error: 'SERVICE_UNAVAILABLE',
   detail: 'Could not make the project folder: Harness\'s workspaces service was not available for 10 minutes. Try again, or restart Harness.' }
 
-export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, claudeHomeListed, workspaces }: LaunchRequestDeps) {
+export function createLaunchRequests({ describeDsh = async id => dshUnavailable(id), receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, claudeHomeListed, workspaces }: LaunchRequestDeps) {
   /** Since when each create has waited for workspaces, by its creation id: in memory, as its hold is retried in this
    *  core. An entry lasts only while its create waits: it goes when the create goes on, gives up or is cancelled. */
   const waitingSince = new Map<string, number>()
@@ -115,13 +117,11 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     authority.hold(WORKSPACES_HOLD)
     return null
   }
-  const validateInstalled = async (input: CreateInput, known?: ReturnType<typeof installedDsh>): Promise<{ error: string; detail: string } | null> => {
+  const validateInstalled = async (input: CreateInput, known?: DshDescribeAnswer): Promise<{ error: string; detail: string } | null> => {
     if (input.dsh) {
-      const installed = known ?? installedDsh(input.dsh)
-      if (!installed) return { error: 'INVALID_DSH', detail: `${input.dsh} is not installed on this machine` }
-      if (installed.manifest.kind === 'viewer') return { error: 'INVALID_DSH', detail: `${input.dsh} is a viewer package, not an agent` }
-      if (!dshSupportedEngines(installed.manifest).includes(input.engine)) return { error: 'INVALID_DSH',
-        detail: `${input.dsh} supports ${dshSupportedEngines(installed.manifest).join(', ')}; ${input.engine} is not compatible` }
+      const installed = known ?? await describeDsh(input.dsh, input.engine)
+      if (!installed.ok) return { error: installed.error, detail: installed.detail }
+      if (installed.refusal) return { error: 'INVALID_DSH', detail: installed.refusal }
     }
     if (input.agent && !supportsNamedAgent(input.engine, input.engine === 'opencode' ? await opencodeLaunch.opencodeMajorVersion() : null)) {
       return { error: 'AGENT_UNSUPPORTED', detail: new NamedAgentUnsupportedError(input.engine).message }
@@ -129,9 +129,10 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     return null
   }
 
-  const executeCreate = async (input: CreateInput, projectFolder: ProjectFolder | null, local: boolean, invoke: CreateAgent, validated = false): Promise<AgentCreationOutcome> => {
+  const executeCreate = async (input: CreateInput, projectFolder: ProjectFolder | null, local: boolean, invoke: CreateAgent, validated = false, known?: DshDescription): Promise<AgentCreationOutcome> => {
+    const description = known ?? (input.dsh ? await describeDsh(input.dsh, input.engine) : undefined)
     if (!validated) {
-      const refusal = await validateInstalled(input)
+      const refusal = await validateInstalled(input, description)
       if (refusal) return { state: 'failed', ...refusal }
     }
     const { dsh, resumeSessionId } = input
@@ -142,7 +143,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     /** The SSH alias a clone got in through, which the apps tell the person: it is the account later pushes go as. */
     let clonedVia: { alias: string } | undefined
     if (projectFolder?.source === 'new') {
-      try { made = preparedFolder = await prepareNewFolder(projectFolder, { label: (dsh ? installedDsh(dsh)?.manifest.name : null) ?? engineLabel(input.engine) }) }
+      try { made = preparedFolder = await prepareNewFolder(projectFolder, { label: (description?.ok ? description.name : null) ?? engineLabel(input.engine) }) }
       catch (error) {
         return { state: 'failed', error: error instanceof ProjectFolderError ? error.code : 'PROJECT_PREPARATION_FAILED',
           detail: error instanceof ProjectFolderError ? error.message : 'Could not prepare the project folder.',
@@ -451,16 +452,16 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     // A DSH is refused, never approximated: an agent created as its plain base engine would look
     // like it worked and have none of the skills the user picked the tile for.
     let dsh: string | null = null
-    let installed: ReturnType<typeof installedDsh>
+    let installed: DshDescribeAnswer | undefined
     if (payload.dsh !== undefined && payload.dsh !== null) {
       if (typeof payload.dsh !== 'string' || !DSH_ID_RE.test(payload.dsh)) {
         reply({ error: 'INVALID_DSH', detail: 'dsh must be an owner/name id' }); return
       }
-      installed = installedDsh(payload.dsh)
+      installed = await describeDsh(payload.dsh, engine)
       // Formerly-named packages used their canonical ID in both launch input
       // and v1 fingerprints. Resolve aliases without refusing a known receipt
       // merely because the package is no longer installed.
-      dsh = installed?.id ?? payload.dsh
+      dsh = installed.ok ? installed.id : payload.dsh
     }
     // A first prompt is refused BEFORE any pane exists: an engine with no way to take one would
     // otherwise open on an empty input and look like the person's request had been heard. The
@@ -581,7 +582,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
             selection: model.state === 'ok' ? model.selection : null, label: buildHarnessSessionLabel(engine), local: asker.local }, model.state === 'ok' ? modelHold : launchHold)
           : model.state === 'ok'
           ? pending.start(creationId, fingerprint, { kind: 'model-create-v1', input, selection: model.selection, projectFolder, local: asker.local }, modelHold)
-          : receipts.run(creationId, fingerprint, () => executeCreate(input, projectFolder, asker.local, create, true))
+          : receipts.run(creationId, fingerprint, () => executeCreate(input, projectFolder, asker.local, create, true, installed?.ok ? installed : undefined))
         void operation.then(async (status) => {
           reply({ creationId, ...await creationStatusPayload(status) })
         }).catch(() => reply({ error: 'INTERNAL' }))

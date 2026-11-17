@@ -28,6 +28,8 @@ import { listClaudeProfiles, profileId } from '../lib/claudeHomes.js'
 import { linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { compactRuntimePickerModels, launchTarget, MODELS_REQUESTS, startModels } from './models.js'
+import { ensureBundledModelManager } from '../dsh/builtins.js'
+vi.mock('../dsh/builtins.js', () => ({ ensureBundledModelManager: vi.fn(() => true) }))
 
 const access = vi.hoisted(() => ({ ensure: vi.fn(async (_request?: { ownGrid?: boolean }): Promise<GridAttachResult> => ({ status: 'converged', name: 'grid-1', detail: 'ok' })) }))
 vi.mock('../lib/gridAttach.js', () => ({
@@ -145,6 +147,14 @@ function deferred<T>() {
 }
 
 describe('the models service', () => {
+  it('prepares its bundled package on first local-model request with Store off and retries only when asked again', async () => {
+    const run = setup()
+    vi.mocked(ensureBundledModelManager).mockClear().mockReturnValueOnce(false).mockImplementationOnce(() => { throw Error('DSH_INDEX_BUSY') })
+    expect(ensureBundledModelManager).not.toHaveBeenCalled()
+    expect(await run.ask('grid_fleet_models_list')).toEqual({ error: 'The Model Manager package is unavailable. Try again.' })
+    expect(await run.ask('grid_fleet_models_list')).toEqual({ error: 'Models are unavailable. Try again.' })
+    expect(ensureBundledModelManager).toHaveBeenCalledTimes(2)
+  })
   beforeEach(() => { vi.spyOn(console, 'log').mockImplementation(() => {}) })
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 

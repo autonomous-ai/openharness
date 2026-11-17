@@ -15,6 +15,18 @@ export interface DshLaunchRequest extends DshMaterializeRequest {
   forkOf?: { agentId: string; dshRuntime: string | null }
 }
 
+/** One requested package, not an installed index or an executable manifest. */
+export interface DshDescribeRequest { dsh: string; engine: AgentEngine }
+export interface DshDescription {
+  ok: true
+  id: string
+  name: string
+  permissionMode: string | null
+  /** Existing create refusal for a viewer or incompatible engine; aliases still resolve for receipts. */
+  refusal: string | null
+}
+export type DshDescribeAnswer = DshDescription | DshRefusal
+
 export interface DshRefusal {
   ok: false
   error: string

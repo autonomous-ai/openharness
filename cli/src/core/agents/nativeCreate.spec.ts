@@ -72,7 +72,7 @@ it.each([true, false])('completes native Codex preparation before its dispatch c
     hookPort: 19473, hooksDisabled: false, installOpencodePlugin: async () => true,
     gridLaunchMachine: () => ({}) as never, buildGridLaunch: async () => { throw Error('unexpected grid') },
     terminalHintMachineName: () => 'Fixture', blocksFolder: () => false, gridSetup: () => null, privateGridName: async () => null,
-    dshLaunch: { launch: async () => { throw Error('unexpected DSH') }, materialize: async () => { throw Error('unexpected DSH') } },
+    dshLaunch: { describe: async () => { throw Error('unused') }, launch: async () => { throw Error('unexpected DSH') }, materialize: async () => { throw Error('unexpected DSH') } },
     syncProfileHome: async () => [],
   })
   const receipts = new AgentCreationReceipts(join(root, 'receipts'))

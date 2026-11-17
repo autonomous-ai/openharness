@@ -271,9 +271,10 @@ like any other. Named in `HARNESSD_SERVICES`, it starts with the others.
   the Wi-Fi device's service. `/api/status` never starts it. The viewers' process (the viewers and the Store)
   is asked for by a harness here, as the core starts or as one is attached (created, forked, restored, found),
   by a request (the Store's, a harness's create or restore, a client's viewer stream or rendered frame, which
-  wait for it), and as the core starts when the release's own harnesses are not in the installed index as this
-  build ships them (`src/dsh/builtinIds.ts` `bundledRevisions`) or the viewers' ledger names viewer servers an earlier
-  process left running (`src/core/viewersWake.ts`). A stream before it has first connected is held, bounded,
+  wait for it), and as the core starts when the viewers' ledger names viewer servers an earlier
+  process left running (`src/core/viewersWake.ts`). The core never reads the installed index. Models and Memories
+  prepare their own bundled package on actual first use; the Store retries incomplete preparation on actual package
+  requests. Different-package index mutations share one lock, with immediate visible busy refusal. A stream before it has first connected is held, bounded,
   until it does (`src/core/viewersLink.ts`).
 - **Older cores.** `askedSince` is the core protocol (`HARNESSD_PROTOCOL`, `src/harnessd/protocol.ts`) from
   which a core asks for this process. A core that speaks an older one never asks, so the master starts the

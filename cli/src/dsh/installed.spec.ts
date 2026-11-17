@@ -4,6 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import * as fs from 'node:fs'
+vi.mock('node:fs', async original => ({ ...await original<typeof import('node:fs')>(), readFileSync: vi.fn((await original<typeof import('node:fs')>()).readFileSync) }))
+const actualFs = await vi.importActual<typeof import('node:fs')>('node:fs')
 import { env } from '../config/env.js'
 import {
   dshInstallDir, dshRootDir, installedDsh, invalidateInstalledDsh, isBrokenDsh, listDshState, listInstalledDsh,
@@ -72,6 +75,32 @@ describe('the installed index', () => {
     expect(readInstalledIndex().map((row) => `${row.id}@${row.ref}`)).toEqual(['alpha/one@null', 'zeta/one@v2'])
     expect(statSync(indexFile()).mode & 0o777).toBe(0o600)
     expect(readFileSync(indexFile(), 'utf8').endsWith('\n')).toBe(true)
+  })
+
+  it('serializes different-package index mutations without losing a concurrent row', () => {
+    writeInstalledIndex([])
+    const original = actualFs.readFileSync
+    let second: unknown
+    let raced = false
+    const read = vi.spyOn(fs, 'readFileSync').mockImplementation(((path: any, ...args: any[]) => {
+      const value = original(path, ...args as [any])
+      if (String(path) === indexFile() && !raced) {
+        raced = true
+        try { upsertInstalledRecord(record('beta/two')) } catch (error) { second = error }
+      }
+      return value
+    }) as typeof fs.readFileSync)
+    try { upsertInstalledRecord(record('alpha/one')) } finally { read.mockRestore() }
+    expect(second).toMatchObject({ message: expect.stringContaining('DSH_INDEX_BUSY') })
+    upsertInstalledRecord(record('beta/two'))
+    expect(readInstalledIndex().map(row => row.id)).toEqual(['alpha/one', 'beta/two'])
+  })
+  it('releases the index lock and temporary output after a failed publication', () => {
+    const rename = vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => { throw Error('disk full') })
+    try { expect(() => upsertInstalledRecord(record('alpha/one'))).toThrow('disk full') } finally { rename.mockRestore() }
+    expect(fs.readdirSync(dshRootDir())).toEqual([])
+    upsertInstalledRecord(record('beta/two'))
+    expect(readInstalledIndex().map(row => row.id)).toEqual(['beta/two'])
   })
 
   it('removes a row and says whether there was one', () => {

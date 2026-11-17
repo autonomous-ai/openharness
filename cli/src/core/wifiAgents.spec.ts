@@ -25,6 +25,13 @@ function registryOf(agents: RegisteredSession[], terminal = (_agentId: string) =
 }
 
 describe('the agents as the Wi-Fi device lists them', () => {
+  it('uses the bounded frame-part package identity and falls back to the retained row while viewers are absent', () => {
+    const row = agent({ dsh: 'acme/former' })
+    const deps = { registry: registryOf([row]), machineId: () => 'mac' }
+    expect(storeAgents({ ...deps, packageId: () => 'acme/current' })[0]?.packageId).toBe('acme/current')
+    expect(storeAgents({ ...deps, packageId: () => null })[0]?.packageId).toBe('acme/former')
+    expect(storeAgents(deps)[0]?.packageId).toBe('acme/former')
+  })
   it('gives the Store its evidence on each agent: the harness it runs, its folder as it really is, and whether its engine is up', () => {
     installed.set('autonomous/robot', { id: 'autonomous/robot' })
     const work = join(root, 'work'); mkdirSync(work)

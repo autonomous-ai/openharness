@@ -588,7 +588,7 @@ describe('production resume handler', () => {
   it.each([
     ['missing tmux', () => { noBackend() }, 'TMUX_UNAVAILABLE'],
     ['missing provider', () => rewrite({ grid: { baseUrl: 'https://fixture.invalid', model: null }, gridLaunch: null }), 'GRID_CREDENTIAL_REQUIRED'],
-    ['missing DSH', () => rewrite({ dsh: 'missing' }), 'INVALID_DSH'],
+    ['missing DSH', () => { rewrite({ dsh: 'missing' }); vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: false, error: 'DSH_NOT_INSTALLED', detail: 'missing' }) }, 'INVALID_DSH'],
     ['missing cwd', () => rewrite({ cwd: null }), 'CWD_NOT_FOUND'],
     ['removed cwd', () => rewrite({ cwd: join(dir, 'gone') }), 'CWD_NOT_FOUND'],
     ['file cwd', () => { const file = join(dir, 'file'); writeFileSync(file, 'file'); rewrite({ cwd: file }) }, 'CWD_NOT_FOUND'],

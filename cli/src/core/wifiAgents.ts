@@ -6,7 +6,6 @@
  * lib/autonomous-device/storeRuntime.ts.
  */
 import { realpathSync } from 'node:fs'
-import { installedDsh } from '../dsh/installed.js'
 import type { AutonomousDeviceAgent } from '../lib/autonomous-device/service.js'
 import type { StoreAgent } from '../lib/autonomous-device/store.js'
 import type { RegisteredSession, registry } from '../lib/registry.js'
@@ -25,6 +24,8 @@ export interface WifiAgentsDeps {
   registry: Pick<typeof registry, 'list' | 'advertised' | 'terminalAvailable'>
   /** The account's id for this machine. */
   machineId(): string
+  /** The same service-reported package identity as the agent frame. */
+  packageId?(session: RegisteredSession): string | null
   displayName(session: RegisteredSession): string
   /** Whether an engine session has a turn open: its agent is running. */
   running(sessionId: string): boolean
@@ -33,9 +34,9 @@ export interface WifiAgentsDeps {
 
 /** Every agent with the Store's evidence on it: which harness it runs, where, and whether its engine is up
  *  yet. A device's Store preparation reads it to find an agent already working in a folder. */
-export function storeAgents(deps: Pick<WifiAgentsDeps, 'registry' | 'machineId'>): StoreAgent[] {
+export function storeAgents(deps: Pick<WifiAgentsDeps, 'registry' | 'machineId' | 'packageId'>): StoreAgent[] {
   const machineId = deps.machineId()
-  return deps.registry.list().map(s => ({ agentId: s.agentId, machineId, packageId: s.dsh ? installedDsh(s.dsh)?.id ?? s.dsh : null,
+  return deps.registry.list().map(s => ({ agentId: s.agentId, machineId, packageId: deps.packageId?.(s) ?? s.dsh ?? null,
     engine: s.engine, workspace: canonicalPath(s.cwd), state: s.active ? 'active' : 'inactive',
     runtime: !deps.registry.terminalAvailable(s.agentId) || s.launch?.state === 'failed' ? 'unavailable'
       : s.launch?.state === 'starting' ? 'starting' : s.active ? (s.launch?.state === 'ready' || s.sessionId || s.engine === 'terminal' ? 'ready' : 'starting') : 'unavailable',
@@ -56,7 +57,7 @@ export function wifiView(deps: WifiAgentsDeps): WifiView {
  *  never a bypass, a grid, another engine home, a first prompt, a name or a named agent. Fixed here, in the
  *  core, so no process but the core's decides how an agent starts. */
 export type WifiCreateInput = Parameters<NonNullable<BackendSocket['onCreateAgent']>>[0]
-export function wifiCreate(deps: Pick<WifiAgentsDeps, 'registry' | 'machineId'> & {
+export function wifiCreate(deps: Pick<WifiAgentsDeps, 'registry' | 'machineId' | 'packageId'> & {
   createAgent(): BackendSocket['onCreateAgent']
 }): CoreApi['wifi']['create'] {
   return async (packageId, engine, cwd) => {
@@ -71,7 +72,7 @@ export function wifiCreate(deps: Pick<WifiAgentsDeps, 'registry' | 'machineId'> 
   }
 }
 
-export interface WifiDoorsDeps extends Pick<WifiAgentsDeps, 'registry' | 'machineId' | 'displayName' | 'running'> {
+export interface WifiDoorsDeps extends Pick<WifiAgentsDeps, 'registry' | 'machineId' | 'displayName' | 'running' | 'packageId'> {
   registry: WifiAgentsDeps['registry'] & Pick<typeof registry, 'resolve'>
   /** The socket, once it exists: the windows on this computer, and how an agent is created. */
   socket(): Pick<BackendSocket, 'hasLocalClient' | 'sendFirstLocal' | 'onCreateAgent'> | null

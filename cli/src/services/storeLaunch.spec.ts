@@ -5,6 +5,9 @@ import { forkRuntimeKey, prepareHarnessLaunch } from '../dsh/runtime.js'
 import type { PrepareDsh } from '../dsh/preparation.js'
 import { prepareInstructionWrites } from '../scm/launch.js'
 import { storeLaunchPort } from './storeLaunch.js'
+import { createStorePreparation } from './store.js'
+import { fakeCore } from '../testing/fakeCore.js'
+import { MODEL_MANAGER_ID } from '../dsh/builtinIds.js'
 
 vi.mock('../scm/launch.js', () => ({ prepareInstructionWrites: vi.fn(async () => {}) }))
 vi.mock('../dsh/installed.js', () => ({ installedDsh: vi.fn(), dshRootDir: () => '/unused' }))
@@ -16,14 +19,41 @@ const pkg = { id: request.dsh } as NonNullable<ReturnType<typeof installedDsh>>
 
 describe('the Store owns package preparation', () => {
   afterEach(() => vi.clearAllMocks())
+  it('recovers incomplete startup on the next actual package request without restarting', async () => {
+    let installed: typeof pkg | undefined
+    const prepare = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(false).mockImplementation(() => {
+      installed = { ...pkg, id: MODEL_MANAGER_ID, manifest: { spec: 1, id: MODEL_MANAGER_ID, name: 'Models', engine: 'codex' } }
+      return true
+    })
+    const ready = createStorePreparation(fakeCore(), prepare)
+    expect(ready()).toBe(false)
+    const port = storeLaunchPort(() => installed, run, ready)
+    expect(await port.dshDescribe({ ...request, dsh: MODEL_MANAGER_ID })).toMatchObject({ error: 'DSH_UNAVAILABLE', unavailable: 'store' })
+    expect(await port.dshDescribe({ ...request, dsh: MODEL_MANAGER_ID })).toMatchObject({ ok: true, id: MODEL_MANAGER_ID })
+    expect(await port.dshDescribe({ ...request, dsh: MODEL_MANAGER_ID })).toMatchObject({ ok: true })
+    expect(prepare).toHaveBeenCalledTimes(3)
+  })
   it('refuses missing packages without writing anything', async () => {
     const port = storeLaunchPort(() => undefined, run)
     const refused = { ok: false, error: 'DSH_NOT_INSTALLED', detail: 'test/draw is not installed on this machine' }
     expect(await port.dshMaterialize(request)).toEqual(refused)
     expect(await port.dshLaunch(request)).toEqual(refused)
+    expect(await port.dshDescribe(request)).toEqual({ ...refused, error: 'INVALID_DSH' })
     expect(prepareInstructionWrites).not.toHaveBeenCalled()
     expect(materializeWorkspace).not.toHaveBeenCalled()
     expect(prepareHarnessLaunch).not.toHaveBeenCalled()
+  })
+  it('projects canonical identity and compatibility without exposing a manifest', async () => {
+    const installed = { ...pkg, id: 'test/current', manifest: { id: 'test/current', name: 'Draw', spec: 1, engine: 'codex',
+      formerly: [request.dsh], agent: { env: { DSH_PERMISSION_MODE: ' auto ', SECRET: 'not a core fact' } } } } as NonNullable<ReturnType<typeof installedDsh>>
+    const lookup = vi.fn(() => installed)
+    const port = storeLaunchPort(lookup, run)
+    expect(await port.dshDescribe(request)).toEqual({ ok: true, id: 'test/current', name: 'Draw', permissionMode: 'auto', refusal: null })
+    expect(lookup).toHaveBeenCalledExactlyOnceWith(request.dsh)
+    installed.manifest.kind = 'viewer'
+    expect(await port.dshDescribe(request)).toMatchObject({ refusal: 'test/draw is a viewer package, not an agent' })
+    delete installed.manifest.kind
+    expect(await port.dshDescribe({ ...request, engine: 'terminal' })).toMatchObject({ refusal: expect.stringContaining('not compatible') })
   })
   it('materializes only at create, and carries account, engine and fork source into runtime preparation', async () => {
     vi.mocked(installedDsh).mockReturnValue(pkg)

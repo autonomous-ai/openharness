@@ -29,6 +29,7 @@ describe('the Store in its own process', () => {
     const service = { stop: vi.fn() }
     const handle = runStoreService({
       dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't',
+      prepare: Object.assign(() => true, { ready: () => true }),
       run: (given) => { options = given; return service },
       start: (core) => { api = core; return answers },
     })
@@ -41,7 +42,7 @@ describe('the Store in its own process', () => {
     const { options, api, handle, service } = setup()
     expect(handle).toBe(service)
     expect(options).toMatchObject({ name: 'store', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
-    expect(Object.keys(options.requests).sort()).toEqual([...STORE_REQUESTS, 'dshMaterialize', 'dshLaunch'].sort())
+    expect(Object.keys(options.requests).sort()).toEqual([...STORE_REQUESTS, 'dshDescribe', 'dshMaterialize', 'dshLaunch'].sort())
     await expect(api.account.accessToken()).rejects.toThrow('store holds no credential')
   })
 
@@ -74,20 +75,26 @@ describe('the Store in its own process', () => {
     runStoreService({ dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
     const options = vi.mocked(runServiceProcess).mock.calls.at(-1)![0]
     expect(options.name).toBe('store')
-    expect(Object.keys(options.requests).sort()).toEqual([...STORE_REQUESTS, 'dshMaterialize', 'dshLaunch'].sort())
+    expect(Object.keys(options.requests).sort()).toEqual([...STORE_REQUESTS, 'dshDescribe', 'dshMaterialize', 'dshLaunch'].sort())
   })
 })
 
 describe('the Store launch port on its process wire', () => {
   const request = { dsh: 'test/draw', workspace: '/workspace', engine: 'claude', key: 'agent', account: {} }
   const setup = () => {
-    const launch = { dshMaterialize: vi.fn(async () => ({ ok: true as const, created: [], kept: [], warnings: [] })),
+    const launch = { dshDescribe: vi.fn(async () => ({ ok: true as const, id: 'test/draw', name: 'Draw', permissionMode: null, refusal: null })), dshMaterialize: vi.fn(async () => ({ ok: true as const, created: [], kept: [], warnings: [] })),
       dshLaunch: vi.fn(async () => ({ ok: true as const, launch: { env: {}, args: [] } })) }
-    runStoreService({ dataDir: '/data', socketPath: '/socket', machineId: 'm', token: 't', start: () => ({}), launch })
+    runStoreService({ dataDir: '/data', socketPath: '/socket', machineId: 'm', token: 't', start: () => ({}), launch,
+      prepare: Object.assign(() => true, { ready: () => true }) })
     return { launch, requests: vi.mocked(runServiceProcess).mock.calls.at(-1)![0].requests }
   }
   it('checks context, private grid and fork identity, and strips unrelated data', async () => {
     const { launch, requests } = setup()
+    expect(await requests.dshDescribe!({ dsh: request.dsh, engine: 'claude', manifest: {} }, ASKER)).toMatchObject({ ok: true, id: request.dsh })
+    expect(launch.dshDescribe).toHaveBeenCalledWith({ dsh: request.dsh, engine: 'claude' })
+    for (const payload of [{}, { dsh: 'invalid', engine: 'claude' }, { dsh: request.dsh, engine: 'unknown' }]) {
+      expect(await requests.dshDescribe!(payload, ASKER)).toMatchObject({ error: 'INVALID_DSH' })
+    }
     for (const account of [{}, { privateGrid: null }, { privateGrid: '' }, { privateGrid: 'private' }]) {
       expect(await requests.dshMaterialize!({ ...request, account, secret: 'not forwarded' }, ASKER)).toMatchObject({ ok: true })
       expect(launch.dshMaterialize).toHaveBeenLastCalledWith({ dsh: request.dsh, workspace: request.workspace, key: request.key, engine: request.engine, account })
@@ -96,6 +103,23 @@ describe('the Store launch port on its process wire', () => {
       expect(await requests.dshLaunch!({ ...request, forkOf }, ASKER)).toMatchObject({ ok: true })
       expect(launch.dshLaunch).toHaveBeenLastCalledWith({ ...request, ...(forkOf ? { forkOf } : {}) })
     }
+  })
+  it('reports readiness only after partial startup has recovered on a real description request', async () => {
+    let ready = false
+    const { launch } = setup()
+    const facts = { ok: true as const, id: request.dsh, name: 'Draw', permissionMode: null, refusal: null }
+    launch.dshDescribe.mockImplementation(async () => { ready = true; return facts })
+    runStoreService({ dataDir: '/data', socketPath: '/socket', machineId: 'm', token: 't', start: () => ({}), launch,
+      prepare: Object.assign(() => ready, { ready: () => ready }) })
+    const options = vi.mocked(runServiceProcess).mock.calls.at(-1)![0]
+    const query = vi.fn(async () => ({}))
+    options.onConnected!({ query })
+    expect(query).not.toHaveBeenCalled()
+    expect(await options.requests.dshDescribe!(request, ASKER)).toEqual(facts)
+    expect(query).toHaveBeenCalledWith('prepared')
+    query.mockRejectedValueOnce(Error('core left'))
+    expect(await options.requests.dshDescribe!(request, ASKER)).toEqual(facts)
+    await Promise.resolve()
   })
   it('rejects malformed requests before package work starts', async () => {
     const { launch, requests } = setup()

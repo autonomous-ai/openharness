@@ -14,10 +14,8 @@ import { dirname } from 'node:path'
 import type { BackendSocket } from '../../backendSocket.js'
 import type { ConnectorsPort, ModelsPort } from '../api.js'
 import { MODEL_MANAGER_ID } from '../../dsh/builtinIds.js'
-import { installedDsh } from '../../dsh/installed.js'
-import { harnessEnvToClear, type DshAccount } from '../../dsh/launch.js'
-import { dshPinnedPermissionMode } from '../../dsh/manifest.js'
-import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
+import type { DshAccount } from '../../dsh/launch.js'
+import { harnessEnvToClear } from '../../dsh/sessionEnv.js'
 import type { DshThrough } from './dshThrough.js'
 import * as opencodeLaunch from '../../engines/launchControl.js'
 import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
@@ -98,7 +96,7 @@ export interface CreateAgentDeps {
    *  while it is off. */
   gridSetup: () => ModelsPort['ensure'] | null
   privateGridName: () => Promise<string | null>
-  dshLaunch: Pick<DshThrough, 'materialize' | 'launch'>
+  dshLaunch: Pick<DshThrough, 'describe' | 'materialize' | 'launch'>
   /** A profile home's MCP config written with the connections' entries, by connected services (core/api.ts
    *  `ConnectorsPort`): bounded, and answered nothing while they are off, failing or slow. Never rejects. */
   syncProfileHome: ConnectorsPort['syncProfileHome']
@@ -149,8 +147,11 @@ export function createAgentCreator({
     // A harness can pin its permission mode (`dshPinnedPermissionMode`): the Grid harness starts model
     // servers, which Codex's sandbox would start without a GPU. Pinned before anything reads the mode,
     // and recorded on the row like a chosen one, so a relaunch keeps it.
-    const pinnedDsh = dsh ? installedDsh(dsh) : null
-    const pinnedMode = pinnedDsh ? dshPinnedPermissionMode(pinnedDsh.manifest) : null
+    const description = dsh ? await dshLaunch.describe(dsh, engine) : null
+    if (!authority.current()) return stale()
+    if (description && !description.ok) return description
+    const pinnedDsh = description
+    const pinnedMode = pinnedDsh?.permissionMode
     if (pinnedMode && permissionModeFlags(engine, pinnedMode)) {
       permissionMode = pinnedMode
       bypassPermission = permissionModeApproves(pinnedMode)
@@ -203,13 +204,12 @@ export function createAgentCreator({
     const installed = pinnedDsh
     if (dsh) {
       if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is not installed on this machine` }
-      if (installed.manifest.kind === 'viewer') return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is a viewer package, not an agent` }
-      const refusal = incompatibleHarnessEngine(dsh, installed.manifest, engine)
+      const refusal = installed.refusal
       if (refusal) {
         return { ok: false, error: 'INVALID_DSH', detail: refusal }
       }
       if (!(await createBackend.capabilities()).sessionEnv) {
-        const detail = `${tmuxTooOldForSessionEnv('a new session')} — so ${installed.manifest.name} `
+        const detail = `${tmuxTooOldForSessionEnv('a new session')} — so ${installed.name} `
           + `could not tell ${engine} which harness it is. Upgrade tmux.`
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
         return { ok: false, error: 'TMUX_TOO_OLD_FOR_DSH', detail }
@@ -266,13 +266,13 @@ export function createAgentCreator({
         return { ok: false, error: 'DSH_MATERIALIZE_FAILED', detail }
       }
       const prepared = await dshLaunch.launch({ dsh, workspace: cwd, engine, key: label, account: dshAccount },
-        { ids: [harness.id, ...harness.manifest.formerly ?? []], workspace: originalWorkspace.directory })
+        { ids: [harness.id, dsh], workspace: originalWorkspace.directory })
       if (!current()) return stale()
       if (!prepared.ok) return { ok: false, error: prepared.error, detail: prepared.detail,
         ...(prepared.unavailable ? { unavailable: prepared.unavailable } : {}) }
       dshEnv = prepared.launch.env
       dshArgs = prepared.launch.args
-      dshLabel = harness.manifest.name
+      dshLabel = harness.name
     }
     let gridLaunch: { env: Record<string, string>; args: string[]; webSearch: GridWebSearchStatus } | undefined
     if (grid && built?.ok) {

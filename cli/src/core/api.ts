@@ -2134,12 +2134,14 @@ export interface WindowRelay {
 }
 
 export interface StorePort {
+  dshDescribe(request: import('../dsh/launchWire.js').DshDescribeRequest): Promise<import('../dsh/launchWire.js').DshDescribeAnswer>
   dshMaterialize(request: DshMaterializeRequest): Promise<DshMaterializeAnswer>
   dshLaunch(request: DshLaunchRequest): Promise<DshLaunchAnswer>
 }
 
-export const STORE_FALLBACKS: PortFallbacks<StorePort> = { dshMaterialize: later(FAIL), dshLaunch: later(FAIL) }
+export const STORE_FALLBACKS: PortFallbacks<StorePort> = { dshDescribe: later(FAIL), dshMaterialize: later(FAIL), dshLaunch: later(FAIL) }
 export const STORE_OFF: StorePort = {
+  dshDescribe: () => Promise.reject(new ServiceUnavailableError('store')),
   dshMaterialize: () => Promise.reject(new ServiceUnavailableError('store')),
   dshLaunch: () => Promise.reject(new ServiceUnavailableError('store')),
 }

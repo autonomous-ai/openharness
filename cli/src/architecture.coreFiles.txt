@@ -156,12 +156,9 @@ core/wifiLink.ts
 core/workspacesLink.ts
 dsh/adapters.ts
 dsh/builtinIds.ts
-dsh/compatibility.ts
 dsh/id.ts
-dsh/installed.ts
-dsh/launch.ts
 dsh/launchWire.ts
-dsh/manifest.ts
+dsh/sessionEnv.ts
 engines/agy/contract.ts
 engines/amp/contract.ts
 engines/claude/backgroundCommands.ts

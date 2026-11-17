@@ -10,7 +10,6 @@
 import { createLaunchHelpers, gridLaunchThrough } from '../core/agents/launch.js'
 import { createAgentCreator, type CreateAgentDeps } from '../core/agents/create.js'
 import { createAgentForker, type ForkAgentDeps } from '../core/agents/fork.js'
-import { installedDsh } from '../dsh/installed.js'
 import { dshThrough } from '../core/agents/dshThrough.js'
 import { createStoreLink } from '../core/storeLink.js'
 import { storeLaunchPort } from '../services/storeLaunch.js'
@@ -77,7 +76,8 @@ export function launchShapes(world: LaunchWorld) {
     },
   }))
   const store = storeLaunchPort()
-  const link = createStoreLink({ clients: { dshInstallStatus: () => {} } } as never, () => {}, async (type, payload) => {
+  const link = createStoreLink({ clients: { dshInstallStatus: () => {} } } as never, async (type, payload) => {
+    if (type === 'dshDescribe') return wire(await store.dshDescribe(payload as never))
     if (type === 'dshMaterialize') {
       const request = dshMaterializeRequestIn(wire(payload))
       if (!request) throw new Error('Store could not read the workspace request')
@@ -87,7 +87,7 @@ export function launchShapes(world: LaunchWorld) {
     if (!request) throw new Error('Store could not read the launch request')
     return wire(await store.dshLaunch(request))
   })
-  const dshLaunch = dshThrough({ store: () => link.port, nameOf: id => installedDsh(id)?.manifest.name,
+  const dshLaunch = dshThrough({ store: () => link.port, nameOf: () => undefined,
     account: () => ({ privateGrid: gridName() }) })
   const launchOverridesDeps: LaunchOverridesDeps = {
     machine: world.machine,

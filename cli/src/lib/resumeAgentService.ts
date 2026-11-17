@@ -1,7 +1,6 @@
 /** Exact-resume lifecycle shared by the daemon and its isolated acceptance tests. */
 import { transcriptSize, type RelaunchMarks } from '../core/transcripts/relaunch.js'
 import { isTerminalEngine } from '../engines/types.js'
-import { installedDsh } from '../dsh/installed.js'
 import { engineKeepsTranscriptFile, registry as liveRegistry, type RegisteredSession } from './registry.js'
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { materializeResumeTranscript } from '../engines/resumeTranscript.js'
@@ -239,7 +238,6 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         saved = { ...saved, ...choice }
       }
       if (saved.grid && !saved.gridLaunch) return { ok: false, error: 'GRID_CREDENTIAL_REQUIRED', detail: 'The saved provider configuration is unavailable.' }
-      if (saved.dsh && !installedDsh(saved.dsh)) return { ok: false, error: 'INVALID_DSH', detail: 'Install this harness from the Harness Store before resuming it.' }
       if (!saved.cwd) return { ok: false, error: 'CWD_NOT_FOUND', detail: 'The saved project folder is no longer available.' }
       const cwd = saved.cwd
       const missing = workspaceMissing(cwd)
@@ -284,7 +282,8 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         const built = await relaunchOverrides(saved, launchArgs ? { ...saved, launchArgs } : saved, sourceCurrent)
         if (sourceError) throw sourceError
         transcript?.verify()
-        if (!built.ok) return built
+        if (!built.ok) return built.error === 'DSH_NOT_INSTALLED'
+          ? { ok: false, error: 'INVALID_DSH', detail: 'Install this harness from the Harness Store before resuming it.' } : built
         if (!current()) return resumeChanged
         if (permissionMode !== undefined) {
           const refusal = await refusePermissionFlagIfUnsupported(saved.engine,

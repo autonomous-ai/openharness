@@ -103,6 +103,14 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
     createAgent: () => create, forkAgent: () => fork, resumeAgent: () => resume, restartAgent: () => restart,
     byAgent: (id) => known.get(id), toProject: vi.fn(async (s: RegisteredSession) => frameOf(s)),
     modelTarget: resolveNewAgentModel,
+    describeDsh: async (dsh, engine) => {
+      const installed = installedDsh(dsh)
+      if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is not installed on this machine` }
+      const engines = dshSupportedEngines(installed.manifest)
+      return { ok: true, id: installed.id, name: installed.manifest.name, permissionMode: null,
+        refusal: installed.manifest.kind === 'viewer' ? `${dsh} is a viewer package, not an agent`
+          : engines.includes(engine) ? null : `${dsh} supports ${engines.join(', ')}; ${engine} is not compatible` }
+    },
     stoppedAgent: () => undefined,
     workspaces: () => workspaces,
     ...over,
@@ -122,6 +130,26 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
 }
 
 describe('agent_create, refused before any pane exists', () => {
+  it('admits a package from Store facts without opening its index in core', async () => {
+    vi.mocked(installedDsh).mockImplementationOnce(() => { throw Error('core opened the package index') })
+    const describeDsh = vi.fn(async () => ({ ok: true, id: 'acme/current', name: 'Notes', permissionMode: null, refusal: null }))
+    const run = setup({ describeDsh } as Partial<LaunchRequestDeps>)
+    expect(await run.ask({ engine: 'claude', cwd: '/w', dsh: 'acme/former' })).toHaveProperty('agent')
+    expect(describeDsh).toHaveBeenCalledWith('acme/former', 'claude')
+    expect(installedDsh).not.toHaveBeenCalled()
+    expect(run.create).toHaveBeenCalledWith(expect.objectContaining({ dsh: 'acme/current' }))
+  })
+
+  it('reports an old or unavailable Store without consulting a local package index', async () => {
+    vi.mocked(installedDsh).mockImplementationOnce(() => { throw Error('core opened the package index') })
+    const describeDsh = vi.fn(async () => ({ ok: false, error: 'DSH_UNAVAILABLE', unavailable: 'store', detail: 'Waiting for Store.' }))
+    const run = setup({ describeDsh } as Partial<LaunchRequestDeps>)
+    expect(await run.ask({ engine: 'claude', cwd: '/w', dsh: 'acme/notes' })).toMatchObject({ error: 'DSH_UNAVAILABLE' })
+    expect(run.create).not.toHaveBeenCalled()
+    expect(await run.ask({ engine: 'claude', cwd: '/w' })).toHaveProperty('agent')
+    expect(installedDsh).not.toHaveBeenCalled()
+  })
+
   it('keeps a selected model pending before native preparation, then dispatches its fresh resolution once', async () => {
     vi.mocked(parseNewAgentModel).mockReturnValue({ state: 'ok', selection: { model: 'fixture-model', grid: 'fixture-grid' } })
     const grid = { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'http://fixture.invalid', apiKey: 'fixture' }

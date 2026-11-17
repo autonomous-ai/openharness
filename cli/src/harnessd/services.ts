@@ -74,7 +74,7 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // own, outside this budget. The Store beside them: its installs run git and the harnesses' toolchains
   // in their own processes too, and take minutes, which is what it must not spend in the core.
   // Started only once something needs it (core/viewersWake.ts): a harness here, a Store or viewer request, or
-  // the release's own harnesses to put in place. It idled at about 96 MiB on every computer, and few harnesses
+  // orphan viewer servers. Bundled consumers prepare on first use outside core. It idled at about 96 MiB on every computer, and few harnesses
   // have a viewer: 1 of 14 on one real machine, 2 of 35 on another (2026-10-12).
   viewers: { services: ['viewers', 'store'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 5,
     frameParts: { viewers: { fields: ['dsh', 'dshName', 'viewerUrl', 'viewerName', 'verdict'], having: ['dsh'] } } },

@@ -9,16 +9,16 @@
  * It tells the core two things (core/storeLink.ts):
  * - how an install or update is going (`installStatus`), which the core pushes to the apps as
  *   `dsh_install_status`; one said while the core is away is lost, as a line of progress may be;
- * - that what is installed changed (`installed`), before it answers the request that changed it: the
- *   core keeps the installed index for two seconds (dsh/installed.ts), and the create that follows an
- *   install must find what was just installed.
+ * - legacy installed/prepared notices. Package admission now asks this process for bounded facts;
+ *   only this process reads the installed index, and partial preparation is never announced ready.
  */
 import type { CoreApi, ServiceRequest, ServiceRequests, StorePort } from '../core/api.js'
 import type { DshMaterializeRequest, DshLaunchRequest } from '../dsh/launchWire.js'
+import { DSH_ID_RE } from '../dsh/id.js'
 import { PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { processCoreApi } from './processCoreApi.js'
-import { startStore } from './store.js'
+import { createStorePreparation, startStore, type StorePreparation } from './store.js'
 import { storeLaunchPort } from './storeLaunch.js'
 
 export interface StoreServiceOptions {
@@ -31,6 +31,8 @@ export interface StoreServiceOptions {
   /** Swapped in tests for a Store that clones and installs nothing. */
   start?: (core: CoreApi) => ServiceRequests
   launch?: StorePort
+  /** The fixed bundled preparation, replaced by controlled outcomes in process tests. */
+  prepare?: StorePreparation
 }
 
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
@@ -65,8 +67,9 @@ export function runStoreService(options: StoreServiceOptions): ServiceProcess {
     ...base,
     clients: { ...base.clients, dshInstallStatus: (status) => { void core?.query('installStatus', { status }).catch(() => {}) } },
   }
-  const answers = (options.start ?? startStore)(api)
-  const launch = options.launch ?? storeLaunchPort()
+  const prepare = options.prepare ?? createStorePreparation(api)
+  const answers = options.start ? options.start(api) : startStore(api, undefined, prepare)
+  const launch = options.launch ?? storeLaunchPort(undefined, undefined, prepare)
   /** Answered once the core has heard that what is installed changed: whatever it was, it may have. */
   const changing = (handle: ServiceRequest): ServiceRequest => async (payload, asker) => {
     const answer = await handle(payload, asker)
@@ -74,18 +77,24 @@ export function runStoreService(options: StoreServiceOptions): ServiceProcess {
     return answer
   }
   const requests: Record<string, ServiceRequest> = Object.fromEntries(Object.entries(answers).map(([type, handle]) => [type, CHANGES.includes(type) ? changing(handle) : handle]))
+  requests.dshDescribe = async payload => {
+    if (!text(payload.dsh) || !DSH_ID_RE.test(payload.dsh) || !PROCESS_ENGINES.some(engine => engine === payload.engine)) return { ok: false, error: 'INVALID_DSH', detail: 'Invalid harness description request' }
+    const answer = await launch.dshDescribe({ dsh: payload.dsh, engine: payload.engine as AgentEngine })
+    if (prepare.ready()) void core?.query('prepared').catch(() => {})
+    return { ...answer }
+  }
   requests.dshMaterialize = async payload => {
     const request = dshMaterializeRequestIn(payload)
     if (!request) return { ok: false, error: 'INVALID_DSH', detail: 'Invalid harness workspace request' }
     const answer = await launch.dshMaterialize(request)
-    if (answer.ok || !answer.unavailable) void core?.query('prepared').catch(() => {})
+    if ((answer.ok || !answer.unavailable) && prepare.ready()) void core?.query('prepared').catch(() => {})
     return { ...answer }
   }
   requests.dshLaunch = async payload => {
     const request = dshLaunchRequestIn(payload)
     if (!request) return { ok: false, error: 'INVALID_DSH', detail: 'Invalid harness launch request' }
     const answer = await launch.dshLaunch(request)
-    if (answer.ok || !answer.unavailable) void core?.query('prepared').catch(() => {})
+    if ((answer.ok || !answer.unavailable) && prepare.ready()) void core?.query('prepared').catch(() => {})
     return { ...answer }
   }
   return (options.run ?? runServiceProcess)({
@@ -96,9 +105,8 @@ export function runStoreService(options: StoreServiceOptions): ServiceProcess {
     requests,
     onConnected: (connection) => {
       core = connection
-      // startStore has prepared the bundled harnesses before this link opens. A reconnect repeats the
-      // notice so a restarted core refreshes its installed index before restoring those agents.
-      void connection.query('prepared').catch(() => {})
+      // A partial startup is never announced ready. The next real package request can finish it.
+      if (prepare.ready()) void connection.query('prepared').catch(() => {})
     },
   })
 }

@@ -113,7 +113,6 @@ import { externalResumePending } from '../lib/externalResume.js'
 import { type LaunchOverridesDeps } from '../lib/launchOverrides.js'
 import { buildHarnessSessionLabel } from '../lib/harnessSessionLabel.js'
 import { listTmuxPanes } from '../lib/tmuxAgentDiscovery.js'
-import { installedDsh, invalidateInstalledDsh } from '../dsh/installed.js'
 import { dshThrough } from './agents/dshThrough.js'
 import { ApiConnectionMetadata } from '../lib/apiConnectionMetadata.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
@@ -897,7 +896,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ready: () => gatewayOps.wifiService(true),
     want: () => devicesWake.ask('wifi', 'a Wi-Fi device'),
     doors: wifiDoors({
-      registry, machineId: machineIdNow, displayName: projectDisplayName, running: (sessionId) => turnStartedAt.has(sessionId),
+      registry, machineId: machineIdNow, packageId: session => { const id = frameParts.read(session.agentId).dsh; return typeof id === 'string' ? id : session.dsh ?? null }, displayName: projectDisplayName, running: (sessionId) => turnStartedAt.has(sessionId),
       socket: () => backendRef ?? null, deviceInput: () => deviceInput, answer: (request) => cloudAgents?.answer(request) ?? questions.answer(request),
       stop: (agentId) => cancelAgent(agentId, true), devices: () => ports.devices,
     }),
@@ -1622,7 +1621,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // frame for Agent Messages, in its own process or in this one (core/messagesLink.ts).
   backend.onTabFrame = (event) => { tabRelay.heard(event); messagesLink.tabFrame(event) }
   // What the Store in its own process tells the core: an install's progress, and that what is installed changed (core/storeLink.ts).
-  const storeLink = createStoreLink(coreApi, invalidateInstalledDsh, (type, payload) => serviceLinks.call('store', type, payload))
+  const storeLink = createStoreLink(coreApi, (type, payload) => serviceLinks.call('store', type, payload))
   storeLink.onReady(() => { void heldLaunches.restoreHeld('store') })
   // What the core keeps of models in its own process for frames and keystrokes, and how it asks it the rest (core/modelsLink.ts).
   const modelsLink = createModelsLink(coreApi, (type, payload) => serviceLinks.call('models', type, payload), (frame) => serviceLinks.notify('models', frame))
@@ -2490,7 +2489,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // launch on one while models is down is refused, and one on the engine's own login never asks it.
   const gridLaunch = gridLaunchThrough(() => ports.models ?? MODELS_OFF)
   const dshLaunch = dshThrough({ store: () => ports.store ?? STORE_OFF,
-    nameOf: id => installedDsh(id)?.manifest.name, account: () => ({ privateGrid: backend.gridName() }) })
+    nameOf: () => undefined, account: () => ({ privateGrid: backend.gridName() }) })
   const prepareNativeLaunch = createNativeLaunchPreparer({
     installations: (process.platform === 'win32' ? createWindowsInstallations : createNativeInstallations)({ directory: join(env.ADAPTER_DATA_DIR, 'native-installations') }),
     inspect: (engine, source) => inspectNativeLaunch(engine, source, {
@@ -3103,6 +3102,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The requests that start an agent's process, and the receipts of those asked with a creationId
   // (core/agents/launches.ts). The orchestrator and the cable create and fork through the socket's slots.
   const launches = createLaunchRequests({
+    describeDsh: dshLaunch.describe,
     claudeHomeListed: (home) => claudeHomeListed(home, machineIdNow()),
     receipts,
     createAgent: () => backend.onCreateAgent, forkAgent: () => backend.onForkAgent,

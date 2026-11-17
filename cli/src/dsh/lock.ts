@@ -2,13 +2,22 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { dshRootDir } from './installed.js'
-import { DSH_ID_RE } from './manifest.js'
+import { DSH_ID_RE } from './id.js'
 
 export function lockDsh(id: string): (() => void) | null {
   if (!DSH_ID_RE.test(id)) return null
+  return lockDirectory(`.lock-${id.replace('/', '_')}`)
+}
+
+/** Different package writers share the same index transaction. */
+export function lockDshIndex(): (() => void) | null {
+  return lockDirectory('.lock-installed-index')
+}
+
+function lockDirectory(name: string): (() => void) | null {
   const root = dshRootDir()
   mkdirSync(root, { recursive: true, mode: 0o700 })
-  const path = join(root, `.lock-${id.replace('/', '_')}`)
+  const path = join(root, name)
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       mkdirSync(path, { mode: 0o700 })

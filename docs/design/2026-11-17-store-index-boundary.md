@@ -1,0 +1,77 @@
+# Store package facts outside the core
+
+Package 7, step 2 of the daemon core plan. The Store in the viewers process owns
+installed-index, manifest, compatibility and executable package parsing. The core
+keeps only bounded facts for the launch presently being prepared. Existing viewers
+frame parts already carry package display facts; there is no second core cache.
+
+## Design
+
+Reviewed direction: root, 2026-11-17, before implementation.
+
+1. Growth: no new disk records, cache, timer or index in core. A package description
+   lives only for its request and leaves on completion/cancellation. It contains a
+   canonical id, name, permission choice and compatibility refusal, each bounded;
+   no manifest, aliases, package environment or argument list crosses this read.
+2. Concurrency: existing launch/receipt ownership is rechecked after asynchronous
+   package reads. Store's existing preparation lock and atomic runtime/index writes
+   remain authoritative. A description is a captured observation, never permission
+   to publish after the launch owner or workspace changes.
+   Consumer-local builtin setup introduces concurrent different-package writers.
+   installed.json therefore gains one transient directory lock around the complete
+   read/modify/atomic-rename operation, reusing the package lock's ownership and
+   stale-owner recovery. Busy is an immediate named refusal; the next actual
+   consumer request retries preparation. No timer, sleep or background retry is
+   added. Successful, failed and cancelled writes release it in finally; a killed
+   writer is recovered by the existing dead-owner check. Old versions ignore the
+   new lock, so this protects same-version writers, not a simultaneous old CLI
+   mutation; the existing per-package lock still covers their same-package work.
+3. Read cost: ordinary engine launches and frame reads perform no package disk
+   reads. A package admission asks one bounded description through the existing
+   Store deadline; preparation can refresh that observation. The Store's existing
+   installed cache owns disk parsing. Display facts use the existing frame-part
+   budget and invalidation/agent lifecycle; Wi-Fi reads those same facts.
+4. Scale: ten times the retained agents creates no installed-package cache in core.
+   Description fields are at most 4 KiB, ids retain the public owner/name grammar,
+   and the fixed reply has no package-sized arrays. Existing service deadlines and
+   fixed malformed-reply logs expose unavailable/oversized facts. Timed comparisons
+   require a coordinated quiet window and are not inferred from source size.
+5. Compatibility: public create/resume/fork frames, receipt fingerprints and runtime
+   snapshots retain their formats. Alias canonicalization still precedes new
+   receipt fingerprints. Missing packages do not prevent recovery of completed
+   receipts. A supported old Store lacking the new internal description answers
+   unavailable for an affected package request, never a plain-engine launch.
+   Inline/no-master mode supplies the same port from its dynamic component load.
+6. Migration/rollback: no disk migration. Existing installed.json and runtime.json
+   remain readable by the previous release. Old snapshot package directories are
+   retained; they are never rewritten to the currently installed package directory.
+7. Audience: existing owner/client checks and authenticated service registration
+   remain the audience boundary. Only the launch's short package facts are retained;
+   no credentials, manifest contents, package scripts or personal paths are logged.
+8. Identity: workspace, runtime destination key, account and current owner are
+   captured independently by core before awaiting a launch. A new create retains
+   its canonical package id. Historical aliases/snapshots remain Store-declared
+   package authority: another reply from the same Store is not independent proof
+   of that identity. No reply alias list expands core authority. Packages remain
+   trusted executable code with their published arbitrary uppercase env/argv
+   contract, including PATH/HOME/loaders/hooks.
+9. Failure: unavailable, killed, hung or malformed Store answers hold/refuse only
+   package launches, before pane creation. Ordinary agents continue. Removing the
+   boot index scan does not make viewers always-on: first package admission wakes
+   Store. Models and Memories prepare their bundled package at their existing
+   outside-core first use with the same locked/atomic installer; failure remains
+   visible instead of silently dropping the bundled feature.
+10. Platforms: shared TypeScript on macOS/Linux/Windows. No new process mechanism,
+    dependency, OS account or platform-specific shell. Paths use native path APIs;
+    fixtures cover symlinked workspace, renamed package and old install directory.
+
+## Selected validation
+
+Test first at actual create/request/fork/resume callers and the process port. Prove
+no eager index read, malformed/off/old service isolation, captured owner/workspace,
+legacy aliases and concurrent builtin preparation. Run source types, architecture,
+affected files, required core/resume/portability gates and private native Store
+flows, at most two test workers. Parent coordinates timing, integration and release.
+
+`lib/apiConnectionMetadata.ts` remains another default-core zod import until its
+separate extraction integrates. This task removes the Store path, not that path.

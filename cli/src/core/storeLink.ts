@@ -1,16 +1,15 @@
 /**
  * The Harness Store in its own process, as the core hears it (beside the viewers; the process's side is
  * services/storeProcess.ts). The apps' requests are routed to it. The
- * Store tells the core how an install is going, which the core pushes to the apps
- * (`CoreApi.clients.dshInstallStatus`), and that what is installed changed, so that the core reads the
- * installed index again rather than from its two-second cache (dsh/installed.ts): the create that follows
- * an install must find the harness just installed.
+ * Store reports progress and readiness. Package lookups are bounded requests; the core
+ * owns no installed index, manifest or package cache.
  */
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
-import { DSH_SESSION_ENV } from '../dsh/launch.js'
+import { DSH_SESSION_ENV } from '../dsh/sessionEnv.js'
+import { DSH_ID_RE } from '../dsh/id.js'
 import { launchContributionIn, launchText } from '../lib/launchContribution.js'
-import type { DshLaunchRequest, DshLaunchAnswer, DshMaterializeAnswer, DshRefusal } from '../dsh/launchWire.js'
+import type { DshLaunchRequest, DshLaunchAnswer, DshMaterializeAnswer, DshRefusal, DshDescribeAnswer } from '../dsh/launchWire.js'
 import type { CoreApi, StorePort } from './api.js'
 import { ServiceUnavailableError } from './serviceHost.js'
 
@@ -29,6 +28,17 @@ function refusal(value: Record<string, unknown>): DshRefusal | null {
     ...(value.thrown !== undefined ? { thrown: value.thrown } : {}) }
 }
 
+/** The fixed shape bounds a lookup before any caller retains its facts. */
+export function dshDescriptionIn(value: unknown): DshDescribeAnswer | null {
+  if (!record(value)) return null
+  if (value.ok !== true) return refusal(value)
+  const short = (value: unknown): value is string => launchText(value, 4096)
+  if (!short(value.id) || !DSH_ID_RE.test(value.id) || !short(value.name) || !value.name
+    || !(value.permissionMode === null || short(value.permissionMode))
+    || !(value.refusal === null || short(value.refusal))) return null
+  return { ok: true, id: value.id, name: value.name, permissionMode: value.permissionMode, refusal: value.refusal }
+}
+
 /** Only a checked contribution can reach the pane; malformed answers hold the launch. */
 export function dshMaterializeAnswerIn(value: unknown): DshMaterializeAnswer | null {
   if (!record(value)) return null
@@ -37,9 +47,9 @@ export function dshMaterializeAnswerIn(value: unknown): DshMaterializeAnswer | n
     ? { ok: true, created: value.created, kept: value.kept, warnings: value.warnings } : null
 }
 
-/** Captured from an existing installed-package lookup and the launch's existing workspace observation.
- * Restore/fork lack this identity until installed-index extraction supplies it; a returned alias is no proof. */
-export interface DshLaunchIdentity { ids: readonly string[]; workspace: string }
+/** Captured before awaiting the launch. New creates retain their admitted package id.
+ * Historical snapshot ids remain Store-declared package authority; an alias list in a reply is no proof. */
+export interface DshLaunchIdentity { ids?: readonly string[]; workspace: string }
 
 export function dshLaunchAnswerIn(value: unknown, request: DshLaunchRequest, identity?: DshLaunchIdentity): DshLaunchAnswer | null {
   if (!record(value)) return null
@@ -50,7 +60,7 @@ export function dshLaunchAnswerIn(value: unknown, request: DshLaunchRequest, ide
   if (env.HARNESS_PRIVATE_GRID !== undefined && env.HARNESS_PRIVATE_GRID !== request.account.privateGrid) return null
   if (identity) {
     const runtime = join(identity.workspace, '.harness', 'runtime', createHash('sha256').update(request.key).digest('hex'))
-    if (!identity.ids.includes(env.HARNESS_DSH!) || env.HARNESS_WORKSPACE !== identity.workspace
+    if ((identity.ids ? !identity.ids.includes(env.HARNESS_DSH!) : !DSH_ID_RE.test(env.HARNESS_DSH ?? '')) || env.HARNESS_WORKSPACE !== identity.workspace
       || env.HARNESS_CONTEXT_FILE !== join(runtime, 'CONTEXT.md') || env.HARNESS_SKILLS_DIR !== join(runtime, 'skills')) return null
   }
   return { ok: true, launch }
@@ -58,10 +68,15 @@ export function dshLaunchAnswerIn(value: unknown, request: DshLaunchRequest, ide
 
 type CallStore = (type: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>
 
-export function createStoreLink(core: Pick<CoreApi, 'clients'>, installedChanged: () => void,
+export function createStoreLink(core: Pick<CoreApi, 'clients'>,
   call: CallStore = async () => ({ error: 'SERVICE_UNAVAILABLE' })) {
   const listeners = new Set<() => void>()
   const port: StorePort = {
+    dshDescribe: async request => {
+      const answer = dshDescriptionIn(await call('dshDescribe', { ...request }))
+      if (!answer) { console.warn('[store] PACKAGE_FACTS_REFUSED'); throw new ServiceUnavailableError('store') }
+      return answer
+    },
     dshMaterialize: async request => {
       const answer = dshMaterializeAnswerIn(await call('dshMaterialize', { ...request }))
       if (!answer) throw new ServiceUnavailableError('store')
@@ -86,7 +101,6 @@ export function createStoreLink(core: Pick<CoreApi, 'clients'>, installedChanged
         return { said: true }
       }
       if (query === 'prepared' || query === 'installed') {
-        installedChanged()
         if (query === 'prepared') {
           for (const ready of listeners) ready()
         }

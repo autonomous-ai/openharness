@@ -14,6 +14,7 @@ import { modelsAssignments } from './modelsAssignments.js'
 import { join } from 'node:path'
 import { baseNode } from '../harnessd/baseNode.js'
 import type { CoreApi, CorePorts, ModelsPort, ServiceRequest, ServiceRequests } from '../core/api.js'
+import { ensureBundledModelManager } from '../dsh/builtins.js'
 import { MODEL_MANAGER_ID } from '../dsh/builtinIds.js'
 import { installedDsh } from '../dsh/installed.js'
 import { ApiConnections, apiConnectionsRequest } from '../lib/apiConnections.js'
@@ -267,6 +268,7 @@ function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => P
   // account's own grid, and so does the Set up that offers it.
   const localModel = (type: LocalModelRequest): ServiceRequest => async (payload) => {
     try {
+      if (!ensureBundledModelManager()) return { error: 'The Model Manager package is unavailable. Try again.' }
       const list = type === 'grid_fleet_models_list'
       const setup = list ? payload.setup === true : type !== 'grid_fleet_model_stop'
       const unready = setup ? await notReady(grid, type !== 'grid_fleet_model_download') : null

@@ -26,7 +26,7 @@ const built = (input: GridLaunchRequest) => answerGridLaunch(input, value => ({ 
 const models = (answer: unknown) => createModelsLink(fakeCore(), async () => answer as Record<string, unknown>, () => true).port
 const storeRequest = { dsh: 'test/draw', workspace: '/private/fixture/work', engine: 'claude' as const, key: 'session', account: {} }
 const storeReply = (env: Record<string, string> = {}, args: string[] = []) => ({ ok: true as const, launch: { env: { HARNESS_DSH: 'test/draw', ...env } as Record<string, string>, args } })
-const store = (answer: unknown) => createStoreLink(fakeCore(), () => {}, async () => answer as Record<string, unknown>).port
+const store = (answer: unknown) => createStoreLink(fakeCore(), async () => answer as Record<string, unknown>).port
 const guestRequest = { email: 'test@fixture.invalid', engine: 'claude', bypassPermission: false, permissionFlags: ['--permission-mode', 'auto'], prompt: '-literal prompt' }
 const guestReply = (platform: NodeJS.Platform = process.platform) => {
   const workspace = guestWorkspaceFor(guestRequest.email, platform)
@@ -177,8 +177,8 @@ describe('Store contribution bounds preserve the installed package contract', ()
 
   it('keeps every real Store adapter, canonical workspace and former package snapshot identity', async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'launch-boundary-'))); roots.push(root)
-    const workspace = join(root, 'work'), alias = join(root, 'alias'), directory = join(root, 'package')
-    mkdirSync(workspace); mkdirSync(directory); symlinkSync(workspace, alias, 'junction')
+    const workspace = join(root, 'work'), alias = join(root, 'alias'), directory = join(root, 'package'), updated = join(root, 'updated-package')
+    mkdirSync(workspace); mkdirSync(directory); mkdirSync(updated); symlinkSync(workspace, alias, 'junction')
     const pkg: InstalledDsh = { id: 'test/old', dir: directory, realDir: directory, source: directory, ref: null, commit: null, linked: true, installedAt: 1,
       manifest: { spec: 1, id: 'test/old', name: 'Drawing', engine: 'codex', agent: { env: { PYTHONPATH: '${dsh}/python', PACKAGE_CUSTOM: 'x' },
         args: ['-c', 'approval_policy=never', '-c', 'sandbox_mode=danger-full-access', '-c', 'hooks.Stop=[{hooks=[{type="command",command="tool"}]}]'] } } }
@@ -195,11 +195,18 @@ describe('Store contribution bounds preserve the installed package contract', ()
           expect(await guarded.launch(input, { ids: [pkg.id], workspace }), field).toMatchObject({ ok: false, error: 'DSH_UNAVAILABLE' })
         }
       }
-      const renamed = { ...pkg, id: 'test/new', manifest: { ...pkg.manifest, id: 'test/new', formerly: [pkg.id] } }
+      const renamed = { ...pkg, id: 'test/new', dir: updated, realDir: updated, manifest: { ...pkg.manifest, id: 'test/new', formerly: [pkg.id] } }
       const resumed = { ok: true as const, launch: prepareHarnessLaunch(renamed, alias, engine, input.key, input.account) }
       expect(resumed.launch.env.HARNESS_DSH).toBe(pkg.id)
-      const resumedThrough = dshThrough({ store: () => store(resumed), nameOf: () => 'Drawing', account: () => ({}) })
+      expect(resumed.launch.env.HARNESS_DSH_DIR).toBe(directory)
+      const resumedThrough = dshThrough({ store: () => store(resumed), nameOf: () => 'Drawing', account: () => input.account })
       expect(await resumedThrough.launch({ ...input, dsh: renamed.id }, { ids: [renamed.id, pkg.id], workspace })).toEqual(resumed)
+      expect(await resumedThrough.relaunch(renamed.id, alias, engine, input.key)).toEqual(resumed)
+      const forkKey = `fork-${engine}`
+      const forked = { ok: true as const, launch: prepareHarnessLaunch(renamed, alias, engine, forkKey, input.account, input.key) }
+      const forkThrough = dshThrough({ store: () => store(forked), nameOf: () => 'Drawing', account: () => input.account })
+      expect(await forkThrough.launch({ ...input, key: forkKey, dsh: pkg.id, forkOf: { agentId: 'source', dshRuntime: input.key } }, { workspace })).toEqual(forked)
+      expect(forked.launch.env.HARNESS_DSH_DIR).toBe(directory)
     }
   })
 
@@ -216,7 +223,7 @@ describe('Store contribution bounds preserve the installed package contract', ()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const answer = make()
     await expect(store(answer).dshLaunch(storeRequest)).rejects.toThrow('the store service is unavailable')
-    const through = dshThrough({ store: () => ({ dshLaunch: async () => answer, dshMaterialize: async () => ({ ok: true, created: [], kept: [], warnings: [] }) }), nameOf: () => 'Drawing', account: () => ({}) })
+    const through = dshThrough({ store: () => ({ dshDescribe: async () => ({ ok: false, error: 'unused', detail: '' }), dshLaunch: async () => answer, dshMaterialize: async () => ({ ok: true, created: [], kept: [], warnings: [] }) }), nameOf: () => 'Drawing', account: () => ({}) })
     expect(await through.launch(storeRequest)).toMatchObject({ ok: false, error: 'DSH_UNAVAILABLE' })
   })
 

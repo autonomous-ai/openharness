@@ -46,6 +46,12 @@ vi.mock('../../scm/launch.js', async (real) => {
 vi.mock('../../engines/kit/notifyHooks.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
 vi.mock('../../lib/forkAgent.js', async (real) => ({ ...await real<object>(), planFork: vi.fn(() => ({ ok: true, level: 'native', forkSessionId: 's1' })) }))
 
+const describeDsh = async (dsh: string): Promise<any> => {
+  const installed = installedDsh(dsh)
+  return installed ? { ok: true, id: installed.id, name: installed.manifest.name, permissionMode: null, refusal: null }
+    : { ok: false, error: 'INVALID_DSH', detail: `${dsh} is no longer installed on this machine` }
+}
+
 const launchDsh = vi.fn<ForkAgentDeps['dshLaunch']['launch']>(async () => ({ ok: true, launch: { env: { HARNESS_DSH: 'blender' }, args: ['--dsh'] } }))
 
 const root = mkdtempSync(join(tmpdir(), 'core-fork-'))
@@ -78,7 +84,7 @@ function setup(row: RegisteredSession | null = source(), over: Partial<ForkAgent
       ok: true as const, overrides: { env: (session.codexHome ? { CODEX_HOME: session.codexHome } : {}) as Record<string, string>, extraArgs: [] as string[], clearEnv: [] as string[] },
     })),
     gridName: () => 'grid-me',
-    dshLaunch: { launch: launchDsh },
+    dshLaunch: { describe: describeDsh, launch: launchDsh },
     ...over,
   }
   return { deps, fork: createAgentForker(deps) }
@@ -104,7 +110,7 @@ describe('forking an agent', () => {
       const run = setup(source({ dsh: 'fixture/tools' }), {
         authority: () => () => stage !== 'source',
         native: async (_engine, _source, authority) => { authority.hold({ service: 'native', detail: 'Checking fixture' }); revoke('inspect'); return { ok: true, launch } },
-        dshLaunch: { launch: async () => { revoke('harness'); return { ok: true, launch: { env: {}, args: [] } } } },
+        dshLaunch: { describe: describeDsh, launch: async () => { revoke('harness'); return { ok: true, launch: { env: {}, args: [] } } } },
         relaunchOverrides: async () => { revoke('overrides'); return { ok: true, overrides: { native: launch, env: {}, extraArgs: [], clearEnv: [] } } },
         prepareNative: async () => { revoke('hooks'); return true },
       })

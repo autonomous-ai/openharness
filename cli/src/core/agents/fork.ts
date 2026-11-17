@@ -11,9 +11,8 @@
 import { randomUUID } from 'node:crypto'
 import { statSync } from 'node:fs'
 import type { BackendSocket } from '../../backendSocket.js'
-import { installedDsh } from '../../dsh/installed.js'
-import { harnessEnvToClear } from '../../dsh/launch.js'
-import type { DshThrough } from './dshThrough.js'
+import { harnessEnvToClear } from '../../dsh/sessionEnv.js'
+import { captureDshWorkspace, type DshThrough } from './dshThrough.js'
 import * as opencodeLaunch from '../../engines/launchControl.js'
 import type { TurnRecaps } from '../turns/recaps.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
@@ -63,7 +62,7 @@ export interface ForkAgentDeps {
   relaunchOverrides: ReturnType<typeof createLaunchHelpers>['relaunchOverrides']
   /** This account's private grid, as the socket knows it (BackendSocket.gridName). */
   gridName: () => string | null
-  dshLaunch: Pick<DshThrough, 'launch'>
+  dshLaunch: Pick<DshThrough, 'describe' | 'launch'>
 }
 
 export function createAgentForker({
@@ -116,18 +115,22 @@ export function createAgentForker({
     let dshArgs: string[] = []
     let dshLabel: string | undefined
     if (source.dsh) {
-      const installed = installedDsh(source.dsh)
-      if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${source.dsh} is no longer installed on this machine` }
+      const workspace = await captureDshWorkspace(source.cwd)
+      if (!current()) return changed
+      if (!workspace) return { ok: false, error: 'CWD_NOT_FOUND' }
+      const installed = await dshLaunch.describe(source.dsh, engine)
+      if (!current()) return changed
+      if (!installed.ok) return installed
       // Narrowed above; a closure would lose that, so the checked values are named here.
       const cwd = source.cwd
       const prepared = await dshLaunch.launch({ dsh: source.dsh, workspace: cwd, engine, key: label,
-        account: { privateGrid: gridName() }, forkOf: { agentId: source.agentId, dshRuntime: source.dshRuntime ?? null } })
+        account: { privateGrid: gridName() }, forkOf: { agentId: source.agentId, dshRuntime: source.dshRuntime ?? null } }, { workspace })
       if (!current()) return changed
       if (!prepared.ok) return { ok: false, error: prepared.error, detail: prepared.detail,
         ...(prepared.unavailable ? { unavailable: prepared.unavailable } : {}) }
       dshEnv = prepared.launch.env
       dshArgs = prepared.launch.args
-      dshLabel = installed.manifest.name
+      dshLabel = installed.name
     }
     // The row's own login, model and profile, as a restart and a resume relaunch it (launch.ts): a Codex
     // agent moved back off a grid names its provider again (`-c model_provider=…`, `ownProvider` in

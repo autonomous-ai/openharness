@@ -51,7 +51,7 @@ vi.mock('../../dsh/manifest.js', async (real) => ({ ...await real<object>(), dsh
 vi.mock('../../dsh/compatibility.js', () => ({ incompatibleHarnessEngine: vi.fn(() => null) }))
 const materializeWorkspace = vi.fn(async () => ({ warnings: [], created: [], kept: [] }))
 
-vi.mock('../../dsh/launch.js', async (real) => ({ ...await real<object>(), harnessEnvToClear: vi.fn(() => ['HARNESS_OLD']) }))
+vi.mock('../../dsh/sessionEnv.js', async (real) => ({ ...await real<object>(), harnessEnvToClear: vi.fn(() => ['HARNESS_OLD']) }))
 // OpenCode's version probe is its own code, loaded for an OpenCode launch alone; a test may say it could not be.
 vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
@@ -113,6 +113,13 @@ vi.mock('../../engines/hooks.js', async (real) => {
 // What the backend new panes are made on can do; every test's backend can give a session its own environment.
 const capabilities = vi.fn(async () => ({ sessionEnv: true }))
 
+const describeDsh = async (dsh: string, engine: any): Promise<any> => {
+  const installed = installedDsh(dsh)
+  if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is not installed on this machine` }
+  return { ok: true, id: installed.id, name: installed.manifest.name, permissionMode: dshPinnedPermissionMode(installed.manifest),
+    refusal: installed.manifest.kind === 'viewer' ? `${dsh} is a viewer package, not an agent` : incompatibleHarnessEngine(dsh, installed.manifest, engine) }
+}
+
 const launchDsh = vi.fn<CreateAgentDeps['dshLaunch']['launch']>(async () => ({ ok: true, launch: { env: { HARNESS_DSH: 'blender' }, args: ['--dsh'] } }))
 
 const root = mkdtempSync(join(tmpdir(), 'core-create-'))
@@ -151,7 +158,7 @@ function setup(over: Partial<CreateAgentDeps> = {}) {
     blocksFolder: vi.fn(() => false),
     gridSetup: vi.fn(() => vi.fn(async () => ({}))) as never,
     privateGridName: vi.fn(async () => 'grid-me'),
-    dshLaunch: { launch: launchDsh, materialize: async () => ({ ok: true, ...await materializeWorkspace() }) },
+    dshLaunch: { describe: describeDsh, launch: launchDsh, materialize: async () => ({ ok: true, ...await materializeWorkspace() }) },
     syncProfileHome: vi.fn(async () => []),
     ...over,
   }
@@ -290,7 +297,7 @@ describe('creating an agent', () => {
       const run = setup({ native: async () => { revoke('inspect'); return { ok: true, launch } },
         buildGridLaunch: async request => { revoke('models'); return { ok: true, override: request.override, launch: { env: {}, args: [], webSearch: 'unsupported' } } },
         privateGridName: async () => { revoke('account'); return null },
-        dshLaunch: {
+        dshLaunch: { describe: describeDsh,
           materialize: async () => { revoke('materialize'); return { ok: true, warnings: [], created: [], kept: [] } },
           launch: async () => { revoke('harness'); return { ok: true, launch: { env: {}, args: [] } } },
         },
@@ -663,7 +670,7 @@ describe('creating an agent', () => {
       vi.mocked(installedDsh).mockReturnValue(installed() as never)
       const refused = { ok: false as const, error: 'DSH_UNAVAILABLE', detail: 'Store unavailable', unavailable: 'store' as const }
       const materialize = vi.fn(async () => refused)
-      const { create } = setup({ dshLaunch: { materialize, launch: launchDsh } })
+      const { create } = setup({ dshLaunch: { describe: describeDsh, materialize, launch: launchDsh } })
       expect(await create(request({ dsh: 'blender' }))).toEqual(refused)
       expect(launchDsh).not.toHaveBeenCalled()
       expect(createAndRegisterPane).not.toHaveBeenCalled()

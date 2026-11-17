@@ -6,11 +6,12 @@
  * and a row whose manifest no longer parses is reported broken rather than silently dropped, so a
  * DSH that breaks on update is visible in `harness dsh list` instead of vanishing from the picker.
  */
-import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import { DSH_ID_RE, readDshManifest, type DshManifest } from './manifest.js'
+import { lockDshIndex } from './lock.js'
 
 export interface InstalledDshRecord {
   id: string
@@ -82,25 +83,41 @@ export function readInstalledIndex(): InstalledDshRecord[] {
 }
 
 export function writeInstalledIndex(records: readonly InstalledDshRecord[]): void {
+  changeIndex(() => writeIndex(records))
+}
+
+function changeIndex<T>(change: () => T): T {
+  const release = lockDshIndex()
+  if (!release) throw new Error('DSH_INDEX_BUSY: another package is updating the installed index; try again.')
+  try { return change() } finally { release() }
+}
+
+function writeIndex(records: readonly InstalledDshRecord[]): void {
   mkdirSync(dshRootDir(), { recursive: true, mode: 0o700 })
   const temporary = `${indexPath()}.${randomUUID()}.tmp`
-  writeFileSync(temporary, JSON.stringify(records, null, 2) + '\n', { mode: 0o600 })
-  renameSync(temporary, indexPath())
+  try {
+    writeFileSync(temporary, JSON.stringify(records, null, 2) + '\n', { mode: 0o600 })
+    renameSync(temporary, indexPath())
+  } finally { rmSync(temporary, { force: true }) }
 }
 
 export function upsertInstalledRecord(record: InstalledDshRecord): void {
-  const others = readInstalledIndex().filter((row) => row.id !== record.id)
-  writeInstalledIndex([...others, record].sort((a, b) => a.id.localeCompare(b.id)))
-  invalidateInstalledDsh()
+  changeIndex(() => {
+    const others = readInstalledIndex().filter((row) => row.id !== record.id)
+    writeIndex([...others, record].sort((a, b) => a.id.localeCompare(b.id)))
+    invalidateInstalledDsh()
+  })
 }
 
 export function removeInstalledRecord(id: string): boolean {
-  const before = readInstalledIndex()
-  const after = before.filter((row) => row.id !== id)
-  if (after.length === before.length) return false
-  writeInstalledIndex(after)
-  invalidateInstalledDsh()
-  return true
+  return changeIndex(() => {
+    const before = readInstalledIndex()
+    const after = before.filter((row) => row.id !== id)
+    if (after.length === before.length) return false
+    writeIndex(after)
+    invalidateInstalledDsh()
+    return true
+  })
 }
 
 /** Load one record's manifest, or say why it is broken. */
