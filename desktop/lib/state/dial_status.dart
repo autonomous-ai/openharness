@@ -200,12 +200,20 @@ class DialStatus {
   /// does not choose it, support reads it.
   final String? hw;
 
-  /// `hello.board` — `pro` for the square Harness Pro. Null (a round dial) from older daemons.
+  /// `hello.board` — `pro` for the square Harness Pro, `max` for the Harness Max bar. Null (a round
+  /// dial) from older daemons.
   final String? board;
 
-  /// The Harness Pro: only brightness, sound and voice language are its to change. The old Player-1
-  /// build says `hw: harness-pro` without a board.
-  bool get isPro => board == 'pro' || hw == 'harness-pro';
+  /// The Harness Pro, or Harness Max, which builds the Pro's firmware: only brightness, sound and voice
+  /// language are theirs to change. The old Player-1 build says `hw: harness-pro` without a board.
+  bool get isPro => board == 'pro' || board == 'max' || hw == 'harness-pro';
+
+  /// The product's name for copy that names it, or null for a round dial.
+  String? get product => board == 'max'
+      ? 'Harness Max'
+      : isPro
+      ? 'Harness Pro'
+      : null;
 
   /// The version on its way over the cable, or null. The one state that deserves its own word in the
   /// window, because it is the minute in which people unplug the thing.
