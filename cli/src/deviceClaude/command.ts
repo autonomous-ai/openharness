@@ -74,16 +74,17 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
     case 'disable':
       return turnOff('claude', claudeHome(), deps, () => claudeDisable({ run: deps.claude(), platform: deps.platform }))
     case 'asked': {
-      // A session started before `disable` still runs the hook: with the plugin off, its stdin is read and nothing told.
-      const post = claudePluginOn(claudeSettingsPath()) ? daemonPost(deps.dataDir, deps.port) : async () => {}
+      // A session started before `disable` still runs the hook: with the plugin off or removed, its stdin is read and
+      // nothing told.
+      const post = pluginActs(deps.dataDir) ? daemonPost(deps.dataDir, deps.port) : async () => {}
       // Prints nothing, ever: what the hook prints, Claude Code reads as its decision.
       return runAsked({ stdin: deps.stdin, post })
     }
     case 'link': {
       // The socket alone: a request over it is trusted by the filesystem, so the mod is handed no credential. Where
-      // there is none (Windows), or the plugin is off, no answer, and the mod tries again later.
+      // there is none (Windows), or the plugin is off or removed, no answer, and the mod tries again later.
       const socketPath = localSocketRoute(deps.dataDir, deps.port, deps.platform)
-      if (!socketPath || !claudePluginOn(claudeSettingsPath())) return 1
+      if (!socketPath || !pluginActs(deps.dataDir)) return 1
       // The mod posts its session id to the devices' listener: handed only when that socket is this account's own, never
       // one another account made or can reach. None there, or not private (no dial yet): left out, and the mod asks
       // again at an attach.
@@ -123,6 +124,15 @@ async function codexCommand(verb: string, json: boolean, deps: DeviceDeps): Prom
 const ENGINE_NAMES: Record<DialEngine, string> = { claude: 'Claude Code', codex: 'Codex' }
 const OTHER: Record<DialEngine, DialEngine> = { claude: 'codex', codex: 'claude' }
 const SAVE_FAILED = 'Could not save the dial setting.'
+
+/**
+ * Whether the plugin's hook and mod act: its entry on in this command's Claude Code settings, and `disable` has not
+ * removed Claude Code. The devices service installs the plugin into the daemon's Claude Code home, which may not be the
+ * one a `disable` ran with: the plugin stays on there, and the removal alone keeps the dial off it.
+ */
+function pluginActs(dataDir: string): boolean {
+  return claudePluginOn(claudeSettingsPath()) && readRemoved(dataDir).claude !== true
+}
 
 /** The command's own Claude Code home, where Claude Code's user settings are. */
 function claudeHome(): string {
