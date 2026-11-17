@@ -377,6 +377,21 @@ describe('run-eval.mjs with claude', () => {
     ])
   })
 
+  it('keeps the model and usage of a claude run that failed on its own on its error row', () => {
+    fakeClaude(String.raw`for (const event of [
+  { type: 'system', subtype: 'init', model: 'claude-opus-5-5' },
+  { type: 'result', subtype: 'error_during_execution', is_error: true, usage: { input_tokens: 7, output_tokens: 3 } },
+]) console.log(JSON.stringify(event))
+process.exitCode = 1`)
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'add-version-flag', '--approve-harness'])
+
+    expect(out.status).toBe(1)
+    expect(jsonl('baseline', 'errors.jsonl')).toMatchObject([
+      { prompt_id: 'add-version-flag.claude', failure_class: 'error', model: 'claude-opus-5-5', usage: { input_tokens: 7, output_tokens: 3 } },
+    ])
+  })
+
   it('stops the pass at the account limit: exit 3, one account_limited error and no further case', () => {
     fakeClaude(LIMITED)
 
