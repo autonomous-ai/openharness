@@ -29,7 +29,8 @@ working in. The app he is working in is the one in front, and the computer alrea
 2. **The host sends the apps with their agent counts, and the dial sends back the app picked.** These are two new
    frames. There is no "All".
 3. **The ring is per app:** at most 16 agents of the shown app, and each app keeps its own fixed order (the
-   `fix/dial-swipe-order` rules, applied per app).
+   `fix/dial-swipe-order` rules, applied per app). Orca's ring later takes Orca's tab order
+   ([design](../plans/2026-11-16-dial-orca-focus-order-design.md)).
 4. **The default is the app with the most agents.** A tie is drawn at random once and held until an app's agent count
    changes.
 5. **The dial follows the app in front** once it has stayed in front for 1 s. An app in front with no agents changes

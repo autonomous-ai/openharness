@@ -1144,6 +1144,32 @@ describe('the dial that shows one app at a time', () => {
     expect((await host.listAgentSnapshot({ apps: true })).apps?.apps.map((a) => a.id)).toEqual(APP_IDS.slice(0, 16))
   })
 
+  /** Orca 3 listed between Ghostty 2: Orca is shown, having the most. */
+  const mixed = (): HostAgent[] => [agent('o1', 'orca'), agent('g1', 'ghostty'), agent('o2', 'orca'), agent('o3', 'orca'), agent('g2', 'ghostty')]
+
+  it('a rank for Orca orders Orca\'s ring at the next read; the single ring and another app\'s ring keep first-entry order', async () => {
+    const host = setup(mixed())
+    host.setRank('orca', new Map([['o3', 0], ['o1', 1], ['o2', 2]]))
+    expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['o3', 'o1', 'o2'])
+    expect(ids(await host.listAgentSnapshot())).toEqual(['o1', 'g1', 'o2', 'o3', 'g2'])
+    expect(host.pickApp('ghostty')).toBe('switched')
+    expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['g1', 'g2'])
+  })
+
+  it('the same rank read again moves nobody, and a new rank reorders', async () => {
+    const agents = mixed()
+    const host = setup(agents)
+    const rank = new Map([['o3', 0], ['o1', 1], ['o2', 2]])
+    host.setRank('orca', rank)
+    expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['o3', 'o1', 'o2'])
+    // The same object, changed in place, and the registry listing Orca's agents in another order: the ring holds still.
+    rank.set('o2', -1)
+    agents.reverse()
+    expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['o3', 'o1', 'o2'])
+    host.setRank('orca', new Map([['o2', 0], ['o3', 1], ['o1', 2]]))
+    expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['o2', 'o3', 'o1'])
+  })
+
   it('a pick switches the list and holds through a count change', async () => {
     const agents = five()
     const appSwitched = vi.fn()

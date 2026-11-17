@@ -87,7 +87,7 @@ mod tests {
     fn a_save_reads_back() {
         let dir = tempfile::tempdir().unwrap();
         let file = JsonStateFile::new(dir.path().to_path_buf(), Arc::new(MemoryLog::default()));
-        let saved = Saved { cli_seen: true, asked_claude: true, ..Saved::default() };
+        let saved = Saved { cli_seen: true, asked_sign_in: true, ..Saved::default() };
         file.save(&saved).unwrap();
         assert_eq!(file.load(), saved);
         assert_eq!(names(dir.path()), ["state.json"]);
@@ -161,23 +161,16 @@ mod tests {
     }
 
     #[test]
-    fn a_state_file_from_before_codex_keeps_its_answers() {
+    fn a_state_file_with_the_old_offer_keys_loads() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
             dir.path().join("state.json"),
-            r#"{"version":1,"cliSeen":true,"askedSignIn":true,"askedClaude":true,"loginItem":true}"#,
+            r#"{"version":1,"cliSeen":true,"askedSignIn":true,"askedClaude":true,"askedCodex":false,"loginItem":true}"#,
         )
         .unwrap();
         let log = Arc::new(MemoryLog::default());
         let file = JsonStateFile::new(dir.path().to_path_buf(), log.clone());
-        let before = Saved {
-            version: 1,
-            cli_seen: true,
-            asked_sign_in: true,
-            asked_claude: true,
-            asked_codex: false,
-            login_item: true,
-        };
+        let before = Saved { version: 1, cli_seen: true, asked_sign_in: true, login_item: true };
         assert_eq!(file.load(), before);
         assert!(log.lines().is_empty());
     }

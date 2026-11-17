@@ -19,8 +19,8 @@ describe('api', () => {
 
   it('sends an action by its name', async () => {
     vi.mocked(invoke).mockResolvedValue(undefined)
-    await act('not_now')
-    expect(invoke).toHaveBeenCalledWith('act', { action: 'not_now' })
+    await act('later')
+    expect(invoke).toHaveBeenCalledWith('act', { action: 'later' })
   })
 
   it('hands each view event its payload and resolves to the unlisten function', async () => {
