@@ -83,6 +83,19 @@ describe('harness reply to a program\'s own harness (#4393)', () => {
     expect(new ProgramRecords(dir).get('a1')!.inputs).toEqual([{ id: 'program:x1', takenAt: NOW + 400 }])
   })
 
+  it('sends words starting with ! or / to OpenClaw as a message, never a shell or TUI command; other engines as written', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('a1'), frame('c1', { engine: 'claude' })]
+    own('a1')
+    own('c1', 'lamp-claude', { engine: 'claude' })
+    d.extra.input_ack = () => ({ inputId: 'program:b1', state: 'taken', takenAt: NOW })
+    const say = (name: string, words: string) => replyCommand([name, '--program-token-file', token, '--json', '--', words], harness(d).deps)
+    expect(await say('lamp-openclaw', '!ls ~')).toBe(EXIT.ok)
+    expect(await say('lamp-openclaw', '/new')).toBe(EXIT.ok)
+    expect(await say('lamp-claude', '/new')).toBe(EXIT.ok)
+    expect(d.requests.filter((r) => r.type === 'input_ack').map((r) => r.payload.text)).toEqual(['​!ls ~', '​/new', '/new'])
+  })
+
   it('waits for an engine still coming up, then says ENGINE_NOT_READY with nothing typed', async () => {
     const d = new FakeDaemon()
     d.frames = [frame('a1')]

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { KEPT_INPUTS, ownedBy, ProgramRecords, programMay, readProgramToken, sameHash, withProgramLock } from './program.js'
+import { KEPT_INPUTS, openclawMessage, ownedBy, ProgramRecords, programMay, readProgramToken, sameHash, withProgramLock } from './program.js'
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'program-')) })
@@ -41,6 +41,30 @@ describe('a program token file', () => {
     expect(programMay('reply', false) && programMay('resume', true)).toBe(true)
     expect(sameHash('ab', 'ab')).toBe(true)
     expect(sameHash('ab', 'abc')).toBe(false)
+  })
+})
+
+describe('a program\'s words to an OpenClaw harness', () => {
+  // OpenClaw 2026.11.2's TUI, as it reads a submitted editor: pi-tui 1.0.3 `submitValue` trims, then
+  // `createEditorSubmitHandler` asks `resolveEditorSubmitAction` and sends `raw.trim()` as the message.
+  const tui = (typed: string): { action: string; sent: string } => {
+    const raw = typed.trim()
+    const action = /^\/browser-setup(?:\s|$)/i.test(raw.trimStart()) ? 'command'
+      : raw.includes('\n') ? 'message'
+        : raw.startsWith('!') && raw.trimEnd() !== '!' ? 'local shell'
+          : raw.trimStart().startsWith('/') ? 'command' : 'message'
+    return { action, sent: raw.trim() }
+  }
+
+  it('are always sent as a message, a line starting with ! or / included, and otherwise as written', () => {
+    for (const words of ['!rm -rf ~', '/new', '/reset please', '  /browser-setup', '!', '/']) {
+      const typed = openclawMessage(words)
+      expect(tui(typed)).toEqual({ action: 'message', sent: `​${words.trim()}` })
+    }
+    for (const words of ['turn on the light', 'what is 2/3?', '!important\nthen this', 'say hi!']) {
+      expect(openclawMessage(words)).toBe(words)
+      expect(tui(words).action).toBe('message')
+    }
   })
 })
 
