@@ -6144,6 +6144,20 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
     await vi.waitFor(() => expect(calls('turnStarted')).toEqual([[id, '', undefined]]))
   })
 
+  // A build that fails says nothing of the session: its first cards go, and nothing of it is held after.
+  it('a session first listed while the dial\'s list fails to build has its next cards told', async () => {
+    const { oc, live, tell } = withOpencode()
+    oc.active = { [SES]: { type: 'busy' } }
+    const build = vi.spyOn(host(), 'listAgentSnapshot').mockRejectedValue(new Error('the fleet is gone'))
+    await live()
+    await vi.advanceTimersByTimeAsync(0)
+    build.mockRestore()
+    const [{ id }] = await listed()
+    oc.active = {}
+    tell('session.execution.succeeded', { sessionID: SES })
+    expect(calls('turnDone')).toEqual([[id]])
+  })
+
   // The devices' copy of the core's agents is read again only at a list build: opencode lists a new session's first turn
   // before the copy holds the session Harness bound to it.
   it('a session Harness started gets no card as opencode\'s before the dial\'s list binds it', async () => {
