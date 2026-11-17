@@ -12,6 +12,16 @@ function withResult(result: Record<string, unknown>): string {
   return `${lines.join('\n')}\n`
 }
 
+/** The sample with each main-thread assistant event served by the model `served` names for it, the nth from 0. */
+function servedBy(served: (n: number) => string): string {
+  let n = 0
+  return sample.trimEnd().split('\n').map((line) => {
+    const event = JSON.parse(line)
+    if (event.type === 'assistant' && event.parent_tool_use_id === null) event.message.model = served(n++)
+    return JSON.stringify(event)
+  }).join('\n')
+}
+
 // The sample is a real `claude -p` 2.1.326 run of api-key-missing with the dial skill, sanitized (pilot, 2026-11-17).
 describe('parseClaudeStream', () => {
   it('turns the stream into turns in order; system, rate-limit and permission events make none', () => {
@@ -29,7 +39,7 @@ describe('parseClaudeStream', () => {
     expect(run.transcript[17].content).toBe('shown')
   })
 
-  it('takes the model, answer, usage and stop reason from the init and result events', () => {
+  it('takes the model from the assistant events, and the answer, usage and stop reason from the result event', () => {
     const run = parseClaudeStream(sample)
     expect(run.model).toBe('claude-opus-5-5')
     expect(run.answer).toMatch(/^I couldn't generate this week's report\./)
@@ -39,6 +49,22 @@ describe('parseClaudeStream', () => {
     expect(run.tool_calls).toBe(8)
     expect(run.status).toBe('ok')
     expect(run.limited).toBe(false)
+  })
+
+  it('takes the model that served the main thread, not the one init echoes from --model', () => {
+    expect(parseClaudeStream(servedBy(() => 'claude-sonnet-5')).model).toBe('claude-sonnet-5')
+  })
+
+  it('leaves a subagent\'s model out of the served model', () => {
+    const lines = sample.trimEnd().split('\n')
+    const sub = JSON.stringify({ type: 'assistant', parent_tool_use_id: 'toolu_sub', message: { model: 'claude-haiku-5-5', role: 'assistant', content: [] } })
+    expect(parseClaudeStream([...lines.slice(0, 2), sub, ...lines.slice(2)].join('\n')).model).toBe('claude-opus-5-5')
+  })
+
+  it('names every model, under a name no served-model check accepts, when the main thread was served by more than one', () => {
+    const { model } = parseClaudeStream(servedBy((n) => (n < 3 ? 'claude-opus-5-5' : 'claude-sonnet-5')))
+    expect(model).toBe('mixed: claude-opus-5-5, claude-sonnet-5')
+    expect(model?.startsWith('claude-opus-5-5')).toBe(false)
   })
 
   it('drops the empty thinking Claude Code prints when thinking is not shown, and makes no turn of it', () => {

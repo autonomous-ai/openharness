@@ -81,6 +81,14 @@ describe('claudeJudge', () => {
     expect((err as Error).message).not.toMatch(/rate.?limit|overloaded/i)
   })
 
+  it('throws serving_substitution, carrying the models and spend, when any other model served the judge', async () => {
+    const served = reply({ structured_output: { pass: true, reason: 'Names the key.' }, modelUsage: { [JUDGE_MODEL]: { inputTokens: 300 }, 'claude-sonnet-5': { inputTokens: 20 } } })
+    const err = await judgeWith({ FAKE_REPLY: served })('actionable', { ask: 'a', line: 'b' }).catch((e: unknown) => e)
+    expect(err).toMatchObject({ failure_class: 'serving_substitution', judge_model: `${JUDGE_MODEL},claude-sonnet-5`, judge_usage: usage })
+    // Not retried: the runner retries only messages that read as a transient overload.
+    expect((err as Error).message).not.toMatch(/rate.?limit|overloaded/i)
+  })
+
   it('throws, naming the exit code, when the judge prints no JSON', async () => {
     await expect(judgeWith({ FAKE_REPLY: 'oops', FAKE_CODE: '1' })('actionable', { ask: 'a', line: 'b' })).rejects.toThrow(/exit 1/)
   })
