@@ -3,7 +3,6 @@ import { join } from 'node:path'
 
 export interface SplitStats { mean: number; ci_lo: number; ci_hi: number; n: number }
 export interface Paired { mean: number; ci_lo: number; ci_hi: number; n: number; significant: boolean }
-export type Prices = Record<string, { in: number; out: number }>
 export interface VariantStats {
   change: string
   splits: Record<string, SplitStats>
@@ -27,6 +26,11 @@ interface Row {
 }
 interface ErrorRow { prompt_id: string; rep: number; failure_class?: string; model?: string | null; usage?: Usage;
   judge_model?: string; judge_usage?: Usage }
+
+// $ per million tokens, from the claude-api skill's Current Models table (cached 2026-11-03).
+export const PRICES: Record<string, { in: number; out: number }> = {
+  'claude-opus-5-5': { in: 4, out: 20 },
+}
 
 const SPLITS = ['val', 'train', 'test'] as const
 const STATUS = ['<!-- status -->', '<!-- /status -->'] as const
@@ -77,11 +81,11 @@ function caseMeans(rows: Row[]): Map<string, number> {
   return new Map([...by].map(([id, xs]) => [id, mean(xs)]))
 }
 
-function priceOf(model: string | null | undefined, prices: Prices) {
+function priceOf(model: string | null | undefined) {
   if (!model) return undefined
   // Longest matching prefix, as the runner accepts a served model that starts with the requested one.
-  const key = Object.keys(prices).filter(k => model.startsWith(k)).sort((a, b) => b.length - a.length)[0]
-  return key ? prices[key] : undefined
+  const key = Object.keys(PRICES).filter(k => model.startsWith(k)).sort((a, b) => b.length - a.length)[0]
+  return key ? PRICES[key] : undefined
 }
 
 function tokensOf(u: Usage | undefined): number {
@@ -90,9 +94,9 @@ function tokensOf(u: Usage | undefined): number {
 }
 
 // Dollars for one call: cache reads at 0.1× input, cache writes at 1.25× input; null when billed tokens have no price.
-function costOf(model: string | null | undefined, u: Usage | undefined, prices: Prices): number | null {
+function costOf(model: string | null | undefined, u: Usage | undefined): number | null {
   if (!tokensOf(u)) return 0
-  const p = priceOf(model, prices)
+  const p = priceOf(model)
   if (!p) return null
   return (p.in * ((u!.input_tokens ?? 0) + 0.1 * (u!.cache_read_input_tokens ?? 0)
     + 1.25 * (u!.cache_creation_input_tokens ?? 0)) + p.out * (u!.output_tokens ?? 0)) / 1e6
@@ -116,7 +120,7 @@ function changeOf(flow: string, v: string): string {
 
 const rate = (rows: Row[], key: string) => mean(rows.flatMap(r => (key in (r.grade ?? {}) ? [r.grade![key]] : [])))
 
-export function summarize(flow: string, prices: Prices): Summary {
+export function summarize(flow: string): Summary {
   const split = splitOf(readState(flow))
   const variants: Record<string, VariantStats> = {}
   const means: Record<string, Map<string, number>> = {}
@@ -140,7 +144,7 @@ export function summarize(flow: string, prices: Prices): Summary {
     for (const e of errs) errors[e.failure_class ?? 'error'] = (errors[e.failure_class ?? 'error'] ?? 0) + 1
     // Every attempt was billed, scored or not: truncated, invalid and failed ones count toward spend.
     const costs = [...rows, ...errs].flatMap(r =>
-      [costOf(r.model, r.usage, prices), costOf(r.judge_model, r.judge_usage, prices)])
+      [costOf(r.model, r.usage), costOf(r.judge_model, r.judge_usage)])
     variants[v] = {
       change: changeOf(flow, v),
       splits,
@@ -275,8 +279,8 @@ function replaceBlock(path: string, [open, close]: readonly [string, string], bo
 
 // Writes every variant's table.md, the status table in narrative.md and the aggregate table in metrics.md;
 // returns the headline line.
-export function writeSummaries(flow: string, prices: Prices): string {
-  const s = summarize(flow, prices)
+export function writeSummaries(flow: string): string {
+  const s = summarize(flow)
   for (const v of Object.keys(s.variants)) writeFileSync(join(flow, v, 'table.md'), runTable(flow, v))
   replaceBlock(join(flow, 'narrative.md'), STATUS, statusTable(s))
   replaceBlock(join(flow, 'metrics.md'), AGGREGATE, aggregateTable(s))

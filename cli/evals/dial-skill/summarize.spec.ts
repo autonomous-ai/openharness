@@ -4,8 +4,6 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { summarize, writeSummaries } from './lib/summarize.js'
 
-// Per million tokens, as the claude-api skill's Current Models table gives them.
-const PRICES = { 'claude-opus-5-5': { in: 4, out: 20 } }
 const USAGE = { input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 10_000, cache_creation_input_tokens: 2000 }
 const JUDGE = { judge_model: 'claude-opus-5-5', judge_usage: { input_tokens: 500, output_tokens: 50 } }
 
@@ -78,7 +76,7 @@ afterEach(() => rmSync(flow, { recursive: true, force: true }))
 
 describe('summarize', () => {
   it('takes means per case over status-ok reps, then over cases, with a t interval', () => {
-    const s = summarize(flow, PRICES).variants.baseline
+    const s = summarize(flow).variants.baseline
     expect(s.splits.train.n).toBe(3)
     expect(s.splits.train.mean).toBeCloseTo(1.5, 4)
     expect(s.splits.train.ci_lo).toBeCloseTo(-2.9787, 3)
@@ -88,11 +86,11 @@ describe('summarize', () => {
     expect(s.splits.val.ci_lo).toBeCloseTo(-5.5729, 3)
     expect(s.splits.val.ci_hi).toBeCloseTo(7.5729, 3)
     expect(s.splits.test).toMatchObject({ mean: 4, n: 1 })
-    expect(summarize(flow, PRICES).variants.v1.splits.val).toMatchObject({ mean: 2.625, n: 4 })
+    expect(summarize(flow).variants.v1.splits.val).toMatchObject({ mean: 2.625, n: 4 })
   })
 
   it('counts truncated, invalid and failed attempts and keeps them out of the rates', () => {
-    const { baseline, v1 } = summarize(flow, PRICES).variants
+    const { baseline, v1 } = summarize(flow).variants
     expect(baseline.truncated).toBe(1)
     expect(baseline.invalid).toBe(1)
     expect(baseline.errors).toEqual({ timeout: 1 })
@@ -103,13 +101,13 @@ describe('summarize', () => {
   })
 
   it('takes precision as rings on need runs over all rings', () => {
-    const { baseline, v1 } = summarize(flow, PRICES).variants
+    const { baseline, v1 } = summarize(flow).variants
     expect(baseline.precision).toBeCloseTo(5 / 6, 6)
     expect(v1.precision).toBeCloseTo(9 / 10, 6)
   })
 
   it('counts the runs that did the harm, over the train and val runs with a harm check', () => {
-    const { baseline, v1 } = summarize(flow, PRICES).variants
+    const { baseline, v1 } = summarize(flow).variants
     expect(baseline.harmed).toBe(1)
     expect(baseline.harm_rate).toBeCloseTo(1 / 3, 6)
     expect(v1.harmed).toBe(0)
@@ -117,7 +115,7 @@ describe('summarize', () => {
   })
 
   it('pairs each variant with the baseline over the cases both scored', () => {
-    const { paired } = summarize(flow, PRICES)
+    const { paired } = summarize(flow)
     expect(paired.v1.train.n).toBe(3)
     expect(paired.v1.train.mean).toBeCloseTo(0.8333, 3)
     expect(paired.v1.train.ci_lo).toBeCloseTo(0.1162, 3)
@@ -131,7 +129,7 @@ describe('summarize', () => {
   })
 
   it('prices agent, judge and failed-attempt usage, and leaves a model with no price unmeasured', () => {
-    const { baseline, v1 } = summarize(flow, PRICES).variants
+    const { baseline, v1 } = summarize(flow).variants
     // 14 runs × $0.02 + 10 judged runs × $0.003 + the timed-out attempt's $0.006.
     expect(baseline.spend_usd).toBeCloseTo(0.316, 8)
     expect(v1.spend_usd).toBeNull()
@@ -147,7 +145,7 @@ describe('writeSummaries', () => {
   })
 
   it('writes each run and the totals into the variant table', () => {
-    writeSummaries(flow, PRICES)
+    writeSummaries(flow)
     const baseline = readFileSync(join(flow, 'baseline', 'table.md'), 'utf8')
     expect(baseline).toContain('| case | split | rep 0 | rep 1 | mean | spread |')
     expect(baseline).toContain('| a.claude | train | 4 | 2 | 3.00 | 2.00 |')
@@ -160,8 +158,8 @@ describe('writeSummaries', () => {
   })
 
   it('rewrites the status and aggregate tables between their markers and keeps the rest', () => {
-    const headline = writeSummaries(flow, PRICES)
-    writeSummaries(flow, PRICES)
+    const headline = writeSummaries(flow)
+    writeSummaries(flow)
     const narrative = readFileSync(join(flow, 'narrative.md'), 'utf8')
     expect(narrative.startsWith('# Dial skill hill-climb\n\n<!-- status -->\n')).toBe(true)
     expect(narrative.endsWith('<!-- /status -->\n\nThe story so far.\n')).toBe(true)
@@ -185,6 +183,6 @@ describe('writeSummaries', () => {
 
   it('refuses a file whose markers are missing', () => {
     writeFileSync(join(flow, 'metrics.md'), '# Metrics\n')
-    expect(() => writeSummaries(flow, PRICES)).toThrow(/metrics\.md.*<!-- aggregate -->/)
+    expect(() => writeSummaries(flow)).toThrow(/metrics\.md.*<!-- aggregate -->/)
   })
 })
