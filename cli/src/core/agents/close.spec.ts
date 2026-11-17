@@ -286,6 +286,13 @@ describe('agent_close', () => {
     ask({ request: vi.fn(async () => ({})) }, { ...target, mode: 'now', onlyIfHidden: 'yes' })
   })
 
+  it('passes on a program forget\'s leave to save no history its engine never wrote (#4393), and nothing else for it', async () => {
+    const request = vi.fn(async () => ({ closed: true }))
+    ask({ request }, { ...target, mode: 'now', ifNoHistory: true })
+    ask({ request }, { ...target, mode: 'now', ifNoHistory: 'yes' })
+    expect(request.mock.calls).toEqual([[{ ...target, mode: 'now', ifNoHistory: true }], [{ ...target, mode: 'now' }]])
+  })
+
   // anh Dee, 2026-11-13: an experiment never touches the core. A Change agent close names its switch, which the core once
   // checked for one component's agents; it is a close as any other now, and the core reads nothing of the switch.
   it('closes a close that names a Change agent switch as any close', () => {

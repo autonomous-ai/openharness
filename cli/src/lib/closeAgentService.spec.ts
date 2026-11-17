@@ -70,6 +70,21 @@ it('checkpoint failure retains the session and reports the failure', async () =>
   expect(await service.request(request())).toMatchObject({ error: 'HISTORY_NOT_SAVED', detail: 'Disk full' })
   expect(registry.byAgent(row.agentId)).toBe(row)
 })
+it('a program forgetting its harness closes one whose engine wrote no history with none kept, and no other failure (#4393)', async () => {
+  const empty = Object.assign(new Error('Could not read the saved conversation.'), { code: 'HISTORY_NOT_SAVED', empty: true })
+  vi.mocked(deps.checkpoint).mockRejectedValue(empty)
+  // Any other close refuses as before.
+  expect(await service.request(request('now'))).toMatchObject({ error: 'HISTORY_NOT_SAVED' })
+  expect(registry.byAgent(row.agentId)).toBe(row)
+  // Another failure refuses a forget too.
+  vi.mocked(deps.checkpoint).mockRejectedValueOnce(Object.assign(new Error('Disk full'), { code: 'HISTORY_NOT_SAVED' }))
+  expect(await service.request({ ...request('now'), ifNoHistory: true })).toMatchObject({ error: 'HISTORY_NOT_SAVED', detail: 'Disk full' })
+  vi.mocked(deps.checkpoint).mockRejectedValueOnce(null)
+  expect(await service.request({ ...request('now'), ifNoHistory: true })).toMatchObject({ error: expect.any(String) })
+  expect(registry.byAgent(row.agentId)).toBe(row)
+  expect(await service.request({ ...request('now'), ifNoHistory: true })).toEqual({ closed: true, withoutConversation: true })
+  expect(registry.byAgent(row.agentId)).toBeUndefined()
+})
 it('a queued Close preserves its intent and reason while native identity is unavailable, then retries', async () => {
   vi.mocked(deps.stop).mockRejectedValueOnce(new IdentityReadUnavailable('the process record is incomplete'))
   await expect(service.request(request('after_task'))).resolves.toEqual({ deferred: true })

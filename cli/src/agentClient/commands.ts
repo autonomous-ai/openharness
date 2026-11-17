@@ -33,7 +33,7 @@ import { messagesRpc, type Rpc } from '../messages/rpc.js'
 import { PERSON_AGENT_ID, REPLY_OFF_TEXT } from '../messages/replyLocal.js'
 import { TELL_OFF_TEXT } from '../messages/tell.js'
 import { sendPane } from '../messages/command.js'
-import { deleteOpenclawSession, openclawKey, runOpenclaw, type Deletion, type RunOpenclaw } from './forget.js'
+import { deleteHermesSession, deleteOpenclawSession, openclawKeys, runCommand, type Deletion, type RunCommand, type SessionDeletion } from './forget.js'
 import { PROGRAM_TOKEN_FLAG, ProgramRecords, programMay, readProgramToken, sameHash, type ProgramHarness, type ProgramInput } from './program.js'
 import { asSaid, callerOf, clip, cloudMeta, cloudTurn, failureOf, forAgent, isAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type CloudMeta, type Failure, type Frame, type HistoryEvent, type Row, type State } from './model.js'
 
@@ -57,8 +57,10 @@ export interface ClientDeps {
   machines?: () => Promise<NewMachine[]>
   /** How long `ps --machines` waits on each other machine. */
   answerMs?: number
-  /** Runs `openclaw` (`close --forget`'s Gateway `sessions.delete`, forget.ts). */
-  openclaw?: RunOpenclaw
+  /** Runs an engine's CLI, `openclaw` or `hermes` (`close --forget`'s session deletes, forget.ts). */
+  engineCli?: RunCommand
+  /** Whether Hermes's store holds exactly session [id] (forget.ts `hermesHolds`). */
+  hermesHolds?: (id: string) => Promise<boolean | null>
 }
 
 const ON_MACHINE = '--machine <name> is another of your machines, by its name or id as harness new takes it; this one when left out.'
@@ -142,11 +144,13 @@ ${ON_MACHINE}
 
 A program closes its own harness with ${PROGRAM_TOKEN_FLAG} <path> (this computer only). With --forget as well, for
 a sign-out, a reset or another engine, its conversation is deleted too: the engine's own session where the engine
-allows it (OpenClaw's through its Gateway; Hermes's from its store), and everything Harness kept of it. The program then
-no longer owns it, so the next harness ensure of that name starts a new one. --forget takes ${PROGRAM_TOKEN_FLAG}: a
-harness a person started is never forgotten this way.
---json answers {"name","id","engine","closed","forgotten":true,"harness":{"state"},"engineSession":{"state","key"?},
-"effect"}; each "state" is "deleted", "none" (there was nothing to delete) or "kept", with "detail" saying why.
+allows it (OpenClaw's every key through its Gateway; Hermes's with hermes sessions delete), and everything Harness kept
+of it. The program then no longer owns it, so the next harness ensure of that name starts a new one, and a second
+--forget of it is UNKNOWN_HARNESS. --forget takes ${PROGRAM_TOKEN_FLAG}: a harness a person started is never
+forgotten this way.
+--json answers {"name","id","engine","closed","forgotten":true,"harness":{"state"},"engineSession":{"state",
+"sessions":[{"key","state"}]},"effect"}; each "state" is "deleted", "none" (there was nothing to delete) or "kept",
+with "detail" saying why.
 Exit status: 0 everything deleted, 1 something kept (NOT_ALL_DELETED: it is still forgotten), 5 refused.`
 export const DELETE_USAGE = `Usage: harness delete <name> [--json]
 
@@ -262,7 +266,8 @@ function setup(deps: ClientDeps) {
     intervalMs: deps.intervalMs ?? DEFAULT_INTERVAL_MS,
     record: deps.record ?? messagesRpc,
     answerMs: deps.answerMs ?? PS_MACHINES_ANSWER_MS,
-    openclaw: deps.openclaw ?? runOpenclaw,
+    engineCli: deps.engineCli ?? ((command: string, args: string[]) => runCommand(command, args)),
+    hermesHolds: deps.hermesHolds,
     machines: deps.machines ?? (async (): Promise<NewMachine[]> => {
       throw new AgentClientError('MACHINES_UNAVAILABLE', 'Harness could not list your machines here.')
     }),
@@ -2002,8 +2007,9 @@ export function closeCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
 }
 
 /** [t] closed (`agent_close`), as `harness close` closes it: refused, with what to do, while it works or still runs
- *  background commands, unless [now]. The daemon's answer, once it closed it. */
-async function closeTarget(s: Setup, t: Target, name: string, away: Away | null, now: boolean): Promise<Record<string, unknown>> {
+ *  background commands, unless [now]. [extra] goes with the request (`close --forget`'s `ifNoHistory`). The daemon's
+ *  answer, once it closed it. */
+async function closeTarget(s: Setup, t: Target, name: string, away: Away | null, now: boolean, extra: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   const anyway = s.env[VIA_MCP_ENV] === '1' ? 'now: true' : '--now'
   // Idle with background commands still running is not done, and a close would end them (it ends the engine's whole
   // process tree). Refused here, not by the daemon: its idle close keeps its rule for the windows' Close.
@@ -2012,7 +2018,7 @@ async function closeTarget(s: Setup, t: Target, name: string, away: Away | null,
     if (background) throw new AgentClientError('WORKING', `${name}: ${backgroundSaid(background)}; ${anyway} closes anyway`)
   }
   const reply = await t.daemon.request('agent_close', {
-    agentId: t.frame.id, sessionId: t.frame.sessionId ?? '', createdAt: t.frame.createdAt ?? '', mode: now ? 'now' : 'idle',
+    agentId: t.frame.id, sessionId: t.frame.sessionId ?? '', createdAt: t.frame.createdAt ?? '', mode: now ? 'now' : 'idle', ...extra,
   }, 60_000)
   if (reply.error === 'SESSION_NOT_IDLE') {
     throw new AgentClientError('WORKING', `${name} is ${reply.activity === 'needs_input' ? 'waiting for the person' : 'working'}. Wait for it (${step(s.env, 'wait', onAway(name, away))}), or close it anyway with ${anyway}.`)
@@ -2029,13 +2035,18 @@ async function closeTarget(s: Setup, t: Target, name: string, away: Away | null,
 
 // ── close --forget: a program's own harness and its conversation (#4393) ───────────────────────────
 
+/** What became of an engine's conversation: each session it had, or, with none known, why. */
+type EngineForget = Deletion & { sessions: SessionDeletion[] }
+
 /**
  * A program's own harness closed and its conversation deleted, for a sign-out, a reset or an engine switch. Closed as
- * `close` closes it (refused while it works, unless [now]); then the engine's own session where the engine allows it
- * (OpenClaw's by its Gateway, forget.ts; any other engine's by Harness's purge, as `harness delete` erases it); then
- * everything Harness kept of it (`agent_purge`); then the program's record, so the next `ensure` answers `new`. A record
- * whose harness Harness no longer lists is forgotten too, its OpenClaw session deleted by the key it was launched with.
- * Each part is said as it went, never one that failed as done: NOT_ALL_DELETED (exit 1) when anything was kept.
+ * `close` closes it (refused while it works, unless [now]; one whose engine has written no history yet is closed with
+ * none to save, `ifNoHistory`); then the engine's own sessions, by the engine itself (forget.ts: OpenClaw's every key
+ * through its Gateway, Hermes's by `hermes sessions delete`; any other engine's by Harness's purge, as `harness delete`
+ * erases it); then everything Harness kept of it (`agent_purge`); then the program's record, so the next `ensure`
+ * answers `new`. A record whose harness Harness no longer lists is forgotten too, its OpenClaw session deleted by the key
+ * it was launched with. Each part is said as it went, never one that failed as done: NOT_ALL_DELETED (exit 1) when
+ * anything was kept.
  */
 async function forgetProgramHarness(s: Setup, o: Opened, p: Program, name: string, now: boolean, json: boolean): Promise<number> {
   let t: ProgramTarget | null = null
@@ -2046,26 +2057,33 @@ async function forgetProgramHarness(s: Setup, o: Opened, p: Program, name: strin
   const record = t?.record ?? p.records.named(name, p.hash)[0]
   const id = record.agentId, engine = t?.frame.engine ?? record.engine, said = t?.frame.name ?? record.name
   const closed = !!t && t.frame.status !== 'stopped'
-  if (t && closed) await closeTarget(s, t, said, null, now)
+  if (t && closed) await closeTarget(s, t, said, null, now, { ifNoHistory: true })
   // Read again once closed: a close moves it to the stopped ones, and binds what it was in.
   const frame = t ? named(await list(o.daemon, true)).find((f) => f.id === id) ?? null : null
-  let engineSession: Deletion & { key?: string }
+  const bound = frame?.sessionId || t?.frame.sessionId || null
+  const sessions: SessionDeletion[] = []
+  let unknown: string | null = null
   if (engine === 'openclaw') {
-    const key = openclawKey(id, frame?.sessionId ?? t?.frame.sessionId)
-    engineSession = record.local
-      ? { state: 'kept', key, detail: `it ran on its own --local folder (${record.local}), which holds its session: delete that folder` }
-      : { ...await deleteOpenclawSession(key, s.openclaw), key }
-  } else engineSession = { state: 'kept', detail: 'Harness no longer keeps this harness, so it cannot find its conversation' }
+    for (const key of openclawKeys(id, bound)) {
+      sessions.push(record.local ? { key, state: 'kept', detail: `it ran on its own --local folder (${record.local}), which holds its session: delete that folder` }
+        : await deleteOpenclawSession(key, s.engineCli))
+    }
+  } else if (engine === 'hermes' && bound) sessions.push(await deleteHermesSession(bound, { run: s.engineCli, ...(s.hermesHolds ? { holds: s.hermesHolds } : {}) }))
+  else if (!frame) unknown = 'Harness no longer keeps this harness, so it cannot find its conversation'
   let harness: Deletion = { state: 'none' }
+  let byPurge: Deletion | null = null
   if (frame) {
     const purged = await purgeOwned(o.daemon, frame)
     harness = purged.error ? { state: 'kept', detail: purged.error } : { state: 'deleted' }
-    // Every other engine's own session is the purge's: erased with it, or kept with the purge's reason.
-    if (engine !== 'openclaw') {
-      const kept = purged.kept?.[0]?.reason
-      engineSession = purged.error ? { state: 'kept', detail: purged.error } : kept ? { state: 'kept', detail: kept } : { state: frame.sessionId ? 'deleted' : 'none' }
+    // Any other engine's own session is the purge's: erased with it, or kept with the purge's reason.
+    const kept = purged.kept?.[0]?.reason
+    if (engine !== 'openclaw' && engine !== 'hermes') {
+      byPurge = purged.error ? { state: 'kept', detail: purged.error } : kept ? { state: 'kept', detail: kept } : { state: frame.sessionId ? 'deleted' : 'none' }
     }
   }
+  const engineSession: EngineForget = byPurge ? { ...byPurge, sessions }
+    : unknown ? { state: 'kept', detail: unknown, sessions }
+    : { state: sessions.some((x) => x.state === 'kept') ? 'kept' : sessions.some((x) => x.state === 'deleted') ? 'deleted' : 'none', sessions }
   p.records.forget(id)
   const result = { name: said, id, engine, closed, forgotten: true, harness, engineSession }
   const effect = forgetSaid(said, engineName(engine), result)
@@ -2077,20 +2095,25 @@ async function forgetProgramHarness(s: Setup, o: Opened, p: Program, name: strin
 }
 
 /** What `close --forget` did, in one paragraph: each part as it went. */
-function forgetSaid(name: string, engine: string, r: { closed: boolean; harness: Deletion; engineSession: Deletion & { key?: string } }): string {
-  const why = (d: Deletion): string => (d.detail ? `: ${d.detail}` : '')
-  const session = `Its ${engine} session${r.engineSession.key ? ` ${r.engineSession.key}` : ''}`
+function forgetSaid(name: string, engine: string, r: { closed: boolean; harness: Deletion; engineSession: EngineForget }): string {
+  // A detail is a clause of the sentence it is put in: its own closing stop would be a second one.
+  const clause = (d: Deletion): string => String(d.detail).replace(/[.\s]+$/, '')
+  const went = (what: string, d: Deletion): string =>
+    d.state === 'deleted' ? `${what} was deleted${d.detail ? ` (${clause(d)})` : ''}.`
+      : d.state === 'none' ? `${what} had nothing to delete${d.detail ? `: ${clause(d)}` : ''}.`
+      // Never kept without a reason.
+      : `${what} was NOT deleted: ${clause(d)}.`
+  const sessions = r.engineSession.sessions.length
+    ? r.engineSession.sessions.map((x) => went(`Its ${engine} session ${x.key}`, x))
+    : [went(`Its ${engine} conversation`, r.engineSession)]
   return [
     `${name}: ${r.closed ? 'closed and ' : ''}forgotten; the next harness ensure starts a new one.`,
-    r.engineSession.state === 'deleted' ? `${session} was deleted${r.engineSession.detail ? ` (${r.engineSession.detail})` : ''}.`
-      : r.engineSession.state === 'none' ? `${session} had nothing to delete${why(r.engineSession)}.`
-      : `${session} was NOT deleted${why(r.engineSession)}.`,
+    ...sessions,
     r.harness.state === 'deleted' ? 'Everything Harness kept of it is erased.'
       : r.harness.state === 'none' ? 'Harness kept nothing of it.'
-      : `What Harness kept of it was NOT erased${why(r.harness)}.`,
+      : `What Harness kept of it was NOT erased: ${clause(r.harness)}.`,
   ].join(' ')
 }
-
 /** A stopped harness purged as `harness delete` purges it (`agent_purge`, reviewed, then done): its conversation and
  *  everything Harness kept of it, never its folder. `error` says why it was not; `kept`, what an engine's store kept. */
 async function purgeOwned(daemon: Daemon, frame: Frame): Promise<{ error?: string; kept?: Kept[] }> {
