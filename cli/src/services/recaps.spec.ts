@@ -249,13 +249,14 @@ describe('the recaps', () => {
   })
 
   it('cuts no recap from a turn whose final answer the core cannot read', async () => {
+    vi.useFakeTimers()
     const { core, tell } = setup()
     vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.mocked(core.transcripts.lastTurn).mockResolvedValue(null)
     tell({ kind: 'events', session: s1, events: [started()], replay: false })
     tell({ kind: 'events', session: s1, events: [ended], replay: false })
-    await flush()
-    await flush()
+    // Past the quiet window, where a recap would have been told.
+    await quietWindow()
     expect(core.clients.turnSummary).not.toHaveBeenCalled()
     expect(vi.mocked(core.clients.turnCard).mock.calls.at(-1)?.[0].payload).toEqual({ kind: 'done', text: 'done' })
   })
