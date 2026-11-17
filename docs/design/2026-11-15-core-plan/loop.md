@@ -375,6 +375,16 @@ belong to the coordinator; this is not a completed performance acceptance claim.
 
 ### PR 5 (core-loop-5): create receipts are deleted
 
+Continuation review (18 November): no finite retry lifetime is established yet, so age-based deletion is not
+approved. `AgentCreationReceipts` promises that an old retry never becomes a fresh launch. Desktop's community
+launcher restores `community.launch.<requestId>` from its persistent store and reuses that creation ID
+(`desktop/lib/community/fork_controller.dart`); `AgentCreationAttempt` itself has no expiry. The CLI ledger's
+half-hour pending display window is not a server-side expiry of creation authority. A deleted receipt would make
+the same valid ID eligible to launch again. Preserve existing receipts until a versioned expiry/admission contract
+or positive retirement proof closes that gap. Moving completed receipts out of recurring pending-work scans can
+proceed separately, with old-writer discovery and crash recovery proved; it must not silently evict deduplication
+authority. The deletion proposal below remains an unresolved design task, not an implementation instruction.
+
 - `lib/agentCreationReceipt.ts` `AgentCreationReceipts` (class at line 105): one file per creation id, never deleted.
   `pendingIntents()` (line 328) walks the whole folder with `opendir`; `core/agents/pendingLaunches.ts:96-123` scans it
   every 60 s, a bounded part per turn (493 receipts on the measured Mac).
