@@ -308,7 +308,7 @@ describe('harness device claude', () => {
 
   it('the usage says a dial sets the agents up, and that disable is a removal Harness leaves alone', () => {
     for (const line of [
-      'Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it; these take that away or bring it back):',
+      'Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it; disable takes that away, enable brings it back):',
       'harness device claude status [--json]  whether the dial is on for Claude Code (its harness-device plugin on, and not removed), and its version',
       'harness device claude enable           set Claude Code up again: the plugin and the dial skill (Claude Code 2.1.287 or later)',
       'harness device claude disable          remove the plugin and the dial skill; Harness leaves them removed',
@@ -388,7 +388,7 @@ describe('the dial skill', () => {
   })
 
   it('disable removes the skill an enable run with another home wrote', async () => {
-    // The menu-bar app runs the command with neither CODEX_HOME nor CLAUDE_CONFIG_DIR; a person may run it with one.
+    // A person may run the command with CODEX_HOME or CLAUDE_CONFIG_DIR set, Device 0.1.1's menu with neither.
     const dataDir = folder()
     const [codexThen, codexNow] = [folder(), folder()]
     expect(await device(['codex', 'enable'], { dataDir, codexHome: codexThen })).toEqual({ code: 0, out: [], err: [] })
@@ -417,7 +417,7 @@ describe('the dial skill', () => {
 
   it('an enable into a home no record could hold writes no skill', async () => {
     const dataDir = folder()
-    // U+0085 is a control character the record refuses: written, the skill would be one a Turn off never finds.
+    // U+0085 is a control character the record refuses: written, the skill would be one a disable never finds.
     const codexHome = join(folder(), 'co\u0085dex')
     expect(await device(['codex', 'enable'], { dataDir, codexHome })).toEqual({ code: 1, out: [], err: ['Could not write the Codex skill.'] })
     expect(existsSync(join(codexHome, 'skills', 'dial'))).toBe(false)

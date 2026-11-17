@@ -254,8 +254,8 @@ describe('the dial skill', () => {
   it('a skill another remover took first is none, not a failure', () => {
     const skills = skillsAt()
     writeSkill(skills)
-    // The command and the devices service both remove at a Turn off: the other one unlinks between this one's check and
-    // its own unlink.
+    // The command and the devices service both remove once `disable` marks the removal: the other one unlinks between this
+    // one's check and its own unlink.
     before.set('unlinkSync', () => rmSync(join(skills, 'dial', 'SKILL.md')))
     expect(removeSkill(skills)).toBe('none')
   })

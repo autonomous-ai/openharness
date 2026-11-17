@@ -137,7 +137,7 @@ export function removeSkill(skills: string): 'removed' | 'none' | 'theirs' | 'fa
   try {
     unlinkSync(join(folder, 'SKILL.md'))
   } catch (error) {
-    // Another remover took it first: the command and the devices service both remove at a Turn off.
+    // Another remover took it first: the command and the devices service both remove once `disable` marks the removal.
     return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'none' : 'failed'
   }
   // `skills` is the person's agent folder and stays.

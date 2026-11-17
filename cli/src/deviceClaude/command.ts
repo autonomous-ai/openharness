@@ -4,9 +4,10 @@
  * that a person never types: `asked` (its PermissionRequest hook) and `link` (its mod, for the daemon's socket and the
  * devices' listener's). `disable` marks the engine removed in dial-skill.json, which the devices service then leaves
  * alone, and removes Harness's skill from the engine's default home, from each folder an enable wrote and from each the
- * service recorded in dial-setup.json. `enable` clears the mark and writes the skill back into those homes. `harness
- * device orca link` is Orca's plugin's word, never typed either: whether the daemon is up and where the devices' socket
- * is, so the plugin builds no path. `harness device notify` is an agent's, from the dial skill (devices/notice.ts). This
+ * service recorded in dial-setup.json. `enable` clears the mark and writes the skill into the engine's default home and
+ * back into each folder the service recorded; a folder an earlier enable wrote with another home is not written again.
+ * `harness device orca link` is Orca's plugin's word, never typed either: whether the daemon is up and where the
+ * devices' socket is, so the plugin builds no path. `harness device notify` is an agent's, from the dial skill (devices/notice.ts). This
  * runs only in the `harness` command's own process; nothing the core or a service loads imports this folder.
  */
 import { mkdirSync } from 'node:fs'
@@ -22,7 +23,7 @@ import { daemonPost, runAsked } from './asked.js'
 import { claudePluginOn, claudeSettingsPath } from './plugin.js'
 
 /** `asked`, `link` and `orca link` are left out: they are the plugins', and typed by hand they only wait on stdin or print a path. */
-export const DEVICE_USAGE = `Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it; these take that away or bring it back):
+export const DEVICE_USAGE = `Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it; disable takes that away, enable brings it back):
   harness device claude status [--json]  whether the dial is on for Claude Code (its harness-device plugin on, and not removed), and its version
   harness device claude enable           set Claude Code up again: the plugin and the dial skill (Claude Code 2.1.287 or later)
   harness device claude disable          remove the plugin and the dial skill; Harness leaves them removed
@@ -201,11 +202,12 @@ function madeFolder(folder: string): boolean {
 
 /**
  * The removal is marked first, so the devices service writes no new copy while these are removed, and leaves the engine
- * alone after: the default home, each folder an enable wrote and each one the devices service recorded. Each step runs
- * whatever the one before did, so a failed one leaves no more behind than it must; the first error is the one printed.
- * A folder the other engine holds its skill in (~/.codex/skills linked to ~/.claude/skills) keeps it. The command's
- * record then keeps only the folders whose removal failed, for the next disable. The service's record is only read: its
- * one writer is the devices service, which empties that engine's folders once it reads the mark.
+ * alone after: the default home, each folder an enable wrote and each one the devices service recorded, at most 129
+ * folders (the default home and the 64 each record holds). Each step runs whatever the one before did, so a failed one
+ * leaves no more behind than it must; the first error is the one printed. A folder the other engine holds its skill in
+ * (~/.codex/skills linked to ~/.claude/skills) keeps it. The command's record then keeps only the folders whose removal
+ * failed, for the next disable. The service's record is only read: its one writer is the devices service, which empties
+ * that engine's folders once it reads the mark.
  */
 async function turnOff(engine: DialEngine, home: string, deps: DeviceDeps, plugin?: () => Promise<ClaudeResult>): Promise<number> {
   let error = writeRemoved(deps.dataDir, engine, true) === undefined ? undefined : SAVE_FAILED
