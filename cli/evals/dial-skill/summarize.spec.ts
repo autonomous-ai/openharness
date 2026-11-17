@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -188,6 +188,12 @@ describe('writeSummaries', () => {
     expect(v1).toContain('| total claude |  | 14 | 10 | 2.25 | 4.00 |')
     expect(v1).toContain('| total oracle |  | 4 | 4 | 4.00 | 0.00 |')
     expect(v1).toContain('| total |  | 18 | 14 | 2.50 | 4.00 |')
+  })
+
+  it('lists a case whose every attempt failed', () => {
+    appendFileSync(join(flow, 'v1', 'errors.jsonl'), jsonl([{ prompt_id: 'h.claude', rep: 0, failure_class: 'timeout', error: 'timed out', latency_s: 600 }]))
+    writeSummaries(flow)
+    expect(readFileSync(join(flow, 'v1', 'table.md'), 'utf8')).toContain('| h.claude | test | error: timeout |  | n/a | n/a |')
   })
 
   it('rewrites the status and aggregate tables between their markers and keeps the rest', () => {
