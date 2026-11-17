@@ -25,7 +25,7 @@ import { readCompanionIdentity, type CompanionIdentity } from './companionProtoc
 import { CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
 import { voiceLevel } from './voiceLevel.js'
-import { FirmwareTransfer, otaKeyFor } from './fwPush.js'
+import { FirmwareTransfer, isP4Board, otaKeyFor } from './fwPush.js'
 import { PACK_VERSION } from './pets/pack.js'
 import { planPetSync } from './pets/sync.js'
 import type { PetStore } from './pets/store.js'
@@ -539,7 +539,7 @@ export interface DialStatus {
   /** Which of the two dials this is — `cst9217+axp2101`, `cst816s`, … — as the firmware detected itself
    *  at boot (device: board.h). Absent from a firmware that predates the field. Informational. */
   hw?: string
-  /** `hello.board`; "pro" is the square Harness Pro. Absent = a round dial. */
+  /** `hello.board`; "pro" is the square Harness Pro, "max" the Harness Max bar. Absent = a round dial. */
   board?: string
   updating?: string
   /** Something the person has to do about this device, in words shown as they are (cableFleet.ts: a silent Harness Pro). */
@@ -685,8 +685,8 @@ export class CableSession {
   private playerLibraryKey = ''
   private playerLibraryAt = 0
   private swarmsTrimmedKey = ''
-  /** `hello.board === 'pro'`: every JSON frame to it carries a `seq` (a USB loss on its path is silent, and a hole in
-   *  the count is how it notices). Per session: each welcome restarts it at 0. A round dial's frames stay as they were. */
+  /** A Pro or Max hello (isP4Board): every JSON frame to it carries a `seq` (a USB loss on its path is silent, and a hole
+   *  in the count is how it notices). Per session: each welcome restarts it at 0. A round dial's frames stay as they were. */
   private seqOn = false
   private seq = 0
   private resyncAt = 0
@@ -1304,7 +1304,7 @@ export class CableSession {
         this.statsTurn = str('stats') === 'turn-v1'
         this.playerCapable = str('player') === 'library-v1'
         this.appFilter = str('appFilter') === 'v1'
-        this.seqOn = str('board') === 'pro'
+        this.seqOn = isP4Board(str('board'))
         this.seq = 0
         const mac = str('mac') ?? ''
         // Rule 1: every greeting is answered, but only an unfamiliar dial gets the full state.
@@ -1325,7 +1325,7 @@ export class CableSession {
             'voice.draft',
             'agents.refresh',
             ...(this.playerCapable && this.host.playerLibrary ? ['player.library'] : []),
-            // Only a Pro numbers its frames and asks for `resync`; a round dial's feature list stays as it was.
+            // Only a Pro or Max numbers its frames and asks for `resync`; a round dial's feature list stays as it was.
             ...(this.seqOn ? ['resync'] : []),
             ...(this.host.form ? ['form'] : []),
             ...(this.host.selectPassage ? ['selection'] : []),
@@ -2047,7 +2047,7 @@ export class CableSession {
         await this.put(this.link, encodeCableFrame(CableType.Fw, slice))
       },
       (line) => this.log(line),
-      { offsets: this.greetedBoard === 'pro' && this.greetedOta === 'v1' },
+      { offsets: isP4Board(this.greetedBoard) && this.greetedOta === 'v1' },
     )
     this.armFwStall()
     await this.send({ t: 'fw.offer', version: candidate.version, size: candidate.image.length, sha256: candidate.sha256 })

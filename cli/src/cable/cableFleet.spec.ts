@@ -963,6 +963,22 @@ describe('a Harness Pro that is silent from the moment its port opens', () => {
     } finally { await s.fleet.stop() }
   })
 
+  it('is the same for a Harness Max, on the same ESP32-P4 USB: reset once, then its own row asks for a replug', async () => {
+    const s = setup()
+    s.verdicts.markDial(s.port, 'max')
+    try {
+      s.fleet.start()
+      await vi.waitFor(() => expect(Quiet.made).toHaveLength(1))
+      Quiet.made[0].silent()
+      await vi.waitFor(() => expect(s.reset).toHaveBeenCalledWith('/dev/pro'))
+      expect(s.f.host.log).toHaveBeenCalledWith(expect.stringContaining('Harness Max on /dev/pro is silent'))
+      await vi.waitFor(async () => { await s.scan(); expect(Quiet.made).toHaveLength(2) })
+      Quiet.made[1].silent()
+      await vi.waitFor(() => expect(s.rows()).toEqual([{ id: PRO, attached: false, board: 'max', problem: NOTICE }]))
+      expect(s.verdicts.isForeign(s.port)).toBe(false)
+    } finally { await s.fleet.stop() }
+  })
+
   it('is told to the person at once where the board cannot be reset', async () => {
     const s = setup()
     s.verdicts.markDial(s.port, 'pro')
@@ -1075,7 +1091,7 @@ describe('a Harness Pro that is silent from the moment its port opens', () => {
     try {
       s.fleet.start()
       await vi.waitFor(() => expect(Quiet.made).toHaveLength(1))
-      expect(new DialVerdicts(file).isPro(s.port)).toBe(true)
+      expect(new DialVerdicts(file).boardOf(s.port)).toBe('pro')
       Quiet.made[0].silent()
       await vi.waitFor(() => expect(s.reset).toHaveBeenCalledTimes(1))
     } finally { await s.fleet.stop() }

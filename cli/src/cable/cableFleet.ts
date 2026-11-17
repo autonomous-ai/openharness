@@ -4,6 +4,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { resetBoard } from './boardReset.js'
 import { DialVerdicts } from './dialPortVerdicts.js'
+import { isP4Board } from './fwPush.js'
 import { findDialPorts, portInUse, SerialLink, type DialPort } from './serial.js'
 import { isUsbConsoleUser } from './usbConsoleUser.js'
 import type { CableSession, CableHost, CablePort, DialStatus, PortOpener } from './cableSession.js'
@@ -13,8 +14,9 @@ type Surface = Pick<CableSession, keyof CableSession>
 type SessionConstructor = new (host: CableHost, log: DialLog, open: PortOpener) => Surface
 type Entry = { port: DialPort; session: Surface; attached: boolean; status: DialStatus; faults: number[] }
 type OpenPort = (path: string, onData: (chunk: Buffer) => void, onClosed: (why: string) => void) => Promise<CablePort>
-/** A known Harness Pro that has been silent since its port opened: being reset, reset and looked at again, or the person told. */
-type Unanswered = { port: DialPort; stage: 'resetting' | 'reset' | 'told' }
+/** A known Harness Pro or Max (`board`) that has been silent since its port opened: being reset, reset and looked at
+ *  again, or the person told. */
+type Unanswered = { port: DialPort; board: string; stage: 'resetting' | 'reset' | 'told' }
 export interface CableFleetOptions {
   discover?: () => Promise<DialPort[]>
   open?: OpenPort
@@ -45,7 +47,7 @@ const FAULTS_TO_DROP = 5
 const DROP_BACKOFF_MS = 5_000
 const DROP_BACKOFF_MAX_MS = 60_000
 const DROP_FORGIVEN_MS = 300_000
-/** Shown on a silent Harness Pro's row once a reset has not brought it back: short, the card gives it about two lines. */
+/** Shown on a silent Harness Pro's or Max's row once a reset has not brought it back: short, the card gives it about two lines. */
 const UNANSWERED_NOTICE = 'Not answering — unplug and replug'
 /** A Harness Pro's greeting as the daemon writes it into that device's dial log (cableSession.ts, dialLog.ts). */
 const PRO_GREETING = /\] dial \S+ (?:back )?on fw \S+ .*\bboard pro\b/
@@ -101,7 +103,7 @@ export class CableFleet {
   /** Dials dropped for their faults, by id: when their port is looked at again, and the wait after that. */
   private readonly dropped = new Map<string, { until: number; backoffMs: number; at: number }>()
   private readonly reset: (path: string) => Promise<boolean>
-  /** Known Harness Pros silent since their port opened, by id, for as long as that USB attachment lasts. */
+  /** Known Harness Pros and Maxes silent since their port opened, by id, for as long as that USB attachment lasts. */
   private readonly unanswered = new Map<string, Unanswered>()
   /** Whether a board's own dial logs show it greeting as a Harness Pro, read once per board. */
   private readonly proInLogs = new Map<string, boolean>()
@@ -179,7 +181,7 @@ export class CableFleet {
       if (!this.waitingForConsole) this.host.log('cable: USB belongs to the account at this computer\'s screen — releasing this connection')
       this.waitingForConsole = true
       await Promise.allSettled([...this.entries.values()].map(entry => entry.session.stop()))
-      // A silent Pro's notice is this account's to see, and its board no longer ours to reset.
+      // A silent Pro's or Max's notice is this account's to see, and its board no longer ours to reset.
       if (this.entries.size || this.unanswered.size) { this.entries.clear(); this.unanswered.clear(); this.publish() }
       return
     }
@@ -191,7 +193,7 @@ export class CableFleet {
       const serial = port.serialNumber?.toUpperCase()
       if (this.serials.size && (!serial || !this.serials.has(serial))) continue
       // Found not to be a dial already, and nobody seen working on it since: nothing to look at.
-      if (this.verdicts.isForeign(port) && !this.knownPro(port) && !(await this.workedOn(port))) continue
+      if (this.verdicts.isForeign(port) && !this.knownP4Board(port) && !(await this.workedOn(port))) continue
       present.set(serial || port.path, port)
     }
     let removed = false
@@ -201,7 +203,7 @@ export class CableFleet {
       this.entries.delete(id)
       removed = true
     }
-    // A silent Pro is left alone for as long as its USB attachment lasts: unplugged, or plugged back in, it is
+    // A silent Pro or Max is left alone for as long as its USB attachment lasts: unplugged, or plugged back in, it is
     // a new attachment and looked at afresh.
     for (const [id, held] of this.unanswered) {
       const now = present.get(id)
@@ -258,7 +260,8 @@ export class CableFleet {
           if (key === 'onDialAttached') return attached
           if (key === 'onDialGone') return gone
           if (key === 'onForeignPort') return (path: string, why: string) => {
-            if (why === 'silent' && this.knownPro(port)) return this.silentPro(id, entry)
+            const board = why === 'silent' ? this.knownP4Board(port) : undefined
+            if (board) return this.silentP4Board(id, entry, board)
             this.verdicts.markForeign(port)
             this.host.log(`cable: ${path} is not a Harness dial (${why}) — leaving it alone until it is unplugged or reset [usb ${id}]`)
             // Off this call stack: the session is in the middle of deciding this, and stop() waits on it.
@@ -296,28 +299,30 @@ export class CableFleet {
   }
 
   /**
-   * Did this board greet as a Harness Pro? Its port record says so, or, for a Pro that last greeted a daemon older
-   * than the record's board (a user's Pro, 20-26 Oct), its own dial log does; that is then recorded. Nothing else is
-   * ever reset: every ESP32 shares one USB id, and its serial is only the chip's MAC.
+   * Which ESP32-P4 board this greeted as, "pro" or "max", or undefined. Its port record says so, or, for a Pro that
+   * last greeted a daemon older than the record's board (a user's Pro, 20-26 Oct), its own dial log does; that is then
+   * recorded. Nothing else is ever reset: every ESP32 shares one USB id, and its serial is only the chip's MAC.
    */
-  private knownPro(port: DialPort): boolean {
-    if (this.verdicts.isPro(port)) return true
+  private knownP4Board(port: DialPort): string | undefined {
+    const board = this.verdicts.boardOf(port)
+    if (isP4Board(board)) return board
     const id = port.serialNumber?.toUpperCase() || port.path
     if (!this.proInLogs.has(id)) this.proInLogs.set(id, greetedAsPro(join(this.logs, logFolder(id))))
-    if (!this.proInLogs.get(id)) return false
+    if (!this.proInLogs.get(id)) return undefined
     this.verdicts.markDial(port, 'pro')
-    return true
+    return 'pro'
   }
 
   /**
-   * A known Harness Pro silent since its port opened. Measured on a user's Pro started beside a booting Mac: nothing
-   * came out at all, a reopen did not help and a replug did. So it is reset over the cable once and looked at again
-   * by a fresh session; silent again, or where it cannot be reset, the person is asked to replug it, on its row, and
-   * the port is left alone until they do. Never written off as foreign: a 6 h verdict is what stranded that Pro.
+   * A known Harness Pro or Max silent since its port opened. Measured on a user's Pro started beside a booting Mac:
+   * nothing came out at all, a reopen did not help and a replug did. So it is reset over the cable once and looked at
+   * again by a fresh session; silent again, or where it cannot be reset, the person is asked to replug it, on its row,
+   * and the port is left alone until they do. Never written off as foreign: a 6 h verdict is what stranded that Pro.
    */
-  private silentPro(id: string, entry: Entry): void {
+  private silentP4Board(id: string, entry: Entry, board: string): void {
     const again = this.unanswered.get(id)?.stage === 'reset'
-    const held: Unanswered = { port: entry.port, stage: again ? 'told' : 'resetting' }
+    const held: Unanswered = { port: entry.port, board, stage: again ? 'told' : 'resetting' }
+    const named = board === 'max' ? 'Harness Max' : 'Harness Pro'
     this.unanswered.set(id, held)
     // Off this call stack, as onForeignPort's own stop: the session is in the middle of deciding this.
     // Given up when the port has gone, the daemon is stopping or USB has passed to another account in the meantime:
@@ -336,11 +341,11 @@ export class CableFleet {
       if (this.stopped || !this.canUseUsb()) return forget()
       // Only a USB serial says which board this is; a port without one is told, never reset.
       if (!again && entry.port.serialNumber && await this.reset(entry.port.path)) {
-        this.host.log(`cable: Harness Pro on ${entry.port.path} is silent — reset it over the cable, looking again [usb ${id}]`)
+        this.host.log(`cable: ${named} on ${entry.port.path} is silent — reset it over the cable, looking again [usb ${id}]`)
         if (this.unanswered.get(id) === held) held.stage = 'reset'
         return
       }
-      this.host.log(`cable: Harness Pro on ${entry.port.path} is still silent${again ? ' after a reset' : ' and cannot be reset here'} — asking for a replug [usb ${id}]`)
+      this.host.log(`cable: ${named} on ${entry.port.path} is still silent${again ? ' after a reset' : ' and cannot be reset here'} — asking for a replug [usb ${id}]`)
       if (this.unanswered.get(id) !== held) return
       held.stage = 'told'
       this.publish()
@@ -389,7 +394,7 @@ export class CableFleet {
   /** Every device this computer can see, newest reading. Ordered as they were discovered. */
   devices(): DialStatus[] {
     const told = [...this.unanswered].filter(([, held]) => held.stage === 'told')
-      .map(([id]): DialStatus => ({ id, attached: false, board: 'pro', problem: UNANSWERED_NOTICE }))
+      .map(([id, held]): DialStatus => ({ id, attached: false, board: held.board, problem: UNANSWERED_NOTICE }))
     return [...[...this.entries.values()].map(e => e.status).filter(s => s.attached || s.settings), ...told]
   }
 

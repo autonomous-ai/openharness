@@ -23,6 +23,7 @@ Full key list, in the order the Pro sends it:
 | `proto` | number | existing |
 | `hw` | board name | existing, informational |
 | `board` | `"pro"` | new on main: names the client kind, for logs |
+| | `"max"` | Harness Max, which builds this firmware: the daemon gives it the Pro's `seq`, `resync`, firmware offers (key `harness-max`) and port verdicts |
 | `swarms` | `"members-v1"` | capability |
 | `recap` | `"long-v1"` | capability |
 | `activity` | `"steps-v1"` | capability |

@@ -27,6 +27,18 @@ export const CIRCLE_OTA_KEY = 'commander'
 /** Harness Pro's. A different SoC entirely — an image from either key bricks the other board. */
 export const PRO_OTA_KEY = 'harness-pro'
 
+/** Harness Max's. The Pro's chip and firmware sources, but its own panel and pins: never the Pro's image. */
+export const MAX_OTA_KEY = 'harness-max'
+
+/**
+ * The ESP32-P4 boards, by their hello's `board`: the Harness Pro, and Harness Max, which builds the Pro's firmware
+ * on the same chip and the same USB-Serial/JTAG. Where the reason is that chip and its USB (bytes lost host to
+ * device, a firmware transfer, a reset over the cable), Max is treated as the Pro.
+ */
+export function isP4Board(board: string | undefined): boolean {
+  return board === 'pro' || board === 'max'
+}
+
 /**
  * Which manifest entry belongs to the board that just greeted us, or null for "do not offer anything".
  *
@@ -58,10 +70,12 @@ export function otaKeyForBoard(hw: string | undefined | null): string | null {
 /**
  * The manifest entry for a device by its whole hello. The Pro takes an image only when it says it can
  * (`board: "pro"` and `ota: "v1"`); any other Pro is offered nothing. The old Player-1 Pro build also says
- * hw "harness-pro" but has no board, and is never offered an image.
+ * hw "harness-pro" but has no board, and is never offered an image. Harness Max (`board: "max"`) is the same,
+ * with its own entry.
  */
 export function otaKeyFor(hw: string | undefined, board: string | undefined, ota: string | undefined): string | null {
   if (board === 'pro') return ota === 'v1' ? PRO_OTA_KEY : null
+  if (board === 'max') return ota === 'v1' ? MAX_OTA_KEY : null
   const key = otaKeyForBoard(hw)
   return key === PRO_OTA_KEY ? null : key
 }
@@ -166,7 +180,7 @@ export class FirmwareTransfer {
     readonly version: string,
     private readonly sendSlice: (slice: Buffer) => Promise<void>,
     private readonly log: (line: string) => void,
-    /** `offsets`: every slice is `u32 LE offset + data` so the device can ask for a resend (Pro, ota v1). */
+    /** `offsets`: every slice is `u32 LE offset + data` so the device can ask for a resend (Pro and Max, ota v1). */
     private readonly opts: { offsets?: boolean } = {},
   ) {
     this.sliceBytes = opts.offsets ? FW_SLICE_DATA_WITH_OFFSET : FW_SLICE_BYTES
