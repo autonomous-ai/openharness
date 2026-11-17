@@ -89,3 +89,24 @@ formats. The already coordinated private worker contract 2 covers this unpublish
 No extra queue, timer, retained observation or process is introduced. Tests first cover
 callback ownership, exact bounded wire shape, provenance admission and malformed-source
 refusal, followed by the existing recorder/backpressure gates and a frozen comparison.
+
+The corrected source `6073cfcfca` passes all 328 affected cases and types; the changed
+core gateway link retains 100% coverage on all four measures. The three new transport,
+admission and callback-ownership checks fail before the correction and pass after it.
+The revised comparison extracts the production gateway proxy methods and receiver switch
+in both arms, retaining the same 40 samples and operation counts. Baseline `963b6a5b66`
+versus corrected source has elapsed median 14.1041→12.6841 ms and CPU median
+14.1265→12.7900 ms per 10,000 observations (−10.07% and −9.46%). Authenticated service
+provenance increases wire bytes from 890,000 to 1,105,000 per sample. Every observation is
+acknowledged and counted exactly once. This clears the measured isolated-path regression;
+it does not establish native IPC or whole-daemon cost. Unrelated query handlers, the common
+BackendSocket guard and the final product recorder remain outside this fixture.
+
+All four arms, preparation and their ownership checks pass. Evidence is retained at
+`/tmp/core-service-counter-cost-v4`, manifest
+`e0eb9cdf5e0ec85cd407436fe3c108b045a2af254dcf68686938f2a86197009f`.
+V2 fails during warmup because the fixture generator joined `return` to `default`;
+V3 fails its preparation smoke because the expected four-frame byte sum was miscalculated.
+Both have zero timed samples and proved process cleanup, with their private failure roots
+retained. V4 corrects only those fixture errors, validates the wire before timing, and keeps
+the product sources, fixed workload and earlier V1 regression evidence unchanged.
