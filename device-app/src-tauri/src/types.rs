@@ -138,6 +138,7 @@ pub enum MenuAction {
     NotifyYou,
     Update,
     OpenHarness,
+    About,
     Quit,
 }
 
@@ -194,6 +195,8 @@ pub struct AppState {
     pub app_update: AppUpdate,
     pub claude_change: EngineChange,
     pub codex_change: EngineChange,
+    /// What `harness --version` printed, for the About panel.
+    pub cli_version: Option<String>,
 }
 
 /// AuthorizeUrl holds an `https:` URL only (account.rs lets no other through).
@@ -218,6 +221,7 @@ pub enum Event {
     Auth(Option<bool>),
     Claude(Option<ClaudeStatus>),
     Codex(Option<CodexStatus>),
+    CliVersion(Option<String>),
     Login(LoginEvent),
     ClaudeSet(bool),
     CodexSet(bool),
@@ -230,7 +234,8 @@ pub enum Event {
     UpdateFailed(UpdateFailure),
 }
 
-/// What to do about it. Show(None) hides the window. Menu, Show, Quit and Relaunch are the binary's.
+/// What to do about it. Show(None) hides the window. ShowAbout: the About panel, with its credits line. Menu, Show,
+/// ShowAbout, Quit and Relaunch are the binary's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     FindCli,
@@ -241,6 +246,7 @@ pub enum Effect {
     ReadAuth,
     ReadClaude,
     ReadCodex,
+    ReadVersion,
     RunLogin,
     CancelLogin,
     SetClaude(bool),
@@ -257,6 +263,7 @@ pub enum Effect {
     InstallUpdate,
     Menu(Vec<MenuItem>),
     Show(Option<View>),
+    ShowAbout(Option<String>),
     Quit,
     Relaunch,
 }
