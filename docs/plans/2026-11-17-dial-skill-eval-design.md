@@ -89,7 +89,11 @@ macOS, where the agents and the dial are used. The eval itself is plain Node and
    and nothing touches `~/.codex` or `~/.codex-hq`. The before/after table speaks of Claude Code only. This overrides
    every mention of Codex above (runs, isolation, cost: about half the earlier budget).
 3. Claude `claude-opus-5-5` at effort `high`.
-4. The network stays on. Claude runs sandboxed so it writes only inside the temp repo (sandbox on, network allowed). Fake hosts in scenarios use the `.invalid` suffix
+4. The network stays on. Claude runs sandboxed so it writes only inside the temp repo (sandbox on, network allowed).
+   Claude's sandbox has no allow-all-hosts setting, so the network allowlist is `registry.npmjs.org` only; confining
+   writes to the temp repo is the part that matters. The pilot stops and reports if the VPN scenario sees a sandbox or
+   permission error instead of "host not found", or if the agent treats the sandbox as something to ask the person
+   about; it never switches to running without the sandbox on its own. Fake hosts in scenarios use the `.invalid` suffix
    (RFC 2606), which never resolves. No scenario needs a real credential.
 5. Test is scored on baseline and winner at the end, as the guide says; split 6/5/5.
 6. Bonuses on need runs only; `+1 line` only when it rang and every line passes (a second ring forfeits it); `+1 ask`
