@@ -24,7 +24,7 @@ function servedBy(served: (n: number) => string): string {
 
 // The sample is a real `claude -p` 2.1.326 run of api-key-missing with the dial skill, sanitized (pilot, 2026-11-17).
 describe('parseClaudeStream', () => {
-  it('turns the stream into turns in order; system, rate-limit and permission events make none', () => {
+  it('turns the stream into turns in order; system and permission events make none', () => {
     const run = parseClaudeStream(sample)
     expect(run.transcript.map((t) => `${t.role}${t.name ? `:${t.name}` : ''}`)).toEqual([
       'tool_call:Bash', 'tool_result:Bash', 'tool_call:Bash', 'tool_result:Bash', 'tool_call:Bash', 'tool_result:Bash',
