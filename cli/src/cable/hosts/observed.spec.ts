@@ -645,6 +645,20 @@ describe('ObservedSource and a turn\'s end by hook', () => {
     expect(src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false })
   })
 
+  // Ended at its prompt (Ctrl-C), it waits on nobody, and the interrupt its transcript then gets is no answer.
+  it('a session that ends while it waits on a prompt reads idle, though its transcript grows', async () => {
+    const { src, clock, stamps, ev } = setup()
+    src.ingest(ev('turn-start', { transcriptPath: '/t/s.jsonl' }))
+    clock.t += 6_000
+    src.ingest(ev('needs-input'))
+    clock.t += 3_000
+    src.ingest(ev('session-end'))
+    stamps.set('/t/s.jsonl', clock.t)
+    expect(src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false })
+    await src.checkWorking()
+    expect(src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false })
+  })
+
   it('a lead that ends its session after its Stop, its subagent running, does not read working', async () => {
     const { src, ev } = setup()
     src.ingest(ev('turn-start'))
