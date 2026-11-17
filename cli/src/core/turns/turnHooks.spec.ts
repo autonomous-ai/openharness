@@ -915,6 +915,24 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
       expect(run.hooks.withheld('s1')).toBe(false)
     })
 
+    // These ends are the core's own, or an end read with no time: left open, the wait withheld the next turn's Working.
+    it('a turn the core ends ends it: its held end delivered, its close after the grace, or Codex\'s interrupt', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const ways = engine === 'claude'
+        ? [async (run: ReturnType<typeof setup>) => { end(run, parse(run, 't1')); run.hooks.onTurnStop({ sessionId: 's1' }) },
+            async (run: ReturnType<typeof setup>) => { parse(run, 't1'); run.hooks.onTurnStop({ sessionId: 's1' }) }]
+        : [async (run: ReturnType<typeof setup>) => { parse(run, 't1'); run.hooks.onTurnStop({ sessionId: 's1', status: 'interrupted' }) }]
+      for (const way of ways) {
+        const run = await hookDriven()
+        run.hooks.onWait({ sessionId: 's1', firedAt: 5_000 })
+        await way(run)
+        await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
+        expect(run.deps.emit).toHaveBeenCalledOnce()
+        parse(run, 't2')
+        expect(run.hooks.withheld('s1')).toBe(false)
+      }
+    })
+
     it('a wait hook run before the latest prompt hook opens nothing', () => {
       const run = waiting()
       run.hooks.onPromptHook('s1', 3_000)
