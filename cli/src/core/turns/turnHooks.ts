@@ -30,6 +30,8 @@ import type { TranscriptRead } from '../transcripts/ingest.js'
 export const STOP_HOOK_GRACE_MS = 1_500
 /** How many sessions' hook records are kept. */
 export const HOOKS_KEPT = 512
+/** A held end with no hook for this long had its Stop lost: it goes on, as Orca's 2-minute rule does (R6). */
+export const HOOK_SILENCE_MS = 120_000
 
 /** What a session's hooks have said of its turn. One a session. */
 interface HookTurn {
@@ -37,10 +39,12 @@ interface HookTurn {
   promptAt?: number
   /** It has sent a Stop in this daemon run, so its engine sends them: its turns end by hook (R0). */
   endsByHook: boolean
-  /** The turn's own end, read and held for its Stop. */
-  held?: { end: LiveEvent; identity?: string; openedAt?: number }
+  /** The turn's own end, read and held for its Stop, and when it was read. */
+  held?: { end: LiveEvent; identity?: string; openedAt?: number; at: number }
   /** Stops waiting for that end, each at most the grace. */
   awaiting: Array<(held: boolean) => void>
+  /** When its latest end hook reached the daemon: an engine still sending them has not lost the Stop. */
+  hookAt: number
 }
 
 export interface TurnHookDeps {
@@ -87,7 +91,7 @@ export function createTurnHooks({
   }
   /** The session's record, made the newest. The oldest makes room, its held end delivered first. */
   const record = (sessionId: string): HookTurn => {
-    const turn = turns.get(sessionId) ?? { endsByHook: false, awaiting: [] }
+    const turn = turns.get(sessionId) ?? { endsByHook: false, awaiting: [], hookAt: 0 }
     turns.delete(sessionId)
     turns.set(sessionId, turn)
     if (turns.size > HOOKS_KEPT) {
@@ -115,7 +119,7 @@ export function createTurnHooks({
       if (event.type === 'turn_started' && turn.held) { out.push(turn.held.end); turn.held = undefined }
       // An aborted end, and one no Stop follows (a paused /goal pass), go on at once.
       if (event.type !== 'turn_ended' || event.payload.aborted || read.over) { out.push(event); continue }
-      turn.held = { end: event, identity: read.turn?.identity, openedAt: read.turn?.openedAt }
+      turn.held = { end: event, identity: read.turn?.identity, openedAt: read.turn?.openedAt, at: Date.now() }
       for (const answer of turn.awaiting) answer(true)
     }
     if (out.length) emit(sessionId, out)
@@ -189,7 +193,9 @@ export function createTurnHooks({
     if (rule?.backstop && status === 'waiting') { armAgyIdleWatch(sessionId); return }
     if (onStop) {
       // Its engine sends Stops: from this one on, its turns end by hook (R0).
-      record(sessionId).endsByHook = true
+      const turn = record(sessionId)
+      turn.endsByHook = true
+      turn.hookAt = Date.now()
       if (!current()) return
       // Invoke synchronously: the engine snapshots which turn the hook arrived about before draining.
       const failed = (error: unknown): void => {
@@ -228,8 +234,15 @@ export function createTurnHooks({
       console.error(`[hooks] ${session.engine} stop hook failed:`, err instanceof Error ? err.message : err)
     })
   }
+  /** The open turn's heartbeat: an end held with no hook since for HOOK_SILENCE_MS lost its Stop, and goes on (R6). */
+  const beat = (sessionId: string): void => {
+    const turn = turns.get(sessionId)
+    if (!turn?.held || Date.now() - Math.max(turn.hookAt, turn.held.at) < HOOK_SILENCE_MS) return
+    log(`[turn] ${sid(sessionId)} ended by its transcript · no Stop in 2 min`)
+    deliver(sessionId)
+  }
   return {
-    onTurnStart, onToolStart, onTurnStop, onPromptHook, transcript, withheld,
+    onTurnStart, onToolStart, onTurnStop, onPromptHook, transcript, withheld, beat,
     /** The turn's own end is read and held for its Stop: the turn is still open (R7). */
     held: (sessionId: string): boolean => !!turns.get(sessionId)?.held,
     /** The turn was closed without its end (a cancel): what is held goes, unsent. */

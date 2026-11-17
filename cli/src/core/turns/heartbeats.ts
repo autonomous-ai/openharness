@@ -10,6 +10,7 @@ import type { TurnRecaps } from './recaps.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { RuntimeActivityReader } from '../../lib/runtimeActivity.js'
 import type { TurnActivity } from '../../lib/turnActivity.js'
+import type { TurnHooks } from './turnHooks.js'
 
 export interface HeartbeatDeps {
   bySession: (sessionId: string) => RegisteredSession | undefined
@@ -20,9 +21,10 @@ export interface HeartbeatDeps {
   mirror: Pick<TurnRecaps, 'heartbeat'>
   /** The app. */
   clients: { send(frame: ReturnType<typeof correlateAgentEvent>): void }
+  turns: Pick<TurnHooks, 'beat'>
 }
 
-export function createHeartbeats({ bySession, sessionTurnOpen, agentIdFor, runtimeActivity, turnActivity, mirror, clients }: HeartbeatDeps) {
+export function createHeartbeats({ bySession, sessionTurnOpen, agentIdFor, runtimeActivity, turnActivity, mirror, clients, turns }: HeartbeatDeps) {
   // A timer is an opportunity to inspect work, not proof that work is happening.
   // Keep polling unfinished transcripts even when their activity lease expires:
   // a missed file notification or a later completion must still be discovered.
@@ -46,6 +48,8 @@ export function createHeartbeats({ bySession, sessionTurnOpen, agentIdFor, runti
       if (!bySession(sessionId)?.active) {
         stopHeartbeat(sessionId); turnActivity.forget(sessionId); return
       }
+      // First: an end whose Stop never came goes on here, and the turn it closes is not checked as open.
+      turns.beat(sessionId)
       if (sessionTurnOpen(sessionId)) await turnActivity.check(sessionId)
       if (!heartbeats.has(sessionId)) return
       const activity = turnActivity.snapshot(sessionId)

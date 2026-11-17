@@ -1940,6 +1940,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     turnActivity,
     mirror,
     clients: backend,
+    turns: { beat: (sessionId) => turnHooksRef?.beat(sessionId) },
   })
   const heartbeats = turnBeats.heartbeats
   const turnStartedAt = turnBeats.turnStartedAt
