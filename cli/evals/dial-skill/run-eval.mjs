@@ -194,6 +194,14 @@ async function loadCases(ctx) {
     if (unknown !== undefined) throw new Error(`no scenario '${unknown}'`);
     filters.push(new Set(ctx.cases.map(scenarioOf)));
   }
+  // Resume keys on (id, rep) alone: a pass with or without the skill over claude rows run the other way would mix both in
+  // one variant.
+  for (const ln of (readIfPresent(join(ctx.flow, ctx.variant, 'results.jsonl')) ?? '').split('\n')) {
+    let meta;
+    try { ({ meta } = JSON.parse(ln)); } catch { continue; }
+    if (meta?.agent === 'claude' && meta.skill !== ctx.skill)
+      throw new Error(`${ctx.variant} holds claude rows run ${meta.skill ? 'with' : 'without'} the skill; run this pass as another --variant`);
+  }
   const claudeVersion = execFileSync(AGENT_CONFIG.claudeBin, ['--version'], { env, encoding: 'utf8', timeout: JUDGE_TIMEOUT_MS }).trim();
   writeSummary(ctx, claudeVersion);
   return scenarios.filter(s => filters.every(f => f.has(s.id))).flatMap(s => ctx.agents.map(agent => ({
