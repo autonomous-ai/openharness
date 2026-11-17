@@ -228,6 +228,25 @@ describe('run-eval.mjs pass', () => {
     expect(callsMade()).toEqual(before)
   })
 
+  it('records on each row the harness sha and claude version it ran under, as a resumed pass may run under others', () => {
+    const harnessFile = join(tmp, 'grade.ts')
+    writeFileSync(harnessFile, 'export const a = 1\n')
+    writeState({ harness_paths: [harnessFile] })
+    const sha = () => JSON.parse(readFileSync(join(flow, '_state.json'), 'utf8')).harness_sha
+    expect(runEval(['--variant', 'baseline', '--agents', 'null', '--cases', 'add-version-flag', '--approve-harness']).status).toBe(0)
+    const first = sha()
+    writeFileSync(harnessFile, 'export const a = 2\n')
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'null', '--cases', 'add-version-flag,fix-off-by-one', '--approve-harness'])
+
+    expect(out.status, out.stderr).toBe(0)
+    expect(sha()).not.toBe(first)
+    expect(Object.fromEntries(jsonl('baseline', 'results.jsonl').map((r) => [r.prompt_id, r.meta]))).toMatchObject({
+      'add-version-flag.null': { harness_sha: first, claude_version: '2.1.326 (Claude Code)' },
+      'fix-off-by-one.null': { harness_sha: sha(), claude_version: '2.1.326 (Claude Code)' },
+    })
+  })
+
   it('refuses a changed harness file until --approve-harness', () => {
     const harnessFile = join(tmp, 'grade.ts')
     writeFileSync(harnessFile, 'export const a = 1\n')
