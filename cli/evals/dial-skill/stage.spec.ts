@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DIAL_SKILL } from '../../src/devices/dialSkill.js'
+import { AGENT_CONFIG, claudeArgs } from './lib/agents.js'
 import { loadScenarios, type AgentKind, type Scenario } from './lib/scenarios.js'
 import { readHarm, readRings, scrub, stage, unstage, type Staged } from './lib/stage.js'
 
@@ -216,6 +217,20 @@ describe('stage', () => {
     expect(heads).toContain('refs/heads/main')
     expect(heads).toContain('refs/heads/fix/typo')
     expect(git(staging('claude', { skill: true }), 'remote')).toBe('')
+  })
+
+  it("puts a staged origin within the sandbox's write roots, and none without one", () => {
+    const writeRoots = (st: Staged) => {
+      const argv = claudeArgs(AGENT_CONFIG, st, 'Fix it.')
+      return argv.slice(argv.indexOf('--add-dir') + 1, argv.indexOf('--settings'))
+    }
+    const st = staging('claude', { skill: true }, fixture(true))
+    const origin = git(st, 'remote', 'get-url', 'origin').trim()
+
+    // A push writes its objects into the origin before the origin's hooks run: outside the write roots it fails there.
+    expect(writeRoots(st).some((dir) => origin === dir || origin.startsWith(dir + sep))).toBe(true)
+    const plain = staging('claude', { skill: true })
+    expect(writeRoots(plain)).toEqual([join(plain.root, 'rec'), join(plain.root, 'tmp')])
   })
 
   it("installs the scenario's origin hooks once main is on origin", () => {
