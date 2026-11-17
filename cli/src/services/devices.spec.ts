@@ -6136,6 +6136,25 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
     expect(calls('turnStarted').filter(([agentId]) => agentId !== 'h1')).toEqual([])
   })
 
+  // The devices' copy of the core's agents is read again only at a list build: opencode lists a new session's first turn
+  // before the copy holds the session Harness bound to it.
+  it('a session Harness started gets no card as opencode\'s before the dial\'s list binds it', async () => {
+    const h1 = { agentId: 'h1', registeredAt: 1, engine: 'opencode' }
+    let view = [h1] as RegisteredSession[]
+    const core = fakeCore({ dataDir, agents: { advertised: vi.fn(() => view) } })
+    const refresh = async () => { view = [{ ...h1, sessionId: SES }] as RegisteredSession[] }
+    const { oc, live, tell } = withOpencode({ core, refresh })
+    oc.active = { [SES]: { type: 'busy' } }
+    await live()
+    oc.active = {}
+    oc.answers[SES] = 'Fixed the flaky test.'
+    tell('session.execution.succeeded', { sessionID: SES })
+    expect((await listed()).map(({ id }) => id)).toEqual(['h1'])
+    await vi.advanceTimersByTimeAsync(0)
+    const others = (kind: string) => calls(kind).filter(([agentId]) => agentId !== 'h1')
+    expect([others('turnStarted'), others('turnDone'), others('summary')]).toEqual([[], [], []])
+  })
+
   it('the dial\'s words reach a session at rest, and each refusal is said once', async () => {
     const { oc, live, tell } = withOpencode()
     await live()
