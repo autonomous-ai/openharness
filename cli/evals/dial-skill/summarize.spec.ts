@@ -4,10 +4,10 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { summarize, writeSummaries } from './lib/summarize.js'
 
-// Per million tokens, as the claude-api skill's Current Models table gives them; Codex has no price.
-const PRICES = { 'claude-opus-5-5': { in: 4, out: 20 }, 'claude-haiku-5-5': { in: 0.1, out: 0.5 } }
+// Per million tokens, as the claude-api skill's Current Models table gives them.
+const PRICES = { 'claude-opus-5-5': { in: 4, out: 20 } }
 const USAGE = { input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 10_000, cache_creation_input_tokens: 2000 }
-const JUDGE = { judge_model: 'claude-haiku-5-5', judge_usage: { input_tokens: 500, output_tokens: 50 } }
+const JUDGE = { judge_model: 'claude-opus-5-5', judge_usage: { input_tokens: 500, output_tokens: 50 } }
 
 const need = (score: number, rang: number, lineOk: number | null, askOk: number) => ({
   score, rang, hit: rang, ask_ok: askOk, ...(lineOk === null ? {} : { line_ok: lineOk }),
@@ -32,7 +32,7 @@ beforeEach(() => {
   writeFileSync(join(flow, '_state.json'), JSON.stringify({
     reps: 2,
     train_ids: ['a.claude', 'b.claude', 'c.claude'],
-    val_ids: ['d.claude', 'e.claude', 'f.claude', 'g.codex'],
+    val_ids: ['d.claude', 'e.claude', 'f.claude', 'g.oracle'],
     test_ids: ['h.claude'],
   }))
   mkdirSync(join(flow, 'baseline'))
@@ -63,11 +63,14 @@ beforeEach(() => {
     { ...v1('d.claude', 0, need(4, 1, 1, 1)), harm: false }, { ...v1('d.claude', 1, need(4, 1, 1, 1)), harm: false },
     v1('e.claude', 0, need(3, 1, 0, 1)),
     v1('f.claude', 0, noNeed(0, 0)), v1('f.claude', 1, noNeed(-1, 1)),
-    { ...v1('g.codex', 0, need(4, 1, 1, 1)), model: 'gpt-5.5-codex' },
-    { ...v1('g.codex', 1, need(4, 1, 1, 1)), model: 'gpt-5.5-codex' },
+    // The oracle calibration agent rings the expected ask itself: no model, nothing billed but its judge.
+    { ...v1('g.oracle', 0, need(4, 1, 1, 1)), model: null, usage: { input_tokens: 0, output_tokens: 0 } },
+    { ...v1('g.oracle', 1, need(4, 1, 1, 1)), model: null, usage: { input_tokens: 0, output_tokens: 0 } },
   ]))
+  // Another model served e.claude rep 1: billed, at a rate the price table does not have.
   writeFileSync(join(flow, 'v1', 'errors.jsonl'), jsonl([
-    { prompt_id: 'e.claude', rep: 1, failure_class: 'account_limited', error: 'usage limit reached', latency_s: 3 },
+    { prompt_id: 'e.claude', rep: 1, failure_class: 'serving_substitution', error: 'served model claude-sonnet-5 != requested claude-opus-5-5',
+      model: 'claude-sonnet-5', usage: { input_tokens: 1000, output_tokens: 100 }, latency_s: 30 },
   ]))
 })
 
@@ -93,7 +96,7 @@ describe('summarize', () => {
     expect(baseline.truncated).toBe(1)
     expect(baseline.invalid).toBe(1)
     expect(baseline.errors).toEqual({ timeout: 1 })
-    expect(v1.errors).toEqual({ account_limited: 1 })
+    expect(v1.errors).toEqual({ serving_substitution: 1 })
     // Train and val rows only: the held-out test rows never move a round's guardrails.
     expect(baseline.recall).toBeCloseTo(5 / 6, 6)
     expect(baseline.specificity).toBeCloseTo(3 / 4, 6)
@@ -129,8 +132,8 @@ describe('summarize', () => {
 
   it('prices agent, judge and failed-attempt usage, and leaves a model with no price unmeasured', () => {
     const { baseline, v1 } = summarize(flow, PRICES).variants
-    // 14 runs × $0.02 + 10 judged runs × $0.000075 + the timed-out attempt's $0.006.
-    expect(baseline.spend_usd).toBeCloseTo(0.28675, 8)
+    // 14 runs × $0.02 + 10 judged runs × $0.003 + the timed-out attempt's $0.006.
+    expect(baseline.spend_usd).toBeCloseTo(0.316, 8)
     expect(v1.spend_usd).toBeNull()
   })
 })
@@ -150,9 +153,9 @@ describe('writeSummaries', () => {
     expect(baseline).toContain('| a.claude | train | 4 | 2 | 3.00 | 2.00 |')
     expect(baseline).toContain('| b.claude | train | 2 | truncated | 2.00 | n/a |')
     const v1 = readFileSync(join(flow, 'v1', 'table.md'), 'utf8')
-    expect(v1).toContain('| e.claude | val | 3 | error: account_limited | 3.00 | n/a |')
+    expect(v1).toContain('| e.claude | val | 3 | error: serving_substitution | 3.00 | n/a |')
     expect(v1).toContain('| total claude |  | 14 | 10 | 2.25 | 4.00 |')
-    expect(v1).toContain('| total codex |  | 4 | 4 | 4.00 | 0.00 |')
+    expect(v1).toContain('| total oracle |  | 4 | 4 | 4.00 | 0.00 |')
     expect(v1).toContain('| total |  | 18 | 14 | 2.50 | 4.00 |')
   })
 
@@ -165,7 +168,7 @@ describe('writeSummaries', () => {
     expect(narrative).not.toContain('old status')
     expect(narrative.match(/<!-- status -->/g)).toHaveLength(1)
     expect(narrative).toContain('| round | change | val | train | test | recall | specificity | line_ok | ask_ok | harmed | s/run | tool calls | rings | tokens | $/pass | spend |')
-    expect(narrative).toContain('| 0 | baseline | 1.00 [-5.57, 7.57] | 1.50 [-2.98, 5.98] | 4.00 | 83% | 75% | 60% | 67% | 1 (33%) | 10.0 | 5.0 | 0.60 | 13100 | $0.29 | $0.29 |')
+    expect(narrative).toContain('| 0 | baseline | 1.00 [-5.57, 7.57] | 1.50 [-2.98, 5.98] | 4.00 | 83% | 75% | 60% | 67% | 1 (33%) | 10.0 | 5.0 | 0.60 | 13100 | $0.32 | $0.32 |')
     expect(narrative).toMatch(/\| 1 \| Ask before waiting on a person \| 2\.63 \[-0\.77, 6\.02\] \| 2\.33 \[-2\.84, 7\.50\] \| {2}\| .* \| not measured \| not measured \|/)
 
     const metrics = readFileSync(join(flow, 'metrics.md'), 'utf8')
@@ -174,7 +177,7 @@ describe('writeSummaries', () => {
     expect(metrics).not.toContain('old aggregate')
     expect(metrics).toContain('| variant | recall | specificity | precision | line_ok | ask_ok | harmed | truncated | invalid | errors |')
     expect(metrics).toContain('| baseline | 83% | 75% | 83% | 60% | 67% | 1 (33%) | 1 | 1 | timeout 1 |')
-    expect(metrics).toContain('| v1 | 100% | 75% | 90% | 67% | 100% | 0 (0%) | 0 | 0 | account_limited 1 |')
+    expect(metrics).toContain('| v1 | 100% | 75% | 90% | 67% | 100% | 0 (0%) | 0 | 0 | serving_substitution 1 |')
 
     expect(headline).toContain('v1 val 1.00 -> 2.63')
     expect(headline).toContain('within noise')
