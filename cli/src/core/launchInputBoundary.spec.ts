@@ -160,24 +160,24 @@ describe('Store contribution bounds preserve the installed package contract', ()
       manifest: { spec: 1, id: 'test/old', name: 'Drawing', engine: 'codex', agent: { env: { PYTHONPATH: '${dsh}/python', PACKAGE_CUSTOM: 'x' },
         args: ['-c', 'approval_policy=never', '-c', 'sandbox_mode=danger-full-access', '-c', 'hooks.Stop=[{hooks=[{type="command",command="tool"}]}]'] } } }
     for (const engine of PROCESS_ENGINES) {
-      const input = { ...storeRequest, dsh: pkg.id, workspace: alias, engine, key: engine }
-      const answer = { ok: true as const, launch: prepareHarnessLaunch(pkg, alias, engine, input.key) }
+      const input = { ...storeRequest, dsh: pkg.id, workspace: alias, engine, key: engine, account: { privateGrid: 'synthetic-private-grid' } }
+      const answer = { ok: true as const, launch: prepareHarnessLaunch(pkg, alias, engine, input.key, input.account) }
       const through = dshThrough({ store: () => store(answer), nameOf: () => 'Drawing', account: () => ({}) })
       expect(await through.launch(input, { ids: [pkg.id], workspace })).toEqual(answer)
+      if (engine === 'claude') {
+        vi.spyOn(console, 'warn').mockImplementation(() => {})
+        for (const field of ['HARNESS_DSH', 'HARNESS_WORKSPACE', 'HARNESS_CONTEXT_FILE', 'HARNESS_SKILLS_DIR', 'HARNESS_PRIVATE_GRID']) {
+          const forged = structuredClone(answer); forged.launch.env[field] = 'another-session'
+          const guarded = dshThrough({ store: () => store(forged), nameOf: () => 'Drawing', account: () => input.account })
+          expect(await guarded.launch(input, { ids: [pkg.id], workspace }), field).toMatchObject({ ok: false, error: 'DSH_UNAVAILABLE' })
+        }
+      }
       const renamed = { ...pkg, id: 'test/new', manifest: { ...pkg.manifest, id: 'test/new', formerly: [pkg.id] } }
-      const resumed = { ok: true as const, launch: prepareHarnessLaunch(renamed, alias, engine, input.key) }
+      const resumed = { ok: true as const, launch: prepareHarnessLaunch(renamed, alias, engine, input.key, input.account) }
       expect(resumed.launch.env.HARNESS_DSH).toBe(pkg.id)
       const resumedThrough = dshThrough({ store: () => store(resumed), nameOf: () => 'Drawing', account: () => ({}) })
       expect(await resumedThrough.launch({ ...input, dsh: renamed.id }, { ids: [renamed.id, pkg.id], workspace })).toEqual(resumed)
     }
-  })
-
-  it.each(['HARNESS_DSH', 'HARNESS_WORKSPACE', 'HARNESS_CONTEXT_FILE', 'HARNESS_SKILLS_DIR', 'HARNESS_PRIVATE_GRID'])('refuses a forged reserved %s against captured create identity', async field => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const answer = storeReply({ [field]: 'another-session' })
-    const through = dshThrough({ store: () => store(answer), nameOf: () => 'Drawing', account: () => ({}) })
-    expect(await through.launch(storeRequest, { ids: [storeRequest.dsh], workspace: storeRequest.workspace }))
-      .toMatchObject({ ok: false, error: 'DSH_UNAVAILABLE' })
   })
 
   it.each([
