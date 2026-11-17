@@ -744,7 +744,7 @@ describe('the devices set the dial skill up', () => {
     expect(existsSync(join(listed[0], 'dial'))).toBe(false)
   })
 
-  it('a home whose skills folder no record could hold gets no skill', () => {
+  it('a home whose skills folder no record could hold gets no skill, not even an empty folder, and is counted', () => {
     // U+0085 is a control character the record refuses: written, the skill would be one a disable never finds.
     const codexHome = join(folder(), 'co\u0085dex')
     mkdirSync(codexHome)
@@ -752,9 +752,23 @@ describe('the devices set the dial skill up', () => {
 
     r.writer.started()
 
-    expect(existsSync(join(codexHome, 'skills', 'dial'))).toBe(false)
+    expect(existsSync(join(codexHome, 'skills'))).toBe(false)
     expect(readSetup(r.dataDir).homes.codex).toEqual([])
-    expect(r.lines).toEqual(['dial skill: path refused (shape)'])
+    expect(r.lines).toEqual(['dial skill: path refused (shape)', counts([0, 0], [0, 0, 1])])
+    expect(r.counted).toEqual([['codex', 'failed', 'shape']])
+
+    // Its skills folder a link to one whose path no record could hold.
+    const linked = folder()
+    const target = join(folder(), 'sk\u0085ills')
+    mkdirSync(target)
+    symlinkSync(target, join(linked, 'skills'))
+    const viaLink = rig({ codexHome: linked })
+
+    viaLink.writer.started()
+
+    expect(existsSync(join(target, 'dial'))).toBe(false)
+    expect(viaLink.lines).toEqual(['dial skill: path refused (shape)', counts([0, 0], [0, 0, 1])])
+    expect(viaLink.counted).toEqual([['codex', 'failed', 'shape']])
   })
 
   it('a home whose record cannot be saved keeps no skill', () => {
