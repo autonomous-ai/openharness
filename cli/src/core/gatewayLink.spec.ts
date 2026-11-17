@@ -153,6 +153,24 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(kinds()).toEqual(['start', 'reply'])
   })
 
+  it('leaves stream backlog refusal to the physical sink so a final close cannot silently disappear', () => {
+    const { link, kinds, binary, setBuffered, setWritable, log } = setup()
+    link.connected()
+    link.notice({ kind: 'status', connected: true })
+    register(link, 'phone-1')
+    setBuffered(GATEWAY_BUFFER_LIMIT + 1)
+    const quota = { service: 'viewers', direction: 'client' } as const
+    expect(link.port.target('phone-1', 'viewer_data', {}, quota)).toBe(true)
+    expect(link.port.terminal('phone-1', 'agent_browser_close', {}, { ...quota, final: true })).toBe(true)
+    expect(link.port.terminalBinary('phone-1', encodeTerminalLocal(bytesOf('hi'))!, quota)).toBe(true)
+    expect(kinds()).toEqual(['start', 'target', 'terminal'])
+    expect(binary).toHaveLength(1)
+    expect(log).not.toHaveBeenCalled()
+    setWritable(false)
+    expect(link.port.target('phone-1', 'viewer_closed', {}, { ...quota, final: true })).toBe(false)
+    expect(kinds().at(-1)).toBe('target')
+  })
+
   it('hands the core what the gateway tells it, read as data', () => {
     const { link, heard } = setup()
     link.connected()

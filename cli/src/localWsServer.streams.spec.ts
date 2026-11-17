@@ -60,6 +60,30 @@ const quota = { service: 'agentBrowser', direction: 'client' } as const
 const chunk = new Uint8Array(LIMIT / 8)
 
 describe('stream quotas at actual WebSocket acceptance', () => {
+  it('returns false for serialization failures without throwing or retaining queue charges', async () => {
+    const x = await setup(); await x.connect()
+    const sink = x.sinks[0]!, circular: Record<string, unknown> = { type: 'fixture' }
+    circular.payload = circular
+    const getter = { type: 'fixture', get payload(): unknown { throw new Error('fixture serialization') } }
+    for (const frame of [circular, getter]) {
+      let sent: boolean | undefined
+      expect(() => { sent = sink.sendFrame(frame, quota) }).not.toThrow()
+      expect(sent).toBe(false)
+    }
+    holdWrites()
+    expect(sink.sendBinary(new Uint8Array(LIMIT), quota)).toBe(true)
+  })
+
+  it('keeps ordinary terminal JSON and binary sends free of accounting callbacks', async () => {
+    const x = await setup(); await x.connect()
+    const writes = holdWrites(), sink = x.sinks[0]!
+    const frame = { type: 'terminal_output', payload: { data: 'fixture' } }, raw = Uint8Array.of(1)
+    expect(sink.sendFrame(frame)).toBe(true)
+    expect(sink.sendBinary(raw)).toBe(true)
+    expect(writes.sent).toEqual([JSON.stringify(frame), raw])
+    expect(writes.callbacks).toEqual([])
+  })
+
   it('bounds actual tiny-frame callbacks before byte exhaustion and recovers on physical completion', async () => {
     const x = await setup(); await x.connect(); await x.connect()
     const writes = holdWrites(), first = x.sinks[0]!, second = x.sinks[1]!
@@ -145,7 +169,35 @@ describe('stream quotas at actual WebSocket acceptance', () => {
     writes.callbacks[0]!()
   })
 
-  it('revokes live and pending grants, and leaves no component stream after a saturated service socket closes', async () => {
+  it('revokes a gateway service on its refused client-directed final close and retains physical charges', async () => {
+    const x = await setup(), gateway = await x.connect('gateway'), viewers = await x.connect('viewers'), client = await x.connect()
+    const writes = holdWrites(), sink = x.services.get('gateway')!, localSink = x.sinks[0]!
+    expect(sink.sendBinary(Uint8Array.of(1), quota)).toBe(true)
+    sink.sendFrame({ type: 'service_reply', payload: { unrelated: true } })
+    const physical = writes.sockets[0]!
+    vi.spyOn(physical, 'bufferedAmount', 'get').mockReturnValue(LIMIT + 1)
+    expect(sink.sendBinary(Uint8Array.of(2), quota)).toBe(false)
+    expect(x.closed.get('gateway')).not.toHaveBeenCalled()
+    expect(gateway.readyState).toBe(WebSocket.OPEN)
+    const ended = new Promise<number>(resolve => gateway.once('close', code => resolve(code)))
+    const physicallyEnded = new Promise<void>(resolve => physical.once('close', () => resolve()))
+    expect(sink.sendFrame({ type: 'service_event', payload: { kind: 'terminal', type: 'agent_browser_close' } }, { ...quota, final: true })).toBe(false)
+    expect(x.closed.get('gateway')).toHaveBeenCalledOnce()
+    expect(localSink.sendBinary(new Uint8Array(LIMIT), quota)).toBe(false)
+    expect(localSink.sendBinary(chunk, { service: 'viewers', direction: 'client' })).toBe(true)
+    expect(x.services.get('viewers')!.sendBinary(chunk, { service: 'viewers', direction: 'service' })).toBe(true)
+    expect(viewers.readyState).toBe(WebSocket.OPEN)
+    expect(client.readyState).toBe(WebSocket.OPEN)
+    await expect(ended).resolves.toBe(1013)
+    await physicallyEnded
+    expect(localSink.sendBinary(new Uint8Array(LIMIT), quota)).toBe(true)
+    writes.callbacks[0]!(); writes.callbacks[0]!()
+    expect(localSink.sendBinary(Uint8Array.of(1), quota)).toBe(false)
+    expect(x.closed.get('gateway')).toHaveBeenCalledOnce()
+    expect(x.closed.get('viewers')).not.toHaveBeenCalled()
+  })
+
+  it.each(['stream quota', 'nonstream backlog'])('revokes live and pending grants, and leaves no component stream after %s closes its service socket', async saturation => {
     let relay: ReturnType<typeof createClientStreams>
     const x = await setup(service => relay.disconnected(service))
     const browser = await x.connect('agentBrowser'), viewer = await x.connect('viewers')
@@ -180,11 +232,17 @@ describe('stream quotas at actual WebSocket acceptance', () => {
     browser.once('close', () => bridge.disconnected())
     for (const requestId of ['first', 'second']) relay.frame('owner', 'agent_browser_open', { requestId }, { local: true, owner: true })
     await vi.waitFor(() => expect(active.size).toBe(2))
-    holdWrites()
+    const writes = holdWrites()
     const transport = x.services.get('agentBrowser')!
-    for (let index = 0; index < 8; index++) transport.sendBinary(chunk, { service: 'agentBrowser', direction: 'service' })
+    if (saturation === 'stream quota') {
+      for (let index = 0; index < 8; index++) transport.sendBinary(chunk, { service: 'agentBrowser', direction: 'service' })
+    } else {
+      transport.sendFrame({ type: 'service_reply', payload: { unrelated: true } })
+      vi.spyOn(writes.sockets[0]!, 'bufferedAmount', 'get').mockReturnValue(LIMIT + 1)
+    }
     const ended = new Promise<void>(resolve => browser.once('close', () => resolve()))
     relay.frame('owner', 'agent_browser_open', { requestId: 'pending' }, { local: true, owner: true })
+    expect(x.closed.get('agentBrowser')).toHaveBeenCalledOnce()
     await ended
     expect(active.size).toBe(0)
     expect(outputs.filter(frame => frame.type === 'agent_browser_close')).toHaveLength(2)

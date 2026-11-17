@@ -126,7 +126,9 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
   const send = (kind: string, payload: Record<string, unknown> = {}, quota?: ClientStreamQuota): boolean =>
     up && deps.notify({ type: 'service_event', payload: { ...payload, kind } }, quota)
   /** A frame for remote clients: dropped rather than held while the gateway reads nothing. */
-  const fits = (): boolean => {
+  const fits = (quota?: ClientStreamQuota): boolean => {
+    // Stream refusal must reach the physical owner, which revokes a final close it cannot queue.
+    if (quota) return true
     if (deps.buffered() <= GATEWAY_BUFFER_LIMIT) return true
     const at = now()
     if (at - droppedSaidAt < 60_000) droppedUnsaid++
@@ -193,10 +195,10 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     commander: (frame) => { bulk('commander', { frame }) },
     user: (frame) => { send('user', { frame }) },
     reply: (connId, type, requestId, payload) => { send('reply', { connId, type, requestId, payload }) },
-    target: (connId, type, payload, quota) => up && linkUp && clients.has(connId) && fits() && send('target', { connId, type, payload }, quota),
-    terminal: (connId, type, payload, quota) => reachableClient(connId) && fits() && send('terminal', { connId, type, payload }, quota),
+    target: (connId, type, payload, quota) => up && linkUp && clients.has(connId) && fits(quota) && send('target', { connId, type, payload }, quota),
+    terminal: (connId, type, payload, quota) => reachableClient(connId) && fits(quota) && send('terminal', { connId, type, payload }, quota),
     terminalBinary: (connId, local, quota) => {
-      if (!reachableClient(connId) || !fits()) return false
+      if (!reachableClient(connId) || !fits(quota)) return false
       const bytes = encodeGatewayBinary(GatewayBinary.remote, connId, local)
       return !!bytes && deps.notifyBinary(bytes, quota)
     },

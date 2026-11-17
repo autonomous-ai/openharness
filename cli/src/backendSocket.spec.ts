@@ -543,9 +543,9 @@ describe('viewer forwarding authentication', () => {
     await socket.fromGateway.disconnected('r2')
     expect(streams.closed).toHaveBeenCalledWith('r2')
     socket.fromGateway.linkDown()
-    expect(streams.closed.mock.calls.filter(call => call.length === 0)).toHaveLength(1)
+    expect(streams.closed.mock.calls.filter(call => call.length === 0)).toHaveLength(0)
     await socket.stop()
-    expect(streams.closed.mock.calls.filter(call => call.length === 0)).toHaveLength(2)
+    expect(streams.closed.mock.calls.filter(call => call.length === 0)).toHaveLength(1)
   })
 
   it('requires encryption and a web-role session remotely, while permitting trusted local clients', async () => {

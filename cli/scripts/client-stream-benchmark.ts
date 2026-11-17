@@ -4,6 +4,9 @@
  */
 import assert from 'node:assert/strict'
 import { performance } from 'node:perf_hooks'
+import { createHash } from 'node:crypto'
+import { writeFileSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
 
 type Payload = Record<string, any>
 type Modules = { variant: 'baseline' | 'shared'; encodeTerminalLocal: (frame: Payload) => Uint8Array | null;
@@ -88,8 +91,13 @@ function fixture(modules: Modules, agents: number, slots: Slot[], pending = fals
         }
         return true
       }, streamInput: () => true, streamClosed: () => {}, streamRoute: () => {}, streamTransportError: () => {}, streamRefused: () => {} }) })
-    const viewer = modules.createViewersLink!({ agents: {}, clients: { viewerFrame: send } }, (event: Payload) => {
-      if (event.payload.kind === 'stream') tally.down++
+    let viewer: any
+    viewer = modules.createViewersLink!({ agents: {}, clients: { viewerFrame: send } }, (event: Payload) => {
+      if (event.payload.kind === 'stream') {
+        tally.down++
+        if (event.payload.type === 'viewer_request') viewer.notice({ kind: 'viewer', connId: event.payload.connId,
+          type: 'viewer_response', payload: { streamId: event.payload.frame.streamId, status: 200 } })
+      }
       return true
     }, { buffered: () => 0, call: async () => ({}) }, firstStart ? { wake: () => tally.wakes++ } : undefined)
     const streams = modules.createViewerStreams!(() => viewer.port, send)
@@ -102,7 +110,10 @@ function fixture(modules: Modules, agents: number, slots: Slot[], pending = fals
     upstream = (slot, type, payload) => viewer.notice({ kind: 'viewer', connId: slot.connection, type, payload })
     screen = bytes => { expectedBytes = bytes; assert.equal(browser.bytes(bytes), true) }
     ready = () => viewer.connected()
-    close = () => { browser.gone(); streams.closedAll(); viewer.connected() }
+    close = () => {
+      for (const connection of new Set(slots.map(slot => slot.connection))) { browser.closeConnection(connection); streams.closed(connection) }
+      viewer.connected()
+    }
   }
   return { tally, client, upstream, screen, ready, close: () => { close(); for (const slot of slots) slot.grant = '' }, beforeRelay, viewerData }
 }
@@ -115,6 +126,8 @@ function slots(count: number, agents: number, perConnection = 2): Slot[] {
 export function run(modules: Modules): void {
   assert.equal(typeof global.gc, 'function', '--expose-gc is required')
   assert.equal(process.env.HARNESS_TEST_ISOLATED, '1', 'isolation must be set before loading the bundle')
+  const output = process.argv[2]
+  assert.ok(output && isAbsolute(output), 'a new private absolute output path is required')
   const results: Payload[] = []
   for (const agents of [1, 16, 160]) for (const streams of [1, 4]) for (const consumer of ['browser', 'viewer']) {
     const list = slots(streams, agents, Math.ceil(streams / 2))
@@ -136,16 +149,32 @@ export function run(modules: Modules): void {
         test.client(slot, 'viewer_ack', { streamId: slot.id, bytes: CHUNK })
       }
     }
+    const samplesMs = new Float64Array(ITERATIONS)
     for (let index = 0; index < WARMUP; index++) cycle(index)
     global.gc!()
     const cpu = process.cpuUsage(), started = performance.now()
-    for (let index = 0; index < ITERATIONS; index++) cycle(index)
+    for (let index = 0; index < ITERATIONS; index++) {
+      const began = performance.now()
+      cycle(index)
+      samplesMs[index] = performance.now() - began
+    }
     const elapsedMs = performance.now() - started, cost = process.cpuUsage(cpu)
     const active = memory()
+    const cycles = WARMUP + ITERATIONS
+    assert.deepEqual(test.tally, {
+      opened: consumer === 'browser' ? streams : 0, refused: 0,
+      down: streams + cycles * (consumer === 'browser' ? 1 : 2),
+      up: streams + (consumer === 'browser' ? 0 : cycles),
+      binary: consumer === 'browser' ? cycles : 0,
+      binaryBytes: consumer === 'browser' ? cycles * (CHUNK + 36) : 0, wakes: 0,
+    }, `${agents} agents / ${streams} streams / ${consumer}: exact opens, data, ACKs and output bytes`)
     test.close()
     const closed = memory()
+    const ordered = [...samplesMs].sort((a, b) => a - b)
     results.push({ kind: 'steady', agents, streams, consumer, warmup: WARMUP, iterations: ITERATIONS,
       payloadBytes: CHUNK, oneWayMiB: ITERATIONS * CHUNK / 1024 ** 2, elapsedMs, cpuUs: cost.user + cost.system,
+      samplesMs: Array.from(samplesMs), p50Ms: ordered[Math.ceil(ITERATIONS * .50) - 1], p95Ms: ordered[Math.ceil(ITERATIONS * .95) - 1],
+      memoryScope: 'retained is relay state after open; afterTraffic/afterClose also retain fixture payloads and the identical 8192 Float64 timing samples',
       retained: difference(live, before), afterTraffic: difference(active, before), afterClose: difference(closed, before), tally: test.tally })
   }
   for (const kind of ['live', 'viewer-live', 'pending', 'ids', 'first-start-frames', 'first-start-bytes']) {
@@ -189,7 +218,9 @@ export function run(modules: Modules): void {
       assert.equal(test.tally.down, previous + 1, 'a released reservation must admit a subsequent valid open')
       test.close()
     }
-    results.push({ kind, attempts: attempted, beforeOverflow, beforeReady, afterReady, retained: difference(retained, before), afterClose })
+    results.push({ kind, attempts: attempted, beforeOverflow, beforeReady, afterReady, retained: difference(retained, before), afterClose,
+      scope: kind === 'viewer-live' ? 'direct core relay probe; baseline service stub omits the real ViewerForwarder 256 global / 64 connection admission limits'
+        : kind === 'ids' ? 'direct core retained-ID probe; bypasses public JSON ingress and does not claim these IDs represent supported clients' : 'direct relay metadata or first-start queue probe' })
   }
   if (modules.createClientStreamQueue) for (const [kind, bytes, attempts, accepted] of [
     ['transport-count', 36, 4097, 4096], ['transport-bytes', CHUNK + 36, 129, 127],
@@ -211,5 +242,10 @@ export function run(modules: Modules): void {
     results.push({ kind, bytes, attempts, accepted, queuedBytes: bytes * accepted, retained, afterClose: difference(memory(), before),
       scope: 'accounting release closures only; payload and WebSocket callback memory belong to the separate native transport fixture' })
   }
-  console.log(JSON.stringify({ variant: modules.variant, node: process.version, gc: 'before fixture, after open, after 128 warmup iterations, after measured traffic, after close', results }))
+  const report = JSON.stringify({ variant: modules.variant, node: process.version,
+    gc: 'before fixture, after open, after 128 warmup iterations, after measured traffic, after close', results }) + '\n'
+  const bytes = Buffer.byteLength(report)
+  assert.ok(bytes <= 8 * 1024 * 1024, 'bounded result file')
+  writeFileSync(output, report, { flag: 'wx', mode: 0o600 })
+  console.log(JSON.stringify({ variant: modules.variant, bytes, sha256: createHash('sha256').update(report).digest('hex') }))
 }

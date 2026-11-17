@@ -482,7 +482,11 @@ export class BackendSocket {
     },
     linkDown: () => {
       this.observers?.closeAll()
-      this.clientStreams?.closed(); this.ownerCommands.closeAll(); for (const connId of this.remoteClients.keys()) this.onConnectionClosed?.(connId)
+      this.ownerCommands.closeAll()
+      for (const connId of this.remoteClients.keys()) {
+        this.clientStreams?.closed(connId)
+        this.onConnectionClosed?.(connId)
+      }
       void this.terminalStreams?.closeConnectionsWhere(
         (connId) => !isLocalClientId(connId),
         'backend disconnected',

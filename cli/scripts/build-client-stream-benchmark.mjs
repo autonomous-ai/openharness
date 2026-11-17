@@ -30,7 +30,7 @@ run({ variant: ${JSON.stringify(shared ? 'shared' : 'baseline')}, encodeTerminal
 const entryPath = join(output, 'entry.ts')
 writeFileSync(entryPath, entry, { flag: 'wx' })
 const result = await build({ entryPoints: [entryPath],
-  absWorkingDir: source, outfile: join(output, 'measure.mjs'), bundle: true, platform: 'node', format: 'esm', target: 'node24', metafile: true,
+  absWorkingDir: source, outfile: join(output, 'measure.mjs'), bundle: true, platform: 'node', format: 'esm', target: 'node20', minify: true, keepNames: true, metafile: true,
   // CJS dependencies that esbuild retains must see Node's real require; no runtime source loader is used.
   banner: { js: "import { createRequire as __requireFactory } from 'node:module'; const require = __requireFactory(import.meta.url);" },
 })
@@ -46,7 +46,8 @@ const manifest = { source, variant: shared ? 'shared' : 'baseline', entrySha256:
   builder: { path: fileURLToPath(import.meta.url), sha256: sha256(readFileSync(fileURLToPath(import.meta.url))) },
   node: { path: process.execPath, version: process.version, sha256: sha256(readFileSync(process.execPath)) },
   inputs, external, outputSha256: sha256(readFileSync(join(output, 'measure.mjs'))),
-  requiredRuntime: 'Run with --expose-gc and isolated HOME, ADAPTER_DATA_DIR, ADAPTER_RUNTIME_DIR, HARNESS_TEST_ISOLATED=1; stdout is the result. No daemon or socket is started.',
+  transforms: { target: 'node20', minify: true, keepNames: true },
+  requiredRuntime: 'Run with --expose-gc and isolated HOME, ADAPTER_DATA_DIR, ADAPTER_RUNTIME_DIR, HARNESS_TEST_ISOLATED=1. argv[2] is a new private JSON output file; stdout contains only its hash and byte length. No daemon or socket is started.',
 }
 writeFileSync(join(output, 'closure.json'), JSON.stringify(manifest, null, 2) + '\n', { flag: 'wx' })
 writeFileSync(join(output, 'metafile.json'), JSON.stringify(result.metafile, null, 2) + '\n', { flag: 'wx' })

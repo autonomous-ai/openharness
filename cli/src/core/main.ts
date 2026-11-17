@@ -1300,11 +1300,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (!outOfProcess.has(service)) continue
     const quota = { service, direction: 'service' as const }
     const tell = (payload: Record<string, unknown>): boolean =>
-      (serviceLinksRef?.buffered(service) ?? 0) <= 4 * 1024 * 1024 &&
       (serviceLinksRef?.notify(service, { type: 'service_event', payload }, { quota }) ?? false)
     streamEndpoints.set(service, {
       frame: event => tell({ kind: 'client_stream', ...event }),
-      binary: frame => (serviceLinksRef?.buffered(service) ?? 0) <= 4 * 1024 * 1024 && (serviceLinksRef?.notifyBinary(service, frame, quota) ?? false),
+      binary: frame => serviceLinksRef?.notifyBinary(service, frame, quota) ?? false,
       // Individual connection ends are already delivered by serviceLinks.closeConnection.
       closed: connection => { if (connection === undefined) tell({ kind: 'client_stream_closed' }) },
       control: (grant, payload) => { tell({ kind: 'client_stream_control', grant, payload }) },

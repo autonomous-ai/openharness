@@ -1,4 +1,5 @@
 import { createClientStreamQueue, type ClientStreamQuota } from './lib/clientStreamQueue.js'
+import { CLIENT_STREAM_QUEUE_BYTES } from './lib/clientStreamContract.js'
 import { randomUUID } from 'node:crypto'
 import type { AppSwarms } from './cable/cableSession.js'
 import { notificationReadToken, type UnreadNotification } from './lib/notificationRead.js'
@@ -334,12 +335,12 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     let serviceLink: { receive(frame: Frame): void; receiveBinary(bytes: Uint8Array): void; closed(): void } | null = null
 
     const refusedStream = (quota: ClientStreamQuota): false => {
-      if (quota.direction === 'service') {
+      if (quota.direction === 'service' || quota.final) {
         // Revoke authority now. Actual queued bytes stay charged until the physical socket releases them.
         serviceLink?.closed()
         serviceLink = null
         close(1013, 'Stream queue full')
-      } else if (quota.final) close(1013, 'Stream queue full')
+      }
       return false
     }
     const queued = streamQueue.connection()
@@ -347,20 +348,26 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     const sink: LocalClientSink = {
       sendFrame: (frame, quota) => {
         if (ws.readyState !== WebSocket.OPEN) return false
-        const serialized = JSON.stringify(frame)
-        const release = quota ? queued.reserve(quota, Buffer.byteLength(serialized)) : undefined
-        if (release === null) return refusedStream(quota!)
+        let release: (() => void) | null | undefined
         try {
-          ws.send(serialized, (error) => { release?.(); if (error) ws.terminate() })
+          const serialized = JSON.stringify(frame)
+          if (!quota) { ws.send(serialized); return true }
+          if (ws.bufferedAmount > CLIENT_STREAM_QUEUE_BYTES) return refusedStream(quota)
+          release = queued.reserve(quota, Buffer.byteLength(serialized))
+          if (release === null) return refusedStream(quota)
+          ws.send(serialized, (error) => { release!(); if (error) ws.terminate() })
           return true
         } catch { release?.(); return false }
       },
       sendBinary: (frame, quota) => {
         if (ws.readyState !== WebSocket.OPEN) return false
-        const release = quota ? queued.reserve(quota, frame.length) : undefined
-        if (release === null) return refusedStream(quota!)
+        let release: (() => void) | null | undefined
         try {
-          ws.send(frame, { binary: true }, (error) => { release?.(); if (error) ws.terminate() })
+          if (!quota) { ws.send(frame, { binary: true }); return true }
+          if (ws.bufferedAmount > CLIENT_STREAM_QUEUE_BYTES) return refusedStream(quota)
+          release = queued.reserve(quota, frame.length)
+          if (release === null) return refusedStream(quota)
+          ws.send(frame, { binary: true }, (error) => { release!(); if (error) ws.terminate() })
           return true
         } catch { release?.(); return false }
       },

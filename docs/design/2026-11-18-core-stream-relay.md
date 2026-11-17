@@ -382,13 +382,40 @@ on the coordinated saturation and retained-state measurements, separately from t
 | `lib/viewerForwarder.ts` / `lib/viewerWire.ts` | 256 viewer streams globally, 64 per connection | Browser has different admission and separate reservations |
 
 The attribution fixture therefore includes 64 × 64 remote-panel attempts plus one overflow, held pending opens,
-large legal request IDs, and first-start frame-count and UTF-8-byte saturation as distinct cases. It must report
+large request IDs passed directly to the core factory, and first-start frame-count and UTF-8-byte saturation as distinct cases. The direct-ID probe bypasses public ingress; it is not a supported-client claim. The baseline Viewer
+saturation probe similarly replaces the real service's existing 256/64 admission with a synthetic accepting stub.
+It must report
 accepted/refused counts, pre-overflow retained state, and recovery after cleanup. It cannot establish native daemon
 RSS or terminal echo latency; those remain the separate packaged validation gate.
 
 Focused test logs are work-in-progress evidence, not the final validation gate. The 0c190a62 baseline reproduces
 17 existing BackendSocket fixture failures; these are recorded separately from shared-boundary regressions.
 Metadata reservations remain provisional until the coordinated state/RSS and fixed-workload measurements.
+
+### Physical transport failure ownership
+
+Gateway loss closes only the remote connection IDs the gateway registered. Browser already had this behavior;
+the old Viewers `closedAll()` also killed local streams on remote link loss. Shared connection-scoped teardown
+corrects that local Viewer failure while retaining remote grant revocation. The caller regression exercises live
+local and remote streams of both consumers, then verifies local data still flows and remote data is refused.
+
+The physical WebSocket owns stream admission against both its existing total `bufferedAmount` limit (4 MiB,
+including unrelated traffic) and the independent stream byte/frame shares. Composition and gateway quota paths
+must reach that owner: an early backlog return would drop both the triggering message and its final close.
+Ordinary unquota gateway traffic retains its existing `fits()` behavior. Service-directed refusal, or a final
+client close which cannot be sent, immediately revokes any authenticated service link on that physical socket
+before closing it with 1013. This includes the gateway's client-directed sends: saturating its one physical link
+can end its remote streams, while local streams and unrelated service links survive. There is no control reserve
+or retry. Logical revocation never releases queued charges; only the actual send callback or physical close does.
+
+JSON serialization remains inside the transport's failure boundary and returns false on failure. Ordinary
+unquota terminal JSON and binary sends keep their callback-free fast path. Accounting callbacks are allocated
+only for quota sends (or a separately requested settlement observer when that interface is integrated).
+
+The three caller/serialization/fast-path regressions failed before the fix and passed in a 33-case focused run.
+The nonstream backlog service-cleanup regression and two gateway physical-owner regressions also failed first;
+the subsequent four-file focused run passed all 76 cases, including actual isolated loopback sockets, physical
+ownership through replacement and late callbacks. Gateway per-file coverage is 100% across all four measures.
 
 Current validation: the readiness/audience/Windows cases were observed RED (3 failures), and the registered local
 socket quota case was independently RED. The following focused run passed all 202 cases, including actual loopback

@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackendSocket } from './backendSocket.js'
 import { env } from './config/env.js'
 import type { Asker, RemoteClient } from './core/api.js'
-import type { ClientStreams } from './core/clientStreams.js'
+import { createClientStreams, type ClientStreams } from './core/clientStreams.js'
+import type { ClientStreamEvent } from './lib/clientStreamContract.js'
 import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from './lib/terminalBinary.js'
 import * as logModule from './lib/log.js'
 import { dispatchDown, gatewayOf, relaySocket } from './testing/relaySocket.js'
@@ -145,7 +146,41 @@ describe('agent browser streams through the socket', () => {
     socket.fromGateway.linkDown()
     socket.registerLocalClient('local:w', { sendFrame: () => true, sendBinary: () => true })
     await socket.unregisterLocalClient('local:w')
-    expect(streams.closed.mock.calls).toEqual([['mac-2'], ['mac-3'], [], ['local:w']])
+    expect(streams.closed.mock.calls).toEqual([['mac-2'], ['mac-3'], ['mac-4'], ['local:w']])
+  })
+
+  it('keeps local Browser and Viewer grants alive when the gateway loses only its remote clients', async () => {
+    const port = () => ({ frame: vi.fn((_event: ClientStreamEvent) => true), binary: () => true, closed: vi.fn(), control: () => {}, refused: () => {} })
+    const endpoints = { agentBrowser: port(), viewers: port() }, bytes = vi.fn(() => true)
+    const relay = createClientStreams({ endpoint: service => endpoints[service as keyof typeof endpoints] ?? null,
+      disabled: () => false, wake: () => {}, send: () => true, sendBinary: bytes })
+    const browser = relay.connected('agentBrowser')!, viewer = relay.connected('viewers')!
+    relay.serving('agentBrowser'); relay.serving('viewers')
+    socket.clientStreams = relay
+    socket.registerLocalClient('local:w', { sendFrame: () => true, sendBinary: () => true })
+    socket.fromGateway.client('mac-2', web)
+    const ids = [STREAM, '00000000-0000-4000-8000-0000000000d2']
+    for (const [index, connection] of ['local:w', 'mac-2'].entries()) {
+      for (const frame of [
+        { type: 'agent_browser_open', payload: { requestId: `open-${index}`, agentId: 'a1' } },
+        { type: 'viewer_request', payload: { streamId: 'same', agentId: 'a1' } },
+      ]) {
+        if (connection === 'local:w') await dispatchDown(socket, frame, connection)
+        else await socket.fromGateway.frame(connection, frame, 'relay', 'web')
+      }
+      const event = endpoints.agentBrowser.frame.mock.calls.at(-1)![0]
+      expect(browser.frame(event.grant, 'agent_browser_open_result', { requestId: event.grant, streamId: ids[index] })).toBe(true)
+    }
+    const [localViewer, remoteViewer] = endpoints.viewers.frame.mock.calls.map(([event]) => event)
+    socket.fromGateway.linkDown()
+    expect(endpoints.agentBrowser.closed).toHaveBeenCalledExactlyOnceWith('mac-2')
+    expect(endpoints.viewers.closed).toHaveBeenCalledExactlyOnceWith('mac-2')
+    const localBytes = encodeTerminalLocal(screen)!
+    expect(browser.binary(localBytes)).toBe(true)
+    expect(bytes).toHaveBeenLastCalledWith('agentBrowser', 'local:w', localBytes)
+    expect(browser.binary(encodeTerminalLocal({ ...screen, streamId: ids[1]! })!)).toBe(false)
+    expect(viewer.frame(localViewer!.grant, 'viewer_data', { streamId: localViewer!.grant, data: 'AA==' })).toBe(true)
+    expect(viewer.frame(remoteViewer!.grant, 'viewer_data', { streamId: remoteViewer!.grant, data: 'AA==' })).toBe(false)
   })
 
   it('the gateway\'s route, lost route and transport error reach the streams', () => {
