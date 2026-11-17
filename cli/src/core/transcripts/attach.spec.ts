@@ -1116,7 +1116,9 @@ describe('attaching a session', () => {
         expect(usage).not.toHaveBeenCalled()
         await watcher.pollSession(row.sessionId)
         expect(usage).toHaveBeenCalledExactlyOnceWith(row)
-        expect(emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, expect.arrayContaining([expect.objectContaining({ type: 'turn_ended' })]))
+        // A live line: the answer has no time and Claude's transcript never marks its own end, so only the closed turn goes on.
+        expect(emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, expect.arrayContaining([expect.objectContaining({ type: 'turn_ended' })]),
+          { at: undefined, over: undefined, turn: expect.objectContaining({ turnOpen: false }) })
         expect(run.normalizers.sessionTurnOpen(row.sessionId)).toBe(false)
       } finally { await watcher.stop() }
     })
@@ -1392,7 +1394,8 @@ describe('attaching a session', () => {
           expect(add).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: row.sessionId }), { fromOffset: end })
           await watcher.pollSession(row.sessionId)
           expect(usage).toHaveBeenCalledExactlyOnceWith(row)
-          expect(emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, expect.arrayContaining([expect.objectContaining({ type: 'turn_ended' })]))
+          expect(emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, expect.arrayContaining([expect.objectContaining({ type: 'turn_ended' })]),
+            { at: undefined, over: undefined, turn: expect.objectContaining({ turnOpen: false }) })
         } finally { await watcher.stop() }
       })
 
