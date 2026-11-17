@@ -147,6 +147,25 @@ describe('createDialPluginSetup', () => {
     expect(counted).toEqual([['set up']])
   })
 
+  // Turned off through /plugin before the first dial: the person's, as an uninstall is.
+  it('a plugin the person turned off before the first setup is left removed, and not turned on', async () => {
+    const claude = fakeClaude({ installed: { ...entry('16a92abfab3f'), enabled: false } })
+    const { setup, state, counted } = rig(claude)
+    expect(await setup.pass()).toBe(false)
+    expect(claude.writes()).toEqual([])
+    expect(state.recorded).toBe('0.6.59')
+    expect(counted).toEqual([['left removed']])
+  })
+
+  it('a plugin already on at the first setup is recorded and counts nothing', async () => {
+    const claude = fakeClaude({ installed: entry('16a92abfab3f') })
+    const { setup, state, counted } = rig(claude)
+    expect(await setup.pass()).toBe(false)
+    expect(claude.writes()).toEqual([])
+    expect(state.recorded).toBe('0.6.59')
+    expect(counted).toEqual([])
+  })
+
   it('a plugin the person uninstalled is not installed again', async () => {
     const claude = fakeClaude()
     const { setup, state, counted } = rig(claude)

@@ -7,7 +7,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { claudeDisable, claudeEnable, claudeFound, claudeRun, claudeStatus, claudeUpdate, type ClaudeRun } from './claudePlugin.js'
+import { claudeDisable, claudeEnable, claudeFound, claudeRun, claudeSetUp, claudeStatus, claudeUpdate, type ClaudeRun } from './claudePlugin.js'
 
 type Answer = { code: number | null; stdout?: string; stderr?: string }
 
@@ -183,6 +183,33 @@ describe('claudeEnable', () => {
   })
 })
 
+describe('claudeSetUp', () => {
+  it('a plugin not there yet is installed, as enable installs it', async () => {
+    const claude = fakeClaude({})
+    expect(await claudeSetUp({ run: claude.run, platform: 'darwin' })).toEqual({ ok: true, outcome: 'installed' })
+    expect(claude.writes()).toEqual([
+      'plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin plugins',
+      'plugin install harness-device@openharness --scope user',
+    ])
+  })
+
+  // `harness device claude enable` turns an entry that is off back on; the devices' own setup leaves it the person's.
+  it('a plugin already on is current, and one turned off is absent, and nothing is run for either', async () => {
+    for (const [entry, outcome] of [[USER_ON, 'current'], [USER_OFF, 'absent']] as const) {
+      const claude = fakeClaude({ 'plugin list --json': list(entry) })
+      expect(await claudeSetUp({ run: claude.run, platform: 'darwin' })).toEqual({ ok: true, outcome })
+      expect(claude.writes()).toEqual([])
+    }
+  })
+
+  it('with an old Claude Code it asks its version and nothing else', async () => {
+    const claude = fakeClaude({}, '2.1.286 (Claude Code)')
+    expect(await claudeSetUp({ run: claude.run, platform: 'darwin' }))
+      .toEqual({ ok: false, error: 'Claude Code 2.1.287 or later is needed.', step: 'unsupported' })
+    expect(claude.calls.map((call) => call.args)).toEqual(['--version'])
+  })
+})
+
 describe('claudeDisable', () => {
   it('disable uninstalls and leaves the marketplace', async () => {
     const claude = fakeClaude({ 'plugin list --json': list(USER_OFF) })
@@ -277,9 +304,9 @@ describe('a list that cannot be read', () => {
     [{ code: 0, stdout: 'Loading plugins…\n[' }, UNLISTED],
   ]
 
-  it('update, disable and enable fail with step list, and change nothing', async () => {
+  it('setup, update, disable and enable fail with step list, and change nothing', async () => {
     for (const [answer, error] of unreadable) {
-      for (const act of [claudeUpdate, claudeDisable, claudeEnable]) {
+      for (const act of [claudeSetUp, claudeUpdate, claudeDisable, claudeEnable]) {
         const claude = fakeClaude({ 'plugin list --json': answer })
         expect(await act({ run: claude.run, platform: 'darwin' })).toEqual({ ok: false, error, step: 'list' })
         expect(claude.writes()).toEqual([])
