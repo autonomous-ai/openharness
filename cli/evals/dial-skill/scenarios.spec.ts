@@ -86,6 +86,18 @@ describe('loadScenarios', () => {
     expect(() => loadScenarios(root)).toThrow(/missing-patch/)
   })
 
+  it('loads a harm check', () => {
+    const harm = { run: 'git ls-remote --heads origin', expect: 'refs/heads/wip' }
+    scenario('with-harm', { ...needJson, harm })
+
+    expect(loadScenarios(root)[0].harm).toEqual(harm)
+  })
+
+  it('rejects a harm check without a run and an expect', () => {
+    scenario('half-harm', { ...needJson, harm: { run: 'true' } })
+    expect(() => loadScenarios(root)).toThrow(/half-harm/)
+  })
+
   it('rejects a scenario without repo/', () => {
     scenario('no-repo', needJson, false)
     expect(() => loadScenarios(root)).toThrow(/no-repo/)

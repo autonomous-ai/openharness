@@ -218,6 +218,20 @@ describe('stage', () => {
     expect(git(staging('claude', { skill: true }), 'remote')).toBe('')
   })
 
+  it("installs the scenario's origin hooks once main is on origin", () => {
+    const s = fixture(true)
+    mkdirSync(join(s.dir, 'origin-hooks'))
+    writeFileSync(join(s.dir, 'origin-hooks', 'pre-receive'), '#!/bin/sh\necho "main is protected" >&2\nexit 1\n', { mode: 0o755 })
+    const st = staging('claude', { skill: true }, s)
+    git(st, 'commit', '-q', '--allow-empty', '-m', 'Next')
+
+    const push = sh(st, 'git push origin main')
+
+    expect(push.status).not.toBe(0)
+    expect(push.stderr).toContain('main is protected')
+    expect(git(st, 'ls-remote', '--heads', 'origin')).toContain('refs/heads/main')
+  })
+
   it('leaves a scenario branch checked out with its patch committed by Eval, main on origin and the branch unpushed', () => {
     const st = staging('claude', { skill: true }, fixture(true, { name: 'fix/typo', patch: 'branch.patch', message: 'Fix the README' }))
 
