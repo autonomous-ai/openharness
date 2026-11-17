@@ -68,8 +68,8 @@ their original records remain retained.
 Values are arithmetic means of the two runs per side, not significance claims. Both
 1,600-row pairs reduce the largest loop hold; both increase CPU and retained RSS.
 This is an I/O responsiveness tradeoff, not a universal speed or memory improvement.
-Independent review and acceptance remain open before integration. JSON parsing and
-whole-image retention remain in core. Receipts are in
+Independent source review is complete; final combined and platform acceptance remain
+open. JSON parsing and whole-image retention remain in core. Receipts are in
 `/tmp/registry-image-read-startup-abba-v1`; manifest SHA-256 is
 `03ca91c35d41b42d743ea0fcc85ab9ce50a89fc15d5d23406e4136e485f9ab56`.
 
@@ -88,3 +88,16 @@ existing native lock probe restriction; the isolated unsandboxed RED retained bo
 expected content failures. After the correction, all 17 quarantine and initialization
 tests pass with actual exit zero. Logs are
 `/tmp/registry-quarantine-content-{red,red-native,green}.log`.
+
+## Independent review and integration
+
+An independent reviewer found no blocking issue in author `e72dcb3b9b`, including
+initialization/flush ownership, descriptor closure, post-read lock/deadline checks,
+peer preservation, migration and diagnostic privacy. The reviewer verified all twelve
+result hashes and custody records, both bundles, 103 Git-backed source imports per side
+and six identical external imports, without rerunning workloads. The report is
+`/tmp/registry-image-read-independent-review.json`.
+
+Integration commits are `bb9ce8b807` and `6e1e24194a`. Changed runtime and test files match
+the author byte for byte; typechecking passes on `6e1e24194a`. Native Linux/Windows,
+early-boot signal handling and the final combined build remain separate acceptance.
