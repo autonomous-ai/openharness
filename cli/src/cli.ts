@@ -193,6 +193,8 @@ Machine:
   harness tui                  all of Harness in this terminal: tabs, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [--machine <name>] [folder|name] [-- task]
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
+  harness ensure <openclaw|hermes> --name <n> --program-token-file <p> --json
+                               a program's own harness, kept across its tasks: live, resumed or new
   harness machines             list the machines on this account (this computer's is marked)
   harness search <words>       find the conversation on this computer that said them: every turn of
                                every harness, live or stopped (--limit=N, --json)
@@ -2770,6 +2772,8 @@ async function logsExportCommand(json: boolean): Promise<void> {
 
 import { orchestratorCommand } from './orchestrator/command.js'
 import { paneOwner, sendCommand, sendPane } from './messages/command.js'
+import { ensureCommand } from './agentClient/ensure.js'
+import { ensureDaemonForProgram } from './lib/programDaemon.js'
 import { agentOrigin, closeCommand, deleteCommand, goalCommand, psCommand, replyCommand, resumeCommand, routeCommand, showCommand, tellCommand, waitCommand, watchCommand, whoamiCommand } from './agentClient/commands.js'
 import { agentsHelp, helpFor } from './agentClient/help.js'
 import { openUrlCommand } from './agentClient/openUrl.js'
@@ -3011,6 +3015,27 @@ switch (cmd) {
       origin: () => agentOrigin(),
     }).then((code) => { process.exitCode = code }).catch(onError)
     break
+  case 'ensure': {
+    // A program's own harness, kept across its tasks (#4393): `harness new`'s own launch, behind the program's token,
+    // with the daemon started first when it is down (lib/programDaemon.ts).
+    const tokenAt = rest.indexOf('--program-token-file')
+    const withToken = tokenAt >= 0 && rest[tokenAt + 1] !== undefined
+    ensureCommand(rest, {
+      machines: usableMachines,
+      ...(withToken ? { daemonUp: () => ensureDaemonForProgram(env.ADAPTER_DATA_DIR, env.PORT) } : {}),
+      create: async (argv) => {
+        const lines: string[] = []
+        const code = await newCommand({
+          argv, cwd: process.cwd(), home: homedir(), port: daemonPort(), localMachineId: wantedDaemonIdentity(),
+          daemonRunning: isDaemonRunning, unreachable: () => daemonUnreachableText(), listMachines: usableMachines,
+          connect: (url, headers) => new NewCommandSocket(url, { headers }),
+          output: (line) => lines.push(line), error: (line) => lines.push(line),
+        })
+        return { code, lines }
+      },
+    }).then((code) => { process.exitCode = code }).catch(onError)
+    break
+  }
   case 'shell-launch':
     import('./shellLaunch.js').then(({ shellLaunch }) => shellLaunch(rest)).then((code) => { process.exitCode = code }).catch(onError)
     break
