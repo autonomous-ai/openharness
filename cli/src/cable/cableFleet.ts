@@ -233,9 +233,13 @@ export class CableFleet {
         this.verdicts.markDial(port, entry.status.board)
         this.unanswered.delete(id)
         if (entry.attached) return
-        const first = ![...this.entries.values()].some(e => e.attached)
+        const sibling = [...this.entries.values()].find(e => e.attached)
         entry.attached = true
-        if (first) this.host.onDialAttached?.()
+        if (!sibling) { this.host.onDialAttached?.(); return }
+        // The host asks again only as the first dial arrives, so this one is given what its sibling would be asked again.
+        // Mid-greeting: the session only takes them in here, and asks each once as its greeting's push ends.
+        const failed = (error: unknown) => this.host.log(`cable: ${port.path} open questions: ${String(error)} [usb ${id}]`)
+        for (const open of sibling.session.owedQuestions()) entry.session.question(open.agentId, open.id, open.questions).catch(failed)
       }
       const gone = () => {
         if (!entry.attached) return

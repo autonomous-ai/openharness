@@ -3501,6 +3501,26 @@ describe('hello capabilities', () => {
     } finally { await session.stop() }
   })
 
+  it('a dial that greets anew is shown a notice whose turn ended, but not a question whose turn ended without a close', async () => {
+    const { session, port } = await connect(richHost())
+    const notice = [{ key: 'notice', q: 'Tests pass.', options: ['In Terminal'] }]
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      await session.question('a2', `${SHOWN_ONLY_PREFIX}n2`, notice)
+      await session.turnDone('a1')
+      await session.summary('a2', 'Done.', 'Done.')
+      port.sent.length = 0
+      // Nothing else asks a dial that greets again on the same desk: only its own walk does.
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.1' })
+      // Asked in the order they came: by the notice, the question would be there too.
+      await vi.waitFor(() => expect(port.types()).toContain('question'))
+      await settle()
+      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a2', id: `${SHOWN_ONLY_PREFIX}n2` }])
+    } finally { await session.stop() }
+  })
+
   it('a question the dial holds is not asked of it again, as the core asks it of devices that reconnect', async () => {
     const { session, port } = await connect(richHost())
     const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
@@ -3568,12 +3588,16 @@ describe('hello capabilities', () => {
       await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
       await session.question('a2', 'q2', [{ key: 'k', q: 'Closed?', options: ['yes'] }])
       await session.questionClose('a2', 'q2')
+      // A notice stays on the dial after its turn ends, so a resync carries it too.
+      await session.question('a3', `${SHOWN_ONLY_PREFIX}n3`, [{ key: 'notice', q: 'Tests pass.', options: ['In Terminal'] }])
+      await session.summary('a3', 'Done.', 'Done.')
       port.sent.length = 0
       port.say({ t: 'resync' })
-      await vi.waitFor(() => expect(port.types()).toContain('question'))
+      await vi.waitFor(() => expect(ofType(port, 'question')).toHaveLength(2))
       const types = port.types()
       for (const t of ['machines.begin', 'swarms', 'agents.begin', 'agents.end', 'notif.replace']) expect(types).toContain(t)
-      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a1', id: 'q1' }])   // the closed one is not resent
+      // The closed one is not resent; the notice is.
+      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a1', id: 'q1' }, { agentId: 'a3', id: `${SHOWN_ONLY_PREFIX}n3` }])
       port.sent.length = 0
       port.say({ t: 'resync' })
       await settle()
