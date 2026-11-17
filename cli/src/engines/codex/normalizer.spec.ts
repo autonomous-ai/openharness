@@ -871,3 +871,22 @@ describe('Codex tool_end outputTail', () => {
     expect(done.outputTail).toBe(done.output)
   })
 })
+
+describe('Codex: a turn the person stopped', () => {
+  const say = (normalizer: CodexNormalizer, payload: object) => normalizer.ingest(JSON.stringify({ type: 'event_msg', payload }))
+
+  it('a turn the person stopped ends as aborted, a finished one does not', () => {
+    const normalizer = new CodexNormalizer('live')
+    say(normalizer, { type: 'user_message', message: 'go' })
+    expect(say(normalizer, { type: 'turn_aborted' }).at(-1)).toEqual({ type: 'turn_ended', payload: { aborted: true } })
+    say(normalizer, { type: 'user_message', message: 'again' })
+    expect(say(normalizer, { type: 'task_complete' }).at(-1)).toEqual({ type: 'turn_ended', payload: {} })
+  })
+
+  it('an abort with no turn open, or on a replay, ends nothing', () => {
+    expect(say(new CodexNormalizer('live'), { type: 'turn_aborted' })).toEqual([])
+    const replay = new CodexNormalizer('replay')
+    say(replay, { type: 'user_message', message: 'go' })
+    expect(say(replay, { type: 'turn_aborted' }).filter((event) => event.type === 'turn_ended')).toEqual([])
+  })
+})
