@@ -88,7 +88,7 @@ dial-skill.json   {"removed":{"codex":true},"homes":{"claude":[],"codex":["/…/
 | `removed.<engine>` | `disable` | never | `enable` | next `disable` |
 | a folder in `dial-skill.json` `homes` | `enable` wrote it | never | `disable` removed the skill there | next `enable` |
 
-   At most 64 folders an engine in each file; a full list writes no new home and counts `failed · full`. Every reader of all folders (the service's passes, `enable`, `disable`) reads at most 128 paths.
+   At most 64 folders an engine in each file; a full list writes no new home and counts `failed · full`. Every reader of all folders (the service's passes, `enable`, `disable`) reads at most 129 paths (the default home and 64 from each file).
 2. **Concurrency.** One writer a file: the devices process (single-threaded; the plugin's step saves through the homes' in-memory record) and the command. Whole-file rename, so a reader sees one version. Invariants: (a) no home is touched before `dial` is saved (Task 5); (b) a skill the service wrote is in the record, or taken out again when the record cannot be saved (carried over); (c) `disable` wins a race: its mark is read right before each write and again after it, and the plugin's install checks it again when it ends (Tasks 5, 7).
 3. **Read cost.** A scan with every home handled: two `stat` calls (the stamp of `dial-skill.json` and Claude Code's `settings.json`) and, while a default home is missing, one `stat` for it; no file read, no process. Task 6 holds it with a test. A removal reaches the service through the stamp.
 4. **Scale.** Ten times today's few homes fits the 64. The count that warns first: `failed` with `full` in the day's tally.
