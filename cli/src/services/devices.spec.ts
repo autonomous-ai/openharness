@@ -2,7 +2,7 @@
 // they say reaches the core through its API alone, and the fleet failing costs the dial nothing.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { delimiter, dirname, join } from 'node:path'
+import { delimiter, dirname, join, parse } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
 import { AppFilter, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
@@ -12,6 +12,8 @@ import { hcClientDeps, type HcClient, type HcPrompt, type HcSubscriber, type HcT
 import { herdrClientDeps, type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrPrompt, type HerdrSubscriber } from '../cable/hosts/herdrClient.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
+import { OPENCODE_MESSAGE, opencodeClientDeps, type OpencodeAnswer, type OpencodeClient, type OpencodeEvent, type OpencodeFault, type OpencodePrompt } from '../cable/hosts/opencodeClient.js'
+import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import type { OrcaChild, OrcaReads, OrcaTabs, OrcaTerminal } from '../cable/hosts/orca.js'
 import { AppRings } from '../cable/hosts/select.js'
 import { env } from '../config/env.js'
@@ -215,6 +217,15 @@ vi.mock('../cable/hosts/unixSocket.js', async (real) => ({
     return () => { watched.stopped++ }
   },
 }))
+// The watch on the folders opencode's service.json goes in: recorded, with its stops, so no spec watches this machine's
+// folders, and herdr's `watched` is left alone.
+const watchedFolders = vi.hoisted(() => ({ calls: [] as unknown[][], stopped: 0 }))
+vi.mock('../cable/hosts/folderWatch.js', () => ({
+  watchNearest: (folders: readonly string[], changed: () => void) => {
+    watchedFolders.calls.push([folders, changed])
+    return () => { watchedFolders.stopped++ }
+  },
+}))
 
 const { startDevices } = await import('./devices.js')
 
@@ -273,6 +284,21 @@ const noCmux: CmuxClient = {
   inputState: async () => undefined,
   paste: async () => false,
 }
+/** What the devices asked of opencode's service: recorded, so no spec reaches the developer's own opencode. It has no
+ *  service.json, and its prompt fails. */
+const opencodeCalls: unknown[][] = []
+const opencode: OpencodeClient = {
+  registration: () => { opencodeCalls.push(['registration']); return { fault: 'no_service' } },
+  find: async () => { opencodeCalls.push(['find']); return { fault: 'no_service' } },
+  request: async (method, path) => { opencodeCalls.push(['request', method, path]); return { ok: false, fault: 'no_service' } },
+  events: (_onEvent, onClose) => {
+    opencodeCalls.push(['events'])
+    // As the client tells it with no service: once the caller holds its close.
+    queueMicrotask(() => onClose('no_service'))
+    return { close: () => {} }
+  },
+  prompt: async (...args) => { opencodeCalls.push(['prompt', ...args]); return 'failed' },
+}
 /** Orca's reads for every spec but Orca's own: nothing lands, so no other spec hears of an order or a watch. */
 const inertOrcaReads: OrcaReads = {
   orcaWatchesFocus: () => new Promise(() => {}),
@@ -309,8 +335,11 @@ beforeEach(() => {
   codexRuns.length = 0
   herdrCalls.length = 0
   hcCalls.length = 0
+  opencodeCalls.length = 0
   watched.calls.length = 0
   watched.stopped = 0
+  watchedFolders.calls.length = 0
+  watchedFolders.stopped = 0
   seen.bridges = {}
   seen.fleet = null
   readers.open = readers.external = null
@@ -328,7 +357,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const ports: CorePorts = emptyPorts()
   const onExit = vi.fn()
@@ -349,6 +378,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     hc: over.hc ?? hc,
     // Null: no client given, so the devices build their own.
     cmux: over.cmux === null ? undefined : over.cmux ?? noCmux,
+    opencode: over.opencode ?? opencode,
     decideTier: over.decideTier === null ? undefined : over.decideTier ?? (async () => ({ tier: 'alert', by: 'test', detail: '', ms: 0 })),
     faults: new Set(over.faults ?? []),
     log: (line) => { logs.push(line) },
@@ -5960,6 +5990,317 @@ describe('cmux\'s agents, from cmux\'s own stores (docs/plans/2026-11-17-dial-cm
       await vi.waitFor(() => expect(logs).toContain('[cmux] listed · 1 agents'), { timeout: 10_000 })
       expect(cmux.calls()).toEqual([{ args: ['sessions', 'list', '--json', '--all'], stdin: '', env: [] }])
     })
+  })
+})
+
+describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial-opencode-design.md)", () => {
+  const SES = 'ses_a1'
+  /** On macOS, each app's command on the path but `herdr-app`, so Herdr Core's source does not start: what a tap runs is
+   *  read in `orcaRuns`. */
+  const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => (name === 'herdr-app' ? null : `/opt/${name}/bin/${name}`) }
+  const host = () => seen.dial as unknown as DaemonCableHost
+  /** A dial on the cable, on this computer's agents: no window. */
+  const attach = (port: DevicesPort) => { seen.host.watching!(true); port.swarms(null) }
+  const listed = async () => (await host().listAgentSnapshot()).agents.map(({ id, name, caps }) => ({ id, name, caps }))
+  const said = () => logs.filter((line) => line.startsWith('[device] '))
+  /** A session as opencode's list reads it (Session.Info): at rest in /work/api, viewed since its last turn ended. */
+  const session = (over: Record<string, unknown> = {}, time: Record<string, number> = {}) => {
+    const now = Date.now()
+    return { id: SES, projectID: 'prj_1', cost: 0, title: 'Fix the login test', location: { directory: '/work/api' },
+      time: { created: now - 120_000, updated: now - 60_000, idle: now - 60_000, viewed: now - 30_000, ...time }, ...over }
+  }
+  beforeEach(() => { vi.useFakeTimers() })
+
+  /**
+   * The devices with an opencode the test drives, the dial not attached yet. Its service.json is there (`stamp`). Each
+   * stream keeps its callbacks and whether it was closed; the list, the running sessions, the permissions and the last
+   * answers are the test's own values, in the shapes of opencode v2.3.0; a prompt is recorded and answers the next of
+   * `prompts`, else sent. `live` attaches the dial, says the stream is connected and waits for the list it asks; `tell` is
+   * an event on the first stream; `reads` counts the last answers read.
+   */
+  const withOpencode = (over: Parameters<typeof start>[0] = {}) => {
+    const streams: Array<{ onEvent: (event: OpencodeEvent) => void; onClose: (reason: OpencodeFault | 'ended') => void; closed: boolean }> = []
+    const oc = {
+      sessions: [session()] as unknown[], active: {} as Record<string, unknown>, permissions: {} as Record<string, unknown[]>,
+      answers: { [SES]: 'All 12 tests pass.' } as Record<string, string>, asked: [] as unknown[][], prompts: [] as OpencodePrompt[], streams,
+    }
+    const ok = (data: unknown): OpencodeAnswer => ({ ok: true, json: { data, cursor: {} } })
+    const client: OpencodeClient = {
+      registration: () => { oc.asked.push(['registration']); return { stamp: 's1' } },
+      find: async () => { oc.asked.push(['find']); return { stamp: 's1' } },
+      request: async (method, path) => {
+        oc.asked.push(['request', method, path])
+        if (path.startsWith('/api/session?')) return ok(oc.sessions)
+        if (path === '/api/session/active') return ok(oc.active)
+        const [, id, what] = /^\/api\/session\/([^/]+)\/(permission|message)/.exec(path)!
+        if (what === 'permission') return ok(oc.permissions[id] ?? [])
+        const text = oc.answers[id]
+        return ok(text === undefined ? [] : [{ id: 'msg_1', type: 'assistant', time: { created: 1 }, agent: 'build',
+          model: { id: 'm', providerID: 'p' }, content: [{ type: 'reasoning', text: 'thinking' }, { type: 'text', text }] }])
+      },
+      events: (onEvent, onClose) => {
+        const stream = { onEvent, onClose, closed: false }
+        streams.push(stream)
+        return { close: () => { stream.closed = true } }
+      },
+      prompt: async (...args) => {
+        oc.asked.push(['prompt', ...args])
+        return oc.prompts.shift() ?? 'sent'
+      },
+    }
+    const started = start({ orca: onMac, tty: async () => undefined, opencode: client, ...over, faults: ['fleet', ...over.faults ?? []] })
+    const tell = (type: string, data: Record<string, unknown> = {}): void => streams[0].onEvent({ type, data })
+    const live = async (sessions: unknown[] = [session()]): Promise<void> => {
+      oc.sessions = sessions
+      const from = logs.length
+      attach(started.port)
+      await vi.waitFor(() => expect(streams).toHaveLength(1))
+      tell('server.connected')
+      await vi.waitFor(() => expect(logs.slice(from)).toContainEqual(expect.stringMatching(/^\[opencode\] listed · /)))
+    }
+    const reads = () => oc.asked.filter(([what, , path]) => what === 'request' && String(path).includes('/message')).length
+    return { ...started, oc, live, tell, reads }
+  }
+
+  it('with a dial attached opencode\'s sessions are listed sv, on the opencode page; detached, the source stops', async () => {
+    const { oc, live } = withOpencode()
+    // No dial: opencode is not asked.
+    expect(oc.asked).toEqual([])
+    await live()
+    expect(await listed()).toEqual([{ id: expect.any(String), name: 'Fix the login test', caps: 'sv' }])
+    expect((await host().listAgentSnapshot()).agents).toEqual([expect.objectContaining({ engine: 'opencode', host: 'opencode' })])
+    expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual({ id: 'opencode', name: 'opencode', count: 1, waiting: 0 })
+    expect(logs).toContain('[opencode] listed · 1 sessions')
+    seen.host.watching!(false)
+    expect(oc.streams.map(({ closed }) => closed)).toEqual([true])
+    expect(await listed()).toEqual([])
+    expect(watchedFolders.stopped).toBe(1)
+  })
+
+  it('a turn is its cards', async () => {
+    const { oc, live, tell } = withOpencode()
+    await live()
+    const [{ id }] = await listed()
+    tell('session.execution.started', { sessionID: SES })
+    expect(calls('turnStarted')).toEqual([[id, '', undefined]])
+    tell('permission.asked', { sessionID: SES, id: 'per_1', action: 'bash' })
+    expect(calls('turnStarted')).toEqual([[id, '', undefined], [id, 'Waiting for you · opencode', undefined]])
+    expect(await host().activityText(id)).toBe('Waiting for you · opencode')
+    tell('permission.replied', { sessionID: SES, requestID: 'per_1', reply: 'once' })
+    oc.answers[SES] = 'Fixed the flaky test.'
+    tell('session.execution.succeeded', { sessionID: SES })
+    expect(calls('turnDone')).toEqual([[id]])
+    await vi.waitFor(() => expect(calls('summary')).toEqual([[id, 'Fixed the flaky test.', 'Fixed the flaky test.', 'alert', 'Fixed the flaky test.', false]]))
+  })
+
+  it('a session first listed done, with its last answer, gets no card, and the tile\'s history has the answer', async () => {
+    const { live } = withOpencode()
+    await live([session({}, { viewed: Date.now() - 90_000 })])
+    const [{ id }] = await listed()
+    expect(calls('turnDone')).toEqual([])
+    expect(calls('summary')).toEqual([])
+    expect(await host().recentSummaries(id)).toEqual([{ recap: 'All 12 tests pass.', text: 'All 12 tests pass.', ask: '', fullText: 'All 12 tests pass.' }])
+  })
+
+  // opencode's last assistant message is then the turn before's: kept, it tells the dial nothing new.
+  it('a turn interrupted before any answer is a done card and no summary', async () => {
+    const { live, tell, reads } = withOpencode()
+    await live()
+    const [{ id }] = await listed()
+    tell('session.execution.started', { sessionID: SES })
+    tell('session.execution.interrupted', { sessionID: SES })
+    expect(calls('turnDone')).toEqual([[id]])
+    await vi.waitFor(() => expect(reads()).toBe(2))
+    // The read's answer lands within a real tick, which this one lets pass.
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls('summary')).toEqual([])
+  })
+
+  it('an opencode session mid-turn is reminded', async () => {
+    const { live, tell } = withOpencode()
+    await live()
+    const [{ id }] = await listed()
+    tell('session.execution.started', { sessionID: SES })
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(calls('turnStarted')).toEqual([[id, '', undefined], [id, '', undefined]])
+  })
+
+  it('a session Harness started is one row, Harness\'s, and gets no card as opencode\'s', async () => {
+    const core = fakeCore({ dataDir, agents: { advertised: vi.fn(() => [{ agentId: 'h1', registeredAt: 1, engine: 'opencode', sessionId: SES }] as RegisteredSession[]) } })
+    const { port, live, tell } = withOpencode({ core })
+    port.swarms(null)
+    await host().listAgentSnapshot()
+    await live()
+    expect((await listed()).map(({ id }) => id)).toEqual(['h1'])
+    tell('session.execution.started', { sessionID: SES })
+    expect(calls('turnStarted').filter(([agentId]) => agentId !== 'h1')).toEqual([])
+  })
+
+  it('a session first listed mid-turn gets its card once the dial\'s list holds it', async () => {
+    const { oc, live } = withOpencode()
+    oc.active = { [SES]: { type: 'busy' } }
+    await live()
+    const [{ id }] = await listed()
+    await vi.waitFor(() => expect(calls('turnStarted')).toEqual([[id, '', undefined]]))
+  })
+
+  // A build that fails says nothing of the session: its first cards go, and nothing of it is held after.
+  it('a session first listed while the dial\'s list fails to build has its next cards told', async () => {
+    const { oc, live, tell } = withOpencode()
+    oc.active = { [SES]: { type: 'busy' } }
+    const build = vi.spyOn(host(), 'listAgentSnapshot').mockRejectedValue(new Error('the fleet is gone'))
+    await live()
+    await vi.advanceTimersByTimeAsync(0)
+    build.mockRestore()
+    const [{ id }] = await listed()
+    oc.active = {}
+    tell('session.execution.succeeded', { sessionID: SES })
+    expect(calls('turnDone')).toEqual([[id]])
+  })
+
+  // The devices' copy of the core's agents is read again only at a list build: opencode lists a new session's first turn
+  // before the copy holds the session Harness bound to it.
+  it('a session Harness started gets no card as opencode\'s before the dial\'s list binds it', async () => {
+    const h1 = { agentId: 'h1', registeredAt: 1, engine: 'opencode' }
+    let view = [h1] as RegisteredSession[]
+    const core = fakeCore({ dataDir, agents: { advertised: vi.fn(() => view) } })
+    const refresh = async () => { view = [{ ...h1, sessionId: SES }] as RegisteredSession[] }
+    const { oc, live, tell } = withOpencode({ core, refresh })
+    oc.active = { [SES]: { type: 'busy' } }
+    await live()
+    oc.active = {}
+    oc.answers[SES] = 'Fixed the flaky test.'
+    tell('session.execution.succeeded', { sessionID: SES })
+    expect((await listed()).map(({ id }) => id)).toEqual(['h1'])
+    await vi.advanceTimersByTimeAsync(0)
+    const others = (kind: string) => calls(kind).filter(([agentId]) => agentId !== 'h1')
+    expect([others('turnStarted'), others('turnDone'), others('summary')]).toEqual([[], [], []])
+  })
+
+  it('the dial\'s words reach a session at rest, and each refusal is said once', async () => {
+    const { oc, live, tell } = withOpencode()
+    await live()
+    const [{ id }] = await listed()
+    expect(await host().sendTurn(id, 'run the tests')).toEqual({ ok: true })
+    expect(oc.asked.filter(([what]) => what === 'prompt')).toEqual([['prompt', SES, 'run the tests', expect.stringMatching(OPENCODE_MESSAGE)]])
+    expect(said()).toEqual(['[device] voice · opencode'])
+    tell('session.execution.started', { sessionID: SES })
+    expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'Fix the login test is busy. Say it when it is done.' })
+    tell('permission.asked', { sessionID: SES, id: 'per_1' })
+    expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'Fix the login test is waiting for your answer in opencode.' })
+    tell('session.execution.succeeded', { sessionID: SES })
+    expect(await host().sendTurn(id, 'x'.repeat(2001))).toMatchObject({ ok: false, message: 'Too long. Say it shorter.' })
+    oc.prompts.push('failed')
+    expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'Fix the login test did not answer.' })
+    expect(said()).toEqual(['[device] voice · opencode', '[device] voice · busy', '[device] voice · waiting', '[device] voice · too-long',
+      '[device] voice · no-answer'])
+    // Refused by its state, nothing was posted.
+    expect(oc.asked.filter(([what]) => what === 'prompt')).toHaveLength(2)
+  })
+
+  it('a tap opens nothing', async () => {
+    const { live } = withOpencode()
+    await live()
+    const [{ id }] = await listed()
+    expect(await host().openAgent(id)).toEqual({ ok: false, error: 'opencode did not open it.' })
+    expect(orcaRuns).toEqual([])
+  })
+
+  it('turning the dial to a done session marks it seen here, and asks opencode nothing', async () => {
+    const begun = vi.spyOn(OpencodeSource.prototype, 'start')
+    const { oc, live } = withOpencode()
+    await live([session({}, { viewed: Date.now() - 90_000 })])
+    const source = begun.mock.contexts[0] as OpencodeSource
+    const [{ id }] = await listed()
+    expect(source.list()).toEqual([expect.objectContaining({ id, state: 'done', unseenDone: true })])
+    const asked = oc.asked.length
+    turnTo(id)
+    expect(source.list()).toEqual([expect.objectContaining({ id, state: 'done', unseenDone: false })])
+    expect(oc.asked).toHaveLength(asked)
+    expect(oc.streams).toHaveLength(1)
+  })
+
+  it('HARNESS_DEVICE_OBSERVED=off: nothing is read, asked or watched', () => {
+    const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+    switched.HARNESS_DEVICE_OBSERVED = false
+    onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+    const { oc, port } = withOpencode()
+    attach(port)
+    seen.host.watching!(false)
+    attach(port)
+    expect(oc.asked).toEqual([])
+    expect(oc.streams).toEqual([])
+    expect(watchedFolders.calls).toEqual([])
+  })
+
+  // The desktop app runs opencode's service with no `opencode` command installed.
+  it('it runs with no opencode on PATH, and on Windows', async () => {
+    const away = withOpencode({ orca: { ...onMac, onPath: () => null } })
+    await away.live()
+    expect(await listed()).toEqual([{ id: expect.any(String), name: 'Fix the login test', caps: 'sv' }])
+    const windows = withOpencode({ orca: { ...onMac, platform: 'win32' } })
+    await windows.live()
+    expect(await listed()).toEqual([{ id: expect.any(String), name: 'Fix the login test', caps: 'sv' }])
+  })
+
+  // P5: a watch above them, on ~/.local or the home folder, would wake the devices on every write below it on macOS.
+  it('only the folder of service.json and the state folder above it are watched, while a dial is attached', () => {
+    const { port } = withOpencode()
+    const path = opencodeClientDeps().servicePath
+    const folders = [dirname(path), dirname(dirname(path))]
+    expect(watchedFolders.calls).toEqual([])
+    attach(port)
+    expect(watchedFolders.calls).toEqual([[folders, expect.any(Function)]])
+    seen.host.watching!(false)
+    expect(watchedFolders.stopped).toBe(1)
+    // A state folder made while neither was there is watched from the next attach.
+    attach(port)
+    expect(watchedFolders.calls.map(([watched]) => watched)).toEqual([folders, folders])
+  })
+
+  it('a state folder that is the home folder or a disk\'s root is not watched', () => {
+    onTestFinished(() => { vi.unstubAllEnvs() })
+    for (const state of [homedir(), parse(homedir()).root]) {
+      vi.stubEnv('XDG_STATE_HOME', state)
+      watchedFolders.calls.length = 0
+      attach(withOpencode().port)
+      expect(watchedFolders.calls).toEqual([[[join(state, 'opencode')], expect.any(Function)]])
+    }
+  })
+
+  it('the devices stopping stops the source', async () => {
+    const { port, oc, live } = withOpencode()
+    await live()
+    await port.stop()
+    expect(oc.streams.map(({ closed }) => closed)).toEqual([true])
+    expect(watchedFolders.stopped).toBe(1)
+  })
+
+  it('an opencode part that throws costs the dial nothing', async () => {
+    const { port, oc } = withOpencode({ faults: ['opencode'] })
+    port.observed({ engine: 'claude', sessionId: 'sess-1', event: 'session-start', cwd: '/work/web', callerPid: 4242,
+      transcriptPath: '/t/sess-1.jsonl', hostHints: {} })
+    attach(port)
+    expect(oc.streams).toEqual([])
+    expect(logs).toContain('[devices] opencode failed · injected fault: opencode')
+    expect((await listed()).map(({ id }) => id)).toEqual([observedAgentId('claude', 'sess-1')])
+  })
+
+  it('no log line holds a session id, a title, a folder or the words', async () => {
+    const { oc, live, tell } = withOpencode()
+    await live([session({ id: 'ses_secret1', title: 'Nebula', location: { directory: '/work/secret-folder' } })])
+    const [{ id }] = await listed()
+    tell('session.execution.started', { sessionID: 'ses_secret1' })
+    tell('permission.asked', { sessionID: 'ses_secret1', id: 'per_secret2' })
+    await host().sendTurn(id, 'run the secret tests')
+    tell('session.execution.succeeded', { sessionID: 'ses_secret1' })
+    await host().sendTurn(id, 'run the secret tests')
+    await host().openAgent(id)
+    oc.streams[0].onClose('ended')
+    expect(logs).toEqual(expect.arrayContaining(['[opencode] listed · 1 sessions', '[device] voice · waiting', '[device] voice · opencode',
+      '[opencode] closed · ended', '[opencode] retry · 1']))
+    const secrets = ['ses_secret1', 'per_secret2', 'Nebula', 'secret-folder', 'secret tests']
+    expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
   })
 })
 

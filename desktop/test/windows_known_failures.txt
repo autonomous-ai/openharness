@@ -160,7 +160,7 @@ test/environment_provisioner_test.dart::missing Linux base tools are installed b
 test/environment_provisioner_test.dart::missing tmux and X11 clipboard share one Terminal transaction
 test/environment_provisioner_test.dart::missing tmux opens a real terminal before the CLI installer
 test/environment_provisioner_test.dart::non-apt Linux returns package-manager guidance
-test/environment_provisioner_test.dart::without tmux the plan is one in-app step, worded by whether Homebrew is here
+test/environment_provisioner_test.dart::without tmux the plan is one in-app step: the managed download
 test/environment_setup_screen_test.dart::setup details and recovery text have readable contrast in dark
 test/environment_setup_screen_test.dart::setup details and recovery text have readable contrast in light
 test/harness_cli_runner_test.dart::remote-password status invokes cli.js as direct argv and reads its JSON result

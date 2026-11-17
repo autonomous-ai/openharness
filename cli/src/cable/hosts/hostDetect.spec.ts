@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { APP_IDS, appDisplayName, detectApp, detectHost, hostDisplayName, inCmux, inHerdr, UNKNOWN_APP } from './hostDetect.js'
+import { APP_BUNDLES, APP_IDS, appDisplayName, detectApp, detectHost, hostDisplayName, inCmux, inHerdr, UNKNOWN_APP } from './hostDetect.js'
 
 describe('detectHost', () => {
   it.each([
@@ -187,10 +187,12 @@ describe('detectApp', () => {
     expect(detectApp({ __CFBundleIdentifier: 'com.cmuxterm.app.nightly' })).toBe(UNKNOWN_APP)
   })
 
-  it('APP_IDS has 18 ids, and every one has a display name', () => {
-    expect(APP_IDS).toHaveLength(18)
+  it('APP_IDS has 19 ids, and every one has a display name', () => {
+    expect(APP_IDS).toHaveLength(19)
     expect(APP_IDS.indexOf('codex')).toBe(APP_IDS.indexOf('claude') + 1)
     expect(APP_IDS.indexOf('cmux')).toBe(APP_IDS.indexOf('ghostty') + 1)
+    expect(APP_IDS.indexOf('opencode')).toBe(APP_IDS.indexOf('codex') + 1)
+    expect(APP_IDS.at(-1)).toBe('terminal')
     for (const id of APP_IDS) expect(appDisplayName(id)).toMatch(/\S/)
   })
 
@@ -199,8 +201,17 @@ describe('detectApp', () => {
     expect(appDisplayName('terminal-app')).toBe('Terminal')
     expect(hostDisplayName('terminal')).toBe('Terminal')
     const others = APP_IDS.filter((id) => id !== 'terminal' && id !== 'terminal-app')
-    expect(others).toHaveLength(16)
+    expect(others).toHaveLength(17)
     for (const id of others) expect(appDisplayName(id)).toBe(hostDisplayName(id))
+  })
+
+  it('opencode is a page with a name, and no hint names it', () => {
+    expect(hostDisplayName('opencode')).toBe('opencode')
+    expect(appDisplayName('opencode')).toBe('opencode')
+    expect(Object.hasOwn(APP_BUNDLES, 'opencode')).toBe(false)
+    const hints = { TERM_PROGRAM: 'opencode' }
+    expect(detectApp(hints)).toBe(UNKNOWN_APP)
+    expect(detectHost(hints)).toBe('terminal')
   })
 })
 

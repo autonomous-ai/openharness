@@ -6,7 +6,8 @@
  */
 export { OpencodeReader, readOpencodeMessages } from './reader.js'
 export { lastOpencodeTurnText, opencodeMessagesToEvents, windowOpencodeMessages } from './normalizer.js'
-export { countOpencodePickers, opencodeFooterModelId, opencodeRowMatches, opencodeRowNamesModel, parseOpencodeFooter, parseOpencodeModelsOutput, parseOpencodePickerRows } from './runtimeProfile.js'
+export { countOpencodePickers, countOpencodeVariantPickers, opencodeFooterModelId, opencodeRowMatches, opencodeRowNamesModel, parseOpencodeFooter,
+  parseOpencodeModelsOutput, parseOpencodePickerRows, parseOpencodeVariantRows } from './runtimeProfile.js'
 export { isOpencodeV2, opencodeMajorVersion } from './version.js'
 export { applyOpencodeSessionModel, parseOpencodeModelId } from './sessionModel.js'
 export { opencodeProvider } from '../../lib/sessionSearch/externals/opencode.js'

@@ -24,10 +24,8 @@ const String kHarnessDesktopInstallCommand =
     '/bin/sh -s -- --desktop';
 
 /// The same installer's host half — tmux and what the CLI runs beside it.
-/// On macOS this is how tmux is obtained, in-app: Homebrew's if Homebrew is
-/// already there, else the managed build downloaded into `~/.harness/runtime`
-/// (no compiler, no package manager, no password). One ladder, implemented
-/// once, in the script.
+/// On macOS this is how tmux is obtained, in-app: the managed build downloaded
+/// into `~/.harness/runtime` (no compiler, no package manager, no password).
 const String kHarnessHostSetupCommand =
     'curl -fsSL https://cdn.autonomous.ai/harness/cli/install.sh | '
     '/bin/sh -s -- --host';
@@ -152,9 +150,9 @@ const String _linuxClockRepairCommand =
     'sudo systemctl restart systemd-timesyncd; fi';
 
 /// What Harness Desktop RUNS — the only things readiness is about. Everything
-/// else the setup screen ever mentions (Homebrew, the Apple developer tools,
-/// apt, curl) is a way of obtaining one of these, appears only in the plan
-/// for a step that is missing, and is never probed while the step is ready.
+/// else the setup screen ever mentions (the managed tmux download, apt, curl)
+/// is a way of obtaining one of these, appears only in the plan for a step
+/// that is missing, and is never probed while the step is ready.
 enum EnvironmentStep {
   /// The native image-paste helper of the active Linux display (`wl-copy` /
   /// `xclip`). Not applicable on macOS or a headless Linux host.
@@ -187,7 +185,7 @@ enum EnvironmentSetupMode { automatic, manual }
 
 /// Identifies which host setup owns a visible Terminal handoff. Only Linux has
 /// one now — apt needs a password on a real tty; on macOS nothing does since
-/// tmux comes from Homebrew-if-present or the managed download. Linux can wait
+/// tmux comes from the managed download. Linux can wait
 /// on the clipboard helper even when tmux itself is already ready, so a
 /// resumed failure must not always be attributed to the tmux row.
 enum EnvironmentTerminalSetup { linuxHost }
@@ -273,8 +271,7 @@ enum EnvironmentStepStatus {
 
 /// One thing setup will do to obtain a missing [step], in the order it will
 /// be done. Computed by the provisioner from what it actually probed, so the
-/// screen renders it rather than inferring it — a plan that names Xcode is a
-/// plan for a computer where Homebrew was found missing, never a guess.
+/// screen renders it rather than inferring it.
 class EnvironmentPlanItem {
   final EnvironmentStep step;
   final String title;
@@ -299,16 +296,7 @@ class EnvironmentPlanItem {
   });
 
   /// The items a plan is assembled from, written down once. tmux on macOS
-  /// is a single in-app step whichever way it is obtained; the detail says
-  /// which, because that is the one thing the person reading the plan may
-  /// care about.
-  static const tmuxViaHomebrew = EnvironmentPlanItem(
-    step: EnvironmentStep.tmux,
-    title: 'tmux',
-    detail: 'Installs with the Homebrew already on this Mac',
-    command: kHarnessHostSetupCommand,
-  );
-
+  /// is a single in-app step: the managed download.
   static const tmuxManaged = EnvironmentPlanItem(
     step: EnvironmentStep.tmux,
     title: 'tmux',
@@ -951,15 +939,12 @@ class EnvironmentProvisioner {
       }
 
       if (_isMacOS && !probe.tmuxRuns) {
-        // One in-app step whichever rung applies: the installer's host half
-        // uses the Homebrew already here or downloads the managed build.
-        // Neither needs a password, so no Terminal window and no waiting.
+        // One in-app step: the installer's host half downloads the managed
+        // build. It needs no password, so no Terminal window and no waiting.
         emit(
           step: EnvironmentStep.tmux,
           status: EnvironmentStepStatus.running,
-          message: probe.homebrewInstallsTmux
-              ? 'Installing tmux via Homebrew…'
-              : 'Downloading the managed tmux…',
+          message: 'Downloading the managed tmux…',
         );
         ProcessResult? installResult;
         try {
@@ -1161,16 +1146,7 @@ class EnvironmentProvisioner {
     }
     if (_isMacOS) {
       final tmuxRuns = await _hasTmux();
-      var homebrewInstallsTmux = false;
-      if (!tmuxRuns) {
-        // Asked only to word the plan: the installer decides the same way.
-        homebrewInstallsTmux = await _hasHomebrew();
-        plan.add(
-          homebrewInstallsTmux
-              ? EnvironmentPlanItem.tmuxViaHomebrew
-              : EnvironmentPlanItem.tmuxManaged,
-        );
-      }
+      if (!tmuxRuns) plan.add(EnvironmentPlanItem.tmuxManaged);
       final harnessRuns = await _hasHarness();
       if (!harnessRuns) plan.add(EnvironmentPlanItem.harnessCli);
       return _HostProbe(
@@ -1178,7 +1154,6 @@ class EnvironmentProvisioner {
         clipboardApplicable: false,
         clipboardRuns: true,
         harnessRuns: harnessRuns,
-        homebrewInstallsTmux: homebrewInstallsTmux,
         plan: plan,
       );
     }
@@ -1754,15 +1729,6 @@ foreach ($name in ($env:HARNESS_SIGNATURE_FILES -split [string][char]10)) {
     return result.exitCode == 0;
   }
 
-  Future<bool> _hasHomebrew() async {
-    final result = await _probeShell(
-      'command -v brew >/dev/null && brew --version',
-      'Homebrew',
-      step: EnvironmentStep.tmux,
-    );
-    return result.exitCode == 0;
-  }
-
   /// The Linux apt transaction as a script for a real terminal — the one
   /// host step left that needs a password on a tty.
   Future<File> _writeTerminalBootstrapScript({
@@ -1846,13 +1812,10 @@ fi
     // `~/.zprofile` and never `~/.zshrc`
     // — which is where `brew shellenv` sits on plenty of machines. A Finder
     // launch then starts from launchd's bare `/usr/bin:/bin:/usr/sbin:/sbin`
-    // and this probe reports tmux missing on a computer that has it, then
-    // "installs" it through whichever `brew` it can see. Measured: an Apple
-    // Silicon Mac with both Homebrews picked up Intel `/usr/local/bin/brew`
-    // and built openssl@3 from source under Rosetta, holding the boot open
-    // on "Checking tmux…" for as long as that took. Apple Silicon first, so
-    // a machine with both never installs through the Intel one. The CLI
-    // closed the same gap in `lib/tmuxOnPath.ts`.
+    // and this probe would report a Homebrew tmux missing on a computer that
+    // has it, then download the managed one. Apple Silicon first, so a
+    // machine with both Homebrews finds the native tmux. The CLI closed the
+    // same gap in `lib/tmuxOnPath.ts`.
     'export PATH="\$HOME/.local/bin${_isMacOS ? ':/opt/homebrew/bin:/usr/local/bin' : ''}:\$PATH"; $command',
   ];
 
@@ -2145,9 +2108,6 @@ class _HostProbe {
   final String? clipboardPackage;
   final bool harnessRuns;
 
-  /// macOS: Homebrew is present, so tmux installs in-app without a password.
-  final bool homebrewInstallsTmux;
-
   /// Windows: the terminal step is B's terminal host, and this is the version
   /// `runtime\pty\current-pty` names (null when it is not installed).
   final bool windows;
@@ -2166,7 +2126,6 @@ class _HostProbe {
     this.clipboardCommand,
     this.clipboardPackage,
     required this.harnessRuns,
-    this.homebrewInstallsTmux = false,
     this.windows = false,
     this.terminalHostVersion,
     this.aptPackages = const [],
@@ -2202,9 +2161,7 @@ class _HostProbe {
     if (aptPackages.isNotEmpty) {
       return '${psRuns ? 'tmux' : 'tmux and ps'} will be installed with apt.';
     }
-    return homebrewInstallsTmux
-        ? 'tmux will be installed with Homebrew.'
-        : 'tmux will be downloaded into ~/.harness/runtime.';
+    return 'tmux will be downloaded into ~/.harness/runtime.';
   }
 
   String get tmuxOutput {
@@ -2216,11 +2173,7 @@ class _HostProbe {
     if (terminalReady) return '✓ tmux --version';
     final lines = <String>[tmuxRuns ? '✓ tmux --version' : '✗ tmux --version'];
     if (!psRuns) lines.add('✗ ps');
-    if (aptPackages.isEmpty) {
-      lines.add(
-        homebrewInstallsTmux ? '✓ brew --version' : '– managed tmux download',
-      );
-    }
+    if (aptPackages.isEmpty) lines.add('– managed tmux download');
     return lines.join(' · ');
   }
 }

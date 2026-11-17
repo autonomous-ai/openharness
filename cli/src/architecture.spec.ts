@@ -630,6 +630,11 @@ describe('the daemon\'s shape', () => {
     expect(listed, `Keep src/${CORE_FILES} in order, each file once: lines kept in order merge without conflicts.`).toEqual([...new Set(listed)].sort())
   }, WALK_TIMEOUT_MS)
 
+  it('the core never loads computerName.ts: a machine\'s name is the command\'s and the gateway\'s', () => {
+    // It runs scutil on a Mac, a child process the core has no need of: the core's own uses of the hostname are display only.
+    expect(readFileSync(join(SRC, CORE_FILES), 'utf8').split('\n')).not.toContain('lib/computerName.ts')
+  })
+
   // The core meets the outside least (cli/AGENTS.md, Protect the core, rule 4). Its one call to another host was the
   // sign-in's renewal, which the gateway's process makes now (the core audit of 2026-11-12, decision 4). Whatever can
   // open a connection, a network module imported for its code (not its types) or a `fetch`, is in one of these files,

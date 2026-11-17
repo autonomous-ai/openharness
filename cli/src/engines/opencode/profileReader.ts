@@ -1,6 +1,6 @@
 import type { InlineRuntimeContext, InlineRuntimeReader } from '../facets/inlineRuntime.js'
 import type { RuntimeModelOption } from '../facets/runtime.js'
-import { encodeRuntimeProfile } from '../kit/runtime.js'
+import { addOption, encodeRuntimeProfile, RUNTIME_EFFORTS } from '../kit/runtime.js'
 import { confirmObserved } from '../kit/runtimeReader.js'
 import { env } from '../../config/env.js'
 import { execFile } from 'node:child_process'
@@ -11,10 +11,11 @@ import type { OpencodeModelTarget } from './runtimeProfile.js'
 
 const execFileAsync = promisify(execFile)
 const CATALOG_TTL_MS = 5 * 60_000
+const MAX_CATALOGS = 32
 
 class ProfileReader {
   readonly engine = 'opencode' as const
-  private opencodeCatalogCache: { key: string; expiresAt: number; entries: OpencodeModelTarget[] } | null = null
+  private readonly catalogs = new Map<string, { expiresAt: number; entries: OpencodeModelTarget[] }>()
 
   pane(context: InlineRuntimeContext, paneText: string): void | false {
     const { state, control } = context
@@ -28,7 +29,7 @@ class ProfileReader {
     // never prints, so insisting on a catalog match left the chips blank on a freshly opened agent
     // — showing nothing about a model the terminal was naming two lines below.
     const footer = opencode.parseOpencodeFooter(paneText)
-    const id = opencode.opencodeFooterModelId(paneText, this.opencodeCatalogCache?.entries ?? [])
+    const id = opencode.opencodeFooterModelId(paneText, this.cachedEntries(context.session.cwd))
     const model = id ?? footer?.target ?? null
     if (model) {
       // 'auto' remains the default: early builds had no reasoning axis at all, and inventing a
@@ -41,18 +42,20 @@ class ProfileReader {
     }
   }
 
+  /** Its `/models` and `/effort` pickers are driven (lib/runtimeControl.ts `setOpencode`), session or none. */
+  supportsControl(): boolean {
+    return true
+  }
+
   async models(context: InlineRuntimeContext): Promise<RuntimeModelOption[]> {
     const { session, state } = context
-    const entries = await this.catalog()
+    const entries = await this.catalog(session.cwd)
     const output: RuntimeModelOption[] = []
     const seen = new Set<string>()
     for (const entry of entries) {
-      const id = encodeRuntimeProfile({
-        sessionId: session.agentId, engine: 'opencode', model: entry.id, effort: 'auto',
-      })
-      if (seen.has(id)) continue
-      seen.add(id)
-      output.push({ id, displayName: entry.id })
+      // `auto` is OpenCode's Default variant: no variant chosen, the provider's own setting.
+      // An effort the profile id cannot carry is no row: a pick of it could never be named back.
+      for (const effort of ['auto', ...(entry.efforts ?? []).filter((e) => RUNTIME_EFFORTS.has(e))]) addOption(output, seen, session, entry.id, effort, entry.name ?? entry.id)
     }
     // See commandcodeModels: only worth a row when the catalogue itself came back.
     if (entries.length && state?.model && !entries.some((entry) => entry.id === state.model)) {
@@ -64,26 +67,46 @@ class ProfileReader {
     return output
   }
 
-  async catalog(): Promise<OpencodeModelTarget[]> {
+  /** The entries a catalog read last found for a folder, for the pane poll, which cannot wait for a read. */
+  private cachedEntries(cwd: string | null | undefined): OpencodeModelTarget[] {
+    return this.catalogs.get(`${env.OPENCODE_DATA_DIR}\u0000${cwd ?? ''}`)?.entries ?? []
+  }
+
+  /**
+   * The models OpenCode offers in [cwd], an agent's folder: a project's own config can add providers, and OpenCode
+   * answers for the folder it is asked about (`location[directory]`), its home otherwise (MSI, 2026-11-17).
+   */
+  async catalog(cwd?: string | null): Promise<OpencodeModelTarget[]> {
     // Its output is read with the engine's own code: without it there is no catalog, and nothing is run.
-    const key = env.OPENCODE_DATA_DIR
-    if (this.opencodeCatalogCache?.key === key && this.opencodeCatalogCache.expiresAt > Date.now()) {
-      return this.opencodeCatalogCache.entries
-    }
+    const key = `${env.OPENCODE_DATA_DIR}\u0000${cwd ?? ''}`
+    const hit = this.catalogs.get(key)
+    if (hit && hit.expiresAt > Date.now()) return hit.entries
     let entries: OpencodeModelTarget[] = []
+    const bin = await opencodeBinAsync()
+    // Run from where the daemon is: an agent's folder may be gone, and a program started in a folder that is not
+    // there never runs. The folder is said to OpenCode instead.
+    const run = async (args: string[]) => (await execFileAsync(bin, args, { env: process.env, timeout: 10_000, maxBuffer: 4 * 1024 * 1024 })).stdout
+    // OpenCode 2 names each model and its variants (its efforts) in its own list, from the one server its screens
+    // use too; `opencode models`, all an older OpenCode has, prints only the ids.
+    const where = cwd ? `?location%5Bdirectory%5D=${encodeURIComponent(cwd)}` : ''
     try {
-      const result = await execFileAsync(await opencodeBinAsync(), ['models'], {
-        env: process.env, timeout: 10_000, maxBuffer: 1024 * 1024,
-      })
-      entries = opencode.parseOpencodeModelsOutput(result.stdout)
-    } catch {
-      console.warn('[runtime-profile] OPENCODE_CATALOG_UNAVAILABLE')
+      entries = opencode.parseOpencodeApiModels(await run(['api', 'GET', `/api/model${where}`]))
+    } catch { /* An older OpenCode has only the ids returned below. */ }
+    if (!entries.length) {
+      try {
+        entries = opencode.parseOpencodeModelsOutput(await run(['models']))
+      } catch {
+        console.warn('[runtime-profile] OPENCODE_CATALOG_UNAVAILABLE')
+      }
     }
-    this.opencodeCatalogCache = { key, entries, expiresAt: Date.now() + CATALOG_TTL_MS }
+    this.catalogs.delete(key)
+    this.catalogs.set(key, { entries, expiresAt: Date.now() + CATALOG_TTL_MS })
+    // One per folder an agent is open in; the oldest goes first.
+    while (this.catalogs.size > MAX_CATALOGS) this.catalogs.delete(this.catalogs.keys().next().value!)
     return entries
   }
 
-  async config(): Promise<boolean> { await this.catalog(); return false }
+  async config(context: InlineRuntimeContext): Promise<boolean> { await this.catalog(context.session.cwd); return false }
 }
 
 export function createRuntimeProfileReader(): InlineRuntimeReader & { engine: 'opencode' } { return new ProfileReader() }

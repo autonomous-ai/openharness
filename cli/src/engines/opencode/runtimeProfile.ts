@@ -35,6 +35,10 @@ export interface OpencodeModelTarget {
    * provider to confuse it with.
    */
   modelFilter: string
+  /** As the picker and the footer name it ("DeepSeek V4.1 Flash Free"), where OpenCode's own list said. */
+  name?: string
+  /** Its variants, OpenCode's efforts (`low`, `high`, `max`), in OpenCode's order; empty for a model with none. */
+  efforts?: string[]
 }
 
 export interface OpencodePickerRow {
@@ -79,6 +83,39 @@ export function opencodeModelTarget(id: string): OpencodeModelTarget | null {
   }
 }
 
+/**
+ * Parse OpenCode 2's own model list (`opencode api GET /api/model`): each model's name as the picker draws it and its
+ * variants, which are its efforts — `opencode models` prints neither. A model switched off or retired is left out, as
+ * the picker leaves it out; a variant id that is not a plain word is dropped rather than typed into a picker.
+ */
+export function parseOpencodeApiModels(output: string): OpencodeModelTarget[] {
+  let parsed: unknown
+  try { parsed = JSON.parse(output) } catch { return [] }
+  const data = (parsed as { data?: unknown })?.data
+  if (!Array.isArray(data)) return []
+  const targets: OpencodeModelTarget[] = []
+  const seen = new Set<string>()
+  for (const row of data.slice(0, 500)) {
+    if (!row || typeof row !== 'object') continue
+    const { id, providerID, name, variants, enabled, status } = row as Record<string, unknown>
+    if (typeof id !== 'string' || typeof providerID !== 'string' || enabled === false || (status && status !== 'active')) continue
+    const target = opencodeModelTarget(`${providerID}/${id}`)
+    if (!target || seen.has(target.id)) continue
+    seen.add(target.id)
+    const label = typeof name === 'string' && name.trim() && name.length <= 128 ? name.trim() : null
+    const efforts = Array.isArray(variants)
+      ? variants.map((v) => (v as { id?: unknown })?.id).filter((v): v is string => typeof v === 'string' && /^[a-z][a-z0-9_-]{0,15}$/.test(v))
+      : []
+    targets.push({
+      ...target,
+      // The picker filters on what it draws: the model's name, not its id's words.
+      ...(label ? { name: label, filter: `${words(label)} ${words(target.provider)}`.trim(), modelFilter: words(label) } : {}),
+      efforts,
+    })
+  }
+  return targets
+}
+
 /** Parse `opencode models`; anything that is not a `provider/model` line is ignored. */
 export function parseOpencodeModelsOutput(output: string): OpencodeModelTarget[] {
   const targets: OpencodeModelTarget[] = []
@@ -102,7 +139,9 @@ export function parseOpencodePickerRows(capture: string): OpencodePickerRow[] | 
   // usually still up there — reading from it parsed a stale, differently-filtered row set.
   const header = lines.findLastIndex((line) => /\bSelect model\b/.test(line))
   if (header < 0) return null
-  const end = lines.findIndex((line, index) => index > header && /Connect provider/i.test(line))
+  // OpenCode 2.2 ends the list with `View all integrations ctrl+a`, and draws its composer and the project's
+  // `~/path   7.1K (4%)` column under it, which read as a second row (MSI, 2026-11-17).
+  const end = lines.findIndex((line, index) => index > header && /Connect provider|View all integrations|^\s*[┃╹]/i.test(line))
   const rows: OpencodePickerRow[] = []
   for (const line of lines.slice(header + 1, end < 0 ? lines.length : end)) {
     const text = line.trim()
@@ -125,6 +164,35 @@ export function parseOpencodePickerRows(capture: string): OpencodePickerRow[] | 
  */
 export function countOpencodePickers(capture: string): number {
   return capture.split('\n').filter((line) => /\bSelect model\b/.test(line)).length
+}
+
+/**
+ * The rows of OpenCode 2's `/effort` picker, its variants, as drawn on MSI (2026-11-17):
+ *
+ *     Select variant                       esc
+ *     Search                     ← the filter box: what is typed shows here
+ *   ● Default
+ *     low
+ *     high
+ *
+ * Null when none is open. Bounded below by the composer's `┃`/`╹` edge.
+ */
+export function parseOpencodeVariantRows(capture: string): Array<{ name: string; current: boolean }> | null {
+  const lines = capture.split('\n').map((line) => line.trim())
+  const header = lines.findLastIndex((line) => /^Select variant\b/.test(line))
+  if (header < 0) return null
+  const rows: Array<{ name: string; current: boolean }> = []
+  for (const line of lines.slice(header + 2)) {
+    if (/^[┃╹]/.test(line)) break
+    if (!line || /^No results/i.test(line)) continue
+    rows.push({ name: line.replace(/^●\s*/, ''), current: line.startsWith('●') })
+  }
+  return rows
+}
+
+/** How many times the `/effort` picker appears in a capture: see [countOpencodePickers]. */
+export function countOpencodeVariantPickers(capture: string): number {
+  return capture.split('\n').filter((line) => /^\s*Select variant\b/.test(line)).length
 }
 
 /** True when a picker row NAMES the target's model, whatever provider it is listed under. */
@@ -189,15 +257,29 @@ export function parseOpencodeFooter(capture: string): OpencodeFooter | null {
 export function opencodeFooterModelId(capture: string, catalog: OpencodeModelTarget[]): string | null {
   const footer = parseOpencodeFooter(capture)
   if (!footer) return null
-  const tail = squash(footer.target)
+  // OpenCode 2.2 on a phone's 50 columns: `Build · DeepSeek V4.1 Flash F… · high`, and with one provider connected no
+  // provider after the name at all (`Build · DeepSeek V4.1 Flash Free`), measured on MSI 2026-11-17.
+  const cut = footer.target.endsWith('…')
+  const tail = squash(footer.target.replace(/…$/, ''))
   if (!tail) return null
 
-  let best: { id: string; length: number } | null = null
+  // The provider named after the model tells two same-named models apart; a name cut short must name one model only.
+  let best: { id: string; score: number } | null = null
+  let tied = false
   for (const entry of catalog) {
-    const leaf = squash(entry.model.slice(entry.model.lastIndexOf('/') + 1))
-    if (!leaf || !tail.startsWith(leaf)) continue
-    if (!tail.includes(squash(entry.provider))) continue
-    if (!best || leaf.length > best.length) best = { id: entry.id, length: leaf.length }
+    const keys = [entry.name, entry.model.slice(entry.model.lastIndexOf('/') + 1)].map((key) => squash(key ?? '')).filter(Boolean)
+    for (const key of keys) {
+      const whole = tail.startsWith(key)
+      if (!whole && !(cut && key.startsWith(tail))) continue
+      // Words after the name are its provider's, and must be this entry's: `MiniMax M3 (vibe) Vibe Gateway` is not
+      // opencode-go's MiniMax M3. Nothing after it is a footer that names no provider.
+      const rest = whole ? tail.slice(key.length) : ''
+      const named = !!rest && rest.includes(squash(entry.provider))
+      if (rest && !named) continue
+      const score = (named ? 1000 : 0) + (whole ? key.length : tail.length)
+      if (best && best.id !== entry.id && score === best.score) tied = true
+      if (!best || score > best.score) { best = { id: entry.id, score }; tied = false }
+    }
   }
-  return best?.id ?? null
+  return best && !tied ? best.id : null
 }

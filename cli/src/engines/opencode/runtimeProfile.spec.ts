@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   countOpencodePickers,
+  countOpencodeVariantPickers,
   opencodeFooterModelId,
   parseOpencodeFooter,
   opencodeRowMatches,
+  parseOpencodeApiModels,
   parseOpencodeModelsOutput,
   parseOpencodePickerRows,
+  parseOpencodeVariantRows,
 } from './runtimeProfile.js'
 
 // Real `opencode models` lines from this computer (opencode 1.18.7), including the nested-model form.
@@ -143,5 +146,68 @@ describe('opencode model catalog', () => {
     const footer = '┃  Build · Ox Alpha Free (Unlimited) OpenCode Zen · high'
     expect(opencodeFooterModelId(footer, catalog)).toBeNull()
     expect(parseOpencodeFooter(footer)?.target).toBe('Ox Alpha Free (Unlimited) OpenCode Zen')
+  })
+})
+
+describe('opencode 2 model list', () => {
+  // `opencode api GET /api/model` on MSI (opencode 2.2.6, 2026-11-17), trimmed to the fields read and three rows.
+  const API = JSON.stringify({
+    location: { directory: '/home/me' },
+    data: [
+      { id: 'big-pickle', providerID: 'opencode', name: 'Big Pickle', variants: [], status: 'active', enabled: true },
+      { id: 'deepseek-v4.1-flash-free', providerID: 'opencode', name: 'DeepSeek V4.1 Flash Free', status: 'active', enabled: true,
+        variants: [{ id: 'low' }, { id: 'high' }, { id: 'max' }, { id: 'NOT A WORD' }] },
+      { id: 'retired', providerID: 'opencode', name: 'Retired', variants: [], status: 'deprecated', enabled: true },
+      { id: 'off', providerID: 'opencode', name: 'Off', variants: [], enabled: false },
+    ],
+  })
+  const listed = parseOpencodeApiModels(API)
+
+  it('names each model as the picker draws it, with its variants for efforts', () => {
+    expect(listed.map((m) => [m.id, m.name, m.efforts, m.modelFilter])).toEqual([
+      ['opencode/big-pickle', 'Big Pickle', [], 'big pickle'],
+      ['opencode/deepseek-v4.1-flash-free', 'DeepSeek V4.1 Flash Free', ['low', 'high', 'max'], 'deepseek v4.1 flash free'],
+    ])
+    expect(parseOpencodeApiModels('<!doctype html>')).toEqual([])
+    expect(parseOpencodeApiModels('{"data":{}}')).toEqual([])
+  })
+
+  it('resolves the footer as a phone draws it: no provider after the name, or the name cut short', () => {
+    // Measured on MSI's 50 columns after a switch.
+    expect(opencodeFooterModelId('┃  Build · DeepSeek V4.1 Flash Free', listed)).toBe('opencode/deepseek-v4.1-flash-free')
+    expect(opencodeFooterModelId('┃  Build · DeepSeek V4.1 Flash F… · high', listed)).toBe('opencode/deepseek-v4.1-flash-free')
+    expect(opencodeFooterModelId('┃  Build auto · Big Pickle OpenCode', listed)).toBe('opencode/big-pickle')
+    // Another provider's model of the same name is not this one, and a cut that fits two names is neither.
+    expect(opencodeFooterModelId('┃  Build · Big Pickle Vibe Gateway', listed)).toBeNull()
+    const twins = parseOpencodeApiModels(JSON.stringify({ data: [
+      { id: 'deepseek-a', providerID: 'opencode', name: 'DeepSeek A', variants: [] },
+      { id: 'deepseek-b', providerID: 'opencode', name: 'DeepSeek B', variants: [] },
+    ] }))
+    expect(opencodeFooterModelId('┃  Build · DeepSe…', twins)).toBeNull()
+  })
+})
+
+describe('opencode 2 pickers', () => {
+  it('reads the variant picker\'s rows, the filter box left out, down to the composer', () => {
+    // MSI, 2026-11-17, `/effort` on DeepSeek V4.1 Flash Free with `high` typed.
+    const typed = ['     Select variant                       esc', '     high', '     high', '     xhigh', '  ┃', '  ┃  Build · DeepSeek V4.1 Flash Free'].join('\n')
+    expect(parseOpencodeVariantRows(typed)).toEqual([{ name: 'high', current: false }, { name: 'xhigh', current: false }])
+    const open = ['Select variant   esc', '     Search', '   ● Default', '     low', '  ╹▀▀▀▀'].join('\n')
+    expect(parseOpencodeVariantRows(open)).toEqual([{ name: 'Default', current: true }, { name: 'low', current: false }])
+    expect(countOpencodeVariantPickers(`${open}\n${typed}`)).toBe(2)
+    expect(parseOpencodeVariantRows('┃  Build · Big Pickle')).toBeNull()
+  })
+
+  it('reads the model picker\'s rows above OpenCode 2.2\'s integrations line and its path column', () => {
+    const capture = [
+      '     Select model                         esc',
+      '     deepseek',
+      '     DeepSeek V4.1 Flash Free            Free',
+      '     View all integrations ctrl+a',
+      '     Favorite ctrl+f',
+      '  ┃  Build auto · Big Pickle OpenCode',
+      '  ~/projects/claude-2026-11-12-04-14   7.1K (4%)',
+    ].join('\n')
+    expect(parseOpencodePickerRows(capture)).toEqual([{ display: 'DeepSeek V4.1 Flash Free', provider: 'Free', current: false }])
   })
 })

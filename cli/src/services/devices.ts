@@ -32,6 +32,7 @@ import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
 import { cmuxClientDeps, cmuxStoreDir, cmuxStores, createCmuxClient, type CmuxClient } from '../cable/hosts/cmuxCli.js'
 import { createCmuxAppAdapter } from '../cable/hosts/cmuxApp.js'
 import { CmuxSource } from '../cable/hosts/cmuxSource.js'
+import { watchNearest } from '../cable/hosts/folderWatch.js'
 import { createCodexAppAdapter } from '../cable/hosts/codexApp.js'
 import { codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
 import { createHcClient, hcClientDeps, hcPaneKey, hcSocketPath, type HcClient } from '../cable/hosts/hcClient.js'
@@ -44,6 +45,8 @@ import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
 import { askedLine, countWord, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type ObservedDeps, type PromptSource } from '../cable/hosts/observed.js'
 import { createOpenActions } from '../cable/hosts/open.js'
+import { createOpencodeClient, opencodeClientDeps, opencodeMessageId, type OpencodeClient } from '../cable/hosts/opencodeClient.js'
+import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { createOrcaAdapter, createOrcaReads, orcaDeps, type OrcaFocusWatch, type OrcaReadDeps, type OrcaReads, type OrcaTerminal } from '../cable/hosts/orca.js'
 import { readRecordName } from '../cable/hosts/recordName.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
@@ -129,6 +132,8 @@ export interface DevicesDeps {
   hc?: HcClient
   /** For this service's tests: cmux's own command line (cable/hosts/cmuxCli.ts). */
   cmux?: CmuxClient
+  /** For this service's tests: opencode's service (cable/hosts/opencodeClient.ts). */
+  opencode?: OpencodeClient
   /** Opens the devices' own listener with these handlers (services/devicesListener.ts). Given by the devices process
    *  alone: inside the core's process (`HARNESSD_SERVICES=none`, Harness OS) there is none, so the core's process opens
    *  no socket for the devices, and the dial follows no app in front there. */
@@ -318,6 +323,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  it. */
   const hcAt = hcClientDeps()
   const hcClient = deps.hc ?? createHcClient(hcAt)
+  /** Where opencode's service.json is, from the daemon's own environment: the client reads it, and the opencode source
+   *  watches its folder. */
+  const opencodeAt = opencodeClientDeps()
+  const opencodeClient = deps.opencode ?? createOpencodeClient(opencodeAt)
   /** The devices follow the default hc session, the one whose addresses the hook sends (notify.mjs): its socket is
    *  where the daemon's own environment, with no session or socket named, puts it. */
   const hookIds = hcAt.socketPath === hcSocketPath({ ...process.env, HC_SESSION: undefined, HC_SOCKET: undefined }, hcAt.home)
@@ -537,6 +546,27 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log,
     count: voiced,
   }) : null
+  /** opencode's sessions, listed and followed over its local server (docs/plans/2026-11-17-dial-opencode-design.md). It
+   *  runs only while a dial is attached, behind the observed agents' switch, on every platform. It looks for no `opencode`
+   *  on PATH: the desktop app runs the service with no CLI installed. */
+  const opencodeFolder = dirname(opencodeAt.servicePath)
+  const opencodeState = dirname(opencodeFolder)
+  // The folder of service.json, else the state folder above it, and none higher: on macOS a watch on ~/.local or the home
+  // folder would wake the devices on every write below it. So no state folder that is the home folder or a disk's root,
+  // as XDG_STATE_HOME can make it.
+  const opencodeFolders = opencodeState === homedir() || opencodeState === dirname(opencodeState) ? [opencodeFolder] : [opencodeFolder, opencodeState]
+  const opencode = observed ? new OpencodeSource({
+    client: opencodeClient,
+    // Set at each attach, so a folder made since is held.
+    watch: (changed) => watchNearest(opencodeFolders, changed),
+    after: timerIn('opencode'),
+    now: Date.now,
+    monotonic,
+    uuid: randomUUID,
+    messageId: opencodeMessageId,
+    log,
+    count: voiced,
+  }) : null
   /** The ones the dial lists, each with its source: the merged list's, not each source's own, as a copy a stronger source
    *  also holds (a Harness agent's session, a hooked agent's pane) is that one's row and must get no second card. */
   const outsideEntries = (): HostEntry[] => registry.entries().filter((entry) => entry.source !== cableHost.harness)
@@ -702,7 +732,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   })
   // What the dial lists with no window, or with one in the apps view: this computer's harness agents, and the ones outside
   // a pane unless switched off.
-  const registry = new HostRegistry([cableHost.harness, observed, herdr, hcSource, cmuxSource].filter((source) => source !== null))
+  const registry = new HostRegistry([cableHost.harness, observed, herdr, hcSource, cmuxSource, opencode].filter((source) => source !== null))
   cableHost.setRegistry(registry)
   // The dial's log lives with the app's, one file a day (dialLog.ts). The old unbounded `dial.log` in the
   // data folder is cut down to a pointer, for anyone with a bookmark.
@@ -976,11 +1006,41 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** Another question of that agent closed: its notice, covered or held back by it, is asked again. */
   const reaskNotice = (agentId: string): void => part.call('notices', () => notices.reask(agentId))
 
+  /** The ids on the dial's lists, built now, which reads the core's agents again. Both lists a dial can hold: the one
+   *  ring, and the shown app's for a dial that says appFilter, read only while one is connected: that read can switch the
+   *  app, which no older dial shows. */
+  const listedIds = async (): Promise<Set<string>> => {
+    const apps = cable.wantsApps() ? [cableHost.listAgentSnapshot({ apps: true })] : []
+    const lists = await Promise.all([cableHost.listAgentSnapshot(), ...apps])
+    return new Set(lists.flatMap((list) => list.agents.map((agent) => agent.id)))
+  }
+  /** opencode's sessions first listed and not yet found on the dial's lists, each with the cards held for it. opencode
+   *  lists a session Harness started before the devices' copy of the core's agents, read again only at a list build,
+   *  holds the session Harness bound to it: that build gives the row to Harness, whose own cards are the turn's. */
+  const checking = new Map<string, DialEvent[]>()
+  const tellOf = (agentId: string, event: DialEvent): void => {
+    const held = checking.get(agentId)
+    if (held) held.push(event)
+    else tell(event)
+  }
+  /** Builds the dial's lists, then tells the cards held for those of `batch` they hold. One listed again meanwhile is in
+   *  a later batch too, whose check tells what it held since. A build that fails tells none and holds them no longer:
+   *  held for good, each later card of theirs would be. */
+  const check = async (batch: Map<string, DialEvent[]>): Promise<void> => {
+    try {
+      const listed = await listedIds()
+      for (const [agentId, held] of batch) if (listed.has(agentId)) for (const event of held) tell(event)
+    } finally {
+      for (const agentId of batch.keys()) checking.delete(agentId)
+    }
+  }
+
   /** What changed among them, told: run whenever a source of theirs says its list changed. */
   const outsideTurn = (): void => {
     showWaits()
     const entries = outsideEntries()
     const ids = new Set(entries.map((entry) => entry.agent.id))
+    const fresh = new Map<string, DialEvent[]>()
     for (const id of told.keys()) {
       if (ids.has(id)) continue
       told.delete(id)
@@ -997,26 +1057,33 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         // turn's (this turn's was not found) is not said again.
         if (agent.state === 'done' && agent.lastAnswer && agent.lastAnswer !== was.answer) {
           was.answer = agent.lastAnswer
-          tell({ ...card, kind: 'summary', text: agent.lastAnswer, recap: agent.lastAnswer, fullText: agent.lastAnswer })
+          tellOf(agent.id, { ...card, kind: 'summary', text: agent.lastAnswer, recap: agent.lastAnswer, fullText: agent.lastAnswer })
         }
         continue
       }
       told.set(agent.id, { state: agent.state, line, answer: agent.lastAnswer })
+      if (!was && entry.source === opencode) {
+        const held: DialEvent[] = []
+        fresh.set(agent.id, held)
+        checking.set(agent.id, held)
+      }
       // Only an observed agent has a hook to say its turn started (port.observed): another's going busy is its next turn.
       if (entry.source !== observed && busy(entry) && !(was && busyState(was.state))) endNotice(agent.id)
       // An agent a listing names for the first time ended no turn the dial saw: herdr says done of any turn that ended in a
       // pane it has not focused, and lists it again at each plug-in, reconnect and unfold. An observed one is first heard
       // by its hook, which may be the turn's end.
       const ended = was !== undefined || entry.source === observed
-      if (busy(entry)) tell(started(entry))
-      else if (ended && agent.state === 'done') tell({ ...card, kind: 'done' })
-      else if (ended && agent.state === 'error') tell({ ...card, kind: 'error' })
+      if (busy(entry)) tellOf(agent.id, started(entry))
+      else if (ended && agent.state === 'done') tellOf(agent.id, { ...card, kind: 'done' })
+      else if (ended && agent.state === 'error') tellOf(agent.id, { ...card, kind: 'error' })
     }
+    if (fresh.size) part.call('dial', () => check(fresh))
   }
   observed?.onChange(() => part.call('dial', outsideTurn))
   herdr?.onChange(() => part.call('dial', outsideTurn))
   hcSource?.onChange(() => part.call('dial', outsideTurn))
   cmuxSource?.onChange(() => part.call('dial', outsideTurn))
+  opencode?.onChange(() => part.call('dial', outsideTurn))
   /** One of the observed source's timers, each run guarded as a notice is: one that throws is logged and the next runs. */
   const every = (ms: number, run: () => unknown): ReturnType<typeof setInterval> => {
     const timer = setInterval(() => part.call('observed', run), ms)
@@ -1036,14 +1103,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   /** Each observed agent mid-turn that a dial lists (sixteen at most of the fifty in each list), told again: the dial forgets
    *  a turn it hears nothing of for 25 s, and one that just came, whose window just closed, or whose app the dial was just
-   *  turned to, has heard nothing of it yet. Both lists a dial can hold: the one ring, and the shown app's for a dial that
-   *  says appFilter, read only while one is connected: that read can switch the app, which no older dial shows. */
+   *  turned to, has heard nothing of it yet. */
   const remind = async (): Promise<void> => {
     const mid = outsideEntries().filter(busy)
     if (!mid.length || heldOnTab()) return
-    const apps = cable.wantsApps() ? [cableHost.listAgentSnapshot({ apps: true })] : []
-    const lists = await Promise.all([cableHost.listAgentSnapshot(), ...apps])
-    const listed = new Set(lists.flatMap((list) => list.agents.map((agent) => agent.id)))
+    const listed = await listedIds()
     for (const entry of mid) if (listed.has(entry.agent.id)) tell(started(entry))
   }
 
@@ -1248,7 +1312,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log('[device] orca watch · ended')
   }
 
-  /** The scan, the reminders, and herdr's and Herdr Core's sockets, for an attached dial alone. */
+  /** The scan, the reminders, herdr's and Herdr Core's sockets, and opencode's service, for an attached dial alone. */
   let attached: ReturnType<typeof setInterval>[] = []
   const dialAttached = (on: boolean): void => {
     dialOn = on
@@ -1261,7 +1325,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // Its questions were in its RAM: each notice still pending is asked again, under its id, whatever source is on.
     // With the last gone, a Harness agent's next turn goes unheard, so its card ends now.
     part.call('notices', () => on ? notices.attached() : notices.detached())
-    if (!observed || !herdr) return
+    if (!observed || !herdr || !opencode) return
     // Only with herdr installed, read at each attach, as a tap needs it (herdr.ts): with none, no folder is watched
     // (~/.config, or the home folder, recursive on macOS) for a socket that never comes.
     part.call('herdr', () => on && apps.onPath('herdr') ? herdr.start() : herdr.stop())
@@ -1273,6 +1337,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       cmuxFound = on && cmuxClient.binary() !== null
       return cmuxFound ? cmuxSource.start() : cmuxSource.stop()
     })
+    part.call('opencode', () => on ? opencode.start() : opencode.stop())
     if (!on) {
       // The next attach checks Orca's ring afresh, and a read under way lands on nothing.
       orcaRing = { again: false }

@@ -61,17 +61,26 @@ export class RuntimeProfileController {
     }
     await native?.validate({ stage: 'scope', target, state: observed })
     const release = await this.deps.acquireInput(session.agentId)
-    if (!release) throw new RuntimeProfileControlError('BUSY')
+    if (!release) {
+      console.warn('[runtime-profile] BUSY (input held)')
+      throw new RuntimeProfileControlError('BUSY')
+    }
     let controlStarted = false
+    let held = ''
     try {
       if (!await this.deps.validateRuntime(session)) throw new RuntimeProfileControlError('TMUX_FAILED')
       const capture = await this.deps.capture(session.agentId, 100)
       if (!capture) throw new RuntimeProfileControlError('TMUX_FAILED')
       const inspection = (await this.deps.readScreen(session, capture))?.pane
+      held = 'screen unread'
       if (!inspection) throw new RuntimeProfileControlError('BUSY')
+      held = 'scope'
       await native?.validate({ stage: 'scope', target, state: observed, pane: inspection })
+      held = inspection.dialog ? 'dialog' : inspection.draft ? 'draft' : 'no prompt'
       if (!inspection.idle) throw new RuntimeProfileControlError('BUSY')
+      held = 'switch unfinished'
       if (!this.deps.manager.beginControl(session, target)) throw new RuntimeProfileControlError('BUSY')
+      held = ''
       controlStarted = true
       await native.apply({ target, current, options })
       this.deps.manager.finishControl(session)
@@ -85,7 +94,7 @@ export class RuntimeProfileController {
       // A failed switch used to leave NOTHING in the log — the picker just flashed open and shut on the
       // user's terminal and the device said nothing useful. Name the session, engine and reason.
       const code = error instanceof RuntimeProfileControlError ? error.code : 'TMUX_FAILED'
-      console.warn(`[runtime-profile] ${code}`)
+      console.warn(`[runtime-profile] ${code}${code === 'BUSY' && held ? ` (${held})` : ''}`)
       if (error instanceof RuntimeProfileControlError) throw error
       throw new RuntimeProfileControlError('TMUX_FAILED')
     } finally {

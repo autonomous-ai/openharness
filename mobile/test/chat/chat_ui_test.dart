@@ -123,7 +123,7 @@ void main() {
     (tester) async {
       setPhone(tester, largePhone);
       final sent = <String>[];
-      var stopped = 0, attached = 0;
+      var stopped = 0, attached = 0, models = 0;
       Widget composer({required bool working}) => phoneApp(
         Scaffold(
           body: Align(
@@ -136,25 +136,34 @@ void main() {
               },
               onStop: () => stopped++,
               onAttach: () => attached++,
+              onModel: () => models++,
               model: 'Claude Opus 5.5 · Medium',
             ),
           ),
         ),
       );
       await tester.pumpWidget(composer(working: false));
-      // The card's controls: attach, and the agent's model — shown, never a button.
+      // The card's controls: attach, and the agent's model, which opens its Model sheet.
       await tester.tap(find.byTooltip('Attach'));
-      expect(attached, 1);
-      expect(find.text('Claude Opus 5.5 · Medium'), findsOneWidget);
+      await tester.tap(find.text('Claude Opus 5.5 · Medium'));
+      expect((attached, models), (1, 1));
+      // The chip is as wide as its words and starts at the row's left, beside `+`: never centred in the row.
+      final chip = tester.getRect(
+        find
+            .ancestor(
+              of: find.text('Claude Opus 5.5 · Medium'),
+              matching: find.byType(InkWell),
+            )
+            .first,
+      );
+      final attach = tester.getRect(find.byTooltip('Attach'));
+      expect(chip.left - attach.right, lessThan(20));
       expect(
-        find.ancestor(
-          of: find.text('Claude Opus 5.5 · Medium'),
-          matching: find.byWidgetPredicate(
-            (w) => w is InkWell || w is GestureDetector,
-          ),
+        chip.width,
+        closeTo(
+          tester.getSize(find.text('Claude Opus 5.5 · Medium')).width + 24,
+          1,
         ),
-        findsNothing,
-        reason: 'nothing to tap: the model cannot be changed from here',
       );
 
       await tester.enterText(find.byType(TextField), 'run the tests');

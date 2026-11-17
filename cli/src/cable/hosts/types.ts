@@ -75,7 +75,7 @@ export type TypeResult = boolean | 'busy' | 'waiting' | { refused: string }
 export type PaneSwitch = 'ok' | 'failed' | 'busy'
 
 export interface HostSource {
-  /** 'harness' | 'observed' | a listing source's name (`herdr`, `herdr-app`). */
+  /** 'harness' | 'observed' | a listing source's name (`herdr`, `herdr-app`, `opencode`). */
   readonly id: string
   list(): HostAgent[]
   capabilities(agent: HostAgent): Caps

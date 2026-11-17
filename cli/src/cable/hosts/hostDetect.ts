@@ -39,10 +39,11 @@ const NAMES: Record<string, string> = {
   warp: 'Warp',
   claude: 'Claude',
   codex: 'ChatGPT',
+  opencode: 'opencode',
   terminal: 'Terminal',
 }
 
-/** The apps an agent can run in, the dial's pages: the hosts, in the order of their names. Eighteen ids; the firmware
+/** The apps an agent can run in, the dial's pages: the hosts, in the order of their names. Nineteen ids; the firmware
  *  holds 16 (`CABLE_MAX_APPS`), and the `apps` frame holds to it (`APP_LIMIT`, select.ts). */
 export const APP_IDS: readonly string[] = Object.keys(NAMES)
 

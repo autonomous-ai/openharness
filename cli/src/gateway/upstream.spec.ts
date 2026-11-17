@@ -1,14 +1,19 @@
 import { EventEmitter, once } from 'node:events'
+import type { IncomingMessage } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { hostname } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { env } from '../config/env.js'
 import { AuthSessionError } from '../lib/authSession.js'
 import { UpstreamLink } from './upstream.js'
 
+// A computer's name that is not its hostname, so the adapter-ws label below shows which one it sends.
+vi.mock('../lib/computerName.js', () => ({ computerName: async () => 'Test Lab Mac' }))
+
 // A stand-in backend on loopback. `onConnection` decides what each accepted link gets; `refuse` answers
 // every upgrade with that HTTP status instead.
-async function backend(opts: { onConnection?: (ws: WebSocket) => void; refuse?: number } = {}) {
+async function backend(opts: { onConnection?: (ws: WebSocket, request: IncomingMessage) => void; refuse?: number } = {}) {
   const wss = new WebSocketServer({
     port: 0,
     host: '127.0.0.1',
@@ -16,7 +21,7 @@ async function backend(opts: { onConnection?: (ws: WebSocket) => void; refuse?: 
   })
   await once(wss, 'listening')
   const links: WebSocket[] = []
-  wss.on('connection', (ws) => { links.push(ws); opts.onConnection?.(ws) })
+  wss.on('connection', (ws, request) => { links.push(ws); opts.onConnection?.(ws, request) })
   return { wss, links, url: `ws://127.0.0.1:${(wss.address() as AddressInfo).port}` }
 }
 
@@ -194,6 +199,19 @@ describe('UpstreamLink reconnect backoff', () => {
 
     expect(waits).toEqual([1_500, 2_500, 4_500])
     expect(refreshes).toBe(3)
+  })
+
+  // The backend writes this label to Machine.hostname on every connect, and the apps read it as the hostname.
+  it('the adapter-ws dial is labelled with the hostname, not the computer\'s name', async () => {
+    let dialed = ''
+    await serve({ onConnection: (_ws, request) => { dialed = request.url ?? '' } })
+    const { link, signals } = open()
+
+    const up = once(signals, 'up')
+    link.connect()
+    await up
+
+    expect(new URL(dialed, 'ws://backend').searchParams.get('label')).toBe(hostname())
   })
 
   it.each(['stop', 'close'] as const)('cancels a pending redial on %s', async (end) => {

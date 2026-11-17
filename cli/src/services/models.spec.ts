@@ -1,6 +1,8 @@
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { emptyPorts, MODELS_FALLBACKS, type ModelsPort } from '../core/api.js'
+import { listClaudeCommands } from '../engines/claude/lists.js'
+import { listOpencodeCommands } from '../engines/opencode/commandList.js'
 import { createServiceHost } from './inlineHost.js'
 import { installedDsh } from '../dsh/installed.js'
 import { appEngineOps, scanAppModels } from '../lib/appModels.js'
@@ -27,7 +29,7 @@ import { linkClaudeProfile } from '../lib/claudeProfiles.js'
 import { listClaudeProfiles, profileId } from '../lib/claudeHomes.js'
 import { linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { compactRuntimePickerModels, launchTarget, MODELS_REQUESTS, startModels } from './models.js'
+import { compactRuntimePickerModels, launchTarget, MODELS_REQUESTS, runtimeModelCatalog, startModels } from './models.js'
 import { ensureBundledModelManager } from '../dsh/builtins.js'
 vi.mock('../dsh/builtins.js', () => ({ ensureBundledModelManager: vi.fn(() => true) }))
 
@@ -569,6 +571,71 @@ describe('the models service', () => {
         expect(await ask('models_list', { agentId: 's1', compact: true, pickerMode: 'model', selectedModel: 'runtime-v1:s1:codex:gpt-5.6-sol@high' }))
           .toEqual({ models: [{ id: 'runtime-v1:s1:codex:gpt-5.6-sol@high' }, { id: 'runtime-v1:s1:codex:o3@auto' }] })
         expect(await ask('models_list', { compact: true })).toEqual({ models: catalog.map(({ id }) => ({ id })) })
+      })
+
+      it('answers the phone one row per model, with its name, the engine\'s line under it and its efforts', async () => {
+        const options: RuntimeModelOption[] = [
+          { id: 'runtime-v1:s1:claude:opus@auto', displayName: 'Opus 5.5 / Auto', description: 'For complex work and everyday tasks' },
+          { id: 'runtime-v1:s1:claude:opus@low', displayName: 'Opus 5.5 / Low', description: 'For complex work and everyday tasks' },
+          { id: 'runtime-v1:s1:claude:opus@max', displayName: 'Opus 5.5 / Max', description: 'For complex work and everyday tasks' },
+          { id: 'runtime-v1:s1:claude:haiku@auto', displayName: 'Haiku 4.5 / Auto', description: 'Fastest for quick answers' },
+          // Another agent's choice is never this agent's row.
+          { id: 'runtime-v1:s2:claude:sonnet@auto', displayName: 'Sonnet 5 / Auto' },
+        ]
+        const runtimeModels = vi.fn(async () => options)
+        const { ask } = setup([], { agents: { runtimeModels } })
+        expect(await ask('models_list', { agentId: 's1', catalog: true })).toEqual({
+          catalog: [
+            { model: 'opus', name: 'Opus 5.5', description: 'For complex work and everyday tasks', efforts: ['auto', 'low', 'max'] },
+            { model: 'haiku', name: 'Haiku 4.5', description: 'Fastest for quick answers', efforts: [] },
+          ],
+        })
+      })
+
+      it('the phone\'s rows: at most 40 models, a nameless model by its id, an unreadable id skipped', () => {
+        const many: RuntimeModelOption[] = [
+          { id: 'not-a-profile', displayName: 'Broken / Auto' },
+          { id: 'runtime-v1:s1:codex:bare@high', displayName: ' / High' },
+          // The same pair twice is one effort.
+          { id: 'runtime-v1:s1:codex:bare@high', displayName: ' / High' },
+          ...Array.from({ length: 45 }, (_, i) => ({ id: `runtime-v1:s1:codex:m${i}@auto`, displayName: `M${i} / Auto` })),
+        ]
+        const rows = runtimeModelCatalog(many, undefined)
+        expect(rows).toHaveLength(40)
+        expect(rows[0]).toEqual({ model: 'bare', name: 'bare', efforts: ['high'] })
+        expect(rows.at(-1)?.model).toBe('m38')
+      })
+
+      it('answers the phone a Claude Code agent\'s own `/` commands, up to what one answer carries, and none for any other', async () => {
+        const claude = { agentId: 'a1', sessionId: 's1', engine: 'claude', cwd: '/w', cliVersion: '2.1.283' }
+        const resolve = vi.fn((id: string) => id === 'a1' ? claude : id === 'c1' ? { ...claude, agentId: 'c1', engine: 'codex' } : undefined)
+        const { ask } = setup([], { agents: { resolve } as never })
+        const listed = [
+          { name: 'compact', description: 'Free up context by summarizing the conversation so far', argumentHint: '[instructions]' },
+          ...Array.from({ length: 200 }, (_, i) => ({ name: `skill-${i}`, description: 'x'.repeat(150), argumentHint: '' })),
+        ]
+        vi.mocked(listClaudeCommands).mockResolvedValueOnce(listed)
+        const { commands } = await ask('models_list', { agentId: 'a1', commands: true }) as { commands: unknown[] }
+        expect(commands[0]).toEqual(listed[0])
+        expect(commands.length).toBeLessThan(listed.length)
+        expect(Buffer.byteLength(JSON.stringify(commands))).toBeLessThanOrEqual(12_000 + commands.length)
+        expect(vi.mocked(listClaudeCommands)).toHaveBeenCalledWith(claude)
+
+        // OpenCode lists its own, from its server.
+        resolve.mockImplementationOnce(() => ({ ...claude, agentId: 'o1', engine: 'opencode' }))
+        vi.mocked(listOpencodeCommands).mockResolvedValueOnce([{ name: 'review', description: 'review changes', argumentHint: '' }])
+        expect(await ask('models_list', { agentId: 'o1', commands: true })).toEqual({ commands: [{ name: 'review', description: 'review changes', argumentHint: '' }] })
+
+        // Codex's, those a chat can use.
+        const codex = await ask('models_list', { agentId: 'c1', commands: true }) as { commands: Array<{ name: string }> }
+        expect(codex.commands.map((c) => c.name)).toEqual(['model', 'permissions', 'init', 'compact', 'recap', 'goal', 'plan', 'new', 'clear'])
+
+        // Another engine, an agent that is gone, none named, a Claude Code that could not be asked: no list.
+        resolve.mockImplementationOnce(() => ({ ...claude, agentId: 'p1', engine: 'pi' }))
+        expect(await ask('models_list', { agentId: 'p1', commands: true })).toEqual({ commands: [] })
+        expect(await ask('models_list', { agentId: 'gone', commands: true })).toEqual({ commands: [] })
+        expect(await ask('models_list', { commands: true })).toEqual({ commands: [] })
+        expect(await ask('models_list', { agentId: 'a1', commands: true })).toEqual({ commands: [] })
       })
 
       it('a catalog that cannot be read is logged and answered INTERNAL, as the socket did', async () => {

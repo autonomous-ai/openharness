@@ -102,6 +102,21 @@ vi.mock('./src/lib/agentTmp.js', async (importOriginal) => {
   }
 })
 
+// The computer running these may have a Claude Code of its own, and no spec may run it: Claude's model list is asked of
+// `claude` itself (engines/claude/lists.ts), and so are its commands. Asked with no options, this answers as a Claude Code
+// that could not be asked, so every runtime spec keeps the aliases it pins; a spec that passes its own options tests the
+// real thing.
+vi.mock('./src/engines/claude/lists.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./src/engines/claude/lists.js')>()
+  return {
+    ...real,
+    listClaudeModels: vi.fn((session: Parameters<typeof real.listClaudeModels>[0], options?: Parameters<typeof real.listClaudeModels>[1]) =>
+      options ? real.listClaudeModels(session, options) : Promise.resolve(null)),
+    listClaudeCommands: vi.fn((session: Parameters<typeof real.listClaudeCommands>[0], options?: Parameters<typeof real.listClaudeCommands>[1]) =>
+      options ? real.listClaudeCommands(session, options) : Promise.resolve(null)),
+  }
+})
+
 // The computer running these may have a Hermes of its own, and no spec may run it: whether a Hermes keeps a terminal
 // record is its `hermes --version`. Asked with no deps, this answers as an older Hermes would, so every hook spec and
 // golden stays as it was; a spec that passes its own deps tests the real thing.
@@ -111,5 +126,17 @@ vi.mock('./src/engines/hermesRecord.js', async (importOriginal) => {
     ...real,
     hermesKeepsRecord: vi.fn((executable?: Parameters<typeof real.hermesKeepsRecord>[0], environment?: Parameters<typeof real.hermesKeepsRecord>[1],
       deps?: Parameters<typeof real.hermesKeepsRecord>[2]) => deps ? real.hermesKeepsRecord(executable, environment, deps) : Promise.resolve(false)),
+  }
+})
+
+// OpenCode's `/` commands are asked of `opencode` itself (engines/opencode/commandList.ts), which no spec may run. Asked
+// with no options, this answers as an OpenCode that could not be asked; a spec that passes its own `run` tests the real
+// thing.
+vi.mock('./src/engines/opencode/commandList.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./src/engines/opencode/commandList.js')>()
+  return {
+    ...real,
+    listOpencodeCommands: vi.fn((session: Parameters<typeof real.listOpencodeCommands>[0], options?: Parameters<typeof real.listOpencodeCommands>[1]) =>
+      options ? real.listOpencodeCommands(session, options) : Promise.resolve(null)),
   }
 })
