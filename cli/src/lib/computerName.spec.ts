@@ -9,12 +9,12 @@ import { computerNameReader, SYSTEM_COMPUTER_NAME_SOURCES, type ComputerNameSour
 const HOSTNAME = 'MacBook-Pro.local'
 
 /** Fake sources that count how often each is asked. */
-function fake(platform: NodeJS.Platform, scutil: () => string) {
+function fake(platform: NodeJS.Platform, scutil: () => string, host = HOSTNAME) {
   const calls = { scutil: 0, hostname: 0 }
   const sources: ComputerNameSources = {
     platform,
     scutil: () => { calls.scutil++; return scutil() },
-    hostname: () => { calls.hostname++; return HOSTNAME },
+    hostname: () => { calls.hostname++; return host },
   }
   return { sources, calls }
 }
@@ -62,21 +62,28 @@ describe('the computer\'s name', () => {
     }
   })
 
-  it('control characters go, and the name is cut at 80', () => {
+  it('control characters go, and the name is cut at 80 UTF-16 units, never inside a pair', () => {
     expect(answering('Lab\u0000 Mac\u007f\t\n')).toBe('Lab Mac')
     expect(answering('é'.repeat(100))).toBe('é'.repeat(80))
-    expect(answering(`${'a'.repeat(79)}🙂`)).toBe(`${'a'.repeat(79)}🙂`)
+    expect(answering(`${'a'.repeat(78)}🙂`)).toBe(`${'a'.repeat(78)}🙂`)
+    expect(answering(`${'a'.repeat(79)}🙂`)).toBe('a'.repeat(79))
     const cut = answering(`${'a'.repeat(80)}🙂`)
     expect(cut).toBe('a'.repeat(80))
     expect(cut).not.toMatch(/[\uD800-\uDFFF]/)
   })
 
-  it('the system source asks scutil by its full path, with a 2 s deadline and no stdin', () => {
+  it('a long hostname is cut the same way', () => {
+    const { sources } = fake('linux', () => '', `${'h'.repeat(79)}🙂`)
+    expect(computerNameReader(sources)()).toBe('h'.repeat(79))
+  })
+
+  // tmuxOnPath.ts learned 2 s is too short for a child process on a loaded Mac.
+  it('the system source asks scutil by its full path, with a 5 s deadline and no stdin', () => {
     child.execFileSync.mockReturnValue('Diego’s Mac\n')
     expect(SYSTEM_COMPUTER_NAME_SOURCES.scutil()).toBe('Diego’s Mac\n')
     expect(child.execFileSync).toHaveBeenCalledWith('/usr/sbin/scutil', ['--get', 'ComputerName'], {
       encoding: 'utf8',
-      timeout: 2000,
+      timeout: 5000,
       stdio: ['ignore', 'pipe', 'ignore'],
     })
   })
