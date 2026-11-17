@@ -5,7 +5,14 @@ import { applyOpencodeSessionModel, parseOpencodeModelId, opencodeV2TurnOpen } f
 import { isOpencodeV2 } from '../../engines/launchControl.js'
 import { binaryOnPath } from '../../lib/binaryOnPath.js'
 import { builtinSqlite } from '../../lib/sqliteBuiltin.js'
-import { validateLaunchOverrides } from '../../lib/launchOverrides.js'
+import { buildLaunchOverrides, validateLaunchOverrides, type LaunchOverridesDeps } from '../../lib/launchOverrides.js'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { ApiConnections } from '../../lib/apiConnections.js'
+import { refreshApiFor } from '../../lib/apiModels.js'
+import { answerGridLaunch } from '../../lib/gridLaunch.js'
+import { gridLaunchThrough } from './launch.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { AgentRestartCoordinator, bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
@@ -79,7 +86,10 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RetargetDe
     runtimeProfiles: { selectedModel: vi.fn(() => 'runtime-v1:claude:opus') } as never,
     launchOverridesDeps: {} as never,
     acquireTerminalControl: vi.fn(() => release),
-    relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: { gridLaunchRecord: { override: grid, webSearch: 'off' } } })) as never,
+    relaunchOverrides: vi.fn<RetargetDeps['relaunchOverrides']>(async (_session, source) => ({ ok: true, overrides: {
+      env: {}, extraArgs: [], clearEnv: [],
+      ...(source?.gridLaunch ? { gridLaunchRecord: { override: source.gridLaunch, webSearch: 'unsupported' as const } } : {}),
+    } })),
     downgradedPermission: vi.fn(async (_s, bypass: boolean) => ({ bypassPermission: bypass, permissionMode: null })) as never,
     agentReconciler: { holdRoute: vi.fn(() => releaseRoute) },
     restartJobs: { busy: vi.fn(() => false), cancel: vi.fn(), revision: () => 0 } as never,
@@ -95,6 +105,43 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RetargetDe
 }
 
 describe('retargeting an agent', () => {
+  it.each(['rotated', 'deleted', 'deleted after preflight'] as const)('Saved API freshness keeps retarget assignment consistent with a %s source', async state => {
+    const directory = mkdtempSync(join(tmpdir(), 'retarget-api-'))
+    try {
+      const store = new ApiConnections(directory)
+      const connection = store.save({ provider: 'custom', name: 'Previous API', baseUrl: 'https://old.example.test/v1', apiKey: 'FAKE-old-key' })
+      const target = { ...grid, networkId: `api:${connection.id}`, networkName: connection.name, baseUrl: connection.baseUrl, apiKey: 'FAKE-old-key' }
+      const launchOverridesDeps: LaunchOverridesDeps = {
+        machine: () => ({ hermesSystemManaged: false }),
+        gridLaunch: gridLaunchThrough(() => ({ gridLaunch: async input => answerGridLaunch(input, refreshApiFor(store)) })),
+        capabilities: async () => ({ sessionEnv: true }), writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(),
+        readCodexConfig: () => null, readAttribution: () => null,
+      }
+      const actual = await vi.importActual<typeof import('../../lib/launchOverrides.js')>('../../lib/launchOverrides.js')
+      vi.mocked(validateLaunchOverrides).mockImplementationOnce(actual.validateLaunchOverrides)
+      const row = agent()
+      const run = setup(row, { launchOverridesDeps, relaunchOverrides: async (session, source) => {
+        if (state === 'deleted after preflight') store.remove(connection.id)
+        else if (state === 'rotated') store.save({ ...connection, name: 'Current API', baseUrl: 'https://current.example.test/v1', apiKey: 'FAKE-current-key' })
+        return buildLaunchOverrides(launchOverridesDeps, session.engine, source!, session.agentId)
+      } })
+      if (state === 'deleted') store.remove(connection.id)
+      const result = await run.retarget({ agentId: row.agentId, grid: target })
+      if (state !== 'rotated') {
+        expect(result).toMatchObject({ ok: false, error: 'API_UNAVAILABLE' })
+        expect(run.deps.acquireTerminalControl).toHaveBeenCalledTimes(state === 'deleted' ? 0 : 1)
+        expect(run.deps.restartJobs.cancel).toHaveBeenCalledTimes(state === 'deleted' ? 0 : 1)
+        expect(restartAgent).not.toHaveBeenCalled()
+        expect(run.deps.registry.confirmLaunch).not.toHaveBeenCalled()
+      } else {
+        expect(result).toEqual({ ok: true })
+        expect(row.gridLaunch).toMatchObject({ baseUrl: 'https://current.example.test/v1', apiKey: 'FAKE-current-key' })
+        expect(row.grid).toEqual({ baseUrl: row.gridLaunch!.baseUrl, model: target.model })
+      }
+      expect(target.apiKey).toBe('FAKE-old-key')
+    } finally { rmSync(directory, { recursive: true, force: true }) }
+  })
+
   it('keeps the terminal held when a newer lifecycle follows confirmed retarget publication', async () => {
     const run = setup()
     const publish = vi.mocked(run.deps.registry.confirmLaunch).getMockImplementation()!
@@ -544,7 +591,7 @@ describe('retargeting an agent', () => {
       expect(restartAgent).toHaveBeenCalledWith({ engine: 'claude', sessionId: 's1' }, true, { isCurrent: expect.any(Function) })
       // No gateway: the row keeps the one it had, and the relaunched engine says it again (a hook, or Codex's argv).
       expect(run.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ processIdentity: expect.objectContaining({ pid: 2 }), grid: { baseUrl: grid.baseUrl, model: grid.model } }), expect.anything())
-      expect(run.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ gridLaunchRecord: { override: grid, webSearch: 'off' } }), expect.anything())
+      expect(run.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ gridLaunchRecord: { override: grid, webSearch: 'unsupported' } }), expect.anything())
       expect(run.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ subscriptionModel: 'opus' }), expect.anything())
       expect(run.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.anything(), expect.anything())
       expect(run.deps.refreshGridAssignment).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', launch: { state: 'ready' }, grid: { baseUrl: grid.baseUrl, model: grid.model } }))

@@ -219,12 +219,15 @@ export function createAgentCreator({
     // refusal rather than a fallback — an agent silently started on the engine's own login spends the
     // wrong account and looks identical to one that worked. Asked of models before a harness's workspace is
     // laid out or trusted: a create refused here leaves the folder as it was.
-    const built = grid ? await buildGridLaunch({ engine, override: grid, machine: await gridLaunchMachine(engine, native) }) : null
+    const built = grid ? await buildGridLaunch({ engine, override: grid, machine: await gridLaunchMachine(engine, native), refresh: true }) : null
     if (!current()) return stale()
     if (built && !built.ok) {
       console.warn(`[agent] create ${engine} refused · ${built.detail}`)
       return built
     }
+    // Models may have refreshed a Saved API. Keep the resulting launch and its record together;
+    // the input remains the original request, including when a durable receipt owns it.
+    if (built) grid = built.override
     if (dsh) {
       // Checked above: a harness that is not installed was refused before models was asked.
       const harness = pinnedDsh!

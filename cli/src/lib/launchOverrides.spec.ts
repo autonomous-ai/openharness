@@ -14,6 +14,10 @@ import { HARNESS_INSTRUCTIONS } from './agentAttribution.js'
 import { writeMachineMcp } from './machineMcp.js'
 import { missingHookScript } from '../engines/kit/hookScript.js'
 import type { NativeLaunch } from '../engines/nativeLaunch.js'
+import { ApiConnections } from './apiConnections.js'
+import { refreshApiFor } from './apiModels.js'
+import { answerGridLaunch } from './gridLaunch.js'
+import { gridLaunchThrough } from '../core/agents/launch.js'
 
 const GRID: GridLaunchOverride = {
   networkId: 'grid-abc',
@@ -209,6 +213,24 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
     expect(await validateLaunchOverrides(d, 'pi', { gridLaunch: null, codexHome: '/x' })).toEqual({ ok: true })
     expect(await validateLaunchOverrides(deps().d, 'pi', { gridLaunch: GRID })).toEqual({ ok: true })
     expect(calls).toEqual([])
+  })
+
+  it('Saved API freshness names the current connection in preflight and refuses its deletion', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'preflight-api-'))
+    try {
+      const store = new ApiConnections(directory)
+      const connection = store.save({ provider: 'custom', name: 'Previous name', baseUrl: 'https://old.example.test/v1', apiKey: 'FAKE-old-key' })
+      const gridLaunch = { ...GRID, networkId: `api:${connection.id}`, networkName: connection.name, baseUrl: connection.baseUrl }
+      const { d, calls } = deps({
+        gridLaunch: gridLaunchThrough(() => ({ gridLaunch: async input => answerGridLaunch(input, refreshApiFor(store)) })),
+        capabilities: async () => ({ sessionEnv: false }),
+      })
+      store.save({ ...connection, name: 'Current name', apiKey: 'FAKE-current-key' })
+      expect(await validateLaunchOverrides(d, 'claude', { gridLaunch })).toMatchObject({ error: 'TMUX_TOO_OLD_FOR_GRID', detail: expect.stringContaining('Current name') })
+      store.remove(connection.id)
+      expect(await validateLaunchOverrides(d, 'claude', { gridLaunch })).toMatchObject({ error: 'API_UNAVAILABLE' })
+      expect(calls).toEqual([])
+    } finally { rmSync(directory, { recursive: true, force: true }) }
   })
 
   it('a Codex profile gets its CODEX_HOME, its hooks and its own provider, and clears inherited harness context', async () => {

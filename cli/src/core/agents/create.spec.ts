@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, opendirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, opendirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -12,7 +12,7 @@ import { windowsAfterExit } from '../../lib/windows/engineStart.js'
 import { buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from '../../lib/engineLaunch.js'
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
-import type { GridLaunchAnswer, GridLaunchRequest } from '../../lib/gridLaunchWire.js'
+import { describeGridLaunch, type GridLaunchAnswer, type GridLaunchRequest } from '../../lib/gridLaunchWire.js'
 import { engineHookInstallations as engineHooks } from '../../engines/nativeHookSetup.js'
 import { ENUMERATION_ATTEMPTS } from '../../engines/kit/nativeFiles.js'
 import { loadEngine } from '../../engines/inProcess.js'
@@ -27,6 +27,13 @@ import { projectsRoot } from '../../lib/projectFolder.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
 import { agentLaunchArgs } from '../../lib/agentAttribution.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
+import { ApiConnections } from '../../lib/apiConnections.js'
+import { refreshApiFor } from '../../lib/apiModels.js'
+import { answerGridLaunch } from '../../lib/gridLaunch.js'
+import { gridLaunchThrough } from './launch.js'
+import { AgentCreationReceipts } from '../../lib/agentCreationReceipt.js'
+import { createLaunchRequests } from './launches.js'
+import { WORKSPACES_OFF } from '../api.js'
 
 // Real native preparation asks the fixture engine for its help: answered in this process (testing/engineHelpInProcess.ts).
 vi.mock('node:child_process', async (real) => (await import('../../testing/engineHelpInProcess.js')).withEngineHelp(await real<typeof import('node:child_process')>()))
@@ -191,6 +198,107 @@ describe('creating an agent', () => {
   })
   // A launch or an installed harness one test queued and never used answers no other test.
   afterEach(() => { workspaceRead.afterStat = undefined; vi.restoreAllMocks(); vi.clearAllMocks(); launchDsh.mockReset(); vi.mocked(installedDsh).mockReset() })
+
+  describe('Saved API freshness', () => {
+    function savedApi(over: Partial<CreateAgentDeps> = {}) {
+      const store = new ApiConnections(folder())
+      const connection = store.save({ provider: 'custom', name: 'Fixture API', baseUrl: 'https://old.example.test/v1', apiKey: 'FAKE-old-key' })
+      const grid = { networkId: `api:${connection.id}`, networkName: connection.name, baseUrl: connection.baseUrl, apiKey: 'FAKE-old-key', model: 'fixture-model' }
+      const models = vi.fn(async (input: GridLaunchRequest) => answerGridLaunch(input, refreshApiFor(store)))
+      const run = setup({ buildGridLaunch: gridLaunchThrough(() => ({ gridLaunch: models })), ...over })
+      const rotate = () => store.save({ ...connection, name: 'Current API', baseUrl: 'https://current.example.test/v1', apiKey: 'FAKE-current-key' })
+      return { ...run, store, connection, grid, models, rotate }
+    }
+
+    it('creates with the current credential and records the accepted endpoint and override', async () => {
+      const run = savedApi()
+      const input = request({ grid: run.grid })
+      const original = structuredClone(input)
+      const current = run.rotate()
+      expect(await run.create(input)).toMatchObject({ ok: true })
+      const pane = vi.mocked(createAndRegisterPane).mock.calls[0]![0]
+      expect(pane.env).toMatchObject({ ANTHROPIC_AUTH_TOKEN: 'FAKE-current-key' })
+      expect(pane.grid).toEqual({ baseUrl: current.baseUrl, model: run.grid.model })
+      expect(pane.gridLaunchRecord).toMatchObject({ override: { ...run.grid, networkName: current.name, baseUrl: current.baseUrl, apiKey: 'FAKE-current-key' } })
+      expect(describeGridLaunch).toHaveBeenCalledWith('claude', pane.gridLaunchRecord!.override, pane.gridLaunchRecord!.webSearch)
+      expect(input).toEqual(original)
+    })
+
+    it('refuses a deleted source before workspace, trust, native hooks or pane effects', async () => {
+      const prepareHooks = vi.fn(async () => true)
+      const native = { current: () => true, environment: { HOME: root }, prepareHooks } as unknown as NativeLaunch
+      const run = savedApi({ native: async () => ({ ok: true, launch: native }) })
+      vi.mocked(installedDsh).mockReturnValue(installed() as never)
+      run.store.remove(run.connection.id)
+      expect(await run.create(request({ grid: run.grid, dsh: 'blender' }))).toMatchObject({ ok: false, error: 'API_UNAVAILABLE' })
+      expect(materializeWorkspace).not.toHaveBeenCalled()
+      expect(preTrustClaudeProject).not.toHaveBeenCalled()
+      expect(run.deps.prepareInstructions).not.toHaveBeenCalled()
+      expect(run.deps.watchNewPane).not.toHaveBeenCalled()
+      expect(prepareHooks).not.toHaveBeenCalled()
+      expect(createAndRegisterPane).not.toHaveBeenCalled()
+    })
+
+    it('keeps an ordinary Grid launch unchanged when Models refreshes it', async () => {
+      const run = savedApi()
+      const grid = { ...run.grid, networkId: 'grid-fixture' }
+      run.rotate()
+      const read = vi.spyOn(run.store, 'modelAccess')
+      expect(await run.create(request({ grid }))).toMatchObject({ ok: true })
+      const pane = vi.mocked(createAndRegisterPane).mock.calls[0]![0]
+      expect(pane.env).toMatchObject({ ANTHROPIC_AUTH_TOKEN: grid.apiKey })
+      expect(pane.grid).toEqual({ baseUrl: grid.baseUrl, model: grid.model })
+      expect(pane.gridLaunchRecord).toMatchObject({ override: grid })
+      expect(read).not.toHaveBeenCalled()
+    })
+
+    it.each(['replay', 'cancel'] as const)('preserves original durable request authority across credential refresh: %s', async mode => {
+      const run = savedApi()
+      const receiptDirectory = folder()
+      const receipts = new AgentCreationReceipts(receiptDirectory)
+      let enter!: () => void, release!: () => void
+      const entered = new Promise<void>(resolve => { enter = resolve })
+      const gate = new Promise<void>(resolve => { release = resolve })
+      const answer = run.models.getMockImplementation()!
+      run.models.mockImplementationOnce(async input => { enter(); await gate; return answer(input) })
+      const requests = createLaunchRequests({
+        receipts, createAgent: () => run.create, prepareCreate: run.create.prepare,
+        forkAgent: () => null, resumeAgent: () => null, restartAgent: () => null,
+        byAgent: id => id === pending.agentId ? pending : undefined, stoppedAgent: () => undefined,
+        toProject: async row => ({ id: row.agentId }) as never,
+        modelTarget: async () => null, workspaces: () => WORKSPACES_OFF,
+      })
+      const payload = { creationId: 'saved-api-freshness-fixture', engine: 'claude', cwd: folder(), grid: run.grid }
+      const ask = async (value = payload) => {
+        let reply!: (value: Record<string, unknown>) => void
+        const result = new Promise<Record<string, unknown>>(resolve => { reply = resolve })
+        await requests.create(value, { local: true }, reply)
+        return result
+      }
+      try {
+        const first = ask()
+        await entered
+        const original = receipts.pendingIntent(payload.creationId)!
+        const originalBytes = readFileSync(join(receiptDirectory, `${payload.creationId}.json`), 'utf8')
+        expect(original.request).toMatchObject({ kind: 'native-create-v1', input: { grid: run.grid } })
+        run.rotate()
+        if (mode === 'cancel') receipts.cancelIntent(payload.creationId)
+        else expect(receipts.pendingIntent(payload.creationId)).toEqual(original)
+        release()
+        const result = await first
+        expect(result).toMatchObject({ state: mode === 'cancel' ? 'cancelled' : 'created' })
+        run.store.remove(run.connection.id)
+        expect(await ask()).toEqual(result)
+        expect(createAndRegisterPane).toHaveBeenCalledTimes(mode === 'cancel' ? 0 : 1)
+        if (mode === 'replay') {
+          expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0].gridLaunchRecord).toMatchObject({ override: { apiKey: 'FAKE-current-key' } })
+          expect(await ask({ ...payload, grid: { ...run.grid, apiKey: 'FAKE-changed-request' } })).toEqual({ error: 'CREATION_CONFLICT' })
+        }
+        expect(run.models).toHaveBeenCalledOnce()
+        expect(readFileSync(join(receiptDirectory, `${payload.creationId}.json`), 'utf8')).toBe(originalBytes)
+      } finally { release(); requests.stop() }
+    })
+  })
 
   it('waits for deferred workspace instructions and refuses a launch revoked during them', async () => {
     let release!: () => void, entered!: () => void
@@ -670,7 +778,7 @@ describe('creating an agent', () => {
       expect(await create(request({ grid }))).toEqual({ ok: false, error: 'GRID_ENGINE_UNSUPPORTED', detail: 'no grid for amp' })
       capabilities.mockResolvedValueOnce({ sessionEnv: false })
       expect(await create(request({ grid }))).toMatchObject({ error: 'TMUX_TOO_OLD_FOR_GRID' })
-      const configured = { ok: true, launch: { env: {}, args: [], webSearch: 'off', configDir: { envVar: 'PI_CONFIG', files: {}, links: [] } } }
+      const configured = { ok: true, override: grid, launch: { env: {}, args: [], webSearch: 'off', configDir: { envVar: 'PI_CONFIG', files: {}, links: [] } } }
       buildGridLaunch.mockResolvedValueOnce(configured as never).mockResolvedValueOnce(configured as never)
       vi.mocked(writeGridConfigDir).mockRejectedValueOnce(new Error('read-only')).mockRejectedValueOnce('worse')
       expect(await create(request({ grid }))).toMatchObject({ error: 'GRID_CONFIG_FAILED', detail: "could not write claude's grid configuration · read-only" })
@@ -880,8 +988,8 @@ describe('creating an agent', () => {
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({
         grid: { baseUrl: 'http://g', model: 'm1' }, gridLaunchRecord: { override: grid, webSearch: 'unsupported' }, env: expect.objectContaining({ GRID_KEY: 'k' }),
       })
-      const withFile = (pointAt?: string) => ({ ok: true, launch: { env: {}, args: [], webSearch: 'off', configDir: { envVar: 'OPENCODE_CONFIG', files: {}, links: [], pointAt } } })
-      buildGridLaunch.mockResolvedValueOnce(withFile('opencode.json') as never).mockResolvedValueOnce(withFile() as never)
+      const withFile = (input: GridLaunchRequest, pointAt?: string) => ({ ok: true, override: input.override, launch: { env: {}, args: [], webSearch: 'off', configDir: { envVar: 'OPENCODE_CONFIG', files: {}, links: [], pointAt } } })
+      buildGridLaunch.mockImplementationOnce(async input => withFile(input, 'opencode.json') as never).mockImplementationOnce(async input => withFile(input) as never)
       await create(request({ grid: { ...grid, model: undefined } }))
       await create(request({ grid }))
       expect(vi.mocked(createAndRegisterPane).mock.calls[1][0]).toMatchObject({ grid: { model: null }, env: { OPENCODE_CONFIG: '/config/harness-claude/opencode.json' } })

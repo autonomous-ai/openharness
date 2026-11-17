@@ -320,9 +320,12 @@ export function createAgentRetargeter({ opencodeMajor: readOpencodeMajor,
         console.warn(`[grid] retarget ${sid(session.agentId)} failed · ${outcome.detail}`)
         return failed('RESPAWN_FAILED', outcome.detail)
       }
+      const record = built.overrides.gridLaunchRecord
+      // Models may have refreshed the endpoint since the target was selected.
+      const launchedGrid = grid && (record?.override ?? grid)
       const publication = await registry.confirmLaunch(session.agentId, { processIdentity: outcome.processIdentity,
-        grid: grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null,
-        gridLaunchRecord: built.overrides.gridLaunchRecord ?? null, ...(grid && remembered ? { subscriptionModel: remembered } : {}),
+        grid: launchedGrid ? { baseUrl: launchedGrid.baseUrl, model: launchedGrid.model ?? null } : null,
+        gridLaunchRecord: record ?? null, ...(grid && remembered ? { subscriptionModel: remembered } : {}),
       }, { current: dispatchCurrent, refresh: async () => {
         const observed = await resolvePaneEngineProcess(backend, pane, session.engine)
         if (!sameProcessIdentity(observed, outcome.processIdentity) || observed?.executable !== outcome.processIdentity.executable) {
@@ -342,7 +345,6 @@ export function createAgentRetargeter({ opencodeMajor: readOpencodeMajor,
       // would leave the banner up over an agent that had already been moved.
       announceSession(refreshed); refreshGridAssignment(refreshed)
       const how = outcome.resumed ? (movesProvider ? 'continued in a fork' : 'resumed') : 'fresh session'
-      const record = built.overrides.gridLaunchRecord
       const where = record
         ? describeGridLaunch(session.engine, record.override, record.webSearch)
         : `${session.engine} on its own login`

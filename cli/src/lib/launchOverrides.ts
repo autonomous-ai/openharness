@@ -186,9 +186,9 @@ export async function validateLaunchOverrides(
   native?: NativeLaunch,
 ): Promise<{ ok: true } | { ok: false; error: string; detail: string; unavailable?: string }> {
   if (!source.gridLaunch) return { ok: true }
-  const built = await deps.gridLaunch({ engine, override: source.gridLaunch, machine: await deps.machine(engine, native) })
+  const built = await deps.gridLaunch({ engine, override: source.gridLaunch, machine: await deps.machine(engine, native), refresh: true })
   if (!built.ok) return { ok: false, error: built.error, detail: built.detail, ...(built.unavailable ? { unavailable: built.unavailable } : {}) }
-  return tmuxRefusal(deps, engine, source.gridLaunch)
+  return tmuxRefusal(deps, engine, built.override)
 }
 
 /** Only a launch that SETS variables needs the tmux that can set them. */
