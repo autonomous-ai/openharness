@@ -10,8 +10,8 @@ use crate::types::{
 /// The menu reads the account and the CLI's version again at most this often.
 const READ_EVERY_SECS: u64 = 60;
 
-/// The app asks for its own update at most this often.
-const CHECK_EVERY_SECS: u64 = 21_600;
+/// The app asks for its own update at most this often: as often as the CLI's updater.
+const CHECK_EVERY_SECS: u64 = 60;
 
 /// Where a person whose app cannot replace itself gets the new one. Fixed: nothing of the manifest reaches `open`.
 const DEVICE_PAGE: &str = "https://harness.autonomous.ai/device";
