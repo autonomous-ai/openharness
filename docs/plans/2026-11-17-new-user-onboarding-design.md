@@ -69,6 +69,11 @@ Done when, on a Mac with a dial, a brand-new user who installs Harness Device:
 9. After #4399 (orchestrator, 2026-11-17): Orca Claude Code homes join #4399's automatic setup, each with its own
    record; a home where the person turned the plugin off stays off; `harness device claude enable` and `disable` cover
    the Orca homes; an Orca home needs only `claude plugin enable`, since `plugins/` is shared with `~/.claude`.
+10. Answers to the plan's questions after #4399 (orchestrator, 2026-11-17): `harness device claude enable` records the
+   Orca homes it turned on in its own file, `dial-skill.json` (`pluginHomes`), and the devices process in
+   `dial-setup.json`: each file has one writer, and a home in either list counts as recorded. Orca homes are turned on
+   only while the default home's plugin reads on: a person who turned it off or removed it there said no, and a removal
+   takes the shared `plugins/` files every home names.
 
 ## Goals, non-goals, anti-goals
 
@@ -208,10 +213,11 @@ scan. So each Orca Codex home gets the skill once, as any adopted Codex home doe
 
 **Automatic (devices process).** #4399's `cable/dialPluginSetup.ts` installs and turns on the plugin in the default home
 once, records the CLI version that did, and brings it current once per CLI update. Orca homes join it:
-- Once the default home's plugin is recorded as set up, each Orca Claude Code home not yet in the record gets
+- Once the default home's plugin is recorded as set up and its settings read it on, each Orca Claude Code home not yet
+  in either record gets
   `claude plugin enable harness-device@openharness --scope user`, run with `CLAUDE_CONFIG_DIR=<home>` on that child
   alone. The files are already there: `plugins/` is linked to `~/.claude/plugins` (check 8). Success records the home
-  (its real path) in `dial-setup.json`.
+  (its real path) in `dial-setup.json`. While the default home's plugin reads off or absent, no Orca home is touched.
 - A recorded home is never enabled again: one where the person turned the plugin off through `/plugin` stays off, and a
   home Orca no longer lists is dropped from the record at the next read.
 - An Orca account added later is set up at the next scan once the Orca read names it.
@@ -222,7 +228,7 @@ once, records the CLI version that did, and brings it current once per CLI updat
   did it.
 
 **The commands.** `harness device claude enable` sets up the default home as today, then runs `claude plugin enable` in
-each Orca home and records it. A home that fails prints `Could not turn on Claude Code in one Orca account.`, and the
+each Orca home and records it in `dial-skill.json`'s `pluginHomes`. A home that fails prints `Could not turn on Claude Code in one Orca account.`, and the
 command still exits 0 when the default home succeeded. `disable` runs `claude plugin disable` in each Orca home first,
 then removes the default home's plugin as today and records the removal. Since `plugins/` is shared, an uninstall in one
 home removes the files every home names, and the other homes' own uninstall would then find nothing and leave their
@@ -291,8 +297,8 @@ differ.
 
 Reviewed revision: this draft. Reviewer: the orchestrator.
 
-1. Growth: `dial-setup.json` gains the Orca Claude Code homes the plugin was turned on in (real paths, at most
-   `MAX_HOMES`, a home Orca no longer lists dropped). The Orca homes list itself is in memory only. The dial skill's homes
+1. Growth: `dial-setup.json` (the devices) and `dial-skill.json` (the command) each gain `pluginHomes`, the Orca Claude
+   Code homes the plugin was turned on in (real paths, at most `MAX_HOMES`, a home Orca no longer lists dropped). The Orca homes list itself is in memory only. The dial skill's homes
    list keeps its bound (`MAX_HOMES`).
 2. Concurrency: the step is written only by the install's runner thread through the app's event queue. The Orca homes
    cache is one value replaced whole. The `claude plugin` runs are one at a time.
