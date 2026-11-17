@@ -160,21 +160,24 @@ function send(
   return request
 }
 
-/** One request, 10 s for its whole answer. */
-const call = (service: Service, method: 'GET' | 'POST', path: string, body?: unknown) => new Promise<OpencodeAnswer>((resolve) => {
+/** One request, 10 s for its whole answer, and the status that came: 0 for none, a 2xx even when its body then failed. */
+const call = (
+  service: Service, method: 'GET' | 'POST', path: string, body?: unknown,
+) => new Promise<[answer: OpencodeAnswer, status: number]>((resolve) => {
   let done = false
   let request: ClientRequest | undefined
+  let status = 0
   const finish = (answer: OpencodeAnswer) => {
     if (done) return
     done = true
     clearTimeout(deadline)
     request?.destroy()
-    resolve(answer)
+    resolve([answer, status])
   }
   const deadline = setTimeout(() => finish({ ok: false, fault: 'timeout' }), RUN_TIMEOUT_MS)
   deadline.unref()
   request = send(service, method, path, body === undefined ? undefined : JSON.stringify(body), (response) => {
-    const status = response.statusCode ?? 0
+    status = response.statusCode ?? 0
     // A redirect is a fault like any other status, never followed: the password would go wherever it points.
     if (status < 200 || status > 299) return finish({ ok: false, fault: faultOf(status) })
     const chunks: Buffer[] = []
@@ -254,7 +257,7 @@ export function createOpencodeClient(deps: OpencodeClientDeps): OpencodeClient {
     held = undefined
     const found = service()
     if ('fault' in found) return found
-    const info = await call(found, 'GET', '/api/info')
+    const [info] = await call(found, 'GET', '/api/info')
     // A server with no /api/info has no V2 API.
     if (!info.ok) return { fault: info.fault === 'not_found' ? 'old_version' : info.fault }
     const { pid, version } = isObject(info.json) ? info.json : {}
@@ -269,7 +272,7 @@ export function createOpencodeClient(deps: OpencodeClientDeps): OpencodeClient {
   }
 
   const request = (method: 'GET' | 'POST', path: string, body?: unknown): Promise<OpencodeAnswer> =>
-    held ? call(held, method, path, body) : Promise.resolve({ ok: false, fault: 'no_service' })
+    held ? call(held, method, path, body).then(([answer]) => answer) : Promise.resolve({ ok: false, fault: 'no_service' })
 
   const events = (onEvent: (event: OpencodeEvent) => void, onClose: (reason: OpencodeFault | 'ended') => void) => {
     let over = false
@@ -370,24 +373,26 @@ export function createOpencodeClient(deps: OpencodeClientDeps): OpencodeClient {
     // The words go to the service whose reads said the session is free, whatever a find meanwhile holds.
     const at = held
     if (!at) return 'failed'
-    const active = await call(at, 'GET', '/api/session/active')
+    const [active] = await call(at, 'GET', '/api/session/active')
     if (!active.ok) return outcome(active.fault)
     const running = isObject(active.json) ? active.json.data : undefined
     if (!isObject(running)) return 'failed'
     if (Object.hasOwn(running, sessionId)) return 'busy'
     const session = `/api/session/${sessionId}`
-    const asked = await call(at, 'GET', `${session}/permission`)
+    const [asked] = await call(at, 'GET', `${session}/permission`)
     if (!asked.ok) return outcome(asked.fault)
     const pending = isObject(asked.json) ? asked.json.data : undefined
     if (!Array.isArray(pending)) return 'failed'
     if (pending.length > 0) return 'waiting'
     const body = { text: words, id: messageId, delivery: 'queue' }
-    let sent = await call(at, 'POST', `${session}/prompt`, body)
+    const post = () => call(at, 'POST', `${session}/prompt`, body)
+    let [sent, status] = await post()
     // With no answer the words may have landed or not. Posted once more under the same id, they land once: a 409 says the
     // first did. Any answer is opencode's own, and is never posted again.
-    if (!sent.ok && (sent.fault === 'refused' || sent.fault === 'timeout')) sent = await call(at, 'POST', `${session}/prompt`, body)
-    // A 409 is only ever our own id: an earlier post of these same words.
-    return sent.ok || sent.fault === 'conflict' ? 'sent' : outcome(sent.fault)
+    if (status === 0) [sent, status] = await post()
+    // A 2xx took the words, its body whole or not. A 409 is only ever our own id: an earlier post of these same words.
+    if (sent.ok || (status >= 200 && status <= 299) || sent.fault === 'conflict') return 'sent'
+    return outcome(sent.fault)
   }
 
   return { registration, find, request, events, prompt }
