@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { inflateRawSync } from 'node:zlib'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { crc32 } from '../lib/zipWriter.js'
 import {
   buildVersion, packVsix, recordVersion, vscodeDisable, vscodeEnable, vscodeExtensionDeps, vscodeStatus,
@@ -315,6 +315,16 @@ describe('the real dependencies, on the test\'s own files', () => {
     const code = join(scratch, 'code')
     writeFileSync(code, '#!/bin/sh\nexec sleep 60\n', { mode: 0o755 })
     expect(await vscodeExtensionDeps().run(code, [], 300)).toEqual({ code: null, timedOut: true })
+  })
+
+  it('a run past its time ends what it started too, as VS Code\'s own script starts Electron and waits', async () => {
+    const code = join(scratch, 'code')
+    const pidFile = join(scratch, 'child.pid')
+    writeFileSync(code, `sleep 60 &\necho $! > '${pidFile}'\nwait $!\nexit $?\n`)
+    // The script through /bin/sh: macOS checks a new executable on its first run, which can take longer than the time.
+    expect(await vscodeExtensionDeps().run('/bin/sh', [code], 300)).toEqual({ code: null, timedOut: true })
+    const pid = Number(readFileSync(pidFile, 'utf8'))
+    await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' })))
   })
 
   it('the temporary folder and the file are this account\'s alone, and removing never throws', () => {
