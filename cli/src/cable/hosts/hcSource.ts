@@ -198,6 +198,11 @@ export class HcSource implements HostSource {
     return found
   }
 
+  /** The terminal of a listed agent, for the dial's scroll: an agent only hc lists has no other pane to name. */
+  paneOf(agentId: string): string | undefined {
+    return this.find(agentId)?.address
+  }
+
   private listed(): Row[] {
     return [...this.rows.values()].slice(0, MAX_AGENTS)
   }
