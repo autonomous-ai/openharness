@@ -44,7 +44,7 @@ class _SignedOutCli extends CliLogin {
   Future<CliAuthStatus> checkStatus() async => CliAuthStatus(loggedIn: false);
 }
 
-/// The Devices tab reads no machine in a test.
+/// The Devices tab reads no machine in a test: this Mac's dial is the one host it hears from, plus [others].
 class _QuietDevicesApp extends AppNotifier {
   _QuietDevicesApp({required super.deviceAppOffer})
     : super(
@@ -53,8 +53,40 @@ class _QuietDevicesApp extends AppNotifier {
         configStore: null,
       );
 
+  /// Other computers' hosts, each with its dial's status.
+  final others = <DeviceHost, DialStatus>{};
+
   @override
-  Future<void> refreshDevices() async {}
+  Future<void> refreshDevices() async {
+    deviceHosts.reconcile([
+      const DeviceHost(id: 'here', name: 'This Mac', local: true, online: true),
+      ...others.keys,
+    ]);
+    deviceHosts.receive('here', dial.status, revision: 1);
+    for (final MapEntry(key: host, value: status) in others.entries) {
+      deviceHosts.receive(host.id, status, revision: 1);
+    }
+  }
+}
+
+/// The real Devices tab over [app], reading its machines every 10 seconds.
+Future<void> _pumpTab(WidgetTester tester, AppNotifier app) async {
+  tester.view.physicalSize = const Size(1280, 940);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.reset);
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: DevicesTab(
+          notifier: app,
+          refreshEvery: const Duration(seconds: 10),
+        ),
+      ),
+    ),
+  );
+  await tester.pump();
+  await tester.pump();
+  addTearDown(() => tester.pumpWidget(const SizedBox()));
 }
 
 AppNotifier _app(
@@ -419,32 +451,50 @@ void main() {
     variant: _mac,
   );
 
-  testWidgets("the Devices tab's tick looks again", (tester) async {
+  testWidgets("the Devices tab shows the row, and its tick looks again", (
+    tester,
+  ) async {
     final fixture = DeviceAppFixture();
     final app = _QuietDevicesApp(deviceAppOffer: fixture.offer);
     addTearDown(app.dispose);
-    tester.view.physicalSize = const Size(1280, 940);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-    app.dial.apply(const DialStatus(attached: true));
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: DevicesTab(
-            notifier: app,
-            refreshEvery: const Duration(seconds: 10),
-          ),
-        ),
-      ),
-    );
-    await tester.pump();
+    report(app.dial, [deviceStatus('d1')]);
+    await _pumpTab(tester, app);
+    expect(_label(tester, _rowAction), 'Install');
     final before = fixture.probe.lookups;
     expect(before, greaterThan(0));
 
     await tester.pump(const Duration(seconds: 10));
     expect(fixture.probe.lookups, before + 1);
-    await tester.pumpWidget(const SizedBox());
   }, variant: _mac);
+
+  testWidgets(
+    "the Devices tab: another computer's dial selected shows no row",
+    (tester) async {
+      final fixture = DeviceAppFixture();
+      final app = _QuietDevicesApp(deviceAppOffer: fixture.offer);
+      addTearDown(app.dispose);
+      app.others[const DeviceHost(
+        id: 'there',
+        name: 'Other Mac',
+        online: true,
+      )] = DialStatus(
+        attached: true,
+        devices: [deviceStatus('d2')],
+      );
+      report(app.dial, [deviceStatus('d1')]);
+      await _pumpTab(tester, app);
+      expect(_label(tester, _rowAction), 'Install');
+
+      await tester.tap(find.text('Other Mac'));
+      await tester.pump();
+      expect(find.byKey(_row), findsNothing);
+
+      await tester.tap(find.text('This Mac'));
+      await tester.pump();
+      expect(_label(tester, _rowAction), 'Install');
+    },
+    variant: _mac,
+  );
 
   testWidgets('before the workspace: no band', (tester) async {
     final fixture = DeviceAppFixture();
