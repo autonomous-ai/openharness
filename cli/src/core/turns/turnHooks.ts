@@ -48,8 +48,8 @@ interface HookTurn {
   endsByHook: boolean
   /** The turn's own end, read and held for its Stop, and when it was read. */
   held?: { end: LiveEvent; identity?: string; openedAt?: number; at: number }
-  /** Stops waiting for that end, each at most the grace. */
-  awaiting: Array<(held: boolean) => void>
+  /** The turn a Stop came for before its end was read: that end goes on as it is read (R2). */
+  stopped?: string
   /** When its latest end or wait hook reached the daemon: an engine still sending them has not lost the Stop. */
   hookAt: number
   /** When the hook of the wait on the person ran, while it is open (R4). */
@@ -115,7 +115,7 @@ export function createTurnHooks({
   }
   /** The session's record, made the newest. The oldest makes room, its held end delivered first. */
   const record = (sessionId: string): HookTurn => {
-    const turn = turns.get(sessionId) ?? { endsByHook: false, awaiting: [], hookAt: 0, subagents: 0, progressAt: 0 }
+    const turn = turns.get(sessionId) ?? { endsByHook: false, hookAt: 0, subagents: 0, progressAt: 0 }
     turns.delete(sessionId)
     turns.set(sessionId, turn)
     if (turns.size > HOOKS_KEPT) {
@@ -145,13 +145,13 @@ export function createTurnHooks({
     }
     if (turn?.subagents && events.some(event => isProgressEvent(event.type))) turn.progressAt = Date.now()
     if (!turn?.endsByHook) return emit(sessionId, events)
+    // An aborted end, one no Stop follows (a paused /goal pass), and one its Stop came for already go on at once.
+    const atOnce = read.over || (read.turn && read.turn.identity === turn.stopped)
     const out: LiveEvent[] = []
     for (const event of events) {
       if (event.type === 'turn_started' && turn.held) { out.push(turn.held.end); turn.held = undefined }
-      // An aborted end, and one no Stop follows (a paused /goal pass), go on at once.
-      if (event.type !== 'turn_ended' || event.payload.aborted || read.over) { out.push(event); continue }
+      if (event.type !== 'turn_ended' || event.payload.aborted || atOnce) { out.push(event); continue }
       turn.held = { end: event, identity: read.turn?.identity, openedAt: read.turn?.openedAt, at: Date.now() }
-      for (const answer of turn.awaiting) answer(true)
     }
     if (out.length) emit(sessionId, out)
   }
@@ -181,17 +181,7 @@ export function createTurnHooks({
     emit,
     graceMs: STOP_HOOK_GRACE_MS,
     heldEnd: (sessionId) => turns.get(sessionId)?.held,
-    heldEndWithin: (sessionId, ms) => new Promise(resolve => {
-      const turn = turns.get(sessionId)
-      if (!turn || turn.held) return resolve(!!turn)
-      const answer = (held: boolean): void => {
-        clearTimeout(timer)
-        turn.awaiting = turn.awaiting.filter(other => other !== answer)
-        resolve(held)
-      }
-      const timer = setTimeout(answer, ms, false)
-      turn.awaiting.push(answer)
-    }),
+    awaitEnd: (sessionId, identity) => { const turn = turns.get(sessionId); if (turn) turn.stopped = identity },
     deliverHeldEnd: deliver,
     subagentsRun: atWork,
   }

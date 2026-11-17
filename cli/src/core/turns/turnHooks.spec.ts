@@ -640,14 +640,21 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     expect(holdStop).toHaveBeenCalledTimes(2)
   })
 
-  stopRule('a Stop waiting for the end is told at once when one is held, and has none to wait for with no record', async () => {
+  stopRule('a Stop that came before its turn\'s end lets that end go on as it is read, and no other', () => {
     let context!: HookTurnContext
-    vi.spyOn(engineHooks[engine], 'onStop').mockImplementationOnce(value => { context = value })
+    vi.spyOn(engineHooks.claude, 'onStop').mockImplementationOnce(value => { context = value })
     const run = setup(engine)
     run.hooks.onTurnStop({ sessionId: 's1' })
+    context.awaitEnd('s1', 't1')
+    context.awaitEnd('nobody', 't1')
     run.hooks.transcript('s1', END, { turn: turnOf('t1') })
-    await expect(context.heldEndWithin('s1', STOP_HOOK_GRACE_MS)).resolves.toBe(true)
-    await expect(context.heldEndWithin('nobody', STOP_HOOK_GRACE_MS)).resolves.toBe(false)
+    expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', END)
+    // A read that names no turn, or another turn, is held for its own Stop.
+    run.hooks.transcript('s1', END, {})
+    run.hooks.transcript('s1', END, { turn: turnOf('t2') })
+    expect(run.deps.emit).toHaveBeenCalledOnce()
+    expect(run.hooks.held('s1')).toBe(true)
+    expect(run.hooks.withheld('nobody')).toBe(false)
   })
 
   // Review Focus 5: Codex's turn had no opening time, so a Stop that arrived after the next turn's start was read

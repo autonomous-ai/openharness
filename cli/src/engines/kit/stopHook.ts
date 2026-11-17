@@ -10,7 +10,7 @@ import type { LiveTurn } from '../facets/live.js'
 
 /** Capture the arrival's turn before the first await: a drain can open the next turn. */
 export async function closeTurnOnStop(
-  { turnState, closeTurn, latestPromptAt, drain, noteEngineStopped, emit, graceMs, heldEnd, heldEndWithin, deliverHeldEnd,
+  { turnState, closeTurn, latestPromptAt, drain, noteEngineStopped, emit, graceMs, heldEnd, awaitEnd, deliverHeldEnd,
     subagentsRun, heldBeforeHook }: HookTurnContext,
   { sessionId, status, firedAt }: HookStop,
 ): Promise<void> {
@@ -62,10 +62,10 @@ export async function closeTurnOnStop(
   const open = turnState(sessionId)
   if (!open?.turnOpen || !itsTurn(open)) { leftAsLater(open); return } // its end already went on → nothing to do
   // Still open: the Stop hook beats the transcript's final text by about 200 ms (lib/commander.ts). Its end goes on
-  // the moment it is read; none within the grace, a re-poll, and only then a force-close of a wedged turn, whose
+  // the moment it is read; none within the grace and a re-poll, and only then a force-close of a wedged turn, whose
   // assistant text is on disk by now.
-  if (!await heldEndWithin(sessionId, graceMs)) await drain(sessionId)
-  if (delivered()) return
+  awaitEnd(sessionId, open.identity)
+  await new Promise(resolve => setTimeout(resolve, graceMs)); await drain(sessionId)
   const st = turnState(sessionId)
   if (st?.turnOpen && itsTurn(st) && closeTurn(sessionId, st.identity)) {
     console.log(`[turn] ${sid(sessionId)} force-closed by ${hook} hook (after grace)`)
