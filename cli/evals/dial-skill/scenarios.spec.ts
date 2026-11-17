@@ -92,6 +92,16 @@ describe('loadScenarios', () => {
   })
 })
 
+describe('the committed scenarios', () => {
+  it("hold asks that fit the dial's one line of at most 120 characters, so the oracle's ring can pass", () => {
+    for (const s of loadScenarios()) {
+      if (s.ask === null) continue
+      expect([...s.ask].length, s.id).toBeLessThanOrEqual(120)
+      expect(s.ask, s.id).not.toMatch(/[\r\n]/)
+    }
+  })
+})
+
 describe('caseId', () => {
   it('joins the scenario id and the agent', () => {
     expect(caseId('a', 'claude')).toBe('a.claude')
