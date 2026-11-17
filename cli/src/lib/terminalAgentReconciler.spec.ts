@@ -841,4 +841,27 @@ describe('a pass whose observations cannot be saved', () => {
     const error = failure()
     await expect(outage([error]).reconciler.trigger()).rejects.toBe(error)
   })
+
+  // A pass nobody waits on — the interval, a theme change, a session's end, a stop — dropped that rejection, and
+  // the fatal guard logged an unhandled rejection for a rare ownership race (e2e/diskfull.e2e.ts asserts none).
+  it.each([
+    ['asked for', (reconciler: TerminalAgentReconciler) => reconciler.nudge()],
+    ['on the interval', (reconciler: TerminalAgentReconciler) => { void reconciler.start(5) }],
+  ])('logs a failed pass %s by its kind and leaves no rejection unhandled', async (_how, ask) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    const run = outage([new RegistryOwnershipChanged('the registry owner changed while its write was being prepared')])
+    try {
+      ask(run.reconciler)
+      const line = '[discovery] a pass failed, the next one tries again · RegistryOwnershipChanged'
+      await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(line))
+      // An unhandled rejection is reported after the microtasks of the turn that dropped it.
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(unhandled).not.toHaveBeenCalled()
+    } finally {
+      run.reconciler.stop()
+      process.off('unhandledRejection', unhandled)
+    }
+  })
 })
