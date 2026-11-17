@@ -1,5 +1,5 @@
 /** Four durable reservations. An unsettled writer keeps its slot across core replacement. */
-import { constants, lstatSync, mkdirSync, openSync, closeSync, writeFileSync, ftruncateSync, fsyncSync,
+import { constants, lstatSync, mkdirSync, openSync, closeSync, writeFileSync, ftruncateSync, fstatSync, fsyncSync,
   unlinkSync, rmdirSync, renameSync, type BigIntStats } from 'node:fs'
 import { lstat, open, type FileHandle } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
@@ -133,9 +133,19 @@ export class CheckpointStages {
         directoryIdentity(directory, directoryKey)
         if (recordKey) identity(record, recordKey)
         const fd = openSync(record, constants.O_WRONLY | constants.O_NOFOLLOW | (recordKey ? 0 : constants.O_CREAT | constants.O_EXCL), 0o600)
-        try { ftruncateSync(fd, 0); writeFileSync(fd, JSON.stringify(owner)); fsyncSync(fd) } finally { closeSync(fd) }
-        recordKey = nativeFileKey(lstatSync(record, { bigint: true }))
-        syncStateDirectory(directory)
+        try {
+          const opened = fstatSync(fd, { bigint: true }); privateFile(opened)
+          const openedKey = nativeFileKey(opened)
+          if (recordKey && recordKey !== openedKey) throw new Error('checkpoint stage changed')
+          directoryIdentity(directory, directoryKey)
+          identity(record, openedKey)
+          ftruncateSync(fd, 0); writeFileSync(fd, JSON.stringify(owner)); fsyncSync(fd)
+          // Only creation changes the directory. Retain its durability after both flushes and exact identity checks.
+          if (!recordKey) syncStateDirectory(directory)
+          directoryIdentity(directory, directoryKey)
+          identity(record, openedKey)
+          recordKey ??= openedKey
+        } finally { closeSync(fd) }
       }
       try { writeOwner() } catch (error) { await file.close(); throw error }
       let closed = false, verified: string | undefined, verification: Promise<void> | undefined, cleanup: Promise<void> | undefined
@@ -199,6 +209,7 @@ export class CheckpointStages {
             await verification?.catch(() => {})
             await closeDescriptor()
             if (owner.writer !== null && !owner.settled) { retained(); return }
+            identity(record, recordKey!)
             this.remove(directory, directoryKey, owner)
           })().catch(retained)
           await beforeDeadline(cleanup, deadline).catch(retained)

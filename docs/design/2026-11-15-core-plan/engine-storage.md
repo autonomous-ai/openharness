@@ -273,3 +273,79 @@ store. File-native purge and separately reviewed worktree-only deletion keep the
 Red-first caller cases cover all four database engines, zero calls to every irreversible dependency, unchanged real
 shared database contents, mixed-request refusal, worktree-only success, explicit OpenClaw retention, file-native
 regressions and unchanged monitor byte totals. Export's frozen acceptance is completed before this implementation.
+
+## Design: checkpoint owner durability reuse (17 November)
+
+The combined-engine diagnostic found twenty additional synchronous flushes per Close. This correction targets only
+six repeat slot-directory flushes: two exports each update the existing owner filename for writer, settlement and
+publication. Every owner-file flush remains. The filename needs a directory flush on its first creation; subsequent
+writes to that same inode change file contents only. This is not an end-to-end performance acceptance or removal of
+checkpoint staging from core.
+
+- Growth and lifecycle: the same four fixed slots, one owner file and one stage per slot; no new data, cache, timer or
+  collection. Successful cleanup and conservative restart recovery are unchanged. Failed creation reserves its slot.
+- Concurrency: directory durability belongs to this lease's exact slot and original owner inode. Before truncation,
+  validate the opened descriptor's private regular-file identity against the retained key, then the path and slot.
+  After every file flush, recheck the path and slot. Initial creation additionally flushes the directory before those
+  final checks and before retaining its key. Keep the descriptor open through these checks. A substituted owner or
+  slot is refused; a failed initial flush cannot produce a lease or establish reusable durability. Cleanup must also
+  verify the retained owner identity before unlinking it. The existing four-slot cross-core reservation stays intact.
+- Read cost: fixed metadata checks for the selected owner and slot only; no contents reread, directory scan or new
+  async wait. Every owner write still serializes at most the existing bounded record. The regression test measures
+  actual synchronous file and directory flushes across two public stage lifecycles.
+- Scale: two exports retain eight owner-file flushes and reduce owner-slot directory flushes from eight to two.
+  Slot creation-parent, history publication and cleanup-parent durability remain. At ten times the request count,
+  admission remains four; existing HISTORY_NOT_SAVED/STAGE_CLEANUP_UNAVAILABLE expose pressure. The quiet integrated
+  Close/Resume benchmark remains required to determine actual latency and CPU.
+- Compatibility: no public API, worker capability or version-1 owner, history or manifest bytes change. All readers
+  remain CheckpointStages.prepare/remove and the existing checkpoint readers. Old clients and rollback behave as before.
+- Migration/rollback: no migration, deletion sweep or production-data access. Reverting changes only redundant flush
+  behavior and the added identity checks; both versions read the same files.
+- Audience and identity: same authenticated local core and selected owner's private state directory. No worker receives
+  an owner filename or publication destination, and no other login or new process is used.
+- Failure: fd/path/slot substitution, unsafe metadata and a failed file or initial directory flush reject the operation.
+  Existing caller HISTORY_NOT_SAVED and cleanup STAGE_CLEANUP_UNAVAILABLE stay visible; failed ownership is not silently
+  recaptured. Tests inject replacements before/after open and during flush, failed first flush, and retry/cleanup.
+- Platforms: affects macOS, Linux and Windows. Windows retains syncStateDirectory's existing no-op because Node cannot
+  flush directories there; owner-file fsync and identity checks remain. Local tests are macOS with pinned Node 24.22.2;
+  Linux/Windows native acceptance is not claimed. No process-start implementation changes.
+
+Validation is selected before implementation: new RED public-stage durability/race cases, the existing checkpoint
+stage and secure-state fault cases, database Close/storage caller tests, TypeScript, and focused source coverage.
+Root owns broad integrated gates and the quiet native benchmark. No runtime correction preceded this Design.
+
+### Focused correction evidence
+
+On macOS with pinned Node 24.22.2, the configured first run failed eight new cases and passed three controls
+(`/tmp/checkpoint-owner-durability-configured-red.log`, 1.41 s, actual exit 1). The additional two initial-directory
+replacement cases and independent cleanup case each failed before the runtime change (three failures, eleven skips,
+0.49 s, `/tmp/checkpoint-owner-durability-creation-red.log`). An earlier invocation from the repository root also
+produced eight failures/three passes, but omitted the CLI setup; its private-fixture result is retained separately
+as `/tmp/checkpoint-owner-durability-red.log`, not used as the configured gate.
+
+After correction, the new durability spec plus the existing stage and secure-state specs passed 38 tests with two
+existing platform skips (6.94 s, actual exit 0). The six-file stage, database Close, stopped catalog, core storage and
+worker storage run passed all 158 tests (24.93 s, actual exit 0), recorded in
+`/tmp/checkpoint-owner-durability-callers-unsandboxed.log`. Its preceding sandboxed run failed 106 admission-dependent
+cases and passed 52: the sandbox denied `/bin/ps`, so Registry could not obtain its own start marker. That failure is
+retained as `/tmp/checkpoint-owner-durability-callers.log`; no runtime change or flaky-test retry produced the green.
+
+The public two-export workload preserves eight successful owner-file flushes, exact owner updates and histories,
+slot removal, and four creation/cleanup parent-directory flushes. On the original `38f9eba9e0` source it counted eight
+owner-slot directory flushes (expected two, actual exit 1; `/tmp/checkpoint-owner-durability-two-export-baseline.log`).
+The corrected source counts two. Thus six synchronous directory flushes are removed per two exports. The baseline
+was run only for this selected workload, and the exact corrected source was restored afterward (SHA-256
+`68a721c63394415f56b64635730698d50ca4db78fa44ebd533a8d2562121b385`). This is a filesystem-work measurement, not native
+Close latency or total-process CPU acceptance.
+
+Focused checkpointStages source coverage is 98.60% lines, 92.07% statements, 87.93% branches and 87.87% functions;
+every changed runtime statement and conditional branch is exercised. This library is outside the core/service
+per-file gate; no claim of 100% whole-file coverage is made. Existing expiration/read-deadline branches remain outside
+this focused selection. After adding Windows-specific directory-flush expectations and keeping fixture state under
+its configured private root, all 14 durability cases passed again (1.66 s, actual exit 0), and final TypeScript passed
+with no diagnostics. The three directory-flush fault cases explicitly skip on Windows because no directory fsync runs
+there; owner-file and identity cases remain enabled. No Windows or Linux native run is claimed.
+
+All invoked commands settled; no fixture daemon, background writer, push or release was started. Root still owns
+current-main integration, broad required gates, independent review and matched quiet runtime acceptance. This change
+retains both exports, every owner-file flush, history/parent/cleanup durability and the four-slot recovery policy.
