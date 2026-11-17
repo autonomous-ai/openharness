@@ -22,8 +22,8 @@ import { LEAN_CORE_ENTRY, readLeanBundle } from '../src/harnessd/leanBundle.js'
 type Engine = 'claude' | 'codex'
 /** The processes the master runs the services in, and the services, each on its own link to the core. The
  *  experiments' start only once they are on (e2e/experiments.e2e.ts, from the run's bundle). The viewers' starts
- *  only once something needs it: in each test's new home, a bundle's own harnesses, which its Store puts in place,
- *  ask for it as the core starts (core/viewersWake.ts, e2e/viewersOnDemand.e2e.ts). */
+ *  on demand: each fresh fixture asks for the Store through dsh_list before checking its process
+ *  (core/viewersWake.ts, e2e/viewersOnDemand.e2e.ts). */
 const PROCESSES = ['search', 'viewers', 'edge', 'models']
 const SERVICES = ['search', 'viewers', 'store', 'workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'models']
 
@@ -75,6 +75,12 @@ describe('harnessd\'s master and services lean', () => {
     writeFileSync(join(d.dataDir, 'local-models', 'operations.json'), '[]')
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-120).join('\n')}`) })
     await d.start()
+    const client = await LocalClient.connect(d)
+    try {
+      const list = await client.request('dsh_list', {}, 60_000)
+      expect(list.error, JSON.stringify(list)).toBeUndefined()
+      expect(Array.isArray(list.dsh)).toBe(true)
+    } finally { client.close() }
     await until('every service process', () => PROCESSES.every((name) => new RegExp(`service ${name} started`).test(d.log())) || null, 60_000, 200)
     return d
   }
