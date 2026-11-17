@@ -1,0 +1,205 @@
+<title>Màn hình Dial và Pro</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a reference atlas. Device switch on top, then the device's notes, then flow sections of screen tiles drawn in each glass's own shape. */
+:root {
+  --bg: #eceef2;
+  --surface: #ffffff;
+  --sunk: #e2e5ea;
+  --fg: #15171c;
+  --muted: #596070;
+  --line: #d3d8df;
+  --accent: #6d4fc0;        /* the Dial's lilac, deepened for a light ground */
+  --accent-soft: #e7defa;
+  --glass: #000000;
+  --scrim: rgba(12, 13, 16, .86);
+  --font-ui: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101114; --surface: #191a1f; --sunk: #222329; --fg: #efe7de; --muted: #a8a3ad; --line: #2d2f36;
+    --accent: #c6aaef; --accent-soft: #2f2640; --glass: #000000; --scrim: rgba(0, 0, 0, .9); color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101114; --surface: #191a1f; --sunk: #222329; --fg: #efe7de; --muted: #a8a3ad; --line: #2d2f36;
+  --accent: #c6aaef; --accent-soft: #2f2640; --glass: #000000; --scrim: rgba(0, 0, 0, .9); color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-ui); font-size: 15px; line-height: 1.5; }
+.wrap { max-width: 1320px; margin: 0 auto; padding-block: 28px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+header { display: grid; gap: 6px; margin-bottom: 20px; }
+.eyebrow { font: 500 12px/1.4 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+h1 { font-size: clamp(26px, 4vw, 38px); line-height: 1.1; margin: 0; letter-spacing: -.02em; font-weight: 700; text-wrap: balance; }
+.source { color: var(--muted); font-size: 13.5px; max-width: 75ch; }
+.source code, .mono { font-family: var(--font-mono); font-size: .9em; }
+.switch { display: flex; flex-wrap: wrap; gap: 6px; padding: 5px; background: var(--sunk); border-radius: 12px; width: fit-content; max-width: 100%; margin: 6px 0 22px; }
+.switch a { display: flex; align-items: baseline; gap: 8px; padding: 8px 14px; border-radius: 8px; color: var(--muted); text-decoration: none; font-weight: 600; }
+.switch a span { font: 500 12px var(--font-mono); }
+.switch a[aria-current="page"] { background: var(--surface); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.switch a:focus-visible, button:focus-visible, input:focus-visible, .tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.intro { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 28px; align-items: start; margin-bottom: 22px; }
+@media (max-width: 860px) { .intro { grid-template-columns: minmax(0, 1fr); gap: 14px; } }
+.intro h2 { margin: 0 0 4px; font-size: 22px; letter-spacing: -.01em; }
+.spec { font: 400 12.5px/1.6 var(--font-mono); color: var(--muted); }
+.ux { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 14px; }
+.ux li::marker { color: var(--accent); }
+.toolbar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center;
+  padding: 10px 0; background: var(--bg); border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.chips { display: flex; gap: 6px; overflow-x: auto; flex: 1 1 420px; min-width: 0; scrollbar-width: thin; }
+.chips a { flex: none; font-size: 13px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--fg); text-decoration: none; white-space: nowrap; }
+.chips a span { color: var(--muted); font: 500 11.5px var(--font-mono); margin-left: 4px; }
+.chips a:hover { border-color: var(--accent); }
+.search { flex: 0 1 240px; min-width: 0; font: inherit; font-size: 14px; padding: 7px 11px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); }
+.toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); white-space: nowrap; }
+section { padding-top: 26px; scroll-margin-top: 70px; }
+section > h3 { display: flex; align-items: baseline; gap: 10px; margin: 0; font-size: 18px; letter-spacing: -.01em; }
+section > h3 span { font: 500 12px var(--font-mono); color: var(--muted); }
+section > p { margin: 4px 0 14px; color: var(--muted); font-size: 14px; max-width: 80ch; }
+.grid { display: grid; gap: 18px 14px; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); }
+.shape-bar .grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 560px), 1fr)); }
+.tile { display: grid; gap: 7px; align-content: start; text-align: left; background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: zoom-in; min-width: 0; }
+.tile img { display: block; width: 100%; max-width: 100%; height: auto; background: var(--glass); transition: transform .15s ease; }
+.shape-round .tile img { border-radius: 50%; }
+.shape-square .tile img { border-radius: 14px; }
+.shape-bar .tile img { border-radius: 10px; aspect-ratio: 4 / 1; }
+.tile:hover img { transform: translateY(-2px); }
+.tile b { font: 500 12px/1.35 var(--font-mono); overflow-wrap: anywhere; }
+.tile small { color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+.anims { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+.note { margin-top: 30px; padding: 16px 18px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); }
+.note h3 { margin: 0 0 10px; font-size: 18px; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 13.5px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 500 11.5px var(--font-mono); letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+td:first-child { font-weight: 600; }
+td:last-child { color: var(--accent); }
+.empty { color: var(--muted); padding: 30px 0; }
+.lb { position: fixed; inset: 0; z-index: 20; background: var(--scrim); display: grid; grid-template-rows: 1fr auto; padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
+[hidden] { display: none !important; }
+.lb figure { margin: 0; min-height: 0; display: grid; place-items: center; }
+.lb img { max-width: min(100%, 920px); max-height: 100%; object-fit: contain; background: #000; }
+.lb.shape-round img { border-radius: 50%; max-width: min(100%, 700px); }
+.lb.shape-square img { border-radius: 18px; }
+.lb.shape-bar img { max-width: 100%; border-radius: 12px; }
+.lb .bar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; color: #efe7de; padding-top: 12px; }
+.lb .bar b { font: 500 14px var(--font-mono); }
+.lb .bar p { margin: 2px 0 0; color: #b9b3bd; font-size: 14px; max-width: 70ch; }
+.lb .bar code { color: #8f8a94; font: 12px var(--font-mono); }
+.lb nav { display: flex; gap: 8px; }
+.lb button { font: 600 14px var(--font-ui); color: #efe7de; background: #26272d; border: 1px solid #3a3b42; border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+.lb button:hover { border-color: #c6aaef; }
+@media (prefers-reduced-motion: reduce) { .tile img { transition: none; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Harness Max · tư liệu UI/UX</div>
+    <h1>Màn hình Dial và Pro</h1>
+    <div class="source" id="source"></div>
+  </header>
+  <nav class="switch" id="switch" aria-label="Thiết bị"></nav>
+  <main id="view"></main>
+</div>
+<div class="lb" id="lb" hidden role="dialog" aria-modal="true" aria-label="Xem ảnh">
+  <figure><img id="lb-img" alt=""></figure>
+  <div class="bar">
+    <div><b id="lb-name"></b><p id="lb-cap"></p><code id="lb-file"></code></div>
+    <nav><button id="lb-prev" type="button">Trước</button><button id="lb-next" type="button">Sau</button><button id="lb-close" type="button">Đóng</button></nav>
+  </div>
+</div>
+
+<script type="application/json" id="data">/*DATA*/null</script>
+<script>
+const DATA = JSON.parse(document.getElementById('data').textContent);
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const state = { dev: 'dial', q: '', frames: false, list: [], at: 0 };
+try { state.frames = localStorage.getItem('frames') === '1'; } catch (e) {}
+
+$('#source').innerHTML = `Render bằng chính code C của firmware trên máy Mac, không phải ảnh chụp màn thật. Dial và Pro lấy từ <code>main</code> ` +
+  `<code>${esc(DATA.meta.main)}</code>; bản nháp Max lấy từ <code>feat/harness-max-all</code> <code>${esc(DATA.meta.max)}</code>. Export ${esc(DATA.meta.date)}. Chạm vào ảnh để xem lớn.`;
+
+function renderSwitch() {
+  $('#switch').innerHTML = DATA.devices.map(d =>
+    `<a href="#${d.id}" ${d.id === state.dev ? 'aria-current="page"' : ''}>${esc(d.short)}<span>${d.count}</span></a>`).join('');
+}
+
+function tile(it, k) {
+  return `<button class="tile" type="button" data-k="${k}"><img src="${it.src}" alt="${esc(it.n)}" loading="lazy" decoding="async">` +
+    `<b>${esc(it.n)}</b>${it.c ? `<small>${esc(it.c)}</small>` : ''}</button>`;
+}
+
+function render() {
+  const d = DATA.devices.find(x => x.id === state.dev);
+  const q = state.q.trim().toLowerCase();
+  state.list = [];
+  const push = it => { state.list.push(it); return state.list.length - 1; };
+  let html = `<div class="intro shape-${d.shape}"><div><h2>${esc(d.title)}</h2><div class="spec">${esc(d.spec)}</div></div>` +
+    `<ul class="ux">${d.ux.map(u => `<li>${esc(u)}</li>`).join('')}</ul></div>`;
+  const groups = d.groups.map(g => ({ ...g, items: g.items.filter(it => (state.frames || !it.seq) &&
+    (!q || it.n.toLowerCase().includes(q) || (it.c || '').toLowerCase().includes(q))) })).filter(g => g.items.length);
+  const hasSeq = d.groups.some(g => g.items.some(it => it.seq));
+  html += `<div class="toolbar"><div class="chips">${groups.map(g => `<a href="#${d.id}" data-go="g-${g.id}">${esc(g.title)}<span>${g.items.length}</span></a>`).join('')}</div>` +
+    `<input class="search" id="q" type="search" placeholder="Tìm tên hoặc nội dung" value="${esc(state.q)}" aria-label="Tìm màn hình">` +
+    (hasSeq ? `<label class="toggle"><input type="checkbox" id="frames" ${state.frames ? 'checked' : ''}>Hiện khung hình lặp</label>` : '') + `</div>`;
+  if (d.anims.length && !q) {
+    html += `<section class="shape-${d.shape}" id="g-anim"><h3>Chuyển động<span>${d.anims.length}</span></h3>` +
+      `<p>Chuỗi khung hình ghép lại, để thấy nhịp của pet và sóng giọng nói.</p><div class="anims grid">` +
+      d.anims.map(a => tile({ n: a.n, c: '', src: a.src, file: a.file }, push({ n: a.n, c: 'Animation', src: a.src, file: a.file }))).join('') + `</div></section>`;
+  }
+  html += groups.map(g => `<section class="shape-${d.shape}" id="g-${g.id}"><h3>${esc(g.title)}<span>${g.items.length}</span></h3>` +
+    (g.desc ? `<p>${esc(g.desc)}</p>` : '') + `<div class="grid">${g.items.map(it => tile(it, push(it))).join('')}</div></section>`).join('');
+  if (!groups.length) html += `<p class="empty">Không có màn nào khớp "${esc(state.q)}".</p>`;
+  if (d.id === 'max') {
+    html += `<div class="note"><h3>Dial và Pro làm được, bản nháp Max chưa vẽ</h3><div class="tablewrap"><table><thead><tr><th>Chủ đề</th><th>Dial</th><th>Pro</th><th>Max nháp</th></tr></thead><tbody>` +
+      DATA.gaps.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('') + `</tbody></table></div></div>`;
+  }
+  const view = $('#view');
+  view.innerHTML = html;
+  view.dataset.shape = d.shape;
+  const input = $('#q');
+  input.addEventListener('input', () => { state.q = input.value; const pos = input.selectionStart; render(); const n = $('#q'); n.focus(); n.setSelectionRange(pos, pos); });
+  const fr = $('#frames');
+  if (fr) fr.addEventListener('change', () => { state.frames = fr.checked; try { localStorage.setItem('frames', fr.checked ? '1' : '0'); } catch (e) {} render(); });
+  view.querySelectorAll('[data-go]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); document.getElementById(a.dataset.go)?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); }));
+  view.querySelectorAll('.tile').forEach(b => b.addEventListener('click', () => open(+b.dataset.k)));
+}
+
+function open(k) {
+  state.at = (k + state.list.length) % state.list.length;
+  const it = state.list[state.at], d = DATA.devices.find(x => x.id === state.dev);
+  const lb = $('#lb');
+  lb.className = `lb shape-${d.shape}`;
+  $('#lb-img').src = it.src; $('#lb-img').alt = it.n;
+  $('#lb-name').textContent = it.n; $('#lb-cap').textContent = it.c || ''; $('#lb-file').textContent = it.file || '';
+  lb.hidden = false; $('#lb-close').focus();
+}
+function close() { $('#lb').hidden = true; }
+$('#lb-prev').addEventListener('click', () => open(state.at - 1));
+$('#lb-next').addEventListener('click', () => open(state.at + 1));
+$('#lb-close').addEventListener('click', close);
+$('#lb').addEventListener('click', e => { if (e.target.id === 'lb' || e.target.tagName === 'FIGURE') close(); });
+document.addEventListener('keydown', e => {
+  if ($('#lb').hidden) return;
+  if (e.key === 'Escape') close();
+  else if (e.key === 'ArrowLeft') open(state.at - 1);
+  else if (e.key === 'ArrowRight') open(state.at + 1);
+});
+
+function route() {
+  const id = location.hash.slice(1);
+  state.dev = DATA.devices.some(d => d.id === id) ? id : 'dial';
+  state.q = '';
+  renderSwitch(); render();
+}
+window.addEventListener('hashchange', route);
+route();
+</script>
