@@ -131,6 +131,11 @@ function boundProcessRuns(
   ))
 }
 
+/** A failed pass, said by its kind only: its message may quote a path (a probe's command, a state file). */
+function passFailed(error: unknown): void {
+  console.warn(`[discovery] a pass failed, the next one tries again · ${error instanceof Error ? error.constructor.name : typeof error}`)
+}
+
 /** Serialized, failure-isolated reconciliation across every enabled backend instance. */
 export class TerminalAgentReconciler {
   private readonly misses = new Map<string, number>()
@@ -170,9 +175,7 @@ export class TerminalAgentReconciler {
     this.waitingForStart = false
     this.timer = setInterval(() => this.nudge(), intervalMs)
     this.timer.unref?.()
-    await this.trigger().catch((error) => {
-      console.warn(`[discovery] first pass failed, retrying on the interval · ${error instanceof Error ? error.message : error}`)
-    })
+    await this.trigger().catch(passFailed)
   }
 
   stop(): void {
@@ -254,9 +257,7 @@ export class TerminalAgentReconciler {
    * Logged by its kind only, as its message may quote a path; the next pass tries again.
    */
   nudge(): void {
-    this.trigger().catch((error: unknown) => {
-      console.warn(`[discovery] a pass failed, the next one tries again · ${error instanceof Error ? error.constructor.name : typeof error}`)
-    })
+    this.trigger().catch(passFailed)
   }
 
   /** A pass, waited for until the pass deadline and no longer: see [RECONCILE_PASS_DEADLINE_MS]. */

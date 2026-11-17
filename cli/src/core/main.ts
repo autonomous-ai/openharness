@@ -2137,11 +2137,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // now marks their agents gone, which the resume path takes from there, rather than at the next tick.
   // A drain host that exited took its panes too.
   for (const backend of ptyHosts ? [ptyHosts.create, ...ptyHosts.drain] : []) {
-    backend.onHostReplaced = () => {
-      void agentReconciler.trigger().catch((error) => {
-        console.error('[terminal] ptyhost: reconcile after host restart failed:', error instanceof Error ? error.message : error)
-      })
-    }
+    backend.onHostReplaced = () => agentReconciler.nudge()
   }
 
   // Account HTTP and the persistent machine cache belong to the gateway. The core routes the request
