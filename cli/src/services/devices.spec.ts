@@ -3372,11 +3372,11 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(await caps()).toEqual([{ id: ID, caps: 'sf' }])
   })
 
-  it('a tap writes the show to its window, then brings VS Code forward', async () => {
+  it('a tap writes the show to its window, asking it to raise that window, then brings VS Code forward', async () => {
     const { reported } = await inVscodeTerminal({ orca: mac })
     const window = await reported()
     expect(await host().openAgent(ID)).toBeUndefined()
-    expect(window.lines).toEqual([{ show: SHELL }])
+    expect(window.lines).toEqual([{ show: SHELL, raise: true }])
     // The adapter's own `open -b`, after the show: the opener runs none of its own, and falls back to none.
     expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', VSCODE], 10_000]])
     expect(said()).toEqual([])
