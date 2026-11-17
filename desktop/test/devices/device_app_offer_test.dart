@@ -219,6 +219,18 @@ void main() {
     expect(fixture.offer.state, DeviceAppOfferState.notRunning);
   });
 
+  test('an answer asked before an Open ended is not believed', () async {
+    final fixture = await _attached(presence: installedNotRunning);
+    fixture.probe.gate = Completer<void>();
+    final asked = fixture.offer.refresh();
+    await fixture.offer.open();
+    expect(fixture.offer.state, DeviceAppOfferState.hidden);
+    // What the lookup saw before the app had opened.
+    fixture.probe.gate!.complete();
+    await asked;
+    expect(fixture.offer.state, DeviceAppOfferState.hidden);
+  });
+
   test('a second press joins the running install', () async {
     final fixture = await _attached();
     fixture.install.gate = Completer<void>();
