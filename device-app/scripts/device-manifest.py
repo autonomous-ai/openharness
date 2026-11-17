@@ -118,8 +118,8 @@ def check_sums(folder, path):
 
 
 def file_entries(version, folder, base_url):
-    """What the manifest says of this build: its version, the update archive for both Macs, and Desktop's entry for
-    each file."""
+    """What the manifest says of this build: its version, the update archive for both Macs, and an entry in Desktop's
+    shape for the archive and the dmg, once per Mac."""
     parse(version)
     folder = Path(folder)
     sums = file_sums(folder)
@@ -135,7 +135,8 @@ def file_entries(version, folder, base_url):
 
 
 def build_manifest(version, folder, notes, pub_date, base_url):
-    """Tauri's static update manifest, which installed apps read, plus an entry for each file in Desktop's shape."""
+    """Tauri's static update manifest, which installed apps read, plus the archive's and the dmg's entries in
+    Desktop's shape."""
     if not PUB_DATE.fullmatch(pub_date):
         raise ValueError(f"pub_date {pub_date!r} must be YYYY-MM-DDTHH:MM:SSZ")
     datetime.strptime(pub_date, "%Y-%m-%dT%H:%M:%SZ")  # and a real date: the updater reads it as RFC 3339

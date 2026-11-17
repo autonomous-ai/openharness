@@ -70,7 +70,8 @@ The scripts the jobs run: `scripts/release-setup.sh` (the runner's tools), `scri
 ## The manifest
 
 `https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/metadata.json`, read from the bucket, never
-through the CDN. Tauri's static update format, plus an entry for each file in the shape of Desktop's manifest:
+through the CDN. Tauri's static update format, plus entries for the archive and the dmg in the shape of Desktop's
+manifest:
 
 ```json
 {

@@ -127,7 +127,7 @@ describe("GET /device/download-macos", () => {
     }
   });
 
-  // The first manifests named the dmg `dmg`; the link reads only Desktop's entry name now.
+  // The first manifests named the dmg `dmg`; the link reads only `device-macos-dmg` now.
   it("reports 503 when the manifest names the dmg only as dmg", async () => {
     manifest({ version: "0.1.0", platforms: {}, dmg: { url: CDN_DMG, sha256: "x", size: 1 } });
 
