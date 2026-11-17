@@ -196,5 +196,5 @@ export async function claudeUpdate(deps: ClaudeDeps): Promise<ClaudeUpdate> {
   if (failed) return failed
   const after = await userEntry(run)
   if (!after.ok) return after
-  return { ok: true, outcome: after.entry?.version !== before.entry.version ? 'updated' : 'current' }
+  return { ok: true, outcome: after.entry !== undefined && after.entry.version !== before.entry.version ? 'updated' : 'current' }
 }
