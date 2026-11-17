@@ -4,14 +4,19 @@
  * `disable` removes from every folder a list holds, so a damaged or hand-edited list must read as nothing it may not
  * hold.
  */
+import * as fs from 'node:fs'
 import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DIAL_SETUP_FILE, DIAL_SKILL_FILE, MAX_HOMES, listable, readRemoved, readSetup, readWritten, writeRemoved, writeSetup } from './dialSkillFiles.js'
+
+// A copy of the module, so a test can watch the file calls a write makes.
+vi.mock('node:fs', async (original) => ({ ...await original<object>() }))
 
 const folders: string[] = []
 afterEach(() => {
+  vi.restoreAllMocks()
   for (const folder of folders.splice(0)) {
     // A test made it read-only: open it again so it can be removed.
     chmodSync(folder, 0o700)
@@ -173,6 +178,49 @@ describe('the devices\' record of a dial\'s setup', () => {
     // A missing file says nothing of the kind.
     rmSync(files[1])
     expect(readSetup(dataDir)).not.toHaveProperty('unread')
+  })
+
+  it('a plugin value a read would drop is not saved: the plugin would read as never set up', () => {
+    const dataDir = aDataDir()
+    const homes = { claude: [], codex: [] }
+    writeSetup(dataDir, { dial: true, plugin: '0.6.59', homes })
+    const record = readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8')
+
+    expect(writeSetup(dataDir, { dial: true, plugin: '0.6.59 beta', homes })).toBe('EINVAL')
+
+    expect(readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8')).toBe(record)
+  })
+
+  it('a file is on disk before it is renamed into place', () => {
+    const dataDir = aDataDir()
+    const calls: string[] = []
+    const module = fs as unknown as Record<string, (...args: unknown[]) => unknown>
+    for (const name of ['fsyncSync', 'renameSync']) {
+      const real = module[name]
+      vi.spyOn(module, name).mockImplementation((...args) => {
+        calls.push(name)
+        return real(...args)
+      })
+    }
+
+    expect(writeSetup(dataDir, { dial: true, homes: { claude: [], codex: [] } })).toBeUndefined()
+    expect(writeRemoved(dataDir, 'codex', true)).toBeUndefined()
+
+    expect(calls).toEqual(['fsyncSync', 'renameSync', 'fsyncSync', 'renameSync'])
+  })
+
+  it('a record past what a read takes is not written: a read would drop it whole', () => {
+    const dataDir = aDataDir()
+    writeSetup(dataDir, { dial: true, plugin: '0.6.59', homes: { claude: [], codex: [] } })
+    const record = readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8')
+    // Listable, 1024 bytes, and every byte but the first one JSON escapes: two full lists outgrow 256 KiB.
+    const escaped = Array.from({ length: 2 * MAX_HOMES }, (_, i) => `/${'\\'.repeat(i)}${'"'.repeat(1023 - i)}`)
+    for (const path of escaped) expect(listable(path)).toBe(true)
+
+    expect(writeSetup(dataDir, { dial: true, homes: { claude: escaped.slice(0, MAX_HOMES), codex: escaped.slice(MAX_HOMES) } })).toBe('EFBIG')
+
+    expect(readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8')).toBe(record)
+    expect(readdirSync(dataDir)).toEqual([DIAL_SETUP_FILE])
   })
 
   it('a removal or a record that cannot be saved says its code and leaves the file', () => {

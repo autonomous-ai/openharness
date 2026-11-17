@@ -1094,6 +1094,11 @@ describe('the record the plugin\'s setup reads', () => {
     chmodSync(r.dataDir, 0o500)
     expect(r.writer.recordPlugin('0.6.60')).toBe(false)
     expect(r.writer.plugin()).toBe('0.6.59')
+
+    // A value a read would drop is not saved either: after a restart the plugin would read as never set up.
+    chmodSync(r.dataDir, 0o700)
+    expect(r.writer.recordPlugin('0.6.60 beta')).toBe(false)
+    expect(r.writer.plugin()).toBe('0.6.59')
   })
 
   it('a record that cannot be read is not written over: an attach and a start write nothing, and say so', () => {
