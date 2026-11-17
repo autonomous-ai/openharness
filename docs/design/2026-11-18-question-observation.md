@@ -240,3 +240,55 @@ Actual outer, four worker and four receiver exits were zero. All EOF/reap/group/
 198 of 198 sockets physically closed, all four private roots were removed, and all 426 frozen input
 hashes plus report/evidence hashes matched. The remaining ordinary/new-observer/boundary cost phases
 and final native gates are separate; these numbers alone do not close responsiveness acceptance.
+
+## Merged-source ordinary comparison
+
+The fixed ordinary ABBA compares the same baseline `787c737db6` and merged `7aa0903a8b`, before later
+metric and launch changes. It retains all 840 measured samples across 1, 16 and 160 agents: existing
+window/default-tool snapshots, legacy live delivery and the actual question predicate with no audience,
+a window, a remote app or 64 named tools watching eight agents each. Every matched legacy wire byte
+and frame count agrees between the two sources, including the original complete-ID reconciliation.
+
+At 160 agents, window snapshot medians were 4.933/4.891 ms and default-tool medians 4.997/5.020 ms
+(baseline/candidate). Median timed live send was 21.391/21.619 microseconds; server CPU for 1,000 live
+operations was 31.535/31.540 ms. Predicate nanoseconds per query were 42.53/54.17 with no audience,
+15.72/22.66 with a window, 30.43/47.33 with a remote app and 289.38/239.88 with 64 named tools.
+The worst recorded loop hold across these ordinary cases was 6.042/4.858 ms; the worst snapshot loop
+hold was 2.431/2.449 ms. These are selected caller costs from one ABBA block, not aggregate daemon costs.
+Server CPU includes fixture/control work; receiver CPU is separate. Snapshot latency includes receiver
+parsing and assertions. Recorded memory includes the bundle, fixtures, timing arrays and prior cases,
+so it is not a measurement of isolated retained core state.
+
+Actual outer, all four worker and all four receiver exits were zero. All 6,252 sockets physically closed;
+EOF/reap/group/guardian and independent live absence checks passed, all four private roots were removed,
+and all 426 input hashes plus report/evidence hashes matched. All samples and cleanup receipts are retained
+in `/tmp/core-question-final-ordinary-results-20261118a`. Candidate-only stress, maximum plain input,
+exact-boundary and final native acceptance remain separate.
+
+## Merged-source observer stress
+
+Two fresh candidate-only `7aa0903a8b` workers retain all 360 samples: three warmups and ten samples
+per case, 1/16/160 agents, 64 explicit observation interests for the predicate, snapshots with one
+observer, 64 observers or one opted-in window, and live delivery to one or 64 observers. Each snapshot
+sample contains twenty complete connection cohorts; each live sample sends 1,000 operations. The full
+phase opened 103,350 physical WebSockets. The earlier 49,920 shorthand counted only the 64-observer
+snapshot route in one worker; the frozen loops were unchanged when this reporting error was corrected.
+
+At 160 agents, one-observer snapshot median/p95 was 8.312/10.713 ms. A 64-observer cohort completed in
+303.356/313.720 ms median/p95; its individual clients had a median of 277.982 ms. The opted-in window
+snapshot median was 8.220 ms. Median timed live send was 0.040277 ms for one observer and 1.577567 ms
+for 64, with a maximum of 3.843 ms for the 64-observer case. The worst measured loop hold across all
+cases was 9.445 ms; the 160-agent, 64-observer snapshot maximum was 8.815 ms. These are new-route
+measurements, with no baseline or per-phase improvement comparison.
+
+No observer refused a frame and no content/state assertion failed. Each arm accounted for 5,687,175
+question frames and 8,055,092,175 bytes, including warmups and all routes. Final callback-owned peaks
+were 131,586/109,631 bytes and 104/69 frames for the two arms. Accounting emits on physical close:
+sample deltas do not describe still-open live cohorts. Memory snapshots are retained with the same
+fixture/timing-array caveat as the ordinary comparison; they do not establish isolated core retention.
+
+Actual outer, both workers and both receivers exited zero. All 103,350 sockets physically closed, with
+no owned sockets or cleanup failures; EOF/reap/group/guardian and independent absence checks passed,
+both private roots were removed, and all 426 frozen inputs and report/evidence hashes matched. All
+samples and receipts remain in `/tmp/core-question-final-candidate-results-20261118a`. Maximum plain
+input, exact-boundary and native acceptance remain separate.
