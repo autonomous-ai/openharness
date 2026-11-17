@@ -32,7 +32,6 @@ void main() {
 
   ProcessRunner runner({
     required bool Function() tmuxPresent,
-    bool Function()? homebrewPresent,
     bool Function()? xclipPresent,
     bool Function()? wlCopyPresent,
     bool aptPresent = true,
@@ -100,11 +99,6 @@ void main() {
           stdout: tmuxInstallExitCode == 0 ? '✓ tmux ready (tmux 3.7c)' : '',
           stderr: tmuxInstallExitCode == 0 ? '' : 'tmux install failed',
         );
-      }
-      if (shell.contains('command -v brew')) {
-        return (homebrewPresent?.call() ?? true)
-            ? result(0, stdout: 'Homebrew 4.0')
-            : result(1);
       }
       if (shell.contains('command -v tmux')) {
         return tmuxPresent() ? result(0, stdout: 'tmux 3.4') : result(1);
@@ -224,9 +218,8 @@ void main() {
     );
   }
 
-  // The macOS ladder: tmux, else one in-app installer step that uses the
-  // Homebrew already here or downloads the managed build. Nothing here ever
-  // needs a Terminal window, Xcode, or a password.
+  // macOS: tmux, else one in-app installer step that downloads the managed
+  // build. Nothing here ever needs a Terminal window, Xcode, or a password.
   test('a computer with tmux is ready without Homebrew', () async {
     // Homebrew is how tmux MIGHT have got here, not how it runs — a `brew
     // install` from last year keeps working after Homebrew itself broke.
@@ -239,7 +232,6 @@ void main() {
       isWindows: false,
       openTerminal: (_) async => terminalLaunches++,
       run: runner(
-        homebrewPresent: () => false,
         tmuxPresent: () => true,
         installHarness: createManagedHarness,
         calls: calls,
@@ -260,46 +252,44 @@ void main() {
     expect(terminalLaunches, 0);
   });
 
-  test('without tmux the plan is one in-app step, worded by whether Homebrew is here', () async {
-    for (final homebrew in [true, false]) {
-      final calls = <String>[];
-      final provisioner = EnvironmentProvisioner(
-        harnessHome: scratch,
-        isMacOS: true,
-        isLinux: false,
-        isWindows: false,
-        run: runner(
-          homebrewPresent: () => homebrew,
-          tmuxPresent: () => false,
-          calls: calls,
-        ),
-      );
+  test('without tmux the plan is one in-app step: the managed download', () async {
+    // The installer never runs Homebrew, so a Homebrew here changes nothing.
+    final calls = <String>[];
+    final withoutHomebrew = runner(tmuxPresent: () => false, calls: calls);
+    final provisioner = EnvironmentProvisioner(
+      harnessHome: scratch,
+      isMacOS: true,
+      isLinux: false,
+      isWindows: false,
+      run: (executable, arguments, {environment}) async {
+        final shell = arguments.isNotEmpty ? arguments.last : '';
+        if (shell.contains('command -v brew')) {
+          calls.add('$executable ${arguments.join(' ')}');
+          return result(0, stdout: 'Homebrew 4.0');
+        }
+        return withoutHomebrew(executable, arguments, environment: environment);
+      },
+    );
 
-      final readiness = await provisioner.ensureReady(
-        onProgress: (_) {},
-        install: false,
-      );
+    final readiness = await provisioner.ensureReady(
+      onProgress: (_) {},
+      install: false,
+    );
 
-      expect(readiness.phase, EnvironmentSetupPhase.review);
-      expect(readiness.plan.map((item) => item.title), [
-        'tmux',
-        'Managed Node 22+ & Harness CLI',
-      ]);
-      expect(readiness.plan.first.requiresTerminal, isFalse);
-      expect(readiness.plan.first.command, kHarnessHostSetupCommand);
-      expect(
-        readiness.plan.first.detail,
-        homebrew ? contains('Homebrew') : contains('~/.harness/runtime'),
-      );
-      expect(
-        readiness.output.join('\n'),
-        homebrew
-            ? contains('✓ brew --version')
-            : contains('managed tmux download'),
-      );
-      expect(calls.any((line) => line.contains('xcrun')), isFalse);
-      expect(calls.any((line) => line.contains('--host')), isFalse);
-    }
+    expect(readiness.phase, EnvironmentSetupPhase.review);
+    expect(readiness.plan.map((item) => item.title), [
+      'tmux',
+      'Managed Node 22+ & Harness CLI',
+    ]);
+    expect(readiness.plan.first.requiresTerminal, isFalse);
+    expect(readiness.plan.first.command, kHarnessHostSetupCommand);
+    expect(readiness.plan.first.detail, contains('~/.harness/runtime'));
+    expect(readiness.output.join('\n'), contains('managed tmux download'));
+    // Every call's PATH names /opt/homebrew/bin, so these are the probes.
+    expect(calls.any((line) => line.contains('command -v brew')), isFalse);
+    expect(calls.any((line) => line.contains('brew --version')), isFalse);
+    expect(calls.any((line) => line.contains('xcrun')), isFalse);
+    expect(calls.any((line) => line.contains('--host')), isFalse);
   });
 
   test('automatic setup obtains tmux in-app through the installer, never in Terminal', () async {
@@ -314,15 +304,15 @@ void main() {
       isWindows: false,
       openTerminal: (_) async => terminalLaunches++,
       run: runner(
-        homebrewPresent: () => false,
         tmuxPresent: () => tmuxPresent,
         installTmux: () async => tmuxPresent = true,
         calls: calls,
       ),
     );
 
+    final messages = <String?>[];
     final readiness = await provisioner.ensureReady(
-      onProgress: (_) {},
+      onProgress: (state) => messages.add(state.message),
       install: true,
       mode: EnvironmentSetupMode.automatic,
     );
@@ -332,6 +322,7 @@ void main() {
     expect(terminalLaunches, 0);
     expect(calls.where((line) => line.contains('--host')), hasLength(1));
     expect(calls.any((line) => line.contains('brew install')), isFalse);
+    expect(messages, contains('Downloading the managed tmux…'));
     expect(readiness.output.join('\n'), contains('tmux ready (tmux 3.7c)'));
   });
 
