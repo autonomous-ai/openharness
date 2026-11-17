@@ -352,6 +352,10 @@ function fakeOrcaHomes(homes: OrcaHomes = { claude: [], codex: [] }) {
   return fake
 }
 
+/** The process table VS Code's windows match their agents by (services/devices.ts processNames): the spec's own, empty
+ *  unless a spec sets it, and each read counted, so no spec reads this machine's processes. */
+const processTable = { rows: [] as Array<{ pid: number; ppid: number; executable: string }>, reads: 0 }
+
 let dataDir: string
 let logs: string[]
 beforeEach(() => {
@@ -375,6 +379,8 @@ beforeEach(() => {
   readers.answer.mockResolvedValue(undefined)
   readers.name.mockResolvedValue(undefined)
   readers.processes.mockResolvedValue([])
+  processTable.rows = []
+  processTable.reads = 0
 })
 afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true })
@@ -417,6 +423,10 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     // A `claude` that finds none unless the spec gives its own: no spec runs the developer's. null leaves it out.
     claude: over.claude === null ? undefined : over.claude ?? (async () => null),
     orcaHomes: over.orcaHomes === null ? undefined : orcaHomes.cache(),
+    processNames: async () => {
+      processTable.reads++
+      return processTable.rows
+    },
   })
   const port = ports.devices as DevicesPort
   // Stopped once the spec ends, as the process stops them: a dial left attached on real timers keeps its 60 s scan, which
@@ -442,7 +452,8 @@ const turnTo = (agentId: string): void => {
 /** The listener the devices process opens (devicesProcess.ts), stood in for: what it was handed, its close, a front
  *  through its handler as `harness hardware watch` sends one, an attach as the harness-device mod sends one, the
  *  Notifications setting as a watch sends it, an agent's notice as `harness device notify` sends it, the tabs stream a
- *  watch holds open, and the dial stream Orca's Harness Device plugin holds open. */
+ *  watch holds open, the dial stream Orca's Harness Device plugin holds open, and a VS Code window's stream and state as
+ *  Harness's own extension sends them. */
 function fakeListener() {
   type Handlers = Readonly<Record<string, ListenerHandler | ListenerStreamHandler>>
   const given: Array<{ handlers: Handlers; log: (line: string) => void }> = []
@@ -490,7 +501,25 @@ function fakeListener() {
     })).toBeUndefined()
     return { lines, writable: () => writable(), end: (reason: string) => ended.abort(reason), break: () => { broken = true } }
   }
-  return { given, close, listen, front, attach, notify, notice, tabs, dial }
+  /** A VS Code window's stream, as Harness's extension holds one open: the lines the devices write on it, and its end. */
+  const vscode = (window: string) => {
+    const lines: unknown[] = []
+    const ended = new AbortController()
+    expect((given[0].handlers.vscode as ListenerStreamHandler).open({ type: 'vscode', window }, {
+      write: (line) => {
+        if (ended.signal.aborted) return false
+        lines.push(line)
+        return true
+      },
+      onWritable: () => {},
+      ended: ended.signal,
+    })).toBeUndefined()
+    return { lines, end: (reason: string) => ended.abort(reason) }
+  }
+  /** A window's shells, as its extension reports them, the first one active. */
+  const vscodeState = (window: string, terminals: number[]): unknown => (given[0].handlers['vscode-state'] as ListenerHandler)
+    .handle({ type: 'vscode-state', window, terminals, active: terminals[0] ?? null, focused: true }, new AbortController().signal)
+  return { given, close, listen, front, attach, notify, notice, tabs, dial, vscode, vscodeState }
 }
 
 describe('the devices, as the core starts them', () => {
@@ -550,12 +579,12 @@ describe('the devices, as the core starts them', () => {
 })
 
 describe('the devices\' own listener (services/devicesListener.ts)', () => {
-  it('the devices open their listener once, with front, attach, the tab handler, the tabs stream, the dial stream, the Notifications setting and the notice', () => {
+  it('the devices open their listener once, with front, attach, the tab handler, the tabs stream, the dial stream, the Notifications setting, the notice and VS Code\'s windows', () => {
     const listener = fakeListener()
     start({ listen: listener.listen })
     expect(listener.listen).toHaveBeenCalledTimes(1)
     const [{ handlers, log }] = listener.given
-    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'tabs', 'dial', 'notify', 'notice'])
+    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'tabs', 'dial', 'notify', 'notice', 'vscode', 'vscode-state'])
     expect(handlers.notice).toMatchObject({ maxBytes: NOTICE_MAX_BYTES, perSecond: NOTICE_PER_SECOND })
     expect(handlers.front).toMatchObject({ maxBytes: FRONT_MAX_BYTES, perSecond: FRONT_PER_SECOND })
     expect([FRONT_MAX_BYTES, FRONT_PER_SECOND]).toEqual([64, 10])
@@ -573,6 +602,14 @@ describe('the devices\' own listener (services/devicesListener.ts)', () => {
     // What the listener says goes to the devices' own log.
     log('[devices] listener open')
     expect(logs).toEqual(['[devices] listener open'])
+  })
+
+  it('the listener is given the vscode stream and its state report, with their bounds', () => {
+    const listener = fakeListener()
+    start({ listen: listener.listen })
+    const [{ handlers }] = listener.given
+    expect(handlers.vscode).toMatchObject({ maxBytes: 96, perSecond: 1, keyed: { limit: 8 } })
+    expect(handlers['vscode-state']).toMatchObject({ maxBytes: 1024, perSecond: 8 })
   })
 
   it('the listener is closed when the devices stop, before the cable is', async () => {
@@ -3263,6 +3300,93 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     await swiped('failed')
     expect(said()).toEqual(['[device] swipe · ok', '[device] swipe · failed'])
     expect(logs.filter((line) => [UUID, V1, 'vscode://', VSCODE].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  // An agent in VS Code's integrated terminal is shown by Harness's own extension, in the window that reports its shell,
+  // matched by the process tree (docs/plans/2026-11-17-dial-vscode-extension-design.md, §2 and §3).
+  const WINDOW_ID = 'window-1'
+  /** The shell VS Code started for the terminal: the hook's caller, 4242, runs under it. */
+  const SHELL = 4000
+  const TERMINAL_TREE = [{ pid: 4242, ppid: SHELL, executable: 'claude' }, { pid: SHELL, ppid: 1, executable: 'zsh' }]
+  /** Claude Code in a VS Code terminal, its dial on the cable once the listener opened; on macOS its hook carries VS Code's
+   *  bundle id too. */
+  const inVscodeTerminal = async (over: Parameters<typeof start>[0] = {}) => {
+    vi.useFakeTimers()
+    processTable.rows = TERMINAL_TREE
+    const listener = fakeListener()
+    const started = startHere({ listen: listener.listen, ...over })
+    const bundle: Record<string, string> = over.orca?.platform === 'darwin' ? { __CFBundleIdentifier: VSCODE } : {}
+    started.port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'vscode', ...bundle } }))
+    attach(started.port)
+    await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+    const front = (app: string) => { expect(listener.front(app)).toBeUndefined() }
+    /** The window opens and reports the agent's shell: once the table is read, the dials are told to look. */
+    const reported = async () => {
+      const window = listener.vscode(WINDOW_ID)
+      const looks = calls('syncAgents').length
+      expect(listener.vscodeState(WINDOW_ID, [SHELL])).toBeUndefined()
+      await vi.waitFor(() => expect(calls('syncAgents')).toHaveLength(looks + 1))
+      return window
+    }
+    return { ...started, front, reported }
+  }
+
+  it('an agent in VS Code\'s terminal gets its terminal once its window reports the shell, and the dials are told to look', async () => {
+    const { reported } = await inVscodeTerminal()
+    expect(await caps()).toEqual([{ id: ID, caps: 's' }])
+    await reported()
+    expect(processTable.reads).toBe(1)
+    expect(await caps()).toEqual([{ id: ID, caps: 'sf' }])
+  })
+
+  it('a tap writes the show to its window, then brings VS Code forward', async () => {
+    const { reported } = await inVscodeTerminal({ orca: mac })
+    const window = await reported()
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(window.lines).toEqual([{ show: SHELL }])
+    // The adapter's own `open -b`, after the show: the opener runs none of its own, and falls back to none.
+    expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', VSCODE], 10_000]])
+    expect(said()).toEqual([])
+  })
+
+  it('a rest shows the terminal only while VS Code is in front', async () => {
+    const { reported, front } = await inVscodeTerminal({ orca: mac })
+    const window = await reported()
+    front('vscode')
+    expect(host().swipeSwitches(ID)).toBe(true)
+    host().swipeEnded(ID, 'rest')
+    await swiped('ok')
+    expect(window.lines).toEqual([{ show: SHELL }])
+    expect(orcaRuns).toEqual([])
+    front('ghostty')
+    expect(host().swipeSwitches(ID)).toBe(false)
+  })
+
+  it('an agent that left has its chain dropped', async () => {
+    const { port, reported } = await inVscodeTerminal()
+    await reported()
+    expect(processTable.reads).toBe(1)
+    port.observed(hook('session-end', { hostHints: { TERM_PROGRAM: 'vscode' } }))
+    // Listed again under the same pid, which may be another process by now: its chain is read anew.
+    port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'vscode' } }))
+    await vi.waitFor(() => expect(processTable.reads).toBe(2))
+  })
+
+  it('with no listener (the services inside the core) no process table is read', async () => {
+    processTable.rows = TERMINAL_TREE
+    const { port } = startHere()
+    port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'vscode' } }))
+    attach(port)
+    expect(await caps()).toEqual([{ id: ID, caps: 's' }])
+    expect(processTable.reads).toBe(0)
+  })
+
+  it('a throw on the VS Code path costs the dial nothing', async () => {
+    const { port } = startHere({ faults: ['vscode'] })
+    port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'vscode' } }))
+    attach(port)
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
+    expect(logs).toContain('[devices] vscode failed · injected fault: vscode')
   })
 
   it('no swipe line carries a handle, a session or an agent', async () => {
