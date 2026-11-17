@@ -1,5 +1,28 @@
 # Registry persistence without lock sleeps
 
+## Pending admission during discovery (17 November Design)
+
+Concurrent native Claude/Codex creation exposed a pending-admission refusal while
+the other engine's discovery transaction was active. Pending admission alone did
+not permit the writer to validate and commit a complete observation batch, as
+process admission and binding already do. Give it the same existing permission;
+retain whole-batch validation, durable peer ownership, captured live ownership,
+the original write deadline, and publication before returning its detached row.
+Do not wait inside the writer for a transaction whose callback may await that
+same admission. Incomplete swaps and competing durable route owners still refuse.
+
+This introduces no record, queue, storage shape, migration, identity or audience
+change. Work and bounds remain those of the existing strict writer, with no new
+polling or retries. Existing content-free refusal diagnostics remain; the private
+native diagnostic classifies only fixed reasons and is not part of this change.
+Shared TypeScript affects all platforms; native evidence here is macOS x64.
+
+Select deterministic real-transaction RED first, plus incomplete-batch and changed
+peer-owner controls, the complete Registry unit file and related admission/merge/
+observation files, source types, and the unchanged concurrent native reader case.
+Keep the earlier native failure and require actual exit, EOF and owned cleanup.
+Broader integration gates follow only after this correction is accepted.
+
 Status: reviewed Design; first increment implementation and focused validation in progress. Based on
 `c3f590a247de488cbb61c50f105fe00e95746781`.
 

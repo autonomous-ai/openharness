@@ -2540,6 +2540,56 @@ describe('registry across a reboot and pane loss', () => {
     expect(registry.clearProcessIdentity('nobody')).toBe(false)
   })
 
+  it('admits a pending pane inside a complete discovery transaction before its callback continues', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const first = (await registry.openProcessAgent({ engine: 'claude', tmuxPane: '%1', processIdentity: processIdentity(11) }))!.entry
+    await registry.transaction(async () => {
+      registry.setCwd(first.agentId, '/fixture/discovered')
+      const pending = await registry.openPendingAgent({ agentId: 'pending-codex', engine: 'codex',
+        runtimes: [{ backend: 'tmux', paneId: '%2' }], cwd: '/fixture/created' })
+      expect(pending).toMatchObject({ agentId: 'pending-codex', engine: 'codex', tmuxPane: '%2', launch: { state: 'starting' } })
+      const saved = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8')) as RegisteredSession[]
+      expect(saved.find(row => row.agentId === first.agentId)?.cwd).toBe('/fixture/discovered')
+      expect(saved.find(row => row.agentId === 'pending-codex')).toMatchObject({ engine: 'codex', tmuxPane: '%2' })
+      expect(registry.byAgent('pending-codex')).toEqual(pending)
+      expect(registry.byAgent('pending-codex')).not.toBe(pending)
+    })
+  })
+
+  it('refuses a pending pane while the discovery batch contains an incomplete route swap', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const a = (await registry.openProcessAgent({ engine: 'claude', tmuxPane: '%1', processIdentity: processIdentity(11) }))!.entry.agentId
+    const b = (await registry.openProcessAgent({ engine: 'claude', tmuxPane: '%2', processIdentity: processIdentity(12) }))!.entry.agentId
+    const file = join(dataDir, 'registry.json'), before = readFileSync(file, 'utf8')
+    await registry.transaction(async () => {
+      registry.updateRuntimes(a, [{ backend: 'tmux', paneId: '%2' }], 'tmux\u0000%2')
+      try {
+        expect(await registry.openPendingAgent({ agentId: 'pending-codex', engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%3' }] })).toBeNull()
+        expect(registry.byAgent('pending-codex')).toBeUndefined()
+        expect(readFileSync(file, 'utf8')).toBe(before)
+      } finally { registry.updateRuntimes(b, [{ backend: 'tmux', paneId: '%1' }], 'tmux\u0000%1') }
+    })
+    expect(JSON.parse(readFileSync(file, 'utf8')).map((row: RegisteredSession) => row.agentId).sort()).toEqual([a, b].sort())
+  })
+
+  it('refuses a pending pane whose route gained a durable peer owner during discovery', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    await registry.openProcessAgent({ engine: 'claude', tmuxPane: '%1', processIdentity: processIdentity(11) })
+    const peer = new (registry.constructor as new () => typeof registry)()
+    registryInstances.add(peer); peer.load()
+    await registry.transaction(async () => {
+      expect(await peer.openPendingAgent({ agentId: 'peer-codex', engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%2' }] })).not.toBeNull()
+      const file = join(dataDir, 'registry.json'), peerBytes = readFileSync(file, 'utf8')
+      expect(await registry.openPendingAgent({ agentId: 'pending-codex', engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%2' }] })).toBeNull()
+      expect(registry.byAgent('pending-codex')).toBeUndefined()
+      expect(readFileSync(file, 'utf8')).toBe(peerBytes)
+      expect(peer.byAgent('peer-codex')).toMatchObject({ engine: 'codex', tmuxPane: '%2' })
+    })
+  })
+
   it('survives two restored panes swapping ids when done inside one transaction', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()
