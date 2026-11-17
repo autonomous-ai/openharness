@@ -1,4 +1,5 @@
 import { EventEmitter, once } from 'node:events'
+import type { IncomingMessage } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
@@ -6,9 +7,12 @@ import { env } from '../config/env.js'
 import { AuthSessionError } from '../lib/authSession.js'
 import { UpstreamLink } from './upstream.js'
 
+// The computer's name is macOS's to give, which a test cannot set.
+vi.mock('../lib/computerName.js', () => ({ computerName: () => 'Test Lab Mac' }))
+
 // A stand-in backend on loopback. `onConnection` decides what each accepted link gets; `refuse` answers
 // every upgrade with that HTTP status instead.
-async function backend(opts: { onConnection?: (ws: WebSocket) => void; refuse?: number } = {}) {
+async function backend(opts: { onConnection?: (ws: WebSocket, request: IncomingMessage) => void; refuse?: number } = {}) {
   const wss = new WebSocketServer({
     port: 0,
     host: '127.0.0.1',
@@ -16,7 +20,7 @@ async function backend(opts: { onConnection?: (ws: WebSocket) => void; refuse?: 
   })
   await once(wss, 'listening')
   const links: WebSocket[] = []
-  wss.on('connection', (ws) => { links.push(ws); opts.onConnection?.(ws) })
+  wss.on('connection', (ws, request) => { links.push(ws); opts.onConnection?.(ws, request) })
   return { wss, links, url: `ws://127.0.0.1:${(wss.address() as AddressInfo).port}` }
 }
 
@@ -194,6 +198,18 @@ describe('UpstreamLink reconnect backoff', () => {
 
     expect(waits).toEqual([1_500, 2_500, 4_500])
     expect(refreshes).toBe(3)
+  })
+
+  it('the adapter-ws dial names the computer as its person named it', async () => {
+    let dialed = ''
+    await serve({ onConnection: (_ws, request) => { dialed = request.url ?? '' } })
+    const { link, signals } = open()
+
+    const up = once(signals, 'up')
+    link.connect()
+    await up
+
+    expect(dialed).toContain('label=Test%20Lab%20Mac')
   })
 
   it.each(['stop', 'close'] as const)('cancels a pending redial on %s', async (end) => {
