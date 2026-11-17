@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CMUX_AUTOMATION_OFF, type CmuxPrompt, type CmuxSession, type CmuxSessions } from './cmuxCli.js'
-import { CmuxSource, pidAlive, type CmuxSourceDeps } from './cmuxSource.js'
+import { CmuxSource, type CmuxSourceDeps } from './cmuxSource.js'
 import type { HostAgent, PaneSwitch } from './types.js'
 
 /** The wall clock the test starts at. */
@@ -117,18 +117,6 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
       s.live.delete(102)
       await started(s, [record(), record({ surface: S2, pid: 102 })])
       expect(listed(s)).toEqual([key(S1)])
-    })
-
-    it('pidAlive is true when kill succeeds or says EPERM, false on ESRCH', () => {
-      const fault = (code: string) => () => { throw Object.assign(new Error(code), { code }) }
-      const kill = vi.spyOn(process, 'kill')
-      kill.mockImplementationOnce(() => true)
-      expect(pidAlive(4242)).toBe(true)
-      kill.mockImplementationOnce(fault('EPERM'))
-      expect(pidAlive(4242)).toBe(true)
-      kill.mockImplementationOnce(fault('ESRCH'))
-      expect(pidAlive(4242)).toBe(false)
-      expect(kill.mock.calls).toEqual([[4242, 0], [4242, 0], [4242, 0]])
     })
 
     it('one row per surface: the newest updated_at_unix wins, whichever store it came from', async () => {

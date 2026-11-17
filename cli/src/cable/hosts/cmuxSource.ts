@@ -21,8 +21,6 @@ import { MAX_AGENTS, shown } from './herdrSource.js'
 import { MAX_TEXT } from './orca.js'
 import type { Caps, HostAgent, HostAgentState, HostSource, PaneSwitch, SendResult } from './types.js'
 
-export { pidAlive } from '../../lib/processProof.js'
-
 /** The agents kept, listed or not. */
 const MAX_KEPT = 1024
 /** cmux processes at a time: cmux v0.65.2.2 tracks 20 agents, each with a store of its own. */
