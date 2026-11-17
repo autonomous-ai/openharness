@@ -87,9 +87,10 @@ export interface HostAdapter {
   /** Whether a rest can show the pane inside its app now (the app in front, a watch open): asked at each look. */
   canShow?(pane: Pane): boolean
   show?(pane: Pane, agentId: string): Promise<PaneSwitch>
-  /** Types a line at the agent's prompt and submits it. Only the source decides that the prompt is free. A `TypeResult`
-   *  is `true` when sent, `false` when it failed, `'busy'` or `'waiting'` as the app says now, or `{ refused }` with a
-   *  fixed sentence the dial shows. */
+  /** Types a line at the agent's prompt and submits it. The source decides that the agent is free; an adapter that can
+   *  read the prompt checks it again before it types (cmux's: an idle, empty prompt). A `TypeResult` is `true` when sent,
+   *  `false` when it failed, `'busy'` or `'waiting'` as the app says now, or `{ refused }` with a fixed sentence the
+   *  dial shows. */
   type?(pane: Pane, text: string): Promise<TypeResult>
   /** A tap's order with the app's own `open -b`: the pane first (Orca, WezTerm, herdr), the pane alone (the Claude
    *  app's link and Herdr's focus bring the app themselves), or the app first (a tab is selected once its app is in
@@ -101,8 +102,10 @@ export interface HostAdapter {
 The adapter id is the name today's log lines use (`[device] open · claude · fallback`), so the Claude app's is `claude`
 (PM, 2026-11-15).
 
-`ObservedSource` keeps every pane an adapter recognises for an entry, in a fixed order: herdr, WezTerm, Orca, the
-Claude app, then a tab by tty. That is today's precedence: `open.ts` `paneOf` for a tap, then `shownPane`'s tab.
+`ObservedSource` keeps every pane an adapter recognises for an entry, in a fixed order (`adapters` in
+`services/devices.ts`): herdr, tmux, Herdr (`herdr-app`), cmux, WezTerm, Orca, the Claude app, the Codex app, VS Code,
+then a tab by tty. The nearest host first: a multiplexer keeps the environment it started in, and Herdr and cmux tell
+their programs they run in Ghostty, whose tabs hold none of them.
 
 Each verb uses the first pane in that order whose adapter can do it:
 - words: the first with `type` (Orca);
