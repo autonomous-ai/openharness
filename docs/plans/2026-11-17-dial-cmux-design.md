@@ -53,7 +53,9 @@ With cmux on this Mac and a dial attached:
 2. **Voice** only when `effective_mode` is `automation` or `allowAll`, the surface's `input_state` is idle with an empty
    prompt, and the agent there is the one the dial means. Through `cmux paste --submit`, never `--force`. Otherwise the
    dial shows `Turn on Automation mode in cmux.`; the docs give the steps. `password` mode is not supported (no secret
-   is read). cmux's settings are never changed.
+   is read). cmux's settings are never changed. Only Claude Code's and Codex's agents take words: cmux v0.65.2.2's
+   `surface.input_state` reads only their prompts (`AgentPromptInputState.swift`), and every other agent's is
+   `unknown` (PM, final review).
 3. **Tap and rest** are the `cmux://` link alone, sent to cmux by its bundle id through `appLink.ts` `createAppLink`
    with `bundle: 'com.cmuxterm.app'` (`open -b com.cmuxterm.app cmux://workspace/<w>/surface/<s>`, through `openPath`),
    as the Claude and Codex apps' links, so only the release app receives it. A second rest while one runs is `busy`.
@@ -109,7 +111,10 @@ agents, and tells `onChange` only when the listed rows changed.
   (`<word>-hook-sessions.json`) in `~/.cmuxterm` (the devices process's own `HOME`), one run for that agent alone
   (`--agent <word> --all`), whose rows replace that agent's rows; the other agents' rows stay. So a Claude Code hook
   never walks Codex's sessions. A change with no file name runs all agents. Per agent, one run at a time; changes during
-  a run give one more after it. A run that ends after `stop()` is dropped.
+  a run give one more after it, and two runs of one agent start at least 250 ms apart (a working agent's hooks write
+  its store many times a second; PM, final review). A run that ends after `stop()` is dropped.
+- **A failed start:** when the all-agents run fails (one store cmux cannot read fails it all), one run per store file
+  in the folder follows, so one bad store hides only its own agent.
 - **The watch** is `unixSocket.ts`'s `watchSocket`, made to pass the changed file's name (no second watcher): it holds
   `~/.cmuxterm`, else its parent and `HOME`, and goes back to them when the folder is removed. With no `~/.cmuxterm`
   nothing is listed until it appears. No timer runs.
@@ -131,18 +136,25 @@ agents, and tells `onChange` only when the listed rows changed.
 - **Its tap** goes through the opener (`open.ts`) to the cmux adapter's `focus`, as a hooked agent's does. **Its rest:**
   `hasPane` (the adapter's `canShow`) and `showPane` (the adapter's `show`). **Its words:** the adapter's `prompt`,
   with the refusals below as the dial's sentences.
-- **Merge with a hooked copy:** the registry folds a row into the hooked copy on any one of the same `engine` and
-  `session_id`, the same pid, or the same pane key (`registry.ts`), and keeps the hooked one. The cmux row carries all
-  three (`callerPid` from `pid`), so the fold holds also while the hooked copy has no cmux pane yet.
+- **Merge with a hooked copy:** the registry folds a row into the hooked copy on the same `engine` and `session_id`,
+  or the same pane key, and keeps the hooked one (`registry.ts`; it folds by pid only an agent with no session id). So
+  while the hooked copy has no cmux pane (tmux inside cmux), the fold holds by the session id alone.
+- **Voice** is offered (`capabilities`) only on a `claude` or `codex` row; the adapter's `canType` holds the same rule
+  for a hooked copy (decided 2).
 - **The open scan's copy** (decided 7): the scan lists every open Claude Code and Codex session, and its copy wins the
   fold by its session id, with no cmux pane until that session's next hook. `devices.ts` places each such copy with no
   cmux pane of its own at the pane of the cmux row that names its engine and session id (the source tells a row's pane,
   `paneAt`), through `setPaneNames('cmux', new Map(), placed)`, after each change of either source. A place opens and
   shows, never takes words: its state and words stay the scan's until its first hook. The place goes when cmux no
   longer lists that session, or when a hook gives it a cmux pane of its own.
+- **Limit (PM, final review):** a Claude Code or Codex session in cmux that no Harness hook has told of (started before
+  Harness's hooks were set up) keeps the scan's copy: the dial shows the scan's state, not cmux's `needsInput`, and its
+  words are not typed into cmux, until that session's first Harness hook. Herdr's agents have the same limit, from the
+  same fold. A follow-up fixes both.
 - Logs, fixed words and counts only: `[cmux] listed · <n> agents`, `[cmux] list · failed|too-big`,
   `[cmux] over · <n> left out`, `[cmux] watch · none|on`, `[cmux] read · <agent word or all> · <ms>` (the hot-path
-  number: each run's time, from the fake in tests and from a real cmux later).
+  number: a word's first run after each start, then each slower one; from the fake in tests and from a real cmux later).
+  A failure line names the fault and the agent word, and is said once per start.
 
 ### The cmux adapter (`cmuxApp.ts`)
 
@@ -257,8 +269,8 @@ macOS only (cmux runs only there). Linux and Windows: no change; the hook sends 
   cmux's tab), `test_touch_ui.py`.
 - **End to end, macOS** (`cli/e2e/deviceCmux.e2e.ts`): the daemon under test with its own `HOME`, the fake `cmux` on
   its `PATH` and the fake `open` (#4373). The records' pid is a live process the test starts and ends. Writing a store
-  file in that `HOME` lists the agent with its state, and the log's `read` line gives the time from write to card; a state
-  change arrives as a card; a tap runs one `open -b com.cmuxterm.app` of the `cmux://` link; the words arrive on the fake's stdin with
+  file in that `HOME` lists the agent with its state; a state change arrives as a card, and the test prints the time
+  from that store write to the card; a tap runs one `open -b com.cmuxterm.app` of the `cmux://` link; the words arrive on the fake's stdin with
   `automation` and are refused with `cmuxOnly` (the dial's sentence); a pick of cmux runs `open -b com.cmuxterm.app`.
   It checks the fake is the cmux the daemon resolves before any tap, so a real cmux is never driven.
 - Nothing runs or reads Diego's own cmux, `~/.cmuxterm` or cmux settings.
@@ -271,20 +283,26 @@ macOS only (cmux runs only there). Linux and Windows: no change; the hook sends 
 ## Follow-ups
 
 - A check against the real cmux app (a nightly that installs the cask, or Diego once he installs it), with the `read`
-  times of a real store and Codex index.
+  times of a real store and Codex index, and whether the 250 ms gap between one agent's runs holds the load down.
+- A Claude Code or Codex session no Harness hook has told of, in cmux and in Herdr: its state and words from the
+  listing source (the limit above).
+- A permanent macOS job that runs the device end to ends (`deviceCmux.e2e.ts`, `deviceHerdrApp.e2e.ts`).
 - cmux NIGHTLY.
 - The firmware release that carries the `cmux` name.
 
 ## Done when
 
 1. With cmux running and no Harness hook, each agent its stores list as active and alive is on the dial, on cmux's
-   page, with its state; a state change reaches the dial as a card within a second of the store's write.
+   page, with its state; a state change reaches the dial as a card within a second of the store's write. A new row
+   also waits for the dial's own list push (one a second at most, `AGENTS_PUSH_GAP_MS`). Not for a Claude Code or Codex
+   session the open scan found before any Harness hook (the limit above).
 2. A hooked agent in cmux is listed once, on cmux's page, never Ghostty's.
 3. A tap opens cmux at that agent's tab (opening cmux when it is closed); a rest with cmux in front shows the tab; a
    pick of cmux on APPS brings cmux forward.
 4. The dial's words reach an idle cmux agent as one submitted prompt only with Automation mode (or full access) on;
    with the default mode the dial says `Turn on Automation mode in cmux.`; nothing is typed while it works, waits, holds
-   a draft or a dialog, or when the text is empty or too long.
+   a draft or a dialog, or when the text is empty or too long. Only Claude Code and Codex agents take words; other
+   agents in cmux show their state and open on a tap.
 5. With cmux not installed, or no `~/.cmuxterm`, nothing is listed and no timer runs; when the folder appears, its
    agents appear with no daemon restart.
 6. After #4391 is on `main`: after a daemon restart, an idle Claude Code or Codex agent listed from cmux shows its last

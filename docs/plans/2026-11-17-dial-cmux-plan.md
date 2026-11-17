@@ -699,7 +699,7 @@ The planner read these in cmux `v0.65.2.2` (`gh api repos/manaflow-ai/cmux/conte
   - `a tap opens the agent's tab by cmux's link, and a pick of cmux brings cmux forward`: after `agent.open`, `d.opens()` is `[['-b', 'com.cmuxterm.app', 'cmux://workspace/<W>/surface/<S>']]`; after `app.pick` of `cmux` (a dial that says `appFilter`), it gains `['-b', 'com.cmuxterm.app']`.
   - `a hooked agent in cmux is one row on cmux's page, and its tap is the same link`: `Outside.start(d, 'web', { TERM_PROGRAM: 'ghostty', CMUX_SURFACE_ID: S2, CMUX_WORKSPACE_ID: W2 })`; its row has `host: 'cmux'` and the dial's `apps` hold `cmux` and no `ghostty`; a record of that surface with its pid and session id, then a `touchStore`, leaves one row with the same id; its tap's `open` is `['-b', 'com.cmuxterm.app', 'cmux://workspace/<W2>/surface/<S2>']`.
   - `afterEach` ends the children, then the desk, the daemon and the backend.
-- [ ] **Step 2: Run** `cd cli && env -u TMUX -u TMUX_PANE TMPDIR=/tmp E2E_BUNDLE=1 npx vitest run --config vitest.e2e.config.ts e2e/deviceCmux.e2e.ts`. Expected: PASS, three tests, none skipped, on this Mac. A failure is a finding in the task that owns the behavior: report it, do not loosen the test.
+- [ ] **Step 2: Run** `cd cli && env -u TMUX -u TMUX_PANE TMPDIR=/tmp E2E_BUNDLE=1 npx vitest run --config vitest.e2e.config.ts e2e/deviceCmux.e2e.ts --reporter=default`. Expected: PASS, three tests, none skipped, on this Mac. A failure is a finding in the task that owns the behavior: report it, do not loosen the test.
 - [ ] **Step 3: Commit** `e2e: cmux's agents on the dial, from a fake cmux`.
 
 ### Task 11: Say it in the docs
@@ -757,14 +757,14 @@ The planner read these in cmux `v0.65.2.2` (`gh api repos/manaflow-ai/cmux/conte
 **1. A fake cmux, the real daemon, a fake dial**
 - Where: this Mac only, at the final head. No test account, no sign-in: the speech goes to a fake backend on loopback.
 - Build: nothing by hand. The suite starts the daemon from the working tree.
-- Run: `cd cli && env -u TMUX -u TMUX_PANE TMPDIR=/tmp E2E_BUNDLE=1 npx vitest run --config vitest.e2e.config.ts e2e/deviceCmux.e2e.ts`.
+- Run: `cd cli && env -u TMUX -u TMUX_PANE TMPDIR=/tmp E2E_BUNDLE=1 npx vitest run --config vitest.e2e.config.ts e2e/deviceCmux.e2e.ts --reporter=default`.
 - Isolation, the suite's own (`cli/e2e/harness/daemon.ts`, cli/AGENTS.md rules 5 and 6) and the file's:
   - a throwaway home (so its own `.cmuxterm`), data folder and Codex home, a private port and tmux server, a fake dial on a pseudo-terminal;
   - the fake `cmux` in the daemon's root, in a `cmux.app/Contents/Resources/bin` folder, linked first on the daemon's `PATH`, and checked to be the one the daemon resolves before it starts;
   - the fake `open` (`HARNESS_OPEN_BIN`), checked to be inside the daemon's root;
   - the daemon under test inherits no `CMUX_*` (`src/testing/daemonEnvironment.ts`), and the client would drop one.
   - Before and after the run, `ls -d ~/.cmuxterm /Applications/cmux.app; command -v cmux` answers the same: nothing.
-- A person sees: three tests pass, none skipped (four once Task 12 is in). The first one's log has `[cmux] watch · none`, `[cmux] watch · on`, `[cmux] listed · 1 agents`, `[cmux] read · all · <ms>`, `[device] voice · refused (cmux)`, `[device] voice · cmux` and `[device] voice · busy`. It prints the time from the store's write to the dial's row: under 1,000 ms on this Mac, else a finding (done-when 1). The second one's `open` record is `-b com.cmuxterm.app` and the link, then `-b com.cmuxterm.app`.
+- A person sees: three tests pass, none skipped (four once Task 12 is in). The first one's log has `[cmux] watch · none`, `[cmux] watch · on`, `[cmux] listed · 1 agents`, `[cmux] read · all · <ms>`, `[device] voice · refused (cmux)`, `[device] voice · cmux` and `[device] voice · busy`. It prints the time from a store write to the card it gives: under 1,000 ms on this Mac, else a finding (done-when 1; a new row also waits for the dial's own 1 s list push). `--reporter=default` keeps that line visible under an agent's runner. The second one's `open` record is `-b com.cmuxterm.app` and the link, then `-b com.cmuxterm.app`.
 - Skipped or not run: report it as not verified, never as passed.
 - On GitHub: none. `cli-e2e.yml`'s shards are Linux, where the file reads skipped, and its one macOS job runs the disk-full tests alone. **Proposal** (not this pull request; it goes in the final report, decided 10): a macOS job of `cli-e2e.yml` for the macOS-only dial files; this one needs nothing installed.
 
