@@ -666,6 +666,24 @@ describe('start()', () => {
       vi.useRealTimers()
     }
   })
+
+  it('logs a failed opening pass by its kind, as its message may quote a path', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    class ProbeFailed extends Error {}
+    const reconciler = new TerminalAgentReconciler({
+      current: () => [], backends: [], backendOrder: ['tmux'],
+      onDiscovered: vi.fn(), onObserved: vi.fn(), onDormant: vi.fn(), onRemoved: vi.fn(),
+      probe: async () => { throw new ProbeFailed("ps failed reading '/Users/someone/private'") },
+    })
+    try {
+      await reconciler.start(60_000)
+      expect(warn).toHaveBeenCalledWith('[discovery] a pass failed, the next one tries again · ProbeFailed')
+      expect(warn.mock.calls.flat().join(' ')).not.toContain('/Users/someone')
+    } finally {
+      reconciler.stop()
+      warn.mockRestore()
+    }
+  })
 })
 
 describe('a terminal pane (engine `terminal`)', () => {
