@@ -3,8 +3,8 @@
  * real daemon, started once something needs it (core/viewersWake.ts; e2e/viewersOnDemand.e2e.ts). The harnesses
  * the release bundles are put in place by the Store's start; an install from a
  * repository runs there, its progress reaches the window as `dsh_install_status` through the core, and an
- * agent created on the harness the moment the install answers finds it installed, though the core keeps
- * the installed index for two seconds (dsh/installed.ts). Whatever happens to the process costs the Store
+ * agent created on the harness the moment the install answers finds it through the Store's two-second
+ * installed-index cache (dsh/installed.ts). Whatever happens to the process costs the Store
  * and the viewers alone: killed, a list asked meanwhile waits for the master to bring it back, within a start's
  * wait (core/serviceLinks.ts `waitsThroughRestart`), and agents go on.
  */
@@ -24,7 +24,7 @@ function repository(d: IsolatedDaemon, id = HARNESS, name = 'Installed Here', ga
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'harness.json'), JSON.stringify({ spec: 1, id, name, engine: 'claude', toolchain: { setup: './setup.sh' }, ...(initialization ? { workspace: { init: './init.mjs' } } : {}) }))
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
-  // Found by QA on a quiet machine: hold setup while the core reads the uninstalled index. A
+  // Found by QA on a quiet machine: hold setup while admission asks for the uninstalled package. A
   // warming loop can cross the install's completion and mistake a successful create for a failure.
   const wait = gate ? `${quote(process.execPath)} -e ${quote(`
     const fs = require('node:fs');
@@ -96,7 +96,7 @@ describe('the Store in its own process, beside the viewers', () => {
     const client = await LocalClient.connect(d)
     expect(await client.request('dsh_install', { url: repository(d, FIRST, 'Installed First') }, 180_000)).toMatchObject({ ok: true, id: FIRST })
     expect(await create(d, client, 'installed-first', FIRST)).toMatchObject({ dsh: FIRST, dshName: 'Installed First' })
-    // The core keeps what is installed for two seconds (dsh/installed.ts). Read the missing
+    // Store keeps what is installed for two seconds (dsh/installed.ts). Read the missing
     // harness while setup is held, then finish the install inside that cache's lifetime.
     const cwd = join(d.projectsDir, 'installed-here')
     mkdirSync(cwd, { recursive: true })
@@ -112,7 +112,7 @@ describe('the Store in its own process, beside the viewers', () => {
     expect(await installing).toMatchObject({ ok: true, id: HARNESS })
     const created = await createHere()
     // Expiry must not hide a missing invalidation: both requests completed inside the cache lifetime.
-    expect(Date.now() - warmedAt, 'created inside the core cache lifetime').toBeLessThan(2_000)
+    expect(Date.now() - warmedAt, 'created inside the Store cache lifetime').toBeLessThan(2_000)
     expect(created.error, JSON.stringify(created)).toBeUndefined()
     const agent = await until('the harness agent to bind', async () => {
       const found = await row(client, created.agent.id)

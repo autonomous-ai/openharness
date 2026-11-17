@@ -99,18 +99,18 @@ describe('forking an agent', () => {
   // A launch or an installed harness one test queued and never used answers no other test.
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); launchDsh.mockReset(); vi.mocked(installedDsh).mockReset() })
 
-  it.each(['initial', 'source', 'inspect', 'harness', 'overrides', 'hooks', 'permission', 'instructions'] as const)(
+  it.each(['initial', 'source', 'inspect', 'workspace', 'description', 'harness', 'overrides', 'hooks', 'permission', 'instructions'] as const)(
     'cannot dispatch a fork whose original owner is revoked during %s', async stage => {
       let current = stage !== 'initial'
       const revoke = (at: string) => { if (stage === at) current = false }
-      const launch = { current: () => true, environment: { HOME: root }, opencodeMajor: 1 } as unknown as NativeLaunch
+      const launch = { current: () => stage !== 'workspace', environment: { HOME: root }, opencodeMajor: 1 } as unknown as NativeLaunch
       vi.mocked(installedDsh).mockReturnValue({ manifest: { name: 'Fixture' } } as never)
       vi.mocked(refusePermissionFlagIfUnsupported).mockImplementation(async () => { revoke('permission'); return null })
       vi.mocked(prepareInstructionWrites).mockImplementation(async () => revoke('instructions'))
       const run = setup(source({ dsh: 'fixture/tools' }), {
         authority: () => () => stage !== 'source',
         native: async (_engine, _source, authority) => { authority.hold({ service: 'native', detail: 'Checking fixture' }); revoke('inspect'); return { ok: true, launch } },
-        dshLaunch: { describe: describeDsh, launch: async () => { revoke('harness'); return { ok: true, launch: { env: {}, args: [] } } } },
+        dshLaunch: { describe: async dsh => { revoke('description'); return describeDsh(dsh) }, launch: async () => { revoke('harness'); return { ok: true, launch: { env: {}, args: [] } } } },
         relaunchOverrides: async () => { revoke('overrides'); return { ok: true, overrides: { native: launch, env: {}, extraArgs: [], clearEnv: [] } } },
         prepareNative: async () => { revoke('hooks'); return true },
       })
@@ -126,6 +126,18 @@ describe('forking an agent', () => {
       }
     },
   )
+
+  it('refuses a package fork whose workspace disappears during native preparation', async () => {
+    const cwd = mkdtempSync(join(root, 'vanishing-'))
+    const describe = vi.fn(describeDsh)
+    const run = setup(source({ cwd, dsh: 'fixture/tools' }), {
+      native: async () => { rmSync(cwd, { recursive: true }); return { ok: true, launch: { current: () => true } as NativeLaunch } },
+      dshLaunch: { describe, launch: launchDsh },
+    })
+    expect(await run.fork({ agentId: 'a1', name: null, prompt: null })).toEqual({ ok: false, error: 'CWD_NOT_FOUND' })
+    expect(describe).not.toHaveBeenCalled()
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
+  })
 
   it('holds an unconfirmed final fork configuration before permission checks or dispatch', async () => {
     const launch = { current: () => true, environment: { HOME: root }, opencodeMajor: 1 } as unknown as NativeLaunch

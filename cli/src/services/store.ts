@@ -38,7 +38,7 @@ const internal = (error: unknown): Record<string, unknown> =>
   ({ error: 'INTERNAL', detail: error instanceof Error ? error.message : String(error) })
 
 /** A partial startup retries only when something uses Store. Successful starts scan no more. */
-export type StorePreparation = ((id?: string) => boolean) & { ready(): boolean }
+export type StorePreparation = ((id?: string) => boolean) & { ready(): boolean; invalidate(): void }
 export function createStorePreparation(core: Pick<CoreApi, 'dataDir'>, prepare = ensureBundledCoreHarnesses): StorePreparation {
   let prepared = false
   let hachi: boolean | undefined
@@ -51,7 +51,7 @@ export function createStorePreparation(core: Pick<CoreApi, 'dataDir'>, prepare =
     }
     return prepared || (id === HACHI_ID && !enabled)
   }
-  return Object.assign(ensure, { ready: () => prepared })
+  return Object.assign(ensure, { ready: () => prepared, invalidate: () => { prepared = false } })
 }
 
 export function startStore(core: CoreApi, deps: StoreDeps = DEFAULTS, prepare = createStorePreparation(core, deps.prepare)): ServiceRequests {
@@ -65,6 +65,7 @@ export function startStore(core: CoreApi, deps: StoreDeps = DEFAULTS, prepare = 
   // conversation. The watch keeps no process alive, and the Store has no stop of its own: it ends with its process.
   deps.watch(agentSettingsPath(core.dataDir), () => {
     const now = hachiOn()
+    if (now !== hachi) prepare.invalidate()
     if (now && !hachi) prepare()
     hachi = now
   })
@@ -98,7 +99,11 @@ export function startStoreInCore(core: CoreApi, ports: CorePorts, prepared?: () 
   const requests = startStore(core, undefined, prepare)
   const launch = storeLaunchPort(undefined, undefined, prepare)
   ports.store = {
-    dshDescribe: request => launch.dshDescribe(request),
+    dshDescribe: async request => {
+      const answer = await launch.dshDescribe(request)
+      if (prepare.ready()) prepared?.()
+      return answer
+    },
     dshMaterialize: async request => {
       const answer = await launch.dshMaterialize(request)
       if ((answer.ok || !answer.unavailable) && prepare.ready()) prepared?.()

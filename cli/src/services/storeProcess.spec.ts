@@ -29,7 +29,7 @@ describe('the Store in its own process', () => {
     const service = { stop: vi.fn() }
     const handle = runStoreService({
       dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't',
-      prepare: Object.assign(() => true, { ready: () => true }),
+      prepare: Object.assign(() => true, { ready: () => true, invalidate: () => {} }),
       run: (given) => { options = given; return service },
       start: (core) => { api = core; return answers },
     })
@@ -85,7 +85,7 @@ describe('the Store launch port on its process wire', () => {
     const launch = { dshDescribe: vi.fn(async () => ({ ok: true as const, id: 'test/draw', name: 'Draw', permissionMode: null, refusal: null })), dshMaterialize: vi.fn(async () => ({ ok: true as const, created: [], kept: [], warnings: [] })),
       dshLaunch: vi.fn(async () => ({ ok: true as const, launch: { env: {}, args: [] } })) }
     runStoreService({ dataDir: '/data', socketPath: '/socket', machineId: 'm', token: 't', start: () => ({}), launch,
-      prepare: Object.assign(() => true, { ready: () => true }) })
+      prepare: Object.assign(() => true, { ready: () => true, invalidate: () => {} }) })
     return { launch, requests: vi.mocked(runServiceProcess).mock.calls.at(-1)![0].requests }
   }
   it('checks context, private grid and fork identity, and strips unrelated data', async () => {
@@ -110,7 +110,7 @@ describe('the Store launch port on its process wire', () => {
     const facts = { ok: true as const, id: request.dsh, name: 'Draw', permissionMode: null, refusal: null }
     launch.dshDescribe.mockImplementation(async () => { ready = true; return facts })
     runStoreService({ dataDir: '/data', socketPath: '/socket', machineId: 'm', token: 't', start: () => ({}), launch,
-      prepare: Object.assign(() => ready, { ready: () => ready }) })
+      prepare: Object.assign(() => ready, { ready: () => ready, invalidate: () => {} }) })
     const options = vi.mocked(runServiceProcess).mock.calls.at(-1)![0]
     const query = vi.fn(async () => ({}))
     options.onConnected!({ query })

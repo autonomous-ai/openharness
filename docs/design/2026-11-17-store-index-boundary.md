@@ -64,6 +64,9 @@ Reviewed direction: root, 2026-11-17, before implementation.
    Each consumer retains successful first-use readiness for that process, so later
    requests do not rehash bundle contents. Only incomplete/failed preparation is
    retried by the next actual request; a component restart loads a new release.
+   Store invalidates readiness when optional Hachi changes, without preparing while
+   it is off. Both process and explicit inline descriptions announce recovered
+   readiness to waiting launches.
 10. Platforms: shared TypeScript on macOS/Linux/Windows. No new process mechanism,
     dependency, OS account or platform-specific shell. Paths use native path APIs;
     fixtures cover symlinked workspace, renamed package and old install directory.
@@ -98,3 +101,10 @@ Selected final checks: CLI types; core, harnessd, resume, portability and local-
 required gates; architecture and Store/Grid/native launch goldens; private Store
 process kill/hang/restore and viewer scenarios; program ensure/newCommand specs and
 programHarness private E2E for the merged source. No benchmark runs overlap them.
+
+Targeted review validation: the inline recovery notification test failed first
+(expected three notifications, observed two), then passed after the port fix.
+The existing Hachi off/on control caught readiness retained across a disabled
+interval; settings invalidation restored it. The final narrow run passed all 216
+tests in eight Store, consumer, create and fork files, and CLI types passed. Full
+required gates and private E2Es remain pending the parent's quiet-window release.

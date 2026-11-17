@@ -141,8 +141,8 @@ export function isBrokenDsh(value: InstalledDsh | BrokenDsh): value is BrokenDsh
   return 'error' in value
 }
 
-// The daemon asks "is this agent's DSH installed" on every frame it projects, which is every
-// announce of every agent. A short cache keeps that off the disk; installs and removals clear it.
+// Store and viewer consumers share this process-local view. A short cache keeps repeated
+// package/frame requests off disk; installs and removals clear it.
 const CACHE_TTL_MS = 2_000
 let cache: { at: number; installed: InstalledDsh[]; broken: BrokenDsh[] } | null = null
 

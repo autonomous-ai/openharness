@@ -24,7 +24,7 @@ import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import type { AutonomousDeviceAgent, AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'
 import type { StoreAgent } from '../lib/autonomous-device/store.js'
-import type { DshLaunchAnswer, DshLaunchRequest, DshMaterializeAnswer, DshMaterializeRequest } from '../dsh/launchWire.js'
+import type { DshDescribeAnswer, DshDescribeRequest, DshLaunchAnswer, DshLaunchRequest, DshMaterializeAnswer, DshMaterializeRequest } from '../dsh/launchWire.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { GridAccess } from '../lib/gridAttach.js'
 import type { createHarnessResourcesReader } from '../lib/harnessResources.js'
@@ -2134,7 +2134,7 @@ export interface WindowRelay {
 }
 
 export interface StorePort {
-  dshDescribe(request: import('../dsh/launchWire.js').DshDescribeRequest): Promise<import('../dsh/launchWire.js').DshDescribeAnswer>
+  dshDescribe(request: DshDescribeRequest): Promise<DshDescribeAnswer>
   dshMaterialize(request: DshMaterializeRequest): Promise<DshMaterializeAnswer>
   dshLaunch(request: DshLaunchRequest): Promise<DshLaunchAnswer>
 }

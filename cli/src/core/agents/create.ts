@@ -201,9 +201,8 @@ export function createAgentCreator({
     let dshLabel: string | undefined
     /** What the harness is told about the signed-in account (its private grid), not left to guess. */
     let dshAccount: DshAccount = {}
-    const installed = pinnedDsh
     if (dsh) {
-      if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is not installed on this machine` }
+      const installed = pinnedDsh!
       const refusal = installed.refusal
       if (refusal) {
         return { ok: false, error: 'INVALID_DSH', detail: refusal }
@@ -227,7 +226,7 @@ export function createAgentCreator({
     }
     if (dsh) {
       // Checked above: a harness that is not installed was refused before models was asked.
-      const harness = installed!
+      const harness = pinnedDsh!
       // The Model Manager is grid in use, however it was made (the Store, New Harness, `harness new`, the
       // models picker): grid is set up before the workspace asks it which grid is this account's.
       const ensureGrid = gridSetup()
