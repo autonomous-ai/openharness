@@ -938,17 +938,6 @@ async function watchRestoredPane(
         const selected = deps.registry.byAgent(agentId)?.processIdentity
         if ((initial.processIdentity && (!sameProcessIdentity(initial.processIdentity, identity) || initial.processIdentity.executable !== identity.executable))
           || (selected && (!sameProcessIdentity(selected, identity) || selected.executable !== identity.executable))) return
-        // A resume the engine rejects does not fail to start — it starts, prints why, and exits a
-        // few seconds later. Keep the pane (and the fallback) for a settling window before handing
-        // it over; a pane let go at first sight of the process vanished with the engine and took
-        // the agent with it (measured: claude resuming a conversation another client still held).
-        const settled = await waitForSettle(deps, runtime, settleMs)
-        if (!current() && !selectFirstHook(identity)) return
-        if (settled === 'gone') {
-          if (!await relaunchFresh()) return
-          delayMs = 50
-          continue
-        }
         const expires = performance.now() + Math.min(5_000, Math.max(0, budgetMs - (Date.now() - startedAt)))
         const refresh = async () => {
             const observed = await deps.probeProcess(runtime, engine)
@@ -956,6 +945,9 @@ async function watchRestoredPane(
               throw new IdentityReadUnavailable('the restored process changed before publication')
             }
         }
+        // Recorded at first sight, before the settle window: the engine's hooks wait for a recorded process
+        // (core/engines/hooks.ts), and recorded only after the window, a turn sent in it was folded as history
+        // and no live turn_ended reached the person (e2e/adopt.e2e.ts, 2026-11-17).
         let publication: LaunchPublication
         try { publication = await deps.registry.confirmLaunch(agentId, { processIdentity: identity, grid }, { current, refresh, expires }) }
         catch (error) {
@@ -964,10 +956,28 @@ async function watchRestoredPane(
           publication = await deps.registry.confirmLaunch(agentId, { processIdentity: identity, grid }, { current, refresh, expires })
         }
         const ready = publication.state === 'confirmed' ? publication.entry : null
-        const committed = () => lifecycle() && !!ready && matchesLaunchReceipt(deps.registry.byAgent(agentId), ready)
-        if (!committed()) return
-        await deps.clearRemainOnExit(runtime, committed)
-        if (!committed()) return
+        if (!lifecycle() || !ready || !matchesLaunchReceipt(deps.registry.byAgent(agentId), ready)) return
+        // From here the watch follows the row it published by its receipt, not `restoreOwner`: a reopened
+        // conversation's own hook stamps `boundAt` in the window, and the watch then ended with the pane held.
+        current = () => lifecycle() && matchesLaunchReceipt(deps.registry.byAgent(agentId), ready)
+        // A resume the engine rejects does not fail to start — it starts, prints why, and exits a
+        // few seconds later. Keep the pane (and the fallback) for a settling window before handing
+        // it over; a pane let go at first sight of the process vanished with the engine and took
+        // the agent with it (measured: claude resuming a conversation another client still held).
+        // The pane's and the route's holds keep it through the window, not the record.
+        const settled = await waitForSettle(deps, runtime, settleMs)
+        if (!current() && !selectFirstHook(identity)) return
+        if (settled === 'gone') {
+          current = restoreOwner(deps, deps.registry.byAgent(agentId)!)
+          // Left on the row, the guard above took the fresh engine for a stranger's: the row kept a dead
+          // process, no conversation and its pane held.
+          deps.registry.clearProcessIdentity(agentId)
+          if (!await relaunchFresh()) return
+          delayMs = 50
+          continue
+        }
+        await deps.clearRemainOnExit(runtime, current)
+        if (!current()) return
         // Release BEFORE the hint: the pass it triggers is the one that must see this route again.
         release()
         await deps.triggerHint(runtime, engine)

@@ -564,7 +564,7 @@ it.each([false, true])('restore shell fallback revalidates engine absence after 
   expect(releaseHold).not.toHaveBeenCalled()
 })
 
-it('restore keeps the settled process held until readiness publication completes', async () => {
+it('restore keeps the probed process held until its publication completes', async () => {
   registry.clearProcessIdentity(row.agentId)
   registry.setLaunch(row.agentId, { state: 'starting', nativeToken: startingToken })
   await registry.flush()
