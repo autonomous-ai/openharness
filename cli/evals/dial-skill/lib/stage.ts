@@ -51,6 +51,10 @@ export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; bas
     // The sandbox refuses writes to ~/.npm, and npm reads that EPERM as root-owned files to `sudo chown`: an obstacle
     // only the person could clear, made by the eval. Its cache (and its logs, kept beside the cache) go to tmp/.
     npm_config_cache: join(root, 'tmp', 'npm-cache'),
+    // /usr/bin/git, make and xcodebuild run from the developer folder: the Command Line Tools keep git and make, while
+    // xcodebuild refuses without Xcode, so the real one cannot step past xcode-license-sudo's license. A missing folder
+    // would stop git and make too.
+    DEVELOPER_DIR: '/Library/Developer/CommandLineTools',
   })
   if (agent === 'claude') env.CLAUDE_CONFIG_DIR = profile
 

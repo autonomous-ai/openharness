@@ -19,7 +19,7 @@ const README_FIX = `diff --git a/README.md b/README.md
 -# Orders service
 +# Orders service.
 `
-const ALLOWED = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'TERM', 'TMPDIR', 'GIT_CONFIG_GLOBAL', 'npm_config_userconfig', 'npm_config_cache', 'CLAUDE_CONFIG_DIR']
+const ALLOWED = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'TERM', 'TMPDIR', 'GIT_CONFIG_GLOBAL', 'npm_config_userconfig', 'npm_config_cache', 'DEVELOPER_DIR', 'CLAUDE_CONFIG_DIR']
 
 let base: string
 let scenarios: string
