@@ -3,7 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, u
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { appBundles, assertRebranded, assertUnchanged, GATE_ID, rebrand, stamp } from './throwawayApp.js'
+import { appBundles, assertRebranded, assertUnchanged, GATE_ID, rebrand, stamp, unregister } from './throwawayApp.js'
 
 let root: string
 beforeEach(() => {
@@ -62,6 +62,10 @@ describe.runIf(process.platform === 'darwin')('the throwaway VS Code app', () =>
   it('names each app LaunchServices registers apart, as it records them: the app and each helper', () => {
     const { app, helpers } = vscodeApp()
     expect(appBundles(app).sort()).toEqual([app, ...helpers].map((path) => realpathSync(path)).sort())
+  })
+
+  it('passes over an app LaunchServices never registered, as a helper that never ran', () => {
+    expect(() => unregister(vscodeApp().app)).not.toThrow()
   })
 })
 
