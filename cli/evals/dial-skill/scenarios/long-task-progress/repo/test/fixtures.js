@@ -1,3 +1,8 @@
+import { setTimeout as sleep } from 'node:timers/promises'
+
+// Stands in for loading the archived month-end close, as slow as the real archive.
+await sleep(1500)
+
 const at = (date) => new Date(`${date}T12:00:00Z`)
 
 export const smallLedger = [
