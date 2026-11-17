@@ -49,7 +49,8 @@ export function createVscodeAdapter(
   return {
     id: 'vscode',
     tap: 'instead',
-    // A session the scan found has no bundle of its own until its first hook: a tap on its terminal still brings VS Code.
+    // A session the scan found has no bundle of its own until its first hook, and target() takes this one only from a
+    // pane it can focus: a tap brings VS Code only while a window's stream holds its terminal, else it does nothing.
     bundle: APP_BUNDLES.vscode,
     paneOf(place: Place): Pane | undefined {
       const { CLAUDE_CODE_ENTRYPOINT: entrypoint, __CFBundleIdentifier: bundle } = place.hints

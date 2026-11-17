@@ -163,8 +163,9 @@ in `services/devices.ts`, like every app.
     for a panel id.
   - No `type`, no `paneKey`.
   - The adapter declares `bundle: APP_BUNDLES.vscode`, and `observed.ts` `target()` uses the pane's adapter's `bundle`
-    whenever the entry has none of its own (today only for a placed pane), so a tap on a session the scan found (no
-    hook yet) still brings VS Code forward.
+    whenever the entry has none of its own, and only from a pane it can focus. So a tap on a session the scan found (no
+    hook yet) brings VS Code forward only while a window's stream holds its terminal. With the extension off, or its
+    terminal in a window past the eighth, the tap does nothing.
 - **Tap with two or more windows** (spike, task 1). `open -b` raises VS Code's last active window; a terminal in
   another window is shown there but stays behind it. The spike tries, in the throwaway VS Code, what raises the
   window that holds it from outside or from the extension, and the plan takes the first that works without a new
