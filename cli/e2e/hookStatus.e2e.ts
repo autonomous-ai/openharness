@@ -1,7 +1,7 @@
 /**
  * Hook-driven agent status, end to end, for Claude Code and Codex in Harness panes on the real daemon
- * (docs/plans/2026-11-16-hook-driven-agent-status-plan.md, Task 22): a turn ends at its engine's Stop, not when its
- * transcript ends; a wait on the person stops reading as working at its hook and its question shows at the next poll;
+ * (docs/plans/2026-11-16-hook-driven-agent-status-plan.md, Task 22): a Claude Code turn ends at its Stop, not when its
+ * transcript ends, and a Codex one at the end Codex writes only once its Stop returned; a wait on the person stops reading as working at its hook and its question shows at the next poll;
  * a Claude Code lead stays working while its subagents run; Finished is announced once, after 1.5 s of quiet; and an
  * engine older than an event never waits for it.
  *
@@ -28,9 +28,6 @@ const AT_ONCE_MS = 20_000
 const QUESTION_AFTER_WAIT_MS = 3_000
 /** turn_ended and Finished cross the same socket but leave the daemon from different processes. */
 const FRAME_SKEW_MS = 100
-/** Claude Code's Stop acted on this long after it came (`HARNESSD_TEST_STOP_HOOK_DELAY_MS`): its end is held meanwhile,
- *  which leaves room to read the agent working between an answer and the turn's end. */
-const STOP_DELAY_MS = 2_500
 
 const isTurn = (type: string, agentId: string) => (frame: Frame) => frame.type === type && frame.agentId === agentId
 const notified = (agentId: string) => (frame: Frame) => isTurn('turn_summary', agentId)(frame) && !!frame.payload?.notification
@@ -67,8 +64,8 @@ describe('hook-driven agent status', () => {
    * A daemon, the engine as [release] of it (written over the fake's wrapper before the daemon starts), and an agent of
    * it bound to its conversation, whose first plain turn has ended.
    */
-  async function setUp(engine: Engine, folder: string, release: Partial<EngineConfig> = {}, env: Record<string, string> = {}) {
-    const d = await IsolatedDaemon.create({ env })
+  async function setUp(engine: Engine, folder: string, release: Partial<EngineConfig> = {}) {
+    const d = await IsolatedDaemon.create()
     daemon = d
     onTestFailed(() => {
       console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`)
@@ -112,38 +109,35 @@ describe('hook-driven agent status', () => {
    * A wait on the person (R4): the agent stops reading as working at the wait's hook, long before its work lease would
    * run out, and the question shows at the watcher's next poll; once answered it reads working again, and the turn ends
    * once. [hookFirst]: the engine waits for the hook before it draws its dialog, so the question comes after it.
-   * Working again is read for Claude Code only, whose end its Stop holds (`STOP_DELAY_MS`): the fake Codex ends its turn
-   * as soon as its Stop hook returns, too soon after the answer to read the agent in between.
+   * The turn's Stop is held (`!heldstop`) until working again has been read: Claude Code's end waits for its Stop, and
+   * Codex writes its end only once its Stop hook returns, so neither turn can end before.
    */
-  async function waitsOnThePerson(run: Run, engine: Engine, prompt: string, pick: RegExp, hookFirst: boolean): Promise<void> {
-    const { client, agent, fence } = run
+  async function waitsOnThePerson(run: Run, prompt: string, pick: RegExp, hookFirst: boolean): Promise<void> {
+    const { d, client, agent, fence, isWorking } = run
     const since = client.frames.length
     const began = () => client.frames.slice(since).some(isTurn('turn_started', agent.id))
     // A not-working state before this turn started is the first turn's.
     const waited = arrival(client.next((frame) => isTurn('agent_activity', agent.id)(frame) && frame.payload?.activity?.state !== 'working' && began(),
       WAIT_MS, 'the agent to stop reading as working at its wait hook'))
     const asked = arrival(client.next(isTurn('commander_question', agent.id), TURN_MS, 'the question'))
-    client.send('message', { agentId: agent.id, content: prompt })
+    client.send('message', { agentId: agent.id, content: `!heldstop ${prompt}` })
     const [wait, question] = await Promise.all([waited, asked])
     if (hookFirst) expect(client.frames.indexOf(wait.frame), 'not working before the question').toBeLessThan(client.frames.indexOf(question.frame))
     // Claude Code runs its PermissionRequest hook beside the dialog it has just drawn: either may be first.
     expect(Math.abs(question.at - wait.at), 'the question and the wait hook, ms apart').toBeLessThanOrEqual(QUESTION_AFTER_WAIT_MS)
-    const from = client.frames.length
-    const ended = client.next(isTurn('turn_ended', agent.id), TURN_MS, 'turn_ended once answered')
     await answer(run, question.frame, pick)
-    if (engine === 'claude') {
-      // Where the reply that read it working sits: a turn_ended sent before it would be before it.
-      const read = await until('working again once answered', async () => (await fence()).activity?.state === 'working' && client.frames.length,
-        STOP_DELAY_MS, 50)
-      expect(client.frames.slice(from, read).filter(isTurn('turn_ended', agent.id)), 'read before the turn ended').toEqual([])
-    }
+    await isWorking('working again once answered')
+    expect(client.frames.slice(since).filter(isTurn('turn_ended', agent.id)), 'no turn_ended while its Stop is held').toEqual([])
+    const ended = client.next(isTurn('turn_ended', agent.id), TURN_MS, 'turn_ended at its Stop')
+    writeFileSync(join(d.engineConfig.root, 'held-stop.release'), 'go')
     await ended
     await fence()
     expect(client.frames.slice(since).filter(isTurn('turn_ended', agent.id))).toHaveLength(1)
   }
 
-  it.each(engines)('%s: a turn\'s end is told at its Stop, not when its transcript ends', async (engine) => {
-    const { d, client, agent, fence } = await setUp(engine, `held-stop-${engine}`)
+  // Codex writes its end only after its Stop: `codex: a turn's Stop reaches the daemon before its task_complete…` below.
+  it('claude: a turn\'s end is told at its Stop, not when its transcript ends', async () => {
+    const { d, client, agent, fence } = await setUp('claude', 'held-stop-claude')
     const since = client.frames.length
     const answered = client.next(said(agent.id, '!heldstop'), TURN_MS, 'the turn\'s answer')
     client.send('message', { agentId: agent.id, content: '!heldstop' })
@@ -191,23 +185,23 @@ describe('hook-driven agent status', () => {
   })
 
   it.each(engines)('%s: a permission asked: the agent stops reading as working at the hook, the question is shown at the next poll, and an answer sets it working again', async (engine) => {
-    const run = await setUp(engine, `permit-${engine}`, {}, { HARNESSD_TEST_STOP_HOOK_DELAY_MS: String(STOP_DELAY_MS) })
+    const run = await setUp(engine, `permit-${engine}`)
     // Codex runs its PermissionRequest hook and waits for it before it draws the request; Claude Code beside it.
-    await waitsOnThePerson(run, engine, '!permit printf hi', /^Yes/, engine === 'codex')
+    await waitsOnThePerson(run, '!permit printf hi', /^Yes/, engine === 'codex')
     expect(await run.d.capture(run.agent.tmuxPane)).toContain('ran printf hi')
   })
 
   it.each(engines)('%s: a question through the engine\'s own tool (AskUserQuestion, request_user_input), the same', async (engine) => {
-    const run = await setUp(engine, `ask-${engine}`, {}, { HARNESSD_TEST_STOP_HOOK_DELAY_MS: String(STOP_DELAY_MS) })
+    const run = await setUp(engine, `ask-${engine}`)
     // Both run the tool's PreToolUse hook and wait for it before the dialog.
-    await waitsOnThePerson(run, engine, '!ask', /^Coffee$/, true)
+    await waitsOnThePerson(run, '!ask', /^Coffee$/, true)
     expect(await run.d.capture(run.agent.tmuxPane)).toContain('you chose Coffee')
   })
 
   it('claude: an MCP server asking for input (Elicitation), the same', async () => {
-    const run = await setUp('claude', 'elicit-claude', {}, { HARNESSD_TEST_STOP_HOOK_DELAY_MS: String(STOP_DELAY_MS) })
+    const run = await setUp('claude', 'elicit-claude')
     // Claude Code runs its Elicitation hook and waits for it before it draws the dialog.
-    await waitsOnThePerson(run, 'claude', '!elicit', /^Accept$/, true)
+    await waitsOnThePerson(run, '!elicit', /^Accept$/, true)
     expect(await run.d.capture(run.agent.tmuxPane)).toContain('the deploy was accepted')
   })
 
@@ -313,11 +307,12 @@ describe('hook-driven agent status', () => {
     expect(hooksRan(d, 'Stop', agent.sessionId), 'the engine ran no Stop').toBe(0)
   })
 
-  // As Tasks 1 and 2 found: Claude Code 2.1.209 has every event Harness installs; Codex 0.144.0 has no Interrupt.
+  // As Tasks 1 and 2 found: Claude Code 2.1.209 has every event Harness installs; Codex 0.144.0 has no Interrupt, so its
+  // Esc ends the turn by the transcript's turn_aborted alone.
   it.each([
     ['claude', '2.1.209', []],
     ['codex', '0.144.0', ['Interrupt']],
-  ] as const)('the oldest supported, %s %s: the events it lacks are never waited for, and its turns end from the transcript as today', async (engine, version, withoutHooks) => {
+  ] as const)('the oldest supported, %s %s: the events it lacks are never waited for, and each turn ends at once, one stopped by Esc among them', async (engine, version, withoutHooks) => {
     const { d, client, agent, fence } = await setUp(engine, `oldest-${engine}`, { version, withoutHooks: [...withoutHooks] })
     const since = client.frames.length
     await client.turn(agent.id, 'a second turn', AT_ONCE_MS)
