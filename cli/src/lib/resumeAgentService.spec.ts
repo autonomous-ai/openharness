@@ -550,10 +550,10 @@ describe('production resume handler', () => {
   })
 
   it('composes stopped resume with real launch preparation before any live row exists', async () => {
-    const apiNotes = vi.fn()
+    const apiNotes = vi.fn(async () => {})
     const helpers = createLaunchHelpers({
       authority: createLaunchAuthority({ byAgent: id => registry.byAgent(id), revision: id => deps.restartJobs.revision(id), cancelled: id => deps.stopJobs.has(id) }),
-      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
+      prepareInstructions: apiNotes, setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
       launchOverridesDeps: { machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(),
         capabilities: async () => ({ sessionEnv: true }), writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(async () => true), readCodexConfig: () => null },
     })

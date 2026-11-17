@@ -94,10 +94,16 @@ describe('the workspaces service', () => {
     })
   })
 
+  it('stopping workspaces refuses later instruction preparation', async () => {
+    const { port } = setup()
+    port.stop()
+    expect(await port.prepareInstructions('/work', 'claude')).toBe(false)
+  })
+
   // #4166: it swept clean, week-idle worktrees twice a day when the core said, the ones their person chose to keep too.
   it('removes no worktree on its own: only a purge the core asks for removes one', () => {
     const { core, port } = setup([agent({ cwd: '/h/live' })])
-    expect(Object.keys(port)).toEqual(['stop', 'nameBranches', 'ready', 'prepareFolder', 'describeWorkspace', 'reviewWorktree', 'removeWorktree'])
+    expect(Object.keys(port)).toEqual(['stop', 'nameBranches', 'ready', 'prepareFolder', 'prepareInstructions', 'describeWorkspace', 'reviewWorktree', 'removeWorktree'])
     expect(core.agents.all).not.toHaveBeenCalled()
     expect(worktrees.removeWorktree).not.toHaveBeenCalled()
   })

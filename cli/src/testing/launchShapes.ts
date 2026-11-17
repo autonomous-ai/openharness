@@ -47,16 +47,16 @@ export interface LaunchWorld {
 }
 
 /** What `create` needs besides the launch: the spec's stubs for the pane, the registry and the rest. */
-export type CreateRest = Omit<CreateAgentDeps, 'gridLaunchMachine' | 'prepareApiTools' | 'buildGridLaunch' | 'dshLaunch'>
+export type CreateRest = Omit<CreateAgentDeps, 'gridLaunchMachine' | 'prepareInstructions' | 'buildGridLaunch' | 'dshLaunch'>
 /** What `fork` needs besides the launch. */
-export type ForkRest = Omit<ForkAgentDeps, 'prepareApiTools' | 'relaunchOverrides' | 'gridName' | 'dshLaunch'>
+export type ForkRest = Omit<ForkAgentDeps, 'prepareInstructions' | 'relaunchOverrides' | 'gridName' | 'dshLaunch'>
 
 export function launchShapes(world: LaunchWorld) {
   const savedApis = new ApiConnections(world.dataDir)
-  // What the core reads for the note (core/main.ts): the list without keys, never the store.
+  // The workspace component's note writer: synthetic projects have an explicit root, never this machine's home.
   const savedApiList = new ApiConnectionMetadata(world.dataDir)
   const gridName = world.gridName ?? (() => null)
-  const prepareApiTools = (cwd: string | null | undefined, engine: string): void => {
+  const prepareInstructions = async (cwd: string | null | undefined, engine: string): Promise<void> => {
     if (!cwd) return
     try { prepareApiInstructions(savedApiList, cwd, engine, world.projectsRoot) }
     catch { console.warn('[apis] Tool instructions could not be added. Saved connections remain available through harness api.') }
@@ -100,13 +100,13 @@ export function launchShapes(world: LaunchWorld) {
   }
   const helpers = createLaunchHelpers({
     authority: () => () => true,
-    prepareApiTools, launchOverridesDeps,
+    prepareInstructions, launchOverridesDeps,
     setGridLaunch: world.setGridLaunch as never, prepareResume: async () => ({ repairedItems: 0 }),
   })
   return {
-    create: (rest: CreateRest) => createAgentCreator({ ...rest, gridLaunchMachine: world.machine, buildGridLaunch: gridLaunch, prepareApiTools, dshLaunch }),
+    create: (rest: CreateRest) => createAgentCreator({ ...rest, gridLaunchMachine: world.machine, buildGridLaunch: gridLaunch, prepareInstructions, dshLaunch }),
     relaunch: (session: RegisteredSession, source?: LaunchSource) => helpers.relaunchOverrides(session, source),
-    fork: (rest: ForkRest) => createAgentForker({ ...rest, prepareApiTools, relaunchOverrides: helpers.relaunchOverrides, gridName, dshLaunch }),
+    fork: (rest: ForkRest) => createAgentForker({ ...rest, prepareInstructions, relaunchOverrides: helpers.relaunchOverrides, gridName, dshLaunch }),
     validate: (engine: AgentEngine, source: LaunchSource) => validateLaunchOverrides(launchOverridesDeps, engine, source),
     /** The line retarget logs once a move onto a grid succeeded. */
     retargetLine: (engine: AgentEngine, overrides: LaunchOverrides): string | null => overrides.gridLaunchRecord
@@ -120,6 +120,6 @@ export function launchShapes(world: LaunchWorld) {
     },
     leavingGrid: (engine: AgentEngine) => gridEnvVarNames(engine),
     gridCapable: () => gridCapableEngines(),
-    apiTools: prepareApiTools,
+    apiTools: prepareInstructions,
   }
 }

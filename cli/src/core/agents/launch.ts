@@ -18,7 +18,6 @@ import { gridUnavailable, type GridLaunchAnswer, type GridLaunchRequest } from '
 import { buildLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps, type LaunchOverridesResult, type LaunchSource } from '../../lib/launchOverrides.js'
 import type { ModelsPort } from '../api.js'
 import { sid } from '../../lib/log.js'
-import { prepareInstructionWrites } from '../../scm/launch.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 
 /**
@@ -48,15 +47,15 @@ const UNREPAIRED: Record<Unrepaired, string> = {
 export interface LaunchHelperDeps {
   /** Capture dispatch authority before a service can yield to Stop or a replacement binding. */
   authority: (agentId: string) => () => boolean
-  /** Writes the saved APIs' tool instructions into the agent's folder before it launches. */
-  prepareApiTools: (cwd: string | null | undefined, engine: string) => void
+  /** Optional workspace instructions, prepared by the workspace component before launch. */
+  prepareInstructions: (cwd: string | null | undefined, engine: string) => Promise<void>
   launchOverridesDeps: LaunchOverridesDeps
   setGridLaunch: typeof registry.setGridLaunch
   /** The publication coordinator moves the tail in the same turn as its atomic replacement. */
   prepareResume: (source: ResumeSource, current: () => boolean) => Promise<HistoryRepair>
 }
 
-export function createLaunchHelpers({ authority, prepareApiTools, launchOverridesDeps, setGridLaunch, prepareResume }: LaunchHelperDeps) {
+export function createLaunchHelpers({ authority, prepareInstructions, launchOverridesDeps, setGridLaunch, prepareResume }: LaunchHelperDeps) {
   // Whatever the source (the row itself, or a grid override the desktop just sent), the agent's DSH,
   // workspace, named agent and who started it come from the row: a retarget must not silently drop the harness
   // the agent is, or bring a pane opened as `harness-compute` back as a general session.
@@ -74,9 +73,8 @@ export function createLaunchHelpers({ authority, prepareApiTools, launchOverride
     if (!result.ok && (result.unavailable || result.error === 'AGENT_CHANGED')) return result
     // Saved-API instructions remain available after an ordinary semantic refusal, as before.
     // A missing dependency or revoked operation must leave these files untouched.
-    await prepareInstructionWrites(session.cwd)
+    await prepareInstructions(session.cwd, session.engine)
     if (!current()) return changed
-    prepareApiTools(session.cwd, session.engine)
     if (result.ok && session.externalResume?.request.engine === session.engine) {
       result.overrides.extraArgs.push(...session.externalResume.session?.launchArgs ?? [])
     }

@@ -23,6 +23,7 @@ describe('workspaces in their own process', () => {
     let options: ServiceProcessOptions | null = null
     const port = {
       stop: vi.fn(), nameBranches: vi.fn(), ready: vi.fn(() => true),
+      prepareInstructions: vi.fn(async () => true),
       prepareFolder: vi.fn(async (): Promise<PreparedFolder> => ({ ok: true, cwd: '/h/harnesses/repo' })),
       describeWorkspace: vi.fn(async (): Promise<WorkspaceInspection | null> => null),
       reviewWorktree: vi.fn(async (): Promise<WorktreeAnswer> => ({ ok: false, reason: 'No separate worktree. This folder is not a Git worktree.' })),
@@ -47,7 +48,22 @@ describe('workspaces in their own process', () => {
     const { options } = setup()
     expect(options).toMatchObject({ name: 'workspaces', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
     // The port's own members, which the core asks as itself (core/workspacesLink.ts): no app request names them.
-    expect(Object.keys(options.requests)).toEqual(['prepareFolder', 'describeWorkspace', 'reviewWorktree', 'removeWorktree'])
+    expect(Object.keys(options.requests)).toEqual(['prepareInstructions', 'prepareFolder', 'describeWorkspace', 'reviewWorktree', 'removeWorktree'])
+  })
+
+  it('prepares instructions only for the core, retaining request cancellation', async () => {
+    const { options, port } = setup()
+    const request = options.requests.prepareInstructions!
+    const payload = { workspace: '/h/harnesses/project', engine: 'claude' }
+    const closed = new AbortController()
+    expect(await request(payload, { local: true, owner: true }, closed.signal)).toEqual({ prepared: true })
+    expect(port.prepareInstructions).toHaveBeenCalledExactlyOnceWith(payload.workspace, payload.engine, closed.signal)
+    for (const asker of [{ local: false, owner: true }, { local: true, owner: false }, { local: true, owner: true, connection: 'client' }]) {
+      expect(await request(payload, asker, closed.signal)).toEqual({ prepared: false })
+    }
+    closed.abort()
+    expect(await request(payload, { local: true, owner: true }, closed.signal)).toEqual({ prepared: false })
+    expect(port.prepareInstructions).toHaveBeenCalledTimes(1)
   })
 
   it('says it makes folders each time it connects, so a core of this build asks it for them; a word lost is said', async () => {
@@ -55,7 +71,7 @@ describe('workspaces in their own process', () => {
     const { options } = setup()
     const { core, query } = connection()
     options.onConnected!(core)
-    expect(query.mock.calls).toEqual([['follow_agents', { each: true, frames: true }], ['folders']])
+    expect(query.mock.calls).toEqual([['follow_agents', { each: true, frames: true }], ['folders', { instructions: true }]])
     options.onConnected!({ query: vi.fn(async () => { throw new Error('the core went away') }) })
     options.onConnected!({ query: vi.fn(async () => { throw 'closed' }) })
     await flush()
@@ -143,7 +159,7 @@ describe('workspaces in their own process', () => {
     options.onConnected!(core)
     options.onEvent!({ kind: 'sweep' })
     await flush()
-    expect(query.mock.calls).toEqual([['follow_agents', { each: true, frames: true }], ['folders']])
+    expect(query.mock.calls).toEqual([['follow_agents', { each: true, frames: true }], ['folders', { instructions: true }]])
     expect(port.nameBranches).not.toHaveBeenCalled()
   })
 

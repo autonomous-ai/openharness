@@ -61,7 +61,7 @@ it('a Codex resume repairs a 200 MB rollout without ever holding the core loop f
   const repairs = createResumeRepairs({ call, handles: () => true, hold: async () => null, setTail })
   repairs.connected('engine-codex')
   const { prepareSessionResume } = createLaunchHelpers({
-    authority: () => () => true, prepareApiTools: () => {}, launchOverridesDeps: {} as never, setGridLaunch: () => true, prepareResume: repairs.prepare,
+    authority: () => () => true, prepareInstructions: async () => {}, launchOverridesDeps: {} as never, setGridLaunch: () => true, prepareResume: repairs.prepare,
   })
   const session = { agentId: 'a1', sessionId: SESSION, engine: 'codex', transcriptPath: file, codexHome: profile } as RegisteredSession
   vi.spyOn(console, 'log').mockImplementation(() => {})

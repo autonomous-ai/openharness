@@ -8,7 +8,7 @@
  * Nothing removes a worktree on a timer (#4166).
  */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -91,6 +91,28 @@ describe('workspaces in their own process', () => {
     await until('workspaces to connect to the core', () => connected(d) >= 1 || null, 30_000, 100)
     return d
   }
+
+  it.each(['ready', 'failed'] as const)('workspace instructions are optional and isolated when preparation is %s', async state => {
+    const d = await fresh(state === 'failed' ? { HARNESSD_TEST_FAULTS: 'workspaces.prepareInstructions' } : {}, daemon => {
+      const api = join(daemon.dataDir, 'api-connections')
+      mkdirSync(api, { recursive: true, mode: 0o700 })
+      writeFileSync(join(api, 'list.json'), JSON.stringify({ version: 1, connections: [{ id: 'fixture', provider: 'fixture',
+        name: 'Fixture', baseUrl: 'https://fixture.invalid/v1', keyEnv: 'FIXTURE_KEY', authHeader: 'Authorization', authPrefix: 'Bearer' }] }), { mode: 0o600 })
+    })
+    const client = await LocalClient.connect(d)
+    try {
+      const cwd = join(d.env.HOME!, 'harnesses', 'optional-instructions')
+      const agent = await create(d, client, cwd)
+      const note = join(cwd, 'CLAUDE.md')
+      if (state === 'ready') expect(readFileSync(note, 'utf8')).toContain('<!-- harness:apis -->')
+      else {
+        expect(!existsSync(note) || !readFileSync(note, 'utf8').includes('<!-- harness:apis -->')).toBe(true)
+        expect(d.log()).toContain('TOOL_INSTRUCTIONS_UNAVAILABLE')
+      }
+      await turn(client, agent.id, 'ordinary agent works with optional workspace preparation')
+      expect(d.coresStarted()).toBe(1)
+    } finally { client.close() }
+  })
 
   it('the made-up branch takes the session\'s name in the workspaces process, never in the core, and reaches the frame; search and the viewers run beside it', async () => {
     const d = await fresh({ HARNESSD_SERVICES: 'search,viewers,workspaces' })

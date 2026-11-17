@@ -300,8 +300,6 @@ lib/agentNames.ts
 lib/agentSessionEnv.ts
 lib/agentSettings.ts
 lib/agentUsageWire.ts
-lib/apiConnectionMetadata.ts
-lib/apiInstructions.ts
 lib/attachTracker.ts
 lib/attachTranscript.ts
 lib/authSession.ts

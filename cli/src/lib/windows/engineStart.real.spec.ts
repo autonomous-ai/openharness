@@ -62,7 +62,7 @@ function creator(backend: PtyHostBackend) {
     watchNewPane: (async () => {}) as unknown as CreateAgentDeps['watchNewPane'],
     announceSession: () => {},
     attach: () => {},
-    prepareApiTools: () => {},
+    prepareInstructions: async () => {},
     hookPort: 0,
     hooksDisabled: true,
     installOpencodePlugin: async () => true,

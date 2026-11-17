@@ -3,10 +3,10 @@ import { installedDsh } from '../dsh/installed.js'
 import { materializeWorkspace } from '../dsh/materialize.js'
 import { forkRuntimeKey, prepareHarnessLaunch } from '../dsh/runtime.js'
 import type { PrepareDsh } from '../dsh/preparation.js'
-import { prepareInstructionWrites } from '../scm/launch.js'
+import { prepareInstructionWrites } from '../scm/instructionWrites.js'
 import { storeLaunchPort } from './storeLaunch.js'
 
-vi.mock('../scm/launch.js', () => ({ prepareInstructionWrites: vi.fn(async () => {}) }))
+vi.mock('../scm/instructionWrites.js', () => ({ prepareInstructionWrites: vi.fn(async () => {}) }))
 vi.mock('../dsh/installed.js', () => ({ installedDsh: vi.fn(), dshRootDir: () => '/unused' }))
 vi.mock('../dsh/materialize.js', () => ({ materializeWorkspace: vi.fn() }))
 vi.mock('../dsh/runtime.js', () => ({ forkRuntimeKey: vi.fn(() => 'source-runtime'), prepareHarnessLaunch: vi.fn() }))

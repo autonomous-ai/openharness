@@ -5,7 +5,7 @@ import { dshRootDir, installedDsh as lookup } from '../dsh/installed.js'
 import { materializeWorkspace } from '../dsh/materialize.js'
 import { forkRuntimeKey, prepareHarnessLaunch } from '../dsh/runtime.js'
 import { dshPreparations, type PrepareDsh } from '../dsh/preparation.js'
-import { prepareInstructionWrites } from '../scm/launch.js'
+import { prepareInstructionWrites } from '../scm/instructionWrites.js'
 
 const detail = (error: unknown) => error instanceof Error ? error.message : String(error)
 
