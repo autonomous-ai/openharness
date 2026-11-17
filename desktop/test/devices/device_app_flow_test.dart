@@ -13,10 +13,13 @@ import 'package:harness/devices/device_app_offer.dart';
 import 'package:harness/devices/device_hosts.dart';
 import 'package:harness/devices/devices_controller.dart';
 import 'package:harness/devices/devices_screen.dart';
+import 'package:harness/devices/loose_sheet.dart' show petRows;
+import 'package:harness/devices/pet_source.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/dial_status.dart';
 
 import '../devices_controller_test.dart' show deviceStatus, report;
+import '../pet_settings_test.dart' show sheetPreview;
 import '../support/device_app.dart';
 import '../support/memory_key_value_store.dart';
 
@@ -341,6 +344,80 @@ void main() {
     await _tap(tester, _bandInstall);
     expect(fixture.install.calls, 1);
   }, variant: _mac);
+
+  testWidgets(
+    'the pet viewer stays level with the Pet section as the row goes',
+    (tester) async {
+      final fixture = DeviceAppFixture();
+      addTearDown(fixture.offer.dispose);
+      final dial = DialState();
+      final controller = DevicesController(
+        dial: dial,
+        accountId: 'a',
+        storage: MemoryKeyValueStore(),
+        sendSettings: (_, _) async => true,
+        petRequest: (_, type, _) async => type == 'pet_status'
+            ? {
+                'mapping': {'all': null, 'engines': <String, String>{}},
+                'dial': {'supported': true, 'held': <String>[]},
+              }
+            : sheetPreview('boba', petRows),
+      );
+      addTearDown(controller.dispose);
+      await controller.load();
+      report(dial, [deviceStatus('d1')]);
+      fixture.offer.dialChanged(true);
+      await fixture.offer.refresh();
+      tester.view.physicalSize = const Size(1280, 940);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      // No shell: only the offer rebuilds the screen as the row goes.
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: DevicesScreen(
+              controller: controller,
+              deviceAppOffer: fixture.offer,
+              pickPetFile: () async => '/tmp/boba.png',
+              resolvePetSource: (path) async =>
+                  PetSource(pngPath: path, name: 'boba', cleanup: () async {}),
+              loadPetSheet: (_) async => null,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      addTearDown(() => tester.pumpWidget(const SizedBox()));
+
+      fixture.install.gate = Completer<void>();
+      await _tap(tester, _rowAction);
+      expect(_label(tester, _rowAction), 'Installing…');
+      await tester.ensureVisible(find.text('Choose file…'));
+      await tester.pump();
+      await tester.tap(find.text('Choose file…'));
+      for (var i = 0; i < 4; i++) {
+        await tester.pump();
+      }
+      final viewer = find.byKey(const ValueKey('devices-pet-viewer'));
+      final panel = find.byKey(const ValueKey('pet-panel'));
+      expect(
+        tester.getRect(viewer).top,
+        moreOrLessEquals(tester.getRect(panel).top, epsilon: .5),
+      );
+
+      fixture.install.gate!.complete();
+      for (var i = 0; i < 4; i++) {
+        await tester.pump();
+      }
+      expect(find.byKey(_row), findsNothing);
+      expect(
+        tester.getRect(viewer).top,
+        moreOrLessEquals(tester.getRect(panel).top, epsilon: .5),
+      );
+    },
+    variant: _mac,
+  );
 
   testWidgets("the Devices tab's tick looks again", (tester) async {
     final fixture = DeviceAppFixture();
