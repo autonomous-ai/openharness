@@ -36,6 +36,10 @@ class DeviceAppOffer extends ChangeNotifier {
   bool _disposed = false;
   DeviceAppPresence? _presence;
   DeviceAppInstallStep? _failedStep;
+
+  /// The failure came from an install, its open step and that open's Retry included; the band shows only these, a
+  /// refused Open from the row of an installed app stays on the row.
+  bool _installFailed = false;
   Future<void>? _installing;
   Future<void>? _lookup;
   int _installsEnded = 0;
@@ -62,14 +66,13 @@ class DeviceAppOffer extends ChangeNotifier {
   DeviceAppInstallStep? get failedStep =>
       state == DeviceAppOfferState.failed ? _failedStep : null;
 
-  bool get bandVisible =>
-      _restoredDone &&
-      !_dismissed &&
-      const {
-        DeviceAppOfferState.offer,
-        DeviceAppOfferState.installing,
-        DeviceAppOfferState.failed,
-      }.contains(state);
+  bool get bandVisible {
+    if (!_restoredDone || _dismissed) return false;
+    final state = this.state;
+    return state == DeviceAppOfferState.offer ||
+        state == DeviceAppOfferState.installing ||
+        (state == DeviceAppOfferState.failed && _installFailed);
+  }
 
   /// Completes once the stored answer was read.
   Future<void> get restored => _restored;
@@ -107,6 +110,7 @@ class DeviceAppOffer extends ChangeNotifier {
     if (opened) {
       _presence = const DeviceAppPresence(installed: true, running: true);
       _failedStep = null;
+      _installFailed = false;
     } else {
       _failedStep = DeviceAppInstallStep.open;
       _log?.call('device app: open failed');
@@ -162,12 +166,14 @@ class DeviceAppOffer extends ChangeNotifier {
       // Trusted at once: the installer put it in place and opened it.
       _presence = const DeviceAppPresence(installed: true, running: true);
       _failedStep = null;
+      _installFailed = false;
       _log?.call('device app: install done');
     } else {
       if (failed == DeviceAppInstallStep.open) {
         _presence = const DeviceAppPresence(installed: true, running: false);
       }
       _failedStep = failed;
+      _installFailed = true;
       _log?.call('device app: install failed ${failed.name}');
     }
     _notify();
@@ -193,6 +199,7 @@ class DeviceAppOffer extends ChangeNotifier {
     if (answer.installed) {
       _awaitingRegistration = false;
       _failedStep = null;
+      _installFailed = false;
     } else if (_awaitingRegistration) {
       return;
     }
