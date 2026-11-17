@@ -39,7 +39,8 @@ export const SUBAGENTS_MAX = 64
 /** Subagents running with no hook and no progress for this long lost a SubagentStop: none is counted (R5). */
 export const SUBAGENT_TIMEOUT_MS = 600_000
 
-/** What a session's hooks have said of its turn. One a session. */
+/** What a session's hooks have said of its turn. One a session. When the daemon read or heard something (`held.at`,
+ *  `hookAt`, `progressAt`) is on the monotonic clock: it times the waits, which a wall clock set back would stretch. */
 interface HookTurn {
   /** When its engine ran its latest prompt hook: a Stop run before it is about an earlier turn. */
   promptAt?: number
@@ -147,7 +148,7 @@ export function createTurnHooks({
     }
     // A turn an attach picks back up: the end held before it goes on first (R1.4).
     if (read.resumed) { deliver(sessionId); return emit(sessionId, events, { resumed: true }) }
-    if (turn?.subagents && events.some(event => isProgressEvent(event.type))) turn.progressAt = Date.now()
+    if (turn?.subagents && events.some(event => isProgressEvent(event.type))) turn.progressAt = performance.now()
     if (!turn?.endsByHook || (!turn.held && !events.some(event => event.type === 'turn_ended'))) return emit(sessionId, events)
     // An aborted end, one no Stop follows (a paused /goal pass), and one its Stop came for already go on at once.
     const { awaited } = turn, ofTurn = read.turn
@@ -157,7 +158,7 @@ export function createTurnHooks({
     for (const event of events) {
       if (event.type === 'turn_started' && turn.held) { out.push(turn.held.end); turn.held = undefined }
       if (event.type !== 'turn_ended' || event.payload.aborted || atOnce) { out.push(event); continue }
-      turn.held = { end: event, identity: read.turn?.identity, openedAt: read.turn?.openedAt, at: Date.now() }
+      turn.held = { end: event, identity: read.turn?.identity, openedAt: read.turn?.openedAt, at: performance.now() }
     }
     if (out.length) emit(sessionId, out)
   }
@@ -237,7 +238,7 @@ export function createTurnHooks({
       // Taken before this Stop counts as a hook: the lead wrote on after its end was read (R5).
       const heldBeforeHook = !!turn.held && turn.held.at < turn.hookAt
       turn.endsByHook = true
-      turn.hookAt = Date.now()
+      turn.hookAt = performance.now()
       if (status === 'interrupted') {
         // Codex's Interrupt (R3): Codex waits for it before it writes turn_aborted, so the open turn ends here, before
         // the route answers, as aborted, the way Claude Code's interrupt line ends one: no drain, no wait, no key. The
@@ -294,10 +295,10 @@ export function createTurnHooks({
    */
   const onWait = ({ sessionId, firedAt: ran }: { sessionId: string; firedAt?: number }): void => {
     const firedAt = ordered(sessionId, ran), turn = record(sessionId)
-    turn.hookAt = Date.now()
+    turn.hookAt = performance.now()
     // One run before the latest prompt hook is about an earlier turn.
     if (firedAt !== undefined && (turn.promptAt ?? 0) > firedAt) return
-    turn.waitAt = firedAt ?? turn.hookAt
+    turn.waitAt = firedAt ?? Date.now()
     turnActivity.withdraw(sessionId)
     tell(sessionId)
     awaitDialog(sessionId)
@@ -306,7 +307,7 @@ export function createTurnHooks({
    *  a process of its own, so a slow daemon can take a stop before its start. */
   const onSubagent = ({ sessionId, started, firedAt }: { sessionId: string; started: boolean; firedAt?: number }): void => {
     const turn = record(sessionId)
-    turn.hookAt = Date.now()
+    turn.hookAt = performance.now()
     if (!started) { if (turn.subagents) turn.subagents--; else turn.subagentStopAt = firedAt }
     else if ((firedAt ?? Infinity) < (turn.subagentStopAt ?? 0)) turn.subagentStopAt = undefined
     else if (turn.subagents < SUBAGENTS_MAX) turn.subagents++
@@ -320,13 +321,13 @@ export function createTurnHooks({
   const beat = (sessionId: string): void => {
     const turn = turns.get(sessionId)
     if (turn?.subagents) {
-      if (Date.now() - Math.max(turn.hookAt, turn.progressAt) < SUBAGENT_TIMEOUT_MS) return
+      if (performance.now() - Math.max(turn.hookAt, turn.progressAt) < SUBAGENT_TIMEOUT_MS) return
       turn.subagents = 0
       log(`[turn] ${sid(sessionId)} subagent count reset · no hook or progress in 10 min`)
       deliver(sessionId)
       return
     }
-    if (!turn?.held || Date.now() - Math.max(turn.hookAt, turn.held.at) < HOOK_SILENCE_MS) return
+    if (!turn?.held || performance.now() - Math.max(turn.hookAt, turn.held.at) < HOOK_SILENCE_MS) return
     log(`[turn] ${sid(sessionId)} ended by its transcript · no Stop in 2 min`)
     deliver(sessionId)
   }
