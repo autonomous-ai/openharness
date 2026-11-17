@@ -1,7 +1,6 @@
 // Which app an agent runs in, from the few environment values the hook sends. Own variables of a
 // multiplexer or terminal come first: they name the nearest host, while TERM_PROGRAM names the outermost one.
 
-import { CMUX_ID } from './cmuxCli.js'
 import { HC_TERMINAL } from './hcClient.js'
 
 /** Each host's macOS app by the bundle id its Info.plist gives it: how `__CFBundleIdentifier` names the app, and how a
@@ -93,6 +92,11 @@ export function inHerdr(hints: Readonly<Record<string, string>>): boolean {
   return HC_TERMINAL.test(hints.HC_TERMINAL_ID ?? '') && (program === '' || program === 'ghostty')
     && !NEARER_HOSTS.some((own) => hints[own])
 }
+
+/** A cmux id's form, a UUID, with no anchors: a cmux pane's id holds two (cmuxApp.ts). */
+export const CMUX_UUID = '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}'
+/** A cmux surface's or workspace's id. */
+export const CMUX_ID = new RegExp(`^${CMUX_UUID}$`)
 
 /** The terminals' own variables, beside the multiplexers': a terminal started from a cmux terminal keeps its CMUX_*. */
 const NOT_CMUX = [...NEARER_HOSTS, 'HC_TERMINAL_ID', 'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE']

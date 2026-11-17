@@ -14,16 +14,14 @@
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { createAppLink, type AppLinkDeps } from './appLink.js'
 import {
-  CMUX_AUTOMATION_OFF, CMUX_ID, cmuxPaneId, cmuxPaneKey, cmuxPaneOf, type CmuxClient, type CmuxPrompt,
+  CMUX_AUTOMATION_OFF, cmuxPaneId, cmuxPaneKey, cmuxPaneOf, type CmuxClient, type CmuxPrompt,
 } from './cmuxCli.js'
-import { APP_BUNDLES, inCmux } from './hostDetect.js'
+import { APP_BUNDLES, CMUX_UUID, inCmux } from './hostDetect.js'
 import { CONTROL, MAX_TEXT } from './orca.js'
 import type { PaneSwitch, TypeResult } from './types.js'
 
-/** CMUX_ID's form without its anchors. */
-const UUID = CMUX_ID.source.slice(1, -1)
 /** A pane's id, `<workspace>/<surface>`: checked again before every command. */
-const CMUX_PANE = new RegExp(`^${UUID}/${UUID}$`)
+const CMUX_PANE = new RegExp(`^${CMUX_UUID}/${CMUX_UUID}$`)
 /** The modes that let a process not started inside cmux use its socket. `password` would need a secret Harness never
  *  reads. */
 const OPEN_MODES: ReadonlySet<string> = new Set(['automation', 'allowAll'])

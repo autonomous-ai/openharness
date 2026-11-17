@@ -19,9 +19,9 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
 import { MAX_CWD } from './herdrSource.js'
+import { CMUX_ID } from './hostDetect.js'
 import { RUN_TIMEOUT_MS } from './orca.js'
 
-export const CMUX_ID = /^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$/
 export const CMUX_WORD = /^[a-z][a-z0-9-]{0,31}$/
 /** A store file's name; group 1 is cmux's word for its agent. */
 export const CMUX_STORE = /^([a-z][a-z0-9-]{0,31})-hook-sessions\.json$/
