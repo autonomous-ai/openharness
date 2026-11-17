@@ -87,6 +87,25 @@ describe('the recaps', () => {
     expect(vi.mocked(core.clients.turnCard).mock.calls.map(([frame]) => frame.payload)).toEqual([{ kind: 'processing', text: 'Processing' }])
   })
 
+  // The core withdraws a turn's Working claim while it waits on the person (core/turns/turnHooks.ts). The dial keeps its
+  // tile working under the question (core/questions.ts), and a dial the restarted devices attach again is shown so
+  // (e2e/devicesProcess.e2e.ts, "killed outright").
+  it('beats a busy card, and says it to a dial that just attached, while a question waits on the person', async () => {
+    const { core, recaps, tell } = setup()
+    tell({ kind: 'events', session: s1, events: [started()], replay: false })
+    tell({ kind: 'asked', sessionId: 's1', requestId: 'r1' })
+    vi.mocked(core.clients.turnCard).mockClear()
+    tell({ kind: 'beat', session: s1, working: false })
+    expect(vi.mocked(core.clients.turnCard).mock.calls.map(([frame]) => frame.payload)).toEqual([{ kind: 'processing', text: 'Processing' }])
+    expect(await recaps.port.liveCards()).toEqual([{ type: 'commander_event', agentId: 'a1', dbSessionId: 's1', payload: { kind: 'processing', text: 'Processing' } }])
+    // Answered: the core's beat alone says again.
+    tell({ kind: 'answered', sessionId: 's1', requestId: 'r1' })
+    vi.mocked(core.clients.turnCard).mockClear()
+    tell({ kind: 'beat', session: s1, working: false })
+    expect(core.clients.turnCard).not.toHaveBeenCalled()
+    expect(await recaps.port.liveCards()).toEqual([])
+  })
+
   it('clears the card on a cancel and a forget, keeping what is stored for a resume', () => {
     const { core, recaps, tell } = setup()
     tell({ kind: 'events', session: s1, events: [started()], replay: false })
