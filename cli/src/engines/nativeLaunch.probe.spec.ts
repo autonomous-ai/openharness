@@ -2,7 +2,9 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { inspectNativeLaunch } from './nativeLaunch.js'
+import { inspectNativeLaunch as inspect } from './nativeLaunch.js'
+import { nativeSetupProbes } from '../services/nativeSetup.js'
+const inspectNativeLaunch: typeof inspect = (engine, source, deps) => inspect(engine, source, { setup: nativeSetupProbes, ...deps })
 
 const fixture = vi.hoisted(() => ({ identity: '', calls: 0, stall: false, expireAtExit: false, expire: null as (() => void) | null, pipes: false, pipeCount: 0, root: '',
   children: [] as import('node:child_process').ChildProcess[],

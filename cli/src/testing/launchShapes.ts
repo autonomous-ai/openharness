@@ -1,3 +1,4 @@
+import { opencodeMajorVersion } from '../engines/opencode/version.js'
 /**
  * The core's launch paths, wired as core/main.ts wires them, over a machine a spec chooses: create, every relaunch
  * (restart, resume, restore and fork share `relaunchOverrides`), retarget's check before it touches a pane and the
@@ -104,9 +105,9 @@ export function launchShapes(world: LaunchWorld) {
     setGridLaunch: world.setGridLaunch as never, prepareResume: async () => ({ repairedItems: 0 }),
   })
   return {
-    create: (rest: CreateRest) => createAgentCreator({ ...rest, gridLaunchMachine: world.machine, buildGridLaunch: gridLaunch, prepareApiTools, dshLaunch }),
+    create: (rest: CreateRest) => createAgentCreator({ opencodeMajor: opencodeMajorVersion, ...rest, gridLaunchMachine: world.machine, buildGridLaunch: gridLaunch, prepareApiTools, dshLaunch }),
     relaunch: (session: RegisteredSession, source?: LaunchSource) => helpers.relaunchOverrides(session, source),
-    fork: (rest: ForkRest) => createAgentForker({ ...rest, prepareApiTools, relaunchOverrides: helpers.relaunchOverrides, gridName, dshLaunch }),
+    fork: (rest: ForkRest) => createAgentForker({ opencodeMajor: opencodeMajorVersion, ...rest, prepareApiTools, relaunchOverrides: helpers.relaunchOverrides, gridName, dshLaunch }),
     validate: (engine: AgentEngine, source: LaunchSource) => validateLaunchOverrides(launchOverridesDeps, engine, source),
     /** The line retarget logs once a move onto a grid succeeded. */
     retargetLine: (engine: AgentEngine, overrides: LaunchOverrides): string | null => overrides.gridLaunchRecord

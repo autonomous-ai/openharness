@@ -1,3 +1,4 @@
+import { opencodeMajorVersion } from '../engines/opencode/version.js'
 /**
  * The core's requests answered the way the daemon answers them, for a socket a spec builds on its own.
  * Requests that left the socket's switch for the core are bound by cli.ts, so a bare socket answers them
@@ -151,6 +152,7 @@ export function bindLaunchRequests(socket: BackendSocket, over: Partial<Launcher
     launcher = state
     launchers.set(socket, state)
     const launches = createLaunchRequests({
+      opencodeMajor: opencodeMajorVersion,
       receipts: new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations')),
       createAgent: () => socket.onCreateAgent, forkAgent: () => socket.onForkAgent,
       resumeAgent: () => state.resume, restartAgent: () => state.restart,

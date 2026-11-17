@@ -36,6 +36,11 @@ export async function readYamlSetting(file: string, section: string, key: string
   } catch {
     return null
   }
+  return yamlStringSetting(text, section, key)
+}
+
+/** The same interpretation for setup's already bounded, captured configuration bytes. */
+export function yamlStringSetting(text: string, section: string, key: string): string | null {
   // Read as the engines' YAML 1.1 readers (PyYAML's safe_load) read it: two equal keys are no error and the last
   // counts, aliases are followed and merge keys applied. An alias bomb trips toJS's own limit.
   const document = parseDocument(text, { uniqueKeys: false, prettyErrors: false, merge: true })

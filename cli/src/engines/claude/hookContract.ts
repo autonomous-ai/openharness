@@ -1,8 +1,9 @@
+import { hookAuthority } from './hookAuthority.js'
 import type { HookContract } from '../facets/hooks.js'
 
 /**
- * Claude Code's hooks, declared: data only, which core applies with the kit's installer and rules
- * (engines/hooks.ts). Copied from the former installHooks.ts and hooks.ts of this folder.
+ * Claude Code's hooks, declared: data for setup rendering and explicit CLI installation
+ * (hookAuthority.ts holds core admission). Copied from the former installHooks.ts and hooks.ts of this folder.
  */
 export const hooks: HookContract = {
   settings: {
@@ -58,6 +59,5 @@ export const hooks: HookContract = {
       failed: '[hooks] failed to write settings.json:',
     },
   },
-  sessionFile: { suffix: '.jsonl' },
-  stopClosesTurns: true,
+  ...hookAuthority,
 }

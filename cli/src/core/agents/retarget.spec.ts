@@ -1,5 +1,7 @@
+import { opencodeMajorVersion } from '../../engines/opencode/version.js'
+vi.mock('../../engines/opencode/version.js', () => ({ opencodeMajorVersion: vi.fn(async () => 1) }))
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { applyOpencodeSessionModel, parseOpencodeModelId, opencodeMajorVersion, opencodeV2TurnOpen } from '../../engines/launchControl.js'
+import { applyOpencodeSessionModel, parseOpencodeModelId, opencodeV2TurnOpen } from '../../engines/launchControl.js'
 import { isOpencodeV2 } from '../../engines/launchControl.js'
 import { binaryOnPath } from '../../lib/binaryOnPath.js'
 import { builtinSqlite } from '../../lib/sqliteBuiltin.js'
@@ -59,7 +61,7 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RetargetDe
   const tmux = { name: 'tmux', holdOpen: vi.fn(), respawn: vi.fn(),
     clearEnv: vi.fn<NonNullable<TerminalBackend['clearEnv']>>(async () => ({ state: 'succeeded', dispatch: 'executed' })),
     releaseHold: vi.fn<TerminalBackend['releaseHold']>(async () => {}) }
-  const deps: RetargetDeps = {
+  const deps: RetargetDeps = { opencodeMajor: opencodeMajorVersion,
     sessionTurnOpen: vi.fn(() => false),
     purgeBusy: vi.fn(() => false),
     terminals: { backendFor: vi.fn((runtime: { backend: string }) => runtime.backend === 'tmux' ? tmux : undefined), instances: () => [tmux] } as unknown as RetargetDeps['terminals'],
@@ -126,6 +128,12 @@ describe('retargeting an agent', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
   })
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
+
+  it('keeps the existing unknown-version retarget behavior when setup cannot answer', async () => {
+    const run = setup(agent({ engine: 'opencode' }), { opencodeMajor: async () => null })
+    expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: true })
+    expect(restartAgent).toHaveBeenCalledOnce()
+  })
 
   it('holds an unavailable native retarget before inspecting or mutating the pane', async () => {
     const held = { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Waiting for native evidence.' } as const

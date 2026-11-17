@@ -59,6 +59,9 @@ export type ServiceHostSpec = Omit<ServiceSpec, 'name'>
  * would cost that four times.
  */
 export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
+  // Installation journals and executable probes cannot block core or unrelated edge services. Older cores
+  // prepare launches inline and never ask; this process costs nothing until its first setup request.
+  engineSetup: { services: ['engineSetup'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true, askedSince: 0 },
   // Engine workers have no older-core startup obligation: old cores run these facets inline and never ask.
   // Each holds at most four reads, a 128-entry pager and replies capped at 4 MiB. The heap limit
   // contains transient parsing; RSS additionally bounds file buffers outside V8's heap.

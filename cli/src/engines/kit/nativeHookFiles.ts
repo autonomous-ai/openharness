@@ -83,15 +83,15 @@ async function syncDirectoryChain(path: string, attempt: HookPreparationAttempt)
 
 /** Create only absent directories. The final leaf-to-root flush confirms every name. Existing
  * aliases are resolved before use; no directory is chmodded or replaced. */
-function ensureDirectory(path: string, attempt: HookPreparationAttempt): void {
+export function prepareHookDirectory(path: string, attempt: HookPreparationAttempt, mode?: number): void {
   attempt.check()
   try {
     if (!lstatSync(path).isDirectory()) throw new HookPreparationHeld('the configuration directory changed type')
   } catch (error) {
     if (!missing(error)) throw error
-    ensureDirectory(dirname(path), attempt)
+    prepareHookDirectory(dirname(path), attempt, mode)
     attempt.verify(); attempt.check()
-    try { mkdirSync(path) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+    try { mkdirSync(path, { mode }) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
     directoryChanged(attempt, dirname(path))
   }
 }
@@ -173,7 +173,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
   }
   verify()
   return {
-    content, directory, stamp: before,
+    content, directory, mode, stamp: before,
     verify, prepare,
     async replace(next: string, attempt: HookPreparationAttempt, exclusive = false): Promise<HookFilePublication> {
       attempt.verify(); prepare(next)
@@ -204,7 +204,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
       // Resolve an existing ancestor before creating descendants; this preserves
       // relocated config homes without following a replaced alias at publish.
       const parent = directoryPath(dirname(target))
-      ensureDirectory(parent, attempt)
+      prepareHookDirectory(parent, attempt)
       const actual = join(parent, target.slice(dirname(target).length + 1))
       // Creation invalidates absent-ancestor facts; capture the new route and
       // still require the exact old leaf (or its observed absence).
@@ -292,16 +292,27 @@ export interface HookPreparationAttempt {
   flush(fd: number): Promise<void>
 }
 export interface HookPreparationOptions {
+  /** Setup renders against captured inputs; only the core's native publisher has real file effects. */
+  files?: HookPreparationFiles
   /** Join only the same port, executable, command and complete destination set. */
   identity?: string
   current?(): boolean
   timeoutMs?: number
   /** Immutable effect claims must let a competing publisher finish. */
   retainConflicts?: boolean
+  /** A native launch may wait once for revoked work to actually release its destinations. */
+  settleConflicts?: boolean
   /** Evidence retained by this launch; never a global success cache. */
   confirmed?(proof: HookPreparationProof): void
 }
-interface PendingPreparation { identity?: string; keys: string[]; revoke(): void; reply: Promise<unknown>; waiters: number; proof?: HookPreparationProof }
+export interface HookPreparationFiles {
+  report(stream: 'log' | 'warn' | 'error', ...args: unknown[]): void
+  inspect: typeof inspectHookFile
+  run: typeof runHookPreparation
+  directory(path: string, mode: number | undefined, attempt: HookPreparationAttempt): void
+  write(file: string, text: string, mode: number, attempt: HookPreparationAttempt): Promise<void>
+}
+interface PendingPreparation { identity?: string; keys: string[]; revoke(): void; reply: Promise<unknown>; settled: Promise<void>; waiters: number; proof?: HookPreparationProof }
 function preparationProof(files: readonly string[], verifyRoutes: () => void): HookPreparationProof {
   verifyRoutes()
   const confirmed = files.map(file => {
@@ -321,9 +332,11 @@ async function joinPreparation<T>(pending: PendingPreparation, options: HookPrep
   if (options.current?.() === false) throw new HookPreparationHeld('the joining owner changed')
   if (pending.waiters >= 16) throw new HookPreparationHeld('the preparation waiters are occupied')
   pending.waiters++
+  // The callback still occupies this slot after a joining caller’s shorter deadline.
+  const reply = pending.reply.finally(() => { pending.waiters-- })
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    const result = await Promise.race([pending.reply, new Promise<never>((_, reject) => {
+    const result = await Promise.race([reply, new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new HookPreparationHeld('the joining preparation exceeded its deadline')), options.timeoutMs ?? 5_000)
     })])
     verifyRoutes()
@@ -338,7 +351,28 @@ async function joinPreparation<T>(pending: PendingPreparation, options: HookPrep
     if (options.current?.() === false) throw new HookPreparationHeld('the joining owner changed')
     options.confirmed?.(proof)
     return result as T
-  } finally { clearTimeout(timer); pending.waiters-- }
+  } finally { clearTimeout(timer) }
+}
+/** Waiting grants no publication proof: the caller must acquire and capture its own reservation afterward. */
+async function settlePreparations(conflicts: PendingPreparation[], options: HookPreparationOptions, verifyRoutes: () => void, deadline: number): Promise<void> {
+  verifyRoutes()
+  if (options.current?.() === false) throw new HookPreparationHeld('the waiting owner changed')
+  if (performance.now() >= deadline) throw new HookPreparationHeld('the preparation exceeded its deadline')
+  if (conflicts.some(pending => pending.waiters >= 16)) throw new HookPreparationHeld('the preparation waiters are occupied')
+  for (const pending of conflicts) { pending.waiters++; pending.revoke() }
+  // A timeout ends the reply, not the callbacks retained by hung actual I/O.
+  const settled = Promise.all(conflicts.map(pending => pending.settled)).then(() => {
+    for (const pending of conflicts) pending.waiters--
+  })
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([settled, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new HookPreparationHeld('the preparation exceeded its deadline')), deadline - performance.now())
+    })])
+    verifyRoutes()
+    if (options.current?.() === false) throw new HookPreparationHeld('the waiting owner changed')
+    if (performance.now() >= deadline) throw new HookPreparationHeld('the preparation exceeded its deadline')
+  } finally { clearTimeout(timer) }
 }
 const pendingPreparations = new Set<PendingPreparation>()
 const MAX_PREPARATIONS = 16
@@ -383,17 +417,24 @@ export function hookPreparationRoutes(files: readonly string[]): { verify(): voi
 /** Disk waits remain in eager core code. Reservations survive a timeout until
  * actual I/O settles: a late fsync must never use a closed, recycled descriptor. */
 export async function runHookPreparation<T>(files: readonly string[], work: (attempt: HookPreparationAttempt) => Promise<T>, options: HookPreparationOptions = {}): Promise<T> {
+  const deadline = performance.now() + (options.timeoutMs ?? 5_000)
   const { verify: verifyRoutes, keys } = hookPreparationRoutes(files)
   const conflicts = [...pendingPreparations].filter(pending => pending.keys.some(key => keys.includes(key)))
   if (conflicts.length) {
     const same = conflicts.length === 1 && options.identity !== undefined && conflicts[0].identity === options.identity
       && JSON.stringify(conflicts[0].keys) === JSON.stringify(keys)
     if (same) return await joinPreparation<T>(conflicts[0], options, verifyRoutes, files)
-    if (!options.retainConflicts) for (const pending of conflicts) pending.revoke()
-    throw new HookPreparationHeld('another preparation still owns these destinations')
+    if (options.settleConflicts && !options.retainConflicts) {
+      await settlePreparations(conflicts, options, verifyRoutes, deadline)
+      if ([...pendingPreparations].some(pending => pending.keys.some(key => keys.includes(key)))) {
+        throw new HookPreparationHeld('another preparation still owns these destinations')
+      }
+    } else {
+      if (!options.retainConflicts) for (const pending of conflicts) pending.revoke()
+      throw new HookPreparationHeld('another preparation still owns these destinations')
+    }
   }
   if (pendingPreparations.size >= MAX_PREPARATIONS) throw new HookPreparationHeld('the disk preparation slots are occupied')
-  const deadline = performance.now() + (options.timeoutMs ?? 5_000)
   let revoked = false
   const cancellations = new Set<() => void>()
   const revoke = () => { revoked = true; for (const cancel of [...cancellations]) cancel() }
@@ -432,7 +473,7 @@ export async function runHookPreparation<T>(files: readonly string[], work: (att
   }
   directoryFlushes.set(attempt, { flushed: new Set(), changes: 0 })
   let timer: ReturnType<typeof setTimeout> | undefined
-  const pending: PendingPreparation = { identity: options.identity, keys, revoke, reply: Promise.resolve(), waiters: 0 }
+  const pending: PendingPreparation = { identity: options.identity, keys, revoke, reply: Promise.resolve(), settled: Promise.resolve(), waiters: 0 }
   pendingPreparations.add(pending)
   // Dispatch only after the reservation is visible. A timeout ends the caller's
   // wait; the finally below runs only when the actual work (and its FDs) finishes.
@@ -452,8 +493,9 @@ export async function runHookPreparation<T>(files: readonly string[], work: (att
     pendingPreparations.delete(pending)
     clearTimeout(timer)
   })
+  pending.settled = actual.then(() => {}, () => {})
   pending.reply = Promise.race([actual, new Promise<never>((_, reject) => {
-    timer = setTimeout(() => { revoke(); reject(new HookPreparationHeld('disk confirmation exceeded its deadline')) }, options.timeoutMs ?? 5_000)
+    timer = setTimeout(() => { revoke(); reject(new HookPreparationHeld('disk confirmation exceeded its deadline')) }, Math.max(0, deadline - performance.now()))
   })])
   return await pending.reply as T
 }

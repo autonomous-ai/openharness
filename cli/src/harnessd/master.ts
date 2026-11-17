@@ -395,7 +395,7 @@ export function runMaster(config: MasterConfig): Supervisor {
       const file = config.currentScript ? script() : lean.scriptFor(spec.name)
       // One process for every service it hosts, each on its own link to the core (services/process.ts).
       const handle = coreHandle(spawn(named(`harnessd-${spec.name}`), [...coreExecArgv(config.execArgv, spec.heapLimitMiB), file, '__service', spec.services.join(',')], {
-        env: { ...env, ...extra },
+        env: { ...env, ...extra, ...(!config.currentScript && file !== config.scriptPath ? { [LEAN_CORE_SCRIPT_ENV]: config.scriptPath } : {}) },
         stdio: ['ignore', output, output, 'ipc'],
       }))
       if (!config.currentScript) lean.started(spec.name, file, handle)

@@ -172,15 +172,19 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
  *  repair's closure may reach of the two engines. */
 const LAUNCH_CONTRACTS = new Set(['engines/claude/launch.ts', 'engines/codex/launch.ts'])
 const SESSION_STORES = new Set(['engines/claude/sessionStore.ts', 'engines/codex/sessionStore.ts'])
-const DECLARED = new Set(['engines/claude/hookContract.ts', 'engines/codex/hookContract.ts', 'engines/claude/discoveryContract.ts',
+const DECLARED = new Set(['engines/claude/hookAuthority.ts', 'engines/codex/hookAuthority.ts', 'engines/claude/discoveryContract.ts',
   'engines/codex/discoveryContract.ts', ...SESSION_STORES])
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
+  // Setup owns installation and engine probes; trusted executable/location selection remains core launch authority.
+  /^engines\/kit\/(downloadMarker|nativeInstall|nativeVersion|nativeProbe|windowsInstall|setupProbe)\.ts$/,
+  /^engines\/hermesRecord\.ts$/, /^engines\/opencode\/version\.ts$/,
   /^engines\/(claude|codex)\/(screen|composer|activity|stoppedGoal|modelControl|modelPicker|questionControl|submission|nativeControl)\.ts$/,
-  // Claude Code's and Codex's hooks are declared data (hookContract.ts) that the kit applies in core: no hook code
-  // of theirs is the core's, and none runs in a worker either (docs/design/2026-10-08-engine-hooks.md).
-  /^engines\/(claude|codex)\/(hooks|installHooks)\.ts$/,
+  // Hook admission and Stop remain mandatory authority; installation parsing/templates belong to setup.
+  /^engines\/(claude|codex)\/(hooks|installHooks|hookContract)\.ts$/,
+  /^engines\/(nativeHooks|hookInstallations)\.ts$/,
+  /^engines\/kit\/(hookSettings|hookReview|nativeHookSettings|nativeHookYaml|nativePlugin|notifyHooks|yamlSetting|hermesRecordSettings|hookPreparationFiles)\.ts$/,
   // Claude Code's stop of a `claude --bg` job holding a session it resumes runs in its worker (#4146).
   /^engines\/(backgroundJobs|claude\/backgroundJob)\.ts$/,
   // Linking a Claude Code profile and what a reported profile id stands for are models' and usage's: the core checks a
@@ -379,13 +383,26 @@ describe('the daemon\'s shape', () => {
     }
   })
 
-  it('hook installation, admission, transcript correction and turn closing load the engines\' declared hook contracts alone', () => {
-    const contracts = new Set(['engines/claude/hookContract.ts', 'engines/codex/hookContract.ts'])
-    for (const entry of ['engines/hooks.ts', 'engines/kit/hookSettings.ts', 'engines/kit/hookRules.ts', 'engines/kit/stopHook.ts',
+  it('hook admission, transcript correction and turn closing load mandatory authority alone', () => {
+    const contracts = new Set(['engines/claude/hookAuthority.ts', 'engines/codex/hookAuthority.ts'])
+    for (const entry of ['engines/hooks.ts', 'engines/kit/hookRules.ts', 'engines/kit/stopHook.ts',
       'core/turns/turnHooks.ts']) {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file) && !contracts.has(file)), entry).toEqual([])
     }
     expect([...closureOf('engines/hooks.ts').keys()].filter(file => contracts.has(file)).sort()).toEqual([...contracts].sort())
+  })
+
+  it('core hook publication reaches no vendor parser or template while setup owns them', () => {
+    const optional = [ 'engines/hookInstallations.ts', 'engines/nativeHooks.ts',
+      'engines/kit/hookSettings.ts', 'engines/kit/nativeHookSettings.ts', 'engines/kit/nativeHookYaml.ts',
+      'engines/kit/nativePlugin.ts', 'engines/kit/notifyHooks.ts', 'engines/claude/hookContract.ts', 'engines/codex/hookContract.ts' ]
+    for (const entry of ['core/main.ts', 'core/engines/hooks.ts', 'engines/nativeHookSetup.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => optional.includes(file)), entry).toEqual([])
+    }
+    const worker = closureOf('services/nativeSetupFiles.ts')
+    for (const file of optional.filter(file => !['engines/nativeHooks.ts', 'engines/hookInstallations.ts'].includes(file))) {
+      expect(worker.has(file), file).toBe(true)
+    }
   })
 
   it('discovery loads the engines\' declared contracts alone', () => {
@@ -412,7 +429,7 @@ describe('the daemon\'s shape', () => {
     }
     // The stores alone, and what Codex's shares with its launch and hook contracts (the rollout layout, the child rule).
     expect([...closureOf('engines/sessionStoreContracts.ts').keys()].filter(file => /^engines\/(claude|codex)\//.test(file)).sort())
-      .toEqual(['engines/claude/sessionStore.ts', 'engines/codex/hookContract.ts', 'engines/codex/launch.ts', 'engines/codex/sessionStore.ts'])
+      .toEqual(['engines/claude/sessionStore.ts', 'engines/codex/hookAuthority.ts', 'engines/codex/launch.ts', 'engines/codex/sessionStore.ts'])
     // The kit's mechanics know no engine at all.
     for (const entry of ['engines/kit/sessionRecords.ts', 'engines/kit/continuation.ts']) {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file)), entry).toEqual([])
@@ -458,7 +475,7 @@ describe('the daemon\'s shape', () => {
       'engines/kit/launchStartup.ts', 'dsh/adapters.ts', 'engines/launchPrep.ts', 'engines/kit/folderTrust.ts',
       'engines/kit/resumeRepair.ts', 'dsh/runtime.ts', 'lib/apiInstructions.ts', 'engines/kit/attribution.ts', 'lib/agentAttribution.ts']) {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file) && !contracts.has(file)
-        && !SESSION_STORES.has(file) && file !== 'engines/codex/hookContract.ts'), entry).toEqual([])
+        && !SESSION_STORES.has(file) && file !== 'engines/codex/hookAuthority.ts'), entry).toEqual([])
     }
     expect([...closureOf('lib/engineLaunch.ts').keys()].filter(file => contracts.has(file)).sort()).toEqual([...contracts].sort())
     // The launches themselves reach the registry too, whose hook admission reads the hook contracts and whose
@@ -506,9 +523,9 @@ describe('the daemon\'s shape', () => {
     }
   })
 
-  it('native hook installation never loads optional code and reaches only engine declarations', () => {
-    for (const entry of ['core/engines/hooks.ts', 'engines/nativeHooks.ts', 'engines/kit/nativeHookSettings.ts',
-      'engines/kit/nativeHookYaml.ts', 'engines/kit/nativeHookHomes.ts', 'engines/kit/nativePlugin.ts']) {
+  it('native hook coordination reaches only engine declarations and bounded publication', () => {
+    for (const entry of ['core/engines/hooks.ts', 'engines/nativeHookSetup.ts', 'engines/kit/nativeHookPublication.ts',
+      'engines/kit/nativeHookHomes.ts', 'engines/kit/opencodeHookPreparation.ts']) {
       const imports = importsFor(entry, readFileSync(join(SRC, entry), 'utf8'))
       expect(imports.filter(one => one.dynamic || /inProcess\.js$/.test(one.from)), entry).toEqual([])
       expect([...closureOf(entry).keys()].filter(theirs), entry).toEqual([])

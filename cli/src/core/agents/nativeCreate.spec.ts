@@ -54,7 +54,7 @@ it.each([true, false])('completes native Codex preparation before its dispatch c
   const { createAgentCreator } = await import('./create.js')
   const { createLaunchRequests } = await import('./launches.js')
   const { AgentCreationReceipts } = await import('../../lib/agentCreationReceipt.js')
-  const { inspectNativeLaunch } = await import('../../engines/nativeLaunch.js')
+  const { inspectNativeLaunch } = await import('../../testing/nativeSetupInProcess.js')
   const { projectsRoot } = await import('../../lib/projectFolder.js')
   const cwd = join(projectsRoot(), 'workspace'); mkdirSync(cwd, { recursive: true })
   const config = join(process.env.CODEX_HOME!, 'config.toml')

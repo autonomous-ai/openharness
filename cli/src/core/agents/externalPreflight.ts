@@ -1,5 +1,5 @@
 /** Verify a resumable launch before asking an external terminal to quit. */
-import { engineHooks } from '../../engines/hooks.js'
+import { engineHookInstallations as engineHooks } from '../../engines/nativeHookSetup.js'
 import { hooksHeldDetail } from '../../engines/kit/hooksHeldDetail.js'
 import { buildEngineCommandArgv, refusePermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'

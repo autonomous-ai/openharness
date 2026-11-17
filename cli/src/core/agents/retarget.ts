@@ -44,6 +44,7 @@ type LaunchHelpers = ReturnType<typeof createLaunchHelpers>
 type RetargetAgent = NonNullable<BackendSocket['onRetargetAgent']>
 
 export interface RetargetDeps {
+  opencodeMajor?: () => Promise<number | null>
   /** What it answers when no backend here can respawn a pane: the configured backend's own code (terminalBackend.ts
    *  `noBackendCode`); `TMUX_UNAVAILABLE`, as before, by default. */
   noBackendCode?: string
@@ -71,7 +72,7 @@ export interface RetargetDeps {
   moveConversation?: MoveConversation
 }
 
-export function createAgentRetargeter({
+export function createAgentRetargeter({ opencodeMajor: readOpencodeMajor,
   sessionTurnOpen, purgeBusy, terminals, registry, runtimeProfiles, launchOverridesDeps, acquireTerminalControl,
   relaunchOverrides, downgradedPermission, agentReconciler, restartJobs, paneSwapDeps, liveBypassPermission,
   announceSession, refreshGridAssignment, opencodeDb, noBackendCode = 'TMUX_UNAVAILABLE', moveConversation,
@@ -173,7 +174,7 @@ export function createAgentRetargeter({
     const rewritesOpencodeSession = session.engine === 'opencode' && !!session.sessionId
       && (!!grid || !!remembered?.includes('/'))
     const opencode = session.engine === 'opencode' ? opencodeLaunch : null
-    const opencodeMajor = native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null
+    const opencodeMajor = native ? native.opencodeMajor : opencode ? await readOpencodeMajor?.() ?? null : null
     if (!current()) return changed()
     if (rewritesOpencodeSession && opencode && !opencode.isOpencodeV2(opencodeMajor) && !builtinSqlite() && !binaryOnPath('sqlite3')) {
       return {

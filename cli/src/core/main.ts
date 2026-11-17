@@ -7,13 +7,10 @@ import { masterRunsEngineModelControl } from '../harnessd/services.js'
 import { createScreens } from './engines/screens.js'
 import { createScreenTransport } from './engines/screenTransport.js'
 import { terminalScreen } from '../engines/kit/screen.js'
-import { opencodeMajorVersion } from '../engines/launchControl.js'
 import { inspectNativeLaunch, type NativeLaunch } from '../engines/nativeLaunch.js'
-import { nativeHookLocations } from '../engines/kit/nativeLocations.js'
+import { nativeHookLocations, type NativeHookOptions } from '../engines/kit/nativeLocations.js'
 import { createNativeLaunchPreparer } from '../engines/prepareNativeLaunch.js'
-import { engineDownloading } from '../engines/kit/downloadMarker.js'
-import { createNativeInstallations } from '../engines/kit/nativeInstall.js'
-import { createWindowsInstallations } from '../engines/kit/windowsInstall.js'
+import { createNativeSetupLink } from '../engines/kit/nativeSetupLink.js'
 import { publishGridConfigDir } from '../lib/publishedGridConfig.js'
 import { masterRunsEngineScreen } from '../harnessd/services.js'
 import { createSubmissions } from './engines/submissions.js'
@@ -62,7 +59,7 @@ import { claudeHomeListed } from '../lib/claudeHomes.js'
 import { registry, projectDisplayName, validTranscriptPath, type RegisteredSession } from '../lib/registry.js'
 import { engineSessionTitle } from '../lib/sessionTitle.js'
 import { machineNames } from '../lib/machineNames.js'
-import { engineHooks as engineHookFacets } from '../engines/hooks.js'
+import { engineHookInstallations as engineHookFacets } from '../engines/nativeHookSetup.js'
 import type { LiveFor } from '../engines/facets/live.js'
 import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, removePidFileIf, onError, LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel } from '../lib/daemonState.js'
 import { clearSafeModeMarker, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from '../lib/daemonSafeMode.js'
@@ -175,7 +172,7 @@ import { createForgetSession } from './agents/forget.js'
 import { createBinding } from './agents/bind.js'
 import { createHermesTerminal } from './agents/hermesTerminal.js'
 import { hermesSessionEndedSince, hermesSessionKind, hermesStoreStamp, hermesTerminalNames, hermesTerminalStamp, readHermesTerminal } from '../engines/identities.js'
-import { hermesRecordSeen } from '../engines/nativeHooks.js'
+import { hermesRecordSeen } from '../engines/nativeHookSetup.js'
 import { createDiscoveryHandlers } from './agents/discovery.js'
 import { createLaunchHelpers, gridLaunchThrough } from './agents/launch.js'
 import { createLaunchAuthority } from './agents/launchAuthority.js'
@@ -1576,7 +1573,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The requests each service that can run in its own process answers, as core/api.ts declares them.
   const requestsOf: Record<string, readonly string[]> = {
     gateway: GATEWAY_REQUESTS, wifi: WIFI_REQUESTS, search: SEARCH_REQUESTS, store: STORE_REQUESTS, usage: USAGE_REQUESTS, monitor: MONITOR_REQUESTS, projects: PROJECTS_REQUESTS, models: MODELS_REQUESTS, handoff: HANDOFF_REQUESTS, connectors: CONNECTORS_REQUESTS, sharedMachines: SHARED_MACHINES_REQUESTS,
-    devices: DEVICES_REQUESTS, windowNames: WINDOW_NAMES_REQUESTS, engineProbe: ENGINE_PROBE_REQUESTS, goals: GOALS_REQUESTS, shell: SHELL_REQUESTS, messages: MESSAGES_REQUESTS, osDevice: OS_DEVICE_REQUESTS, machineAddons: MACHINE_ADDON_REQUESTS,
+    devices: DEVICES_REQUESTS, windowNames: WINDOW_NAMES_REQUESTS, engineProbe: ENGINE_PROBE_REQUESTS, engineSetup: [], goals: GOALS_REQUESTS, shell: SHELL_REQUESTS, messages: MESSAGES_REQUESTS, osDevice: OS_DEVICE_REQUESTS, machineAddons: MACHINE_ADDON_REQUESTS,
     agentBrowser: AGENT_BROWSER_REQUESTS,
     ...Object.fromEntries(Object.entries(EXPERIMENTS).map(([name, experiment]) => [name, experiment.requests])),
   }
@@ -1682,13 +1679,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // once needed: a request asks. Shell, Agent Messages and the engine probe are in the always-running edge host, but
     // a first request can beat that host's connection. Hold it through the same bounded startup gate; after any
     // disconnect, fail promptly as before. Under a master from before, Agent Messages' own process starts at its first request this way.
-    onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND, ...VIEWERS_ON_DEMAND, ...Object.values(READER_SERVICES), OTHER_ENGINES_SERVICE, 'models', 'gateway', 'shell', 'messages', 'agentBrowser', 'engineProbe']),
+    onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND, ...VIEWERS_ON_DEMAND, ...Object.values(READER_SERVICES), OTHER_ENGINES_SERVICE, 'models', 'gateway', 'shell', 'messages', 'agentBrowser', 'engineProbe', 'engineSetup']),
     // But the Store's requests wait through its process's restart too: a window's Store list was answered unavailable
     // while the master restarted the viewers (core/serviceLinks.ts `waitsThroughRestart`). So does an engine probe
     // asked while the edge host is restarting: the core's own probe always answered while it ran in this process. One
     // in flight as the host goes is still answered unavailable, which its callers read as not checked, never as no
     // engine installed.
-    waitsThroughRestart: new Set(['store', 'engineProbe']),
+    waitsThroughRestart: new Set(['store', 'engineProbe', 'engineSetup']),
     // Claude Code's and Codex's readers may take longer to start: a person's first message waits for them (core/input.ts).
     startWaits: Object.fromEntries([...Object.values(READER_SERVICES), OTHER_ENGINES_SERVICE].map(service => [service, READER_START_MS])),
     want: (service) => experimentHooks.want(service),
@@ -2019,6 +2016,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
 
   // Binding a session to its agent, and a running process to its session (core/agents/bind.ts).
+  let hookSetup: NativeHookOptions['setup']
+
   const binding = createBinding({
     owners: conversationOwners,
     registry,
@@ -2058,7 +2057,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       kind: hermesSessionKind,
       endedSince: hermesSessionEndedSince,
       storeStamp: hermesStoreStamp,
-      recordSeen: (home) => { void hermesRecordSeen(home) },
+      recordSeen: (home) => { void hermesRecordSeen(home, env.PORT, { setup: hookSetup }) },
       now: Date.now,
     }),
   })
@@ -2488,7 +2487,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    */
   const gridLaunchMachine = async (engine: AgentEngine, native?: NativeLaunch): Promise<GridLaunchMachine> => ({
     hermesSystemManaged: existsSync(HERMES_SYSTEM_MANAGED_DIR),
-    opencodeMajor: native ? native.opencodeMajor : engine === 'opencode' ? await opencodeMajorVersion() : null,
+    opencodeMajor: native ? native.opencodeMajor : engine === 'opencode' ? await nativeSetup.opencodeMajor() : null,
     ...(native?.environment.HOME ? { grokHome: nativeHookLocations(native.environment).GROK_HOME } : {}),
   })
 
@@ -2503,13 +2502,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const gridLaunch = gridLaunchThrough(() => ports.models ?? MODELS_OFF)
   const dshLaunch = dshThrough({ store: () => ports.store ?? STORE_OFF,
     nameOf: id => installedDsh(id)?.manifest.name, account: () => ({ privateGrid: backend.gridName() }) })
+  // Old-master compatibility through 2026-12-15; explicit debug/no-master composition shares this door.
+  // A failed advertised worker never selects the inline implementation.
+  const nativeSetup = outOfProcess.has('engineSetup')
+    ? createNativeSetupLink((type, payload) => serviceLinks.call('engineSetup', type, payload))
+    : inline!.createLocalNativeSetup(join(env.ADAPTER_DATA_DIR, 'native-installations'))
+  hookSetup = nativeSetup
   const prepareNativeLaunch = createNativeLaunchPreparer({
-    installations: (process.platform === 'win32' ? createWindowsInstallations : createNativeInstallations)({ directory: join(env.ADAPTER_DATA_DIR, 'native-installations') }),
+    installations: nativeSetup.installations,
     inspect: (engine, source) => inspectNativeLaunch(engine, source, {
-      confirmHome: (engine, home) => { confirmHomes({ [sessionStoreContracts[engine].sessions.moved.variable]: home }) },
+      setup: nativeSetup,
+      confirmHome: (engine, home) => confirmHomes({ [sessionStoreContracts[engine].sessions.moved.variable]: home }),
     }),
-    // The Desktop's own download of the engine on a fresh computer: a launch waits for it rather than installing beside it.
-    downloading: (engine) => engineDownloading(engine),
+    downloading: nativeSetup.downloading,
   })
   const launchOverridesDeps: LaunchOverridesDeps = {
     publishConfig: publishGridConfigDir,
@@ -2520,7 +2525,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     writeGridConfigDir,
     // No backend to make the pane on is not this check's to say: the launch answers the configured backend's code.
     capabilities: () => createBackend?.capabilities() ?? Promise.resolve({ sessionEnv: true }),
-    installCodexHooks: (codexHome) => env.DISABLE_HOOK_INSTALL ? true : engineHookFacets.codex.installIn(hookPort, codexHome),
+    installCodexHooks: (codexHome) => env.DISABLE_HOOK_INSTALL ? true : engineHookFacets.codex.installIn(hookPort, codexHome, { setup: nativeSetup }),
     dshLaunch: dshLaunch.relaunch,
   }
   // What a relaunch needs to bring a pane back (core/agents/launch.ts). Declared before the restore
@@ -2823,14 +2828,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     waiting: row => heldIn(row, row.externalResume!.token, (runtime) => terminals.backendFor(runtime)).then(value => value === true),
     inspect: request => ports.search?.inspect(request) ?? Promise.resolve(externalUnavailable()),
     preflight: createExternalPreflight({ blocksFolder: cwd => backend.purgeAgentService?.blocksFolder(cwd),
-      native: prepareNativeLaunch, hookPort, hooksDisabled: env.DISABLE_HOOK_INSTALL, installOpencodePlugin: installOpencodePluginBeforeSpawn }),
+      native: prepareNativeLaunch, hookPort, hooksDisabled: env.DISABLE_HOOK_INSTALL, installOpencodePlugin: (port) => installOpencodePluginBeforeSpawn(port, undefined, nativeSetup) }),
     announce: announceSession, launch: () => { void heldLaunches.restoreHeld('search') },
     forget: id => forgetSession(id, { force: true }),
     heldConversation: (sessionId) => moveHeldConversations.get(sessionId) ?? null,
   })
 
   // Creating an agent (core/agents/create.ts).
-  const creator = createAgentCreator({
+  const creator = createAgentCreator({ opencodeMajor: nativeSetup.opencodeMajor,
     publishConfig: publishGridConfigDir,
     native: prepareNativeLaunch,
     dshLaunch,
@@ -2845,7 +2850,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     prepareApiTools,
     hookPort,
     hooksDisabled: env.DISABLE_HOOK_INSTALL,
-    installOpencodePlugin: installOpencodePluginBeforeSpawn,
+    installOpencodePlugin: (port) => installOpencodePluginBeforeSpawn(port, undefined, nativeSetup),
     gridLaunchMachine,
     buildGridLaunch: gridLaunch,
     terminalHintMachineName,
@@ -2861,7 +2866,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.onCreateAgent = creator
 
   // Forking an agent (core/agents/fork.ts).
-  backend.onForkAgent = createAgentForker({
+  backend.onForkAgent = createAgentForker({ opencodeMajor: nativeSetup.opencodeMajor,
     native: prepareNativeLaunch,
     prepareNative: launchOverridesDeps.prepareNative,
     authority: launchAuthority,
@@ -2895,7 +2900,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const liveBypassPermission = paneSwap.liveBypassPermission
 
   // Moving a running agent onto a grid, or back to its own login (core/agents/retarget.ts).
-  backend.onRetargetAgent = createAgentRetargeter({
+  backend.onRetargetAgent = createAgentRetargeter({ opencodeMajor: nativeSetup.opencodeMajor,
     noBackendCode: createUnavailable,
     sessionTurnOpen,
     // A retarget swaps the engine too: not of an agent a stopped move may still run beside (`moveHeld`).
@@ -3118,7 +3123,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     claudeHomeListed: (home) => claudeHomeListed(home, machineIdNow()),
     receipts,
     createAgent: () => backend.onCreateAgent, forkAgent: () => backend.onForkAgent,
-    prepareCreate: creator.prepare, prepareEngine: prepareNativeLaunch,
+    prepareCreate: creator.prepare, prepareEngine: prepareNativeLaunch, opencodeMajor: nativeSetup.opencodeMajor,
     resumeAgent: () => lifecycle.resumeAgent, restartAgent: () => restartAgent,
     byAgent: (id) => registry.byAgent(id), stoppedAgent: (id) => stoppedAgents.get(id) ?? undefined, toProject: (s) => backend.toProject(s),
     modelTarget: (selection) => (ports.models ?? MODELS_OFF).launchTarget(selection),
@@ -3388,7 +3393,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   console.log('[cli] ready')
   // Each launch confirms its own hooks. Startup never waits on any vendor's disk or probe.
   installedHooks = env.DISABLE_HOOK_INSTALL ? undefined
-    : installEngineHooks(hookPort, { only: env.HOOK_INSTALL_ENGINES, loginShell: loginShellEnvPromise })
+    : installEngineHooks(hookPort, { only: env.HOOK_INSTALL_ENGINES, loginShell: loginShellEnvPromise, setup: nativeSetup })
   // Ready first, never after a service: the agents the boot held for one are launched now, in the background.
   void heldLaunches.restoreHeld()
   externalResumes.open()

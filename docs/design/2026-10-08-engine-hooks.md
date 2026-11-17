@@ -1,5 +1,10 @@
 # Engine hooks
 
+Current boundary (2026-11-16): optional installation parsing/templates now run in engineSetup; mandatory
+admission, binding and Stop stay in core. Core still owns bounded native-file capture/staging/publication
+and exact-file proofs. See [the file boundary](2026-11-16-engine-setup-files.md). The extraction record
+below describes the original declarative consolidation, not the current process placement.
+
 Claude Code's and Codex's hook code has left the core. Each engine now declares its hooks as data
 (`Engine.hooks`, `engines/{claude,codex}/hookContract.ts`), and shared mechanics in `engines/kit` apply
 them. Core still evaluates all of it in line and synchronously, as before. Nothing moved into a worker.

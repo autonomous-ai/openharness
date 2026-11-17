@@ -11,7 +11,7 @@ import type { StatusLineContract } from '../facets/launch.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { shellSingleQuote } from '../../lib/shellQuote.js'
 import { isRecord, jsonObject, merged, type AttributionFiles } from './attribution.js'
-import { quoteHookCommand } from './notifyHooks.js'
+import { quoteHookCommand } from './hookCommand.js'
 import { claudeCodeGitBash } from '../../lib/windows/claudeCodeGitBash.js'
 
 declare const __STATUS_LINE_SCRIPT__: string | undefined
