@@ -27,6 +27,8 @@ export function scoreOf(need: boolean, rang: boolean, lineOk: boolean, askOk: bo
 
 export async function gradeRun(s: Scenario, run: RunResult, rings: { line: string | null }[], judge: Judge): Promise<Graded> {
   if (run.transcript.some((turn) => ANSWER_KEY.test(turn.content))) return { grade: {}, explanation: {}, status: 'invalid' }
+  // A run cut off at --max-turns is kept out of the means by its row's status, so judging it would only spend.
+  if (run.status === 'truncated') return { grade: {}, explanation: {}, status: 'ok' }
   // A recorded call that is not `device notify` (line null) shows nothing on the dial, so it is not a ring.
   const lines = rings.flatMap((r) => (r.line === null ? [] : [r.line]))
   const rang = lines.length > 0

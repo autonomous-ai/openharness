@@ -19,6 +19,11 @@ export interface RunResult {
 /** The words Claude Code ends a run with when the account's subscription or rate limit stops it. */
 const LIMIT = /usage limit|rate.?limit|hit your limit/i
 
+/** Whether a `result` event, from stream-json or json output alike, is Claude Code stopped by the account limit. */
+export function limitedBy(result: Record<string, unknown>): boolean {
+  return result.is_error === true && typeof result.result === 'string' && LIMIT.test(result.result)
+}
+
 interface Block { type: string; text?: string; thinking?: string; id?: string; name?: string; input?: unknown; tool_use_id?: string; content?: unknown }
 
 export function parseClaudeStream(jsonl: string): RunResult {
@@ -51,7 +56,7 @@ export function parseClaudeStream(jsonl: string): RunResult {
       run.usage = usageOf(event.usage)
       run.stop_reason = typeof event.stop_reason === 'string' ? event.stop_reason : null
       if (event.subtype === 'error_max_turns') run.status = 'truncated'
-      run.limited = event.is_error === true && LIMIT.test(run.answer)
+      run.limited = limitedBy(event)
     }
   }
   // Thinking with no turn after it still belongs in the transcript.

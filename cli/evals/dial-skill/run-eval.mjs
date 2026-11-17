@@ -223,7 +223,11 @@ async function gradeCase(input, run, ref, ctx) {
   }
   let g;
   try { g = await gradeRun(input.scenario, run, run.rings, ctx.judge); }
-  catch (e) { throw Object.assign(e, { message: run.clean(String(e?.message ?? e)) }); }
+  catch (e) {
+    // The judge runs under the same account, so its limit stops the pass as the agent's does.
+    if (e?.failure_class === 'account_limited') ctx.stop = true;
+    throw Object.assign(e, { message: run.clean(String(e?.message ?? e)) });
+  }
   // The harness takes a row's status from the run: one that reached the answer key is invalid however it ended.
   if (g.status === 'invalid') run.status = 'invalid';
   return { ...g, explanation: Object.fromEntries(Object.entries(g.explanation).map(([key, value]) => [key, run.clean(value)])) };

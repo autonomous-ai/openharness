@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Usage } from './parse.js'
+import { limitedBy, type Usage } from './parse.js'
 
 // Grading is judgement, so the judge is Opus; low effort keeps a two-line rubric cheap.
 export const JUDGE_MODEL = 'claude-opus-5-5'
@@ -54,6 +54,8 @@ export function claudeJudge(cfg: { claudeBin: string; env: NodeJS.ProcessEnv; ti
     }
     const model = Object.keys((result.modelUsage ?? {}) as object).join(',')
     const usage = usageOf(result.usage)
+    // Worded without "rate limit", which the runner retries: an account limit lasts hours.
+    if (limitedBy(result)) throw Object.assign(new Error('the Claude account limit is reached'), { failure_class: 'account_limited', judge_model: model, judge_usage: usage })
     const verdict = result.structured_output as { pass?: unknown; reason?: unknown } | undefined
     if (typeof verdict?.pass !== 'boolean' || typeof verdict.reason !== 'string') {
       // The call was billed even though it gave no verdict; the errors sidecar counts this spend.
