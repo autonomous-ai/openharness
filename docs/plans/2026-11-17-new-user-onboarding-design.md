@@ -272,8 +272,8 @@ computer's hostname. It keeps sending `hostname()` (final review, 2026-11-17). E
 `resolve-computer` before the daemon connects, so a new machine is named there. `/api/device-ws?label=` names a new
 device binding once and never renames it (`DeviceService.resolveOrCreateForComputer`), so it is a new machine's label too.
 
-A new module `cli/src/lib/computerName.ts` exports `computerName()`. On macOS it runs `scutil --get ComputerName` once
-per process (a 5 s deadline, as `tmuxOnPath.ts` learned 2 s is too short on a loaded Mac; trimmed, with no control
+A new module `cli/src/lib/computerName.ts` exports `computerName()`, a promise. On macOS it runs `scutil --get ComputerName` once
+per process, asynchronously so the gateway and the devices process carry their traffic while it runs (a 5 s deadline, as `tmuxOnPath.ts` learned 2 s is too short on a loaded Mac; trimmed, with no control
 characters, cut once to at most 80 UTF-16 units without splitting a pair), and caches the answer. Empty, failed, or
 another platform: `os.hostname()`, cut the same way. Callers do not cut it again. The four places that send a new
 machine's or device's label use it:
