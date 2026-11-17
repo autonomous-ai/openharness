@@ -364,14 +364,14 @@ describe('the master on Windows', () => {
   it('redirects the console before the master says anything: its first line, too, reaches the daemon log', () => {
     const order: string[] = []
     const log = vi.spyOn(console, 'log').mockImplementation(() => { order.push('log') })
-    // No Unix socket, as on Windows every time: masterEnv says the services run in the core's process.
+    // Windows has an authenticated pipe, so missing a Unix socket is no inline fallback.
     socket.none = true
     try {
       runMaster.mockClear()
       startMaster({ scriptPath: '/cli/cli.js' }, () => {}, 'win32', () => { order.push('redirect'); return {} })
-      expect(order).toEqual(['redirect', 'log'])
-      // In the words for Windows: startMaster hands masterEnv its platform.
-      expect(log).toHaveBeenCalledWith(expect.stringMatching(/\[harnessd\] on Windows the services run in the core's process$/))
+      expect(order).toEqual(['redirect'])
+      expect(log).not.toHaveBeenCalled()
+      expect((runMaster.mock.calls[0]![0] as { env: NodeJS.ProcessEnv }).env.HARNESSD_SERVICES).toBe(process.env.HARNESSD_SERVICES)
     } finally { log.mockRestore(); socket.none = false }
   })
 
@@ -639,20 +639,22 @@ describe('starting the master', () => {
       expect(given).toEqual({ HOME: '/home/someone' })
       expect(logs).toEqual([expect.stringMatching(/\[harnessd\] this data folder is too deep for the daemon's local socket — the services run in the core's process$/)])
     }
-    // Windows has no socket for them at all: the same, said as it is there, with no word of a socket or a depth.
+    // Windows reaches the authenticated pipe, including when no core record exists yet.
     logs.length = 0
-    expect(masterEnv(given, null, (line) => logs.push(line), 'win32')).toEqual({ HOME: '/home/someone', HARNESSD_SERVICES: 'none' })
-    expect(logs).toEqual([expect.stringMatching(/ \[harnessd\] on Windows the services run in the core's process$/)])
-    expect(logs[0]).not.toMatch(/socket|deep/)
+    expect(masterEnv(given, null, (line) => logs.push(line), 'win32')).toBe(given)
+    const subset = { HARNESSD_SERVICES: 'search' }
+    expect(masterEnv(subset, null, (line) => logs.push(line), 'win32')).toBe(subset)
+    expect(logs).toEqual([])
     // Already none: nothing to change or say.
     const none = { HARNESSD_SERVICES: 'none' }
     expect(masterEnv(none, null, (line) => logs.push(line))).toBe(none)
-    expect(logs).toHaveLength(1)
+    expect(logs).toHaveLength(0)
     // Its own log line goes to the master's console, which is the daemon's log.
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     try {
       masterEnv({}, null)
-      expect(log).toHaveBeenCalledWith(expect.stringMatching(/the services run in the core's process$/))
+      if (process.platform === 'win32') expect(log).not.toHaveBeenCalled()
+      else expect(log).toHaveBeenCalledWith(expect.stringMatching(/the services run in the core's process$/))
     } finally { log.mockRestore() }
     // startMaster hands runMaster an environment: this one's, or this one's with the services kept in.
     runMaster.mockClear()

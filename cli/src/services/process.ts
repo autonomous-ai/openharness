@@ -13,10 +13,14 @@
  */
 import { existsSync } from 'node:fs'
 import WebSocket from 'ws'
+import { env as config } from '../config/env.js'
 import type { Asker, ServiceRequests } from '../core/api.js'
 import { heartbeatInterval, type MasterChannel } from '../harnessd/coreLink.js'
 import { isMasterMessage } from '../harnessd/protocol.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
+import { serviceConnector } from './localConnection.js'
+
+const connectLocal = serviceConnector({ dataDir: config.ADAPTER_DATA_DIR, port: config.PORT })
 
 type Payload = Record<string, unknown>
 
@@ -33,7 +37,7 @@ export interface CoreConnection {
 
 export interface ServiceProcessOptions {
   name: string
-  /** The core's local socket. */
+  /** The core's Unix socket; empty on Windows, which discovers its authenticated pipe per connection. */
   socketPath: string
   /** This machine, as the core's `machine_select` expects it. */
   machineId: string
@@ -52,7 +56,7 @@ export interface ServiceProcessOptions {
    *  service that keeps something of its own per connection, an agent browser's viewers' streams. A throw is logged. */
   onConnectionClosed?: (connection: string) => void
   env?: NodeJS.ProcessEnv
-  connect?: (url: string) => WebSocket
+  connect?: (url: string, signal: AbortSignal) => WebSocket | Promise<WebSocket>
   log?: (line: string) => void
   /** The reconnect delay starts here and doubles to `maxBackoffMs`. */
   initialBackoffMs?: number
@@ -187,6 +191,8 @@ export function heldOffFile(env: NodeJS.ProcessEnv, name: string): string | null
 
 /** How often a held-off service looks again (`heldOffFile`). */
 const HELD_OFF_POLL_MS = 200
+/** Endpoint discovery, WebSocket upgrade and service registration share one bound. */
+const CONNECT_TIMEOUT_MS = 10_000
 
 /** One service in its process: its own link to the core, answering what the core routes to it. */
 export function runServiceProcess(options: ServiceProcessOptions): ServiceProcess {
@@ -195,7 +201,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
   // As a service whose start throws: it is not run, and, alone in its process, the process ends and the
   // master decides whether to try again.
   if (faults.start) throw new Error(`injected fault: ${options.name}`)
-  const connect = options.connect ?? ((url: string) => new WebSocket(url))
+  const connect = options.connect ?? connectLocal
   const log = options.log ?? ((line: string) => console.log(line))
   const initialBackoffMs = options.initialBackoffMs ?? 250
   const maxBackoffMs = options.maxBackoffMs ?? 5_000
@@ -204,6 +210,9 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
   let backoff = initialBackoffMs
   let socket: WebSocket | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let connectionTimer: ReturnType<typeof setTimeout> | null = null
+  let attempt: AbortController | null = null
+  let reportedFailure = false
   let queries = 0
   /** The core took this connection (`connected`): only then does its end mean the service was cut off. */
   let opened = false
@@ -230,7 +239,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
     },
   }
 
-  const onFrame = (raw: WebSocket.RawData, isBinary = false): void => {
+  const onFrame = (ws: WebSocket, raw: WebSocket.RawData, isBinary = false): void => {
     if (isBinary) {
       try { options.onBinary?.(raw instanceof Buffer ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength) : new Uint8Array(Buffer.concat(raw as Buffer[]))) }
       catch (error) { log(`[service ${options.name}] binary frame failed · ${describe(error)}`) }
@@ -240,6 +249,9 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
     try { frame = JSON.parse(raw.toString()) as typeof frame } catch { return }
     const payload = frame.payload ?? {}
     if (frame.type === 'connected') {
+      if (connectionTimer) clearTimeout(connectionTimer)
+      connectionTimer = null
+      reportedFailure = false
       backoff = initialBackoffMs
       opened = true
       log(`[service ${options.name}] connected to the core`)
@@ -305,51 +317,84 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       })
       .then((result) => {
         answering.delete(closed)
-        send({ type: `${type}_result`, payload: { ...result, requestId } })
+        if (!stopped && !attempt?.signal.aborted && socket === ws) send({ type: `${type}_result`, payload: { ...result, requestId } })
       })
   }
 
   const heldOff = heldOffFile(env, options.name)
+  const reportFailure = (code: string): void => {
+    if (reportedFailure || stopped) return
+    reportedFailure = true
+    log(`[service ${options.name}] ${code}`)
+  }
+  const ended = (owner: AbortController, code = 1006): void => {
+    if (attempt !== owner) return
+    owner.abort()
+    attempt = null
+    if (connectionTimer) clearTimeout(connectionTimer)
+    connectionTimer = null
+    const wasOpen = opened
+    socket = null
+    opened = false
+    for (const [id, waiting] of pending) { pending.delete(id); waiting.reject(new Error('the core went away')) }
+    for (const closed of answering.keys()) closed.abort()
+    if (wasOpen) {
+      try { options.onDisconnected?.() } catch (error) { log(`[service ${options.name}] disconnect failed · ${describe(error)}`) }
+    } else reportFailure('SERVICE_CONNECT_UNAVAILABLE')
+    if (stopped) return
+    const delay = code === REFUSED ? Math.max(backoff, refusedBackoffMs) : backoff
+    backoff = Math.min(backoff * 2, maxBackoffMs)
+    reconnectTimer = setTimeout(() => { reconnectTimer = null; dial() }, delay)
+  }
   // Only ever run at start and from the reconnect timer, which `stop` clears.
   const dial = (): void => {
     if (heldOff && existsSync(heldOff)) {
       reconnectTimer = setTimeout(() => { reconnectTimer = null; dial() }, HELD_OFF_POLL_MS)
       return
     }
-    const ws = connect(`ws+unix://${options.socketPath}:/api/local-ws`)
-    socket = ws
-    ws.on('open', () => {
-      // Through `send`, which a socket failing as it opens cannot turn into a crash: `close` follows.
-      send({ type: 'machine_select', payload: {
-        machineId: options.machineId, localProtocolVersion: 1, role: 'service', service: options.name, token: options.token,
-      } })
-    })
-    ws.on('message', (raw, isBinary) => onFrame(raw, isBinary))
-    ws.on('error', () => { /* `close` follows, and reconnects */ })
-    ws.on('close', (code: number) => {
-      // A new socket is dialled only after this one closes, so this is always the current one.
-      const wasOpen = socket === ws && opened
-      socket = null
-      opened = false
-      for (const [id, waiting] of pending) { pending.delete(id); waiting.reject(new Error('the core went away')) }
-      // The core that asked is gone, and every connection it routed with it: nobody can read these answers.
-      for (const closed of answering.keys()) closed.abort()
-      if (wasOpen) {
-        try { options.onDisconnected?.() } catch (error) { log(`[service ${options.name}] disconnect failed · ${describe(error)}`) }
+    const owner = new AbortController()
+    attempt = owner
+    connectionTimer = setTimeout(() => {
+      connectionTimer = null
+      reportFailure('SERVICE_CONNECT_TIMEOUT')
+      owner.abort()
+      socket?.terminate()
+      // Discovery still owns its slot until it settles; a timeout cannot multiply a stuck OS read.
+    }, CONNECT_TIMEOUT_MS)
+    const attached = (ws: WebSocket): void => {
+      ws.on('error', () => { /* close follows, including a refused pipe proof */ })
+      ws.on('close', (code: number) => ended(owner, code))
+      if (stopped || owner.signal.aborted) {
+        if (ws.readyState === WebSocket.CLOSED) ended(owner)
+        else ws.terminate()
+        return
       }
-      if (stopped) return
-      // Refused: this core does not run the service out of its process, as a core from before it did under
-      // a newer master, for as long as the two differ. Asked again every few seconds, it only filled both
-      // logs; once a minute still finds a core that takes it.
-      const delay = code === REFUSED ? Math.max(backoff, refusedBackoffMs) : backoff
-      backoff = Math.min(backoff * 2, maxBackoffMs)
-      reconnectTimer = setTimeout(() => { reconnectTimer = null; dial() }, delay)
-    })
+      socket = ws
+      ws.on('open', () => {
+        if (stopped || owner.signal.aborted || socket !== ws) return
+        send({ type: 'machine_select', payload: {
+          machineId: options.machineId, localProtocolVersion: 1, role: 'service', service: options.name, token: options.token,
+        } })
+      })
+      ws.on('message', (raw, isBinary) => {
+        if (!stopped && !owner.signal.aborted && socket === ws) onFrame(ws, raw, isBinary)
+      })
+    }
+    try {
+      const next = connect(`ws+unix://${options.socketPath}:/api/local-ws`, owner.signal)
+      if (next instanceof Promise) void next.then(attached, () => ended(owner))
+      else attached(next)
+    } catch {
+      ended(owner)
+    }
   }
 
   const stop = (): void => {
     if (stopped) return
     stopped = true
+    attempt?.abort()
+    if (connectionTimer) clearTimeout(connectionTimer)
+    connectionTimer = null
     if (reconnectTimer) clearTimeout(reconnectTimer)
     try { socket?.close() } catch { /* already closed */ }
   }

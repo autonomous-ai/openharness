@@ -73,6 +73,7 @@ export interface ServiceProcessDeps {
   /** The process the services run in; swapped in tests for one that touches no channel, signal or exit. */
   host?: (options: ServiceHostOptions) => ServiceHost
   exit?: (code: number) => never
+  platform?: NodeJS.Platform
 }
 
 const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error))
@@ -97,7 +98,9 @@ export async function startServiceProcess(named: string | undefined, deps: Servi
   }
   // The updater never reaches the core: it tells the master. Without a socket (a data folder too deep for
   // one) it still runs, or that machine would never get the update that fixes it.
-  if (!socketPath && names.some((name) => !BESIDE_THE_CORE.has(name))) {
+  // Windows connections discover the authenticated pipe after the core publishes it; services may
+  // start before that record exists and reconnect through the same bounded path after every restart.
+  if (!socketPath && (deps.platform ?? process.platform) !== 'win32' && names.some((name) => !BESIDE_THE_CORE.has(name))) {
     console.error(`[service] ${names.join(',')}: the core has no local socket to reach`)
     return exit(2)
   }

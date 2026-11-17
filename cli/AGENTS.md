@@ -85,6 +85,8 @@ service process runs one or more services, each on its own link to the core. In 
 `HARNESSD_SERVICES` names a subset to run in their own processes, by service or by process.
 `HARNESSD_SERVICES=none` runs every service in the core's process, for debugging or a quick way back. How
 to add a service, and how to make one start on demand, is in [src/services/AGENTS.md](src/services/AGENTS.md).
+Windows uses the same process plan, with authenticated named-pipe connections to the core. An older master
+that explicitly declares inline services remains an upgrade compatibility path until it is replaced.
 
 `src/core/main.ts` `runForeground()` is the composition root: it creates the modules and wires them
 together. It is the core's own entry (`harness __run`), which the master starts; `src/cli.ts` is the CLI,

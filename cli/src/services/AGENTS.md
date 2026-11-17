@@ -114,7 +114,11 @@ master too old to run it starts it beside itself, still in its own process (`src
   (`lib/sqliteBuiltin.ts`) only at the first read, so import `sqliteReadAll` and never the binding itself.
 - `src/services/process.ts` is the process's side: `hostServices` beats to the master and stops every
   service before the process exits; `runServiceProcess` is each service's own connection to the core,
-  with the master's token, reconnecting after core restarts. `<host>.crash` and `<host>.leak`, or a
+  with the master's token, reconnecting after core restarts. Windows reaches the authenticated named pipe,
+  rediscovering its record and token on each connection; simultaneous discoveries share one in-flight proof
+  per host (`localConnection.ts`). A connection has ten seconds to register and never falls back to TCP or
+  inline mode. Explicit inline debugging and old masters that declare inline remain compatibility paths.
+  `<host>.crash` and `<host>.leak`, or a
   service's own, crash or leak the whole process: it is one process.
 - `src/core/serviceLinks.ts` is the core's side: it routes those requests to the process, answers
   `SERVICE_UNAVAILABLE` while it is down, and holds what the service must not miss. The Store's requests and
