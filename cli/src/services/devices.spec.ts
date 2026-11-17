@@ -2,11 +2,12 @@
 // they say reaches the core through its API alone, and the fleet failing costs the dial nothing.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
 import { AppFilter, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
 import type { CodexRunEnd } from '../cable/hosts/codexQueue.js'
+import { CMUX_APP_BINARY, type CmuxClient, type CmuxInputState, type CmuxSession } from '../cable/hosts/cmuxCli.js'
 import { hcClientDeps, type HcClient, type HcPrompt, type HcSubscriber, type HcTerminal } from '../cable/hosts/hcClient.js'
 import { herdrClientDeps, type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrPrompt, type HerdrSubscriber } from '../cable/hosts/herdrClient.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
@@ -28,6 +29,7 @@ import type { FleetEvent } from '../cable/machineFleet.js'
 import { claudeProjectsRoots, codexHomeRoots } from '../lib/engineHomes.js'
 import type { TierInput } from '../lib/notifyTier.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import { fakeCmux } from '../testing/fakeCmux.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { Fleet, FleetDeps } from './fleet.js'
 import type { DevicesDeps } from './devices.js'
@@ -263,6 +265,14 @@ const hc: HcClient = {
   prompt: async (address, kind, text) => { hcCalls.push(['prompt', address, kind, text]); return { outcome: 'sent' } },
   socketStamp: () => undefined,
 }
+/** cmux as every spec but cmux's own has it: not installed, so no spec runs the developer's own cmux. */
+const noCmux: CmuxClient = {
+  binary: () => null,
+  sessions: async () => ({ ok: false, fault: 'no-binary' }),
+  mode: async () => undefined,
+  inputState: async () => undefined,
+  paste: async () => false,
+}
 /** Orca's reads for every spec but Orca's own: nothing lands, so no other spec hears of an order or a watch. */
 const inertOrcaReads: OrcaReads = {
   orcaWatchesFocus: () => new Promise(() => {}),
@@ -318,7 +328,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const ports: CorePorts = emptyPorts()
   const onExit = vi.fn()
@@ -337,6 +347,8 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     codex: over.codex ?? codex,
     herdr: over.herdr ?? herdr,
     hc: over.hc ?? hc,
+    // Null: no client given, so the devices build their own.
+    cmux: over.cmux === null ? undefined : over.cmux ?? noCmux,
     decideTier: over.decideTier === null ? undefined : over.decideTier ?? (async () => ({ tier: 'alert', by: 'test', detail: '', ms: 0 })),
     faults: new Set(over.faults ?? []),
     log: (line) => { logs.push(line) },
@@ -5607,6 +5619,313 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       '[herdr-app] closed · ended', '[herdr-app] retry · 1']))
     const secrets = ['t7q4', 'Nebula', 'secret-folder', 'secret tests']
     expect(logs.filter((line) => secrets.some((word) => line.includes(word)))).toEqual([])
+  })
+})
+
+describe('cmux\'s agents, from cmux\'s own stores (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
+  // cmux prints its ids in upper case; a store or a link may hold lower.
+  const W = '5A1B2C3D-0000-4000-8000-00000000000A'
+  const S = '9F8E7D6C-0000-4000-8000-00000000000B'
+  const w = W.toLowerCase()
+  const s = S.toLowerCase()
+  const ID = observedAgentId('claude', 'sess-1')
+  /** An agent cmux lists: Claude Code idle at its prompt in /work/api, alive as this process is. */
+  const record = (over: Partial<CmuxSession> = {}): CmuxSession =>
+    ({ word: 'claude', kind: 'claude', surface: S, workspace: W, pid: process.pid, lifecycle: 'idle', updatedAt: 1, cwd: '/work/api', ...over })
+  const IDLE: CmuxInputState = { terminal: true, agent: true, lifecycle: 'idle', state: 'empty', blocksTyping: false }
+  /** cmux's own terminal: it gives its programs TERM_PROGRAM=ghostty, and its two ids. */
+  const IN_CMUX = { TERM_PROGRAM: 'ghostty', CMUX_SURFACE_ID: S, CMUX_WORKSPACE_ID: W }
+  /** Claude Code's hook, from cmux's own terminal unless other hints are given. */
+  const hook = (event: ObservedHookEvent['event'], hostHints: Record<string, string> = IN_CMUX): ObservedHookEvent => ({
+    engine: 'claude', sessionId: 'sess-1', event, cwd: '/work/api', callerPid: 4242, transcriptPath: '/t/sess-1.jsonl', hostHints,
+  })
+  /** On macOS, each app's command on the path: what a tap runs is read in `orcaRuns`. */
+  const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => `/opt/${name}/bin/${name}` }
+  /** The one run of a tap or a rest: cmux's link, sent to cmux alone. */
+  const link = (workspace = W, surface = S): [string, string[], number] =>
+    ['/usr/bin/open', ['-b', 'com.cmuxterm.app', `cmux://workspace/${workspace}/surface/${surface}`], 10_000]
+  const host = () => seen.dial as unknown as DaemonCableHost
+  /** A dial on the cable, on this computer's agents: no window. */
+  const attach = (port: DevicesPort) => { seen.host.watching!(true); port.swarms(null) }
+  const listed = async () => (await host().listAgentSnapshot()).agents.map(({ id, name, caps }) => ({ id, name, caps }))
+  const said = () => logs.filter((line) => line.startsWith('[device] '))
+  const brings = () => logs.filter((line) => line.includes('app filter: bring'))
+  /** The watches on the folder cmux's stores live in, in the suite's throwaway home: herdr and hc have folders of their own. */
+  const storesWatched = () => watched.calls.filter(([where]) => (where as { socketPath: string }).socketPath === join(homedir(), '.cmuxterm', 'stores'))
+  /** Lets the runs and reads under way answer. */
+  const flush = () => vi.advanceTimersByTimeAsync(0)
+  beforeEach(() => { vi.useFakeTimers() })
+
+  /**
+   * The devices with a cmux the test drives, installed, with its stores' folder there, the dial not attached yet. Each call
+   * of its client is recorded; `sessions` answers the records of that word (all, with none), `mode` the mode, and the
+   * prompt is idle and empty. `live` attaches the dial and lets the first list land; `changed` is the latest watch telling
+   * a change of that file, and its run landing.
+   */
+  const withCmux = (over: Parameters<typeof start>[0] = {}) => {
+    const fake = { found: true, records: [record()], mode: 'cmuxOnly' as string | undefined, calls: [] as unknown[][] }
+    const client: CmuxClient = {
+      binary: () => fake.found ? CMUX_APP_BINARY : null,
+      sessions: async (word) => {
+        fake.calls.push(['sessions', word])
+        return { ok: true, sessions: fake.records.filter((one) => word === undefined || one.word === word), unread: 0 }
+      },
+      mode: async () => { fake.calls.push(['mode']); return fake.mode },
+      inputState: async (surface) => { fake.calls.push(['inputState', surface]); return IDLE },
+      paste: async (...args) => { fake.calls.push(['paste', ...args]); return true },
+    }
+    const folder = join(homedir(), '.cmuxterm')
+    mkdirSync(folder, { recursive: true })
+    onTestFinished(() => rmSync(folder, { recursive: true, force: true }))
+    const started = start({ orca: onMac, tty: async () => undefined, cmux: client, ...over, faults: ['fleet', ...over.faults ?? []] })
+    const live = async () => {
+      attach(started.port)
+      await flush()
+    }
+    const changed = async (file?: string) => {
+      ;(storesWatched().at(-1)![1] as (file?: string) => void)(file)
+      await flush()
+    }
+    return { ...started, fake, live, changed }
+  }
+  /** Claude Code's session `sess-1`, running in cmux before the dial came, as its parent processes say, idle since: the
+   *  open scan lists it, and no hook gave it a pane. */
+  const scanned = () => {
+    readers.known.set('sess-1', 'terminal')
+    readers.owners.set('sess-1', { engine: 'claude', pid: 4241 })
+    readers.rows.set('sess-1', { cwd: '/work/api', transcriptPath: null })
+    readers.working.set('sess-1', false)
+    readers.apps.mockResolvedValueOnce(new Map([[4241, 'cmux']]))
+  }
+
+  it('with a dial attached and cmux found its agents are listed svf, on cmux\'s page; detached, the source stops and its watch is closed', async () => {
+    const { fake, live } = withCmux()
+    // No dial: cmux is not asked.
+    expect(fake.calls).toEqual([])
+    await live()
+    expect(await listed()).toEqual([{ id: expect.any(String), name: 'api', caps: 'svf' }])
+    const [{ id }] = await listed()
+    expect(host().hostOf(id)).toBe('cmux')
+    expect(host().appOf(id)).toBe('cmux')
+    expect(fake.calls).toEqual([['sessions', undefined]])
+    expect(storesWatched()).toEqual([[{ socketPath: join(homedir(), '.cmuxterm', 'stores'), home: homedir() }, expect.any(Function)]])
+    expect(logs).toContain('[cmux] listed · 1 agents')
+    seen.host.watching!(false)
+    expect(await listed()).toEqual([])
+    expect(watched.stopped).toBe(watched.calls.length)
+  })
+
+  it('cmux not installed: nothing is asked and no folder is watched; the next attach looks again', async () => {
+    const { port, fake, live } = withCmux()
+    fake.found = false
+    attach(port)
+    expect(fake.calls).toEqual([])
+    expect(storesWatched()).toEqual([])
+    seen.host.watching!(false)
+    fake.found = true
+    await live()
+    expect(fake.calls).toEqual([['sessions', undefined]])
+    expect(storesWatched()).toHaveLength(1)
+  })
+
+  /** A dial attached: cmux is not asked, and its stores' folder is not watched. */
+  const nothingAsked = ({ port, fake }: ReturnType<typeof withCmux>) => {
+    attach(port)
+    expect(fake.calls).toEqual([])
+    expect(storesWatched()).toEqual([])
+  }
+
+  it.each(['linux', 'win32'] as const)('off macOS (%s) there is no cmux source', (platform) => {
+    nothingAsked(withCmux({ orca: { ...onMac, platform } }))
+  })
+
+  it('with HARNESS_DEVICE_OBSERVED off there is no cmux source', () => {
+    const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+    switched.HARNESS_DEVICE_OBSERVED = false
+    onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+    nothingAsked(withCmux())
+  })
+
+  it('a store\'s change reaches the dial as a card', async () => {
+    const { fake, live, changed } = withCmux()
+    await live()
+    const [{ id }] = await listed()
+    fake.records = [record({ lifecycle: 'running' })]
+    await changed('claude-hook-sessions.json')
+    expect(calls('turnStarted')).toEqual([[id, '', undefined]])
+    fake.records = [record({ lifecycle: 'needsInput' })]
+    await changed('claude-hook-sessions.json')
+    expect(calls('turnStarted')).toEqual([[id, '', undefined], [id, 'Waiting for you · cmux', undefined]])
+    fake.records = [record({ lifecycle: 'idle' })]
+    await changed('claude-hook-sessions.json')
+    expect(calls('turnDone')).toEqual([[id]])
+    expect(fake.calls).toEqual([['sessions', undefined], ['sessions', 'claude'], ['sessions', 'claude'], ['sessions', 'claude']])
+  })
+
+  it('a tap on a listed agent is one open of cmux\'s link, and is the dial\'s own move', async () => {
+    const listener = fakeListener()
+    const { live } = withCmux({ listen: listener.listen })
+    await live()
+    const [{ id }] = await listed()
+    // Terminal came forward and reported its tab, which waits on its settle.
+    expect(listener.front('terminal-app')).toBeUndefined()
+    ;(listener.given[0].handlers.tab as ListenerHandler).handle({ type: 'tab', app: 'terminal-app', tty: '/dev/ttys023' }, never)
+    expect(await host().openAgent(id)).toBeUndefined()
+    expect(orcaRuns).toEqual([link()])
+    // The tap moved the dial since that report: the settle does not pull it back.
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    expect(logs.filter((line) => line.startsWith('[device] tab'))).toEqual(['[device] tab · skipped · echo'])
+  })
+
+  it('a rest with cmux in front shows its tab; with another app in front it has no pane', async () => {
+    const { live } = withCmux()
+    await live()
+    const [{ id }] = await listed()
+    host().front('cmux')
+    expect(host().swipeSwitches(id)).toBe(true)
+    host().swipeEnded(id, 'rest')
+    await vi.waitFor(() => expect(said()).toContain('[device] swipe · ok'))
+    expect(orcaRuns).toEqual([link()])
+    host().front('ghostty')
+    expect(host().swipeSwitches(id)).toBe(false)
+  })
+
+  it('the dial\'s words reach a listed agent through cmux, and are counted cmux', async () => {
+    const { fake, live } = withCmux()
+    fake.mode = 'automation'
+    await live()
+    const [{ id }] = await listed()
+    expect(await host().sendTurn(id, 'run the tests')).toEqual({ ok: true })
+    expect(fake.calls.slice(1)).toEqual([['mode'], ['inputState', S], ['paste', W, S, 'run the tests']])
+    expect(said()).toEqual(['[device] voice · cmux'])
+  })
+
+  it('with the default mode the dial hears the Automation sentence, counted refused (cmux), and nothing is pasted', async () => {
+    const { fake, live } = withCmux()
+    await live()
+    const [{ id }] = await listed()
+    expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'Turn on Automation mode in cmux.' })
+    expect(fake.calls.slice(1)).toEqual([['mode']])
+    expect(said()).toEqual(['[device] voice · refused (cmux)'])
+  })
+
+  it('a hooked agent in cmux is on cmux\'s page with cmux\'s pane, never a tab\'s, and its tap is the link', async () => {
+    const { port, fake, live } = withCmux()
+    fake.records = []
+    port.observed(hook('session-start'))
+    await live()
+    expect(host().hostOf(ID)).toBe('cmux')
+    expect(host().appOf(ID)).toBe('cmux')
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([link()])
+  })
+
+  it('a hooked agent cmux also lists is one row, the hook\'s', async () => {
+    const { port, fake, live } = withCmux()
+    // The hook's ids in upper case, the store's in lower.
+    fake.records = [record({ surface: s, workspace: w, sessionId: 'sess-1' })]
+    port.observed(hook('session-start'))
+    await live()
+    expect(logs).toContain('[cmux] listed · 1 agents')
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
+  })
+
+  it('a hooked agent with no mod takes the dial\'s words through cmux, and the Automation sentence reaches the dial', async () => {
+    const { port, fake, live } = withCmux()
+    fake.records = []
+    port.observed(hook('turn-stop'))
+    await live()
+    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'Turn on Automation mode in cmux.' })
+    expect(fake.calls.slice(1)).toEqual([['mode']])
+    expect(said()).toContain('[device] voice · refused (cmux)')
+  })
+
+  // The open scan lists Claude Code's session before any hook of it (each restart, for every agent sitting idle), and its
+  // copy wins the fold over cmux's row by its session id (the design's decided 7).
+  it('a session the open scan found and cmux lists is one row, the scan\'s, placed at cmux\'s tab: a tap is one open of cmux\'s link from the first list', async () => {
+    const { fake, live } = withCmux()
+    fake.records = [record({ surface: s, workspace: w, sessionId: 'sess-1' })]
+    scanned()
+    await live()
+    expect((await listed()).map(({ id }) => id)).toEqual([ID])
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([link(w, s)])
+  })
+
+  it('a rest with cmux in front shows the placed session\'s tab, and the dial\'s words for it never reach cmux', async () => {
+    const { fake, live } = withCmux()
+    fake.mode = 'automation'
+    fake.records = [record({ surface: s, workspace: w, sessionId: 'sess-1' })]
+    scanned()
+    await live()
+    host().front('cmux')
+    expect(host().swipeSwitches(ID)).toBe(true)
+    host().swipeEnded(ID, 'rest')
+    await vi.waitFor(() => expect(said()).toContain('[device] swipe · ok'))
+    expect(orcaRuns).toEqual([link(w, s)])
+    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false })
+    expect(fake.calls).toEqual([['sessions', undefined]])
+  })
+
+  it('the place goes when cmux no longer lists that session, and a hook from its cmux terminal gives it a pane of its own', async () => {
+    const { port, fake, live, changed } = withCmux()
+    fake.records = [record({ surface: s, workspace: w, sessionId: 'sess-1' })]
+    scanned()
+    await live()
+    fake.records = []
+    await changed('claude-hook-sessions.json')
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([])
+    port.observed(hook('turn-stop'))
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([link()])
+    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'Turn on Automation mode in cmux.' })
+    expect(fake.calls).toContainEqual(['mode'])
+  })
+
+  // tmux comes before cmux: its pane is the nearer, and cmux's place of the same agent is its surface, which holds tmux.
+  it('tmux inside a cmux terminal keeps tmux\'s pane, on cmux\'s page', async () => {
+    const { port, fake, live } = withCmux()
+    fake.records = [record({ sessionId: 'sess-1' })]
+    port.observed(hook('session-start', { ...IN_CMUX, TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.cmuxterm.app' }))
+    await live()
+    expect(logs).toContain('[cmux] listed · 1 agents')
+    expect(host().hostOf(ID)).toBe('tmux')
+    expect(host().appOf(ID)).toBe('cmux')
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns[0][0]).toBe('tmux')
+    expect(orcaRuns.filter(([, args]) => args.some((arg) => arg.startsWith('cmux://')))).toEqual([])
+  })
+
+  it('a pick of cmux brings cmux forward', async () => {
+    const { port, live } = withCmux()
+    await live()
+    // Ghostty's two agents keep cmux's ring from being the one shown: the pick switches to it.
+    for (const sessionId of ['g-1', 'g-2']) {
+      port.observed({ engine: 'claude', sessionId, event: 'session-start', cwd: '/work/web', callerPid: 4243,
+        transcriptPath: `/t/${sessionId}.jsonl`, hostHints: { TERM_PROGRAM: 'ghostty' } })
+    }
+    expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('ghostty')
+    expect(host().pickApp('cmux')).toBe('switched')
+    await vi.waitFor(() => expect(brings()).toEqual(['[device] app filter: bring · ok']))
+    expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'com.cmuxterm.app'], 10_000]])
+  })
+
+  // A daemon started from a cmux terminal carries its CMUX_* variables: a mode override, another stores' folder.
+  describe.skipIf(process.platform === 'win32')('with no client given', () => {
+    it('the devices run the cmux on PATH, with no CMUX_* variable', async () => {
+      vi.useRealTimers()
+      const cmux = fakeCmux()
+      onTestFinished(() => cmux.remove())
+      cmux.set({ sessions: [{ agent: 'claude', surface_id: S, workspace_id: W, pid: process.pid }] })
+      vi.stubEnv('PATH', `${cmux.dir}${delimiter}${process.env.PATH ?? ''}`)
+      vi.stubEnv('CMUX_SOCKET_MODE', 'allowAll')
+      vi.stubEnv('CMUX_AGENT_HOOK_STATE_DIR', join(dataDir, 'other-stores'))
+      const { port } = withCmux({ cmux: null })
+      attach(port)
+      await vi.waitFor(() => expect(logs).toContain('[cmux] listed · 1 agents'), { timeout: 10_000 })
+      expect(cmux.calls()).toEqual([{ args: ['sessions', 'list', '--json', '--all'], stdin: '', env: [] }])
+    })
   })
 })
 
