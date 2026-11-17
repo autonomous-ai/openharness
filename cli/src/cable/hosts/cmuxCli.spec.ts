@@ -97,6 +97,18 @@ describe.skipIf(process.platform === 'win32')('cmux client (docs/plans/2026-11-1
       }
     })
 
+    it('the runs take what the last look found: PATH is searched again only by the next look', async () => {
+      const realpath = vi.fn((path: string) => realpathSync(path))
+      const { fake, cmux } = setup({ realpath })
+      expect(cmux.binary()).toBe(realpathSync(fake.binary))
+      await cmux.sessions()
+      await cmux.mode()
+      expect(realpath).toHaveBeenCalledTimes(1)
+      expect(fake.calls()).toHaveLength(2)
+      cmux.binary()
+      expect(realpath).toHaveBeenCalledTimes(2)
+    })
+
     it('off macOS there is none, whatever is on PATH', () => {
       for (const platform of ['linux', 'win32'] as const) {
         expect(setup({ platform, exists: () => true }).cmux.binary()).toBeNull()

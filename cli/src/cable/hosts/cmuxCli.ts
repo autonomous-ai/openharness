@@ -87,7 +87,8 @@ export interface CmuxInputState {
 }
 export type CmuxPrompt = 'sent' | 'busy' | 'waiting' | 'automation-off' | 'no-answer'
 export interface CmuxClient {
-  /** cmux's own binary by its real path; none when cmux is not installed, and off macOS. */
+  /** cmux's own binary by its real path; none when cmux is not installed, and off macOS. The runs after it take what it
+   *  found, until it is asked again. */
   binary(): string | null
   /** Every agent's records, or one agent's by cmux's word: only those active for their surface, each value in form. */
   sessions(word?: string): Promise<CmuxSessions>
@@ -164,13 +165,17 @@ function sessionOf(record: unknown): CmuxSession | undefined {
 }
 
 export function createCmuxClient(deps: CmuxClientDeps): CmuxClient {
-  const binary = (): string | null => {
+  const look = (): string | null => {
     if (deps.platform !== 'darwin') return null
     const linked = deps.onPath('cmux')
     const real = linked ? deps.realpath(linked) : null
     if (real?.endsWith(APP_SUFFIX)) return real
     return deps.exists(CMUX_APP_BINARY) ? CMUX_APP_BINARY : null
   }
+  // What the last look found (none yet: not looked), so a run searches no PATH: devices.ts looks at each attach.
+  let found: string | null | undefined
+  const binary = (): string | null => (found = look())
+  const kept = (): string | null => found === undefined ? binary() : found
 
   /** One run of cmux, with `input` on its stdin (empty when there is none). Never rejects. */
   const run = (file: string, args: string[], input = ''): Promise<Run> => new Promise((resolve) => {
@@ -214,7 +219,7 @@ export function createCmuxClient(deps: CmuxClientDeps): CmuxClient {
   return {
     binary,
     sessions: async (word) => {
-      const file = binary()
+      const file = kept()
       if (!file) return { ok: false, fault: 'no-binary' }
       if (word !== undefined && !CMUX_WORD.test(word)) return { ok: false, fault: 'failed' }
       const answer = await run(file, word === undefined
@@ -226,13 +231,13 @@ export function createCmuxClient(deps: CmuxClientDeps): CmuxClient {
       return { ok: true, sessions: top.sessions.flatMap((record) => sessionOf(record) ?? []) }
     },
     mode: async () => {
-      const file = binary()
+      const file = kept()
       if (!file) return undefined
       const mode = parsed(await run(file, ['socket-status', '--json']))?.effective_mode
       return typeof mode === 'string' && MODE.test(mode) ? mode : undefined
     },
     inputState: async (surface) => {
-      const file = binary()
+      const file = kept()
       if (!file || !CMUX_ID.test(surface)) return undefined
       const state = parsed(await run(file, ['--json', 'rpc', 'surface.input_state', JSON.stringify({ surface_id: surface })]))
       if (!state) return undefined
@@ -246,7 +251,7 @@ export function createCmuxClient(deps: CmuxClientDeps): CmuxClient {
       }
     },
     paste: async (workspace, surface, text) => {
-      const file = binary()
+      const file = kept()
       if (!file || !CMUX_ID.test(workspace) || !CMUX_ID.test(surface)) return false
       // Never --force: cmux's own Draft guard keeps the words off a prompt someone is typing in.
       const answer = await run(file, ['--json', 'paste', '--workspace', workspace, '--surface', surface, '--submit', '-'], text)
