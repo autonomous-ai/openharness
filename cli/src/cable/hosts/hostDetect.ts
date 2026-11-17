@@ -1,6 +1,7 @@
 // Which app an agent runs in, from the few environment values the hook sends. Own variables of a
 // multiplexer or terminal come first: they name the nearest host, while TERM_PROGRAM names the outermost one.
 
+import { CMUX_ID } from './cmuxCli.js'
 import { HC_TERMINAL } from './hcClient.js'
 
 /** Each host's macOS app by the bundle id its Info.plist gives it: how `__CFBundleIdentifier` names the app, and how a
@@ -93,6 +94,18 @@ export function inHerdr(hints: Readonly<Record<string, string>>): boolean {
     && !NEARER_HOSTS.some((own) => hints[own])
 }
 
+/** The terminals' own variables, beside the multiplexers': a terminal started from a cmux terminal keeps its CMUX_*. */
+const NOT_CMUX = [...NEARER_HOSTS, 'HC_TERMINAL_ID', 'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_TERMINAL_HANDLE']
+
+/** The agent runs in cmux's own terminal. Every program started there inherits cmux's variables (`code .`, WezTerm,
+ *  kitty, tmux), so only with both ids in form, cmux's own TERM_PROGRAM (`ghostty`) or none, and no nearer or other
+ *  app's variable. */
+export function inCmux(hints: Readonly<Record<string, string>>): boolean {
+  const program = hints.TERM_PROGRAM ?? ''
+  return CMUX_ID.test(hints.CMUX_SURFACE_ID ?? '') && CMUX_ID.test(hints.CMUX_WORKSPACE_ID ?? '')
+    && (program === '' || program === 'ghostty') && !NOT_CMUX.some((own) => hints[own])
+}
+
 /** The outermost app an agent runs in. The bundle id and TERM_PROGRAM name it, unlike a multiplexer's own variables,
  *  which name the nearest host; with neither set, the nearest host is the only one known. */
 export function detectApp(hints: Record<string, string>): string {
@@ -101,6 +114,9 @@ export function detectApp(hints: Record<string, string>): string {
   // Herdr Core (hc) gives its programs TERM_PROGRAM=ghostty and its own bundle is dev.herdr.core, so neither can name
   // it: its own terminal decides first.
   if (inHerdr(hints)) return 'herdr'
+  // cmux is built on Ghostty: its terminals say TERM_PROGRAM=ghostty and may carry Ghostty's bundle id, so its own
+  // terminal decides first.
+  if (inCmux(hints)) return 'cmux'
   // Cursor is a VS Code fork and reports TERM_PROGRAM=vscode, so the bundle id decides first. A hint is outside text:
   // only a table's own key names an app, never one an object inherits (`constructor`).
   if (Object.hasOwn(BUNDLE_APPS, bundle)) return BUNDLE_APPS[bundle]
@@ -119,6 +135,7 @@ export function detectHost(hints: Record<string, string>): string {
   if (has('ZELLIJ')) return 'zellij'
   if (has('TMUX_PANE')) return 'tmux'
   if (inHerdr(hints)) return 'herdr'
+  if (inCmux(hints)) return 'cmux'
   if (has('KITTY_WINDOW_ID')) return 'kitty'
   if (has('WEZTERM_PANE')) return 'wezterm'
   if (has('ORCA_AGENT_SESSION_ID') || bundle === APP_BUNDLES.orca) return 'orca'
