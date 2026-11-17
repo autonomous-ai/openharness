@@ -510,8 +510,8 @@ function postObserved(port, body) {
  *
  * In order: the app's names first, then the hosts from the nearest, as detectHost reads them (cable/hosts/hostDetect.ts),
  * so a session with more than MAX_HINTS set loses the farthest. HC_TERMINAL_ID comes after the multiplexers: one started
- * in an hc terminal keeps that terminal's address, and is the nearer host. cmux's ids come after it: hc started in a
- * cmux terminal keeps cmux's ids, and is the nearer host. CLAUDE_CODE_ENTRYPOINT is last, the first the
+ * in an hc terminal keeps that terminal's address, and is the nearer host. cmux's ids come after them: a multiplexer
+ * started in a cmux terminal keeps cmux's ids, and is the nearer host. CLAUDE_CODE_ENTRYPOINT is last, the first the
  * cap drops: without it a tap still brings the app forward.
  */
 const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE',
@@ -538,8 +538,11 @@ function hostHints() {
     // alone would read as Herdr's own terminal (hostDetect.ts inHerdr).
     if (name === 'HC_TERMINAL_ID' && (process.platform !== 'darwin' || process.env.HERDR_PANE_ID
       || process.env.HERDR_SESSION || (process.env.HC_SESSION && process.env.HC_SESSION !== 'default'))) continue
-    // cmux's ids off macOS (see HOST_HINTS): skipped before the cap counts them too.
-    if (name.startsWith('CMUX_') && process.platform !== 'darwin') continue
+    // cmux's ids off macOS (see HOST_HINTS), and under herdr or hc, the nearer host when started in a cmux terminal: a
+    // named session of either sends no pane id or address above, and the ids alone would read as cmux's own terminal
+    // (hostDetect.ts inCmux), which the dial's words are pasted into. Skipped before the cap counts them too.
+    if ((name === 'CMUX_SURFACE_ID' || name === 'CMUX_WORKSPACE_ID') && (process.platform !== 'darwin'
+      || process.env.HERDR_PANE_ID || process.env.HERDR_SESSION || process.env.HC_TERMINAL_ID)) continue
     const value = process.env[name]?.slice(0, 64)
     if (value && !CONTROL.test(value)) hints[name] = value
   }
