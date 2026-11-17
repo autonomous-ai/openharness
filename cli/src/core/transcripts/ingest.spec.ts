@@ -49,19 +49,29 @@ describe('ingesting a transcript line', () => {
     p.ingest.acceptFrame('s1', 'codex', frame)
     expect(p.deps.emit).not.toHaveBeenCalled()
     p.ingest.acceptFrame('s1', 'claude', frame)
-    expect(p.deps.emit).toHaveBeenCalledWith('s1', frame.events, { replay: true })
+    expect(p.deps.emit).toHaveBeenCalledWith('s1', frame.events, { replay: true, turn: frame.turn })
     expect(p.deps.runtimeProfiles.ingest).toHaveBeenCalledWith(p.sessions.get('s1'), frame.raw)
     p.ingest.acceptFrame('s1', 'claude', { ...frame, replay: false, failure: 'rate limited' })
     expect(p.deps.announceTurnAborted).toHaveBeenCalledWith('s1', 'claude', 'rate limited')
     expect(vi.mocked(p.deps.announceTurnAborted).mock.invocationCallOrder[0])
       .toBeLessThan(vi.mocked(p.deps.emit).mock.invocationCallOrder[1])
-    expect(p.deps.emit).toHaveBeenLastCalledWith('s1', frame.events, { replay: false })
+    expect(p.deps.emit).toHaveBeenLastCalledWith('s1', frame.events, { replay: false, turn: frame.turn })
     expect(p.normalizers.hasState('s1')).toBe(false)
     vi.mocked(p.deps.runtimeProfiles.ingest).mockClear()
     p.ingest.acceptFrame('s1', 'claude', frame, true)
     expect(p.deps.runtimeProfiles.ingest).not.toHaveBeenCalled()
     expect(p.deps.tokenUsage.changed).toHaveBeenCalledWith(p.sessions.get('s1'))
-    expect(p.deps.emit).toHaveBeenLastCalledWith('s1', frame.events, { replay: true })
+    expect(p.deps.emit).toHaveBeenLastCalledWith('s1', frame.events, { replay: true, turn: frame.turn })
+  })
+
+  // The core's turn rules compare a read with the hooks' own times and hold its end (core/turns/turnHooks.ts).
+  it('hands a worker frame\'s time, own end and turn on with its events', () => {
+    const run = setup({ s1: 'claude' })
+    const turn = { identity: 'worker:turn', turnOpen: false, continued: true, openedAt: 1_000 }
+    const frame: LiveFrame = { raw: '{}', events: [{ type: 'turn_ended', payload: {} }], profile: false, observe: true,
+      replay: false, at: 2_000, over: true, turn }
+    run.ingest.acceptFrame('s1', 'claude', frame)
+    expect(vi.mocked(run.deps.emit).mock.calls).toStrictEqual([['s1', frame.events, { replay: false, at: 2_000, over: true, turn }]])
   })
 
   it('takes lines only for a registered session of the engine that wrote them', () => {
@@ -194,6 +204,30 @@ describe('the watcher wiring', () => {
       ['[cli] line handler error (session s1):', 'bad line'],
       ['[cli] line handler error (session s1):', 'worse'],
     ])
+  })
+
+  it('hands a live line\'s on, with the parser\'s turn after it', () => {
+    const run = wired({ s1: 'claude' })
+    const record = (value: object, timestamp: string) => JSON.stringify({ ...value, timestamp })
+    run.watcher.emit('line', line('s1', 'claude', record(JSON.parse(CLAUDE_PROMPT), '2026-11-17T01:00:00.000Z')))
+    const parser = run.normalizers.liveParsers.get('s1')!
+    const opened = parser.snapshot()
+    expect(opened).toMatchObject({ turnOpen: true, openedAt: Date.parse('2026-11-17T01:00:00.000Z') })
+    expect(vi.mocked(run.deps.emit).mock.calls[0][2]).toEqual({ at: Date.parse('2026-11-17T01:00:00.000Z'), turn: opened })
+    // A paused `/goal` pass: its turn_duration is the engine's own end, with no Stop after it.
+    run.watcher.emit('line', line('s1', 'claude', record({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn' } }, '2026-11-17T01:00:00.500Z')))
+    run.watcher.emit('line', line('s1', 'claude', record({ type: 'attachment', attachment: { type: 'goal_status', met: false, condition: 'finish' } }, '2026-11-17T01:00:01.000Z')))
+    run.watcher.emit('line', line('s1', 'claude', record({ type: 'system', subtype: 'turn_duration', durationMs: 1 }, '2026-11-17T01:00:02.000Z')))
+    const read = vi.mocked(run.deps.emit).mock.calls.at(-1)![2]
+    expect(read).toEqual({ at: Date.parse('2026-11-17T01:00:02.000Z'), over: true, turn: parser.snapshot() })
+    expect(read?.turn?.turnOpen).toBe(false)
+  })
+
+  it('a history batch and another engine\'s frame say neither', () => {
+    const run = wired({ s1: 'claude', cc: 'commandcode' })
+    run.watcher.emit('history', { sessionId: 's1', lines: [line('s1', 'claude', JSON.stringify({ ...JSON.parse(CLAUDE_PROMPT), timestamp: '2026-11-17T01:00:00.000Z' }))] } as HistoryEvent)
+    run.ingest.acceptStreamFrame(run.sessions.get('cc')!, { serial: 1, events: [{ type: 'turn_ended', payload: {} }], turn: { identity: 't:1', turnOpen: false } })
+    expect(vi.mocked(run.deps.emit).mock.calls.map((call) => call.slice(2))).toStrictEqual([[{ replay: true }], []])
   })
 
   it('emits a catch-up batch as one replay, and nothing when it holds no events', () => {
