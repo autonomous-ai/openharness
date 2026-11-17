@@ -206,28 +206,32 @@ export function withoutReviewRecords(text: string, record: HookReviewRecord, own
 }
 
 /** Inspect approvals before publishing hooks. An unreadable or conflicting
- * config cannot authorize even the first write of the installation. */
+ * config cannot authorize even the first write of the installation. [pruned]: the settings as they were before
+ * Harness's blocks were taken out of them, whose records of those blocks go in the same write. */
 export function prepareReviewed(record: HookReviewRecord, home: string, settingsFile: string, settings: Settings,
-  platform: NodeJS.Platform = process.platform) {
+  platform: NodeJS.Platform = process.platform, pruned?: Settings) {
   const config = join(home, record.file), observed = inspectHookFile(config, 0o600)
   // Codex uses the real home plus the literal hooks filename, even when that
   // leaf is an alias. The config's own leaf alias does not change that home.
-  const records = reviewRecords(record, join(observed.directory, basename(settingsFile)), settings, platform)
+  const keyed = join(observed.directory, basename(settingsFile))
+  const records = reviewRecords(record, keyed, settings, platform)
   if (records.size === 0) throw new HookPreparationHeld('the hooks have no verifiable approval records')
   const text = observed.content ?? ''
   try { parseToml(text, { integersAsBigInt: true, maxDepth: 64 }) }
   catch { throw new HookPreparationHeld('the hook review configuration is not complete TOML') }
   const next = withReviewRecords(text, record, records)
   if (next === 'unsafe') throw new HookPreparationHeld('the hook review configuration cannot be safely updated')
-  const output = next === 'unchanged' ? text : next
+  // A record [settings] still needs, the same hook at the same place, stays.
+  const gone = pruned ? reviewRecords(record, keyed, pruned, platform) : new Map<string, string>()
+  const output = withoutReviewRecords(next === 'unchanged' ? text : next, record, (key, hash) => gone.get(key) === hash && records.get(key) !== hash).text
   try { parseToml(output, { integersAsBigInt: true, maxDepth: 64 }) }
   catch { throw new HookPreparationHeld('the prepared hook reviews are not complete TOML') }
   observed.prepare(output)
   return {
     verify: observed.verify,
     commit: async (attempt: HookPreparationAttempt) => {
-      const published = await observed.replace(next === 'unchanged' ? text : next, attempt)
-      if (next !== 'unchanged') console.log(record.messages.recorded.replace('{config}', config))
+      const published = await observed.replace(output, attempt)
+      if (output !== text) console.log(record.messages.recorded.replace('{config}', config))
       return published
     },
   }
