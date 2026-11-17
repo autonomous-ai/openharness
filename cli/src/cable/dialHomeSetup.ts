@@ -68,10 +68,11 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
   /** Homes done while their engine was on: a scan passes them with a set lookup. */
   const handled: Record<DialEngine, Set<string>> = { claude: new Set(), codex: new Set() }
   /** Homes, and recorded folders, given no skill for a reason the next try would meet again (no skills folder, a full
-   *  list, a write that failed): passed the same way, through a start or an attach too, until the stamp changes or the
-   *  set is an hour old. */
-  const refused = new Set<string>()
-  let refusedAt = 0
+   *  list, a write that failed), each with when: passed the same way, through a start or an attach too, until its own
+   *  hour is up or an engine is turned off or on. */
+  const refused = new Map<string, number>()
+  /** Whether each engine was on at the last start pass. */
+  let onBefore = ''
   /** Engines on at the last pass: a scan looks at their default home, and Codex's at its sessions' homes, without
    *  reading whether they still are, which only a changed stamp can change. */
   const onAtPass = new Set<DialEngine>()
@@ -142,15 +143,24 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
     return false
   }
 
-  /** The refused set is an hour old: each home in it is tried again. */
-  const hourUp = (): boolean => deps.now() - refusedAt >= RETRY_MS
+  /** Refused within its own hour; one whose hour is up leaves, and is tried again. */
+  const isRefused = (key: string): boolean => {
+    const at = refused.get(key)
+    if (at === undefined) return false
+    if (deps.now() - at < RETRY_MS) return true
+    refused.delete(key)
+    return false
+  }
 
-  /** A home is passed by the scans after while it is done, or refused until the set is an hour old. */
+  /** A home is passed by the scans after while it is done, or refused until its hour is up. A full refused list makes
+   *  room from the ones whose hour is up. */
   const settle = (engine: DialEngine, home: string, outcome: 'done' | 'refused'): void => {
-    const set = outcome === 'done' ? handled[engine] : refused
-    if (set.size >= MAX_HOMES) return
-    if (set === refused && refused.size === 0) refusedAt = deps.now()
-    set.add(home)
+    if (outcome === 'done') {
+      if (handled[engine].size < MAX_HOMES) handled[engine].add(home)
+      return
+    }
+    if (refused.size >= MAX_HOMES) for (const key of [...refused.keys()]) isRefused(key)
+    if (refused.size < MAX_HOMES) refused.set(home, deps.now())
   }
 
   /** A recorded folder leaves the record only with its home, a throwaway one that is gone: a skills folder the person
@@ -216,7 +226,7 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
     // current: a skill the person deleted stays deleted.
     if (found !== null && listed.includes(found)) {
       // Refused at the pass's look at the record: not tried again before its hour.
-      if (refused.has(found)) return 'refused'
+      if (isRefused(found)) return 'refused'
       const result = refreshSkill(found)
       tally(counts, engine, result)
       if (result === 'gone') leftRemoved(engine, found)
@@ -267,16 +277,18 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
   /** Every home read anew: at the start, at an attach, and at a scan that finds the stamp changed. */
   const startPass = (counts: Counts): void => {
     // Taken before on is read, so a disable after it is a changed file at the next scan.
-    const next = stampNow()
-    // A replug does not try a refused home again before its hour; a removal, an enable or the plugin turned on or off
-    // does.
-    if (next !== stamp || hourUp()) refused.clear()
-    stamp = next
+    stamp = stampNow()
+    const wanted = { claude: on('claude'), codex: on('codex') }
+    // A replug, or Claude Code saving another setting, does not try a refused home again before its hour; a removal, an
+    // enable or the plugin turned on or off does.
+    const onNow = `${wanted.claude} ${wanted.codex}`
+    if (onNow !== onBefore) refused.clear()
+    onBefore = onNow
     for (const engine of ENGINES) handled[engine].clear()
     onAtPass.clear()
     const adopted = deps.adopted()
     for (const engine of ENGINES) {
-      if (!on(engine)) {
+      if (!wanted[engine]) {
         turnOff(engine, counts)
         continue
       }
@@ -290,7 +302,7 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
           leftRemoved(engine, skills)
           return true
         }
-        if (state !== 'ok' || refused.has(skills)) return true
+        if (state !== 'ok' || isRefused(skills)) return true
         const result = refreshSkill(skills)
         tally(counts, engine, result)
         if (result === 'gone') leftRemoved(engine, skills)
@@ -305,7 +317,7 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
       if (wrote && !stillOn(engine, counts)) continue
       // Only the command makes a default home that is missing: the scans write it once it is there.
       for (const home of [defaultHome[engine], ...adopted[engine]]) {
-        if (refused.has(home) || ownDirectory(home, deps.uid) !== 'ok') continue
+        if (isRefused(home) || ownDirectory(home, deps.uid) !== 'ok') continue
         const outcome = writeHome(engine, home, counts)
         if (outcome === 'off') break
         settle(engine, home, outcome)
@@ -359,12 +371,10 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
       // A removal or enable since, or the plugin turned on or off: every home is written again, or taken out, without
       // a restart.
       if (stampNow() !== stamp) startPass(counts)
-      // A home that cannot be written is not tried at every scan.
-      if (refused.size > 0 && hourUp()) refused.clear()
       // An engine installed since the pass: its default home is written once it is there.
       for (const engine of ENGINES) {
         const home = defaultHome[engine]
-        if (!onAtPass.has(engine) || handled[engine].has(home) || refused.has(home) || ownDirectory(home, deps.uid) !== 'ok') continue
+        if (!onAtPass.has(engine) || handled[engine].has(home) || isRefused(home) || ownDirectory(home, deps.uid) !== 'ok') continue
         const outcome = writeHome(engine, home, counts)
         if (outcome !== 'off') settle(engine, home, outcome)
       }
@@ -377,7 +387,7 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
           sayOnce('shape', 'dial skill: path refused (shape)')
           continue
         }
-        if (handled.codex.has(home) || refused.has(home) || handled.codex.size >= MAX_HOMES) continue
+        if (handled.codex.has(home) || isRefused(home) || handled.codex.size >= MAX_HOMES) continue
         const state = ownDirectory(home, deps.uid)
         if (state !== 'ok') {
           sayOnce(home, `dial skill: path refused (${state})`)
