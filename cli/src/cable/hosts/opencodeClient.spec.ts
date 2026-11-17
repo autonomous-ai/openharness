@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -156,16 +157,37 @@ describe('the opencode client (docs/plans/2026-11-17-dial-opencode-design.md)', 
     for (const url of [
       `https://127.0.0.1:${port}`, 'http://192.168.1.5:4096', 'http://example.com', 'http://127.0.0.1.example.com',
       `http://user:pw@127.0.0.1:${port}`, 'file:///x', 'not a url',
+      // A name is what the resolver makes of it, localhost too.
+      `http://localhost:${port}`,
     ]) {
       server.register({ url })
       expect(opencode.registration()).toEqual({ fault: 'not_local' })
       expect(await opencode.find()).toEqual({ fault: 'not_local' })
     }
     expect(server.requests).toEqual([])
-    for (const url of [`http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://[::1]:${port}`]) {
+    for (const url of [`http://127.0.0.1:${port}`, `http://[::1]:${port}`]) {
       server.register({ url })
       expect(opencode.registration()).toEqual({ stamp: expect.any(String) })
     }
+  })
+
+  it('a pid that is gone is no_service, and nothing is sent: its port may be anyone\'s now', async () => {
+    const server = await start()
+    const opencode = await found(server)
+    // A process that has run and ended, as an opencode that crashed and left its file.
+    server.register({ pid: spawnSync(process.execPath, ['-e', '']).pid })
+    expect(opencode.registration()).toEqual({ stamp: expect.any(String) })
+    expect(await opencode.find()).toEqual({ fault: 'no_service' })
+    expect(await opencode.request('GET', '/api/session/active')).toEqual({ ok: false, fault: 'no_service' })
+    expect(routes(server)).toEqual(['GET /api/info'])
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('another user\'s pid is no_service, and nothing is sent', async () => {
+    const server = await start()
+    // pid 1 is the system's own first process, never this user's.
+    server.register({ pid: 1 })
+    expect(await client(server).find()).toEqual({ fault: 'no_service' })
+    expect(server.requests).toEqual([])
   })
 
   it('find asks /api/info with Basic opencode:<password>, and no header for a service with none', async () => {
@@ -191,7 +213,8 @@ describe('the opencode client (docs/plans/2026-11-17-dial-opencode-design.md)', 
     }
     // Found first: a fault after leaves no service held.
     expect(await opencode.find()).toEqual({ stamp: expect.any(String) })
-    server.register({ pid: process.pid + 1 })
+    // Running and this user's, and not the server.
+    server.register({ pid: process.ppid })
     await refused('not_ours')
     server.register({ version: '2.3.1' })
     await refused('not_ours')
