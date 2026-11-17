@@ -17,7 +17,8 @@
 import { existsSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { SpawnLockBusyError, describeSpawnLockFailure } from '../daemonSpawnLock.js'
-import { binaryVersion, currentPtyVersion } from '../ptyHost/launch.js'
+import { binaryVersion } from '../ptyHost/launch.js'
+import { currentPtyVersion } from '../ptyHost/binary.js'
 import { PTY_PROTOCOL, SUPPORTED_PTY_PROTOCOLS } from '../ptyHost/protocol.js'
 import { REFUSED_RETRY_MAX_MS, msUntilSlot, type Poller } from '../selfUpdate.js'
 import {

@@ -1,4 +1,4 @@
-// Computes the core's closure with and without the other-engines door, like architecture.spec.ts closureOf.
+// Computes the core's closure with and without its implementation doors, like architecture.spec.ts closureOf.
 import { readFileSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { createRequire } from 'node:module'
@@ -38,7 +38,8 @@ function parsed(path, open) {
     const target = [base.replace(/\.js$/, '.ts'), base, `${base}.ts`, join(base, 'index.ts')].find(isFile)
     if (!target || !target.startsWith(SRC + '/') || !target.endsWith('.ts') || /\.(spec|test|e2e)\.ts$/.test(target)) continue
     const importer = relative(SRC, path), t = relative(SRC, target)
-    if (dynamic && (t === IN_PROCESS_ONLY || (!open && LAZY.has(importer)))) continue
+    if (dynamic && (t === IN_PROCESS_ONLY || (!open && (LAZY.has(importer)
+      || (importer === 'core/main.ts' && t === 'core/ptyHost.ts'))))) continue
     imports.push(target)
   }
   const result = { lines: text.split('\n').length, imports }

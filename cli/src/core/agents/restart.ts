@@ -23,7 +23,7 @@ import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import type { createLaunchHelpers } from './launch.js'
 import type { RestartAgent } from './launches.js'
 import type { PaneSwap } from './swap.js'
-import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
+import { moveHeldLine } from '../../lib/hostMove/held.js'
 import type { LaunchOverridesDeps } from '../../lib/launchOverrides.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 

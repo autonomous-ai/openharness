@@ -14,7 +14,7 @@ import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import type { Socket } from 'node:net'
 import { patientExec, type ExecDone, type PatientExecOptions } from './patientExec.js'
-import { ptyHostBinary } from './ptyHost/launch.js'
+import { ptyHostBinary } from './ptyHost/binary.js'
 import { runPowershellAsync } from './windows/powershell.js'
 
 /** Yes, no, or `unanswered`: the lookup did not finish in time, which is not a no. The listener answers a retryable 503. */

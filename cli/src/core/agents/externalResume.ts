@@ -13,7 +13,7 @@ import { adoptionDecision } from './adopt.js'
 import { heldPaneArgv } from './heldLaunches.js'
 import { createExternalInspector } from './externalInspect.js'
 import { stopExternalOwner } from './externalOwner.js'
-import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
+import { moveHeldLine } from '../../lib/hostMove/held.js'
 
 type CreateAgent = NonNullable<BackendSocket['onCreateAgent']>
 type Owner = NonNullable<ExternalResumeIntent['owner']>

@@ -99,6 +99,8 @@ const IN_PROCESS_ONLY = 'services/inline.ts'
  * (docs/design/2026-10-08-other-engines-out-of-core.md). An `import()` of their code anywhere else is followed.
  */
 const LAZY_LOADERS = new Set(['engines/inProcess.ts'])
+/** Only this edge opens the terminal host implementation: configured startup or a Windows guest. */
+const PTY_HOST_DOOR = { importer: 'core/main.ts', target: 'core/ptyHost.ts' }
 
 /**
  * Every file the core's process loads, one a line and in order: the walk from `core/main.ts` with every door shut.
@@ -136,7 +138,8 @@ function closureOf(entry: string): Map<string, number> {
 /** Whether the walk follows an import of `target` written in `importer`: every one but an `import()` of
  *  `IN_PROCESS_ONLY`, or one written in a lazy loader. */
 function followed(importer: string, target: string, dynamic: boolean): boolean {
-  return !dynamic || (target !== IN_PROCESS_ONLY && !LAZY_LOADERS.has(importer))
+  return !dynamic || (target !== IN_PROCESS_ONLY && !LAZY_LOADERS.has(importer)
+    && !(importer === PTY_HOST_DOOR.importer && target === PTY_HOST_DOOR.target))
 }
 
 /** Each file read and parsed once, however many walks pass through it. */
@@ -638,6 +641,39 @@ describe('the daemon\'s shape', () => {
     expect(wrong, 'The master is the one process that must not fail: no feature code in it (src/harnessd/AGENTS.md).').toEqual([])
   })
 
+  it('the default core does not load the optional PTY host implementation; generic input and protocol contracts stay', () => {
+    const implementation = [
+      'core/agents/hostMove.ts',
+      'lib/guestRunner.ts',
+      'lib/hostMove/moveAgent.ts',
+      'lib/hostMove/mover.ts',
+      'lib/hostMove/quiet.ts',
+      'lib/hostMove/seed.ts',
+      'lib/ptyHost/client.ts',
+      'lib/ptyHost/drain.ts',
+      'lib/ptyHost/launch.ts',
+      'lib/ptyHost/protocol.ts',
+      'lib/ptyHost/stream.ts',
+      'lib/ptyHostBackend.ts',
+      'lib/terminalEnvironment.ts',
+      'lib/windows/guestHostBackend.ts',
+    ]
+    const closure = closureOf('core/main.ts')
+    expect(implementation.filter((file) => closure.has(file)),
+      'Package 13: load the host implementation only when the configured backend or a Windows guest needs it.').toEqual([])
+    for (const contract of ['lib/hostMove/gate.ts', 'lib/ptyHost/instance.ts']) {
+      expect(closure.has(contract), `${contract} remains a shared input/protocol contract`).toBe(true)
+    }
+    const opened = closureOf(PTY_HOST_DOOR.target)
+    expect([...opened.keys()].filter((file) => !closure.has(file)).sort()).toEqual([PTY_HOST_DOOR.target, ...implementation].sort())
+    expect(importsFor(PTY_HOST_DOOR.importer, readFileSync(join(SRC, PTY_HOST_DOOR.importer), 'utf8'))
+      .filter(({ from }) => from === './ptyHost.js')).toEqual([{ from: './ptyHost.js', dynamic: true }])
+    expect(followed(PTY_HOST_DOOR.importer, PTY_HOST_DOOR.target, true)).toBe(false)
+    expect(followed(PTY_HOST_DOOR.importer, PTY_HOST_DOOR.target, false)).toBe(true)
+    expect(followed('core/agents/create.ts', PTY_HOST_DOOR.target, true)).toBe(true)
+    expect(followed(PTY_HOST_DOOR.importer, 'lib/ptyHost/launch.ts', true)).toBe(true)
+  }, WALK_TIMEOUT_MS)
+
   it('the core\'s process loads no edge file but those listed, and reports source size for review', () => {
     const closure = closureOf('core/main.ts')
     const lines = [...closure.values()].reduce((sum, count) => sum + count, 0)
@@ -762,7 +798,8 @@ describe('the daemon\'s shape', () => {
       visit(source)
       return opens
     }
-    const loaded = new Set(closureOf('core/main.ts').keys())
+    // Opening a terminal backend does not exempt its pipe and launcher from the local-only network rule.
+    const loaded = new Set([...closureOf('core/main.ts').keys(), ...closureOf(PTY_HOST_DOOR.target).keys()])
     const opening = [...loaded].filter((file) => opensIn(readFileSync(join(SRC, file), 'utf8'))).sort()
     expect(opening.filter((file) => !OPENS[file]), 'A file the core\'s process loads can open a connection: the core calls no other host. Make the call in the component that faces it (the gateway, for the backend), or, for one on this computer only, list it here and say what it does.').toEqual([])
     expect(Object.keys(OPENS).filter((file) => !opening.includes(file)), 'Opens no connection, or is no longer loaded: remove it from the list.').toEqual([])

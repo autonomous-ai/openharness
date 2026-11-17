@@ -130,6 +130,13 @@ describe('the lean bundle a release carries', () => {
       expect([...loads('core')].some(name => files.get(name)!.includes(marker)), marker).toBe(false)
     }
   })
+  it.each(['PtyHostClient', 'HostMover', 'QuietClock', 'createGuestHostBackend', 'FrameReader'])(
+    'loads the terminal host %s only after its backend is selected', (name) => {
+      // The release build keeps these implementation names; both presence and absence are checked.
+      const marker = JSON.stringify(name)
+      expect([...files].some(([file, code]) => file.startsWith('core-') && code.includes(marker))).toBe(true)
+      expect([...loads('core')].some(file => files.get(file)!.includes(marker))).toBe(false)
+    })
 
   it('gives the core its own code and none of the CLI\'s commands, which parsing cli.js cost it', () => {
     const core = loads('core')

@@ -11,7 +11,7 @@
  */
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { currentPtyVersion } from '../ptyHost/launch.js'
+import { currentPtyVersion } from '../ptyHost/binary.js'
 import { PTY_PROTOCOL } from '../ptyHost/protocol.js'
 import { semverGt } from '../selfUpdate.js'
 import { installPreparedPty, readPtyPending, type PtyPending } from './ptyInstall.js'

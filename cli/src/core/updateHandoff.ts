@@ -51,7 +51,7 @@ export interface UpdateHandoffDeps {
   error(line: string): void
   teardownDeadlineMs?: number
   /** What must finish before the teardown starts, outside its deadline and bounded by its own: a host move that holds
-   *  input, whose held keystrokes the teardown's closed connections would lose (lib/hostMove/mover.ts
+   *  input, whose held keystrokes the teardown's closed connections would lose (lib/hostMove/handover.ts
    *  `settleMovesForHandOver`). */
   beforeTeardown?: () => Promise<void>
 }

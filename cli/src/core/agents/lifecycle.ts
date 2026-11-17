@@ -8,7 +8,7 @@ import type { clearDeleted as clearDeletedFn, markDeleted as markDeletedFn } fro
 import { PurgeAgentService, type PurgeDeps } from '../../lib/purgeAgentService.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { createResumeAgentService, type ResumeAgentServiceDeps } from '../../lib/resumeAgentService.js'
-import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
+import { moveHeldLine } from '../../lib/hostMove/held.js'
 import type { SessionCheckpointStore } from '../../lib/sessionCheckpoint.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import { AgentStopError, createStopAgentService, type StopAgentServiceDeps } from '../../lib/stopAgentService.js'

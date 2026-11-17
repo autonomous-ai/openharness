@@ -31,7 +31,6 @@ core/agents/gridAssignments.ts
 core/agents/guestCreate.ts
 core/agents/heldLaunches.ts
 core/agents/hermesTerminal.ts
-core/agents/hostMove.ts
 core/agents/launch.ts
 core/agents/launchAuthority.ts
 core/agents/launchEnv.ts
@@ -339,7 +338,6 @@ lib/gridFleetProtocol.ts
 lib/gridLaunchWire.ts
 lib/guestEngines.ts
 lib/guestLaunchWire.ts
-lib/guestRunner.ts
 lib/guestUser.ts
 lib/handoffAuthority.ts
 lib/handoffDiscovery.ts
@@ -355,10 +353,8 @@ lib/historyRewrap.ts
 lib/hookAuth.ts
 lib/hookRoutes.ts
 lib/hostMove/gate.ts
-lib/hostMove/moveAgent.ts
-lib/hostMove/mover.ts
-lib/hostMove/quiet.ts
-lib/hostMove/seed.ts
+lib/hostMove/handover.ts
+lib/hostMove/held.ts
 lib/hostTheme.ts
 lib/installedCopy.ts
 lib/jsonStringBytes.ts
@@ -414,13 +410,8 @@ lib/processTable.ts
 lib/processTree.ts
 lib/projectFolder.ts
 lib/projectPath.ts
-lib/ptyHost/client.ts
-lib/ptyHost/drain.ts
+lib/ptyHost/binary.ts
 lib/ptyHost/instance.ts
-lib/ptyHost/launch.ts
-lib/ptyHost/protocol.ts
-lib/ptyHost/stream.ts
-lib/ptyHostBackend.ts
 lib/publishedGridConfig.ts
 lib/purgeAgentService.ts
 lib/questionController.ts
@@ -473,7 +464,6 @@ lib/terminalBackend.ts
 lib/terminalBackendCoordinator.ts
 lib/terminalBackendRecovery.ts
 lib/terminalBinary.ts
-lib/terminalEnvironment.ts
 lib/terminalHandoff.ts
 lib/terminalKeys.ts
 lib/terminalRuntime.ts
@@ -502,7 +492,6 @@ lib/windows/daemonPipe.ts
 lib/windows/dataFolderClaim.ts
 lib/windows/engineStart.ts
 lib/windows/guestEngine.ts
-lib/windows/guestHostBackend.ts
 lib/windows/guestTree.ts
 lib/windows/hermesLaunch.ts
 lib/windows/installNames.ts

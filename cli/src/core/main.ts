@@ -76,7 +76,7 @@ import { createDeviceHookCalls } from './deviceHookCalls.js'
 import { buildEngineLaunchArgv, engineLaunchEnv, supportsFirstPrompt, typedFirstPrompt } from '../lib/engineLaunch.js'
 import { launchSettingsArgs } from '../engines/kit/launchValues.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../lib/windows/engineStart.js'
-import { createGuestHostBackend } from '../lib/windows/guestHostBackend.js'
+import type { createGuestHostBackend } from '../lib/windows/guestHostBackend.js'
 import { workspaceMissing } from '../lib/workspaceCheck.js'
 import { HERMES_SYSTEM_MANAGED_DIR, type GridLaunchMachine } from '../lib/gridLaunchWire.js'
 import { writeGridConfigDir } from '../lib/gridConfigDir.js'
@@ -88,15 +88,14 @@ import { createHandoffDependencies } from './handoffDependencies.js'
 import { TmuxBackend } from '../lib/tmuxBackend.js'
 import { tmuxAvailableNow } from '../lib/tmuxOnPath.js'
 import { createTerminalBackendRecovery } from '../lib/terminalBackendRecovery.js'
-import { isDrainBackend, ptyHostBackends, ptyHostOnProbation, PtyHostDrain, rowInstancesOf, rowsOnInstance, untilHostAttached, withoutCreateHost } from '../lib/ptyHost/drain.js'
-import { removeUnusedPtyVersions, targetHost } from '../lib/ptyHost/launch.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from '../lib/hostTheme.js'
 import { restoreAgents, type RestoreAgentsDeps, type RestoreSummary } from '../lib/restoreAgents.js'
 import { restoreTerminals } from '../lib/restoreTerminals.js'
 import { acquireAfterHold, MoveGate } from '../lib/hostMove/gate.js'
-import { HostMover, settleMovesForHandOver } from '../lib/hostMove/mover.js'
-import { moveHeldLine, removeOrphanMovePanes, type MoveOutcome } from '../lib/hostMove/moveAgent.js'
-import { QUIET_MS, QuietClock } from '../lib/hostMove/quiet.js'
+import type { HostMover } from '../lib/hostMove/mover.js'
+import { settleMovesForHandOver } from '../lib/hostMove/handover.js'
+import { moveHeldLine } from '../lib/hostMove/held.js'
+import type { MoveOutcome } from '../lib/hostMove/moveAgent.js'
 import { resumesConversation } from '../lib/resumeCapability.js'
 import { createRetainExitedSession } from '../lib/retainExitedSession.js'
 import { createKeepAbandonedConversation } from '../lib/keepAbandonedConversation.js'
@@ -188,7 +187,6 @@ import { createAgentForker } from './agents/fork.js'
 import { createPaneSwap } from './agents/swap.js'
 import { createAgentRetargeter } from './agents/retarget.js'
 import { createAgentRestarter } from './agents/restart.js'
-import { createHostMove, moveWaitingArgv } from './agents/hostMove.js'
 import { createAgentLifecycle, createPurgeRequest, createStopRequest } from './agents/lifecycle.js'
 import { createAgentLife } from './agentLife.js'
 import { createAgentClosing, createCloseRequests } from './agents/close.js'
@@ -510,10 +508,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (core/agents/heldLaunches.ts): the boot's restore of only those agents, set where tmux is there to restore into.
   const restorePanes = createPaneOperations()
   const restartJobs = new AgentRestartCoordinator()
+  const terminalConfig = {
+    backends: env.TERMINAL_BACKENDS ?? defaultTerminalBackends(process.platform),
+  }
+  // One door for configured hosts and Windows guests. tmux-only cores never evaluate the host implementation.
+  const loadPtyHost = () => import('./ptyHost.js')
+  const pty = terminalConfig.backends.includes('ptyhost') ? await loadPtyHost() : null
   // Moving agents off a drained pty host (lib/hostMove/): how long each has been idle and untouched, the one gate an
   // agent's input waits in while it changes host, and the agents a move a dead daemon left may still run beside
   // (`removeOrphanMovePanes` below), held this start: neither restored, nor discovered, nor moved.
-  const hostQuiet = new QuietClock({ now: Date.now })
+  const hostQuiet = pty ? new pty.QuietClock({ now: Date.now }) : null
   const moveHeld = new Set<string>()
   /** The conversations of the agents in [moveHeld]: an adoption of one would start a second engine on it too. */
   const moveHeldConversations = new Map<string, string>()
@@ -528,7 +532,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   let hostMover: HostMover | null = null
   // Every removal of a row goes through here: its clocks go with it.
-  const forgetRestartRevision = (agentId: string): void => { restartJobs.forget(agentId); hostQuiet.forget(agentId) }
+  const forgetRestartRevision = (agentId: string): void => { restartJobs.forget(agentId); hostQuiet?.forget(agentId) }
   const restoreRevision = (agentId: string): number => restartJobs.revision(agentId)
   let externalResumes: ReturnType<typeof createExternalResumes> | null = null
   let searchGeneration = 0
@@ -601,9 +605,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // config/terminalConfig.ts). `parseTerminalBackends` drops a retired `herdr` still named in someone's
   // environment rather than refusing to boot on it.
   const backendsExplicit = env.TERMINAL_BACKENDS !== undefined
-  const terminalConfig = {
-    backends: env.TERMINAL_BACKENDS ?? defaultTerminalBackends(process.platform),
-  }
   // The desktop's pane colours, for tmux's `window-style` (lib/hostTheme.ts): the last ones the app
   // sent, or its stock dark palette until it says otherwise. Read through a closure so a change
   // reaches sessions created after it without rebuilding the backend.
@@ -619,12 +620,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // target's host, the build this daemon would start; any other host, still running from before an update, is a
   // drain backend beside it (lib/ptyHost/drain.ts). The target is read here once, for this core's life: it runs the
   // binary (`harness-pty version`, up to 5 s), and an update that moves it starts a new core.
-  const ptyTarget = terminalConfig.backends.includes('ptyhost') ? await targetHost() : null
-  if (terminalConfig.backends.includes('ptyhost')) {
+  const ptyTarget = pty ? await pty.targetHost() : null
+  if (pty) {
     console.log(ptyTarget ? `[terminal] ptyhost: target ${ptyTarget.instance}` : '[terminal] ptyhost: target unknown')
   }
-  const ptyHosts = terminalConfig.backends.includes('ptyhost')
-    ? ptyHostBackends(env.HARNESS_PTY_DIR, { target: ptyTarget, rowInstances: () => rowInstancesOf(registry.list()) })
+  const ptyHosts = pty
+    ? pty.ptyHostBackends(env.HARNESS_PTY_DIR, { target: ptyTarget, rowInstances: () => pty.rowInstancesOf(registry.list()) })
     : null
   const ptyHostBackend = ptyHosts?.create ?? null
   if (ptyHosts) candidates.push(ptyHosts.create, ...ptyHosts.drain)
@@ -639,13 +640,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const prepared = await preparing
   const readyBackends = prepared.filter((p) => p.result.state === 'ready').map((p) => p.backend)
   // With no target, the create backend took whichever host answered, which a drain backend may be on too.
-  const terminalBackends = ptyHosts ? withoutCreateHost(readyBackends, ptyHosts.create) : readyBackends
+  const terminalBackends = pty && ptyHosts ? pty.withoutCreateHost(readyBackends, ptyHosts.create) : readyBackends
   // The first backend that could not be readied, and why, for the status's `discoveryError`.
   let terminalUnavailable: { backend: TerminalBackend['name']; reason: string; code: string } | null = prepared.flatMap(({ backend, result }) => result.state === 'unavailable'
     ? [{ backend: backend.name, reason: result.reason, code: result.code }] : [])[0] ?? null
   // The backend new panes are made on. Every other pane operation reaches the pane's own backend
   // through the coordinator (`terminals.backendFor`).
-  let createBackend: TerminalBackend | null = terminalBackends.find((backend) => !isDrainBackend(backend)) ?? null
+  let createBackend: TerminalBackend | null = terminalBackends.find((backend) => !pty?.isDrainBackend(backend)) ?? null
   // What a create, fork or resume answers while there is none: the configured backend's code, not always tmux's.
   const createUnavailable = noBackendCode(terminalConfig.backends)
   // A hook's tmux runtime hint is taken only while tmux is the backend new panes are made on
@@ -670,13 +671,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   // Shut down a drained host once it has no pane, and take its backend out of `terminalBackends` (stepped after
   // each reconcile pass, below).
-  const ptyDrain = ptyHosts?.drain.length
-    ? new PtyHostDrain({
+  const ptyDrain = pty && ptyHosts?.drain.length
+    ? new pty.PtyHostDrain({
       drain: ptyHosts.drain.filter((backend) => terminalBackends.includes(backend)),
       backends: terminalBackends,
       coordinator: terminals,
-      inUse: (instanceId) => rowsOnInstance(registry.list(), instanceId),
-      cleanup: () => { removeUnusedPtyVersions(env.HARNESS_PTY_DIR) },
+      inUse: (instanceId) => pty.rowsOnInstance(registry.list(), instanceId),
+      cleanup: () => { pty.removeUnusedPtyVersions(env.HARNESS_PTY_DIR) },
       // An old host is not shut down while new panes have no host to go to: it may be the only one that serves.
       createAvailable: () => createBackend === ptyHosts.create && ptyHosts.create.attached,
     })
@@ -1269,7 +1270,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // an older desktop and typing from a phone get it too; an agent on its own login has no `grid`.
     onInput: (agentId, typed, from) => {
       // What the person typed restarts the agent's quiet period: one in use is not moved to another host.
-      if (typed) hostQuiet.noteInput(agentId)
+      if (typed) hostQuiet?.noteInput(agentId)
       if (typed) browser.typed(agentId, from)
       const grid = registry.resolve(agentId)?.grid
       if (grid) ports.models?.prewarm(grid)
@@ -1491,7 +1492,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Declared further down: read as a prompt is typed, never now.
     promptTyped: (session, capture, screen) => {
       // A message typed into the pane, from any sender (`harness send`, Agent Messages, the Device): the agent is in use.
-      hostQuiet.noteInput(session.agentId)
+      hostQuiet?.noteInput(session.agentId)
       if (session.sessionId) questionWatcher.notePrompt(session.sessionId, capture, screen.question)
     },
     // The person sent a harness text from a window or the phone (services/agentCleanup.ts).
@@ -2003,7 +2004,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     mirror,
     // A live turn, however short and with no input of its own (a /loop wake-up, a background notification), restarts
     // the agent's quiet period: the mover's ticks alone, seconds apart, would miss it.
-    working: (agentId) => hostQuiet.noteActivity(agentId, 'working'),
+    working: (agentId) => hostQuiet?.noteActivity(agentId, 'working'),
     shortTurns,
     quietTitles,
   })
@@ -2624,7 +2625,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // pane read is.
   const restoreOn = restoreTerminals({
     backendFor: (runtime) => terminals.backendFor(runtime),
-    newPanesOn: (backend) => isDrainBackend(backend) ? createBackend : null,
+    newPanesOn: (backend) => pty?.isDrainBackend(backend) ? createBackend : null,
     listTmuxPanes: () => listTmuxPanes(),
     cwd: homedir(),
     label: (engine) => buildHarnessSessionLabel(engine),
@@ -2667,8 +2668,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // before restore relaunches the row's own engine and discovery could mint that pane an agent beside it. One whose
   // close is not confirmed may still run an engine on the conversation: its agent is held this start (not restored,
   // not discovered, not moved), and so is the pane's route, until the next start closes it.
-  if (ptyHosts) {
-    const swept = await removeOrphanMovePanes(terminalBackends.filter((backend) => backend.name === 'ptyhost'), registry.list())
+  if (pty && ptyHosts) {
+    const swept = await pty.removeOrphanMovePanes(terminalBackends.filter((backend) => backend.name === 'ptyhost'), registry.list())
       .catch((error) => {
         console.warn(`[terminal] move: could not look for panes a stopped move left: ${error instanceof Error ? error.message : error}`)
         return { removed: 0, unconfirmed: [] as string[], keptPanes: [] }
@@ -3077,11 +3078,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Agents on a drained pty host move, one at a time and only while nobody uses them, to the target host once it can seed
   // a pane (lib/hostMove/mover.ts). Each move is the agent's lifecycle operation: a restart, stop or delete waits for it
   // or cancels it, as it would another restart.
-  if (ptyHosts?.drain.length && ptyHostBackend) {
+  if (pty && hostQuiet && ptyHosts?.drain.length && ptyHostBackend) {
     const target = ptyHostBackend
     const moveActivity = (row: RegisteredSession) => activityFrameContextRef?.(row)?.state ?? 'unknown'
     const moveLookedAt = (agentId: string) => terminalStreams.isLookedAt(agentId) || terminalWatch.isWatched(agentId)
-    const moveOne = createHostMove({
+    const moveOne = pty.createHostMove({
       registry, terminals, createBackend: () => createBackend,
       restore: restoreOn, buildLaunch: restoreLaunch, paneSwapDeps,
       // Every stream open to the agent follows it: the windows' and phones', and Share viewers'.
@@ -3092,20 +3093,20 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         // Handing over: a move not yet past the old engine's stop cancels itself (`settleMovesForHandOver`).
         if (hostMover?.stopped) return false
         const row = registry.byAgent(agentId)
-        return !!row && moveActivity(row) === 'idle' && hostQuiet.quietFor(agentId) >= QUIET_MS && !moveLookedAt(agentId)
+        return !!row && moveActivity(row) === 'idle' && hostQuiet.quietFor(agentId) >= pty.QUIET_MS && !moveLookedAt(agentId)
       },
       holdRoute: (key, ms) => agentReconciler.holdRoute(key, ms),
       announce: announceSession,
       invalidateControl: invalidateTerminalControl,
       refreshGridAssignment: gridAssignments.refresh,
-      waitingArgv: () => moveWaitingArgv(),
+      waitingArgv: () => pty.moveWaitingArgv(),
       log: (line) => console.log(line),
     })
-    hostMover = new HostMover({
+    hostMover = new pty.HostMover({
       list: () => registry.list(),
       isDrainRow: (row) => row.runtimes.some((runtime) => {
         const on = terminals.backendFor(runtime)
-        return !!on && isDrainBackend(on)
+        return !!on && pty.isDrainBackend(on)
       }),
       // Only while the target's host is the one new panes are made on, and it lists `seed`.
       targetCanSeed: () => createBackend === target && target.canSeed,
@@ -3141,15 +3142,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const known = guestHosts.get(user)
     if (known) return known
     const reached = (async () => {
-      const backend = createGuestHostBackend({ user })
+      let backend: ReturnType<typeof createGuestHostBackend> | null = null
       try {
+        backend = (await loadPtyHost()).createGuestHostBackend({ user })
         const prepared = await backend.prepare({ ownedPanes: new Map() })
         if (prepared.state !== 'ready') { backend.dispose(); return null }
       } catch (error) {
         // A task that is gone, or a host that cannot start, is no host: the create says "turn sharing on again"
         // rather than throwing out of the request.
         console.warn(`[guest] ${user} host unavailable · ${error instanceof Error ? error.message : String(error)}`)
-        backend.dispose()
+        backend?.dispose()
         return null
       }
       terminals.addBackend(backend)
@@ -3439,9 +3441,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // A terminal host on probation is judged by this ready: a host whose version answers may still fail to serve (its
   // conpty.dll, its endpoint), and kept, every new pane would fail on it. Not ready until the create backend is attached
   // to the target's host; never, if it cannot be, and the master's ready timeout rolls the host back (lib/ptyHost/drain.ts).
-  if (ptyHosts && coreLink.supervised && ptyHostOnProbation(env.ADAPTER_RUNTIME_DIR)) {
+  if (pty && ptyHosts && coreLink.supervised && pty.ptyHostOnProbation(env.ADAPTER_RUNTIME_DIR)) {
     const create = ptyHosts.create
-    await untilHostAttached(() => ptyTarget !== null && createBackend === create && create.attached, ptyTarget?.instance ?? null, (line) => console.log(line))
+    await pty.untilHostAttached(() => ptyTarget !== null && createBackend === create && create.attached, ptyTarget?.instance ?? null, (line) => console.log(line))
   }
   backend.openRequests()
   daemonBoot.openRequests = null

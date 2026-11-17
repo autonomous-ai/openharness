@@ -8,7 +8,7 @@ import { createAgentLifecycle, createPurgeRequest, createStopRequest, TOLD_NOT_E
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 import { WORKSPACES_OFF, type WorkspacesPort } from '../api.js'
-import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
+import { moveHeldLine } from '../../lib/hostMove/held.js'
 
 vi.mock('../../lib/stopAgentService.js', async (real) => ({ ...await real<object>(), createStopAgentService: vi.fn(() => vi.fn(async () => {})) }))
 vi.mock('../../lib/resumeAgentService.js', async (real) => ({

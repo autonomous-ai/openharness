@@ -10,7 +10,7 @@ import type { ProcessView, RunningProcess } from '../../lib/sessionSearch/extern
 import { createExternalSessions } from '../../services/externalSessions.js'
 import { createExternalResumes, type ExternalResumeDeps } from './externalResume.js'
 import { stopExternalOwner } from './externalOwner.js'
-import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
+import { moveHeldLine } from '../../lib/hostMove/held.js'
 vi.mock('./externalOwner.js', () => ({ stopExternalOwner: vi.fn(async () => false) }))
 
 const cwd = mkdtempSync(join(tmpdir(), 'external-resume-'))
