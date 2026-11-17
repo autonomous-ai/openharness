@@ -184,6 +184,17 @@ describe('Orca actions', () => {
     expect(orcaDeps().onPath('orca')).toBe(fake.file)
   })
 
+  // GNOME's screen reader is /usr/bin/orca: it ignores the arguments it does not know, and starts.
+  it('an orca on PATH that is not Orca\'s launcher is never run', async () => {
+    fakeOrca()
+    vi.stubEnv('PATH', dir)
+    // Nor the app's own.
+    const orca = createOrcaActions({ ...orcaDeps(), exists: () => false })
+    expect(await orca.send(HANDLE, 'hi')).toBe(false)
+    expect(await orca.switchTo(HANDLE)).toBe('failed')
+    expect(existsSync(join(dir, 'argv'))).toBe(false)
+  })
+
   it('the app\'s own binary is used on macOS when PATH has none', async () => {
     const looked: string[] = []
     const { calls, orca } = recorder({ onPath: () => null, exists: (path) => { looked.push(path); return path === APP_ORCA } })

@@ -4,9 +4,9 @@
  */
 import { type ChildProcess, spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, relative } from 'node:path'
+import { delimiter, dirname, join, relative } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import {
   createOrcaHomesCache,
@@ -204,9 +204,10 @@ describe('readOrcaHomes', () => {
 })
 
 describe('orcaHomesDeps', () => {
-  /** A fake `orca` in a throwaway folder that runs [body]. Never the real one. */
-  function script(body: string): string {
-    const file = join(home(), 'orca')
+  /** A fake `orca` in a throwaway folder, at [path] in it, that runs [body]. Never the real one. */
+  function script(body: string, path = 'orca'): string {
+    const file = join(home(), path)
+    mkdirSync(dirname(file), { recursive: true })
     writeFileSync(file, `#!/bin/sh\n${body}\n`)
     chmodSync(file, 0o755)
     return file
@@ -249,13 +250,28 @@ describe('orcaHomesDeps', () => {
     expect(await run(echo, ['a\0b'], { timeoutMs: 600_000, maxBytes: 1024 })).toEqual({ code: null, stdout: '', timedOut: false })
   })
 
-  it('the real deps read the orca on PATH', async () => {
+  it("the real deps read Orca's own launcher on PATH, through a link and past another orca", async () => {
     const a = home()
-    // printf is the shell's own: PATH holds the fake alone.
-    const fake = script(`[ "$*" = 'account list --json' ] || exit 9\nprintf '%s' '${answer(engine(account(1, a)))}'`)
-    vi.stubEnv('PATH', join(fake, '..'))
-    // Never the app's own `orca`, even if the fake were not found.
-    expect(await readOrcaHomes({ ...orcaHomesDeps(), exists: () => false })).toEqual({ homes: { claude: [a], codex: [] } })
+    // Where Orca installs it: in the app on macOS, beside its binary on Linux.
+    for (const install of ['Orca.app/Contents/Resources/bin/orca', 'Orca/resources/bin/orca']) {
+      // printf is the shell's own: PATH holds the fakes alone.
+      const launcher = script(`[ "$*" = 'account list --json' ] || exit 9\nprintf '%s' '${answer(engine(account(1, a)))}'`, install)
+      const linked = join(home(), 'orca')
+      symlinkSync(launcher, linked)
+      const other = script('exit 0')
+      vi.stubEnv('PATH', [dirname(other), dirname(linked)].join(delimiter))
+      // Never the app's own `orca`, even if the fake were not found.
+      expect(await readOrcaHomes({ ...orcaHomesDeps(), exists: () => false }), install).toEqual({ homes: { claude: [a], codex: [] } })
+    }
+  })
+
+  // GNOME's screen reader is /usr/bin/orca: it ignores the arguments it does not know, and starts.
+  it("an orca on PATH that is not Orca's launcher is never run", async () => {
+    const ran = join(home(), 'ran')
+    const reader = script(`: > '${ran}'`)
+    vi.stubEnv('PATH', dirname(reader))
+    expect(await readOrcaHomes({ ...orcaHomesDeps(), exists: () => false })).toEqual({ homes: NONE, failure: 'no orca' })
+    expect(existsSync(ran)).toBe(false)
   })
 })
 
