@@ -238,18 +238,6 @@ bool max_has_card(const max_agent_t *a, uint32_t now_ms)
     return a->card && (a->state == MAX_FAILED || max_note_shown(a, now_ms));
 }
 
-int max_open_card(const int lanes[MAX_LANES], int n, uint32_t now_ms)
-{
-    int first = -1;
-    for (int i = 0; i < n; i++) {
-        const max_agent_t *a = &max_m.agents[lanes[i]];
-        if (!max_has_card(a, now_ms)) continue;
-        if (!strcmp(a->id, max_m.selected)) return i;
-        if (first < 0) first = i;
-    }
-    return first;
-}
-
 uint32_t max_card_key(const max_agent_t *a)
 {
     const max_ask_t *k = max_ask_of(a->id);

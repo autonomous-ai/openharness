@@ -93,7 +93,7 @@ typedef struct {
     int queued;                     // moves asked for while a command was out, -8..8
 } max_form_t;
 
-// ---- what the finger can hit, besides the lanes and the Talk slot ----
+// ---- what the finger can hit, besides the lanes ----
 typedef enum {
     MAX_HIT_OPTION,      // arg: the option on the card's question
     MAX_HIT_SEND,        // a multi-select's Send (or Next before the last question)
@@ -172,11 +172,9 @@ typedef struct {
     max_box_t lane_box[MAX_LANES];
     char lane_id[MAX_LANES][ID_MAX];
     int lane_hits;
-    max_box_t talk_box;
-    bool talk_hit;
     max_hit_t hits[MAX_HITS];        // the card's buttons, New, the form's choices
     int hit_count;
-    char card_id[ID_MAX];            // the agent whose card was drawn open ("" = none)
+    char card_id[ID_MAX];            // the room's agent as drawn, for its card's buttons ("" = none)
     uint32_t card_key;               // its question and step as drawn: a tap on a card that changed since does nothing
     int32_t form_revision;           // the form's page as drawn
     uint32_t drawn_key;              // max_ui_time_key at the last render
@@ -234,10 +232,8 @@ bool max_can_talk(const max_agent_t *);
 // ---- questions (max_ui_ask.c) ----
 max_ask_t *max_ask_of(const char *agent);
 void max_ask_drop(const char *agent);
-// Whether this lane opens a card: a question, a failure not yet dismissed, or an alert's summary while it shows.
+// Whether the room shows the agent's card: a question, a failure not yet dismissed, or an alert's summary while it shows.
 bool max_has_card(const max_agent_t *, uint32_t now_ms);
-// The lane on the page shown whose card is open: the selected one if it has a card, else the first that has. -1: none.
-int max_open_card(const int lanes[MAX_LANES], int n, uint32_t now_ms);
 // What a tap on the card must match (the question, its step, its phase).
 uint32_t max_card_key(const max_agent_t *);
 // How a permission prompt's option reads, by the daemon's own words for them (questionPane.ts APPROVE_RE, REJECT_RE):

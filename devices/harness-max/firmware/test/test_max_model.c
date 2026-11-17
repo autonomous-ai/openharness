@@ -1,5 +1,6 @@
 // The lanes model: what the cable's feeds do to the lanes, their order, the pages and the clock.
 #include "max_test.h"
+#include "max_ui_motion.h"
 
 static const char *const ABC[] = {"a", "b", "c"};
 static const char *const ABCDE[] = {"a", "b", "c", "d", "e"};
@@ -241,11 +242,13 @@ static void test_room_and_lanes(void)
     CHECK(max_ui_selected() == NULL && max_pages() == 0 && max_m.page == 0);
 }
 
-// The room's clock and summary are drawn too: they wake the render task and redraw, whatever page the lanes show.
+// The room's clock and summary are drawn too: they wake the render task and redraw, whatever page the lanes show. And
+// the room's pet moves: the render task wakes for its next step.
 static void test_room_clock(void)
 {
     enum { N = MAX_LANES + 2 };
     linked(XS, N);
+    roster_of(XS, N, "gemini");   // a logo for a pet: it holds still, so only the clocks wake the render task
     max_ui_focus(XS[N - 1]);
     max_m.page = 0;
     max_ui_turn(XS[N - 1], "started", "", 0, 1000);
@@ -255,6 +258,13 @@ static void test_room_clock(void)
     max_ui_summary(XS[N - 1], "Done it", NULL, false, POD_TIER_LIST, 4000);
     render(4000);
     CHECK(max_ui_next_wake_ms(4000 + MAX_DONE_MS - 10) == 10 && max_ui_tick(4000 + MAX_DONE_MS));
+    // Claude's pet at work: its next step wakes the render task, sooner than the clock's next second.
+    roster(XS, N);
+    max_ui_turn(XS[N - 1], "started", "", 0, 10000);
+    render(10000);
+    const uint32_t step = max_ui_next_wake_ms(10000);
+    CHECK(step >= POD_PH_ANIM_MS && step < 1000 && step == max_motion_ms(10000));
+    CHECK(!max_ui_tick(10000 + step - 1) && max_ui_tick(10000 + step));
 }
 
 // A tap where nothing is drawn: a person at the bar from `at`.
@@ -299,13 +309,17 @@ static void test_questions_take_the_room_oldest_first(void)
 static void test_a_person_at_the_bar_keeps_the_room(void)
 {
     linked(ABCDE, 5);
+    roster_of(ABCDE, 5, "gemini");   // pets that hold still: the clocks below are the toast's and the quiet's
     touch_at(1000);
     CHECK(max_ui_question("c", "r1", "Deploy?", NULL, 0, false, false, 2000));
     CHECK(!strcmp(max_ui_selected(), "a") && !strcmp(max_m.toast_id, "c"));
     CHECK(max_toast_shown(2000) && max_toast_shown(2000 + MAX_TOAST_MS - 1) && !max_toast_shown(2000 + MAX_TOAST_MS));
-    // The render task wakes when the toast runs out, and when the person has been away long enough.
+    // The render task wakes for the toast's bar as it runs down, when the toast runs out, and when the person has been
+    // away long enough.
     render(2000);
-    CHECK(max_ui_next_wake_ms(2000) == MAX_TOAST_MS);
+    CHECK(max_ui_next_wake_ms(2000) == max_motion_ms(2000) && max_motion_ms(2000) < MAX_TOAST_MS);
+    render(2000 + MAX_TOAST_MS - 50);
+    CHECK(max_ui_next_wake_ms(2000 + MAX_TOAST_MS - 50) == 50);
     CHECK(!max_ui_tick(2000 + MAX_TOAST_MS - 1) && max_ui_tick(2000 + MAX_TOAST_MS));
     render(2000 + MAX_TOAST_MS);
     CHECK(max_ui_next_wake_ms(2000 + MAX_TOAST_MS) == 1000 + MAX_QUIET_MS - (2000 + MAX_TOAST_MS));

@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "max_ui_internal.h"
+#include "max_ui_motion.h"
 #include "pod/pod_mem.h"   // EXT_RAM_BSS_ATTR: the agents' text is tens of KB, PSRAM on the device
 
 EXT_RAM_BSS_ATTR max_model_t max_m;
@@ -505,7 +506,7 @@ bool max_ui_update(int pct, const char *to)
 bool max_ui_tick(uint32_t now_ms)
 {
     const bool moved = settle(now_ms);   // left alone: the room goes back to the question waiting
-    return moved || max_m.dirty || max_time_key(now_ms) != max_m.drawn_key;
+    return moved || max_m.dirty || max_time_key(now_ms) != max_m.drawn_key || !max_motion_ms(now_ms);
 }
 
 uint32_t max_ui_next_wake_ms(uint32_t now_ms)
@@ -527,6 +528,8 @@ uint32_t max_ui_next_wake_ms(uint32_t now_ms)
     // The person's quiet runs out: left alone, the room may go back to a question (max_ui_tick).
     if (max_m.touched && (int32_t)(quiet_end - now_ms) > 0 && quiet_end - now_ms < ms) ms = quiet_end - now_ms;
     if (max_m.link) ms = max_form_wake(now_ms, max_ask_wake(now_ms, ms));   // a read again, a poll, a reply overdue
+    const uint32_t motion = max_motion_ms(now_ms);   // the room's pet, the toast's bar
+    if (motion < ms) ms = motion;
     return ms ? ms : 1;
 }
 

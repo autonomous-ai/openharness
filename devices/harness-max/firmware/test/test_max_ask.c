@@ -340,14 +340,6 @@ static void test_cards(void)
     max_ui_turn("a", "error", "boom", 0, 20);
     max_ui_question("a", "toolu_1", "Which?", &DB, 1, false, false, 30);
     CHECK(max_has_card(max_find("a"), 30) && !max_find("a")->card);
-    // The open card: the selected lane's, else the first with one.
-    int lanes[MAX_LANES] = {0, 1, 2};
-    max_ui_turn("b", "error", "boom", 0, 40);
-    CHECK(max_open_card(lanes, 3, 40) == 0);
-    max_ui_focus("b");
-    CHECK(max_open_card(lanes, 3, 40) == 1);
-    max_ui_focus("c");
-    CHECK(max_open_card(lanes, 3, 40) == 0);
 }
 
 int main(void)
