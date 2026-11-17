@@ -5,8 +5,8 @@
  * still open — or, for an error, announces why. Claude Code's and Codex's declare theirs as hooks
  * (engines/hooks.ts); the other engines' as Stop rules (engines/otherEngines.ts `STOP_RULES`), applied here
  * with what their worker does to their parsers (core/engines/otherStreams.ts). Once Claude Code or Codex has sent a
- * Stop, the end its transcript reads of a turn is held here for that turn's Stop
- * (docs/plans/2026-11-16-hook-driven-agent-status-plan.md, Turn rules).
+ * Stop, the end its transcript reads of a turn is held here for that turn's Stop; and their wait hooks withdraw
+ * Working while the person is waited on (docs/plans/2026-11-16-hook-driven-agent-status-plan.md, Turn rules).
  *
  * Moved verbatim out of the hook server's options in `runForeground` (the core boundary, step 9:
  * docs/design/2026-10-03-harnessd.md).
@@ -21,6 +21,8 @@ import type { LiveEvent } from '../../engines/kit/events.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { SessionNormalizers } from '../transcripts/normalizers.js'
 import type { TranscriptRead } from '../transcripts/ingest.js'
+import { correlateAgentEvent } from '../../lib/agentEvent.js'
+import { isProgressEvent, type TurnActivity } from '../../lib/turnActivity.js'
 
 // Claude's Stop hook fires when the agent finishes, but the transcript can lag a moment behind
 // (docs: "the transcript file may lag behind the in-memory conversation"). Acting immediately races
@@ -43,9 +45,15 @@ interface HookTurn {
   held?: { end: LiveEvent; identity?: string; openedAt?: number; at: number }
   /** Stops waiting for that end, each at most the grace. */
   awaiting: Array<(held: boolean) => void>
-  /** When its latest end hook reached the daemon: an engine still sending them has not lost the Stop. */
+  /** When its latest end or wait hook reached the daemon: an engine still sending them has not lost the Stop. */
   hookAt: number
+  /** When the hook of the wait on the person ran, while it is open (R4). */
+  waitAt?: number
 }
+
+/** A turn's end, or the lead's own progress: a subagent's tool, or its end, is not the lead writing on (R4). */
+const leadsOn = (event: LiveEvent): boolean => event.type === 'turn_ended'
+  || (isProgressEvent(event.type) && event.type !== 'subagent_finished' && !(event.payload as { parentToolUseId?: string }).parentToolUseId)
 
 export interface TurnHookDeps {
   holdStop?: (session: RegisteredSession, force?: boolean) => boolean
@@ -61,12 +69,19 @@ export interface TurnHookDeps {
   armAgyIdleWatch: (sessionId: string) => void
   clearAgyIdleWatch: (sessionId: string) => void
   mirror: Pick<TurnRecaps, 'noteEngineStopped'>
+  /** A wait withdraws the Working claim, and every window is told, as a cancel tells it (core/turns/cancel.ts). */
+  turnActivity: Pick<TurnActivity, 'withdraw' | 'snapshot'>
+  /** The app. */
+  clients: { send(frame: ReturnType<typeof correlateAgentEvent>): void }
+  agentIdFor: (sessionId: string) => string
+  /** QuestionWatcher.awaitDialog: no pane is read at the hook. */
+  awaitDialog: (sessionId: string) => void
   log?: (line: string) => void
 }
 
 export function createTurnHooks({
   resolve, normalizers, others, emit, drain, announceTurnAborted, armAgyIdleWatch, clearAgyIdleWatch, mirror, holdStop, afterStop,
-  log = (line) => console.log(line),
+  turnActivity, clients, agentIdFor, awaitDialog, log = (line) => console.log(line),
 }: TurnHookDeps) {
   const { liveParsers } = normalizers
   // Command Code's PreToolUse — the one live "a turn is running" signal this engine has. Without it the
@@ -108,6 +123,9 @@ export function createTurnHooks({
   /** Every transcript read of a session, on its way to the funnel (R1): a turn's end waits for its Stop. */
   const transcript = (sessionId: string, events: LiveEvent[], read: TranscriptRead = {}): void => {
     const turn = turns.get(sessionId)
+    // The person is waited on until the lead writes on after the wait's hook ran (R4): the waited tool's own start,
+    // written before it, is often read after it.
+    if (turn?.waitAt !== undefined && read.at !== undefined && read.at > turn.waitAt && events.some(leadsOn)) turn.waitAt = undefined
     if (read.replay) {
       // The transcript was read again: what it says of its turns is the latest word.
       if (turn?.held && events.some(event => event.type === 'turn_started' || event.type === 'turn_ended')) turn.held = undefined
@@ -124,10 +142,11 @@ export function createTurnHooks({
     }
     if (out.length) emit(sessionId, out)
   }
-  /** Its turns end by hook, none is open and none is held: progress read now claims no work (lib/turnActivity.ts). */
+  /** The person is waited on, or its turns end by hook and none is open or held: progress read now claims no work
+   *  (lib/turnActivity.ts). */
   const withheld = (sessionId: string): boolean => {
     const turn = turns.get(sessionId)
-    return !!turn?.endsByHook && !turn.held && !liveParsers.get(sessionId)?.turnOpen
+    return !!turn && (turn.waitAt !== undefined || (turn.endsByHook && !turn.held && !liveParsers.get(sessionId)?.turnOpen))
   }
   const hookTurns: HookTurnContext = {
     turnState: (sessionId) => {
@@ -244,6 +263,22 @@ export function createTurnHooks({
       console.error(`[hooks] ${session.engine} stop hook failed:`, err instanceof Error ? err.message : err)
     })
   }
+  /**
+   * The engine waits on the person: a permission, a question (R4), in any turn, its first too. It draws its dialog
+   * after this hook returns, so no pane is read here: the watcher reads it at its next poll. One dialog can post twice
+   * (Claude Code's PreToolUse, then its PermissionRequest): the same wait, open from the later.
+   */
+  const onWait = ({ sessionId, firedAt }: { sessionId: string; firedAt?: number }): void => {
+    const turn = record(sessionId)
+    turn.hookAt = Date.now()
+    // One run before the latest prompt hook is about an earlier turn.
+    if (firedAt !== undefined && (turn.promptAt ?? 0) > firedAt) return
+    turn.waitAt = firedAt ?? turn.hookAt
+    turnActivity.withdraw(sessionId)
+    const activity = turnActivity.snapshot(sessionId)
+    if (activity) clients.send(correlateAgentEvent({ type: 'agent_activity', payload: { activity } }, sessionId, agentIdFor(sessionId)))
+    awaitDialog(sessionId)
+  }
   /** The open turn's heartbeat: an end held with no hook since for HOOK_SILENCE_MS lost its Stop, and goes on (R6). */
   const beat = (sessionId: string): void => {
     const turn = turns.get(sessionId)
@@ -252,11 +287,16 @@ export function createTurnHooks({
     deliver(sessionId)
   }
   return {
-    onTurnStart, onToolStart, onTurnStop, onPromptHook, transcript, withheld, beat,
+    onTurnStart, onToolStart, onTurnStop, onPromptHook, transcript, withheld, beat, onWait,
     /** The turn's own end is read and held for its Stop: the turn is still open (R7). */
     held: (sessionId: string): boolean => !!turns.get(sessionId)?.held,
-    /** The turn was closed without its end (a cancel): what is held goes, unsent. */
-    closed: (sessionId: string): void => { const turn = turns.get(sessionId); if (turn) turn.held = undefined },
+    /** The turn was closed without its end (a cancel): what is held goes, unsent, and its wait ends. */
+    closed: (sessionId: string): void => {
+      const turn = turns.get(sessionId)
+      if (turn) { turn.held = undefined; turn.waitAt = undefined }
+    },
+    /** The watcher: a question closed, or the pane read clear (R4). */
+    waitOver: (sessionId: string): void => { const turn = turns.get(sessionId); if (turn) turn.waitAt = undefined },
     forget: (sessionId: string): void => { turns.delete(sessionId) },
   }
 }

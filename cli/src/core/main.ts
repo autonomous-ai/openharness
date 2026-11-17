@@ -1510,6 +1510,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     someoneCanAnswer,
     followedByTool: (agentId) => backend.followedByTool(agentId),
     deviceInput,
+    waitOver: (sessionId) => turnHooksRef?.waitOver(sessionId),
   })
   const questions = asking.questions
   // Cloud harnesses (core/agents/cloud.ts): listed with the rest; their questions shown as the panes' are, and
@@ -2240,6 +2241,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     armAgyIdleWatch,
     clearAgyIdleWatch,
     mirror,
+    turnActivity,
+    clients: backend,
+    agentIdFor,
+    awaitDialog: (sessionId) => questionWatcher.awaitDialog(sessionId),
   })
   turnHooksRef = turnHooks
   // Which agent a hook belongs to, and what a SessionEnd means (core/engines/hooks.ts).
@@ -2279,6 +2284,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onTurnStart: turnHooks.onTurnStart,
     onToolStart: turnHooks.onToolStart,
     onTurnStop: turnHooks.onTurnStop,
+    onWait: turnHooks.onWait,
     // A paneless agent's event goes on to the devices process and stays nowhere in the core; no devices, no forward.
     onObserved: observedHook.onObserved,
     onInbox: deviceHookCalls.onInbox,
