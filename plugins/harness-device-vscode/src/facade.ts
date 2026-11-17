@@ -1,5 +1,6 @@
 // The window made from VS Code's API: each terminal's shell pid, kept so state() answers at once, and read again at each
-// terminal event, since VS Code relaunches a shell in the same Terminal with a new pid.
+// terminal event and focus change, since VS Code relaunches a shell in the same Terminal with a new pid (and 1.75 may
+// fire no terminal event for it).
 import type { ApiTerminal, Disposable, VscodeApi } from './vscodeApi'
 import { windowState, type WindowFacade } from './window'
 
@@ -41,7 +42,10 @@ export function windowFacade(api: VscodeApi): WindowFacade & Disposable {
       readAll()
     }),
     api.window.onDidChangeTerminalState(readAll),
-    api.window.onDidChangeWindowState(tell),
+    api.window.onDidChangeWindowState(() => {
+      tell()
+      readAll()
+    }),
   ]
 
   return {
