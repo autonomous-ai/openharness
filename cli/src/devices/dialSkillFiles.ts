@@ -3,7 +3,8 @@
 // command, and the devices service leaves what it removed alone. dial-setup.json is the devices service's own record of
 // a dial's setup: a dial attached here once, the CLI version that last set Claude Code's plugin up, and the skills
 // folders it wrote into; its one writer is that service. A `disable` finds every folder in both.
-import { closeSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { closeSync, fsyncSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 export type DialEngine = 'claude' | 'codex'
@@ -16,7 +17,8 @@ export const MAX_HOMES = 64
 export const SETUP_COUNTS = ['set up', 'updated', 'failed', 'left removed'] as const
 export type SetupCount = typeof SETUP_COUNTS[number]
 
-/** Two full lists of the longest paths, with room for JSON's quotes and escapes: each file holds two lists. */
+/** Two full lists of the longest paths, with room for JSON's quotes: each file holds two lists. Paths whose characters
+ *  JSON escapes can outgrow it, and such a file is not written. */
 const MAX_FILE_BYTES = 256 * 1024
 const MAX_PATH_BYTES = 1024
 const CONTROL = /\p{Cc}/u
@@ -75,11 +77,20 @@ const orUnread = <T extends object>(read: () => T, empty: T): Read<T> => {
   }
 }
 
-/** Written whole and renamed into place, so a reader never sees half a file. */
+/** Written whole and on disk before it is renamed into place, so a reader, or a crash, never sees half a file. One a
+ *  read would drop as too long is not written: EFBIG. */
 const writeJson = (file: string, value: unknown): string | undefined => {
-  const temporary = `${file}.${process.pid}.tmp`
+  const text = `${JSON.stringify(value)}\n`
+  if (Buffer.byteLength(text) > MAX_FILE_BYTES) return 'EFBIG'
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
   try {
-    writeFileSync(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600 })
+    const fd = openSync(temporary, 'wx', 0o600)
+    try {
+      writeFileSync(fd, text)
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
     renameSync(temporary, file)
     return undefined
   } catch (error) {
@@ -174,7 +185,9 @@ export function readSetup(dataDir: string): Read<DialSetupRecord> {
   return orUnread(() => setupOf(readJson(join(dataDir, DIAL_SETUP_FILE), MAX_FILE_BYTES)), setupOf(undefined))
 }
 
-/** undefined once saved; else the error's code. */
+/** undefined once saved; else the error's code: EINVAL for a plugin value a read would drop, so the plugin would read
+ *  as never set up. */
 export function writeSetup(dataDir: string, record: DialSetupRecord): string | undefined {
+  if (record.plugin !== undefined && !VERSION.test(record.plugin)) return 'EINVAL'
   return writeJson(join(dataDir, DIAL_SETUP_FILE), setupOf(record))
 }
