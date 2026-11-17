@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { REFUSED, type ListenerStream, type StreamEnd } from '../../services/devicesListener.js'
+import { PS_MAX_BYTES, PS_TIMEOUT_MS, type Exec } from './scannedApp.js'
 import {
-  CHAIN_RETRY_MS, VSCODE_OPEN_MAX_BYTES, VSCODE_OPEN_PER_SECOND, VSCODE_SCROLL_MAX, VSCODE_STATE_MAX_BYTES,
+  CHAIN_RETRY_MS, readProcessParents, VSCODE_OPEN_MAX_BYTES, VSCODE_OPEN_PER_SECOND, VSCODE_SCROLL_MAX, VSCODE_STATE_MAX_BYTES,
   VSCODE_STATE_PER_SECOND, VSCODE_TERMINALS, VSCODE_WINDOWS, vscodeStreams, type VscodeTerminalsDeps,
 } from './vscodeTerminals.js'
 
@@ -525,5 +526,23 @@ describe('VS Code\'s windows', () => {
       '[devices] vscode stream · ended · gone · windows 0',
     ])
     for (const line of h.logged) expect(line).not.toMatch(/900|910|700|710|5f3a|process table/)
+  })
+})
+
+describe('the process table the match reads', () => {
+  it('is each process\'s pid and parent alone, from one ps read within its bounds', async () => {
+    const exec = vi.fn<Exec>(async () => '  600     1\n  700   600\nnot a row\n')
+    expect(await readProcessParents(exec)).toEqual([{ pid: 600, ppid: 1 }, { pid: 700, ppid: 600 }])
+    expect(exec.mock.calls).toEqual([['ps', ['-axo', 'pid=,ppid='], { timeout: PS_TIMEOUT_MS, maxBuffer: PS_MAX_BYTES }]])
+  })
+
+  it('a ps that failed or listed nobody is an error that says nothing of what it printed', async () => {
+    for (const out of [null, '', 'SECRET-TOKEN rotate the key\n']) {
+      expect(await readProcessParents(async () => out).catch((e: unknown) => e)).toEqual(new Error('process table not read'))
+    }
+  })
+
+  it.skipIf(process.platform === 'win32')('this machine\'s holds this process under its parent', async () => {
+    expect(await readProcessParents()).toContainEqual({ pid: process.pid, ppid: process.ppid })
   })
 })
