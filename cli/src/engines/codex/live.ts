@@ -10,16 +10,19 @@ export const live: EngineLive = {
     const normalizer = new CodexNormalizer('live', codexSubagentResolverFor(session.codexHome))
     const generation = randomUUID()
     let turn = 0
+    let openedAt: number | undefined
     return {
       engine: session.engine,
       get turnOpen() { return normalizer.turnOpen },
       ingest(line) {
         const events = normalizer.ingest(line)
-        for (const event of events) if (event.type === 'turn_started') turn++
+        const at = normalizer.at
+        for (const event of events) if (event.type === 'turn_started') { turn++; openedAt = at }
         const failure = codexTaskError(line)
-        return { events, ...(failure === null ? {} : { failure }) }
+        return { events, ...(failure === null ? {} : { failure }), ...(at === undefined ? {} : { at }) }
       },
-      snapshot: () => ({ identity: `${generation}:${turn}`, turnOpen: normalizer.turnOpen, continued: false }),
+      snapshot: () => ({ identity: `${generation}:${turn}`, turnOpen: normalizer.turnOpen, continued: false,
+        ...(openedAt === undefined ? {} : { openedAt }) }),
       closeTurn: () => { normalizer.closeTurn() },
       windowStart: (offset) => { normalizer.thinkingPrefix = `thinking-codex-${offset.toString(36)}-` },
     }

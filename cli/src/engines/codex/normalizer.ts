@@ -301,6 +301,8 @@ export class CodexNormalizer implements EngineNormalizer {
   private compactJustEmitted = false
   /** Objective of the active `/goal`, so its re-injection each turn isn't read as a new submission. */
   private goalObjective: string | null = null
+  /** When Codex wrote the last record read (its own `timestamp`), epoch ms; undefined when it says none. */
+  at: number | undefined
 
   constructor(
     private readonly mode: 'live' | 'replay',
@@ -313,6 +315,8 @@ export class CodexNormalizer implements EngineNormalizer {
 
   ingest(line: string): LiveEvent[] {
     const raw = parse(line)
+    const at = typeof raw?.timestamp === 'string' ? Date.parse(raw.timestamp) : NaN
+    this.at = Number.isSafeInteger(at) ? at : undefined
     if (!raw) return []
     const topType = string(raw.type)
     const item = payload(raw)

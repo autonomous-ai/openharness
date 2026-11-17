@@ -17,6 +17,10 @@ export interface LiveRead {
   events: LiveEvent[]
   /** Announced before this record's events, which may include its turn end. */
   failure?: string
+  /** When the engine wrote this record (its own `timestamp`), epoch ms. Absent when it says none. */
+  at?: number
+  /** This record is the engine's own word that its turn is over, and no Stop follows it (Claude Code's `turn_duration`). */
+  over?: true
 }
 
 /** Core's observation and explicit closure authority; the implementation may live in a worker. */
