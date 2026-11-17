@@ -2448,3 +2448,25 @@ missing current row. The new cancellation assertion was corrected to the existin
 `AGENT_CHANGED` contract; its first mismatched-detail failure is retained. TypeScript passes.
 These are scoped results across successive source fixes, not a single passing four-file run.
 The real guest parity test and final Resume coverage/native acceptance remain unrun here.
+
+## Process reconciliation before hook admission (2026-11-17 Design)
+
+The combined native engine run exposed six Cursor admission failures: a create can confirm its
+process while the hook-triggered reconciliation prepares an observation, so the Registry owner
+guard correctly refuses that stale observation. The rejection escaped process resolution before
+the bounded admission queue owned the request and became HTTP 500. A separate single diagnostic
+did not reproduce the race; it does not supersede those failures.
+
+Treat only `RegistryOwnershipChanged` from the hinted reconciliation as an overdue observation.
+Continue the existing current-process matcher and bounded record/pane-commit wait, using the
+arrival-time ancestry already captured. Unknown errors still propagate. Do not weaken the owner
+guard, adopt the rejected observation, or grant the hook a binding from its old snapshot. The
+existing `onWait` reply remains a live hold while daemon resolution continues; returning 202 and
+dropping resolution would lose Cursor deliveries because that client does not retry the same hook.
+No new queue, retry policy, state, disk format, migration, account authority or capacity is added.
+The shared TypeScript change affects all platforms; native acceptance here is macOS only.
+
+Tests first inject the actual typed guard refusal into the resolver and assert fresh matching,
+waiting for pane publication, and refusal after removal; an unrelated error still rejects. Then
+run the complete resolver file with its per-file coverage and the affected native Cursor cases
+on the corrected combined source. Earlier native failures remain recorded until that proof.
