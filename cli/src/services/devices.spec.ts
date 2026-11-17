@@ -356,9 +356,9 @@ function fakeOrcaHomes(homes: OrcaHomes = { claude: [], codex: [] }) {
   return fake
 }
 
-/** The process table VS Code's windows match their agents by (services/devices.ts processNames): the spec's own, empty
+/** The process table VS Code's windows match their agents by (services/devices.ts processParents): the spec's own, empty
  *  unless a spec sets it, and each read counted, so no spec reads this machine's processes. */
-const processTable = { rows: [] as Array<{ pid: number; ppid: number; executable: string }>, reads: 0 }
+const processTable = { rows: [] as Array<{ pid: number; ppid: number }>, reads: 0 }
 
 /** VS Code and Harness's extension as the devices see them (services/devices.ts vscodeExtension): the spec's own, absent
  *  unless the spec names the version [installed], each `code` run kept, so no spec runs the developer's VS Code or reads
@@ -453,7 +453,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     orcaHomes: over.orcaHomes === null ? undefined : orcaHomes.cache(),
     // A VS Code that is absent unless the spec gives its own: no spec runs the developer's. null leaves it out.
     vscodeExtension: over.vscodeExtension === null ? undefined : over.vscodeExtension ?? fakeVscode().deps,
-    processNames: async () => {
+    processParents: async () => {
       processTable.reads++
       return processTable.rows
     },
@@ -3340,7 +3340,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   const WINDOW_ID = 'window-1'
   /** The shell VS Code started for the terminal: the hook's caller, 4242, runs under it. */
   const SHELL = 4000
-  const TERMINAL_TREE = [{ pid: 4242, ppid: SHELL, executable: 'claude' }, { pid: SHELL, ppid: 1, executable: 'zsh' }]
+  const TERMINAL_TREE = [{ pid: 4242, ppid: SHELL }, { pid: SHELL, ppid: 1 }]
   /** Claude Code in a VS Code terminal, its dial on the cable once the listener opened; on macOS its hook carries VS Code's
    *  bundle id too. */
   const inVscodeTerminal = async (over: Parameters<typeof start>[0] = {}) => {

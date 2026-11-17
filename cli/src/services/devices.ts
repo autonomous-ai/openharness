@@ -51,14 +51,14 @@ import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { createOrcaAdapter, createOrcaReads, orcaDeps, type OrcaFocusWatch, type OrcaReadDeps, type OrcaReads, type OrcaTerminal } from '../cable/hosts/orca.js'
 import { readRecordName } from '../cable/hosts/recordName.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
-import { learnApps, readProcessNames, type ProcessName } from '../cable/hosts/scannedApp.js'
+import { learnApps, readProcessNames } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
 import { createTmuxAdapter } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
-import { vscodeStreams, type VscodeTerminal } from '../cable/hosts/vscodeTerminals.js'
+import { readProcessParents, vscodeStreams, type VscodeTerminal, type VscodeTerminalsDeps } from '../cable/hosts/vscodeTerminals.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
 import { createEngineTally } from '../cable/engineTally.js'
 import { startVscodeExtensionUpdate } from '../cable/vscodeExtensionUpdate.js'
@@ -148,7 +148,7 @@ export interface DevicesDeps {
   tty?: (pid: number) => Promise<string | undefined>
   /** For this service's tests: the process table VS Code's terminals are matched by; `ps` by default
    *  (cable/hosts/vscodeTerminals.ts). */
-  processNames?: () => Promise<readonly ProcessName[]>
+  processParents?: VscodeTerminalsDeps['processes']
   /** For this service's tests: how Claude Code is found for a Claude Code home; the daemon's own lookup by default
    *  (devices/claudePlugin.ts claudeFound). */
   claude?: (home: string, shell: boolean) => Promise<ClaudeRun | null>
@@ -384,7 +384,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // (docs/plans/2026-11-17-dial-vscode-extension-design.md). An adapter's capabilities are read at each look, so a
   // terminal found or lost tells the dials to look again.
   const vscode = vscodeStreams({
-    processes: deps.processNames ?? readProcessNames,
+    processes: deps.processParents ?? readProcessParents,
     changed: () => part.call('dial', () => cable.syncAgents()),
     now: monotonic,
     after: timerIn('vscode'),

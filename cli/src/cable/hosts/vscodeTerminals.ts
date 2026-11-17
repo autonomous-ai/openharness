@@ -6,12 +6,14 @@
  *
  * The match is the process tree: an agent runs under the shell VS Code started for its terminal, or is that terminal's
  * own process, so the window that lists a pid of its chain holds it. A process's name is outside text (a process can
- * write a prompt there) and its environment holds secrets (cli/AGENTS.md rule 4), so neither is read: one `ps` table
- * gives pids and parents. A running pid's parents never change, so an agent's chain is read once and kept until it
- * leaves, and one read serves every agent that needs one.
+ * write a prompt there) and its environment holds secrets (cli/AGENTS.md rule 4), so neither is read: one
+ * `ps -axo pid=,ppid=` table gives pids and parents alone. A running pid's parents never change, so an agent's chain is
+ * read once and kept until it leaves, and one read serves every agent that needs one.
  */
+import { execFile } from 'node:child_process'
+import { patientExec } from '../../lib/patientExec.js'
 import { REFUSED, type ListenerHandler, type ListenerStream, type ListenerStreamHandler } from '../../services/devicesListener.js'
-import { parentChain, type ProcessName } from './scannedApp.js'
+import { parentChain, PS_MAX_BYTES, PS_TIMEOUT_MS, type Exec, type ProcessName } from './scannedApp.js'
 
 export const VSCODE_WINDOWS = 8
 export const VSCODE_TERMINALS = 32
@@ -31,6 +33,28 @@ export const CHAIN_RETRY_MS = 5_000
 const WINDOW_ID = /^[A-Za-z0-9-]{8,36}$/
 const PID_MAX = 2 ** 31 - 1
 const MINUTE_MS = 60_000
+const PARENT_ROW = /^\s*(\d+)\s+(\d+)\s*$/
+
+type ProcessParent = Pick<ProcessName, 'pid' | 'ppid'>
+
+// A held event loop must not turn the timeout into an empty table (patientExec.ts).
+const patient = patientExec(execFile)
+const execText: Exec = (command, args, options) => new Promise((resolve) => {
+  patient(command, args, options, (error, stdout) => resolve(error ? null : stdout))
+})
+
+/** Each process's pid and parent, from one `ps -axo pid=,ppid=` read; rejects when `ps` could not be read. */
+export async function readProcessParents(exec: Exec = execText): Promise<ProcessParent[]> {
+  const out = await exec('ps', ['-axo', 'pid=,ppid='], { timeout: PS_TIMEOUT_MS, maxBuffer: PS_MAX_BYTES })
+  const rows: ProcessParent[] = []
+  for (const line of (out ?? '').split('\n')) {
+    const row = PARENT_ROW.exec(line)
+    if (row) rows.push({ pid: Number(row[1]), ppid: Number(row[2]) })
+  }
+  // `ps` lists itself at the least: no row is a read that failed. The error names nothing it printed.
+  if (!rows.length) throw new Error('process table not read')
+  return rows
+}
 
 /** A terminal of an open window: the window's id and its shell's pid. */
 export interface VscodeTerminal { window: string; shell: number }
@@ -50,7 +74,7 @@ export interface VscodeTerminals {
 
 export interface VscodeTerminalsDeps {
   /** One read of every process's pid and parent; rejects when `ps` could not be read. */
-  processes(): Promise<readonly Pick<ProcessName, 'pid' | 'ppid'>[]>
+  processes(): Promise<readonly ProcessParent[]>
   /** Which agents have a terminal changed. */
   changed(): void
   /** Monotonic milliseconds. */
@@ -154,7 +178,7 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
   const read = async (asked: ReadonlySet<number>, start: number): Promise<void> => {
     reading = true
     count('reads')
-    let table: Map<number, Pick<ProcessName, 'pid' | 'ppid'>> | undefined
+    let table: Map<number, ProcessParent> | undefined
     try {
       table = new Map((await deps.processes()).map((row) => [row.pid, row]))
     } catch {
