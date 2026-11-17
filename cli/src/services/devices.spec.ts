@@ -5660,7 +5660,7 @@ describe('cmux\'s agents, from cmux\'s own stores (docs/plans/2026-11-17-dial-cm
    * The devices with a cmux the test drives, installed, with its stores' folder there, the dial not attached yet. Each call
    * of its client is recorded; `sessions` answers the records of that word (all, with none), `mode` the mode, and the
    * prompt is idle and empty. `live` attaches the dial and lets the first list land; `changed` is the latest watch telling
-   * a change of that file, and its run landing.
+   * a change of that file, and its run landing: one agent's runs start at least 250 ms apart.
    */
   const withCmux = (over: Parameters<typeof start>[0] = {}) => {
     const fake = { found: true, records: [record()], mode: 'cmuxOnly' as string | undefined, calls: [] as unknown[][] }
@@ -5684,7 +5684,7 @@ describe('cmux\'s agents, from cmux\'s own stores (docs/plans/2026-11-17-dial-cm
     }
     const changed = async (file?: string) => {
       ;(storesWatched().at(-1)![1] as (file?: string) => void)(file)
-      await flush()
+      await vi.advanceTimersByTimeAsync(250)
     }
     return { ...started, fake, live, changed }
   }

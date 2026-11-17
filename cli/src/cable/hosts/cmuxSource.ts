@@ -5,7 +5,7 @@
  * it works whatever cmux's socket mode is.
  *
  * A working agent's hooks write its store several times a second, so each agent has one run at a time, and the changes
- * during it give one more after it: one cmux process after another, never a pile.
+ * during it give one more after it, at least 250 ms after its start: one cmux process after another, never a pile.
  *
  * Every listable agent is kept (1,024 at most) and the first 64 are listed, so when one leaves the next is listed with
  * no new run. Those past either bound, and a run's records past the 1,024 it reads, are counted in one over line.
@@ -25,6 +25,8 @@ import type { Caps, HostAgent, HostAgentState, HostSource, PaneSwitch, SendResul
 const MAX_KEPT = 1024
 /** cmux processes at a time: cmux v0.65.2.2 tracks 20 agents, each with a store of its own. */
 const MAX_RUNS = 32
+/** The least time between the starts of two runs of one agent (PM, final review). */
+const GAP_MS = 250
 const STATES: Record<CmuxLifecycle, HostAgentState> = { running: 'working', needsInput: 'needs-you', idle: 'idle', unknown: 'idle' }
 
 export interface CmuxSourceDeps {
@@ -36,6 +38,8 @@ export interface CmuxSourceDeps {
   folder(): boolean
   /** Whether that process is alive, asked of the OS alone. */
   alive(pid: number): boolean
+  /** A timer; its cancel is returned. */
+  after(ms: number, run: () => void): () => void
   /** The dial's words: the cmux adapter's prompt (cmuxApp.ts). `pane` is `<workspace>/<surface>`. */
   prompt(pane: string, kind: string, text: string): Promise<CmuxPrompt>
   /** A tap on that agent at that pane, as the devices route it. */
@@ -56,8 +60,12 @@ interface Row {
   agent: HostAgent
 }
 
-/** A run under way, and whether a change came during it. */
+/** One agent's last run: whether it is under way, whether 250 ms have not passed since it started (and that timer's
+ *  cancel), and whether a change came since it started. */
 interface Run {
+  under: boolean
+  gap: boolean
+  cancel: () => void
   again: boolean
 }
 
@@ -76,14 +84,14 @@ export class CmuxSource implements HostSource {
   /** Each agent's records by cmux's word, and the records each run's word (none: all) read past the 1,024. */
   private readonly records = new Map<string, Kept>()
   private readonly cut = new Map<string | undefined, number>()
-  /** This start's runs under way, by word (none: all); and the cmux processes under way, any start's. */
+  /** This start's last run of each word (none: all), until it ended and its 250 ms passed: a run that ends with its word
+   *  holding another belongs to a start before; and the cmux processes under way, any start's. */
   private readonly runs = new Map<string | undefined, Run>()
   private active = 0
   /** A change found every run taken: one all-agents run when one ends, which reads that agent too. */
   private waiting = false
-  /** The count of runs started, which orders their answers; and the start a run belongs to. */
+  /** The count of runs started, which orders their answers. */
   private order = 0
-  private epoch = 0
   private running = false
   private unwatch: (() => void) | undefined
   /** Whether the stores' folder was there, as last said: kept across a detach, so a dial plugged in again says nothing. */
@@ -229,7 +237,7 @@ export class CmuxSource implements HostSource {
 
   /** Drops every run under way, every record and every row: a run that answers after is not taken. */
   private forget(): void {
-    this.epoch++
+    for (const run of this.runs.values()) run.cancel()
     this.runs.clear()
     this.waiting = false
     this.records.clear()
@@ -243,37 +251,47 @@ export class CmuxSource implements HostSource {
     this.emit()
   }
 
-  /** One run of that agent's records (none: every agent's), or one more after the one under way. */
+  /** One run of that agent's records (none: every agent's), or one more once the last has ended and its 250 ms passed. */
   private read(word: string | undefined): void {
     if (word === undefined) this.waiting = false
-    const under = this.runs.get(word)
-    if (under) {
-      under.again = true
+    const last = this.runs.get(word)
+    if (last) {
+      last.again = true
       return
     }
     if (this.active >= MAX_RUNS) {
       this.waiting = true
       return
     }
-    const run: Run = { again: false }
+    const run: Run = { under: true, gap: true, cancel: () => {}, again: false }
     this.runs.set(word, run)
+    run.cancel = this.deps.after(GAP_MS, () => {
+      run.gap = false
+      this.next(word, run)
+    })
     this.active++
-    const { epoch } = this
     const order = ++this.order
     const began = this.deps.monotonic()
     void this.deps.client.sessions(word)
       .catch((): CmuxSessions => ({ ok: false, fault: 'failed' }))
-      .then((answer) => this.ended(word, run, epoch, order, began, answer))
+      .then((answer) => this.ended(word, run, order, began, answer))
   }
 
-  private ended(word: string | undefined, run: Run, epoch: number, order: number, began: number, answer: CmuxSessions): void {
+  private ended(word: string | undefined, run: Run, order: number, began: number, answer: CmuxSessions): void {
     this.active--
-    if (epoch === this.epoch) {
-      this.runs.delete(word)
+    run.under = false
+    if (this.runs.get(word) === run) {
       this.answered(word, order, this.deps.monotonic() - began, answer)
-      if (run.again) this.read(word)
+      this.next(word, run)
     }
     if (this.waiting) this.read(undefined)
+  }
+
+  /** A word's run that ended, 250 ms after it started, frees its word: a change since it started reads it again. */
+  private next(word: string | undefined, run: Run): void {
+    if (run.under || run.gap || this.runs.get(word) !== run) return
+    this.runs.delete(word)
+    if (run.again) this.read(word)
   }
 
   /** A run with no answer keeps the rows, and says so once until a run of that word answers. */

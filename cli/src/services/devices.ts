@@ -518,6 +518,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     watch: (changed) => watchSocket({ socketPath: join(cmuxStoreDir(cmuxAt.home), 'stores'), home: cmuxAt.home }, changed),
     folder: () => existsSync(cmuxStoreDir(cmuxAt.home)),
     alive: pidAlive,
+    after: timerIn('cmux'),
     prompt: cmuxApp.prompt,
     // Through the opener, as a hooked agent's tap: one bring runs at a time, and a pick waiting is dropped. Noted before
     // it, as the observed source's tap is.
