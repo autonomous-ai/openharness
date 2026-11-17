@@ -264,17 +264,23 @@ hostname), where his first one had been "Diego's Mac". The Desktop kept its tab 
 "Harness is offline". A new machine is made because the computer id is a random file in `~/.harness`
 (`lib/computerIdentity.ts`), which went with the folder. That stays as designed.
 
-The backend uses a machine's `label` only when it creates the machine (`MachineService.resolveOrCreateForComputer`,
-from `/api/machines/resolve-computer` and the adapter-ws upgrade). An existing machine keeps its name, so the change
-reaches new machines only, and the backend does not change.
+The backend uses the `label` of `/api/machines/resolve-computer` only when it creates the machine
+(`MachineService.resolveOrCreateForComputer`). An existing machine keeps its name, so the change reaches new machines
+only, and the backend does not change. The adapter-ws upgrade's `?label=` is different: the backend writes it to
+`Machine.hostname` on every connect (`backend/src/lib/adapterWs.ts`), and Desktop, mobile and grid read that field as the
+computer's hostname. It keeps sending `hostname()` (final review, 2026-11-17). Every login resolves the machine through
+`resolve-computer` before the daemon connects, so a new machine is named there. `/api/device-ws?label=` names a new
+device binding once and never renames it (`DeviceService.resolveOrCreateForComputer`), so it is a new machine's label too.
 
 A new module `cli/src/lib/computerName.ts` exports `computerName()`. On macOS it runs `scutil --get ComputerName` once
-per process (a 2 s deadline, trimmed, cut to 80 characters, with no control characters), and caches the answer. Empty,
-failed, or another platform: `os.hostname()`. The four places that send a new machine's label use it:
+per process (a 5 s deadline, as `tmuxOnPath.ts` learned 2 s is too short on a loaded Mac; trimmed, with no control
+characters, cut once to at most 80 UTF-16 units without splitting a pair), and caches the answer. Empty, failed, or
+another platform: `os.hostname()`, cut the same way. Callers do not cut it again. The four places that send a new
+machine's or device's label use it:
 - `cli.ts` `resolveComputerMachine` (`label` of `resolve-computer`);
 - `cli.ts` `qrSignInCommand` (`label`);
 - `lib/authRefresh.ts` `harnessSessionRequest` (`label`);
-- `gateway/upstream.ts`, the adapter-ws `?label=`.
+- `device/deviceLink.ts`, the device-ws `?label=` (in the devices process).
 
 None of these files is in the core's process (`src/architecture.coreFiles.txt`). The core's own uses of `hostname()`
 (`thisDeviceLabel`, the terminal hint's fallback) are display only, and they stay. `computerName.ts` must not be
@@ -282,7 +288,7 @@ imported by any core-loaded file. `architecture.spec.ts` keeps the list as it is
 
 Tests (red first): `computerName.spec.ts` (an answer is used and cached: a fake runner is called once for two calls; an
 empty answer, a failure, a timeout and a non-macOS platform give the hostname; control characters are stripped and
-the cut is at 80), and one test per caller that its label is `computerName()`'s (a fake), never `hostname()` when they
+the cut is at 80 units, never inside a pair), `upstream.spec.ts` (the adapter-ws label is the hostname), and one test per caller that its label is `computerName()`'s (a fake), never `hostname()` when they
 differ.
 
 ## Follow-ups (not this branch)

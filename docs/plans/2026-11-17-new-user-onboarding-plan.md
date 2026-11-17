@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use devcrew phase 3 to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** updated 2026-11-17 to the spec as revised after #4399 (commit `6af858e2ac`, decisions 1 to 9). Tasks 1, 2, 3, 5 (narrowed), 6, 7, 9, 10, 11, 12, 14, 15 and 16 are done on the branch. Tasks 4 and 13 are dropped. What is left: Task 8 (narrowed) and Tasks 13a to 13e (spec decision 9, "C. The plugin"). Two open questions are at the end ([Open questions](#open-questions)). Tasks 13b and 13d follow answer (a) of question 1 until it is answered.
+**Status:** every task is done on the branch (2026-11-17), and the final review's fixes are landing. Spec decisions 1 to 10 hold; the open questions were answered by decision 10, and the final review corrected section D (the adapter-ws label stays the hostname; the device-ws label is a new device's name).
 
 **Goal:** A brand-new user who installs Harness Device on a Mac sees what the install is doing, gets tmux with no Homebrew run, sees the Claude Code sessions Orca runs under its own accounts on the dial, with their waiting prompts, has an app log of step lines and results only, and gets a new machine named as the Mac is in System Settings.
 
@@ -48,10 +48,10 @@
 
 | PR | Branch at PR time | Tasks | Files |
 |---|---|---|---|
-| A. Installer | `fix/new-user-onboarding-installer` | 1, 2, 3 | `cli/scripts/install.sh`, `cli/src/scripts/install.spec.ts`, `desktop/lib/`, `desktop/test/`, `desktop/CLAUDE.md`, `desktop/RELEASE.md`, and the spec and this plan |
+| A. Installer | `fix/new-user-onboarding-installer` | 1, 2, 3 | `cli/scripts/install.sh`, `cli/src/scripts/install.spec.ts`, `cli/src/lib/tmuxOnPath.ts` (a comment), `desktop/lib/`, `desktop/test/`, `desktop/CLAUDE.md`, `desktop/RELEASE.md`, and the spec and this plan |
 | B. Device app (items 3 and 5) | `fix/new-user-onboarding-device-app` | 5, 6, 7, 8 | `device-app/`, `desktop/design/desktop-design-system.md`, `docs/plans/2026-11-13-device-menubar-design.md` |
-| C. Orca homes (item 2) | `fix/new-user-onboarding-orca-homes` | 9, 10, 11, 12, 13a, 13b, 13c, 13d, 13e, 14 | `cli/src/` but `cli/src/scripts/install.spec.ts` and D's files, `cli/e2e/`, `cli/AGENTS.md`, `docs/cli.md`; and `cli/src/cli.ts`, shared with D |
-| D. Machine name | `fix/new-user-onboarding-machine-name` | 15, 16 | `cli/src/lib/computerName.ts`, `computerName.spec.ts`, `cli/src/lib/authRefresh.ts`, `cli/src/gateway/upstream.ts`, `upstream.spec.ts`, `cli/src/authCommand.spec.ts`, `cli/src/architecture.spec.ts`, `cli/src/__fixtures__/bundledCli.ts`, `cli/src/__fixtures__/computerNameFake.ts`; and `cli/src/cli.ts`, shared with C |
+| C. Orca homes (item 2) | `fix/new-user-onboarding-orca-homes` | 9, 10, 11, 12, 13a, 13b, 13c, 13d, 13e, 14 | `cli/src/` but `cli/src/scripts/install.spec.ts`, `cli/src/lib/tmuxOnPath.ts` and D's files, `cli/e2e/`, `cli/AGENTS.md`, `docs/cli.md`; and `cli/src/cli.ts`, shared with D |
+| D. Machine name | `fix/new-user-onboarding-machine-name` | 15, 16 | `cli/src/lib/computerName.ts`, `computerName.spec.ts`, `cli/src/lib/authRefresh.ts`, `cli/src/gateway/upstream.ts`, `upstream.spec.ts`, `cli/src/authCommand.spec.ts`, `cli/src/architecture.spec.ts`, `cli/src/__fixtures__/bundledCli.ts`, `cli/src/__fixtures__/computerNameFake.ts`, `cli/src/device/deviceLink.ts`, `deviceLink.spec.ts`; and `cli/src/cli.ts`, shared with C |
 
 - **One commit, one pull request.** Every commit of a task, and every review fix, touches files of one row only. A fix that spans two rows is two commits. `cli/src/cli.ts` is in two rows: a commit that touches it belongs to C (Task 13d's `DeviceDeps` wiring) or to D (Task 16's two labels), never both. Every D commit's subject starts `Machine name: `, and no other commit's does: the split picks D by subject, since a path cannot tell C's `cli.ts` commits from D's.
 - `desktop/design/desktop-design-system.md` is under `desktop/` and goes with B: the design doc's own rule puts a screen's change and its section in one pull request. A touches other `desktop/` files, so the two never meet. B's PR CI runs the Desktop suite too, because of that one file.
@@ -453,9 +453,9 @@ At the end: quit the app, `rm -rf "$T"`, and `lsof -nP -iTCP:18473 -sTCP:LISTEN 
 **9. Both Orca homes enabled, recorded, then turned off (C).** Task 13e's specs, run in check 7's command on this Mac at the final head, and in the same by-hand `cli-e2e` run on GitHub. With this branch's CLI, two throwaway Orca-like homes (their `plugins` and `projects` linked to the daemon's own Claude Code home, as Orca links them), the fake `orca` listing them and a fake dial attached in the devices service. Passes when: both homes end with `harness-device@openharness` on and both real paths in `dial-setup.json`'s `pluginHomes`; a home turned off as `/plugin` would stays off after a replug; `harness device claude disable` exits 0 and leaves all three homes off with the default home's plugin uninstalled; `enable` turns them on again.
 
 **10. The computer's name (D).**
-- `cd cli && npx vitest run src/lib/computerName.spec.ts src/authCommand.spec.ts src/gateway/upstream.spec.ts src/architecture.spec.ts`, on this Mac. All pass. PR CI runs them on Linux.
+- `cd cli && npx vitest run src/lib/computerName.spec.ts src/authCommand.spec.ts src/gateway/upstream.spec.ts src/device/deviceLink.spec.ts src/architecture.spec.ts`, on this Mac. All pass. PR CI runs them on Linux.
 - On this Mac, read only: `cd cli && node --import tsx -e "import('./src/lib/computerName.ts').then((m) => console.log(m.computerName()))"` prints what `scutil --get ComputerName` prints. Nothing runs `scutil --set`.
-- No end-to-end run against a backend: the label reaches only the backend's create of a new machine, and a check against production is not planned. The four callers' bodies are checked against fake backends in the unit tests.
+- No end-to-end run against a backend: the label reaches only the backend's create of a new machine or device binding (the adapter-ws label stays the hostname, spec D), and a check against production is not planned. The four callers' bodies are checked against fake backends in the unit tests.
 
 **Not planned here:**
 - The spec's last check, Orca's real sessions on the person's dial with nothing pressed. It needs their own Orca accounts and dial: **the user's own**, after the merge; no tester runs it.
@@ -465,5 +465,4 @@ At the end: quit the app, `rm -rf "$T"`, and `lsof -nP -iTCP:18473 -sTCP:LISTEN 
 
 ## Open questions
 
-1. **Where `harness device claude enable` records the Orca homes it turned on.** The spec says it "records it", and Design point 1 names only `dial-setup.json`. That file has one writer, the devices process, which holds it in memory and saves it whole: a write from the command would be lost at the service's next save. Options: (a) the command keeps its own list, `pluginHomes` in `dial-skill.json` (the command's file), and the devices treat a home in either list as recorded; Design point 1 then names that field too. (b) The command writes `dial-setup.json` and the devices read it again before each save (two writers). (c) The command records nothing, and the devices record, with no call, an unrecorded home whose entry already reads on; a home the person turns off through `/plugin` between `enable` and the devices' next pass is then turned on again. Tasks 13b, 13c and 13d follow (a); (c) would drop `readPluginHomes`/`writePluginHomes`, `enabledByCommand` and 13d's record step.
-2. **When the person turned the plugin off or uninstalled it in the default home** (#4399 records that as set up, outcome `absent`), are Orca homes still turned on? The spec reads yes ("once the default home's plugin is recorded as set up"). But an uninstall there removes the shared files, so each Orca home's `enable` then fails and is counted every hour, and a turn-off there would still have the dial ring from Orca's sessions. The alternative: the Orca step runs only while the default home's entry reads on (`claudePluginState` of its `settings.json`, the file the skill setup already reads). Task 13c follows the spec as written until this is answered.
+None. Both were answered by spec decision 10 (the orchestrator, 2026-11-17): (a) for the record, and the Orca step runs only while the default home's plugin reads on.
