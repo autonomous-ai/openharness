@@ -145,6 +145,7 @@ function viewing(clients = true) {
       return true
     },
   } } : {}) })
+  if (!clients) Reflect.deleteProperty(core.clients, 'streamFrame')
   let opens = 0
   /** A viewer's open through the port: the stream it was given, or why none. */
   const open = (port: BrowserRuntime, agentId: string, asker: Asker = LOCAL, connId = 'local:w'): string => {
@@ -356,6 +357,10 @@ describe('the agent browser service', () => {
     const refused = v.open(port, 'a1')
     port.streamRefused(refused)
     expect(v.closes()).toEqual([['mac-2', gone, 'closed'], ['mac-3', moved, 'route'], ['mac-4', relayed, 'rate'], ['local:w', refused, 'backlog']])
+    const local = v.open(port, 'a1'), remote = v.open(port, 'a1', OTHER_DESKTOP, 'mac-5')
+    port.streamClosed()
+    expect(v.closes().slice(-2)).toEqual([['local:w', local, 'agent'], ['mac-5', remote, 'agent']])
+    expect(v.pipes.slice(-2).every(pipe => pipe.stdin.writableEnded && pipe.kill.mock.calls.length > 0)).toBe(true)
   })
 
   it('a stop and a delete close the browser\'s viewers at once', async () => {
