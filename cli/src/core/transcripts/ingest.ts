@@ -7,7 +7,7 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 9: docs/design/2026-10-03-harnessd.md). The other
  * fourteen engines' normalizers left for their worker (docs/design/2026-11-15-core-plan/engines.md, step 1b).
  */
-import type { LiveFor, LiveParser } from '../../engines/facets/live.js'
+import type { LiveFor, LiveParser, LiveTurn } from '../../engines/facets/live.js'
 import { keepsStore } from '../../engines/otherEngines.js'
 import { OPENCLAW_STATES } from '../../engines/openclaw/contract.js'
 import type { StreamFrame } from '../../engines/worker/otherStreamProtocol.js'
@@ -25,6 +25,9 @@ import type { LiveFrame } from '../../engines/worker/liveProtocol.js'
  *  holds its stream sets, and the only ones it clears. */
 const OPENCLAW_STORE_HOLDS = new Set<string>([OPENCLAW_STATES.unsupported, OPENCLAW_STATES.harnessNode, OPENCLAW_STATES.noSessions])
 
+/** What a transcript read says beside its events: the core's turn rules take it (core/turns/turnHooks.ts). */
+export interface TranscriptRead { replay?: boolean; at?: number; over?: true; turn?: LiveTurn }
+
 export interface IngestDeps {
   liveFor: LiveFor
   has: (sessionId: string) => boolean
@@ -35,7 +38,7 @@ export interface IngestDeps {
   runtimeProfiles: Pick<RuntimeProfileManager, 'ingest' | 'evidence'>
   normalizers: Pick<SessionNormalizers, 'liveParsers'>
   announceTurnAborted: (sessionId: string, engine: string, message: string, deviceMessage?: string) => void
-  emit: (sessionId: string, events: LiveEvent[], opts?: { replay?: boolean }) => void
+  emit: (sessionId: string, events: LiveEvent[], read?: TranscriptRead) => void
   attachSession: (session: RegisteredSession, reset: boolean) => Promise<boolean>
   /** What the agent says while its engine's store cannot be read (OpenClaw's named states); undefined clears it. */
   setIdentityHold: (agentId: string, reason?: string) => boolean
@@ -66,25 +69,27 @@ export function createIngest({
     if (!profileAccepted) sideRead('runtime profile', evt.sessionId, () => runtimeProfiles.ingest(session, evt.text))
     return session
   }
-  const ingestLine = (evt: LineEvent): LiveEvent[] | null => {
+  /** A line's events, and what its parser says beside them (nothing for an engine the core does not parse). */
+  const readLine = (evt: LineEvent): { events: LiveEvent[]; read?: TranscriptRead } | null => {
     const session = observeLine(evt)
     if (!session) return null
     const adapter = liveFor(session.engine)
-    if (!adapter) return []
+    if (!adapter) return { events: [] }
     let parser = liveParsers.get(evt.sessionId)
     if (!parser || parser.engine !== session.engine || !('ingest' in parser)) { parser = adapter.create(session); liveParsers.set(evt.sessionId, parser) }
     const read = (parser as LiveParser).ingest(evt.text)
     if (read.failure !== undefined) announceTurnAborted(evt.sessionId, session.engine, read.failure)
-    return read.events
+    return { events: read.events, read: { at: read.at, over: read.over, turn: parser.snapshot() } }
   }
+  const ingestLine = (evt: LineEvent): LiveEvent[] | null => readLine(evt)?.events ?? null
   /** Feed what the watcher delivers through `ingestLine` into the funnel. */
   const wireWatcher = (watcher: Pick<Watcher, 'on'>): void => {
     watcher.on('line', (evt: LineEvent) => {
       // This runs from a void-discarded async read, so a throw here would be an unhandledRejection. A
       // single malformed line must never take the daemon down — contain it per line and move on.
       try {
-        const events = ingestLine(evt)
-        if (events) emit(evt.sessionId, events)
+        const line = readLine(evt)
+        if (line) emit(evt.sessionId, line.events, line.read)
       } catch (err) {
         console.error(`[cli] line handler error (session ${evt.sessionId}):`, err instanceof Error ? err.message : err)
       }
@@ -119,7 +124,7 @@ export function createIngest({
   const acceptFrame = (sessionId: string, engine: RegisteredSession['engine'], frame: LiveFrame, profileAccepted = false): void => {
     if (!observeLine({ sessionId, engine, text: frame.raw }, profileAccepted)) return
     if (frame.failure !== undefined) announceTurnAborted(sessionId, engine, frame.failure)
-    emit(sessionId, frame.events, { replay: frame.replay })
+    emit(sessionId, frame.events, { replay: frame.replay, at: frame.at, over: frame.over, turn: frame.turn })
   }
   /**
    * A frame the other engines' worker made of one of their sessions: a file engine's taken as each of its lines was
