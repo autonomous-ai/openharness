@@ -411,6 +411,58 @@ void main() {
     dial.dispose();
   });
 
+  testWidgets(
+    'a Harness Max shows exactly the Pro\'s settings: Brightness, Sound and Voice language',
+    (tester) async {
+      final dial = DialState();
+      final controller = DevicesController(
+        dial: dial,
+        accountId: 'a',
+        sendSettings: (_, _) async => true,
+      );
+      await controller.load();
+      // Max builds the Pro's firmware, so its settings card is the Pro's.
+      report(dial, [
+        DialStatus.fromJson({
+          'attached': true,
+          'id': 'max',
+          'mac': 'aa:bb:cc:ee',
+          'fw': '0.0.1',
+          'hw': 'harness-max',
+          'board': 'max',
+          'settings': {
+            'brightness': 70,
+            'character': 2,
+            'face': 720,
+            'round': false,
+            'muted': false,
+            'quiet': false,
+            'straightTitle': true,
+            'focusFace': true,
+            'scrollReversed': false,
+            'voiceLang': 'en',
+          },
+        }),
+      ]);
+      await pump(tester, controller);
+      await tester.tap(
+        find.byKey(ValueKey('device-card-${controller.devices.single.key}')),
+      );
+      await tester.pumpAndSettle();
+      for (final t in ['Brightness', 'Sound', 'Voice language']) {
+        expect(find.text(t), findsOneWidget, reason: t);
+      }
+      for (final t in ['Reverse scrolling', 'Faces', 'Still companion']) {
+        expect(find.text(t), findsNothing, reason: t);
+      }
+      expect(find.byKey(const Key('devices-faces')), findsNothing);
+      expect(find.textContaining('Pet'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      controller.dispose();
+      dial.dispose();
+    },
+  );
+
   testWidgets('A Pro that still reports a uiSkin shows no Interface choice', (
     tester,
   ) async {
@@ -510,6 +562,51 @@ void main() {
       dial.dispose();
     },
   );
+
+  testWidgets('setup names a Harness Max by its model, kept across a restart', (
+    tester,
+  ) async {
+    final dial = DialState();
+    final storage = MemoryStore();
+    final controller = DevicesController(
+      dial: dial,
+      accountId: 'a',
+      storage: storage,
+      sendSettings: (_, _) async => true,
+    );
+    await pump(tester, controller);
+    await tester.tap(find.byKey(const Key('devices-add')));
+    await tester.pumpAndSettle();
+    report(dial, [deviceStatus('new')]);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Harness').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Harness Max').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'Desk bar');
+    await tester.ensureVisible(find.text('Finish setup'));
+    await tester.tap(find.text('Finish setup'));
+    await tester.pumpAndSettle();
+    expect(controller.devices.single.model, HarnessDeviceModel.max);
+    expect(find.text('Harness Max'), findsWidgets);
+    await controller.settled;
+    final unplugged = DialState();
+    final reopened = DevicesController(
+      dial: unplugged,
+      accountId: 'a',
+      storage: storage,
+      sendSettings: (_, _) async => true,
+    );
+    await reopened.load();
+    expect(reopened.devices.single.name, 'Desk bar');
+    expect(reopened.devices.single.model, HarnessDeviceModel.max);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    reopened.dispose();
+    unplugged.dispose();
+    controller.dispose();
+    dial.dispose();
+  });
 
   testWidgets(
     'USB setup adds the actual device, saves Pro model, and Shop opens the product page',

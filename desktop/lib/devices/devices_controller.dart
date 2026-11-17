@@ -9,7 +9,8 @@ import 'device_hosts.dart';
 
 enum HarnessDeviceModel {
   harness('Harness'),
-  pro('Harness Pro');
+  pro('Harness Pro'),
+  max('Harness Max');
 
   const HarnessDeviceModel(this.label);
   final String label;
@@ -119,9 +120,9 @@ class HarnessDevice {
           : 'This computer',
       hostOnline: false,
       local: raw['machineId'] == null || raw['machineId'] == 'local',
-      model: raw['model'] == 'pro'
-          ? HarnessDeviceModel.pro
-          : HarnessDeviceModel.harness,
+      model:
+          HarnessDeviceModel.values.asNameMap()[raw['model']] ??
+          HarnessDeviceModel.harness,
       status: DialStatus.fromJson({
         ...Map<String, dynamic>.from(raw['status'] as Map),
         'attached': false,

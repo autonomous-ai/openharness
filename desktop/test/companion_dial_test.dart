@@ -215,4 +215,23 @@ void main() {
     expect(find.text('Your dial is updating'), findsNothing);
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets('a Harness Max says Harness Max while updating', (tester) async {
+    await mount(tester, species: 'tim', uid: 'tim-one');
+    dial.apply(
+      DialStatus.fromJson({
+        'attached': true,
+        'id': 'max-usb',
+        'hw': 'harness-max',
+        'board': 'max',
+        'updating': '0.1.0',
+        'settings': settings(),
+      }),
+    );
+    await tester.pump();
+    expect(find.text('Your Harness Max is updating'), findsOneWidget);
+    expect(find.text('Your Harness Pro is updating'), findsNothing);
+    expect(find.text('Your dial is updating'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
 }
