@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { gridLaunchRequestIn } from '../services/modelsProcess.js'
 import { createModelsLink } from './modelsLink.js'
 import { createStoreLink } from './storeLink.js'
 import { createSharedMachinesLink } from './sharedMachinesLink.js'
@@ -46,6 +47,28 @@ describe('Models launch authority', () => {
       expect(await models(answer).gridLaunch(input)).toEqual(answer)
       expect(await gridLaunchThrough(() => models(answer))(input)).toEqual(answer)
     }
+  })
+
+  it('preserves the captured Grok home across the actual Models request and reply wire', async () => {
+    const input = request('grok')
+    const port = createModelsLink(fakeCore(), async (_type, payload) => {
+      const decoded = gridLaunchRequestIn(payload)
+      if (!decoded) throw Error('fixture request failed')
+      return { ...built(decoded) }
+    }, () => true).port
+    expect(await port.gridLaunch(input)).toEqual(built(input))
+  })
+
+  it.each([null, 7, 'x\0y', 'x'.repeat(65537)])('refuses a malformed native home in the service request parser', grokHome => {
+    expect(gridLaunchRequestIn({ ...request('grok'), machine: { hermesSystemManaged: false, grokHome } })).toBeNull()
+  })
+
+  it('bounds the borrowed target itself at and just past the text limit', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const atLimit = { ...request('grok'), machine: { hermesSystemManaged: false, grokHome: '/' + 'x'.repeat(65526) } }
+    expect(await models(built(atLimit)).gridLaunch(atLimit)).toEqual(built(atLimit))
+    const tooLong = { ...atLimit, machine: { ...atLimit.machine, grokHome: atLimit.machine.grokHome + 'x' } }
+    await expect(models(built(tooLong)).gridLaunch(tooLong)).rejects.toThrow('the models service is unavailable')
   })
 
   it.each([
