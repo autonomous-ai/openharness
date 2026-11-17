@@ -1083,6 +1083,26 @@ describe.skipIf(process.platform === 'win32')('the devices listener', () => {
       expect(lines.at(-1)).toBe('[devices] listener in the last minute: 0 unknown, 0 oversized, 0 over rate, 3 refused, 0 failed')
     })
 
+    it('a key that throws is 500, counted failed, logged with no text of the error, and nothing is opened', async () => {
+      const opened: Array<{ key: string; stream: ListenerStream }> = []
+      const handler = keyed(opened)
+      const { path, lines } = await open({
+        win: { ...handler, keyed: { ...handler.keyed!, key: (message) => {
+          if (message.boom) throw new Error('secret-9b1d')
+          return handler.keyed!.key(message)
+        } } },
+      })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const kept = await asked(path, win('a'))
+      expect(await connection(path).send(JSON.stringify({ type: 'win', k: 'b', boom: 1 }))).toMatchObject({ status: 500, body: '' })
+      // It reached no handler, and the open stream goes on.
+      expect(reasons(opened)).toEqual([['a', undefined]])
+      expect(opened[0]!.stream.write({ n: 1 })).toBe(true)
+      expect(await kept.got(1)).toEqual(['{"n":1}'])
+      vi.advanceTimersByTime(MINUTE)
+      expect(lines).toEqual(['[devices] listener open', '[devices] listener in the last minute: 0 unknown, 0 oversized, 0 over rate, 0 refused, 1 failed'])
+    })
+
     it('a standby open of an open key is 409; of a free key it opens', async () => {
       const opened: Array<{ key: string; stream: ListenerStream }> = []
       const { path, lines } = await open({ win: keyed(opened) })
