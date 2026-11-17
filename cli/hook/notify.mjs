@@ -591,24 +591,12 @@ function waitsOnPerson(engine, event, input) {
   return event === 'PermissionRequest' || (engine === 'claude' && event === 'Elicitation')
 }
 
-/** Claude Code's first release whose SubagentStop fires once a subagent ends: before it, a running background subagent
- *  also sent one about every 30 s, which would end its lead's turn early (facts-claude §5). */
-const SUBAGENTS_COUNTED_FROM = [2, 1, 311]
-
 /**
  * Whether a Claude Code subagent event is one the daemon counts. Its own helpers (prompt suggestions, `/btw`) end with a
- * SubagentStop of no type after no SubagentStart, and a hook that names no version may be from before the fix above:
- * neither is sent, so the daemon's count needs no rule about versions.
+ * SubagentStop of no type after no SubagentStart: it is not sent, so the count stays even.
  */
 function countsSubagent(event, input) {
-  if (event === 'SubagentStop' && !input.agent_type) return false
-  const version = /^(\d+)\.(\d+)\.(\d+)/.exec(String(input.cli_version || input.version || ''))
-  if (!version) return false
-  for (let part = 0; part < SUBAGENTS_COUNTED_FROM.length; part++) {
-    const value = Number(version[part + 1])
-    if (value !== SUBAGENTS_COUNTED_FROM[part]) return value > SUBAGENTS_COUNTED_FROM[part]
-  }
-  return true
+  return event !== 'SubagentStop' || !!input.agent_type
 }
 
 /** A paneless hook's event in the devices' words (core/observedHook.ts); null for one that says none of them. */
