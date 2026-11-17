@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ENV_FIELD_NAMES } from '../config/env.js'
 import { AGENT_SESSION_VARIABLES, ORCA_VARIABLES } from './agentSessionEnv.js'
-import { DROPPED_ON_PURPOSE, START_ENV_NAMES, START_ENV_PREFIXES, startEnvironment, startEnvLine } from './startEnvironment.js'
+import {
+  DROPPED_ON_PURPOSE, START_ENV_NAMES, START_ENV_PREFIXES, narrowOwnEnvironment, startEnvironment, startEnvLine,
+} from './startEnvironment.js'
 
 // Made up, every value (docs/plans/2026-11-17-daemon-minimal-env-design.md).
 const OUTSIDERS = {
@@ -79,5 +84,32 @@ describe('the environment harness start gives the daemon', () => {
     const given = { PATH: '/bin', HOME: '/h', SENTINEL_TOKEN: 'sentinel-value', GH_TOKEN: 'g', TERM: 'x' }
     expect(startEnvLine(given, startEnvironment(given, 'linux')))
       .toBe('[env] started with 2 variables; 3 left out (docs/cli.md#the-daemons-environment)')
+  })
+})
+
+describe('a start that becomes the daemon', () => {
+  let folder: string
+  beforeEach(() => { folder = mkdtempSync(join(tmpdir(), 'start-env-')) })
+  afterEach(() => { rmSync(folder, { recursive: true, force: true }) })
+
+  it('narrows an environment in place, then reads the env file again', () => {
+    const file = join(folder, 'harness.env')
+    writeFileSync(file, 'FROM_FILE=in-the-file\nSENTINEL_TOKEN=from-the-file\n')
+    // As config/loadEnv.ts left it when the CLI loaded: FROM_FILE read from the file, SENTINEL_TOKEN the shell's own.
+    const env: NodeJS.ProcessEnv = { PATH: '/bin', HARNESS_ENV_FILE: file, FROM_FILE: 'in-the-file', SENTINEL_TOKEN: 'from-the-shell', GH_TOKEN: 'g' }
+    const line = narrowOwnEnvironment(env, 'darwin')
+    // The shell's token is gone; what the person put in the file is the daemon's, as after a background start.
+    expect(env).toEqual({ PATH: '/bin', HARNESS_ENV_FILE: file, FROM_FILE: 'in-the-file', SENTINEL_TOKEN: 'from-the-file' })
+    expect(line).toBe('[env] started with 2 variables; 3 left out (docs/cli.md#the-daemons-environment)')
+  })
+  it('narrows with no env file named', () => {
+    const env: NodeJS.ProcessEnv = { HOME: '/h', CLAUDE_CODE_MESSAGING_TOKEN: 't', NODE_OPTIONS: '--require /fake/hook.cjs' }
+    expect(narrowOwnEnvironment(env, 'linux')).toBe('[env] started with 1 variables; 2 left out (docs/cli.md#the-daemons-environment)')
+    expect(env).toEqual({ HOME: '/h' })
+  })
+  it('on Windows takes nothing out', () => {
+    const env: NodeJS.ProcessEnv = { Path: 'C:\\Windows', JAVA_HOME: 'C:\\jdk', SENTINEL_TOKEN: 's' }
+    expect(narrowOwnEnvironment(env, 'win32')).toBe('[env] started with 3 variables; 0 left out (docs/cli.md#the-daemons-environment)')
+    expect(env).toEqual({ Path: 'C:\\Windows', JAVA_HOME: 'C:\\jdk', SENTINEL_TOKEN: 's' })
   })
 })
