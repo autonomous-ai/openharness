@@ -19,7 +19,11 @@ export const live: EngineLive = {
         const at = normalizer.at
         for (const event of events) if (event.type === 'turn_started') { turn++; openedAt = at }
         const failure = codexTaskError(line)
-        return { events, ...(failure === null ? {} : { failure }), ...(at === undefined ? {} : { at }) }
+        // Codex runs its Stop and waits for it before it writes a turn's end, and a turn that errs or a prompt
+        // hook stops ends the same way with none: no Stop ever follows a Codex end (facts-codex §5).
+        const over = events.some((event) => event.type === 'turn_ended')
+        return { events, ...(failure === null ? {} : { failure }), ...(at === undefined ? {} : { at }),
+          ...(over ? { over: true as const } : {}) }
       },
       snapshot: () => ({ identity: `${generation}:${turn}`, turnOpen: normalizer.turnOpen, continued: false,
         ...(openedAt === undefined ? {} : { openedAt }) }),
