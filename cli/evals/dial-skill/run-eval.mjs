@@ -620,8 +620,17 @@ async function main() {
         // so a hung judge stream can't hold the slot either.
         const { run, g, latency_s } = await withTimeout((async () => {
           let tAttempt = t0;
-          const run = await withBackoff(() => { tAttempt = Date.now(); return runCase(c, ctx); },
-            appRetry, deadline);
+          // dial skill eval: a failed agent run was billed too (lib/agents.ts), and a transient one is retried: its spend
+          // goes to the run that scores, or to the error row, as a retried grading attempt's does (gradeCase).
+          let appSpent;
+          const run = await withBackoff(() => {
+            tAttempt = Date.now();
+            return runCase(c, ctx).catch(e => {
+              appSpent = addUsage(appSpent, e?.usage);
+              throw Object.assign(e, { usage: appSpent });
+            });
+          }, appRetry, deadline);
+          run.usage = addUsage(appSpent, run.usage);
           lastRun = run;
           // latency_s = the final app attempt only; backoff sleeps, failed
           // attempts, and judge time are excluded (retry counts are in meta).
