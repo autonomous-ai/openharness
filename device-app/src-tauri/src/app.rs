@@ -1,13 +1,13 @@
 //! The app's rules: a pure reducer from an event to the effects it asks for.
 
 use crate::keepalive::{Keep, KeepAlive};
-use crate::model::{due, menu, menu_log};
+use crate::model::{about_credits, due, menu, menu_log};
 use crate::types::{
     Action, AppState, AppUpdate, CliState, Daemon, Effect, EngineChange, Event, LoginEvent, MenuAction, MenuItem,
     NotifyMode, Phase, Saved, Screen, UpdateFailure, View,
 };
 
-/// The menu reads the account, Claude Code and Codex again at most this often.
+/// The menu reads the account, Claude Code, Codex and the CLI's version again at most this often.
 const READ_EVERY_SECS: u64 = 60;
 
 /// The app asks for its own update at most this often.
@@ -66,6 +66,7 @@ impl App {
             app_update: AppUpdate::None,
             claude_change: EngineChange::None,
             codex_change: EngineChange::None,
+            cli_version: None,
         };
         let mut app = App {
             state,
@@ -166,6 +167,7 @@ impl App {
                 self.state.signed_in = None;
                 self.state.claude = None;
                 self.state.codex = None;
+                self.state.cli_version = None;
                 self.awaiting_account = false;
                 if self.window.is_some() {
                     self.show(None, effects);
@@ -220,8 +222,11 @@ impl App {
             Event::Codex(status) if self.state.cli == CliState::Found => {
                 self.state.codex = status.or(self.state.codex.take());
             }
+            Event::CliVersion(version) if self.state.cli == CliState::Found => {
+                self.state.cli_version = version.or(self.state.cli_version.take());
+            }
             // A read of a CLI that went away answers late: nothing reads it.
-            Event::Auth(_) | Event::Claude(_) | Event::Codex(_) => {}
+            Event::Auth(_) | Event::Claude(_) | Event::Codex(_) | Event::CliVersion(_) => {}
             Event::Login(event) => self.login_event(event, effects),
             Event::ClaudeSet(made) => {
                 // A change that no longer runs (its CLI went away) answers late: nothing reads it.
@@ -279,6 +284,7 @@ impl App {
                 }
                 MenuAction::Update => effects.push(Effect::OpenUrl(DEVICE_PAGE.into())),
                 MenuAction::OpenHarness => effects.push(Effect::OpenDesktop),
+                MenuAction::About => effects.push(Effect::ShowAbout(about_credits(&self.state))),
                 MenuAction::Quit => {
                     self.stop_watch(effects);
                     effects.push(Effect::Quit);
@@ -455,7 +461,7 @@ impl App {
     }
 
     fn read(&mut self, effects: &mut Vec<Effect>) {
-        effects.extend([Effect::ReadAuth, Effect::ReadClaude, Effect::ReadCodex]);
+        effects.extend([Effect::ReadAuth, Effect::ReadClaude, Effect::ReadCodex, Effect::ReadVersion]);
         self.last_read = self.now;
     }
 

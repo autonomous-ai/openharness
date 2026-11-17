@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 /// A line of output longer than this is dropped: what a CLI prints is outside text.
 pub const LINE_MAX: usize = 64 * 1024;
-/// `auth status`, `device claude status`.
+/// `auth status`, `device claude status`, `--version`.
 pub const STATUS_DEADLINE: Duration = Duration::from_secs(10);
 /// `device claude enable` and `disable`.
 pub const CHANGE_DEADLINE: Duration = Duration::from_secs(60);
@@ -46,6 +46,8 @@ const SOUND_STDERR: &str = "sound: ";
 /// A failed Notifications change, then its code, of the same kind as a sound change's.
 const NOTIFY_STDERR: &str = "notify: ";
 const CODE_MAX: usize = 32;
+/// The longest version the About panel shows: what the CLI prints is outside text.
+const VERSION_MAX: usize = 32;
 
 /// How to run the CLI: `program`, then `prefix`, then the arguments, with `env` on top of the app's own.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -215,6 +217,17 @@ impl Cli for HarnessCli {
     fn spawn(&self, args: &[&str]) -> io::Result<Child> {
         self.started(args, |command| Child::start(command, name(args), self.log.clone()))
     }
+}
+
+/// `harness --version`: its first line, when it reads as a version (digits, letters, `.`, `+` and `-`).
+pub fn version(cli: &dyn Cli) -> Option<String> {
+    let output = cli.run(&["--version"], STATUS_DEADLINE).ok()?;
+    if output.timed_out || output.code != Some(0) {
+        return None;
+    }
+    let line = output.stdout.lines().next()?.trim();
+    let valid = |c: char| c.is_ascii_alphanumeric() || ".+-".contains(c);
+    (!line.is_empty() && line.len() <= VERSION_MAX && line.chars().all(valid)).then(|| line.to_string())
 }
 
 /// A running CLI in its own process group: its stdin is held open until closed or dropped, its stdout comes a line

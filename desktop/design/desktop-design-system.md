@@ -733,6 +733,25 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   `Could not turn on` or `Could not turn off` (the same after `Codex:`). The
   action is **Turn on** or **Turn off**; while a change runs there is none.
   An action that opens no window has no `…`.
+- The dial line names no firmware version: only `Updating to <version>`
+  while the dial updates. **About** opens macOS's standard About panel,
+  brought to the front, with the app's name and version and one credits line,
+  `Dial 0.1.0 · Harness 0.6.58`, a version the app does not know left out.
+
+The menu, top to bottom:
+
+```text
+Dial connected
+Signed in
+Claude Code: On
+Turn off
+Sound ✓
+Notifications ▸
+──────────
+Open Harness
+About
+Quit
+```
 
 The [gallery](../../device-app/ui/gallery.html) shows every screen in every
 state, light and dark, the primary button focused, and the menu-bar icon on

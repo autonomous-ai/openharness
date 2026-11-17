@@ -162,12 +162,14 @@ impl Runner {
         self.0.find_cli()
     }
 
-    /// Menu, Show, Quit and Relaunch come back for the binary. Everything else is done here, anything slow on a thread,
-    /// and answers through `send`.
+    /// Menu, Show, ShowAbout, Quit and Relaunch come back for the binary. Everything else is done here, anything slow on
+    /// a thread, and answers through `send`.
     pub fn run(&self, effect: Effect) -> Option<Effect> {
         let shared = &self.0;
         match effect {
-            Effect::Menu(_) | Effect::Show(_) | Effect::Quit | Effect::Relaunch => return Some(effect),
+            Effect::Menu(_) | Effect::Show(_) | Effect::ShowAbout(_) | Effect::Quit | Effect::Relaunch => {
+                return Some(effect);
+            }
             Effect::FindCli => shared.answer(Event::Cli(shared.find_cli())),
             Effect::SpawnWatch => shared.spawn_watch(),
             // Its child then exits 0 by itself, and its WatchExit(Some(0)) is the answer.
@@ -195,6 +197,7 @@ impl Runner {
             Effect::ReadAuth => shared.with_cli(|cli| Event::Auth(account::auth_status(cli))),
             Effect::ReadClaude => shared.with_cli(|cli| Event::Claude(engine::status(cli, Engine::Claude))),
             Effect::ReadCodex => shared.with_cli(|cli| Event::Codex(engine::status(cli, Engine::Codex))),
+            Effect::ReadVersion => shared.with_cli(|cli| Event::CliVersion(cli::version(cli))),
             Effect::RunLogin => shared.run_login(),
             Effect::CancelLogin => {
                 let login = shared.login.lock().unwrap().take();

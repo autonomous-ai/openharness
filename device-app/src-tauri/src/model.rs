@@ -23,11 +23,18 @@ pub fn dial_line(state: &AppState) -> String {
     if let Some(problem) = &dial.problem {
         return problem.clone();
     }
-    match (dial.attached, &dial.fw) {
-        (true, Some(fw)) => format!("Dial connected · {fw}"),
-        (true, None) => "Dial connected".into(),
-        (false, _) => "No dial".into(),
-    }
+    // The firmware's version is in the About panel.
+    if dial.attached { "Dial connected".into() } else { "No dial".into() }
+}
+
+/// The About panel's credits line, `Dial 0.1.0 · Harness 0.6.58`: a version the app does not know is left out.
+pub fn about_credits(state: &AppState) -> Option<String> {
+    let dial = state.dial.as_ref().filter(|dial| dial.attached).and_then(|dial| dial.fw.as_ref());
+    let pieces: Vec<String> = [("Dial", dial), ("Harness", state.cli_version.as_ref())]
+        .into_iter()
+        .filter_map(|(name, version)| Some(format!("{name} {}", version?)))
+        .collect();
+    (!pieces.is_empty()).then(|| pieces.join(" · "))
 }
 
 /// The tray menu's rows, top to bottom. A row with nothing to say is absent.
@@ -76,6 +83,7 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
     if state.desktop_installed {
         items.push(MenuItem::Action(MenuAction::OpenHarness, "Open Harness".into()));
     }
+    items.push(MenuItem::Action(MenuAction::About, "About".into()));
     items.push(MenuItem::Action(MenuAction::Quit, "Quit".into()));
     items
 }
