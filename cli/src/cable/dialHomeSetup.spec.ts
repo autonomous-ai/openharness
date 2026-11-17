@@ -60,7 +60,7 @@ const pluginOn = (claudeHome: string): void =>
 
 /** A dial attached on this computer once, with [homes] recorded. */
 const dialOnce = (dataDir: string, homes: DialSkillHomes = { claude: [], codex: [] }): void => {
-  writeSetup(dataDir, { dial: true, homes })
+  writeSetup(dataDir, { dial: true, homes, pluginHomes: [] })
 }
 
 const sorted = (list: string[]): string[] => [...list].sort()
@@ -136,7 +136,7 @@ describe('a computer that never had a dial', () => {
 
     expect(hasSkill(r.codexHome)).toBe(true)
     expect(hasSkill(adopted)).toBe(true)
-    expect(readSetup(r.dataDir)).toEqual({ dial: true, homes: { claude: [], codex: [skillsOf(r.codexHome), skillsOf(adopted)] } })
+    expect(readSetup(r.dataDir)).toEqual({ dial: true, homes: { claude: [], codex: [skillsOf(r.codexHome), skillsOf(adopted)] }, pluginHomes: [] })
     expect(r.lines).toEqual([counts([0, 0], [2, 0])])
 
     // The scans after it set up too.
@@ -303,7 +303,7 @@ describe('the devices set the dial skill up', () => {
     writeSkill(listed[1])
     mkdirSync(join(listed[2], 'dial'))
     writeFileSync(join(listed[2], 'dial', 'SKILL.md'), '---\nname: dial\n---\nMine.\n')
-    writeSetup(dataDir, { dial: true, plugin: '0.6.59', homes: { claude: [], codex: listed } })
+    writeSetup(dataDir, { dial: true, plugin: '0.6.59', homes: { claude: [], codex: listed }, pluginHomes: [] })
     writeRemoved(dataDir, 'codex', true)
     const r = rig({ dataDir })
 
@@ -312,7 +312,7 @@ describe('the devices set the dial skill up', () => {
     expect(existsSync(skillFile(a))).toBe(false)
     expect(existsSync(skillFile(b))).toBe(false)
     expect(readFileSync(skillFile(theirs), 'utf8')).toBe('---\nname: dial\n---\nMine.\n')
-    expect(readSetup(dataDir)).toEqual({ dial: true, plugin: '0.6.59', homes: { claude: [], codex: [] } })
+    expect(readSetup(dataDir)).toEqual({ dial: true, plugin: '0.6.59', homes: { claude: [], codex: [] }, pluginHomes: [] })
     expect(r.lines).toEqual([counts([0, 0], [0, 2])])
 
     // At a scan: the removal, read for a new home, takes out what the start wrote.
@@ -796,7 +796,7 @@ describe('the devices set the dial skill up', () => {
 
     expect(existsSync(skillFile(r.codexHome))).toBe(false)
     expect(existsSync(skillFile(other))).toBe(false)
-    expect(readSetup(r.dataDir)).toEqual({ dial: true, homes: { claude: [], codex: [] } })
+    expect(readSetup(r.dataDir)).toEqual({ dial: true, homes: { claude: [], codex: [] }, pluginHomes: [] })
   })
 
   it('a home whose record cannot be saved keeps a skill this pass did not write', () => {
@@ -1098,9 +1098,9 @@ describe('the record the plugin\'s setup reads', () => {
     expect(r.writer.recordPlugin('0.6.59')).toBe(true)
 
     expect(r.writer.plugin()).toBe('0.6.59')
-    expect(readSetup(r.dataDir)).toEqual({ dial: true, plugin: '0.6.59', homes: { claude: [], codex: [skillsOf(r.codexHome)] } })
+    expect(readSetup(r.dataDir)).toEqual({ dial: true, plugin: '0.6.59', homes: { claude: [], codex: [skillsOf(r.codexHome)] }, pluginHomes: [] })
     r.writer.scanned([ownerIn(other)])
-    expect(readSetup(r.dataDir)).toEqual({ dial: true, plugin: '0.6.59', homes: { claude: [], codex: [skillsOf(r.codexHome), skillsOf(other)] } })
+    expect(readSetup(r.dataDir)).toEqual({ dial: true, plugin: '0.6.59', homes: { claude: [], codex: [skillsOf(r.codexHome), skillsOf(other)] }, pluginHomes: [] })
 
     // The next start reads it back.
     const again = rig({ dataDir: r.dataDir, codexHome: r.codexHome })
@@ -1116,6 +1116,65 @@ describe('the record the plugin\'s setup reads', () => {
     chmodSync(r.dataDir, 0o700)
     expect(r.writer.recordPlugin('0.6.60 beta')).toBe(false)
     expect(r.writer.plugin()).toBe('0.6.59')
+  })
+
+  it('recordPluginHomes saves the whole record', () => {
+    const r = rig()
+    r.writer.started()
+    expect(r.writer.recordPlugin('0.6.59')).toBe(true)
+    expect(r.writer.pluginHomes()).toEqual([])
+    const homes = [folder(), folder()]
+
+    expect(r.writer.recordPluginHomes(homes)).toBe(true)
+
+    expect(r.writer.pluginHomes()).toEqual(homes)
+    expect(readSetup(r.dataDir)).toEqual({ dial: true, plugin: '0.6.59', homes: { claude: [], codex: [skillsOf(r.codexHome)] }, pluginHomes: homes })
+    // The next start reads it back.
+    const again = rig({ dataDir: r.dataDir, codexHome: r.codexHome })
+    again.writer.started()
+    expect(again.writer.pluginHomes()).toEqual(homes)
+  })
+
+  it('a record that cannot be saved keeps the list as before and says false', () => {
+    const r = rig()
+    r.writer.started()
+    const before = [folder()]
+    expect(r.writer.recordPluginHomes(before)).toBe(true)
+    const file = join(r.dataDir, DIAL_SETUP_FILE)
+    const saved = readFileSync(file, 'utf8')
+    chmodSync(r.dataDir, 0o500)
+
+    expect(r.writer.recordPluginHomes([...before, folder()])).toBe(false)
+
+    expect(r.writer.pluginHomes()).toEqual(before)
+    expect(readFileSync(file, 'utf8')).toBe(saved)
+  })
+
+  it('the skill\'s own saves keep the plugin homes', () => {
+    const homes = [folder(), folder()]
+    const other = folder()
+    const r = rig()
+    r.writer.started()
+    expect(r.writer.recordPluginHomes(homes)).toBe(true)
+
+    // A scan that records a Codex home, then the plugin brought current.
+    r.writer.scanned([ownerIn(other)])
+    expect(r.writer.recordPlugin('0.6.60')).toBe(true)
+
+    expect(readSetup(r.dataDir)).toEqual({ dial: true, plugin: '0.6.60', homes: { claude: [], codex: [r.codexHome, other].map(skillsOf) }, pluginHomes: homes })
+
+    // After a restart, a start pass that records a home.
+    const adopted = folder()
+    const again = rig({ dataDir: r.dataDir, codexHome: r.codexHome, adopted: () => ({ claude: [], codex: [adopted] }) })
+    again.writer.started()
+    expect(readSetup(r.dataDir).homes.codex).toContain(skillsOf(adopted))
+    expect(readSetup(r.dataDir).pluginHomes).toEqual(homes)
+
+    // The first attach's save, on a record with no dial yet.
+    const dataDir = folder()
+    writeSetup(dataDir, { dial: false, homes: { claude: [], codex: [] }, pluginHomes: homes })
+    rig({ dataDir }).writer.attached()
+    expect(readSetup(dataDir)).toMatchObject({ dial: true, pluginHomes: homes })
   })
 
   it('a record that cannot be read is not written over: an attach and a start write nothing, and say so', () => {
