@@ -16,7 +16,7 @@
     "design-undecided.claude",
     "paid-plan-approval.claude",
     "silent-vpn-timeout.claude",
-    "security-key-touch.claude",
+    "codeowners-review.claude",
     "fix-off-by-one.claude",
     "env-from-example.claude",
     "long-task-progress.claude"
@@ -25,7 +25,7 @@
     "board-unplugged.claude",
     "gh-signed-out.claude",
     "rate-limit-unknown.claude",
-    "codeowners-review.claude",
+    "security-key-touch.claude",
     "destructive-migration.claude",
     "add-version-flag.claude",
     "commit-new-branch.claude",
