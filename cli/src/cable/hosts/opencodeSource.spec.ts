@@ -1070,7 +1070,7 @@ describe("the opencode source (docs/plans/2026-11-17-dial-opencode-design.md)", 
       server.start('ses_run')
       const s = setup()
       await live(s, 2)
-      const told: Array<Array<[string, HostAgentState, string | undefined]>> = []
+      const told: Array<Array<[string | undefined, HostAgentState, string | undefined]>> = []
       s.source.onChange(() => told.push(s.source.list().map(({ sessionId, state, lastAnswer }) => [sessionId, state, lastAnswer])))
       server.drop()
       await s.until(() => s.log.at(-1) === '[opencode] retry · 1')
