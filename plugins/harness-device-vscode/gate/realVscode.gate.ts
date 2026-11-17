@@ -4,7 +4,8 @@
  * devices' real listener and VS Code half (vscodeTerminals.ts). Never the developer's VS Code, its settings, its
  * extensions or their daemon: everything it starts or writes is under the root, which it removes. On a Mac the copy
  * carries a bundle id of its own, LaunchServices forgets it after the run, and the run fails if the developer's VS Code's
- * preferences changed (throwawayApp.ts).
+ * preferences changed (throwawayApp.ts). The clean-up kills what the throwaway still runs and runs each of its steps
+ * whatever the others did (cleanup.ts); a run clears the roots of runs that ended without theirs (Ctrl+C).
  *
  * The driver (driver/run.cjs) runs as VS Code's extension tests and is the gate's hands: it makes the terminals and says
  * which is active. What the extension reports, and what it does with a `show`, is read at the listener.
@@ -20,7 +21,21 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { vscodeStreams, type VscodeTerminals } from '../../../cli/src/cable/hosts/vscodeTerminals.js'
 import { buildVersion, packVsix, recordVersion, type VscodeExtensionFiles } from '../../../cli/src/devices/vscodeExtension.js'
 import { openDevicesListener, REFUSED, type DevicesListener, type ListenerStream } from '../../../cli/src/services/devicesListener.js'
-import { assertRebranded, assertUnchanged, rebrand, stamp, unregister, VSCODE_PREFERENCES, type Stamp } from './throwawayApp.js'
+import { cleanUp, within } from './cleanup.js'
+import {
+  assertRebranded,
+  assertUnchanged,
+  killThrowaway,
+  rebrand,
+  rootName,
+  stamp,
+  startedAt,
+  sweepLeftovers,
+  throwawayProcesses,
+  unregister,
+  VSCODE_PREFERENCES,
+  type Stamp,
+} from './throwawayApp.js'
 
 // @ts-expect-error — plain ESM with no declaration file
 const { readVscodeExtensionBundle } = await import('../../../cli/scripts/lib/vscodeExtensionBundle.mjs') as {
@@ -29,6 +44,8 @@ const { readVscodeExtensionBundle } = await import('../../../cli/scripts/lib/vsc
 
 /** Each wait's bound, inside the test's: a VS Code on a loaded Mac takes tens of seconds to start. */
 const UNTIL_MS = 120_000
+/** Each clean-up step's bound: the steps all fit in the hook's 300 s. */
+const CLEAN_UP_MS = 30_000
 
 // Run from a VS Code terminal, these name that VS Code's own handles, and a launch or CLI that inherits them could
 // reach it.
@@ -47,6 +64,8 @@ let listener: DevicesListener | null = null
 let control: Server | undefined
 let driver: Socket | undefined
 let launched: Promise<number> | undefined
+/** Each reported shell's start, by its pid: the clean-up kills a shell only while it is that process. */
+const shellStarts = new Map<number, string>()
 let exited: number | Error | undefined
 let logsWatch: FSWatcher | undefined
 const answers: ((line: Record<string, unknown>) => void)[] = []
@@ -132,7 +151,9 @@ describe('the extension in a real, throwaway VS Code', () => {
   beforeAll(async () => {
     preferences = stamp(VSCODE_PREFERENCES)
     // Short and in /tmp: the devices' socket goes in it, and a Unix socket's path has 96 bytes.
-    root = mkdtempSync('/tmp/harness-vscode-gate-')
+    root = mkdtempSync(join('/tmp', rootName(process.pid)))
+    const cleared = sweepLeftovers()
+    if (cleared.length) console.warn(`cleared ${cleared.length} roots of gate runs that ended without their clean-up`)
     userData = join(root, 'user-data')
     extensions = join(root, 'extensions')
     home = join(root, 'home')
@@ -149,11 +170,28 @@ describe('the extension in a real, throwaway VS Code', () => {
     driver?.destroy()
     logsWatch?.close()
     control?.close()
-    await launched?.catch(() => {})
-    await listener?.close()
-    if (app !== undefined) unregister(app)
-    rmSync(root, { recursive: true, force: true })
-    if (preferences !== undefined) assertUnchanged(VSCODE_PREFERENCES, preferences)
+    const ended = (): Promise<unknown> | undefined => launched?.catch(() => {})
+    await cleanUp([
+      ['VS Code\'s exit', ended],
+      ['the throwaway\'s processes', () => {
+        const killed = killThrowaway(root, shellStarts)
+        if (killed.length) console.warn(`killed the throwaway's processes still running: ${killed.join(', ')}`)
+      }],
+      ['the throwaway\'s end', async () => {
+        await ended()
+        const left = throwawayProcesses(root).length
+        if (left) throw new Error(`${left} of the throwaway's processes still running`)
+      }],
+      ['the devices\' listener', () => listener?.close()],
+      ['LaunchServices', () => {
+        if (app !== undefined) unregister(app)
+      }],
+      // What was killed may still be letting go of its files.
+      ['the root', () => rmSync(root, { recursive: true, force: true, maxRetries: 5 })],
+      ['the developer\'s VS Code\'s preferences', () => {
+        if (preferences !== undefined) assertUnchanged(VSCODE_PREFERENCES, preferences)
+      }],
+    ], CLEAN_UP_MS)
   })
 
   it('installs the packed .vsix with the throwaway\'s own CLI, and its record reads as status reads it', async () => {
@@ -256,6 +294,10 @@ describe('the extension in a real, throwaway VS Code', () => {
     })
     shells = (await ask('terminals')).terminals as number[]
     expect(shells).toHaveLength(2)
+    for (const shell of shells) {
+      const started = startedAt(shell)
+      if (started !== undefined) shellStarts.set(shell, started)
+    }
     await until('one vscode stream', () => (opened.length ? true : undefined))
     await until('a state listing both shells', () =>
       states.some(({ terminals }) => shells.every((shell) => terminals.includes(shell))) || undefined)
@@ -291,7 +333,7 @@ describe('the extension in a real, throwaway VS Code', () => {
 
   it('VS Code exits with code 0, and the stream ends gone', async () => {
     driver!.end(`${JSON.stringify({ ask: 'exit' })}\n`)
-    expect(await launched).toBe(0)
+    expect(await within(launched!, UNTIL_MS, 'VS Code\'s exit')).toBe(0)
     await until('the stream\'s end', () => (opened[0]!.stream.ended.aborted ? true : undefined))
     expect(opened[0]!.stream.ended.reason).toBe('gone')
   })

@@ -7,7 +7,7 @@
  */
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs'
 import { userInfo } from 'node:os'
 import { basename, dirname, join, relative } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
@@ -76,6 +76,89 @@ export function unregister(app: string): void {
     const run = spawnSync(LSREGISTER, ['-u', bundle], { encoding: 'utf8' })
     if (run.status !== 0 && !run.stderr.includes(NOT_REGISTERED)) throw new Error(`lsregister -u ${bundle} failed: ${run.stderr.trim()}`)
   }
+}
+
+/** A gate run's root in /tmp, before mkdtemp's suffix. It carries the run's pid, so a later run's sweep tells the root of
+ *  a run that ended without its clean-up (Ctrl+C) from that of a run still going beside it. */
+export const rootName = (pid: number): string => `harness-vscode-gate-${pid}-`
+const ROOT = /^harness-vscode-gate-(\d+)-/
+
+type Process = { pid: number; ppid: number; args: string }
+
+/** This account's processes, read in one go: their arguments, never their environment. */
+function processes(): Process[] {
+  const table = execFileSync('/bin/ps', ['-ww', '-U', String(userInfo().uid), '-o', 'pid=,ppid=,args='], { encoding: 'utf8' })
+  return table.split('\n').flatMap((line) => {
+    const row = /^\s*(\d+)\s+(\d+)\s?(.*)$/.exec(line)
+    return row ? [{ pid: Number(row[1]), ppid: Number(row[2]), args: row[3]! }] : []
+  })
+}
+
+/** Each of this account's processes whose arguments carry the root's folder name: every process of the throwaway runs
+ *  from under the root, or names its folders, by /tmp or /private/tmp. */
+function carrying(table: readonly Process[], root: string): number[] {
+  const name = basename(root)
+  return table.filter(({ args }) => args.includes(name)).map(({ pid }) => pid)
+}
+
+/** The throwaway's processes still running. */
+export function throwawayProcesses(root: string): number[] {
+  return carrying(processes(), root)
+}
+
+/** When the process started, as `ps` says: with its pid, it tells it from a later process given the same pid. */
+export function startedAt(pid: number): string | undefined {
+  const read = spawnSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' })
+  return read.status === 0 ? read.stdout.trim() : undefined
+}
+
+/** SIGKILLs what the throwaway still runs, SIGKILL as a VS Code that will not quit may pass over SIGTERM: each process
+ *  that carries the root's name, each shell the driver reported that is still the process it reported (by its start),
+ *  and every descendant of either, which may carry no name. Returns the processes' names, never their arguments, which
+ *  hold paths. */
+export function killThrowaway(root: string, shells: ReadonlyMap<number, string> = new Map()): string[] {
+  const table = processes()
+  const doomed = new Set(carrying(table, root))
+  for (const [pid, started] of shells) if (startedAt(pid) === started) doomed.add(pid)
+  // Every descendant before any kill: a killed parent's children go to launchd, and out of reach.
+  for (const parent of doomed) for (const { pid, ppid } of table) if (ppid === parent) doomed.add(pid)
+  if (doomed.size === 0) return []
+  const names = spawnSync('/bin/ps', ['-o', 'comm=', '-p', [...doomed].join(',')], { encoding: 'utf8' }).stdout
+  for (const pid of doomed) {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    }
+  }
+  return [...new Set(names.split('\n').filter(Boolean).map((name) => basename(name.trim())))].sort()
+}
+
+function running(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/** Clears, of this account's roots in `tmp`, each whose run has ended: kills what still runs from it, has LaunchServices
+ *  forget its apps and removes it. Returns the roots it cleared. */
+export function sweepLeftovers(tmp = '/tmp'): string[] {
+  const cleared: string[] = []
+  for (const entry of readdirSync(tmp, { withFileTypes: true })) {
+    const pid = ROOT.exec(entry.name)?.[1]
+    if (!entry.isDirectory() || pid === undefined || running(Number(pid))) continue
+    const root = join(tmp, entry.name)
+    if (statSync(root).uid !== userInfo().uid) continue
+    killThrowaway(root)
+    unregister(root)
+    // What was killed may still be letting go of its files.
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 })
+    cleared.push(entry.name)
+  }
+  return cleared
 }
 
 export type Stamp = { mtimeMs: number; sha256: string } | null
