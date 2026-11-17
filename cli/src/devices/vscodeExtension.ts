@@ -96,6 +96,9 @@ export function vscodeStatus(deps: VscodeExtensionDeps): VscodeStatus {
 
 /** A failure answers `off` whatever was installed before: what the caller needs is that this build's is not on. */
 export async function vscodeEnable(deps: VscodeExtensionDeps): Promise<VscodeChange> {
+  // On at this build's version already: an enable that arrives twice installs once.
+  const before = vscodeStatus(deps)
+  if (before.vscode === 'on' && before.version === buildVersion(deps)) return before
   const cli = vscodeCli(deps)
   if (cli === null) return { vscode: 'off', error: 'no-code' }
   const files = deps.files()
