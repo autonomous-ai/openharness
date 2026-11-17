@@ -16,7 +16,7 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 2))
 if (process.argv[2] === '--worker') {
   const [bundle, directory] = process.argv.slice(3)
   const { registry } = await import(pathToFileURL(bundle).href)
-  registry.load()
+  await registry.load()
   let queue = Promise.resolve()
   process.on('message', ({ id, command, count }) => {
     queue = queue.then(async () => {
