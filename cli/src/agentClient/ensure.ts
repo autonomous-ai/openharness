@@ -1,0 +1,153 @@
+/**
+ * `harness ensure` (#4393): a program's own harness for an engine, kept across its tasks. The live one its token owns by
+ * that name, else the closed one opened again with its conversation, else a new one started by `harness new` itself.
+ * The daemon is started first when it is down (lib/programDaemon.ts, through `daemonUp`). A new verb: nothing without
+ * it changes.
+ */
+import { randomUUID } from 'node:crypto'
+import { engineName } from '../messages/model.js'
+import {
+  EXIT, exactly, inspect, list, named, opened, programOf, refuseAgentWithToken, resumedAgent, run, STARTING_MS, UsageError, wantsJson, words,
+  type ClientDeps, type Opened, type Setup,
+} from './commands.js'
+import { AgentClientError, type Daemon } from './daemon.js'
+import type { Frame } from './model.js'
+import { PROGRAM_TOKEN_FLAG, withProgramLock, type ProgramHarness } from './program.js'
+
+export const ENSURE_USAGE = `Usage: harness ensure <engine> --name <name> ${PROGRAM_TOKEN_FLAG} <path> [--local <dir>] [--fresh] [<folder>] [--json]
+
+One call that keeps a program's own harness (#4393): the live one by that name and token, else the closed one opened
+again with its conversation (OpenClaw keeps its --session key, Hermes its resume id), else a new one, started exactly as
+harness new starts it. --fresh closes the one there is and starts a new conversation. A name held by a harness without
+that token is refused NAME_TAKEN. Two ensures of one name at once make one harness.
+The token file is 0600, yours, and holds 32 or more bytes; the token never reaches the harness's terminal.
+--json answers {"result":"live"|"resumed"|"new","id","name","engine","engineSession","state":"idle"|"working"|"starting",
+"why"?}: "why" says why a conversation could not go on.
+Then give it words with harness reply <name> ${PROGRAM_TOKEN_FLAG} <path> -- <words>.
+Exit status: 0 ok, 5 refused (NAME_TAKEN, NOT_YOURS, BAD_TOKEN_FILE), 1 failed.
+This computer only.`
+
+export interface EnsureDeps extends ClientDeps {
+  /** Starts a harness as `harness new` does with [argv] (`--json` among them): its exit code and the lines it printed. */
+  create: (argv: string[]) => Promise<{ code: number; lines: string[] }>
+  /** Brings this computer's daemon up when it is down, for a program (contract E, #4393): whether it started it and how
+   *  long that took. Absent: a daemon that is down is said, as every verb says it. */
+  daemonUp?: () => Promise<{ started: boolean; ms: number }>
+}
+
+type EnsureResult = 'live' | 'resumed' | 'new'
+
+/** What the engine resumes the conversation by: OpenClaw's `--session` key, Hermes's session id; null before it has one. */
+function engineSession(frame: Frame): string | null {
+  if (frame.sessionId) return frame.sessionId
+  return frame.engine === 'openclaw' ? `harness-${frame.id}` : null
+}
+
+export function ensureCommand(argv: readonly string[], deps: EnsureDeps): Promise<number> {
+  return run(ENSURE_USAGE, deps, wantsJson, argv, async (s) => {
+    const { names, flags, machine } = words(argv, { '--name': 'value', [PROGRAM_TOKEN_FLAG]: 'value', '--local': 'value', '--fresh': 'flag', '--json': 'flag' })
+    if (machine !== null) throw new UsageError('harness ensure keeps a harness on this computer: leave out --machine.')
+    if (!names.length || names.length > 2) throw new UsageError(names.length ? 'Name the engine, then at most one folder.' : 'Name the engine: harness ensure openclaw --name <name> …')
+    const name = String(flags.get('--name') ?? '').trim()
+    if (!name) throw new UsageError('Name the harness: --name <name>.')
+    if (!flags.has(PROGRAM_TOKEN_FLAG)) throw new UsageError(`A program's harness is proven by its token: ${PROGRAM_TOKEN_FLAG} <path>.`)
+    const [engine, folder] = names
+    const json = flags.has('--json')
+    const began = s.now()
+    const up = deps.daemonUp ? await deps.daemonUp() : { started: false, ms: 0 }
+    const o = await opened(s)
+    try {
+      refuseAgentWithToken(o)
+      const p = programOf(flags, o.where.dataDir)!
+      return await withProgramLock(o.where.dataDir, name, async () => {
+        // Read again under the lock: an ensure that held it before may have made the harness.
+        o.frames = await list(o.daemon, true)
+        o.stopped = true
+        const frames = named(o.frames)
+        const byId = new Map(frames.map((f) => [f.id, f]))
+        // A record whose harness was deleted outright (the person's Delete) is no longer anyone's.
+        try { p.records.prune(new Set(frames.map((f) => f.id))) } catch { /* read past below */ }
+        const mine = p.records.named(name, p.hash).flatMap((record) => { const frame = byId.get(record.agentId); return frame ? [{ record, frame }] : [] })
+        const other = mine.find((x) => x.record.engine !== engine && x.frame.status !== 'stopped')
+        if (other) {
+          throw new AgentClientError('NAME_TAKEN', `"${name}" is your ${engineName(other.record.engine)} harness. Close it (harness close ${name} ${PROGRAM_TOKEN_FLAG} <path>) before keeping a ${engineName(engine)} one by that name.`)
+        }
+        const same = mine.filter((x) => x.record.engine === engine)
+        const held = frames.find((f) => f.status !== 'stopped' && exactly(name)(f) && !same.some((x) => x.frame.id === f.id))
+        if (!same.length && held) throw new AgentClientError('NAME_TAKEN', `"${name}" is held by a harness this token does not own. Choose another name.`)
+        const live = same.find((x) => x.frame.status !== 'stopped')
+        const say = async (result: EnsureResult, frame: Frame, why?: string): Promise<number> => {
+          const state = result === 'live' ? await stateNow({ daemon: o.daemon, frame }, p.records.get(frame.id)) : 'starting'
+          const answer = { result, id: frame.id, name, engine, engineSession: engineSession(frame), state, ...(why ? { why } : {}),
+            ...(up.started ? { daemonStarted: true, daemonStartMs: up.ms } : {}) }
+          s.out(json ? JSON.stringify(answer) : `${name}: ${result}${why ? ` (${why})` : ''} · ${engineName(engine)} · ${state} · ${s.now() - began} ms`)
+          return EXIT.ok
+        }
+        if (live && !flags.has('--fresh')) return say('live', live.frame)
+        if (live) {
+          const closed = await o.daemon.request('agent_close', { agentId: live.frame.id, sessionId: live.frame.sessionId ?? '', createdAt: live.frame.createdAt ?? '', mode: 'now' }, 60_000)
+          if (closed.error) throw new AgentClientError(String(closed.error), `${name} could not be closed for a fresh start (${String(closed.error)}).`)
+        }
+        // Closed: opened again with its conversation, unless a fresh one is asked for.
+        const closedOne = flags.has('--fresh') ? undefined : same[0]
+        if (closedOne) {
+          const resumed = await resumeOwned(s, o, closedOne.frame).catch((error: unknown) => error instanceof AgentClientError ? error : Promise.reject(error))
+          if (!(resumed instanceof AgentClientError)) {
+            p.records.started(closedOne.frame.id, s.now())
+            return resumed.resumed
+              ? say('resumed', resumed.frame)
+              : say('new', resumed.frame, `${engineName(engine)} could not resume the earlier conversation: the same harness runs in a new one`)
+          }
+          if (resumed.code === 'RESUME_UNCONFIRMED') {
+            p.records.started(closedOne.frame.id, s.now())
+            return say('resumed', closedOne.frame, 'its conversation is not confirmed yet')
+          }
+          // Not opened again at all: forgotten as the program's, and a new one started in its place.
+          p.records.forget(closedOne.frame.id)
+          return created(`the earlier harness could not be opened again (${resumed.message})`)
+        }
+        // A fresh start forgets the old one as the program's: it stays closed, and the name is the new one's.
+        for (const x of same) p.records.forget(x.frame.id)
+        return created()
+
+        async function created(why?: string): Promise<number> {
+          const local = flags.get('--local')
+          const made = await deps.create([engine, ...(folder ? [folder] : []), '--name', name, PROGRAM_TOKEN_FLAG, p.file,
+            ...(typeof local === 'string' ? ['--local', local] : []), '--json'])
+          const line = made.lines.map((l) => { try { return JSON.parse(l) as Record<string, unknown> } catch { return null } }).find((x) => x) ?? null
+          if (made.code !== 0 || !line || line.ok !== true) {
+            const code = typeof line?.code === 'string' ? line.code : 'FAILED'
+            const detail = typeof line?.error === 'string' ? line.error : made.lines.join(' ').trim() || 'The harness could not be started.'
+            throw new AgentClientError(code, detail)
+          }
+          const agent = (line.agent ?? {}) as Frame
+          return say('new', { ...agent, engine: agent.engine ?? engine }, why)
+        }
+      })
+    } finally { o.daemon.close() }
+  })
+}
+
+/** A live harness's state for `ensure`: idle, working, or still starting (no words taken since its engine started, and
+ *  not idle yet). */
+async function stateNow(t: { daemon: Daemon; frame: Frame }, record: ProgramHarness | null): Promise<'idle' | 'working' | 'starting'> {
+  const { screen } = await inspect(t)
+  if (screen === 'idle') return 'idle'
+  const fresh = !record || record.inputs.every((input) => input.takenAt < record.startedAt)
+  return fresh || t.frame.launch?.state === 'starting' ? 'starting' : 'working'
+}
+
+/** [frame], closed, opened again with its conversation where its engine can (`agent_resume`), as `harness resume` does. */
+async function resumeOwned(s: Setup, o: Opened, frame: Frame): Promise<{ frame: Frame; resumed: boolean }> {
+  const name = frame.name ?? frame.id.slice(0, 8)
+  const creationId = randomUUID()
+  let reply: Record<string, unknown>
+  try { reply = await o.daemon.request('agent_resume', { agentId: frame.id, creationId }, STARTING_MS) } catch (error) {
+    if (!(error instanceof AgentClientError) || error.code !== 'TIMEOUT') throw error
+    reply = await o.daemon.request('agent_create_status', { creationId })
+    if (reply.state === 'missing') throw error
+  }
+  const agent = resumedAgent(s, name, name, frame.id, reply)
+  return { frame: { ...frame, ...agent }, resumed: reply.resumed !== false }
+}
+
