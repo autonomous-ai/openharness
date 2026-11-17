@@ -1,0 +1,11 @@
+{
+  "name": "harness-device",
+  "displayName": "Harness Device",
+  "description": "The Harness dial reaches Claude Code and Codex in this window's terminals.",
+  "version": "0.0.0",
+  "publisher": "autonomous-ai",
+  "license": "MIT",
+  "engines": { "vscode": "^1.75.0" },
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"]
+}
