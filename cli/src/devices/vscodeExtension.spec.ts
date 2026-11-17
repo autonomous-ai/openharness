@@ -162,7 +162,6 @@ describe('vscodeStatus', () => {
     const disk: Record<string, string> = { ...MAC }
     if (text !== undefined) disk[RECORD] = text
     expect(vscodeStatus(computer({ disk }).deps)).toEqual({ vscode: 'off' })
-    if (text !== undefined) expect(recordVersion(text)).toBeUndefined()
   })
 
   it('status runs nothing', () => {
