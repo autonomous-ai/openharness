@@ -184,7 +184,7 @@ String _bandText(WidgetTester tester) =>
 
 void main() {
   testWidgets(
-    'a dial and no menu-bar app: the band; Install installs, opens it, and the band goes',
+    'a dial and no menu-bar app: the band; Install installs and the band goes',
     (tester) async {
       final fixture = DeviceAppFixture();
       final app = _app(fixture);
