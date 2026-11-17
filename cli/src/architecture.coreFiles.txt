@@ -317,7 +317,6 @@ lib/claudeHomes.ts
 lib/closeAgentService.ts
 lib/cloudAgents.ts
 lib/computerIdentity.ts
-lib/connectors/vaultOps.ts
 lib/conversationIdentity.ts
 lib/createAgentPane.ts
 lib/cwdRepair.ts

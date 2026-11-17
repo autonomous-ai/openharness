@@ -7,7 +7,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Store, type Client, type Token } from './store.js'
-import { merge, parseSnapshot, snapshotOf, VaultSync, vaultPortOf, type Snapshot, type VaultPort } from './vaultSync.js'
+import { fingerprint, merge, parseSnapshot, snapshotOf, VaultSync, vaultPortOf, type Snapshot, type VaultPort } from './vaultSync.js'
+import { VAULT_PLAINTEXT_BYTES } from './vaultBounds.js'
 
 const token = (access: string, obtained: number, extra: Partial<Token> = {}): Token => ({
   access_token: access, refresh_token: `r-${access}`, source: 'dcr', issuer: 'https://mcp.linear.app', obtained_at: obtained,
@@ -19,6 +20,46 @@ const snap = (connections: Snapshot['connections'], removed: Snapshot['removed']
 
 describe('merging two computers\' connections', () => {
   const now = 2_000_000_000
+
+  it('secret boundary: restores a missing client only from the identical token', () => {
+    const incomplete = snap({ linear: { token: token('synthetic', 300) } })
+    const complete = snap({ linear: { token: token('synthetic', 300), client: client('synthetic-client') } })
+    expect(merge(incomplete, complete, now).connections.linear.client).toEqual(client('synthetic-client'))
+    const different = snap({ linear: { token: token('other', 300), client: client('wrong-client') } })
+    expect(merge(incomplete, different, now).connections.linear.client).toBeUndefined()
+    expect(merge(snap({ linear: { token: token('newer', 301) } }), complete, now).connections.linear.client).toBeUndefined()
+  })
+
+  it('secret boundary: rejects reserved codes, normalizes old codes and reconstructs only bounded client fields', () => {
+    let nested: unknown = 'synthetic'
+    for (let i = 0; i < 100; i++) nested = { more: nested }
+    const connections = Object.fromEntries([
+      ['__proto__', { token: token('synthetic-prototype', 10) }],
+      ['constructor', { token: token('synthetic-constructor', 10) }],
+      ['prototype', { token: token('synthetic-prototype', 10) }],
+      ['not/a/code', { token: token('synthetic-invalid', 10) }],
+      ['apollo', { token: token('synthetic-valid', 10), client: { ...client('bounded'), extra: nested } }],
+    ])
+    const removed = Object.fromEntries([['__proto__', 1], ['constructor', 1], ['not/a/code', 1], ['apollo', now]])
+    const parsed = parseSnapshot(JSON.stringify({ v: 1, connections, removed }))!
+    expect(Object.keys(parsed.connections)).toEqual(['apollo_io'])
+    expect(parsed.removed).toEqual({ apollo_io: now })
+    expect(parsed.connections.apollo_io.client).toEqual(client('bounded'))
+    expect(JSON.stringify(parsed)).not.toContain('more')
+    expect(() => fingerprint(parsed)).not.toThrow()
+  })
+
+  it('secret boundary: rejects malformed maps and over-limit plaintext before parsing', () => {
+    expect(parseSnapshot(JSON.stringify({ v: 1, connections: [] }))).toBeNull()
+    expect(parseSnapshot(JSON.stringify({ v: 1, connections: {}, removed: [] }))).toBeNull()
+    const text = JSON.stringify(snap({ linear: { token: token('synthetic', 1) } }))
+    expect(parseSnapshot(text + ' '.repeat(VAULT_PLAINTEXT_BYTES - Buffer.byteLength(text) + 1))).toBeNull()
+    for (const value of [{ ...client('x'), client_secret: { nested: true } }, { ...client('x'), registered_at: 'later' },
+      { ...client('x'), client_id: 'x'.repeat(8193) }]) {
+      const parsed = parseSnapshot(JSON.stringify(snap({ linear: { token: token('synthetic', 1), client: value as never } })))!
+      expect(parsed.connections.linear.client).toBeUndefined()
+    }
+  })
 
   it('keeps the token issued last, and a disconnect over every older one', () => {
     const a = snap({ linear: { token: token('a1', now - 300) }, notion: { token: token('n1', now - 300) } })
@@ -97,6 +138,25 @@ describe('two computers and the backend', () => {
     const vault = new Store(join(home, name), env())
     return { vault, sync: new VaultSync({ vault, port: backend.port(name), env: env() }) }
   }
+
+  it('secret boundary: stopped synchronization cannot apply a response that arrives later', async () => {
+    const backend = new FakeBackend()
+    backend.envelope = { plaintext: JSON.stringify(snap({ linear: { token: token('synthetic-late', 100) } })), for: ['A', 'B'] }
+    const vault = new Store(join(home, 'late'), env())
+    let resume!: () => void
+    let entered!: () => void
+    const reading = new Promise<void>(resolve => { entered = resolve })
+    const blocked = new Promise<void>(resolve => { resume = resolve })
+    const port = backend.port('A')
+    const sync = new VaultSync({ vault, env: env(), port: { ...port, read: async () => { entered(); await blocked; return port.read() } } })
+    const running = sync.run()
+    await reading
+    sync.stop()
+    resume()
+    await running
+    expect(vault.tokens()).toEqual({})
+    expect(backend.writes).toBe(0)
+  })
 
   it('hands a connection made on one computer to the other, and its renewal and disconnect too', async () => {
     const backend = new FakeBackend()

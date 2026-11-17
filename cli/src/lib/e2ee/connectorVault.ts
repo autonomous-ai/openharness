@@ -10,8 +10,7 @@
  *     a key it trusts (a machine of the account's log), so the backend, which can replace the envelope,
  *     cannot make a computer accept connections it wrote itself (an MCP address of its own, say).
  *
- * Only the gateway holds this machine's identity; the connectors service asks it to seal and open
- * (core.account.connectorVault).
+ * Only the gateway holds this machine's identity and synchronizes these envelopes. Core carries metadata only.
  */
 import { ed25519, x25519 } from '@noble/curves/ed25519'
 import { sha256 } from '@noble/hashes/sha2'
@@ -19,6 +18,7 @@ import { hkdf } from '@noble/hashes/hkdf'
 import { randomBytes } from '@noble/hashes/utils'
 import { chacha20poly1305 } from '@noble/ciphers/chacha'
 import { b64d, b64e, lvCat, sign, utf8, verify, type Identity } from './core.js'
+import { VAULT_CIPHERTEXT_CHARS, VAULT_PLAINTEXT_BYTES } from '../connectors/vaultBounds.js'
 
 const CONTEXT = 'harness-connector-vault-v1'
 const WRAP = 'harness-connector-vault-wrap-v1'
@@ -50,6 +50,7 @@ function wrapKey(shared: Uint8Array, eph: Uint8Array, recipient: Uint8Array): Ui
 
 /** Seal [plaintext] from [sender] for [recipients] (base64 Ed25519 device keys); the sender is always one. */
 export function sealVault(plaintext: string, sender: Identity, recipients: Iterable<string>): VaultEnvelope {
+  if (Buffer.byteLength(plaintext) > VAULT_PLAINTEXT_BYTES) throw new Error('connections exceed the vault limit')
   const senderPub = b64e(sender.pub)
   const to = [...new Set([senderPub, ...recipients])]
   if (to.length > MAX_RECIPIENTS) throw new Error('too many machines to seal for')
@@ -77,7 +78,8 @@ export function sealVault(plaintext: string, sender: Identity, recipients: Itera
 export function openVault(envelope: unknown, me: Identity, trusted: ReadonlySet<string>): string | null {
   const e = envelope as Partial<VaultEnvelope> | null
   if (!e || e.v !== 1 || typeof e.sender !== 'string' || typeof e.eph !== 'string' || typeof e.nonce !== 'string'
-    || typeof e.ct !== 'string' || typeof e.sig !== 'string' || !e.keys || typeof e.keys !== 'object') return null
+    || typeof e.ct !== 'string' || e.ct.length > VAULT_CIPHERTEXT_CHARS || typeof e.sig !== 'string'
+    || !e.keys || typeof e.keys !== 'object' || Array.isArray(e.keys) || Object.keys(e.keys).length > MAX_RECIPIENTS) return null
   if (!trusted.has(e.sender)) return null
   const keys = e.keys as Record<string, unknown>
   if (Object.values(keys).some(value => typeof value !== 'string')) return null

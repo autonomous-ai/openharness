@@ -1058,7 +1058,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Their relay, a socket per shared tab, held by the gateway too (gateway/tabRelay.ts).
     tabRelay,
     // The account's connected services, sealed and opened by the gateway for the connectors service.
-    connectorVault: { seal: (plaintext) => gatewayOps.connectorVault.seal(plaintext), open: (envelope) => gatewayOps.connectorVault.open(envelope) },
+    connectorSync: (refresh) => gatewayOps.connectorSync(refresh),
     // The same path the window's `agent_fork` takes.
     fork: async (agentId) => {
       if (!backendRef?.onForkAgent) return { ok: false, error: 'UNSUPPORTED' }
@@ -1610,9 +1610,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Agent Messages reads its tabs again at `desk_changed`: told here in its own process, heard through
     // `account.onNotice` in this one.
     messagesLink.notice(notice)
-    // The connectors service merges the account's sealed connections again (services/connectors.ts); in
-    // the core's process it hears this through `account.onNotice` like any listener.
-    // A device key added or confirmed (`device_keys_changed`) may be a machine to seal them for as well.
+    // Edge projects its current local connection set after a gateway notice; no vault data crosses this link.
     if ((notice.type === 'connectors_changed' || notice.type === 'device_keys_changed') && outOfProcess.has('connectors')) {
       serviceLinks.notify('connectors', { type: 'service_event', payload: { kind: 'notice', notice } })
     }
