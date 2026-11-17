@@ -60,6 +60,7 @@ import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
 import { vscodeStreams } from '../cable/hosts/vscodeTerminals.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
 import { createEngineTally } from '../cable/engineTally.js'
+import { startVscodeExtensionUpdate } from '../cable/vscodeExtensionUpdate.js'
 import { Notices, type NoticeCaller } from '../cable/notices.js'
 import { NOTIFY_MODE_FILE, NotifyModeStore, type NotifyMode } from '../cable/notifyMode.js'
 import { PetStore } from '../cable/pets/store.js'
@@ -69,6 +70,7 @@ import { createDialSetup } from '../cable/dialSetup.js'
 import { claudeFound, type ClaudeRun } from '../devices/claudePlugin.js'
 import { readRemoved, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
 import { createOrcaHomesCache, orcaHomesDeps, readOrcaHomes, type OrcaHomesCache } from '../devices/orcaHomes.js'
+import { buildVersion, vscodeEnable, vscodeExtensionDeps, vscodeStatus, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 import { WindowForm } from '../cable/windowForm.js'
 import { createWindowRouter } from '../cable/windowRoute.js'
 import { WindowSelection } from '../cable/windowSelection.js'
@@ -151,6 +153,9 @@ export interface DevicesDeps {
   claude?: (home: string, shell: boolean) => Promise<ClaudeRun | null>
   /** For this service's tests: Orca's account homes (devices/orcaHomes.ts); read with this computer's `orca` when unset. */
   orcaHomes?: OrcaHomesCache
+  /** For this service's tests: how VS Code and Harness's extension in it are found and `code` is run; the real ones by
+   *  default (devices/vscodeExtension.ts). */
+  vscodeExtension?: VscodeExtensionDeps
 }
 
 /** ⌘K's answer while the fleet is not running: it never started, so there is no list to weigh. */
@@ -505,6 +510,21 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const skillPass = (): void => {
     if (skill && !stopped) part.call('skill', () => skill.started())
   }
+  // Harness's VS Code extension brought to this CLI's version (cable/vscodeExtensionUpdate.ts), in the devices' own
+  // process alone, as the dial setup: inside the core's the core would run VS Code's `code`. A part of its own, so a throw
+  // in VS Code's files is never the dial's.
+  if (deps.listen) part.call('vscodeExtension', () => {
+    const vscode = deps.vscodeExtension ?? vscodeExtensionDeps()
+    const count = createEngineTally('[device] vscode extension', ['vscode'], ['updated', 'failed', 'left removed'], log)
+    startVscodeExtensionUpdate({
+      platform: vscode.platform,
+      status: () => vscodeStatus(vscode),
+      version: () => buildVersion(vscode),
+      enable: () => vscodeEnable(vscode),
+      after: timerIn('vscodeExtension'),
+      count: (kind, reason) => count('vscode', kind, reason),
+    })
+  })
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, orcaHomes, {
     adapters,
     modReady: (sessionId) => inbox.ready(sessionId),
