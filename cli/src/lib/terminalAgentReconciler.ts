@@ -283,8 +283,9 @@ export class TerminalAgentReconciler {
    *
    * A pass that rejected was an HTTP 500 for the hook that asked for it, before its admission could show its
    * hold, and an unhandled rejection every 5 s from the timer for as long as the outage lasted
-   * (e2e/hookclient.e2e.ts, e2e/diskfull.e2e.ts, 2026-11-17). What the pass observed stays in the registry's
-   * rows and is saved by a later pass. No "saved again" line: a batch that resolves may have written nothing.
+   * (e2e/hookclient.e2e.ts, e2e/diskfull.e2e.ts, 2026-11-17). What the pass applied stays in the registry's rows
+   * and is saved by a later pass; a callback whose own write was refused ends the batch there, and the next pass
+   * observes the rest again. No "saved again" line: a batch that resolves may have written nothing.
    * Any other failure, an owner that changed among them, still fails the pass.
    */
   private async batch(saved: Promise<void>): Promise<void> {
