@@ -1386,7 +1386,7 @@ class Registry {
     const rebooted = bootChanged(savedBoot, bootId)
     let originalContents: string | undefined
     try {
-      originalContents = readPrivateStateFile(FILE)
+      originalContents = await readPrivateRegistryFile(FILE)
       const stored = JSON.parse(originalContents) as unknown
       if (!Array.isArray(stored)) {
         await this.quarantine('root is not an array', originalContents)
@@ -1699,7 +1699,7 @@ class Registry {
       await this.writer.run(deadline => registryFileLock(env.ADAPTER_DATA_DIR, deadline, async checkOwner => {
         // A peer may publish while rows are being prepared or the lock is awaited.
         // Only the exact malformed image we read may be moved aside.
-        if (readPrivateStateFile(FILE) !== originalContents) {
+        if (await readPrivateRegistryFile(FILE) !== originalContents) {
           throw new RegistryPersistenceUnavailable('registry image changed during initialization')
         }
         checkOwner()

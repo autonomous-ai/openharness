@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -56,6 +56,61 @@ function pausedLoad() {
   expect(loading).toBeInstanceOf(Promise)
   return { loading, entered: entered.promise, resume: resumed.resolve }
 }
+
+it('keeps initial image I/O owned without using the blocking reader or admitting callers', async () => {
+  const persistence = await import('./registryPersistence.js'), read = persistence.readPrivateRegistryFile
+  const secure = await import('./secureState.js'), readSync = secure.readPrivateStateFile
+  const entered = deferred(), resumed = deferred()
+  release = resumed.resolve
+  vi.spyOn(secure, 'readPrivateStateFile').mockImplementation((path, limit) => {
+    if (path === file) throw new Error('fixture: whole-image disk read cannot run in line')
+    return readSync(path, limit)
+  })
+  let held = false
+  vi.spyOn(persistence, 'readPrivateRegistryFile').mockImplementation(async (...args) => {
+    if (args[0] === file && !held) { held = true; entered.resolve(); await resumed.promise }
+    return read(...args)
+  })
+  const loading = registry.load(); pending.push(loading)
+  expect(await Promise.race([entered.promise.then(() => 'reading'), loading.then(() => 'completed')])).toBe('reading')
+  expect(() => registry.list()).toThrow('initializing')
+  expect(() => registry.markOpened('fixture-0')).toThrow('initializing')
+  let closed = false
+  const closing = registry.flush({ exiting: true }).then(() => { closed = true }); pending.push(closing)
+  await Promise.resolve()
+  expect(closed).toBe(false)
+  resumed.resolve(); await loading; await closing
+  expect(closed).toBe(true)
+  expect(JSON.parse(readFileSync(file, 'utf8'))).toHaveLength(2)
+})
+
+it('owns the recovery read through settlement before moving the exact corrupt image aside', async () => {
+  const original = 'fixture invalid JSON'
+  writeFileSync(file, original, { mode: 0o600 })
+  const persistence = await import('./registryPersistence.js'), read = persistence.readPrivateRegistryFile
+  const secure = await import('./secureState.js'), readSync = secure.readPrivateStateFile
+  const entered = deferred(), resumed = deferred()
+  release = resumed.resolve
+  let synchronousReads = 0, asynchronousReads = 0
+  vi.spyOn(secure, 'readPrivateStateFile').mockImplementation((path, limit) => {
+    if (path === file && ++synchronousReads > 1) throw new Error('fixture: recovery disk read cannot run in line')
+    return readSync(path, limit)
+  })
+  vi.spyOn(persistence, 'readPrivateRegistryFile').mockImplementation(async (...args) => {
+    if (args[0] === file && ++asynchronousReads === 2) { entered.resolve(); await resumed.promise }
+    return read(...args)
+  })
+  const loading = registry.load(); pending.push(loading)
+  expect(await Promise.race([entered.promise.then(() => 'reading'), loading.then(() => 'completed')])).toBe('reading')
+  expect(readFileSync(file, 'utf8')).toBe(original)
+  expect(() => registry.list()).toThrow('initializing')
+  resumed.resolve(); await loading
+  expect(existsSync(file)).toBe(false)
+  const aside = readdirSync(join(root, 'data')).filter(name => name.startsWith('registry.json.corrupt-'))
+  expect(aside).toHaveLength(1)
+  expect(readFileSync(join(root, 'data', aside[0]!), 'utf8')).toBe(original)
+  expect(registry.list()).toEqual([])
+})
 
 it('yields between complete native proofs without publishing rows or admitting callers', async () => {
   const entered = vi.fn(); registry.onEnter = entered
