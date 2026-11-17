@@ -14,6 +14,7 @@ type Answer = { code: number | null; stdout?: string; stderr?: string }
 const USER_ON = { id: 'harness-device@openharness', scope: 'user', enabled: true, version: '0.1.0' }
 const USER_OFF = { ...USER_ON, enabled: false }
 const MARKETPLACE = [{ name: 'openharness', source: 'github', repo: 'autonomous-ai/openharness' }]
+const UNLISTED = 'Claude Code did not list its plugins.'
 
 /** A `claude` that answers by its arguments and records each call with the time it was given. */
 function fakeClaude(answers: Record<string, Answer>, version = '2.1.287 (Claude Code)') {
@@ -236,12 +237,42 @@ describe('claudeUpdate', () => {
     }
   })
 
+  it('an update whose list after it cannot be read is a failure, not updated', async () => {
+    const claude = fakeClaude({ 'plugin list --json': list(USER_ON) })
+    let updated = false
+    const run: ClaudeRun = async (args, timeoutMs) => {
+      if (args.join(' ') === update) updated = true
+      if (args.join(' ') === 'plugin list --json' && updated) return { code: null, stdout: '', stderr: '' }
+      return claude.run(args, timeoutMs)
+    }
+    expect(await claudeUpdate({ run, platform: 'darwin' })).toEqual({ ok: false, error: UNLISTED, step: 'list' })
+  })
+
   it('update with an old Claude Code, or none, asks its version and nothing else', async () => {
     const claude = fakeClaude({ 'plugin list --json': list(USER_ON) }, '2.1.286 (Claude Code)')
     const unsupported = { ok: false, error: 'Claude Code 2.1.287 or later is needed.', step: 'unsupported' }
     expect(await claudeUpdate({ run: claude.run, platform: 'darwin' })).toEqual(unsupported)
     expect(claude.calls.map((call) => call.args)).toEqual(['--version'])
     expect(await claudeUpdate({ run: null, platform: 'darwin' })).toEqual(unsupported)
+  })
+})
+
+describe('a list that cannot be read', () => {
+  // One that failed, ran out of time or is not JSON says nothing of the plugin: it is never read as none.
+  const unreadable: Array<[Answer, string]> = [
+    [{ code: 1, stderr: 'Error: settings locked\n' }, 'Error: settings locked'],
+    [{ code: null }, UNLISTED],
+    [{ code: 0, stdout: 'Loading plugins…\n[' }, UNLISTED],
+  ]
+
+  it('update, disable and enable fail with step list, and change nothing', async () => {
+    for (const [answer, error] of unreadable) {
+      for (const act of [claudeUpdate, claudeDisable, claudeEnable]) {
+        const claude = fakeClaude({ 'plugin list --json': answer })
+        expect(await act({ run: claude.run, platform: 'darwin' })).toEqual({ ok: false, error, step: 'list' })
+        expect(claude.writes()).toEqual([])
+      }
+    }
   })
 })
 

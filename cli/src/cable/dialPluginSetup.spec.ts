@@ -191,6 +191,26 @@ describe('createDialPluginSetup', () => {
     expect(state.lookups).toBe(1)
   })
 
+  it('after a CLI update a list that cannot be read is failed · list, the old version kept, and tried an hour later', async () => {
+    const fail = ['plugin list --json']
+    const claude = fakeClaude({ installed: entry('16a92abfab3f'), fail })
+    const { setup, state, counted } = rig(claude)
+    state.recorded = '0.6.58'
+    expect(await setup.pass()).toBe(false)
+    expect(claude.writes()).toEqual([])
+    expect(state.recorded).toBe('0.6.58')
+    expect(counted).toEqual([['failed', 'list']])
+    state.now = HOUR - 1
+    await setup.pass()
+    expect(state.lookups).toBe(1)
+    fail.pop()
+    state.now = HOUR
+    expect(await setup.pass()).toBe(true)
+    expect(claude.writes()).toEqual([PULL, UPDATE])
+    expect(state.recorded).toBe('0.6.59')
+    expect(counted).toEqual([['failed', 'list'], ['updated']])
+  })
+
   it('a failed install is counted with its step and tried no sooner than an hour later', async () => {
     const fail = [INSTALL]
     const claude = fakeClaude({ fail })
