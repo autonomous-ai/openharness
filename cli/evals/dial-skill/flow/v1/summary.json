@@ -3,7 +3,7 @@
   "label": "stops on their step",
   "target": "skill",
   "environment": {
-    "commit": "5336350ba2a2671598e936a4b18c098ec10eed58",
+    "commit": "7b9db015a119463e45392020321212939fcc06f9",
     "lockfile": "cli/package-lock.json",
     "lockfile_sha256": "a7cc1f1846e31034bca132a0c072bd5d1877aa01e4ee188a57b3b5cf53eed738",
     "claude_version": "2.1.326 (Claude Code)",
