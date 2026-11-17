@@ -173,10 +173,19 @@ interface Entry {
   dialPrompts: { at: number }[]
 }
 
+/** A pane's name as its app shows it, and whether the person set it. */
+export interface PaneName {
+  title: string
+  renamed: boolean
+}
+
 export class ObservedSource implements HostSource {
   readonly id = 'observed'
   private readonly entries = new Map<string, Entry>()
   private readonly listeners = new Set<() => void>()
+  /** Each adapter's names for its panes, by pane id, as its app shows them, and the pane its caller placed each agent
+   *  with none of that adapter's at, by agent id. */
+  private readonly paneNames = new Map<string, { names: ReadonlyMap<string, PaneName>; placed: ReadonlyMap<string, string> }>()
   private scanning: Promise<void> | null = null
 
   constructor(private readonly deps: ObservedDeps) {}
@@ -354,13 +363,28 @@ export class ObservedSource implements HostSource {
    *  else now. Asked at each look: the front moves, and a watch comes and goes. */
   private shown(agent: HostAgent): Located | undefined {
     const e = this.entries.get(agent.id)
-    return e && this.live(e) ? this.first(e, rest) : undefined
+    return e && this.live(e) ? this.shownOnly(e).find(({ adapter, pane }) => rest(adapter, pane)) : undefined
   }
 
-  /** What a tap opens: its app, and the first of its panes the opener brings forward. Asked at each look, as a rest's. */
+  /** What a tap opens: its app, and the first of its panes the opener brings forward. Asked at each look, as a rest's.
+   *  An agent placed by its caller has had no hook to name its app: the adapter it was placed in names it. */
   private target(e: Entry): OpenTarget {
-    const near = this.first(e, tapped)
-    return { ...(e.bundle ? { bundle: e.bundle } : {}), ...(near ? { pane: near.pane } : {}) }
+    const near = this.shownOnly(e).find(({ adapter, pane }) => tapped(adapter, pane))
+    const placed = near && !e.panes.includes(near)
+    const bundle = e.bundle ?? (placed ? near.adapter.bundle : undefined)
+    return { ...(bundle ? { bundle } : {}), ...(near ? { pane: near.pane } : {}) }
+  }
+
+  /** What a rest and a tap may show: its panes, and in an adapter where it has none, the pane its caller placed it at. A
+   *  place is a guess: showing the wrong terminal costs a look, while words typed there would run at another's prompt.
+   *  So only these two read it, never words, `byPane` or `paneOf`. */
+  private shownOnly(e: Entry): readonly Located[] {
+    return (this.deps.actions?.adapters ?? []).flatMap((adapter) => {
+      const own = e.panes.find((located) => located.adapter === adapter)
+      if (own) return [own]
+      const at = this.paneNames.get(adapter.id)?.placed.get(e.agent.id)
+      return at === undefined ? [] : [{ adapter, pane: { adapter: adapter.id, id: at } }]
+    })
   }
 
   /** Every pane its adapters know it by, afresh: a session resumed elsewhere keeps none it left. */
@@ -381,6 +405,22 @@ export class ObservedSource implements HostSource {
       if (!found || e.agent.lastActivityAt > found.agent.lastActivityAt) found = e
     }
     return found && { ...found.agent }
+  }
+
+  /** The live agent with that adapter's pane of that id: of two, the one heard from last. */
+  byPane(adapter: string, id: string): HostAgent | undefined {
+    let found: Entry | undefined
+    for (const e of this.entries.values()) {
+      if (!this.live(e) || !e.panes.some(({ pane }) => pane.adapter === adapter && pane.id === id)) continue
+      if (!found || e.agent.lastActivityAt > found.agent.lastActivityAt) found = e
+    }
+    return found && { ...found.agent }
+  }
+
+  /** A live agent's pane id in that adapter; none when it has no pane there, or its session ended. */
+  paneOf(agentId: string, adapter: string): string | undefined {
+    const e = this.entries.get(agentId)
+    return e && this.live(e) ? e.panes.find(({ pane }) => pane.adapter === adapter)?.pane.id : undefined
   }
 
   /**
@@ -452,6 +492,41 @@ export class ObservedSource implements HostSource {
     for (const l of [...this.listeners]) l()
   }
 
+  /** Replaces that adapter's names for its panes whole, and the panes its caller placed agents with none of its at, and
+   *  names every live agent again: the change is told once. A place names an agent, and a rest and a tap show it
+   *  (shownOnly); it is never one of its panes, so no words reach it. A place that came or went is told too: what a tap
+   *  can reach changed. */
+  setPaneNames(adapter: string, names: ReadonlyMap<string, PaneName>, placed: ReadonlyMap<string, string>): void {
+    const was = this.paneNames.get(adapter)?.placed
+    this.paneNames.set(adapter, { names, placed })
+    let changed = false
+    for (const e of this.entries.values()) {
+      if (!this.live(e)) continue
+      if (was?.get(e.agent.id) !== placed.get(e.agent.id)) changed = true
+      const name = this.nameOf(e)
+      if (name === e.agent.name) continue
+      e.agent.name = name
+      changed = true
+    }
+    if (changed) this.emit()
+  }
+
+  /** A pane name the person set wins; else the name they gave the session; else its pane's name, else its folder's. */
+  private nameOf(e: Entry): string {
+    const pane = this.paneName(e)
+    return pane?.renamed ? pane.title : e.title ?? pane?.title ?? folderName(e.agent.cwd, e.agent.engine)
+  }
+
+  /** The name of its pane in the first adapter that names one: its own pane there, else the one it was placed at. */
+  private paneName(e: Entry): PaneName | undefined {
+    for (const [adapter, { names, placed }] of this.paneNames) {
+      const id = e.panes.find(({ pane }) => pane.adapter === adapter)?.pane.id ?? placed.get(e.agent.id)
+      const name = id === undefined ? undefined : names.get(id)
+      if (name) return name
+    }
+    return undefined
+  }
+
   /** What the permission prompt the agent waits on asks, while it waits; '' for a prompt that names nothing. */
   waitingOn(agentId: string): string | undefined {
     return this.entries.get(agentId)?.asked
@@ -489,7 +564,7 @@ export class ObservedSource implements HostSource {
       if (e.title !== undefined) entry.title = e.title
       else if (e.engine === 'claude') entry.title = undefined
     }
-    a.name = entry.title ?? folderName(a.cwd, a.engine)
+    a.name = this.nameOf(entry)
     if (e.transcriptPath) entry.transcriptPath = e.transcriptPath
     if (e.event === 'session-end') {
       entry.endAt = now
@@ -686,7 +761,6 @@ export class ObservedSource implements HostSource {
       const name = names.get(sessionId)
       if (name) {
         entry.title = name
-        entry.agent.name = name
         named++
       }
       // The app alone: its host and what a tap opens stay unknown until its first hook.
@@ -697,6 +771,8 @@ export class ObservedSource implements HostSource {
         known++
       }
       this.learnTty(entry, owner.pid)
+      // Once its panes are known.
+      entry.agent.name = this.nameOf(entry)
       // A turn it is in when found reads working, as checkWorking reads it, which ends it once its owner reads idle: listed
       // idle, its compaction's SessionStart (which moves no state) would give a running turn a handle to type into.
       if ((engine === 'claude' || engine === 'codex') && await this.deps.openSessions.busy(owner)

@@ -276,13 +276,13 @@ describe('the recaps', () => {
       tell({ kind: 'events', session, events: [ended], replay: false }, seen)
     }
 
-    it('is decided once, with the agent and its engine, for the dial and the apps while a device listens', async () => {
+    it('is decided once, with the agent\'s engine, for the dial and the apps while a device listens', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const decideTier = vi.fn(async (_input: TierInput) => decided('alert'))
       const { core, tell } = setup({ decideTier })
       await turn(tell, watching)
       await vi.waitFor(() => expect(core.clients.turnSummary).toHaveBeenCalled())
-      expect(decideTier).toHaveBeenCalledExactlyOnceWith({ agent: 'app', engine: 'codex', recap: expect.any(String),
+      expect(decideTier).toHaveBeenCalledExactlyOnceWith({ engine: 'codex', recap: expect.any(String),
         durationS: 0, stats: {}, subagent: false, onScreen: false, failed: false })
       expect(vi.mocked(core.clients.turnSummary).mock.calls[0][0]).toMatchObject({ payload: { tier: 'alert' } })
       expect(vi.mocked(core.clients.turnCard).mock.calls.at(-1)?.[0].payload).toMatchObject({ kind: 'summary', tier: 'alert' })
@@ -317,7 +317,7 @@ describe('the recaps', () => {
     it('decides a harness agent\'s turn alert, with no Jev call', async () => {
       const { tier, log } = await decidedWith()
       expect(tier).toBe('alert')
-      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[recap\] notify · app · alert · rule:turn · turn · \d+ms$/))
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[recap\] notify · alert · rule:turn · turn · \d+ms$/))
     })
 
   })

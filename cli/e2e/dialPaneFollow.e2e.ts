@@ -10,23 +10,18 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import type { FakeDial } from './harness/fakeDial.js'
+import { FakeOrca } from './harness/fakeOrca.js'
 import { InOrca } from './harness/inOrca.js'
 
 /** Node may fire the 400 ms rest's timer a millisecond early; the exact 400 is cableSession.spec.ts's, on a fake clock. */
 const REST_AT_LEAST_MS = 395
-
-/** `orca`, as the daemon finds it: each run's arguments in a file of its own, and the exit code a test wrote (0 if none). */
-const fakeOrca = (runs: string, exitFile: string): string =>
-  `#!/bin/sh\nprintf '%s' "$*" > "$(mktemp '${runs}/run.XXXXXX')"\ncode=$(cat '${exitFile}' 2>/dev/null)\nexit "\${code:-0}"\n`
-
-interface Run { args: string; at: number }
 
 // How `harness hardware watch` is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : ['--import', 'tsx', 'src/cli.ts']
@@ -63,20 +58,13 @@ describe('the dial and the apps follow each other', () => {
     d.env.HARNESSD_TEST_DIAL_PORT = file
     writeFileSync(file, '[]')
     desk = new Desk(file)
-    const runsDir = join(d.root, 'orca-runs')
-    mkdirSync(runsDir)
-    const exitFile = join(d.root, 'orca-exit')
-    writeFileSync(join(d.root, 'bin', 'orca'), fakeOrca(runsDir, exitFile), { mode: 0o755 })
+    const orca = FakeOrca.install(d)
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
     before?.(d)
     await d.start()
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a', capabilities)
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
-    const runs = (): Run[] => readdirSync(runsDir).map((name) => {
-      const path = join(runsDir, name)
-      return { args: readFileSync(path, 'utf8'), at: statSync(path).mtimeMs }
-    })
-    return { d, dial, runs, refuse: () => writeFileSync(exitFile, '1') }
+    return { d, dial, runs: () => orca.runs(), refuse: () => orca.refuse() }
   }
 
   /** A session in an Orca terminal of its own, with Orca's bundle id as an app's terminal inherits it. */

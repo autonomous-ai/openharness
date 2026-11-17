@@ -23,6 +23,7 @@ import { devicesListenerPath } from '../src/devices/listenerPath.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { FakeDial } from './harness/fakeDial.js'
+import { FakeOrca } from './harness/fakeOrca.js'
 import { InOrca } from './harness/inOrca.js'
 import type { DialState } from '../../plugins/harness-device-orca/src/protocol.ts'
 
@@ -78,8 +79,9 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
   })
 
   /**
-   * A daemon of its own, with a desk it finds its dials on, and a fake `orca` first on its PATH: a swipe to an agent in an
-   * Orca terminal runs `orca terminal switch`, and with none on PATH a Mac's daemon runs the Orca app's own.
+   * A daemon of its own, with a desk it finds its dials on, and a fake `orca` first on its PATH (harness/fakeOrca.ts): a
+   * swipe to an agent in an Orca terminal runs `orca terminal switch`, and with none on PATH a Mac's daemon runs the Orca
+   * app's own.
    */
   const fresh = async () => {
     const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false' } })
@@ -89,7 +91,7 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     writeFileSync(file, '[]')
     const theDesk = new Desk(file)
     desk = theDesk
-    writeFileSync(join(d.root, 'bin', 'orca'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    FakeOrca.install(d)
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
     await d.start()
     return { d, desk: theDesk }

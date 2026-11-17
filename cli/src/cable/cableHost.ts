@@ -41,7 +41,7 @@ import { HarnessSource } from './hosts/harness.js'
 import { AppFilter, type AppCounts } from './hosts/appFilter.js'
 import { appDisplayName, hostDisplayName } from './hosts/hostDetect.js'
 import type { HostEntry, HostRegistry } from './hosts/registry.js'
-import { APP_LIMIT, AppRings, DialRing } from './hosts/select.js'
+import { APP_LIMIT, AppRings, DialRing, type RingRank } from './hosts/select.js'
 import { FRONT_NONE } from './hosts/frontApp.js'
 import { capsLetters, type AppList, type AppPick, type DialView, type HostAgent, type PaneSwitch, type SwitchCause, type ViewCause } from './hosts/types.js'
 
@@ -675,11 +675,18 @@ export class DaemonCableHost implements CableHost {
   /** For a dial that says `appFilter`: one ring per app, and which app is shown. One of each for this host, so every such
    *  dial here shows the same app and a pick on one turns them all. In memory only, as the ring. */
   private readonly rings = new AppRings()
+  /** Each app's own order, by app id, for its ring alone; the single ring takes none. In memory only, as the rings. */
+  private readonly ranks = new Map<string, RingRank>()
   private readonly filter: AppFilter
 
   /** Its changes reach the dial on the session's next tick, which reads the list every second. */
   setRegistry(registry: HostRegistry | null): void {
     this.registry = registry
+  }
+
+  /** That app's own order, for its ring alone. It reaches the dial on the session's next list, as any ring change. */
+  setRank(app: string, rank: RingRank): void {
+    this.ranks.set(app, rank)
   }
 
   /** An agent of the machine list and the source that holds it. A dial on a window's tab may do everything with its
@@ -903,7 +910,7 @@ export class DaemonCableHost implements CableHost {
 
   /** The apps of the machine list, in the order they appeared, and the one shown over these agents. */
   private appList(agents: HostAgent[]): AppList {
-    this.rings.update(agents)
+    this.rings.update(agents, this.ranks)
     const shown = this.filter.shown() ?? ''
     const all = this.rings.apps()
     // The firmware keeps the first APP_LIMIT rows and drops the rest, which could be the shown app: past the bound, the

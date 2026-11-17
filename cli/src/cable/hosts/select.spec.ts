@@ -214,6 +214,70 @@ describe('DialRing', () => {
     new DialRing().select(input)
     expect(ids(input)).toEqual(['b', 'a'])
   })
+
+  describe('with a rank', () => {
+    /** Each id's place is its index here. */
+    const rankOf = (...order: string[]): Map<string, number> => new Map(order.map((id, i) => [id, i]))
+
+    it('a rank orders the ring when its members change: the ranked by place, the unranked after them in ring order', () => {
+      const ring = new DialRing()
+      const [a, b, c, d] = row(4)
+      const rank = rankOf('a3', 'a2', 'a1')
+      expect(ids(ring.select([a, b, c], rank).rows)).toEqual(['a3', 'a2', 'a1'])
+      const n = agent('n', { lastActivityAt: 99 })
+      expect(ids(ring.select([a, b, c, d, n], rank).rows)).toEqual(['a3', 'a2', 'a1', 'a4', 'n'])
+      expect(ids(ring.select([a, c, d, n], rank).rows)).toEqual(['a3', 'a1', 'a4', 'n'])
+    })
+
+    it('a new rank object orders the ring again; the same object does not, whatever it holds by then', () => {
+      const ring = new DialRing()
+      const list = row(3)
+      const rank = rankOf('a1', 'a2', 'a3')
+      expect(ids(ring.select(list, rank).rows)).toEqual(['a1', 'a2', 'a3'])
+      rank.set('a3', 0).set('a1', 2)
+      expect(ids(ring.select(list, rank).rows)).toEqual(['a1', 'a2', 'a3'])
+      expect(ids(ring.select(list, rankOf('a3', 'a2', 'a1')).rows)).toEqual(['a3', 'a2', 'a1'])
+    })
+
+    it('with the same members and the same rank the ring holds still: states, activity and the registry\'s order move nobody', () => {
+      const ring = new DialRing()
+      const [a, b, c] = row(3)
+      const rank = rankOf('a2', 'a1')
+      expect(ids(ring.select([a, b, c], rank).rows)).toEqual(['a2', 'a1', 'a3'])
+      const moved: HostAgent[] = [{ ...working(c), lastActivityAt: 99 }, needs(b), { ...a, state: 'done', unseenDone: true }]
+      expect(ids(ring.select(moved, rank).rows)).toEqual(['a2', 'a1', 'a3'])
+    })
+
+    it('the agent the dial shows keeps its row through a reorder', () => {
+      const ring = new DialRing()
+      const before = ids(ring.select(row(4)).rows)
+      const pass = row(4).map((a) => ({ ...a }))
+      const after = ring.select(pass, rankOf('a4', 'a3', 'a2', 'a1')).rows
+      expect(ids(after)).toEqual(['a4', 'a3', 'a2', 'a1'])
+      // Every row before is a row after, once, as the object this pass was given: only its place differs.
+      expect([...ids(after)].sort()).toEqual([...before].sort())
+      for (const r of after) expect(r).toBe(pass.find((a) => a.id === r.id))
+    })
+
+    it('equal places keep their ring order', () => {
+      const ring = new DialRing()
+      const list = row(4)
+      ring.select(list)
+      expect(ids(ring.select(list, new Map([['a4', 0], ['a3', 1], ['a1', 1]])).rows)).toEqual(['a4', 'a1', 'a3', 'a2'])
+    })
+
+    it('a full ring with a rank: the 16-place rules say who is in it, the rank only where', () => {
+      const ring = new DialRing()
+      const held = row(16)
+      const tabs = ids(held).reverse()
+      const rank = rankOf(...tabs.slice(0, 3), 'n', ...tabs.slice(3))
+      expect(ids(ring.select(held, rank).rows)).toEqual(tabs)
+      // a1 is idle the longest: the newcomer that needs the person takes its place, and stands at its own place.
+      const next = ring.select([...held, needs(agent('n'))], rank)
+      expect(ids(next.rows)).toEqual([...tabs.slice(0, 3), 'n', ...tabs.slice(3, 15)])
+      expect(next.total).toBe(17)
+    })
+  })
 })
 
 describe('AppRings', () => {
@@ -366,6 +430,15 @@ describe('AppRings', () => {
       expect(rings.apps()).toEqual([{ id: 'ghostty', count: 2, waiting: 0 }])
       expect(ringIds(rings, 'ghostty')).toEqual(['g1', 'g2'])
     })
+  })
+
+  it('a rank for one app orders that ring only', () => {
+    const rings = new AppRings()
+    const [o1, o2, o3] = row(3, 'o').map(at('orca'))
+    const [g1, g2] = row(2, 'g').map(at('ghostty'))
+    rings.update([o1, g1, o2, o3, g2], new Map([['orca', new Map([['o3', 0], ['o1', 1], ['o2', 2]])]]))
+    expect(ringIds(rings, 'orca')).toEqual(['o3', 'o1', 'o2'])
+    expect(ringIds(rings, 'ghostty')).toEqual(['g1', 'g2'])
   })
 
   it('the map is bounded: 20 agents with 20 unknown app ids make one terminal ring', () => {

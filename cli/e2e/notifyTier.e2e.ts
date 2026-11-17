@@ -47,6 +47,6 @@ describe('a finished turn\'s tier, decided by Harness\'s rules', () => {
     expect((await summary).payload?.tier).toBe('alert')
 
     expect(asked).toEqual([])
-    expect(machine.daemon.log()).toMatch(/\[recap\] notify · .* · alert · rule:turn · turn · /)
+    expect(machine.daemon.log()).toMatch(/\[recap\] notify · alert · rule:turn · turn · /)
   })
 })

@@ -103,7 +103,7 @@ export function createRecaps(core: CoreApi, options: RecapsOptions = {}): Recaps
     decideTier: async (turn) => {
       if (!watchers.device && !watchers.remote) return null
       const session = sessions.get(turn.sessionId)
-      const decision = await tierOf({ agent: session?.name ?? '', engine: session?.engine ?? '', recap: turn.recap,
+      const decision = await tierOf({ engine: session?.engine ?? '', recap: turn.recap,
         durationS: turn.durationS, stats: turn.stats, subagent: false, onScreen: false, failed: false })
       return decision.tier
     },

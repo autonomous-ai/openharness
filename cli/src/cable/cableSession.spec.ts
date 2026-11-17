@@ -4937,6 +4937,32 @@ describe('the app filter', () => {
       } finally { await session.stop() }
     }
   })
+
+  // Orca's ring is pushed again in its tab order (spec 2026-11-16-dial-orca-focus-order): the reorder relies on this.
+  it('the shown app\'s ring sent again in another order: the dial is told its agent again, its echo starts no rest, and the host hears no other agent', async () => {
+    const swipeEnded = vi.fn()
+    const dialShows = vi.fn<NonNullable<CableHost['dialShows']>>()
+    const { host, state } = appHost({ swipeSwitches: () => true, swipeEnded, dialShows })
+    const { session, port } = await greeted(host)
+    // Faked after the greeting, as `resting` does: vi.waitFor is not used while a rest is pending.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      port.say({ t: 'focus', agentId: 'g2' })
+      await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
+      expect(swipeEnded.mock.calls).toEqual([['g2', 'rest']])
+      const pushedAt = port.sent.length
+      state.rings.ghostty = [row('g3', 'ghostty'), row('g1', 'ghostty'), row('g2', 'ghostty')]
+      await session.syncAgents(true)
+      const since = port.sent.slice(pushedAt)
+      expect(since.filter((m) => m.t === 'agent').map((m) => m.id)).toEqual(['g3', 'g1', 'g2'])
+      expect(since.filter((m) => m.t === 'focus').map((m) => m.agentId)).toEqual(['g2'])
+      expect(since.findIndex((m) => m.t === 'focus')).toBeGreaterThan(since.findIndex((m) => m.t === 'agents.end'))
+      port.say({ t: 'focus', agentId: 'g2' })
+      await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
+      expect(swipeEnded).toHaveBeenCalledTimes(1)
+      expect(dialShows.mock.calls.map(([, agent]) => agent)).toEqual([{ name: 'g2', app: 'Ghostty' }])
+    } finally { vi.useRealTimers(); await session.stop() }
+  })
 })
 
 describe('what the dial cannot do for an agent', () => {
