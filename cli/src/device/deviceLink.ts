@@ -658,7 +658,7 @@ export class DeviceLink {
     const base = this.opts.backendWsBase.replace(/\/$/, '')
     const url = `${base}/api/device-ws?computer=${encodeURIComponent(this.opts.computerId)}`
       // The backend names a new device binding with it once, as resolve-computer names a new machine.
-      + `&label=${encodeURIComponent(computerName())}`
+      + `&label=${encodeURIComponent(await computerName())}`
       + `&autonomousEnv=${encodeURIComponent(this.opts.autonomousEnv)}`
 
     let token = await this.readToken()

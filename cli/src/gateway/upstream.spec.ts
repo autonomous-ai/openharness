@@ -9,7 +9,7 @@ import { AuthSessionError } from '../lib/authSession.js'
 import { UpstreamLink } from './upstream.js'
 
 // A computer's name that is not its hostname, so the adapter-ws label below shows which one it sends.
-vi.mock('../lib/computerName.js', () => ({ computerName: () => 'Test Lab Mac' }))
+vi.mock('../lib/computerName.js', () => ({ computerName: async () => 'Test Lab Mac' }))
 
 // A stand-in backend on loopback. `onConnection` decides what each accepted link gets; `refuse` answers
 // every upgrade with that HTTP status instead.

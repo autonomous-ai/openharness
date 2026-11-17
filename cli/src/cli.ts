@@ -325,7 +325,7 @@ async function resolveComputerMachine(signal?: AbortSignal): Promise<AuthSession
   const accessToken = await auth.accessToken()
   const result = await postJson<{ machine?: { machineId?: string } }>('/api/machines/resolve-computer', {
     computerId: current.computerId,
-    label: computerName(),
+    label: await computerName(),
     // Same claim the adapter-ws dial carries: a machine deleted while this computer was offline must
     // come back as 403, not as a quietly minted replacement.
     ...(current.machineId ? { machineId: current.machineId } : {}),
@@ -719,7 +719,7 @@ async function qrSignInCommand(
   const result = await qrSignIn({
     post: (path, body) => postJson(path, body),
     ...(hooks.onStarted ? { onStarted: hooks.onStarted } : {}),
-    label: computerName(),
+    label: await computerName(),
     computerId: computerId(),
     ...(hooks.spoken ? {
       showCode: (code: string, expiresIn: number) => {
@@ -893,7 +893,7 @@ async function browserSignIn(
         // The utm_* and rid auth.autonomous.ai carried back: how the account came (PR #785).
         ...(callbackResult.attribution ? { attribution: callbackResult.attribution } : {}),
         // A Harness session in place of the SSO tokens (backend lib/ssoSession.ts); an older backend sends those.
-        harnessSession: harnessSessionRequest(),
+        harnessSession: await harnessSessionRequest(),
       })
       if (!exchanged.token) throw new Error('SSO exchange returned no access token')
     } catch (err) {

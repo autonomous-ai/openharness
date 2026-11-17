@@ -7,13 +7,13 @@
  *
  * Never loaded by the core's process: its own uses of the hostname are display only.
  */
-import { execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { hostname } from 'node:os'
 
 export interface ComputerNameSources {
   platform: NodeJS.Platform
-  /** `/usr/sbin/scutil --get ComputerName`'s stdout. Throws on a failure or past its deadline. */
-  scutil(): string
+  /** `/usr/sbin/scutil --get ComputerName`'s stdout. Rejects on a failure or past its deadline. */
+  scutil(): Promise<string>
   hostname(): string
 }
 
@@ -28,11 +28,13 @@ const CONTROL = /[\u0000-\u001F\u007F-\u009F]/g
 export const SYSTEM_COMPUTER_NAME_SOURCES: ComputerNameSources = {
   platform: process.platform,
   // By its full path: a process started from a shell whose PATH lacks /usr/sbin still finds it.
-  // Its complaint stays out of the terminal, as `lib/bootId.ts`'s sysctl's does.
-  scutil: () => execFileSync('/usr/sbin/scutil', ['--get', 'ComputerName'], {
-    encoding: 'utf8',
-    timeout: COMPUTER_NAME_DEADLINE_MS,
-    stdio: ['ignore', 'pipe', 'ignore'],
+  // Asynchronous: the gateway and the devices process carry other traffic while it runs. Its complaint is
+  // captured, so it stays out of the terminal.
+  scutil: () => new Promise((resolve, reject) => {
+    execFile('/usr/sbin/scutil', ['--get', 'ComputerName'], {
+      encoding: 'utf8',
+      timeout: COMPUTER_NAME_DEADLINE_MS,
+    }, (error, stdout) => { if (error) reject(error); else resolve(stdout) })
   }),
   hostname: () => hostname(),
 }
@@ -43,19 +45,19 @@ function cut(name: string): string {
   return name.slice(0, pairSplit ? COMPUTER_NAME_MAX - 1 : COMPUTER_NAME_MAX)
 }
 
-function readComputerName(sources: ComputerNameSources): string {
+async function readComputerName(sources: ComputerNameSources): Promise<string> {
   if (sources.platform === 'darwin') {
     try {
-      const name = sources.scutil().replace(CONTROL, '').trim()
+      const name = (await sources.scutil()).replace(CONTROL, '').trim()
       if (name) return cut(name)
     } catch { /* scutil failed or ran past its deadline: the hostname, below */ }
   }
   return cut(sources.hostname())
 }
 
-/** A reader that asks once and keeps its answer, whichever it was. */
-export function computerNameReader(sources: ComputerNameSources): () => string {
-  let name: string | undefined
+/** A reader that asks once and keeps its answer, whichever it was; asks made while it is out share it. */
+export function computerNameReader(sources: ComputerNameSources): () => Promise<string> {
+  let name: Promise<string> | undefined
   return () => (name ??= readComputerName(sources))
 }
 
