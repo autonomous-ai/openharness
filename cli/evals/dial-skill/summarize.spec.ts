@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { parseClaudeStream } from './lib/parse.js'
-import { summarize, writeSummaries } from './lib/summarize.js'
+import { headline, summarize, writeSummaries } from './lib/summarize.js'
 
 const USAGE = { input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 10_000, cache_creation_input_tokens: 2000 }
 const JUDGE = { judge_model: 'claude-opus-5-5', judge_usage: { input_tokens: 500, output_tokens: 50 } }
@@ -134,6 +134,14 @@ describe('summarize', () => {
     // 14 runs × $0.024 + 10 judged runs × $0.003 + the timed-out attempt's $0.006.
     expect(baseline.spend_usd).toBeCloseTo(0.372, 8)
     expect(v1.spend_usd).toBeNull()
+  })
+})
+
+describe('headline', () => {
+  it('says there is nothing to headline before any variant has run', () => {
+    rmSync(join(flow, 'baseline'), { recursive: true })
+    rmSync(join(flow, 'v1'), { recursive: true })
+    expect(headline(summarize(flow))).toBe('no variants')
   })
 })
 
