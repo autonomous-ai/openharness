@@ -61,7 +61,7 @@ export function startLoop(
   let passing: AbortController | null = null
   let passDone = Promise.resolve()
   let lastStart = 0
-  // The watch asked while a pass ran: one more pass follows it.
+  // The watch asked while a pass ran: one more pass follows it, unless the watch has closed since.
   let again = false
   let wait = FIRST_WAIT_MS
   let nextAt = Infinity
@@ -195,6 +195,7 @@ export function startLoop(
   function unwatch(): void {
     watching?.close()
     watching = null
+    again = false
   }
 
   // Ends the loop for good: by stop, or by a line that says another holder has this window's id.
