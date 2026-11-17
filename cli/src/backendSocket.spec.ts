@@ -84,8 +84,16 @@ describe('safe session close RPC', () => {
         sendBinary: () => true,
       })
     }
-    const row = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%7302' }], cwd: '/tmp' }))!
-    row.sessionId = sessionId
+    let row = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%7302' }], cwd: '/tmp' }))!
+    if (sessionId) {
+      const sessions = join(env.CODEX_HOME, 'sessions')
+      mkdirSync(sessions, { recursive: true })
+      const transcriptPath = join(sessions, 'rollout-close-history.jsonl')
+      writeFileSync(transcriptPath, JSON.stringify({ type: 'session_meta', payload: { id: sessionId, cwd: '/tmp', source: 'cli' } }) + '\n')
+      const bound = await registry.register({ engine: 'codex', tmuxPane: '%7302', sessionId, transcriptPath })
+      expect(bound?.entry.agentId).toBe(row.agentId)
+      row = bound!.entry
+    }
     const checkpoint = vi.fn(async () => {})
     const stop = vi.fn(async (_agentId, options) => {
       await options.checkpoint(row, 'before')
