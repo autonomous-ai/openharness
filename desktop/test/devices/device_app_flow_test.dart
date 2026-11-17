@@ -465,6 +465,21 @@ void main() {
 
     await tester.pump(const Duration(seconds: 10));
     expect(fixture.probe.lookups, before + 1);
+
+    // Hidden, the tab looks no more; seen again, it looks once.
+    addTearDown(
+      () => tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      ),
+    );
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    await tester.pump(const Duration(seconds: 30));
+    expect(fixture.probe.lookups, before + 1);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(fixture.probe.lookups, before + 2);
   }, variant: _mac);
 
   testWidgets(
