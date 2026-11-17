@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { createReadStream, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, createReadStream, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir, userInfo } from 'node:os'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -337,6 +337,29 @@ describe('stage', () => {
     unstage(st)
 
     expect(existsSync(st.root)).toBe(false)
+  })
+
+  it("unstage removes the run's folder in the profile even when the run root cannot be removed, and says so", () => {
+    const profile = mkdtempSync(join(tmpdir(), 'dial-skill-profile-'))
+    try {
+      vi.stubEnv('CLAUDE_CONFIG_DIR', profile)
+      const st = staging('claude', { skill: true })
+      const folder = join(profile, 'projects', st.repo.replace(/[^a-zA-Z0-9]/g, '-'))
+      mkdirSync(join(folder, 'memory'), { recursive: true })
+      // A file in a folder that refuses its removal.
+      const locked = join(st.root, 'locked')
+      mkdirSync(locked)
+      writeFileSync(join(locked, 'file'), '')
+      chmodSync(locked, 0o500)
+      try {
+        expect(() => unstage(st)).toThrow()
+        expect(existsSync(folder)).toBe(false)
+      } finally {
+        chmodSync(locked, 0o700)
+      }
+    } finally {
+      rmSync(profile, { recursive: true, force: true })
+    }
   })
 
   it('unstage removes the folder claude made for the run in the profile, by its exact name, and nothing else there', () => {
