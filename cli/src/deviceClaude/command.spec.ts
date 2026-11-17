@@ -962,94 +962,103 @@ describe('harness device notify', () => {
   })
 })
 
-describe('harness device orca link', () => {
+describe('harness device orca link and vscode link', () => {
   const link = (dataDir: string, ready: boolean, daemon = false) =>
     ({ code: 0, err: [], out: [JSON.stringify({ daemon, devicesSocket: devicesListenerPath(dataDir), devicesReady: ready })] })
 
-  it('with no daemon and no dial it prints daemon false, the devices\' path and devicesReady false, and exits 0', async () => {
+  it.each(['orca', 'vscode'])('%s link: with no daemon and no dial it prints daemon false, the devices\' path and devicesReady false, and exits 0', async (host) => {
     const dataDir = folder()
-    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, false))
+    expect(await device([host, 'link'], { dataDir })).toEqual(link(dataDir, false))
   })
 
-  it('daemon is true once the daemon\'s socket is there, this account\'s own, and takes a connect', async () => {
+  it.each(['orca', 'vscode'])('%s link: daemon is true once the daemon\'s socket is there, this account\'s own, and takes a connect', async (host) => {
     const dataDir = folder()
     await ownDaemonAt(dataDir)
-    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, false, true))
+    expect(await device([host, 'link'], { dataDir })).toEqual(link(dataDir, false, true))
   })
 
-  it('the connect asks the daemon nothing', async () => {
+  it.each(['orca', 'vscode'])('%s link: the connect asks the daemon nothing', async (host) => {
     const dataDir = folder()
     const { seen } = await ownDaemonAt(dataDir)
-    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, false, true))
+    expect(await device([host, 'link'], { dataDir })).toEqual(link(dataDir, false, true))
     await vi.waitFor(() => expect(seen).toEqual({ connections: 1, closed: 1, requests: 0 }))
   })
 
-  it('a socket a crashed daemon left behind is daemon false', async () => {
+  it.each(['orca', 'vscode'])('%s link: a socket a crashed daemon left behind is daemon false', async (host) => {
     const dataDir = folder()
     const crashed = await listenLocalSocket((_req, res) => res.end(), unixSocketPath(dataDir, PORT)!)
     crashed.server.close()
     // Still there and still this account's own: only the connect tells it from a live one.
     expect(socketIsPrivate(crashed.path)).toBe(true)
-    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, false))
+    expect(await device([host, 'link'], { dataDir })).toEqual(link(dataDir, false))
   })
 
-  it('a daemon\'s socket that is not private is daemon false, and is not connected to', async () => {
+  it.each(['orca', 'vscode'])('%s link: a daemon\'s socket that is not private is daemon false, and is not connected to', async (host) => {
     const dataDir = folder()
     const { path, seen } = await ownDaemonAt(dataDir)
     chmodSync(path, 0o666)
-    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, false))
+    expect(await device([host, 'link'], { dataDir })).toEqual(link(dataDir, false))
     // A connect of the test's own, once it has closed, is the only one the server took: `link`'s would have come first.
     expect(await takesConnect(path)).toBe(true)
     await vi.waitFor(() => expect(seen.closed).toBe(1))
     expect(seen.connections).toBe(1)
   })
 
-  it('devicesReady is true once the devices\' socket is there and this account\'s own', async () => {
+  it.each(['orca', 'vscode'])('%s link: devicesReady is true once the devices\' socket is there and this account\'s own', async (host) => {
     const dataDir = folder()
     await devicesAt(dataDir)
-    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, true))
+    expect(await device([host, 'link'], { dataDir })).toEqual(link(dataDir, true))
   })
 
-  it('a devices\' socket nothing listens on is still devicesReady true', async () => {
+  it.each(['orca', 'vscode'])('%s link: a devices\' socket nothing listens on is still devicesReady true', async (host) => {
     const dataDir = folder()
     const crashed = await listenLocalSocket((_req, res) => res.end(), devicesListenerPath(dataDir)!)
     crashed.server.close()
-    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, true))
+    expect(await device([host, 'link'], { dataDir })).toEqual(link(dataDir, true))
   })
 
-  it('a devices\' socket that is not private is devicesReady false, its path still printed', async () => {
+  it.each(['orca', 'vscode'])('%s link: a devices\' socket that is not private is devicesReady false, its path still printed', async (host) => {
     const open = folder()
     chmodSync(await devicesAt(open), 0o666)
-    expect(await device(['orca', 'link'], { dataDir: open })).toEqual(link(open, false))
+    expect(await device([host, 'link'], { dataDir: open })).toEqual(link(open, false))
     const shared = folder()
     await devicesAt(shared)
     chmodSync(shared, 0o777)
-    expect(await device(['orca', 'link'], { dataDir: shared })).toEqual(link(shared, false))
+    expect(await device([host, 'link'], { dataDir: shared })).toEqual(link(shared, false))
     const plain = folder()
     writeFileSync(devicesListenerPath(plain)!, '', { mode: 0o600 })
-    expect(await device(['orca', 'link'], { dataDir: plain })).toEqual(link(plain, false))
+    expect(await device([host, 'link'], { dataDir: plain })).toEqual(link(plain, false))
   })
 
-  it('on Windows it prints {"daemon":false,"devicesReady":false} and exits 0', async () => {
-    expect(await device(['orca', 'link'], { platform: 'win32' })).toEqual({ code: 0, err: [], out: ['{"daemon":false,"devicesReady":false}'] })
+  it.each(['orca', 'vscode'])('%s link: on Windows it prints {"daemon":false,"devicesReady":false} and exits 0', async (host) => {
+    expect(await device([host, 'link'], { platform: 'win32' })).toEqual({ code: 0, err: [], out: ['{"daemon":false,"devicesReady":false}'] })
   })
 
-  it('with the harness-device plugin off in Claude Code it prints the same', async () => {
+  it.each(['orca', 'vscode'])('%s link: with the harness-device plugin off in Claude Code it prints the same', async (host) => {
     const dataDir = folder()
     pluginOn(false)
-    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, false))
+    expect(await device([host, 'link'], { dataDir })).toEqual(link(dataDir, false))
   })
 
-  it('it never looks for claude', async () => {
+  it.each(['orca', 'vscode'])('%s link: it never looks for claude', async (host) => {
     const dataDir = folder()
-    expect(await device(['orca', 'link'], { dataDir, claude: () => { throw new Error('never') } })).toEqual(link(dataDir, false))
+    expect(await device([host, 'link'], { dataDir, claude: () => { throw new Error('never') } })).toEqual(link(dataDir, false))
   })
 
-  it('orca with no verb, another verb or an extra word prints the usage and exits 1', async () => {
-    for (const argv of [['orca'], ['orca', 'status'], ['orca', 'link', 'extra']]) {
+  it('vscode link prints what orca link prints', async () => {
+    const dataDir = folder()
+    await ownDaemonAt(dataDir)
+    await devicesAt(dataDir)
+    const orca = await device(['orca', 'link'], { dataDir })
+    expect(orca).toEqual(link(dataDir, true, true))
+    expect(await device(['vscode', 'link'], { dataDir })).toEqual(orca)
+  })
+
+  it.each(['orca', 'vscode'])('%s with no verb, another verb or an extra word prints the usage and exits 1', async (host) => {
+    for (const argv of [[host], [host, 'status'], [host, 'link', 'extra']]) {
       expect(await device(argv), argv.join(' ')).toEqual({ code: 1, out: [], err: [DEVICE_USAGE] })
     }
-    expect(DEVICE_USAGE).not.toContain('device orca')
+    expect(DEVICE_USAGE).not.toContain(`device ${host}`)
   })
 })
 
