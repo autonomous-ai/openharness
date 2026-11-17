@@ -149,11 +149,13 @@ describe('harness device notify', () => {
     await listed(dial, engine.id)
     const caller = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: engine.sessionId }
     const started = dial.messages.length
-    // A turn long enough for the command an agent runs in it: the notice comes while it works.
-    engine.type('!slow 10000')
+    // The turn ends only once the notice is shown, as an agent's turn goes on while the command it runs works: no
+    // timer for the command to beat.
+    engine.type('!until fix-login')
     await dial.next((m) => m.t === 'turn.started' && m.agentId === engine.id, 45_000, 'its turn started', started)
     expect(await notify(d, caller, join(d.projectsDir, 'fix-login'))).toMatchObject({ code: 0, out: 'shown' })
     const question = await dial.next((m) => m.t === 'question' && m.agentId === engine.id, 45_000, 'the notice', started)
+    writeFileSync(join(d.engineConfig.root, 'fix-login.release'), '')
     const summary = await dial.next((m) => m.t === 'summary' && m.agentId === engine.id, 60_000, 'its answer', started)
     expect(summary).toMatchObject({ tier: 'silent', silent: true })
     // The read answered after the summary is the barrier: the card is still the daemon's, and nothing closed it.
@@ -162,7 +164,8 @@ describe('harness device notify', () => {
     expect(await dial.next((m) => m.t === 'question.state' && m.requestId === 'read-1', 45_000, 'the card read', since))
       .toMatchObject({ ok: true, id: question.id, questions: card('Ghostty') })
     expect(dial.messages.some((m) => m.t === 'question.close' && m.agentId === engine.id)).toBe(false)
-    expect(d.log()).toContain('[cable] notify · silent · rule:notice · notice · 0ms')
+    // The log reaches the test on a path of its own, not behind the dial's frames.
+    await until('the silent end in the daemon\'s log', () => d.log().includes('[cable] notify · silent · rule:notice · notice · 0ms'), 30_000, 50)
   })
 
   it('a Codex session\'s notice is its own card', async () => {
