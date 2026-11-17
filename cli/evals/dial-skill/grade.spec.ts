@@ -128,6 +128,14 @@ describe('gradeRun', () => {
     expect(judge.calls).toEqual([])
   })
 
+  it('sums the judge calls\' cache writes by how long the cache keeps them, as they are priced apart', async () => {
+    const judge: Judge = async () => ({ pass: true, reason: 'ok', model: 'claude-opus-5-5',
+      usage: { input_tokens: 10, output_tokens: 2, cache_creation_input_tokens: 30, cache_creation: { ephemeral_5m_input_tokens: 10, ephemeral_1h_input_tokens: 20 } } })
+    const g = await gradeRun(need, run('a'), [ring('Set WEATHER_API_KEY')], judge)
+    expect(g.judge_usage).toEqual({ input_tokens: 20, output_tokens: 4, cache_creation_input_tokens: 60,
+      cache_creation: { ephemeral_5m_input_tokens: 20, ephemeral_1h_input_tokens: 40 } })
+  })
+
   it('attaches the spend of the calls before a judge call that throws', async () => {
     let calls = 0
     const judge: Judge = async () => {

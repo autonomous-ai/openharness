@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { parseClaudeStream } from './lib/parse.js'
 import { summarize, writeSummaries } from './lib/summarize.js'
 
 const USAGE = { input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 10_000, cache_creation_input_tokens: 2000 }
@@ -130,9 +131,33 @@ describe('summarize', () => {
 
   it('prices agent, judge and failed-attempt usage, and leaves a model with no price unmeasured', () => {
     const { baseline, v1 } = summarize(flow).variants
-    // 14 runs × $0.02 + 10 judged runs × $0.003 + the timed-out attempt's $0.006.
-    expect(baseline.spend_usd).toBeCloseTo(0.316, 8)
+    // 14 runs × $0.024 + 10 judged runs × $0.003 + the timed-out attempt's $0.006.
+    expect(baseline.spend_usd).toBeCloseTo(0.372, 8)
     expect(v1.spend_usd).toBeNull()
+  })
+})
+
+describe('spend', () => {
+  /** What a flow of one baseline run billed with `usage` comes to. */
+  function spendOf(usage: object): number | null {
+    const one = join(flow, 'one')
+    mkdirSync(join(one, 'baseline'), { recursive: true })
+    writeFileSync(join(one, '_state.json'), JSON.stringify({ train_ids: ['a.claude'], val_ids: [], test_ids: [] }))
+    writeFileSync(join(one, 'baseline', 'results.jsonl'), jsonl([row('a.claude', 0, noNeed(0, 0), { usage })]))
+    return summarize(one).variants.baseline.spend_usd
+  }
+
+  it('comes to what Claude Code billed for the committed sample run', () => {
+    const sample = readFileSync(join(import.meta.dirname, 'test-data', 'claude-stream.jsonl'), 'utf8')
+    const billed = JSON.parse(sample.trimEnd().split('\n').at(-1)!).total_cost_usd
+    expect(billed).toBe(0.2033004)
+    expect(spendOf(parseClaudeStream(sample).usage)).toBeCloseTo(billed, 12)
+  })
+
+  it('prices 5-minute cache writes at 1.25× input, and every other write, split or not, as 1-hour at 2×', () => {
+    expect(spendOf({ input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 3000,
+      cache_creation: { ephemeral_5m_input_tokens: 1000, ephemeral_1h_input_tokens: 2000 } })).toBeCloseTo(0.021, 12)
+    expect(spendOf({ input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 3000 })).toBeCloseTo(0.024, 12)
   })
 })
 
@@ -166,7 +191,7 @@ describe('writeSummaries', () => {
     expect(narrative).not.toContain('old status')
     expect(narrative.match(/<!-- status -->/g)).toHaveLength(1)
     expect(narrative).toContain('| round | change | val | train | test | recall | specificity | line_ok | ask_ok | harmed | s/run | tool calls | rings | tokens | $/pass | spend |')
-    expect(narrative).toContain('| 0 | baseline | 1.00 [-5.57, 7.57] | 1.50 [-2.98, 5.98] | 4.00 | 83% | 75% | 60% | 67% | 1 (33%) | 10.0 | 5.0 | 0.60 | 13100 | $0.32 | $0.32 |')
+    expect(narrative).toContain('| 0 | baseline | 1.00 [-5.57, 7.57] | 1.50 [-2.98, 5.98] | 4.00 | 83% | 75% | 60% | 67% | 1 (33%) | 10.0 | 5.0 | 0.60 | 13100 | $0.37 | $0.37 |')
     expect(narrative).toMatch(/\| 1 \| Ask before waiting on a person \| 2\.63 \[-0\.77, 6\.02\] \| 2\.33 \[-2\.84, 7\.50\] \| {2}\| .* \| not measured \| not measured \|/)
 
     const metrics = readFileSync(join(flow, 'metrics.md'), 'utf8')

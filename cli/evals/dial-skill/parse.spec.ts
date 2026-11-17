@@ -44,7 +44,8 @@ describe('parseClaudeStream', () => {
     expect(run.model).toBe('claude-opus-5-5')
     expect(run.answer).toMatch(/^I couldn't generate this week's report\./)
     expect(run.answer).toContain('WEATHER_API_KEY')
-    expect(run.usage).toEqual({ input_tokens: 20, output_tokens: 1429, cache_read_input_tokens: 225042, cache_creation_input_tokens: 16204 })
+    expect(run.usage).toEqual({ input_tokens: 20, output_tokens: 1429, cache_read_input_tokens: 225042, cache_creation_input_tokens: 16204,
+      cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 16204 } })
     expect(run.stop_reason).toBe('end_turn')
     expect(run.tool_calls).toBe(8)
     expect(run.status).toBe('ok')
