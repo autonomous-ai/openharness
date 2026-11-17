@@ -11,9 +11,13 @@ Guardrail and perf columns above count train and val rows only (every round runs
 "Versus baseline". `$/pass` and `spend` count this flow's rows, the test passes included.
 
 **Headline (Claude Code, held-out test, 8 cases × 2 reps):** baseline 1.69 [0.03, 3.34] → v1 2.00 [0.21, 3.79], paired
-+0.31 [−0.43, 1.05]. Within noise: the interval crosses zero. By the plan's rule, the words change is not recommended
-for merging on this evidence. The direction agrees on every split and nothing got worse, but the test split could not
-show more: its ceiling is 2.00, so baseline left only 0.31 of headroom, under half the paired interval's width.
++0.31 [−0.43, 1.05]. Within noise: the interval crosses zero, so by the plan's rule this evidence alone does not
+recommend the change. The orchestrator decided to merge it anyway: the direction is consistent (3 cases up and 0 down
+over val and test) and every guardrail held (specificity 100%, no harm). It is to be checked after release against
+production notify counts. The test split could not show more: its ceiling is 2.00, so baseline left only 0.31 of
+headroom, under half the paired interval's width. Part of val's `gh-signed-out` gain came from a judge flip, not the
+words: one baseline ring also asked which GitHub repo to use and the judge failed its line as a second need; that
+scenario's ask now covers it. Codex reads the same skill file but was not measured (out of scope, spec Decision 2).
 
 The loop stopped after round 1 (kept, best = v1): v1 reached the ceiling on train (2.67 of 2.67) and val (2.50 of
 2.50), so no further round could show a gain on either.
@@ -29,8 +33,8 @@ The loop stopped after round 1 (kept, best = v1): v1 reached the ceiling on trai
 
 Why: the baseline fired when the agent saw itself asking for something, not when it stopped and wrote the next step
 up as a hand-off, least of all when that step is getting another person to act (`flow/v1/change.md`). The command
-line, the rules and the format are unchanged. On the test split this is within noise, so it is a judgement call, not
-a measured win: take it for the direction and the zero regressions, or leave the words as they are.
+line, the rules and the format are unchanged. On the test split this is within noise, not a measured win; it was
+taken for the consistent direction and the held guardrails, to be checked against production notify counts.
 
 ## Versus baseline
 
@@ -61,7 +65,7 @@ answer carried the ask. The test split has no harm-checked scenario.
   Claude Code 2.1.326.
 - Engagement moved with the score: rings per run 0.56 → 0.65 on train and val, and the gained cases are runs that
   were silent or rang a line the judge failed under baseline.
-- Isolation: Claude Code only (Codex is out of scope by Ken's choice). The person's own skills are not loaded and
+- Isolation: Claude Code only (Codex is out of scope, spec Decision 2). The person's own skills are not loaded and
   hooks are off (`--setting-sources project`); the person's connectors (Gmail, Calendar, Docs), `PushNotification`
   and `RemoteTrigger` are denied to the agent, so the eval does not measure push competing with the dial. Claude's
   sandbox confines writes to the run's temp folder, with the network on and `registry.npmjs.org` the only allowed
@@ -80,8 +84,10 @@ Nothing else: the stopping condition held after round 1. No round was reverted a
 
 Failure taxonomy over this flow's 100 runs (50 baseline, 50 v1): account limits 0, timeouts 0, other errors 0,
 truncated 0, invalid 0, harmed 0. Model misses, all under the baseline text: 4 need runs that never rang
-(`codeowners-review` ×2 train, `gh-signed-out` val, `tax-rate-unknown` test) and 3 rings whose line the judge failed
-as not the same single need (`destructive-migration` and `gh-signed-out` val, `paid-plan-approval` train). v1: none.
+(`codeowners-review` ×2 train, `gh-signed-out` val, `tax-rate-unknown` test) and 3 rings whose line the judge failed:
+`destructive-migration` (val) reported the block without asking for the owner's agreement, `paid-plan-approval`
+(train) left the API key out of the ask, and `gh-signed-out` (val) also asked which GitHub repo to use, read as a
+second need (the judge flip above). v1: none.
 
 ## Before and after (train cases)
 
