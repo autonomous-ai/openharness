@@ -286,10 +286,6 @@ fn menu_id(action: MenuAction) -> &'static str {
     match action {
         MenuAction::Install => "install",
         MenuAction::SignIn => "sign_in",
-        MenuAction::ClaudeOn => "claude_on",
-        MenuAction::ClaudeOff => "claude_off",
-        MenuAction::CodexOn => "codex_on",
-        MenuAction::CodexOff => "codex_off",
         MenuAction::SoundOn => "sound_on",
         MenuAction::SoundOff => "sound_off",
         MenuAction::NotifyFull => "notify_full",
@@ -303,24 +299,9 @@ fn menu_id(action: MenuAction) -> &'static str {
 
 fn menu_action(id: &str) -> Option<MenuAction> {
     use MenuAction::*;
-    [
-        Install,
-        SignIn,
-        ClaudeOn,
-        ClaudeOff,
-        CodexOn,
-        CodexOff,
-        SoundOn,
-        SoundOff,
-        NotifyFull,
-        NotifyYou,
-        Update,
-        OpenHarness,
-        About,
-        Quit,
-    ]
-    .into_iter()
-    .find(|action| menu_id(*action) == id)
+    [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit]
+        .into_iter()
+        .find(|action| menu_id(*action) == id)
 }
 
 #[cfg(test)]
@@ -335,30 +316,13 @@ mod tests {
     #[test]
     fn every_menu_action_has_its_own_id() {
         use MenuAction::*;
-        let actions = [
-            Install,
-            SignIn,
-            ClaudeOn,
-            ClaudeOff,
-            CodexOn,
-            CodexOff,
-            SoundOn,
-            SoundOff,
-            NotifyFull,
-            NotifyYou,
-            Update,
-            OpenHarness,
-            About,
-            Quit,
-        ];
+        let actions = [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit];
         for action in actions {
             assert_eq!(menu_action(menu_id(action)), Some(action));
         }
         let ids: std::collections::HashSet<_> = actions.into_iter().map(menu_id).collect();
         assert_eq!(ids.len(), 10);
         assert_eq!(menu_id(About), "about");
-        assert_eq!(menu_id(CodexOn), "codex_on");
-        assert_eq!(menu_id(CodexOff), "codex_off");
         assert_eq!(menu_id(NotifyFull), "notify_full");
         assert_eq!(menu_id(NotifyYou), "notify_you");
         assert_eq!(menu_action("sound"), None);

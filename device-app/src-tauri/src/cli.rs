@@ -16,10 +16,8 @@ use std::time::{Duration, Instant};
 
 /// A line of output longer than this is dropped: what a CLI prints is outside text.
 pub const LINE_MAX: usize = 64 * 1024;
-/// `auth status`, `device claude status`, `--version`.
+/// `auth status`, `--version`.
 pub const STATUS_DEADLINE: Duration = Duration::from_secs(10);
-/// `device claude enable` and `disable`.
-pub const CHANGE_DEADLINE: Duration = Duration::from_secs(60);
 /// `start --if-down`.
 pub const START_DEADLINE: Duration = Duration::from_secs(90);
 /// Each install script.
@@ -1048,13 +1046,13 @@ mod tests {
         assert_eq!(hung.line(WAIT), Ok(Some("started".into())));
         hung.killer().kill();
         assert_eq!(hung.exit(WAIT), Ok(None));
-        let unknown = cli.run(&["device", "claude", "status", "--json"], WAIT).unwrap();
+        let unknown = cli.run(&["no", "such", "command"], WAIT).unwrap();
         assert_eq!((unknown.code, unknown.stderr.as_str()), (Some(1), "Unknown command\n"));
-        assert_eq!(fake.calls(), ["auth status --json", "hardware watch --json", "device claude status --json"]);
+        assert_eq!(fake.calls(), ["auth status --json", "hardware watch --json", "no such command"]);
         let pids = fake.pids();
         assert_eq!(pids.len(), 3);
         assert!(pids[0] != pids[1] && pids[1] != pids[2]);
-        assert_eq!(fake.ends(), ["auth status --json", "device claude status --json"]);
+        assert_eq!(fake.ends(), ["auth status --json", "no such command"]);
 
         fake.script("login --json", &["@wait go", "after"]);
         let mut waiting = cli.spawn(&["login", "--json"]).unwrap();
