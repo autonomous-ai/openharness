@@ -48,4 +48,36 @@ The corrected shared relay costs more CPU in most cases. Viewer p95 grows by rou
 
 All cap refusal/recovery and late-callback assertions passed. Sequential V8 memory deltas can be negative because prior fixtures become collectable between readings. In particular, the Viewer and prebuilt-ID samples do not establish absolute retained-memory bounds; small steady-state RSS deltas are allocator noise. Repeatable positive high-water samples support attribution, not final capacity acceptance. The Browser caps remain explicit new safety budgets, not a derived maximum supported workload. The native gate must separately validate process isolation, cleanup, actual stream traffic and the core memory/terminal targets.
 
-Raw receipts, all samples and comparison tables remain in the f report directory. Prior d/e results and CPU profiles remain in their separate directories. The final combined core/services gate and packaged native validation are owned by the integration run.
+Raw receipts, all samples and comparison tables remain in the f report directory. Prior d/e results and CPU profiles remain in their separate directories. The final combined core/services gate is owned by the integration run.
+
+## Packaged native functional validation
+
+The exact combined source `d7f502bf799e1b5734c55083fbcfe0beb100fd4e` passed the five selected native cases on macOS,
+using `/tmp/core-session-d7f5-build.json` and its separately built release artifact. All five passed in 64.42 seconds;
+the eleven other cases in those files were intentionally unselected. The actual Vitest child and outer runner both
+exited 0. There was no retry.
+
+- Browser screen/input bytes and panel close, then service death and a new stream after recovery.
+- Browser startup failure while the agent and its one core generation remain available.
+- Viewer request/data/close, immediate refusal during process loss, and a working stream after recovery.
+- Hung and killed viewers while agents complete turns, followed by a replacement viewer.
+- First Viewer demand starts the process exactly once and answers the client without restarting core.
+
+The frozen custody packet `/tmp/core-stream-native-v1/inputs.json` verified 6406 input files, 207 dependency
+packages and dependency links. Its digest is `758b4b2505258fbac76b38a27c0337bee41454feefa260c071615f73ef8902c2`.
+The actual resource inventory contained five private roots, five master lifetimes and 76 owned PIDs, including
+four private viewer servers, two fake-Podman event watchers, three screen pipes and 26 other fake-Podman calls.
+No real Podman or owner daemon was used. The helper observer patched only bounded regular private fixture scripts,
+preserved their shebang/mode, and recorded before/after hashes plus PID lifecycle metadata, without argv or content.
+
+All five masters reached exit/close and both EOFs. Every recorded helper generation was proved gone, including
+the four viewer servers and two event watchers that did not report normal JS exit after shutdown signals; these
+are not claimed to have exited 0. The outer guardian and process groups were gone. All five roots, the copied Node
+and bundle were removed; the temporary directory was empty. Source, dependency and artifact hashes were unchanged.
+The receipt is `/tmp/cn4-7f8a1c2d/receipt.json`, SHA-256
+`69b42a6de8d7d766bee2088412258a099236954bde4ce4438b3af54409a98236`; `resource-summary.json`, `outer-exit.json`,
+test JSON and full logs are beside it. This proves native behavior and isolation, not a native latency/RSS limit.
+
+The final component caller tests also passed all 144 cases with per-file 100% statements, branches, functions and
+lines for `services/agentBrowser.ts` and `services/viewers.ts`; TypeScript passed. These test-only additions are
+`171cf2681e`, and change no runtime bytes from the packaged source above.

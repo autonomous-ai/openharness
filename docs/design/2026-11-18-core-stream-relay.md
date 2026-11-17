@@ -424,4 +424,7 @@ passed 90 tests at per-file 100% statements/branches/functions/lines. TypeScript
 passed 5614 cases and exposed two obsolete test expectations (optional transport quota and deleted inline exports).
 Both were corrected and passed in the following 43-case focused run, together with the new frame-count and byte
 quota regressions; the transport queue reached per-file 100% coverage. The fixed attribution and its corrected fixture are recorded in
-[the performance evidence](../performance/2026-11-18-core-stream-relay.md); native and absolute-memory acceptance remain open. The final combined full gate remains the integration owner's responsibility.
+[the performance evidence](../performance/2026-11-18-core-stream-relay.md). The five selected packaged native cases
+passed on combined source d7f502bf799e1b5734c55083fbcfe0beb100fd4e with complete process and fixture cleanup.
+Actual component caller tests passed 144 cases with per-file 100% for viewers and Agent Browser. Absolute-memory
+and native latency acceptance, and the final combined full gate, remain the integration owner's responsibility.
