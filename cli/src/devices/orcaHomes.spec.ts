@@ -1,0 +1,370 @@
+/**
+ * Orca's account homes, from a fake `orca` answer in Orca 1.4.256's shape with made-up ids and emails, and throwaway
+ * folders as the homes. The real `orca`, the person's Orca profiles and ~/.claude are never run or read.
+ */
+import { type ChildProcess, spawn } from 'node:child_process'
+import { once } from 'node:events'
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, relative } from 'node:path'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import {
+  createOrcaHomesCache,
+  orcaBinary,
+  type OrcaHomes,
+  orcaHomesDeps,
+  type OrcaHomesDeps,
+  type OrcaHomesFailure,
+  type OrcaHomesRead,
+  readOrcaHomes,
+} from './orcaHomes.js'
+
+// The real spawn, watched: a spec reads how the child of a run ended.
+vi.mock('node:child_process', async (original) => {
+  const real = await original<typeof import('node:child_process')>()
+  return { ...real, spawn: vi.fn(real.spawn) }
+})
+
+const uid = process.getuid!()
+const FAKE_ORCA = '/fake/bin/orca'
+const APP_ORCA = '/Applications/Orca.app/Contents/Resources/bin/orca'
+const NONE: OrcaHomes = { claude: [], codex: [] }
+
+const cleanup: string[] = []
+afterEach(() => {
+  vi.unstubAllEnvs()
+  for (const dir of cleanup.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
+
+/** A throwaway folder of this user's, by its real path. */
+function home(): string {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'orca-home-')))
+  cleanup.push(dir)
+  return dir
+}
+
+/** One account of `orca account list --json`, made up: Orca's id and email beside its home. */
+const account = (n: number, home: unknown) => ({
+  id: `acct-${n}-5d1e9b`,
+  email: `person${n}@example.com`,
+  label: `Made up ${n}`,
+  home,
+  createdAt: 1763337600000,
+})
+/** The whole answer, with an engine this module does not read beside the two it does. */
+const answer = (claude: unknown, codex: unknown = { accounts: [] }) =>
+  JSON.stringify({ id: 'req-1', ok: true, result: { claude, codex, gemini: { activeAccountId: null, accounts: [] } } })
+const engine = (...accounts: unknown[]) => ({ activeAccountId: 'acct-1-5d1e9b', accounts })
+
+type RunAnswer = Awaited<ReturnType<OrcaHomesDeps['run']>>
+interface Call { file: string; args: string[]; opts: { timeoutMs: number; maxBytes: number } }
+
+/** Deps whose `run` runs nothing: it records each call and answers [answer], by default exit 0 with nothing printed. */
+function fakeDeps(answered: Partial<RunAnswer> = {}, over: Partial<OrcaHomesDeps> = {}) {
+  const calls: Call[] = []
+  const deps: OrcaHomesDeps = {
+    run: async (file, args, opts) => {
+      calls.push({ file, args, opts })
+      return { code: 0, stdout: '', timedOut: false, ...answered }
+    },
+    onPath: (name) => (name === 'orca' ? FAKE_ORCA : null),
+    exists: () => false,
+    platform: 'darwin',
+    uid,
+    ...over,
+  }
+  return { calls, deps }
+}
+
+describe('orcaBinary', () => {
+  it("is the orca on PATH, else, on macOS, the app's own", () => {
+    expect(orcaBinary({ onPath: (name) => (name === 'orca' ? FAKE_ORCA : null), exists: () => true, platform: 'darwin' })).toBe(FAKE_ORCA)
+    const looked: string[] = []
+    expect(orcaBinary({ onPath: () => null, exists: (path) => { looked.push(path); return path === APP_ORCA }, platform: 'darwin' })).toBe(APP_ORCA)
+    expect(looked).toEqual([APP_ORCA])
+    expect(orcaBinary({ onPath: () => null, exists: () => false, platform: 'darwin' })).toBeNull()
+    // The app's folder is a macOS path.
+    expect(orcaBinary({ onPath: () => null, exists: () => true, platform: 'linux' })).toBeNull()
+  })
+})
+
+describe('readOrcaHomes', () => {
+  it("keeps each account's home and nothing else", async () => {
+    const [a, b, c] = [home(), home(), home()]
+    const { calls, deps } = fakeDeps({ stdout: answer(engine(account(1, a), account(2, b)), engine(account(3, c))) })
+    const read = await readOrcaHomes(deps)
+    expect(read).toEqual({ homes: { claude: [a, b], codex: [c] } })
+    const kept = JSON.stringify(read)
+    for (const n of [1, 2, 3]) expect(kept).not.toContain(`acct-${n}`)
+    expect(kept).not.toContain('@')
+    expect(kept).not.toContain('Made up')
+    expect(calls).toEqual([{ file: FAKE_ORCA, args: ['account', 'list', '--json'], opts: { timeoutMs: 5000, maxBytes: 262144 } }])
+  })
+
+  it('refuses a home that is relative, not normalised, missing, a file, another user\'s, too long or holds a control character', async () => {
+    const base = home()
+    const kept = join(base, 'a')
+    mkdirSync(kept)
+    const file = join(base, 'file')
+    writeFileSync(file, '')
+    const tab = join(base, 'a\tb')
+    const newline = join(base, 'a\nb')
+    mkdirSync(tab)
+    mkdirSync(newline)
+    // Past 1024 bytes. Linux's PATH_MAX is 4096, so the folder is real there and only the bound refuses it; macOS's is
+    // 1024, so no folder can have it.
+    const long = join(base, ...Array<string>(6).fill('d'.repeat(200)))
+    if (process.platform === 'linux') mkdirSync(long, { recursive: true })
+    // Each but the missing one names a real folder of this user's, or a file: only the check named refuses it.
+    const refused: unknown[] = [
+      relative(process.cwd(), kept), `${base}/a/../a`, `${base}/./a`, `${base}//a`, `${kept}/`,
+      join(base, 'missing'), file, tab, newline, long, 42, null, {}, [kept],
+    ]
+    const { deps } = fakeDeps({ stdout: answer(
+      engine(null, kept.slice(1), ...refused.map((path, n) => account(n, path)), account(99, kept)),
+      engine(...refused.map((path, n) => account(n, path)), account(100, kept)),
+    ) })
+    expect(await readOrcaHomes(deps)).toEqual({ homes: { claude: [kept], codex: [kept] } })
+    // Another user's: the same folder, owned by a uid that is not this one.
+    expect(await readOrcaHomes({ ...deps, uid: uid + 1 })).toEqual({ homes: NONE })
+  })
+
+  it('keeps each home once', async () => {
+    const [a, b] = [home(), home()]
+    const { deps } = fakeDeps({ stdout: answer(engine(account(1, a), account(2, b), account(3, a)), engine(account(4, b), account(5, b))) })
+    expect(await readOrcaHomes(deps)).toEqual({ homes: { claude: [a, b], codex: [b] } })
+  })
+
+  it('keeps at most 64 an engine', async () => {
+    const base = home()
+    const homes = Array.from({ length: 70 }, (_, n) => {
+      const path = join(base, `h${n}`)
+      mkdirSync(path)
+      return path
+    })
+    const accounts = homes.map((path, n) => account(n, path))
+    const { deps } = fakeDeps({ stdout: answer(engine(...accounts), engine(...accounts)) })
+    expect(await readOrcaHomes(deps)).toEqual({ homes: { claude: homes.slice(0, 64), codex: homes.slice(0, 64) } })
+  })
+
+  it('no orca runs nothing', async () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      const { calls, deps } = fakeDeps({}, { platform, onPath: () => null })
+      expect(await readOrcaHomes(deps)).toEqual({ homes: NONE, failure: 'no orca' })
+      expect(calls).toEqual([])
+    }
+    // Linux never runs the macOS app's binary.
+    const linux = fakeDeps({}, { platform: 'linux', onPath: () => null, exists: () => true })
+    expect(await readOrcaHomes(linux.deps)).toEqual({ homes: NONE, failure: 'no orca' })
+    expect(linux.calls).toEqual([])
+  })
+
+  it('an exit other than 0 is failed', async () => {
+    const a = home()
+    // An Orca with no `account list`; a run with no exit code (killed, not started, or past its byte bound); and an exit
+    // other than 0 whatever it printed.
+    for (const answered of [
+      { code: 1, stdout: 'Unknown command: account\n' },
+      { code: null, stdout: '' },
+      { code: 2, stdout: answer(engine(account(1, a))) },
+    ]) {
+      expect(await readOrcaHomes(fakeDeps(answered).deps)).toEqual({ homes: NONE, failure: 'failed' })
+    }
+  })
+
+  it('a run past its deadline is timed out', async () => {
+    expect(await readOrcaHomes(fakeDeps({ code: null, stdout: '', timedOut: true }).deps)).toEqual({ homes: NONE, failure: 'timed out' })
+  })
+
+  it('an answer that is not JSON, not ok or not an object is unreadable', async () => {
+    const a = home()
+    const whole = answer(engine(account(1, a)))
+    for (const stdout of [
+      '', 'not json', whole.slice(0, -1), 'null', '[]', '"ok"', '42',
+      JSON.stringify({ ok: false, error: { code: 'not_running', message: 'Orca is not running' } }),
+      JSON.stringify({ ok: 'true', result: { claude: engine(account(1, a)) } }),
+      JSON.stringify({ result: { claude: engine(account(1, a)) } }),
+      JSON.stringify({ ok: true }),
+      JSON.stringify({ ok: true, result: [engine(account(1, a))] }),
+      JSON.stringify({ ok: true, result: 'claude' }),
+    ]) {
+      expect(await readOrcaHomes(fakeDeps({ stdout }).deps)).toEqual({ homes: NONE, failure: 'unreadable' })
+    }
+  })
+
+  it('an engine with no accounts list has no homes', async () => {
+    const a = home()
+    const read = (result: unknown) => readOrcaHomes(fakeDeps({ stdout: JSON.stringify({ ok: true, result }) }).deps)
+    expect(await read({ claude: engine(account(1, a)) })).toEqual({ homes: { claude: [a], codex: [] } })
+    expect(await read({ codex: engine(account(1, a)) })).toEqual({ homes: { claude: [], codex: [a] } })
+    expect(await read({})).toEqual({ homes: NONE })
+    expect(await read({ claude: {}, codex: { accounts: 'none' } })).toEqual({ homes: NONE })
+    expect(await read({ claude: null, codex: [account(1, a)] })).toEqual({ homes: NONE })
+  })
+})
+
+describe('orcaHomesDeps', () => {
+  /** A fake `orca` in a throwaway folder that runs [body]. Never the real one. */
+  function script(body: string): string {
+    const file = join(home(), 'orca')
+    writeFileSync(file, `#!/bin/sh\n${body}\n`)
+    chmodSync(file, 0o755)
+    return file
+  }
+
+  /** How the latest spawned child ended, once it has: its signal, or null for an exit of its own. */
+  async function ending(): Promise<NodeJS.Signals | null> {
+    const child = vi.mocked(spawn).mock.results.at(-1)!.value as ChildProcess
+    // A child never killed would outlive the suite.
+    onTestFinished(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL') })
+    if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+    return child.signalCode
+  }
+
+  it('the real run ends at its deadline and at its byte bound', async () => {
+    const { run } = orcaHomesDeps()
+    // The fake sleeps 300 s, past the test's own timeout: an answer at all means the deadline gave it.
+    expect(await run(script('exec sleep 300'), [], { timeoutMs: 200, maxBytes: 262144 })).toEqual({ code: null, stdout: '', timedOut: true })
+    expect(await ending()).toBe('SIGKILL')
+
+    // 300 KB, then a sleep past the test's own timeout and a deadline past it too: only the bound can end it.
+    const loud = script('head -c 307200 /dev/zero\nexec sleep 300')
+    expect(await run(loud, [], { timeoutMs: 600_000, maxBytes: 262144 })).toEqual({ code: null, stdout: '', timedOut: false })
+    expect(await ending()).toBe('SIGKILL')
+
+    // At the bound, the answer is whole.
+    const full = await run(script('head -c 262144 /dev/zero'), [], { timeoutMs: 600_000, maxBytes: 262144 })
+    expect({ ...full, stdout: full.stdout.length }).toEqual({ code: 0, stdout: 262144, timedOut: false })
+  })
+
+  it('the real run answers what it printed, with no shell and stdin closed', async () => {
+    const { run } = orcaHomesDeps()
+    // `cat` reads stdin to its end: one left open would wait for the deadline.
+    const echo = script('cat\nprintf "%s|" "$@"')
+    expect(await run(echo, ['account', 'list', '--json', '$(touch x); x'], { timeoutMs: 600_000, maxBytes: 1024 }))
+      .toEqual({ code: 0, stdout: 'account|list|--json|$(touch x); x|', timedOut: false })
+    expect(await run(script('exit 3'), [], { timeoutMs: 600_000, maxBytes: 1024 })).toEqual({ code: 3, stdout: '', timedOut: false })
+    // A binary that cannot start, and an argument refused before starting (a NUL byte), have no exit code.
+    expect(await run(join(home(), 'missing'), [], { timeoutMs: 600_000, maxBytes: 1024 })).toEqual({ code: null, stdout: '', timedOut: false })
+    expect(await run(echo, ['a\0b'], { timeoutMs: 600_000, maxBytes: 1024 })).toEqual({ code: null, stdout: '', timedOut: false })
+  })
+
+  it('the real deps read the orca on PATH', async () => {
+    const a = home()
+    // printf is the shell's own: PATH holds the fake alone.
+    const fake = script(`[ "$*" = 'account list --json' ] || exit 9\nprintf '%s' '${answer(engine(account(1, a)))}'`)
+    vi.stubEnv('PATH', join(fake, '..'))
+    // Never the app's own `orca`, even if the fake were not found.
+    expect(await readOrcaHomes({ ...orcaHomesDeps(), exists: () => false })).toEqual({ homes: { claude: [a], codex: [] } })
+  })
+})
+
+describe('createOrcaHomesCache', () => {
+  const A: OrcaHomes = { claude: ['/made/up/a', '/made/up/b'], codex: ['/made/up/c'] }
+  const B: OrcaHomes = { claude: ['/made/up/a'], codex: ['/made/up/c', '/made/up/d'] }
+  const ok = (homes: OrcaHomes) => () => Promise.resolve<OrcaHomesRead>({ homes })
+  const failed = (failure: OrcaHomesFailure) => () => Promise.resolve<OrcaHomesRead>({ homes: NONE, failure })
+
+  /** A cache whose reads answer [reads] in turn, on a clock the test moves. */
+  function cacheOf(reads: Array<() => Promise<OrcaHomesRead>>, platform: NodeJS.Platform = 'darwin') {
+    let clock = 1_000_000
+    let count = 0
+    const lines: string[] = []
+    const cache = createOrcaHomesCache({
+      read: () => {
+        count += 1
+        return reads.shift()!()
+      },
+      now: () => clock,
+      platform,
+      log: (line) => { lines.push(line) },
+    })
+    return { cache, lines, reads: () => count, advance: (ms: number) => { clock += ms } }
+  }
+
+  it('the first refresh reads, and says how many', async () => {
+    const t = cacheOf([ok(A)])
+    expect(t.cache.get()).toEqual(NONE)
+    expect(await t.cache.refresh()).toBe(true)
+    expect(t.cache.get()).toEqual(A)
+    expect(t.lines).toEqual(['[observed] orca homes · 2 claude · 1 codex'])
+
+    // A first read with no homes changes nothing, and still says so.
+    const empty = cacheOf([ok(NONE)])
+    expect(await empty.cache.refresh()).toBe(false)
+    expect(empty.lines).toEqual(['[observed] orca homes · 0 claude · 0 codex'])
+  })
+
+  it('a refresh within 5 minutes reads nothing', async () => {
+    const t = cacheOf([ok(A)])
+    await t.cache.refresh()
+    t.advance(5 * 60_000 - 1)
+    expect(await t.cache.refresh()).toBe(false)
+    expect(t.reads()).toBe(1)
+    expect(t.lines).toHaveLength(1)
+    expect(t.cache.get()).toEqual(A)
+  })
+
+  it('after 5 minutes it reads again, and says whether the list changed', async () => {
+    const t = cacheOf([ok(A), ok(A), ok(B)])
+    await t.cache.refresh()
+    t.advance(5 * 60_000)
+    expect(await t.cache.refresh()).toBe(false)
+    t.advance(5 * 60_000)
+    expect(await t.cache.refresh()).toBe(true)
+    expect(t.cache.get()).toEqual(B)
+    expect(t.reads()).toBe(3)
+    expect(t.lines).toEqual([
+      '[observed] orca homes · 2 claude · 1 codex',
+      '[observed] orca homes · 2 claude · 1 codex',
+      '[observed] orca homes · 1 claude · 2 codex',
+    ])
+  })
+
+  it('two refreshes share one read', async () => {
+    let settle!: (read: OrcaHomesRead) => void
+    const t = cacheOf([() => new Promise((resolve) => { settle = resolve })])
+    const first = t.cache.refresh()
+    const second = t.cache.refresh()
+    expect(t.reads()).toBe(1)
+    settle({ homes: A })
+    expect(await Promise.all([first, second])).toEqual([true, true])
+    expect(t.lines).toHaveLength(1)
+    // Done, it is the last read: one within 5 minutes reads nothing.
+    expect(await t.cache.refresh()).toBe(false)
+    expect(t.reads()).toBe(1)
+  })
+
+  it('a failed read empties the list and names its kind', async () => {
+    for (const failure of ['no orca', 'failed', 'timed out', 'unreadable'] as const) {
+      const t = cacheOf([ok(A), failed(failure)])
+      await t.cache.refresh()
+      t.advance(5 * 60_000)
+      expect(await t.cache.refresh()).toBe(true)
+      expect(t.cache.get()).toEqual(NONE)
+      expect(t.lines.at(-1)).toBe(`[observed] orca homes · not read · ${failure}`)
+    }
+  })
+
+  it('a read that throws is failed', async () => {
+    const t = cacheOf([ok(A), () => { throw new Error('/made/up/a person1@example.com') }, () => Promise.reject(new Error('/made/up/b'))])
+    await t.cache.refresh()
+    t.advance(5 * 60_000)
+    expect(await t.cache.refresh()).toBe(true)
+    expect(t.cache.get()).toEqual(NONE)
+    t.advance(5 * 60_000)
+    expect(await t.cache.refresh()).toBe(false)
+    // The error's text is never said: it can name paths and emails.
+    expect(t.lines.slice(1)).toEqual(['[observed] orca homes · not read · failed', '[observed] orca homes · not read · failed'])
+  })
+
+  it('on Windows it never reads', async () => {
+    const t = cacheOf([ok(A)], 'win32')
+    expect(await t.cache.refresh()).toBe(false)
+    t.advance(5 * 60_000)
+    expect(await t.cache.refresh()).toBe(false)
+    expect(t.reads()).toBe(0)
+    expect(t.lines).toEqual([])
+    expect(t.cache.get()).toEqual(NONE)
+  })
+})
