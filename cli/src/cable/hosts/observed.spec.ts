@@ -645,6 +645,16 @@ describe('ObservedSource and a turn\'s end by hook', () => {
     expect(src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false })
   })
 
+  it('a lead that ends its session after its Stop, its subagent running, does not read working', async () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('subagent-start'))
+    src.ingest(ev('turn-stop'))
+    src.ingest(ev('session-end'))
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false })
+  })
+
   // The person stopped the turn: nothing to tell as done, as a Claude turn stopped with Esc.
   it.each([['within the 1.5 s', ['turn-start', 'turn-stop']], ['mid-turn', ['turn-start']]] as const)(
     'turn-aborted %s ends the turn idle, never done', async (_when, before) => {
