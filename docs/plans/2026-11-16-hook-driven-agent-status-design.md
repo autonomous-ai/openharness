@@ -288,9 +288,9 @@ All run `notify.mjs`. Only end and wait events are added; there is no hook per t
   - Installer tests: pruning undeclared events, Codex review records and hashes for the new events.
   - Recaps tests: the quiet window, a next turn inside it, an aborted turn.
   - End to end with the fake engines (`e2e/harness/fakeEngine.mjs`) on an isolated daemon.
-  - Real Claude Code on an isolated daemon, with this session's own Claude profile (`CLAUDE_CONFIG_DIR`, hooks pointed
-    at the isolated daemon, never port 18473). Real Codex is not run; the fake engine and the Windows VM cover it. A
-    check by hand on Ken's Mac comes after a release.
+  - Real Claude Code and Codex are checked by hand after a release: an isolated daemon never binds a real Claude
+    Code's session, whose transcript is under the profile, and seeing the profile would write hooks into its
+    `settings.json`.
 - `npm run test:core`, `npm run test:harnessd` and the Windows hook specs are run and recorded in the pull request.
 
 ## Decided

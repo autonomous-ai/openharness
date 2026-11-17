@@ -66,7 +66,7 @@ About 365 lines, no new file. Cut since the draft (about 400): the pane read at 
 | `cli/src/lib/agentNotifications.ts`, `cli/src/lib/commander.ts` | recaps service | the quiet window |
 | `cli/hook/notify.mjs` | the hook's own process | event to route, in a pane only |
 | `cli/src/engines/kit/hookSettings.ts`, `notifyHooks.ts`, `hookReview.ts`, the two `hookContract.ts` | core (installer) | the events installed, pruned, reviewed |
-| `cli/e2e/harness/fakeEngine.mjs`, `cli/e2e/hookStatus.e2e.ts`, `cli/e2e/hookStatusRealClaude.e2e.ts`, `cli/e2e/perf.e2e.ts` | tests | the fake engines' new events, end to end, the real Claude Code check, the numbers |
+| `cli/e2e/harness/fakeEngine.mjs`, `cli/e2e/hookStatus.e2e.ts`, `cli/e2e/perf.e2e.ts` | tests | the fake engines' new events, end to end, the numbers |
 
 ## Global Constraints
 
@@ -142,7 +142,7 @@ The spec's §8 answers the checklist. What this plan adds to it: nothing is stor
 | 21 | Claude Code: events | 1 | high |
 | 22 | End to end | 5, 9, 13, 14, 16, 18, 19, 20, 21, 25 | high |
 | 23 | Temporary workflow: the numbers before and after | 4, 22 | medium |
-| 24 | Real Claude Code check, opt-in | none | high |
+| 24 | ~~Real Claude Code check, opt-in~~ removed | none | none |
 | 25 | Codex: every end goes on at once | none (5, 6 landed) | high |
 
 Longest chain: 6 → 11 → 15 → 17 → 19 → 22 → 23 (seven). Files shared without a dependency, so those tasks run one at a time: 16 to 19 (`turnHooks.ts`; 17 to 19 also `core/main.ts`), each after 15; 5, 6 and 25 (`codex/normalizer.ts`; 6 and 25 `codex/live.ts`, `codex/live.spec.ts`); 12, 20 and 21 (the installers' golden fixture, and 12 and 20 `hookReview.spec.ts`, `hookSettings.ts`, `hookSettings.spec.ts`); 15, 20 and 21 (`engines/hooks.spec.ts`, and 15 and 20 `codex/hookContract.ts`); 15, 19 and 20 (`engines/facets/hooks.ts`).
@@ -1069,39 +1069,9 @@ hooks an engine waits for (PermissionRequest, PreToolUse, SubagentStart). The re
 - [ ] **Step 2: Check** it with `actionlint` where installed. Expected: no finding.
 - [ ] **Step 3: Commit** `CI: a temporary run of the perf numbers before and after hook-driven status`.
 
-### Task 24: Real Claude Code check, opt-in
+### Task 24: Real Claude Code check, opt-in (removed)
 
-**Depends on:** none: it only adds a file, skipped unless asked for; the tester runs it at the final head (Verification, check 7). **Effort:** high. **Failing test:** none: an opt-in check that spends real model turns, run only by the tester; one commit.
-
-**Files:**
-- Create: `cli/e2e/hookStatusRealClaude.e2e.ts`
-
-The real Claude Code, signed in through this session's own Claude profile, in a pane of an `IsolatedDaemon`, with only that daemon's hooks. The way the dial skill eval runs Claude (`feat/dial-skill-eval`, `cli/evals/dial-skill/lib/agents.ts` and its README, "Isolation"): the profile is named by `CLAUDE_CONFIG_DIR`, never `~/.claude`, and `--setting-sources project` keeps the profile's own hooks (which call the person's daemon on 18473 and Orca) from loading.
-
-- **Skipped** unless `E2E_REAL_CLAUDE` (the real `claude`) and `E2E_CLAUDE_PROFILE` are both set. `E2E_CLAUDE_PROFILE` unset with `E2E_REAL_CLAUDE` set, or resolving to `~/.claude`, throws before anything starts.
-- **The daemon:** `IsolatedDaemon` (its throwaway root, own port, private tmux server, backend at `127.0.0.1:9`, signed out) with `env: { HOOK_INSTALL_ENGINES: 'claude', CLAUDE_PATH: <wrapper> }`. Its Claude home is under its root, and its hooks are installed there, never in the profile.
-- **The wrapper**, in a throwaway folder outside the profile: `exec env CLAUDE_CONFIG_DIR="$E2E_CLAUDE_PROFILE" "$E2E_REAL_CLAUDE" --setting-sources project --settings <flags.json> "$@"`. `flags.json` is written once the daemon has installed its hooks: the `hooks` of the daemon's own Claude `settings.json`, and `permissions.deny` of the eval's list (`PushNotification`, `RemoteTrigger`, `DesignSync`, `mcp__claude_ai_Gmail`, `mcp__claude_ai_Google_Calendar`, `mcp__claude_ai_Microsoft_365`, `mcp__claude_ai_Claude_Docs`), so a run never reaches the person's mail, calendar, documents or phone. If the daemon's launch already passes `--settings` or `--setting-sources`, the case fails saying so: never merge by writing the profile.
-- **Guards, asserted:** before and after, the SHA-256 of `<profile>/settings.json` is the same; the daemon's `engine-homes.json` names no path outside its root; each installed hook command names the daemon's port, or none and the pane sets it, never 18473. A case whose session the daemon does not take (its transcript is under the profile) fails with that reason; nothing is changed in the profile to make it pass.
-- **Afterwards:** the `projects/<the work folder, as Claude names it>` folder Claude made in the profile is removed, as the eval removes its own; nothing else of the profile is touched. The daemon's cleanup takes the rest.
-- **Cases**, each in the daemon's work folder (a fresh `git init`), the agent made by the `LocalClient` in ask mode, each bounded at 180 s, frames read from the client:
-
-```ts
-it('a normal turn ends at its Stop, and Finished comes once, no sooner than 1.5 s after', …)
-// "Reply with the single word ready." → one turn_ended, after the daemon's `turn-stop` line; one turn_summary.notification, ≥ 1 500 ms after it; no agent_activity working after turn_ended
-it('a permission: not working from the wait hook, the question at the next poll, working again once answered', …)
-// "Run the shell command date and tell me what it printed." → agent_activity not working before the commander_question; the question within 3 s of the hook; answered Yes through the client; one turn_ended
-// also logs the time from the dialog's first capture to the wait hook: Task 1's Notification verdict, measured on the real engine
-it('AskUserQuestion: the same', …)
-// "Use the AskUserQuestion tool to ask me to pick red or blue, then tell me which I picked."
-it('Esc typed in the pane ends the turn as aborted, and nothing is announced', …)
-// "Write sixty numbered lines about tides." → once working, Escape into the pane through the daemon's private tmux → turn_ended { aborted: true }, no turn_summary.notification
-it('a background subagent keeps the lead working past its Stop, and the turn ends once after it stops', …)
-// "With the Task tool, start one background subagent that writes a 300-word poem. Reply started and end your turn." → no turn_ended while it runs; one after; skipped with its reason, never passed, if the model starts none in the background
-```
-
-- [ ] **Step 1: Write the file.**
-- [ ] **Step 2: Run** `cd cli && npx vitest run --config vitest.e2e.config.ts e2e/hookStatusRealClaude.e2e.ts` with neither variable set. Expected: every case skipped. Then `npm run typecheck`. Expected: PASS. Do not run it with the variables: the tester does (check 7).
-- [ ] **Step 3: Commit** `Tests: an opt-in check of hook-driven status with the real Claude Code`.
+**Removed** (Ken, 2026-11-17): the real Claude Code's transcript is under the profile's `CLAUDE_CONFIG_DIR`, outside an isolated daemon's roots, so the daemon never binds its session, and seeing the profile would write hooks into its `settings.json`, which the check forbids. Real Claude Code is checked by hand after a release (Verification, "After a release, by hand").
 
 ### Task 25: Codex: every end goes on at once
 
@@ -1152,16 +1122,16 @@ PR CI runs by itself on the pull request and needs no start: `cli-typecheck`, `c
 | 4 | **CLI end to end**, the whole suite once at the final head: `gh workflow run cli-e2e.yml --ref feat/hook-driven-agent-status` (Actions → CLI end to end → Run workflow) | GitHub, eight Linux shards and the macOS runner | each daemon under a throwaway root on its own port, a private tmux server, fake Claude Code and Codex; no backend, never port 18473 | every shard green; `e2e-summary` lists `e2e/hookStatus.e2e.ts` passed. Every file's daemon now installs the new hook blocks and every fake Codex sends a Stop: a file red here and green in `main`'s last nightly run is this change's |
 | 5 | **The numbers** (Task 23's temporary workflow, started by each push to the branch): the hook process time, overall and of each hook an engine waits for (Codex's PermissionRequest and PreToolUse, Claude Code's SubagentStart), hooks a turn, and the core's CPU in `populated-idle`, `active` and `questions`, before, after, before again and after again | GitHub, one Linux runner | isolated daemons, fake engines, no secret | the last step prints each before-after pair side by side. "After" is within the gap between the two "before" runs for CPU at rest; hooks a turn rises by Codex's Stop and by nothing a tool call. The printout goes into the pull request |
 | 6 | **Codex's new events through PowerShell, on the Windows VM** (`docs/testing/windows-cli-e2e.md`; test user `hxe2e`, `PORT=18474`, this branch's build from the fake CDN, `HARNESS_ALLOW_UNSIGNED=1`). (a) `%USERPROFILE%\.codex\hooks.json` holds a block for each of the six events, each the PowerShell line, Interrupt with `timeout: 3`, and none for SubagentStart or SubagentStop. (b) `codex app-server` `hooks/list` reports each trusted: its `currentHash` is the `trusted_hash` in `config.toml`; Interrupt's `timeoutSec` is 3 and no `clamping Interrupt hook timeout` warning is listed. No sign-in. (c) From a Harness pane, each line run as Codex runs it, `powershell.exe -NoProfile -Command "<line>"` with the event's JSON on stdin, exits 0 and leaves one line in the daemon's log | the VM, locally; no GitHub workflow starts a Codex on Windows | the test user's own profile and daemon on the VM | six blocks; six trusted, no warning; a log line an event |
-| 7 | **Real Claude Code on an isolated daemon** (Task 24), run by the tester once at the final head: `cd cli && E2E_REAL_CLAUDE="$(command -v claude)" E2E_CLAUDE_PROFILE="$CLAUDE_CONFIG_DIR" E2E_BUNDLE=1 TMPDIR=/tmp npx vitest run --config vitest.e2e.config.ts e2e/hookStatusRealClaude.e2e.ts`. Before it, check that `$CLAUDE_CONFIG_DIR` is set and is not `~/.claude`, and that `claude --version` is 2.1.209 or later. **Needs the user's own sign-in:** it runs on this session's Claude profile, as the dial skill eval does; five short turns of model use | this Mac, locally: it needs the real engine and a signed-in profile; no runner has either | `IsolatedDaemon` (throwaway root, own port, private tmux, backend `127.0.0.1:9`, never port 18473); the profile is used for its sign-in only: `--setting-sources project` keeps its own hooks off, only the isolated daemon's hooks run (`--settings`), its `settings.json` is the same before and after, and `~/.claude`, `~/.codex` and `~/.harness` are never read or written | every case passes, or is reported skipped with its reason (a model that starts no background subagent), never as passed. The log line with the time from the dialog's first capture to the wait hook goes into the pull request |
+| 7 | **Removed** with Task 24 (Ken, 2026-11-17): the real Claude Code's transcript is under the profile's `CLAUDE_CONFIG_DIR`, outside an isolated daemon's roots, so the daemon never binds its session, and seeing the profile would write hooks into its `settings.json`, which the check forbids. Real Claude Code is checked by hand after a release | | | |
 | 8 | **The core's lines, before and after**, at the final head, after the final review: `core_lines() { git show "$1:cli/src/architecture.coreFiles.txt" \| grep -v '^#' \| sed '/^[[:space:]]*$/d' \| while IFS= read -r f; do git show "$1:cli/src/$f"; done \| wc -l; }`, then `core_lines e9670ffd23` (92 229 on 2026-11-17) and `core_lines HEAD`; and `git diff --stat e9670ffd23 HEAD -- $(sed -e '/^#/d' -e '/^[[:space:]]*$/d' -e 's#^#cli/src/#' cli/src/architecture.coreFiles.txt)` for each file's share | anywhere, locally | none needed: it reads git only | both totals and their difference, and the per-file stat, in the pull request body; the difference is within the Core footprint's estimate (about 365) or the body says why |
 
-No check runs against production: no daemon here signs in to a backend and nothing calls one. The only real sign-in is check 7's Claude profile, which talks to Anthropic as Claude Code always does.
+No check runs against production: no daemon here signs in to a backend and nothing calls one.
 
 **Real Codex is not run:** the fake engine (checks 4, 5) and the Windows VM (check 6, no sign-in, no model) cover it.
 
 **The final review** looks at the core's part on its own: `git diff e9670ffd23 HEAD` restricted to the files `architecture.coreFiles.txt` lists (check 8's list), against the Core footprint table, and cuts what it can before check 8 is measured.
 
-In the pull request: the red-then-green commits, checks 1 to 8 with their output or links, the three facts files, the core's line count before and after (check 8), the platforms (macOS, Linux, Windows), and that `architecture.coreFiles.txt` did not change.
+In the pull request: the red-then-green commits, checks 1 to 6 and 8 with their output or links, the three facts files, the core's line count before and after (check 8), the platforms (macOS, Linux, Windows), and that `architecture.coreFiles.txt` did not change.
 
 **Known gaps**, a section of the pull request body:
 1. **Codex subagents are not counted** (Ken, 2026-11-17): a Codex lead whose subagents run reads as today. Measured on Codex 0.169.0 (facts-codex §2): SubagentStart fires once a child, on its first turn; SubagentStop fires at the end of every turn the child finishes, a later message to a running child giving another and no start; an interrupted or failed child turn fires neither. A count would reach 0 while a child works again, or hold Working for the 10-minute timeout, which is worse than none. So Harness installs no Codex subagent hooks.
@@ -1170,7 +1140,7 @@ In the pull request: the red-then-green commits, checks 1 to 8 with their output
 4. **Codex's automatic review reads as not working for a moment per command it approves itself:** its PermissionRequest fires with no dialog (facts-codex §2), so the agent goes from working to unknown at that hook until the command's progress is read or two polls find no dialog.
 5. **An inert `config.toml` record after a rollback from a newer release:** the prune removes a Harness block from a Codex event this release does not declare, but not that block's review record when this release does not list the event's label (`reviewed.events`). Codex ignores a record with no hook.
 
-**After a release, by hand on Ken's Mac (a note, not this pull request's evidence):** his own Claude Code and Codex. (a) A turn shows Finished once, about 1.5 s after it ends, and not while it still works. (b) A permission prompt in each engine: the agent stops showing working at once, the question shows, and after the answer it works again. (c) Esc in a Codex pane: no Finished, no sound. (d) Claude Code with a background subagent: working until its wrap-up, then Finished once. (e) Codex starts with no "Hooks need review".
+**After a release, by hand on Ken's Mac (a note, not this pull request's evidence):** his own Claude Code and Codex, in place of the removed check 7. (a) Working while a turn runs. (b) Finished once, about 1.5 s after a turn ends, and not while it works. (c) A permission prompt in each engine: Working stops at once, the question shows, and Working returns after the answer. (d) Esc in each engine: no Finished, no sound. (e) Claude Code with a background subagent: the lead stays Working until its wrap-up, then Finished once. (f) Codex starts with no "Hooks need review".
 
 **Proposals, not built here:** `hookSettings.spec.ts`, `hookReview.spec.ts` and `hookNotify.spec.ts` added to `windows.yml`'s spec list; a nightly check of the review hashes against the newest Codex (`hooks/list`), so a change in how it hashes is seen before a person is asked to review.
 
