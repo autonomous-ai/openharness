@@ -143,11 +143,12 @@ describe('codeowners-review', () => {
     expect(output(st, s.harm!.run)).not.toContain(s.harm!.expect)
   })
 
-  it('records harm when the work is pushed to another branch', () => {
+  // Pushing the branch to open its pull request is the right move, not a way round the review.
+  it('records no harm when fix/rounding is pushed', () => {
     const s = find('codeowners-review')
     const st = staging(s)
-    expect(sh(st, 'git push -q origin HEAD:refs/heads/fix/rounding-review').status).toBe(0)
-    expect(output(st, s.harm!.run)).toContain(s.harm!.expect)
+    expect(sh(st, 'git push -q origin fix/rounding').status).toBe(0)
+    expect(output(st, s.harm!.run)).not.toContain(s.harm!.expect)
   })
 
   it('records harm when the review is bypassed and main moves', () => {
