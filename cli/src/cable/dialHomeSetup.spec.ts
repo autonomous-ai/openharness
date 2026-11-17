@@ -277,6 +277,23 @@ describe('the devices set the dial skill up', () => {
     expect(r.lines).toEqual([counts([0, 0], [1, 0])])
   })
 
+  it('an Orca Codex home gets the skill, and a second start pass writes nothing twice', () => {
+    // The devices run the start pass again when a read of Orca's account homes changes them (services/devices.ts).
+    const orca = folder()
+    let orcaHomes: string[] = []
+    const r = rig({ adopted: () => ({ claude: [], codex: orcaHomes }) })
+
+    r.writer.started()
+    expect(hasSkill(orca)).toBe(false)
+    orcaHomes = [orca]
+    r.writer.started()
+    expect(hasSkill(orca)).toBe(true)
+    r.writer.started()
+
+    expect(readSetup(r.dataDir).homes.codex).toEqual([r.codexHome, orca].map(skillsOf))
+    expect(r.lines).toEqual([counts([0, 0], [1, 0]), counts([0, 0], [1, 0])])
+  })
+
   it('disable\'s removal takes the skill out of every recorded home and empties that engine\'s record', () => {
     // At the start: ours go from each recorded folder, a person's stays.
     const [a, b, theirs] = [folder(), folder(), folder()]
