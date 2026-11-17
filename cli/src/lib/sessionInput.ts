@@ -631,6 +631,29 @@ export class SessionInputController {
 
   onTurnEnded(sessionId: string): void {
     const state = this.state(sessionId)
+    const session = this.controlSession(sessionId)
+    if (session?.engine === 'hermes' && !state.dispatching && !state.turnOpen && state.awaitingContent && this.deps.capture) {
+      // #4393: a Hermes conversation bound while its first turn ran gives its reader no turn start, only this end
+      // (the Mac test of `ensure --fresh`: answered, and the delivery `turn_ended_without_start`). Its pane decides first,
+      // with no Enter pressed meanwhile: these words its last message, out of its composer, are the turn that ended.
+      if (state.timer) clearTimeout(state.timer)
+      state.timer = null
+      const content = state.awaitingContent
+      void this.deps.capture(session.agentId).catch(() => null).then((capture) => {
+        if (this.states.get(sessionId) !== state || state.turnOpen || state.awaitingContent !== content) return
+        if (capture && hermesTookPrompt(capture, content, true)) {
+          console.log(`[inject] ${sid(sessionId)} accepted (echoed, its turn ended) · engine=hermes`)
+          if (state.deliveryId) this.finishDelivery(sessionId, state, 'started')
+          state.turnOpen = true
+        }
+        this.endTurn(sessionId, state)
+      })
+      return
+    }
+    this.endTurn(sessionId, state)
+  }
+
+  private endTurn(sessionId: string, state: InputState): void {
     if (!state.dispatching) this.finishDelivery(sessionId, state, 'unknown', 'turn_ended_without_start')
     // Typed while a turn ran, the engine holds it as that turn's follow-up; otherwise no turn was seen for it.
     this.settle(state, state.turnOpen ? 'taken' : 'turn_ended')

@@ -894,6 +894,40 @@ describe('SessionInputController', () => {
       controller.forget('s1')
     })
 
+    // #4393, a Mac test of `ensure --fresh`: Hermes took the words and answered before the first check, and its
+    // conversation was bound during that turn. The reader attached to a turn already under way, so no turn start came;
+    // its end did. The delivery was answered `turn_ended_without_start` and the reply TIMEOUT, though it was answered.
+    const RULE = '─'.repeat(40)
+    const answered = (words: string) => [RULE, `● ${words}`, '', '╭─ ☤ Hermes ─╮', 'two', '╰────╯',
+      '❯ Summarize what\'s in this folder', '─'.repeat(80)].join('\n')
+
+    it('a turn that ends with no start seen, its pane showing these words as its last message, took them', async () => {
+      vi.useFakeTimers()
+      const { controller, sendKey, onError, onDelivery } = hermesController(() => answered(WORDS))
+      controller.submit('s1', WORDS, 'program:1')
+      await vi.advanceTimersByTimeAsync(1_000)
+      controller.onTurnEnded('s1')
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(onDelivery).toHaveBeenCalledWith({ sessionId: 's1', deliveryId: 'program:1', state: 'started' })
+      expect(onDelivery).not.toHaveBeenCalledWith(expect.objectContaining({ state: 'unknown' }))
+      expect(sendKey).not.toHaveBeenCalled()
+      expect(onError).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
+
+    it('a turn that ends with other words last, or these still in the composer, is a turn without a start, as before', async () => {
+      vi.useFakeTimers()
+      for (const pane of [answered('Reply with exactly the word: one'), typed]) {
+        const { controller, onDelivery } = hermesController(() => pane)
+        controller.submit('s1', WORDS, 'program:1')
+        await vi.advanceTimersByTimeAsync(1_000)
+        controller.onTurnEnded('s1')
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(onDelivery).toHaveBeenCalledWith({ sessionId: 's1', deliveryId: 'program:1', state: 'unknown', reason: 'turn_ended_without_start' })
+        controller.forget('s1')
+      }
+    })
+
     it('words still in its composer are retried with Enter, as before', async () => {
       vi.useFakeTimers()
       const { controller, sendKey, onDelivery } = hermesController(() => typed)

@@ -20,8 +20,8 @@ export const ENSURE_USAGE = `Usage: harness ensure <engine> --name <name> ${PROG
 
 One call that keeps a program's own harness (#4393): the live one by that name and token, else the closed one opened
 again with its conversation (OpenClaw keeps its --session key, Hermes its resume id), else a new one, started exactly as
-harness new starts it. --fresh closes the one there is and starts a new conversation. A name held by a harness without
-that token is refused NAME_TAKEN. Two ensures of one name at once make one harness.
+harness new starts it. --fresh deletes the one there is, as harness delete does (its conversation, never its folder),
+and starts a new conversation. A name held by a harness without that token is refused NAME_TAKEN. Two ensures of one name at once make one harness.
 The token file is 0600, yours, and holds 32 or more bytes; the token never reaches the harness's terminal.
 --json answers {"result":"live"|"resumed"|"new","id","name","engine","engineSession","state":"idle"|"working"|"starting",
 "why"?}: "why" says why a conversation could not go on.
@@ -136,9 +136,33 @@ export function ensureCommand(argv: readonly string[], deps: EnsureDeps): Promis
           p.records.forget(closedOne.frame.id)
           return created(`the earlier harness could not be opened again (${resumed.message})`)
         }
-        // A fresh start forgets the old one as the program's: it stays closed, and the name is the new one's.
-        for (const x of same) p.records.forget(x.frame.id)
+        // A fresh start deletes the harness it replaces, as harness delete does (agent_purge): its conversation and
+        // everything Harness kept of it, never its folder. Left closed, it was no longer the token's and nobody could delete
+        // it (#4393, a Mac test). A deletion refused starts nothing: the old one stays the token's, for the next ensure.
+        if (same.length) {
+          const now = new Map((await list(o.daemon, true)).map((f) => [f.id, f]))
+          for (const x of same) {
+            const f = now.get(x.frame.id)
+            if (f) await replaced(f)
+            p.records.forget(x.frame.id)
+          }
+        }
         return created()
+
+        async function replaced(f: Frame): Promise<void> {
+          // A harness with no conversation yet lists '' and purge reads it as none (null), as harness delete sends it.
+          const which = { agentId: f.id, sessionId: f.sessionId || null, createdAt: Date.parse(f.createdAt ?? '') }
+          const failed = (reply: Record<string, unknown>) => {
+            if (reply.error) {
+              throw new AgentClientError(String(reply.error), `${name}'s earlier conversation could not be deleted for a fresh start (${
+                typeof reply.detail === 'string' && reply.detail ? reply.detail : String(reply.error)}); nothing was started.`)
+            }
+          }
+          const review = await o.daemon.request('agent_purge', { ...which, mode: 'inspect' }, 60_000)
+          failed(review)
+          failed(await o.daemon.request('agent_purge', { ...which, mode: 'delete', reviewId: review.reviewId,
+            choices: { sessionData: true, worktreeData: false } }, 120_000))
+        }
 
         async function created(why?: string): Promise<number> {
           const local = flags.get('--local')

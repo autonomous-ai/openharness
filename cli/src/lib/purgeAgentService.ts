@@ -5,7 +5,7 @@ import { promisify } from 'node:util'
 import { existsSync, lstatSync, realpathSync, unlinkSync } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { env } from '../config/env.js'
-import { hermesDbPath } from '../engines/hermes/contract.js'
+import { HERMES_STORE_KEPT, hermesDbPath } from '../engines/hermes/contract.js'
 import { OPENCLAW_STORE_KEPT } from '../engines/openclaw/contract.js'
 import { AgentCreationReceiptError } from './agentCreationReceipt.js'
 import type { RegisteredSession } from './registry.js'
@@ -123,6 +123,10 @@ export async function inspectNativeHistory(s: RegisteredSession): Promise<Histor
   if (!builtinSqlite()) await exec('sqlite3', ['--version'], { timeout: 2500, maxBuffer: 4096 })
   const allowedTables = new Set([sessionTable, ...children.map(([table]) => table)])
   if ((await query("SELECT name, tbl_name FROM sqlite_master WHERE type='trigger'")).some(t => allowedTables.has(String(t.tbl_name)))) {
+    // Hermes 0.21 keeps full-text and display triggers on its messages: its rows are never erased here. The harness is
+    // deleted all the same, its store kept and said, as OpenClaw's is (#4393: else a used Hermes harness, and an
+    // `ensure --fresh` of one, could never be deleted).
+    if (s.engine === 'hermes') return { bytes: 0, kept: { what: 'engine-store', reason: HERMES_STORE_KEPT } }
     return fail('This engine uses history triggers that Harness cannot safely verify. Use the engine to delete its conversation.')
   }
   for (const table of await query("SELECT name FROM sqlite_master WHERE type='table'")) {

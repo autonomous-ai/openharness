@@ -32,6 +32,13 @@ describe('hermesTookPrompt', () => {
     expect(hermesTookPrompt(screen(RULE, `● ${WORDS}`, RULE, '╭─ ☤ Hermes ─╮', 'bravo', '╰────╯', IDLE), WORDS)).toBe(false)
   })
 
+  it('once a turn has just ended, its last echo of the words out of the composer is taken, idle or not', () => {
+    const idle = screen(RULE, `● ${WORDS}`, RULE, '╭─ ☤ Hermes ─╮', 'bravo', '╰────╯', IDLE)
+    expect(hermesTookPrompt(idle, WORDS, true)).toBe(true)
+    expect(hermesTookPrompt(idle, 'Reply with exactly the word: charlie', true)).toBe(false)
+    expect(hermesTookPrompt(typed, WORDS, true)).toBe(false)
+  })
+
   it('is not taken by a ● line that is not a submitted message (no rule above it)', () => {
     expect(hermesTookPrompt(screen(`● ${WORDS}`, BUSY), WORDS)).toBe(false)
   })

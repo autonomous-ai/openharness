@@ -8,6 +8,9 @@ import type { StoreHomes } from '../kit/storeHomes.js'
 import type { StoreSourceRule } from '../kit/storeSource.js'
 import { composerHolds, visibleTerminal } from '../kit/submission.js'
 
+/** A Hermes harness deleted whose conversation Harness cannot erase (its store's triggers): what the deletion says. */
+export const HERMES_STORE_KEPT = "Hermes's store is kept: delete its session with hermes sessions delete."
+
 /** The store a Hermes home keeps its sessions in. */
 export function hermesDbPath(home: string): string {
   return join(home, 'state.db')
@@ -195,12 +198,14 @@ const compact = (text: string): string => text.replace(/\s+/g, '')
 /**
  * Whether [capture] shows Hermes took [content]: its turn running, the words out of its composer, and the last message
  * it echoed beginning with their first line (an echo the pane wrapped is read whole; a timestamp may follow it).
+ * [turnEnded]: a turn of its conversation has just ended, which is its turn having run: the running hint is not asked
+ * for. An idle pane's last echo is otherwise no evidence (an earlier turn's, of the same words).
  */
-export function hermesTookPrompt(capture: string, content: string): boolean {
+export function hermesTookPrompt(capture: string, content: string, turnEnded = false): boolean {
   const first = compact(content.split('\n').find((line) => line.trim()) ?? '')
   if (!first) return false
   const lines = visibleTerminal(capture).split('\n')
-  if (!lines.slice(-8).some((line) => RUNNING.test(line)) || composerHolds(capture, content)) return false
+  if ((!turnEnded && !lines.slice(-8).some((line) => RUNNING.test(line))) || composerHolds(capture, content)) return false
   const at = lines.findLastIndex((line, index) => index > 0 && line.startsWith('● ') && SUBMITTED_RULE.test(lines[index - 1]!))
   if (at < 0) return false
   let echo = lines[at]!.slice(2)
