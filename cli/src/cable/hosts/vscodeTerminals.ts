@@ -69,8 +69,9 @@ interface Window {
   scroll?: { shell: number; lines: number }
 }
 
-/** `scrolls` counts each scroll line written; `dropped` each wait of lines replaced by lines for another shell. */
-const NONE_COUNTED = { shows: 0, taps: 0, refused: 0, reads: 0, scrolls: 0, dropped: 0 }
+/** `failed` counts each `ps` read that failed, of `reads`; `scrolls` each scroll line written; `dropped` each wait of
+ *  lines replaced by lines for another shell. */
+const NONE_COUNTED = { shows: 0, taps: 0, refused: 0, reads: 0, failed: 0, scrolls: 0, dropped: 0 }
 
 const isWindowId = (window: unknown): window is string => typeof window === 'string' && WINDOW_ID.test(window)
 
@@ -102,7 +103,7 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
     minute = true
     deps.after(MINUTE_MS, () => {
       minute = false
-      deps.log(`[devices] vscode · in the last minute: ${counted.shows} shows, ${counted.taps} taps, ${counted.refused} refused states, ${counted.reads} ps reads, ${counted.scrolls} scroll lines, ${counted.dropped} dropped`)
+      deps.log(`[devices] vscode · in the last minute: ${counted.shows} shows, ${counted.taps} taps, ${counted.refused} refused states, ${counted.reads} ps reads, ${counted.failed} failed, ${counted.scrolls} scroll lines, ${counted.dropped} dropped`)
       counted = { ...NONE_COUNTED }
     })
   }
@@ -156,7 +157,10 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
     let table: Map<number, Pick<ProcessName, 'pid' | 'ppid'>> | undefined
     try {
       table = new Map((await deps.processes()).map((row) => [row.pid, row]))
-    } catch { /* Nothing read: each agent asked is due again CHAIN_RETRY_MS from this read's start. */ }
+    } catch {
+      // Nothing read, counted in the minute's line: each agent asked is due again CHAIN_RETRY_MS from this read's start.
+      count('failed')
+    }
     reading = false
     // Only the agents it was asked for: one listed during the read may have started after its table was taken.
     for (const pid of asked) {
