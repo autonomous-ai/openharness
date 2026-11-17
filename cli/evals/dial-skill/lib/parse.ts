@@ -43,8 +43,10 @@ export function parseClaudeStream(jsonl: string): RunResult {
       const content = (event.message as { content?: unknown } | undefined)?.content
       const blocks: Block[] = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : []
       for (const block of blocks) {
-        if (block.type === 'thinking') thinking = thinking === undefined ? block.thinking ?? '' : `${thinking}\n\n${block.thinking ?? ''}`
-        else if (block.type === 'text') push({ role: event.type, content: block.text ?? '' })
+        if (block.type === 'thinking') {
+          // Unless asked to show it, Claude Code prints thinking with empty text: nothing to fold into a turn.
+          if (block.thinking) thinking = thinking === undefined ? block.thinking : `${thinking}\n\n${block.thinking}`
+        } else if (block.type === 'text') push({ role: event.type, content: block.text ?? '' })
         else if (block.type === 'tool_use') {
           toolNames.set(block.id ?? '', block.name ?? '')
           push({ role: 'tool_call', name: block.name ?? '', content: JSON.stringify(block.input ?? {}, null, 2) })
