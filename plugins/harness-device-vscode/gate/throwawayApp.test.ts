@@ -86,6 +86,30 @@ describe.runIf(process.platform === 'darwin')('the throwaway VS Code app', () =>
     expect(() => assertRebranded(app)).toThrow(/signed.*com\.microsoft\.VSCode/)
   })
 
+  /** What VS Code's Info.plist claims, so macOS sends it `vscode:` links and the files it opens. */
+  const claims = ['CFBundleURLTypes', 'CFBundleDocumentTypes', 'UTExportedTypeDeclarations', 'UTImportedTypeDeclarations']
+  const claim = (app: string, key: string): void => {
+    const value = key === 'CFBundleURLTypes' ? [{ CFBundleURLName: 'Visual Studio Code', CFBundleURLSchemes: ['vscode'] }] : [{}]
+    execFileSync('plutil', ['-insert', key, '-json', JSON.stringify(value), join(app, 'Contents', 'Info.plist')])
+  }
+  const claimed = (app: string): string[] =>
+    claims.filter((key) => spawnSync('plutil', ['-extract', key, 'json', '-o', '-', join(app, 'Contents', 'Info.plist')]).status === 0)
+
+  it('drops the copy\'s claims on links and files, so no vscode:// link goes to it', () => {
+    const { app } = vscodeApp()
+    for (const key of claims) claim(app, key)
+    expect(claimed(app)).toEqual(claims)
+    rebrand(app)
+    expect(claimed(app)).toEqual([])
+  })
+
+  it('refuses a copy that still claims vscode:// links', () => {
+    const { app } = vscodeApp()
+    rebrand(app)
+    claim(app, 'CFBundleURLTypes')
+    expect(() => assertRebranded(app)).toThrow(/Visual Studio Code\.app.*CFBundleURLTypes/)
+  })
+
   it('names each app LaunchServices registers apart, as it records them: the app and each helper', () => {
     const { app, helpers } = vscodeApp()
     expect(appBundles(app).sort()).toEqual([app, ...helpers].map((path) => realpathSync(path)).sort())
