@@ -150,8 +150,8 @@ it('stops a guest harness by closing its pane, without the native probe or a sig
   expect(deps.stopNative).not.toHaveBeenCalled()
   expect(terminateDeletedAgent).not.toHaveBeenCalled()
   expect(tmuxKill).toHaveBeenCalledOnce()
-  // Guest exit is checked before retirement and again after the durable image is prepared.
-  expect(checkPidRuntime).toHaveBeenCalledTimes(3)
+  // Recheck after preparation and again after POSIX directory durability yields to other work.
+  expect(checkPidRuntime).toHaveBeenCalledTimes(process.platform === 'win32' ? 3 : 4)
   expect(stoppedAgents.get(row.agentId)).toMatchObject({ active: false, sessionId: 'saved' })
   expect(registry.byAgent(row.agentId)).toBeUndefined()
 })
@@ -179,7 +179,7 @@ it('waits through the bounded default guest-exit interval before publishing Stop
     await vi.advanceTimersByTimeAsync(250)
     await stopping
     expect(registry.byAgent(row.agentId)).toBeUndefined()
-    expect(checkPidRuntime).toHaveBeenCalledTimes(3)
+    expect(checkPidRuntime).toHaveBeenCalledTimes(process.platform === 'win32' ? 3 : 4)
   } finally { vi.useRealTimers() }
 })
 it('checks the saved guest process after its pane removes the registry row, without claiming the changed stop completed', async () => {

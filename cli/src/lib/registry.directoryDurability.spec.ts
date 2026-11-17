@@ -305,7 +305,7 @@ it.skipIf(process.platform === 'win32')('the actual bind caller never submits a 
     clients: { send: vi.fn() }, attachSession: vi.fn(async () => true), captureReader: () => () => true,
     announceSession: vi.fn(), stoppedAgents: { save: vi.fn(), finishResume: vi.fn(), get: vi.fn(() => null) },
     syncRecapPool: vi.fn(), input: { forget: vi.fn(), awaitingConfirmation: () => false }, submitAgent: submit,
-    deviceInput: { forget: vi.fn() }, homes: { copilot: root, grok: root, agy: root },
+    homes: { copilot: root, grok: root, agy: root },
     capturePane: async () => screen, openclawPaneRead: () => true, openclawPaneDue: () => true,
     openclawStateDir: async () => null, followsLive: () => false,
   })
