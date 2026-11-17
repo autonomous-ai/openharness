@@ -126,6 +126,21 @@ describe('Finished after 1.5 s of quiet', () => {
     expect(error.mock.calls.filter(([line]) => String(line).startsWith('[recap]'))).toHaveLength(1)
   })
 
+  it('a turn held for its sub-agents gets the window from when the hold is let go', async () => {
+    const { mirror, desktop } = setup()
+    mirror.ingest([turn[0], { type: 'tool_start', payload: { id: 'a1', tool: 'Agent', input: { description: 'look around' } } }, turn[2]], 's')
+    await vi.advanceTimersByTimeAsync(60_000)
+    mirror.ingest([
+      { type: 'subagent_finished', payload: { id: 'a1', status: 'completed' } },
+      { type: 'text_delta', payload: { content: 'The fix is complete.' } },
+    ] as LiveEvent[], 's')
+    // The wrap-up lets the hold go 2 s on.
+    await vi.advanceTimersByTimeAsync(2_000 + DONE_QUIET_MS - 1)
+    expect(desktop).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(desktop[0].payload.notification.kind).toBe('done')
+  })
+
   it("a /goal pass that opens inside the window: the recap is told silent before the next pass's Processing card, and nothing rings", async () => {
     const decideTier = vi.fn(async () => 'alert' as const)
     const { mirror, device, desktop } = setup({ decideTier })

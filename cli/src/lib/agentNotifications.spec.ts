@@ -28,6 +28,15 @@ describe('shared desktop/device notification policy', () => {
     expect(tell).toHaveBeenCalledExactlyOnceWith({ id: expect.any(String), kind: 'done' })
   })
 
+  it('a second end heard inside the window does not push it back', () => {
+    const policy = new AgentNotifications(); const tell = vi.fn()
+    policy.started('s'); policy.ended('s')
+    vi.advanceTimersByTime(DONE_QUIET_MS - 500)
+    policy.ended('s'); policy.decide('s', 'Finished.', false, tell)
+    vi.advanceTimersByTime(500)
+    expect(tell).toHaveBeenCalledExactlyOnceWith({ id: expect.any(String), kind: 'done' })
+  })
+
   it('a result that came after the window is decided at once', () => {
     const policy = new AgentNotifications()
     policy.started('s'); policy.ended('s')
