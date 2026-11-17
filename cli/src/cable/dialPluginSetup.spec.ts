@@ -282,6 +282,29 @@ describe('createDialPluginSetup', () => {
     expect(counted).toEqual([])
   })
 
+  it('an undo that failed is tried again after the hour though Claude Code is not wanted, and not once it is done', async () => {
+    const fail = [UNINSTALL]
+    const { setup, state, counted } = rig(null)
+    const claude = fakeClaude({ fail, on: (call) => { if (call === INSTALL) state.wanted = false } })
+    state.found = claude
+    expect(await setup.pass()).toBe(false)
+    expect(counted).toEqual([['failed', 'uninstall']])
+    state.now = HOUR - 1
+    await setup.pass()
+    expect(state.lookups).toBe(1)
+
+    fail.pop()
+    state.now = HOUR
+    expect(await setup.pass()).toBe(false)
+    expect(claude.writes()).toEqual([ADD, INSTALL, UNINSTALL, UNINSTALL])
+    expect(state.recorded).toBeUndefined()
+    expect(counted).toEqual([['failed', 'uninstall']])
+
+    state.now = 3 * HOUR
+    await setup.pass()
+    expect(state.lookups).toBe(2)
+  })
+
   it('two passes at once run one install', async () => {
     const claude = fakeClaude()
     const { setup } = rig(claude)
