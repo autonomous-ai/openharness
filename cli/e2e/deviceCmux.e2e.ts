@@ -7,7 +7,9 @@
  * cmux is never run, and the person's own `~/.cmuxterm` is never read. The daemon's `cmux` is the fake, linked first on
  * its PATH from a `cmux.app/Contents/Resources/bin` folder in the daemon's root, checked to be the one it resolves before
  * the daemon starts: with no `cmux` on its PATH it would run /Applications/cmux.app's own. Its HOME is the root's, and its
- * `open` is the harness's fake (HARNESS_OPEN_BIN, harness/daemon.ts), so a tap or a pick brings nothing forward.
+ * `open` is the harness's fake (HARNESS_OPEN_BIN, harness/daemon.ts), so a tap or a pick brings nothing forward. It
+ * carries a mode and a stores' folder of cmux's, as a daemon started from a cmux terminal does, and no run of cmux gets
+ * them.
  *
  * A record's pid is a live process the test starts and ends: the source lists only agents whose process is alive.
  */
@@ -80,19 +82,24 @@ describe.skipIf(process.platform !== 'darwin')("cmux's agents on the dial, from 
     const relay = await FakeBackend.start()
     backend = relay
     relay.addMachine(ME)
+    // A cmux terminal's own variables, but its two ids: those would make the Ghostty agent below one of cmux's.
     const d = await IsolatedDaemon.create({
-      env: { CABLE_DISABLE: 'false', BACKEND_WS_URL: relay.wsUrl, WEB_URL: relay.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId },
+      env: { CABLE_DISABLE: 'false', BACKEND_WS_URL: relay.wsUrl, WEB_URL: relay.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId,
+        CMUX_SOCKET_MODE: 'allowAll' },
     })
     daemon = d
+    d.env.CMUX_AGENT_HOOK_STATE_DIR = join(d.root, 'other')
     const fake = fakeCmux(d.root)
     d.env.PATH = `${fake.dir}:${d.env.PATH}`
-    // Before anything runs: the cmux the daemon resolves is the fake, its home and its open are the root's.
-    expect(realpathSync(resolveBinaryOnPath('cmux', d.env)!)).toBe(realpathSync(fake.binary))
+    // Before anything runs: the cmux the daemon resolves is the fake, where cmux's app keeps its own (the client runs
+    // /Applications/cmux.app's otherwise), and its home and its open are the root's.
+    const resolved = realpathSync(resolveBinaryOnPath('cmux', d.env)!)
+    expect(resolved).toBe(realpathSync(fake.binary))
+    expect(resolved).toMatch(/\/cmux\.app\/Contents\/Resources\/bin\/cmux$/)
     const open = d.env.HARNESS_OPEN_BIN ?? ''
     expect(isAbsolute(open), open).toBe(true)
     expect(relative(d.root, open).startsWith('..'), open).toBe(false)
     expect(relative(d.root, d.env.HOME!).startsWith('..'), d.env.HOME).toBe(false)
-    expect(Object.keys(d.env).filter((name) => name.startsWith('CMUX_'))).toEqual([])
     const file = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = file
     writeFileSync(file, '[]')
@@ -160,8 +167,10 @@ describe.skipIf(process.platform !== 'darwin')("cmux's agents on the dial, from 
     // 3. Its state, as its hooks write it: working, waiting on the person, done.
     let since = dial.messages.length
     fake.set({ sessions: [record('running')] })
+    const working = performance.now()
     touchStore(home, 'claude')
     await dial.next((m) => m.t === 'turn.started' && m.agentId === id, 45_000, 'its turn started', since)
+    console.log(`[cmux e2e] store written → card: ${Math.round(performance.now() - working)} ms`)
     since = dial.messages.length
     fake.set({ sessions: [record('needsInput')] })
     touchStore(home, 'claude')
@@ -173,10 +182,12 @@ describe.skipIf(process.platform !== 'darwin')("cmux's agents on the dial, from 
     await dial.next((m) => m.t === 'turn.done' && m.agentId === id, 45_000, 'its turn done', since)
 
     // 4. cmux's default mode lets no process outside cmux in: the dial says how to turn it on, and only the mode is read.
+    // A store's change heard twice reads the list again: the words' runs are the rest.
+    const spoken = (from: number) => fake.calls().slice(from).filter((run) => run.args[0] !== 'sessions')
     let calls = fake.calls().length
     expect(await speak(dial, relay, id, 'run the spoken tests', 'spoken-1'))
       .toMatchObject({ t: 'voice.error', message: 'Turn on Automation mode in cmux.' })
-    expect(fake.calls().slice(calls)).toEqual([{ args: ['socket-status', '--json'], stdin: '', env: [] }])
+    expect(spoken(calls)).toEqual([{ args: ['socket-status', '--json'], stdin: '', env: [] }])
     await said(d, '[device] voice · refused (cmux)')
 
     // 5. With Automation mode the words are its next prompt: on the paste's stdin, never an argument, never forced.
@@ -185,13 +196,13 @@ describe.skipIf(process.platform !== 'darwin')("cmux's agents on the dial, from 
     expect(await speak(dial, relay, id, 'run the spoken tests', 'spoken-2'))
       .toMatchObject({ t: 'voice.transcript', text: 'run the spoken tests', agentId: id })
     await said(d, '[device] voice · cmux')
-    const runs = fake.calls().slice(calls)
-    expect(runs).toEqual([
+    expect(spoken(calls)).toEqual([
       { args: ['socket-status', '--json'], stdin: '', env: [] },
       { args: ['--json', 'rpc', 'surface.input_state', JSON.stringify({ surface_id: S })], stdin: '', env: [] },
       { args: ['--json', 'paste', '--workspace', W, '--surface', S, '--submit', '-'], stdin: 'run the spoken tests', env: [] },
     ])
     for (const run of fake.calls()) {
+      expect(run.env).toEqual([])
       expect(run.args).not.toContain('--force')
       expect(run.args.join(' ')).not.toContain('run the spoken tests')
     }
@@ -268,12 +279,14 @@ describe.skipIf(process.platform !== 'darwin')("cmux's agents on the dial, from 
     const since = dial.messages.length
     touchStore(d.env.HOME!, 'claude')
     await said(d, '[cmux] listed · 1 agents')
-    const listed = Date.now()
-    await until('a frame after the fold settled', () => dial.arrivedAt.some((at) => at >= listed + 3_000), 30_000, 100)
-    const after = rosters(dial, since)
-    const last = after.at(-1) ?? rosters(dial).at(-1)!
-    expect(cmuxRows(last).map((row) => row.id)).toEqual([web.id])
-    expect(after.every((rows) => isDeepStrictEqual(cmuxRows(rows).map((row) => row.id), [web.id]))).toBe(true)
+    // Working, once cmux listed it: the list the dial asks for then is folded from both.
+    const turn = dial.messages.length
+    web.type('hello from cmux')
+    await dial.next((m) => m.t === 'turn.started' && m.agentId === web.id, 45_000, 'its turn started', turn)
+    const asked = dial.messages.length
+    dial.send({ t: 'agents.list' })
+    expect(cmuxRows(await showing(dial, 'the list it asked for', () => true, asked)).map((row) => row.id)).toEqual([web.id])
+    expect(rosters(dial, since).every((rows) => isDeepStrictEqual(cmuxRows(rows).map((row) => row.id), [web.id]))).toBe(true)
 
     // 3. Its tap opens its tab.
     dial.send({ t: 'agent.open', agentId: web.id })
