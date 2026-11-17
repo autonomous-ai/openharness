@@ -46,7 +46,8 @@ it('installs Claude hooks into the requested home through its facet', async () =
     const file = join(home, 'settings.json')
     const first = readFileSync(file, 'utf8')
     const settings = JSON.parse(first)
-    expect(Object.keys(settings.hooks)).toEqual(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure', 'Notification', 'PostToolUse'])
+    expect(Object.keys(settings.hooks)).toEqual(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure', 'Notification',
+      'PreToolUse', 'PermissionRequest', 'Elicitation', 'SubagentStart', 'SubagentStop', 'PostToolUse'])
     // Only the notices that wait for the person run the hook (hook/notify.mjs NEEDS_INPUT), not the idle one after each turn.
     expect(settings.hooks.Notification[0].matcher).toBe('permission_prompt|elicitation_dialog|elicitation_url_dialog|quota_auto_resume_stale')
     const command = settings.hooks.Stop[0].hooks[0].command as string
@@ -55,6 +56,28 @@ it('installs Claude hooks into the requested home through its facet', async () =
     expect(command).not.toContain('--engine')
     await engineHooks.claude.installIn(19473, home)
     expect(readFileSync(file, 'utf8')).toBe(first)
+  } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
+// Variant P (facts-claude §1): PermissionRequest and Elicitation say a dialog waits as it opens, and PreToolUse only for
+// AskUserQuestion, so no hook runs for any other tool. SubagentStart and SubagentStop count a lead's open subagents.
+it('installs Claude Code\'s wait and subagent hooks beside the person\'s own', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'claude-hook-waits-'))
+  const own = { matcher: 'Bash', hooks: [{ type: 'command', command: 'my-guard' }] }
+  try {
+    writeFileSync(join(home, 'settings.json'), JSON.stringify({ hooks: { PreToolUse: [own] } }))
+    await engineHooks.claude.installIn(19473, home)
+    const settings = JSON.parse(readFileSync(join(home, 'settings.json'), 'utf8'))
+    expect(Object.keys(settings.hooks)).toEqual(['PreToolUse', 'SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure',
+      'Notification', 'PermissionRequest', 'Elicitation', 'SubagentStart', 'SubagentStop', 'PostToolUse'])
+    expect(settings.hooks.PreToolUse).toHaveLength(2)
+    expect(settings.hooks.PreToolUse[0]).toEqual(own)
+    expect(settings.hooks.PreToolUse.at(-1)).toMatchObject({ matcher: 'AskUserQuestion' })
+    for (const event of ['PermissionRequest', 'Elicitation', 'SubagentStart', 'SubagentStop']) {
+      expect(settings.hooks[event]).toHaveLength(1)
+      expect(settings.hooks[event][0].matcher).toBeUndefined()
+      expect(settings.hooks[event][0].hooks[0].command).toContain('--port 19473')
+    }
   } finally { rmSync(home, { recursive: true, force: true }) }
 })
 

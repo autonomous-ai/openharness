@@ -34,7 +34,8 @@ interface Case { name: string; setup?: (target: Target) => void; noHome?: boolea
 /** The events each installer writes, with their matchers and an event's own timeout, to build the files a current install leaves. */
 const EVENTS: Record<Engine, Array<{ event: string; matcher?: string; timeout?: number }>> = {
   claude: [...['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure'].map((event) => ({ event })),
-    { event: 'Notification', matcher: 'permission_prompt|elicitation_dialog|elicitation_url_dialog|quota_auto_resume_stale' }],
+    { event: 'Notification', matcher: 'permission_prompt|elicitation_dialog|elicitation_url_dialog|quota_auto_resume_stale' },
+    { event: 'PreToolUse', matcher: 'AskUserQuestion' }, ...['PermissionRequest', 'Elicitation', 'SubagentStart', 'SubagentStop'].map((event) => ({ event }))],
   codex: [{ event: 'SessionStart', matcher: 'startup|resume|clear|compact' }, { event: 'UserPromptSubmit' }, { event: 'Stop' },
     { event: 'PermissionRequest' }, { event: 'PreToolUse', matcher: 'request_user_input' }, { event: 'Interrupt', timeout: 3 }],
 }
