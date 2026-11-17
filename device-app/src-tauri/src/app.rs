@@ -10,8 +10,11 @@ use crate::types::{
 /// The menu reads the account and the CLI's version again at most this often.
 const READ_EVERY_SECS: u64 = 60;
 
-/// The app asks for its own update at most this often.
-const CHECK_EVERY_SECS: u64 = 21_600;
+/// The app asks for its own update at most this often: as often as the CLI's updater.
+const CHECK_EVERY_SECS: u64 = 60;
+
+/// The longest a version whose download, signature or install failed waits to be tried again.
+const RETRY_MAX_SECS: u64 = 3_600;
 
 /// Where a person whose app cannot replace itself gets the new one. Fixed: nothing of the manifest reaches `open`.
 const DEVICE_PAGE: &str = "https://harness.autonomous.ai/device";
@@ -47,6 +50,8 @@ pub struct App {
     found: Option<String>,
     /// The version last logged as not writable, so it is said once.
     skipped: Option<String>,
+    /// The version whose download, signature or install failed, how often, and when last.
+    failed: Option<Failed>,
     /// An update is installed: the app relaunches on the first tick with nothing running.
     relaunch: bool,
 }
@@ -79,6 +84,7 @@ impl App {
             updating: false,
             found: None,
             skipped: None,
+            failed: None,
             relaunch: false,
         };
         let mut effects = Vec::new();
@@ -259,7 +265,20 @@ impl App {
             }
             // Installed even while a sign-in runs: only the relaunch waits for it.
             Event::UpdateChecked(Some(version)) => {
-                effects.push(Effect::Log(format!("update: found {version}")));
+                // Checked every minute, a release that fails the same way was downloaded whole each minute: it waits
+                // two checks, then four, eight, up to an hour, as the CLI's updater waits on a build it refused. A
+                // newer version is tried at once.
+                if let Some(failed) = self.failed.as_ref().filter(|failed| failed.version == version) {
+                    let wait = (CHECK_EVERY_SECS << failed.tries.min(6)).min(RETRY_MAX_SECS);
+                    if self.now.abs_diff(failed.at) < wait {
+                        self.updating = false;
+                        return;
+                    }
+                }
+                // Said once per version: the check repeats every minute.
+                if self.found.as_ref() != Some(&version) {
+                    effects.push(Effect::Log(format!("update: found {version}")));
+                }
                 // A version already blocked keeps its row while it is tried again, so the menu does not flip.
                 if self.state.app_update != AppUpdate::Blocked(version.clone()) {
                     self.state.app_update = AppUpdate::Installing;
@@ -300,6 +319,13 @@ impl App {
             }
         };
         effects.push(Effect::Log(format!("update: failed {word}")));
+        if failure != UpdateFailure::Check
+            && let Some(version) = self.found.clone()
+        {
+            let tries =
+                self.failed.as_ref().filter(|failed| failed.version == version).map_or(1, |failed| failed.tries + 1);
+            self.failed = Some(Failed { version, tries, at: self.now });
+        }
         if self.state.app_update == AppUpdate::Installing {
             self.state.app_update = AppUpdate::None;
         }
@@ -480,6 +506,13 @@ impl App {
     }
 }
 
+/// A version whose download, signature or install failed `tries` times, the last at `at`.
+struct Failed {
+    version: String,
+    tries: u32,
+    at: u64,
+}
+
 fn screen_at(screen: Screen, phase: Phase, lines: Vec<String>) -> View {
     View { screen, phase, lines }
 }
@@ -495,8 +528,8 @@ mod tests {
     /// Second 0 of a minute.
     const B: u64 = 1794556800;
 
-    /// How often the app asks for its own update.
-    const H6: u64 = 21_600;
+    /// How often the app asks for its own update: as often as the CLI.
+    const M1: u64 = 60;
 
     /// A CLI seen before and a login item registered: only what each test does is saved.
     const SEEN: Saved = Saved { version: 1, cli_seen: true, asked_sign_in: false, login_item: true };
@@ -1162,14 +1195,14 @@ mod tests {
     }
 
     #[test]
-    fn the_first_tick_checks_and_then_every_six_hours() {
+    fn the_first_tick_checks_and_then_every_minute() {
         let mut app = found();
         assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
         app.handle(Event::UpdateChecked(None));
-        for now in [B + 10, B + H6] {
+        for now in [B + 10, B + M1] {
             assert!(!has(&app.handle(tick(now)), &Effect::CheckUpdate), "{now}");
         }
-        assert!(has(&app.handle(tick(B + 5 + H6)), &Effect::CheckUpdate));
+        assert!(has(&app.handle(tick(B + 5 + M1)), &Effect::CheckUpdate));
         app.handle(Event::UpdateChecked(None));
         // A clock set back checks too: abs_diff.
         assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
@@ -1179,10 +1212,10 @@ mod tests {
     fn no_second_check_starts_while_one_runs() {
         let mut app = found();
         assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
-        // A Mac asleep through the check, or a clock that jumps: six hours on, it has not answered.
-        assert!(!has(&app.handle(tick(B + 5 + H6)), &Effect::CheckUpdate));
+        // A Mac asleep through the check, or a clock that jumps: a minute on, it has not answered.
+        assert!(!has(&app.handle(tick(B + 5 + M1)), &Effect::CheckUpdate));
         app.handle(Event::UpdateChecked(None));
-        assert!(has(&app.handle(tick(B + 10 + H6)), &Effect::CheckUpdate));
+        assert!(has(&app.handle(tick(B + 10 + M1)), &Effect::CheckUpdate));
     }
 
     #[test]
@@ -1210,13 +1243,13 @@ mod tests {
         let row = MenuItem::Text("Updating Harness…".into());
         let at = menu.iter().position(|item| *item == row).expect("the row");
         assert_eq!(menu[at + 1], MenuItem::Separator);
-        assert!(!has(&app.handle(tick(B + 5 + H6)), &Effect::CheckUpdate));
+        assert!(!has(&app.handle(tick(B + 5 + M1)), &Effect::CheckUpdate));
 
         let effects = app.handle(Event::UpdateInstalled);
         assert_eq!(logs(&effects), ["update: installed 0.1.3"]);
         assert!(!rows(&effects).contains(&"Updating Harness…".to_string()));
         assert!(!has(&effects, &Effect::Relaunch));
-        assert_eq!(app.handle(tick(B + 10 + H6)), [Effect::StopWatch, Effect::Relaunch]);
+        assert_eq!(app.handle(tick(B + 10 + M1)), [Effect::StopWatch, Effect::Relaunch]);
     }
 
     #[test]
@@ -1266,11 +1299,11 @@ mod tests {
     fn an_install_waiting_to_relaunch_checks_no_more() {
         let mut app = on_sign_in();
         installed(&mut app);
-        // The window stays open past six hours: this process is still the old version, and a check would find the
+        // The window stays open past a minute: this process is still the old version, and a check would find the
         // installed one again and install it a second time.
-        assert!(!has(&app.handle(tick(B + 10 + H6)), &Effect::CheckUpdate));
+        assert!(!has(&app.handle(tick(B + 10 + M1)), &Effect::CheckUpdate));
         app.handle(Event::WindowClosed);
-        assert!(app.handle(tick(B + 15 + H6)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
+        assert!(app.handle(tick(B + 15 + M1)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
     }
 
     #[test]
@@ -1296,8 +1329,49 @@ mod tests {
             assert!(!rows(&sent).contains(&"Updating Harness…".to_string()), "{kind:?}");
             let effects = app.handle(tick(B + 10));
             assert!(!has(&effects, &Effect::CheckUpdate) && !has(&effects, &Effect::Relaunch), "{kind:?}");
-            assert!(has(&app.handle(tick(B + 5 + H6)), &Effect::CheckUpdate), "{kind:?}");
+            assert!(has(&app.handle(tick(B + 5 + M1)), &Effect::CheckUpdate), "{kind:?}");
         }
+    }
+
+    #[test]
+    fn a_version_whose_install_failed_waits_longer_each_time() {
+        const H1: u64 = 3_600;
+        // Checked every minute, a release whose signature fails was downloaded whole every minute, forever.
+        for kind in [UpdateFailure::Download, UpdateFailure::Signature, UpdateFailure::Install] {
+            let mut app = found();
+            let mut at = B + 5;
+            for wait in [2 * M1, 4 * M1, 8 * M1, 16 * M1, 32 * M1, H1, H1] {
+                assert!(has(&app.handle(tick(at)), &Effect::CheckUpdate), "{kind:?} {wait}");
+                assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::InstallUpdate));
+                app.handle(Event::UpdateFailed(kind));
+                // Still checked every minute; the same version is neither fetched nor said, and the menu stays.
+                assert!(has(&app.handle(tick(at + wait - M1)), &Effect::CheckUpdate), "{kind:?} {wait}");
+                assert!(app.handle(Event::UpdateChecked(Some("0.1.3".into()))).is_empty(), "{kind:?} {wait}");
+                at += wait;
+            }
+            // A newer version is tried at once.
+            app.handle(tick(at));
+            app.handle(Event::UpdateChecked(Some("0.1.3".into())));
+            app.handle(Event::UpdateFailed(kind));
+            app.handle(tick(at + M1));
+            let effects = app.handle(Event::UpdateChecked(Some("0.1.4".into())));
+            assert!(has(&effects, &Effect::InstallUpdate), "{kind:?}");
+            assert_eq!(logs(&effects), ["update: found 0.1.4"]);
+        }
+    }
+
+    #[test]
+    fn a_check_that_fails_never_makes_a_version_wait_longer() {
+        // The check downloaded nothing: only a failed download, signature or install counts against a version.
+        let mut app = found();
+        app.handle(tick(B + 5));
+        app.handle(Event::UpdateChecked(Some("0.1.3".into())));
+        app.handle(Event::UpdateFailed(UpdateFailure::Download));
+        assert!(has(&app.handle(tick(B + 5 + M1)), &Effect::CheckUpdate));
+        app.handle(Event::UpdateFailed(UpdateFailure::Check));
+        // Two minutes after its one failed download, it is tried again.
+        assert!(has(&app.handle(tick(B + 5 + 2 * M1)), &Effect::CheckUpdate));
+        assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::InstallUpdate));
     }
 
     #[test]
@@ -1317,15 +1391,16 @@ mod tests {
             [Effect::OpenUrl("https://harness.autonomous.ai/device".into())]
         );
 
-        // Six hours on, the same version: tried again, the row stays, and the line is not said twice.
-        assert!(has(&app.handle(tick(B + 5 + H6)), &Effect::CheckUpdate));
+        // A minute on, the same version: tried again, the row stays, and no line is said twice, found or skipped.
+        assert!(has(&app.handle(tick(B + 5 + M1)), &Effect::CheckUpdate));
         let effects = app.handle(Event::UpdateChecked(Some("0.1.3".into())));
         assert!(has(&effects, &Effect::InstallUpdate));
+        assert!(logs(&effects).is_empty());
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::Menu(_))));
         assert!(logs(&app.handle(Event::UpdateFailed(UpdateFailure::NotWritable))).is_empty());
 
         // A newer version changes the row, and is said once more.
-        app.handle(tick(B + 5 + 2 * H6));
+        app.handle(tick(B + 5 + 2 * M1));
         app.handle(Event::UpdateChecked(Some("0.1.4".into())));
         let effects = app.handle(Event::UpdateFailed(UpdateFailure::NotWritable));
         assert_eq!(logs(&effects), ["update: skipped not-writable"]);
@@ -1339,10 +1414,10 @@ mod tests {
         assert!(app.handle(Event::UpdateChecked(None)).is_empty());
 
         // Nothing newer than the version a row offers: the row goes.
-        app.handle(tick(B + 5 + H6));
+        app.handle(tick(B + 5 + M1));
         app.handle(Event::UpdateChecked(Some("0.1.3".into())));
         app.handle(Event::UpdateFailed(UpdateFailure::NotWritable));
-        app.handle(tick(B + 5 + 2 * H6));
+        app.handle(tick(B + 5 + 2 * M1));
         assert!(!rows(&app.handle(Event::UpdateChecked(None))).contains(&"Update 0.1.3…".to_string()));
     }
 }
