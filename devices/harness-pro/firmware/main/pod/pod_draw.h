@@ -31,7 +31,8 @@ void pod_grad_aa(ht_scene_t *s, int x, int y, int w, int h, int radius, uint16_t
 // gradient reads smooth instead of in horizontal bands. Costs a little more per pixel than pod_grad_aa.
 void pod_grad_aa_dither(ht_scene_t *s, int x, int y, int w, int h, int radius, uint16_t top, uint16_t bottom);
 // A filled triangle, vertices in sixteenths of a px (either winding), anti-aliased across a 1 px ramp centred on each
-// edge. ink is native RGB565. False (nothing added) for a degenerate triangle or a coordinate beyond +-1023 px.
+// edge. ink is native RGB565. False (nothing added) for a degenerate triangle, a coordinate beyond +-2047 px, or one
+// more than 2047 px from another.
 bool pod_tri(ht_scene_t *s, int x0, int y0, int x1, int y1, int x2, int y2, uint16_t ink);
 // The same with some edges marked inner (bit i = the edge from vertex i to i+1): an inner edge is not anti-aliased
 // but bleeds a pixel outward, so two triangles that share it leave no seam (anti-aliasing both sides of a shared

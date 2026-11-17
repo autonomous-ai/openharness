@@ -579,6 +579,13 @@ static void test_lanes_say_their_state(void)
     }
     CHECK(filled(max_m.lane_box[0], PEACH));
     for (int i = 1; i < max_m.lane_hits; i++) CHECK(!filled(max_m.lane_box[i], PEACH));
+    // A paper bubble's tail points down at the pet in every lane, the ones right of 1023 px too (pod_tri's reach).
+    for (int i = 0; i < 2; i++) {
+        bool tail = false;
+        for (int j = 0; j < S.count; j++)
+            tail |= S.runs[j].pro_kind == POD_TRI && within(ht_run_bounds(&S.runs[j]), max_m.lane_box[i]);
+        CHECK(tail);
+    }
     const char *bubbles[] = {"Run the", "pnpm test", "Editing"};
     for (int i = 0; i < 3; i++) {
         const ht_run_t *r = text_run(bubbles[i]);

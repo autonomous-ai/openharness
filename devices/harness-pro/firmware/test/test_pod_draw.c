@@ -345,6 +345,10 @@ static void draw_test_tri(void)
     ht_scene_t d; ht_scene_clear(&d, 0);
     CHECK(!pod_tri(&d, 0, 0, 160, 160, 320, 320, ink) && d.count == 0);
     CHECK(!pod_tri(&d, 40000, 0, 0, 0, 0, 160, ink) && d.count == 0);
+    CHECK(!pod_tri(&d, -0x7000, 0, 0x7000, 0, 0, 160, ink) && d.count == 0);   // an edge too long for isqrt
+    // Max's glass is 1920 px wide: a vertex right of 1023 px draws, as far as int16 sixteenths reach.
+    ht_scene_t wide; ht_scene_clear(&wide, 0);
+    CHECK(pod_tri(&wide, 1500 * 16, 0, 1530 * 16, 0, 1515 * 16, 16 * 16, ink) && wide.count == 1);
     ht_scene_t s1, s2, s3; ht_scene_clear(&s1, 0); ht_scene_clear(&s2, 0); ht_scene_clear(&s3, 0);
     pod_tri(&s1, 160, 160, 800, 160, 160, 800, ink);
     pod_tri(&s2, 160, 160, 800, 160, 160, 801, ink);

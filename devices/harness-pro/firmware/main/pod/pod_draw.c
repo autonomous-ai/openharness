@@ -621,11 +621,14 @@ bool pod_tri(ht_scene_t *s, int x0, int y0, int x1, int y1, int x2, int y2, uint
 bool pod_tri_inner(ht_scene_t *s, int x0, int y0, int x1, int y1, int x2, int y2, uint16_t ink, unsigned inner)
 {
     const int v[6] = {x0, y0, x1, y1, x2, y2};
-    for (int i = 0; i < 6; i++) if (v[i] < -0x3FFF || v[i] > 0x3FFF) return false;
+    // A vertex as far as int16 sixteenths reach (Max's glass is 1920 px wide); an edge no longer than tri_raster's
+    // isqrt takes in 32 bits, as when every vertex had to lie within 1023 px.
+    for (int i = 0; i < 6; i++) if (v[i] < -0x7FFF || v[i] > 0x7FFF) return false;
     int64_t area = (int64_t)(x1 - x0) * (y2 - y0) - (int64_t)(y1 - y0) * (x2 - x0);
     if (!area) return false;
     int lx = imin(x0, imin(x1, x2)), hx = imax(x0, imax(x1, x2));
     int ly = imin(y0, imin(y1, y2)), hy = imax(y0, imax(y1, y2));
+    if (hx - lx > 0x7FFE || hy - ly > 0x7FFE) return false;
     int bx0 = (lx >> 4) - 1, by0 = (ly >> 4) - 1, bx1 = ((hx + 15) >> 4) + 1, by1 = ((hy + 15) >> 4) + 1;
     ht_run_t *r = new_run(s, POD_TRI, bx0, by0, bx1 - bx0, by1 - by0);
     if (!r) return false;
