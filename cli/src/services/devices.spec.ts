@@ -5884,6 +5884,17 @@ describe('cmux\'s agents, from cmux\'s own stores (docs/plans/2026-11-17-dial-cm
     expect(fake.calls).toContainEqual(['mode'])
   })
 
+  it('the last dial gone, a scanned session\'s tap opens no cmux link: every place goes with cmux\'s rows', async () => {
+    const { fake, live } = withCmux()
+    fake.records = [record({ surface: s, workspace: w, sessionId: 'sess-1' })]
+    scanned()
+    await live()
+    seen.host.watching!(false)
+    await flush()
+    await host().openAgent(ID)
+    expect(orcaRuns.filter(([, args]) => args.some((arg) => arg.startsWith('cmux://')))).toEqual([])
+  })
+
   it('with cmux stopped, an observed agent\'s changes place nothing in cmux', () => {
     const places = vi.spyOn(ObservedSource.prototype, 'setPaneNames')
     onTestFinished(() => places.mockRestore())
