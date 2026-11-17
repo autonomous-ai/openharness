@@ -15,7 +15,8 @@
 //   - writes its conversation to a transcript in the engine's real record shapes, so the daemon's
 //     normalizers, turn lifecycle, chips and attach read are exercised for real.
 //
-// A prompt can carry directives that script the turn: `!slow <ms>` holds the answer back,
+// A prompt can carry directives that script the turn: `!slow <ms>` holds the answer back, `!until <name>` until the
+// test writes `<name>.release` in the root (a minute at most), as an agent's turn goes on while a command it runs works,
 // `!tool <command>` runs a tool call first, `!background <command>` (Claude Code) starts the command in the background as
 // its Bash tool's `run_in_background` does, as the engine's own direct child, and ends the turn while it runs, `!commentary <text>` (Codex) says what it is about to do in a message of its own first,
 // `!grow <MiB>` appends that much compaction history
@@ -1716,6 +1717,10 @@ export async function run(engine, config = {}, { native = false } = {}) {
         const timer = setTimeout(done, Number(directive[2]) || 1000)
         interruptSlow = done
       })
+      if (!open) return
+    }
+    if (directive?.[1] === 'until') {
+      await released(join(config.root, `${directive[2]}.release`))
       if (!open) return
     }
     await finish(`answer ${turn}: ${prompt}`)
