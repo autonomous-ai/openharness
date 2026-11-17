@@ -1,4 +1,4 @@
-flow/**/traces/
+**/traces/
 flow/report.html
 flow/state.json
 flow/trajectory/
