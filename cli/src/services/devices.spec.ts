@@ -5704,7 +5704,7 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
     expect(held(env.CODEX_HOME)).toBe(DIAL_SKILL)
     // One lookup pass at a time is shared (lib/engineBin.ts): once this one ends, the start's has, and only promises are
     // left of its pass.
-    expect(await claudeFound(claudeHome())).toBeNull()
+    expect(await claudeFound(claudeHome(), true)).toBeNull()
     await new Promise((resolve) => setImmediate(resolve))
     expect(readSetup(dataDir).plugin).toBeUndefined()
     expect(logs.filter((line) => line.startsWith('[device] dial setup · claude'))).toEqual([])

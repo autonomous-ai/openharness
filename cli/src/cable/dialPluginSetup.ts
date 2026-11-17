@@ -10,7 +10,8 @@ export interface DialPluginSetupDeps {
   platform: NodeJS.Platform
   /** This CLI's version. */
   version: string
-  claude(): Promise<ClaudeRun | null>
+  /** Claude Code as the daemon finds it; [shell]: the login shell's PATH read anew for it, which starts that shell. */
+  claude(shell: boolean): Promise<ClaudeRun | null>
   /** A dial attached here once, and `disable` has not removed Claude Code; read anew at each call. */
   wanted(): boolean
   recorded(): string | undefined
@@ -19,10 +20,14 @@ export interface DialPluginSetupDeps {
   count(kind: SetupCount, reason?: string): void
 }
 
-/** One pass at a time; never rejects. true: this pass installed or updated the plugin. */
-export interface DialPluginSetup { pass(): Promise<boolean> }
+/** One pass at a time; never rejects. true: this pass installed or updated the plugin. [attached]: a dial attached this
+ *  moment. */
+export interface DialPluginSetup { pass(attached?: boolean): Promise<boolean> }
 
 const RETRY_MS = 3_600_000
+/** A computer with a dial and no Claude Code looks for it at every scan: the login shell's PATH is read for it this often
+ *  at most, and at once when a dial attaches, so a login shell that fails is not started, and logged, at each scan. */
+const SHELL_MS = 600_000
 /** What a pass that did its work counts: a plugin found as it should be counts nothing. */
 const COUNTED: Record<Extract<ClaudeSetup, { ok: true }>['outcome'], SetupCount | undefined> =
   { installed: 'set up', updated: 'updated', absent: 'left removed', current: undefined }
@@ -30,6 +35,7 @@ const COUNTED: Record<Extract<ClaudeSetup, { ok: true }>['outcome'], SetupCount 
 export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetup {
   let running = false
   let retryAt = -Infinity
+  let shellAt = -Infinity
   /** An undo that failed: tried again at the passes after its hour while Claude Code is not wanted, as nothing else
    *  would take out what this setup put in. */
   let undoOwed = false
@@ -53,8 +59,10 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
     return disabled.ok ? false : failed(disabled.step)
   }
 
-  async function run(wanted: boolean): Promise<boolean> {
-    const found = await deps.claude()
+  async function run(wanted: boolean, attached: boolean): Promise<boolean> {
+    const shell = attached || deps.now() - shellAt >= SHELL_MS
+    if (shell) shellAt = deps.now()
+    const found = await deps.claude(shell)
     // Not on this computer yet: asked again at the next pass, with nothing counted.
     if (!found) return false
     const claude = { run: found, platform: deps.platform }
@@ -69,7 +77,7 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
   }
 
   return {
-    async pass() {
+    async pass(attached = false) {
       // Windows has no dial to ring: no `claude` is looked for there.
       if (deps.platform === 'win32' || running) return false
       running = true
@@ -77,7 +85,7 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
         // The in-memory checks first: wanted() reads dial-skill.json, which a scan with the plugin set up never reads.
         if (deps.recorded() === deps.version || deps.now() < retryAt) return false
         const wanted = deps.wanted()
-        return wanted || undoOwed ? await run(wanted) : false
+        return wanted || undoOwed ? await run(wanted, attached) : false
       } catch {
         return failed('error')
       } finally {

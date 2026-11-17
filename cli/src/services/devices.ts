@@ -131,7 +131,7 @@ export interface DevicesDeps {
   tty?: (pid: number) => Promise<string | undefined>
   /** For this service's tests: how Claude Code is found for a Claude Code home; the daemon's own lookup by default
    *  (devices/claudePlugin.ts claudeFound). */
-  claude?: (home: string) => Promise<ClaudeRun | null>
+  claude?: (home: string, shell: boolean) => Promise<ClaudeRun | null>
 }
 
 /** ⌘K's answer while the fleet is not running: it never started, so there is no list to weigh. */

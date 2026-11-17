@@ -7,7 +7,9 @@
 import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
-import { agentCommandOwnershipSnapshotAsync, installedEngineBin } from '../lib/engineBin.js'
+import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
+import { agentCommandOwnershipSnapshotAsync, ENGINE_CLI_ALIASES, enginePathOverride, executableFileIdentity, installedEngineBin } from '../lib/engineBin.js'
+import { ENGINE_INSTALL, engineInstallPaths } from '../lib/engineInstall.js'
 import { DIAL_PLUGIN_ID } from './dialSkill.js'
 
 export const MARKETPLACE = 'openharness'
@@ -67,16 +69,30 @@ export function claudeRun(): ClaudeRun | null {
 }
 
 /**
- * Claude Code as the daemon finds it for its own agents; null when it is not on this computer or the lookup failed.
- * The lookup reads the person's interactive PATH, which the devices' own (launchd's bare one) may lack: the child gets
- * the folder `claude` is in first, so an npm install's `#!/usr/bin/env node` finds the node beside it. It is pointed at
- * [home] whatever CLAUDE_CONFIG_DIR the daemon was started with (an Orca profile's shell), so the plugin goes into the
- * home whose settings the devices read; ~/.claude is Claude Code's own default and needs none.
+ * Claude Code where the daemon's lookup looks with no shell started: its override, the devices' own PATH and the folders
+ * its installer uses. Not engineBin's synchronous lookup: once its last read of the login shell failed, it starts the
+ * shell again.
  */
-export async function claudeFound(home: string): Promise<ClaudeRun | null> {
+function claudeNearby(): string | null {
+  for (const command of [enginePathOverride('claude'), ...ENGINE_CLI_ALIASES.claude, ...engineInstallPaths(ENGINE_INSTALL.claude)]) {
+    const bin = command && resolveBinaryOnPath(command, process.env, (path) => executableFileIdentity(path) !== null)
+    if (bin) return bin
+  }
+  return null
+}
+
+/**
+ * Claude Code as the daemon finds it for its own agents; null when it is not on this computer or the lookup failed.
+ * With [shell] the lookup reads the person's interactive PATH, which the devices' own (launchd's bare one) may lack, by
+ * starting their login shell; without it, it looks only where no shell is started. The child gets the folder `claude`
+ * is in first, so an npm install's `#!/usr/bin/env node` finds the node beside it. It is pointed at [home] whatever
+ * CLAUDE_CONFIG_DIR the daemon was started with (an Orca profile's shell), so the plugin goes into the home whose
+ * settings the devices read; ~/.claude is Claude Code's own default and needs none.
+ */
+export async function claudeFound(home: string, shell: boolean): Promise<ClaudeRun | null> {
   let bin: string | null
   try {
-    bin = installedEngineBin('claude', await agentCommandOwnershipSnapshotAsync())
+    bin = shell ? installedEngineBin('claude', await agentCommandOwnershipSnapshotAsync()) : claudeNearby()
   } catch {
     return null
   }
