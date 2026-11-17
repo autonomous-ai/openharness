@@ -193,9 +193,9 @@ function holdUnreadableDescriptor(config, ms) {
 
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 /**
- * Claude Code 2.1.x's `/model` rows on a subscription: bare aliases, Haiku with no effort. The efforts are those the
- * daemon's alias list offers these models, so a test sees the same choices whether its first ask is answered from
- * the aliases or from this list.
+ * Claude Code 2.1.x's `/model` rows on a subscription: bare aliases, Haiku with no effort. Opus and Sonnet take the
+ * efforts the daemon's alias list offers them, so a test that picks one sees the same choices whether its first ask is
+ * answered from the aliases or from this list (the aliases give `default` no effort, and add `fable`).
  */
 const CLAUDE_LISTED_MODELS = [
   { value: 'default', displayName: 'Default (recommended)', description: 'Opus for complex work', supportsEffort: true, supportedEffortLevels: CLAUDE_EFFORTS },
