@@ -564,8 +564,12 @@ export class ObservedSource implements HostSource {
       this.asked(e)
       return
     }
+    const known = this.entries.get(observedAgentId(e.engine, e.sessionId))
     // The end of a session never listed (one of the 50 dropped when full, or ended before the devices started) lists none.
-    if (e.event === 'session-end' && !this.entries.has(observedAgentId(e.engine, e.sessionId))) return
+    if (e.event === 'session-end' && !known) return
+    // Each hook is a process of its own, and a subagent stopped as its lead exits still sends SubagentStop: one that comes
+    // after the lead's SessionEnd is no resume, and the ended session's terminal holds a shell now.
+    if ((e.event === 'subagent-start' || e.event === 'subagent-stop') && known?.endAt !== undefined) return
     const now = this.deps.now()
     const entry = this.entry(e.engine, e.sessionId, now, {
       cwd: e.cwd, transcriptPath: e.transcriptPath, pid: e.callerPid,
