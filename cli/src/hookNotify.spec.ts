@@ -2907,3 +2907,183 @@ describe('hook notify: what the hook says of its own environment', () => {
     expect([headers[1][GATEWAY_HEADER], headers[1][CODEX_HOME_HEADER]]).toEqual([undefined, undefined])
   })
 })
+
+// The engine's own word, from a Harness pane, that it waits on the person, ended a turn, or runs a subagent.
+describe('hook notify: waits, turn ends and subagents from a pane', () => {
+  const urls = (requests: Array<{ url: string }>) => requests.map((request) => request.url)
+  /** Claude Code fixed SubagentStop firing about twice a minute for each running subagent in this release. */
+  const COUNTED = '2.1.311'
+  const subagent = (event: 'SubagentStart' | 'SubagentStop', fields: Record<string, unknown> = {}) => ({
+    hook_event_name: event, session_id: 'lead-1', agent_id: 'agent-7', agent_type: 'Explore', version: COUNTED, ...fields,
+  })
+  /** Every event this change installs, engine by engine. */
+  const NEW_EVENTS = [
+    ['claude', 'PreToolUse', { hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion' }],
+    ['claude', 'PermissionRequest', { hook_event_name: 'PermissionRequest', tool_name: 'Bash' }],
+    ['claude', 'Elicitation', { hook_event_name: 'Elicitation', mcp_server_name: 'docs' }],
+    ['claude', 'SubagentStart', subagent('SubagentStart')],
+    ['claude', 'SubagentStop', subagent('SubagentStop')],
+    ['codex', 'PermissionRequest', { hook_event_name: 'PermissionRequest', tool_name: 'exec_command' }],
+    ['codex', 'PreToolUse', { hook_event_name: 'PreToolUse', tool_name: 'request_user_input' }],
+    ['codex', 'Stop', { hook_event_name: 'Stop', turn_id: 't1' }],
+    ['codex', 'Interrupt', { hook_event_name: 'Interrupt', turn_id: 't1' }],
+  ] as const
+
+  it.each([
+    ['claude', 'PreToolUse', 'AskUserQuestion'], ['codex', 'PermissionRequest', 'exec_command'], ['codex', 'PreToolUse', 'request_user_input'],
+  ] as const)('%s %s in a pane posts a wait with the event and the tool\'s name, and none of its input', async (engine, event, tool) => {
+    const { port, requests } = await collect()
+    await runHook({ port, engine, tmuxPane: '%4', input: { hook_event_name: event, session_id: 'sess-1', tool_name: tool, tool_input: { command: 'input-secret' } } })
+    expect(urls(requests)).toEqual(['/api/hook/wait'])
+    expect(requests[0].body).toMatchObject({ engine, sessionId: 'sess-1', hookEvent: event, toolName: tool })
+    expect(JSON.stringify(requests[0].body)).not.toContain('input-secret')
+  })
+
+  // A matcher edited by hand must not turn each tool call into a request to the daemon.
+  it.each(['claude', 'codex'] as const)('%s PreToolUse for any other tool posts nothing', async (engine) => {
+    const { port, requests } = await collect()
+    await runHook({ port, engine, tmuxPane: '%4', input: { hook_event_name: 'PreToolUse', session_id: 'sess-1', tool_name: 'Bash', tool_input: { command: 'ls' } } })
+    expect(requests).toEqual([])
+  })
+
+  // Variant P (facts-claude §1): PermissionRequest and Elicitation fire as the dialog opens; Notification only after 6 s.
+  it.each([
+    ['PermissionRequest', { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'input-secret' } }, { toolName: 'Bash' }],
+    ['Elicitation', { hook_event_name: 'Elicitation', mcp_server_name: 'docs', message: 'input-secret', requested_schema: {} }, {}],
+  ] as const)('claude %s posts a wait, and none of what it asks', async (_event, input, tool) => {
+    const { port, requests } = await collect()
+    await runHook({ port, tmuxPane: '%4', input: { ...input, session_id: 'sess-1' } })
+    expect(urls(requests)).toEqual(['/api/hook/wait'])
+    expect(requests[0].body).toMatchObject({ engine: 'claude', sessionId: 'sess-1', hookEvent: input.hook_event_name, ...tool })
+    expect(JSON.stringify(requests[0].body)).not.toContain('input-secret')
+  })
+
+  // Claude Code runs both for one AskUserQuestion dialog (facts-claude §5): two waits on the same session open one.
+  it('claude AskUserQuestion\'s PreToolUse and its PermissionRequest each post the same wait', async () => {
+    const { port, requests } = await collect()
+    for (const event of ['PreToolUse', 'PermissionRequest']) {
+      await runHook({ port, tmuxPane: '%4', input: { hook_event_name: event, session_id: 'sess-1', tool_name: 'AskUserQuestion' } })
+    }
+    expect(requests.map((request) => [request.url, request.body.sessionId, request.body.toolName])).toEqual([
+      ['/api/hook/wait', 'sess-1', 'AskUserQuestion'], ['/api/hook/wait', 'sess-1', 'AskUserQuestion'],
+    ])
+  })
+
+  it('codex Stop in a pane posts turn-stop; codex Interrupt posts turn-stop with status interrupted', async () => {
+    const { port, requests } = await collect()
+    for (const event of ['Stop', 'Interrupt']) {
+      await runHook({ port, engine: 'codex', tmuxPane: '%4', input: { hook_event_name: event, session_id: 'sess-1', turn_id: 't1', last_assistant_message: 'text-secret' } })
+    }
+    expect(urls(requests)).toEqual(['/api/hook/turn-stop', '/api/hook/turn-stop'])
+    expect(requests[0].body).toMatchObject({ engine: 'codex', sessionId: 'sess-1', hookEvent: 'Stop' })
+    expect(requests[0].body.status).toBeUndefined()
+    expect(requests[1].body).toMatchObject({ engine: 'codex', sessionId: 'sess-1', hookEvent: 'Interrupt', status: 'interrupted' })
+    expect(JSON.stringify(requests)).not.toContain('text-secret')
+  })
+
+  it('claude SubagentStart and SubagentStop post /api/hook/subagent with the lead\'s session', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, tmuxPane: '%4', input: subagent('SubagentStart') })
+    await runHook({ port, tmuxPane: '%4', input: subagent('SubagentStop', { last_assistant_message: 'text-secret' }) })
+    expect(requests.map((request) => [request.url, request.body.sessionId, request.body.hookEvent])).toEqual([
+      ['/api/hook/subagent', 'lead-1', 'SubagentStart'], ['/api/hook/subagent', 'lead-1', 'SubagentStop'],
+    ])
+    expect(JSON.stringify(requests)).not.toContain('text-secret')
+  })
+
+  // Claude Code's own helpers (prompt suggestions, /btw) end with a SubagentStop of no type, after no SubagentStart.
+  it.each([[''], [undefined]])('claude SubagentStop with agent_type %j posts nothing', async (agentType) => {
+    const { port, requests } = await collect()
+    await runHook({ port, tmuxPane: '%4', input: subagent('SubagentStop', { agent_type: agentType }) })
+    expect(requests).toEqual([])
+  })
+
+  // Before 2.1.311 a running background subagent sent a SubagentStop about every 30 s, which would end the lead's turn
+  // early; Claude Code's hooks that name no version cannot be told from those.
+  it.each([['2.1.310'], ['2.0.999'], [undefined]])('claude %s: no subagent event posts anything', async (version) => {
+    const { port, requests } = await collect()
+    for (const event of ['SubagentStart', 'SubagentStop'] as const) {
+      await runHook({ port, tmuxPane: '%4', input: subagent(event, { version }) })
+    }
+    expect(requests).toEqual([])
+  })
+
+  it.each([['2.1.311'], ['2.2.0'], ['3.0.0']])('claude %s counts its subagents', async (version) => {
+    const { port, requests } = await collect()
+    await runHook({ port, tmuxPane: '%4', input: subagent('SubagentStart', { version }) })
+    expect(urls(requests)).toEqual(['/api/hook/subagent'])
+  })
+
+  // A resumed subagent, or a teammate taking a new message, sends a start with its own stop: the count stays even.
+  it('a subagent resumed sends its start and then its stop', async () => {
+    const { port, requests } = await collect()
+    for (const event of ['SubagentStart', 'SubagentStop', 'SubagentStart', 'SubagentStop'] as const) {
+      await runHook({ port, tmuxPane: '%4', input: subagent(event) })
+    }
+    expect(requests.map((request) => [request.url, request.body.hookEvent])).toEqual([
+      ['/api/hook/subagent', 'SubagentStart'], ['/api/hook/subagent', 'SubagentStop'],
+      ['/api/hook/subagent', 'SubagentStart'], ['/api/hook/subagent', 'SubagentStop'],
+    ])
+  })
+
+  // Codex's SubagentStop fires per child turn and never for a failed one (facts-codex §2): its subagents are not counted.
+  it.each(['SubagentStart', 'SubagentStop'] as const)('codex %s posts no subagent event', async (event) => {
+    const { port, requests } = await collect()
+    await runHook({ port, engine: 'codex', tmuxPane: '%4', input: subagent(event) })
+    expect(urls(requests)).not.toContain('/api/hook/subagent')
+  })
+
+  // Claude Code and Codex read any stdout of these as a decision; an empty one with exit 0 leaves it to the person.
+  it.each(NEW_EVENTS)('%s %s writes nothing on stdout and exits 0', async (engine, _event, input) => {
+    const { port, requests } = await collect()
+    expect(await runHook({ port, engine, tmuxPane: '%4', input: { ...input, session_id: 'sess-1' } })).toBe('')
+    expect(requests).toHaveLength(1)
+  })
+
+  // Codex runs these before its dialog and waits for them: whatever the daemon answers, they decide nothing.
+  it.each(['PermissionRequest', 'PreToolUse'] as const)('codex %s: nothing on stdout and exit 0 when the daemon answers 403, 500 or never', async (event) => {
+    for (const answer of [403, 500, 'never'] as const) {
+      const seen: string[] = []
+      const server = createServer((req, res) => {
+        seen.push(req.url ?? '')
+        req.resume()
+        if (answer !== 'never') res.writeHead(answer).end('{}')
+      })
+      servers.push(server)
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+      const address = server.address()
+      if (!address || typeof address === 'string') throw new Error('test server did not bind a TCP port')
+      const stdout = await runHook({ port: address.port, engine: 'codex', tmuxPane: '%4', input: {
+        hook_event_name: event, session_id: 'sess-1', tool_name: event === 'PreToolUse' ? 'request_user_input' : 'exec_command',
+      } })
+      server.closeAllConnections()
+      expect([answer, stdout, seen]).toEqual([answer, '', ['/api/hook/wait']])
+    }
+  })
+
+  it('outside a pane, a codex Stop posts nothing', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, engine: 'codex', input: { hook_event_name: 'Stop', session_id: 'sess-1', turn_id: 't1' } })   // no tmuxPane
+    expect(requests).toEqual([])
+  })
+
+  it.each(NEW_EVENTS)('outside a pane, %s %s posts nothing', async (engine, _event, input) => {
+    const { port, requests } = await collect()
+    await runHook({ port, engine, input: { ...input, session_id: 'sess-1', cwd: '/w' } })
+    expect(requests).toEqual([])
+  })
+
+  it('outside a pane, claude Stop still tells the devices turn-stop', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: '/w' } })
+    expect(requests.map((request) => [request.url, request.body.event])).toEqual([['/api/hook/observed', 'turn-stop']])
+  })
+
+  it('a Codex child thread\'s hooks still post nothing', async () => {
+    const { port, requests } = await collect()
+    const child = { session_id: 'sess-1', source: { subagent: { thread_spawn: { parent_thread_id: 'sess-1', depth: 1 } } } }
+    await runHook({ port, engine: 'codex', tmuxPane: '%4', input: { ...child, hook_event_name: 'PermissionRequest', tool_name: 'exec_command' } })
+    await runHook({ port, engine: 'codex', tmuxPane: '%4', input: { ...child, hook_event_name: 'PreToolUse', tool_name: 'request_user_input' } })
+    expect(requests).toEqual([])
+  })
+})
