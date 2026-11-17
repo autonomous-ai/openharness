@@ -56,7 +56,8 @@ class DeviceAppInstallResult {
   final String? installedAt;
 }
 
-final _macVersion = RegExp(r'^Version (\d+)');
+/// The first dotted number: Apple documents the words around it as localized.
+final _macVersion = RegExp(r'(\d+)\.\d+');
 
 /// macOS 13 or later, and not a viewer build. Defaults: [defaultTargetPlatform],
 /// [RuntimePlatform.operatingSystemVersion], `kIsWeb || kViewerMode`.
