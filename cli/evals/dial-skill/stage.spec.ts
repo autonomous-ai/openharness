@@ -169,6 +169,25 @@ describe('stage', () => {
     expect(st.env.npm_config_cache).toBe(join(st.root, 'tmp', 'npm-cache'))
   })
 
+  it('leaves nothing of a stage that fails, and its error names no path under the home folder', () => {
+    const s = fixture(true, { name: 'fix/typo', patch: 'branch.patch', message: 'Fix the README' })
+    writeFileSync(join(s.dir, 'branch.patch'), 'not a patch\n')
+    // The scenario folder under the home folder, as the eval's own sits.
+    vi.stubEnv('HOME', scenarios)
+
+    const error = (() => {
+      try {
+        stage(s, 'claude', { skill: true, base })
+      } catch (e) {
+        return e as Error
+      }
+    })()
+
+    expect(error?.message).toMatch(/git apply/)
+    expect(error!.message).not.toContain(scenarios)
+    expect(readdirSync(join(base, 'dial-skill-eval'))).toEqual([])
+  })
+
   it('refuses claude without CLAUDE_CONFIG_DIR, so the default profile is never used', () => {
     vi.stubEnv('CLAUDE_CONFIG_DIR', undefined)
 
