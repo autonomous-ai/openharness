@@ -166,6 +166,26 @@ describe('createDialPluginSetup', () => {
     expect(counted).toEqual([])
   })
 
+  // A computer with a dial and no Claude Code looks at every scan: a login shell that fails is started, and logged, once
+  // in ten minutes at most, and at once when a dial attaches.
+  it('the login shell\'s PATH is read at the first pass, then at most every ten minutes, and at once at an attach', async () => {
+    const shells: boolean[] = []
+    const { setup, state } = rig(null, { claude: async (shell) => { shells.push(shell); return null } })
+    const at = async (ms: number, attached?: boolean) => {
+      state.now = ms
+      await setup.pass(attached)
+    }
+    const TEN_MINUTES = 600_000
+    await at(0)
+    await at(60_000)
+    await at(TEN_MINUTES - 2)
+    await at(TEN_MINUTES - 1, true)
+    await at(TEN_MINUTES)
+    await at(2 * TEN_MINUTES - 2)
+    await at(2 * TEN_MINUTES - 1)
+    expect(shells).toEqual([true, false, false, true, false, false, true])
+  })
+
   it('a plugin the person uninstalled is not installed again', async () => {
     const claude = fakeClaude()
     const { setup, state, counted } = rig(claude)

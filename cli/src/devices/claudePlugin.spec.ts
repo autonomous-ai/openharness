@@ -7,7 +7,11 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import * as engineBin from '../lib/engineBin.js'
 import { claudeDisable, claudeEnable, claudeFound, claudeRun, claudeSetUp, claudeStatus, claudeUpdate, type ClaudeRun } from './claudePlugin.js'
+
+// A copy of the module, so a test can watch whether the lookup that starts the login shell ran.
+vi.mock('../lib/engineBin.js', async (original) => ({ ...await original<object>() }))
 
 type Answer = { code: number | null; stdout?: string; stderr?: string }
 
@@ -40,6 +44,7 @@ const list = (...entries: unknown[]): Answer => ({ code: 0, stdout: JSON.stringi
 const cleanup: Array<() => void> = []
 afterEach(() => {
   vi.unstubAllEnvs()
+  vi.restoreAllMocks()
   for (const step of cleanup.splice(0).reverse()) step()
 })
 
@@ -439,22 +444,44 @@ describe('claudeFound', () => {
   it('claudeFound runs the claude the lookup finds, its folder first on PATH, CLAUDE_CONFIG_DIR naming the home', async () => {
     const { dir, bin } = claudeOnPath()
     const home = join(dir, 'profile-a')
-    const run = await claudeFound(home)
-    expect(run).not.toBeNull()
-    expect(await run!(['plugin', 'list', '--json'], 15_000))
-      .toEqual({ code: 0, stdout: `args: plugin list --json\nhome: ${home}\nfirst: ${bin}\n`, stderr: '' })
+    for (const shell of [true, false]) {
+      const run = await claudeFound(home, shell)
+      expect(run).not.toBeNull()
+      expect(await run!(['plugin', 'list', '--json'], 15_000))
+        .toEqual({ code: 0, stdout: `args: plugin list --json\nhome: ${home}\nfirst: ${bin}\n`, stderr: '' })
+    }
+  })
+
+  // The scans between two reads of the login shell's PATH: a `claude` installed since, where its installer puts it, is
+  // found with no shell started.
+  it('claudeFound without the shell finds a claude in the folder its installer uses, and starts no login shell', async () => {
+    const dir = throwawayPath()
+    const lookup = vi.spyOn(engineBin, 'agentCommandOwnershipSnapshotAsync')
+    expect(await claudeFound(join(dir, '.claude'), false)).toBeNull()
+    mkdirSync(join(dir, '.local', 'bin'), { recursive: true })
+    const script = join(dir, '.local', 'bin', 'claude')
+    writeFileSync(script, '#!/bin/sh\necho "args: $*"\n')
+    chmodSync(script, 0o755)
+
+    const run = await claudeFound(join(dir, '.claude'), false)
+
+    expect(await run!(['--version'], 15_000)).toMatchObject({ code: 0, stdout: 'args: --version\n' })
+    expect(lookup).not.toHaveBeenCalled()
+    await claudeFound(join(dir, '.claude'), true)
+    expect(lookup).toHaveBeenCalledTimes(1)
   })
 
   // The daemon started from a shell with an Orca profile's CLAUDE_CONFIG_DIR: the plugin goes into the home asked for.
   it('claudeFound with ~/.claude as the home passes no CLAUDE_CONFIG_DIR, though the process has one', async () => {
     const { dir, bin } = claudeOnPath()
     vi.stubEnv('CLAUDE_CONFIG_DIR', join(dir, 'profile-b'))
-    const run = await claudeFound(join(dir, '.claude'))
+    const run = await claudeFound(join(dir, '.claude'), true)
     expect(await run!(['--version'], 15_000)).toEqual({ code: 0, stdout: `args: --version\nhome: none\nfirst: ${bin}\n`, stderr: '' })
   })
 
   it('claudeFound is null when no claude is found', async () => {
     const dir = throwawayPath()
-    expect(await claudeFound(join(dir, '.claude'))).toBeNull()
+    expect(await claudeFound(join(dir, '.claude'), true)).toBeNull()
+    expect(await claudeFound(join(dir, '.claude'), false)).toBeNull()
   })
 })

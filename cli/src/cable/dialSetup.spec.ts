@@ -68,6 +68,8 @@ function rig() {
   const fake = fakeClaude(claudeHome)
   const state = { found: true }
   const looked: string[] = []
+  /** Whether each lookup read the login shell's PATH. */
+  const shells: boolean[] = []
   const counted: string[][] = []
   const clock = { at: 0 }
   const deps: DialSetupDeps = {
@@ -81,13 +83,14 @@ function rig() {
     now: () => clock.at,
     count: (engine, kind, reason) => { counted.push(reason === undefined ? [engine, kind] : [engine, kind, reason]) },
     log: () => {},
-    claude: async (home) => {
+    claude: async (home, shell) => {
       looked.push(home)
+      shells.push(shell)
       return state.found ? fake.run : null
     },
     version: '0.6.59',
   }
-  return { dataDir, claudeHome, codexHome, fake, state, looked, counted, clock, setup: createDialSetup(deps) }
+  return { dataDir, claudeHome, codexHome, fake, state, looked, shells, counted, clock, setup: createDialSetup(deps) }
 }
 
 describe('createDialSetup', () => {
@@ -209,5 +212,19 @@ describe('createDialSetup', () => {
     expect(r.fake.writes().filter((call) => call === INSTALL)).toHaveLength(2)
     expect(hasSkill(r.claudeHome)).toBe(true)
     expect(readSetup(r.dataDir).plugin).toBe('0.6.59')
+  })
+
+  it('an attach reads the login shell\'s PATH at once, and the scans between read it at most every ten minutes', async () => {
+    const r = rig()
+    r.state.found = false
+    await r.setup.attached()
+    r.clock.at = 60_000
+    await r.setup.scanned([])
+    r.clock.at = 120_000
+    await r.setup.attached()
+    r.clock.at = 120_000 + 600_000
+    await r.setup.scanned([])
+
+    expect(r.shells).toEqual([true, false, true, true])
   })
 })
