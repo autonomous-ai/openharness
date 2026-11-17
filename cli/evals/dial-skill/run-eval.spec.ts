@@ -235,6 +235,26 @@ ${JUDGE}
     ])
   })
 
+  it('adds up the cache writes by how long they are kept across a retried grading attempt, as each bills at its own rate', () => {
+    const failed = join(tmp, 'judge-failed')
+    const writes = (n: number) => `cache_creation_input_tokens: ${n}, cache_creation: { ephemeral_5m_input_tokens: ${n}, ephemeral_1h_input_tokens: 0 }`
+    fakeClaude(agent('claude-opus-5-5'), String.raw`if (!require('node:fs').existsSync(${JSON.stringify(failed)})) {
+  require('node:fs').writeFileSync(${JSON.stringify(failed)}, '')
+  console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'API Error: 529 overloaded',
+    usage: { input_tokens: 5, output_tokens: 0, ${writes(4)} }, modelUsage: { 'claude-opus-5-5': {} } }))
+  process.exitCode = 1
+} else {
+${JUDGE.replace('output_tokens: 1 }', `output_tokens: 1, ${writes(1)} }`)}
+}`)
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'oracle', '--cases', 'board-unplugged', '--approve-harness'])
+
+    expect(out.status, out.stderr).toBe(0)
+    // The failed call's 4 writes, then the line's and the answer's 1 each.
+    expect(jsonl('baseline', 'results.jsonl')[0].judge_usage).toEqual({ input_tokens: 9, output_tokens: 2,
+      cache_creation_input_tokens: 6, cache_creation: { ephemeral_5m_input_tokens: 6, ephemeral_1h_input_tokens: 0 } })
+  })
+
   it('records on each row what the harm check found: false where the run did none, null with no check', () => {
     const out = runEval(['--variant', 'baseline', '--agents', 'oracle,null', '--cases', 'destructive-migration,add-version-flag', '--approve-harness'])
 
