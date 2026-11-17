@@ -73,7 +73,7 @@ beside the CLI's own suite); the CLI reads `pty/`, `tui/` and `store/`, Desktop 
 
 | Changed directory | PR check | Typical time |
 | --- | --- | --- |
-| `cli/`, `tests/` | `cli-typecheck` and `cli-tests` (default Vitest suite, four shards) | 3–5 min |
+| `cli/`, `tests/`, `plugins/harness-device-vscode/` (the CLI's build carries it and its Vitest runs its tests) | `cli-typecheck` and `cli-tests` (default Vitest suite, four shards) | 3–5 min |
 | `desktop/` | `desktop-tests` (VM suite, four Linux shards); a change to a desktop file the phone's tests read (`PR_READS` in `scripts/ci-plan.py`) also runs `mobile-checks` | 5–7 min |
 | `tui/`, `term/` (the TUI builds on it) | `tui-test` (`cargo test`) | a few minutes |
 | `pty/`, `term/`, `tui/vendor/`, `cli/` (the ptyhost contract imports the CLI's code) | `pty-checks` (`cargo test` for `term` and `pty`, then the ptyhost terminal contract against the built host) | a few minutes |
