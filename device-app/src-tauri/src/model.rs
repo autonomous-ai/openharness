@@ -1,6 +1,8 @@
 //! What the menu shows and which screen is due, from the app's state.
 
-use crate::types::{AppState, AppUpdate, CliState, Daemon, DialStatus, MenuAction, MenuItem, NotifyMode, Screen};
+use crate::types::{
+    AppState, AppUpdate, CliState, Daemon, DialStatus, MenuAction, MenuItem, NotifyMode, Screen, Vscode,
+};
 
 /// The menu's first, disabled row: the first of these that applies.
 pub fn dial_line(state: &AppState) -> String {
@@ -68,6 +70,9 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
         AppUpdate::Blocked(version) => items.push(MenuItem::Action(MenuAction::Update, format!("Update {version}…"))),
         AppUpdate::None => {}
     }
+    if offers_vscode(state) {
+        items.push(MenuItem::Action(MenuAction::TurnOnVscode, "Turn on VS Code".into()));
+    }
     items.push(MenuItem::Separator);
     if state.desktop_installed {
         items.push(MenuItem::Action(MenuAction::OpenHarness, "Open Harness".into()));
@@ -75,6 +80,11 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
     items.push(MenuItem::Action(MenuAction::About, "About".into()));
     items.push(MenuItem::Action(MenuAction::Quit, "Quit".into()));
     items
+}
+
+/// Turn on VS Code: VS Code is here, its extension is off, and no turn-on runs. The menu, and a click, ask this alike.
+pub fn offers_vscode(state: &AppState) -> bool {
+    state.cli == CliState::Found && state.vscode == Some(Vscode::Off) && !state.vscode_busy
 }
 
 /// The screen the window should show next, in the order they chain: install, then sign-in.

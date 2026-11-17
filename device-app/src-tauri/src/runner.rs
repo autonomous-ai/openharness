@@ -10,6 +10,7 @@ use crate::state::StateFile;
 use crate::tabs::{Out, POLL_EVERY, Select, TabApp, TabFollow, TabScripts};
 use crate::types::{Effect, Event, Log, LoginEvent};
 use crate::update::AppUpdater;
+use crate::vscode;
 use crate::watch::{self, Watch};
 use std::ffi::OsString;
 use std::io;
@@ -199,6 +200,8 @@ impl Runner {
             }
             Effect::ReadAuth => shared.with_cli(|cli| Event::Auth(account::auth_status(cli))),
             Effect::ReadVersion => shared.with_cli(|cli| Event::CliVersion(cli::version(cli))),
+            Effect::ReadVscode => shared.with_cli(|cli| Event::Vscode(vscode::status(cli))),
+            Effect::TurnOnVscode => shared.with_cli(|cli| Event::VscodeTurnedOn(vscode::turn_on(cli))),
             Effect::RunLogin => shared.run_login(),
             Effect::CancelLogin => {
                 let login = shared.login.lock().unwrap().take();

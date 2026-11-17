@@ -306,6 +306,7 @@ fn menu_id(action: MenuAction) -> &'static str {
         MenuAction::NotifyFull => "notify_full",
         MenuAction::NotifyYou => "notify_you",
         MenuAction::Update => "update",
+        MenuAction::TurnOnVscode => "turn_on_vscode",
         MenuAction::OpenHarness => "open_harness",
         MenuAction::About => "about",
         MenuAction::Quit => "quit",
@@ -314,7 +315,7 @@ fn menu_id(action: MenuAction) -> &'static str {
 
 fn menu_action(id: &str) -> Option<MenuAction> {
     use MenuAction::*;
-    [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit]
+    [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, TurnOnVscode, OpenHarness, About, Quit]
         .into_iter()
         .find(|action| menu_id(*action) == id)
 }

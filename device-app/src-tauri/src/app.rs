@@ -2,13 +2,13 @@
 
 use crate::install::GETTING_READY;
 use crate::keepalive::{Keep, KeepAlive};
-use crate::model::{about_credits, due, menu, menu_log};
+use crate::model::{about_credits, due, menu, menu_log, offers_vscode};
 use crate::types::{
     Action, AppState, AppUpdate, CliState, Daemon, Effect, Event, LoginEvent, MenuAction, MenuItem, NotifyMode, Phase,
-    Saved, Screen, UpdateFailure, View,
+    Saved, Screen, UpdateFailure, View, Vscode,
 };
 
-/// The menu reads the account and the CLI's version again at most this often.
+/// The menu reads the account, the CLI's version and VS Code's status again at most this often.
 const READ_EVERY_SECS: u64 = 60;
 
 /// The app asks for its own update at most this often: as often as the CLI's updater.
@@ -71,6 +71,8 @@ impl App {
             saved,
             app_update: AppUpdate::None,
             cli_version: None,
+            vscode: None,
+            vscode_busy: false,
         };
         let mut app = App {
             state,
@@ -170,6 +172,8 @@ impl App {
                 }
                 self.state.signed_in = None;
                 self.state.cli_version = None;
+                self.state.vscode = None;
+                self.state.vscode_busy = false;
                 self.awaiting_account = false;
                 if self.window.is_some() {
                     self.show(None, effects);
@@ -227,8 +231,19 @@ impl App {
             Event::CliVersion(version) if self.state.cli == CliState::Found => {
                 self.state.cli_version = version.or(self.state.cli_version.take());
             }
+            // A CLI with no such word answers None: the item is not offered.
+            Event::Vscode(vscode) if self.state.cli == CliState::Found => self.state.vscode = vscode,
+            Event::VscodeTurnedOn(result) if self.state.cli == CliState::Found => {
+                self.state.vscode_busy = false;
+                match result {
+                    // The CLI said on: the item stays hidden until the read below says otherwise.
+                    Ok(()) => self.state.vscode = Some(Vscode::On),
+                    Err(failure) => effects.push(Effect::Log(format!("vscode: not turned on · {}", failure.as_str()))),
+                }
+                effects.push(Effect::ReadVscode);
+            }
             // A read of a CLI that went away answers late: nothing reads it.
-            Event::Auth(_) | Event::CliVersion(_) => {}
+            Event::Auth(_) | Event::CliVersion(_) | Event::Vscode(_) | Event::VscodeTurnedOn(_) => {}
             Event::Login(event) => self.login_event(event, effects),
             // A failure is tried again at the next start.
             Event::LoginItem(registered) => {
@@ -252,6 +267,13 @@ impl App {
                     effects.push(Effect::Menu(self.menu.clone()));
                 }
                 MenuAction::Update => effects.push(Effect::OpenUrl(DEVICE_PAGE.into())),
+                // Only while the item shows: a click of a menu drawn before the run started does nothing.
+                MenuAction::TurnOnVscode => {
+                    if offers_vscode(&self.state) {
+                        self.state.vscode_busy = true;
+                        effects.push(Effect::TurnOnVscode);
+                    }
+                }
                 MenuAction::OpenHarness => effects.push(Effect::OpenDesktop),
                 MenuAction::About => effects.push(Effect::ShowAbout(about_credits(&self.state))),
                 MenuAction::Quit => {
@@ -447,7 +469,7 @@ impl App {
     }
 
     fn read(&mut self, effects: &mut Vec<Effect>) {
-        effects.extend([Effect::ReadAuth, Effect::ReadVersion]);
+        effects.extend([Effect::ReadAuth, Effect::ReadVersion, Effect::ReadVscode]);
         self.last_read = self.now;
     }
 
