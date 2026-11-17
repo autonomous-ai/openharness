@@ -291,3 +291,9 @@ closure. Those exact two transitive files are now listed with both selected
 backends and removed from the cold inventory; runtime is unchanged. The failed
 receipt remains `.harness/validation/20261117T234312.940268Z-54184/receipt.json`.
 A final architecture run is pending the coordinated quiet benchmark slot.
+
+Final combined loading/launch validation at `00f158f85b` passes 446 cases in
+13 files plus TypeScript, actual outer exit 0. The exact cold and warmed
+inventories pass. Receipt:
+`.harness/validation/20261117T235130.603814Z-61586/receipt.json`.
+No further runtime change follows those checks; native platform/cost holds remain.
