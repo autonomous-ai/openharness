@@ -34,7 +34,7 @@ import { backendHttpBase } from './lib/backendHttpBase.js'
 import { GRID_MINT_TIMEOUT_MS, requestJson, postJson, controlPlaneAuth } from './lib/controlPlane.js'
 import { LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel, DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, daemonPort, isAlive, isDaemonRunning, onError, readPid } from './lib/daemonState.js'
 import { daemonUnreachableText, sandboxed, startRefusalText } from './lib/unreachable.js'
-import { BIND_WAIT_MS, connectFailure, defaultLaunchDeps, waitForBind } from './lib/daemonLaunch.js'
+import { BIND_WAIT_MS, connectFailure, daemonSpawnOptions, defaultLaunchDeps, waitForBind } from './lib/daemonLaunch.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
 import { buildLogBundle, bundleFileName } from './lib/logBundle.js'
 import { redactSecretsInText } from './lib/redactSecrets.js'
@@ -108,7 +108,8 @@ import { ensureManagedGrid, ensureManagedRuntime } from './lib/runtimeInstall.js
 // Before ANY child is spawned: on Linux an absent locale makes tmux and ps mangle their output,
 // which silently costs the daemon every pane it would have discovered. See lib/childLocale.ts.
 ensureUtf8Locale()
-import { prepareLogFile } from './lib/log.js'
+import { prepareLogFile, ts } from './lib/log.js'
+import { startEnvLine } from './lib/startEnvironment.js'
 import { privacyCommand } from './lib/privacyCommand.js'
 
 
@@ -1721,14 +1722,15 @@ async function spawnDaemon(session: AuthSession | null, runtimeNode: string | nu
     }
   }
   const logFd = openSync(LOG_FILE, 'a')
+  // The daemon gets only the allowlist of the shell that ran this start, not this process's environment: another
+  // program's session tokens would reach the daemon, its tmux server and every pane
+  // (docs/plans/2026-11-17-daemon-minimal-env-design.md). Its log says how many were left out, never which.
+  const options = daemonSpawnOptions(process.env, logFd)
+  writeSync(logFd, `${ts()} ${startEnvLine(process.env, options.env)}\n`)
   // The daemon starts on the managed runtime straight away rather than inheriting this process's
   // interpreter and waiting for some later restart to adopt it.
   // Under its own name in Activity Monitor (harnessd/processName.ts) rather than `node`.
-  const child = spawn(namedNode(runtimeNode ?? process.execPath, entry === '__run' ? 'harnessd-core' : 'harnessd', env.ADAPTER_RUNTIME_DIR), [SCRIPT_PATH, entry], {
-    detached: true,
-    env: { ...process.env },
-    stdio: ['ignore', logFd, logFd],
-  })
+  const child = spawn(namedNode(runtimeNode ?? process.execPath, entry === '__run' ? 'harnessd-core' : 'harnessd', env.ADAPTER_RUNTIME_DIR), [SCRIPT_PATH, entry], options)
   let childExited = false
   child.on('exit', () => { childExited = true })
   child.on('error', () => { childExited = true })
