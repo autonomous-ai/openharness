@@ -98,6 +98,8 @@ export interface HcTerminal {
   /** hc's count of its program's turns: it goes up each time the status leaves `working` (F7), so a turn that ran while
    *  nothing was subscribed still shows. */
   turn?: number
+  /** The pid of the program it runs now, never its shell's own. */
+  foregroundPid?: number
 }
 
 export interface HcSubscriber {
@@ -153,15 +155,17 @@ export function hcTerminal(value: unknown): HcTerminal | undefined {
     ...(typeof value.name === 'string' ? { name: value.name } : {}),
     ...(typeof cwd === 'string' ? { cwd } : {}),
     ...(Number.isSafeInteger(value.turn) && (value.turn as number) >= 0 ? { turn: value.turn as number } : {}),
+    ...(Number.isSafeInteger(foreground.pid) && (foreground.pid as number) > 0 ? { foregroundPid: foreground.pid as number } : {}),
   }
 }
 
 /** What a subscription keeps of a terminal, for up to HC_MAX_TERMINALS of them: the fields hcTerminal reads, an
- *  object's own narrowed to the keys it reads. A terminal's command line (in it and in its foreground), its title and a
- *  status's records are left in the line they came in. */
+ *  object's own narrowed to the keys it reads. A terminal's command line (in it and in its foreground), its foreground's
+ *  name, its title and a status's records are left in the line they came in. The foreground's pid is kept because the
+ *  devices pair a session the scan found with the terminal running it by that pid; it is an id, never logged or sent. */
 const READ: Record<string, readonly string[] | undefined> = {
   address: undefined, state: undefined, name: undefined, cwd: undefined, turn: undefined,
-  labels: ['herdr.space'], status: ['app', 'state'], foreground: ['cwd'],
+  labels: ['herdr.space'], status: ['app', 'state'], foreground: ['cwd', 'pid'],
 }
 const only = (value: unknown, keys: readonly string[]): unknown => isObject(value)
   ? Object.fromEntries(keys.filter((key) => Object.hasOwn(value, key)).map((key) => [key, value[key]]))
@@ -189,6 +193,7 @@ const TAKES: Record<string, (facts: Fields, data: Fields) => Fields> = {
 
 const same = (a: HcTerminal, b: HcTerminal) => a.live === b.live && a.space === b.space && a.status === b.status
   && a.kind === b.kind && a.name === b.name && a.cwd === b.cwd && a.turn === b.turn
+  && a.foregroundPid === b.foregroundPid
 
 const lineOf = (id: string, method: string, params: Record<string, unknown>) =>
   `${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`
