@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -112,6 +112,18 @@ describe('Finished after 1.5 s of quiet', () => {
     expect(desktop).toHaveLength(1)
     expect(desktop[0].payload.notification.kind).toBe('done')
     expect(device.at(-1)?.payload).toMatchObject({ kind: 'summary', notification: desktop[0].payload.notification })
+  })
+
+  it.each([
+    ['no tier', undefined],
+    ['a decided tier', async () => 'alert' as const],
+  ])('a recap the apps cannot be sent after the window (%s) throws nowhere and logs one line', async (_, decideTier) => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    onTestFinished(() => error.mockRestore())
+    const { mirror } = setup({ decideTier, sendWeb: () => { throw new Error('socket closed') } })
+    mirror.ingest(turn, 's')
+    await vi.runAllTimersAsync()
+    expect(error.mock.calls.filter(([line]) => String(line).startsWith('[recap]'))).toHaveLength(1)
   })
 
   it("a /goal pass that opens inside the window: the recap is told silent before the next pass's Processing card, and nothing rings", async () => {
