@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { fstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -7,7 +7,8 @@ import type { NativeHookInput } from './nativeHookWire.js'
 import * as nativeFiles from './nativeHookFiles.js'
 
 const filesystem = vi.hoisted(() => ({ reads: undefined as Map<string, number> | undefined,
-  total: undefined as Map<string, number> | undefined, onStat: undefined as ((path: string) => void) | undefined }))
+  total: undefined as Map<string, number> | undefined, onStat: undefined as ((path: string) => void) | undefined,
+  onSync: undefined as ((fd: number) => void) | undefined }))
 vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>()
   return { ...fs, lstatSync: (...args: Parameters<typeof fs.lstatSync>) => {
@@ -16,7 +17,10 @@ vi.mock('node:fs', async original => {
     if (filesystem.total) filesystem.total.set(path, (filesystem.total.get(path) ?? 0) + 1)
     filesystem.onStat?.(path)
     return fs.lstatSync(...args)
-  } }
+  }, fsync: (fd: number, callback: (error: Error | null) => void) => fs.fsync(fd, error => {
+    try { filesystem.onSync?.(fd) } catch (cause) { callback(cause as Error); return }
+    callback(error)
+  }) }
 })
 
 let fixtureRoot: string, root: string, file: string
@@ -27,7 +31,7 @@ beforeEach(() => {
   mkdirSync(root, { recursive: true })
   file = join(root, 'settings.json'); writeFileSync(file, '{}')
 })
-afterEach(() => { filesystem.reads = undefined; filesystem.total = undefined; filesystem.onStat = undefined; rmSync(fixtureRoot, { recursive: true, force: true }) })
+afterEach(() => { filesystem.reads = undefined; filesystem.total = undefined; filesystem.onStat = undefined; filesystem.onSync = undefined; rmSync(fixtureRoot, { recursive: true, force: true }) })
 const prepared = (input: NativeHookInput) => ({ version: 1 as const, files: input.files.map((entry, index) => ({ index, content: `${entry.content ?? ''} prepared` })) })
 
 it('bounds filesystem reads during a worker authority check for unchanged native files', async () => {
@@ -58,8 +62,59 @@ it('bounds filesystem reads during a worker authority check for unchanged native
   expect(activeReads!.profile).toBeLessThanOrEqual(9)
   expect(activeReads!.artifact).toBeLessThanOrEqual(4)
   // On macOS this fixture owns a fixed depth under /tmp. The whole publisher
-  // read this ancestor 1,513 times before the fresh-snapshot comparison, now 1,021.
-  if (process.platform === 'darwin') expect(ancestorReads).toBeLessThanOrEqual(1021)
+  // read this ancestor 1,021 times when every nested durability check walked the full profile proof.
+  if (process.platform === 'darwin') expect(ancestorReads).toBeLessThanOrEqual(600)
+})
+
+it('composes the caller file guard with publisher-owned routes and shared proofs', async () => {
+  const dependency = join(root, 'dependency'); writeFileSync(dependency, 'captured')
+  const evidence = nativeFiles.inspectHookFile(dependency), confirmed = vi.fn()
+  expect(await publishNativeHookFiles({ engine: 'claude', port: 1234, environment: { HOME: root } }, [{ file }],
+    { prepareFiles: async input => { writeFileSync(dependency, 'newer'); return prepared(input) } },
+    { verify: evidence.verify, confirmed })).toBe(false)
+  expect(readFileSync(file, 'utf8')).toBe('{}')
+  expect(confirmed).not.toHaveBeenCalled()
+})
+
+it.each(['profile bytes', 'profile ancestor', 'shared alias', 'owner'] as const)(
+  'retains %s authority while the shared artifact file flush settles', async change => {
+  const profile = join(root, 'profile'), artifact = join(root, 'hook.mjs'), other = join(root, 'other.mjs')
+  mkdirSync(profile); const settings = join(profile, 'settings.json')
+  writeFileSync(settings, 'profile'); writeFileSync(artifact, 'shared'); writeFileSync(other, 'foreign')
+  const confirmed = vi.fn(); let current = true, changed = false
+  filesystem.onSync = fd => {
+    if (!fstatSync(fd).isFile()) return
+    filesystem.onSync = undefined; changed = true
+    if (change === 'profile bytes') writeFileSync(settings, 'newer')
+    else if (change === 'profile ancestor') { renameSync(profile, join(root, 'displaced')); mkdirSync(profile); writeFileSync(settings, 'replacement') }
+    else if (change === 'shared alias') { unlinkSync(artifact); symlinkSync(other, artifact) }
+    else current = false
+  }
+  expect(await publishNativeHookFiles({ engine: 'claude', port: 1234, environment: { HOME: root } },
+    [{ file: settings }, { file: artifact, shared: true }], { prepareFiles: async input => prepared(input) },
+    { current: () => current, confirmed })).toBe(false)
+  expect(changed).toBe(true)
+  expect(readFileSync(settings, 'utf8')).toBe(change === 'profile bytes' ? 'newer' : change === 'profile ancestor' ? 'replacement' : 'profile')
+  expect(readFileSync(artifact, 'utf8')).toBe(change === 'shared alias' ? 'foreign' : 'shared')
+  expect(confirmed).not.toHaveBeenCalled()
+})
+
+it.runIf(process.platform !== 'win32')('refuses final acknowledgement after an ancestor moves during shared directory durability', async () => {
+  const parent = join(root, 'parent'), child = join(parent, 'child'), artifact = join(child, 'hook.mjs')
+  mkdirSync(child, { recursive: true }); writeFileSync(artifact, 'shared')
+  const confirmed = vi.fn(); let moved = false
+  filesystem.onSync = fd => {
+    if (!fstatSync(fd).isDirectory()) return
+    filesystem.onSync = undefined
+    renameSync(parent, join(root, 'displaced')); mkdirSync(parent); renameSync(join(root, 'displaced', 'child'), child)
+    moved = true
+  }
+  expect(await publishNativeHookFiles({ engine: 'claude', port: 1234, environment: { HOME: root } },
+    [{ file }, { file: artifact, shared: true }], { prepareFiles: async input => prepared(input) }, { confirmed })).toBe(false)
+  expect(moved).toBe(true)
+  expect(readFileSync(file, 'utf8')).toBe('{}')
+  expect(readFileSync(artifact, 'utf8')).toBe('shared prepared')
+  expect(confirmed).not.toHaveBeenCalled()
 })
 
 it('gives no launch proof when an unchanged child moves through a replaced ancestor', async () => {

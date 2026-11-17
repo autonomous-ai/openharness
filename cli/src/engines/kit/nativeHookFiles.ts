@@ -324,6 +324,8 @@ export interface HookPreparationOptions {
   /** Join only the same port, executable, command and complete destination set. */
   identity?: string
   current?(): boolean
+  /** Retained native dependencies: checked at effect/acknowledgement fences, not while flushing an owned descriptor. */
+  verify?(): void
   timeoutMs?: number
   /** Immutable effect claims must let a competing publisher finish. */
   retainConflicts?: boolean
@@ -356,6 +358,7 @@ function preparationProof(files: readonly string[], verifyRoutes: () => void): H
 async function joinPreparation<T>(pending: PendingPreparation, options: HookPreparationOptions, verifyRoutes: () => void, files: readonly string[]): Promise<T> {
   const deadline = performance.now() + (options.timeoutMs ?? 5_000)
   verifyRoutes()
+  options.verify?.()
   if (options.current?.() === false) throw new HookPreparationHeld('the joining owner changed')
   if (pending.waiters >= 16) throw new HookPreparationHeld('the preparation waiters are occupied')
   pending.waiters++
@@ -367,6 +370,7 @@ async function joinPreparation<T>(pending: PendingPreparation, options: HookPrep
       timer = setTimeout(() => reject(new HookPreparationHeld('the joining preparation exceeded its deadline')), options.timeoutMs ?? 5_000)
     })])
     verifyRoutes()
+    options.verify?.()
     if (pending.proof && !pending.proof.current()) throw new HookPreparationHeld('the prepared settings changed before acknowledgement')
     // Joining shares the publication, not the caller's aliases. Retain this
     // caller's route all the way through the final pane guard.
@@ -375,6 +379,7 @@ async function joinPreparation<T>(pending: PendingPreparation, options: HookPrep
       throw new HookPreparationHeld('the prepared settings changed while their proof was captured')
     }
     if (performance.now() >= deadline) throw new HookPreparationHeld('the joining preparation exceeded its deadline')
+    options.verify?.()
     if (options.current?.() === false) throw new HookPreparationHeld('the joining owner changed')
     options.confirmed?.(proof)
     return result as T
@@ -383,6 +388,7 @@ async function joinPreparation<T>(pending: PendingPreparation, options: HookPrep
 /** Waiting grants no publication proof: the caller must acquire and capture its own reservation afterward. */
 async function settlePreparations(conflicts: PendingPreparation[], options: HookPreparationOptions, verifyRoutes: () => void, deadline: number): Promise<void> {
   verifyRoutes()
+  options.verify?.()
   if (options.current?.() === false) throw new HookPreparationHeld('the waiting owner changed')
   if (performance.now() >= deadline) throw new HookPreparationHeld('the preparation exceeded its deadline')
   if (conflicts.some(pending => pending.waiters >= 16)) throw new HookPreparationHeld('the preparation waiters are occupied')
@@ -397,6 +403,7 @@ async function settlePreparations(conflicts: PendingPreparation[], options: Hook
       timer = setTimeout(() => reject(new HookPreparationHeld('the preparation exceeded its deadline')), deadline - performance.now())
     })])
     verifyRoutes()
+    options.verify?.()
     if (options.current?.() === false) throw new HookPreparationHeld('the waiting owner changed')
     if (performance.now() >= deadline) throw new HookPreparationHeld('the preparation exceeded its deadline')
   } finally { clearTimeout(timer) }
@@ -472,7 +479,11 @@ export async function runHookPreparation<T>(files: readonly string[], work: (att
     }
   }
   const observations = new Map<string, () => void>()
-  const verify = () => { check(); verifyRoutes(); for (const inspect of observations.values()) inspect(); check() }
+  const verify = () => {
+    check(); options.verify?.()
+    verifyRoutes(); for (const inspect of observations.values()) inspect()
+    options.verify?.(); check()
+  }
   const attempt: HookPreparationAttempt = {
     check, verify,
     observe: (file, inspect) => { observations.set(file, inspect) },

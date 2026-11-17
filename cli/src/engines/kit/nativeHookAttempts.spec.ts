@@ -4,13 +4,18 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { inspectHookFile, runHookPreparation, type HookPreparationAttempt } from './nativeHookFiles.js'
 
-const disk = vi.hoisted(() => ({ held: true, pending: new Map<number, (error: Error | null) => void>() }))
-vi.mock('node:fs', async original => ({ ...await original<typeof import('node:fs')>(),
+const disk = vi.hoisted(() => ({ held: true, pending: new Map<number, (error: Error | null) => void>(),
+  onStat: undefined as ((path: string) => void) | undefined }))
+vi.mock('node:fs', async original => {
+  const fs = await original<typeof import('node:fs')>()
+  return { ...fs,
+  lstatSync: (...args: Parameters<typeof fs.lstatSync>) => { disk.onStat?.(String(args[0])); return fs.lstatSync(...args) },
   fsync: (fd: number, done: (error: Error | null) => void) => {
     if (disk.held) disk.pending.set(fd, done)
     else queueMicrotask(() => done(null))
   },
-}))
+  }
+})
 let root: string
 const drain = async () => { for (let n = 0; n < 80; n++) await Promise.resolve() }
 async function release() {
@@ -24,7 +29,72 @@ beforeEach(() => {
   disk.held = true
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
 })
-afterEach(async () => { await release(); vi.useRealTimers(); rmSync(root, { recursive: true, force: true }) })
+afterEach(async () => { disk.onStat = undefined; await release(); vi.useRealTimers(); rmSync(root, { recursive: true, force: true }) })
+
+it.each(['before dispatch', 'after flush'] as const)('refuses changed caller file evidence %s before publishing', async boundary => {
+  const file = join(root, 'hooks'), dependency = join(root, 'dependency')
+  writeFileSync(file, 'before'); writeFileSync(dependency, 'captured')
+  const evidence = inspectHookFile(dependency), work = vi.fn((attempt: HookPreparationAttempt) => inspectHookFile(file).replace('after', attempt))
+  const prepared = runHookPreparation([file], work, { verify: evidence.verify }).catch(error => error)
+  if (boundary === 'after flush') { await drain(); expect(disk.pending.size).toBe(1) }
+  writeFileSync(dependency, 'newer')
+  await release()
+  expect(await prepared).toEqual(expect.objectContaining({ message: expect.stringMatching(/changed/) }))
+  expect(readFileSync(file, 'utf8')).toBe('before')
+  if (boundary === 'before dispatch') expect(work).not.toHaveBeenCalled()
+})
+
+it('checks caller file evidence again after its own route reads and before allowing the next effect', async () => {
+  const file = join(root, 'hooks'), dependency = join(root, 'dependency')
+  writeFileSync(file, 'before'); writeFileSync(dependency, 'captured')
+  const evidence = inspectHookFile(dependency)
+  let reachedEffect = false
+  const outcome = await runHookPreparation([file], async attempt => {
+    disk.onStat = path => {
+      if (path !== file) return
+      disk.onStat = undefined
+      writeFileSync(dependency, 'newer')
+    }
+    attempt.verify()
+    reachedEffect = true
+  }, { verify: evidence.verify }).catch(error => error)
+  expect(outcome).toEqual(expect.objectContaining({ message: expect.stringMatching(/changed/) }))
+  expect(reachedEffect).toBe(false)
+})
+
+it.each(['join', 'settle'] as const)('keeps caller file dependencies through a %s wait', async kind => {
+  const file = join(root, 'hooks'), dependency = join(root, 'dependency')
+  writeFileSync(file, 'before'); writeFileSync(dependency, 'captured')
+  const evidence = inspectHookFile(dependency), confirmed = vi.fn(), work = vi.fn(async () => true)
+  const previous = runHookPreparation([file], attempt => inspectHookFile(file).replace('original', attempt), { identity: 'original' }).catch(error => error)
+  await drain()
+  const waiting = runHookPreparation([file], work, { identity: kind === 'join' ? 'original' : 'replacement',
+    settleConflicts: kind === 'settle', verify: evidence.verify, confirmed }).catch(error => error)
+  await drain()
+  writeFileSync(dependency, 'newer')
+  await release(); await previous
+  expect(await waiting).toEqual(expect.objectContaining({ message: expect.stringMatching(/changed/) }))
+  expect(work).not.toHaveBeenCalled()
+  expect(confirmed).not.toHaveBeenCalled()
+})
+
+it.each(['join', 'settle'] as const)('refuses stale caller dependencies before entering a %s wait', async kind => {
+  const file = join(root, 'hooks'), dependency = join(root, 'dependency')
+  writeFileSync(file, 'before'); writeFileSync(dependency, 'captured')
+  const evidence = inspectHookFile(dependency), work = vi.fn(async () => true)
+  const previous = runHookPreparation([file], attempt => inspectHookFile(file).replace('original', attempt), { identity: 'original' }).catch(error => error)
+  await drain(); writeFileSync(dependency, 'newer')
+  let refusal: unknown
+  const waiting = runHookPreparation([file], work, { identity: kind === 'join' ? 'original' : 'replacement',
+    settleConflicts: kind === 'settle', verify: evidence.verify }).catch(error => { refusal = error })
+  try {
+    await drain()
+    expect(refusal).toEqual(expect.objectContaining({ message: expect.stringMatching(/changed/) }))
+    expect(work).not.toHaveBeenCalled()
+  } finally { await release(); await waiting; await previous }
+  // Refusing an invalid waiter must not revoke the original writer.
+  expect(readFileSync(file, 'utf8')).toBe('original')
+})
 
 it('keeps the event loop available and retains the descriptor and reservation after its reply deadline', async () => {
   const file = join(root, 'hooks'); writeFileSync(file, 'before')

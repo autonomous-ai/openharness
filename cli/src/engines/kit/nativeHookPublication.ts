@@ -33,8 +33,12 @@ export async function publishNativeFiles(destinations: readonly NativeHookDestin
   try {
     const routes = hookPreparationRoutes([...destinations.map(file => file.file), ...directories.map(directory => directory.path)])
     const sharedProofs: HookPreparationProof[] = [], proofs: HookPreparationProof[] = []
+    const verify = () => {
+      routes.verify(); options.verify?.()
+      if (!sharedProofs.every(proof => proof.current())) throw new HookPreparationHeld('the shared preparation changed')
+    }
     const current = () => {
-      try { routes.verify(); return options.current?.() !== false && sharedProofs.every(proof => proof.current()) } catch { return false }
+      try { verify(); return options.current?.() !== false } catch { return false }
     }
     const installed = await runHookPreparation(destinations.filter(file => !file.shared).map(file => file.file), async attempt => {
       const observed = destinations.map(file => inspectHookFile(file.file, file.mode))
@@ -64,7 +68,9 @@ export async function publishNativeFiles(destinations: readonly NativeHookDestin
       }
       for (const [index, destination] of destinations.entries()) if (destination.shared) {
         await runHookPreparation([destination.file], async shared => { await publish(index, shared, true) }, {
-          current: active, timeoutMs: options.timeoutMs, identity: JSON.stringify(candidate.files[index].content),
+          // A flush owns its descriptor; file dependencies are checked at each effect and final proof.
+          current: () => { try { attempt.check(); return true } catch { return false } }, verify: attempt.verify,
+          timeoutMs: options.timeoutMs, identity: JSON.stringify(candidate.files[index].content),
           confirmed: proof => sharedProofs.push(proof),
         })
         attempt.verify()
@@ -76,7 +82,7 @@ export async function publishNativeFiles(destinations: readonly NativeHookDestin
       }
       for (const [index, destination] of destinations.entries()) if (!destination.shared) await publish(index, attempt)
       return { shared: [...sharedProofs] }
-    }, { ...options, current, confirmed: proof => proofs.push(proof) })
+    }, { ...options, verify, confirmed: proof => proofs.push(proof) })
     // A same-profile join shares the completed artifact publication too, never just its profile proof.
     for (const proof of installed.shared) if (!sharedProofs.includes(proof)) sharedProofs.push(proof)
     if (!current()) return false

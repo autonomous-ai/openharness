@@ -477,3 +477,52 @@ on all platforms. Raw counts match before and after that fixture correction. An 
 assertion was off by one (1,020); its failed receipt is retained, and the final limit is the measured
 1,021. This is a filesystem-work result only: combined quiet CPU, RSS and latency acceptance belongs
 to the integrating parent. Linux and Windows native execution remain unverified here.
+
+## Publication dependency checks around disk waits (2026-11-17)
+
+The clean combined comparison still shows higher cached-launch cost. A separate diagnostic counts
+5,685 -> 47,628 core native-path metadata reads over six cached launches. The nested shared artifact
+uses the profile attempt's full `verify` as its `current` callback, so every fsync queue, dispatch and
+completion check recursively walks the profile's routes and files. This is operation-count attribution;
+the sanitized CPU profiles did not retain useful core module names and establish no stack attribution.
+
+Keep the existing distinction between `check` (original owner, revocation and deadline) and `verify`
+(all file/route dependencies). Add one internal dependency-verification callback to the preparation
+options. Full verification invokes it before and after its own route and observation reads, preserving
+both proof fences. The publisher composes its original caller's dependency callback with its routes
+and accepted shared proofs. A shared artifact's owner callback checks the outer attempt's ownership;
+its dependency callback performs the outer attempt's full verification. Worker authority requests stay
+full verifications. Joining and conflict settlement check dependencies before and after their waits.
+
+Only the checks surrounding fsync of an already owned descriptor become owner checks. No new bytes or
+filename are published there. Every rename, link, removal, directory creation, subsequent publication,
+proof capture and acknowledgement retains its full checks. The directory chain still verifies each
+opened directory's identity before/after its flush, and ancestor substitution while it runs refuses
+the final proof. A revoked/expired caller cannot dispatch a queued flush or receive success after an
+in-flight flush settles. Descriptor and reservation lifetimes remain tied to actual completion.
+
+Design: no new durable data, schema, wire contract, cache, timer, queue, retry, process, or dependency.
+Growth remains the existing bounded attempts/observations plus one callback per attempt; concurrency
+and audience remain the existing exact owner and destination reservation. Read cost changes only in
+descriptor-durability intervals. No migration or rollback operation is needed. Failure uses the
+existing held result and content-free log. macOS/Linux/Windows semantics and all directory/file
+flushes remain; native platform acceptance belongs to the integrating parent. The old baseline wrote
+the shared Messages artifact outside durable publication, so its lower directory-flush count is not
+permission to remove the new durability work.
+
+Selected validation: first observe the existing fixed-depth publisher exceeding a 600-read ancestor
+budget and caller dependency guards refusing too late or not at all on unchanged production. Add
+real file/parent/alias mutation during shared fsync, composed dependency, join/settle and final-fence
+checks. Run the affected publication/attempt/path, launch, trust, setup and Windows-file unit fixtures
+with at most two workers, then TypeScript. CPU/latency comparison and integrated native/full gates
+remain root-scheduled; fewer metadata reads alone do not clear the performance hold.
+
+Observed validation on macOS with Node 24.22.2: before the runtime change, the two focused suites
+failed nine cases and passed 35, including the measured 1,021 ancestor reads above the new 600-read
+budget. With the change, all 44 cases pass, including the unchanged worker-authority leaf budgets
+and the file, ancestor, alias, owner, join/settle and directory-durability races. The passing test
+records only the ancestor bound, so the exact after count remains pending the fixed comparison.
+The unchanged caller batch passes 264 cases across 12 files; both test runs and TypeScript have
+observed exit 0, and the diff check is clean. These are unit/caller results, including simulated
+Windows paths, not native Linux/Windows or end-to-end CPU, RSS and latency acceptance. Raw RED,
+GREEN, caller and typecheck receipts remain in the private integration evidence directory.
