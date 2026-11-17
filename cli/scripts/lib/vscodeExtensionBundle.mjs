@@ -15,6 +15,9 @@ export async function readVscodeExtensionBundle(version) {
   const manifest = { ...JSON.parse(readFileSync(new URL('package.json', ROOT), 'utf8')), version: extensionVersion(version) }
   const built = await esbuild.build({
     entryPoints: [fileURLToPath(new URL('src/extension.ts', ROOT))],
+    // The bundle names each source in a comment, relative to this folder: the current one would put the builder's
+    // home in a build run from elsewhere.
+    absWorkingDir: fileURLToPath(ROOT),
     bundle: true,
     platform: 'node',
     format: 'cjs',
