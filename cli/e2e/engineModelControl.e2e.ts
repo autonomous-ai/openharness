@@ -37,6 +37,11 @@ describe('engine model-control workers', () => {
 
   it.each([false, true])('switches Claude Code model and effort with inline=%s', async inline => {
     const { d, c, agent, selected, turn, commands } = await fresh('claude', inline ? { env: { HARNESSD_SERVICES: 'none' } } : {})
+    // Claude Code's own `/model` list reaches the picker, each row with its line: fresh()'s ask may be answered from the
+    // aliases past models()'s 1 s, but the read goes on and fills the cache. Without this a fake that never answered
+    // the read passed every test on the aliases.
+    await until('Claude Code\'s own model list', async () => (await c.request('models_list', { agentId: agent.id }, 15_000)).models
+      ?.some((option: { id: string; description?: string }) => option.id === selected && option.description === 'For everyday tasks'), 15_000, 200)
     const result = await c.request('agent_update', { agentId: agent.id, selectedModel: selected }, 45_000)
     expect(result.error, JSON.stringify(result)).toBeUndefined()
     expect(result.agent.selectedModel).toBe(selected)
