@@ -17,7 +17,7 @@
 #include "pro_app_api.h"            // pro_agent_row_t
 #include "terminal.h"               // ht_scene_t
 
-// A fresh model: link down, no agents, nothing selected, no notice, no update.
+// A fresh model: link down, no agents, nobody in the room, no notice, no update.
 void max_ui_reset(void);
 
 // ---- feeds (the cable_link task, through max_app.c) ----
@@ -40,7 +40,7 @@ bool max_ui_answer_receipt(const char *id, const char *fetch, const char *token,
                            const char *error, uint32_t now_ms);
 bool max_ui_summary(const char *id, const char *text, const char *recap, bool restore, pod_tier_t tier,
                     uint32_t now_ms);
-// The computer's window moved to this agent: it becomes the selected lane, and its page is shown.
+// The computer's window moved to this agent: the room shows it. Not a person at the bar.
 bool max_ui_focus(const char *id);
 
 // ---- New Harness ----
@@ -112,7 +112,7 @@ void max_ui_render(ht_scene_t *scene, uint32_t now_ms);
 // ---- the finger (touch task), landscape glass coordinates ----
 typedef enum {
     MAX_ACT_NONE,
-    MAX_ACT_OPEN,    // a lane was tapped: it is now the selected one; send agent.open for agent_id
+    MAX_ACT_OPEN,    // a lane was tapped: the room now shows it; send agent.open for agent_id
     MAX_ACT_TALK,    // the Talk slot was tapped while idle: record for agent_id (the selected agent)
     MAX_ACT_SEND,    // the Talk slot was tapped while recording: finish and send
     MAX_ACT_NEW,     // New on the rail: name a form and open it (max_ui_form_open)
@@ -131,5 +131,5 @@ typedef struct {
 max_act_t max_ui_touch(bool down, int x, int y, uint32_t now_ms);
 void max_ui_touch_cancel(void);
 
-// The selected agent's id, or NULL when no agent is selected.
+// The room's agent's id, or NULL when there are no agents.
 const char *max_ui_selected(void);

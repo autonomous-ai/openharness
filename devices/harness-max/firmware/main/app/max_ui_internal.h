@@ -196,21 +196,26 @@ max_agent_t *max_find(const char *id);
 // The roster's indices in lane order: needs a person (asking, failed), then working, then the rest; roster order in
 // each group, so the order moves only when a state does. Returns the count.
 int max_order(int out[MAX_AGENTS]);
+// The pages of lanes: every agent but the room's, MAX_LANES a page.
 int max_pages(void);
 // Keep the page within the pages there are.
 void max_clamp_page(void);
+// The room shows this agent ("" for none) and the lanes the others. True when it changed. Nothing is sent: the finger
+// sends agent.open itself.
+bool max_room_show(const char *id);
 // The seconds a lane's clock shows at now_ms, or -1 when it shows none.
 int64_t max_secs(const max_agent_t *, uint32_t now_ms);
 // Whether a finished lane still shows its summary, and the notice is up.
 bool max_note_shown(const max_agent_t *, uint32_t now_ms);
 bool max_notice_shown(uint32_t now_ms);
-// A digest of everything drawn that depends on the time (the visible clocks, a summary or a notice running out).
+// A digest of everything drawn that depends on the time (the clocks of the room and the lanes shown, a summary or a
+// notice running out).
 uint32_t max_time_key(uint32_t now_ms);
 // "m:ss" under an hour, else "h:mm:ss"; "" for a negative count.
 void max_fmt_elapsed(char *out, size_t cap, int64_t secs);
 // FNV-1a over n bytes, from h (2166136261u to start).
 uint32_t max_fnv(uint32_t h, const void *data, size_t n);
-// The lanes on the page shown, as roster indices. Returns how many.
+// The lanes on the page shown, as roster indices, in max_order() without the room's agent. Returns how many.
 int max_visible(int out[MAX_LANES]);
 bool max_notice_set(const char *text, uint32_t now_ms);   // for MAX_NOTICE_MS
 // A state change, with the turn's clock (stopped at the end of a turn, dropped when one we did not see start begins).

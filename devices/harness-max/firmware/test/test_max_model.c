@@ -3,6 +3,9 @@
 
 static const char *const ABC[] = {"a", "b", "c"};
 static const char *const ABCDE[] = {"a", "b", "c", "d", "e"};
+// Enough agents for the room's and two pages of lanes, whatever MAX_LANES is.
+static const char *const XS[] = {"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9"};
+_Static_assert(MAX_LANES + 2 <= sizeof XS / sizeof XS[0], "XS holds the room and two pages of lanes");
 
 static bool utf8_valid(const char *s)
 {
@@ -36,7 +39,7 @@ static void test_link_down_clears_everything(void)
     CHECK(max_ui_machines(&m, 1, "m1"));
     max_ui_turn("b", "started", "", 0, 30);
     CHECK(max_ui_focus("e"));
-    CHECK(max_m.page == 1);
+    max_m.page = 1;
     CHECK(max_ui_link(false, NULL, 40));
     CHECK(!max_m.link && max_m.computer[0] == 0);
     CHECK(max_m.count == 0 && max_m.machine_count == 0 && max_m.page == 0);
@@ -63,9 +66,9 @@ static void test_roster_replace(void)
     CHECK(b->state == MAX_WORKING && !strcmp(b->activity, "Editing touch.c"));
     CHECK(max_find("d")->state == MAX_IDLE && max_find("a") == NULL);
     CHECK(!strcmp(max_ui_selected(), "b"));
-    // b goes: nothing is selected.
+    // b goes: the room takes the agent that leads the lanes.
     CHECK(max_ui_agents(next, 1, 400));
-    CHECK(max_ui_selected() == NULL);
+    CHECK(!strcmp(max_ui_selected(), "c"));
     // An absent name reads as the id; a repeated id is kept once; rows past the cap are dropped.
     pro_agent_row_t many[MAX_AGENTS + 3];
     char ids[MAX_AGENTS + 3][8];
@@ -77,8 +80,9 @@ static void test_roster_replace(void)
     CHECK(max_ui_agents(many, MAX_AGENTS + 3, 500));
     CHECK(max_m.count == MAX_AGENTS);
     CHECK(!strcmp(max_m.agents[0].name, "x0") && !strcmp(max_m.agents[1].id, "x2"));
+    CHECK(!strcmp(max_ui_selected(), "x0"));
     CHECK(max_ui_agents(NULL, 0, 600));
-    CHECK(max_m.count == 0);
+    CHECK(max_m.count == 0 && max_ui_selected() == NULL);
 }
 
 static void test_turn_kinds(void)
@@ -208,27 +212,49 @@ static void test_order_and_stability(void)
     CHECK(!strcmp(order_ids(buf, sizeof buf), "b d e a c"));
 }
 
-static void test_paging_and_focus(void)
+// The room shows one agent large; the lanes page through the others, in lane order.
+static void test_room_and_lanes(void)
 {
-    linked(ABCDE, 5);
+    enum { N = MAX_LANES + 2 };   // the room's agent and two pages of lanes
+    linked(XS, N);
+    // There was no room when the agents arrived: it takes the one that leads the lanes.
+    CHECK(!strcmp(max_ui_selected(), "x0"));
     CHECK(max_pages() == 2 && max_m.page == 0);
-    CHECK(!max_ui_focus("zz"));
-    CHECK(max_ui_focus("e"));
-    CHECK(!strcmp(max_ui_selected(), "e") && max_m.page == 1);
-    CHECK(!max_ui_focus("e"));
-    // A focus on a lane of the page shown only selects it.
-    CHECK(max_ui_focus("d"));
-    CHECK(max_m.page == 1);
-    // e asks: it leads page 0, and a focus follows it there.
-    max_ui_question("e", "r", "Ok?", NULL, 0, false, false, 0);
-    CHECK(max_ui_focus("e"));
-    CHECK(max_m.page == 0);
-    // Fewer agents: the page comes back within the pages there are.
+    int v[MAX_LANES], n = max_visible(v);
+    CHECK(n == MAX_LANES && !strcmp(max_m.agents[v[0]].id, "x1") && !strcmp(max_m.agents[v[n - 1]].id, XS[MAX_LANES]));
     max_m.page = 1;
-    roster(ABC, 3);
+    CHECK(max_visible(v) == 1 && !strcmp(max_m.agents[v[0]].id, XS[N - 1]));
+    // The computer's window moved: the room shows that agent, and the one it showed goes back to the lanes.
+    CHECK(!max_ui_focus("zz") && !max_ui_focus("x0"));
+    CHECK(max_ui_focus(XS[N - 1]));
+    CHECK(!strcmp(max_ui_selected(), XS[N - 1]) && max_m.page == 1);
+    CHECK(max_visible(v) == 1 && !strcmp(max_m.agents[v[0]].id, XS[MAX_LANES]));
+    // The room's agent leaves: the room takes the one that leads the lanes, a failure before the idle ones.
+    max_ui_turn("x2", "error", "boom", 0, 0);
+    roster(XS, N - 1);
+    CHECK(!strcmp(max_ui_selected(), "x2"));
+    // Fewer agents: the page comes back within the pages there are.
     CHECK(max_pages() == 1 && max_m.page == 0);
+    roster(XS, 1);
+    CHECK(!strcmp(max_ui_selected(), "x0") && max_pages() == 0 && max_m.page == 0);
     roster(NULL, 0);
-    CHECK(max_pages() == 0 && max_m.page == 0);
+    CHECK(max_ui_selected() == NULL && max_pages() == 0 && max_m.page == 0);
+}
+
+// The room's clock and summary are drawn too: they wake the render task and redraw, whatever page the lanes show.
+static void test_room_clock(void)
+{
+    enum { N = MAX_LANES + 2 };
+    linked(XS, N);
+    max_ui_focus(XS[N - 1]);
+    max_m.page = 0;
+    max_ui_turn(XS[N - 1], "started", "", 0, 1000);
+    render(1000);
+    CHECK(!max_ui_tick(1999) && max_ui_tick(2000));
+    CHECK(max_ui_next_wake_ms(1500) == 500);
+    max_ui_summary(XS[N - 1], "Done it", NULL, false, POD_TIER_LIST, 4000);
+    render(4000);
+    CHECK(max_ui_next_wake_ms(4000 + MAX_DONE_MS - 10) == 10 && max_ui_tick(4000 + MAX_DONE_MS));
 }
 
 static void test_caps(void)
@@ -313,7 +339,8 @@ int main(void)
     test_question();
     test_summary_tiers();
     test_order_and_stability();
-    test_paging_and_focus();
+    test_room_and_lanes();
+    test_room_clock();
     test_caps();
     test_elapsed_format();
     test_app_state();

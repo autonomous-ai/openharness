@@ -51,7 +51,20 @@ int max_order(int out[MAX_AGENTS])
     return n;
 }
 
-int max_pages(void) { return (max_m.count + MAX_LANES - 1) / MAX_LANES; }
+// The lanes: every agent but the room's, in lane order.
+static int lane_order(int out[MAX_AGENTS])
+{
+    int o[MAX_AGENTS], n = max_order(o), k = 0;
+    for (int i = 0; i < n; i++)
+        if (strcmp(max_m.agents[o[i]].id, max_m.selected)) out[k++] = o[i];
+    return k;
+}
+
+int max_pages(void)
+{
+    int o[MAX_AGENTS];
+    return (lane_order(o) + MAX_LANES - 1) / MAX_LANES;
+}
 
 void max_clamp_page(void)
 {
@@ -88,9 +101,26 @@ void max_fmt_elapsed(char *out, size_t cap, int64_t secs)
 
 int max_visible(int out[MAX_LANES])
 {
-    int o[MAX_AGENTS], n = max_order(o), k = 0;
+    int o[MAX_AGENTS], n = lane_order(o), k = 0;
     for (int i = max_m.page * MAX_LANES; i < n && k < MAX_LANES; i++) out[k++] = o[i];
     return k;
+}
+
+// What is drawn with a clock or a summary: the lanes of the page shown, then the room's agent. Returns how many.
+static int drawn(int out[MAX_LANES + 1])
+{
+    int n = max_visible(out);
+    const max_agent_t *room = max_find(max_m.selected);
+    if (room) out[n++] = (int)(room - max_m.agents);
+    return n;
+}
+
+bool max_room_show(const char *id)
+{
+    if (!strcmp(max_m.selected, id)) return false;
+    max_copy(max_m.selected, sizeof max_m.selected, id);
+    max_clamp_page();   // the agent it showed is back among the lanes
+    return true;
 }
 
 uint32_t max_fnv(uint32_t h, const void *data, size_t n)
@@ -102,7 +132,7 @@ uint32_t max_fnv(uint32_t h, const void *data, size_t n)
 uint32_t max_time_key(uint32_t now_ms)
 {
     uint32_t h = 2166136261u;
-    int v[MAX_LANES], n = max_visible(v);
+    int v[MAX_LANES + 1], n = drawn(v);
     for (int i = 0; i < n; i++) {
         const max_agent_t *a = &max_m.agents[v[i]];
         const int64_t secs = max_secs(a, now_ms);
@@ -220,9 +250,9 @@ bool max_ui_agents(const pro_agent_row_t *rows, int n, uint32_t now_ms)
     for (int i = 0; i < MAX_AGENTS; i++)   // a question goes with its agent
         if (max_m.asks[i].agent[0] && !max_find(max_m.asks[i].agent)) max_m.asks[i].agent[0] = 0;
     bool changed = k != old || memcmp(max_m.agents, s_old, (size_t)k * sizeof s_old[0]);
-    if (max_m.selected[0] && !max_find(max_m.selected)) {
-        max_m.selected[0] = 0;
-        changed = true;
+    if (!max_find(max_m.selected)) {   // the room's agent left, or there was none: the agent that leads the lanes
+        int o[MAX_AGENTS];
+        changed |= max_room_show(max_order(o) ? max_m.agents[o[0]].id : "");
     }
     max_clamp_page();
     return changed;
@@ -381,16 +411,7 @@ bool max_ui_summary(const char *id, const char *text, const char *recap, bool re
     return memcmp(&s_before, a, sizeof *a) != 0;
 }
 
-bool max_ui_focus(const char *id)
-{
-    if (!max_find(id)) return false;
-    int o[MAX_AGENTS], n = max_order(o), at = 0;
-    while (at < n && strcmp(max_m.agents[o[at]].id, id)) at++;
-    const bool changed = strcmp(max_m.selected, id) || max_m.page != at / MAX_LANES;
-    max_copy(max_m.selected, sizeof max_m.selected, id);
-    max_m.page = at / MAX_LANES;
-    return changed;
-}
+bool max_ui_focus(const char *id) { return max_find(id) && max_room_show(id); }
 
 // ---- the app's own state ----
 
@@ -435,7 +456,7 @@ uint32_t max_ui_next_wake_ms(uint32_t now_ms)
 {
     if (max_m.dirty) return 1;
     uint32_t ms = MAX_WAKE_MS;
-    int v[MAX_LANES], n = max_visible(v);
+    int v[MAX_LANES + 1], n = drawn(v);
     for (int i = 0; i < n; i++) {
         const max_agent_t *a = &max_m.agents[v[i]];
         if (a->clock && running(a->state)) {

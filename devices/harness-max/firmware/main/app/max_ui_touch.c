@@ -53,8 +53,7 @@ static max_act_t tap(int x, int y, uint32_t now_ms)
         if (!inside(max_m.lane_box[i], x, y)) continue;
         // The lane the person saw, even if the order moved since; gone from the roster, it opens nothing.
         if (!max_find(max_m.lane_id[i])) break;
-        if (strcmp(max_m.selected, max_m.lane_id[i])) max_m.dirty = true;
-        max_copy(max_m.selected, sizeof max_m.selected, max_m.lane_id[i]);
+        if (max_room_show(max_m.lane_id[i])) max_m.dirty = true;
         return act_for(MAX_ACT_OPEN, max_m.selected);
     }
     if (max_m.talk_hit && inside(max_m.talk_box, x, y)) {

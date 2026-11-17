@@ -163,19 +163,22 @@ void last_words_phase(lw_task_t task, const char *phase) { (void)task; (void)pha
 void ram_telemetry_periodic(const char *tag) { (void)tag; }
 
 // ---- helpers ----
-static const char *const ABCDE[] = {"a", "b", "c", "d", "e"};
+// a, b, c...: the room's agent and two pages of lanes, whatever MAX_LANES is.
+static const char *const IDS[] = {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"};
+enum { AGENTS = MAX_LANES + 2 };
+_Static_assert(AGENTS <= sizeof IDS / sizeof IDS[0], "IDS holds the room and two pages of lanes");
 enum { CARD_CY = MAX_CARD_Y + MAX_CARD_H / 2 };
-static int lane_cx(int i) { return MAX_LANE_X + i * MAX_LANE_W + MAX_LANE_W / 2; }
 static const int TALK_CX = MAX_TALK_X + MAX_TALK_W / 2;
 
-// The cable says hello and lists five agents; the glass shows what the model holds (the render task's draw).
+// The cable says hello and lists the agents; the glass shows what the model holds (the render task's draw). The room
+// shows a.
 static void fresh(void)
 {
     pro_app_link(false, NULL);
     pro_app_link(true, "MacBook Pro");
-    pro_agent_row_t rows[5];
-    for (int i = 0; i < 5; i++) rows[i] = (pro_agent_row_t){ABCDE[i], ABCDE[i], "claude", "m1", "MacBook Pro"};
-    pro_app_agents(rows, 5);
+    pro_agent_row_t rows[AGENTS];
+    for (int i = 0; i < AGENTS; i++) rows[i] = (pro_agent_row_t){IDS[i], IDS[i], "claude", "m1", "MacBook Pro"};
+    pro_app_agents(rows, AGENTS);
     render(now);
     NOTIFIES = 0;
 }
@@ -199,12 +202,12 @@ static void contact(int x, int y, int dx, int dy)
 static void test_touch_wakes_the_renderer(void)
 {
     fresh();
-    contact(lane_cx(1), CARD_CY, -(MAX_SWIPE_PX + 40), 0);
+    contact(lane_x(1), lane_y(1), -(MAX_SWIPE_PX + 40), 0);
     CHECK(max_m.page == 1);
     CHECK(NOTIFIES > 0);
 
     fresh();
-    contact(lane_cx(2), CARD_CY, 3, -2);
+    contact(lane_x(1), lane_y(1), 3, -2);
     CHECK(!strcmp(max_ui_selected(), "c"));
     CHECK(NOTIFIES > 0);
 }
@@ -214,10 +217,10 @@ static void test_tap_opens_the_lane(void)
 {
     fresh();
     OPENS = 0;
-    contact(lane_cx(1), CARD_CY, 2, 1);
+    contact(lane_x(0), lane_y(0), 2, 1);
     CHECK(OPENS == 1 && !strcmp(OPENED, "b"));
     // A swipe opens nothing.
-    contact(lane_cx(0), CARD_CY, -(MAX_SWIPE_PX + 40), 0);
+    contact(lane_x(0), lane_y(0), -(MAX_SWIPE_PX + 40), 0);
     CHECK(OPENS == 1);
 }
 
@@ -226,10 +229,7 @@ static void test_talk_records_and_sends(void)
 {
     fresh();
     V_BEGINS = 0;
-    contact(TALK_CX, CARD_CY, 0, 0);   // no lane selected: "Tap a lane", nothing starts
-    CHECK(V_BEGINS == 0 && max_m.talk == MAX_TALK_IDLE);
-
-    contact(lane_cx(1), CARD_CY, 0, 0);
+    contact(lane_x(0), lane_y(0), 0, 0);   // the room shows b
     render(now);
     NOTIFIES = 0;
     contact(TALK_CX, CARD_CY, 0, 0);
@@ -249,8 +249,6 @@ static void test_talk_records_and_sends(void)
 static void test_update_gate_holds_talk(void)
 {
     fresh();
-    contact(lane_cx(0), CARD_CY, 0, 0);
-    render(now);
     CHECK(pro_app_begin_update_gate());
     V_BEGINS = 0;
     contact(TALK_CX, CARD_CY, 0, 0);
@@ -269,10 +267,10 @@ static void test_asleep_refuses_the_finger(void)
 {
     fresh();
     pro_app_sleep();
-    CHECK(!pro_app_touch(true, lane_cx(0), CARD_CY));
+    CHECK(!pro_app_touch(true, lane_x(0), lane_y(0)));
     CHECK(LOCK_DEPTH == 0);
     pro_app_wake();
-    CHECK(pro_app_touch(true, lane_cx(0), CARD_CY));
+    CHECK(pro_app_touch(true, lane_x(0), lane_y(0)));
     pro_app_touch_cancel();
 }
 
@@ -313,6 +311,14 @@ static void press(max_hit_kind_t kind, int arg)
     CHECK(h != NULL);
     contact(h->x + h->w / 2, h->y + h->h / 2, 0, 0);
 }
+// A button of the room's card.
+static void press_room(max_hit_kind_t kind, int arg)
+{
+    render(now);
+    room_card();
+    const max_hit_t *h = room_hit(kind, arg);
+    contact(h->x + h->w / 2, h->y + h->h / 2, 0, 0);
+}
 static const pro_ask_item_t DB = {"db", "Which database?", {"Dev", "Staging"}, 2, false, true};
 
 // The reviewed path end to end: the read goes out after the lock (with the next contact's take, as with the clock's),
@@ -327,17 +333,17 @@ static void test_reviewed_answer_is_sent_after_the_lock(void)
     contact(MAX_RAIL_W / 2, 20, 0, 0);
     CHECK(SENDS == 1 && WAITED && !strcmp(last_sent(), "question.read a q1"));
     pro_app_question_state("a", "q1", true, "toolu_1", "tok", false, NULL, &DB, 1);
-    press(MAX_HIT_OPTION, 1);
+    press_room(MAX_HIT_OPTION, 1);
     CHECK(SENDS == 2 && WAITED && !strcmp(last_sent(), "answer.reviewed a tok q1 1:2"));
     CHECK(OPENS == 0);   // a button is not the lane
     pro_app_answer_receipt("a", "q1", "tok", true, false, NULL);
     CHECK(!strcmp(max_m.notice, "Sent") && max_find("a")->state == MAX_WORKING);
     // The daemon refuses it: its words.
-    pro_app_ask("b", "toolu_2", DB.q, &DB, 1, true);
+    pro_app_ask("a", "toolu_2", DB.q, &DB, 1, true);
     contact(MAX_RAIL_W / 2, 20, 0, 0);
-    pro_app_question_state("b", "q2", true, "toolu_2", "tok2", false, NULL, &DB, 1);
-    press(MAX_HIT_OPTION, 0);
-    pro_app_answer_receipt("b", "q2", "tok2", false, false, "Permission prompts cannot be answered from here.");
+    pro_app_question_state("a", "q2", true, "toolu_2", "tok2", false, NULL, &DB, 1);
+    press_room(MAX_HIT_OPTION, 0);
+    pro_app_answer_receipt("a", "q2", "tok2", false, false, "Permission prompts cannot be answered from here.");
     CHECK(!strcmp(max_m.notice, "Permission prompts cannot be answered from here."));
     CHECK(LOCK_DEPTH == 0);
 }
@@ -350,10 +356,10 @@ static void test_plain_answer_and_a_full_port(void)
     SENDS = 0;
     pro_app_ask("a", "toolu_1", DB.q, &DB, 1, false);
     PORT_FULL = true;
-    press(MAX_HIT_OPTION, 0);
+    press_room(MAX_HIT_OPTION, 0);
     PORT_FULL = false;
-    CHECK(SENDS == 0 && !strcmp(max_m.notice, "Not sent") && find_hit(MAX_HIT_OPTION, 0));
-    press(MAX_HIT_OPTION, 0);
+    CHECK(SENDS == 0 && !strcmp(max_m.notice, "Not sent") && max_ask_of("a")->phase == MAX_ASK_READY);
+    press_room(MAX_HIT_OPTION, 0);
     CHECK(SENDS == 1 && !strcmp(last_sent(), "answer a toolu_1 1 db=Dev") && !strcmp(max_m.notice, "Sent"));
     FEATURES = CABLE_FEATURE_FORM | CABLE_FEATURE_QUESTION_REVIEW;
 }
@@ -392,8 +398,6 @@ static void test_new_harness(void)
     press(MAX_HIT_FORM_CLOSE, 0);
     CHECK(!max_form_open() && strstr(last_sent(), " close 8 0"));
     // Talk for an agent clears the form's name from the next recording.
-    render(now);
-    contact(lane_cx(0), CARD_CY, 0, 0);
     render(now);
     contact(TALK_CX, CARD_CY, 0, 0);
     CHECK(V_OPEN && !strcmp(V_AGENT, "a") && VOICE_FORM[0] == 0);
