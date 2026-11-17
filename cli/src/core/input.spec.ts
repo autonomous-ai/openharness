@@ -552,6 +552,58 @@ describe('createInput', () => {
     inputs.input.forget('a1')
   })
 
+  it.each(['composer', 'personal'])('wakes recreated input after the old %s write actually settles', async kind => {
+    vi.useFakeTimers()
+    let session = agents.get('a1')!
+    const run = deps({ resolve: () => session }), writing = pending<TerminalActionResult>()
+    vi.mocked(run.deps.terminal.submitTerminalAction).mockImplementationOnce(() => writing.promise)
+    const inputs = createInput(run.deps)
+    if (kind === 'composer') inputs.submitInput('a1', { content: 'old write', deliveryId: 'old', when: 'composer' })
+    else inputs.messageRequest({ agentId: 'a1', content: 'old write' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledTimes(1)
+    inputs.input.forget('a1')
+    session = { ...session, sessionId: 'replacement-session' }
+    inputs.submitInput('a1', { content: 'replacement write', deliveryId: 'replacement', when: 'composer' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledTimes(1)
+    writing.resolve(ok)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(vi.mocked(run.deps.terminal.submitTerminalAction).mock.calls.map(call => call[1]))
+      .toEqual(['old write', 'replacement write'])
+    inputs.input.forget('a1')
+  })
+
+  it('retains a possibly pasted composer after caller revocation and a rejected write until fresh evidence clears it', async () => {
+    vi.useFakeTimers()
+    let current = true, draft: 'pending' | 'clear' = 'pending'
+    const run = deps(), writing = pending<TerminalActionResult>()
+    run.deps.submission = { ...inlineSubmission, read: vi.fn(async () => ({ draft: draft === 'pending', composer: true, nativeDraft: draft })) }
+    vi.mocked(run.deps.terminal.submitTerminalAction).mockImplementationOnce(async () => {
+      await writing.promise
+      throw new Error('reader failed after paste')
+    })
+    const inputs = createInput(run.deps)
+    inputs.submitInput('a1', { content: 'uncertain write', deliveryId: 'uncertain', when: 'composer', current: () => current })
+    await vi.advanceTimersByTimeAsync(0)
+    inputs.submitInput('a1', { content: 'next write', deliveryId: 'next', when: 'composer' })
+    current = false
+    writing.resolve(ok)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.deliveries.settled).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'uncertain', state: 'unknown' }))
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledTimes(1)
+    inputs.input.onTurnStarted('a1', 'uncertain write')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledTimes(1)
+    expect(run.deps.terminal.keyTerminalAction).not.toHaveBeenCalled()
+    draft = 'clear'
+    inputs.input.onTurnStarted('a1', 'uncertain write')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(vi.mocked(run.deps.terminal.submitTerminalAction).mock.calls.map(call => call[1]))
+      .toEqual(['uncertain write', 'next write'])
+    inputs.input.forget('a1')
+  })
+
   it('lets an answer take control while correlated input waits on a question', async () => {
     vi.useFakeTimers()
     const run = deps(), inputs = createInput(run.deps)

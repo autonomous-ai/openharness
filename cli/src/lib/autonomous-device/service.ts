@@ -158,7 +158,9 @@ export class AutonomousDeviceService {
   }
   inputContext(deliveryId: string, context: Pick<AgentView, 'agentId' | 'sessionId' | 'engine' | 'cliVersion'>): void {
     const entry = this.deliveries.get(deliveryId)
-    if (entry?.receipt.agentId === context.agentId) this.inputContexts.set(entry, { ...context })
+    if (entry?.receipt.agentId === context.agentId) this.inputContexts.set(entry, {
+      agentId: context.agentId, sessionId: context.sessionId, engine: context.engine, cliVersion: context.cliVersion,
+    })
   }
   inputCurrent(deliveryId: string): boolean {
     const entry = this.deliveries.get(deliveryId)

@@ -13,6 +13,18 @@ function fixture(now?: () => number, fullAnswer?: string) {
 }
 
 describe('Autonomous device local-agent service', () => {
+  it('retains only the four binding facts needed by an input receipt', async () => {
+    const f = fixture()
+    await f.service.request('device', f.send())
+    const deliveryId = f.service.receipt('device', 'intent1')!.deliveryId
+    const context = { agentId: 'agent', sessionId: 'session', engine: 'claude' as const, cliVersion: '1.0.0',
+      runtime: { snapshot: 'unrelated agent data' } }
+    f.service.inputContext(deliveryId, context)
+    const entry = (Reflect.get(f.service, 'deliveries') as Map<string, object>).get(deliveryId)!
+    const retained = (Reflect.get(f.service, 'inputContexts') as WeakMap<object, object>).get(entry)
+    expect(retained).toEqual({ agentId: 'agent', sessionId: 'session', engine: 'claude', cliVersion: '1.0.0' })
+  })
+
   it('bounds live native reservations in the component without evicting or replaying unknown work', async () => {
     const submit = vi.fn()
     const service = new AutonomousDeviceService({ machineId: 'machine', serverInstanceId: 'instance',

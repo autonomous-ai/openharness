@@ -277,6 +277,9 @@ export class SessionInputController {
     if (!writer.retired || writer.held || writer.writing || writer.waiters.length) return
     if (this.retiredWriters.get(id) === writer) this.retiredWriters.delete(id)
     writer.retired = false
+    // The old control release cannot wake a replacement state; actual writer settlement must do it.
+    const state = this.states.get(id)
+    if (state?.writer === writer && state.queue.length) this.drainOne(id, state)
   }
 
   /** Ordinary writes retain their concurrency, except while an atomic input owns this pane. */
@@ -1082,7 +1085,7 @@ export class SessionInputController {
       this.delivery(sessionId, deliveryId, operation.dispatched ? 'unknown' : 'rejected',
         operation.dispatched ? 'dispatch_ambiguous' : 'runtime_gone_pre_paste')
       receipt?.('ambiguous')
-      if (atomic && operation.dispatched && current()) {
+      if (atomic && operation.dispatched && this.states.get(sessionId) === state && state.operation === operation) {
         state.awaitingFingerprint = fingerprint(content)
         state.awaitingContent = content
         state.ambiguousDispatch = true
