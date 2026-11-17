@@ -14,6 +14,8 @@ export interface WindowFacade {
   onChange(changed: () => void): () => void
   /** Shows the terminal whose shell has that pid, with focus; false when none has. */
   show(pid: number): boolean
+  /** Brings this window in front of VS Code's others, and VS Code in front of other apps. */
+  raise(): void
   /** One line toward older lines (`up`) or newer, in the active terminal. */
   scrollLine(up: boolean): Promise<void>
 }

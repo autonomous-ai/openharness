@@ -10,9 +10,10 @@
  *
  * The integrated terminal (docs/plans/2026-11-17-dial-vscode-extension-design.md, §3): a Claude Code or Codex agent in a
  * terminal has the pane `term:<its pid>`, and Harness's own extension in the window that holds the terminal shows it on
- * a `{"show":<shell pid>}` line (vscodeTerminals.ts). The terminal is asked for again at each verb, since a window comes
- * and goes between looks. The adapter's one `tap` is `'instead'`, for the tab's link, so a terminal's tap runs VS Code's
- * own `open -b` itself once its line is queued; off macOS the line alone is the tap.
+ * a `{"show":<shell pid>}` line (vscodeTerminals.ts), a tap's with `"raise":true` so that window comes in front of
+ * VS Code's others. The terminal is asked for again at each verb, since a window comes and goes between looks. The
+ * adapter's one `tap` is `'instead'`, for the tab's link, so a terminal's tap runs VS Code's own `open -b` itself once
+ * its line is queued; off macOS the line alone is the tap.
  */
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { createAppLink, type AppLinkDeps } from './appLink.js'

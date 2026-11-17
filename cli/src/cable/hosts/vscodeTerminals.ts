@@ -41,7 +41,8 @@ export interface VscodeTerminals {
   agents(pids: readonly number[]): void
   /** The window and shell that hold the agent with that pid, from its kept chain; none while unknown. */
   terminalOf(agentPid: number): VscodeTerminal | undefined
-  /** Queues `{"show":<shell>}` on the window's stream, the latest winning; false when that stream is gone. `tap` chooses the count only. */
+  /** Queues `{"show":<shell>}` on the window's stream, the latest winning; false when that stream is gone. A tap's has
+   *  `"raise":true`: the extension then brings its window forward, which an older one ignores. */
   show(terminal: VscodeTerminal, tap: boolean): boolean
   /** Adds whole lines for that terminal; false when its window's stream is gone. */
   scroll(terminal: VscodeTerminal, lines: number): boolean
@@ -63,7 +64,7 @@ interface Window {
   /** Its latest state's shells; none until its first state. */
   shells?: ReadonlySet<number>
   /** A show its stream has not taken yet: the latest wins. */
-  show?: number
+  show?: { shell: number; raise: boolean }
   /** Lines its stream has not taken yet, all for one shell: written after the show. */
   scroll?: { shell: number; lines: number }
 }
@@ -172,7 +173,8 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
   /** One line at a time: the show first, then up to VSCODE_SCROLL_MAX of what waits to scroll. */
   const write = (window: Window): void => {
     if (window.show !== undefined) {
-      if (!window.stream.write({ show: window.show })) return
+      const { shell, raise } = window.show
+      if (!window.stream.write(raise ? { show: shell, raise } : { show: shell })) return
       window.show = undefined
     }
     const waiting = window.scroll
@@ -248,7 +250,7 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
     show: (terminal, tap) => {
       const window = windows.get(terminal.window)
       if (!window) return false
-      window.show = terminal.shell
+      window.show = { shell: terminal.shell, raise: tap }
       write(window)
       count(tap ? 'taps' : 'shows')
       return true

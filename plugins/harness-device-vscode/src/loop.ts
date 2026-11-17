@@ -1,6 +1,7 @@
 // The loop behind the extension: it asks `harness device vscode link` where the devices' socket is, holds this window's
 // `vscode` stream open on it, reports the window's shells on connections of their own, and shows or scrolls the terminal
-// a line names. Nothing of `vscode` is loaded here: the end to end test runs this file outside VS Code.
+// a line names, raising the window for a tap's show. Nothing of `vscode` is loaded here: the end to end test runs this
+// file outside VS Code.
 import { basename, dirname } from 'node:path'
 import { MISSING, type LoopInputs, type Ran } from './inputs'
 import type { WindowFacade } from './window'
@@ -254,8 +255,12 @@ export function startLoop(
       halt()
       return false
     }
-    if (value && Number.isInteger(value.show)) count(window.show(value.show as number) ? 'shows' : 'notFound')
-    else if (value && Number.isInteger(value.scroll) && value.scroll !== 0 && Number.isInteger(value.pid)) {
+    if (value && Number.isInteger(value.show)) {
+      const shown = window.show(value.show as number)
+      // Only once the terminal is shown: the window raised is the one that holds it.
+      if (shown && value.raise === true) window.raise()
+      count(shown ? 'shows' : 'notFound')
+    } else if (value && Number.isInteger(value.scroll) && value.scroll !== 0 && Number.isInteger(value.pid)) {
       scroll({ pid: value.pid as number, n: held(value.scroll as number), from: 1 })
     } else count('skipped')
     return true

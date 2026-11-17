@@ -52,6 +52,10 @@ export function windowFacade(api: VscodeApi): WindowFacade & Disposable {
       terminal.show(false)
       return true
     },
+    raise() {
+      // VS Code before 1.128 has no such command and rejects: there the terminal is shown without its window raised.
+      void api.commands.executeCommand('workbench.action.focusWindow').then(undefined, () => {})
+    },
     async scrollLine(up) {
       await api.commands.executeCommand(up ? 'workbench.action.terminal.scrollUp' : 'workbench.action.terminal.scrollDown')
     },

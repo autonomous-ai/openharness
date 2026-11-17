@@ -3,7 +3,8 @@
  * (docs/plans/2026-11-17-dial-vscode-extension-design.md), on the real daemon. Two sessions run each under a shell of its own under a fake VS Code (harness/outsideAgent.ts), so
  * the parent chain the devices read from `ps` is this computer's own; Harness's extension's loop
  * (plugins/harness-device-vscode/src/loop.ts) runs with a fake window in a process of its own (harness/vscodeWindow.ts),
- * reports both shells on the real devices' socket and prints each terminal it is asked to show and each line it scrolls;
+ * reports both shells on the real devices' socket and prints each terminal it is asked to show, each raise of its window
+ * and each line it scrolls;
  * a fake dial on the desk taps, rests and scrolls. The app in front is a line on the stdin of the real `harness hardware watch --json`, as the Harness
  * Device app writes it.
  *
@@ -47,6 +48,8 @@ interface Window {
   states: string[]
   /** Each shell's pid it was asked to show, in order. */
   shows: number[]
+  /** For each raise of the window, how many shows came before it. */
+  raised: number[]
   /** Each line it scrolled its active terminal, in order. */
   scrolls: ('up' | 'down')[]
   /** Each state it took from set(), as it then said it was, in order. */
@@ -137,6 +140,7 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     children.push(child)
     const states: string[] = []
     const shows: number[] = []
+    const raised: number[] = []
     const scrolls: ('up' | 'down')[] = []
     const took: WindowState[] = []
     const logs: string[] = []
@@ -150,9 +154,10 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
       })
     }
     lines(child.stdout, (line) => {
-      const said = JSON.parse(line) as { state?: string; show?: number; scroll?: 'up' | 'down'; took?: WindowState; log?: string }
+      const said = JSON.parse(line) as { state?: string; show?: number; raise?: true; scroll?: 'up' | 'down'; took?: WindowState; log?: string }
       if (said.state !== undefined) states.push(said.state)
       if (said.show !== undefined) shows.push(said.show)
+      if (said.raise) raised.push(shows.length)
       if (said.scroll !== undefined) scrolls.push(said.scroll)
       if (said.took !== undefined) took.push(said.took)
       if (said.log !== undefined) logs.push(said.log)
@@ -160,9 +165,9 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     lines(child.stderr, (line) => logs.push(line))
     let exited: { code: number | null } | undefined
     child.once('close', (code) => { exited = { code } })
-    onTestFailed(() => { console.log(`---- the window's states\n${states.join('\n')}\n---- its shows\n${shows.join('\n')}\n---- its scrolls\n${scrolls.join(' ')}\n---- its log\n${logs.join('\n')}`) })
+    onTestFailed(() => { console.log(`---- the window's states\n${states.join('\n')}\n---- its shows\n${shows.join('\n')}\n---- its raises, after so many shows\n${raised.join(' ')}\n---- its scrolls\n${scrolls.join(' ')}\n---- its log\n${logs.join('\n')}`) })
     return {
-      states, shows, scrolls, took, logs,
+      states, shows, raised, scrolls, took, logs,
       set: (state) => { child.stdin.write(`${JSON.stringify(state)}\n`) },
       stop: async () => {
         child.stdin.end()
@@ -223,7 +228,7 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     return { a, b, window }
   }
 
-  it('a tap shows its terminal and brings VS Code forward, a rest shows it while VS Code is in front, and neither once the window goes', async () => {
+  it('a tap shows its terminal and raises its window, a rest shows it while VS Code is in front, and neither once the window goes', async () => {
     const { d, dial } = await fresh()
     // The open the daemon runs is the harness's fake in its root, never the real one.
     const open = d.env.HARNESS_OPEN_BIN ?? ''
@@ -233,18 +238,21 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     // 1. A and B in VS Code's terminals, and W in Ghostty, and the window holds A's and B's, A's active.
     const { a, b, window } = await twoTerminals(d, dial)
 
-    // 2. Swipe: with VS Code in front, a rest on A shows A's terminal.
+    // 2. Swipe: with VS Code in front, a rest on A shows A's terminal, and raises no window.
     const front = watch(d)
     front(VSCODE)
     await turned(dial, a, "A's terminal shown", () => window.shows[0])
     expect(window.shows).toEqual([a.shellPid])
+    expect(window.raised).toEqual([])
     await said(d, '[device] swipe · ok')
     expect(new Set(swipes(d))).toEqual(new Set(['[device] swipe · ok']))
 
-    // 3. Tap: B's terminal is shown, and on macOS VS Code is brought forward by its own open, once; elsewhere none runs.
+    // 3. Tap: B's terminal is shown, then its window raised, and on macOS VS Code is brought forward by its own open,
+    // once; elsewhere none runs.
     dial.send({ t: 'agent.open', agentId: b.id })
-    await until("B's terminal shown", () => window.shows.length === 2, 30_000, 50)
+    await until("B's window raised", () => window.raised.length === 1, 30_000, 50)
     expect(window.shows).toEqual([a.shellPid, b.shellPid])
+    expect(window.raised).toEqual([2])
     if (mac) await until('VS Code brought forward', () => d.opens().length === 1, 30_000, 50)
     expect(d.opens()).toEqual(mac ? [['-b', VSCODE]] : [])
     expect(d.log()).not.toContain('[device] open · vscode · fallback')
@@ -266,6 +274,7 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     await ring(dial, 'vscode', since)
     expect(d.log()).not.toContain(`cable: dropped dial focus ${b.id}`)
     expect(window.shows).toEqual(shownBefore)
+    expect(window.raised).toEqual([2])
     expect(swipes(d)).toHaveLength(swipesBefore)
 
     // 5. The window goes: its loop ends by itself once its stdin ends, and the daemon says the stream ended.
