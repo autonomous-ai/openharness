@@ -13,13 +13,18 @@ import 'package:harness/browser/browser_setup_dialog.dart';
 import 'package:harness/browser/browser_stream.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/devices/device_app.dart';
+import 'package:harness/devices/device_app_offer.dart';
+import 'package:harness/devices/device_app_row.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/terminal/terminal_typography.dart';
 import 'package:harness/widgets/desktop_workspace_tab.dart';
+import 'package:harness/widgets/device_app_band.dart';
 import 'package:harness/widgets/web_pane_panel.dart';
 
+import 'support/device_app.dart';
 import 'support/fake_browser_view.dart';
 
 /// The elements gallery (desktop-design-system.md, Elements gallery): each
@@ -129,6 +134,28 @@ Future<void> _show(WidgetTester tester, Brightness brightness) async {
   addTearDown(browserApp.dispose);
   WebPanePanel.webviewAvailableForTest = true;
   addTearDown(() => WebPanePanel.webviewAvailableForTest = null);
+  // The menu-bar app's offer, in each state its band and its Devices row draw.
+  Future<DeviceAppOffer> offer(
+    DeviceAppOfferState state, [
+    DeviceAppInstallStep? step,
+  ]) async {
+    final fixture = await DeviceAppFixture.inState(state, step: step);
+    addTearDown(fixture.offer.dispose);
+    return fixture.offer;
+  }
+
+  final deviceAppBands = [
+    await offer(DeviceAppOfferState.offer),
+    await offer(DeviceAppOfferState.installing),
+    await offer(DeviceAppOfferState.failed, DeviceAppInstallStep.download),
+  ];
+  final deviceAppRows = [
+    await offer(DeviceAppOfferState.offer),
+    await offer(DeviceAppOfferState.installing),
+    await offer(DeviceAppOfferState.failed, DeviceAppInstallStep.checksum),
+    await offer(DeviceAppOfferState.failed, DeviceAppInstallStep.open),
+    await offer(DeviceAppOfferState.notRunning),
+  ];
   tester.view.devicePixelRatio = 1;
   // Taller than the gallery needs: each section is its own image, so the page's height is in none of them.
   tester.view.physicalSize = const Size(760, 2400);
@@ -140,7 +167,11 @@ Future<void> _show(WidgetTester tester, Brightness brightness) async {
       // A still spinner, so the image holds one frame.
       home: MediaQuery(
         data: const MediaQueryData(disableAnimations: true),
-        child: _Gallery(browserApp: browserApp),
+        child: _Gallery(
+          browserApp: browserApp,
+          deviceAppBands: deviceAppBands,
+          deviceAppRows: deviceAppRows,
+        ),
       ),
     ),
   );
@@ -229,10 +260,20 @@ Future<({int width, int height, Uint8List bytes})> _pixels(
 }
 
 class _Gallery extends StatelessWidget {
-  const _Gallery({required this.browserApp});
+  const _Gallery({
+    required this.browserApp,
+    required this.deviceAppBands,
+    required this.deviceAppRows,
+  });
 
   /// Where Browser settings reads Faye's.
   final AppNotifier browserApp;
+
+  /// The menu-bar app's offers its bands draw: offered, installing, failed.
+  final List<DeviceAppOffer> deviceAppBands;
+
+  /// The offers its Devices rows draw: offered, installing, failed, not opened, not running.
+  final List<DeviceAppOffer> deviceAppRows;
 
   /// Each section's boundary is keyed this prefix and its id, the name of its images.
   static const sectionPrefix = 'elements/';
@@ -360,6 +401,26 @@ class _Gallery extends StatelessWidget {
               ),
             ),
           ]),
+          section(
+            'device-app',
+            'The menu-bar app: its band offered, installing and failed; its Devices row offered, installing, failed, not opened and not running',
+            [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                spacing: 8,
+                children: [
+                  for (final offer in deviceAppBands)
+                    SizedBox(
+                      width: 720,
+                      // No room for traffic lights, so the image is the same on every host.
+                      child: DeviceAppBand(offer: offer, leadingClearance: 0),
+                    ),
+                  for (final offer in deviceAppRows)
+                    SizedBox(width: 420, child: DeviceAppRow(offer: offer)),
+                ],
+              ),
+            ],
+          ),
         ],
       ),
     );
