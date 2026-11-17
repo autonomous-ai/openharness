@@ -1718,6 +1718,38 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
       expect(orca.refresh).toHaveBeenCalledTimes(3)
     })
 
+    // The read can take its 5 s: a scan that lands after the dial went, or once the devices stop, lists and says nothing.
+    it('a scan whose Orca read lands once the dial has gone or the devices are stopping reads no session', async () => {
+      vi.useFakeTimers()
+      const orca = fakeOrcaHomes()
+      const listener = fakeListener()
+      const { port } = start({ faults: ['fleet'], orcaHomes: orca, listen: listener.listen })
+      orca.held = true
+      // Landed with the dial still here, it scans.
+      seen.host.watching!(true)
+      orca.pending[0](false)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(readers.scans).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(59_000)
+      expect(orca.pending).toHaveLength(2)
+      seen.host.watching!(false)
+      orca.pending[1](false)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(readers.scans).toBe(1)
+
+      // Stopping, the listener closes first: the dial is still attached until it has.
+      let closed!: () => void
+      listener.close.mockImplementation(() => new Promise<void>((resolve) => { closed = resolve }))
+      seen.host.watching!(true)
+      const stopping = port.stop()
+      orca.pending[2](false)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(readers.scans).toBe(1)
+      closed()
+      await stopping
+    })
+
     it('with no observed source and no skill writer Orca is not asked', () => {
       const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
       switched.HARNESS_DEVICE_OBSERVED = false
