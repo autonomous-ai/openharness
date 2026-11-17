@@ -5,7 +5,9 @@ import type { HostAdapter, Pane, Place } from './adapter.js'
 import { createClaudeAppAdapter } from './claudeApp.js'
 import { createCodexAppAdapter } from './codexApp.js'
 import type { CodexQueueResult } from './codexQueue.js'
+import type { HcPrompt } from './hcClient.js'
 import { createHerdrAdapter } from './herdr.js'
+import { createHerdrAppAdapter } from './herdrApp.js'
 import type { HerdrPrompt } from './herdrClient.js'
 import { type Delivery, Inbox } from './inbox.js'
 import { askedLine, countWord, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, type PromptSource } from './observed.js'
@@ -1338,12 +1340,17 @@ describe('ObservedSource and the last answer the scan reads', () => {
 
 const HANDLE = 'term_0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b'
 
-/** What the tests answer for the source's routes: its own, and the Orca, Claude app, Codex app and tab verbs its adapters run. */
+/** What the tests answer for the source's routes: its own, and the Orca, herdr, Herdr Core, Claude app, Codex app and tab
+ *  verbs its adapters run. */
 interface Fakes extends Omit<ObservedActions, 'adapters'> {
   orcaSend(handle: string, text: string): Promise<TypeResult>
   orcaSwitch(handle: string): Promise<PaneSwitch>
   herdrPrompt(pane: string, kind: string, text: string): Promise<HerdrPrompt>
   herdrStamp(): string | undefined
+  hcPrompt(address: string, kind: string, text: string): Promise<HcPrompt>
+  hcShows(address: string): boolean
+  hcReports(address: string): boolean
+  herdrInFront(): boolean
   claudeInFront(): boolean
   claudeShow(agentId: string, session: string): Promise<PaneSwitch>
   codexInFront(): boolean
@@ -1368,6 +1375,11 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     herdrPrompt: vi.fn(async (_pane: string, _kind: string, _text: string): Promise<HerdrPrompt> => ({ outcome: 'sent' })),
     // herdr's socket is where the daemon looks.
     herdrStamp: vi.fn((): string | undefined => '1:1'),
+    // hc types into every terminal, Herdr's window shows each, and hc reports an agent in each; Herdr is not in front.
+    hcPrompt: vi.fn(async (_address: string, _kind: string, _text: string): Promise<HcPrompt> => ({ outcome: 'sent' })),
+    hcShows: vi.fn((_address: string) => true),
+    hcReports: vi.fn((_address: string) => true),
+    herdrInFront: vi.fn(() => false),
     // As on macOS: an app or a pane is something a tap can open (open.ts).
     canOpen: vi.fn((target: OpenTarget) => !!target.bundle || !!target.pane),
     open: vi.fn(async (_agentId: string, _target: OpenTarget) => true),
@@ -1396,6 +1408,10 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
       socketStamp: () => fake.herdrStamp(),
     } }),
     createTmuxAdapter({ run: ran, processes: async () => [], log: () => {} }),
+    // As devices.ts takes it where the hook's addresses are hc's own session's.
+    createHerdrAppAdapter({ ...deps, client: { prompt: (address, kind, text) => fake.hcPrompt(address, kind, text) },
+      hookIds: true, inFront: () => fake.herdrInFront(), shows: (address) => fake.hcShows(address),
+      reports: (address) => fake.hcReports(address), log: () => {} }),
     createWeztermAdapter(deps),
     { ...orca, type: (pane, text) => fake.orcaSend(pane.id, text), show: (pane) => fake.orcaSwitch(pane.id) },
     { ...claude, show: (pane, agentId) => fake.claudeShow(agentId, pane.id) },
@@ -1928,6 +1944,178 @@ describe('ObservedSource actions', () => {
     src.ingest(ev('session-start', { engine: 'codex', sessionId: THREAD, hostHints: { __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
     expect(await src.focus(src.list()[0])).toBe(true)
     expect(actions.open.mock.calls).toEqual([[src.list()[0].id, { bundle: 'com.microsoft.VSCode' }]])
+  })
+})
+
+// hc's own foreground pid equal to the pid the scan lists a session by, in one terminal only, is where it runs (the
+// addendum of docs/plans/2026-11-17-dial-recap-after-restart-design.md, decision 5).
+describe('ObservedSource and the Herdr terminal a session the scan found runs in', () => {
+  /** A Claude session found open in a terminal and idle, its owner `pid`, its last answer `Done`. */
+  const found = (s: ReturnType<typeof setup>, sessionId: string, pid: number): void => {
+    s.open.set(sessionId, 'terminal')
+    s.owners.set(sessionId, { pid, engine: 'claude' })
+    s.externals.set(sessionId, { cwd: `/x/${sessionId}`, transcriptPath: `/t/${sessionId}.jsonl` })
+    s.working.set(sessionId, false)
+    s.answers.set(`/t/${sessionId}.jsonl`, 'Done')
+  }
+  /** A source whose lookup answers from `terminals` (pid → hc terminal), with the real adapters on `fakes`. */
+  const paired = (over: Partial<ObservedDeps> = {}, fakes: Partial<Fakes> = {}) => {
+    const terminals = new Map<number, string>()
+    const herdrTerminal = vi.fn((pid: number) => terminals.get(pid))
+    const { actions } = fakeActions(fakes)
+    return { ...setup({ actions, herdrTerminal, ...over }), actions, terminals, herdrTerminal }
+  }
+  /** The same session `a` of pid 11, as a hook with these hints places it. */
+  const hooked = (hostHints: Record<string, string>, fakes: Partial<Fakes> = {}) => {
+    const { actions } = fakeActions(fakes)
+    const s = setup({ actions })
+    s.src.ingest(s.ev('session-start', { sessionId: 'a', callerPid: 11, hostHints }))
+    return { ...s, actions }
+  }
+  const inT7 = { HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty' }
+  const placeOf = ({ host, app, appPending, paneKeys }: HostAgent) => ({ host, app, appPending, paneKeys })
+  const herdrLines = (logs: string[]): string[] => logs.filter((line) => line.startsWith('[observed] herdr'))
+
+  it('paired by its pid, it is placed as its hook would place it, on Herdr\'s page, with its pane, words and tap there', async () => {
+    const s = paired()
+    found(s, 'a', 11)
+    s.terminals.set(11, 't7')
+    await s.src.scanOpen()
+    const [agent] = s.src.list()
+    expect(agent).toMatchObject({ host: 'herdr', app: 'herdr', paneKeys: ['herdr-app:t7'], state: 'idle', lastAnswer: 'Done' })
+    expect(agent).not.toHaveProperty('appPending')
+    expect(s.changes).toHaveBeenCalledTimes(1)
+    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 1 answered · 0 ms', '[observed] herdr · 1 paired'])
+    const h = hooked(inT7)
+    const [twin] = h.src.list()
+    expect(placeOf(agent)).toEqual(placeOf(twin))
+    expect(s.src.capabilities(agent)).toEqual(h.src.capabilities(twin))
+    expect(s.src.capabilities(agent)).toMatchObject({ voice: true, focus: true })
+    expect(await s.src.focus(agent)).toBe(true)
+    expect(await h.src.focus(twin)).toBe(true)
+    expect(s.actions.open.mock.calls).toEqual([[agent.id, { bundle: 'dev.herdr.app', pane: { adapter: 'herdr-app', id: 't7' } }]])
+    expect(h.actions.open.mock.calls).toEqual(s.actions.open.mock.calls)
+    expect(await s.src.send(agent, 'next')).toEqual({ ok: true })
+    expect(s.actions.hcPrompt.mock.calls).toEqual([['t7', 'claude', 'next']])
+    expect(counted(s.actions.count)).toEqual(['herdr-app'])
+  })
+
+  it('a terminal hc reports no agent in takes no words, as for a hooked agent', async () => {
+    const quiet = { hcReports: vi.fn((_address: string) => false) }
+    const s = paired({}, quiet)
+    found(s, 'a', 11)
+    s.terminals.set(11, 't7')
+    await s.src.scanOpen()
+    const [agent] = s.src.list()
+    expect(agent.paneKeys).toEqual(['herdr-app:t7'])
+    const h = hooked(inT7, quiet)
+    expect(s.src.capabilities(agent).voice).toBe(false)
+    expect(h.src.capabilities(h.src.list()[0]).voice).toBe(false)
+    expect(await s.src.send(agent, 'next')).toEqual({ ok: false, reason: 'a did not answer.' })
+    expect(await h.src.send(h.src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+    expect(s.actions.hcPrompt).not.toHaveBeenCalled()
+  })
+
+  it('no lookup, or one that answers none, pairs nothing and logs no herdr line', async () => {
+    for (const herdrTerminal of [undefined, vi.fn((_pid: number): string | undefined => undefined)]) {
+      const s = setup({ actions: fakeActions().actions, herdrTerminal })
+      found(s, 'a', 11)
+      await s.src.scanOpen()
+      s.src.placeHerdr()
+      expect(placeOf(s.src.list()[0])).toEqual({ host: 'terminal', app: 'terminal', appPending: true, paneKeys: undefined })
+      expect(s.changes).toHaveBeenCalledTimes(1)
+      expect(herdrLines(s.logs)).toEqual([])
+    }
+  })
+
+  it('Herdr\'s list after the scan: placeHerdr pairs it and tells one change; again with nothing new, none', async () => {
+    const s = paired()
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(placeOf(s.src.list()[0])).toEqual({ host: 'terminal', app: 'terminal', appPending: true, paneKeys: undefined })
+    expect(herdrLines(s.logs)).toEqual([])
+    s.terminals.set(11, 't7')
+    s.src.placeHerdr()
+    expect(s.src.list()[0]).toMatchObject({ host: 'herdr', app: 'herdr', paneKeys: ['herdr-app:t7'], lastAnswer: 'Done' })
+    expect(s.src.list()[0]).not.toHaveProperty('appPending')
+    expect(s.changes).toHaveBeenCalledTimes(2)
+    expect(herdrLines(s.logs)).toEqual(['[observed] herdr · 1 paired'])
+    s.src.placeHerdr()
+    expect(s.changes).toHaveBeenCalledTimes(2)
+    expect(herdrLines(s.logs)).toEqual(['[observed] herdr · 1 paired'])
+  })
+
+  it('a pairing that no longer holds is taken back to what the scan gave it; one that moves follows its terminal', async () => {
+    const s = paired({ apps: async () => new Map([[11, 'vscode']]) })
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    s.terminals.set(11, 't7').set(12, 't9')
+    await s.src.scanOpen()
+    const row = (sessionId: string): HostAgent => s.src.list().find((a) => a.sessionId === sessionId)!
+    expect(placeOf(row('a'))).toEqual({ host: 'herdr', app: 'herdr', appPending: undefined, paneKeys: ['herdr-app:t7'] })
+    expect(herdrLines(s.logs)).toEqual(['[observed] herdr · 2 paired'])
+    // a moves to t8; b's terminal no longer runs it.
+    s.terminals.set(11, 't8').delete(12)
+    s.src.placeHerdr()
+    expect(s.changes).toHaveBeenCalledTimes(2)
+    expect(placeOf(row('a'))).toEqual({ host: 'herdr', app: 'herdr', appPending: undefined, paneKeys: ['herdr-app:t8'] })
+    expect(placeOf(row('b'))).toEqual({ host: 'terminal', app: 'terminal', appPending: true, paneKeys: undefined })
+    expect(herdrLines(s.logs)).toEqual(['[observed] herdr · 2 paired', '[observed] herdr · 1 paired'])
+    // A move kept what the scan gave a: its app comes back, and no stale Herdr pane takes words or a tap.
+    s.terminals.delete(11)
+    s.src.placeHerdr()
+    expect(s.changes).toHaveBeenCalledTimes(3)
+    expect(placeOf(row('a'))).toEqual({ host: 'terminal', app: 'vscode', appPending: undefined, paneKeys: undefined })
+    expect(herdrLines(s.logs)).toHaveLength(2)
+    expect(s.src.capabilities(row('a'))).toMatchObject({ voice: false, focus: false })
+    expect(await s.src.focus(row('a'))).toBe(false)
+    expect(s.actions.canOpen).toHaveBeenLastCalledWith({})
+    expect(await s.src.send(row('a'), 'next')).toEqual({ ok: false, reason: 'a did not answer.' })
+    expect(s.actions.hcPrompt).not.toHaveBeenCalled()
+  })
+
+  it('a hook heard after the pairing places it by its own hints, and no later placeHerdr pairs it again', async () => {
+    const s = paired()
+    found(s, 'a', 11)
+    s.terminals.set(11, 't7')
+    await s.src.scanOpen()
+    s.src.ingest(s.ev('turn-stop', { sessionId: 'a', callerPid: 11, cwd: '/x/a', hostHints: { TERM_PROGRAM: 'iTerm.app' } }))
+    expect(placeOf(s.src.list()[0])).toEqual({ host: 'iterm', app: 'iterm', appPending: undefined, paneKeys: undefined })
+    const changes = s.changes.mock.calls.length
+    s.herdrTerminal.mockClear()
+    s.src.placeHerdr()
+    expect(s.herdrTerminal).not.toHaveBeenCalled()
+    expect(s.changes).toHaveBeenCalledTimes(changes)
+    expect(placeOf(s.src.list()[0])).toEqual({ host: 'iterm', app: 'iterm', appPending: undefined, paneKeys: undefined })
+    s.src.ingest(s.ev('turn-start', { sessionId: 'a', callerPid: 11, cwd: '/x/a', hostHints: { HC_TERMINAL_ID: 't9', TERM_PROGRAM: 'ghostty' } }))
+    expect(s.src.list()[0].paneKeys).toEqual(['herdr-app:t9'])
+  })
+
+  it('a hook heard while the scan\'s reads ran keeps its own place', async () => {
+    let answer: (text: string | undefined) => void = () => {}
+    const lastAnswer = vi.fn(() => new Promise<string | undefined>((resolve) => { answer = resolve }))
+    const s = paired({ lastAnswer })
+    found(s, 'a', 11)
+    s.terminals.set(11, 't7')
+    const scan = s.src.scanOpen()
+    await vi.waitFor(() => expect(lastAnswer).toHaveBeenCalled())
+    s.src.ingest(s.ev('session-start', { sessionId: 'a', callerPid: 11, cwd: '/x/a', hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    answer('Done')
+    await scan
+    expect(placeOf(s.src.list()[0])).toEqual({ host: 'ghostty', app: 'ghostty', appPending: undefined, paneKeys: undefined })
+    expect(s.herdrTerminal).not.toHaveBeenCalled()
+    expect(herdrLines(s.logs)).toEqual([])
+  })
+
+  it('the herdr line counts only: two paired in one look, and no pid, address or name in any line', async () => {
+    const s = paired({ recordName: async (owner) => (owner.sessionId === 'a' ? 'Tho 7f3a91c2' : undefined) })
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    s.terminals.set(11, 't7').set(12, 't8')
+    await s.src.scanOpen()
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 0 app known · 1 named · 2 answered · 0 ms', '[observed] herdr · 2 paired'])
+    const said = s.logs.join('\n')
+    for (const word of ['t7', 't8', '11', '12', ...s.src.list().map((a) => a.name)]) expect(said).not.toMatch(new RegExp(`\\b${word}\\b`))
   })
 })
 
