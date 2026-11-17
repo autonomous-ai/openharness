@@ -37,7 +37,8 @@ const LIST_EVERY_MS = 1000
 const ANSWER_CHARS = 300
 /** The pending permissions kept a session. */
 const MAX_WAITS = 16
-/** Unlisted sessions whose turn asked for a list; sessions, and events of each, heard while a list is in flight. */
+/** Unlisted sessions whose turn asked for a list; unlisted sessions, and events of each session, heard while a list is
+ *  in flight. */
 const MAX_HEARD = 64
 const LIST_PATH = `/api/session?parentID=null&archived=false&order=desc&limit=${LIST_LIMIT}`
 /** A service that is not this user's opencode 2.x: nothing more is sent to it. */
@@ -115,6 +116,8 @@ interface Listed {
 interface Heard {
   /** Each session's events in order, the last 64; a listed session's too, which marks it as told. */
   events: Map<string, OpencodeEvent[]>
+  /** The sessions not listed among them. */
+  unlisted: number
   dropped: Set<string>
 }
 
@@ -363,7 +366,7 @@ export class OpencodeSource implements HostSource {
 
   private async run(): Promise<void> {
     const epoch = this.epoch
-    const heard: Heard = { events: new Map(), dropped: new Set() }
+    const heard: Heard = { events: new Map(), unlisted: 0, dropped: new Set() }
     this.heard = heard
     this.listedAt = this.deps.monotonic()
     const sessions = await this.deps.client.request('GET', LIST_PATH)
@@ -523,7 +526,12 @@ export class OpencodeSource implements HostSource {
     if (!heard) return
     const events = heard.events.get(id)
     if (!events) {
-      if (heard.events.size < MAX_HEARD) heard.events.set(id, [event])
+      // A listed session's are always kept, or the list would set it back: 16 sessions at most. Others' are kept for 64.
+      if (!this.rows.has(id)) {
+        if (heard.unlisted === MAX_HEARD) return
+        heard.unlisted++
+      }
+      heard.events.set(id, [event])
       return
     }
     events.push(event)
