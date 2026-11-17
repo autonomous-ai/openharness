@@ -1313,7 +1313,7 @@ describe('ObservedSource and the last answer the scan reads', () => {
   })
 })
 
-const HANDLE ='term_0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b'
+const HANDLE = 'term_0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b'
 
 /** What the tests answer for the source's routes: its own, and the Orca, Claude app, Codex app and tab verbs its adapters run. */
 interface Fakes extends Omit<ObservedActions, 'adapters'> {
