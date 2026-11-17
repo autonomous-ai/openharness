@@ -174,6 +174,7 @@ class _DevicesScreenState extends State<DevicesScreen>
   void initState() {
     super.initState();
     _page.addListener(_place);
+    widget.deviceAppOffer?.addListener(_offerChanged);
     unawaited(widget.controller.load());
     widget.wifi?.start();
   }
@@ -192,10 +193,15 @@ class _DevicesScreenState extends State<DevicesScreen>
   void didUpdateWidget(DevicesScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) _dropPet();
+    if (oldWidget.deviceAppOffer != widget.deviceAppOffer) {
+      oldWidget.deviceAppOffer?.removeListener(_offerChanged);
+      widget.deviceAppOffer?.addListener(_offerChanged);
+    }
   }
 
   @override
   void dispose() {
+    widget.deviceAppOffer?.removeListener(_offerChanged);
     _cards.dispose();
     _page.dispose();
     _viewerTop.dispose();
@@ -206,6 +212,12 @@ class _DevicesScreenState extends State<DevicesScreen>
 
   void _petChanged() {
     if (mounted) setState(() {});
+  }
+
+  /// The menu-bar app row rebuilds on its own as it comes, goes or shows its failure line, moving the Pet section
+  /// under a viewer placed beside it: measure again.
+  void _offerChanged() {
+    if (_beside != null) _measureSoon();
   }
 
   /// Ends the current pet edit. Disposed after the frame, once no widget
