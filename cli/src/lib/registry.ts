@@ -88,8 +88,10 @@ export interface LaunchPublicationInput {
 
 export type LaunchPublication = { state: 'not-published' } | { state: 'confirmed'; entry: RegisteredSession | null }
 
+/** A launch published `ready` and the row a hook's registration rebuilds without one are the same launch. Read
+ *  apart, the second of two restarts took the engine down and answered AGENT_CHANGED (e2e/races.e2e.ts, 2026-11-17). */
 function launchIdentity(row: RegisteredSession | undefined): string {
-  return rowFingerprint({ launch: row?.launch, launchArgs: row?.launchArgs, grid: row?.grid,
+  return rowFingerprint({ launch: row?.launch?.state === 'ready' ? undefined : row?.launch, launchArgs: row?.launchArgs, grid: row?.grid,
     gridLaunch: row?.gridLaunch, gridWebSearch: row?.gridWebSearch, subscriptionModel: row?.subscriptionModel, active: row?.active })
 }
 

@@ -271,9 +271,10 @@ export function restoreRuntimeOf(entry: { readonly runtimes: readonly TerminalRu
 
 /** A service or tmux answer cannot act on a newer binding, launch, route or in-progress Stop. */
 function restoreOwner(deps: RestoreAgentsDeps, entry: RegisteredSession, committing = false): () => boolean {
+  // `ready` reads as no launch, as in the registry's `launchIdentity`.
   const identity = (row: RegisteredSession | undefined) => row && JSON.stringify([
     row.registeredAt, row.boundAt, row.sessionId, row.engine, row.cwd, row.dsh, row.dshRuntime,
-    row.runtimes.map(terminalRouteKey).sort(), row.launch, row.externalResume,
+    row.runtimes.map(terminalRouteKey).sort(), row.launch?.state === 'ready' ? undefined : row.launch, row.externalResume,
   ])
   const owned = identity(entry)
   const revision = deps.revision?.(entry.agentId)
