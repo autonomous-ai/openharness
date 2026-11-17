@@ -7,9 +7,10 @@ export default defineConfig({
     // Gives the run a temporary folder of its own, which its workers' folders go in (vitest.tmpdir.ts).
     globalSetup: ['./src/__fixtures__/vitestRun.ts'],
     setupFiles: ['./vitest.tmpdir.ts', './vitest.setup.ts'],
-    // The VS Code extension's tests too: the CLI's build inlines the extension, and PR CI runs this suite for it.
+    // The VS Code extension's tests too: the CLI's build inlines the extension, and PR CI runs this suite for it. The
+    // gate's guard tests launch no VS Code, so PR CI runs them as well; the gate itself is `*.gate.ts`, run by hand.
     include: ['src/**/*.test.ts', 'src/**/*.spec.ts', '../plugins/harness-device-vscode/src/**/*.test.ts',
-      '../plugins/harness-device-vscode/src/**/*.spec.ts'],
+      '../plugins/harness-device-vscode/src/**/*.spec.ts', '../plugins/harness-device-vscode/gate/**/*.test.ts'],
     // Half the machine's cores (src/testing/suiteWorkers.ts).
     maxWorkers: suiteWorkers(),
     // Many cases do real I/O: git, child processes, and disk flushes, each a full drive flush on macOS (F_FULLFSYNC).
