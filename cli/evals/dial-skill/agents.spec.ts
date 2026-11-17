@@ -200,6 +200,18 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(SAMPLE)}))`)
     await line.gone
   })
 
+  it('kills what the agent left running in the run in a group of its own, as Claude starts its Bash commands, once it exits', async () => {
+    const line = lifeline()
+    const bin = fake('claude', `const fs = require('node:fs')
+require('node:child_process').spawn('/bin/sleep', ['60'], { detached: true, stdio: ['ignore', 'ignore', 'ignore', fs.openSync(${JSON.stringify(line.path)}, 'w')] }).unref()
+process.stdout.write(fs.readFileSync(${JSON.stringify(SAMPLE)}))`)
+
+    const run = await runAgent('claude', need, staged(), config(bin))
+
+    expect(run.answer).toContain('WEATHER_API_KEY')
+    await line.gone
+  })
+
   it('rejects account_limited, without the words the runner retries on, when the account limit stops the run', async () => {
     const limit = { type: 'result', subtype: 'success', is_error: true, result: "You've hit your limit · resets 6pm", usage: { input_tokens: 0, output_tokens: 0 } }
     const bin = fake('claude', `process.stdout.write(${JSON.stringify(`${JSON.stringify(limit)}\n`)}); process.exitCode = 1`)
