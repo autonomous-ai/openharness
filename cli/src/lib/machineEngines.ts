@@ -35,7 +35,7 @@ const probeMachine = (dataDir: string, port: number): MachineProbe => async (mac
   return { machineId, reply }
 }
 
-/** The probe's answer as one row per engine, read as #1743's consumer reads it (superTabs/machines.ts). */
+/** The probe's answer as one row per engine. */
 export function readinessRows(machineId: string, reply: Record<string, unknown>): EngineReadiness[] {
   const engines = Array.isArray(reply.engines) ? reply.engines : []
   return engines.flatMap((entry): EngineReadiness[] => {

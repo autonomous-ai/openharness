@@ -3,7 +3,8 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { GUEST_LAUNCH_ENGINES, GUEST_PANE_BOOTSTRAP, guestPaneCommand } from './guestPaneCommand.js'
+import { GUEST_LAUNCH_ENGINES } from './guestEngines.js'
+import { GUEST_PANE_BOOTSTRAP, guestPaneCommand } from './guestPaneCommand.js'
 
 const account = { user: 'hg_0123456789ab', home: '/Users/Shared/HarnessGuests/hg_0123456789ab', workspace: '/Users/Shared/HarnessGuests/hg_0123456789ab/work' }
 

@@ -1,20 +1,14 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { homedir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
 import { buildEngineLaunchArgv, commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
-import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { AgentRestartCoordinator, bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { processLaunchArgs } from '../../lib/processTable.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import { createAgentRestarter, type RestartDeps } from './restart.js'
-import { createLaunchAuthority } from './launchAuthority.js'
-import { createSwarmSkillAdoption } from '../../superTabs/inCore/adoption.js'
-import { RETENTION_LAPSE_MS, retainContributions, retainedHarnesses } from '../../superTabs/retention.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 
@@ -24,7 +18,6 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   buildEngineLaunchArgv: vi.fn(() => ['zsh', '-l']),
   commandAvailableInInteractiveShell: vi.fn(async () => true),
 }))
-vi.mock('../../lib/gatewayRuntime.js', async (real) => ({ ...await real<object>(), probeGatewayRuntime: vi.fn(async () => ({ kind: 'none' })) }))
 vi.mock('../../lib/restartAgent.js', async (real) => ({
   ...await real<object>(),
   bypassPermissionFor: vi.fn(async (_s: unknown, live: () => Promise<boolean>) => live()),
@@ -142,51 +135,6 @@ describe('restarting an agent', () => {
       await reconciler.trigger()
       expect(onDiscovered).toHaveBeenCalledOnce()
     } finally { releaseStop?.() }
-  })
-
-  it('adopts an old role before native inspection and relaunch', async () => {
-    const skill = { role: 'coordinator' as const, key: 'a1' }
-    const run = setup(agent(), { adoptSwarmSkill: async row => ({ ...row, swarmSkill: skill }) })
-    expect(await run.restart('a1')).toMatchObject({ ok: true })
-    expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ swarmSkill: skill }),
-      expect.objectContaining({ swarmSkill: skill }), expect.any(Function), undefined)
-  })
-
-  it('does not restart if role adoption loses the session binding', async () => {
-    const run = setup(agent(), { adoptSwarmSkill: async () => null })
-    expect(await run.restart('a1')).toMatchObject({ error: 'AGENT_CHANGED' })
-    expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
-    expect(restartAgent).not.toHaveBeenCalled()
-  })
-
-  it('restarts when an unrelated registry field changes during a no-role lookup', async () => {
-    const session = agent({ registeredAt: 1 })
-    const authority = createLaunchAuthority({ byAgent: () => session, revision: () => 0, cancelled: () => false })
-    const adoptSwarmSkill = createSwarmSkillAdoption({
-      authority, save: vi.fn(), candidate: () => true,
-      role: async () => { session.dsh = 'changed-during-lookup'; return null },
-    })
-    const run = setup(session, { adoptSwarmSkill })
-    expect(await run.restart('a1')).toMatchObject({ ok: true })
-    expect(restartAgent).toHaveBeenCalledOnce()
-  })
-
-  // Security review 2 of #2255: a Mac offline over a week has a lapsed local roster, which once restarted an old Swarm session
-  // without its role.
-  it('restarts an old Swarm session with its role after the local roster lapsed', async () => {
-    const data = mkdtempSync(join(tmpdir(), 'restart-roster-'))
-    try {
-      retainContributions(data, 'machine', [{ tabId: 'tab', agent: { harnessId: 'a1', machineId: 'machine' } }], Date.now() - RETENTION_LAPSE_MS - 60_000)
-      const session = agent({ startedBy: 'agent' })
-      const role = vi.fn(async () => ({ role: 'agent' as const }))
-      const adoptSwarmSkill = createSwarmSkillAdoption({ role, save: vi.fn(), candidate: id => retainedHarnesses(data).has(id),
-        authority: createLaunchAuthority({ byAgent: () => session, revision: () => 0, cancelled: () => false }) })
-      const run = setup(session, { adoptSwarmSkill })
-      expect(await run.restart('a1')).toMatchObject({ ok: true })
-      expect(role).toHaveBeenCalledOnce()
-      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ swarmSkill: { role: 'agent', key: 'a1' } }),
-        expect.anything(), expect.any(Function), undefined)
-    } finally { rmSync(data, { recursive: true, force: true }) }
   })
 
   it.each(['starting', 'held'] as const)('does not replace an unbound native %s launch with a generic fresh restart', async state => {
@@ -571,9 +519,8 @@ describe('restarting an agent', () => {
       expect(swapDeps).toMatchObject({ swap: true })
       expect(swapDeps.isCurrent?.()).toBe(true)
       expect(run.deps.refreshGridWebSearch).toHaveBeenCalledWith('a1', { env: { GRID_KEY: 'k' } })
-      expect(probeGatewayRuntime).toHaveBeenCalledWith(newProcess)
       // Its command line, where a Codex or pi grid's address and model are: never its executable alone.
-      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, 'none')
+      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, undefined, null)
       expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', true)
       expect(releaseHold).toHaveBeenCalledWith(runtime)
       expect(run.deps.announceSession).toHaveBeenCalledWith(agent())
@@ -581,21 +528,6 @@ describe('restarting an agent', () => {
       expect(console.log).toHaveBeenCalledWith('[restart] a1 claude · resumed')
       expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalledWith(routeKey, null)
       expect(run.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(routeKey)
-    })
-
-    // A PM's Restart (⌘⇧E) forced full mode (Ken, 11-09) while a PM in its owner's settings stood still before each tool.
-    // Since 2026-11-12 a Swarm agent starts in Auto-approve, and a PM, as any Swarm agent, comes back in the mode it has.
-    it('restarts a Swarm\'s PM and any other Swarm agent in its own mode, never full mode', async () => {
-      const pm = agent({ swarmSkill: { role: 'coordinator', key: 'p1' }, permissionMode: 'auto' } as Partial<RegisteredSession>)
-      const run = setup(pm)
-      expect(await run.restart('a1')).toMatchObject({ ok: true })
-      expect(bypassPermissionFor).toHaveBeenCalledWith(pm, expect.any(Function))
-      expect(run.deps.downgradedPermission).toHaveBeenCalledWith(pm, true, 'restart', undefined)
-
-      vi.mocked(bypassPermissionFor).mockClear()
-      const worker = agent({ swarmSkill: { role: 'agent', key: 'p1' } } as Partial<RegisteredSession>)
-      expect(await setup(worker).restart('a1')).toMatchObject({ ok: true })
-      expect(bypassPermissionFor).toHaveBeenCalledWith(worker, expect.any(Function))
     })
 
     it('without a mode or a yes, launches with no mode and no bypass; a fresh session on a grid says both', async () => {
@@ -606,6 +538,21 @@ describe('restarting an agent', () => {
       expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(grid, { backend: run.tmuxBackend, runtime }, { env: { GRID_KEY: 'k' } }, null, expect.any(Function))
       expect(vi.mocked(restartAgent).mock.calls[0][1]).toBe(false)
       expect(console.log).toHaveBeenCalledWith('[restart] a1 claude · fresh session · grid Home')
+    })
+
+    it('writes on the row the grid its launch record puts the engine on, never the grid the row had', async () => {
+      const old = { baseUrl: 'https://grid.example/old/relay', model: null }
+      // The saved API's endpoint as saved now: the record a relaunch refreshes (apiModels.ts `refreshApiLaunch`).
+      const override = { networkId: 'api', networkName: 'Saved', baseUrl: 'https://saved.example/now/v1', apiKey: 'k', model: 'm' }
+      const onGrid = setup(agent({ grid: old, gridLaunch: { ...override, baseUrl: 'https://saved.example/then/v1' } } as Partial<RegisteredSession>), {
+        relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [], gridLaunchRecord: { override, webSearch: 'on' } } })) as never,
+      })
+      await onGrid.restart('a1')
+      expect(onGrid.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, undefined, { baseUrl: 'https://saved.example/now/v1', model: 'm' })
+      // A row discovery adopted from a relay URL the person set in their own shell: its relaunch runs on its own login.
+      const adopted = setup(agent({ grid: old, gridLaunch: null } as Partial<RegisteredSession>))
+      await adopted.restart('a1')
+      expect(adopted.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, undefined, null)
     })
 
     it('says why the swap failed, and lets the route go', async () => {
@@ -628,10 +575,10 @@ describe('restarting an agent', () => {
       expect(swapped.deps.refreshGridWebSearch).not.toHaveBeenCalled()
       expect(swapped.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(routeKey)
 
-      const probed = setup()
-      vi.mocked(probeGatewayRuntime).mockImplementationOnce(async () => { probed.state.live = false; return { kind: 'none' } as never })
-      expect(await probed.restart('a1')).toEqual(changed)
-      expect(probed.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+      const committing = setup()
+      vi.mocked(committing.deps.refreshGridWebSearch).mockImplementationOnce(() => { committing.state.live = false })
+      expect(await committing.restart('a1')).toEqual(changed)
+      expect(committing.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
 
       const cleared = setup()
       releaseHold.mockImplementationOnce(async () => { cleared.state.live = false })

@@ -1,8 +1,9 @@
 /**
  * A DSH agent has two things beside its pane that the daemon owns for as long as the agent exists:
  * its viewer server (a URL the desktop shows in a pane next to the terminal) and a watch on the
- * verdict file its scripts write. Both are keyed on the agent, attached wherever an agent with a
- * `dsh` comes into being (create, restore, discovery) and detached where it is forgotten.
+ * verdict file its scripts write. Both are keyed on the agent: attached at every look the core takes at an
+ * agent with a `dsh` (create, restore, discovery), and detached when it ends, both heard as every service
+ * that follows agents hears them (`CoreApi.agents.follow`, `VIEWERS_FOLLOW`).
  *
  * It also serves those viewers to a client that cannot reach this machine's loopback (the phone, the web,
  * a window on another of the owner's machines): a viewer's pages streamed over the client's own connection
@@ -14,7 +15,7 @@
  * only through `CoreApi`, and the core reaches it only through `ports.viewers`.
  */
 import { join } from 'node:path'
-import type { CoreApi, CorePorts } from '../core/api.js'
+import { VIEWERS_FOLLOW, type CoreApi, type CorePorts } from '../core/api.js'
 import { env } from '../config/env.js'
 import { catalogEntry } from '../dsh/catalog.js'
 import { installedDsh } from '../dsh/installed.js'
@@ -140,13 +141,16 @@ export function startViewers(core: CoreApi, ports: CorePorts): void {
     void dshViewers.stop(agentId)
     dshFrames.delete(agentId)
   }
+  const unfollow = core.agents.follow?.((event) => {
+    if (event.kind === 'running') attachDsh(event.session)
+    else if (event.kind === 'ended') detachDsh(event.agentId)
+  }, VIEWERS_FOLLOW)
   ports.viewers = {
-    attach: attachDsh,
-    detach: detachDsh,
     frameContext: dshFrameContext,
     forwardingUrl: (agentId) => dshViewers.forwardingUrl(agentId),
     // The next daemon starts its own viewers for the agents it restores; these must not hold the ports.
     stop: async () => {
+      unfollow?.()
       served.closed()
       await dshViewers.stopAll()
       await dshVerdicts.stop()

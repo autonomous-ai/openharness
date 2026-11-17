@@ -8,6 +8,7 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import { RuntimeProfileState } from '../../lib/runtimeProfileState.js'
 import { createAttach } from './attach.js'
 import { createSessionNormalizers } from './normalizers.js'
+import { noOtherStreams } from '../../testing/otherStreams.js'
 
 const roots: string[] = []
 afterEach(() => {
@@ -29,18 +30,17 @@ function setup(replyEffort?: string) {
   profiles.hydrate(session, [])
   profiles.confirmEffort(session.sessionId, 'high')
   const before = profiles.getState(session.sessionId)
-  const normalizers = createSessionNormalizers()
+  const normalizers = createSessionNormalizers(noOtherStreams())
   const oldParser = liveFor('claude')!.create(session)
   normalizers.liveParsers.set(session.sessionId, oldParser)
   const hold = { offset: statSync(path).size, expired: false, release: vi.fn() }
   const emit = vi.fn(), addSession = vi.fn(async () => {})
-  const attach = createAttach({ setInterpretationHold: () => false, setIdentityHold: () => false, announceSession: vi.fn(), liveFor, normalizers, runtimeProfiles: profiles, resolve: () => session,
+  const attach = createAttach({ setInterpretationHold: () => false, announceSession: vi.fn(), liveFor, normalizers, others: noOtherStreams(), runtimeProfiles: profiles, resolve: () => session,
     terminalGone: async () => false, watcher: { removeSession: async () => {}, pollSession: async () => {}, hold: async () => hold, tails: () => true, addSession },
     cursorDiscovery: { add: async () => {} }, device: () => undefined,
-    captureTerminal: async () => null, emit, announceTurnAborted: vi.fn(),
-    questionWatcher: { start: vi.fn() }, terminalLabel: () => 'private fixture',
-    dbs: { opencode: join(root, 'o.db'), kilo: join(root, 'k.db'), devin: join(root, 'd.db'), openclaw: async () => null },
-    devinHome: root, hermesDb: async () => join(root, 'h.db'), concurrency: 1,
+    captureTerminal: async () => null, emit,
+    tokenUsage: { changed: () => {} }, questionWatcher: { start: vi.fn() }, terminalLabel: () => 'private fixture',
+    storeOf: async () => null, concurrency: 1,
   })
   const attaching = attach.attachSession(session, true)
   return { session, profiles, before, normalizers, oldParser, hold, emit, addSession, configuredEffort,

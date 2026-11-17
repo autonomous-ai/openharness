@@ -71,15 +71,15 @@ describe('what the scan reads: the counters and the last hour from the same even
     const { metrics, lines, minute } = measured()
     const app = Fastify()
     registerRequestMetrics(app, metrics)
-    app.get('/api/super-tabs/:tabId/changes', async () => ({ ok: true }))
+    app.get('/api/harness-links/:id', async () => ({ ok: true }))
     app.get('/api/broken', async () => { throw new Error('boom') })
     await app.ready()
-    await app.inject({ method: 'GET', url: '/api/super-tabs/c51479bd73b59e58176ad9e4/changes?since=1' })
+    await app.inject({ method: 'GET', url: '/api/harness-links/c51479bd73b59e58176ad9e4?since=1' })
     await app.inject({ method: 'GET', url: '/api/broken' })
     await app.close()
     minute()
     expect(lines[0]).toMatchObject({ requests: 2, errors: 1 })
-    expect(Object.keys(lines[0]!.routes).sort()).toEqual(['GET /api/broken', 'GET /api/super-tabs/:tabId/changes'])
+    expect(Object.keys(lines[0]!.routes).sort()).toEqual(['GET /api/broken', 'GET /api/harness-links/:id'])
     expect(JSON.stringify(lines[0])).not.toContain('c51479bd73b59e58176ad9e4')
   })
 
@@ -112,6 +112,11 @@ describe('what the scan reads: the counters and the last hour from the same even
 })
 
 describe('process metrics', () => {
+  it('does not advertise the removed Swarm phone-delivery feature', async () => {
+    const { registry } = createMetrics()
+    expect(await registry.metrics()).not.toContain('phone_pushes_total')
+  })
+
   it('reports event-loop delay and GC pauses', async () => {
     const { registry } = createMetrics()
     const text = await registry.metrics()

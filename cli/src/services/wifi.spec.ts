@@ -29,8 +29,11 @@ function started(over: Parameters<typeof fakeCore>[0] = {}) {
     wifi: { view: vi.fn(async () => ({ agents: [agent], store: [], hasWindow: true })), ...over.wifi },
   })
   const ports = emptyPorts()
-  startWifi(core, ports)
+  const requests = startWifi(core, ports)
   const port = ports.wifi as WifiPort
+  /** One of its routes of the door, as the core hands it on: this computer's owner's. */
+  const http = async (method: string, target: string, body?: unknown): Promise<Record<string, any>> =>
+    requests.wifi_http!({ method, target, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, { local: true, owner: true })
   const ask = async (req: Record<string, unknown>, connId = 'c1') => {
     const [frame, opened] = sealed({ requestId: randomUUID(), ...req })
     await port.request(connId, frame, opened)
@@ -42,8 +45,11 @@ function started(over: Parameters<typeof fakeCore>[0] = {}) {
     port.session(connId, client)
     return ask({ type: 'hello', proto: 1 }, connId)
   }
-  return { core, port, ask, hello }
+  return { core, port, ask, hello, http }
 }
+
+/** A device's identity as `harness device receipt` names it: a key, as its pairing made it. */
+const KEY = Buffer.alloc(32, 7).toString('base64')
 
 describe('the Wi-Fi device, with the dials', () => {
   it('answers a device\'s hello through the core, which seals it to the session it came on, and counts it as watching', async () => {
@@ -185,33 +191,39 @@ describe('the Wi-Fi device, with the dials', () => {
   })
 
   it('carries device add-ons end to end: what the device publishes, an agent\'s proposal sealed to it, and its decision', async () => {
-    const { core, port, hello, ask } = started()
-    expect(await port.addon('propose', { addon: 'glow', idempotencyKey: 'k', act: 'light', holdsMs: 5000 }))
-      .toEqual({ error: { code: 'MISSING_TARGET', message: 'No connected device offers add-ons' } })
+    const { core, port, hello, ask, http } = started()
+    expect(await http('POST', '/api/autonomous-device/addon/propose', { addon: 'glow', idempotencyKey: 'k', act: 'light', holdsMs: 5000 }))
+      .toEqual({ status: 409, body: { error: { code: 'MISSING_TARGET', message: 'No connected device offers add-ons' } } })
     await hello()
     expect(await ask({ type: 'addon.publish', values: [{ topic: 'room/presence', value: { someone: true } }] })).toMatchObject({ type: 'addon.publish_result', topics: 1 })
-    expect(await port.addon('state', {})).toMatchObject({ result: { devices: [{ deviceId: 'device-1', online: true, topics: { 'room/presence': { value: { someone: true } } } }] } })
+    expect(await http('GET', '/api/autonomous-device/addon/state'))
+      .toMatchObject({ status: 200, body: { devices: [{ deviceId: 'device-1', online: true, topics: { 'room/presence': { value: { someone: true } } } }] } })
     vi.mocked(core.wifi.send).mockClear()
-    const proposed = await port.addon('propose', { addon: 'glow', idempotencyKey: 'k', act: 'light', holdsMs: 5000, params: { colour: 'warm' } })
-    const proposalId = ('result' in proposed ? (proposed.result.proposal as { proposalId: string }) : { proposalId: '' }).proposalId
+    const proposed = await http('POST', '/api/autonomous-device/addon/propose', { addon: 'glow', idempotencyKey: 'k', act: 'light', holdsMs: 5000, params: { colour: 'warm' } })
+    const proposalId = proposed.body.proposal.proposalId as string
     expect(sent(core)).toEqual([expect.objectContaining({ connId: 'c1', identity: 'device-1', frame: 'autonomous_device_event', kind: 'addon.proposal',
       payload: expect.objectContaining({ proposalId, addon: 'glow', act: 'light', params: { colour: 'warm' } }) })])
     expect(await ask({ type: 'addon.decision', proposalId, decision: 'dropped', reason: 'someone is talking' })).toMatchObject({ state: 'dropped' })
-    expect(await port.addon('proposal', { proposalId })).toMatchObject({ result: { proposal: { proposalId, state: 'dropped', reason: 'someone is talking' } } })
+    expect(await http('GET', `/api/autonomous-device/addon/proposal?proposalId=${proposalId}`))
+      .toMatchObject({ status: 200, body: { proposal: { proposalId, state: 'dropped', reason: 'someone is talking' } } })
     port.revoked('device-1')
-    expect(await port.addon('state', {})).toEqual({ result: { devices: [] } })
+    expect(await http('GET', '/api/autonomous-device/addon/state')).toEqual({ status: 200, body: { devices: [] } })
+    // Not its routes: the pairings are the gateway's.
+    expect((await http('GET', '/api/autonomous-device/list')).status).toBe(404)
     await port.stop()
   })
 
   it('forgets a closed connection and an unpaired device, and answers a receipt', async () => {
-    const { core, port, hello, ask } = started()
-    await hello()
+    const { core, port, hello, ask, http } = started()
+    port.session('c1', { ...client, identity: KEY })
+    await ask({ type: 'hello', proto: 1 })
     await ask({ type: 'turn.send', machineId: 'machine-1', agentId: 'agent', idempotencyKey: 'k2', text: 'hi' })
-    expect(await port.receipt('device-1', 'k2')).toMatchObject({ receipt: { idempotencyKey: 'k2', state: 'queued' } })
-    expect(await port.receipt('device-1', 'nope')).toEqual({ receipt: null })
-    port.revoked('device-1')
+    const receipt = (key: string) => http('GET', `/api/autonomous-device/receipt?deviceId=${encodeURIComponent(KEY)}&idempotencyKey=${key}`)
+    expect(await receipt('k2')).toMatchObject({ status: 200, body: { receipt: { idempotencyKey: 'k2', state: 'queued' } } })
+    expect(await receipt('nope')).toEqual({ status: 200, body: { receipt: null } })
+    port.revoked(KEY)
     expect(core.wifi.cancel).toHaveBeenCalled()
-    expect(await port.receipt('device-1', 'k2')).toEqual({ receipt: null })
+    expect(await receipt('k2')).toEqual({ status: 200, body: { receipt: null } })
     await hello('c2')
     port.dropped('c2')
     expect(core.wifi.hello).toHaveBeenLastCalledWith('c2', null)
@@ -290,19 +302,20 @@ describe('the Wi-Fi device, with the dials', () => {
     warn.mockRestore()
   })
 
-  it('reads add-on state for one device, a proposal by a malformed id as none, and lets an unexpected failure through', async () => {
-    const { port, hello, ask } = started()
+  it('reads add-on state for one device, a proposal never sent as none, and lets an unexpected failure through', async () => {
+    const { port, hello, ask, http } = started()
     await hello()
     await ask({ type: 'addon.publish', values: [{ topic: 'mood/state', value: { energy: 0.5 } }] })
-    expect(await port.addon('state', { deviceId: 'device-1' })).toMatchObject({ result: { devices: [{ deviceId: 'device-1' }] } })
-    expect(await port.addon('state', { deviceId: 'nobody' })).toEqual({ result: { devices: [] } })
-    expect(await port.addon('proposal', { proposalId: 42 })).toMatchObject({ error: { code: 'PROPOSAL_UNKNOWN' } })
+    expect(await http('GET', '/api/autonomous-device/addon/state?deviceId=device-1')).toMatchObject({ status: 200, body: { devices: [{ deviceId: 'device-1' }] } })
+    expect(await http('GET', '/api/autonomous-device/addon/state?deviceId=nobody')).toEqual({ status: 200, body: { devices: [] } })
+    expect(await http('GET', `/api/autonomous-device/addon/proposal?proposalId=${randomUUID()}`))
+      .toEqual({ status: 404, body: { error: { code: 'PROPOSAL_UNKNOWN', message: 'No such proposal: never sent, or aged out after ten minutes' } } })
     await port.stop()
-    const ports = emptyPorts()
-    startWifi(fakeCore({ dataDir }), ports, {
+    // A failure that is no refusal fails the request: its route answers for it as for a service that is down.
+    const requests = startWifi(fakeCore({ dataDir }), emptyPorts(), {
       service: () => ({ addons: { state: () => { throw new Error('broken') } } }) as unknown as AutonomousDeviceService,
     })
-    await expect((ports.wifi as WifiPort).addon('state', {})).rejects.toThrow('broken')
+    await expect(requests.wifi_http!({ method: 'GET', target: '/api/autonomous-device/addon/state' }, { local: true, owner: true })).rejects.toThrow('broken')
   })
 
   it('says a focus change that carries no revision to nobody', () => {

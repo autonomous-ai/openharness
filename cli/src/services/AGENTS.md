@@ -20,6 +20,14 @@ let several people build features at once without touching the core or each othe
    - While the service is off, its requests are answered `SERVICE_UNAVAILABLE`, never `UNSUPPORTED`
      (the apps read that as "update the CLI"). That is why the types are declared up front.
    - A handler that throws or rejects is answered `SERVICE_FAILED` and counts against the service.
+   - A route of the daemon's local HTTP door is one such request too: its paths, the request it becomes (one
+     `<name>_http` a service), how long it is waited for and what it answers while the service is down go in
+     `SERVICE_HTTP_ROUTES` (`src/core/api.ts`); the core hands it on as it came, once the door let it in
+     (`core/serviceRoutes.ts`), and the service answers `{ status, body }`, checking everything it carries
+     (`lib/autonomous-device/localHttp.ts` shows how). Never a route in `hookServer.ts`. A route only the daemon's own
+     socket may ask (`door: 'socket'`) reaches its service with `asker.door`, which no client of the local WebSocket has.
+     A window's frame a service answers is one request too (`SERVICE_WS_FRAMES`, one `<name>_ws` a service): asked with
+     `{ frame, payload }`, its answer sent back as the frame its route names. Never a frame sniffed in `localWsServer.ts`.
    - Work that belongs to the connection that asked (a limit on how many at once per connection, work to
      stop when the asker goes) is keyed by `asker.connection` and stops on `closed`, the handler's third
      argument: it is aborted when that connection closes, or when the core that routed it goes, wherever
@@ -57,9 +65,10 @@ hang or leak costs only its process. A process per risk, not per feature (`SERVI
 | Process | Services | Why its own | Started |
 |---|---|---|---|
 | `engine-claude`, `engine-codex` | history, live parsers, runtime profiles, screens, submission readings, model control, question navigation and Codex's app-server connection (`src/engines/worker/`) | engine behavior outside core; snapshots and revocable model- and question-control grants | on demand |
+| `engine-others` | the other fourteen engines' history and last turns (`src/engines/others/`) | their transcript and store readers, `node:sqlite` and Amp's `threads export` out of the core; a read names its engine, and each engine's code loads on its first read | on demand |
 | `search` | search | native `node:sqlite`, the index's memory | always |
 | `viewers` | viewers, store | the viewer servers, the remote viewer streams and rendered surfaces, minutes-long installs | on demand |
-| `edge` | workspaces, usage, monitor, projects, handoff, recaps, windowNames, shell, connectors, sharedMachines, agentCleanup, messages, osDevice, goals, hachi | light pure-JS services: isolated from the core, not from each other | always |
+| `edge` | workspaces, usage, monitor, projects, handoff, recaps, windowNames, shell, connectors, sharedMachines, agentCleanup, messages, osDevice, goals, hachi, engineProbe | light pure-JS services: isolated from the core, not from each other | always |
 | `gateway` | gateway | network, crypto and pure-JS WebRTC: the attack surface | on demand |
 | `models` | models | grid's installs, downloads and commands | on demand |
 | `devices` | devices, wifi | the dials' serial ports, the fleet's lane, the voice router's worker, the Wi-Fi device | on demand |
@@ -68,8 +77,7 @@ hang or leak costs only its process. A process per risk, not per feature (`SERVI
 | `memory` | memory | an experiment: Memories across machines | on demand |
 | `router` | router | an experiment: where ⌘B sends a task, decided by Jev | on demand |
 | `cloud` | cloud | an experiment: cloud agents (Fo, Devin Cloud, Cursor Cloud), harnesses on their makers' servers | on demand |
-| `superTabs` | superTabs | the Swarm: its host, its GitHub loops and its calls to the backend | on demand, only while the Swarm is on |
-| `agentBrowser` | agentBrowser | Podman's calls and event stream, image builds, Podman's setup (`agentBrowserProcess.ts`, `core/agentBrowserLink.ts`) | on demand |
+| `agentBrowser` | agentBrowser | Podman's calls and event stream, image builds, Podman's setup, whose Browser is on (its state file), and each viewer's stream of a browser's screen: its exec into the container, the viewer's VNC bytes, the credit and the pacing (`agentBrowserProcess.ts`, `core/agentBrowserLink.ts`; the core passes a stream on and holds it to the connection that opened it, `core/browserStreams.ts`) | on demand |
 
 A fault in one of the edge host's services can cost the others in it, never the core. Every service in
 `KNOWN_SERVICES` runs out of the core's process by default, unless `HARNESSD_SERVICES` names a subset, by
@@ -108,8 +116,9 @@ master too old to run it starts it beside itself, still in its own process (`src
   with the master's token, reconnecting after core restarts. `<host>.crash` and `<host>.leak`, or a
   service's own, crash or leak the whole process: it is one process.
 - `src/core/serviceLinks.ts` is the core's side: it routes those requests to the process, answers
-  `SERVICE_UNAVAILABLE` while it is down, and holds what the service must not miss. The Store's requests
-  (`waitsThroughRestart`) wait for its process to come back instead, bounded as a first start's wait is.
+  `SERVICE_UNAVAILABLE` while it is down, and holds what the service must not miss. The Store's requests and
+  the engine probe's (`waitsThroughRestart`) wait for their process to come back instead, bounded as a first
+  start's wait is. One already in flight as the process goes is answered `SERVICE_UNAVAILABLE` all the same.
 - `src/services/searchProcess.ts` is the example to copy. `e2e/serviceProcesses.e2e.ts` is the proof
   to copy: killed, hung (SIGSTOP), leaking, crashing on every start.
 - A port the core calls asynchronously, answered when it is read, can be a request to the process: the
@@ -135,10 +144,21 @@ master too old to run it starts it beside itself, still in its own process (`src
   and work that belongs to one connection's request (a Grid harness's command) is keyed by the connection
   and request id the core gives every request (`Asker`). `e2e/serviceProcesses.e2e.ts` proves it: a create
   on a grid model while models is killed answers GRID_UNAVAILABLE, and every agent works on.
-- A service the core only gives commands to needs nothing kept for it while it is down. Workspaces
-  (`src/services/workspacesProcess.ts`, `src/core/workspacesLink.ts`) is told to name branches. A command that
-  destroys something is never held or replayed, and what it must know is asked for when it starts, never sent ahead
-  where it could go stale. `e2e/workspacesProcess.e2e.ts` proves it.
+- A service that acts on what happens to agents follows them (`CoreApi.agents.follow`, `core/agentLife.ts`; in its own
+  process `services/followLink.ts`, which asks `follow_agents` each time it connects): it is told every live agent at
+  once, then each look at one (once a run, or every look with `each`, only agents whose row has the fields in `having`),
+  its end, a stop a person or an agent made, a purge with every conversation it had, and a new agent in the pane one
+  ended in (decision 19). The core names no follower. What one in its own process must not miss while it is down (a stop,
+  a purge, a pane taken) is held for it when its process says it hears that kind (`hears` in `SERVICE_HOSTS`); a run and
+  an end its catch-up finds again. The viewers' attach and detach, the agent cleanup's stops, search's purges and the
+  agent browser all hear agents this way.
+- Workspaces (`src/services/workspacesProcess.ts`, `src/core/workspacesLink.ts`) run the git the core runs none of:
+  the folder a create asks for (a clone, a worktree, a branch) and a purge's worktree, reviewed and removed. The core
+  asks each with a deadline and checks the answer's shape; a process says it makes folders each time it connects
+  (`folders`), and until one does, a create that needs git is held and a purge's worktree is unavailable. A removal is
+  never held or replayed, and is asked again before the purge's first step that changes anything. Branch naming is a
+  command, said again on each pass, so nothing is kept for it. `e2e/workspacesFolders.e2e.ts` and
+  `e2e/workspacesProcess.e2e.ts` prove it.
 - A service that is transport rather than requests: the gateway (src/gateway/gatewayProcess.ts,
   src/core/gatewayLink.ts) carries every remote client's traffic, so it tells the core without asking
   (`service_notice`) and carries terminal bytes as binary frames on its link. The core drops what would
@@ -148,7 +168,9 @@ master too old to run it starts it beside itself, still in its own process (`src
   the edge host. It asks the core to launch literal argv or read live terminal identity through
   `core.terminals` (`core/shellQueries.ts`). A lost launch reply leaves an unconfirmed receipt and is
   never retried as a new launch. `e2e/shell.e2e.ts` keeps an attached terminal working across an edge crash.
-- The gateway owns account/backend HTTP and the single writer of `machines.json` (`gateway/accountHttp.ts`).
+- The gateway owns account/backend HTTP and the single writer of `machines.json` (`gateway/accountHttp.ts`), and the
+  account's routes of the door: the desk, the usage reports and choice, the Store's ratings and reviews, the phone's sign-in
+  code (`gateway/accountRoutes.ts`), and the keys' (`harness pair`, `group`, `devices`, …, `gateway/keyRoutes.ts`).
   The core retains its reported list for stale replies during a restart, bound to the current account.
   The Store prepares bundled harnesses before reporting `prepared`; package agents wait held until
   preparation is available, after the core reports ready. The lean bundle shares one asset file, loaded by the Store and never by the core.
@@ -158,10 +180,6 @@ master too old to run it starts it beside itself, still in its own process (`src
   asks the core over its link, in order, and hears only its own deliveries; the core lets a process deliver
   only when `TURN_DELIVERERS` (`src/core/api.ts`) names it: the experiments (below), Agent Messages and the agent
   browser.
-  The Swarm's host, which answers a person in their agent's own chat when the agent's turn ends, also hears each
-  live turn's end (`core.turns.onEnd`; `TURN_END_HEARERS`, told as `service_event` `turn_end`, never waited on), which
-  names its turn by a hash of its prompt and a number, and asks the core for the answer of that turn (`core.turns.answerOf`, the
-  `turn_answer` query, core/experimentQueries.ts).
 - A service that graduates from an experiment keeps the same questions to the core and is answered by a link of its
   own, for what it uses alone, never by the experiments' hooks: Agent Messages in the edge host
   (`src/core/messagesLink.ts`, `MESSAGES_QUERIES` in `src/core/api.ts`) is shown the agents, told how this daemon is
@@ -185,7 +203,15 @@ master too old to run it starts it beside itself, still in its own process (`src
   the process connects, and a dial attaching is shown the open questions and the working tiles. Inside,
   one device failing is that device's alone: its session's faults and a flood on its port drop it, and
   its port is looked at again later (src/cable/cableFleet.ts). `e2e/devicesProcess.e2e.ts` proves it,
-  with fake dials on pseudo-terminals. The Wi-Fi device runs beside them on a link of its own
+  with fake dials on pseudo-terminals. An app the dial reaches an outside agent through is one adapter file
+  under src/cable/hosts/ (`adapter.ts` has the interface), named once in src/services/devices.ts in the order
+  its panes are asked for; `observed.ts` and `open.ts` hold no rule about any app. An app's own reads (its
+  focused pane, its tab order) live in its adapter's file and are named once in src/services/devices.ts;
+  `observed.ts` finds an agent by a pane and names no app. An app that lists its own
+  agents is one source file beside its adapter under src/cable/hosts/, named once in src/services/devices.ts;
+  a hooked copy and a listed copy of one agent are one row (src/cable/hosts/registry.ts). Claude Code's mod and
+  `codex queue` are not adapters: they are the source's routes at the agent's own layer, asked before any pane.
+  The Wi-Fi device runs beside them on a link of its own
   (src/services/wifiProcess.ts, src/core/wifiLink.ts): its sessions are the gateway's, so the core hands
   their requests on in order and checks where each answer goes, and keeps what it reads in line of the
   service (who said hello, which transcripts and streams it follows, the focus revision) from what the
@@ -193,6 +219,22 @@ master too old to run it starts it beside itself, still in its own process (`src
   Their process runs only once there is a device (`onDemand`, asked for since protocol 4): a dial's port in
   /dev, a paired Wi-Fi device or its session, or a request for them (src/core/devicesWake.ts);
   what a Wi-Fi device sends while it starts is held by the core. `e2e/devicesOnDemand.e2e.ts` proves it.
+  The mod's inbox poll reaches the devices as a request with a deadline (src/core/deviceHookCalls.ts).
+  The core asks only while a dial watches, so a poll never starts their process; a client that goes
+  first is told as a notice. What a local tool tells the devices (first the app in front, from `harness hardware
+  watch`) goes to their own listener (src/services/devicesListener.ts), never through the core: a new message is a
+  handler registered there by its type, with its own body and rate limits, beside `front`, `tab`, the mod's
+  `attach`, the session the Claude app shows, `notice`, an agent's line from `harness device notify`, and `notify`,
+  the Notifications setting (src/services/devices.ts). Where the listener does not run (Windows, and devices inside
+  the core, as on Harness OS) `harness device notify` answers `no dial` and the dial's status carries no Notifications
+  setting, which nothing could change: a known gap. A handler of a second kind holds a stream open,
+  one of its type across every connection, and is told when the stream can take a line (`onWritable`) and why it
+  ended (`StreamEnd`): on `tabs` the devices tell the watch which terminal tab to select; on `dial` (`dialStream`),
+  opened with `standby` so it never takes the stream from another Orca, they tell Orca's Harness Device plugin
+  (plugins/harness-device-orca) whether a dial is attached and which agent it shows.
+  Which path: a route of the core's local door, where the core checks who calls (the account's, the Wi-Fi device's,
+  the add-ons'), is a `SERVICE_HTTP_ROUTES` route (above); what a tool on this computer tells the devices alone is a
+  message on their listener, which the core never routes or reads.
 - A service the core tells what happens and never waits on: the recaps (`src/services/recapsProcess.ts`,
   `src/core/recapsLink.ts`) hear each turn's lifecycle as a notification, and one they miss costs that
   turn its recap, nothing else; what would pile up on a hung process is dropped. What they put in front
@@ -201,8 +243,11 @@ master too old to run it starts it beside itself, still in its own process (`src
   `e2e/recapsProcess.e2e.ts` proves turns end on time with them killed, hung or slow, and
   `e2e/recapsCompat.e2e.ts` that the dial and the windows hear the same cards and recaps as before.
   The agent cleanup (`src/services/agentCleanupProcess.ts`, `src/core/agentCleanupLink.ts`) is told the same way
-  (a harness stopped, the person typing into one another agent started), and acts on the core only through what the
-  core lets it: `closeStarted` closes a harness another agent started and refuses any other.
+  (the person typing into a harness another agent started), hears a harness stopped as it follows agents (above), and
+  acts on the core only through what the core lets it: `closeStarted` closes a harness another agent started and refuses any other. One thing the core asks
+  it and waits for, ten seconds at most: to erase what a harness being deleted was told (`forgetTold`, the agent
+  ledger's lines, which this service reads and locks and the core never does). It is asked before anything of the
+  harness is deleted, and a delete it does not answer is refused with nothing deleted.
 
 ## On demand
 
@@ -234,8 +279,9 @@ like any other. Named in `HARNESSD_SERVICES`, it starts with the others.
   which a core asks for this process. A core that speaks an older one never asks, so the master starts the
   process as that core binds (`ServiceSupervisor.unasked`). It is 3 by default, the experiments'; the
   devices, models and the gateway became on demand at protocol 4, which may also ask before it binds; the
-  viewers at protocol 5; the agent browser at protocol 7, asked for by an agent whose Browser is on or as the core starts
-  when its state file is there (`core/agentBrowserLink.ts`). Making another process on demand needs a protocol bump, and that number in its
+  viewers at protocol 5; the agent browser at protocol 7, asked for by a request, as the core starts when its state file
+  is there, or by an agent whose row still carries the Browser flag the core kept until 2026-11-15
+  (`core/agentBrowserLink.ts`, until 2026-12-18). Making another process on demand needs a protocol bump, and that number in its
   `askedSince`. A newer core under an older master asks for a process that master started with the others,
   which changes nothing.
 - **Proof.** `e2e/experiments.e2e.ts`, `e2e/devicesOnDemand.e2e.ts`, `e2e/modelsOnDemand.e2e.ts`,
@@ -266,8 +312,7 @@ To add one:
    (`core.terminals.watch`, `services/watchLink.ts`).
 2. Its entry in `EXPERIMENTS` (`src/core/api.ts`): its requests and its saved state. And its backend routes in
    `EXPERIMENT_BACKEND_ROUTES` beside it, each a method and a whole path, `[]` when it calls none: the core signs a
-   call of its process on those and no other, and answers any other `ROUTE_NOT_DECLARED`, said in the core's log.
-   (The Swarm's is its own API whole, because an app's asks go through its service.) A new backend call is a line
+   call of its process on those and no other, and answers any other `ROUTE_NOT_DECLARED`, said in the core's log. A new backend call is a line
    there in the same pull request; `src/core/experimentQueries.spec.ts` fails on a path, or a method, written in
    the experiment's code that is not declared.
 3. Its process in `SERVICE_HOSTS` (`src/harnessd/services.ts`) with `onDemand: true`, and its runner in
@@ -296,5 +341,12 @@ from before (`src/harnessd/services.spec.ts`, `e2e/messagesSkew.e2e.ts`).
 - Do not keep state the core needs. If the core would break without your data, it is not a service.
 - Do not hold credentials. Ask `core.account`: a token (`accessToken`, with one forced refresh after a
   401) or, to seal for one of the owner's other machines, the gateway's session with it (`lane`, as the
-  fleet's lane does: `src/device/deviceLink.ts`). This machine's E2EE identity is the gateway's alone.
-- Do not write to tmux, the registry or another service's files.
+  fleet's lane does: `src/device/deviceLink.ts`). This machine's E2EE identity is the gateway's alone, and so is
+  renewing the sign-in: the core asks the gateway for the token it hands you (`lib/authRefresh.ts`).
+- Do not write to tmux, the registry or another service's files. A service never writes to Harness's tmux: no pane or
+  session Harness made. One thing is allowed in the person's own tmux (PM, 2026-11-15,
+  [the spec](../../../docs/specs/2026-11-15-device-wave1-checks.md)): the devices process may run `switch-client` (or
+  a select) to the pane a hook named, once it has checked that the pane's process is the agent's or one of its parents
+  (`cable/hosts/tmux.ts`). It names the client it moves, and never one on a session Harness made. It never types,
+  creates or closes anything there. Harness's panes and the person's can share one tmux server, so the rule is held
+  per pane and session, by the owner tag the hook reads (`hook/notify.mjs` `paneFacts`).

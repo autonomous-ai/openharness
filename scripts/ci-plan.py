@@ -28,7 +28,7 @@ _local_spec.loader.exec_module(local_checks)
 
 
 CORE = {"cli", "desktop", "tui", "backend", "companions"}
-EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty"}
+EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty", "device-app"}
 SUITES = CORE | EXTRA | {"pro"}
 JOBS = {
     "cli": {"cli-typecheck", "cli-tests"},
@@ -44,6 +44,7 @@ MANUAL = {"full": CORE, "all": SUITES, "process": set(), **{name: {name} for nam
 COMPONENTS = {"cli": "cli", "tests": "cli", "desktop": "desktop", "tui": "tui", "backend": "backend",
               "companions": "companions", "website": "website", "os": "os", "provider": "provider",
               "devices": "firmware", "mobile": "mobile", "daemons": "daemons", "pty": "pty", "term": "pty",
+              "device-app": "device-app",
               # harness-install.exe's model and steps test on Linux; its Windows half runs in windows-desktop.yml.
               "installer": "pty"}
 # Code inside another component that a suite runs as its own (its references are scanned as the suite's reads): the PTY
@@ -52,11 +53,6 @@ COMPONENTS = {"cli": "cli", "tests": "cli", "desktop": "desktop", "tui": "tui", 
 # only reads is in DEPENDS.
 ALSO = {"cli/src/lib/ptyHost/": "pty", "cli/src/lib/ptyHostBackend": "pty",
         "cli/src/lib/terminalBackend.contract.ts": "pty", "tui/vendor/": "pty", "term/": "tui"}
-# Each Swarm UI style allowlist is checked by its own component's job (check-ui-style.py --only), so
-# it is that component's input: a PR or main commit that changes it runs (never reuses) that suite.
-# Any other file in scripts/ui-style-allowlist/ stays a shared input.
-STYLE_ALLOWLISTS = {"scripts/ui-style-allowlist/desktop.json": "desktop", "scripts/ui-style-allowlist/mobile.json": "mobile"}
-ALSO.update(STYLE_ALLOWLISTS)
 # The Desktop VM runner and the measured file times it splits the shards by (task #3458): a change to either runs those
 # shards, so a split that runs short cannot merge on process checks alone.
 ALSO.update({"scripts/test-desktop.py": "desktop", "scripts/desktop-test-durations.json": "desktop"})
@@ -71,19 +67,13 @@ SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 # test_ci_plan.CrossReadTests scans the components' sources and fails on an undeclared read.
 # The desktop VM tests run in a sparse checkout of exactly these inputs (ci-source-inputs.py).
 DEPENDS = {
-    # attachments.limits.test.ts compares the attachment size limits each client declares; cliVerbs.test-support.ts
-    # reads the CLI's super-tab usage line.
     "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
-                "cli/src/lib/superTabAttachmentProxy.ts", "cli/src/superTabs/attachments.ts", "cli/src/superTabs/command.ts",
                 "daemons/frames.json",
-                "desktop/lib/measurement/", "desktop/lib/super_tabs/attachment_upload.dart", "mobile/lib/measurement/",
-                "mobile/integration_test/push_e2e/reply_push.apns", "mobile/lib/swarm/swarm_outgoing_files.dart",
+                "desktop/lib/measurement/", "mobile/lib/measurement/",
                 "provider/reference-provider/", "tests/fixtures/"),
-    # CLAUDE.md: agentInstructions.spec.ts expects '../../../CLAUDE.md' in a temporary project, and a relative path always
-    # counts as a read; the repository's own CLAUDE.md is a one-line pointer that rarely changes.
-    "cli": ("CLAUDE.md", "backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts", "desktop/",
-            "cli/e2e/harness/", "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/", "pty/", "store/",
-            "tui/"),
+    "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts", "desktop/",
+            "cli/e2e/harness/", "devices/harness-device/firmware/main/ui/habitat/focus_faces.c",
+            "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/", "pty/", "store/", "tui/"),
     "companions": ("cli/", "docs/research/2026-09-30-memory-batch-extraction-cases.json",
                    "docs/research/2026-09-30-memory-extraction-cases.json"),
     # Its generators write (and its checks may compare) these outputs.
@@ -116,22 +106,18 @@ DEPENDS = {
 # test_ci_plan.CrossReadTests scans the components' sources against these too; a path built from parts is declared by
 # hand, or named in full where it is read. A miss here runs one suite too few on a PR; reuse still sees the change.
 PR_READS = {
-    # attachments.limits.test.ts compares the attachment size limits each client declares; cliVerbs.test-support.ts
-    # reads the CLI's super-tab usage line.
     "backend": ("cli/src/lib/productHealthContract.ts", "cli/src/lib/productUsageContract.ts",
-                "cli/src/lib/superTabAttachmentProxy.ts", "cli/src/superTabs/attachments.ts", "cli/src/superTabs/command.ts",
                 "daemons/frames.json",
-                "desktop/lib/measurement/", "desktop/lib/super_tabs/attachment_upload.dart", "mobile/lib/measurement/",
-                "mobile/integration_test/push_e2e/reply_push.apns", "mobile/lib/swarm/swarm_outgoing_files.dart",
+                "desktop/lib/measurement/", "mobile/lib/measurement/",
                 "provider/reference-provider/", "tests/fixtures/"),
-    # CLAUDE.md: agentInstructions.spec.ts expects '../../../CLAUDE.md' in a temporary project, and a relative path always
-    # counts as a read; the repository's own CLAUDE.md is a one-line pointer that rarely changes.
     # cli/scripts/connector-assets.mjs, which a spec imports, names the connector icons' desktop and phone copies it writes.
     # store/: the dsh specs read its agents, viewers and starter (the scan skips it: a path outside every component).
-    "cli": ("CLAUDE.md", "backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts",
+    # focus_faces.c: roundGlyphs.spec.ts holds the daemon's copy of the dial's glyph table to the firmware's.
+    "cli": ("backend/src/lib/deviceAck.vectors.json", "backend/src/lib/deviceAckCore.ts",
             "cli/e2e/harness/", "desktop/assets/connector-icons/",
             "desktop/lib/connectors/connector_icons.dart", "desktop/lib/measurement/product_health_contract.dart",
             "desktop/test/viewer/deviceAck.vectors.json", "desktop/test/viewer/deviceHistory.vectors.json",
+            "devices/harness-device/firmware/main/ui/habitat/focus_faces.c",
             "devices/harness-device/firmware/test/vectors/", "docs/contracts/", "mobile/assets/connector-icons/",
             "mobile/lib/phone/connector_icons.dart", "mobile/test/viewer/deviceAck.vectors.json",
             "mobile/test/viewer/deviceHistory.vectors.json",
@@ -143,8 +129,11 @@ PR_READS = {
                 "companions/src/companion/roster.g.ts", "desktop/assets/daemon-art/",
                 "desktop/lib/daemons/illustrated_alignment.g.dart", "desktop/lib/daemons/plates.g.dart",
                 "desktop/lib/daemons/roster.g.dart", "mobile/lib/daemons/plates.g.dart", "mobile/lib/daemons/roster.g.dart"),
-    "firmware": ("daemons/plates/tux.mjs", "daemons/review/traits.html",
-                 "daemons/tools/illustrated/daemon_art.py", "daemons/tools/plate.mjs", "desktop/assets/model-icons/claude.png"),
+    # test_touch_ui.py holds the dial's host names and busy fuse to the daemon's (cli/src/cable/hosts/hostDetect.ts,
+    # cli/src/services/devices.ts REMIND_MS).
+    "firmware": ("cli/src/cable/hosts/hostDetect.ts", "cli/src/services/devices.ts", "daemons/plates/tux.mjs",
+                 "daemons/review/traits.html", "daemons/tools/illustrated/daemon_art.py", "daemons/tools/plate.mjs",
+                 "desktop/assets/model-icons/claude.png"),
     # Its tests run in a sparse checkout (ci.SOURCE_INPUTS["desktop"]) and read these from it. By hand: the phone's P2P and
     # E2EE files test/p2p/mobile_parity_test.dart compares (its paths are built), the phone's lockfile, store/ (its
     # agents, branding and hands-on list) and docs/images/ (the Store's example images store_discover_test.dart opens);
@@ -153,9 +142,9 @@ PR_READS = {
                 "cli/src/lib/__fixtures__/github-repository-vectors.json", "cli/src/lib/e2ee/applicationFrames.ts",
                 "cli/src/lib/e2ee/core.ts", "cli/src/lib/engineInstall.ts", "cli/src/lib/engineLaunch.ts",
                 "cli/src/lib/relayFrames.ts", "cli/src/lib/shellProtocol.ts", "cli/src/lib/viewerFrames.ts",
-                # The Windows pipe's shared proof vectors; the goal file's rows (desktop/test/swarm_goal_test.dart).
+                # The Windows pipe's shared proof vectors.
                 "cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json", "cli/src/messages/wire.ts",
-                "cli/src/sharing/protocol.ts", "cli/src/superTabs/__fixtures__/goal-rows.json", "daemons/frames.json", "docs/images/",
+                "cli/src/sharing/protocol.ts", "daemons/frames.json", "docs/images/",
                 "daemons/plates.json",
                 "daemons/roster.json", "daemons/tools/illustrated/appearance.py", "daemons/tools/illustrated/daemon_art.py",
                 "daemons/tools/illustrated/generate.py", "mobile/lib/e2ee/relay_session_crypto.dart",
@@ -164,8 +153,7 @@ PR_READS = {
                 "mobile/lib/ws/terminal_transport_plugin.dart", "mobile/pubspec.lock", "store/",
                 "tests/fixtures/shared-pane-layouts.json",
                 "website/scripts/harness-web-assets.mjs", "website/scripts/precompress.mjs"),
-    # The desktop files the phone's tests read: the Swarm models the phone carries as copies or must parse alike
-    # (swarm/desktop_parity_test.dart), the words and helpers its other tests compare; a desktop-only change to one once
+    # The desktop files the phone's tests read: the words and helpers its tests compare; a desktop-only change to one once
     # failed only in a batch, two batches later (River, 2026-11-03). test_ci_plan's
     # test_every_desktop_file_the_phone_tests_read_selects_mobile scans mobile/test and fails on one missing here.
     "mobile": ("backend/src/types/productHealthContract.ts", "backend/src/types/productUsage.ts", "cli/src/engines/",
@@ -173,9 +161,7 @@ PR_READS = {
                "cli/src/lib/productUsageSignals.ts", "cli/src/lib/relayFrames.ts", "cli/src/lib/shellProtocol.ts",
                "cli/src/lib/viewerFrames.ts", "cli/src/messages/wire.ts", "cli/src/sharing/protocol.ts",
                "daemons/banner.json", "daemons/frames.json", "daemons/plates.json", "daemons/roster.json",
-               *(f"desktop/lib/{path}" for path in (
-                   "super_tabs/model.dart", "super_tabs/controller.dart", "super_tabs/parts.dart", "super_tabs/profile_model.dart",
-                   "widgets/engine_identity.dart", "screens/swarm_screen.dart")),
+               "desktop/lib/widgets/engine_identity.dart",
                "docs/performance/"),
     # pty-checks also runs the CLI's ptyhost contract, which imports CLI code.
     # os-checks reads the CLI's dial ids (cli/src/cable/serial.ts), its version and the TUI it packages;
@@ -199,49 +185,16 @@ NOT_READ = {"cli": ("cli/e2e/",)}
 # test data, or a script run only by hand. {source: (why, {path the scan reports, or a folder "dir/" covering it})}.
 # A folder covers only paths named from the repository root: a relative read ("../../cli/x.ts") is always a read.
 NOT_READS = {
-    # A pull request's files in the merger's tests: named, never opened (CLI Swarm v4 security, 2026-11-10).
-    "cli/src/superTabs/githubMerge.spec.ts": ("test data: a pull request's file paths", {"docs/"}),
-    **{source: ("test data: owned-code paths and model names", {"desktop/lib/", "desktop/lib/super_tabs/",
-                                                                "desktop/lib/super_tabs/roster.dart"})
-       for source in ("backend/src/superTabs/commands.test.ts", "backend/integration/superTabs.test.ts")},
-    # Task #4511: a task's owned or changed paths, a PR's files, a lane's folders; none is opened.
-    **{source: ("test data: owned, changed and PR file paths", {"cli/", "companions/", "desktop/", "devices/", "docs/", "mobile/",
-                                                                 "os/", "tests/", "website/"})
-       for source in ("backend/integration/crewDispatch.test.ts", "backend/integration/superTabReviewSteps.test.ts",
-                      "backend/src/github/train.test.ts", "backend/src/superTabs/crew.test.ts",
-                      "backend/src/superTabs/dispatch.test.ts",
-                      "backend/src/superTabs/mergeTrain/plan.test.ts", "backend/src/superTabs/mergeTrain/rulesRecord.test.ts",
-                      "backend/src/superTabs/mergeTrain/train.test.ts", "backend/src/superTabs/osSteps.test.ts",
-                      "backend/src/superTabs/prHistory.test.ts",
-                      "backend/src/superTabs/prHistoryRead.test.ts", "backend/src/superTabs/process.test.ts",
-                      "backend/src/superTabs/pullRequestFiles.test.ts", "backend/src/superTabs/releaseWatch.test.ts",
-                      "backend/src/superTabs/releases.test.ts", "backend/src/superTabs/reviewSteps.test.ts",
-                      "backend/src/superTabs/reviewTable.test.ts", "backend/src/superTabs/stepOs.test.ts")},
-    **{source: ("path rules: the folders a review area or a release matches", {"cli/", "companions/", "daemons/", "desktop/",
-                                                                               "devices/", "docs/", "installer/", "mobile/",
-                                                                               "pty/", "term/", "tui/", "website/"})
-       for source in ("backend/src/superTabs/releases.ts",
-                      "backend/src/superTabs/reviewTable.ts")},
-    **{source: ("test data: a task's owned paths", {"docs/"})
-       for source in ("cli/src/superTabs/routeCheapFirst.spec.ts", "cli/src/superTabs/routeCommand.spec.ts")},
     # cli-tests runs vitest on src/ only; these start the real backend with its installed prisma.
     **{source: ("end-to-end and local stack scripts, run by hand", {"backend/"})
        for source in ("cli/e2e/harness/realBackend.ts", "cli/scripts/box-claim-e2e.ts", "cli/scripts/local-stack-peer.ts",
                       "cli/scripts/remote-viewers-stack.ts", "cli/scripts/share-harness-e2e.ts")},
-    "backend/src/superTabs/refusalLog.test.ts": ("test data: client versions ('cli/0.5.34', 'desktop/1.3.57')",
-                                                 {"cli/", "desktop/"}),
     "cli/src/engines/__fixtures__/other-runtime.golden.json": ("test data: a model name", {"provider/"}),
-    "cli/src/lib/agentInstructions.spec.ts": ("test data: instruction files in a temporary project", {"AGENTS.md", "docs/"}),
-    **{source: ("test data: a task's owned paths", {"desktop/"})
-       for source in ("cli/src/superTabs/fixtures/read/legacy-tab-lead.json", "cli/src/superTabs/fixtures/read/parts-lead.json",
-                      "cli/src/superTabs/fixtures/read/status-lead.json", "cli/src/superTabs/service.spec.ts")},
     "cli/src/lib/sessionSearch/turns.spec.ts": ("test data: a tool call's file path", {"desktop/"}),
     "cli/src/lib/handoffChangedFiles.spec.ts": ("test data: changed file names", {"docs/"}),
     "cli/src/lib/opencodeOneShot.spec.ts": ("test data: a model name", {"provider/"}),
     "cli/src/lib/runtimeProfile.spec.ts": ("test data: a model name", {"provider/"}),
     "cli/src/lib/transcriptReader.spec.ts": ("test data: a tool result's text", {"devices/"}),
-    "cli/src/superTabs/githubTrain.spec.ts": ("test data: a pull request's changed files", {"docs/"}),
-    "cli/src/superTabs/scoreboard.spec.ts": ("test data: the files landings touched most", {"backend/", "docs/"}),
     "companions/src/application/modelProfile.spec.ts": ("test data: a model name", {"provider/"}),
     "companions/src/memory/lessons/signals.spec.ts": ("test data: a test id", {"tests/"}),
     "desktop/tool/native_benchmark/connected_stack.mjs": ("a benchmark run by hand against the built CLI", {"cli/"}),
@@ -252,9 +205,6 @@ NOT_READS = {
                                                   "checkout holds, each declared in ci.SOURCE_INPUTS", {"mobile/"}),
     "desktop/test/community_publish_test.dart": ("test data: a file in a temporary folder", {"docs/"}),
     "desktop/test/runtime_model_name_test.dart": ("test data: a model name", {"provider/"}),
-    "desktop/test/swarm_instructions_shared_test.dart": ("test data: a project's instruction file names",
-                                                         {"AGENTS.md", "CLAUDE.md"}),
-    "desktop/test/super_tab_read_fixtures/first_load.json": ("test data: a task's owned paths", {"docs/design/"}),
     "mobile/lib/demo/sample_scripts.dart": ("demo transcript text", {"tests/"}),
     "os/tests/build-update-fixture.py": ("the CLI bundle a hand-run build copies from its work folder", {"cli/"}),
     "tui/src/runtime_model.rs": ("test data: a model name", {"provider/"}),
@@ -320,8 +270,6 @@ def inert(path):
 
 def shared_input(path):
     """Why a changed path invalidates every suite, or None."""
-    if path in STYLE_ALLOWLISTS:
-        return None
     if path.startswith(SHARED_PREFIXES) or path in SHARED_FILES:
         return "workflow, CI script, merge tool or repository setting"
     if PurePosixPath(path).name in LOCKS_AND_TOOLCHAINS:
@@ -361,8 +309,7 @@ def update_parents(root, head, base):
 def own_shared_change(root, head, base):
     """A shared input this PR itself changes (its own CI runs its own planner), or None."""
     own = changed_paths(root, git(root, "merge-base", base, head), head)
-    return next((path for path in own if (path.startswith(SHARED_PREFIXES) or path in SHARED_FILES)
-                 and path not in STYLE_ALLOWLISTS), None)
+    return next((path for path in own if path.startswith(SHARED_PREFIXES) or path in SHARED_FILES), None)
 
 
 def reuse_blocker(root, suite, origin, head):
@@ -415,30 +362,6 @@ def batch_members(root, head, base):
         raise Rerun(f"its first-parent line has more than {BATCH_MEMBERS_MAX} merges before the base branch")
     if not members:
         raise Rerun("it merges no member PR")
-    return members[::-1]
-
-
-# Harness's train (cli/src/superTabs/githubTrain.ts) lands ready pull requests together from a branch under this prefix,
-# one merge commit for each, and its body carries each member's local check receipts (trainReceipts).
-TRAIN_BRANCH = "harness-train/"
-
-
-def train_members(root, head, base):
-    """Each head a train branch merged, in merge order, with the local checks its merge needs: read from the branch's
-    own merges, never from the pull request's text. What a merge adds is its member's to prove, beyond the member's own
-    commits too, so a receipt is asked for every path the train changes."""
-    members, commit = [], head
-    for _ in range(local_checks.TRAIN_MAX + 1):
-        if is_ancestor(root, commit, base):
-            break
-        parents = git(root, "rev-list", "--parents", "-n", "1", commit).split()[1:]
-        if len(parents) != 2:
-            raise ValueError(f"train commit {commit[:12]} merges no pull request")
-        first, second = (sha(value) for value in parents)
-        members.append(dict(head=second, local_checks=local_checks.required_checks(changed_paths(root, first, commit))))
-        commit = first
-    else:
-        raise ValueError(f"train has more than {local_checks.TRAIN_MAX} merges before the base branch")
     return members[::-1]
 
 
@@ -829,13 +752,10 @@ def make_plan(root, event_name, event, scope="full", source=None, evidence=None)
         git(root, "merge-base", "--is-ancestor", base, head)
     elif event_name not in {"workflow_dispatch", "workflow_call"}:
         raise ValueError("unsupported CI event")
-    members = []
     if base:
         # Treat renames as deletion + addition so both input boundaries apply.
         paths = changed_paths(root, base, head)
         suites, reasons = select(paths)
-        if event_name == "pull_request" and str(event["pull_request"]["head"].get("ref", "")).startswith(TRAIN_BRANCH):
-            members = train_members(root, head, base)
         if event_name == "merge_group":
             suites = set()  # The PR run tested these changes; releases test the rest.
     else:
@@ -850,7 +770,6 @@ def make_plan(root, event_name, event, scope="full", source=None, evidence=None)
                 tree=git(root, "rev-parse", "HEAD^{tree}"), paths=paths, reasons=reasons,
                 suites=sorted(suites), required_jobs=sorted(required), reused=reused, reuse=reuse,
                 local_checks=local_checks.required_checks(paths) if event_name == "pull_request" else [],
-                train_members=members,
                 manual_acceptance="Review still selects relevant native, real-engine, hardware and visual acceptance.")
 
 
@@ -882,12 +801,12 @@ def verify(plan, needs, source):
     for job, result in needs.items():
         if result.get("result") not in {"success", "skipped"}:
             raise ValueError(f"CI job did not complete successfully: {job}")
-    heads = local_checks.planned_heads(plan)
+    required = local_checks.planned_checks(plan)
     try:
         receipts = json.loads(needs.get("process-checks", {}).get("outputs", {}).get("local_receipts", "[]"))
     except (ValueError, TypeError):
         receipts = None  # No receipt: validate_receipts names what is missing.
-    receipts = local_checks.validate_receipts(heads, receipts)
+    receipts = local_checks.validate_receipts(plan["head"], required, receipts)
     return dict(schema=1, kind="ci-required", status="passed", source_sha=plan["head"],
                 source_tree=plan["tree"], event=plan["event"], base=plan["base"],
                 suites=suites, required_jobs=sorted(expected), results={k: v["result"] for k, v in needs.items()},

@@ -9,12 +9,13 @@
  * (or parks it, when it keeps crashing), every service in it connected again.
  */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
+import { Ledger, ledgerPath } from '../src/agentClient/ledger.js'
 import { fakeJwt, installFakeGrid } from '../src/lib/__fixtures__/fakeGrid.js'
 
 type Engine = 'claude' | 'codex'
@@ -257,6 +258,68 @@ describe('the edge host: several services in one process of their own', () => {
     client.close()
   })
 
+  // The probe of this machine's engines left the core's process for this one (the audit of 2026-11-12): a full
+  // probe starts up to sixteen login shells.
+  it('names the engines here, and a probe asked while it is down waits for it to be back', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const connected = () => d.log().split('[services] engineProbe connected').length - 1
+    await until('the engine probe to connect to the core', () => connected() >= 1 || null, 30_000, 200)
+    const installed = async () => {
+      const answer = await client.request('engines_probe', { engines: ['claude', 'codex'] }, 60_000)
+      expect(answer.error, JSON.stringify(answer)).toBeUndefined()
+      return answer.engines.map((entry: Record<string, any>) => [entry.engine, entry.installed])
+    }
+    expect(await installed()).toEqual([['claude', true], ['codex', true]])
+    // A caller told nothing would take it for no engine here: asked while the host is gone, the answer waits for the one
+    // the master starts.
+    const before = edgePids(d)
+    expect(before).toHaveLength(1)
+    for (const pid of before) process.kill(pid, 'SIGKILL')
+    await until('the core to see the edge host gone', async () => (await client.request('fs_list_dir', {}, 30_000)).error === 'SERVICE_UNAVAILABLE' || null, 30_000, 50)
+    expect(await installed()).toEqual([['claude', true], ['codex', true]])
+    expect(connected()).toBe(2)
+    expect(edgePids(d).some((pid) => !before.includes(pid))).toBe(true)
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  // A delete erases the opening words of what the harness was told (`harness tell`), kept in the agent ledger. The
+  // agent cleanup does it here (the audit of 2026-11-12): the core never reads that file, nor waits on its lock.
+  it('a delete erases what the harness was told through the agent cleanup, and is refused with nothing deleted while it cannot', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'claude', 'delete-told')
+    await turn(client, agent.id, 'a turn to delete')
+    await until('every edge service to connect', () => edgeConnections(d) >= 1 && d.log().includes('[services] agentCleanup connected') || null, 30_000, 200)
+    const ledger = new Ledger(ledgerPath(d.dataDir))
+    const told = (agentId: string, probe: string) => ledger.append({ at: Date.now(), by: { machineId: 'm', agentId: 'lead' }, told: { machineId: 'm', agentId }, probe })
+    told(agent.id, 'the words of a tell')
+    told('another', 'what another harness was told')
+    const target = { agentId: agent.id, sessionId: agent.sessionId, createdAt: Date.parse(agent.createdAt) }
+    const remove = async () => {
+      const review = await client.request('agent_purge', { ...target, mode: 'inspect' }, 60_000)
+      return client.request('agent_purge', { ...target, mode: 'delete', reviewId: review.reviewId }, 90_000)
+    }
+    // Held still: the core waits its ten seconds for the erase, asked before anything is deleted, and refuses the
+    // delete in words the person can act on. The conversation is still there.
+    const held = edgePids(d)
+    expect(held).toHaveLength(1)
+    for (const pid of held) process.kill(pid, 'SIGSTOP')
+    const refused = await remove()
+    expect(refused, JSON.stringify(refused)).toMatchObject({ error: 'DELETE_REFUSED', sessionDeleted: false,
+      detail: 'Harness could not erase what this harness was told, so nothing was deleted. The harness is stopped; refresh before trying again.' })
+    expect((await row(client, agent.id))?.sessionId).toBe(agent.sessionId)
+    for (const pid of held) { try { process.kill(pid, 'SIGCONT') } catch { /* the master's watch had killed it already */ } }
+    // Asked again once the cleanup answers: erased, with every other line kept, and the harness is gone.
+    await until('the delete to go through', async () => (await remove()).deleted === true || null, 90_000, 1_000)
+    const kept = readFileSync(ledgerPath(d.dataDir), 'utf8')
+    expect(kept).not.toContain('the words of a tell')
+    expect(kept).toContain('what another harness was told')
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
   it('hung, it is killed by the master\'s heartbeat watch and started again; the core goes on', async () => {
     const d = await fresh({ HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '2000' })
     const client = await LocalClient.connect(d)
@@ -395,7 +458,7 @@ describe('models in its own process', () => {
     client.close()
   })
 
-  it('models killed during discovery: existing assignments stay, new marked processes bind without waiting, and later learn their grid', async () => {
+  it('models killed during discovery: existing assignments stay, new processes bind without waiting, and a Codex\'s argv later gives its grid', async () => {
     const holdDir = mkdtempSync(join(tmpdir(), 'assignment-hold-'))
     const hold = join(holdDir, 'hold')
     try {
@@ -403,11 +466,9 @@ describe('models in its own process', () => {
       const client = await LocalClient.connect(d)
       const grid = { networkId: 'assignment-e2e', networkName: 'Assignment', baseUrl: 'https://fixture.invalid/g/assignment/relay/v1', apiKey: 'fixture-key', model: 'Small-Q4' }
       const known = await createOn(d, client, 'claude', 'assignment-known', grid)
-      const knownAssignment = { baseUrl: grid.baseUrl.replace(/\/v1$/, ''), model: grid.model }
-      await until('the existing Claude assignment to reflect its real endpoint', async () => {
-        const now = await row(client, known.id)
-        return now?.grid?.baseUrl === knownAssignment.baseUrl ? now : null
-      }, 15_000, 200)
+      // The launch record's grid, as the app sent it.
+      const knownAssignment = { baseUrl: grid.baseUrl, model: grid.model }
+      expect((await row(client, known.id))?.grid).toMatchObject(knownAssignment)
       writeFileSync(hold, '')
       for (const pid of modelsPids(d)) process.kill(pid, 'SIGKILL')
       await until('models disconnected', () => d.log().includes('[services] models disconnected') || null, 15_000, 100)
@@ -437,10 +498,13 @@ describe('models in its own process', () => {
       expect((await row(client, known.id))?.grid).toMatchObject(knownAssignment)
       for (const agent of discovered) expect((await row(client, agent.id))?.grid ?? null).toBeNull()
       rmSync(hold)
-      for (const agent of discovered) await until(`${agent.engine} classified after models returns`, async () => {
-        const now = await row(client, agent.id)
-        return now?.sessionId === agent.sessionId && now.grid?.baseUrl === grid.baseUrl && now.grid?.model === grid.model ? now : null
+      const [claude, codex] = discovered
+      await until('codex classified from its argv after models returns', async () => {
+        const now = await row(client, codex.id)
+        return now?.sessionId === codex.sessionId && now.grid?.baseUrl === grid.baseUrl && now.grid?.model === grid.model ? now : null
       }, 45_000, 250)
+      // Its endpoint is in its environment alone, which the daemon never reads.
+      expect((await row(client, claude.id))?.grid ?? null).toBeNull()
       expect(d.coresStarted()).toBe(1)
       client.close()
     } finally { rmSync(holdDir, { recursive: true, force: true }) }

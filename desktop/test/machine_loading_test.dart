@@ -4,6 +4,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/logging/app_log.dart';
+import 'package:harness/logging/log_stream.dart';
+import 'package:harness/logging/log_stream_sinks.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/color_palette.dart';
 import 'package:harness/state/app_state.dart';
@@ -59,6 +62,7 @@ class DiscoveryConnection extends WsConn {
   final capabilities = <Completer<Map<String, dynamic>>>[];
   final themes = <Map<String, dynamic>>[];
   bool refuseTheme = false;
+  WsRequestFailure? themeFailure;
   final timeouts = <String, Duration>{};
   final sent = <String>[];
   final frames = <({String type, Map<String, dynamic> payload})>[];
@@ -85,7 +89,9 @@ class DiscoveryConnection extends WsConn {
         capabilities.add(response);
       case 'theme_set':
         themes.add(payload);
-        if (refuseTheme) {
+        if (themeFailure case final failure?) {
+          response.completeError(failure);
+        } else if (refuseTheme) {
           response.completeError(StateError('daemon predates theme_set'));
         } else {
           response.complete({'applied': true});
@@ -485,6 +491,31 @@ void main() {
 
       expect(connection.themes, hasLength(1));
       expect(app.lastError, isNull);
+    });
+
+    test('a refused theme is logged by its code', () async {
+      final previousLog = appLog;
+      final stream = LogStream();
+      appLog = StreamAppLog(stream);
+      addTearDown(() => appLog = previousLog);
+      connection.themeFailure = const WsRequestFailure(
+        responseType: 'theme_set_result',
+        code: 'NOT_APPLIED',
+        detail: 'zebra-orchard is busy',
+      );
+      machine.connectionStatus = ConnectionStatus.connected;
+      grid.AppTheme.palette.value = HarnessPalette.slate;
+      await _tick();
+      await _tick();
+
+      final line = stream.entries.singleWhere(
+        (e) => e.message.startsWith('theme_set'),
+      );
+      expect(line.message, 'theme_set not applied on ${_machine.machineId}');
+      expect(line.error, 'theme_set_result: NOT_APPLIED');
+      for (final e in stream.entries) {
+        expect('${e.message} ${e.error}', isNot(contains('zebra-orchard')));
+      }
     });
   });
 }

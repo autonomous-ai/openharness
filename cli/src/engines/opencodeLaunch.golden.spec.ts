@@ -13,7 +13,6 @@ vi.mock('../lib/createAgentPane.js', () => ({ createAndRegisterPane: async (inpu
   return { ok: false, error: 'RECORDED', detail: 'No pane is opened by this golden.' }
 } }))
 vi.mock('../lib/processTable.js', async real => ({ ...await real<object>(), processArgs: async () => '' }))
-vi.mock('../lib/gatewayRuntime.js', async real => ({ ...await real<object>(), probeGatewayRuntime: async () => ({ kind: 'none' }) }))
 vi.mock('../lib/binaryOnPath.js', async real => {
   const actual = await real<typeof import('../lib/binaryOnPath.js')>()
   return { ...actual, resolveBinaryOnPath: (name: string) => name === 'tmux' ? '/fixture/bin/tmux' : actual.resolveBinaryOnPath(name) }
@@ -95,7 +94,7 @@ it('records create, fork, relaunch and actual retarget dispatch before the extra
   const { buildEngineLaunchArgv } = await import('../lib/engineLaunch.js')
   const { env } = await import('../config/env.js')
   const world = { dataDir: join(root, 'adapter_data_dir'), machine: async () => ({ hermesSystemManaged: false, opencodeMajor: await opencodeMajorVersion() }),
-    capabilities: async () => ({ sessionEnv: true }), readCodexConfig: () => null, setGridLaunch: () => {} }
+    capabilities: async () => ({ sessionEnv: true }), readCodexConfig: () => null, setGridLaunch: () => {}, projectsRoot: root }
   const shapes = launchShapes(world)
   const row = (engine: AgentEngine, named = false): RegisteredSession => ({ agentId: 'fixture-agent', sessionId: 'ses_fixture', engine, cwd: work,
     registeredAt: Date.now(), active: true, runtimes: [{ backend: 'tmux', paneId: '%4' }], agent: named ? 'reviewer' : null,
@@ -104,7 +103,7 @@ it('records create, fork, relaunch and actual retarget dispatch before the extra
   }) as unknown as RegisteredSession
   const createRest = { createBackend: {}, registry: {}, hooksDisabled: true, hookPort: 4242,
     installOpencodePlugin: async () => true, terminalHintMachineName: () => 'fixture-machine', blocksFolder: () => false,
-    gridSetup: () => null, privateGridName: async () => null, watchNewPane: async () => {}, announceSession: () => {}, attachDsh: () => {},
+    gridSetup: () => null, privateGridName: async () => null, watchNewPane: async () => {}, announceSession: () => {}, attach: () => {},
   }
   for (const version of ['v1', 'v2', 'unknown', 'missing']) {
     vi.stubEnv('OPENCODE_PATH', join(root, 'bin', version))
@@ -120,7 +119,7 @@ it('records create, fork, relaunch and actual retarget dispatch before the extra
       resetCase()
       const fork = await shapes.fork({ createBackend: {}, registry: { byAgent: () => source },
         mirror: { isBusy: () => false, recentAsks: () => ['fixture ask'], recent: () => [], lastFullText: () => 'fixture answer' },
-        pendingForkInherit: new Map(), watchNewPane: async () => {}, announceSession: () => {}, attachDsh: () => {},
+        pendingForkInherit: new Map(), watchNewPane: async () => {}, announceSession: () => {}, attach: () => {},
       } as never)({ agentId: source.agentId, name: null, prompt: 'try another approach' })
       actual[`${version} fork named=${named}`] = normalize({ result: fork, panes: paneAnswer(), native: nativeCalls() })
 

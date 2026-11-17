@@ -110,11 +110,20 @@ interface QueuedInput {
   expiresAt: number
 }
 
-/** A message held while its agent changes host (`MoveGate`): submitted as itself at release, unless cancelled. */
+/** A pending message retains capacity until its move, cancel or earlier-write callback is consumed. */
 interface HeldInput {
   deliveryId?: string
+  receipt?: MessageReceipt
   bytes: number
   cancelled: boolean
+}
+
+/** Burst profiling found discarded splice results on every consumed ticket. Preserve order without that allocation. */
+function removeHeld(held: HeldInput[], item: HeldInput): void {
+  const at = held.indexOf(item)
+  if (at < 0) return
+  for (let i = at; i < held.length - 1; i++) held[i] = held[i + 1]
+  held.pop()
 }
 
 interface InputState {
@@ -131,8 +140,6 @@ interface InputState {
   awaitingContent: string | null
   /** The receipt of the person's message typed last, until it is settled ([settle]). */
   awaitingReceipt?: MessageReceipt
-  /** Identical follow-ups still own different asynchronous composer observations. */
-  personWriteVersion?: number
   controlLocked: boolean
   /** Cancels still pressing their Ctrl-C: a message sent meanwhile waits for it, in `held` (`interrupting`). */
   cancelling: number
@@ -141,8 +148,7 @@ interface InputState {
   afterCancel: { writes: Array<() => void>; sent: Array<() => void> }
   settling: boolean
   queue: QueuedInput[]
-  /** The messages the move gate holds for this agent, in arrival order. Counted against the queue's limits,
-   *  and cancellable as queued ones are. */
+  /** Messages waiting on a move, cancel or earlier write. Counted against the queue's limits. */
   held: HeldInput[]
   timer: NodeJS.Timeout | null
   settleTimer: NodeJS.Timeout | null
@@ -226,14 +232,6 @@ export class SessionInputController {
     return this.deps.submission.policy(engine)?.typesWhileBusy === true
   }
 
-  private swarmTypesWhileBusy(engine: string, deliveryId?: string): boolean {
-    return !!deliveryId?.startsWith('team:service:superTabs:') && this.typesWhileBusy(engine)
-  }
-
-  private checksWhileBusy(session: RegisteredSession, state: InputState): boolean {
-    return this.swarmTypesWhileBusy(session.engine, state.deliveryId)
-      || (!state.deliveryId && this.swarmTypesWhileBusy(session.engine, state.queue[0]?.deliveryId))
-  }
 
   /** Controller dependencies take the stable agent id, never a backend route. */
   private controlSession(id: string): RegisteredSession | undefined {
@@ -254,9 +252,14 @@ export class SessionInputController {
   /** Waits, bounded, for the engine's reader to start (`engineStarting`), saying so once to the person (a team delivery is
    *  automatic: its mailbox hears how it ends); one that does not come in time is logged by name. Whether it waited: the agent may
    *  have gone meanwhile, which its caller checks again. */
-  private async engineReady(sessionId: string, session: RegisteredSession, team: boolean): Promise<boolean> {
+  private engineReady(sessionId: string, session: RegisteredSession, team: boolean): Promise<true> | false {
     const starting = this.deps.engineStarting?.(session)
+    // Keep ready input synchronous: profiling found a needless Promise and continuation on every message.
     if (!starting) return false
+    return this.waitForEngine(sessionId, session, team, starting)
+  }
+
+  private async waitForEngine(sessionId: string, session: RegisteredSession, team: boolean, starting: Promise<boolean>): Promise<true> {
     console.warn(`[inject] ${sid(sessionId)} waiting · engine=${session.engine} · its reader is starting`)
     if (!team) this.deps.onWaiting?.(sessionId, 'engine_starting')
     const since = (this.deps.now ?? Date.now)()
@@ -356,10 +359,10 @@ export class SessionInputController {
   /** Revoke queued work only; a paste already in progress cannot be recalled. */
   cancelDelivery(deliveryId: string): boolean {
     for (const [sessionId, state] of this.states) {
-      const held = state.held.findIndex((item) => item.deliveryId === deliveryId)
+      const held = state.held.findIndex((item) => item.deliveryId === deliveryId && !item.cancelled)
       if (held >= 0) {
         state.held[held].cancelled = true
-        state.held.splice(held, 1)
+        // Its callback still retains the content; cancellation must not allow unbounded pending writes.
         this.delivery(sessionId, deliveryId, 'rejected', 'cancelled')
         return true
       }
@@ -390,12 +393,11 @@ export class SessionInputController {
       const bytes = Buffer.byteLength(content, 'utf8')
       if (this.refusedFull(sessionId, state, bytes, deliveryId, said)) return
       console.log(`[inject] ${sid(sessionId)} held · the agent is changing host · depth=${state.held.length + 1}`)
-      const item: HeldInput = { deliveryId, bytes, cancelled: false }
+      const item: HeldInput = { deliveryId, receipt: said, bytes, cancelled: false }
       state.held.push(item)
       gate.enqueue(agentId, async () => {
-        const at = state.held.indexOf(item)
-        if (at >= 0) state.held.splice(at, 1)
-        if (!item.cancelled) await this.submitNow(sessionId, content, deliveryId, said)
+        removeHeld(state.held, item)
+        if (!item.cancelled && this.states.get(sessionId) === state) await this.submitNow(sessionId, content, deliveryId, said)
       })
       return
     }
@@ -423,14 +425,10 @@ export class SessionInputController {
     }
     this.dropExpired(sessionId, state)
     if (state.controlLocked
-      || (this.swarmTypesWhileBusy(session.engine, deliveryId) && (state.writes || state.queue.length > 0))
-      || (deliveryId && (state.deliveryId || state.dispatching || state.awaitingFingerprint
-        || (!this.swarmTypesWhileBusy(session.engine, deliveryId) && (state.turnOpen || state.settling))))
+      || (deliveryId && (state.deliveryId || state.dispatching || state.awaitingFingerprint || state.turnOpen || state.settling))
       || (!this.typesWhileBusy(session.engine) && (state.turnOpen || state.awaitingFingerprint || state.settling))) {
       console.log(`[inject] ${sid(sessionId)} queued · engine=${session.engine} · depth=${state.queue.length + 1}`)
       this.enqueue(sessionId, state, content, deliveryId, said)
-      if (this.swarmTypesWhileBusy(session.engine, deliveryId) && state.turnOpen
-        && !state.deliveryId && state.awaitingFingerprint && !state.timer) this.armSubmitCheck(sessionId, session, state)
       return Promise.resolve()
     }
     this.delivery(sessionId, deliveryId, 'queued')
@@ -442,26 +440,44 @@ export class SessionInputController {
     // agent as it is by then, which a restart in between may have changed.
     // With nothing in flight the write starts at once, so a cancel or a control request that follows
     // the submit sees it, as before.
-    return this.scheduleWrite(sessionId, session, content, deliveryId, said)
+    return this.scheduleWrite(sessionId, content, deliveryId, said)
   }
 
-  private scheduleWrite(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, receipt?: MessageReceipt): Promise<void> {
+  private scheduleWrite(sessionId: string, content: string, deliveryId?: string, receipt?: MessageReceipt): Promise<void> {
     const state = this.state(sessionId)
+    let pending: HeldInput | undefined
+    if (state.writes) {
+      const bytes = Buffer.byteLength(content, 'utf8')
+      if (this.refusedFull(sessionId, state, bytes, deliveryId, receipt)) return Promise.resolve()
+      pending = { deliveryId, receipt, bytes, cancelled: false }
+      state.held.push(pending)
+    }
     const write = (): Promise<void> => {
+      if (pending) {
+        removeHeld(state.held, pending)
+        if (pending.cancelled) return Promise.resolve()
+      }
+      if (this.states.get(sessionId) !== state) return Promise.resolve()
       // On its way before a cancel began, its turn to be typed came while the Ctrl-C is: it goes on after it.
       if (state.cancelling) {
-        this.holdForCancel(sessionId, state, 0, deliveryId, receipt, 'writes',
-          () => void this.scheduleWrite(sessionId, session, content, deliveryId, receipt))
+        this.holdForCancel(sessionId, state, pending?.bytes ?? Buffer.byteLength(content, 'utf8'), deliveryId, receipt, 'writes',
+          () => void this.scheduleWrite(sessionId, content, deliveryId, receipt))
         return Promise.resolve()
       }
-      return this.inject(sessionId, this.controlSession(sessionId) ?? session, content, deliveryId, receipt)
+      const current = this.controlSession(sessionId)
+      if (!current) {
+        this.delivery(sessionId, deliveryId, 'rejected', 'agent_gone')
+        receipt?.('agent_gone')
+        if (!deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This harness is no longer available.')
+        return Promise.resolve()
+      }
+      return this.inject(sessionId, current, content, deliveryId, receipt)
     }
     const running = state.writes ? state.writes.then(write, write) : write()
-    const settled: Promise<void> = running.catch(() => {}).then(() => {
-      if (state.writes !== settled) return
-      state.writes = undefined
-      if (this.states.get(sessionId) === state && state.queue[0]?.deliveryId?.startsWith('team:service:superTabs:')) this.drainOne(sessionId, state)
-    })
+    const clear = (): void => {
+      if (state.writes === settled) state.writes = undefined
+    }
+    const settled = running.then(clear, clear)
     state.writes = settled
     return settled
   }
@@ -499,7 +515,7 @@ export class SessionInputController {
       if (released) return
       released = true
       const current = this.states.get(sessionId)
-      if (!current) return
+      if (current !== state) return
       current.controlLocked = false
       this.drainOne(sessionId, current)
     }
@@ -523,20 +539,6 @@ export class SessionInputController {
     // an envelope of its own), and is settled once it has; every other engine's record is compared whole.
     const observedFingerprint = fingerprint(userMessage)
     const engineReads = !!session && !!this.deps.submission.policy(session.engine)
-    if (session && this.swarmTypesWhileBusy(session.engine, state.deliveryId) && state.deliveryFingerprint
-      && state.deliveryFingerprint !== observedFingerprint && !state.writing) {
-      // The native queue can start an earlier follow-up after the next has been pasted.
-      // Only a matching echo settles this delivery; another start must leave its check armed.
-      state.turnOpen = true
-      const expected = state.deliveryFingerprint, deliveryId = state.deliveryId
-      void this.echoes(session, userMessage, expected).then(matched => {
-        if (matched && this.states.get(sessionId) === state && state.deliveryId === deliveryId
-          && state.deliveryFingerprint === expected && state.awaitingContent !== null) {
-          this.onTurnStarted(sessionId, state.awaitingContent)
-        }
-      })
-      return
-    }
     if (state.deliveryId && state.writing) state.observedStart = userMessage
     else if (state.deliveryId && state.deliveryFingerprint) {
       const expected = state.deliveryFingerprint
@@ -614,13 +616,6 @@ export class SessionInputController {
 
   onTurnEnded(sessionId: string): void {
     const state = this.state(sessionId)
-    const current = this.controlSession(sessionId)
-    if (current && this.swarmTypesWhileBusy(current.engine, state.deliveryId) && state.awaitingFingerprint) {
-      // Ending the preceding turn says nothing about a follow-up already in the native queue.
-      state.turnOpen = false
-      this.armSubmitCheck(sessionId, current, state)
-      return
-    }
     if (!state.dispatching) this.finishDelivery(sessionId, state, 'unknown', 'turn_ended_without_start')
     // Typed while a turn ran, the engine holds it as that turn's follow-up; otherwise no turn was seen for it.
     this.settle(state, state.turnOpen ? 'taken' : 'turn_ended')
@@ -705,14 +700,13 @@ export class SessionInputController {
   /** Hold one message for the cancel pressing now, counted against the queue's limits and cancellable as queued ones are. */
   private holdForCancel(sessionId: string, state: InputState, bytes: number, deliveryId: string | undefined,
     receipt: MessageReceipt | undefined, kind: 'writes' | 'sent', go: () => void): void {
-    if (bytes && this.refusedFull(sessionId, state, bytes, deliveryId, receipt)) return
-    const item: HeldInput = { deliveryId, bytes, cancelled: false }
+    if (this.refusedFull(sessionId, state, bytes, deliveryId, receipt)) return
+    const item: HeldInput = { deliveryId, receipt, bytes, cancelled: false }
     state.held.push(item)
     console.log(`[inject] ${sid(sessionId)} held · a cancel is pressing Ctrl-C · depth=${state.held.length}`)
     state.afterCancel[kind].push(() => {
-      const at = state.held.indexOf(item)
-      if (at >= 0) state.held.splice(at, 1)
-      if (!item.cancelled) go()
+      removeHeld(state.held, item)
+      if (!item.cancelled && this.states.get(sessionId) === state) go()
     })
   }
 
@@ -739,6 +733,15 @@ export class SessionInputController {
         this.delivery(sessionId, item.deliveryId, 'rejected', 'agent_gone')
         item.receipt?.('agent_gone')
       }
+      state.queue = []
+      for (const item of state.held) {
+        if (item.cancelled) continue
+        item.cancelled = true
+        this.delivery(sessionId, item.deliveryId, 'rejected', 'agent_gone')
+        item.receipt?.('agent_gone')
+      }
+      state.held = []
+      state.afterCancel = { writes: [], sent: [] }
       state.cancelled = true
     }
     this.states.delete(sessionId)
@@ -747,8 +750,16 @@ export class SessionInputController {
   /** Preserve the established injection path for every caller that opts out of receipts. */
   private async injectLegacy(sessionId: string, session: RegisteredSession, content: string, receipt?: MessageReceipt): Promise<void> {
     const state = this.state(sessionId)
-    state.personWriteVersion = (state.personWriteVersion ?? 0) + 1
-    if (!(await this.deps.validateRuntime(session))) {
+    const current = (): boolean => this.states.get(sessionId) === state && this.controlSession(sessionId) !== undefined
+    const gone = (outcome: MessageOutcome = 'agent_gone'): void => {
+      receipt?.(outcome)
+      if (this.states.get(sessionId) !== state) return
+      console.warn(`[inject] ${sid(sessionId)} abort · agent no longer available`)
+      this.deps.onError(sessionId, 'This harness is no longer available.')
+    }
+    const valid = await this.deps.validateRuntime(session)
+    if (!current()) { gone(); return }
+    if (!valid) {
       console.warn(`[inject] ${sid(sessionId)} abort · engine=${session.engine} · process not running`)
       receipt?.('runtime_gone')
       this.deps.onError(sessionId, 'This agent process is no longer running.')
@@ -770,22 +781,28 @@ export class SessionInputController {
       // case. It does discard a draft a human was typing in the terminal — but pasting into that draft
       // would corrupt it into a run-on prompt anyway, which is worse and harder to notice.
       await this.deps.sendKey(session.agentId, 'C-u')
+      if (!current()) { gone(); return }
     }
-    if (await this.engineReady(sessionId, session, false)) {
+    const waitingForEngine = this.engineReady(sessionId, session, false)
+    if (waitingForEngine) {
+      await waitingForEngine
       // Seconds may have passed: the agent may have been closed, or its process ended.
-      if (this.states.get(sessionId) !== state || this.deps.getSession(sessionId) === undefined) return
-      if (!(await this.deps.validateRuntime(session))) {
+      if (!current()) { gone(); return }
+      const stillValid = await this.deps.validateRuntime(session)
+      if (!current()) { gone(); return }
+      if (!stillValid) {
         console.warn(`[inject] ${sid(sessionId)} abort · engine=${session.engine} · process not running`)
         receipt?.('runtime_gone')
         this.deps.onError(sessionId, 'This agent process is no longer running.')
         return
       }
     }
-    const delivery = await this.injectWhenLeased(() => this.deps.inject(session.agentId, content),
-      () => this.controlSession(session.agentId) !== undefined)
+    if (!current()) { gone(); return }
+    const delivery = await this.injectWhenLeased(() => this.deps.inject(session.agentId, content), current)
     const accepted = typeof delivery === 'boolean'
       ? delivery
       : delivery.state === 'succeeded' || delivery.dispatch === 'possibly_executed'
+    if (!current()) { gone(accepted ? 'ambiguous' : 'agent_gone'); return }
     const withheld = enterWithheldReason(delivery)
     if (withheld) {
       // Typed, its Enter not pressed: never pressed later either, which would send it into whatever is open.
@@ -823,9 +840,6 @@ export class SessionInputController {
   private async inject(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, receipt?: MessageReceipt): Promise<void> {
     const state = this.state(sessionId)
     if (!deliveryId) {
-      // A later person write replaces the shared composer-check fields. Read the Swarm
-      // acceptance first so its receipt is not lost merely because the person types sooner.
-      if (this.swarmTypesWhileBusy(session.engine, state.deliveryId)) await this.settleSwarmAcceptance(sessionId, session, state)
       // A local submission keeps its original scheduling. Overlap removes our ability
       // to attribute a later terminal turn to the lamp; it must not block local input.
       this.finishDelivery(sessionId, state, 'unknown', 'prompt_mismatch')
@@ -849,7 +863,9 @@ export class SessionInputController {
       }
       if (state.cancelled || this.states.get(sessionId) !== state) return
       // Before the team's own check of the pane, which a reader not yet up cannot read either.
-      if (await this.engineReady(sessionId, session, deliveryId.startsWith('team:'))) {
+      const waitingForEngine = this.engineReady(sessionId, session, deliveryId.startsWith('team:'))
+      if (waitingForEngine) {
+        await waitingForEngine
         if (state.cancelled || this.states.get(sessionId) !== state) return
         if (!(await this.deps.validateRuntime(session))) {
           console.warn(`[inject] ${sid(sessionId)} abort · engine=${session.engine} · process not running`)
@@ -925,7 +941,7 @@ export class SessionInputController {
       state.observes = 0
       state.ambiguousDispatch = typeof delivery !== 'boolean' && delivery.dispatch === 'possibly_executed'
       state.dispatching = false
-      if (!this.swarmTypesWhileBusy(session.engine, state.deliveryId)) this.delivery(sessionId, state.deliveryId, 'delivered')
+      this.delivery(sessionId, state.deliveryId, 'delivered')
       if (state.observedStart !== undefined) {
         const observed = state.observedStart
         state.observedStart = undefined
@@ -947,7 +963,7 @@ export class SessionInputController {
     if (state.timer) clearTimeout(state.timer)
     state.timer = setTimeout(() => {
       state.timer = null
-      if (!state.awaitingFingerprint || (state.turnOpen && !this.checksWhileBusy(session, state))) return
+      if (!state.awaitingFingerprint || state.turnOpen) return
       const retry = this.retrySubmit(sessionId, session, state)
       if (state.deliveryId) void retry.catch(() => this.failAmbiguousSubmission(sessionId, state))
       else void retry
@@ -979,18 +995,7 @@ export class SessionInputController {
   }
 
   private async retrySubmit(sessionId: string, session: RegisteredSession, state: InputState): Promise<void> {
-    if (state.turnOpen && !state.deliveryId) {
-      await this.observeBusyPerson(sessionId, session, state)
-      return
-    }
-    if (this.swarmTypesWhileBusy(session.engine, state.deliveryId)) {
-      // Use the same native composer reading as person input. A cleared composer confirms
-      // queue acceptance without waiting for a new turn; automatic traffic never retries Enter.
-      if (await this.settleSwarmAcceptance(sessionId, session, state)) return
-      if (++state.observes <= SUBMIT_MAX_OBSERVES) this.armSubmitCheck(sessionId, session, state)
-      else this.failAmbiguousSubmission(sessionId, state)
-      return
-    }
+    if (state.turnOpen && !state.deliveryId) return
     if (state.deliveryId?.startsWith('team:')) {
       // Team traffic is automatic. A missing transcript start is not permission to press Enter
       // again: the message may already be in the engine's queue. Inbox/reply correlation can
@@ -1119,58 +1124,6 @@ export class SessionInputController {
     this.armSubmitCheck(sessionId, session, state)
   }
 
-  /** A queued Swarm item may follow a person input already accepted by the busy engine. Observe only
-   * enough to release it: a hidden composer or unavailable reader must leave the person's receipt for
-   * its real turn event, as before, rather than run the idle retry/error path. */
-  private async observeBusyPerson(sessionId: string, session: RegisteredSession, state: InputState): Promise<void> {
-    const expected = state.awaitingFingerprint, version = state.personWriteVersion
-    if (!expected || state.observes >= SUBMIT_MAX_OBSERVES) return
-    const current = () => this.states.get(sessionId) === state && state.awaitingFingerprint === expected && state.personWriteVersion === version
-      && !state.deliveryId && state.turnOpen && this.swarmTypesWhileBusy(session.engine, state.queue[0]?.deliveryId)
-    if (!current()) return
-    state.observes++
-    const capture = await this.deps.capture?.(session.agentId).catch(() => null)
-    if (!current() || !capture) return
-    const screen = await this.deps.readScreen(this.readingSession(session), capture).catch(() => null)
-    if (!current() || !screen || screen.messageHold) return
-    const reading = await this.deps.submission.read(this.readingSession(session), capture, state.awaitingContent ?? '').catch(() => null)
-    if (!current() || !reading) return
-    if (reading.composer && !reading.draft && !state.ambiguousDispatch) {
-      state.awaitingFingerprint = null
-      state.awaitingContent = null
-      state.observes = 0
-      this.settle(state, 'taken')
-      this.drainOne(sessionId, state)
-    } else if (state.observes < SUBMIT_MAX_OBSERVES) this.armSubmitCheck(sessionId, session, state)
-  }
-
-  /** Settle only this pasted Swarm prompt, before its composer state can be replaced by another writer. */
-  private async settleSwarmAcceptance(sessionId: string, session: RegisteredSession, state: InputState): Promise<boolean> {
-    const expected = state.awaitingFingerprint, deliveryId = state.deliveryId
-    if (!expected || state.ambiguousDispatch) return false
-    const capture = await this.deps.capture?.(session.agentId).catch(() => null)
-    if (this.states.get(sessionId) !== state || state.awaitingFingerprint !== expected || state.deliveryId !== deliveryId) return true
-    if (!capture) return false
-    const record = this.readingSession(session)
-    const [reading, screen] = await Promise.all([
-      this.deps.submission.read(record, capture, state.awaitingContent ?? '').catch(() => null),
-      this.deps.readScreen(record, capture).catch(() => null),
-    ])
-    if (this.states.get(sessionId) !== state || state.awaitingFingerprint !== expected || state.deliveryId !== deliveryId) return true
-    // Enter was executed after the pre-Enter dialog guard. A permission or question
-    // that replaced the composer afterwards is acceptance, as it is for person input.
-    const asked = screen?.messageHold === 'permission_open' || screen?.messageHold === 'question_open'
-    if (!asked && !(reading && !reading.draft && reading.composer)) return false
-    this.finishDelivery(sessionId, state, 'delivered')
-    state.awaitingFingerprint = null
-    state.awaitingContent = null
-    state.observes = 0
-    if (state.timer) clearTimeout(state.timer)
-    state.timer = null
-    this.drainOne(sessionId, state)
-    return true
-  }
-
   /**
    * Our text left the composer: submitted, or queued by the TUI as a follow-up while busy. A real
    * turn_started will confirm and clear this; keep observing (bounded) WITHOUT pressing Enter — a second
@@ -1202,7 +1155,6 @@ export class SessionInputController {
     state.awaitingContent = null
     state.observes = 0
     this.settle(state, 'taken')
-    if (this.swarmTypesWhileBusy(session.engine, state.queue[0]?.deliveryId)) this.drainOne(sessionId, state)
   }
 
   /**
@@ -1228,7 +1180,6 @@ export class SessionInputController {
     state.observes = 0
     state.ambiguousDispatch = false
     this.settle(state, 'taken')
-    if (this.swarmTypesWhileBusy(session.engine, state.queue[0]?.deliveryId)) this.drainOne(sessionId, state)
     return true
   }
 
@@ -1242,24 +1193,21 @@ export class SessionInputController {
   }
 
   private drainOne(sessionId: string, state: InputState): void {
+    if (this.states.get(sessionId) !== state) return
     // A queued message whose turn is due while the agent changes host goes behind what the gate holds.
     const agentId = this.controlSession(sessionId)?.agentId
     const gate = this.deps.moveGate
     if (agentId && gate?.holding(agentId)) {
-      gate.enqueue(agentId, async () => { const current = this.states.get(sessionId); if (current) await this.drainNow(sessionId, current) })
+      gate.enqueue(agentId, () => this.drainNow(sessionId, state))
       return
     }
     void this.drainNow(sessionId, state)
   }
 
   private async drainNow(sessionId: string, state: InputState): Promise<void> {
+    if (this.states.get(sessionId) !== state) return
     this.dropExpired(sessionId, state)
-    const current = this.controlSession(sessionId)
-    const busySwarm = !!current && this.swarmTypesWhileBusy(current.engine, state.queue[0]?.deliveryId)
-    // A person write may still be awaiting its terminal result when several chat
-    // deliveries arrive. Reserve one Swarm receipt only after that writer finishes.
-    if (busySwarm && state.writes) return
-    if (state.controlLocked || state.cancelling || (!busySwarm && (state.turnOpen || state.settling)) || state.awaitingFingerprint) return
+    if (state.controlLocked || state.cancelling || state.turnOpen || state.settling || state.awaitingFingerprint) return
     if (state.queue[0]?.deliveryId && (state.dispatching || state.deliveryId)) return
     const next = state.queue.shift()
     if (!next) return
@@ -1270,8 +1218,8 @@ export class SessionInputController {
       if (!next.deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This harness is no longer available.')
       return
     }
-    if (busySwarm) await this.scheduleWrite(sessionId, session, next.content, next.deliveryId, next.receipt)
-    else await this.inject(sessionId, session, next.content, next.deliveryId, next.receipt)
+    // A drained delivery must own the same write chain as a new person's message, through paste and Enter.
+    await this.scheduleWrite(sessionId, next.content, next.deliveryId, next.receipt)
   }
 
   private enqueue(sessionId: string, state: InputState, content: string, deliveryId?: string, receipt?: MessageReceipt): void {
@@ -1283,9 +1231,10 @@ export class SessionInputController {
 
   /** Refuse a message of [bytes] when the agent's queued and held messages are at their limits. */
   private refusedFull(sessionId: string, state: InputState, bytes: number, deliveryId?: string, receipt?: MessageReceipt): boolean {
-    const waiting = [...state.queue, ...state.held]
-    const waitingBytes = waiting.reduce((sum, item) => sum + item.bytes, 0)
-    if (waiting.length < MAX_QUEUE_ITEMS && waitingBytes + bytes <= MAX_QUEUE_BYTES) return false
+    let waitingBytes = bytes
+    for (const item of state.queue) waitingBytes += item.bytes
+    for (const item of state.held) waitingBytes += item.bytes
+    if (state.queue.length + state.held.length < MAX_QUEUE_ITEMS && waitingBytes <= MAX_QUEUE_BYTES) return false
     this.delivery(sessionId, deliveryId, 'rejected', 'queue_full')
     receipt?.('queue_full')
     if (!deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This agent already has too many queued messages. Try again after the current operation finishes.')

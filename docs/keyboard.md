@@ -1,6 +1,6 @@
 # Keyboard
 
-Use **Swarm** for a workspace group and **Harness** for a running agent session.
+Use **Tab** for a workspace group and **Harness** for a running agent session.
 See [product terminology](terminology.md).
 
 Every action has a key or a palette entry, and every key can be remapped.
@@ -27,7 +27,6 @@ The defaults, in the workspace:
 | ⌘H ⌘J ⌘K ⌘L · ⌘arrows | Focus the pane left · below · above · right |
 | ⇧⌘arrows | Move the focused pane |
 | ⌘⏎ · ⌘; · ⇧⌘W | Zoom or restore · last pane · close pane |
-| ⌘S | New Swarm — the lead creation form, with engine, machine, project and project visibility |
 | ⌃⌘S | Harness Store |
 | ⌘M | Machines — connect another computer or set this computer's password |
 | ⌘I | Models — subscriptions, local models, shared models, and APIs |
@@ -49,9 +48,9 @@ Type `&` to choose a different agent for the focused harness. The pane header's 
 Delete the prefix to return to harness search. These fields use a thin caret and
 no separate prompt character.
 
-Use **⌘R / ⌘D** or **File → Split Right / Split Down** to open the pane picker. The split is applied after choosing or creating a harness; Escape leaves the layout unchanged. A pane header reveals its `x` close action on hover; **⇧⌘W** closes the focused pane and **⌘W** closes the swarm.
+Use **⌘R / ⌘D** or **File → Split Right / Split Down** to open the pane picker. The split is applied after choosing or creating a harness; Escape leaves the layout unchanged. A pane header reveals its `x` close action on hover; **⇧⌘W** closes the focused pane and **⌘W** closes the tab.
 
-When a split needs more room, the workspace expands and scrolls to keep both panes readable. Keyboard focus brings the selected pane into view. Splitting remains available up to the swarm’s 64-pane limit.
+When a split needs more room, the workspace expands and scrolls to keep both panes readable. Keyboard focus brings the selected pane into view. Splitting remains available up to the tab’s 64-pane limit.
 
 In a picker: ↓ ⌃N ⌃J and ↑ ⌃P ⌃K move, and ⏎ opens. In the unified picker, Return opens the highlighted harness; a paused harness resumes and opens. Machines and projects open their harness lists inside the picker. Model management opens the existing Model Manager terminal; API connections open the existing edit dialog. Cmd-Shift-P (Ctrl-Shift-P on Linux) searches named actions for the selected item. Commands name their target, and cancelling or completing an action returns to the same search. Filters and sorting are explicit commands. The preview has no action strip or keyboard footer. Existing remappable Ctrl-S lifecycle shortcuts remain available. Escape returns from a scoped list or closes the picker. ⌘⏎ accepts into the same requested destination. ⌃/ toggles the preview. Page Up/Down pages the result list; Shift-↑/↓ scrolls the preview by one line without leaving the search input. Cmd-P starts without a selected row and shows the resource type hints in the preview area. Typing selects the first match; arrows or Tab can select a row without typing. Enter does nothing until a row is selected.
 Cmd-P has no New Harness row; use Cmd-N to create a harness, including when no harnesses match.

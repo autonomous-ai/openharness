@@ -21,7 +21,7 @@ import { deskRoutes } from './desk.js'
 import { connectorRoutes } from './connectors.js'
 import { connectorVaultRoutes } from './connectorVault.js'
 import { agentMessagesRoutes } from './agentMessages.js'
-import { superTabRoutes } from './superTabs.js'
+import { goneRoutes } from './gone.js'
 import { zooRoutes } from './zoo.js'
 import { experimentalSettingsRoutes } from './experimentalSettings.js'
 import { deviceAuthRoutes } from './deviceAuth.js'
@@ -68,12 +68,12 @@ export async function registerControlRoutes(app: FastifyInstance, opts: {
   await app.register(communityTranslateRoutes) // a Hub draft's words in English, for its author to review
   await app.register(qrSignInRoutes)       // sign a computer in by scanning its QR with a signed-in phone
   await app.register(deviceKeyRoutes)     // the account's device key log: signing in is what trusts a device
-  await app.register(pushDeviceRoutes)    // a signed-in phone's push token: replies and tags reach it while the app is closed
+  await app.register(pushDeviceRoutes)    // supported older phones can unregister their own retired Swarm push token
   await app.register(deskRoutes)          // the account's tabs, the same on every computer (lib/desk.ts)
   await app.register(connectorRoutes)     // sign-in to GitHub, Slack, Google… for local agents (lib/connectorGateway.ts)
   await app.register(connectorVaultRoutes) // those connections sealed for the account's computers, which keep them in step
   await app.register(agentMessagesRoutes)   // which tabs' harnesses may message each other (lib/agentMessages.ts)
-  await app.register(superTabRoutes)
+  await app.register(goneRoutes)          // what Harness took out (Swarms): a plain 410 for the clients still asking
   await app.register(experimentalSettingsRoutes, { daemons: opts.daemons })
   // Availability is separate from opt-in: every account starts off, and its collection is retained.
   await app.register(zooRoutes, { daemons: opts.daemons, requireAccountOptIn: true })

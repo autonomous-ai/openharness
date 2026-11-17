@@ -69,7 +69,7 @@ try {
   const resume = createResumeAgentService({ registry, stoppedAgents: stopped, restartJobs, stopJobs, pinnedControls: new Set(),
     tmuxBackend: { create: forbidden, kill: forbidden }, retainExitedSession: forbidden, announceSession: forbidden,
     relaunchOverrides: async () => ({ ok: false, error: 'SERVICE_UNAVAILABLE', detail: 'Fixture dependency is unavailable.' }),
-    prepareSessionResume: forbidden, refreshGridWebSearch: forbidden, clearDeleted() {}, attachDsh: forbidden, attachSession: forbidden })
+    prepareSessionResume: forbidden, refreshGridWebSearch: forbidden, clearDeleted() {}, attach: forbidden, attachSession: forbidden })
   const iterations = workload.startsWith('checkpoint') ? 5 : 50
   const latenciesMs: number[] = []
   let cpuMs = 0, agent: import('../../src/lib/registry.js').RegisteredSession | undefined

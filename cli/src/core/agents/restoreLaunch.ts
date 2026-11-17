@@ -1,26 +1,20 @@
 /** Restore may wait for preparation; session ownership must survive that wait before core writes. */
 import { externalResumePending } from '../../lib/externalResume.js'
+import { launchedGrid } from '../../lib/gridAssignmentWire.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { LaunchOverrides, LaunchOverridesResult } from '../../lib/launchOverrides.js'
 import type { RestoreAgentsDeps, RestoreLaunch } from '../../lib/restoreAgents.js'
 import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
-import type { AdoptSwarmSkill } from '../api.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
-
-/** What a harness held for its Swarm role says in its pane, in the person's words. */
-export const SWARM_ROLE_HELD = 'Waiting for the Swarm to confirm this agent\'s role. It starts by itself once the Swarm answers.'
 
 interface RestoreLaunchDeps {
   workspaceMissing(cwd: string | null | undefined): { error: string; detail: string } | null
   relaunchOverrides(entry: RegisteredSession, source: RegisteredSession, current: () => boolean): Promise<LaunchOverridesResult>
   downgradedPermission(entry: RegisteredSession, native?: LaunchOverrides['native']): Promise<{ permissionMode?: string | null; bypassPermission?: boolean; nativeHold?: string }>
-  prepareSessionResume(entry: RegisteredSession): void
+  prepareSessionResume(entry: RegisteredSession, current: () => boolean): Promise<unknown>
   refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
   launch(entry: RegisteredSession, opts: { resumeSessionId?: string; agentId: string }, overrides: LaunchOverrides,
     permission: { permissionMode?: string | null; bypassPermission?: boolean }): RestoreLaunch
-  /** The Swarm role of an agent its person attached, read before it is relaunched (superTabs/inCore/adoption.ts). Absent while the
-   *  Swarm is off. */
-  adoptSwarmSkill?: AdoptSwarmSkill
 }
 
 export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps['buildLaunch'] {
@@ -33,20 +27,7 @@ export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps[
       detail: given.launch?.state === 'held' ? given.launch.detail : 'Waiting to verify this external conversation.' }
     const missing = deps.workspaceMissing(given.cwd)
     if (missing) return missing
-    // An agent its person attached comes back with its Swarm role, or waits for it: boot restore and a host move relaunched a
-    // Swarm member with no saved role as an ordinary session (security review 1 of #2255). A held one waits in its pane, and
-    // the held pass launches it once the Swarm answers (core/agents/heldLaunches.ts); a move does not happen.
-    let entry = given
-    const looked = await deps.adoptSwarmSkill?.lookup?.(given, current)
-    if (looked !== undefined) {
-      // The lookup answers null once this launch no longer owns the row.
-      if (looked === null) return { cancelled: true }
-      if (looked === 'unavailable') return { held: 'superTabs', detail: SWARM_ROLE_HELD }
-      // A move builds this while the old engine still runs and writes the row only once it has stopped: it launches with the
-      // role and leaves the record to the agent's next start, which reads it again.
-      if (prepare !== false) looked.commit()
-      entry = looked.row
-    }
+    const entry = given
     const built = await deps.relaunchOverrides(entry, entry, current)
     if (!current()) return { cancelled: true }
     if (!built.ok && built.error === 'AGENT_CHANGED') return { cancelled: true }
@@ -61,17 +42,19 @@ export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps[
     // prepared, and the row written, once that engine has stopped. The move runs this itself then, and relaunches with
     // these same overrides if it falls back, so nothing is asked of the grid or the Store again while the agent's input
     // is held.
-    const preparation = () => {
-      if (opts.resumeSessionId) deps.prepareSessionResume(entry)
-      deps.refreshGridWebSearch(entry.agentId, built.overrides)
+    const preparation = async (waiting?: () => boolean) => {
+      if (opts.resumeSessionId) await deps.prepareSessionResume(entry, () => current() && waiting?.() !== false)
+      if (current()) deps.refreshGridWebSearch(entry.agentId, built.overrides)
     }
-    // These writes are synchronous and belong to the core. Neither a stopped conversation's
-    // transcript/tail nor a replacement binding's grid may be changed by an old Store answer.
+    // These writes belong to the core. Neither a stopped conversation's transcript/tail nor a replacement binding's
+    // grid may be changed by an old Store answer: the history is replaced only while this restore holds, and the grid
+    // is written in the same turn as the check after it.
     if (prepare !== false) {
       if (opts.resumeSessionId) {
-        try { deps.prepareSessionResume(entry) } catch (error) {
+        try { await deps.prepareSessionResume(entry, current) } catch (error) {
           return { error: 'RESUME_PREPARATION_FAILED', detail: error instanceof Error ? error.message : String(error) }
         }
+        if (!current()) return { cancelled: true }
       }
       deps.refreshGridWebSearch(entry.agentId, built.overrides)
     }
@@ -84,6 +67,8 @@ export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps[
       const { error: code, detail } = windowsLaunchRefusal(error)
       return { error: code, detail }
     }
+    // The grid the row keeps is the launch's, with the saved API's endpoint as this build refreshed it.
+    launched = { ...launched, grid: launchedGrid(built.overrides.gridLaunchRecord?.override) }
     return prepare === false ? { ...launched, deferred: { prepare: preparation, overrides: built.overrides, permission } } : launched
   }
 }

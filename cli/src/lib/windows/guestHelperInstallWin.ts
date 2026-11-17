@@ -9,7 +9,7 @@ import { userInfo } from 'node:os'
 import { dirname } from 'node:path'
 import { ptyHostBinary } from '../ptyHost/launch.js'
 import { managedNodePath } from '../nodeRuntime.js'
-import { runGuestCommand, type GuestRunner } from '../guestAccounts.js'
+import { runGuestCommand, type GuestRunner } from '../guestRunner.js'
 import { WHOAMI_USER_ARGS, windowsUserSid } from './whoami.js'
 import { WINDOWS_GUEST_SETUP_VERSION, WINDOWS_GUEST_VERSION_FILE, buildWindowsGuestInstallScript,
   buildWindowsGuestProcessorScript } from './guestScript.js'

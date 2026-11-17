@@ -29,65 +29,6 @@ function withCodexLabels(view: PaneView): PaneView {
   }
 }
 
-/**
- * The key that dismisses Codex's update prompt without updating, or null unless the capture is exactly that prompt. Only
- * for the Swarm's agents (superTabs/terminal.ts), who must not wait for a person. It is Esc alone, never a row number and
- * Enter: on codex-cli 0.165.0 `0` is ignored and its Enter runs `brew upgrade` on the highlighted "Update now" (measured
- * 2026-10-29, update_prompt.rs the same in 0.164), so a Skip row misread as 0 or 1 would have updated Codex. Esc is what
- * the prompt's own footer says skips it; the capture must show that footer and exactly these three rows in this order,
- * so a misread or changed menu sends nothing and is left to the Lead.
- */
-export function updateDismissKeys(capture: string): string[] | null {
-  if (takeover(capture, '') !== 'update') return null
-  const lines = stripAnsi(capture).replace(/\u00a0/g, ' ').split('\n').map(line => line.trim()).filter(Boolean)
-  const header = lines.filter(line => /^Update available\b/.test(line))
-  if (header.length !== 1) return null
-  const rows = lines.filter(line => /^[›>]?\s*\d+\./.test(line)).map(line => line.replace(/^[›>]?\s*/, ''))
-  const menu = rows.length === 3 && /^1\. Update now \(runs /.test(rows[0]) && rows[1] === '2. Skip' && rows[2] === '3. Skip until next version'
-  const footer = /^enter\s+continue\s+·\s+esc\s+skip$/.test(lines[lines.length - 1])
-  return menu && footer ? ['Escape'] : null
-}
-
-/**
- * The key that opens an untrusted folder restricted, or null unless the capture is exactly Codex's screen for it: a Swarm
- * agent's resume in a folder its Codex config names untrusted, which nobody at its pane answers (superTabs/terminal.ts,
- * #3904; task #3009). "Open restricted" keeps the folder's config, hooks and exec policies off and saves no trust. It is
- * Enter on the highlighted first row, so the screen must say so word for word:
- * its sentence that untrusted folders stay disabled, exactly these two rows with the first highlighted, its footer, and no
- * trust question anywhere ("Trust and continue" is also a first row, and it trusts the branch).
- */
-export function openRestrictedKeys(capture: string): string[] | null {
-  if (takeover(capture, '') !== 'trust') return null
-  const lines = stripAnsi(capture).replace(/ /g, ' ').split('\n').map(line => line.trim()).filter(Boolean)
-  const text = lines.join(' ')
-  if (/Trust this folder\?|Do you trust the contents/.test(text) || !text.includes(RESTRICTED_SENTENCE)) return null
-  const rows = lines.filter(line => /^[›>]?\s*\d+\./.test(line))
-  if (rows.length !== 2 || !/^[›>]\s*1\. Open restricted$/.test(rows[0])) return null
-  const footer = lines[lines.length - 1]
-  // 0.166 returns to Agent Command Center instead of quitting (#3904); both screens open restricted with Enter.
-  const menu = (rows[1] === '2. Quit' && footer === 'enter continue · esc quit')
-    || (rows[1] === '2. Back to Agent Command Center' && footer === 'enter continue · esc back')
-  return menu ? ['Enter'] : null
-}
-const RESTRICTED_SENTENCE = 'Config, hooks, and exec policies from untrusted folders stay disabled.'
-
-/**
- * The key that goes past Codex's review of hooks it has not seen, or null unless the capture is exactly that screen. Only for a
- * Swarm agent's own pane, which nobody sits at (superTabs/startScreen.ts): another program's new hook stopped every such start on
- * a computer that has one (Orca's, on DESKTOP-0TFH0OJ, 2026-11-04). Harness's own hooks are already recorded as reviewed
- * (kit/hookReview.ts). It is Esc, which the footer says skips, never a row: "Trust all" is a person's to press, and skipping
- * records nothing, so the same question waits for them in the next pane they open.
- */
-export function hooksReviewSkipKeys(capture: string): string[] | null {
-  const lines = stripAnsi(capture).replace(/ /g, ' ').split('\n').map(line => line.trim()).filter(Boolean)
-  if (lines.filter(line => line === 'Hooks need review').length !== 1) return null
-  const rows = lines.filter(line => /^[›>]?\s*\d+\./.test(line)).map(line => line.replace(/^[›>]\s*/, ''))
-  const menu = rows.length === 3 && rows[0] === '1. Review hooks' && rows[1] === '2. Trust all and continue'
-    && rows[2] === "3. Continue without trusting (hooks won't run)"
-  const firstRowHighlighted = lines.some(line => /^[›>]\s*1\. Review hooks$/.test(line))
-  return menu && firstRowHighlighted && /^enter\s+confirm\s+·\s+esc\s+skip$/.test(lines[lines.length - 1]) ? ['Escape'] : null
-}
-
 function takeover(capture: string, currentUi: string): PaneTakeover | null {
   const lines = stripAnsi(capture).replace(/\u00a0/g, ' ').split('\n')
   const bottom = lines.filter(line => line.trim()).slice(-3)

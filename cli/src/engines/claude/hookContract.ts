@@ -16,7 +16,11 @@ export const hooks: HookContract = {
     // Stop/StopFailure are the authoritative turn-close signals (Stop = normal finish incl. max_tokens/
     // refusal; StopFailure = turn ended on an API error, where Stop does NOT fire) — they close a turn even
     // when the JSONL-derived turn_ended is missed. Neither supports a matcher (silently ignored).
-    events: [{ event: 'SessionStart' }, { event: 'SessionEnd' }, { event: 'UserPromptSubmit' }, { event: 'Stop' }, { event: 'StopFailure' }],
+    // Notification is how a session outside a pane says it waits for the person, which the hook tells the devices
+    // (hook/notify.mjs); for a session in a pane the hook ignores it. Its matcher names the types that wait for the
+    // person (notify.mjs NEEDS_INPUT), so the idle notice after every turn starts no hook.
+    events: [{ event: 'SessionStart' }, { event: 'SessionEnd' }, { event: 'UserPromptSubmit' }, { event: 'Stop' }, { event: 'StopFailure' },
+      { event: 'Notification', matcher: 'permission_prompt|elicitation_dialog|elicitation_url_dialog|quota_auto_resume_stale' }],
     timeout: 5,
     // Agent Messages: a teammate's message reaches a working agent at its next tool call (kit/messagesHook.ts).
     inbox: { event: 'PostToolUse' },
@@ -30,12 +34,15 @@ export const hooks: HookContract = {
     // says), and the plugin's (`mcp__plugin_<plugin>_<server>__<tool>`). By name, not `mcp__harness__*`: another
     // product's MCP server is also often added as `harness`, and its tools are not Harness's to allow. And
     // `harness --help`, which every harness is told to read as it starts (lib/agentAttribution.ts): in ask mode it was
-    // the one question left in a hand-off (2026-10-12, in a clean VM). It only prints.
+    // the one question left in a hand-off (2026-10-12, in a clean VM). It only prints. And `harness device notify`, as
+    // exactly its three words (facets/hooks.ts HARNESS_AGENT_COMMANDS): a question before it would wait for the person
+    // it calls. Claude Code's prefix rule does not cover a compound command (`;`, `&&`, `$(…)`), which still asks.
     allow: {
       list: ['permissions', 'allow'],
       unless: ['deny', 'ask'],
       rules: ['Bash(harness --help)', 'Bash(harness -h)', 'Bash({launcher} --help)',
-        'Bash(harness {verb}:*)', 'Bash({launcher} {verb}:*)', 'mcp__harness__{tool}', 'mcp__plugin_harness_harness__{tool}'],
+        'Bash(harness {verb}:*)', 'Bash({launcher} {verb}:*)', 'mcp__harness__{tool}', 'mcp__plugin_harness_harness__{tool}',
+        'Bash(harness {command}:*)', 'Bash({launcher} {command}:*)'],
     },
     commandNamesHome: false,
     // Windows: exec form, `command` (the managed node.exe) and `args`, run without a shell. In shell form Claude Code runs

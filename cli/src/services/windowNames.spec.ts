@@ -9,7 +9,7 @@ import { BUDGET_MS, cleanName, defaultNamers, KEEP, PROMPT, RETRY_MS, startWindo
 
 vi.mock('../lib/oneshot.js', () => ({ runRouterOneShot: vi.fn(async () => ({ text: 'Harness TUI\n', sessionId: null })) }))
 // The real `opencode models` path, run with a command that lists nothing.
-vi.mock('../lib/engineBin.js', () => ({ opencodeBin: () => '/bin/echo' }))
+vi.mock('../lib/engineBin.js', () => ({ opencodeBinAsync: () => '/bin/echo' }))
 
 const ASKER = { local: true, owner: true }
 type Repo = { kind: string; name: string; root: string | null; remote: string | null; branch: string | null }

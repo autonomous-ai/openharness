@@ -15,7 +15,6 @@ import type { BackendSocket } from '../../backendSocket.js'
 import * as opencodeLaunch from '../../engines/launchControl.js'
 import { binaryOnPath } from '../../lib/binaryOnPath.js'
 import { builtinSqlite } from '../../lib/sqliteBuiltin.js'
-import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
 import { describeGridLaunch, gridEnvVarNames } from '../../lib/gridLaunchWire.js'
 import { validateLaunchOverrides, type LaunchOverridesDeps, type LaunchSource } from '../../lib/launchOverrides.js'
 import { sid } from '../../lib/log.js'
@@ -35,7 +34,6 @@ import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import type { createLaunchHelpers } from './launch.js'
 import type { PaneSwap } from './swap.js'
 import { createLaunchAuthority } from './launchAuthority.js'
-import type { AdoptSwarmSkill } from '../api.js'
 import { nativeOpencodeStore } from '../../engines/kit/nativeLocations.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
@@ -67,9 +65,6 @@ export interface RetargetDeps {
   refreshGridAssignment: (session: RegisteredSession) => void
   /** OpenCode's store, whose rows a resumed session takes its model from. */
   opencodeDb: string
-  /** The Swarm role of an agent its person attached, read before it is relaunched (superTabs/inCore/adoption.ts). Absent while the
-   *  Swarm is off. */
-  adoptSwarmSkill?: AdoptSwarmSkill
   /** Forks a conversation for its new provider, in its engine's worker (core/engines/providerMoves.ts); absent, none is. */
   moveConversation?: MoveConversation
 }
@@ -77,7 +72,7 @@ export interface RetargetDeps {
 export function createAgentRetargeter({
   sessionTurnOpen, purgeBusy, terminals, registry, runtimeProfiles, launchOverridesDeps, acquireTerminalControl,
   relaunchOverrides, downgradedPermission, agentReconciler, restartJobs, paneSwapDeps, liveBypassPermission,
-  announceSession, refreshGridAssignment, opencodeDb, noBackendCode = 'TMUX_UNAVAILABLE', adoptSwarmSkill, moveConversation,
+  announceSession, refreshGridAssignment, opencodeDb, noBackendCode = 'TMUX_UNAVAILABLE', moveConversation,
 }: RetargetDeps) {
   const authority = createLaunchAuthority({ byAgent: id => registry.byAgent(id),
     revision: id => restartJobs.revision(id), cancelled: () => false })
@@ -115,20 +110,6 @@ export function createAgentRetargeter({
     // validate, and respawning over a pane whose occupant we cannot identify is how you replace
     // something that was not ours.
     if (!session.processIdentity) return { ok: false, error: 'NO_ACTIVE_PROCESS' }
-    // An agent its person attached switches with its Swarm role, or not at all while the role cannot be read: a switch
-    // relaunched a Swarm member with no saved role as an ordinary session (security review 1 of #2255). Nothing has touched
-    // the pane yet, so a refusal leaves the running engine as it is.
-    const looked = await adoptSwarmSkill?.lookup?.(session, current)
-    if (looked !== undefined) {
-      // The lookup answers null once this switch no longer owns the row.
-      if (looked === null) return changed()
-      if (looked === 'unavailable') return { ok: false, error: 'SWARM_ROLE_UNAVAILABLE',
-        detail: 'This agent\'s Swarm role could not be confirmed, so its model was not switched. Try again once the Swarm can be reached.' }
-      // Recording the role changes the row this switch owns: it owns the recorded one, taken in the same step.
-      looked.commit()
-      if (looked.row.swarmSkill) session.swarmSkill = looked.row.swarmSkill
-      current = captureAuthority()
-    }
     // Leaving for a grid is the LAST moment this agent's own model is observable: once the pane is on
     // the grid, the engine reports the grid's model and the previous choice exists nowhere. So it is
     // read now and kept, and a later move back returns the person to it rather than to whatever
@@ -336,11 +317,12 @@ export function createAgentRetargeter({
         return failed('RESPAWN_FAILED', outcome.detail)
       }
       // Commit the new process now. Optional grid metadata follows outside the route hold.
-      const gateway = await probeGatewayRuntime(outcome.processIdentity)
-      if (!current()) return changed()
       await backend.releaseHold(pane, current)
       if (!current()) return changed()
-      registry.updateProcessIdentity(session.agentId, outcome.processIdentity, gateway.kind)
+      // The row's grid is the launch Harness just wrote: the process is not read back for it. Nor for its gateway,
+      // which the row keeps until the relaunched engine says it again (its hook, or a Codex's argv on discovery).
+      registry.updateProcessIdentity(session.agentId, outcome.processIdentity, undefined,
+        grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null)
       // The launch that just worked is the one a restart or a post-reboot restore must repeat — and
       // what it decided about web search is what the app shows for this agent from now on. Null for
       // a move home: the block, and the status with it, leave the frame together.

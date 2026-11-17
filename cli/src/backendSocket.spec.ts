@@ -10,10 +10,11 @@ import { BackendSocket } from './backendSocket.js'
 import { dispatchDown, gatewayOf, relaySocket, upstreamOf } from './testing/relaySocket.js'
 import { AGENT_OPENED_THROTTLE_MS } from './core/agents/update.js'
 import { deviceAgentListItem, deviceAgentRow } from './core/agents/list.js'
-import { wholeHistoryPage } from './core/transcripts/history.js'
+import { wholeHistoryPage } from './engines/others/transcripts.js'
 import { grokMessagesToEvents } from './engines/grok/normalizer.js'
-import { bindAgentList, bindAgentUpdate, bindCancelRequest, bindLaunchRequests, bindCloseRequests, bindMessageRequest, bindPurgeRequest, bindQuestionResponse, bindStopRequest, bindTerminalRequests } from './testing/socketCore.js'
-import { emptyPorts, MODELS_FALLBACKS, MODELS_OFF, MONITOR_FALLBACKS, type ModelsPort } from './core/api.js'
+import { bindAgentList, bindAgentUpdate, bindCancelRequest, bindLaunchRequests, bindCloseRequests, bindMessageRequest, bindPurgeRequest, bindQuestionResponse, bindStopRequest, bindTerminalRequests, prepared, preparingWorkspaces } from './testing/socketCore.js'
+import { emptyPorts, MODELS_FALLBACKS, MODELS_OFF, MONITOR_FALLBACKS, type ModelsPort, type UsageEvent } from './core/api.js'
+import { countUsage } from './gateway/usageEvents.js'
 import { createServiceHost, ServiceUnavailableError } from './core/serviceHost.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { SHELL_REQUESTS, startShell } from './services/shell.js'
@@ -23,11 +24,12 @@ import { PROJECTS_REQUESTS, startProjects } from './services/projects.js'
 import { createHarnessResourcesReader } from './lib/harnessResources.js'
 import { createHarnessStorageReader } from './lib/harnessTelemetry.js'
 import { fakeCore } from './testing/fakeCore.js'
-import { AuthSessionError, type AuthSessionManager } from './lib/authSession.js'
+import { AuthSessionError } from './lib/authSession.js'
+import type { AuthSessionManager } from './lib/authRefresh.js'
 import { WS_IDLE_DEADLINE_MS as IDLE_DEADLINE_MS } from './lib/wsLiveness.js'
 import { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import type { TerminalBackendCoordinator } from './lib/terminalBackendCoordinator.js'
-import { decodeTerminalLocal, TerminalBinaryKind } from './lib/terminalBinary.js'
+import { decodeTerminalLocal, encodeTerminalLocal, TerminalBinaryKind } from './lib/terminalBinary.js'
 import { registry, type RegisteredSession } from './lib/registry.js'
 import { stoppedAgents } from './lib/stoppedAgents.js'
 import { AgentStopError } from './lib/stopAgentService.js'
@@ -46,7 +48,6 @@ import { LocalModels } from './lib/localModels.js'
 import { STRICT_DOWN_TYPES, encryptDownFrame, encryptDownFrameFor, encryptRpcResult } from './lib/e2ee/applicationFrames.js'
 import { CloseAgentService } from './lib/closeAgentService.js'
 import { env } from './config/env.js'
-import { supportsFirstPrompt } from './lib/engineLaunch.js'
 
 describe('safe session close RPC', () => {
   it('seals cleanup previews and passes the open-tab condition to Close', async () => {
@@ -1851,6 +1852,8 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
+  // The probe is a service's (services/engineProbe.ts), and a request routed to a service is never waited on in line:
+  // kept awaited in the socket's own switch, it once made a Create click sit behind a sweep of login shells.
   it('does not let a slow engines_probe block agent_create on the same connection', async () => {
     const socket = relaySocket('token')
     bindLaunchRequests(socket)
@@ -1860,7 +1863,11 @@ describe('BackendSocket outbound queue', () => {
       sendBinary: () => true,
     })
     let finishProbe!: () => void
-    socket.engineProbeProvider = () => new Promise((resolve) => { finishProbe = () => resolve([]) })
+    socket.serviceRouter = (type, _payload, _asker, reply) => {
+      if (type !== 'engines_probe') return false
+      finishProbe = () => reply({ engines: [] })
+      return true
+    }
     const pending: RegisteredSession = {
       schemaVersion: 2, active: true, launch: { state: 'starting' },
       agentId: 'pending-1', sessionId: '', boundAt: null, engine: 'claude',
@@ -1883,31 +1890,8 @@ describe('BackendSocket outbound queue', () => {
     })))
     expect(frames.some((frame) => frame.type === 'engines_probe_result')).toBe(false)
     finishProbe()
-    await vi.waitFor(() => expect(frames.some((frame) => frame.type === 'engines_probe_result')).toBe(true))
+    await vi.waitFor(() => expect(frames).toContainEqual({ type: 'engines_probe_result', payload: { requestId: 'probe-1', engines: [] } }))
     await socket.unregisterLocalClient('local:create')
-    await socket.stop()
-  })
-
-  it('answers engines_probe with whether this machine can start each engine with a first prompt (#1788)', async () => {
-    const socket = relaySocket('token')
-    const frames: Array<Record<string, unknown>> = []
-    socket.registerLocalClient('local:probe', {
-      sendFrame: (frame) => { frames.push(frame); return true },
-      sendBinary: () => true,
-    })
-    socket.engineProbeProvider = async () => [
-      { engine: 'claude', installed: true, command: 'claude', installable: true, signedIn: true },
-      { engine: 'cursor', installed: false, command: 'cursor-agent', installable: true },
-    ] as never
-    socket.handleLocalFrame('local:probe', { type: 'engines_probe', payload: { requestId: 'probe-fp' } })
-    await vi.waitFor(() => expect(frames.some((frame) => frame.type === 'engines_probe_result')).toBe(true))
-    const reply = frames.find((frame) => frame.type === 'engines_probe_result')!.payload as {
-      engines: Array<{ engine: string; firstPrompt: boolean }>
-    }
-    const firstPrompt = Object.fromEntries(reply.engines.map((entry) => [entry.engine, entry.firstPrompt]))
-    expect(firstPrompt).toEqual({ claude: supportsFirstPrompt('claude'), cursor: supportsFirstPrompt('cursor') })
-    expect(firstPrompt.claude).toBe(true)
-    await socket.unregisterLocalClient('local:probe')
     await socket.stop()
   })
 
@@ -2152,10 +2136,10 @@ describe('BackendSocket outbound queue', () => {
 
   it('explains invalid repository choices without echoing credentials or preparing a folder', async () => {
     const socket = relaySocket('token')
-    bindLaunchRequests(socket)
+    const prepare = vi.fn(async () => prepared('/never'))
+    bindLaunchRequests(socket, { workspaces: preparingWorkspaces(prepare) })
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:invalid-project', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
-    const prepare = vi.spyOn(projectFolder, 'prepareProjectFolder')
     const create = vi.fn()
     socket.onCreateAgent = create
     try {
@@ -2182,11 +2166,11 @@ describe('BackendSocket outbound queue', () => {
     { projectSource: 'branch', gitSource: '/remote/repo', branchRef: 'refs/heads/feature' },
   ])('prepares $projectSource once under its creation receipt and retains its folder after a refused launch', async (project) => {
     const socket = relaySocket('token')
-    bindLaunchRequests(socket)
+    let finish!: (folder: string) => void
+    const prepare = vi.fn(() => new Promise<ReturnType<typeof prepared>>(resolve => { finish = folder => resolve(prepared(folder)) }))
+    bindLaunchRequests(socket, { workspaces: preparingWorkspaces(prepare) })
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:project', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
-    let finish!: (folder: string) => void
-    const prepare = vi.spyOn(projectFolder, 'prepareProjectFolder').mockImplementation(() => new Promise(resolve => { finish = resolve }))
     const create = vi.fn(async () => ({ ok: false as const, error: 'TMUX_UNAVAILABLE' }))
     socket.onCreateAgent = create
     const creationId = randomUUID()
@@ -2226,17 +2210,19 @@ describe('BackendSocket outbound queue', () => {
   ])('records Claude trust for $name: $trusts', async ({ project, sourceTrusted, trusts }) => {
     // Only a folder the daemon made empty, or a worktree of a repo already trusted, is trusted for the person.
     const socket = relaySocket('token')
-    bindLaunchRequests(socket)
+    // A worktree is made where Harness makes them; the other folders' places do not matter to their trust.
+    const folder = project.projectSource === 'worktree' ? join(projectFolder.projectsRoot(), 'worktrees', 'repo', 'prepared') : '/work/prepared'
+    bindLaunchRequests(socket, { workspaces: preparingWorkspaces(async () => prepared(folder)) })
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:trust', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
-    vi.spyOn(projectFolder, 'prepareProjectFolder').mockResolvedValue('/work/prepared')
+    vi.spyOn(projectFolder, 'prepareNewFolder').mockResolvedValue(folder)
     vi.mocked(claudeTrust.claudeTrusts).mockReturnValue(sourceTrusted)
     vi.mocked(claudeTrust.preTrustClaudeProject).mockClear()
     socket.onCreateAgent = vi.fn(async () => ({ ok: false as const, error: 'TMUX_UNAVAILABLE' }))
     try {
       socket.handleLocalFrame('local:trust', { type: 'agent_create', payload: { requestId: 'r', creationId: randomUUID(), engine: 'claude', ...project } })
       await vi.waitFor(() => expect(socket.onCreateAgent).toHaveBeenCalled())
-      if (trusts) expect(claudeTrust.preTrustClaudeProject).toHaveBeenCalledExactlyOnceWith('/work/prepared')
+      if (trusts) expect(claudeTrust.preTrustClaudeProject).toHaveBeenCalledExactlyOnceWith(folder)
       else expect(claudeTrust.preTrustClaudeProject).not.toHaveBeenCalled()
       if (project.projectSource === 'worktree') expect(claudeTrust.claudeTrusts).toHaveBeenCalledWith('/work/repo')
     } finally {
@@ -2307,13 +2293,11 @@ describe('BackendSocket outbound queue', () => {
 
   it('hands the launch the SCM record the prepared workspace reported, and none for a folder no SCM made', async () => {
     const socket = relaySocket('token')
-    bindLaunchRequests(socket)
+    const prepare = vi.fn(async () => prepared('/remote/harnesses/worktrees/repo/brave-otter', { scmLaunchRecord: { kind: 'git' } }))
+    bindLaunchRequests(socket, { workspaces: preparingWorkspaces(prepare) })
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:scm', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
-    const prepare = vi.spyOn(projectFolder, 'prepareProjectFolder').mockImplementation(async (project, options) => {
-      if (project.source === 'worktree') options?.onPrepared?.({ cwd: '/remote/harnesses/worktrees/repo/brave-otter', scmLaunchRecord: { kind: 'git' } })
-      return project.source === 'worktree' ? '/remote/harnesses/worktrees/repo/brave-otter' : '/remote/harnesses/codex-2026-09-24-12-00'
-    })
+    const made = vi.spyOn(projectFolder, 'prepareNewFolder').mockResolvedValue('/remote/harnesses/codex-2026-09-24-12-00')
     const create = vi.fn(async (_input: Record<string, unknown>) => ({ ok: false as const, error: 'TMUX_UNAVAILABLE' }))
     socket.onCreateAgent = create
     const ask = (requestId: string, choices: Record<string, unknown>) =>
@@ -2330,7 +2314,8 @@ describe('BackendSocket outbound queue', () => {
       await vi.waitFor(() => expect(frames).toContainEqual(expect.objectContaining({ payload: expect.objectContaining({ requestId: 'cwd' }) })))
       expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ cwd: '/remote/own' }))
       expect(create.mock.lastCall?.[0]).not.toHaveProperty('scmLaunchRecord')
-      expect(prepare).toHaveBeenCalledTimes(2)
+      expect(prepare).toHaveBeenCalledTimes(1)
+      expect(made).toHaveBeenCalledTimes(1)
     } finally {
       await socket.unregisterLocalClient('local:scm')
       await socket.stop()
@@ -2493,6 +2478,10 @@ describe('BackendSocket outbound queue', () => {
     expect(handleBinary).toHaveBeenCalledWith('local:terminal', clear)
     expect(socket.sendTerminalBinaryTo('local:terminal', clear)).toBe(true)
     expect(decodeTerminalLocal(binary[0])).toEqual(clear)
+    // A frame its maker framed already (a browser stream's screen, core/browserStreams.ts) goes to a window as it is.
+    const framed = encodeTerminalLocal(clear)!
+    expect(socket.sendTerminalLocalFrameTo('local:terminal', framed)).toBe(true)
+    expect(binary[1]).toBe(framed)
 
     socket.connect()
     const ws = wsMock.instances[0]
@@ -2789,29 +2778,6 @@ describe('desk_changed relay', () => {
     await socket.stop()
   })
 
-  // WS roadmap Phase 2a: a Swarm the account is in changed (backend lib/swarmClientPushes.ts); the window reads it again.
-  it('hands the backend\'s swarm_changed to the window, only the backend\'s, and only an id, a time and its parts', async () => {
-    const socket = relaySocket('token')
-    const frames: Array<Record<string, unknown>> = []
-    socket.registerLocalClient('local:swarm', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
-    socket.connect()
-    const ws = wsMock.instances[0]
-    ws.open()
-    ws.message({ t: 'down', connId: '', frame: { type: 'swarm_changed', payload: { tabId: 'tab-1', lastChangedAt: 5, parts: ['main'], text: 'x' } } })
-    ws.message({ t: 'down', connId: '', frame: { type: 'swarm_changed', payload: {} } })
-    ws.message({ t: 'down', connId: '', frame: { type: 'swarm_changed', payload: { tabId: 'tab-2', lastChangedAt: 5, parts: ['all'] } } })
-    await vi.waitFor(() => expect(frames.filter((f) => f.type === 'swarm_changed')).toEqual([
-      { type: 'swarm_changed', payload: { tabId: 'tab-1', lastChangedAt: 5, parts: ['main'] } },
-      { type: 'swarm_changed', payload: {} }, { type: 'swarm_changed', payload: {} }]))
-    // A relayed client, or a local one, is not the backend: nothing is relayed.
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'swarm_changed', payload: { tabId: 'tab-3', lastChangedAt: 1, parts: ['main'] } } })
-    socket.handleLocalFrame('local:swarm', { type: 'swarm_changed', payload: { tabId: 'tab-4', lastChangedAt: 1, parts: ['main'] } })
-    await new Promise((r) => setTimeout(r, 20))
-    expect(frames.filter((f) => f.type === 'swarm_changed')).toHaveLength(3)
-    await socket.unregisterLocalClient('local:swarm')
-    await socket.stop()
-  })
-
   it('hands the backend\'s connectors_changed on, for the connectors service to merge, and only the backend\'s', async () => {
     const socket = relaySocket('token')
     const heard: unknown[] = []
@@ -2831,99 +2797,24 @@ describe('desk_changed relay', () => {
     await socket.stop()
   })
 
-  // WS roadmap Phase 2a: the server says over this socket when a commit changed what this machine's host reads
-  // (backend lib/swarmHostPushes.ts).
-  it('hands the backend\'s swarm_host_changed to the Swarm host, never to the windows, and only the backend\'s', async () => {
+  // The Swarm was deleted on 2026-11-14. A backend from before still pushes what its Swarms changed and what waits for
+  // their hosts: none of it is anyone's here, neither the windows' nor a service's.
+  it('passes an older backend\'s Swarm pushes to nobody', async () => {
     const socket = relaySocket('token')
     const heard: unknown[] = []
     const frames: Array<Record<string, unknown>> = []
     socket.onAccountNotice = (notice) => { heard.push(notice) }
-    socket.registerLocalClient('local:swarm', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.registerLocalClient('local:window', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
-    ws.message({ t: 'down', connId: '', frame: { type: 'swarm_host_changed', payload: { tabId: 'tab-1', lastChangedAt: 1_700 } } })
-    // Naming no Swarm, or naming one wrongly, it only says the server pushes.
-    ws.message({ t: 'down', connId: '', frame: { type: 'swarm_host_changed', payload: { tabId: 'tab-1', lastChangedAt: 'soon' } } })
-    ws.message({ t: 'down', connId: '', frame: { type: 'swarm_host_changed', payload: {} } })
-    await vi.waitFor(() => expect(heard).toEqual([{ type: 'swarm_host_changed', tabId: 'tab-1', lastChangedAt: 1_700 },
-      { type: 'swarm_host_changed' }, { type: 'swarm_host_changed' }]))
-    // A client relayed with its own connId, or a local one, is not the backend.
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'swarm_host_changed', payload: { tabId: 'tab-2', lastChangedAt: 1 } } })
-    socket.handleLocalFrame('local:swarm', { type: 'swarm_host_changed', payload: { tabId: 'tab-3', lastChangedAt: 1 } })
-    await new Promise((r) => setTimeout(r, 20))
-    expect(heard).toHaveLength(3)
-    expect(frames.filter((f) => f.type === 'swarm_host_changed')).toEqual([])
-    await socket.unregisterLocalClient('local:swarm')
-    await socket.stop()
-  })
-
-  // Stability roadmap 2.4: the server says over this socket when work waits for an agent here (backend lib/adapterWs.ts).
-  it('hands the backend\'s super_tab_deliveries to the Swarm host, never to the windows, and only the backend\'s', async () => {
-    const socket = relaySocket('token')
-    const heard: unknown[] = []
-    const frames: Array<Record<string, unknown>> = []
-    socket.onAccountNotice = (notice) => { heard.push(notice) }
-    socket.registerLocalClient('local:swarm', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
-    socket.connect()
-    const ws = wsMock.instances[0]
-    ws.open()
-    ws.message({ t: 'down', connId: '', frame: { type: 'super_tab_deliveries', payload: { tabId: 'tab-1', agentId: 'agent-1' } } })
-    // Naming no agent, or naming one wrongly, it only says the server pushes.
-    ws.message({ t: 'down', connId: '', frame: { type: 'super_tab_deliveries', payload: { tabId: 'tab-1', agentId: 7 } } })
-    await vi.waitFor(() => expect(heard).toEqual([{ type: 'super_tab_deliveries', tabId: 'tab-1', agentId: 'agent-1' }, { type: 'super_tab_deliveries' }]))
-    // A client relayed with its own connId, or a local one, is not the backend.
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'super_tab_deliveries', payload: { tabId: 'tab-1', agentId: 'agent-2' } } })
-    socket.handleLocalFrame('local:swarm', { type: 'super_tab_deliveries', payload: { tabId: 'tab-1', agentId: 'agent-3' } })
-    await new Promise((r) => setTimeout(r, 20))
-    expect(heard).toHaveLength(2)
-    expect(frames.filter((f) => f.type === 'super_tab_deliveries')).toEqual([])
-    await socket.unregisterLocalClient('local:swarm')
-    await socket.stop()
-  })
-
-  // Task #2800, review of #2977: the server renews the Swarm host's delivery push lease each minute.
-  it('hands the backend\'s __deliveries_lease to the Swarm host, never to the windows, and only the backend\'s', async () => {
-    const socket = relaySocket('token')
-    const heard: unknown[] = []
-    const frames: Array<Record<string, unknown>> = []
-    socket.onAccountNotice = (notice) => { heard.push(notice) }
-    socket.registerLocalClient('local:swarm', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
-    socket.connect()
-    const ws = wsMock.instances[0]
-    ws.open()
-    ws.message({ t: 'down', connId: '', frame: { type: '__deliveries_lease', payload: {} } })
-    await vi.waitFor(() => expect(heard).toEqual([{ type: '__deliveries_lease' }]))
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: '__deliveries_lease', payload: {} } })
-    socket.handleLocalFrame('local:swarm', { type: '__deliveries_lease', payload: {} })
-    await new Promise((r) => setTimeout(r, 20))
-    expect(heard).toHaveLength(1)
-    expect(frames.filter((f) => f.type === '__deliveries_lease')).toEqual([])
-    await socket.unregisterLocalClient('local:swarm')
-    await socket.stop()
-  })
-
-  // Spec 2026-11-02-poll-cost Part 4.2: the server says a Lead's terminal request waits for this machine.
-  it('hands the backend\'s __terminal_waiting to the Swarm host, never to the windows, and only the backend\'s', async () => {
-    const socket = relaySocket('token')
-    const heard: unknown[] = []
-    const frames: Array<Record<string, unknown>> = []
-    socket.onAccountNotice = (notice) => { heard.push(notice) }
-    socket.registerLocalClient('local:swarm', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
-    socket.connect()
-    const ws = wsMock.instances[0]
-    ws.open()
-    ws.message({ t: 'down', connId: '', frame: { type: '__terminal_waiting', payload: { tabId: 'tab-1', agentId: 'agent-1' } } })
-    // One that names no agent is no request.
-    ws.message({ t: 'down', connId: '', frame: { type: '__terminal_waiting', payload: { tabId: 'tab-1' } } })
-    await vi.waitFor(() => expect(heard).toEqual([{ type: '__terminal_waiting', tabId: 'tab-1', agentId: 'agent-1' }]))
-    // A client relayed with its own connId, or a local one, is not the backend.
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: '__terminal_waiting', payload: { tabId: 'tab-1', agentId: 'agent-2' } } })
-    socket.handleLocalFrame('local:swarm', { type: '__terminal_waiting', payload: { tabId: 'tab-1', agentId: 'agent-3' } })
-    await new Promise((r) => setTimeout(r, 20))
-    expect(heard).toHaveLength(1)
-    expect(frames.filter((f) => f.type === '__terminal_waiting')).toEqual([])
-    await socket.unregisterLocalClient('local:swarm')
+    const pushes = ['swarm_changed', 'swarm_host_changed', 'super_tab_deliveries', '__deliveries_lease', '__terminal_waiting']
+    for (const type of pushes) ws.message({ t: 'down', connId: '', frame: { type, payload: { tabId: 'tab-1', agentId: 'agent-1', lastChangedAt: 5, parts: ['main'] } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'desk_changed', payload: { revision: 3 } } })
+    await vi.waitFor(() => expect(frames).toContainEqual({ type: 'desk_changed', payload: { revision: 3 } }))
+    expect(frames.filter((f) => pushes.includes(f.type as string))).toEqual([])
+    expect(heard.filter((notice) => pushes.includes((notice as { type: string }).type))).toEqual([])
+    await socket.unregisterLocalClient('local:window')
     await socket.stop()
   })
 
@@ -3464,7 +3355,7 @@ describe('agent_retarget clearGrid', () => {
     expect(seen).toHaveLength(0)
   })
 
-  // A fresh move served only the v3 Buddy's model switch (#3901): an older caller's `fresh` is taken and goes nowhere.
+  // A fresh move served only a retired model switch (#3901): an older caller's `fresh` is taken and goes nowhere.
   it('moves a request that still says fresh home as any other', async () => {
     const { seen } = await retarget({ requestId: 'r', agentId: 'a1', clearGrid: true, fresh: true })
     expect(seen).toEqual([{ agentId: 'a1', grid: null }])
@@ -4115,15 +4006,14 @@ describe('agent_recent replies', () => {
 describe('request sources', () => {
   it.each(['phone', 'Desktop'] as const)('%s: names a project preparation refusal for a Claude or Codex creation', async surface => {
     const socket = relaySocket('token')
-    bindLaunchRequests(socket)
+    // The real creation handler translates workspaces' refusal into a durable receipt.
+    bindLaunchRequests(socket, { workspaces: preparingWorkspaces(async () => ({ ok: false, error: 'WORKTREE_FAILED', detail: 'PRIVATE_CANARY' })) })
     socket.connect()
     const ws = wsMock.instances.at(-1)!
     ws.open()
     const counters: string[] = [], signals: unknown[] = []
     vi.spyOn(gatewayOf(socket), 'usageCounter').mockImplementation(metric => { counters.push(metric) })
     vi.spyOn(gatewayOf(socket), 'usageLaunch').mockImplementation(signal => { signals.push(signal) })
-    // The real creation handler translates this imported helper's refusal into a durable receipt.
-    vi.spyOn(projectFolder, 'prepareProjectFolder').mockRejectedValue(new projectFolder.ProjectFolderError('WORKTREE_FAILED', 'PRIVATE_CANARY'))
     socket.onCreateAgent = vi.fn()
     socket.registerLocalClient('local:creation-report', { sendFrame: () => true, sendBinary: () => true })
     vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
@@ -4231,7 +4121,7 @@ describe('machines_changed relay', () => {
 
   it('hands a shares notice on at a random moment within 10 s, and a burst of them once', async () => {
     // Prod 2026-10-28: one invitation told every computer of its recipient at once, and each window read the shares list
-    // in the same second; across a Swarm's members those reads came in waves that held the backend at its pod limit.
+    // in the same second; across many agents those reads came in waves that held the backend at its pod limit.
     vi.useFakeTimers()
     vi.spyOn(Math, 'random').mockReturnValue(0.5)
     const socket = relaySocket('token')
@@ -4620,7 +4510,7 @@ describe('opening the app', () => {
     const socket = new BackendSocket('fixture')
     const counted: string[] = []
     socket.useGateway({ holdRequests: () => {}, serveThisComputerOnly: () => {}, localClients: () => {}, windowOpened: () => {},
-      usageCounter: (metric: string) => { counted.push(metric) } } as never)
+      usage: (event: UsageEvent) => countUsage(event, (metric) => { counted.push(metric) }, () => {}) } as never)
     const sink = { sendFrame: () => true, sendBinary: () => true }
     socket.registerLocalClient('local:tui', sink, { surface: 'tui' })
     socket.registerLocalClient('local:app', sink)

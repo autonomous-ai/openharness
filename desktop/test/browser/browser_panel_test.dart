@@ -11,6 +11,9 @@ import 'package:harness/browser/browser_setup_dialog.dart';
 import 'package:harness/browser/browser_stream.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/logging/app_log.dart';
+import 'package:harness/logging/log_stream.dart';
+import 'package:harness/logging/log_stream_sinks.dart';
 import 'package:harness/measurement/product_measurement.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -147,6 +150,7 @@ void main() {
     WidgetTester tester,
     AgentBrowser? browser, {
     bool thisComputer = true,
+    bool visible = true,
   }) async {
     app.browser(browser);
     await tester.pumpWidget(
@@ -161,6 +165,7 @@ void main() {
               machineId: 'm',
               agentId: 'a1',
               thisComputer: thisComputer,
+              visible: visible,
               onClose: () => closed++,
               newView: () {
                 final view = FakeBrowserView(ready: true);
@@ -336,6 +341,20 @@ void main() {
     expect(await app.streams.single.stream.closed, 'closed');
   });
 
+  testWidgets('a tile out of sight ends its stream, and opens another back '
+      'in sight', (tester) async {
+    await showOpen(tester);
+    await show(tester, ready, visible: false);
+    expect(app.streams.single.frames.last.$1, 'agent_browser_close');
+    expect(key('browser-screen'), findsNothing);
+    await show(tester, ready);
+    expect(app.streams, hasLength(2));
+    app.answer();
+    await tester.pump();
+    await tester.pump();
+    expect(key('browser-screen'), findsOneWidget);
+  });
+
   testWidgets('opening a stream reports agent_browser_opened once, with no '
       'other field', (tester) async {
     await show(tester, ready);
@@ -509,6 +528,35 @@ void main() {
     await tester.pump();
     expect(key('browser-screen'), findsOneWidget);
     expect(find.text('Update Harness on Ken Mac first'), findsOneWidget);
+  });
+
+  testWidgets('a refused request is logged by its code', (tester) async {
+    final previousLog = appLog;
+    final stream = LogStream();
+    appLog = StreamAppLog(stream);
+    addTearDown(() => appLog = previousLog);
+    app.stopRefused = const WsRequestFailure(
+      responseType: 'agent_browser_stop_result',
+      code: 'NOT_OWNER',
+      detail: 'zebra-orchard is busy',
+    );
+    await showOpen(tester);
+    await tester.tap(find.byTooltip('Stop'));
+    await tester.pump();
+    await tester.pump();
+    app.answer();
+    await tester.pump();
+    await tester.pump();
+
+    final line = stream.entries.singleWhere(
+      (e) => e.category == 'browser' && e.message.startsWith('request to'),
+    );
+    expect(line.message, 'request to m failed');
+    expect(line.error, 'agent_browser_stop_result: NOT_OWNER');
+    for (final e in stream.entries) {
+      expect('${e.message} ${e.error}', isNot(contains('zebra-orchard')));
+    }
+    expect(find.text('Only its owner can open this browser'), findsOneWidget);
   });
 
   // Review, 2026-11-12: CLI 0.6.40 with its browser in its own process never sent the agent's frame again after a

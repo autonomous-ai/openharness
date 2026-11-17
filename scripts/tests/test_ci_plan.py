@@ -26,23 +26,20 @@ class SelectionTests(unittest.TestCase):
         self.assertNotIn("backend", planner.NOT_READ)
 
     def test_a_desktop_file_the_phone_tests_read_runs_mobile_checks(self):
-        # mobile/test/swarm/desktop_parity_test.dart compares the phone's Swarm models with these; a desktop-only PR that
-        # changed one passed its own CI and failed two batches later (River, 2026-11-03).
-        for path in ["desktop/lib/super_tabs/model.dart", "desktop/lib/super_tabs/controller.dart",
-                     "desktop/lib/super_tabs/parts.dart", "desktop/lib/widgets/engine_identity.dart",
-                     "desktop/test/support/real_fonts.dart"]:
+        # The phone's tests compare these; a desktop-only PR that changed one such file passed its own CI and failed two
+        # batches later (River, 2026-11-03).
+        for path in ["desktop/lib/widgets/engine_identity.dart", "desktop/test/support/real_fonts.dart"]:
             with self.subTest(path=path):
                 self.assertEqual(planner.select([path])[0], {"desktop", "mobile"})
-        self.assertEqual(planner.select(["desktop/lib/super_tabs/view.dart"])[0], {"desktop"})
+        self.assertEqual(planner.select(["desktop/lib/main.dart"])[0], {"desktop"})
 
     def test_a_desktop_change_on_main_keeps_backends_result_only_when_backend_reads_none_of_it(self):
-        # Task #4511: no backend test reads the Swarm view's files since #3013 (11-04); declaring them reran backend
-        # after every Update branch that brought a Buddy change.
-        for path in ["desktop/lib/super_tabs/thread_panel.dart", "desktop/lib/super_tabs/view.dart"]:
+        # Task #4511: a backend test reads only the desktop files it declares; declaring more reran backend after every
+        # Update branch that brought a desktop change.
+        for path in ["desktop/lib/widgets/pane_grid.dart", "desktop/lib/screens/swarm_screen.dart"]:
             with self.subTest(path=path):
                 self.assertFalse(planner.reads("backend", path))
-        for path in ["desktop/lib/super_tabs/attachment_upload.dart", "desktop/lib/measurement/setup_transport.dart",
-                     "mobile/integration_test/push_e2e/reply_push.apns"]:
+        for path in ["desktop/lib/measurement/setup_transport.dart"]:
             with self.subTest(path=path):
                 self.assertTrue(planner.reads("backend", path))
         for path in ["backend/src/lib/deviceAckCore.ts"]:
@@ -59,7 +56,7 @@ class SelectionTests(unittest.TestCase):
         for test in tests:
             text = test.read_text()
             named |= {"desktop/" + m for m in re.findall(r"'(?:\.\./)+desktop/([\w/.-]+\.dart)'", text)}
-        self.assertIn("desktop/lib/super_tabs/model.dart", named)
+        self.assertIn("desktop/lib/widgets/engine_identity.dart", named)
         for path in sorted(named):
             with self.subTest(path=path):
                 self.assertTrue((root / path).exists(), path)
@@ -99,9 +96,43 @@ class SelectionTests(unittest.TestCase):
             "devices/harness-pro/README.md": {"firmware", "pro"}, "devices/harness-pro-other/x.c": {"firmware"},
             "mobile/pubspec.lock": {"mobile"}, "daemons/tools/card.mjs": {"daemons"},
             "pty/src/stream.rs": {"pty"},
+            "device-app/src-tauri/src/lib.rs": {"device-app"}, "device-app/ui/src/main.ts": {"device-app"},
         }.items():
             with self.subTest(path=path):
                 self.assertEqual(planner.owners(path), expected)
+
+    def test_the_device_app_runs_its_own_suite_and_no_other(self):
+        for path in ("device-app/src-tauri/src/keepalive.rs", "device-app/src-tauri/Cargo.lock",
+                     "device-app/ui/package-lock.json", "device-app/AGENTS.md"):
+            with self.subTest(path=path):
+                self.assertEqual(planner.select([path])[0], {"device-app"})
+        self.assertEqual(planner.JOBS["device-app"], {"device-app-checks"})
+        self.assertEqual(planner.MANUAL["device-app"], {"device-app"})
+        self.assertNotIn("device-app", planner.PR_READS)
+
+    def test_the_workflow_carries_every_suite(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text()
+        options = re.search(r"(?m)^        options: \[(.+)\]$", workflow).group(1).split(", ")
+        self.assertEqual(set(options), set(planner.MANUAL))
+        jobs = dict(re.findall(r"(?m)^  ([\w-]+):\n((?:(?:    .*)?\n)+)", workflow))
+        needs = set(re.findall(r"[\w-]+", re.search(r"(?m)^    needs: \[((?:.|\n)+?)\]", jobs["required"]).group(1)))
+        for suite in sorted(planner.SUITES):
+            with self.subTest(suite=suite):
+                self.assertIn(f"      {suite}: ${{{{ steps.select.outputs.{suite} }}}}", jobs["plan"])
+                for job in planner.JOBS[suite]:
+                    self.assertIn(f"needs.plan.outputs.{suite} == 'true'", jobs[job])
+                    self.assertIn(job, needs)
+        job = jobs["device-app-checks"]
+        for text in ("libwebkit2gtk-4.1-dev", "libayatana-appindicator3-dev", "librsvg2-dev",
+                     "working-directory: device-app/ui", "npx vitest run", "npm run build",
+                     "cargo test --locked --manifest-path device-app/src-tauri/Cargo.toml",
+                     "xvfb", "openbox", "xdotool", "xterm", "--ignored x11_live", "x11_live ... ok"):
+            self.assertIn(text, job)
+        self.assertLess(job.index("npm run build"), job.index("cargo test"))  # the binary embeds ui/dist
+        # The live X11 step reuses the unit tests' build.
+        self.assertLess(job.index("cargo test --locked --manifest-path device-app/src-tauri/Cargo.toml"),
+                        job.index("X11 front source, live"))
+        self.assertNotIn("macos", job)
 
     def test_the_cli_ptyhost_backend_and_the_vendored_terminal_also_belong_to_the_pty_suite(self):
         for path, expected in {
@@ -126,11 +157,6 @@ class SelectionTests(unittest.TestCase):
         self.assertIn("desktop", planner.select(["cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json"])[0])
         self.assertNotIn("desktop", planner.select(["cli/src/lib/windows/pipeAuth.ts"])[0])
 
-    def test_the_goal_rows_also_select_the_desktop_suite(self):
-        # desktop/test/swarm_goal_test.dart reads them from cli/: a changed row runs both readers.
-        self.assertIn("desktop", planner.select(["cli/src/superTabs/__fixtures__/goal-rows.json"])[0])
-        self.assertNotIn("desktop", planner.select(["cli/src/superTabs/goal.ts"])[0])
-
     def test_the_desktop_runner_and_its_durations_select_the_desktop_suite(self):
         # Task #3458: the runner splits the Desktop shards by the durations file; a change to either runs those shards,
         # so a bad split cannot merge on process checks alone.
@@ -138,30 +164,6 @@ class SelectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(planner.select([path])[0], {"desktop"})
         self.assertEqual(planner.select(["scripts/desktop-test-durations.py"])[0], set())
-
-    def test_a_style_allowlist_selects_the_suite_whose_job_checks_it(self):
-        # mobile-checks and desktop-tests run scripts/check-ui-style.py --only against their area's list.
-        self.assertEqual(planner.select(["scripts/ui-style-allowlist/mobile.json"])[0], {"mobile"})
-        self.assertEqual(planner.select(["scripts/ui-style-allowlist/desktop.json"])[0], {"desktop"})
-        self.assertEqual(planner.select(["scripts/ui-style-allowlist/website.json"])[0], set())
-
-    def test_the_style_allowlist_map_matches_the_style_check_and_the_workflow(self):
-        scripts = Path(__file__).resolve().parents[1]
-        style_spec = importlib.util.spec_from_file_location("check_ui_style", scripts / "check-ui-style.py")
-        style = importlib.util.module_from_spec(style_spec)
-        style_spec.loader.exec_module(style)
-        expected = {f"{style.ALLOWLISTS}/{area}.json": planner.select([folder + "/x.dart"])[0]
-                    for folder, area in style.ROOTS.items()}
-        self.assertEqual({path: {suite} for path, suite in planner.STYLE_ALLOWLISTS.items()}, expected)
-        # Each area's check runs inside a job of the suite the list selects.
-        workflow = (scripts.parent / ".github/workflows/ci.yml").read_text()
-        jobs = dict(re.findall(r"(?m)^  ([\w-]+):\n((?:(?:    .*)?\n)+)", workflow))
-        for folder, area in style.ROOTS.items():
-            with self.subTest(area=area):
-                suite = planner.STYLE_ALLOWLISTS[f"{style.ALLOWLISTS}/{area}.json"]
-                checking = {name for name, body in jobs.items() if f"check-ui-style.py --only {folder}" in body}
-                self.assertTrue(checking)
-                self.assertLessEqual(checking, planner.JOBS[suite])
 
     def test_the_shared_terminal_crate_selects_both_the_pty_host_and_the_tui(self):
         # term/ is a dependency of the PTY host and of the shipped TUI (`hn`): both suites run (and os-checks, which packages
@@ -177,7 +179,7 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(planner.select(["cli/src/lib/engineLaunch.ts"])[0], {"cli", "companions", "desktop", "mobile", "pty"})
         self.assertEqual(planner.select(["cli/src/lib/tmuxBackend.ts"])[0], {"cli", "companions", "pty"})
         # A desktop file only the desktop reads runs the desktop alone; one the phone's tests read runs both.
-        self.assertEqual(planner.select(["desktop/lib/super_tabs/view.dart"])[0], {"desktop"})
+        self.assertEqual(planner.select(["desktop/lib/widgets/pane_grid.dart"])[0], {"desktop"})
         self.assertEqual(planner.select(["desktop/lib/widgets/engine_identity.dart"])[0], {"desktop", "mobile"})
         # Desktop's and the CLI's tests read the Store's agents and branding, which no component owns.
         self.assertEqual(planner.select(["store/agents/blender/store.json"])[0], {"cli", "desktop"})
@@ -491,30 +493,6 @@ class ReuseTests(ReuseFixture):
         self.assertEqual(plan["reused"], {})
         self.assertIn("backend/integration/teams.test.ts", plan["reuse"]["rerun"]["backend"])
         self.assertEqual(plan["required_jobs"], sorted({"process-checks", "backend-desk", "backend-integration"}))
-
-    def test_a_style_allowlist_main_changed_reruns_the_suite_that_checks_it(self):
-        # mobile-checks runs the mobile style check: a list main shrank can fail with this PR's code.
-        for area, suite, other in (("mobile", "mobile", "backend"), ("desktop", "desktop", "mobile")):
-            with self.subTest(area=area):
-                pr_paths = {"mobile": ["mobile/lib/app.dart", "backend/src/app.ts"],
-                            "desktop": ["desktop/lib/a.dart", "mobile/lib/app.dart"]}[area]
-                _, main, head = self.scenario(pr_paths, [f"scripts/ui-style-allowlist/{area}.json"])
-                plan = self.plan(head, main)
-                self.assertEqual(list(plan["reused"]), [other])
-                self.assertIn(f"scripts/ui-style-allowlist/{area}.json", plan["reuse"]["rerun"][suite])
-                self.assertEqual(plan["required_jobs"], sorted({"process-checks"} | planner.JOBS[suite]))
-
-    def test_a_style_allowlist_the_pr_changes_is_its_components_input_not_a_shared_one(self):
-        # The mobile batch that waited behind a backend batch also shrank its style allowlist (#2154).
-        _, main, head = self.scenario(["mobile/lib/app.dart", "scripts/ui-style-allowlist/mobile.json"],
-                                      ["backend/src/app.ts", "scripts/ui-style-allowlist/desktop.json"])
-        plan = self.plan(head, main)
-        self.assertEqual(plan["suites"], ["mobile"])
-        self.assertEqual(list(plan["reused"]), ["mobile"])
-
-    def test_an_unknown_style_allowlist_on_main_reruns_every_component(self):
-        _, main, head = self.scenario(["mobile/lib/app.dart"], ["scripts/ui-style-allowlist/website.json"])
-        self.assertRerunsAll(self.plan(head, main), "scripts/ui-style-allowlist/website.json")
 
     def test_the_os_suite_reruns_when_main_changes_the_dial_ids_it_checks(self):
         # os/tests/test_lock_and_screenshot.py reads cli/src/cable/serial.ts from the repository root.
@@ -836,16 +814,6 @@ class VerifyReuseTests(ReuseFixture):
                       reused={"mobile": dict(origin_sha=passed, origin_tree=tree, run_id=11, run_attempt=1,
                                              run_url="https://github.com/o/r/actions/runs/11", reason="trust me")})
         with self.assertRaisesRegex(ValueError, "productUsage"):
-            planner.verify_reuse(self.root, forged, main, self.evidence)
-
-    def test_a_claimed_reuse_past_a_shrunk_style_allowlist_is_refused(self):
-        passed, main, head = self.scenario(["mobile/lib/app.dart"], ["scripts/ui-style-allowlist/mobile.json"])
-        tree = self.git("rev-parse", f"{passed}^{{tree}}")
-        forged = dict(source_sha=head, suites=["mobile"], event="pull_request",
-                      reuse=dict(passed_head=passed, main_parent=main),
-                      reused={"mobile": dict(origin_sha=passed, origin_tree=tree, run_id=11, run_attempt=1,
-                                             run_url="https://github.com/o/r/actions/runs/11", reason="trust me")})
-        with self.assertRaisesRegex(ValueError, "ui-style-allowlist/mobile.json"):
             planner.verify_reuse(self.root, forged, main, self.evidence)
 
     def test_a_pr_that_edits_the_planner_cannot_have_reuse_accepted(self):

@@ -6,15 +6,15 @@
  */
 import { randomBytes } from 'node:crypto'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { createServer, type IncomingMessage, type Server } from 'node:http'
-import type { AddressInfo } from 'node:net'
+import { createServer, globalAgent, type IncomingMessage, type Server } from 'node:http'
+import type { AddressInfo, Socket } from 'node:net'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { writeDaemonRecord } from './daemonRecord.js'
 import { isTrustedLocal, listenLocalSocket, pipeProofOf } from './localSocket.js'
-import { daemonFetch, daemonPipeNow, openLocalWs } from './localTransport.js'
+import { daemonFetch, daemonPipeNow, fetchOverSocket, openLocalWs } from './localTransport.js'
 import { NOT_RUNNING } from './unreachable.js'
 import { PIPE_PROOF_HEADER } from './windows/pipeAuth.js'
 import { PipeUnproven, type PipeTarget } from './windows/pipeClient.js'
@@ -97,7 +97,7 @@ describe('daemonFetch on Windows goes over the daemon\'s pipe, never its port (W
     const form = new FormData()
     const bytes = randomBytes(10 * 1024 * 1024)
     form.append('file', new Blob([bytes]), 'big.bin')
-    const answer = await daemonFetch('/nowhere', 4242, never, 'win32', async () => ({ pipe, token }))('http://127.0.0.1:4242/api/super-tabs/t/attachments', { method: 'POST', body: form })
+    const answer = await daemonFetch('/nowhere', 4242, never, 'win32', async () => ({ pipe, token }))('http://127.0.0.1:4242/api/files', { method: 'POST', body: form })
     expect(answer.status).toBe(200)
     expect(seen[0]!.type).toMatch(/^multipart\/form-data; boundary=/)
     expect(seen[0]!.body.includes(bytes)).toBe(true)
@@ -222,5 +222,26 @@ describe('a request whose caller the daemon could not look up in time', () => {
     const other = replies(() => new Response('{"error":"UNAVAILABLE"}', { status: 503 }), unanswered)
     expect((await daemonFetch('/nowhere', 4242, other.base, 'linux')('http://127.0.0.1:9/api/machines')).status).toBe(503)
     expect(other.sent).toHaveLength(1)
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('fetchOverSocket on a socket kept alive', () => {
+  it('fifty requests over one kept-alive socket leave one error listener', async () => {
+    const served = await listenLocalSocket((req, res) => { req.resume(); req.on('end', () => res.end('ok')) }, join(folder().data, 'kept.sock'))
+    tolerant(served.server)
+    cleanup.push(served.close)
+    const made = vi.spyOn(globalAgent, 'createConnection')
+    cleanup.push(() => made.mockRestore())
+    const send = fetchOverSocket(served.path)
+    const errorListeners: number[] = []
+    for (let i = 0; i < 50; i++) {
+      expect(await (await send('http://devices.invalid/', { method: 'POST', body: '{}' })).text()).toBe('ok')
+      // The agent frees the socket on the tick after the answer ends: the next request is sent on it.
+      await new Promise((resolve) => setImmediate(resolve))
+      errorListeners.push((made.mock.results[0]!.value as Socket).listeners('error').filter((listener) => listener.name !== 'freeSocketErrorListener').length)
+    }
+    expect(made).toHaveBeenCalledTimes(1)
+    // Node's own for a free socket aside.
+    expect(errorListeners).toEqual(Array(50).fill(1))
   })
 })

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  ENGINE_LIVE_ENV, ENGINE_RUNTIME_ENV, ENGINE_SCREEN_ENV, ENGINE_MODEL_CONTROL_ENV, masterRunsEngineModelControl, ENGINE_QUESTION_CONTROL_ENV, masterRunsEngineQuestionControl, ENGINE_SUBMISSION_ENV, masterRunsEngineSubmission, ENGINE_NATIVE_CONTROL_ENV, masterRunsEngineNativeControl, ENGINE_BACKGROUND_JOB_ENV, masterRunsEngineBackgroundJob, ENGINE_PROVIDER_MOVE_ENV, masterRunsEngineProviderMove, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, UPDATER_HOST, masterRunsLiveEngines, masterRunsEngineRuntime, masterRunsEngineScreen, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns, SWARM_ENV, servicesOn, swarmOn,
+  ENGINE_LIVE_ENV, ENGINE_OTHERS_ENV, otherEnginesVersion, ENGINE_RUNTIME_ENV, ENGINE_SCREEN_ENV, ENGINE_MODEL_CONTROL_ENV, masterRunsEngineModelControl, ENGINE_QUESTION_CONTROL_ENV, masterRunsEngineQuestionControl, ENGINE_SUBMISSION_ENV, masterRunsEngineSubmission, ENGINE_NATIVE_CONTROL_ENV, masterRunsEngineNativeControl, ENGINE_BACKGROUND_JOB_ENV, masterRunsEngineBackgroundJob, ENGINE_PROVIDER_MOVE_ENV, masterRunsEngineProviderMove, ENGINE_RESUME_REPAIR_ENV, masterRunsEngineResumeRepair, heldAgentLife, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, UPDATER_HOST, masterRunsLiveEngines, masterRunsEngineRuntime, masterRunsEngineScreen, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns,
   type ServiceSpec,
 } from './services.js'
 import { DEFAULT_SERVICE_OPTIONS, ServiceSupervisor, serviceOptions, type ServiceSupervisorDeps, type ServiceSupervisorOptions } from './serviceSupervisor.js'
@@ -336,7 +336,7 @@ describe('ServiceSupervisor', () => {
 
   it('leaves the new reader workers off for old cores that already read inline, and starts only the requested engine', () => {
     const specs = serviceSpecs({}, SERVICE_HOSTS).filter(spec => spec.name.startsWith('engine-'))
-    expect(specs.map(spec => spec.name)).toEqual(['engine-claude', 'engine-codex'])
+    expect(specs.map(spec => spec.name)).toEqual(['engine-claude', 'engine-codex', 'engine-others'])
     const supervisor = make(specs)
     supervisor.start()
     for (const protocol of [0, 1, 2, 3, 4]) supervisor.unasked(protocol)
@@ -538,7 +538,7 @@ describe('ServiceSupervisor', () => {
     const hosted = Object.values(SERVICE_HOSTS).flatMap((host) => host.services)
     expect(KNOWN_SERVICES).toEqual(hosted)
     expect(new Set(hosted).size).toBe(hosted.length)
-    expect(SERVICE_HOSTS.edge.services).toEqual(['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'goals', 'hachi'])
+    expect(SERVICE_HOSTS.edge.services).toEqual(['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'goals', 'hachi', 'engineProbe'])
     // Agent Messages has no process of its own: one cost every computer it was on 62 MiB at idle (2026-10-12).
     expect(Object.keys(SERVICE_HOSTS)).not.toContain('messages')
   })
@@ -581,23 +581,16 @@ describe('ServiceSupervisor', () => {
   })
 })
 
-describe('the Swarm switch', () => {
-  it('is on unless HARNESS_SWARM says off, so nothing changes for anyone who does not set it', () => {
-    expect(SWARM_ENV).toBe('HARNESS_SWARM')
-    expect(swarmOn({})).toBe(true)
-    for (const on of ['', 'on', '1', 'true', 'yes', 'anything']) expect(swarmOn({ HARNESS_SWARM: on }), on).toBe(true)
-    for (const off of ['off', 'OFF', ' off ', '0', 'false', 'no']) expect(swarmOn({ HARNESS_SWARM: off }), off).toBe(false)
-  })
-
-  it('off, leaves the Swarm\'s service out of the services this computer runs, and out of every process the master starts', () => {
-    expect(servicesOn({}, ['search', 'superTabs', 'cloud'])).toEqual(['search', 'superTabs', 'cloud'])
-    expect(servicesOn({ HARNESS_SWARM: 'off' }, ['search', 'superTabs', 'cloud'])).toEqual(['search', 'cloud'])
-    const processes = (env: NodeJS.ProcessEnv): string[] => serviceSpecs(env, SERVICE_HOSTS).flatMap(spec => spec.services)
-    expect(processes({})).toContain('superTabs')
-    expect(processes({ HARNESS_SWARM: 'off' })).not.toContain('superTabs')
-    // Named outright, it still stays off: the switch is the computer's, HARNESSD_SERVICES only says where services run.
-    expect(serviceSpecs({ HARNESSD_SERVICES: 'superTabs,search', HARNESS_SWARM: 'off' }, SERVICE_HOSTS).map(spec => spec.name)).toEqual(['search'])
-    expect(processes({ HARNESS_SWARM: 'off' })).toEqual(processes({}).filter(service => service !== 'superTabs'))
+// What the core holds for a service in its own process while it is down (core/agentLife.ts): a harness's children left
+// open, a deleted conversation left searchable, a browser's logins left with an agent that ended.
+describe('what the core holds of agents for the services out of its process', () => {
+  it('is each process\'s `hears`, by service, for the services out of the core\'s process only', () => {
+    expect(heldAgentLife(new Set(KNOWN_SERVICES))).toEqual({ search: ['purged'], agentCleanup: ['stopped'], agentBrowser: ['purged', 'taken'] })
+    expect(heldAgentLife(new Set(['search', 'viewers']))).toEqual({ search: ['purged'] })
+    expect(heldAgentLife(new Set())).toEqual({})
+    // A process that hears nothing holds nothing, and one names only its own services.
+    expect(heldAgentLife(new Set(['a', 'b']), { one: { services: ['a'], heapLimitMiB: 1, rssLimitMiB: 0 }, two: { services: ['b'], heapLimitMiB: 1, rssLimitMiB: 0, hears: { b: ['taken'] } } }))
+      .toEqual({ b: ['taken'] })
   })
 })
 
@@ -607,15 +600,15 @@ describe('which services the core leaves to its master', () => {
 
   it('is what the master says it runs, told in a form a core from before the list reads too', () => {
     const specs = serviceSpecs({ HARNESSD_SERVICES: 'search,workspaces' }, SERVICE_HOSTS)
-    expect(serviceProcessesEnv(specs, 42)).toEqual({ [SERVICE_PROCESSES_ENV]: 'search,workspaces', HARNESSD_SERVICES: 'search,workspaces', [ENGINE_LIVE_ENV]: '42:1', [ENGINE_RUNTIME_ENV]: '42:1', [ENGINE_SCREEN_ENV]: '42:1', [ENGINE_MODEL_CONTROL_ENV]: '42:1', [ENGINE_QUESTION_CONTROL_ENV]: '42:1', [ENGINE_SUBMISSION_ENV]: '42:1', [ENGINE_NATIVE_CONTROL_ENV]: '42:1', [ENGINE_BACKGROUND_JOB_ENV]: '42:1', [ENGINE_PROVIDER_MOVE_ENV]: '42:1' })
+    expect(serviceProcessesEnv(specs, 42)).toEqual({ [SERVICE_PROCESSES_ENV]: 'search,workspaces', HARNESSD_SERVICES: 'search,workspaces', [ENGINE_LIVE_ENV]: '42:1', [ENGINE_RUNTIME_ENV]: '42:1', [ENGINE_SCREEN_ENV]: '42:1', [ENGINE_MODEL_CONTROL_ENV]: '42:1', [ENGINE_QUESTION_CONTROL_ENV]: '42:1', [ENGINE_SUBMISSION_ENV]: '42:1', [ENGINE_NATIVE_CONTROL_ENV]: '42:1', [ENGINE_BACKGROUND_JOB_ENV]: '42:1', [ENGINE_PROVIDER_MOVE_ENV]: '42:1', [ENGINE_RESUME_REPAIR_ENV]: '42:1', [ENGINE_OTHERS_ENV]: '42:2' })
     // A process named as one of its services is named whole: the viewers' process runs the Store beside them.
     expect(serviceProcessesEnv(serviceSpecs({ HARNESSD_SERVICES: 'viewers' }, SERVICE_HOSTS), 42)).toMatchObject({ [SERVICE_PROCESSES_ENV]: 'viewers,store' })
     expect(serviceProcessesEnv(serviceSpecs({ HARNESSD_SERVICES: 'store' }, SERVICE_HOSTS), 42)).toMatchObject({ [SERVICE_PROCESSES_ENV]: 'store' })
     // By service, not by process: a core from before the edge host routes the services it knows of it.
     const hosted = serviceSpecs({ HARNESSD_SERVICES: 'edge' }, SERVICE_HOSTS)
-    expect(serviceProcessesEnv(hosted, 42)).toEqual({ [SERVICE_PROCESSES_ENV]: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames,shell,connectors,sharedMachines,agentCleanup,messages,osDevice,goals,hachi', HARNESSD_SERVICES: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames,shell,connectors,sharedMachines,agentCleanup,messages,osDevice,goals,hachi', [ENGINE_LIVE_ENV]: '42:1', [ENGINE_RUNTIME_ENV]: '42:1', [ENGINE_SCREEN_ENV]: '42:1', [ENGINE_MODEL_CONTROL_ENV]: '42:1', [ENGINE_QUESTION_CONTROL_ENV]: '42:1', [ENGINE_SUBMISSION_ENV]: '42:1', [ENGINE_NATIVE_CONTROL_ENV]: '42:1', [ENGINE_BACKGROUND_JOB_ENV]: '42:1', [ENGINE_PROVIDER_MOVE_ENV]: '42:1' })
+    expect(serviceProcessesEnv(hosted, 42)).toEqual({ [SERVICE_PROCESSES_ENV]: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames,shell,connectors,sharedMachines,agentCleanup,messages,osDevice,goals,hachi,engineProbe', HARNESSD_SERVICES: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames,shell,connectors,sharedMachines,agentCleanup,messages,osDevice,goals,hachi,engineProbe', [ENGINE_LIVE_ENV]: '42:1', [ENGINE_RUNTIME_ENV]: '42:1', [ENGINE_SCREEN_ENV]: '42:1', [ENGINE_MODEL_CONTROL_ENV]: '42:1', [ENGINE_QUESTION_CONTROL_ENV]: '42:1', [ENGINE_SUBMISSION_ENV]: '42:1', [ENGINE_NATIVE_CONTROL_ENV]: '42:1', [ENGINE_BACKGROUND_JOB_ENV]: '42:1', [ENGINE_PROVIDER_MOVE_ENV]: '42:1', [ENGINE_RESUME_REPAIR_ENV]: '42:1', [ENGINE_OTHERS_ENV]: '42:2' })
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv(hosted, 42) }, known)]).toEqual(['workspaces', 'messages'])
-    expect(serviceProcessesEnv([], 42)).toEqual({ [SERVICE_PROCESSES_ENV]: '', HARNESSD_SERVICES: 'none', [ENGINE_LIVE_ENV]: '42:1', [ENGINE_RUNTIME_ENV]: '42:1', [ENGINE_SCREEN_ENV]: '42:1', [ENGINE_MODEL_CONTROL_ENV]: '42:1', [ENGINE_QUESTION_CONTROL_ENV]: '42:1', [ENGINE_SUBMISSION_ENV]: '42:1', [ENGINE_NATIVE_CONTROL_ENV]: '42:1', [ENGINE_BACKGROUND_JOB_ENV]: '42:1', [ENGINE_PROVIDER_MOVE_ENV]: '42:1' })
+    expect(serviceProcessesEnv([], 42)).toEqual({ [SERVICE_PROCESSES_ENV]: '', HARNESSD_SERVICES: 'none', [ENGINE_LIVE_ENV]: '42:1', [ENGINE_RUNTIME_ENV]: '42:1', [ENGINE_SCREEN_ENV]: '42:1', [ENGINE_MODEL_CONTROL_ENV]: '42:1', [ENGINE_QUESTION_CONTROL_ENV]: '42:1', [ENGINE_SUBMISSION_ENV]: '42:1', [ENGINE_NATIVE_CONTROL_ENV]: '42:1', [ENGINE_BACKGROUND_JOB_ENV]: '42:1', [ENGINE_PROVIDER_MOVE_ENV]: '42:1', [ENGINE_RESUME_REPAIR_ENV]: '42:1', [ENGINE_OTHERS_ENV]: '42:2' })
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv(specs, 42) }, known)]).toEqual(['search', 'workspaces'])
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv([], 42) }, known)]).toEqual([])
     // What the master says wins over whatever HARNESSD_SERVICES the core inherited; names it does not know are its own.
@@ -710,6 +703,28 @@ describe('which services the core leaves to its master', () => {
     // An older master never set it: the core moves a conversation in line, as it did before its worker served it (#4145).
     expect(masterRunsEngineProviderMove({ ...env, [ENGINE_PROVIDER_MOVE_ENV]: undefined }, 42)).toBe(false)
     expect(masterRunsEngineProviderMove({ ...env, [ENGINE_LIVE_ENV]: undefined }, 42)).toBe(false)
+  })
+
+  it('says which version of the other engines\' worker the master runs, from the actual supervising parent alone', () => {
+    const env = { ...supervised, ...serviceProcessesEnv([], 42) }
+    expect(otherEnginesVersion(env, 42)).toBe(2)
+    // A 1a master advertises history only: a new core must keep its live streams inline.
+    expect(otherEnginesVersion({ ...env, [ENGINE_OTHERS_ENV]: '42:1' }, 42)).toBe(1)
+    expect(otherEnginesVersion({ ...env, [ENGINE_OTHERS_ENV]: '42:7' }, 42)).toBe(7)
+    expect(otherEnginesVersion(env, 43)).toBe(0)
+    // A master from before the worker never set it: the core reads those engines in its own process.
+    expect(otherEnginesVersion({ ...env, [ENGINE_OTHERS_ENV]: undefined }, 42)).toBe(0)
+    for (const said of ['42', '42:', '42:0', '42:01', '42:x', ':1', '42:1:2', '42:1234567']) expect(otherEnginesVersion({ ...env, [ENGINE_OTHERS_ENV]: said }, 42), said).toBe(0)
+    expect(otherEnginesVersion({ ...env, HARNESSD_SUPERVISED: undefined }, 42)).toBe(0)
+    expect(otherEnginesVersion({ ...env, HARNESSD_SERVICE_TOKEN: undefined }, 42)).toBe(0)
+  })
+
+  it('negotiates resume repair only with its capable supervising master', () => {
+    const env = { ...supervised, ...serviceProcessesEnv([], 42) }
+    expect(masterRunsEngineResumeRepair(env, 42)).toBe(true)
+    expect(masterRunsEngineResumeRepair(env, 43)).toBe(false)
+    expect(masterRunsEngineResumeRepair({ ...env, [ENGINE_RESUME_REPAIR_ENV]: undefined }, 42)).toBe(false)
+    expect(masterRunsEngineResumeRepair({ ...env, [ENGINE_LIVE_ENV]: undefined }, 42)).toBe(false)
   })
 
   it('is none without a master, or without the token its services would connect with', () => {

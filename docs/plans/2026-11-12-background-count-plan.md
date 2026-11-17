@@ -48,7 +48,7 @@ second ask). Read it with this plan, and `AGENTS.md`, `cli/AGENTS.md`, `cli/src/
 - Where code goes: per-engine knowledge in `cli/src/engines/<engine>/`; the dispatcher in `cli/src/lib/`; the close
   service gets it as a dependency; `core/main.ts` gains wiring only. Hermes's code is reached only through
   `engines/inProcess.ts` (`loadEngine('hermes')`): `src/architecture.spec.ts` fails a static import of it from the
-  core. The cleanup (edge host) imports nothing heavier than `lib/backgroundSaid.ts`. Swarm code is untouched.
+  core. The cleanup (edge host) imports nothing heavier than `lib/backgroundSaid.ts`.
 - `cli/src/core/**` and `cli/src/services/**` stay at 100% per file: every branch a task adds there is covered by
   that task's own spec.
 - Tests never touch the real `~/.harness`, `~/.claude`, `~/.hermes`, the daemon on 18473 or the real tmux server. No

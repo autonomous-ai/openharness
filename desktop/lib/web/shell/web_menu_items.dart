@@ -20,21 +20,14 @@ typedef WebMenuItem = ({
 /// What the `+` beside the tabs offers, in groups a thin rule separates: new
 /// work and what opens it (Huy, 2026-11-02). Machines and Models are the
 /// footer's links, as on Desktop; who is signed in, Settings and Appearance are
-/// the avatar's. New Swarm is here because its only other door is a key
-/// (Alt+S), which a phone has not. Splitting is here because a split is an edge
-/// to hover, which a finger cannot.
+/// the avatar's. Splitting is here because a split is an edge to hover, which a
+/// finger cannot.
 const List<List<WebMenuItem>> kWebMenuGroups = [
   [
     (
       command: 'swarm.new',
       label: 'New tab',
       icon: Icon(AppIcons.plus),
-      width: WebMenuWidth.any,
-    ),
-    (
-      command: 'super_tab.new',
-      label: 'New Swarm',
-      icon: Icon(AppIcons.users),
       width: WebMenuWidth.any,
     ),
   ],

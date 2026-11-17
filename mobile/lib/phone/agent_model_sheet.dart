@@ -158,17 +158,17 @@ class _AgentModelSheetState extends State<_AgentModelSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            ModelSheetTitle(agentName: _models.agent?.name),
+            ModelSheetTitle(onDone: () => Navigator.of(context).pop()),
             Flexible(
               child: ListView(
                 shrinkWrap: true,
-                padding: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.only(bottom: 16),
                 children: [
                   const ModelSectionHeading(
                     caption: 'Subscription',
                     first: true,
                   ),
-                  _subscriptionRow(),
+                  ModelCard(children: [_subscriptionRow()]),
                   ..._gridRows(),
                 ],
               ),
@@ -193,7 +193,6 @@ class _AgentModelSheetState extends State<_AgentModelSheet> {
             agent?.engine,
             displayName: agent?.engineDisplayName,
           ).label,
-      engine: agent?.engine,
       selected: agent?.gridModel == null,
       status: reading?['status'] as String?,
       detail: _nonEmpty(reading?['account'] as String?),
@@ -236,19 +235,24 @@ class _AgentModelSheetState extends State<_AgentModelSheet> {
     return [
       ModelSectionHeading(caption: heading.caption, detail: heading.detail),
       if (empty != null) ModelSectionNote(empty),
-      for (final model in section.models)
-        ModelRow(
-          title: model.id,
-          selected: agent?.gridModel == model.id,
-          // Which machine answers it — on the own grid, one of the user's own
-          // computers, which is the useful part of the answer.
-          status: _nonEmpty(model.node),
-          // The web-search status is about THIS agent's launch; the other rows
-          // are places it could go, about which nothing is known.
-          warning: agent?.gridModel == model.id
-              ? agent?.gridWebSearch?.sentence
-              : null,
-          onTap: () => widget.onPick(model),
+      if (section.models.isNotEmpty)
+        ModelCard(
+          children: [
+            for (final model in section.models)
+              ModelRow(
+                title: model.id,
+                selected: agent?.gridModel == model.id,
+                // Which machine answers it — on the own grid, one of the user's own
+                // computers, which is the useful part of the answer.
+                status: _nonEmpty(model.node),
+                // The web-search status is about THIS agent's launch; the other rows
+                // are places it could go, about which nothing is known.
+                warning: agent?.gridModel == model.id
+                    ? agent?.gridWebSearch?.sentence
+                    : null,
+                onTap: () => widget.onPick(model),
+              ),
+          ],
         ),
     ];
   }

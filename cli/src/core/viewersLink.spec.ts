@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
+import { createAgentLife } from './agentLife.js'
 import { VIEWERS_UNAVAILABLE } from './api.js'
 import { ON_DEMAND_START_MS } from './serviceLinks.js'
 import { createViewersLink, SURFACE_WAIT_MS, VIEWERS_BUFFER_LIMIT } from './viewersLink.js'
@@ -11,38 +12,55 @@ const agent = (over: Partial<RegisteredSession> = {}) =>
 const context = (over: Record<string, unknown> = {}) =>
   ({ id: 'acme/blender', name: 'Blender', viewerUrl: null, viewerName: 'Blender Viewer', verdict: null, ...over })
 
+/** What happens to agents, as the core tells whoever follows them (core/agentLife.ts): a look at one, its end. */
+const lives = () => createAgentLife({ live: () => [], notify: () => true, hears: {} })
+
 function setup(live: RegisteredSession | null = agent(), terminalAvailable = true) {
+  const hub = lives()
   const core = fakeCore({
     agents: {
       byAgent: vi.fn(() => live ?? undefined),
       terminalAvailable: vi.fn(() => terminalAvailable),
-      live: vi.fn(() => [agent(), agent({ agentId: 'plain', dsh: undefined }), agent({ agentId: 'a2', dsh: 'acme/kicad' })]),
+      follow: hub.follow,
     },
   })
   const notify = vi.fn(() => true)
   const link = createViewersLink(core, notify)
-  return { core, notify, link, port: link.port }
+  const unfollow = link.follow()
+  return { core, notify, link, port: link.port, hub, unfollow }
 }
 
 describe('the viewers in their own process, as the core keeps them', () => {
-  it('tells the process of each agent with a harness it attaches, and of no other', () => {
-    const { notify, port } = setup()
-    port.attach(agent())
-    port.attach(agent({ agentId: 'plain', dsh: undefined }))
-    // Not held while the process is down: it asks for every agent each time it connects.
-    expect(notify.mock.calls).toEqual([[{ type: 'service_event', payload: { kind: 'attach', session: agent() } }]])
+  it('tells the process nothing of agents itself: it follows them as every service does (core/agentLife.ts)', () => {
+    const { notify, hub } = setup()
+    hub.running(agent())
+    hub.running(agent({ agentId: 'plain', dsh: undefined }))
+    // What else agents do is not the viewers' business.
+    hub.stopped('a1')
+    hub.purged('a1', ['s1'])
+    hub.ended('a1')
+    expect(notify).not.toHaveBeenCalled()
+  })
+
+  it('keeps nothing once it stops following, and follows nothing in a core that lends no following', () => {
+    const { link, hub, unfollow } = setup()
+    unfollow()
+    hub.running(agent())
+    expect(link.answer('context', { agentId: 'a1', context: context(), forwardingUrl: null })).toEqual({ kept: false })
+    const bare = createViewersLink(fakeCore(), vi.fn(() => true))
+    expect(() => bare.follow()()).not.toThrow()
   })
 
   it('answers a frame with the fallbacks until the process has said anything of the agent', () => {
-    const { port } = setup()
-    port.attach(agent())
+    const { port, hub } = setup()
+    hub.running(agent())
     expect(port.frameContext(agent())).toBeNull()
     expect(port.forwardingUrl('a1')).toBeNull()
   })
 
   it('keeps what the process says of an attached agent, follows its viewer and sends its frame again', () => {
-    const { core, link, port } = setup()
-    port.attach(agent())
+    const { core, link, port, hub } = setup()
+    hub.running(agent())
     const said = context({ viewerUrl: 'http://127.0.0.1:7001/' })
     expect(link.answer('context', { agentId: 'a1', context: said, forwardingUrl: 'http://127.0.0.1:7001/', requestId: 'q1', query: 'context' })).toEqual({ kept: true })
     expect(port.frameContext(agent())).toEqual(said)
@@ -53,8 +71,8 @@ describe('the viewers in their own process, as the core keeps them', () => {
   })
 
   it('a change sends the frame again; no change does nothing', () => {
-    const { core, link, port } = setup()
-    port.attach(agent())
+    const { core, link, port, hub } = setup()
+    hub.running(agent())
     link.answer('context', { agentId: 'a1', context: context(), forwardingUrl: null })
     expect(core.agents.sync).toHaveBeenCalledTimes(1)
     const verdict = { ready: true, summary: 'ok', errors: 0, warnings: 0, artifact: null, phases: [], updatedAt: null }
@@ -67,21 +85,21 @@ describe('the viewers in their own process, as the core keeps them', () => {
 
   it('waits for the terminal before sending a frame, which would otherwise read as "agent gone"', () => {
     const detached = setup(agent(), false)
-    detached.port.attach(agent())
+    detached.hub.running(agent())
     detached.link.answer('context', { agentId: 'a1', context: context({ viewerUrl: 'http://127.0.0.1:7001/' }), forwardingUrl: 'http://127.0.0.1:7001/' })
     expect(detached.port.frameContext(agent())).toMatchObject({ viewerUrl: 'http://127.0.0.1:7001/' })
     expect(detached.core.agents.sync).not.toHaveBeenCalled()
     const gone = setup(null)
-    gone.port.attach(agent())
+    gone.hub.running(agent())
     gone.link.answer('context', { agentId: 'a1', context: context(), forwardingUrl: null })
     expect(gone.core.agents.sync).not.toHaveBeenCalled()
   })
 
   it('keeps nothing of an agent it never attached, or detached since: a word said before the detach is older than it', () => {
-    const { core, link, port } = setup()
+    const { core, link, port, hub } = setup()
     expect(link.answer('context', { agentId: 'a1', context: context(), forwardingUrl: null })).toEqual({ kept: false })
-    port.attach(agent())
-    port.detach('a1')
+    hub.running(agent())
+    hub.ended('a1')
     expect(link.answer('context', { agentId: 'a1', context: context({ viewerUrl: 'http://127.0.0.1:7001/' }), forwardingUrl: 'http://127.0.0.1:7001/' })).toEqual({ kept: false })
     expect(port.frameContext(agent())).toBeNull()
     expect(port.forwardingUrl('a1')).toBeNull()
@@ -91,41 +109,41 @@ describe('the viewers in their own process, as the core keeps them', () => {
   })
 
   it('reads what does not look like a context or a URL as none', () => {
-    const { link, port } = setup()
-    port.attach(agent())
+    const { link, port, hub } = setup()
+    hub.running(agent())
     link.answer('context', { agentId: 'a1', context: 'not a context', forwardingUrl: 9 })
     expect(port.frameContext(agent())).toBeNull()
     expect(port.forwardingUrl('a1')).toBeNull()
   })
 
-  it('a detach forgets the agent, and is held until the process hears it', () => {
-    const { notify, link, port } = setup()
-    port.attach(agent())
+  it('an end forgets the agent, and holds nothing for the process: its catch-up as it connects finds the end', () => {
+    const { notify, link, port, hub } = setup()
+    hub.running(agent())
     link.answer('context', { agentId: 'a1', context: context({ viewerUrl: 'http://127.0.0.1:7001/' }), forwardingUrl: 'http://127.0.0.1:7001/' })
-    port.detach('a1')
-    expect(notify).toHaveBeenLastCalledWith({ type: 'service_event', payload: { kind: 'detach', agentId: 'a1' } }, { untilDelivered: true })
+    hub.ended('a1')
+    expect(notify).not.toHaveBeenCalled()
     expect(port.frameContext(agent())).toBeNull()
     expect(port.forwardingUrl('a1')).toBeNull()
   })
 
   it('answers from what it last knew while the process cannot hear anything', () => {
-    const { link, notify, port } = setup()
-    port.attach(agent())
+    const { link, notify, port, hub } = setup()
+    hub.running(agent())
     link.answer('context', { agentId: 'a1', context: context({ viewerUrl: 'http://127.0.0.1:7001/' }), forwardingUrl: 'http://127.0.0.1:7001/' })
     notify.mockReturnValue(false)
-    port.attach(agent())
+    hub.running(agent())
     expect(port.frameContext(agent())).toMatchObject({ viewerUrl: 'http://127.0.0.1:7001/' })
     expect(port.forwardingUrl('a1')).toBe('http://127.0.0.1:7001/')
   })
 
-  it('names the agents with a harness when the process asks, and refuses a question it does not know', () => {
-    const { link } = setup()
-    expect(link.answer('agents', {})).toEqual({ agents: [agent(), agent({ agentId: 'a2', dsh: 'acme/kicad' })] })
+  it('refuses a question it does not know: which agents have a harness the process asks as it follows them', () => {
+    const { link, hub } = setup()
+    expect(link.answer('agents', {})).toEqual({ error: 'UNKNOWN_QUERY' })
     expect(link.answer('session_search', {})).toEqual({ error: 'UNKNOWN_QUERY' })
   })
 
   it('stops nothing in the core: the viewers are the process\'s', async () => {
-    const { notify, port } = setup()
+    const { notify, port, hub } = setup()
     await expect(port.stop()).resolves.toBeUndefined()
     expect(notify).not.toHaveBeenCalled()
   })
@@ -206,7 +224,8 @@ describe('a viewer served to a client over its connection, through the viewers\'
 
 describe('the viewers\' process on demand (core/viewersWake.ts)', () => {
   const onDemand = (connected = true) => {
-    const core = fakeCore()
+    const hub = lives()
+    const core = fakeCore({ agents: { follow: hub.follow } })
     vi.mocked(core.clients.viewerFrame).mockReturnValue(true)
     const notify = vi.fn(() => connected)
     const wake = vi.fn()
@@ -217,16 +236,17 @@ describe('the viewers\' process on demand (core/viewersWake.ts)', () => {
       setTimer: (run, ms) => { const timer = { run, ms, cleared: false }; timers.push(timer); return timer },
       clearTimer: (timer) => { (timer as { cleared: boolean }).cleared = true },
     })
-    return { core, notify, wake, timers, link, port: link.port }
+    link.follow()
+    return { core, notify, wake, timers, link, port: link.port, hub }
   }
   const stream = (connId: string, type: string, streamId = 's1') =>
     ({ type: 'service_event', payload: { kind: 'stream', connId, type, frame: { streamId } } })
 
   it('asks for the process for an agent with a harness, and not for one without', () => {
-    const { wake, port } = onDemand()
-    port.attach(agent({ agentId: 'plain', dsh: undefined }))
+    const { wake, hub } = onDemand()
+    hub.running(agent({ agentId: 'plain', dsh: undefined }))
     expect(wake).not.toHaveBeenCalled()
-    port.attach(agent())
+    hub.running(agent())
     expect(wake).toHaveBeenCalledWith('a harness here')
   })
 

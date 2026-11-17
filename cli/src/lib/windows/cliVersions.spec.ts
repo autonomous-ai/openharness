@@ -2,7 +2,8 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { VERSION_FOLDER, isVersionFolder, processRetireDeps, replaceFile, retireUnused, switchTo, versionsOnDisk, writeVersionFolder } from './cliVersions.js'
+import { isVersionFolder, processRetireDeps, replaceFile, retireUnused, switchTo, versionsOnDisk, writeVersionFolder } from './cliVersions.js'
+import { VERSION_FOLDER } from './installNames.js'
 
 // A disk that fills up partway through a write: the file is left with half its bytes, and the write throws.
 const fault = vi.hoisted(() => ({ at: null as ((file: string) => boolean) | null }))

@@ -7,7 +7,7 @@ import {
   type TerminalAgentProbe,
 } from './terminalAgentDiscovery.js'
 import type { TerminalBackend } from './terminalBackend.js'
-import { mergeTerminalRuntimes, processIdentityKey, sameProcessIdentity, terminalInstanceId, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
+import { mergeTerminalRuntimes, processAmong, processIdentityKey, sameProcessIdentity, terminalInstanceId, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import type { TerminalRuntimeRef } from './terminalTypes.js'
 
 const MISS_LIMIT = 2
@@ -115,11 +115,27 @@ function unboundRouteObservation(
   return matches.length === 1 ? matches[0] : undefined
 }
 
+/**
+ * Whether the process the agent was bound to still runs in one of its panes, whatever its name now. A wrapper that
+ * `exec`s keeps its pid and start: the wrapper's pid lived on as `unshare` while Hermes loaded, and two passes with no
+ * engine in the pane archived a running agent (lamp-9adf, 2026-11-13, #4259).
+ */
+function boundProcessRuns(
+  current: Pick<RegisteredSession, 'processIdentity' | 'runtimes'>,
+  probe: Pick<TerminalAgentProbe, 'paneProcesses'>,
+): boolean {
+  return current.runtimes.some((runtime) => processAmong(
+    current.processIdentity,
+    probe.paneProcesses?.get(terminalPlacementKey(runtime)),
+  ))
+}
+
 /** Serialized, failure-isolated reconciliation across every enabled backend instance. */
 export class TerminalAgentReconciler {
   private readonly misses = new Map<string, number>()
   /** Consecutive scans that found no engine for an agent, counted against the process identity they
-   *  missed: an engine identified since is a different engine, and its count starts again. */
+   *  missed: an engine identified since is a different engine, and its count starts again. A scan in
+   *  which the agent's recorded process still runs in its pane is no miss (`boundProcessRuns`). */
   private readonly engineMisses = new Map<string, { processKey: string | null; count: number }>()
   private readonly suppressed = new Set<string>()
   private readonly hints = new Map<string, AgentEngine>()
@@ -331,15 +347,21 @@ export class TerminalAgentReconciler {
         // exists to prevent — see the class-level comment on `heldRoutes`.
         if (this.routeHeld(current.runtimes, probeSeq)) continue
         const processKey = currentProcessKey(current)
-        const observed = (processKey ? observedByProcess.get(processKey) : undefined)
+        const sameProcess = (processKey ? observedByProcess.get(processKey) : undefined)
           // A row saved before start ticks is keyed by its marker, the same process observed with them
           // by its ticks: match it here, or the pass takes it for a new process (ProcessIdentity.startTicks).
           ?? probe.agents.find((agent) => agent.engine === current.engine
             && sameProcessIdentity(agent.processIdentity, current.processIdentity))
-          // A row an older build gave Hermes' gateway is the Hermes the gateway runs under: re-recorded, not replaced.
-          ?? probe.agents.find((agent) => agent.engine === current.engine
-            && !!agent.formerProcesses?.some((former) => sameProcessIdentity(former, current.processIdentity)))
-          ?? unboundRouteObservation(current, probe.agents)
+        // A row recorded on a process the engine has since left — an older build's Hermes gateway, or a
+        // wrapper that exec'd into the engine — is the engine's: re-recorded, not replaced.
+        const movedTo = sameProcess ? undefined : probe.agents.find((agent) => agent.engine === current.engine
+          && !!agent.formerProcesses?.some((former) => sameProcessIdentity(former, current.processIdentity)))
+        // Logged so the next report of an agent stopping after a wrapper exec shows whether it was
+        // followed. Once per move: the row now records the new process, so later passes match it above.
+        if (movedTo && current.processIdentity) {
+          console.log(`[discovery] ${current.engine} moved from pid ${current.processIdentity.pid} to pid ${movedTo.processIdentity.pid}; re-recorded`)
+        }
+        const observed = sameProcess ?? movedTo ?? unboundRouteObservation(current, probe.agents)
         if (observed) matchedProcesses.add(processIdentityKey(observed.engine, observed.processIdentity))
 
         let nextRuntimes = current.runtimes
@@ -402,10 +424,13 @@ export class TerminalAgentReconciler {
 
         if (terminalVerified) await this.deps.onTerminalAvailability?.(current, true)
         const probed = probedAs.get(current.agentId)
-        if (observed || (processKey === null && (current.launch?.state === 'starting' || probed?.starting))) {
+        if (observed || boundProcessRuns(current, probe)
+          || (processKey === null && (current.launch?.state === 'starting' || probed?.starting))) {
           // Before the first engine exists, two quick scans prove no exit. The
           // startup watcher owns that decision; discovery still checks the pane.
           // A pre-start snapshot cannot count after readiness changes mid-probe.
+          // Nor does a pane whose bound process runs on under a name no engine
+          // has: two fresh misses are needed once it is gone.
           this.engineMisses.delete(current.agentId)
         } else if (probed && probed.processKey === processKey
           && current.active && terminalVerified && !isTerminalEngine(current.engine) && !current.runtimes.some((runtime) =>

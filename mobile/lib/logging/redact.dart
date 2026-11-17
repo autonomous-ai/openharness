@@ -44,8 +44,8 @@ String summariseForLog(Object? value, {int maxLength = 1200}) {
 
 /// [value] rendered for a log, with any entry whose KEY looks secret replaced,
 /// and any secret a value's TEXT carries blanked ([redactSecretsInText]): a
-/// field named for what it is, not for the secret in it — a Swarm's `joinUrl`
-/// with its `?token=` — is caught by its text.
+/// field named for what it is, not for the secret in it — an invite link with
+/// its `?token=` — is caught by its text.
 ///
 /// Recurses into maps and lists so a secret nested a level or two down is
 /// caught too.

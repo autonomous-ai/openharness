@@ -65,7 +65,9 @@ it('starts phone and Desktop harnesses when managed tmux arrives after daemon st
     const binary = resolveBinaryOnPath(name)
     if (binary) symlinkSync(binary, join(tools, name))
   }
-  symlinkSync(process.execPath, join(tools, 'node'))
+  // The run's Node, not the worker's: Node names itself by the real path behind a link, and the product looks beside
+  // that path for engines (audit of 2026-11-16, docs/plans/2026-11-16-e2e-isolation-3-design.md).
+  symlinkSync(process.env.E2E_NODE_PATH!, join(tools, 'node'))
   d.env.PATH = `${join(d.root, 'bin')}:${tools}`
   d.env.SHELL = '/bin/zsh'
   d.env.HARNESS_HOMEBREW_PREFIXES = join(d.root, 'no-homebrew')

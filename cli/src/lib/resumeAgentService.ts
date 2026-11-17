@@ -1,13 +1,12 @@
 /** Exact-resume lifecycle shared by the daemon and its isolated acceptance tests. */
-import type { AdoptSwarmSkill } from '../core/api.js'
 import { transcriptSize, type RelaunchMarks } from '../core/transcripts/relaunch.js'
 import { isTerminalEngine } from '../engines/types.js'
 import { installedDsh } from '../dsh/installed.js'
-import { engineKeepsTranscriptFile, inSwarmAuto, registry as liveRegistry, type RegisteredSession } from './registry.js'
+import { engineKeepsTranscriptFile, registry as liveRegistry, type RegisteredSession } from './registry.js'
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { materializeResumeTranscript } from '../engines/resumeTranscript.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
-import { ResumePreparationError } from '../engines/kit/resumeRepair.js'
+import { ResumePreparationError } from '../engines/facets/resumeRepair.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import { resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed, RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
@@ -20,6 +19,7 @@ import { workspaceMissing } from './workspaceCheck.js'
 import { buildHarnessSessionLabel } from './harnessSessionLabel.js'
 import { createAndRegisterPane, type CreateAgentPaneDeps } from './createAgentPane.js'
 import type { LaunchOverrides, LaunchOverridesResult } from './launchOverrides.js'
+import { launchedGrid, type GridAssignment } from './gridAssignmentWire.js'
 import type { AgentRestartCoordinator } from './restartAgent.js'
 import { missingBackendCode, terminalTargetOf, type TerminalBackend } from './terminalBackend.js'
 import { windowsLaunchRefusal } from './windows/launch.js'
@@ -29,7 +29,6 @@ import type { TerminalRuntimeRef } from './terminalTypes.js'
 import { harnessPermissionEnvironment } from './harnessDefaults.js'
 
 export interface ResumeAgentServiceDeps {
-  adoptSwarmSkill?: AdoptSwarmSkill
   registry: Pick<typeof liveRegistry, 'byAgent' | 'bySession' | 'resumePendingAgent' | 'setLaunch' | 'setLaunchArgs' | 'updateProcessIdentity'>
   stoppedAgents: StoppedAgentStore
   /** Where a resumed harness's new pane is made (main.ts `createBackend`); null with no backend ready. */
@@ -46,14 +45,15 @@ export interface ResumeAgentServiceDeps {
   retainExitedSession(session: RegisteredSession, paneAlive: boolean): void
   announceSession(session: RegisteredSession): void
   relaunchOverrides(session: RegisteredSession, source: RegisteredSession, current: () => boolean): Promise<LaunchOverridesResult>
-  prepareSessionResume(session: RegisteredSession): void
+  /** Its history made resumable, replaced only while [current] holds; true when it was (core/agents/launch.ts). */
+  prepareSessionResume(session: RegisteredSession, current: () => boolean): Promise<boolean>
   /** Stops a Claude Code background job holding the session before `--resume`, in its worker (core/engines/backgroundJobs.ts). */
   stopBackgroundJob?: ClearBackgroundJob
   refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
   clearDeleted(agentId: string): void
-  attachDsh(session: RegisteredSession): void
-  /** Its browser starts again, for an agent whose Browser is on (core/api.ts `AgentBrowserPort.attached`). */
-  attachBrowser?(session: RegisteredSession): void
+  /** A look at the resumed agent, for the services that follow agents (core/agentLife.ts `running`): its harness's viewer
+   *  and its browser come back with it. */
+  attach(session: RegisteredSession): void
   /** Follows a session: its history read, then its tail (core/transcripts/attach.ts). */
   attachSession(session: RegisteredSession): Promise<boolean>
   /** Where the relaunched engine's own writing begins, for the attach that follows (core/transcripts/relaunch.ts). */
@@ -75,8 +75,8 @@ function preparationFailed(agent: string, error: unknown) {
 
 export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
   const { registry, stoppedAgents, createBackend, noBackendCode = 'TMUX_UNAVAILABLE', backendFor, restartJobs, stopJobs, pinnedControls,
-    retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume, adoptSwarmSkill,
-    refreshGridWebSearch, clearDeleted, attachDsh, attachBrowser, attachSession, relaunchMarks, stopBackgroundJob } = deps
+    retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume,
+    refreshGridWebSearch, clearDeleted, attach, attachSession, relaunchMarks, stopBackgroundJob } = deps
   const resumeConversations = new Set<string>()
   /** Same short form every other `[…]` line in the daemon logs uses. */
   const sid = (id: string) => id.slice(0, 8)
@@ -104,7 +104,8 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
     stoppedAgents.finishResume(agentId)
     return stoppedAgents.beginResume(agentId)
   }
-  const waitForResume = async (entry: RegisteredSession, current: () => boolean) => {
+  /** [grid]: the one the resume's launch put its engine on, written with its process. */
+  const waitForResume = async (entry: RegisteredSession, current: () => boolean, grid: GridAssignment | null) => {
     // Registry observations may update the same object; pin the route being verified.
     const saved = { ...entry }
     const ownsRoute = () => current() && registry.byAgent(saved.agentId)?.tmuxPane === saved.tmuxPane
@@ -132,7 +133,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       // A probe proves the new PID but does not publish it. Persist that proof before readiness;
       // an engine whose hook is delayed or absent must still be attachable and stoppable now.
       if (!result.session.processIdentity
-        || !registry.updateProcessIdentity(saved.agentId, result.session.processIdentity)) return resumeChanged
+        || !registry.updateProcessIdentity(saved.agentId, result.session.processIdentity, undefined, grid)) return resumeChanged
       await terminal.releaseHold(runtime)
       if (!ownsRoute()) return resumeChanged
       stoppedAgents.finishResume(saved.agentId)
@@ -221,7 +222,8 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       const { runtime } = target!
       retainExitedSession(entry, inventory.roots.some(root => sameTerminalPlacement(root.runtime, runtime)))
     },
-    waitForReady: saved => waitForResume(saved, current),
+    // A launch already made: its record is the row's, written when its pane was registered (`refreshGridWebSearch`).
+    waitForReady: saved => waitForResume(saved, current, launchedGrid(saved.gridLaunch)),
     canLaunch: async saved => {
       await stopJobs.get(agentId)
       return !registry.bySession(saved.sessionId) && (await checkPidRuntime(saved)).state === 'gone'
@@ -235,7 +237,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         if (!permissionModeFlags(saved.engine, permissionMode)) return { ok: false, error: 'INVALID_PERMISSION_MODE' }
         const choice = { permissionMode, bypassPermission: permissionModeApproves(permissionMode) }
         saved = { ...saved, ...choice }
-      } else saved = inSwarmAuto(saved) // One the Swarm started, saved with no mode before 2026-11-12 (lib/registry.ts).
+      }
       if (saved.grid && !saved.gridLaunch) return { ok: false, error: 'GRID_CREDENTIAL_REQUIRED', detail: 'The saved provider configuration is unavailable.' }
       if (saved.dsh && !installedDsh(saved.dsh)) return { ok: false, error: 'INVALID_DSH', detail: 'Install this harness from the Harness Store before resuming it.' }
       if (!saved.cwd) return { ok: false, error: 'CWD_NOT_FOUND', detail: 'The saved project folder is no longer available.' }
@@ -247,11 +249,6 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       // a resume that works — after the harness had already been paused.
       if (resumeSessionId && engineKeepsTranscriptFile(saved.engine) && !saved.transcriptPath) {
         return { ok: false, error: 'RESUME_UNAVAILABLE', detail: 'The saved conversation file is unavailable. Start a new conversation separately.' }
-      }
-      if (adoptSwarmSkill) {
-        const adopted = await adoptSwarmSkill(saved, current)
-        if (!adopted || !current()) return resumeChanged
-        saved = adopted
       }
       const sourceEvidence = () => resumeSessionId && engineKeepsTranscriptFile(saved.engine)
         ? controlTranscriptEvidence(saved.engine, resumeSessionId, saved.transcriptPath!, saved.codexHome ?? undefined, saved.cwd) : undefined
@@ -296,13 +293,17 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           if (refusal) return { ok: false, ...refusal }
         }
         if (resumeSessionId) {
-          try { prepareSessionResume(saved) } catch (error) {
+          // Replaced only while this resume holds, and no other live harness has taken the conversation since.
+          let replaced: boolean
+          try { replaced = await prepareSessionResume(saved, () => current() && !(saved.sessionId && registry.bySession(saved.sessionId))) } catch (error) {
             if (error instanceof IdentityReadUnavailable) throw error
             return preparationFailed(sid(saved.agentId), error)
           }
-          // The confirmed synchronous repair may atomically replace this file.
-          // Earn a new proof of the same conversation before the next await.
-          transcript = sourceEvidence()
+          if (!current()) return resumeChanged
+          // A history the repair replaced, checked byte for byte against the one proven, earns a new proof of the same
+          // conversation before the next await; any other must still be the file proven before it.
+          if (replaced) transcript = sourceEvidence()
+          else transcript?.verify()
         }
         if (saved.sessionId && registry.bySession(saved.sessionId)) return { ok: false, error: 'AGENT_BUSY' }
         // Everything the engine writes from here on is its own, and live: the attach after it folds the
@@ -421,9 +422,8 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           announceSession(ready)
           return { ok: true, session: ready, resumed: true }
         }
-        if (pending.dsh) attachDsh(pending)
-        if (pending.browser) attachBrowser?.(pending)
-        const waited = await waitForResume(pending, current)
+        attach(pending)
+        const waited = await waitForResume(pending, current, launchedGrid(built.overrides.gridLaunchRecord?.override))
         if (waited.ok) keepLaunchArgs(waited.session)
         return waited
       } catch (error) {

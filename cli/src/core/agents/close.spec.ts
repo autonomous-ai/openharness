@@ -51,15 +51,6 @@ describe('closing agents no window shows', () => {
     expect(close.changed).toBe(deps.announceSession)
   })
 
-  it('hands the close service the Lead guards it was given', () => {
-    const leadProtected = (id: string) => id === 'lead'
-    const leadSwitching = (id: string) => id === 'lead', leadSwitchEnded = vi.fn()
-    const { close } = setup({ leadProtected, leadSwitching, leadSwitchEnded })
-    expect([close.leadProtected?.('lead'), close.leadProtected?.('other')]).toEqual([true, false])
-    expect(close.leadSwitching).toBe(leadSwitching)
-    expect(close.leadSwitchEnded).toBe(leadSwitchEnded)
-  })
-
   it('hands the close service the count of background commands it was given, or none', () => {
     const backgroundCommands = vi.fn(async () => 1)
     expect(setup({ backgroundCommands }).close.backgroundCommands).toBe(backgroundCommands)
@@ -80,21 +71,21 @@ describe('closing agents no window shows', () => {
     const stoppedAgents = { get: vi.fn((id: string) => (id === 'kept' || id === 'live' ? kept : null)), resumeReservedAt: vi.fn((_id: string): number | null => null) }
     const { close } = setup({ registry, stoppedAgents })
     const asked = (agentId: string, over: Record<string, string> = {}) => ({ agentId, sessionId: 's-kept', createdAt: new Date(5).toISOString(), mode: 'now' as const, ...over })
-    expect(close.closedAlready!(asked('kept'))).toBe(true)
+    expect(close.closedAlready!(asked('kept'))).toBe(kept)
     // Asked before its conversation was known: the creation alone.
-    expect(close.closedAlready!(asked('kept', { sessionId: '' }))).toBe(true)
-    expect(close.closedAlready!(asked('kept', { sessionId: 's-other' }))).toBe(false)
-    expect(close.closedAlready!(asked('kept', { createdAt: new Date(6).toISOString() }))).toBe(false)
-    expect(close.closedAlready!(asked('live'))).toBe(false)
-    expect(close.closedAlready!(asked('gone'))).toBe(false)
+    expect(close.closedAlready!(asked('kept', { sessionId: '' }))).toBe(kept)
+    expect(close.closedAlready!(asked('kept', { sessionId: 's-other' }))).toBeNull()
+    expect(close.closedAlready!(asked('kept', { createdAt: new Date(6).toISOString() }))).toBeNull()
+    expect(close.closedAlready!(asked('live'))).toBeNull()
+    expect(close.closedAlready!(asked('gone'))).toBeNull()
     // Being resumed: about to be live again, not closed.
     stoppedAgents.resumeReservedAt.mockReturnValueOnce(1)
-    expect(close.closedAlready!(asked('kept'))).toBe(false)
+    expect(close.closedAlready!(asked('kept'))).toBeNull()
     // A record that cannot be read says nothing.
     stoppedAgents.get.mockImplementationOnce(() => { throw new Error('unreadable') })
-    expect(close.closedAlready!(asked('kept'))).toBe(false)
+    expect(close.closedAlready!(asked('kept'))).toBeNull()
     // A core that keeps no stopped agents knows none closed.
-    expect(setup({ registry }).close.closedAlready!(asked('kept'))).toBe(false)
+    expect(setup({ registry }).close.closedAlready!(asked('kept'))).toBeNull()
   })
 
   describe('what an agent is doing', () => {
@@ -295,15 +286,12 @@ describe('agent_close', () => {
     ask({ request: vi.fn(async () => ({})) }, { ...target, mode: 'now', onlyIfHidden: 'yes' })
   })
 
-  // Dee, 11-01: a Swarm Product Manager's close passes its guard only as the switch it names (lib/closeAgentService.ts).
-  it('passes on the Change agent switch a close names, only in the shape Change agent makes it', () => {
+  // anh Dee, 2026-11-13: an experiment never touches the core. A Change agent close names its switch, which the core once
+  // checked for one component's agents; it is a close as any other now, and the core reads nothing of the switch.
+  it('closes a close that names a Change agent switch as any close', () => {
     const request = vi.fn(async () => ({}))
     ask({ request }, { ...target, mode: 'now', changeId: 'e'.repeat(32) })
-    expect(request).toHaveBeenLastCalledWith({ ...target, mode: 'now', changeId: 'e'.repeat(32) })
-    for (const changeId of ['E'.repeat(32), 'e'.repeat(31), 7, '../x']) {
-      ask({ request }, { ...target, mode: 'now', changeId })
-      expect(request).toHaveBeenLastCalledWith({ ...target, mode: 'now' })
-    }
+    expect(request).toHaveBeenLastCalledWith({ ...target, mode: 'now' })
   })
 
   // A client cannot name the cleanup's rule: only CoreApi.agents.closeStarted sets it.

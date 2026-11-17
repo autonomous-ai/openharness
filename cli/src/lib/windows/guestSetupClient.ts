@@ -9,8 +9,8 @@
  */
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { canonicalGuestEmail, guestAnswerFile, guestRequestFile, newGuestRequestId, parseGuestSetupAnswer,
-  parseGuestSetupRequest, WINDOWS_GUEST_ANSWERS, WINDOWS_GUEST_REQUESTS, type GuestSetupRequest } from './guestRequests.js'
+import { canonicalGuestEmail, guestAnswerFile, guestRequestFile, newGuestRequestId, parseGuestSetupAnswer, parseGuestSetupRequest, type GuestSetupRequest } from './guestRequests.js'
+import { WINDOWS_GUEST_ANSWERS, WINDOWS_GUEST_REQUESTS } from './guestTree.js'
 import type { GuestSharedFolder } from './guestShare.js'
 
 export const WINDOWS_GUEST_TASK_PATH = '\\Harness\\'

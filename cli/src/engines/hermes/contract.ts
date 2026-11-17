@@ -125,11 +125,8 @@ export const HERMES_HOOK_SETTINGS = {
   },
 } as const satisfies import('../kit/nativeHookYaml.js').NativeYamlHooks
 
-/**
- * The home a Hermes process uses, from its own environment (`hermes_constants.py` `hermes_root_for_environment`):
- * `HERMES_HOME` when set and absolute; else `<HOME>/.hermes<suffix>`, on Windows `<LOCALAPPDATA>\hermes<suffix>`.
- */
-export const HERMES_HOME_RULE = { variable: 'HERMES_HOME', folder: '.hermes', windowsFolder: 'hermes', suffix: 'HERMES_DATA_DIR_SUFFIX' } as const
+/** The store a Hermes holds open for its whole run (docs/plans/2026-11-15-process-env-secrets-plan.md, "Spike result"): its first group is the home. */
+export const HERMES_HELD_STORE = /^(.+)\/state\.db$/
 
 /** `hermes --version` prints `Hermes Agent v<a>.<b>.<c> (<date>)` first (`hermes_cli/main.py` `cmd_version`). */
 export const HERMES_VERSION = { output: /Hermes Agent v(\d+)\.(\d+)\.(\d+)/, args: ['--version'], timeoutMs: 5_000 } as const

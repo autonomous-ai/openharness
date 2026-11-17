@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { clearAuthSession, RENEWAL_WAIT_MS, writeAuthSession } from '../lib/authSession.js'
 import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS } from '../lib/gatewayWire.js'
 import { RelayConnectError } from '../lib/relayFrames.js'
 import { decodeTerminalLocal, encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
-import { TAB_KEY_OFF, type GatewayEvents, type LaneSeal, type TabKey, type TabRelay } from './api.js'
-import { createGatewayLink, GATEWAY_BUFFER_LIMIT, GATEWAY_USAGE_BUFFER_LIMIT, LANE_WAIT_MS, laneOf, OWED_MAX, tabKeyOf, tabRelayOf, PAIR_WAIT_MS, TAB_RELAY_WAIT_MS, WINDOW_GATEWAY_GONE } from './gatewayLink.js'
+import { PAIR_WAIT_MS, TAB_KEY_OFF, type GatewayEvents, type LaneSeal, type TabKey, type TabRelay } from './api.js'
+import { createGatewayLink, GATEWAY_BUFFER_LIMIT, GATEWAY_USAGE_BUFFER_LIMIT, LANE_WAIT_MS, laneOf, OWED_MAX, tabKeyOf, tabRelayOf, TAB_RELAY_WAIT_MS, WINDOW_GATEWAY_GONE } from './gatewayLink.js'
 import { ON_DEMAND_START_MS } from './serviceLinks.js'
 
 const STREAM = '00000000-0000-4000-8000-000000000001'
@@ -27,10 +28,10 @@ function setup(over: { buffered?: number; call?: (type: string, payload: Record<
   const log = vi.fn()
   let clock = 1_000_000
   const call = vi.fn(over.call ?? (async () => ({ status: 200, body: { ok: true } })))
-  const tokens = { accessToken: vi.fn(async () => 'token-1') }
   const backend = vi.fn(async () => ({ status: 200, body: { data: { seen: {} } } }))
   const want = vi.fn()
   const machines = vi.fn()
+  const wifiServing = vi.fn(async () => true)
   const link = createGatewayLink({
     events: heard as unknown as GatewayEvents,
     notify: (frame) => { sent.push(frame.payload as Record<string, unknown>); return writable },
@@ -38,11 +39,11 @@ function setup(over: { buffered?: number; call?: (type: string, payload: Record<
     buffered: () => buffered,
     call,
     start: over.start ?? (() => ({ machineId: 'm1', computerId: 'c1', autonomousEnv: 'prod', signedIn: true })),
-    machines,
-    tokens, backend, log, now: () => clock, want, ...(over.startWaitMs ? { startWaitMs: over.startWaitMs } : {}),
+    machines, wifiServing,
+    backend, log, now: () => clock, want, ...(over.startWaitMs ? { startWaitMs: over.startWaitMs } : {}),
   })
   return {
-    link, heard, sent, binary, call, tokens, backend, log, want, machines,
+    link, heard, sent, binary, call, backend, log, want, machines, wifiServing,
     kinds: () => sent.map((payload) => payload.kind),
     setBuffered: (bytes: number) => { buffered = bytes },
     setWritable: (value: boolean) => { writable = value },
@@ -99,13 +100,13 @@ describe('the gateway in its own process, as the core sees it', () => {
     link.port.deviceClient('phone-1', 'PUB')
     link.port.windowOpened('tui')
     link.port.usageCounter?.('create_requests')
-    link.port.usageLaunch?.({ id: 'creation-fixture-1', phase: 'start' })
+    link.port.usage?.({ kind: 'observed', payload: { measure: 'collector_days' } })
     await link.port.local('local:w', { type: 'e2ee_pairings_list', payload: {} })
     expect(link.port.terminalBinary('phone-1', bytesOf('hi'))).toBe(true)
     // An id the binary frame cannot carry: refused, never sent half-framed.
     register(link, 'x'.repeat(300))
     expect(link.port.terminalBinary('x'.repeat(300), bytesOf('hi'))).toBe(false)
-    expect(kinds().slice(1)).toEqual(['broadcast', 'commander', 'user', 'reply', 'target', 'terminal', 'observer', 'device', 'deviceClient', 'windowOpened', 'usageCounter', 'usageLaunch', 'localFrame'])
+    expect(kinds().slice(1)).toEqual(['broadcast', 'commander', 'user', 'reply', 'target', 'terminal', 'observer', 'device', 'deviceClient', 'windowOpened', 'usageCounter', 'usage', 'localFrame'])
     expect(sent[4]).toEqual({ kind: 'reply', connId: 'phone-1', type: 'agents_list', requestId: 'r-1', payload: { agents: [] } })
     const framed = decodeGatewayBinary(binary[0])!
     expect(framed).toMatchObject({ kind: GatewayBinary.remote, id: 'phone-1' })
@@ -122,7 +123,7 @@ describe('the gateway in its own process, as the core sees it', () => {
     link.connected()
     setBuffered(GATEWAY_USAGE_BUFFER_LIMIT)
     link.port.usageCounter?.('create_requests')
-    link.port.usageLaunch?.({ id: 'creation-fixture-1', phase: 'start' })
+    link.port.usage?.({ kind: 'observed', payload: { measure: 'collector_days' } })
     link.port.broadcast({ type: 'turn_started' })
     expect(kinds()).toEqual(['start', 'broadcast'])
     // About a guest's harness: the gateway is told whose, to seal it for that guest's sessions.
@@ -246,26 +247,14 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(link.port.terminal('phone-1', 'terminal_ready', {})).toBe(false)
   })
 
-  it('answers the daemon\'s own commands about the keys from the gateway, and 503 while it is down', async () => {
+  it('answers the account\'s HTTP from the gateway, a body that is no record as {}, and 503 while it is down', async () => {
     const answers: Record<string, Record<string, unknown>> = {
-      [GATEWAY_CALLS.pair]: { status: 200, body: { label: 'Phone' } },
-      [GATEWAY_CALLS.listPairs]: { error: 'SERVICE_UNAVAILABLE', service: 'gateway', retryable: true },
-      [GATEWAY_CALLS.devicesList]: { status: 200, body: 'not an object' },
+      '/api/desk': { error: 'SERVICE_UNAVAILABLE', service: 'gateway', retryable: true },
+      '/api/auth/me': { status: 200, body: 'not an object' },
     }
-    const { link, call } = setup({ call: async (type) => answers[type] ?? { status: 204, body: { type } } })
-    expect(await link.ops.pair('ABCD')).toEqual({ status: 200, body: { label: 'Phone' } })
-    expect(call).toHaveBeenCalledWith(GATEWAY_CALLS.pair, { code: 'ABCD' }, PAIR_WAIT_MS)
-    expect(await link.ops.listPairs()).toEqual({ status: 503, body: { error: 'GATEWAY_UNAVAILABLE' } })
-    expect(await link.ops.devicesList()).toEqual({ status: 200, body: {} })
-    const each = [
-      link.ops.revoke('1'), link.ops.revokeAll(), link.ops.setRemotePassword('pw'), link.ops.clearRemotePassword(),
-      link.ops.remotePasswordStatus(), link.ops.trustLinkedPeer({ pub: 'P', machineId: 'm', label: 'l' }), link.ops.groupList(),
-      link.ops.groupSync(), link.ops.groupRemove('2'), link.ops.devicesRemove('P'), link.ops.devicesHistory(),
-      link.ops.devicesDismiss({ pub: 'P' }), link.ops.devicesRebaseline(true, { seq: 1, hash: 'h' }), link.ops.devicesRebaseline(false),
-    ]
-    expect((await Promise.all(each)).map((answer) => answer.status)).toEqual(Array(each.length).fill(204))
-    expect(call).toHaveBeenCalledWith(GATEWAY_CALLS.devicesRebaseline, { confirm: true, head: { seq: 1, hash: 'h' } }, undefined)
-    expect(call).toHaveBeenCalledWith(GATEWAY_CALLS.devicesRebaseline, { confirm: false }, undefined)
+    const { link } = setup({ call: async (_type, payload) => answers[payload.path as string] })
+    expect(await link.ops.backend('GET', '/api/desk')).toEqual({ status: 503, body: { error: 'GATEWAY_UNAVAILABLE' } })
+    expect(await link.ops.backend('GET', '/api/auth/me')).toEqual({ status: 200, body: {} })
   })
 
   it('reads the gateway\'s status, with nothing to show while it is down, and never starts it for that', async () => {
@@ -349,18 +338,12 @@ describe('the gateway in its own process, as the core sees it', () => {
     } finally { vi.useRealTimers() }
   })
 
-  it('carries the Wi-Fi device\'s requests, a refusal as the device\'s local API words it', async () => {
-    let answer: Record<string, unknown> = { result: { devices: [] } }
-    const { link, call } = setup({ call: async () => answer })
-    expect(await link.ops.wifi({ op: 'list' })).toEqual({ result: { devices: [] } })
-    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.wifi, { op: 'list' }, undefined)
-    answer = { refused: { code: 'UNKNOWN_DEVICE', message: 'Device pairing not found' } }
-    expect(await link.ops.wifi({ op: 'pair', device: 'd', code: 'c' })).toEqual({ refused: { code: 'UNKNOWN_DEVICE', message: 'Device pairing not found' } })
-    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.wifi, { op: 'pair', device: 'd', code: 'c' }, PAIR_WAIT_MS)
-    answer = { refused: { code: 7 } }
-    expect((await link.ops.wifi({ op: 'discover' })) as { refused: { code: string } }).toMatchObject({ refused: { code: 'UNAVAILABLE' } })
-    answer = { error: 'SERVICE_UNAVAILABLE' }
-    expect(await link.ops.wifi({ op: 'revoke', id: 'x' })).toMatchObject({ refused: { code: 'UNAVAILABLE' } })
+  it('tells the gateway whether the Wi-Fi device\'s service serves, for its look for devices and its pairing, which wait for it', async () => {
+    const { link, wifiServing } = setup()
+    expect(await link.answer('wifi_serving', {})).toEqual({ serving: true })
+    wifiServing.mockResolvedValueOnce(false)
+    expect(await link.answer('wifi_serving', {})).toEqual({ serving: false })
+    expect(wifiServing).toHaveBeenCalledTimes(2)
   })
 
   it('asks the gateway for Share\'s owner\'s key, and says none is held while it cannot answer', async () => {
@@ -612,16 +595,61 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(sent.slice(1)).toEqual([{ kind: 'revokeIdentity', identity: 'PUB' }, { kind: 'reachable', machineIds: null }])
   })
 
-  it('hands the gateway a token from the account, and the session\'s own refusal when there is none', async () => {
-    const { link, tokens, backend } = setup()
-    expect(await link.answer('access_token', { force: true, failedToken: 'old' })).toEqual({ token: 'token-1' })
-    expect(tokens.accessToken).toHaveBeenLastCalledWith({ force: true, failedToken: 'old' })
-    await link.answer('access_token', {})
-    expect(tokens.accessToken).toHaveBeenLastCalledWith({ force: false })
-    tokens.accessToken.mockRejectedValueOnce(Object.assign(new Error('refresh refused'), { code: 'INVALID_REFRESH' }))
-    expect(await link.answer('access_token', {})).toEqual({ code: 'INVALID_REFRESH', message: 'refresh refused' })
-    tokens.accessToken.mockRejectedValueOnce('down')
-    expect(await link.answer('access_token', {})).toEqual({ code: 'UNAVAILABLE', message: 'down' })
+  // The core audit of 2026-11-12, decision 4: the gateway renews the sign-in, and the core, which calls no other host,
+  // asks it to. Until then the gateway asked the core, which renewed it in the process that types into every terminal.
+  describe('the account\'s token', () => {
+    const signedIn = (expiresAt: number) => writeAuthSession({ version: 1, accessToken: 'on-disk', refreshToken: 'r-1', expiresAt, autonomousEnv: 'prod', computerId: 'c1', machineId: 'm1', updatedAt: 1 })
+    afterEach(() => { clearAuthSession() })
+
+    // A gateway that is restarting, or failed to start, cost every token before the review of 2026-11-13: one that needs
+    // no renewal is the session file's, which the core reads itself.
+    it('is the one on disk while it needs no renewal: the gateway is not asked', async () => {
+      signedIn(Date.now() + 3_600_000)
+      const { link, call } = setup({ call: async () => ({ error: 'SERVICE_UNAVAILABLE' }) })
+      expect(await link.ops.accessToken()).toBe('on-disk')
+      // Another than the one that was refused is not renewed either: someone renewed it already.
+      expect(await link.ops.accessToken({ failedToken: 'older' })).toBe('on-disk')
+      expect(call).not.toHaveBeenCalled()
+      // Signed out: no token, and nobody asked.
+      clearAuthSession()
+      await expect(link.ops.accessToken()).rejects.toMatchObject({ name: 'AuthSessionError', code: 'MISSING' })
+      expect(call).not.toHaveBeenCalled()
+    })
+
+    it('is asked of the gateway to renew, and its refusal is thrown as the session\'s own', async () => {
+      signedIn(Date.now() - 1)
+      const answers: Array<Record<string, unknown>> = [
+        { token: 'token-1' },
+        { code: 'INVALID_REFRESH', message: 'SSO refresh token is invalid. Run `harness login`.' },
+        { code: 'SOMETHING_ELSE', message: 'odd' },
+        { error: 'SERVICE_UNAVAILABLE' },
+      ]
+      const { link, call } = setup({ call: async () => answers.shift()! })
+      expect(await link.ops.accessToken()).toBe('token-1')
+      expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.accessToken, {}, RENEWAL_WAIT_MS)
+      await expect(link.ops.accessToken()).rejects.toMatchObject({ name: 'AuthSessionError', code: 'INVALID_REFRESH', message: 'SSO refresh token is invalid. Run `harness login`.' })
+      // A code that is not the session's is one that could not be renewed just now; no answer in time, the same, in words
+      // that blame no outage that may not be one.
+      await expect(link.ops.accessToken()).rejects.toMatchObject({ code: 'UNAVAILABLE', message: 'odd' })
+      await expect(link.ops.accessToken()).rejects.toMatchObject({ code: 'UNAVAILABLE', message: expect.stringContaining('restarting, or the renewal is slow') })
+    })
+
+    // As the session's own manager does (lib/authRefresh.ts): a caller whose token was refused asks with it and `force`,
+    // and the token it names only says whether someone renewed it since.
+    it('is renewed when asked to, the refused one named or not', async () => {
+      signedIn(Date.now() + 3_600_000)
+      const { link, call } = setup({ call: async () => ({ token: 'renewed' }) })
+      expect(await link.ops.accessToken({ force: true })).toBe('renewed')
+      expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.accessToken, { force: true }, RENEWAL_WAIT_MS)
+      expect(await link.ops.accessToken({ force: true, failedToken: 'on-disk' })).toBe('renewed')
+      expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.accessToken, { force: true, failedToken: 'on-disk' }, RENEWAL_WAIT_MS)
+      expect(call).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it('answers the gateway no token: it renews the sign-in itself', async () => {
+    const { link, backend } = setup()
+    expect(await link.answer('access_token', { force: true })).toEqual({ error: 'UNKNOWN_QUERY' })
     // The device key log's reads of the backend, and nothing else the core's session could reach.
     expect(await link.answer('backend', { method: 'GET', path: '/api/device-keys?since=4' })).toEqual({ status: 200, body: { data: { seen: {} } } })
     expect(backend).toHaveBeenCalledWith('GET', '/api/device-keys?since=4')
@@ -641,7 +669,7 @@ describe('the link\'s defaults', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const link = createGatewayLink({
       events: events() as unknown as GatewayEvents, notify: () => true, notifyBinary: () => true, buffered: () => GATEWAY_BUFFER_LIMIT + 1,
-      call: async () => ({}), start: () => ({}), tokens: { accessToken: async () => 't' }, backend: async () => ({ status: 200, body: {} }),
+      call: async () => ({}), start: () => ({}), backend: async () => ({ status: 200, body: {} }), wifiServing: async () => false,
     })
     link.connected()
     link.port.broadcast({ type: 'text_delta' })

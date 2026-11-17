@@ -190,6 +190,14 @@ describe('the default dependencies', { timeout: FAKE_COMMANDS_TIMEOUT_MS }, () =
     expect(COMMAND_TIMEOUT_MS).toBeGreaterThan(STOP_TIMEOUT_S * 1000)
   })
 
+  it('run a command with its output unread when asked, its exit status and what it said on stderr kept', () => {
+    const deps = defaultPlatformDeps({ env: { PATH: fake.bin }, uid: 501, home: join(dir, 'home') })
+    expect(deps.run('launchctl', ['print', 'gui/501'], { stdout: 'ignore' })).toEqual({ status: 0, stdout: '', stderr: '' })
+    fake.set({ guiDomain: false })
+    expect(deps.run('launchctl', ['print', 'gui/501'], { stdout: 'ignore' }))
+      .toEqual({ status: 113, stdout: '', stderr: 'Could not find domain for port identifier: gui/501\n' })
+  })
+
   it('write whole, into a folder they make, readable by launchd and by nobody else to write', () => {
     const deps = defaultPlatformDeps({ env: { PATH: fake.bin }, uid: 501, home: join(dir, 'home') })
     const file = join(dir, 'home', 'Library', 'LaunchAgents', 'x.plist')
@@ -506,6 +514,22 @@ describe('discarding a definition that could not be registered', () => {
 })
 
 describe('reading what the platform says', () => {
+  // A domain's or a job's listing holds launchd's environment, what a person set with `launchctl setenv` among it.
+  it('asks launchd whether it has the domain and the job by exit status alone, its listing unread', () => {
+    const read: string[] = []
+    const { deps } = stubDeps({}, {}, {
+      run: (command, args, options) => {
+        if (options?.stdout !== 'ignore') read.push([command, ...args].join(' '))
+        return ok(command === 'launchctl' && args[0] === 'print' ? 'gui/501 = {\n\tenvironment = {\n\t}\n}\n' : '')
+      },
+    })
+    const service = new PlatformService('launchd', deps)
+    expect(service.preflight()).toEqual({ ok: true })
+    expect(service.start(false)).toEqual({ ok: true })
+    expect(service.stop()).toEqual({ ok: true })
+    expect(read).toEqual([`launchctl kickstart gui/501/${LAUNCHD_LABEL}`, `launchctl bootout gui/501/${LAUNCHD_LABEL}`])
+  })
+
   it('takes launchd\'s listing as it comes: no state, no pid, no last exit', () => {
     const { deps } = stubDeps({ 'launchctl print': ok('gui/501/x = {\n\tactive count = 0\n}\n') })
     expect(new PlatformService('launchd', deps).inspect()).toMatchObject({ registered: true, pid: null, state: null, lastExit: null })

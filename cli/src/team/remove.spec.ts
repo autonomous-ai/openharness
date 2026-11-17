@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
-import type { GuestRunResult } from '../lib/guestAccounts.js'
+import type { GuestRunResult } from '../lib/guestRunner.js'
 import type { AdminResult } from '../lib/windows/elevated.js'
 import type { TeamConfig } from './config.js'
 import { TEAM_REMOVAL_PROMPT, removeTeamAccount, rootLine, teamRemovalDeps, teamRemovalTarget, type TeamRemovalDeps, type TeamRemovalTarget } from './remove.js'

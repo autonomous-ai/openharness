@@ -2,6 +2,7 @@
  * Which process in a pane is the engine — asked of whichever terminal backend holds the pane. The backend
  * answers only for the pane's own root process; the walk below it is the process table's (processTable.ts).
  */
+import { agentCommandOwnershipSnapshotAsync, type AgentCommandOwnershipSnapshot } from './engineBin.js'
 import type { AgentEngine } from '../engines/types.js'
 import { registry, type ProcessIdentity, type RegisteredSession } from './registry.js'
 import { comparableStartMarker, enrichProcessRows, processRows, processTreePids, selectEngineProcess, type ProcessRow } from './processTable.js'
@@ -21,7 +22,9 @@ type PaneRootSource = Pick<TerminalBackend, 'rootProcess'> & Pick<Partial<Termin
  */
 export type PaneProcessLookup =
   | { ok: true; identity: ProcessIdentity }
-  | { ok: false; unknown: boolean; reason: string }
+  /** [paneProcesses]: every process in the pane, on "no engine under it" only, so a caller can tell whether the
+   *  process an agent was bound to still runs there under another name (#4259). */
+  | { ok: false; unknown: boolean; reason: string; paneProcesses?: readonly ProcessIdentity[] }
 
 export async function lookupPaneEngineProcess(
   backend: PaneRootSource,
@@ -39,9 +42,16 @@ export async function lookupPaneEngineProcess(
   if (!rootPid) return { ok: false, unknown: true, reason: `${label} could not be resolved` }
   const rows = await readRows()
   if (!rows) return { ok: false, unknown: true, reason: 'the process table could not be read' }
-  const enrichedRows = await enrichProcessRows(rows, processTreePids(rows, [rootPid]))
-  const process = selectEngineProcess(enrichedRows, rootPid, engine)
-  if (!process) return { ok: false, unknown: false, reason: `no ${engine} process under ${label}` }
+  const panePids = processTreePids(rows, [rootPid])
+  const enrichedRows = await enrichProcessRows(rows, panePids)
+  let ownership: AgentCommandOwnershipSnapshot
+  try { ownership = await agentCommandOwnershipSnapshotAsync() }
+  catch { return { ok: false, unknown: true, reason: 'ENGINE_LOOKUP_UNAVAILABLE: executable ownership could not be read' } }
+  const process = selectEngineProcess(enrichedRows, rootPid, engine, ownership)
+  if (!process) {
+    const paneProcesses = enrichedRows.filter((row) => panePids.has(row.pid)).map(processIdentityOf)
+    return { ok: false, unknown: false, reason: `no ${engine} process under ${label}`, paneProcesses }
+  }
   return {
     ok: true,
     identity: processIdentityOf(process),
@@ -112,3 +122,10 @@ export async function checkSessionRuntime<Ref extends TerminalRuntimeRef>(
   if (!saved) registry.updateProcessIdentity(session.sessionId, live)
   return { state: 'alive' }
 }
+
+/**
+ * How long an engine must stay the pane's engine before a launch counts it as come up: a launch the engine
+ * refuses (`codex resume` after an update dropped it) runs for an instant. One rule for a restart
+ * (`core/agents/swap.ts` `waitForProcess`) and a resume (`resumeStoppedAgent.ts` `waitForResumedAgent`).
+ */
+export const ENGINE_SETTLE_MS = 500

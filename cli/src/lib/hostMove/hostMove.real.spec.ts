@@ -149,10 +149,10 @@ async function rollover(): Promise<Rollover> {
   writeFileSync(path.join(runtimeDir, 'pty', 'current-pty'), `${newVersion}\n`)
   // The host this daemon starts is the installed one's: the create backend's launch resolves HARNESS_PTY_BIN first.
   vi.stubEnv('HARNESS_PTY_BIN', path.join(newDir, BINARY))
-  const target = targetHost({ runtimeDir })
+  const target = await targetHost({ runtimeDir })
   if (!target) throw new Error('the installed build says no version')
   expect(target).toMatchObject({ version: newVersion, source: 'installed', features: expect.arrayContaining(['seed']) })
-  const previous = targetHost({ runtimeDir, env: { HARNESS_PTY_BIN: path.join(oldDir, BINARY) } })!
+  const previous = (await targetHost({ runtimeDir, env: { HARNESS_PTY_BIN: path.join(oldDir, BINARY) } }))!
   expect(previous.instance).not.toBe(target.instance)
   cleanup.push(() => { killPid(readInstanceDiscovery(home, previous.instance)?.pid); killPid(readInstanceDiscovery(home, target.instance)?.pid) })
 
@@ -278,7 +278,7 @@ async function move(rig: Rollover, duringStop: () => Promise<void> = async () =>
     },
     buildLaunch: async (row, options) => ({
       argv: rig.engineArgv('--resume', options.resumeSessionId ?? row.sessionId),
-      deferred: { prepare: () => {}, overrides: { env: {}, extraArgs: [], clearEnv: [] }, permission: {} },
+      deferred: { prepare: async () => {}, overrides: { env: {}, extraArgs: [], clearEnv: [] }, permission: {} },
     }),
     // The stop a restart makes: the pane is kept, then its engine ends. Nothing else of a swap is asked by a move.
     paneSwapDeps: (_session, { backend, runtime }) => ({

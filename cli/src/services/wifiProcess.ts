@@ -9,7 +9,7 @@
  * whichever devices the new core's gateway brings.
  */
 import type { RecentTurn } from '../cable/cableHost.js'
-import { WIFI_ADDON_OPS, emptyPorts, type CoreApi, type CorePorts, type ForkResult, type RemoteClient, type WifiAddonOp, type WifiPort, type WifiResume, type WifiView } from '../core/api.js'
+import { emptyPorts, type CoreApi, type CorePorts, type ForkResult, type RemoteClient, type ServiceRequests, type WifiPort, type WifiResume, type WifiView } from '../core/api.js'
 import type { AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
@@ -36,7 +36,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
    *  asks the core, and so waits for that (found end to end: the ask failed, and the service never built). */
   let linked!: () => void
   let link = new Promise<void>((resolve) => { linked = resolve })
-  let built: { machineId: string; port: WifiPort } | null = null
+  let built: { machineId: string; port: WifiPort; requests: ServiceRequests } | null = null
   /** What the core last listed: whether a window is there to show the device's choice. */
   let lastView: WifiView = { agents: [], store: [], hasWindow: false }
 
@@ -104,13 +104,14 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     if (built) void built.port.stop()
     built = null
     const ports: CorePorts = emptyPorts()
+    let requests: ServiceRequests
     try {
-      ;(options.start ?? startWifi)(api(machineId), ports)
+      requests = (options.start ?? startWifi)(api(machineId), ports)
     } catch (error) {
       console.warn(`[wifi] did not start · ${error instanceof Error ? error.message : String(error)}`)
       return null
     }
-    built = ports.wifi ? { machineId, port: ports.wifi } : null
+    built = ports.wifi ? { machineId, port: ports.wifi, requests } : null
     return built?.port ?? null
   }
 
@@ -158,18 +159,12 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     machineId: options.machineId,
     token: options.token,
     requests: {
-      // `harness device receipt`, asked by the core (core/wifiLink.ts) under a type only the core sends.
-      receipt: async ({ deviceId, idempotencyKey }) => {
+      // Its routes of the door (`harness device receipt`, the add-ons), handed on by the core as they came: answered
+      // once what the core said before is heard, and, while the service could not be built, as one that is down.
+      wifi_http: async (payload, asker, closed) => {
         await heardSoFar
         if (!built) return { error: 'SERVICE_UNAVAILABLE' }
-        return { ...await built.port.receipt(text(deviceId), text(idempotencyKey)) }
-      },
-      // `harness autonomous-device addon`, asked by the core the same way.
-      addon: async ({ op, input }) => {
-        await heardSoFar
-        if (!built) return { error: 'SERVICE_UNAVAILABLE' }
-        if (!(WIFI_ADDON_OPS as readonly unknown[]).includes(op)) return { error: { code: 'INVALID_REQUEST', message: 'Unknown add-on operation' } }
-        return { ...await built.port.addon(op as WifiAddonOp, input && typeof input === 'object' && !Array.isArray(input) ? input as Record<string, unknown> : {}) }
+        return built.requests.wifi_http!(payload, asker, closed)
       },
     },
     onEvent: (payload) => {

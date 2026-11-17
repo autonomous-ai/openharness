@@ -1,5 +1,3 @@
-import { PRODUCT_FEEDBACK } from './lib/productUsageContract.js'
-import { appProductUsageReport, APP_USAGE_VOCABULARY, APP_USAGE_VOCABULARY_HEADER } from './lib/appProductUsageReport.js'
 /**
  * Tiny localhost HTTP server for the Claude Code hook callbacks. `hook/notify.mjs` POSTs here on
  * SessionStart/SessionEnd (127.0.0.1:<PORT>). This replaces the old Fastify routes — the browser
@@ -13,6 +11,7 @@ import type { AddressInfo } from 'node:net'
 import { admitHook, hooksFor } from './engines/hooks.js'
 import { HERMES_HOMES, HERMES_SESSION_PANE, HERMES_SOURCE } from './engines/hermes/contract.js'
 import { readStorePool } from './engines/kit/storePool.js'
+import { homeIsAbsolute } from './engines/kit/homeAdoption.js'
 import { isInteractiveSource, rowSessionSource, storeSourceQuery } from './engines/kit/storeSource.js'
 import { IdentityReadUnavailable } from './engines/kit/identityScan.js'
 import { createPendingAdmissions, type AdmissionDecision } from './core/engines/pendingAdmission.js'
@@ -26,12 +25,13 @@ import { env } from './config/env.js'
 import { hookCredentialMatches, loadOrCreateHookCredential, loadOrCreateHookToken } from './lib/hookAuth.js'
 import { peerIsThisAccount, type PeerAccount } from './lib/peerAccount.js'
 import { LOCAL_CREDENTIAL_REQUIRED, localCredentialMatches, PEER_LOOKUP_UNANSWERED, PEER_LOOKUP_UNANSWERED_MESSAGE } from './lib/localCredential.js'
-import { routeStoreRequest, type StoreHandler } from './lib/storeProxy.js'
 import type { HookTerminalHint } from './lib/terminalTypes.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { isTrustedLocal, listenLocalSocket, type LocalSocketServer } from './lib/localSocket.js'
 import { PTY_HOST_INSTANCE, PTY_HOST_PANE } from './lib/ptyHost/instance.js'
+import type { HttpAnswer } from './core/api.js'
+import type { DoorRequest } from './core/serviceRoutes.js'
 
 /**
  * Which agent does a hook belong to, given the two grades of evidence?
@@ -67,7 +67,14 @@ export interface PairOutcome {
 }
 
 export interface HookServerHandlers {
-  onAutonomousDeviceRequest?: (method: string, target: string, body?: unknown) => Promise<{ status: number; body: unknown }>
+  /** A paneless agent's hook event (core/observedHook.ts): checked, rate limited and forwarded, never kept. */
+  onObserved?: (body: unknown) => 'ok' | 'invalid' | 'dropped'
+  /** The mod's held poll for a spoken prompt (core/deviceHookCalls.ts). `gone` aborts when the client goes before its
+   *  answer. */
+  onInbox?: (body: unknown, gone: AbortSignal) => Promise<'invalid' | 'off' | { text?: string }>
+  /** A route a service answers, once the door let its request in (core/serviceRoutes.ts): its answer, or null when no
+   *  service answers `path`. */
+  onServiceRoute?: (path: string, request: DoorRequest, localOk: boolean, socket: boolean) => Promise<HttpAnswer> | null
 
   onRegistered: (
     entry: RegisteredSession,
@@ -129,71 +136,17 @@ export interface HookServerHandlers {
   /** For the end-to-end suite only: how long a Stop hook is held before it is acted on, as the hook's own
    *  verification can take under load (`HARNESSD_TEST_STOP_HOOK_DELAY_MS`). */
   stopHookDelayMs?: number
-  /** `harness pair <code>` from a second CLI process: run CPace toward the waiting browser. */
-  onPair?: (code: string) => Promise<PairOutcome>
-  /** `harness pairings` — list E2EE-paired browsers. */
-  onListPairs?: () => PairOutcome | Promise<PairOutcome>
-  /** `harness unpair <id>` — unpair one browser (by fingerprint/prefix/index). */
-  onRevoke?: (id: string) => PairOutcome | Promise<PairOutcome>
-  /** `harness unpair --all` — unpair every browser. */
-  onRevokeAll?: () => PairOutcome | Promise<PairOutcome>
-  /** `harness remote-password set` — stretch + persist a new persistent remote password on the
-   *  running daemon's live E2EE state. */
-  onSetRemotePassword?: (password: string) => Promise<PairOutcome>
-  /** `harness remote-password clear` — remove the persistent remote password. */
-  onClearRemotePassword?: () => PairOutcome | Promise<PairOutcome>
-  /** `harness remote-password status` — whether one is set, and its fingerprint. */
-  onRemotePasswordStatus?: () => PairOutcome | Promise<PairOutcome>
-  /** `harness link connect` — the machine this one just linked pinned it back, so trust that machine
-   *  here too (the mutual half of the link). Goes through the daemon: it holds paired.json in memory. */
-  onTrustLinkedPeer?: (peer: { pub: string; machineId: string; label: string }) => PairOutcome | Promise<PairOutcome>
-  /** `harness group list|sync|remove` — the trust group this machine belongs to (groupSyncer.ts). */
-  onGroupList?: () => PairOutcome | Promise<PairOutcome>
-  onGroupSync?: () => PairOutcome | Promise<PairOutcome>
-  onGroupRemove?: (selector: string) => PairOutcome | Promise<PairOutcome>
-  /** `harness devices list|remove|rebaseline` and the window's Devices list — the account's device key
-   *  log as this machine verified it (lib/e2ee/deviceLogSyncer.ts). */
-  onDevicesList?: () => Promise<PairOutcome>
-  onDevicesRemove?: (pub: string) => Promise<PairOutcome>
-  onDevicesRebaseline?: (confirm: boolean, head?: { seq: number; hash: string }) => Promise<PairOutcome>
-  /** `harness devices history` and the window's History — every add and remove, as this machine verified it. */
-  onDevicesHistory?: () => Promise<PairOutcome>
-  /** `harness devices dismiss` and the window's "It's mine" / "Got it" — mark new devices as seen. */
-  onDevicesDismiss?: (body: { pub?: string; pubs?: string[]; baseline?: boolean }) => PairOutcome | Promise<PairOutcome>
   /** The daemon's status (GET /api/status): what `harness status`, the desktop's discovery and scripts read. */
   onStatus?: () => Record<string, unknown> | Promise<Record<string, unknown>>
-  /** GET /api/machines — proxy the user's full machine list from backend using this daemon's own
-   *  saved SSO session, so a local GUI client never needs a token of its own. */
+  /** GET /api/machines — the user's full machine list from the backend, through this daemon's own sign-in, so a local
+   *  GUI client never needs a token of its own: the core's, which answers it from its own copy while the gateway is away
+   *  and signed out without starting it (core/gatewayLink.ts `machines`). */
   onMachinesList?: () => Promise<PairOutcome>
-  /** PATCH /api/machines/:machineId — proxy a rename to backend the same way. */
-  onMachineRename?: (machineId: string, name: string) => Promise<PairOutcome>
-  /** DELETE /api/machines/:machineId — proxy a delete to backend the same way. */
-  onMachineDelete?: (machineId: string) => Promise<PairOutcome>
-  /** GET /api/auth/me — proxy the signed-in user's profile from backend. */
-  onAuthMe?: () => Promise<PairOutcome>
-  /** PATCH /api/auth/me — the signed-in person's own account name (`{ name }`, task #2654), passed to the backend, which
-   *  validates it and answers the profile as GET does; a local write, so CSRF-guarded like the desk's ops. */
-  onAuthMeUpdate?: (body: unknown) => Promise<PairOutcome>
-  /** POST /api/auth/handoff — a one-time code that signs a phone in to this account (the desktop's
-   *  Add Phone QR), minted by backend against this daemon's own session. */
-  onAuthHandoff?: () => Promise<PairOutcome>
   /** POST /api/daemon/stop — `harness stop` on Windows (core/daemonStopRoute.ts). Trusted local only: over TCP any
    *  process on the machine, another user's included, could stop this user's daemon. Given on Windows only; without
    *  it the route does not exist (404), as before on a Mac or Linux. */
   onDaemonStop?: () => Promise<PairOutcome>
   onSharedHarnesses?: () => Promise<PairOutcome>
-  /** GET /api/desk — the account's tabs, the same on every computer; proxied like the machine list. */
-  onDeskRead?: () => Promise<PairOutcome>
-  /** POST /api/desk/ops — the window's tab edits, applied on the backend (its routes/desk.ts); a
-   *  local write, so CSRF-guarded like a rename. */
-  onDeskOps?: (body: unknown) => Promise<PairOutcome>
-  /** GET /api/agent-messages — the account's tabs and who is in each (docs/design/2026-10-10-agent-messages.md),
-   *  proxied like the desk without starting the experiment's process. An older window draws each tab's chat icon
-   *  from its flag, which no daemon reads now: the account's experiment decides (lib/agentSettings.ts). */
-  onAgentMessagesRead?: () => Promise<PairOutcome>
-  /** PATCH /api/agent-messages/tabs/:tabId — an older window's tab switch, passed to the backend so it gets the
-   *  answer it expects, and deciding nothing; a local write, so CSRF-guarded like the desk's ops. */
-  onAgentMessagesWrite?: (tabId: string, body: unknown) => Promise<PairOutcome>
   /** GET/PATCH /api/agent-settings — what the person lets agents do (lib/agentSettings.ts): the account's experiments
    *  as this computer keeps them, and a change written through to the account (`harness settings`, and an older
    *  window's Settings ▸ Agents). The write is CSRF-guarded like the others. */
@@ -203,25 +156,7 @@ export interface HookServerHandlers {
    *  here too (core/experiments.ts `createAgentSettingsSync`). */
   onExperimentalRead?: () => Promise<PairOutcome>
   onExperimentalWrite?: (body: unknown) => Promise<PairOutcome>
-  onProductFeedback?: (body: unknown) => Promise<PairOutcome>
-  /** The phone half of a sign-in (backend routes/qrSignIn.ts) for the desktop and web apps: approve a device
-   *  that says its code aloud (a lamp, #1410) with this computer's own session, as the phone does. */
-  onSignInAnswer?: (action: 'lookup' | 'approve' | 'deny', body: { code: string }) => Promise<PairOutcome>
-  /** A Super Tab chat file from the native desktop, streamed on to the backend with this computer's account
-   *  (lib/superTabAttachmentProxy.ts): the app's REST client holds no token of its own. Answers on `res` itself. */
-  onSuperTabAttachment?: (req: http.IncomingMessage, res: http.ServerResponse, path: string) => Promise<void>
-  /** A chat file over 10 MB goes straight to storage (superTabs/attach.ts): its link asked for, and its upload said complete,
-   *  with this computer's account. Small JSON both ways; the bytes never pass through here. */
-  onSuperTabAttachmentUpload?: (path: string, body: Record<string, unknown>) => Promise<PairOutcome>
-  onProductUsageReport?: (body: unknown) => Promise<PairOutcome>
-  onProductUsageRead?: () => Promise<PairOutcome>
-  onProductUsageWrite?: (body: unknown) => Promise<PairOutcome>
-  /** /api/store/* — proxy the Harness Store's ratings and reviews to backend the same way: reads
-   *  ungated like the machine list, writes (PUT/DELETE) CSRF-guarded like a rename. See storeProxy.ts. */
-  onStore?: StoreHandler
 }
-
-export { STORE_PATH_RE } from './lib/storeProxy.js'
 
 const MAX_HOOK_BODY_BYTES = 256 * 1024
 const HOOK_BODY_FIELDS = new Set([
@@ -249,6 +184,31 @@ function optionalBoundedJson(value: unknown, max: number): boolean {
 export function hookFiredAt(req: Pick<http.IncomingMessage, 'headers'>): number | undefined {
   const value = Number(req.headers['x-harness-hook-fired-at'])
   return Number.isSafeInteger(value) && value > 0 ? value : undefined
+}
+
+const GATEWAY_HEADER = 'x-harness-hook-gateway', CODEX_HOME_HEADER = 'x-harness-hook-codex-home'
+
+/**
+ * What a hook says of its own environment, in two headers: a daemon that does not read a header ignores it, where it
+ * refuses a body with a field it does not list. Each is judged alone: a refused one is named, never the request.
+ */
+export function hookFacts(req: Pick<http.IncomingMessage, 'headers'>, platform?: NodeJS.Platform): { gateway?: 'ori' | null; codexHome?: string; refused: string[] } {
+  const facts: { gateway?: 'ori' | null; codexHome?: string; refused: string[] } = { refused: [] }
+  const gateway = req.headers[GATEWAY_HEADER]
+  if (gateway === 'ori') facts.gateway = 'ori'
+  else if (gateway === 'none') facts.gateway = null
+  else if (gateway !== undefined) facts.refused.push(GATEWAY_HEADER)
+  const home = req.headers[CODEX_HOME_HEADER]
+  if (home !== undefined) {
+    // Percent-encoded by the hook: Node refuses a header value above U+00FF, and a path may hold any character.
+    let decoded: string | undefined
+    try { decoded = typeof home === 'string' ? decodeURIComponent(home) : undefined } catch { decoded = undefined }
+    // Absolute as agent_create takes a home: on Windows a drive's path. A share's or a device's would have the core's
+    // realpath open another computer's folder on every registration.
+    if (decoded !== undefined && homeIsAbsolute(decoded, platform) && decoded.length <= 1_024 && !/[\u0000-\u001f\u007f]/.test(decoded)) facts.codexHome = decoded
+    else facts.refused.push(CODEX_HOME_HEADER)
+  }
+  return facts
 }
 
 function validHookBody(value: unknown): value is BoundHookBody {
@@ -547,6 +507,17 @@ export function startHookServer(
       // send it, can trigger actions. A local process could still call it — same trust level as the
       // CLI, which is acceptable on loopback.
       const localOk = req.headers['x-adapter-local'] === '1'
+      /** A route a service answers (core/serviceRoutes.ts), written as it answered, with the headers its route declares:
+       *  false when no service answers this path and method. Whether a write carries the local header, and whether it came
+       *  over the daemon's own socket, is its route's to ask, and its body is read only then, up to its route's bound. */
+      const serviceRoute = async (): Promise<boolean> => {
+        const routed = handlers.onServiceRoute?.(url, { method: req.method ?? '', target: req.url ?? '', readBody: (max) => readBody(req, max) }, localOk, trustedLocal)
+        if (!routed) return false
+        const result = await routed
+        for (const [name, value] of Object.entries(result.headers ?? {})) res.setHeader(name, value)
+        json(result.status, result.body)
+        return true
+      }
       // An engine hook's token, which opens these hook routes and nothing else (lib/hookAuth.ts). The credential
       // is still taken here: an engine's loaded plugin keeps the copy it started with until its pane restarts. A
       // guest's harness will carry a token scoped to its own agent (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
@@ -582,13 +553,9 @@ export function startHookServer(
         if (!loopback || req.headers.origin || !hookCredentialMatches(hookCredential, bearer) || !credentialOk) {
           json(403, { error: { code: 'FORBIDDEN', message: 'Authenticated native loopback client required' } }); return
         }
-        if (!handlers.onAutonomousDeviceRequest) { json(503, { error: { code: 'UNAVAILABLE', message: 'Autonomous device service unavailable' } }); return }
-        let body: unknown
-        if (req.method !== 'GET') {
-          try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
-        }
-        const result = await handlers.onAutonomousDeviceRequest(req.method ?? '', req.url ?? '', body)
-        json(result.status, result.body); return
+        // The Wi-Fi device's services', as the client sent it: the gateway's, its service's and the machine add-ons'.
+        if (!await serviceRoute()) json(503, { error: { code: 'UNAVAILABLE', message: 'Autonomous device service unavailable' } })
+        return
       }
       if (req.method === 'GET' && url === '/api/health') {
         json(200, { ok: true, version: VERSION }); return
@@ -615,6 +582,10 @@ export function startHookServer(
           if (!validHookBody(parsed)) { json(400, { error: 'invalid hook body' }); return }
           body = parsed
         } catch { json(400, { error: 'bad json' }); return }
+        // Only a refused header's name is logged: its value is a path or a word of the hook's own environment.
+        const refusedHeader = (name: string) => console.warn(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} header refused · ${name}`)
+        const { refused, ...taken } = hookFacts(req)
+        for (const name of refused) refusedHeader(name)
         // Every rejection below says WHY, out loud. They used to be silent, and a hook that arrives and
         // is dropped looks exactly like a hook that never fired — which is precisely the confusion behind
         // "the agent is running in my terminal but the list does not show it".
@@ -823,7 +794,7 @@ export function startHookServer(
             return { kind: 'hold', reason: 'Waiting for the original hook pane to belong to its engine process.' }
           }
           inspectionIdentity = paneReadIdentity(row)
-          prepared = { ...body, processIdentity: row.processIdentity ? { ...row.processIdentity } : undefined,
+          prepared = { ...body, ...taken, processIdentity: row.processIdentity ? { ...row.processIdentity } : undefined,
             runtimes: row.runtimes.map(runtime => ({ ...runtime })), primaryRuntimeKey: row.primaryRuntimeKey,
             transcriptPath: knownTranscriptFor(body, row) }
           const admission = admitHook(engine, prepared)
@@ -838,6 +809,7 @@ export function startHookServer(
           const before = prior && { sessionId: prior.sessionId, transcriptPath: prior.transcriptPath,
             held: !!(prior.identityHold || prior.interpretationHold) }
           committed = registry.register(hermesHome ? { ...prepared, hermesHome } : prepared, { verifiedNativeSource: true })
+          if (committed?.refusedHome) refusedHeader(CODEX_HOME_HEADER)
           if (stopCurrent && !stopCurrent()) stopInvocationClaimed = true
           if (committed && carriesStop && !stopRetained && !stopInvocationClaimed) {
             stopUnmatched ||= deferred || before?.sessionId !== committed.entry.sessionId
@@ -955,6 +927,36 @@ export function startHookServer(
         return
       }
 
+      if (req.method === 'POST' && url === '/api/hook/observed') {
+        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
+        let body: unknown
+        // 4 KB: an event is a few ids and paths. Over the limit readBody gives '', which is not JSON.
+        try { body = JSON.parse(await readBody(req, 4096)) as unknown } catch { json(400, { error: 'bad json' }); return }
+        // A dropped event (rate limited, or the devices not there) is not the hook's error: it never retries.
+        if (handlers.onObserved?.(body) === 'invalid') { json(400, { error: 'invalid observed body' }); return }
+        json(200, { ok: true })
+        return
+      }
+
+      if (req.method === 'POST' && url === '/api/hook/inbox') {
+        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
+        // Before the body is read: a mod whose Claude Code quit holds no poll the devices should still answer.
+        const gone = new AbortController()
+        res.once('close', () => { if (!res.writableEnded) gone.abort() })
+        // The caller check was awaited above: a client that went during it closed before this listened, and is gone already.
+        if (req.socket.destroyed) return
+        let body: unknown
+        // 1 KB: a session id.
+        try { body = JSON.parse(await readBody(req, 1024)) as unknown } catch { json(400, { error: 'bad json' }); return }
+        const answer = handlers.onInbox ? await handlers.onInbox(body, gone.signal) : 'off'
+        if (gone.signal.aborted) return
+        if (answer === 'invalid') { json(400, { error: 'invalid inbox body' }); return }
+        // No device is not an empty hold: the mod asks again in 60 s, not at once.
+        if (answer === 'off') { json(503, { error: 'NO_DEVICE' }); return }
+        json(200, answer)
+        return
+      }
+
       if (req.method === 'POST' && url === '/api/hook/turn-stop') {
         if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
         let body: BoundHookBody
@@ -991,147 +993,9 @@ export function startHookServer(
         return
       }
 
-      // `harness pair <code>` → run CPace toward the browser that is waiting to pair. Long-polls until
-      // the handshake completes/fails (bounded by the manager's round timers). Loopback-only; the PAKE
-      // itself is the security (a local process can trigger, but only the real code completes pairing).
-      if (req.method === 'POST' && url === '/api/pair') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onPair) { json(503, { error: 'PAIRING_UNAVAILABLE' }); return }
-        let body: { code?: string }
-        try { body = JSON.parse(await readBody(req)) as { code?: string } } catch { json(400, { error: 'bad json' }); return }
-        if (!body.code) { json(400, { error: 'MISSING_CODE' }); return }
-        try { const out = await handlers.onPair(body.code); json(out.status, out.body) }
-        catch (e) { json(500, { error: e instanceof Error ? e.message : 'INTERNAL' }) }
-        return
-      }
-
-      // `harness remote-password set` → stretch + persist a new persistent remote password on the
-      // running daemon's live E2EE state (so an in-progress `harness link connect` from another
-      // machine sees it immediately, with no daemon restart needed).
-      if (req.method === 'POST' && url === '/api/remote-password/set') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onSetRemotePassword) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { password?: string }
-        try { body = JSON.parse(await readBody(req)) as { password?: string } } catch { json(400, { error: 'bad json' }); return }
-        if (!body.password) { json(400, { error: 'MISSING_PASSWORD' }); return }
-        try { const out = await handlers.onSetRemotePassword(body.password); json(out.status, out.body) }
-        catch (e) { json(500, { error: e instanceof Error ? e.message : 'INTERNAL' }) }
-        return
-      }
-
-      // `harness remote-password clear` → remove the persistent remote password.
-      if (req.method === 'POST' && url === '/api/remote-password/clear') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onClearRemotePassword) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onClearRemotePassword(); json(out.status, out.body); return
-      }
-
-      // `harness link connect` → trust the machine just linked back, on the daemon's live E2EE state.
-      if (req.method === 'POST' && url === '/api/link/trust-peer') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onTrustLinkedPeer) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { pub?: unknown; machineId?: unknown; label?: unknown }
-        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
-        const isKey = typeof body.pub === 'string' && /^[A-Za-z0-9+/]{43}=$/.test(body.pub) // 32-byte Ed25519, base64
-        if (!isKey || typeof body.machineId !== 'string' || !/^[a-f0-9]{32}$/.test(body.machineId)) { json(400, { error: 'BAD_PEER' }); return }
-        const label = typeof body.label === 'string' && body.label.trim() ? body.label.trim().slice(0, 60) : body.machineId
-        const out = await handlers.onTrustLinkedPeer({ pub: body.pub as string, machineId: body.machineId, label })
-        json(out.status, out.body); return
-      }
-
-      // `harness group list` → the trust group's members. Read-only (keys and labels, no secrets).
-      if (req.method === 'GET' && url === '/api/group') {
-        if (!handlers.onGroupList) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onGroupList(); json(out.status, out.body); return
-      }
-      // `harness group sync` → compare rosters with every reachable member now.
-      if (req.method === 'POST' && url === '/api/group/sync') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onGroupSync) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onGroupSync(); json(out.status, out.body); return
-      }
-      // `harness group remove <id|#|fp>` / `harness link unlink` → drop a member everywhere.
-      if (req.method === 'POST' && url === '/api/group/remove') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onGroupRemove) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { selector?: unknown }
-        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
-        if (typeof body.selector !== 'string' || !body.selector.trim()) { json(400, { error: 'MISSING_SELECTOR' }); return }
-        const out = await handlers.onGroupRemove(body.selector.trim()); json(out.status, out.body); return
-      }
-
-      // `harness devices list` / the window's Devices list → the account's devices, as this machine's
-      // verified copy of the device key log has them. Read-only (public keys and labels).
-      if (req.method === 'GET' && url === '/api/devices') {
-        if (!handlers.onDevicesList) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onDevicesList(); json(out.status, out.body); return
-      }
-      // `harness devices remove <fp>` / Remove in the window → out of the log, signed by this machine.
-      if (req.method === 'POST' && url === '/api/devices/remove') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onDevicesRemove) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { pub?: unknown }
-        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
-        if (typeof body.pub !== 'string' || !body.pub) { json(400, { error: 'MISSING_PUB' }); return }
-        const out = await handlers.onDevicesRemove(body.pub); json(out.status, out.body); return
-      }
-      // `harness devices rebaseline` → what trusting the backend's log again would change; `confirm`
-      // does it (the only way out of a frozen log).
-      if (req.method === 'POST' && url === '/api/devices/rebaseline') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onDevicesRebaseline) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { confirm?: unknown; head?: unknown }
-        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
-        if (!body || typeof body !== 'object') { json(400, { error: 'bad json' }); return }
-        // The head the person was shown in the preview: a confirm only goes ahead on that same list.
-        let head: { seq: number; hash: string } | undefined
-        if (body.head !== undefined) {
-          const h = body.head as { seq?: unknown; hash?: unknown } | null
-          if (!h || typeof h !== 'object' || typeof h.seq !== 'number' || !Number.isSafeInteger(h.seq) || h.seq < 0
-            || typeof h.hash !== 'string' || h.hash.length > 128) { json(400, { error: 'BAD_HEAD' }); return }
-          head = { seq: h.seq, hash: h.hash }
-        }
-        const out = await handlers.onDevicesRebaseline(body.confirm === true, head); json(out.status, out.body); return
-      }
-
-      // `harness devices history` → the log's adds and removes, newest first. Local only: it is the
-      // account's whole device story, and the fetch behind it is a backend call as this machine.
-      if (req.method === 'GET' && url === '/api/devices/history') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onDevicesHistory) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onDevicesHistory(); json(out.status, out.body); return
-      }
-      // `harness devices dismiss [<fp>]` / "It's mine" / "Got it" → new devices marked as seen here.
-      if (req.method === 'POST' && url === '/api/devices/dismiss') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onDevicesDismiss) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { pub?: unknown; pubs?: unknown; baseline?: unknown; confirm?: unknown }
-        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
-        if (!body || typeof body !== 'object') { json(400, { error: 'bad json' }); return }
-        if (body.pub !== undefined && (typeof body.pub !== 'string' || !body.pub)) { json(400, { error: 'MISSING_PUB' }); return }
-        // The keys a window displayed, so a key accepted since the window read the list is not cleared unseen.
-        if (body.pubs !== undefined && (!Array.isArray(body.pubs) || body.pubs.length > 256
-          || body.pubs.some((k) => typeof k !== 'string' || !k || k.length > 256))) { json(400, { error: 'BAD_PUBS' }); return }
-        const out = await handlers.onDevicesDismiss({
-          ...(typeof body.pub === 'string' ? { pub: body.pub } : {}),
-          ...(Array.isArray(body.pubs) ? { pubs: body.pubs as string[] } : {}),
-          ...(body.baseline === true ? { baseline: true } : {}),
-          // "It's mine" for one device: the account's other devices are told too (deviceLogSyncer `dismiss`).
-          ...(body.confirm === true ? { confirm: true } : {}),
-        }); json(out.status, out.body); return
-      }
-
-      // `harness remote-password status` → whether one is set, and its fingerprint. Read-only, same
-      // gating tier as /api/pairs.
-      if (req.method === 'GET' && url === '/api/remote-password/status') {
-        if (!handlers.onRemotePasswordStatus) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onRemotePasswordStatus(); json(out.status, out.body); return
-      }
-
-      // Local GUI clients (e.g. the desktop app): read the full machine list / rename or delete one /
-      // read the signed-in profile through this daemon's own SSO session, so the local caller never
-      // holds a bearer token itself — loopback trust does the authenticating. Reads are ungated (same
-      // tier as /api/status); the rename/delete mutations are CSRF-guarded like every other local write.
+      // Local GUI clients (the desktop app): the full machine list and the harnesses shared with this account, through this
+      // daemon's own sign-in, so the local caller never holds a bearer token itself. The account's other routes are the
+      // gateway's (below, `onServiceRoute`).
       if (req.method === 'GET' && url === '/api/machines') {
         const list = handlers.onMachinesList
         if (!list) { json(503, { error: 'UNAVAILABLE' }); return }
@@ -1140,29 +1004,6 @@ export function startHookServer(
       if (req.method === 'GET' && url === '/api/harness-shares') {
         if (!handlers.onSharedHarnesses) { json(503, { error: 'UNAVAILABLE' }); return }
         await proxied(handlers.onSharedHarnesses); return
-      }
-      if (req.method === 'GET' && url === '/api/desk') {
-        if (!handlers.onDeskRead) { json(503, { error: 'UNAVAILABLE' }); return }
-        await proxied(handlers.onDeskRead); return
-      }
-      if (req.method === 'POST' && url === '/api/desk/ops') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onDeskOps) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
-        await proxied(() => handlers.onDeskOps!(body)); return
-      }
-      if (req.method === 'GET' && url === '/api/agent-messages') {
-        if (!handlers.onAgentMessagesRead) { json(503, { error: 'UNAVAILABLE' }); return }
-        await proxied(handlers.onAgentMessagesRead); return
-      }
-      const agentMessagesTab = req.method === 'PATCH' ? /^\/api\/agent-messages\/tabs\/([A-Za-z0-9_-]{1,64})$/.exec(url) : null
-      if (agentMessagesTab) {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onAgentMessagesWrite) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
-        await proxied(() => handlers.onAgentMessagesWrite!(agentMessagesTab[1], body)); return
       }
       if (req.method === 'GET' && url === '/api/agent-settings') {
         if (!handlers.onAgentSettingsRead) { json(503, { error: 'UNAVAILABLE' }); return }
@@ -1179,97 +1020,6 @@ export function startHookServer(
         if (!handlers.onExperimentalRead) { json(503, { error: 'UNAVAILABLE' }); return }
         await proxied(handlers.onExperimentalRead); return
       }
-      if (req.method === 'POST' && url === '/api/product-usage/report') {
-        // On every answer, a refusal too: the Desktop counts names newer than revision 1 only after
-        // reading it here, because a proxy that predates a name refused the whole report.
-        res.setHeader(APP_USAGE_VOCABULARY_HEADER, String(APP_USAGE_VOCABULARY))
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onProductUsageReport) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try {
-          const raw = await readBody(req, 8192)
-          body = JSON.parse(raw)
-        } catch { json(400, { error: 'BAD_REQUEST' }); return }
-        // Without the names this contract does not know yet; see lib/appProductUsageReport.ts.
-        const report = appProductUsageReport(body)
-        if (!report) {
-          json(400, { error: 'BAD_REQUEST' }); return
-        }
-        try {
-          const result = await handlers.onProductUsageReport(report)
-          // The Desktop waits a busy answer out (desktop/lib/measurement/product_measurement.dart).
-          if (result.retryAfterMs !== undefined) res.setHeader('Retry-After', String(Math.ceil(result.retryAfterMs / 1000)))
-          json(result.status, result.body)
-        } catch { json(502, { success: false, error: { code: 'USAGE_UNAVAILABLE', message: 'Product usage unavailable' } }) }
-        return
-      }
-      const attachment = req.method === 'POST' ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/attachments$/.exec(url) : null
-      if (attachment) {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onSuperTabAttachment) { json(503, { error: 'UNAVAILABLE' }); return }
-        // The body is the file, read by the handler as a stream: never readBody, which holds 256 KiB of text. An agent's
-        // `post --attach` names itself; the backend checks that this account runs that agent.
-        const asAgentId = new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('asAgentId')
-        const agent = asAgentId && /^[A-Za-z0-9_-]{1,160}$/.test(asAgentId) ? `?asAgentId=${asAgentId}` : ''
-        await handlers.onSuperTabAttachment(req, res, `${url}${agent}`); return
-      }
-      const direct = req.method === 'POST'
-        ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/attachments\/uploads(\/[A-Za-z0-9_-]{1,160}\/complete)?$/.exec(url) : null
-      if (direct) {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onSuperTabAttachmentUpload) { json(503, { error: 'UNAVAILABLE' }); return }
-        // A link's request names the file ({conversationId, name, mime, size}); a completion's is {}, and may be empty.
-        let body: unknown
-        try { const raw = await readBody(req, 8192); body = direct[1] && !raw.trim() ? {} : JSON.parse(raw) } catch { body = null }
-        if (!body || typeof body !== 'object' || Array.isArray(body)) { json(400, { error: 'BAD_REQUEST' }); return }
-        const asAgentId = new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('asAgentId')
-        const agent = asAgentId && /^[A-Za-z0-9_-]{1,160}$/.test(asAgentId) ? `?asAgentId=${asAgentId}` : ''
-        // Only the fields a link's request has: nothing else the page sends reaches the backend with this account's token.
-        const { conversationId, name, mime, size } = body as Record<string, unknown>
-        await proxied(() => handlers.onSuperTabAttachmentUpload!(`${url}${agent}`, direct[1] ? {} : { conversationId, name, mime, size })); return
-      }
-      const signInAnswer = req.method === 'POST' ? /^\/api\/auth\/qr\/(lookup|approve|deny)$/.exec(url) : null
-      if (signInAnswer) {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onSignInAnswer) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: 'BAD_REQUEST' }); return }
-        // The code and nothing else: whose account approves is this computer's session, never the caller's.
-        const code = (body as { code?: unknown } | null)?.code
-        if (!body || typeof body !== 'object' || Object.keys(body).length !== 1
-            || typeof code !== 'string' || code.length < 1 || code.length > 128) {
-          json(400, { error: 'BAD_REQUEST' }); return
-        }
-        const action = signInAnswer[1] as 'lookup' | 'approve' | 'deny'
-        await proxied(() => handlers.onSignInAnswer!(action, { code })); return
-      }
-      if (req.method === 'POST' && url === '/api/product-usage/feedback') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onProductFeedback) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: 'BAD_REQUEST' }); return }
-        const feedback = body as { answer?: unknown; id?: unknown } | null
-        if (!feedback || typeof feedback !== 'object' || Object.keys(feedback).length !== 2
-            || !PRODUCT_FEEDBACK.includes(feedback.answer as never) || typeof feedback.id !== 'string'
-            || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(feedback.id)) {
-          json(400, { error: 'BAD_REQUEST' }); return
-        }
-        await proxied(() => handlers.onProductFeedback!(feedback)); return
-      }
-      if (req.method === 'GET' && url === '/api/product-usage/settings') {
-        if (!handlers.onProductUsageRead) { json(503, { error: 'UNAVAILABLE' }); return }
-        await proxied(handlers.onProductUsageRead); return
-      }
-      if (req.method === 'POST' && url === '/api/product-usage/settings') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onProductUsageWrite) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: 'BAD_REQUEST' }); return }
-        if (!body || typeof body !== 'object' || Object.keys(body).length !== 1 || typeof (body as { enabled?: unknown }).enabled !== 'boolean') {
-          json(400, { error: 'BAD_REQUEST' }); return
-        }
-        await proxied(() => handlers.onProductUsageWrite!(body)); return
-      }
       if (req.method === 'PATCH' && url === '/api/experimental-settings') {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onExperimentalWrite) { json(503, { error: 'UNAVAILABLE' }); return }
@@ -1277,89 +1027,19 @@ export function startHookServer(
         try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
         await proxied(() => handlers.onExperimentalWrite!(body)); return
       }
-      if (req.method === 'GET' && url === '/api/auth/me') {
-        const me = handlers.onAuthMe
-        if (!me) { json(503, { error: 'UNAVAILABLE' }); return }
-        await proxied(me); return
-      }
-      if (req.method === 'PATCH' && url === '/api/auth/me') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onAuthMeUpdate) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
-        await proxied(() => handlers.onAuthMeUpdate!(body)); return
-      }
-      // Add Phone: a code that SIGNS A PHONE IN to this account — the one local route whose answer is
-      // a credential. So not the CSRF header, which any local process can send, but the daemon's
-      // owner-only socket: the filesystem has already said this is the user who signed in. Another
-      // account on a shared computer reaches the loopback port, never the socket. A client on TCP is
-      // refused, and the Add Phone QR goes without the code (the phone asks for an emailed one).
-      if (req.method === 'POST' && url === '/api/auth/handoff') {
-        if (!trustedLocal || !localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onAuthHandoff) { json(503, { error: 'UNAVAILABLE' }); return }
-        await proxied(handlers.onAuthHandoff); return
-      }
-      // Stopping the daemon ends every agent's link to it: like the phone code above, the daemon's own trusted
-      // endpoint only (the owner's socket; on Windows its pipe, with the token's proof, lib/localSocket.ts).
+      // Stopping the daemon ends every agent's link to it: like the phone's sign-in code (`ServiceHttpRoute.door`), the
+      // daemon's own trusted endpoint only (the owner's socket; on Windows its pipe, with the token's proof, lib/localSocket.ts).
       // Windows only: the route exists when its handler is given (core/daemonStopRoute.ts daemonStopRoute).
       if (req.method === 'POST' && url === '/api/daemon/stop' && handlers.onDaemonStop) {
         if (!trustedLocal || !localOk) { json(403, { error: 'FORBIDDEN' }); return }
         await proxied(handlers.onDaemonStop); return
       }
-      if (req.method === 'PATCH' && url.startsWith('/api/machines/')) {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        const rename = handlers.onMachineRename
-        if (!rename) { json(503, { error: 'UNAVAILABLE' }); return }
-        const machineId = decodeURIComponent(url.slice('/api/machines/'.length))
-        if (!machineId) { json(400, { error: 'MISSING_MACHINE_ID' }); return }
-        let body: { name?: string }
-        try { body = JSON.parse(await readBody(req)) as { name?: string } } catch { json(400, { error: 'bad json' }); return }
-        const name = body.name
-        if (!name) { json(400, { error: 'MISSING_NAME' }); return }
-        await proxied(() => rename(machineId, name)); return
-      }
-      if (req.method === 'DELETE' && url.startsWith('/api/machines/')) {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        const remove = handlers.onMachineDelete
-        if (!remove) { json(503, { error: 'UNAVAILABLE' }); return }
-        const machineId = decodeURIComponent(url.slice('/api/machines/'.length))
-        if (!machineId) { json(400, { error: 'MISSING_MACHINE_ID' }); return }
-        await proxied(() => remove(machineId)); return
-      }
-
-      // The Harness Store: ratings and reviews in the backend, through this daemon's own session. The
-      // rules (reads ungated, writes behind the local header, the paths it forwards) are storeProxy.ts's.
-      if (url.startsWith('/api/store/')) {
-        // A request an http.Server hands over always has its url; `url` above is it without the query.
-        const route = await routeStoreRequest({ method: req.method, url: req.url as string, localOk, readBody: () => readBody(req) }, handlers.onStore)
-        if ('forward' in route) await proxied(route.forward)
-        else json(route.status, route.body)
-        return
-      }
-
-      // `harness pairings` — list paired browsers.
-      if (req.method === 'GET' && url === '/api/pairs') {
-        if (!handlers.onListPairs) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onListPairs(); json(out.status, out.body); return
-      }
-
-      // `harness unpair <id>` — unpair one browser; signals it (if online) to re-pair.
-      if (req.method === 'POST' && url === '/api/revoke') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onRevoke) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { id?: string }
-        try { body = JSON.parse(await readBody(req)) as { id?: string } } catch { json(400, { error: 'bad json' }); return }
-        if (!body.id) { json(400, { error: 'MISSING_ID' }); return }
-        const out = await handlers.onRevoke(body.id); json(out.status, out.body); return
-      }
-
-      // `harness unpair --all` — unpair every browser.
-      if (req.method === 'POST' && url === '/api/revoke-all') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onRevokeAll) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onRevokeAll(); json(out.status, out.body); return
-      }
-
+      // A route a service answers (core/api.ts `SERVICE_HTTP_ROUTES`): the account's (the desk, Agent Messages' tabs, the
+      // account's name, the phone half of a sign-in and the phone's sign-in code, the usage reports and choice, a machine's
+      // rename and delete, the Store's ratings and reviews) and the keys' (`harness pair`, `unpair`, `remote-password`,
+      // `link connect`, `group`, `devices`), each the gateway's. The door's checks above are done. Never one of the paths
+      // open without the local credential (a hook's): a caller that has not shown it reaches no service here.
+      if (credentialOk && await serviceRoute()) return
       json(404, { error: 'not found' })
     })().catch((error: unknown) => {
       // Whatever a handler throws, the request is answered: an engine's hook that waits on this server
@@ -1397,8 +1077,14 @@ export function startHookServer(
       const actual = (server.address() as AddressInfo).port
       hosts = loopbackHosts(actual)
       console.log(`[hooks] listening on 127.0.0.1:${actual} (SessionStart/SessionEnd callbacks)`)
+      // The permission hook (deviceClaude/asked.ts) and the mod's voice poll post only over the socket, so without one the
+      // person sees why the dial shows no waiting prompt and takes no voice.
+      const tcpOnly = (): void => {
+        console.warn('[hooks] the dial\'s waiting prompts and voice from the Claude Code plugin are off: no Unix socket')
+        resolve({ server, port: actual, localSocket: null })
+      }
       const socketPath = options.socketPath
-      if (!socketPath) { resolve({ server, port: actual, localSocket: null }); return }
+      if (!socketPath) { tcpOnly(); return }
       // The private socket is mandatory when opting into multi-user startup. A duplicate daemon
       // must not survive on a random port while another one owns this user's socket.
       listenLocalSocket(handle, socketPath, { token: options.pipeToken ?? undefined }).then(
@@ -1414,7 +1100,7 @@ export function startHookServer(
             return
           }
           console.warn(`[hooks] local socket unavailable (${socketPath}): ${error instanceof Error ? error.message : error}`)
-          resolve({ server, port: actual, localSocket: null })
+          tcpOnly()
         },
       )
     })

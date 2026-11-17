@@ -187,11 +187,13 @@ void main() {
         deskTab('t1', 'Untitled Tab', [], custom: false),
       ]);
 
-      expect(deskTabNames(built), {'t1': 'New Swarm'});
+      expect(deskTabNames(built), {'t1': 'New Tab'});
     });
 
     test('legacy automatic names are never shown, explicit names stand', () async {
       const legacy = [
+        'New Swarm',
+        'New swarm',
         'New tab',
         'New Tab',
         'Untitled Tab',
@@ -207,7 +209,7 @@ void main() {
 
       final names = deskTabNames(built);
       for (final (i, name) in legacy.indexed) {
-        expect(names['auto$i'], 'New Swarm');
+        expect(names['auto$i'], 'New Tab');
         expect(names['chosen$i'], name);
       }
     });

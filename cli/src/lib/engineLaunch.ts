@@ -1429,7 +1429,7 @@ function availabilityScript(recipe: EngineInstallRecipe | undefined): string {
   ].join('\n')
 }
 
-export type CommandAvailability = { status: 'available' | 'missing' | 'unverified'; detail?: string }
+type CommandAvailability = { status: 'available' | 'missing' | 'unverified'; detail?: string }
 /**
  * Does the same interactive shell that launches a new agent resolve this CLI?
  *

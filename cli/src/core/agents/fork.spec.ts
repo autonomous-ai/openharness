@@ -71,7 +71,7 @@ function setup(row: RegisteredSession | null = source(), over: Partial<ForkAgent
     pendingForkInherit: new Map(),
     watchNewPane: vi.fn(async () => {}),
     announceSession: vi.fn(),
-    attachDsh: vi.fn(),
+    attach: vi.fn(),
     prepareApiTools: vi.fn(),
     // What a restart or a resume relaunches the row with (launch.ts): a Codex profile's CODEX_HOME here.
     relaunchOverrides: vi.fn(async (session: RegisteredSession) => ({
@@ -188,7 +188,7 @@ describe('forking an agent', () => {
     })
     const { inspectNativeLaunch } = await import('../../engines/nativeLaunch.js')
     const prepareNative = (native: NativeLaunch, current: () => boolean, environment?: Readonly<Record<string, string>>, clear?: readonly string[]) => native.prepareHooks(0, current, environment, clear)
-    const helpers = createLaunchHelpers({ authority: () => () => true, prepareApiTools: vi.fn(), setGridLaunch: vi.fn(), setTail: vi.fn(),
+    const helpers = createLaunchHelpers({ authority: () => () => true, prepareApiTools: vi.fn(), setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
       launchOverridesDeps: { native: (engine, source) => inspectNativeLaunch(engine, source), prepareNative,
         machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(), writeGridConfigDir: vi.fn(),
         capabilities: async () => ({ sessionEnv: true }), installCodexHooks: async () => true,
@@ -401,7 +401,7 @@ describe('forking an agent', () => {
     await fork({ agentId: 'a1', name: null, prompt: null })
     expect(vi.mocked(buildEngineLaunchArgv).mock.calls[0][1]).toMatchObject({ extraArgs: ['--dsh', '--agent', 'reviewer'], harnessNode: true, installIfMissing: undefined })
     expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ dsh: 'blender', agent: 'reviewer', label: 'Blender', env: { HARNESS_DSH: 'blender' } })
-    expect(deps.attachDsh).toHaveBeenCalled()
+    expect(deps.attach).toHaveBeenCalled()
     vi.mocked(supportsNamedAgent).mockReturnValueOnce(false)
     await setup(source({ agent: 'reviewer' } as Partial<RegisteredSession>)).fork({ agentId: 'a1', name: null, prompt: null })
     expect(vi.mocked(buildEngineLaunchArgv).mock.calls[1][1]).toMatchObject({ extraArgs: undefined })

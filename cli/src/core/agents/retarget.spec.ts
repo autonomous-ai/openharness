@@ -6,7 +6,6 @@ import { builtinSqlite } from '../../lib/sqliteBuiltin.js'
 import { validateLaunchOverrides } from '../../lib/launchOverrides.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { AgentRestartCoordinator, bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
-import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
 import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
@@ -15,9 +14,6 @@ import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { createAgentRetargeter, type RetargetDeps } from './retarget.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
-import { createSwarmSkillAdoption } from '../../superTabs/inCore/adoption.js'
-import { createLaunchAuthority } from './launchAuthority.js'
-import type { SwarmSkillGrant } from '../../lib/swarmSkills.js'
 
 vi.mock('../../engines/launchControl.js', async (real) => ({
   ...await real<object>(),
@@ -33,7 +29,6 @@ vi.mock('../../engines/inProcess.js', async (real) => {
 })
 vi.mock('../../lib/binaryOnPath.js', () => ({ binaryOnPath: vi.fn(() => true) }))
 vi.mock('../../lib/sqliteBuiltin.js', async (real) => ({ ...await real<object>(), builtinSqlite: vi.fn(() => null) }))
-vi.mock('../../lib/gatewayRuntime.js', async (real) => ({ ...await real<object>(), probeGatewayRuntime: vi.fn(async () => ({ kind: 'none' })) }))
 vi.mock('../../lib/gridLaunchWire.js', async (real) => ({ ...await real<object>(), describeGridLaunch: vi.fn(() => 'claude on Home'), gridEnvVarNames: vi.fn(() => ['ANTHROPIC_BASE_URL']) }))
 vi.mock('../../lib/launchOverrides.js', async (real) => ({ ...await real<object>(), validateLaunchOverrides: vi.fn(async () => ({ ok: true })) }))
 vi.mock('../../lib/restartAgent.js', async (real) => ({
@@ -197,7 +192,7 @@ describe('retargeting an agent', () => {
       expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
       expect(restartAgent).not.toHaveBeenCalled()
     })
-    it.each(['validation', 'version', 'preparation', 'native-write', 'environment', 'bypass', 'permission', 'replacement', 'gateway', 'pane-option'] as const)(
+    it.each(['validation', 'version', 'preparation', 'native-write', 'environment', 'bypass', 'permission', 'replacement', 'pane-option'] as const)(
       'cannot publish or continue a retarget whose owner changes during %s', async phase => {
         const row = agent({ engine: 'opencode', subscriptionModel: 'fixture/model' })
         const run = setup(row, { relaunchOverrides: vi.fn(async () => ({ ok: true as const,
@@ -212,7 +207,6 @@ describe('retargeting an agent', () => {
           case 'bypass': vi.mocked(bypassPermissionFor).mockImplementationOnce(async () => { replace(); return true }); break
           case 'permission': vi.mocked(run.deps.downgradedPermission).mockImplementationOnce(async () => { replace(); return {} }); break
           case 'replacement': vi.mocked(restartAgent).mockImplementationOnce(async () => { replace(); return { ok: true, resumed: true, processIdentity: { pid: 2, executable: 'opencode', startMarker: 'new' } } }); break
-          case 'gateway': vi.mocked(probeGatewayRuntime).mockImplementationOnce(async () => { replace(); return { kind: 'none' } as never }); break
           case 'pane-option': vi.mocked(run.tmux.releaseHold).mockImplementationOnce(async () => { replace() }); break
         }
         const result = await createAgentRetargeter(run.deps)({ agentId: 'a1', grid: phase === 'environment' ? null : grid })
@@ -344,52 +338,6 @@ describe('retargeting an agent', () => {
     })
   })
 
-  // Security review 1 of #2255: a model switch relaunched an old Swarm session with no saved role without asking the Swarm, so it
-  // came back without its guard.
-  describe('an old Swarm session with no saved role', () => {
-    const switchWith = (grant: SwarmSkillGrant | null | undefined) => {
-      const row = agent({ startedBy: 'agent' })
-      const adoptSwarmSkill = createSwarmSkillAdoption({ role: async () => grant, candidate: () => false,
-        authority: createLaunchAuthority({ byAgent: () => row, revision: () => 0, cancelled: () => false }),
-        save: (_id, skill) => { row.swarmSkill = skill; return true } })
-      return { row, ...setup(row, { adoptSwarmSkill }) }
-    }
-    it('switches its model with its role, saved on its row', async () => {
-      const run = switchWith({ role: 'agent' })
-      expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: true })
-      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ swarmSkill: { role: 'agent', key: 'a1' } }),
-        expect.anything(), expect.any(Function), undefined)
-      expect(run.row.swarmSkill).toEqual({ role: 'agent', key: 'a1' })
-      expect(restartAgent).toHaveBeenCalledOnce()
-    })
-    it('does not switch a session that changed while its role was read', async () => {
-      const row = agent({ startedBy: 'agent' })
-      const adoptSwarmSkill = createSwarmSkillAdoption({ candidate: () => false, save: vi.fn(),
-        role: async () => { row.cwd = '/replacement'; return { role: 'agent' as const } },
-        authority: createLaunchAuthority({ byAgent: () => row, revision: () => 0, cancelled: () => false }) })
-      const run = setup(row, { adoptSwarmSkill })
-      expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
-      expect(restartAgent).not.toHaveBeenCalled()
-    })
-    it('switches the person\'s own session as before, with no role and no Swarm read', async () => {
-      const role = vi.fn(async () => ({ role: 'agent' as const }))
-      const row = agent()
-      const run = setup(row, { adoptSwarmSkill: createSwarmSkillAdoption({ role, candidate: () => false, save: vi.fn(),
-        authority: createLaunchAuthority({ byAgent: () => row, revision: () => 0, cancelled: () => false }) }) })
-      expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: true })
-      expect(role).not.toHaveBeenCalled()
-      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.not.objectContaining({ swarmSkill: expect.anything() }),
-        expect.anything(), expect.any(Function), undefined)
-    })
-    it('refuses the switch, saying why, and leaves the running engine alone while its role cannot be read', async () => {
-      const run = switchWith(undefined)
-      expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'SWARM_ROLE_UNAVAILABLE',
-        detail: 'This agent\'s Swarm role could not be confirmed, so its model was not switched. Try again once the Swarm can be reached.' })
-      expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
-      expect(run.deps.acquireTerminalControl).not.toHaveBeenCalled()
-      expect(restartAgent).not.toHaveBeenCalled()
-    })
-  })
 
   describe('a move that goes ahead', () => {
     // Codex 0.166 refuses to resume a conversation on another provider (thread/resume → ModelProviderMismatch);
@@ -534,9 +482,9 @@ describe('retargeting an agent', () => {
 
     it('reports a replacement that started before a later non-Error exception', async () => {
       const run = setup()
-      vi.mocked(probeGatewayRuntime).mockRejectedValueOnce('fixture probe unavailable')
+      vi.mocked(run.tmux.releaseHold).mockRejectedValueOnce('fixture release unavailable')
       expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'RETARGET_FAILED',
-        detail: 'The replacement process started, but retarget did not complete. fixture probe unavailable' })
+        detail: 'The replacement process started, but retarget did not complete. fixture release unavailable' })
       expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
     })
 
@@ -553,8 +501,8 @@ describe('retargeting an agent', () => {
       expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: true })
       expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalled()
       expect(restartAgent).toHaveBeenCalledWith({ engine: 'claude', sessionId: 's1' }, true, { isCurrent: expect.any(Function) })
-      // The grid is read off the new process's command line, never its executable alone.
-      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', expect.objectContaining({ pid: 2 }), 'none')
+      // No gateway: the row keeps the one it had, and the relaunched engine says it again (a hook, or Codex's argv).
+      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', expect.objectContaining({ pid: 2 }), undefined, { baseUrl: grid.baseUrl, model: grid.model })
       expect(run.deps.registry.setGridLaunch).toHaveBeenCalledWith('a1', { override: grid, webSearch: 'off' })
       expect(run.deps.registry.setSubscriptionModel).toHaveBeenCalledWith('a1', 'opus')
       expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', true)
@@ -564,6 +512,20 @@ describe('retargeting an agent', () => {
       expect(run.release).toHaveBeenCalled()
       expect(run.releaseRoute).toHaveBeenCalled()
       expect(log.mock.calls.map(([line]) => String(line))).toContain('claude on Home · retargeted a1 · resumed')
+    })
+
+    it('writes the grid it launched on the row, and none for a move home', async () => {
+      const run = setup()
+      await run.retarget({ agentId: 'a1', grid })
+      expect(vi.mocked(run.deps.registry.updateProcessIdentity).mock.calls.at(-1)![3]).toEqual({ baseUrl: grid.baseUrl, model: grid.model ?? null })
+      const { model: _model, ...modelless } = grid
+      await run.retarget({ agentId: 'a1', grid: modelless })
+      expect(vi.mocked(run.deps.registry.updateProcessIdentity).mock.calls.at(-1)![3]).toEqual({ baseUrl: grid.baseUrl, model: null })
+      const home = setup(agent({ grid: { baseUrl: 'x', model: null } } as Partial<RegisteredSession>), {
+        relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: {} })) as never,
+      })
+      await home.retarget({ agentId: 'a1', grid: null })
+      expect(vi.mocked(home.deps.registry.updateProcessIdentity).mock.calls.at(-1)![3]).toBeNull()
     })
 
     it('remembers only the model of the agent\'s own login, never a grid\'s, never the one it moves to', async () => {
@@ -601,7 +563,7 @@ describe('retargeting an agent', () => {
       expect(vi.mocked(validateLaunchOverrides).mock.lastCall?.[2]).toMatchObject({ subscriptionModel: null })
     })
 
-    // Task #3449: the move home is built from its own source, so it dropped the launch model, and a PM came back from a grid
+    // Task #3449: the move home is built from its own source, so it dropped the launch model, and an agent came back from a grid
     // without its xhigh (lib/launchOverrides.ts ranks the launch model above the remembered one).
     it('back home: the launch model rides with the remembered model; a move onto a grid carries none', async () => {
       const launchModel = { model: 'opus', effort: 'xhigh' }
@@ -708,7 +670,7 @@ describe('retargeting an agent', () => {
       expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
     })
   })
-  // A fresh move (a new conversation on the grid, the old one reopened on the way home) served only the v3 Buddy's model
+  // A fresh move (a new conversation on the grid, the old one reopened on the way home) served only a retired model
   // switch, which went with #3901: every move reopens the row's own conversation, whatever an older caller asks.
   it('reopens the row\'s own conversation on every move, and starts none fresh', async () => {
     const out = setup(agent({ sessionId: 'S1' }))

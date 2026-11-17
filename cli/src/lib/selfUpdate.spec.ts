@@ -1520,7 +1520,10 @@ describe('an update that moves the daemon to Node 24', { timeout: 20_000 }, () =
   beforeEach(() => {
     for (const node of [v22, v24]) { mkdirSync(dirname(node), { recursive: true }); placeNode(node) }
     writeFileSync(currentNode, `${v22}\n`)
-  })
+    // Two full copies of this test's Node: about 120 ms here, but the describe's first copy timed out at the default
+    // 10 s on a loaded CI runner (2026-11-14, run 43603619102), later ones took under a second. Root fix (follow-up):
+    // make the hook cheaper, e.g. one copy per Node shared by the describe.
+  }, 60_000)
   afterEach(() => {
     vi.unstubAllGlobals()
     vi.restoreAllMocks()

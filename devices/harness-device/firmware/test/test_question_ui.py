@@ -27,7 +27,7 @@ code = r'''
 #include "../../cable_features.h"
 static bool cable_client_supports(uint32_t features) { (void)features; return true; }
 '''
-code += defines('ID_MAX','CABLE_NAME_MAX','CABLE_READ_TOKEN_MAX')
+code += defines('ID_MAX','CABLE_NAME_MAX','CABLE_READ_TOKEN_MAX','CABLE_CAP_V','CABLE_CAP_A')
 code += defines('QUESTION_MAX','OPTION_MAX','PANE_RESULT_BYTES','UI_FONT','Q_ROWS',source=source)
 code += defines('FACE_CX', source=source)
 code += source[source.index('typedef enum {'):source.index('typedef struct {\n    char id[ID_MAX], name[CABLE_NAME_MAX]')]
@@ -57,6 +57,8 @@ static bool b_known;
 static struct { bool available,pending; char agent[64]; } visit;
 static void ht_visit_close(void *v) { (void)v; visit.available=false; }
 static bool is_question(const char *id) { return !strcmp(id,"b"); }
+// This harness keeps no per-agent caps (test_touch_ui covers the gate), so every agent may speak.
+static bool agent_allows(const char *id,uint8_t cap) { (void)id;(void)cap;return true; }
 static int find(const char *id) { return !strcmp(id,"a") ? 0 : b_known && !strcmp(id,"b") ? 1 : -1; }
 static question_submit_t packet;
 static uint32_t now=100,random_value=1;
@@ -242,6 +244,21 @@ int main(int argc,char **argv) {
     wakes=0;notices=0;face_agent="b";
     assert(!ui_question_show("b","Other","M2","q-b3",NULL) && wakes==0 && notices==1 && read_now==1);
     face_agent="";
+    // A permission prompt that waits in the agent's own app (the host's services/devices.ts): one option, which the host's
+    // inbox needs, and no canText. Filed with its prompt for the face, drawable on the question screen, closed by its id.
+    {
+        cJSON option={.type=JSTRING,.valuestring="In Orca"};
+        cJSON fields[]={{.string="key",.type=JSTRING,.valuestring="prompt"},
+            {.string="q",.type=JSTRING,.valuestring="printf hi \xc2\xb7 answer in Orca"},
+            {.string="options",.type=JARRAY,.child=&option}};
+        cJSON question=object(fields,3),questions={.type=JARRAY,.child=&question};
+        reset(false);view(HOME);wakes=0;notices=0;removed=0;
+        assert(ui_question_show("b","in-orca","M2","shown:p1",&questions) && s.view==HOME && wakes==1 && notices==1);
+        question_load(&questions);
+        assert(s.q.valid && s.q.supported && s.q.count==1 && s.q.item[0].count==1 && !s.q.item[0].can_text);
+        view(QUESTION);render(dir,"shown-only");
+        ui_question_close("b","shown:p1");assert(removed==1);
+    }
     // The ESP32 compiler's -O0 restrict analysis sees the enclosing global s,
     // not the disjoint options/answer fields. Exercise every selected subset
     // at their real capacities and prove that no neighboring state changes.

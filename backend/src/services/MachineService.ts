@@ -14,7 +14,6 @@ import { env } from '../config/env.js'
 import { encryptMachineCredential } from '../lib/machineCredential.js'
 import { machineBillingService } from './MachineBillingService.js'
 import { storedAutonomousEnvironment, type AutonomousEnvironment } from '../lib/autonomousEnvironment.js'
-import { machineRenamed } from '../superTabs/machineRenames.js'
 
 /** The agent's tier / how it runs Claude, resolved through its plan.
  *  'self' | 'managed' = a docker agent-node on a manager host; 'remote' = the user's own computer
@@ -532,7 +531,7 @@ export const machineService = {
     if (read.length === MACHINE_LIST_MAX) logger.warn('machine list cut at its limit', { userId, limit: MACHINE_LIST_MAX })
     // A Harness Team account's machine (anh Dee, 2026-11-10: Team accounts are gone) is no machine of the person's: never
     // listed, so no app or daemon shows it. Left out of the bounded read here, as a row from before the field has none. Goes
-    // with the job that soft-deletes those rows (superTabs/migration/teamMachinesJob.ts), on or after 2026-12-10.
+    // on or after 2026-12-10.
     const rows = read.filter((b) => b.sessionKind !== 'team')
     if (rows.length === 0) return []
     const ids = rows.map((b) => b.machineId)
@@ -620,10 +619,6 @@ export const machineService = {
     assertRequesterEnvironment(binding, requester)
     assertMachineBillingActive(binding)
     await prisma.machine.update({ where: { machineId }, data: { name } })
-    // Every Swarm it is in shows the new name now, not on its next reading, which an offline machine never sends (#2308).
-    await machineRenamed({ machineId, ownerId: binding.userId, autonomousEnv: binding.autonomousEnv }).catch(error => {
-      logger.warn('machine rename did not reach its Swarms; their next reading of it will', { machineId, error: error instanceof Error ? error.message : String(error) })
-    })
     await publishDeviceMachineListChanged(binding.userId, { reason: 'renamed' }).catch(() => { /* best effort */ })
     if (binding.managerId === '') {
       // Remote machine: a live adapter mirrors the name locally (`machine status`) — push it the new one.

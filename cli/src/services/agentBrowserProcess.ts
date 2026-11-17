@@ -3,35 +3,45 @@
  * process (services/agentBrowser.ts). Podman's calls and its event stream, image builds that run for minutes and a
  * setup that waits on a password dialog all cost this process, never the core.
  *
- * The core tells it what happens to agents (`service_event` `attached`, `stopped`, `deleted`, and `moved`: a pane whose
- * agent ended has a new one, decision 19) and reads each browser's state from what this process last told it
- * (`browser_state`, core/agentBrowserLink.ts), so a frame never waits on it.
- * It asks the core for what only the core knows: its agents' ids (`agent_ids`), the agent of a pane and whether it is a
- * guest's, held to the parents of the command that names it (`agent_of_pane`), and to hand on a product counter
- * (`count`). It asks the core to turn an agent's Browser on or off, its person's Start and Stop (`set_browser`), and to
- * move the flag after a browser it moved to a pane's new agent (`move_browser`): the core tells it `attached` or
- * `stopped` before it answers. And it has the core type its two lines into an agent (`deliver`, services/turnsLink.ts),
- * and hears what became of them.
+ * It hears what happens to agents as every service that follows them does (services/followLink.ts): it asks to follow
+ * them each time it connects (`follow_agents`), and hears each start and end, a purge and a pane's new agent (decision
+ * 19), the last two held for it while it is down. The core reads each browser's state from what this process last told
+ * it (`browser_state`, core/agentBrowserLink.ts), so a frame never waits on it. Whose Browser is on is this process's
+ * own (services/agentBrowser.ts). It asks the core what only the core knows, as any service may: every agent here
+ * (`agents`), the agent of a pane and whether it is a guest's, held to the parents of the command that names it
+ * (`agent_of_pane`), and to hand on a product counter (`count`). And it has the core type its two lines into an agent
+ * (`deliver`, services/turnsLink.ts), and hears what became of them.
+ *
+ * A viewer's stream of a browser's screen runs here whole (agentBrowser/streams.ts). The core passes on a viewer's
+ * frames as events (`stream`, `stream_route`, `stream_transport_error`, `stream_refused`), its connection's end as every
+ * service hears it (`service_connection_closed`), and its bytes
+ * as binary frames (a terminal's plain frame, lib/terminalBinary.ts, which names the stream); the stream's answers go
+ * back as notices (`stream_frame`) and the screen's bytes as the same binary frames, which the core sends the
+ * connection it holds the stream for. It says it takes streams each
+ * time it connects (`streams`): a core is told nothing it did not ask to know.
  */
-import type { BrowserSwitch, CoreApi, CorePorts } from '../core/api.js'
+import type { Asker, BrowserRoute, CoreApi, CorePorts } from '../core/api.js'
+import { decodeTerminalLocal, TerminalBinaryKind } from '../lib/terminalBinary.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
+import type { RegisteredSession } from '../lib/registry.js'
 import { startAgentBrowser } from './agentBrowser.js'
 import type { BrowserState } from './agentBrowser/browsers.js'
+import { followLink, type FollowLink } from './followLink.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
-import { isSession, processCoreApi } from './processCoreApi.js'
+import { agentsIn, isSession, processCoreApi } from './processCoreApi.js'
 import { turnsLink } from './turnsLink.js'
 
 type Payload = Record<string, unknown>
 type Ask = (query: string, payload: Payload) => Promise<Payload>
 
-// The service's start waits on this before it deletes anything; no answer in time is no answer.
-const IDS_TIMEOUT_MS = 10_000
-// The core switches in the same turn it is asked: a person's Start or Stop, or a move, it does not answer in this is a
-// failed one.
-const SWITCH_TIMEOUT_MS = 10_000
+// A legacy row lookup and the old core's move handshake are bounded; neither is authority to delete a profile.
+const AGENTS_TIMEOUT_MS = 10_000
 // The core reads the pane's process from tmux within 2 s. An agent's command waits on this answer: a core that does not
 // give it in time names no agent, and the command is refused rather than left hanging.
 const PANE_TIMEOUT_MS = 10_000
+// A person's Start waits this long at most for what it follows of the agents to be caught up, as the process connects:
+// the core answers `follow_agents` as it is asked, so one that has not in this is not there to answer.
+const FOLLOWED_WAIT_MS = 10_000
 
 export interface AgentBrowserServiceOptions {
   dataDir: string
@@ -44,7 +54,16 @@ export interface AgentBrowserServiceOptions {
   start?: typeof startAgentBrowser
 }
 
-const strings = (value: unknown): string[] | null => (Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : null)
+const ROUTES: ReadonlySet<string> = new Set(['direct', 'turn', 'relay'])
+
+/** What a core from before agents were followed (2026-11-15) tells this process, as what happens to agents now: an agent
+ *  whose Browser is on runs, one stopped, one purged, a pane's new agent. Delete on or after 2026-12-18. */
+function olderAgentEvent(payload: Payload): Payload | null {
+  if (payload.kind === 'attached') return { kind: 'running', session: payload.session }
+  if (payload.kind === 'stopped') return { kind: 'ended', agentId: payload.agentId }
+  if (payload.kind === 'deleted') return { kind: 'purged', agentId: payload.agentId, sessionIds: [] }
+  return null
+}
 
 function within<T>(ms: number, work: Promise<T>): Promise<T> {
   let timer: NodeJS.Timeout | undefined
@@ -52,41 +71,33 @@ function within<T>(ms: number, work: Promise<T>): Promise<T> {
   return Promise.race([work, late]).finally(() => clearTimeout(timer))
 }
 
-/** The core's answer to a switch, or null for anything else. */
-function switchOf(answer: Payload): BrowserSwitch | null {
-  if (answer.ok === true && typeof answer.changed === 'boolean') return { ok: true, changed: answer.changed }
-  return answer.error === 'NOT_RUNNING' || answer.error === 'NOT_ALLOWED' ? { error: answer.error } : null
+/** How a stream's answers and bytes reach the core from here: a notice, and a binary frame; false when the core is
+ *  not there to take them. */
+export interface StreamSinks {
+  frame(connId: string, type: string, payload: Payload): boolean
+  bytes(frame: Uint8Array): boolean
 }
 
-/** The core API the agent browser runs on here: the light services' (processCoreApi.ts), with what it asks the core
- *  and the turns it delivers through it. */
-export function agentBrowserCoreApi(dataDir: string, ask: Ask, deliveries: ReturnType<typeof turnsLink>): CoreApi {
+/** The core API the agent browser runs on here: the light services' (processCoreApi.ts), with what it asks the core,
+ *  what it hears of agents ([follow]), the turns it delivers through it, and where its viewers' streams go. */
+export function agentBrowserCoreApi(dataDir: string, ask: Ask, deliveries: ReturnType<typeof turnsLink>, sinks: StreamSinks, follow?: FollowLink): CoreApi {
   const api = processCoreApi(dataDir, 'agentBrowser', { deliveries })
   return {
     ...api,
+    clients: {
+      ...api.clients,
+      browserFrame: (connId, type, payload) => sinks.frame(connId, type, payload),
+      // Framed by the service already. Taken by the link, or not: what the viewer's transport refuses after it comes back
+      // as `stream_refused`.
+      browserBytes: (frame) => sinks.bytes(frame),
+    },
     agents: {
       ...api.agents,
-      ids: async () => {
-        const answer = await within(IDS_TIMEOUT_MS, ask('agent_ids', {}))
-        const live = strings(answer.live)
-        const stopped = strings(answer.stopped)
-        if (!live || !stopped) throw new Error('the core gave no answer for its agents')
-        return { live, stopped }
-      },
+      ...(follow ? { follow: follow.follow } : {}),
       ofPane: async (pane, ancestors) => {
         const answer = await within(PANE_TIMEOUT_MS, ask('agent_of_pane', { pane, ...(ancestors ? { ancestors } : {}) })).catch(() => null)
         // An answer that does not say whose the agent is names none: a command is never run for a guest's on a guess.
         return typeof answer?.agentId === 'string' && typeof answer.guest === 'boolean' ? { agentId: answer.agentId, guest: answer.guest } : null
-      },
-      setBrowser: async (agentId, on) => {
-        const answer = switchOf(await within(SWITCH_TIMEOUT_MS, ask('set_browser', { agentId, on })))
-        if (!answer) throw new Error('the core gave no answer for the switch')
-        return answer
-      },
-      moveBrowser: async (from, to) => {
-        const answer = switchOf(await within(SWITCH_TIMEOUT_MS, ask('move_browser', { from, to })))
-        if (!answer) throw new Error('the core gave no answer for the move')
-        return answer
       },
     },
     // A count the core cannot take now is lost: counters are measures, never state.
@@ -96,7 +107,13 @@ export function agentBrowserCoreApi(dataDir: string, ask: Ask, deliveries: Retur
 
 export function runAgentBrowserService(options: AgentBrowserServiceOptions): ServiceProcess {
   let core: CoreConnection | null = null
+  let connectionGeneration = 0
   const ask: Ask = (query, payload) => (core ? core.query(query, payload) : Promise.reject(new Error('no core to ask')))
+  const agentQuery = async (source: CoreConnection | null, generation: number, query: string): Promise<Payload | null> => {
+    if (!source || source !== core || generation !== connectionGeneration) return null
+    const answer = await within(AGENTS_TIMEOUT_MS, source.query(query, {})).catch(() => null)
+    return source === core && generation === connectionGeneration ? answer : null
+  }
   const link = turnsLink(ask)
   // A line asked of no core never left this process: heard `rejected`, so it is tried again (agentBrowser/notices.ts),
   // not `unknown`, which counts as perhaps typed and is never typed again.
@@ -105,18 +122,52 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
     queueMicrotask(() => link.heard({ kind: 'delivery', event: { deliveryId, sessionId: agentId, state: 'rejected', reason: 'no_core' } }))
   } } }
   const ports: Pick<CorePorts, 'agentBrowser'> = { agentBrowser: null }
+  // Every agent as it starts and ends here, and a purge and a pane's new agent, held for it while it is down.
+  const follow = followLink({})
+  let legacyMove: ((from: string, session: RegisteredSession, on: boolean) => Promise<boolean>) | undefined
   /** What each browser last showed: a new core, or the same one after this link dropped, hears all of it again. */
   const shown = new Map<string, BrowserState>()
   const tell = (agentId: string, state: BrowserState | undefined) => {
-    // A ready browser's exec goes with its state: the core opens a viewer's stream with it, in line.
-    const command = state?.state === 'ready' ? ports.agentBrowser?.streamCommand(agentId) : undefined
-    void ask('browser_state', { agentId, ...(state ? { state } : {}), ...(command && 'argv' in command ? { command: command.argv } : {}) }).catch(() => {})
+    void ask('browser_state', { agentId, ...(state ? { state } : {}) }).catch(() => {})
   }
-  const requests = (options.start ?? startAgentBrowser)(agentBrowserCoreApi(options.dataDir, ask, deliveries), ports, {
+  /** The connections that asked anything of a stream and are still open. The core that goes forgets every stream it
+   *  held (core/browserStreams.ts `gone`), so each is told ended here: an exec left piping a still screen would hold
+   *  one of its browser's few viewer places for good. */
+  const viewers = new Set<string>()
+  const sinks: StreamSinks = {
+    frame: (connId, type, payload) => {
+      if (!core?.notice) return false
+      core.notice('stream_frame', { connId, type, payload })
+      return true
+    },
+    bytes: frame => core?.sendBinary?.(frame) ?? false,
+  }
+  const requests = (options.start ?? startAgentBrowser)(agentBrowserCoreApi(options.dataDir, ask, deliveries, sinks, follow), ports, {
     told: (agentId, state) => {
       if (state) shown.set(agentId, state)
       else shown.delete(agentId)
       tell(agentId, state)
+    },
+    followed: () => follow.ready(FOLLOWED_WAIT_MS),
+    // The rollback core still owns its Browser flags. Kept entirely in this process, never a new core port.
+    // Delete on or after 2026-12-18.
+    legacyMoves: listener => {
+      legacyMove = listener
+      return () => { legacyMove = undefined }
+    },
+    // Migration needs actual rows, never ids reconstructed as sessions or an inventory for deletion.
+    everyAgent: async () => agentsIn(await agentQuery(core, connectionGeneration, 'agents')),
+    hasAgent: async agentId => {
+      const source = core, generation = connectionGeneration
+      const answer = await agentQuery(source, generation, 'agents')
+      const rows = answer?.agents
+      if (Array.isArray(rows)) return rows.every(isSession) ? rows.some(row => row.agentId === agentId) : null
+      // Old cores name only live/stopped ids. Membership authorizes settings, never migration or Start.
+      // Delete on or after 2026-12-18, with the other old-core adapters in this process.
+      if (answer?.error !== 'UNKNOWN_QUERY') return null
+      const ids = await agentQuery(source, generation, 'agent_ids')
+      const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every(id => typeof id === 'string')
+      return strings(ids?.live) && strings(ids?.stopped) ? ids.live.includes(agentId) || ids.stopped.includes(agentId) : null
     },
   })
   const port = ports.agentBrowser!
@@ -127,25 +178,67 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
     token: options.token,
     requests,
     onEvent: (payload) => {
-      if (deliveries.heard(payload)) return
-      if (payload.kind === 'attached') {
-        if (isSession(payload.session)) port.attached(payload.session)
-        return
-      }
+      if (deliveries.heard(payload) || follow.heard(payload)) return
+      const older = olderAgentEvent(payload)
+      if (older) return void follow.heard({ kind: 'agent', event: older })
       if (payload.kind === 'moved') {
         const { from, session, on } = payload
-        if (typeof from === 'string' && from && isSession(session) && typeof on === 'boolean') port.moved(from, session, on)
+        if (typeof from !== 'string' || !from || !isSession(session) || typeof on !== 'boolean' || !legacyMove) return
+        const source = core
+        void legacyMove(from, session, on).then(async moved => {
+          if (!moved || !on) return
+          // Only the core that sent the move may change its old registry flag. Its attached notice can arrive before
+          // the answer; the repeated running notice below is harmless and also handles a dropped attached notice.
+          const answer = source && source === core
+            ? await within(AGENTS_TIMEOUT_MS, source.query('move_browser', { from, to: session.agentId })).catch(() => null)
+            : null
+          if (answer?.ok === true && source === core) {
+            follow.heard({ kind: 'agent', event: { kind: 'running', session: { ...session, browser: true } } })
+          } else {
+            console.log(`agent browser ${session.agentId}: browser_move_failed (${typeof answer?.error === 'string' ? answer.error.toLowerCase() : 'no_answer'})`)
+          }
+        }).catch(() => { console.log(`agent browser ${session.agentId}: browser_move_failed (no_answer)`) })
         return
       }
-      if (typeof payload.agentId !== 'string' || !payload.agentId) return
-      if (payload.kind === 'stopped') port.stopped(payload.agentId)
-      else if (payload.kind === 'deleted') port.deleted(payload.agentId)
+      if (payload.kind === 'stream') {
+        const { connId, type, asker } = payload
+        if (typeof connId !== 'string' || typeof type !== 'string') return
+        viewers.add(connId)
+        // Who asked comes with an open alone: an ack and a close are the stream's own.
+        port.stream(connId, type, payload.payload && typeof payload.payload === 'object' ? payload.payload as Payload : {}, asker && typeof asker === 'object' ? asker as Asker : undefined)
+        return
+      }
+      if (payload.kind === 'stream_route') {
+        const { streamId, route } = payload
+        if (typeof streamId === 'string' && (route === null || ROUTES.has(route as string))) port.streamRoute(streamId, route as BrowserRoute | null)
+        return
+      }
+      if (payload.kind === 'stream_transport_error') return port.streamTransportError()
+      if (payload.kind === 'stream_refused' && typeof payload.streamId === 'string') port.streamRefused(payload.streamId)
+    },
+    // A viewer's keys and mouse, for its stream.
+    onBinary: (bytes) => {
+      const frame = decodeTerminalLocal(bytes)
+      if (frame?.kind === TerminalBinaryKind.browser) port.streamInput(frame.streamId, frame.bytes)
+    },
+    onConnectionClosed: (connId) => {
+      if (viewers.delete(connId)) port.streamClosed(connId)
     },
     onConnected: (connection) => {
+      connectionGeneration++
       core = connection
+      // Said to each core it connects to: it takes viewers' streams (core/agentBrowserLink.ts `streams`).
+      void ask('streams', {}).catch(() => {})
       for (const [agentId, state] of shown) tell(agentId, state)
+      void follow.connected(connection.query)
     },
-    onDisconnected: () => { core = null },
+    onDisconnected: () => {
+      connectionGeneration++
+      core = null
+      follow.disconnected()
+      for (const connId of viewers) port.streamClosed(connId)
+      viewers.clear()
+    },
   })
   return { stop: () => { port.stop(); return service.stop() } }
 }

@@ -208,7 +208,7 @@ const screen = async (backend: PtyHostBackend, runtime: PtyRuntimeRef): Promise<
           registry, stoppedAgents, createBackend: backend, backendFor, restartJobs, stopJobs, pinnedControls: new Set(),
           retainExitedSession() { throw new Error('nothing live to retain') }, announceSession() {},
           relaunchOverrides: async () => ({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } }),
-          prepareSessionResume() {}, refreshGridWebSearch() {}, clearDeleted() {}, attachDsh() {}, attachSession: async () => true,
+          async prepareSessionResume() { return false }, refreshGridWebSearch() {}, clearDeleted() {}, attach() {}, attachSession: async () => true,
         })
         const resumed = await resume(row.agentId)
         if (!resumed.ok) throw new Error(`resume failed: ${JSON.stringify(resumed)}`)

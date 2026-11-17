@@ -235,8 +235,27 @@ describe('Hachi\'s wakes, from what its harnesses push', () => {
     const close = t.lines.flatMap((l) => l.requests).find(([type]) => type === 'agent_close')!
     expect(close[1]).toEqual({ agentId: 'hachi', sessionId: 's-hachi', createdAt: new Date(NOW - 60_000).toISOString(), mode: 'now' })
     expect(t.lines.filter((l) => !l.closed)).toEqual([])
+    expect(t.log).toHaveBeenCalledWith('[hachi] Hachi is off: closed Hachi, its conversation kept.')
     await t.advance(WAKE_COALESCE_MS)
     expect(t.lines.flatMap((l) => l.requests).some(([type]) => type === 'agent_messages')).toBe(false)
+    t.service.stop()
+  })
+
+  // The close says when the record it saved holds no conversation (lib/closeAgentService.ts `withoutConversation`), and
+  // the line said "its conversation kept" of a Hachi turned off before it bound one
+  // (docs/plans/2026-11-16-codex-help-race-design.md; services/agentCleanup.ts says it the same way).
+  it('turned off before Hachi started a conversation: its line says none was kept', async () => {
+    setAgentSettingsForTest(dir, { hachi: true })
+    const t = setup([row('hachi', { dsh: HACHI_ID, sessionId: '' })])
+    await t.look()
+    setAgentSettingsForTest(dir, { hachi: false })
+    const original = Line.prototype.request
+    Line.prototype.request = async function (type, payload) {
+      if (type === 'agent_close') return { closed: true, withoutConversation: true }
+      return original.call(this, type, payload)
+    }
+    try { await t.look() } finally { Line.prototype.request = original }
+    expect(t.log).toHaveBeenCalledWith('[hachi] Hachi is off: closed Hachi. It had not started a conversation, so none was kept.')
     t.service.stop()
   })
 })

@@ -49,42 +49,17 @@ Two folders are this package's own, and have no counterpart on the desktop:
 `lib/demo/` provides the offline sample runtime. `test/render/` captures the phone screens;
 `integration_test/tour_test.dart` opens `SampleApp` directly for the simulator walkthrough.
 
-## The account’s swarms are the desk’s, here too
+## The account’s tabs are the desk’s, here too
 
-The account’s swarms are stored on the backend (`/api/desk`). `lib/state/desk_sync.dart` models
+The account’s tabs are stored on the backend (`/api/desk`). `lib/state/desk_sync.dart` models
 that shared document; `lib/state/phone_desk.dart` handles the phone's reads and explicit writes.
 The phone's `swarms` are temporary terminal containers for the pager, not a projection of the
-account’s swarms. Swiping must never rewrite the shared desk.
+account’s tabs. Swiping must never rewrite the shared desk.
 
 The phone follows desk updates over machine relay sockets and polls every 15 seconds in the
-foreground. Creating or deleting a harness updates its desk membership; explicit swarm operations
-also live in `PhoneDesk`. The current swarm and position remain device-local. `lib/phone/desk_groups.dart`
-resolves the swarm’s harnesses for navigation.
-
-## Swarm (Settings ▸ Experimental)
-
-`lib/swarm/` brings a Swarm (the desktop's collaborative tab, not the desk groups above) to the
-phone: what needs the person first (decisions, the Product Manager's tags, work waiting on them),
-the Swarms and their projects, a project's conversations, posting with @mentions, and decisions
-answered with one tap. Reads and writes go straight to the backend using the phone's own sign-in
-(`AppNotifier.swarmRequest`), so posting and answering decisions work while every account machine
-is offline. Command retries keep the same operation ID, including after a bearer refresh or a
-fallback through an account machine (`super_tabs`, end-to-end encrypted). Writes fall back only
-when the direct transport or server is unavailable; authentication, access and rate-limit refusals
-stand. The backend enforces what the signed-in person may read and change. Operations that run on
-a computer still need that computer, and regular terminals keep their end-to-end encrypted path
-through the machine. `model.dart` and `parts.dart` are copies of the desktop's, held to them by
-`test/swarm/desktop_parity_test.dart`.
-
-- **Cost.** One `SwarmSession` per signed-in account while Swarm is on. In the foreground it reads
-  what needs the person every 15 seconds, and an open Swarm's changes (first load, then `/changes`)
-  every 5 seconds while a screen shows it. In the background it reads nothing.
-- **Notices** are local only: a foreground read that finds something new posts one while no Swarm
-  screen is open (Home, a terminal). They say who asks and in which project, never the question or
-  the message (`swarm_notices.dart`), because a locked phone may show them; notices to a closed or
-  backgrounded app need push from the backend.
-- **Choices.** `swarm_choices.dart` holds the six UX answers (the way in, the first screen, a
-  project's layout, posting, notices, Undo), each the recommended one until the app's owner decides.
+foreground. Creating or deleting a harness updates its desk membership; explicit tab operations
+also live in `PhoneDesk`. The current tab and position remain device-local. `lib/phone/desk_groups.dart`
+resolves the tab’s harnesses for navigation.
 
 ## It is a VIEWER build, always
 

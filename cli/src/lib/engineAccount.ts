@@ -17,8 +17,8 @@
  * every launch (`~/.claude.json`, which Harness's own folder trust writes too) would not say which
  * engine the person works in.
  */
-import { readApiConnectionStore } from './apiConnectionMetadata.js'
 import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -72,7 +72,7 @@ const runEngineStatus: EngineStatusRun = (engine, args, env) => new Promise(reso
 })
 
 /** What Claude Code or Codex itself says of its sign-in under [env]: true, false, or null when it cannot say. */
-export async function cliSignedIn(engine: 'claude' | 'codex', env: NodeJS.ProcessEnv, run: EngineStatusRun = runEngineStatus): Promise<boolean | null> {
+async function cliSignedIn(engine: 'claude' | 'codex', env: NodeJS.ProcessEnv, run: EngineStatusRun = runEngineStatus): Promise<boolean | null> {
   if (engine === 'codex') {
     const status = await run('codex', ['login', 'status'], env)
     return status ? status.code === 0 : null
@@ -111,6 +111,22 @@ async function newestDay(sessions: string): Promise<number | null> {
 
 const CLAUDE_ENV = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX']
 
+/**
+ * Whether an API saved here (Models ▸ APIs) sends its key as `Authorization: Bearer`, by the store's own checked read
+ * (./apiConnections.ts): a file that read refuses has none. The store, not the list a launch reads: a store from before
+ * the list has none until models first reads it, and this answer did not wait for that.
+ *
+ * That read brings zod, loaded here only where an API was ever saved. The New dialog's probe asks this in the edge host
+ * (services/engineProbe.ts), whose services share one process that otherwise holds none (leanEntry.spec.ts).
+ */
+async function savedBearerApi(dataDir: string): Promise<boolean> {
+  if (!existsSync(join(dataDir, 'api-connections', 'connections.json'))) return false
+  try {
+    const { readApiConnectionStore } = await import('./apiConnections.js')
+    return readApiConnectionStore(dataDir).connections.some((row) => row.authHeader.toLowerCase() === 'authorization' && row.authPrefix.toLowerCase() === 'bearer')
+  } catch { return false }
+}
+
 /** Claude Code and Codex only; every other engine answers unknown. */
 export async function engineAccount(engine: AgentEngine, deps: EngineAccountDeps = {}): Promise<EngineAccount> {
   const home = deps.home ?? homedir()
@@ -119,12 +135,9 @@ export async function engineAccount(engine: AgentEngine, deps: EngineAccountDeps
   // process (loginShellEnv.ts), with the daemon's own on top.
   const env = deps.env ?? { ...await warmLoginShellEnvironment(), ...process.env }
   // A model API saved on this computer (Models ▸ APIs) serves Claude Code without a
-  // subscription, so the machine can take Swarm work on it (headless run, 2026-11-03: a working OpenRouter key saved,
+  // subscription, so the machine can run Claude Code on it (headless run, 2026-11-03: a working OpenRouter key saved,
   // and the account read "not signed in").
-  const savedApi = (() => {
-    try { return readApiConnectionStore(env.ADAPTER_DATA_DIR || join(home, '.harness', 'cli', 'data')).connections }
-    catch { return [] }
-  })().some((row) => row.authHeader.toLowerCase() === 'authorization' && row.authPrefix.toLowerCase() === 'bearer')
+  const savedApi = await savedBearerApi(env.ADAPTER_DATA_DIR || join(home, '.harness', 'cli', 'data'))
   if (engine === 'claude') {
     const dir = env.CLAUDE_CONFIG_DIR || join(home, '.claude')
     const lastUsedAt = deps.lastUsed === false ? null : await newestChild(join(dir, 'projects'))

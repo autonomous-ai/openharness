@@ -9,6 +9,8 @@
  *   but only from an authenticated tmux context.
  * SessionEnd:   asks the adapter to reconcile the terminal; process discovery remains
  *   the authority for whether the agent exists.
+ * Outside a pane, or in a tmux pane the person opened (ownPane): tells the devices what the session did
+ *   (postObserved), and registers nothing.
  *
  * Always exits 0 quickly and swallows every error, so it can never block or
  * delay claude's session start/teardown.
@@ -111,6 +113,11 @@ function argCopilotEvent() {
   return ['sessionStart', 'userPromptSubmitted', 'agentStop', 'sessionEnd'].includes(value) ? value : ''
 }
 
+/** Copilot's agentStop: `stopReason` is `end_turn` on a clean finish; anything else ended the loop early. */
+function copilotStopFailed(input) {
+  return typeof input.stopReason === 'string' && input.stopReason !== '' && input.stopReason !== 'end_turn'
+}
+
 /**
  * agy names its hook event nowhere in the payload, so the installer puts it on the command line.
  *
@@ -121,6 +128,18 @@ function argAgyEvent() {
   const i = process.argv.indexOf('--agy-event')
   const value = i !== -1 ? process.argv[i + 1] : ''
   return value === 'PreInvocation' || value === 'Stop' ? value : ''
+}
+
+/**
+ * agy's Stop: 'waiting' while its sub-agents still work (`fullyIdle: false`, the agy branch of main() says why),
+ * 'error' when the loop ended early (`terminationReason` is NO_TOOL_CALL on a clean finish), else undefined.
+ */
+function agyStopStatus(input) {
+  const failed = typeof input.terminationReason === 'string'
+    && input.terminationReason !== ''
+    && input.terminationReason !== 'NO_TOOL_CALL'
+    && input.terminationReason !== 'model_stop'
+  return input.fullyIdle === false ? 'waiting' : failed || input.error ? 'error' : undefined
 }
 
 function paths() {
@@ -385,7 +404,7 @@ function hookRoute(port) {
   return socketPath ? tokenRoute({ socketPath }, readHookCredential()) : null
 }
 
-function post(port, path, body, onResponse) {
+function post(port, path, body, onResponse, facts = {}) {
   return new Promise((resolve) => {
     const payload = JSON.stringify(body)
     const route = hookRoute(port)
@@ -400,6 +419,8 @@ function post(port, path, body, onResponse) {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(payload),
           ...route.headers,
+          // Headers, not body fields: a daemon that does not read one ignores it, where it refuses an unknown field.
+          ...facts,
           // When the engine ran this hook: this process's start, not its arrival, which can be seconds later on
           // a loaded machine, after the engine has moved on to its next prompt (src/hookServer.ts hookFiredAt).
           'X-Harness-Hook-Fired-At': String(FIRED_AT),
@@ -440,6 +461,224 @@ function post(port, path, body, onResponse) {
     req.write(payload)
     req.end()
   })
+}
+
+/**
+ * post() for a session outside a pane, which only the devices hear of (core/observedHook.ts): written, never waited on.
+ * The engine waits for this hook, and nothing in the daemon's answer changes what the hook does. So it resolves once
+ * the request is handed to the socket ('finish'), which the exit in main()'s finally then cannot cut, or after 150 ms,
+ * so a daemon that takes the request and never answers cannot hold the engine.
+ */
+function postObserved(port, body) {
+  return new Promise((resolve) => {
+    const route = hookRoute(port)
+    if (!route) { resolve(); return }
+    const payload = JSON.stringify(body)
+    const req = http.request({
+      ...route.address,
+      path: '/api/hook/observed',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload), ...route.headers },
+    })
+    setTimeout(resolve, 150)
+    req.on('finish', resolve)
+    req.on('error', resolve)
+    req.end(payload)
+  })
+}
+
+/**
+ * Which app a session outside a pane runs in, from the environment the engine gave this hook: these names exactly,
+ * never by prefix. Orca also sets ORCA_PAIRING_CODE and ORCA_AGENT_SESSION_SPAWN_TOKEN there (read on an Orca 1.4.256
+ * session, 2026-11-13), and they must never leave this process. CLAUDE_CODE_HOST_SESSION_ID is the Claude app's own id
+ * for the session it runs (`local_<random uuid>`): a tap on the dial opens the app on that session. It is an id, not a
+ * credential (read in the app, 2026-11-14: it names the session in the app's list and its telemetry; the app's tokens
+ * are other variables).
+ *
+ * CLAUDE_CODE_ENTRYPOINT is a fixed word naming how Claude Code was started, not a secret: the VS Code extension sets
+ * `claude-vscode` (read in the extension's code), and a tap then opens the extension's tab on the session.
+ *
+ * HC_TERMINAL_ID is Herdr Core's (hc's) address of the terminal the agent runs in, `t7`: an id, no credential. A named
+ * hc session's addresses start again at t1, and the devices follow the default session, where that address would be
+ * another terminal: it is sent from the default session alone. And on macOS alone: hc runs on Linux too, but macOS is
+ * the one platform the devices try Herdr's window on (Q5).
+ *
+ * In order: the app's names first, then the hosts from the nearest, as detectHost reads them (cable/hosts/hostDetect.ts),
+ * so a session with more than MAX_HINTS set loses the farthest. HC_TERMINAL_ID comes after the multiplexers: one started
+ * in an hc terminal keeps that terminal's address, and is the nearer host. CLAUDE_CODE_ENTRYPOINT is last, the first the
+ * cap drops: without it a tap still brings the app forward.
+ */
+const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE',
+  'HC_TERMINAL_ID', 'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE',
+  'CLAUDE_CODE_HOST_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT']
+/** The core's observed route takes no more (core/observedHook.ts MAX_HINTS, which hookNotify.spec.ts keeps this equal to). */
+const MAX_HINTS = 10
+
+/** A character the core refuses in a path or hint (core/observedHook.ts): one there is forged. */
+const CONTROL = /[\u0000-\u001f\u007f]/
+
+function hostHints() {
+  const hints = {}
+  for (const name of HOST_HINTS) {
+    // The core refuses a whole event with more hints than MAX_HINTS, one over 64 characters or one with a control
+    // character (core/observedHook.ts): that hint is left out instead.
+    if (Object.keys(hints).length === MAX_HINTS) break
+    // A named herdr session (`herdr --session <name>`) is a server of its own whose pane ids start again at w1:p1, and
+    // herdr sets HERDR_SESSION in its panes alone (herdr 0.8.0): the devices follow the default session, where this id
+    // would be another agent's pane. Skipped before the cap counts it, so it costs no other hint its place.
+    if (name === 'HERDR_PANE_ID' && process.env.HERDR_SESSION) continue
+    // The same for a named hc session's terminal address (see HOST_HINTS), and off macOS, where the devices do not try
+    // Herdr. And in a herdr pane, the nearer host: a named herdr session sends no HERDR_PANE_ID above, and the address
+    // alone would read as Herdr's own terminal (hostDetect.ts inHerdr).
+    if (name === 'HC_TERMINAL_ID' && (process.platform !== 'darwin' || process.env.HERDR_PANE_ID
+      || process.env.HERDR_SESSION || (process.env.HC_SESSION && process.env.HC_SESSION !== 'default'))) continue
+    const value = process.env[name]?.slice(0, 64)
+    if (value && !CONTROL.test(value)) hints[name] = value
+  }
+  return hints
+}
+
+/** The endpoint variables that say an engine is routed through OpenRouter: these names exactly. Their values never leave this process. */
+const GATEWAY_URLS = ['ANTHROPIC_BASE_URL', 'OPENAI_BASE_URL', 'OPENAI_API_BASE']
+
+/** By the endpoint's host alone: one that only looks like OpenRouter's (openrouter.ai.example.com, a path) is not. */
+function ownGateway() {
+  return GATEWAY_URLS.some((name) => {
+    try { return /(?:^|\.)openrouter\.ai$/i.test(new URL(process.env[name] ?? '').hostname) } catch { return false }
+  }) ? 'ori' : 'none'
+}
+
+/**
+ * This session's Codex home, as the core takes one (src/hookServer.ts hookFacts): absolute as this platform spells it,
+ * on Windows a drive's path, never a share's or a device's (src/engines/kit/homeAdoption.ts homeIsAbsolute). The
+ * default is no home of its own.
+ */
+function ownCodexHome() {
+  const home = process.env.CODEX_HOME
+  const absolute = home && (process.platform === 'win32' ? /^[A-Za-z]:\\/.test(home) : home.startsWith('/'))
+  return absolute && home.length <= 1_024 && !CONTROL.test(home) && home !== join(homedir(), '.codex')
+    ? home : undefined
+}
+
+/**
+ * What this hook says of its session's environment: it reads its own, so the daemon need read no other process's. The
+ * gateway for Claude Code and Hermes (Codex's argv says its own), the home for Codex; nothing for another engine.
+ */
+function ownFacts(engine) {
+  if (engine === 'claude' || engine === 'hermes') return { 'X-Harness-Hook-Gateway': ownGateway() }
+  const home = engine === 'codex' ? ownCodexHome() : undefined
+  // Percent-encoded: Node refuses a header value above U+00FF, and that would end the hook before it registers.
+  return home ? { 'X-Harness-Hook-Codex-Home': encodeURIComponent(home) } : {}
+}
+
+/** Each engine's name for these moments, as main() reads them in a pane: Claude Code's and the engines that copy it
+ *  (Grok's once grokHookEvent has named them), Cursor's and Copilot's lower-camel ones. */
+const OBSERVED_EVENTS = new Map([
+  ['SessionStart', 'session-start'], ['sessionStart', 'session-start'],
+  ['UserPromptSubmit', 'turn-start'], ['beforeSubmitPrompt', 'turn-start'], ['userPromptSubmitted', 'turn-start'],
+  ['Stop', 'turn-stop'], ['StopFailure', 'turn-error'],
+  ['SessionEnd', 'session-end'], ['sessionEnd', 'session-end'],
+])
+
+/** Claude Code's Notification types that wait for the person's answer: a permission, an MCP server's question or
+ *  link, or a resume after the quota ran out. */
+const NEEDS_INPUT = ['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog', 'quota_auto_resume_stale']
+
+/** A paneless hook's event in the devices' words (core/observedHook.ts); null for one that says none of them. */
+function observedEvent(engine, event, input) {
+  const name = engine === 'copilot' ? argCopilotEvent() : engine === 'agy' ? argAgyEvent() : engine === 'grok' ? grokHookEvent(event) : event
+  if (engine === 'copilot' && name === 'agentStop') return copilotStopFailed(input) ? 'turn-error' : 'turn-stop'
+  if (engine === 'cursor' && name === 'stop') return input.status === 'error' ? 'turn-error' : 'turn-stop'
+  if (engine === 'agy' && name === 'Stop') {
+    const status = agyStopStatus(input)
+    // Waiting for its sub-agents: the turn goes on.
+    return status === 'waiting' ? null : status === 'error' ? 'turn-error' : 'turn-stop'
+  }
+  // agy's call of its model, and Command Code's tool call, are the only signs those engines give of a turn running.
+  if (name === 'PreInvocation' || (engine === 'commandcode' && (name === 'PreToolUse' || name === 'preToolUse'))) return 'turn-start'
+  // Grok writes its Stop before the turn's last words (its branch in main()).
+  if (engine === 'grok' && name === 'Stop') return null
+  // Claude Code also says idle_prompt a minute after a finished turn, and auth_success: no answer is waited for, and a
+  // done agent stays done. One too old to name its type sends that idle notice untyped too, so it says nothing.
+  if (name === 'Notification') return NEEDS_INPUT.includes(input.notification_type) ? 'needs-input' : null
+  return OBSERVED_EVENTS.get(name) ?? null
+}
+
+/** How Claude Code types in a message another session sent; the start is all that is read of the prompt. */
+const CROSS_SESSION = /^\s*<cross-session-message /
+
+/** A prompt another session sent, not one the person typed: the devices do not move the dial for it. Codex, Grok and
+ *  Devin name their prompt event as Claude Code does, but only Claude Code types another session's message in so. */
+function relayedPrompt(engine, event, input) {
+  return engine === 'claude' && event === 'UserPromptSubmit' && typeof input.prompt === 'string' && CROSS_SESSION.test(input.prompt)
+}
+
+/** The shells an engine runs its hook through: `/bin/sh -c` is dash on Debian and Ubuntu, bash on Fedora and Arch,
+ *  BusyBox's on Alpine, and each runs as `sh`; an engine that asks for bash or dash by name runs it so. */
+const HOOK_SHELLS = new Set(['sh', 'dash', 'bash'])
+
+/**
+ * The engine's pid, which the devices keep for a paneless agent (cable/hosts/observed.ts). On Linux dash keeps an
+ * engine's `sh -c` as the hook's parent, and it exits with the hook: the devices walked from a pid already gone,
+ * refused a tap on the agent's tmux pane and dropped the agent 30 s later (GitHub run 43721656615). The shell's parent
+ * is the engine, read from /proc, never the environment. macOS's /bin/sh is a bash that execs the hook, so its parent
+ * is the engine already, with no `ps` on the engine's wait.
+ */
+function observedCallerPid() {
+  if (process.platform !== 'linux') return process.ppid
+  const parent = linuxOwnerBirth(process.ppid)
+  // A shell left to init, its engine gone, is named itself: pid 1 never exits, and the devices would keep the agent.
+  return parent && HOOK_SHELLS.has(parent.command) && parent.parentPid > 1 ? parent.parentPid : process.ppid
+}
+
+/** The core refuses an event whose title is longer (core/observedHook.ts): the hook cuts it to this instead. */
+const MAX_TITLE = 64
+
+/**
+ * The name the session gives itself, as the core takes one, or undefined for none. The same rule as the devices'
+ * cleaner (cable/hosts/observedTitle.ts): this file ships alone and cannot import it, and the hook's test holds the
+ * two copies together.
+ */
+function observedTitle(value) {
+  if (typeof value !== 'string') return undefined
+  let title = value.replace(/\s+/g, ' ').trim()
+  if (title.length > MAX_TITLE) {
+    title = title.slice(0, MAX_TITLE)
+    // A cut between the two halves of a surrogate pair would leave half a character.
+    if (/[\ud800-\udbff]$/.test(title)) title = title.slice(0, -1)
+    title = title.trim()
+  }
+  return title === '' || CONTROL.test(title) ? undefined : title
+}
+
+/**
+ * What a paneless session's hook tells the devices: which session, what happened and where, and the name it gives
+ * itself, never its prompt. A path the core would refuse (over 1024 characters, or with a control character) is left
+ * out rather than cost the whole event (core/observedHook.ts), and so are the paths of a body over the 4096 bytes the
+ * core reads (hookServer.ts): the transcript's first, as the devices can do without it, then the folder. The title is
+ * never dropped: at most 64 characters, it fits beside the hints and ids once both paths are gone, so a body without
+ * one always means the session said none.
+ */
+function observedBody(engine, event, input) {
+  const kind = observedEvent(engine, event, input)
+  const sessionId = input.session_id || input.conversation_id || input.sessionId || input.conversationId
+  if (!kind || typeof sessionId !== 'string') return null
+  const path = (value) => typeof value === 'string' && value.length <= 1024 && !CONTROL.test(value) ? value : undefined
+  // Devin's payload carries no cwd; the hook process inherits the session's working directory.
+  const cwd = Array.isArray(input.workspace_roots) ? input.workspace_roots[0]
+    : Array.isArray(input.workspacePaths) ? input.workspacePaths[0]
+      : input.cwd || input.workspaceRoot || (engine === 'devin' ? process.cwd() : undefined)
+  const body = {
+    engine, sessionId, event: kind, cwd: path(cwd), callerPid: observedCallerPid(),
+    transcriptPath: path(input.transcript_path || input.transcriptPath), hostHints: hostHints(),
+  }
+  if (relayedPrompt(engine, event, input)) body.relayed = true
+  const title = kind === 'session-start' || kind === 'turn-start' ? observedTitle(input.session_title) : undefined
+  if (title) body.title = title
+  const fits = () => Buffer.byteLength(JSON.stringify(body)) <= 4096
+  if (!fits()) delete body.transcriptPath
+  if (!fits()) delete body.cwd
+  return body
 }
 
 /** Mirrors syncStateDirectory in src/lib/secureState.ts: Windows cannot flush a directory handle (EPERM), and NTFS
@@ -618,11 +857,12 @@ ensureUtf8Locale()
  * year before the time. Every one of those parses ZERO rows, the hook concludes the machine has no
  * processes, and the engine it was launched by goes unrecognised. LC_ALL has to be cleared because it
  * outranks both categories; LC_CTYPE stays UTF-8 so Linux procps keeps returning raw bytes.
+ * COMMAND_MODE=unix2003: in legacy mode macOS `ps -e` lists every process's environment, which the hook never reads.
  */
 function psEnv(env = process.env) {
   const configured = env.LC_ALL || env.LC_CTYPE || env.LANG
   const ctype = configured && /utf-?8/i.test(configured) ? configured : 'C.UTF-8'
-  return { ...env, LC_ALL: '', LC_CTYPE: ctype, LC_TIME: 'C' }
+  return { ...env, LC_ALL: '', LC_CTYPE: ctype, LC_TIME: 'C', COMMAND_MODE: 'unix2003' }
 }
 
 /** Second line of defence: /proc is raw bytes, so a glibc without C.UTF-8 still resolves correctly. */
@@ -716,6 +956,19 @@ async function paneFacts(pane, dataDir) {
     : session.startsWith(HARNESS_SESSION_PREFIX) ? 'yes'
     : /^[a-z][a-z0-9]*-\d{13}$/.test(session) ? 'if-held' : 'no'
   return { pid, taken }
+}
+
+/**
+ * Whether the session's tmux pane is one the person opened: tmux described it, no daemon tagged it, and the daemon
+ * would not take it for an agent (`paneFacts`, the rule that keeps such a session out of registration). The devices
+ * are told of it as of a session outside a pane (docs/specs/2026-11-15-device-wave1-checks.md, F1). A pane tmux could
+ * not describe is not the person's: the session stays in a pane, as before.
+ */
+async function ownPane(pane) {
+  if (!/^%\d+$/.test(pane || '')) return false
+  const described = await describePane(pane)
+  if (!described || described.owner) return false
+  return (await paneFacts(pane, paths().dataDir))?.taken === 'no'
 }
 
 /**
@@ -1801,11 +2054,16 @@ async function main() {
 
   const event = input.hook_event_name || input.hookEventName
   const tmuxPane = process.env.TMUX_PANE
-  // A pane is required: tmux's, or a pty host's (Windows). Routing to another daemon and the offline registry
-  // fallback read tmux; from a pty host pane they find nothing and the daemon's own scan reconciles.
-  if (!tmuxPane && !PTY_PANE) return
+  // A pane: tmux's, or a pty host's (Windows). Routing to another daemon and the offline registry fallback read
+  // tmux; from a pty host pane they find nothing and the daemon's own scan reconciles. A session outside a pane, or in
+  // a tmux pane the person opened (ownPane), is told only to the devices, below, after the engine guards: it registers
+  // nothing.
+  const paneless = (!tmuxPane && !PTY_PANE) || await ownPane(tmuxPane)
+  // Notification is installed for the session outside a pane, to say it waits for the person. In an agent's pane
+  // nothing is told, as before it was installed; whose pane it is is tmux's to say, so even that asks tmux first.
+  if (!paneless && event === 'Notification') return
   // Before anything reads the data folder or posts: which daemon this pane is (routeToPaneOwner).
-  if (await routeToPaneOwner(tmuxPane)) port = argPort()
+  if (!paneless && await routeToPaneOwner(tmuxPane)) port = argPort()
   const mutationFields = { engine, ...terminalHookFields(tmuxPane) }
   if (engine === 'cursor' && input.is_background_agent === true) return
   if (engine === 'codex' && isCodexSubagent(input, paths())) return
@@ -1815,6 +2073,14 @@ async function main() {
   // `--engine devin`; drop the claude-armed duplicate. Cheap and scoped: a real claude session has a UUID
   // session id and no Devin lock file.
   if (engine === 'claude' && isDevinSession(input, paths())) return
+
+  if (paneless) {
+    // agy's sub-agents fire hooks of their own; only a top-level conversation is a session (agyIsPaneConversation).
+    if (engine === 'agy' && !agyIsPaneConversation(paths(), input.conversationId)) return
+    const body = observedBody(engine, event, input)
+    if (body) await postObserved(port, body)
+    return
+  }
 
   // Grok's hook payload and event records are camelCase, while every Claude-compatible engine above is
   // snake_case. Its Stop hook is deliberately NOT installed: Grok persists that hook_execution before
@@ -1838,10 +2104,8 @@ async function main() {
       return
     }
     if (copilotEvent === 'agentStop') {
-      // `stopReason` is `end_turn` on a clean finish; anything else ended the loop early.
-      const failed = typeof input.stopReason === 'string' && input.stopReason !== '' && input.stopReason !== 'end_turn'
       await post(port, '/api/hook/turn-stop', {
-        sessionId, transcriptPath, status: failed ? 'error' : undefined, ...mutationFields,
+        sessionId, transcriptPath, status: copilotStopFailed(input) ? 'error' : undefined, ...mutationFields,
       })
       return
     }
@@ -1890,13 +2154,7 @@ async function main() {
       // A waiting Stop is still REPORTED, as `status: 'waiting'`, rather than swallowed: one measured run
       // finished its sub-agents and never sent another Stop at all, leaving the turn open with nothing
       // coming to close it. The daemon uses this to arm a pane-idle backstop.
-      // `terminationReason` is NO_TOOL_CALL on a clean finish; anything else ended the loop early.
-      const failed = typeof input.terminationReason === 'string'
-        && input.terminationReason !== ''
-        && input.terminationReason !== 'NO_TOOL_CALL'
-        && input.terminationReason !== 'model_stop'
-      const status = input.fullyIdle === false ? 'waiting' : failed || input.error ? 'error' : undefined
-      await post(port, '/api/hook/turn-stop', { sessionId, transcriptPath, status, ...mutationFields })
+      await post(port, '/api/hook/turn-stop', { sessionId, transcriptPath, status: agyStopStatus(input), ...mutationFields })
       return
     }
     const body = {
@@ -2087,13 +2345,15 @@ async function main() {
     model: modelName(input.model),
     cliVersion: input.cli_version || input.cursor_version || input.version,
   }
-  let ok = await post(port, '/api/hook/session-start', body)
+  // The daemon reads them on this registration alone (src/hookServer.ts hookFacts).
+  const facts = ownFacts(engine)
+  let ok = await post(port, '/api/hook/session-start', body, undefined, facts)
   let held = ok === 'held'
   // A live core's bounded admission queue owns the existing candidates. Retry this
   // delivery within the hook budget, never reconstruct registry state behind it.
   for (let attempt = 0; engine === 'hermes' && ok === 'held' && attempt < 3 && remainingBudget() > 750; attempt++) {
     await new Promise(resolve => setTimeout(resolve, 250))
-    ok = await post(port, '/api/hook/session-start', body)
+    ok = await post(port, '/api/hook/session-start', body, undefined, facts)
     held ||= ok === 'held'
   }
   if (held && ok !== true) process.stderr.write('[harness] Hermes admission is held; this delivery could not be confirmed. The current conversation is unchanged.\n')

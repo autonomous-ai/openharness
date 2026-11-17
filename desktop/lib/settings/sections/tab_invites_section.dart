@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../agent_messages/shared_tab_dialogs.dart';
-import '../../super_tabs/join_machine.dart' show SwarmInviteAccepts;
 import '../../agent_messages/shared_tab_placement.dart' show shortSharedText;
 import '../../agent_messages/shared_tabs.dart';
 import '../../agent_messages/update_harness.dart';
@@ -11,8 +10,6 @@ import '../../shared/theme/app_theme.dart';
 import '../../shared/widgets/section_scaffold.dart';
 import '../../shared/widgets/setting_row.dart';
 import '../../state/app_state.dart';
-import '../../super_tabs/model.dart';
-import '../../super_tabs/visible_tick.dart';
 
 /// Settings ▸ Tab invites: the invitations to shared tabs waiting for an
 /// answer, and the tabs whose owner's computer has a new key.
@@ -25,94 +22,12 @@ class TabInvitesSection extends StatefulWidget {
   State<TabInvitesSection> createState() => _TabInvitesSectionState();
 }
 
-class _TabInvitesSectionState extends State<TabInvitesSection>
-    with WidgetsBindingObserver, VisibleTick<TabInvitesSection> {
-  List<Map<String, dynamic>> _superInvites = [], _superTabs = [];
-  String? _superError, _accepting;
-  final _accepts = SwarmInviteAccepts();
-  bool _loadingSuper = true;
-  int _read = 0;
+class _TabInvitesSectionState extends State<TabInvitesSection> {
   @override
   void initState() {
     super.initState();
     // Read when the panel opens, so an invitation that arrived a moment ago is here.
     unawaited(widget.notifier.sharedTabs.refresh());
-    unawaited(_refreshSuper());
-    // Again every 15 seconds while the panel can be seen, and once as it is seen again.
-    visibleTick(const Duration(seconds: 15));
-  }
-
-  @override
-  void onTick() => unawaited(_refreshSuper());
-
-  @override
-  void onScreenChanged(bool onScreen) {
-    if (onScreen) unawaited(_refreshSuper());
-  }
-
-  Future<void> _refreshSuper() async {
-    final read = ++_read;
-    try {
-      final client = widget.notifier.superTabs;
-      final answers = await Future.wait([
-        client.request('GET', '/api/super-tabs/invitations'),
-        client.request('GET', '/api/super-tabs/list'),
-      ]);
-      if (!mounted || read != _read) return;
-      setState(() {
-        _superInvites = (answers[0] as List).map(superTabMap).toList();
-        _superTabs = (superTabMap(answers[1])['tabs'] as List)
-            .map(superTabMap)
-            .toList();
-        _superError = null;
-        _loadingSuper = false;
-      });
-    } catch (failure) {
-      if (mounted && read == _read) {
-        setState(() {
-          _superError = failure.toString();
-          _loadingSuper = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _acceptSuper(Map<String, dynamic> invite) async {
-    if (_accepting != null) return;
-    setState(() => _accepting = invite['inviteId'] as String);
-    try {
-      final app = widget.notifier;
-      // This attempt's own operation, never one shared with other computers.
-      final reply = await _accepts.accept(
-        invite['inviteId'] as String,
-        (operationId) => app.superTabs.map(
-          'POST',
-          '/api/super-tabs/${invite['tabId']}/commands',
-          body: {
-            'operationId': operationId,
-            'command': {
-              'type': 'invite.accept',
-              'inviteId': invite['inviteId'],
-            },
-          },
-        ),
-      );
-      final tabId = invite['tabId'] as String;
-      final controller = await app.superTabs.open(tabId);
-      await controller.refresh();
-      final result = superTabMap(reply['result']);
-      if (result['conversationId'] is String) {
-        controller.select(result['conversationId'] as String);
-      }
-      if (!mounted) return;
-      app.openSuperTab(tabId, invite['name'] as String);
-      await _refreshSuper();
-      if (mounted) await Navigator.of(context).maybePop();
-    } catch (failure) {
-      if (mounted) setState(() => _superError = failure.toString());
-    } finally {
-      if (mounted) setState(() => _accepting = null);
-    }
   }
 
   static String _expires(String iso) {
@@ -131,51 +46,7 @@ class _TabInvitesSectionState extends State<TabInvitesSection>
       child: SingleChildScrollView(
         child: ListenableBuilder(
           listenable: widget.notifier.sharedTabs,
-          builder: (context, _) => Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (_loadingSuper) const LinearProgressIndicator(),
-              if (_superError != null)
-                SettingRow(
-                  title: 'Could not load Swarms',
-                  detail: _superError,
-                  control: TextButton(
-                    onPressed: _refreshSuper,
-                    child: const Text('Retry'),
-                  ),
-                ),
-              for (final invite in _superInvites)
-                SettingRow(
-                  title: invite['name'] as String,
-                  detail:
-                      'Swarm · ${invite['role'] == 'viewer' ? 'Can view' : 'Can collaborate'}',
-                  control: FilledButton(
-                    onPressed: _accepting == null
-                        ? () => _acceptSuper(invite)
-                        : null,
-                    child: Text(
-                      _accepting == invite['inviteId'] ? 'Joining…' : 'Accept',
-                    ),
-                  ),
-                ),
-              for (final tab in _superTabs)
-                SettingRow(
-                  title: tab['name'] as String,
-                  detail: 'Swarm',
-                  control: TextButton(
-                    onPressed: () {
-                      widget.notifier.openSuperTab(
-                        tab['id'] as String,
-                        tab['name'] as String,
-                      );
-                      Navigator.of(context).maybePop();
-                    },
-                    child: const Text('Open'),
-                  ),
-                ),
-              _body(context),
-            ],
-          ),
+          builder: (context, _) => _body(context),
         ),
       ),
     );
@@ -188,9 +59,7 @@ class _TabInvitesSectionState extends State<TabInvitesSection>
       case SharedTabsState.unknown:
         return const _Skeleton();
       case SharedTabsState.off:
-        return _superInvites.isEmpty && !_loadingSuper && _superError == null
-            ? const Text('No invitations.')
-            : const SizedBox.shrink();
+        return const Text('No invitations.');
       case SharedTabsState.tooOld:
         return UpdateHarnessLine(widget.notifier);
       case SharedTabsState.unsupported:

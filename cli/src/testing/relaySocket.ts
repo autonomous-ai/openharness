@@ -5,7 +5,7 @@
  */
 import { BackendSocket } from '../backendSocket.js'
 import { RelayGateway } from '../gateway/gateway.js'
-import type { AuthSessionManager } from '../lib/authSession.js'
+import type { AuthSessionManager } from '../lib/authRefresh.js'
 
 export function relaySocket(
   machineId: string,

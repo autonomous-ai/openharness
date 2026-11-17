@@ -14,8 +14,6 @@ import { CLOUD_DOWN } from '../api.js'
 import { cloudAgentFrame, cloudHarnessIn, isCloudAgent, type CloudAgentFrame, type CloudHarness } from '../../lib/cloudAgents.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
 import type { QuestionAnswerResult } from '../../lib/questionController.js'
-import { deriveTurnSummary } from '../../lib/deviceRecap.js'
-import { splitSummary } from '../../lib/recapReads.js'
 
 type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Record<string, unknown> }
 
@@ -32,12 +30,23 @@ export interface CloudAgentsDeps {
 
 const DOWN = async (): Promise<typeof CLOUD_DOWN> => CLOUD_DOWN
 const busy = (harness: CloudHarness): boolean => harness.state === 'working' || harness.state === 'starting'
-/** Its last words as the dial's recap and the text under it, or null when it has said nothing. */
+/** The lengths of a card's two lines where the core has to cut them itself (lib/deviceRecap.ts cuts to the same). */
+const HEADLINE_MAX = 180, TEXT_MAX = 250
+/**
+ * Its last words as the dial's recap and the text under it, as its service worked them out (lib/cloudAgents.ts
+ * `card`), or null when it has said nothing.
+ *
+ * A cloud service from before 2026-11-13 sends its words and no card: beside this core its card read "done" and its
+ * tile restored empty (the review of 2026-11-13). Until that process starts again on this build its words are shown
+ * as they are, in one line and cut to a card's lengths: no markdown is read here. Delete on or after 2026-12-13.
+ */
 const recapOf = (harness: CloudHarness): { recap: string; text: string } | null => {
-  const summary = harness.said ? deriveTurnSummary(harness.said) : null
-  if (!summary) return null
-  const { recap, body } = splitSummary(summary)
-  return { recap, text: body }
+  if (!harness.said) return null
+  // Null is the service's word that these words hold nothing to show.
+  if (harness.card !== undefined) return harness.card
+  // Kept trimmed, and never empty (lib/cloudAgents.ts `cloudHarnessIn`).
+  const line = harness.said.replace(/\s+/g, ' ')
+  return { recap: line.slice(0, HEADLINE_MAX), text: line.slice(0, TEXT_MAX) }
 }
 
 export function createCloudAgents({ port, clients, openQuestions, deviceInput, log = (line) => console.log(line) }: CloudAgentsDeps) {

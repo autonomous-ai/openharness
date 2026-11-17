@@ -52,6 +52,7 @@ it('passes only lifecycle scalars to product reporting and keeps relaying if rep
   gateway.productUsage = { observe: fail, opened: fail, presence: fail, counter: fail, launch: fail }
   expect(() => gateway.usageCounter('create_requests')).not.toThrow()
   expect(() => gateway.usageLaunch({ id: 'synthetic-creation-1', phase: 'start' })).not.toThrow()
+  expect(() => gateway.usage({ kind: 'observed', payload: { measure: 'collector_days' } })).not.toThrow()
   expect(() => gateway.broadcast({ type: 'turn_started', agentId: 'fixture-agent' })).not.toThrow()
   expect(() => gateway.windowOpened('desktop')).not.toThrow()
   expect(() => gateway.localClients({ desktop: 1, tui: 0 })).not.toThrow()
@@ -912,6 +913,26 @@ describe('the Wi-Fi device, over the gateway\'s sessions', () => {
     expect(socket.remoteClient('dial-1')).toBeNull()
     await new Promise((done) => setImmediate(done))
     expect(revoked).toHaveBeenCalledWith(dial.pub)
+    await socket.stop()
+  })
+
+  it('counts the sessions on a direct link whose app said hello, each still its identity\'s device: `harness autonomous-device status`', async () => {
+    const socket = relaySocket(MACHINE)
+    const gateway = gatewayOf(socket)
+    const dial = await pairedClient(socket, 'dial-1', { role: 'device', label: 'Desk dial' })
+    const phone = await pairedClient(socket, 'phone-1')
+    gateway.deviceClient('dial-1', dial.pub)
+    // Over the relay, not a direct link.
+    expect(gateway.directDeviceSessions()).toBe(0)
+    gateway.attachDirectDevice('dial-1', () => {})
+    expect(gateway.directDeviceSessions()).toBe(1)
+    // A hello said as another identity, or a phone's session, is not that device's.
+    gateway.deviceClient('dial-1', phone.pub)
+    gateway.attachDirectDevice('phone-1', () => {})
+    gateway.deviceClient('phone-1', phone.pub)
+    expect(gateway.directDeviceSessions()).toBe(0)
+    gateway.deviceClient('dial-1', null)
+    expect(gateway.directDeviceSessions()).toBe(0)
     await socket.stop()
   })
 

@@ -22,7 +22,7 @@ const grantSchema = z.object({
 })
 export type HarnessGrant = z.infer<typeof grantSchema>
 /** An observer a shared tab's roster wants for one of this machine's harnesses (`derive`). */
-export interface DerivedGrant { agentId: string; email: string; tab: string; name: string; engine: string | null; ownerPublicKey: string }
+interface DerivedGrant { agentId: string; email: string; tab: string; name: string; engine: string | null; ownerPublicKey: string }
 /** The backend's bounds on a share's name (backend/src/routes/harnessShares.ts): a roster allows 200 characters, and
  *  an empty one once its control characters are taken out. */
 const shareName = (name: string): string => name.trim().slice(0, 160) || 'Harness'

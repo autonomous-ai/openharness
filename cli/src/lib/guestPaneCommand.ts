@@ -10,10 +10,7 @@
  * than waiting on a create that says nothing for a minute.
  */
 import { GUEST_HELPER_PATH, guestRunCommand, type GuestAccount } from './guestAccounts.js'
-
-/** The engines a guest's harness runs. */
-export type GuestLaunchEngine = 'claude' | 'codex'
-export const GUEST_LAUNCH_ENGINES: readonly string[] = ['claude', 'codex'] satisfies readonly GuestLaunchEngine[]
+import type { GuestLaunchEngine } from './guestEngines.js'
 
 /** Each engine's flag for "work without asking for each command", which a harness starts with by default. */
 const APPROVE_ALL: Record<GuestLaunchEngine, string> = {

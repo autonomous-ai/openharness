@@ -10,16 +10,17 @@
  * and the core going away stops it: a core's restart is the relay's, as it always was, so a remote client
  * that kept its socket opens a new session, as it did when both ran in one process.
  */
-import type { ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
-import type { GatewayAccount, GatewayEvents, WindowRelaySession } from '../core/api.js'
+import type { Asker, GatewayAccount, GatewayEvents, UsageEvent, WindowRelaySession } from '../core/api.js'
 import { localWindowsOf, windowSurfaceOf } from '../lib/windowSurfaces.js'
 import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS } from '../lib/gatewayWire.js'
 import { RelayConnectError } from '../lib/relayFrames.js'
 import { decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.js'
 import { answerTabKey } from '../lib/tabKeyWire.js'
 import { answerTabRelay } from '../lib/tabRelayWire.js'
-import { accountLink } from '../services/accountLink.js'
+import { AuthSessionManager } from '../lib/authRefresh.js'
+import { tokenAnswer, tokenOptionsOf } from '../lib/authSession.js'
+import { backendHttpBase } from '../lib/backendHttpBase.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from '../services/process.js'
 import { startGateway, type StartedGateway } from './start.js'
 import { sharedPeers } from './sharedTrust.js'
@@ -35,6 +36,8 @@ export interface GatewayServiceOptions {
   run?: typeof runServiceProcess
   /** Swapped in tests for a gateway that dials nothing. */
   start?: typeof startGateway
+  /** Swapped in tests for a renewal that reaches no backend. */
+  tokens?: Pick<AuthSessionManager, 'accessToken'>
 }
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
@@ -75,9 +78,9 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     browserTransportError: () => notice('browserTransportError'),
   }
 
-  /** The account's tokens, from the core (`core.account`, services/accountLink.ts): a refusal comes back as
-   *  the session's own error. */
-  const { accessToken } = accountLink((query, payload) => (core ? core.query(query, payload) : Promise.reject(new Error('not connected to the core'))))
+  /** This process renews the account's sign-in (lib/authRefresh.ts): one manager, so every start of the gateway and the
+   *  core's asks share a renewal in flight. Until the core audit of 2026-11-12 the core renewed it, and this asked it. */
+  const tokens = options.tokens ?? new AuthSessionManager(backendHttpBase())
 
   /** The gateway stopped: its link closed, its windows' sessions let go. Not waited on here: what comes after it
    *  on the link (a new `start`) must not wait for the old link's goodbye. The process's own stop waits for it. */
@@ -99,10 +102,12 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
       computerId: text(payload.computerId),
       autonomousEnv: text(payload.autonomousEnv) || 'prod',
       signedIn: payload.signedIn === true,
-      tokens: { accessToken },
+      tokens,
       machineName: text(payload.machineName), hostname: text(payload.hostname),
       machines: (state) => notice('machines', { ...state }),
       account: (payload.account as GatewayAccount | null) ?? { machineId: null, signIn: null },
+      // Only the core can ask for the Wi-Fi device's process (core/gatewayLink.ts `wifi_serving`).
+      wifiServing: async () => (await core?.query('wifi_serving').catch(() => null))?.serving === true,
     })
     running = started
     // Held first, so that nothing the link brings in is answered before the core is ready.
@@ -164,7 +169,7 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     const { port, ops } = gateway
     const connId = text(payload.connId)
     switch (kind) {
-      case 'usageLaunch': port.usageLaunch?.(payload.signal as ProductUsageLaunchSignal); return
+      case 'usage': port.usage?.(payload.event as UsageEvent); return
       case 'usageCounter': port.usageCounter?.(payload.metric as ProductUsageMetric); return
       case 'connect': port.connect(); return
       case 'thisComputerOnly': port.serveThisComputerOnly(); return
@@ -212,37 +217,24 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     else running?.port.terminalBinary(decoded.id, clear)
   }
 
-  /** The core's commands about the keys (`GatewayOps`), answered as their routes answer them. */
+  /** What the core asks of the gateway (`GatewayOps`), each answered from its gateway once that has started. */
   const ops = () => {
     if (!running) throw new Error('the gateway has not started')
     return running.ops
   }
   const requests = {
+    // The core's ask, for itself and for the services that ask it (core/accountQueries.ts): the core calls no other host.
+    [GATEWAY_CALLS.accessToken]: (p: Payload) => tokenAnswer(() => tokens.accessToken(tokenOptionsOf(p))),
     [GATEWAY_CALLS.backend]: async (p: Payload) => ({ ...await ops().backend(text(p.method), text(p.path), p.body) }),
     [GATEWAY_CALLS.machines]: async (p: Payload) => ({ ...await ops().machines(p.fallback === true) }),
     [GATEWAY_CALLS.mintGridName]: async () => ({ name: await ops().mintGridName() }),
     [GATEWAY_CALLS.status]: async () => ({ ...await ops().status() }),
-    [GATEWAY_CALLS.pair]: async (p: Payload) => ({ ...await ops().pair(text(p.code)) }),
-    [GATEWAY_CALLS.listPairs]: async () => ({ ...await ops().listPairs() }),
-    [GATEWAY_CALLS.revoke]: async (p: Payload) => ({ ...await ops().revoke(text(p.id)) }),
-    [GATEWAY_CALLS.revokeAll]: async () => ({ ...await ops().revokeAll() }),
-    [GATEWAY_CALLS.setRemotePassword]: async (p: Payload) => ({ ...await ops().setRemotePassword(text(p.password)) }),
-    [GATEWAY_CALLS.clearRemotePassword]: async () => ({ ...await ops().clearRemotePassword() }),
-    [GATEWAY_CALLS.remotePasswordStatus]: async () => ({ ...await ops().remotePasswordStatus() }),
-    [GATEWAY_CALLS.trustLinkedPeer]: async (p: Payload) => ({ ...await ops().trustLinkedPeer(record(p.peer) as { pub: string; machineId: string; label: string }) }),
-    [GATEWAY_CALLS.groupList]: async () => ({ ...await ops().groupList() }),
-    [GATEWAY_CALLS.groupSync]: async () => ({ ...await ops().groupSync() }),
-    [GATEWAY_CALLS.groupRemove]: async (p: Payload) => ({ ...await ops().groupRemove(text(p.selector)) }),
-    [GATEWAY_CALLS.devicesList]: async () => ({ ...await ops().devicesList() }),
-    [GATEWAY_CALLS.devicesRemove]: async (p: Payload) => ({ ...await ops().devicesRemove(text(p.pub)) }),
-    [GATEWAY_CALLS.devicesHistory]: async () => ({ ...await ops().devicesHistory() }),
-    [GATEWAY_CALLS.devicesDismiss]: async (p: Payload) => ({ ...await ops().devicesDismiss(record(p.body)) }),
-    [GATEWAY_CALLS.devicesRebaseline]: async (p: Payload) => ({
-      ...await ops().devicesRebaseline(p.confirm === true, p.head as { seq: number; hash: string } | undefined),
-    }),
-    [GATEWAY_CALLS.wifi]: async (p: Payload) => ({
-      ...await ops().wifi({ op: text(p.op) as 'discover' | 'pair' | 'pairStatus' | 'list' | 'revoke', device: text(p.device), code: text(p.code), id: text(p.id) }),
-    }),
+    // Its routes of the door (gateway/start.ts `requests`): the Wi-Fi device's pairings and direct links, the account's and
+    // the keys'.
+    gateway_http: (p: Payload, asker: Asker) => {
+      if (!running) throw new Error('the gateway has not started')
+      return running.requests.gateway_http!(p, asker)
+    },
     // The fleet's lane's sessions (gateway/lane.ts). Each is answered from what it holds at once, so they
     // are taken in the order the core sent them.
     [GATEWAY_CALLS.lane]: async (p: Payload): Promise<Payload> => {

@@ -20,7 +20,7 @@ export interface FakeDialOptions {
   mac?: string
   /** The settings it says it holds when it greets, as the firmware reads them from its flash. */
   settings?: Record<string, unknown>
-  /** The capabilities its greeting names (`swarmCard: 'v1'`, …), as a firmware that speaks them does. */
+  /** The capabilities its greeting names (`stats: 'turn-v1'`, …), as a firmware that speaks them does. */
   capabilities?: Record<string, string>
 }
 
@@ -77,6 +77,11 @@ export class FakeDial {
 
   send(message: DialMessage): void {
     this.bridge.stdin!.write(encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(message), 'utf8')))
+  }
+
+  /** One chunk of what its microphone heard, between a `voice.begin` and its `voice.end`, as the firmware sends it. */
+  audio(pcm: Buffer): void {
+    this.bridge.stdin!.write(encodeCableFrame(CableType.Pcm, pcm))
   }
 
   /** The first message from the daemon that passes `test`, waiting up to `ms` for it. */

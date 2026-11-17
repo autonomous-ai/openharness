@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../logging/app_log.dart';
+import '../logging/log_safe_error.dart';
 import 'harness_file_store.dart';
 import 'test_run.dart';
 
@@ -64,8 +65,9 @@ class CrashLog {
         file.writeAsStringSync('');
       }
       final where = context == null ? '' : ' [$context]';
+      // What the app log writes too: a refusal's detail can quote a prompt or a name.
       file.writeAsStringSync(
-        '${DateTime.now().toIso8601String()}$where $error\n'
+        '${DateTime.now().toIso8601String()}$where ${logErrorText(error)}\n'
         '${stackTrace ?? StackTrace.current}\n\n',
         mode: FileMode.append,
       );

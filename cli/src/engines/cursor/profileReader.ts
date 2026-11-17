@@ -1,5 +1,5 @@
 import type { InlineRuntimeContext, InlineRuntimeReader } from '../facets/inlineRuntime.js'
-import type { RuntimeModelOption } from '../facets/runtime.js'
+import type { ProfileEvidence, RuntimeModelOption } from '../facets/runtime.js'
 import { currentPaneUi, effortLabel, encodeRuntimeProfile, stripAnsi, text } from '../kit/runtime.js'
 import { env } from '../../config/env.js'
 import { join } from 'node:path'
@@ -266,29 +266,6 @@ class ProfileReader {
     else if (/Plan, search, build anything/i.test(currentUi)) state.mode = 'default'
   }
 
-  transcript(context: InlineRuntimeContext, raw: Record<string, unknown>): void {
-    const { session, state } = context
-    const version = text(raw.version) || text(raw.cursor_version)
-    if (version) {
-      session.cliVersion = version
-      state.cliVersion = version
-    }
-    const model = text(raw.model)
-    if (model) {
-      state.model = model
-      // Default the effort to 'auto' when we do not have one yet. selectedModel() returns null unless BOTH
-      // axes are known, so without this a Cursor session whose model we DO know shows nothing at all on
-      // the device — the model is thrown away because the effort is missing.
-      //
-      // Cursor reports its model in the transcript but its reasoning level only in the pane footer, so
-      // the effort arrives later (ingestPane) or not at all for a model that has no reasoning levels.
-      // 'auto' is not a guess about Cursor's behaviour: it is exactly how the device renders "not
-      // specified", and the pane path overwrites it with the real value the moment one is read.
-      state.effort ??= 'auto'
-      state.observedAt = Date.now()
-    }
-  }
-
   target(sessionId: string, profileId: string): CursorModelTarget | null {
     return this.cursorTargets.get(sessionId)?.get(profileId) ?? null
   }
@@ -373,3 +350,21 @@ class ProfileReader {
 }
 
 export function createRuntimeProfileReader(): InlineRuntimeReader & { engine: 'cursor' } { return new ProfileReader() }
+
+/**
+ * What one of Cursor's transcript records says of its profile, read in the other engines' worker
+ * (engines/others/streams.ts): its version, and the model that answers.
+ *
+ * The effort defaults to 'auto' while none is known yet. selectedModel() returns null unless BOTH axes are known, so
+ * without it a Cursor session whose model we DO know shows nothing at all on the device — the model is thrown away
+ * because the effort is missing. Cursor reports its model in the transcript but its reasoning level only in the pane
+ * footer, so the effort arrives later (ingestPane) or not at all for a model that has no reasoning levels. 'auto' is
+ * not a guess about Cursor's behaviour: it is exactly how the device renders "not specified", and the pane path
+ * overwrites it with the real value the moment one is read.
+ */
+export function transcriptEvidence(raw: Record<string, unknown>): ProfileEvidence | null {
+  const version = text(raw.version) || text(raw.cursor_version)
+  const model = text(raw.model)
+  if (!version && !model) return null
+  return { ...(version ? { cliVersion: version } : {}), ...(model ? { model, effortUnset: 'auto' } : {}) }
+}

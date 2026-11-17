@@ -1,14 +1,7 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
 
-import { afterEach, describe, expect, it } from 'vitest'
-
-import { ExternalSessions, foregroundJob, OpenSessions, stopSessionOwner, TERMINAL_RESTORE, writeTty } from './external.js'
+import { ExternalSessions, OpenSessions, SessionRows } from './external.js'
 import type { ExternalEngine, ExternalProvider, ExternalSession, OwnerClaim, ProcessView } from './externals/types.js'
-
-const dirs: string[] = []
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
 const session = (sessionId: string, engine: ExternalEngine, mtime: number, extra: Partial<ExternalSession> = {}): ExternalSession => ({
   sessionId, engine, cwd: `/work/${sessionId}`, origin: 'terminal', title: '', mtime, transcriptPath: `/t/${sessionId}.jsonl`, ...extra,
@@ -55,6 +48,35 @@ describe('ExternalSessions', () => {
     const [a, b] = [sessions.scan(), sessions.scan()]
     expect(a).toBe(b)
     expect(await a).toEqual([])
+  })
+})
+
+describe('SessionRows', () => {
+  it("finds sessions in their own engines' stores alone, each engine's memo kept between looks", async () => {
+    const scanned: string[] = []
+    let heads = 0
+    let excludes: boolean | null = null
+    const providers: ExternalProvider[] = [
+      { engine: 'claude', scan: async (ctx) => {
+        scanned.push('claude')
+        excludes = ctx.excluded('/data/harness/voice-route-scratch')
+        await ctx.memo('claude:/t/a.jsonl', '1:1', async () => { heads++ })
+        return [session('a', 'claude', 1), session('b', 'claude', 2)]
+      } },
+      { engine: 'cursor', scan: async () => { scanned.push('cursor'); return [session('c', 'cursor', 1)] } },
+      { engine: 'codex', scan: async () => { throw new Error('store locked') } },
+    ]
+    const log: string[] = []
+    const rows = new SessionRows({ providers, excluded: ['/data/harness'], log: (line) => log.push(line) })
+    expect(await rows.find(new Map([['a', 'claude'], ['gone', 'claude']]))).toEqual(new Map([['a', session('a', 'claude', 1)]]))
+    expect(await rows.find(new Map([['b', 'claude']]))).toEqual(new Map([['b', session('b', 'claude', 2)]]))
+    // A store with none of them open is never read (Cursor's is a database); a file already read is not read again.
+    expect(scanned).toEqual(['claude', 'claude'])
+    expect(heads).toBe(1)
+    expect(excludes).toBe(true)
+    // A store that cannot be read finds none and says so; a session is only ever its own engine's; an engine with no reader finds none.
+    expect(await rows.find(new Map<string, ExternalEngine>([['x', 'codex'], ['c', 'claude'], ['p', 'pi']]))).toEqual(new Map())
+    expect(log).toEqual(['[search] codex sessions not read: store locked'])
   })
 })
 
@@ -112,6 +134,18 @@ describe('OpenSessions', () => {
     expect((await sessions.owner('both'))?.pid).toBe(3)
     expect((await sessions.owner('lockfirst'))?.pid).toBe(4)
     expect((await sessions.owner('twice'))?.pid).toBe(6)
+  })
+
+  it('says who owns every open session from one look', async () => {
+    const { sessions, looks } = open([{ engine: 'grok', scan: async () => [], owners: async () => [
+      { sessionId: 'term', pid: 1, record: '/r/term' }, { sessionId: 'mine', pid: 9, record: '/r/mine' },
+    ] }])
+    expect(await sessions.owners()).toEqual(new Map([
+      ['term', { pid: 1, engine: 'grok', tty: '/dev/ttys001', record: '/r/term' }],
+      ['mine', { pid: 9, engine: 'grok', tty: '/dev/ttys009', record: '/r/mine', harness: true }],
+    ]))
+    await sessions.owners()
+    expect(looks()).toBe(1)
   })
 
   it('reuses an answer for a while, looks again after, and looks now when asked who owns one', async () => {
@@ -206,74 +240,5 @@ describe('OpenSessions', () => {
     expect(await sessions.working('guess')).toBeNull()
     expect(await sessions.working('error')).toBeNull()
     expect(await sessions.working('closed')).toBe(false)
-  })
-})
-
-describe('stopSessionOwner', () => {
-  it('asks it to quit, makes it after five seconds, and gives the terminal back', async () => {
-    const signals: string[] = []
-    const written: string[] = []
-    let living = true
-    let slept = 0
-    const opts = {
-      alive: () => living,
-      job: async () => null,
-      kill: (_pid: number, signal: NodeJS.Signals) => { signals.push(signal); if (signal === 'SIGTERM' && slept === 0) return; living = false },
-      sleep: async (ms: number) => { slept += ms },
-      writeTty: async (tty: string, text: string) => { written.push(`${tty} ${JSON.stringify(text)}`) },
-    }
-    expect(await stopSessionOwner({ pid: 7, tty: '/dev/ttys009' }, opts)).toBe(true)
-    expect(signals).toEqual(['SIGTERM', 'SIGKILL'])
-    expect(slept).toBe(5_000)
-    expect(written).toEqual([`/dev/ttys009 ${JSON.stringify(TERMINAL_RESTORE)}`])
-
-    // One that quits when asked is not made to; one that will not quit at all is reported.
-    signals.length = 0; living = true; slept = 1
-    expect(await stopSessionOwner({ pid: 7, tty: null }, opts)).toBe(true)
-    expect(signals).toEqual(['SIGTERM'])
-    expect(await stopSessionOwner({ pid: 8, tty: null }, { ...opts, alive: () => true, kill: () => { throw new Error('EPERM') } })).toBe(false)
-    // A terminal that cannot be written to is left as it is.
-    living = true; slept = 1
-    expect(await stopSessionOwner({ pid: 7, tty: '/dev/gone' }, { ...opts, writeTty: async () => { throw new Error('ENOENT') } })).toBe(true)
-  })
-
-  it("signals the whole foreground job an engine leads, and only the engine otherwise", async () => {
-    const targets: number[] = []
-    let living = true
-    const opts = { alive: () => living, sleep: async () => undefined, kill: (pid: number) => { targets.push(pid); living = false } }
-    expect(await stopSessionOwner({ pid: 40, tty: null }, { ...opts, job: async () => 40 })).toBe(true)
-    living = true
-    expect(await stopSessionOwner({ pid: 41, tty: null }, { ...opts, job: async () => { throw new Error('ps failed') } })).toBe(true)
-    expect(targets).toEqual([-40, 41])
-    // Leading its group, and that group in front: the job. Anything else: none.
-    const ps = (out: string | null) => async () => out
-    expect(await foregroundJob(40, ps('  40   40\n'))).toBe(40)
-    expect(await foregroundJob(40, ps('  12   40\n'))).toBeNull()
-    expect(await foregroundJob(40, ps('  40   -1\n'))).toBeNull()
-    expect(await foregroundJob(40, ps(null))).toBeNull()
-    // This process leads no foreground job of a terminal.
-    expect(await foregroundJob(process.pid)).toBeNull()
-  })
-
-  it('stops a real process, and writes the terminal back to a real file', async () => {
-    const { spawn } = await import('node:child_process')
-    const child = spawn('sleep', ['30'], { stdio: 'ignore' })
-    const exited = new Promise((resolve) => child.on('exit', resolve))
-    const dir = mkdtempSync(join(tmpdir(), 'external-stop-'))
-    dirs.push(dir)
-    const tty = join(dir, 'tty')
-    writeFileSync(tty, '')
-    // The child is ours, so it lingers as a zombie until reaped: count it gone once it has exited.
-    let done = false
-    void exited.then(() => { done = true })
-    expect(await stopSessionOwner({ pid: child.pid!, tty }, { alive: () => !done })).toBe(true)
-    expect(readFileSync(tty, 'utf8')).toBe(TERMINAL_RESTORE)
-    await expect(writeTty(join(dir, 'missing', 'tty'), 'x')).rejects.toThrow()
-  })
-
-  it("stops a process that is not this one's child, as a terminal's never is", async () => {
-    const { execFileSync } = await import('node:child_process')
-    const pid = Number(execFileSync('/bin/sh', ['-c', 'sleep 30 >/dev/null 2>&1 & echo $!']).toString().trim())
-    expect(await stopSessionOwner({ pid, tty: null })).toBe(true)
   })
 })

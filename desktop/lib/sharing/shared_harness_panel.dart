@@ -11,7 +11,7 @@ import '../measurement/hub_usage.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
 import '../state/terminal_pane.dart';
-import '../super_tabs/visible_tick.dart';
+import '../widgets/visible_tick.dart';
 import '../terminal/terminal_binary.dart';
 import '../terminal/terminal_session.dart';
 import '../widgets/terminal_panel.dart';

@@ -10,6 +10,7 @@ import { createCancel } from '../turns/cancel.js'
 import { createAttach, type AttachDeps } from './attach.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import { createSessionNormalizers } from './normalizers.js'
+import { inProcessOtherStreams } from '../../testing/otherStreamsInProcess.js'
 import { createRelaunchMarks, type RelaunchMark } from './relaunch.js'
 import type { PreparedLive } from '../engines/liveSessions.js'
 import type { LiveFrame } from '../../engines/worker/liveProtocol.js'
@@ -46,6 +47,8 @@ const fakes = vi.hoisted(() => {
     turnOpen = false
     opts: Record<string, any>
     start = async () => {}
+    stop() {}
+    closeTurn() { this.turnOpen = false }
     constructor(opts: Record<string, any>) { this.opts = opts; made.push({ kind, args: [opts], instance: this as Record<string, any> }) }
   }
   return { made, normalizer, reader, copilotOpen: { value: true } }
@@ -94,14 +97,38 @@ const IDLE_AGY = 'done\n\n  ? for shortcuts'
 const started = (userMessage = 'go') => ({ type: 'turn_started' as const, payload: { userMessage } })
 const CLAUDE_PROMPT = { type: 'user', message: { role: 'user', content: 'hello' }, uuid: 'u1' }
 
+/** Their worker's streams, in this process: its tail is the spec's watcher, which a test reads and moves. */
+const stops: Array<() => Promise<void>> = []
+function streamsFor(deps: () => AttachDeps, emit: () => AttachDeps['emit']) {
+  const listeners = new Map<string, (event: unknown) => void>()
+  const others = inProcessOtherStreams({ bySession: (id) => [...bindings.values()].find((row) => row.sessionId === id),
+    frame: (_session, frame) => { if (frame.events.length) emit()(_session.sessionId, frame.events) },
+    watcher: {
+      on: (name: string, listener: (event: unknown) => void) => { listeners.set(name, listener); return {} as never },
+      addSession: (session, options) => deps().watcher.addSession(session as never, options),
+      removeSession: (id) => deps().watcher.removeSession(id),
+      pollSession: (id) => deps().watcher.pollSession(id),
+    } })
+  stops.push(others.stop)
+  /** A line the session's engine wrote, as the worker's tail hands it over. */
+  const line = (sessionId: string, engine: string, record: unknown) => listeners.get('line')?.({ sessionId, engine, text: JSON.stringify(record) })
+  return { ...others, line }
+}
+afterEach(async () => { for (const stop of stops.splice(0)) await stop() })
+/** A session's stream in the worker, with the fake normalizer or reader it made. */
+const inWorker = (run: { others: ReturnType<typeof streamsFor> }, sessionId: string) =>
+  run.others.worker.all().find((stream) => stream.session.sessionId === sessionId) as { normalizer: Record<string, any> | null; reader: Record<string, any> | null } | undefined
+
 function setup(over: Partial<AttachDeps> = {}) {
-  const normalizers = createSessionNormalizers()
+  let deps!: AttachDeps
+  const others = streamsFor(() => deps, () => deps.emit)
+  const normalizers = createSessionNormalizers(over.others as never ?? others.streams)
   const service = { needsTranscript: vi.fn(() => false), observeTranscript: vi.fn() }
   const profile = { ingest: vi.fn(), commit: vi.fn() }
-  const deps: AttachDeps = {
+  deps = {
     liveFor,
     announceSession: vi.fn(),
-    setIdentityHold: () => false,
+    others: others.streams,
     setInterpretationHold: (id, revision, reason, create) => {
       const row = bindings.get(id)
       if (!row || row.evidenceRevision !== revision || row.identityHold || (!row.interpretationHold && !(create && reason))) return false
@@ -120,6 +147,7 @@ function setup(over: Partial<AttachDeps> = {}) {
       transcriptFields: vi.fn(() => []),
       beginHydrate: vi.fn(() => profile),
       hydrate: vi.fn(),
+      hydrateEvidence: vi.fn(),
       ingest: vi.fn(() => false),
       ingestConfig: vi.fn(async () => false),
       ingestPane: vi.fn(() => false),
@@ -131,16 +159,13 @@ function setup(over: Partial<AttachDeps> = {}) {
     } as AttachDeps['runtimeProfiles'],
     captureTerminal: vi.fn(async () => 'pane'),
     emit: vi.fn(),
-    announceTurnAborted: vi.fn(),
-    questionWatcher: { start: vi.fn() },
+    tokenUsage: { changed: vi.fn() }, questionWatcher: { start: vi.fn() },
     terminalLabel: () => 'tmux:%0',
-    dbs: { opencode: '/db/opencode.db', kilo: '/db/kilo.db', devin: '/db/devin.db', openclaw: async () => null },
-    devinHome: '/devin',
-    hermesDb: async (s) => `/db/hermes-${s.agentId}.db`,
+    storeOf: async (s) => ({ opencode: '/db/opencode.db', kilo: '/db/kilo.db', devin: '/db/devin.db', hermes: `/db/hermes-${s.agentId}.db` } as Record<string, string>)[s.engine] ?? null,
     concurrency: 2,
     ...over,
   }
-  return { deps, normalizers, service, profile, attach: createAttach(deps) }
+  return { deps, normalizers, service, profile, others, attach: createAttach(deps) }
 }
 
 const made = (kind: string) => fakes.made.filter((entry) => entry.kind === kind).map((entry) => entry.instance)
@@ -201,7 +226,7 @@ it.each(['same', 'repaired'] as const)('composes discovery, retry and inline att
     announceSession: vi.fn(), stoppedAgents: { save: vi.fn() }, syncRecapPool: vi.fn(),
   } as unknown as BindDeps)
   const discover = createDiscoveryHandlers({ registry, bindObservedAgent: bind.bindObservedAgent,
-    attachSession: run.attach.attachSession, announceSession: vi.fn(), syncRecapPool: vi.fn(),
+    attachSession: run.attach.attachSession, announceSession: vi.fn(), syncRecapPool: vi.fn(), attach: vi.fn(), taken: vi.fn(),
   } as unknown as DiscoveryDeps)
   const seen = { engine: 'codex', processIdentity: { pid: 42, startMarker: 'fixture' }, args: 'codex', runtimes: [] } as unknown as DiscoveredTerminalAgent
   vi.clearAllMocks()
@@ -283,8 +308,8 @@ it('defers history publication if identity becomes held during pane hydration', 
   const row = session('cursor', transcript([{ events: [started()], open: true }]))
   const run = setup({ captureTerminal: async () => { row.identityHold = 'path changed'; return null } })
   expect(await run.attach.attachSession(row)).toBe(true)
+  // Its tail is the worker's, started as it folded; what the attach would say of it, it does not.
   expect(run.deps.emit).not.toHaveBeenCalled()
-  expect(run.deps.watcher.addSession).not.toHaveBeenCalled()
 })
 
 describe('the order of an attach of another engine\'s session', () => {
@@ -300,7 +325,7 @@ describe('the order of an attach of another engine\'s session', () => {
     expect(run.normalizers.hasState('muse-s')).toBe(false)
     loaded()
     expect(await attaching).toBe(true)
-    expect(run.normalizers.museNormalizers.has('muse-s')).toBe(true)
+    expect(!!inWorker(run, 'muse-s')?.normalizer).toBe(true)
     expect(run.deps.watcher.addSession).toHaveBeenCalledTimes(1)
     // Claude Code and Codex never ask for it.
     vi.mocked(loadEngine).mockClear()
@@ -323,16 +348,20 @@ it('starts core transcript discovery before an optional Cursor module can stall 
 
 it('locates a fifth Cursor session while four optional readers occupy the entire attach pool', async () => {
   const releases: Array<() => void> = []
-  vi.mocked(loadEngine).mockImplementationOnce(() => new Promise(resolve => { releases.push(() => resolve(null)) }))
+  const real = vi.mocked(loadEngine).getMockImplementation()!
+  vi.mocked(loadEngine).mockImplementation(() => new Promise(resolve => { releases.push(() => resolve(null)) }))
   const run = setup({ concurrency: 4 })
   const pending = Array.from({ length: 4 }, (_, i) => run.attach.attachSession(session('copilot', undefined, { agentId: `a${i}`, sessionId: `s${i}` })))
-  await vi.waitFor(() => expect(releases).toHaveLength(1))
+  await vi.waitFor(() => expect(releases).toHaveLength(4))
   expect(run.attach.attaches.attaching()).toHaveLength(4)
   const fifth = run.attach.attachSession(session('cursor'))
   expect(run.attach.attaches.queued()).toBe(1)
   expect(run.deps.cursorDiscovery.add).toHaveBeenCalledWith('cursor-s')
   releases.forEach(release => release())
+  await vi.waitFor(() => expect(releases).toHaveLength(5))
+  releases.forEach(release => release())
   await Promise.all([...pending, fifth])
+  vi.mocked(loadEngine).mockImplementation(real)
 })
 
 it.each(['terminal probe', 'optional module'] as const)('does not restore a forgotten Cursor while its %s completes', async phase => {
@@ -407,66 +436,8 @@ it.each(['terminal probe', 'optional module'] as const)('attaches a newly locate
     expect(await first).toBe(false)
     expect(await replacement).toBe(true)
     expect(run.deps.watcher.addSession).toHaveBeenCalledOnce()
-    expect(run.deps.watcher.addSession).toHaveBeenCalledWith(expect.objectContaining({ transcriptPath: path }), {})
+    expect(run.deps.watcher.addSession).toHaveBeenCalledWith(expect.objectContaining({ transcriptPath: path }), expect.objectContaining({ fromOffset: 3 }))
   } finally { await discovery.stop() }
-})
-
-it.each(['current', 'forget', 'rebind'] as const)('holds a stalled import without writes and fences its late retry: %s', async change => {
-  const code = await loadEngine('cursor')
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-  let finish!: () => void
-  vi.mocked(loadEngine).mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(code) }))
-  const run = setup({ readerLoadWaitMs: 20 })
-  const s = session('cursor', transcript([{}]))
-  const first = run.attach.attachSession(s)
-  await vi.advanceTimersByTimeAsync(20)
-  expect(await first).toBe(true)
-  expect(run.normalizers.hasState(s.sessionId)).toBe(false)
-  expect(run.deps.watcher.addSession).not.toHaveBeenCalled()
-  if (change === 'forget') { bindings.delete(s.agentId); run.attach.forget(s.sessionId) }
-  if (change === 'rebind') s.sessionId = 'another'
-  finish()
-  if (change === 'current') await vi.waitFor(() => expect(run.deps.watcher.addSession).toHaveBeenCalledOnce())
-  else { await vi.advanceTimersByTimeAsync(0); expect(run.deps.watcher.addSession).not.toHaveBeenCalled() }
-  vi.useRealTimers()
-})
-
-it.each([new Error('reader failed'), 'reader failed'])('contains a late reader retry failure: %s', async error => {
-  const code = await loadEngine('cursor')
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-  const log = vi.spyOn(console, 'error').mockImplementation(() => {})
-  let finish!: () => void
-  vi.mocked(loadEngine).mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(code) }))
-  const run = setup({ readerLoadWaitMs: 20 })
-  vi.mocked(run.deps.watcher.addSession).mockRejectedValueOnce(error)
-  const pending = run.attach.attachSession(session('cursor', transcript([{}])))
-  await vi.advanceTimersByTimeAsync(20); await pending
-  finish()
-  await vi.waitFor(() => expect(log).toHaveBeenCalledWith('[agent] cursor-a reader retry failed: reader failed'))
-  vi.useRealTimers()
-})
-
-it.each(['terminal probe', 'import'] as const)('does not replay twice when a held loader resolves during a newer attach\'s %s', async phase => {
-  const code = await loadEngine('cursor')
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-  let loaded!: () => void, probed!: () => void
-  vi.mocked(loadEngine).mockImplementationOnce(() => new Promise(resolve => { loaded = () => resolve(code) }))
-  const run = setup({ readerLoadWaitMs: 20 })
-  const event = started('once')
-  const s = session('cursor', transcript([{ events: [event] }]))
-  const first = run.attach.attachSession(s, false, true)
-  await vi.advanceTimersByTimeAsync(20); expect(await first).toBe(true)
-  if (phase === 'terminal probe') vi.mocked(run.deps.terminalGone).mockImplementationOnce(() => new Promise(resolve => { probed = () => resolve(false) }))
-  const second = run.attach.attachSession(s, false, true)
-  await vi.advanceTimersByTimeAsync(0)
-  loaded()
-  await vi.advanceTimersByTimeAsync(0)
-  if (phase === 'terminal probe') probed()
-  expect(await second).toBe(true)
-  await vi.waitFor(() => expect(run.attach.attaches.attaching()).toEqual([]))
-  expect(run.deps.watcher.addSession).toHaveBeenCalledOnce()
-  expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith(s.sessionId, [event])
-  expect(made('cursor')).toHaveLength(1)
 })
 
 describe('attaching a session whose engine\'s code could not be loaded', () => {
@@ -483,8 +454,8 @@ describe('attaching a session whose engine\'s code could not be loaded', () => {
     const store = setup()
     expect(await store.attach.attachSession(session('opencode'))).toBe(true)
     expect(store.normalizers.hasState('opencode-s')).toBe(false)
-    expect(warn).toHaveBeenCalledWith('[agent] grok-age transcript held · engine=grok · its reader is unavailable or still loading')
-    expect(warn).toHaveBeenCalledWith('[agent] opencode transcript held · engine=opencode · its reader is unavailable or still loading')
+    expect(warn).toHaveBeenCalledWith('[agent] grok-age transcript held · engine=grok · its live stream is unavailable')
+    expect(warn).toHaveBeenCalledWith('[agent] opencode transcript held · engine=opencode · its live stream is unavailable')
     warn.mockRestore()
   })
 })
@@ -668,13 +639,15 @@ describe('attaching a session', () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup()
       const s = session('pi', '/t/pi.jsonl')
-      run.normalizers.piNormalizers.set(s.sessionId, {} as never)
+      // Its stream is open in the worker: a later attach only makes sure its tail runs there.
+      await run.attach.attachSession(s)
+      vi.mocked(run.deps.watcher.addSession).mockClear()
       expect(await run.attach.attachSession(s)).toBe(true)
       run.attach.neverFoldedHistory.add(s.sessionId)
       await run.attach.attachSession(s)
       await run.attach.attachSession(s, false, false, true)
       expect(vi.mocked(run.deps.watcher.addSession).mock.calls.map((call) => call[1])).toEqual([
-        { fromStart: false }, { fromStart: true }, { fromStart: true },
+        { fromStart: false, stamp: expect.any(Function), current: expect.any(Function) }, { fromStart: true, stamp: expect.any(Function), current: expect.any(Function) }, { fromStart: true, stamp: expect.any(Function), current: expect.any(Function) },
       ])
       expect(run.attach.neverFoldedHistory.has(s.sessionId)).toBe(false)
     })
@@ -683,16 +656,18 @@ describe('attaching a session', () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup()
       const withFile = session('cursor', '/t/cursor.jsonl')
-      run.normalizers.cursorNormalizers.set(withFile.sessionId, {} as never)
+      await run.attach.attachSession(withFile)
+      vi.mocked(run.deps.watcher.addSession).mockClear()
       await run.attach.attachSession(withFile, false, true)
-      expect(vi.mocked(run.deps.watcher.addSession).mock.calls[0][1]).toEqual({ fromStart: true })
+      expect(vi.mocked(run.deps.watcher.addSession).mock.calls[0][1]).toEqual({ fromStart: true, stamp: expect.any(Function), current: expect.any(Function) })
       const noFile = session('cursor', undefined, { sessionId: 'cursor-2' })
-      run.normalizers.cursorNormalizers.set('cursor-2', {} as never)
+      await run.attach.attachSession(noFile)
       await run.attach.attachSession(noFile)
       expect(run.deps.cursorDiscovery.add).toHaveBeenCalledWith('cursor-2')
       const opencode = session('opencode')
-      run.normalizers.opencodeReaders.set(opencode.sessionId, {} as never)
+      await run.attach.attachSession(opencode)
       expect(await run.attach.attachSession(opencode)).toBe(true)
+      expect(made('opencode')).toHaveLength(1)
     })
   })
 
@@ -746,11 +721,11 @@ describe('attaching a session', () => {
       const run = setup()
       run.service.needsTranscript.mockReturnValue(true)
       await run.attach.attachSession(session('claude', transcript([CLAUDE_PROMPT])))
-      await run.attach.attachSession(session('pi', transcript([{ events: [] }])))
+      await run.attach.attachSession(session('terminal', transcript([{ events: [] }])))
       expect(run.service.observeTranscript).toHaveBeenCalledWith('claude-agent', 'claude-s', 'claude', expect.any(String))
-      expect(run.service.observeTranscript).toHaveBeenCalledWith('pi-agent', 'pi-s', 'pi', '{"events":[]}')
+      expect(run.service.observeTranscript).toHaveBeenCalledWith('terminal-agent', 'terminal-s', 'terminal', '{"events":[]}')
       const none = setup({ device: () => undefined })
-      expect(await none.attach.attachSession(session('pi', transcript([{}])))).toBe(true)
+      expect(await none.attach.attachSession(session('terminal', transcript([{}])))).toBe(true)
     })
 
     it('attaches a session whose device or runtime profile cannot take in its lines, on either path', async () => {
@@ -759,23 +734,23 @@ describe('attaching a session', () => {
       // Asking the device whether it watches the session throws: the attach goes on without it.
       const asking = setup()
       asking.service.needsTranscript.mockImplementation(() => { throw new Error('device state unreadable') })
-      expect(await asking.attach.attachSession(session('pi', transcript([{ events: [] }])))).toBe(true)
-      expect(asking.normalizers.piNormalizers.has('pi-s')).toBe(true)
+      expect(await asking.attach.attachSession(session('terminal', transcript([{ events: [] }])))).toBe(true)
+      expect(asking.normalizers.liveParsers.has('terminal-s')).toBe(true)
       expect(asking.service.observeTranscript).not.toHaveBeenCalled()
       // The device watches, but cannot take a line in; the profile cannot be hydrated either.
       const run = setup()
       run.service.needsTranscript.mockReturnValue(true)
       run.service.observeTranscript.mockImplementation(() => { throw new Error('evidence unreadable') })
       vi.mocked(run.deps.runtimeProfiles.hydrate).mockImplementation(() => { throw 'profile unreadable' })
-      expect(await run.attach.attachSession(session('pi', transcript([{ events: [] }, { events: [] }])))).toBe(true)
+      expect(await run.attach.attachSession(session('terminal', transcript([{ events: [] }, { events: [] }])))).toBe(true)
       expect(await run.attach.attachSession(session('claude', transcript([CLAUDE_PROMPT])))).toBe(true)
-      expect(run.normalizers.piNormalizers.has('pi-s')).toBe(true)
+      expect(run.normalizers.liveParsers.has('terminal-s')).toBe(true)
       expect(run.service.observeTranscript).toHaveBeenCalledWith('claude-agent', 'claude-s', 'claude', expect.any(String))
       expect(run.profile.commit).toHaveBeenCalled()
       expect(error.mock.calls).toEqual([
-        ['[transcripts] the device could not take in a line of pi-s; the line goes on to its engine: device state unreadable'],
-        ['[transcripts] the device could not take in a line of pi-s; the line goes on to its engine: evidence unreadable'],
-        ['[transcripts] the runtime profile could not take in a line of pi-s; the line goes on to its engine: profile unreadable'],
+        ['[transcripts] the device could not take in a line of terminal; the line goes on to its engine: device state unreadable'],
+        ['[transcripts] the device could not take in a line of terminal; the line goes on to its engine: evidence unreadable'],
+        ['[transcripts] the runtime profile could not take in a line of terminal; the line goes on to its engine: profile unreadable'],
         ['[transcripts] the device could not take in a line of claude-s; the line goes on to its engine: evidence unreadable'],
       ])
     })
@@ -850,7 +825,7 @@ describe('attaching a session', () => {
       expect(run.deps.emit).toHaveBeenCalledWith(s.sessionId, [expect.objectContaining({ type: 'turn_started' }), expect.objectContaining({ type: 'text_delta' })])
       expect(log.mock.calls.map(([line]) => String(line)).some((line) => line.includes('replayed the first turn'))).toBe(true)
       // Once replayed, never again.
-      run.normalizers.piNormalizers.delete(s.sessionId)
+      run.normalizers.forget(s.sessionId)
       vi.mocked(run.deps.emit).mockClear()
       await run.attach.attachSession(s, true, false, true)
       expect(run.deps.emit).not.toHaveBeenCalled()
@@ -921,14 +896,9 @@ describe('attaching a session', () => {
     it('folds each file engine into its own normalizer, reading the pane where the chips live there', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup()
-      const maps: Record<string, Map<string, unknown>> = {
-        cursor: run.normalizers.cursorNormalizers, muse: run.normalizers.museNormalizers, amp: run.normalizers.ampNormalizers,
-        grok: run.normalizers.grokNormalizers, agy: run.normalizers.agyNormalizers, copilot: run.normalizers.copilotNormalizers,
-        pi: run.normalizers.piNormalizers, omp: run.normalizers.ompNormalizers, commandcode: run.normalizers.commandcodeNormalizers,
-      }
-      for (const engine of Object.keys(maps)) {
+      for (const engine of ['cursor', 'muse', 'amp', 'grok', 'agy', 'copilot', 'pi', 'omp', 'commandcode']) {
         await run.attach.attachSession(session(engine, transcript([{}])))
-        expect(maps[engine].get(`${engine}-s`), engine).toBe(made(engine)[0])
+        expect(inWorker(run, `${engine}-s`)?.normalizer, engine).toBe(made(engine)[0])
       }
       expect(vi.mocked(run.deps.captureTerminal).mock.calls).toEqual([['cursor-agent', 100], ['grok-agent', 60], ['agy-agent', 60]])
       expect(run.deps.runtimeProfiles.ingestPane).toHaveBeenCalledTimes(3)
@@ -977,8 +947,9 @@ describe('attaching a session', () => {
         vi.mocked(run.deps.captureTerminal).mockReturnValueOnce(new Promise<string>(resolve => { finish = resolve }))
         const mutate = () => {
           if (change.includes('binding')) bindings.set(s.agentId, { ...s, boundAt: 2 })
-          if (change === 'forgotten' || change === 'later normalizer') run.normalizers.agyNormalizers.delete(s.sessionId)
-          if (change.includes('turn')) made('agy')[0].ingest(JSON.stringify({ open: true }))
+          if (change === 'forgotten' || change === 'later normalizer') run.normalizers.forget(s.sessionId)
+          // A record of a new turn, as the worker's tail hands it over: its stream's turn moves on.
+          if (change.includes('turn')) run.others.line(s.sessionId, 'agy', { close: true })
         }
         if (change.startsWith('later')) vi.mocked(run.deps.runtimeProfiles.capturePane).mockImplementationOnce(async (_s, capture) => {
           await capture(s.agentId)
@@ -994,27 +965,7 @@ describe('attaching a session', () => {
         expect(close).not.toHaveBeenCalled()
         expect(run.deps.emit).not.toHaveBeenCalled()
         expect(run.deps.settled).not.toHaveBeenCalled()
-      },
-    )
-
-    it.each(['new turn', 'binding', 'forgotten'] as const)(
-      'keeps captured agy history fenced through watcher installation: %s', async change => {
-        for (const pane of [IDLE_AGY, 'working\n  esc to cancel']) {
-          const run = setup({ settled: vi.fn() }), s = session('agy', transcript([{ events: [started()], open: true }]))
-          vi.mocked(run.deps.captureTerminal).mockResolvedValue(pane)
-          let finish!: () => void
-          vi.mocked(run.deps.watcher.addSession).mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve }))
-          const pending = run.attach.attachSession(s)
-          await vi.waitFor(() => expect(run.deps.watcher.addSession).toHaveBeenCalled())
-          const normalizer = run.normalizers.agyNormalizers.get(s.sessionId)!
-          if (change === 'new turn') normalizer.ingest(JSON.stringify({ open: true }))
-          if (change === 'binding') bindings.set(s.agentId, { ...s, boundAt: 2 })
-          if (change === 'forgotten') run.normalizers.agyNormalizers.delete(s.sessionId)
-          finish()
-          await pending
-          expect(run.deps.emit, pane).not.toHaveBeenCalled()
-          expect(run.deps.settled, pane).not.toHaveBeenCalled()
-        }
+        run.attach.forget(s.sessionId)
       },
     )
 
@@ -1054,20 +1005,23 @@ describe('attaching a session', () => {
       expect(opencode.opts).toMatchObject({ dbPath: '/db/opencode.db', sessionId: 'opencode-s' })
       expect(kilo.opts).toMatchObject({ dbPath: '/db/kilo.db', sessionId: 'kilo-s' })
       expect(hermes.opts).toMatchObject({ dbPath: '/db/hermes-hermes-agent.db', sessionId: 'hermes-s' })
-      expect(devin.opts).toMatchObject({ dbPath: '/db/devin.db', devinHome: '/devin', sessionId: 'devin-s' })
-      expect(run.normalizers.opencodeReaders.get('opencode-s')).toBe(opencode)
-      expect(run.normalizers.kiloReaders.get('kilo-s')).toBe(kilo)
-      expect(run.normalizers.hermesReaders.get('hermes-s')).toBe(hermes)
-      expect(run.normalizers.devinReaders.get('devin-s')).toBe(devin)
+      expect(devin.opts).toMatchObject({ dbPath: '/db/devin.db', devinHome: expect.any(String), sessionId: 'devin-s' })
+      expect(inWorker(run, 'opencode-s')?.reader).toBe(opencode)
+      expect(inWorker(run, 'kilo-s')?.reader).toBe(kilo)
+      expect(inWorker(run, 'hermes-s')?.reader).toBe(hermes)
+      expect(inWorker(run, 'devin-s')?.reader).toBe(devin)
       for (const reader of [opencode, kilo, hermes, devin]) {
         reader.opts.onEvents([started()])
+        if (reader === devin) reader.opts.onTurnAborted('provider error')
         reader.opts.onFatal(new Error('store missing'))
       }
-      expect(vi.mocked(run.deps.emit).mock.calls.map((call) => call[0])).toEqual(['opencode-s', 'kilo-s', 'hermes-s', 'devin-s'])
+      await vi.waitFor(() => expect(vi.mocked(run.deps.emit).mock.calls.map((call) => call[0])).toEqual(['opencode-s', 'kilo-s', 'hermes-s', 'devin-s', 'devin-s']))
       expect(warn).toHaveBeenCalledTimes(4)
-      devin.opts.onTurnAborted('provider error')
-      expect(run.deps.announceTurnAborted).toHaveBeenCalledWith('devin-s', 'devin', 'provider error')
       expect(run.deps.emit).toHaveBeenLastCalledWith('devin-s', [{ type: 'turn_ended', payload: {} }])
+      devin.opts.onEvents([started('too late')])
+      devin.opts.onTurnAborted('too late')
+      await run.others.streams.drainAll()
+      expect(run.deps.emit).toHaveBeenCalledTimes(5)
       // OpenCode and Devin name their model only in the pane.
       expect(vi.mocked(run.deps.captureTerminal).mock.calls).toEqual([['opencode-agent', 100], ['devin-agent', 60]])
       vi.mocked(run.deps.captureTerminal).mockResolvedValue(null)
@@ -1109,6 +1063,560 @@ describe('attaching a session', () => {
     expect(String(warn.mock.calls[0][0])).toMatch(/attach still running · engine=pi · session=.* · 15s/)
     expect(run.attach.attaches.attaching()).toHaveLength(1)
   })
+
+  // The bind's attach read a new Codex rollout to byte 199 and was superseded by a write to the runtime profile before
+  // it installed anything. The SessionStart hook's attach then folded the file to byte 385 and tailed from there, so the
+  // `token_count` line written between the two reached nobody (e2e/usageProcess.e2e.ts, "explicit inline usage follows
+  // the same aggregate boundary", CLI end to end runs 43672659842 shard 2 and 42225258676 shard 7).
+  describe('after a read that was superseded before it installed a tail', () => {
+    const ANSWER = { type: 'assistant', message: { id: 'usage-1', role: 'assistant', content: [{ type: 'text', text: 'done' }],
+      stop_reason: 'end_turn', usage: { input_tokens: 100, output_tokens: 20 } } }
+    /** The next inline attach reads its transcript, then finds its profile hydration no longer current. */
+    const supersede = (run: ReturnType<typeof setup>) =>
+      vi.mocked(run.deps.runtimeProfiles.beginHydrate).mockReturnValueOnce({ ...run.profile, commitWith: () => false })
+    /** What the worker was last asked to read up to. */
+    const askedEnd = (p: ReturnType<typeof remoteSetup>) => vi.mocked(p.remote.prepare).mock.lastCall![1].end
+    /** A profile config read that fails once the transcript was read. */
+    const unreadable = async (): Promise<void> => { throw new Error('unreadable') }
+
+    it.each(['whole', 'half written'] as const)('folds the next attach only to where that read stopped, and delivers what was written since as live lines: a record %s by then', async written => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const watcher = new Watcher(), add = vi.spyOn(watcher, 'addSession')
+      const run = setup({ watcher })
+      const file = transcript([CLAUDE_PROMPT]), row = session('claude', file), read = statSync(file).size
+      const answer = JSON.stringify(ANSWER) + '\n'
+      // The engine was in the middle of its answer when the first read ended: that record is the tail's, whole.
+      if (written === 'half written') appendFileSync(file, answer.slice(0, 40))
+      const emit = vi.fn(), usage = vi.fn()
+      createIngest({ liveFor, has: () => true, bySession: () => row, device: () => undefined,
+        runtimeProfiles: { ingest: vi.fn(), evidence: vi.fn() }, tokenUsage: { changed: usage }, normalizers: run.normalizers,
+        announceTurnAborted: vi.fn(), setIdentityHold: vi.fn(), announceSession: vi.fn(), emit, attachSession: run.attach.attachSession }).wireWatcher(watcher)
+      try {
+        supersede(run)
+        expect(await run.attach.attachSession(row)).toBe(true)
+        expect(add).not.toHaveBeenCalled()
+        expect(run.normalizers.hasState(row.sessionId)).toBe(false)
+        appendFileSync(file, written === 'whole' ? answer : answer.slice(40))
+        // The SessionStart hook's attach, queued behind the bind's.
+        expect(await run.attach.attachSession(row, true)).toBe(true)
+        expect(add).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: row.sessionId }), { fromOffset: read })
+        expect(log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('read the transcript from its end'))).toEqual([
+          expect.stringContaining(`· ${written === 'whole' ? read : read + 40} bytes`), expect.stringContaining(`· ${read} bytes`)])
+        // History ends at the prompt: its turn is open, and nothing after it was folded.
+        expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, [expect.objectContaining({ type: 'turn_started' })], { resumed: true })
+        expect(usage).not.toHaveBeenCalled()
+        await watcher.pollSession(row.sessionId)
+        expect(usage).toHaveBeenCalledExactlyOnceWith(row)
+        expect(emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, expect.arrayContaining([expect.objectContaining({ type: 'turn_ended' })]))
+        expect(run.normalizers.sessionTurnOpen(row.sessionId)).toBe(false)
+      } finally { await watcher.stop() }
+    })
+
+    it('starts the tail at the new end of a transcript rewritten shorter since', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const run = setup()
+      const file = transcript([CLAUDE_PROMPT, ANSWER]), row = session('claude', file)
+      supersede(run)
+      await run.attach.attachSession(row)
+      writeFileSync(file, JSON.stringify(CLAUDE_PROMPT) + '\n')
+      expect(await run.attach.attachSession(row, true)).toBe(true)
+      expect(run.deps.watcher.addSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: row.sessionId }), { fromOffset: statSync(file).size })
+      expect(run.normalizers.sessionTurnOpen(row.sessionId)).toBe(true)
+    })
+
+    it('asks the engine worker to read only that far when its candidate was superseded at install', async () => {
+      const p = remoteSetup(), s = session('claude', '/private/transcript')
+      vi.mocked(p.remote.install).mockReturnValueOnce(false)
+      expect(await p.attach.attachSession(s)).toBe(true)
+      expect(p.remote.retry).toHaveBeenCalledWith(s)
+      expect(p.deps.watcher.addSession).not.toHaveBeenCalled()
+      // The engine link's retry: a reset attach a second later (core/engines/liveSessions.ts `retry`).
+      expect(await p.attach.attachSession(s, true)).toBe(true)
+      expect(p.remote.prepare).toHaveBeenLastCalledWith(s, { live: false, end: 20 }, expect.any(Function), undefined)
+      expect(p.deps.watcher.addSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: s.sessionId }), { fromOffset: 20 })
+      expect(p.normalizers.liveParsers.get(s.sessionId)).toBe(p.handle)
+    })
+
+    it('uses what it remembered once: the attach after a tail is installed reads to the end again', async () => {
+      const p = remoteSetup(), s = session('claude', '/private/transcript')
+      vi.mocked(p.remote.install).mockReturnValueOnce(false)
+      await p.attach.attachSession(s)
+      await p.attach.attachSession(s, true)
+      expect(askedEnd(p)).toBe(20)
+      await p.attach.attachSession(s, true)
+      expect(askedEnd(p)).toBeUndefined()
+    })
+
+    it('remembers a second superseded read\'s own end', async () => {
+      const p = remoteSetup(), s = session('claude', '/private/transcript')
+      vi.mocked(p.remote.install).mockReturnValueOnce(false).mockReturnValueOnce(false)
+      await p.attach.attachSession(s)
+      vi.mocked(p.remote.prepare).mockResolvedValueOnce({ ...p.candidate, page: { cursor: { offset: 16 }, lastStarted: null } } as unknown as PreparedLive)
+      await p.attach.attachSession(s, true)
+      expect(askedEnd(p)).toBe(20)
+      await p.attach.attachSession(s, true)
+      expect(askedEnd(p)).toBe(16)
+    })
+
+    it('reads to a held tail\'s offset first, and forgets what it remembered once it takes that tail over', async () => {
+      const p = remoteSetup(), s = session('claude', '/private/transcript')
+      vi.mocked(p.remote.install).mockReturnValueOnce(false)
+      await p.attach.attachSession(s)
+      const hold: TailHold = { offset: 12, expired: false, release: vi.fn() }
+      vi.mocked(p.deps.watcher.hold).mockResolvedValueOnce(hold)
+      vi.mocked(p.deps.watcher.tails).mockReturnValueOnce(true)
+      await p.attach.attachSession(s, true)
+      expect(askedEnd(p)).toBe(12)
+      expect(p.deps.watcher.addSession).not.toHaveBeenCalled()
+      await p.attach.attachSession(s, true)
+      expect(askedEnd(p)).toBeUndefined()
+    })
+
+    it.each([false, true])('reads to it before a relaunch mark, unless a new engine was started on the conversation: %s', async restarted => {
+      const marks = createRelaunchMarks()
+      const p = remoteSetup(false, { relaunchMarks: marks }), s = session('claude', '/private/transcript')
+      vi.mocked(p.remote.install).mockReturnValueOnce(false)
+      await p.attach.attachSession(s)
+      marks.note(s.sessionId, 30, restarted)
+      await p.attach.attachSession(s, true)
+      expect(askedEnd(p)).toBe(restarted ? 30 : 20)
+    })
+
+    it('forgets it with the session', async () => {
+      const p = remoteSetup(), s = session('claude', '/private/transcript')
+      vi.mocked(p.remote.install).mockReturnValueOnce(false)
+      await p.attach.attachSession(s)
+      p.attach.forget(s.sessionId)
+      await p.attach.attachSession(s, true)
+      expect(askedEnd(p)).toBeUndefined()
+    })
+
+    it('drops it for a conversation whose transcript is another file now', async () => {
+      const p = remoteSetup(), s = session('claude', '/private/transcript')
+      vi.mocked(p.remote.install).mockReturnValueOnce(false)
+      await p.attach.attachSession(s)
+      // An attach of the other file that reads nothing and installs nothing.
+      vi.mocked(p.remote.prepare).mockRejectedValueOnce(new Error('ENGINE_UNAVAILABLE'))
+      await p.attach.attachSession(session('claude', '/private/another'), true)
+      await p.attach.attachSession(session('claude', '/private/transcript'), true)
+      expect(vi.mocked(p.remote.prepare).mock.calls.map(call => call[1].end)).toEqual([undefined, undefined, undefined])
+    })
+
+    it('remembers nothing for a tail the session already has or held, a session with no transcript, or an interpretation recovery', async () => {
+      const tailed = remoteSetup(), s = session('claude', '/private/transcript')
+      vi.mocked(tailed.remote.install).mockReturnValueOnce(false)
+      vi.mocked(tailed.deps.watcher.tails).mockReturnValueOnce(true)
+      await tailed.attach.attachSession(s)
+      await tailed.attach.attachSession(s, true)
+      expect(askedEnd(tailed)).toBeUndefined()
+      // A tail it held, gone by the time its candidate was refused: where delivery stopped is not where this read did.
+      const gone = remoteSetup()
+      vi.mocked(gone.remote.install).mockReturnValueOnce(false)
+      vi.mocked(gone.deps.watcher.hold).mockResolvedValueOnce({ offset: 12, expired: false, release: vi.fn() })
+      await gone.attach.attachSession(s, true)
+      await gone.attach.attachSession(s, true)
+      expect(askedEnd(gone)).toBeUndefined()
+      const pathless = remoteSetup(), unannounced = session('claude')
+      vi.mocked(pathless.remote.install).mockReturnValueOnce(false)
+      await pathless.attach.attachSession(unannounced)
+      await pathless.attach.attachSession(unannounced, true)
+      expect(askedEnd(pathless)).toBeUndefined()
+      const recovery = remoteSetup(), held = session('claude', '/private/transcript', { evidenceRevision: 2, interpretationHold: 'pending' })
+      vi.mocked(recovery.remote.install).mockReturnValueOnce(false)
+      await recovery.attach.attachSession(held)
+      expect(held.interpretationHold).toContain('superseded while reading')
+      vi.mocked(recovery.remote.prepare).mockClear()
+      await recovery.attach.attachSession(held)
+      expect(askedEnd(recovery)).toBeUndefined()
+      recovery.attach.forget(held.sessionId)
+    })
+
+    it('forgets it when an attach only makes sure the tail runs', async () => {
+      const p = remoteSetup(), s = session('claude', '/private/transcript')
+      // A parser from before its transcript was announced, and no tail yet.
+      p.normalizers.liveParsers.set(s.sessionId, { ...p.handle })
+      vi.mocked(p.remote.install).mockReturnValueOnce(false)
+      await p.attach.attachSession(s, true)
+      await p.attach.attachSession(s)
+      expect(p.deps.watcher.addSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: s.sessionId }), { fromStart: false })
+      await p.attach.attachSession(s, true)
+      expect(askedEnd(p)).toBeUndefined()
+    })
+
+    it('remembers where a read stopped whose runtime profile could not be read afterwards', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const run = setup()
+      const file = transcript([CLAUDE_PROMPT]), row = session('claude', file), read = statSync(file).size
+      vi.mocked(run.deps.runtimeProfiles.beginHydrate).mockReturnValueOnce({ ...run.profile, config: unreadable })
+      expect(await run.attach.attachSession(row)).toBe(true)
+      expect(run.deps.watcher.addSession).not.toHaveBeenCalled()
+      appendFileSync(file, JSON.stringify(ANSWER) + '\n')
+      expect(await run.attach.attachSession(row, true)).toBe(true)
+      expect(run.deps.watcher.addSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: row.sessionId }), { fromOffset: read })
+    })
+
+    it('remembers where the engine worker read to when the runtime profile could not be read afterwards', async () => {
+      const p = remoteSetup(), s = session('claude', '/private/transcript')
+      vi.mocked(p.deps.runtimeProfiles.beginHydrate).mockReturnValueOnce({ ...p.profile, config: unreadable })
+      expect(await p.attach.attachSession(s)).toBe(true)
+      expect(p.remote.discard).toHaveBeenCalledExactlyOnceWith(p.candidate)
+      expect(p.remote.retry).toHaveBeenCalledExactlyOnceWith(s)
+      expect(p.deps.watcher.addSession).not.toHaveBeenCalled()
+      await p.attach.attachSession(s, true)
+      expect(askedEnd(p)).toBe(20)
+    })
+
+    it('remembers nothing of an engine worker that could not be reached, or of a failed profile read that held a tail or was a recovery', async () => {
+      const unreached = remoteSetup(), s = session('claude', '/private/transcript')
+      vi.mocked(unreached.remote.prepare).mockRejectedValueOnce(new Error('ENGINE_UNAVAILABLE'))
+      expect(await unreached.attach.attachSession(s)).toBe(true)
+      expect(unreached.remote.discard).not.toHaveBeenCalled()
+      await unreached.attach.attachSession(s, true)
+      expect(askedEnd(unreached)).toBeUndefined()
+      const held = remoteSetup()
+      vi.mocked(held.deps.runtimeProfiles.beginHydrate).mockReturnValueOnce({ ...held.profile, config: unreadable })
+      vi.mocked(held.deps.watcher.hold).mockResolvedValueOnce({ offset: 12, expired: false, release: vi.fn() })
+      await held.attach.attachSession(s, true)
+      await held.attach.attachSession(s, true)
+      expect(askedEnd(held)).toBeUndefined()
+      const recovery = remoteSetup(), pending = session('claude', '/private/transcript', { evidenceRevision: 2, interpretationHold: 'pending' })
+      vi.mocked(recovery.deps.runtimeProfiles.beginHydrate).mockReturnValueOnce({ ...recovery.profile, config: unreadable })
+      await recovery.attach.attachSession(pending)
+      await recovery.attach.attachSession(pending)
+      expect(askedEnd(recovery)).toBeUndefined()
+      recovery.attach.forget(pending.sessionId)
+      // Inline, a tail it held: the hold's offset is where delivery stopped, and the tail goes on from there.
+      const inline = setup(), file = transcript([CLAUDE_PROMPT]), row = session('claude', file)
+      vi.mocked(inline.deps.runtimeProfiles.beginHydrate).mockReturnValueOnce({ ...inline.profile, config: unreadable })
+      vi.mocked(inline.deps.watcher.hold).mockResolvedValueOnce({ offset: statSync(file).size, expired: false, release: vi.fn() })
+      await inline.attach.attachSession(row, true)
+      appendFileSync(file, JSON.stringify(ANSWER) + '\n')
+      await inline.attach.attachSession(row, true)
+      expect(inline.deps.watcher.addSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: row.sessionId }), { fromOffset: statSync(file).size })
+    })
+
+    // A session forgotten and registered again under the same id inherits nothing of its earlier binding
+    // (agents/forget.ts). An attach still reading its profile when the session was forgotten is no longer the
+    // binding's: where it read to is not where the next binding's history ends, and nothing is left to try again.
+    /** A profile whose config is read until the test says it cannot be. */
+    const pendingConfig = (run: ReturnType<typeof setup>) => {
+      const read: { fail?: (error: Error) => void } = {}
+      vi.mocked(run.deps.runtimeProfiles.beginHydrate).mockReturnValueOnce({ ...run.profile,
+        config: () => new Promise<void>((_, reject) => { read.fail = reject }) })
+      return async (during: () => void): Promise<void> => {
+        do await new Promise(resolve => setImmediate(resolve)); while (!read.fail)
+        during()
+        read.fail(new Error('unreadable'))
+      }
+    }
+
+    it('remembers nothing, and tries nothing again, for a read whose session was forgotten while its profile was read', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const run = setup(), file = transcript([CLAUDE_PROMPT]), row = session('claude', file)
+      const fail = pendingConfig(run)
+      const first = run.attach.attachSession(row)
+      await fail(() => run.attach.forget(row.sessionId))
+      await first
+      expect(vi.getTimerCount()).toBe(0)
+      // The same conversation bound again: its first attach folds the whole file, as any first attach does.
+      appendFileSync(file, JSON.stringify(ANSWER) + '\n')
+      expect(await run.attach.attachSession(row)).toBe(true)
+      expect(run.deps.watcher.addSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: row.sessionId }), { fromOffset: statSync(file).size })
+    })
+
+    it('remembers nothing of an engine worker\'s read whose session was forgotten while its profile was read', async () => {
+      const p = remoteSetup(), s = session('claude', '/private/transcript')
+      const fail = pendingConfig(p)
+      const first = p.attach.attachSession(s)
+      await fail(() => p.attach.forget(s.sessionId))
+      await first
+      expect(p.remote.discard).toHaveBeenCalledExactlyOnceWith(p.candidate)
+      await p.attach.attachSession(s)
+      expect(askedEnd(p)).toBeUndefined()
+    })
+
+    it('remembers 256 reads at most: one more starts over', async () => {
+      const p = remoteSetup()
+      vi.mocked(p.remote.install).mockReturnValue(false)
+      const rows = Array.from({ length: 257 }, (_, at) => session('claude', '/private/transcript', { agentId: `agent-${at}`, sessionId: `session-${at}` }))
+      for (const row of rows) await p.attach.attachSession(row)
+      vi.mocked(p.remote.install).mockReturnValue(true)
+      await p.attach.attachSession(rows[0]!, true)
+      expect(askedEnd(p)).toBeUndefined()
+      await p.attach.attachSession(rows[256]!, true)
+      expect(askedEnd(p)).toBe(20)
+    })
+
+    // Without an engine worker nothing asked again: in both runs only the SessionStart hook's attach, which happened to
+    // follow, gave the agent a stream at all. The worker's path has its link's retry (core/engines/liveSessions.ts).
+    describe('inline, it is attached again', () => {
+      const fakeTimers = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      /** Lets a real read finish while the fake clock stands still. */
+      const until = async (done: () => boolean): Promise<void> => { do await new Promise(resolve => setImmediate(resolve)); while (!done()) }
+      const reads = (run: ReturnType<typeof setup>) => vi.mocked(run.deps.runtimeProfiles.beginHydrate).mock.calls.length
+      /** The session has been read this many times, and no attach is still running. */
+      const read = (run: ReturnType<typeof setup>, times: number) => until(() => reads(run) === times && !run.attach.attaches.attaching().length)
+      const quiet = () => { vi.spyOn(console, 'log').mockImplementation(() => {}); return vi.spyOn(console, 'warn').mockImplementation(() => {}) }
+
+      it('a second later, to where its read stopped: a line written meanwhile is delivered live', async () => {
+        fakeTimers(); quiet()
+        const watcher = new Watcher(), add = vi.spyOn(watcher, 'addSession')
+        const run = setup({ watcher })
+        const file = transcript([CLAUDE_PROMPT]), row = session('claude', file), end = statSync(file).size
+        const emit = vi.fn(), usage = vi.fn()
+        createIngest({ liveFor, has: () => true, bySession: () => row, device: () => undefined,
+          runtimeProfiles: { ingest: vi.fn(), evidence: vi.fn() }, tokenUsage: { changed: usage }, normalizers: run.normalizers,
+          announceTurnAborted: vi.fn(), setIdentityHold: vi.fn(), announceSession: vi.fn(), emit, attachSession: run.attach.attachSession }).wireWatcher(watcher)
+        try {
+          supersede(run)
+          expect(await run.attach.attachSession(row)).toBe(true)
+          appendFileSync(file, JSON.stringify(ANSWER) + '\n')
+          expect(vi.getTimerCount()).toBe(1)
+          await vi.advanceTimersByTimeAsync(999)
+          expect(reads(run)).toBe(1)
+          await vi.advanceTimersByTimeAsync(1)
+          await read(run, 2)
+          expect(add).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: row.sessionId }), { fromOffset: end })
+          await watcher.pollSession(row.sessionId)
+          expect(usage).toHaveBeenCalledExactlyOnceWith(row)
+          expect(emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, expect.arrayContaining([expect.objectContaining({ type: 'turn_ended' })]))
+        } finally { await watcher.stop() }
+      })
+
+      it('with the replay flags of the attach it follows: a first turn born after its agent is replayed, once', async () => {
+        fakeTimers(); quiet()
+        const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT]))
+        supersede(run)
+        await run.attach.attachSession(row, false, false, true)
+        expect(run.deps.emit).not.toHaveBeenCalled()
+        expect(vi.getTimerCount()).toBe(1)
+        await vi.advanceTimersByTimeAsync(1_000)
+        await read(run, 2)
+        expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, [expect.objectContaining({ type: 'turn_started' })])
+        expect(run.attach.replayedFirstTurn.has(row.sessionId)).toBe(true)
+      })
+
+      it('five times at most, 1, 2, 4, 8 and 16 seconds apart, says so once, and starts over with the next attach', async () => {
+        fakeTimers()
+        const warn = quiet()
+        const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT]))
+        vi.mocked(run.deps.runtimeProfiles.beginHydrate).mockReturnValue({ ...run.profile, commitWith: () => false })
+        const gaveUp = () => warn.mock.calls.filter(([line]) => line === '[agent] claude-a transcript not tailed · its attach was superseded 5 times')
+        await run.attach.attachSession(row)
+        for (const [retry, wait] of [1_000, 2_000, 4_000, 8_000, 16_000].entries()) {
+          expect(gaveUp()).toHaveLength(0)
+          expect(vi.getTimerCount()).toBe(1)
+          await vi.advanceTimersByTimeAsync(wait - 1)
+          expect(reads(run)).toBe(retry + 1)
+          await vi.advanceTimersByTimeAsync(1)
+          await read(run, retry + 2)
+        }
+        expect(gaveUp()).toHaveLength(1)
+        expect(vi.getTimerCount()).toBe(0)
+        // A hook's attach, or the reconcile's, superseded in its turn: the count starts again.
+        await run.attach.attachSession(row)
+        expect(reads(run)).toBe(7)
+        expect(vi.getTimerCount()).toBe(1)
+        await vi.advanceTimersByTimeAsync(1_000)
+        await read(run, 8)
+        expect(gaveUp()).toHaveLength(1)
+        run.attach.forget(row.sessionId)
+        expect(vi.getTimerCount()).toBe(0)
+      })
+
+      it('one at a time for a session, and it joins an attach already reading', async () => {
+        fakeTimers(); quiet()
+        const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT]))
+        supersede(run); supersede(run)
+        await run.attach.attachSession(row)
+        // A hook's reset, superseded as well: the retry already waiting is the session's one.
+        await run.attach.attachSession(row, true)
+        expect(vi.getTimerCount()).toBe(1)
+        let finish!: () => void
+        vi.mocked(run.deps.terminalGone).mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(false) }))
+        const hooked = run.attach.attachSession(row)
+        await vi.advanceTimersByTimeAsync(1_000)
+        finish()
+        expect(await hooked).toBe(true)
+        await read(run, 3)
+        expect(run.deps.watcher.addSession).toHaveBeenCalledOnce()
+        expect(vi.getTimerCount()).toBe(0)
+      })
+
+      it.each(['tailed', 'rebound', 'forgotten'] as const)('never once the session is %s', async change => {
+        fakeTimers(); quiet()
+        const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT]))
+        supersede(run)
+        await run.attach.attachSession(row)
+        if (change === 'tailed') vi.mocked(run.deps.watcher.tails).mockReturnValue(true)
+        if (change === 'rebound') bindings.set(row.agentId, { ...row, boundAt: 2 })
+        if (change === 'forgotten') run.attach.forget(row.sessionId)
+        expect(vi.getTimerCount()).toBe(change === 'forgotten' ? 0 : 1)
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(run.deps.terminalGone).toHaveBeenCalledOnce()
+        expect(vi.getTimerCount()).toBe(0)
+      })
+
+      // The count is the binding's whose attach was superseded. Kept for the next binding, its first superseded attach
+      // waited two seconds, or after a fifth retry that found the session bound anew, gave up without trying at all.
+      it('counts from one second again for the session bound anew while its retry waited', async () => {
+        fakeTimers(); quiet()
+        const run = setup(), file = transcript([CLAUDE_PROMPT]), row = session('claude', file)
+        vi.mocked(run.deps.runtimeProfiles.beginHydrate).mockReturnValue({ ...run.profile, commitWith: () => false })
+        await run.attach.attachSession(row)
+        const rebound = session('claude', file, { boundAt: 2 })
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(reads(run)).toBe(1)
+        // The new binding's attach, superseded in its turn.
+        await run.attach.attachSession(rebound)
+        await vi.advanceTimersByTimeAsync(1_000)
+        await until(() => !run.attach.attaches.attaching().length)
+        expect(reads(run)).toBe(3)
+        run.attach.forget(row.sessionId)
+      })
+
+      // The retry waiting was the earlier binding's: it finds the session bound anew and tries nothing, so the new
+      // binding's superseded attach, which found one waiting and started none, was never tried again.
+      it('tries again the attach of the session bound anew, superseded while the earlier binding\'s retry waited', async () => {
+        fakeTimers(); quiet()
+        const run = setup(), file = transcript([CLAUDE_PROMPT]), row = session('claude', file)
+        vi.mocked(run.deps.runtimeProfiles.beginHydrate).mockReturnValue({ ...run.profile, commitWith: () => false })
+        await run.attach.attachSession(row)
+        await run.attach.attachSession(session('claude', file, { boundAt: 2 }))
+        expect(reads(run)).toBe(2)
+        expect(vi.getTimerCount()).toBe(1)
+        await vi.advanceTimersByTimeAsync(1_000)
+        await until(() => !run.attach.attaches.attaching().length)
+        expect(reads(run)).toBe(3)
+        expect(vi.getTimerCount()).toBe(1)
+        run.attach.forget(row.sessionId)
+      })
+
+      it('counts from one second again once a tail was installed, and waits no more once an attach made sure the tail runs', async () => {
+        fakeTimers(); quiet()
+        const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT])), add = vi.mocked(run.deps.watcher.addSession)
+        supersede(run)
+        await run.attach.attachSession(row)
+        expect(vi.getTimerCount()).toBe(1)
+        // The hook's attach installs the tail before the retry is due.
+        await run.attach.attachSession(row, true)
+        expect(add).toHaveBeenCalledOnce()
+        expect(vi.getTimerCount()).toBe(0)
+        // Later a reset is superseded with that tail gone. Its retry is one second away, not two; the session has its
+        // parser, so the retry only makes sure the tail runs.
+        supersede(run)
+        await run.attach.attachSession(row, true)
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(vi.getTimerCount()).toBe(0)
+        await until(() => add.mock.calls.length === 2)
+        expect(add).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: row.sessionId }), { fromStart: false })
+        expect(reads(run)).toBe(3)
+        // Superseded once more, and a hook's attach makes sure the tail runs before the retry is due.
+        supersede(run)
+        await run.attach.attachSession(row, true)
+        expect(vi.getTimerCount()).toBe(1)
+        await run.attach.attachSession(row)
+        expect(add).toHaveBeenCalledTimes(3)
+        expect(vi.getTimerCount()).toBe(0)
+      })
+
+      it('never for an engine worker\'s attach, a tail it held, or an interpretation recovery', async () => {
+        fakeTimers(); quiet()
+        const worker = remoteSetup(), s = session('claude', '/private/transcript')
+        vi.mocked(worker.remote.install).mockReturnValueOnce(false)
+        await worker.attach.attachSession(s)
+        expect(vi.getTimerCount()).toBe(0)
+        const held = setup(), tailed = session('claude', transcript([CLAUDE_PROMPT]), { agentId: 'held', sessionId: 'held-s' })
+        supersede(held)
+        vi.mocked(held.deps.watcher.hold).mockResolvedValueOnce({ offset: 1_000_000, expired: false, release: vi.fn() })
+        await held.attach.attachSession(tailed, true)
+        expect(vi.getTimerCount()).toBe(0)
+        const recovery = setup(), pending = session('claude', transcript([]), { agentId: 'recovery', sessionId: 'recovery-s', evidenceRevision: 2, interpretationHold: 'pending' })
+        vi.mocked(recovery.deps.runtimeProfiles.beginHydrate).mockReturnValue({ ...recovery.profile, commitWith: () => false })
+        await recovery.attach.attachSession(pending)
+        expect(pending.interpretationHold).toContain('superseded during watcher installation')
+        // The recovery's own retry, one per conversation, and no other.
+        expect(vi.getTimerCount()).toBe(1)
+        recovery.attach.forget(pending.sessionId)
+        expect(vi.getTimerCount()).toBe(0)
+      })
+
+      it.each([new Error('probe failed'), 'probe failed'])('says when it fails: %s', async error => {
+        fakeTimers(); quiet()
+        const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+        const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT]))
+        supersede(run)
+        await run.attach.attachSession(row)
+        expect(vi.getTimerCount()).toBe(1)
+        vi.mocked(run.deps.terminalGone).mockRejectedValueOnce(error)
+        await vi.advanceTimersByTimeAsync(1_000)
+        await until(() => log.mock.calls.length > 0)
+        expect(log.mock.calls).toEqual([['[agent] claude-a attach retry failed: probe failed']])
+        expect(vi.getTimerCount()).toBe(0)
+      })
+    })
+  })
+
+  // An agent's usage is first read when its row is first listed, and again only when a line is delivered live
+  // (ingest.ts). A line already in the transcript when the attach reads it is folded as history, so the usage stayed
+  // as it was read before that line: unset, for good, in e2e/usageProcess.e2e.ts, "explicit inline usage follows the
+  // same aggregate boundary", 6 runs of 6 on a loaded Mac (2026-11-15), where a session's first read came after the
+  // test's write.
+  describe('reading the usage again after it folded a transcript', () => {
+    const asked = (run: { deps: AttachDeps }) => vi.mocked(run.deps.tokenUsage.changed)
+
+    it.each(['claude', 'pi'] as const)('asks once for each attach that folded what a %s transcript held, and never for one that only makes sure the tail runs', async engine => {
+      const run = setup(), row = session(engine, transcript([engine === 'claude' ? CLAUDE_PROMPT : { events: [started()], open: true }]))
+      expect(await run.attach.attachSession(row)).toBe(true)
+      expect(asked(run)).toHaveBeenCalledExactlyOnceWith(row)
+      // The session has its normalizer now: this attach folds nothing.
+      expect(await run.attach.attachSession(row)).toBe(true)
+      expect(run.deps.watcher.addSession).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: row.sessionId }), { fromStart: false, ...(engine === 'pi' ? { stamp: expect.any(Function), current: expect.any(Function) } : {}) })
+      expect(asked(run)).toHaveBeenCalledOnce()
+      // A reset folds the transcript again.
+      expect(await run.attach.attachSession(row, true)).toBe(true)
+      expect(asked(run)).toHaveBeenCalledTimes(2)
+    })
+
+    it('asks once for an attach whose engine worker read content, and not for one whose worker read none', async () => {
+      const p = remoteSetup(), s = session('claude', '/private/transcript')
+      expect(await p.attach.attachSession(s)).toBe(true)
+      expect(asked(p)).toHaveBeenCalledExactlyOnceWith(s)
+      const none = remoteSetup()
+      vi.mocked(none.remote.prepare).mockResolvedValueOnce({ ...none.candidate, records: 0, content: false } as PreparedLive)
+      expect(await none.attach.attachSession(s, true)).toBe(true)
+      expect(none.normalizers.liveParsers.get(s.sessionId)).toBe(none.handle)
+      expect(asked(none)).not.toHaveBeenCalled()
+    })
+
+    it('does not ask for an attach that folded nothing: an empty transcript, even one replayed as a first turn, no transcript, or a store', async () => {
+      const run = setup(), empty = session('claude', transcript([]))
+      expect(await run.attach.attachSession(empty, false, false, true)).toBe(true)
+      expect(run.attach.replayedFirstTurn.has(empty.sessionId)).toBe(true)
+      expect(await run.attach.attachSession(session('pi'))).toBe(true)
+      expect(await run.attach.attachSession(session('opencode'))).toBe(true)
+      expect(run.normalizers.hasState('opencode-s')).toBe(true)
+      expect(asked(run)).not.toHaveBeenCalled()
+    })
+
+    it.each(['a pane that is gone', 'a read that was superseded', 'a binding that changed while its tail was started'] as const)('does not ask for an attach that returns early: %s', async early => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT]))
+      if (early === 'a pane that is gone') vi.mocked(run.deps.terminalGone).mockResolvedValueOnce(true)
+      if (early === 'a read that was superseded') vi.mocked(run.deps.runtimeProfiles.beginHydrate).mockReturnValueOnce({ ...run.profile, commitWith: () => false })
+      // The transcript was folded and its parser installed by then: the attach is no longer the binding's, and says nothing for it.
+      if (early === 'a binding that changed while its tail was started') vi.mocked(run.deps.watcher.addSession).mockImplementationOnce(async () => { bindings.set(row.agentId, { ...row, boundAt: 2 }) })
+      expect(await run.attach.attachSession(row)).toBe(early === 'a read that was superseded')
+      expect(asked(run)).not.toHaveBeenCalled()
+      run.attach.forget(row.sessionId)
+    })
+  })
 })
 
 
@@ -1142,8 +1650,8 @@ it.each(['config', 'watcher'] as const)('holds real watcher ingestion through de
   const file = transcript([]), row = session('claude', file)
   const emit = vi.fn(), ingestProfile = vi.fn(), token = vi.fn()
   const ingest = createIngest({ liveFor, has: () => true, bySession: () => row, device: () => undefined,
-    runtimeProfiles: { ingest: ingestProfile }, tokenUsage: { changed: token }, normalizers: run.normalizers,
-    announceTurnAborted: vi.fn(), emit, attachSession: run.attach.attachSession })
+    runtimeProfiles: { ingest: ingestProfile, evidence: vi.fn() }, tokenUsage: { changed: token }, normalizers: run.normalizers,
+    announceTurnAborted: vi.fn(), setIdentityHold: vi.fn(), announceSession: vi.fn(), emit, attachSession: run.attach.attachSession })
   ingest.wireWatcher(watcher)
   try {
     await run.attach.attachSession(row)
@@ -1279,7 +1787,7 @@ it.each(['inline', 'worker'] as const)('preserves eager cancel while the %s reco
   const pending = run.attach.attachSession(row)
   await vi.waitFor(() => expect(run.deps.watcher.addSession).toHaveBeenCalledOnce())
   const cancel = createCancel({ resolve: () => row, normalizers: run.normalizers,
-    cursorSubagents: { forget: vi.fn() }, input: { cancel: vi.fn(), cancelConfirmed: vi.fn(async () => true) },
+    input: { cancel: vi.fn(), cancelConfirmed: vi.fn(async () => true) },
     device: () => undefined, stopHeartbeat: vi.fn(), questionWatcher: { stop: vi.fn() }, mirror: { cancel: vi.fn() },
     turnActivity: { observe: vi.fn(), snapshot: vi.fn() }, turnStartedAt: new Map(), agentIdFor: () => row.agentId, clients: { send: vi.fn() },
   })
@@ -1448,7 +1956,7 @@ it('recovers a legacy reader without control cuts and holds one that cannot repl
   const run = setup(), row = session('muse', transcript([]), { evidenceRevision: 2, interpretationHold: 'pending' })
   await run.attach.attachSession(row)
   expect(row.interpretationHold).toBeUndefined()
-  expect(run.normalizers.museNormalizers.has(row.sessionId)).toBe(true)
+  expect(!!inWorker(run, row.sessionId)?.normalizer).toBe(true)
   row.interpretationHold = 'pending'
   run.attach.beforeCancel(row); run.normalizers.closeTurns(row.sessionId)
   await run.attach.attachSession(row)
@@ -1461,7 +1969,7 @@ it('abandons a legacy open turn at the relaunch boundary', async () => {
   const file = transcript([{ open: true, events: [started()] }]), row = session('muse', file)
   marks.note(row.sessionId, statSync(file).size, true)
   await run.attach.attachSession(row)
-  expect(run.normalizers.museNormalizers.get(row.sessionId)?.turnOpen).toBe(false)
+  expect(inWorker(run, row.sessionId)?.normalizer?.turnOpen).toBe(false)
   expect(run.deps.emit).not.toHaveBeenCalled()
   expect(marks.read(row.sessionId)).toBeUndefined()
 })
@@ -1508,15 +2016,14 @@ it('leaves an ordinary database cancellation on its eager native control path', 
 
 it.each(['opencode', 'kilo', 'hermes', 'devin'])('keeps %s Cancel eager after retaining a previous Stop without a file boundary', async engine => {
   const run = setup(), row = session(engine)
-  const reader = { turnOpen: false, closeTurn() { this.turnOpen = false } }
-  const maps = { opencode: run.normalizers.opencodeReaders, kilo: run.normalizers.kiloReaders,
-    hermes: run.normalizers.hermesReaders, devin: run.normalizers.devinReaders }
-  ;(maps[engine as keyof typeof maps] as Map<string, unknown>).set(row.sessionId, reader)
+  await run.attach.attachSession(row)
+  const reader = inWorker(run, row.sessionId)!.reader!
   run.attach.afterStop(row)
   reader.turnOpen = true
   run.attach.beforeCancel(row)
   run.normalizers.closeTurns(row.sessionId)
-  expect(reader.turnOpen).toBe(false)
+  // The cancel reaches the reader in the worker: its turn is closed there.
+  await vi.waitFor(() => expect(reader.turnOpen).toBe(false))
   expect(row.interpretationHold).toBeUndefined()
   expect(run.normalizers.liveParsers.has(row.sessionId)).toBe(false)
   expect(run.deps.watcher.removeSession).not.toHaveBeenCalled()
@@ -1524,5 +2031,56 @@ it.each(['opencode', 'kilo', 'hermes', 'devin'])('keeps %s Cancel eager after re
   await run.attach.attachSession(row)
   expect(row.interpretationHold).toContain('no file cancellation boundary')
   expect(run.deps.emit).not.toHaveBeenCalled()
+  run.attach.forget(row.sessionId)
+})
+
+it.each(['missing', 'unavailable', 'rebound', 'failed-after-rebind'])('preserves the session when its store lookup is %s', async kind => {
+  const row = session('opencode', undefined)
+  const run = setup({ storeOf: async () => {
+    if (kind === 'rebound' || kind === 'failed-after-rebind') row.evidenceRevision = 1
+    if (kind === 'unavailable' || kind === 'failed-after-rebind') throw new Error('ENGINE_UNAVAILABLE')
+    return kind === 'missing' ? null : '/db/store'
+  } })
+  const unavailable = vi.spyOn(run.others.streams, 'unavailable')
+  const answer = await run.attach.attachSession(row)
+  expect(answer).toBe(kind !== 'rebound')
+  expect(unavailable).toHaveBeenCalledTimes(kind === 'unavailable' ? 1 : 0)
+  expect(inWorker(run, row.sessionId)).toBeUndefined()
+})
+
+it('keeps the existing parser when its profile refuses the final inline commit', async () => {
+  const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT]))
+  vi.mocked(run.deps.runtimeProfiles.beginHydrate).mockReturnValueOnce({ ...run.profile, commitWith: () => false })
+  expect(await run.attach.attachSession(row)).toBe(true)
+  expect(run.normalizers.hasState(row.sessionId)).toBe(false)
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  run.attach.forget(row.sessionId)
+})
+
+it.each(['accepted', 'superseded'])('closes relaunched agy history only when its worker close is %s', async result => {
+  const marks = createRelaunchMarks()
+  const run = setup({ relaunchMarks: marks, captureTerminal: async () => 'working\n esc to interrupt' })
+  const row = session('agy', transcript([{ events: [started()], open: true }]))
+  marks.note(row.sessionId, statSync(row.transcriptPath!).size, true)
+  if (result === 'superseded') vi.spyOn(run.others.streams, 'closeIf').mockResolvedValueOnce(false)
+  expect(await run.attach.attachSession(row)).toBe(true)
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  expect(inWorker(run, row.sessionId)?.normalizer?.turnOpen).toBe(result === 'superseded')
+  run.attach.forget(row.sessionId)
+})
+
+it.each(['store-hold', 'binding', 'removed'])('keeps an initial worker reader only for its own %s', async change => {
+  const run = setup(), row = session('opencode', undefined)
+  const original = run.others.streams.open.bind(run.others.streams)
+  const forget = vi.spyOn(run.others.streams, 'forget')
+  vi.spyOn(run.others.streams, 'open').mockImplementationOnce(async (session, options) => {
+    const opened = await original(session, options)
+    if (change === 'removed') bindings.delete(row.agentId)
+    else row.identityHold = 'store unavailable'
+    if (change === 'binding') row.boundAt = 99
+    return { ...opened!, frames: change === 'removed' ? [] : [{ serial: 1, events: [], turn: opened!.turn, hold: 'store unavailable' }] }
+  })
+  await run.attach.attachSession(row)
+  expect(forget).toHaveBeenCalledTimes(change === 'store-hold' ? 0 : 1)
   run.attach.forget(row.sessionId)
 })

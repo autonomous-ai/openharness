@@ -1,325 +1,219 @@
 /**
- * An agent browser's screen, piped to a viewer (docs/superpowers/specs/2026-11-10-agent-browser-design.md, "The stream"):
- * one `podman exec … socat` per open panel, its stdout cut into binary `browser` frames and the viewer's bytes written
- * to its stdin through the route's stream profile (core/rfbShaper.ts). It rides the terminals' transport, so it keeps
- * out of their way:
+ * An agent browser's screen, to the panels open on it: the core's side. The stream itself is the agent browser's
+ * (services/agentBrowser/streams.ts): the exec into the browser's container, the reading of the viewer's VNC bytes,
+ * the credit and the pacing all run in its process. Until the audit of 2026-11-12 they ran here, in the process that
+ * types into every terminal.
  *
- * - **Credit.** At most one window of bytes the viewer has not taken is ever ahead of a terminal's echo: the child's
- *   stdout pauses at `pauseBytes` unacknowledged and resumes below `resumeBytes`. A viewer acks the bytes its page has
- *   drawn (`agent_browser_ack {streamId, bytes}`, the count since its last ack), because noVNC queues what it cannot
- *   draw and disconnects at 40 MiB (second spike). An ack that never comes closes the stream with `backlog` after 10 s,
- *   and so does a viewer that never answers the server's banner, which would otherwise hold a viewer slot for good.
- * - **Pacing.** Bytes on the relay and on TURN cost money and share the backend's per-machine budget: their total,
- *   counted sealed as the backend counts them, leaves at `bytesPerSecond`, taken in turn by the streams that have bytes
- *   to send. A direct link is not paced.
- * - **Nothing dropped.** VNC has no keyframe, so a lost chunk corrupts the screen for good. A send that is refused
- *   closes the stream (`backlog`), a route that went away closes it (`route`), and a relay that refused a frame closes
- *   every stream on the relay (`rate`). The panel then shows why, and reconnects.
+ * The socket hands every frame of a stream here after its gates, and nothing here waits: a frame is passed on as it
+ * comes (`AgentBrowserPort.stream`), and the service's answers and the screen's bytes go back to the one connection
+ * that opened the stream (`frame`, `bytes`). What the core keeps is who may open one, and whose each stream is:
+ *
+ * - **Who may open.** A window on this computer, or another of the owner's own apps and computers
+ *   (`mayOpenBrowser`): refused here, before the service hears of it, and the service is told who asked.
+ * - **Whose a stream is.** An open's answer is passed on only to the connection that asked, under the request it asked
+ *   with, and names the stream that connection now holds. The screen's bytes go to that connection, which the service
+ *   never names; a close reaches it and no other, and a viewer's bytes reach the service only from it. An answer the
+ *   core does not pass on that named a stream is a stream started for nobody: the service is told to end it.
+ * - **Its own bounds.** An open the service has not answered in `BROWSER_OPEN_WAIT_MS` is refused (`NOT_READY`). The
+ *   agent browser holds each stream's credit, a window of what its viewer has not drawn, and the core does not lean on
+ *   it: a stream whose viewer has more than `BROWSER_UNACKED_MAX` unread, or whose send its transport refused, ends
+ *   here (`backlog`), and so does one whose viewer's bytes could not reach the service (`agent`), which would leave
+ *   VNC reading the rest of its stream wrong. Its viewer is told, and the service ends its side. A window's send has
+ *   no limit of its own, so a service that stopped counting would otherwise grow the core's buffers for good.
+ * - **What it knows already.** An agent with no browser, or one whose browser is not ready, is answered in line from
+ *   the state the core keeps for the agent's frame (`NO_BROWSER`, `NOT_READY`), with nobody asked.
+ * - **Nobody serving.** While the agent browser is not connected an open is refused at once (`NOT_READY`), and when its
+ *   process goes every stream it held is told closed (`agent`), so a panel reconnects instead of showing a still
+ *   screen. Until the audit a stream outlived that process, as the core's own child; now it ends with it.
  */
-import { spawn, type ChildProcess } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
-import { agentBrowserStreamCommand, mayOpenBrowser, type AgentBrowserPort, type Asker, type BrowserRoute } from './api.js'
-import { RfbShaper, type StreamProfile } from './rfbShaper.js'
-import { oneShotParentEnv } from '../lib/loginShellEnv.js'
-import { sid } from '../lib/log.js'
-import type { AGENT_BROWSER_CLOSE_REASONS, ProductUsageMetric } from '../lib/productUsageContract.js'
-import { TERMINAL_BINARY_HEADER_BYTES, TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
-import { ownProcessGroup } from '../lib/windows/noWindow.js'
+import { mayOpenBrowser, type AgentBrowserPort, type Asker, type BrowserRoute } from './api.js'
+import { browserLocalFrame } from '../lib/terminalBinary.js'
 
-type BrowserCloseReason = typeof AGENT_BROWSER_CLOSE_REASONS[number]
+type Payload = Record<string, unknown>
 
-/** A route's profile (spec § "Stream profiles by route"): the first spike measured 1080p scrolling at about 2 MB/s
- *  direct, 620 KB/s at 5 fps and 270 KB/s at 2 fps, the last the only one inside the relay budget. */
-const BROWSER_PROFILES: Readonly<Record<BrowserRoute, StreamProfile>> = {
-  direct: { quality: 6, compression: 2, fps: 15 },
-  turn: { quality: 3, compression: 6, fps: 5 },
-  relay: { quality: 3, compression: 6, fps: 2 },
-}
-/** The backend's browser budget per machine socket, 512 KiB a second of sealed frames counted per fixed minute (backend
- *  lib/terminalRelay.ts): every relayed and TURN stream of this machine shares it. */
-const BACKEND_BROWSER_BYTES_PER_SECOND = 512 * 1024
-/** What the backend counts of a frame beyond its bytes: the sealed envelope's 20-byte header, the stream id and seq
- *  in its plaintext (24 bytes) and the AEAD tag (16 bytes) (lib/e2ee/terminalSeal.ts). */
-const SEALED_FRAME_OVERHEAD_BYTES = TERMINAL_BINARY_HEADER_BYTES + 24 + 16
-/** 90% of the backend's budget. The pace holds up to one second of itself, and a fixed minute can start just as that
- *  second is spent, so it sees 61 seconds of the pace: 61 × 0.9 = 55 seconds of budget, under the 60 that would close
- *  every relayed stream with `rate` (two viewers scrolling at the whole budget did, review 2026-11-10). */
-export const BROWSER_PACING_BYTES_PER_SECOND = Math.floor(BACKEND_BROWSER_BYTES_PER_SECOND * 0.9)
-/** The credit window: one 1080p update at q6 is 105-173 KB (second spike), so a window holds one with room to spare. */
-export const BROWSER_WINDOW = { pauseBytes: 256 * 1024, resumeBytes: 128 * 1024 }
-const BROWSER_VIEWERS_MAX = 4
-const STALL_MS = 10_000
-/**
- * How long a viewer has to say anything once its stream sent it the server's banner. Its first ack cannot be the
- * test: a viewer acks every 64 KiB drawn (Desktop `browserAckStepBytes`), and a still page's whole first screen can be
- * smaller than that. Its answer to the banner can: the Desktop loads noVNC before it opens, and noVNC sends its version
- * the moment the banner arrives. The clock starts when the banner leaves, after its pace on the slowest route (the
- * relay), so what is left is one round trip; the 10 s an owed ack gets is far more than that. A Desktop that gave up on
- * its open never answers (review 2026-11-10).
- */
-const ANSWER_MS = STALL_MS
-const KILL_GRACE_MS = 1_000
-const STDERR_KEPT = 2_000
+/** The opens one connection may have unanswered: a panel asks one at a time. */
+export const BROWSER_OPENS_PENDING_MAX = 8
+/** How long an open waits for the agent browser's answer. It starts its exec and answers in the same turn: one that
+ *  has not answered in this never will, and the panel is told so instead of waiting for good. */
+export const BROWSER_OPEN_WAIT_MS = 10_000
+/** What one stream's viewer may have been sent and not acked before the core ends it: four times the agent browser's
+ *  own window (services/agentBrowser/streams.ts `BROWSER_WINDOW`, which pauses at 256 KiB), so a service that counts
+ *  right never meets it. */
+export const BROWSER_UNACKED_MAX = 1024 * 1024
+/** As a stream's frames name it (lib/terminalBinary.ts): a UUID, in lower case. */
+const STREAM_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
-interface Stream {
-  id: string
-  connId: string
-  agentId: string
-  local: boolean
-  route: BrowserRoute | null
-  child: ChildProcess
-  shaper: RfbShaper
-  seq: number
-  /** Read from the child and not yet acknowledged by the viewer, sent or still waiting for its pace. */
-  unacked: number
-  waiting: Uint8Array[]
-  paused: boolean
-  stallTimer: NodeJS.Timeout | null
-  /** The viewer has sent something: an ack or its own bytes. */
-  answered: boolean
-  answerTimer: NodeJS.Timeout | null
-  stderr: string
+export interface BrowserStreams {
+  /** A client's `agent_browser_open`. */
+  open(connId: string, payload: Payload): void
+  /** A client's `agent_browser_ack`. */
+  ack(connId: string, payload: Payload): void
+  /** A client's `agent_browser_close`. */
+  close(connId: string, payload: Payload): void
+  /** A viewer's bytes for its stream. */
+  input(connId: string, streamId: string, bytes: Uint8Array): void
+  /** A client's connection ended. */
+  closeConnection(connId: string): void
+  /** The gateway's word on the route a remote stream opened on, and that a route went away. */
+  route(streamId: string, route: BrowserRoute): void
+  routeLost(streamId: string): void
+  /** The backend refused one of this machine's relayed browser frames. */
+  transportError(): void
+  /** The service's frame for a connection (`agent_browser_open_result`, `agent_browser_close`): false when it is not that
+   *  connection's to hear, or could not reach it. */
+  frame(connId: string, type: string, payload: Payload): boolean
+  /** A stream's screen frame from the service (`browserLocalFrame`), sent as it came to the connection that holds the
+   *  stream: false when none does, when it is no such frame, or when that connection's transport refused it. */
+  bytes(frame: Uint8Array): boolean
+  /** The agent browser went (its process disconnected, or another took its place): every stream it held is closed. */
+  gone(): void
 }
 
-interface BrowserStreamDeps {
-  command: AgentBrowserPort['streamCommand']
+export function createBrowserStreams(deps: {
+  /** The agent browser's port as it is now: null while it is off. */
+  port: () => Pick<AgentBrowserPort, 'frameContext' | 'stream' | 'streamInput' | 'streamClosed' | 'streamRoute' | 'streamTransportError' | 'streamRefused'> | null
   asker: (connId: string) => Asker
-  sendTarget: (connId: string, type: string, payload: Record<string, unknown>) => boolean
-  sendBinaryTarget: (connId: string, frame: TerminalBinaryClear) => boolean
-  measure: (metric: ProductUsageMetric) => void
-  pacing: { bytesPerSecond: number }
-  window: { pauseBytes: number; resumeBytes: number }
-  chunkBytes: number
-}
+  /** A frame to one connection, on the terminals' transport. */
+  send: (connId: string, type: string, payload: Payload) => boolean
+  /** A screen frame as the agent browser framed it, to one connection: as it is to a window here. */
+  sendBinary: (connId: string, frame: Uint8Array) => boolean
+  log?: (line: string) => void
+}): BrowserStreams {
+  const log = deps.log ?? ((line: string) => console.warn(line))
+  /** Each open asked and not yet answered, by connection and request: the timer that gives it up. */
+  const pending = new Map<string, Map<string, NodeJS.Timeout>>()
+  /** Each stream's connection, from the answer to its open until its close, and what its viewer has not acked. */
+  const streams = new Map<string, { connId: string; unacked: number }>()
+  /** A screen frame the core cannot read is said once each time the agent browser connects, not once a frame. */
+  let saidUnreadable = false
 
-export class BrowserStreamManager {
-  private readonly streams = new Map<string, Stream>()
-  /** Paced streams with bytes waiting, in the order they take turns. */
-  private readonly turns = new Set<Stream>()
-  private tokens = 0
-  private refilledAt = Date.now()
-  private paceTimer: NodeJS.Timeout | null = null
-
-  constructor(private readonly deps: BrowserStreamDeps) {}
-
-  open(connId: string, payload: Record<string, unknown>): void {
-    const requestId = payload.requestId
-    if (typeof requestId !== 'string') return
-    const refuse = (error: string) => { this.deps.sendTarget(connId, 'agent_browser_open_result', { requestId, error }) }
-    const asker = this.deps.asker(connId)
-    if (!mayOpenBrowser(asker)) return refuse('NOT_OWNER')
-    const agentId = typeof payload.agentId === 'string' ? payload.agentId : ''
-    const command = agentId ? this.deps.command(agentId) : { error: 'NO_BROWSER' as const }
-    if ('error' in command) return refuse(command.error)
-    // The exec into that browser's container and no other command line, wherever the port's answer came from: the core
-    // starts none a component hands it (core/api.ts `agentBrowserStreamCommand`).
-    const argv = agentBrowserStreamCommand(command.argv)
-    if (!argv) {
-      console.warn(`[agent-browser] refused a stream command that is not the exec into a browser's container (agent ${sid(agentId)})`)
-      return refuse('NOT_READY')
-    }
-    if ([...this.streams.values()].filter(stream => stream.agentId === agentId).length >= BROWSER_VIEWERS_MAX) return refuse('VIEWER_LIMIT')
-    const [file, ...args] = argv as [string, ...string[]]
-    // The daemon was started by launchd or systemd: the login shell's environment is what the person's own `podman`
-    // sees (its machine connections), as every other Podman call has (services/agentBrowser/podman.ts).
-    const child = spawn(file, args, { env: oneShotParentEnv(), stdio: 'pipe', ...ownProcessGroup() })
-    const local = asker.local
-    const stream: Stream = {
-      id: randomUUID(), connId, agentId, local, route: local ? 'direct' : null, child,
-      // Until the gateway says which route it took, a remote stream gets the relay's profile, the cheapest.
-      shaper: new RfbShaper(BROWSER_PROFILES[local ? 'direct' : 'relay']),
-      seq: 0, unacked: 0, waiting: [], paused: false, stallTimer: null, answered: false, answerTimer: null, stderr: '',
-    }
-    this.streams.set(stream.id, stream)
-    stream.shaper.onOutput(bytes => { if (this.streams.get(stream.id) === stream) child.stdin?.write(bytes) })
-    stream.shaper.onClose((reason, detail) => {
-      console.warn(`[agent-browser] stream ${sid(stream.id)} closed: ${detail}`)
-      this.end(stream, reason)
-    })
-    child.stdout?.on('data', (data: Buffer) => this.output(stream, data))
-    child.stderr?.on('data', (data: Buffer) => { stream.stderr = (stream.stderr + data.toString()).slice(-STDERR_KEPT) })
-    // A child that died closes its stdin under a write: the exit below is what ends the stream.
-    child.stdin?.on('error', () => {})
-    child.on('error', (error) => {
-      console.warn(`[agent-browser] stream ${sid(stream.id)} exec failed: ${error.message}`)
-      this.end(stream, 'agent')
-    })
-    child.on('exit', (code, signal) => {
-      if (this.streams.get(stream.id) !== stream) return
-      console.warn(`[agent-browser] stream ${sid(stream.id)} exec exited (${code ?? signal}): ${stream.stderr.trim()}`)
-      this.end(stream, 'agent')
-    })
-    this.deps.sendTarget(connId, 'agent_browser_open_result', { requestId, streamId: stream.id })
-    this.deps.measure('agent_browser_stream_opened')
+  const refuse = (connId: string, requestId: string, error: string): void => { deps.send(connId, 'agent_browser_open_result', { requestId, error }) }
+  /** The open [requestId] of [connId] is answered or given up: false when it was not waited for. */
+  const settle = (connId: string, requestId: string): boolean => {
+    const asked = pending.get(connId)
+    const timer = asked?.get(requestId)
+    if (!asked || timer === undefined) return false
+    clearTimeout(timer)
+    asked.delete(requestId)
+    if (!asked.size) pending.delete(connId)
+    return true
   }
-
-  ack(connId: string, payload: Record<string, unknown>): void {
-    const stream = this.of(connId, payload.streamId)
-    if (!stream) return
-    this.heard(stream)
-    const bytes = payload.bytes
-    if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes <= 0) return
-    stream.unacked = Math.max(0, stream.unacked - bytes)
-    if (stream.paused && stream.unacked < this.deps.window.resumeBytes) {
-      stream.paused = false
-      stream.child.stdout?.resume()
-    }
-    this.watchStall(stream)
-  }
-
-  input(connId: string, streamId: string, bytes: Uint8Array): void {
-    const stream = this.of(connId, streamId)
-    if (!stream) return
-    this.heard(stream)
-    stream.shaper.push(bytes)
-  }
-
-  close(connId: string, payload: Record<string, unknown>): void {
-    const stream = this.of(connId, payload.streamId)
-    if (stream) this.end(stream, 'closed')
-  }
-
-  closeConnection(connId: string): void {
-    for (const stream of [...this.streams.values()]) if (stream.connId === connId) this.end(stream, 'closed')
-  }
-
-  closeAgent(agentId: string): void {
-    for (const stream of [...this.streams.values()]) if (stream.agentId === agentId) this.end(stream, 'agent')
-  }
-
-  /** The gateway's word on the route a remote stream opened on (`GatewayEvents.browserRoute`): it keeps it. */
-  route(streamId: string, route: BrowserRoute): void {
-    const stream = this.streams.get(streamId)
-    if (!stream || stream.local) return
-    stream.route = route
-    stream.shaper.setProfile(BROWSER_PROFILES[route])
-    if (route !== 'direct') return
-    this.turns.delete(stream)
-    for (const chunk of stream.waiting.splice(0)) if (!this.send(stream, chunk)) return
-    this.watchStall(stream)
-  }
-
-  /** The stream's route went away (`GatewayEvents.browserRouteLost`): VNC cannot survive a move, so it ends. */
-  routeLost(streamId: string): void {
-    const stream = this.streams.get(streamId)
-    if (stream) this.end(stream, 'route')
-  }
-
-  /**
-   * The backend refused one of this machine's relayed browser frames (`GatewayEvents.browserTransportError`). The
-   * frame's stream is inside its ciphertext, so every stream that may be on the relay ends: one whose route the gateway
-   * has not said yet included, since a dropped chunk would corrupt it.
-   */
-  transportError(): void {
-    for (const stream of [...this.streams.values()]) {
-      if (stream.route === 'relay' || stream.route === null) this.end(stream, 'rate')
-    }
-  }
-
-  private of(connId: string, streamId: unknown): Stream | undefined {
-    const stream = typeof streamId === 'string' ? this.streams.get(streamId) : undefined
+  const heldBy = (connId: string, streamId: unknown) => {
+    const stream = typeof streamId === 'string' ? streams.get(streamId) : undefined
     return stream?.connId === connId ? stream : undefined
   }
-
-  private paced(stream: Stream): boolean {
-    return stream.route !== 'direct'
+  /** The core ends a stream itself: its viewer is told why, and the service ends its side (`streamRefused`). */
+  const endHere = (streamId: string, connId: string, reason: 'backlog' | 'agent'): void => {
+    streams.delete(streamId)
+    deps.send(connId, 'agent_browser_close', { streamId, reason })
+    deps.port()?.streamRefused(streamId)
+  }
+  /** An answer not passed on that named a stream: started for nobody, and its exec holds one of its browser's few
+   *  viewer places until it is ended. */
+  const unwanted = (streamId: unknown): void => {
+    if (typeof streamId === 'string' && STREAM_ID.test(streamId)) deps.port()?.streamRefused(streamId)
   }
 
-  private output(stream: Stream, data: Buffer): void {
-    if (this.streams.get(stream.id) !== stream) return
-    stream.unacked += data.length
-    if (stream.unacked >= this.deps.window.pauseBytes) {
-      stream.paused = true
-      stream.child.stdout?.pause()
-    }
-    for (let at = 0; at < data.length; at += this.deps.chunkBytes) {
-      const chunk = new Uint8Array(data.subarray(at, at + this.deps.chunkBytes))
-      if (this.paced(stream)) stream.waiting.push(chunk)
-      else if (!this.send(stream, chunk)) return
-    }
-    if (stream.waiting.length) {
-      this.turns.add(stream)
-      this.pace()
-    }
-    this.watchStall(stream)
-  }
-
-  /** False when the stream had to end: a send the transport refused would be a hole in the screen. */
-  private send(stream: Stream, bytes: Uint8Array): boolean {
-    const sent = this.deps.sendBinaryTarget(stream.connId, { kind: TerminalBinaryKind.browser, streamId: stream.id, seq: stream.seq++, bytes, compressed: false })
-    if (!sent) this.end(stream, 'backlog')
-    else if (!stream.answered && !stream.answerTimer) {
-      stream.answerTimer = setTimeout(() => {
-        console.warn(`[agent-browser] stream ${sid(stream.id)} closed: its viewer never answered in ${ANSWER_MS / 1000} s`)
-        this.end(stream, 'backlog')
-      }, ANSWER_MS)
-      stream.answerTimer.unref?.()
-    }
-    return sent
-  }
-
-  private heard(stream: Stream): void {
-    stream.answered = true
-    if (stream.answerTimer) clearTimeout(stream.answerTimer)
-    stream.answerTimer = null
-  }
-
-  /** One token bucket for every paced stream, filled at `bytesPerSecond` of sealed bytes and holding at most one second
-   *  of it. */
-  private pace(): void {
-    if (this.paceTimer) return
-    const rate = this.deps.pacing.bytesPerSecond
-    const now = Date.now()
-    this.tokens = Math.min(rate, this.tokens + ((now - this.refilledAt) * rate) / 1000)
-    this.refilledAt = now
-    for (const stream of this.turns) {
-      const chunk = stream.waiting[0]
-      const cost = chunk.length + SEALED_FRAME_OVERHEAD_BYTES
-      if (cost > this.tokens) {
-        this.paceTimer = setTimeout(() => { this.paceTimer = null; this.pace() }, Math.ceil(((cost - this.tokens) * 1000) / rate))
-        this.paceTimer.unref?.()
-        return
+  return {
+    open: (connId, payload) => {
+      const requestId = payload.requestId
+      if (typeof requestId !== 'string') return
+      // Asked again while the first is unanswered: that one's answer is the answer, and the service starts one exec.
+      if (pending.get(connId)?.has(requestId)) return
+      const asker = deps.asker(connId)
+      if (!mayOpenBrowser(asker)) return refuse(connId, requestId, 'NOT_OWNER')
+      const port = deps.port()
+      // What the agent's frame shows of its browser, read in line: an agent with none never costs its service a look.
+      const shown = typeof payload.agentId === 'string' ? port?.frameContext(payload.agentId) : undefined
+      if (!shown) return refuse(connId, requestId, 'NO_BROWSER')
+      if (shown.state !== 'ready') return refuse(connId, requestId, 'NOT_READY')
+      const asked = pending.get(connId) ?? new Map<string, NodeJS.Timeout>()
+      if (asked.size >= BROWSER_OPENS_PENDING_MAX) return refuse(connId, requestId, 'VIEWER_LIMIT')
+      // Every way an open ends clears this: when it fires, the open is still waited for.
+      const timer = setTimeout(() => {
+        settle(connId, requestId)
+        log(`[agent-browser] the agent browser did not answer a viewer's open in ${BROWSER_OPEN_WAIT_MS / 1000} s: refused`)
+        refuse(connId, requestId, 'NOT_READY')
+      }, BROWSER_OPEN_WAIT_MS)
+      timer.unref?.()
+      asked.set(requestId, timer)
+      pending.set(connId, asked)
+      if (port!.stream(connId, 'agent_browser_open', payload, asker)) return
+      // Nobody took it: its process is not there. The panel shows the browser as not ready, and asks again. One that
+      // answered before it failed was answered.
+      if (settle(connId, requestId)) refuse(connId, requestId, 'NOT_READY')
+    },
+    ack: (connId, payload) => {
+      const stream = heldBy(connId, payload.streamId)
+      if (!stream) return
+      const bytes = payload.bytes
+      if (typeof bytes === 'number' && Number.isFinite(bytes) && bytes > 0) stream.unacked = Math.max(0, stream.unacked - bytes)
+      deps.port()?.stream(connId, 'agent_browser_ack', payload)
+    },
+    close: (connId, payload) => { if (heldBy(connId, payload.streamId)) deps.port()?.stream(connId, 'agent_browser_close', payload) },
+    input: (connId, streamId, bytes) => {
+      if (heldBy(connId, streamId) && !deps.port()?.streamInput(streamId, bytes)) endHere(streamId, connId, 'agent')
+    },
+    closeConnection: (connId) => {
+      for (const timer of pending.get(connId)?.values() ?? []) clearTimeout(timer)
+      pending.delete(connId)
+      for (const [streamId, stream] of streams) if (stream.connId === connId) streams.delete(streamId)
+      deps.port()?.streamClosed(connId)
+    },
+    route: (streamId, route) => { if (streams.has(streamId)) deps.port()?.streamRoute(streamId, route) },
+    routeLost: (streamId) => { if (streams.has(streamId)) deps.port()?.streamRoute(streamId, null) },
+    transportError: () => { deps.port()?.streamTransportError() },
+    frame: (connId, type, payload) => {
+      if (type === 'agent_browser_open_result') {
+        const requestId = payload.requestId
+        const streamId = payload.streamId
+        // Not an open this connection waits for: answered already, given up, or never asked.
+        if (typeof requestId !== 'string' || !settle(connId, requestId)) { unwanted(streamId); return false }
+        if (streamId !== undefined) {
+          if (typeof streamId !== 'string' || !STREAM_ID.test(streamId)) { refuse(connId, requestId, 'NOT_READY'); return false }
+          // A stream is named once. A second answer that names one already held is a broken service: the screen would
+          // follow it to this connection, so both end.
+          const held = streams.get(streamId)
+          if (held) {
+            endHere(streamId, held.connId, 'agent')
+            refuse(connId, requestId, 'NOT_READY')
+            return false
+          }
+          streams.set(streamId, { connId, unacked: 0 })
+        }
+        return deps.send(connId, type, payload)
       }
-      this.tokens -= cost
-      stream.waiting.shift()
-      // Its next chunk waits behind every other stream's.
-      this.turns.delete(stream)
-      if (!this.send(stream, chunk)) continue
-      if (stream.waiting.length) this.turns.add(stream)
-      this.watchStall(stream)
-    }
-  }
-
-  /** The credit is used up and every byte has gone: only the viewer's ack can move the stream now, and 10 s without
-   *  one means it was lost. Bytes still waiting for their pace are ours, not the viewer's. */
-  private watchStall(stream: Stream): void {
-    if (this.streams.get(stream.id) !== stream) return
-    const stalled = stream.paused && stream.waiting.length === 0
-    if (stalled && !stream.stallTimer) {
-      stream.stallTimer = setTimeout(() => this.end(stream, 'backlog'), STALL_MS)
-      stream.stallTimer.unref?.()
-    } else if (!stalled && stream.stallTimer) {
-      clearTimeout(stream.stallTimer)
-      stream.stallTimer = null
-    }
-  }
-
-  private end(stream: Stream, reason: BrowserCloseReason): void {
-    if (this.streams.get(stream.id) !== stream) return
-    this.streams.delete(stream.id)
-    this.turns.delete(stream)
-    stream.waiting = []
-    if (stream.stallTimer) clearTimeout(stream.stallTimer)
-    if (stream.answerTimer) clearTimeout(stream.answerTimer)
-    this.deps.sendTarget(stream.connId, 'agent_browser_close', { streamId: stream.id, reason })
-    this.deps.measure(`agent_browser_stream_closed_${reason}`)
-    const { child } = stream
-    child.stdin?.end()
-    if (child.exitCode !== null || child.signalCode !== null) return
-    child.kill('SIGTERM')
-    // `podman exec` hands SIGTERM on to socat; one that does not end in a second is killed outright.
-    const force = setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS)
-    force.unref?.()
-    child.once('exit', () => clearTimeout(force))
+      if (type !== 'agent_browser_close' || !heldBy(connId, payload.streamId)) return false
+      streams.delete(payload.streamId as string)
+      return deps.send(connId, type, payload)
+    },
+    bytes: (frame) => {
+      const read = browserLocalFrame(frame)
+      if (!read) {
+        if (!saidUnreadable) log(`[agent-browser] a screen frame the core cannot read (${frame.length} bytes) was dropped; the next are dropped without a word until the agent browser connects again`)
+        saidUnreadable = true
+        return false
+      }
+      // One for a stream nobody holds is the tail of one that ended, whose service was told then.
+      const stream = streams.get(read.streamId)
+      if (!stream) return false
+      stream.unacked += read.bytes.length
+      if (stream.unacked <= BROWSER_UNACKED_MAX && deps.sendBinary(stream.connId, frame)) return true
+      // A hole in the screen, or more than a viewer that draws as it should ever has unread.
+      endHere(read.streamId, stream.connId, 'backlog')
+      return false
+    },
+    gone: () => {
+      for (const [streamId, { connId }] of streams) deps.send(connId, 'agent_browser_close', { streamId, reason: 'agent' })
+      streams.clear()
+      for (const [connId, asked] of pending) {
+        for (const [requestId, timer] of asked) {
+          clearTimeout(timer)
+          refuse(connId, requestId, 'NOT_READY')
+        }
+      }
+      pending.clear()
+      saidUnreadable = false
+    },
   }
 }

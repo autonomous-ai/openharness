@@ -5,15 +5,12 @@ import { HANDOFF_REQUESTS, type CoreApi, type CorePorts, type ServiceRequests } 
 import { prepareAgentHandoff, type HandoffDeps } from '../lib/agentHandoff.js'
 import { HANDOFF_DEADLINE_MS } from '../lib/handoffAuthority.js'
 import { createHandoffRequest } from './handoffRequest.js'
-import type { recordReplacement } from '../superTabs/replacements.js'
 
 export { HANDOFF_REQUESTS }
 
-/** `replacements`: a Super Tab member's replacement, recorded for its host (superTabs/replacements.ts, through
- *  superTabs/inServices.ts). Absent while the Swarm is off (`HARNESS_SWARM`), when a completed change records nothing.
- *  `limits`: longer ones for a test on a loaded machine (testing/handoffLimits.ts); as shipped, HANDOFF_DEADLINE_MS and
+/** `limits`: longer ones for a test on a loaded machine (testing/handoffLimits.ts); as shipped, HANDOFF_DEADLINE_MS and
  *  lib/agentHandoff.ts's git and discovery limits. */
-export function startHandoff(core: CoreApi, _ports?: CorePorts, prepare = prepareAgentHandoff, replacements?: typeof recordReplacement,
+export function startHandoff(core: CoreApi, _ports?: CorePorts, prepare = prepareAgentHandoff,
   limits: Pick<HandoffDeps, 'deadlineMs' | 'gitTimeoutMs' | 'discoverMs'> = {}): ServiceRequests {
   const reads = core.conversations
   const deps: HandoffDeps = {
@@ -35,12 +32,11 @@ export function startHandoff(core: CoreApi, _ports?: CorePorts, prepare = prepar
     const answer = createHandoffRequest({ prepare: (request) => prepare({ ...deps, permit,
       publish: (prepared, _permit) => reads.publish(prepared, permit) }, request) })
     return new Promise(reply => answer(payload, asker, reply))
-  }, agent_handoff_complete: async (payload, asker, closed) => {
+  }, agent_handoff_complete: async (_payload, asker, closed) => {
+    // Desktop's Change agent says the new session runs. Nothing is kept of it since the Swarm, which recorded the replacement
+    // for its host, was deleted (2026-11-14); answered as before, so a Desktop that asks reads it as done. Remove the request
+    // on or after 2026-12-14, once no Desktop from before then is in use.
     if (!asker.owner) return { error: 'OWNER_REQUIRED' }
-    try {
-      if (closed?.aborted) return { error: 'HANDOFF_UNAVAILABLE' }
-      await replacements?.(core, payload)
-      return { ok: true }
-    } catch { return { error: 'HANDOFF_UNAVAILABLE' } }
+    return closed?.aborted ? { error: 'HANDOFF_UNAVAILABLE' } : { ok: true }
   } }
 }

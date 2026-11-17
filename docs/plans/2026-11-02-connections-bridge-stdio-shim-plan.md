@@ -7,7 +7,7 @@ security review made a condition of #2550.
 ## Design
 
 - **The shim.** A client's entry runs Harness's node on `mcp-shim.mjs --socket <path> <code>`, a small script written into the vault's
-  private folder, as the Buddy guard is written. An entry naming the running script would name the lean bundle from the daemon, which has
+  private folder. An entry naming the running script would name the lean bundle from the daemon, which has
   no CLI, or a worktree; naming cli.js would load all of it per connection per agent; the updater ships only cli.js and notify.mjs. It speaks MCP's stdio transport to the client
   and MCP's HTTP transport to the bridge over the socket. It streams answers, tracks the session, and sends one POST per message.
 - **The socket.** The bridge's handler gets a second listener at `<vault>/bridge.sock`, 0600, through `listenLocalSocket`. It sits

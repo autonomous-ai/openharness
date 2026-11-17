@@ -3,10 +3,10 @@ import { parseRuntimeProfile } from './runtimeProfileWire.js'
 export { parseRuntimeProfile } from './runtimeProfileWire.js'
 import { launchFlagsOf } from './launchFlags.js'
 import type { RegisteredSession } from './registry.js'
-import type { RuntimeFor, RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField, RuntimeControl, RuntimeCatalogModel } from '../engines/facets/runtime.js'
+import type { ProfileEvidence, RuntimeFor, RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField, RuntimeControl, RuntimeCatalogModel } from '../engines/facets/runtime.js'
 import type { InlineRuntimeContext, InlineRuntimeReader } from '../engines/facets/inlineRuntime.js'
 export type { RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField } from '../engines/facets/runtime.js'
-import { encodeRuntimeProfile, fillConfiguredEffort, record, showEffort, stripAnsi, transcriptFields, RUNTIME_EFFORTS } from '../engines/kit/runtime.js'
+import { applyProfileEvidence, encodeRuntimeProfile, fillConfiguredEffort, record, showEffort, stripAnsi, transcriptFields, RUNTIME_EFFORTS } from '../engines/kit/runtime.js'
 export { encodeRuntimeProfile, runtimeModelLabel } from '../engines/kit/runtime.js'
 import { engineNow, isOtherEngine, loadEngine } from '../engines/inProcess.js'
 import { processIdentityKey } from './terminalRuntime.js'
@@ -55,6 +55,7 @@ export class RuntimeProfileState {
   private readonly waiters = new Map<string, Set<StateWaiter>>()
   private readonly changeTimers = new Map<string, NodeJS.Timeout>()
   private readonly readers = new Map<string, InlineRuntimeReader>()
+  private readonly workspaces = new Map<string, string>()
   private readonly failedReaders = new Set<string>()
   private readonly versions = new WeakMap<RuntimeState, number>()
   private readonly configReads = new WeakMap<RuntimeState, object>()
@@ -143,12 +144,38 @@ export class RuntimeProfileState {
     let raw: Record<string, unknown> | null
     try { raw = record(JSON.parse(rawLine)) } catch { return false }
     if (!raw) return false
-    const before = this.selectedModel(session)
     const runtime = this.runtimeFor(session.engine)
-    const context = this.observe(this.context(session, silent))
-    if (runtime) runtime.transcript(context, raw)
-    else this.readerNow(session.engine)?.transcript?.(context, raw)
+    if (!runtime) return false
+    const before = this.selectedModel(session)
+    runtime.transcript(this.observe(this.context(session, silent)), raw)
     return this.observed(session, before, silent)
+  }
+
+  /**
+   * What another engine's transcript records said of the profile, read in their worker (facets/runtime.ts
+   * `ProfileEvidence`), applied as their readers applied each record here: in order, to the state this keeps.
+   */
+  evidence(session: RegisteredSession, evidence: readonly ProfileEvidence[], silent = false): boolean {
+    const current = this.currentSession(session)
+    if (!current || !evidence.length) return false
+    session = current
+    const before = this.selectedModel(session)
+    const context = this.observe(this.context(session, silent))
+    for (const one of evidence) {
+      if (one.workspace !== undefined) {
+        if (one.workspace) this.workspaces.set(session.sessionId, one.workspace)
+        else this.workspaces.delete(session.sessionId)
+      }
+      applyProfileEvidence(context, one)
+    }
+    return this.observed(session, before, silent)
+  }
+
+  /** A fold's evidence, on a fresh state: as `hydrate` reads a transcript's lines, silently. */
+  hydrateEvidence(session: RegisteredSession, evidence: readonly ProfileEvidence[]): void {
+    if (this.unbound(session.sessionId) || !this.currentSession(session)) return
+    this.states.set(session.sessionId, freshState(session))
+    this.evidence(session, evidence, true)
   }
 
   ingestPane(session: RegisteredSession, paneText: string, silent = false): boolean {
@@ -274,11 +301,11 @@ export class RuntimeProfileState {
     try { return await operation() } finally { this.suppressNotifications-- }
   }
 
-  /** The engine's own workspace for this session, when its reader knows one (the frame's `workspace`). Asked of every
-   *  frame, so only a reader already in use answers: building a frame never loads an engine's code. */
+  /** The engine's own workspace for this session, when its records named one (the frame's `workspace`): OpenClaw's
+   *  session header. Asked of every frame, so it reads only what is kept: building a frame never loads an engine's code. */
   workspace(session: RegisteredSession): string | null {
     if (this.unbound(session.sessionId)) return null
-    return this.readers.get(session.engine)?.workspace?.(session.sessionId) ?? null
+    return this.workspaces.get(session.sessionId) ?? null
   }
 
   selectedModel(session: RegisteredSession): string | null {
@@ -365,6 +392,7 @@ export class RuntimeProfileState {
 
   forget(sessionId: string): void {
     this.states.delete(sessionId)
+    this.workspaces.delete(sessionId)
     this.controls.delete(sessionId)
     const timer = this.changeTimers.get(sessionId)
     if (timer) clearTimeout(timer)

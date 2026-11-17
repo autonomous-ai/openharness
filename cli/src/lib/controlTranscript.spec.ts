@@ -285,11 +285,10 @@ it('preserves a repaired parent through Stop and the final real forget archive',
   const stopped = new StoppedAgentStore(join(root, 'stopped'))
   const forget = createForgetSession({ registry, stoppedAgents: stopped, syncRecapPool: vi.fn(), normalizers: { forget: vi.fn() },
     forgetAttach: vi.fn(), turnStartedAt: new Map(), prompts: new Map(), neverFoldedHistory: new Set(), replayedFirstTurn: new Set(),
-    clearAgyIdleWatch: vi.fn(), cursorDiscovery: { remove: vi.fn() }, cursorSubagents: { forget: vi.fn() },
+    clearAgyIdleWatch: vi.fn(), cursorDiscovery: { remove: vi.fn() },
     runtimeProfiles: { forget: vi.fn() }, watcher: { removeSession: vi.fn(async () => {}) },
     stopHeartbeat: vi.fn(), input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() },
-    ended: vi.fn(), mirror: { forget: vi.fn() }, clients: { send: vi.fn(), sendCommander: vi.fn() },
-    dataDir: join(root, 'ADAPTER_DATA_DIR') })
+    ended: vi.fn(), mirror: { forget: vi.fn() }, clients: { send: vi.fn(), sendCommander: vi.fn() } })
   const stop = createStopAgentService({ registry, stoppedAgents: stopped, restartJobs: new AgentRestartCoordinator(),
     stopJobs: new Map(), backendFor: () => ({ kill: vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const })) }),
     agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
@@ -425,7 +424,7 @@ it.each(['before', 'configuration', 'history repair', 'permission', 'tmux dispat
     registry.removeAgent(row.agentId)
     const stopped = new StoppedAgentStore(join(root, 'stopped')); stopped.save(row)
     const writeConfiguration = vi.fn()
-    const prepare = vi.fn(() => { if (phase === 'history repair') writeFileSync(transcript, header(B)) })
+    const prepare = vi.fn(async () => { if (phase === 'history repair') writeFileSync(transcript, header(B)); return phase === 'history repair' })
     const create = vi.fn(async () => {
       writeFileSync(transcript, header(B))
       return { state: 'succeeded' as const, dispatch: 'executed' as const, runtime: { backend: 'tmux' as const, paneId: '%99' } }
@@ -453,7 +452,7 @@ it.each(['before', 'configuration', 'history repair', 'permission', 'tmux dispat
         if (current()) writeConfiguration()
         return { ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } }
       },
-      prepareSessionResume: prepare, refreshGridWebSearch: vi.fn(), clearDeleted: vi.fn(), attachDsh: vi.fn(),
+      prepareSessionResume: prepare, refreshGridWebSearch: vi.fn(), clearDeleted: vi.fn(), attach: vi.fn(),
       attachSession: vi.fn(async () => true),
     })
     if (phase === 'before') writeFileSync(transcript, header(B))

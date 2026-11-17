@@ -42,6 +42,21 @@ describe('lookupPaneEngineProcess', () => {
   })
 })
 
+describe('lookupPaneEngineProcess, a pane with no engine in it', () => {
+  it('names the processes in the pane, and none outside it', async () => {
+    setProcessTableSource(async () => [
+      { pid: 10, parentPid: 1, executable: 'zsh', startMarker: 'm10', args: '-zsh' },
+      { pid: 11, parentPid: 10, executable: 'unshare', startMarker: 'm11', args: 'unshare --fork hermes-ns' },
+      { pid: 30, parentPid: 1, executable: 'unshare', startMarker: 'm30', args: 'unshare' },
+    ])
+    try {
+      const found = await lookupPaneEngineProcess(backendWithRoot(10), runtime, 'hermes')
+      expect(found).toMatchObject({ ok: false, unknown: false, reason: 'no hermes process under tmux:%1' })
+      expect(found.ok ? null : found.paneProcesses?.map((process) => [process.pid, process.startMarker])).toEqual([[10, 'm10'], [11, 'm11']])
+    } finally { setProcessTableSource(null) }
+  })
+})
+
 describe('checkSessionRuntime', () => {
   const LSTART = 'Mon Aug 10 10:00:11 2026'
   const session = (over: Partial<RegisteredSession>): RegisteredSession => ({

@@ -16,9 +16,9 @@
  */
 import { existsSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join, sep } from 'node:path'
+import { STABLE_NOTIFY } from './installNames.js'
 
 export const CLI_POINTER = 'current'
-export const STABLE_NOTIFY = 'notify.mjs'
 export const LAUNCH_EXE = 'harness-launch.exe'
 
 /** `<root>\bin\harness-launch.exe`. install.ps1 copies it there from the pty payload. */

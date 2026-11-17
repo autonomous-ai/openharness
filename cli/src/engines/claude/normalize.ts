@@ -929,7 +929,7 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
   const stop = msg.stopReason
   // Claude Code writes each block of a message as a line of its own, each with the message's stop reason (2.1.322): a turn's last
   // message is often its thinking and then its text, both `end_turn`. Closed on the thinking, the turn ended before its answer was
-  // read, and a Swarm chat reply was the narration from before the last tool (Devon, 2026-11-12). A line of thinking alone closes
+  // read, and the answer read was the narration from before the last tool (Devon, 2026-11-12). A line of thinking alone closes
   // nothing: the text after it does, or the Stop hook when none comes (core/turns/turnHooks.ts).
   const thinkingOnly = msg.message.content.length > 0
     && msg.message.content.every(block => block.type === 'thinking' || block.type === 'redacted_thinking')

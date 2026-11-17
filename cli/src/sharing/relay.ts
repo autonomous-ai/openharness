@@ -1,6 +1,6 @@
 import { WebSocket } from 'ws'
 import { b64e, newEphemeral } from '../lib/e2ee/core.js'
-import type { AuthSessionManager } from '../lib/authSession.js'
+import type { AuthSessionManager } from '../lib/authRefresh.js'
 import type { Frame, LocalClientSink } from '../backendSocket.js'
 import type { RelaySession } from '../lib/remoteRelay.js'
 import { DAEMON_LOCAL_ONLY_TYPES } from '../lib/relayFrames.js'

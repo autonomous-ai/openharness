@@ -3,8 +3,9 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  CLI_POINTER, LAUNCH_EXE, STABLE_NOTIFY, currentCli, harnessLaunchPath, isSingleSegment, readPointer, writePointer, type PointerFs,
+  CLI_POINTER, LAUNCH_EXE, currentCli, harnessLaunchPath, isSingleSegment, readPointer, writePointer, type PointerFs,
 } from './installLayout.js'
+import { STABLE_NOTIFY } from './installNames.js'
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })

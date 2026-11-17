@@ -10,7 +10,7 @@
  * the gateway refuses its own pairing requests for a guest (gateway/gateway.ts).
  */
 
-import { GUEST_LAUNCH_ENGINES } from '../lib/guestPaneCommand.js'
+import { GUEST_LAUNCH_ENGINES } from '../lib/guestEngines.js'
 
 /** Answered for a guest as for anyone, scoped by the handler (`agents_list` lists only its agents). */
 const ANY: ReadonlySet<string> = new Set([

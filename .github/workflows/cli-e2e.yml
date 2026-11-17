@@ -87,8 +87,8 @@ jobs:
           fi
           zsh -fc 'autoload -U compaudit && compaudit'
       - run: npm ci --no-audit --no-fund
-      # The specs that run against the real backend (e2e/harness/realBackend.ts: Attach and chat, a Lead
-      # reading a terminal, shared tabs) need it and its in-memory Mongo and Redis. Without them they
+      # The specs that run against the real backend (e2e/harness/realBackend.ts: shared tabs, socket
+      # churn, the two-account spike) need it and its in-memory Mongo and Redis. Without them they
       # skip, and they did here until 2026-11-10: Desktop's Swarm then broke twice in production
       # behind tests whose fake backend still answered the old way.
       - name: Set up the real backend and its in-memory Mongo and Redis

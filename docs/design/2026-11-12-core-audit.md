@@ -11,6 +11,10 @@ process. … protect the daemon core."
 
 ## In short
 
+- **The Swarm is deleted (14 November).** anh Dee: "delete the swarm featur entirely … that's the only way i can know
+  for sure it's compeltely out of core". Its door, its port and queries, every list and record the core kept for it, and
+  its code everywhere else went with it: the core's process is 541 files and 92,057 lines. What follows is the audit as
+  it was.
 - **The core's process grew 38% in five weeks.** It loads 98,437 lines in 556 files, against 71,244 in 332 on
   7 October, when the last plan's moves had landed. Nothing stopped it: the test that guards the core names the
   folders it must not load, and the growth came in files no list named.
@@ -40,6 +44,10 @@ The core is the one process every agent depends on, and the most trusted: it typ
    checked in the component that faces it. The core runs no command a component hands it and lends its sign-in
    only on routes a component declared.
 4. **The core is a process, not a folder.** What counts is what `core/main.ts` imports, wherever the file lives.
+5. **An experiment never touches the core** (anh Dee, 2026-11-13: "experimental feature should never touch core. it
+   should be in its own sub component and process when we turn on"). The Swarm is one, built "with the assumption that
+   99.99% of the swarm feature will be shut down". It works through what the core offers every client, from its own
+   process; the core grows no rule, list, record or mechanism for it, not even a generic one only it would use.
 
 The first two are the October design's rule 1 ("No feature runs in the process that owns sessions"). What is new
 is that they are measured at run time, that security is part of them, and that they are in the rules files, not
@@ -157,7 +165,9 @@ none of `services/superTabs.ts`, `superTabs/host.ts` and `superTabs/service.ts`,
 ## What leaves, in order
 
 Each line is one pull request or a few, with the test that fails without it, and removes its entry from this
-list. The per-file detail is in [files.tsv](2026-11-12-core-audit/files.tsv), as the audit found it.
+list. The per-file detail is in [files.tsv](2026-11-12-core-audit/files.tsv), as the audit found it. What is left is
+worked through one package at a time, in the order and with the decisions of [the plan](2026-11-15-core-plan.md)
+(15 November), which also says where each package's work is and how to pick it up.
 
 Left since, with the core's process as `src/architecture.coreFiles.txt` lists it after each:
 
@@ -165,20 +175,36 @@ Left since, with the core's process as `src/architecture.coreFiles.txt` lists it
 | --- | ---: | ---: |
 | The audit's count, with the changes that landed while it ran | 563 | 99,467 |
 | The CLI's client code: seven files loaded for a helper each (13 November) | 558 | 98,600 |
-| The master's supervisor and its supervision of the services (13 November) | 557 | 97,549 |
+| The master's supervisor and its supervision of the services, with the two security changes of the same day, which add 137 lines (13 November) | 557 | 97,686 |
+| The platform's launchd, systemd and Task Scheduler code, loaded to repoint one Node path: the master does it now (13 November) | 554 | 96,582 |
+| Windows files loaded for a constant: the guest set-up's protocol and folder checks, the pane's command for a guest, the updater's version folders and the install layout (13 November) | 551 | 95,749 |
+| `harness uninstall`'s hook removers, loaded for how one outcome is said (13 November) | 551 | 95,590 |
+| The guests' accounts, loaded for a user-name check and a small runner; and a function nothing called (13 November) | 552 | 95,372 |
+| The probe of which engines this machine has: the edge host answers it and starts its login shells (13 November) | 550 | 95,029 |
+| The agent ledger, loaded for one erase in a delete: the agent cleanup erases what a harness was told, asked before anything is deleted. And the dial's recap of a cloud agent's last words, markdown a maker's agent wrote: its service works the card out and the core shows what it is handed (13 November) | 548 | 94,575 |
+| The agent browser's stream: the exec into a browser's container for each viewer, the reading of the viewer's VNC bytes, the credit and the pacing run in the agent browser's process. The core keeps a forwarder that holds each stream to the connection that opened it, bounds what it passes on by itself (an unanswered open, unread bytes), and sends the service's screen frames on unread, which costs it no more per byte than reading the pipe did (13 November) | 547 | 94,319 |
+| The sign-in's renewal, the core's last call to another host: the gateway renews it, and the core asks it for a token. A test lists what in the core's process can open a connection, each to this computer (13 November) | 547 | 94,321 |
+| The Swarm's chat-file upload, the last call to another host with the Swarm on: the core keeps the file in its private uploads folder and the gateway sends it. The connection test reads every file of the core's process, the Swarm's door too. The core no longer loads the backend's address (`lib/backendHttpBase.ts`) at all (13 November) | 546 | 94,344 |
+| The Swarm, deleted: its door, its port and queries, and every list, relay and record the core kept for it (14 November) | 541 | 92,057 |
+| The Agent Browser's lifecycle: one shape for every service that follows agents (`core/agentLife.ts`: each look at a live agent, its end, a stop, a purge, a pane's new agent), with the viewers' attach and detach, the agent cleanup's stops, search's purges and the browser on it and their port members gone; whose Browser is on is the browser's own; `lib/agentTmp.ts` went with it (15 November) | 541 | 92,375 |
+| The Wi-Fi device's routes of the local door (`/api/autonomous-device/*`): the door checks the caller, then one adapter (`core/serviceRoutes.ts`) hands each route as it came to the service that answers it (the gateway, the Wi-Fi device's, the machine add-ons'), which checks it; a service down answers its route's own words at once. `lib/deviceManagementHttp.ts` left (15 November) | 543 | 93,002 |
 
 ### 1. Code the core loads for one helper (low risk, about a day each)
 
 | What | Lines | What the core needs instead |
 | --- | ---: | --- |
-| The master's own code: `harnessd/platform.ts` (902) with `lib/nodeReferences.ts` and `lib/launchers.ts` (198), loaded to repoint one Node path once a start | 1,100 | the master repoints the path when its core says ready |
-| Windows files loaded for a constant: the guest set-up (`guestRequests.ts`, `guestShare.ts`, `sid.ts`, `guestPaneCommand.ts`, `guestAccounts.ts`), the updater's (`cliVersions.ts`, `installLayout.ts`) | 988 | the constants, in files of their own |
-| `agentClient/ledger.ts`: one purge call, and its lock can hold the loop for 2 s | 363 | the edge host's agent cleanup |
-| The New dialog's engine probe: up to 16 login shells started from the core (`lib/engineProbe.ts`, `engineAccount.ts`, `backendSocket.ts:1210-1254`) | 397 | the edge host |
-| Helpers of one feature: `lib/agentTmp.ts` (the Swarm's), `lib/deviceRecap.ts` (cloud agents'), `lib/apiConnectionMetadata.ts` (models': the saved-API store parsed at every launch to learn whether one exists) | 395 | the feature's door, or a flag it reports |
-| The agent settings sync: a five-minute timer and backend reads (`core/experiments.ts:52-200`) | 150 | the edge host |
-| Uninstall, test-only and dead code: `engines/kit/hookRemoval.ts`, `core/stall.ts`, unused exports in the tmux files and `lib/externalOwnerControl.ts` | 481 | nothing |
+| `lib/agentTmp.ts`, a Swarm agent's private temporary folder, made and swept at a launch. A relaunch needs the folder too, and behind the Swarm's door it would still load by default | 183 | done 15 November: only `harness browser` writes there now, and the agent browser sweeps it |
+| `lib/apiConnectionMetadata.ts`: the saved-API store parsed at every launch, keys included, to learn whether one exists. A look that skips the check gives another answer for a file the check refuses, as the engine probe's first cut did (#4255). Done 15 November: a launch reads `list.json`, the saved APIs without their keys, checked as strictly; the store keeps it in step, and the core never opens the store | 53 | the keys in a file of their own, apart from what a launch reads: a change of what is on disk, with its migration |
+| Exports only tests read: `decodeTmuxControlData` and `normalizeTmuxCaptureLines` in `lib/tmuxStream.ts`, `stopSessionOwner`, `writeTty` and `foregroundJob` in `lib/externalOwnerControl.ts` (kept with a golden test: ask before deleting) | 154 | nothing, or a test's own file |
 | Lines of `core/api.ts` no core file imports, and code only the inline mode runs (`core/serviceHost.ts:122-233`, `lib/transcriptPages.ts:240-466`, `lib/sharedMachinesPort.ts:49-160`) | 707 | with their service, or gone with the inline mode |
+
+**Stays, decided 13 November: the agent settings sync** (`core/experiments.ts` `createAgentSettingsSync`, 150 lines).
+It was built as a service in the edge host and measured. The core's side of it (the local door's relay of a window's
+switch, the link, and the check that the edge host changes no switch but the agents' own, since Hachi's is the person's
+yes) came to more than what left: one file and 47 lines more in the core's process, and `harness settings` would fail
+while the edge host is down. Lending the edge host every switch would make the core smaller and let a process that
+reads other accounts' messages turn Hachi on. What the sync does in the core is ask the gateway for one small read
+every five minutes and write one file.
 
 Not counted above, because it is not a move to a service: **the other platform's terminal code.** The Windows
 terminal host and its host moves load on a Mac and on Linux and never run there (`lib/ptyHost/`,
@@ -189,9 +215,8 @@ this platform uses leaves them out. Low risk on a Mac and Linux, medium on a Win
 
 | What | Lines | Where to | Risk |
 | --- | ---: | --- | --- |
-| **The agent browser's stream.** The core starts the exec into the browser's container for each viewer, paces up to 2 MB/s on its own loop and reads the viewer's VNC bytes (`core/browserStreams.ts`, `core/rfbShaper.ts`) | 526 | agentBrowser; the core keeps a forwarder, as for the viewers (`core/viewerStreams.ts`, 50 lines) | low |
-| **Feature routes in the two doors.** Pairing and keys, the account, desk and Store proxies, device and Wi-Fi routes, usage reports, voice, the relay to other machines (`hookServer.ts` 470, `localWsServer.ts` 430, `core/main.ts` about 320, `lib/deviceManagementHttp.ts` 199, `lib/storeProxy.ts` 48) | 1,470 | gateway, devices, edge, through one adapter that turns a route into a service request | medium |
-| **Git.** A create clones a repository or adds a worktree inside the core; every agent frame runs git for its project and branch (`lib/gitProject.ts`, `agentProject.ts`, `projectFolder.ts`, `sessionGitHistory.ts`, `sessionGitContext.ts`, `worktreeDeletion.ts`, `sshHosts.ts`, `scm/`) | 1,900 | edge (workspaces): a create asks for its folder, a frame reads a reported cache | medium |
+| **Feature routes in the two doors.** Pairing and keys, the account, desk and Store proxies, usage reports, voice, the relay to other machines (`hookServer.ts` 470, `localWsServer.ts` 430, `core/main.ts` about 300, `lib/storeProxy.ts` 48). The device and Wi-Fi routes left on 15 November, through the adapter the rest will use (`core/serviceRoutes.ts`) | 1,250 | gateway, devices, edge, through one adapter that turns a route into a service request | medium |
+| **Git.** Every agent frame runs git for its project and branch (`lib/gitProject.ts`, `agentProject.ts`, `sessionGitHistory.ts`, `sessionGitContext.ts`, `sshHosts.ts`, `scm/`). Half done on 15 November (#4319): a create's clone, worktree or branch, and a purge's worktree review and removal, are the workspaces service's (`lib/gitProjectFolder.ts`, `worktreeDeletion.ts`; core 541 files, 92,440 lines) | 1,900 | edge (workspaces): a create asks for its folder (done), a frame reads a reported cache | medium |
 | **The product usage vocabulary** and the mapping of each request's outcome to counter names (`lib/productUsageContract.ts`, `productUsageSignals.ts`, `productHealthContract.ts`, `appProductUsageReport.ts`) | 723 | gateway: the core sends one raw outcome | low |
 | **Paste uploads.** Up to 20 MB from a remote client into the core's memory, then files written and clipboard tools started (`lib/terminalStreamManager.ts:1003-1234`, with `lib/osClipboard.ts` and `lib/pasteDropFiles.ts`) | 240 to 465 | a paste service in the edge host | medium |
 | **The harness index and manifest,** read and parsed with zod on the frame path (`dsh/installed.ts`, `manifest.ts`, `compatibility.ts`) | 420 | viewers (the Store): a reported cache | medium |
@@ -203,11 +228,82 @@ this platform uses leaves them out. Low risk on a Mac and Linux, medium on a Win
 
 | What | Lines | Where to | Risk |
 | --- | ---: | --- | --- |
-| **A Codex resume reads its whole rollout synchronously on the core's loop,** twice when it repairs (`engines/kit/resumeRepair.ts:146`, from `core/agents/launch.ts:132`). The rollout of 3 October was 803 MB. First asynchronous, a day; then the worker | 495 | Codex's worker | medium |
+| **A Codex resume reads its whole rollout on the core's loop,** twice when it repairs (`engines/kit/resumeRepair.ts`, from `core/agents/launch.ts`). The rollout of 3 October was 803 MB. Asynchronous since 15 November: a chunk at a time between turns of the loop, within a size, record and time bound, the history replaced only while its resume holds; a 200 MB rollout held the loop 2.4 s, now 8 ms (543 files, 93,160 lines). Left: the worker | 495 | Codex's worker | medium |
 | **Six engines' model switch drives their panes from the core** (`lib/runtimeControl.ts:229-663`), with their question key steps and readers. Claude Code and Codex already use a worker's grant | 715 | the other engines' worker | medium |
-| **The other fourteen engines run in the core:** their normalizers, readers and Stop rules (`core/transcripts/attach.ts:415-599`, `ingest.ts`, `history.ts`, `core/turns/turnHooks.ts:133-280`), and 16,055 more lines loaded once one of their sessions needs it | 2,584 + 16,055 | one worker for all fourteen, as the plan says ([other engines](2026-10-08-other-engines-out-of-core.md)) | medium, high on attach |
+| **The other fourteen engines run in the core:** their normalizers, readers and Stop rules (`core/transcripts/attach.ts:415-599`, `ingest.ts`, `history.ts`, `core/turns/turnHooks.ts:133-280`), and 16,055 more lines loaded once one of their sessions needs it. Their history and last turns are read in their worker, `engine-others`, since #4317; the live part is left | 2,584 + 16,055 | one worker for all fourteen, as the plan says ([other engines](2026-10-08-other-engines-out-of-core.md)) | medium, high on attach |
 | **Engine set-up:** installing engines, their hooks and plugins, probing binaries, the person's login shell (`engines/kit/native*.ts`, `hookSettings.ts`, `hookReview.ts`, `launchExecutable.ts`, `engines/nativeLaunch.ts`) | 4,436 | a set-up process: needs a ruling first | high |
-| Store engines: deletes on their databases at purge, a whole conversation read into the core at close, Codex's title index read whole | 483 | their worker | medium to high |
+| Store engines: deletes on their databases at purge, a whole conversation read into the core at close. Codex's title index is read from its end, then only what Codex appends (15 November) | 483 | their worker | medium to high |
+
+### 5. The Swarm, out of the core's process
+
+Done on 14 November: the Swarm is deleted, and every line below with it. The order is kept as it was.
+
+anh Dee, 2026-11-13: "swarm is an experimental feature. we could turn it off / kill the feature at any time. the
+philosophy: small tiny core that is super stable and solid and a lot of components around it". With the Swarm on, its
+door (`superTabs/inCore.ts`) loaded 20 files, about 2,100 lines, into the core's process; 13 and about 1,350 once the
+first lines below left (13 November).
+
+The first four lines (orders 1, 3, 4, 5) left the door by turning what the core did for the Swarm into something
+generic in the core: a list of the services that type into a working agent (`WHILE_BUSY_DELIVERERS`), pane access for
+the services the core lists (`core/terminals/panes.ts`), and a relay between services (`core/relays.ts`). The owner's
+next direction rules that out (rule 5 above: "why do we move that into core? that's a swarm feature. it should be in
+swarm"), so each line from order 7 on leaves the other way, and those three come back out too:
+
+- **The Swarm does it in its own process, through what the core offers every client.** Its process may open the
+  core's local API as this computer's owner's tool (`agentClient/daemon.ts`), as `harness` commands do, and asks for
+  what Desktop asks for. Where that is not enough, the Swarm goes without. The core keeps nothing of it, and deleting
+  the Swarm changes nothing in the core.
+
+| What (lines) | What the core did for the Swarm | Where it goes | Order |
+| --- | --- | --- | ---: |
+| `inCore/agents.ts` (56), `leadSwitch.ts` (152) | which agents the Swarm may close or reopen; that a Lead is never stopped, closed or deleted, but in its engine switch, which the core let through once and recorded | done (13 November): the core has no Lead rule. A Product Manager closes as any agent and the Swarm reopens it (`superTabs/ownAgents.ts`, through `agent_close` and `agent_resume`); the Swarm sees a switch from its owner's handoff receipt and records it itself (`superTabs/leadSwitch.ts`) | 7 |
+| `inCore/devices.ts` (9) | whether a finished turn is quiet on the devices | the devices decide, or the flag goes | 2 |
+| `inCore/launch.ts` (79), `lib/swarmSkills.ts` (110), `lib/swarmEngineArgs.ts` (15), `lib/agentInstructions.ts` (408), `agent_create`'s `swarmRole`, the row's `swarmSkill` | a start's roles, the team's basics, the agent's own instructions, its engine flags, its share of the cores | the Swarm starts its agents as Desktop does and tells them their role itself | 6 |
+| `inCore/adoption.ts` (90), `inCore/role.ts` (13), `retention.ts` (103) | an attached agent's role at its restart | goes with order 6 | 8 |
+| `lib/swarmGitHub.ts` (192) | the Harness GitHub App's git and gh for old sessions | deleted on or after 2026-12-10, as it says | 9 |
+| `lib/superTabAttachmentProxy.ts` (159) | a chat file posted to this computer | the Swarm's own intake, in its own process | 10 |
+| `core/relays.ts`, `core/terminals/panes.ts`, `WHILE_BUSY_DELIVERERS`, `PANE_TYPERS`, `TURN_DELIVERERS`' and `TURN_END_HEARERS`' Swarm entries, the Swarm's queries in `core/experimentQueries.ts` and its port in `core/api.ts` | the generic pieces orders 1 to 5 added, which only the Swarm uses, and what the core answers the Swarm alone | each goes, the Swarm doing it through the local API or going without | 11 |
+| `readContract.ts` (89), `wire.ts` (50) | helpers of the files above | go with them | |
+
+With the Swarm off, 70 files of the core's process still name it, in 608 lines (327 of them code): its port, queries and
+lists in `core/api.ts`, `core/main.ts` and `core/experimentQueries.ts`, `swarmRole` and `swarmSkill` in the launch and
+the registry, and the switch's checks in the local server (`localWsServer.ts`). Orders 6, 8, 10 and 11 take them out.
+
+Each line is one pull request, tested with the Swarm's own end-to-end files (`superTabs*.e2e.ts`, `swarm*.e2e.ts`).
+
+Left: `cleanupCloses.ts`, the closes the agent cleanup made, for the machine's report (order 1). The door handed it only
+to an agent cleanup in the core's process; that one now gets it as the cleanup in its own process does, from the
+Swarm's side of the services (`superTabs/inServices.ts`) (13 November).
+
+Left: `inCore/deliveries.ts`, whether a chat message types while the agent works (order 3). The input queue
+(`lib/sessionInput.ts`) also named the Swarm's delivery ids itself, outside the door. Now the core keeps one list of the
+services whose typed turns go into a working agent's own input (`WHILE_BUSY_DELIVERERS`, `core/api.ts`, beside the list
+of those that may deliver at all), and the input asks it by the maker each delivery's id names (13 November). Order 11
+takes the list out.
+
+Left: `inCore/terminal.ts`, a member's screen for its Lead and keys into it (order 5). It is now the core's own
+`core/terminals/panes.ts`: an agent's pane read as plain text and typed into under its write lock, for the services the
+core lists (`PANE_TYPERS`, `core/api.ts`). One more file in the core with the Swarm off (547 files, 94,487 lines), and
+the same count with it on (564), as the door loses it. The queries a service's process sends are `pane_screen`,
+`pane_input` and `pane_input_if_screen` (13 November). Order 11 takes it out.
+
+Left: `inCore/cards.ts` and `inCore/attention.ts`, the Swarm's cards and its members' waits on the dials (order 4). The
+core checked them, read other people's words in them (a Lead's notices) and kept which cards the devices wanted. Now the
+Swarm's service hands them to the devices through `core/relays.ts`, a generic relay: each kind names its one sender and
+receiver (`RELAYS`, `core/api.ts`), the core passes it on unread and bounded, says a sticky kind's last word again to a
+receiver that connects, and tells each side when the other comes or goes. The devices check them and keep an engine's
+question ahead of a Swarm wait (`cable/swarmCardsIn.ts`, `cable/swarmWaits.ts`). The core's process with the Swarm on:
+564 -> 563 files, 96,382 -> 96,222 lines; off, it gains the relay (547 -> 548, 94,487 -> 94,658) (13 November). Order 11
+takes the relay out.
+
+Left: `inCore/agents.ts` and `leadSwitch.ts`, the Swarm's agents and its Product Managers (order 7). The core refused to
+stop, close or delete a Lead, but by the one stop of an engine switch its owner prepared, and decided which agents the
+Swarm could close or reopen. It keeps none of that now. A Product Manager closes, stops and deletes as any agent; the
+Swarm's host reopens one that stopped, and does its own closes and reopens through the core's `agent_close` and
+`agent_resume`, checked first against its own retention and the core's creation receipts (`superTabs/ownAgents.ts`). It
+sees an engine switch itself: a Product Manager it finds stopped within two minutes of its owner preparing a switch
+(this machine's handoff receipt) is switching, and its reopen is held (`superTabs/leadSwitch.ts`). The core's process
+with the Swarm on: 563 -> 561 files, 96,222 -> 95,875 lines; off, 548 files, 94,658 -> 94,523 lines (13 November).
 
 ### 4. Modes where everything runs in the core
 
@@ -225,39 +321,42 @@ The core is the most trusted process: whoever runs code in it can type into ever
 today that the rule says it should not, most serious first:
 
 1. **The core ran a command line a service handed it.** The agent browser's process gave the core an argv, and the
-   core started it for each viewer (`core/agentBrowserLink.ts`, `core/browserStreams.ts`). Narrowed on 13 November:
-   the core starts one command for the agent browser and no other, Podman's exec into a browser's container and the
-   pipe to its screen (`core/api.ts` `agentBrowserStreamCommand`), checked where the process names it and again where
-   it is started. Still that process's to say: which file is Podman, and which of its containers is an agent's. Both
-   end, with the stream itself, when it leaves the core (part 2).
+   core started it for each viewer (`core/agentBrowserLink.ts`, `core/browserStreams.ts`). Fixed on 13 November: the
+   stream is the agent browser's own, in its process (`services/agentBrowser/streams.ts`), and the core starts no
+   command for it and is handed none. What the core still decides is who may open a browser's stream, and whose each
+   stream is: the screen's bytes go only to the connection that opened it, which the service never names.
 2. **An experiment's process could call any backend route as the account.** `core/experimentQueries.ts` signed any
    `/api/` path for the orchestrator, Share, Memories, the router, the Swarm and cloud agents. Fixed on 13 November:
    each declares its routes (`core/api.ts` `EXPERIMENT_BACKEND_ROUTES`), as Agent Messages does, and the core signs
    no other: the Swarm's own API and `GET /api/auth/me`, Share's grants and links, Jev's decision, and none for the
    other three. A refused route is said in the core's log. What the Swarm's process may still ask is all of the
    Swarm's API, not only the routes its service calls: an app's asks go through that service.
-3. **Bytes from outside this computer are parsed in the core:** a remote viewer's VNC bytes (`core/rfbShaper.ts:117-147`),
-   a paste of up to 20 MB from a remote client (`lib/terminalStreamManager.ts:1003-1234`), a third-party
-   `harness.json` (`dsh/manifest.ts`). And what agents write: fourteen engines' transcripts and SQLite stores
+3. **Bytes from outside this computer are parsed in the core:** a paste of up to 20 MB from a remote client
+   (`lib/terminalStreamManager.ts:1003-1234`), a third-party `harness.json` (`dsh/manifest.ts`). A remote viewer's
+   VNC bytes were (`core/rfbShaper.ts`), until 13 November: the agent browser's process reads them now, and the
+   core passes them on unread. And what agents write: fourteen engines' transcripts and SQLite stores
    (`core/transcripts/attach.ts:415-599`), with `node:sqlite` on threads inside the core.
 4. **The core's loop can be held.** A registry save: its lock can sleep the loop for 2 s, and its three fsyncs took
    about 60 ms of a save measured on a Mac (a synchronous `ps` on every save, for a start time that never changes,
    is gone since 13 November: read once); a Codex resume that
-   reads its whole rollout; the ledger's lock (2 s); a login shell and `harness-pty version`, up to 5 s each
+   read its whole rollout (a chunk at a time since 15 November); a login shell and `harness-pty version`, up to 5 s each
    (`lib/engineBin.ts:116`, `lib/ptyHost/launch.ts:227`); fsync bursts for the handoff; `~/.claude.json` rewritten
-   synchronously (`engines/kit/folderTrust.ts:101-115`). And work that grows with history: create receipts are
+   synchronously (`engines/kit/folderTrust.ts:101-115`). (The agent ledger's lock, 2 s, is the edge host's to wait
+   on since 13 November.) And work that grows with history: create receipts are
    never deleted and are scanned every minute, a bounded part at a time (493 on the Mac measured,
    `lib/agentCreationReceipt.ts`).
-5. **Children that are a feature's:** `git clone` inside `agent_create` (`lib/projectFolder.ts:241`), login shells for
-   the New dialog (`backendSocket.ts:1227`), engine installers that run npm or curl (`engines/kit/nativeInstall.ts:357`),
-   `amp threads export`, which calls Amp's servers (`core/transcripts/history.ts:56`).
+5. **Children that are a feature's:** `git clone` inside `agent_create` (the workspaces service's since 15 November), engine installers
+   that run npm or curl (`engines/kit/nativeInstall.ts:357`), `amp threads export`, which calls Amp's servers
+   (`core/transcripts/history.ts:56`; in the other engines' worker since #4317). The New dialog's login shells are the edge host's since 13 November.
 6. **Launch arguments, environment and files from models, the Store and shared machines are checked for shape
    only** (`core/modelsLink.ts:75-89`, `storeLink.ts:36-42`, `sharedMachinesLink.ts:22-25`).
 7. **Keys the core holds without need.** A grid's API key is kept on the registry row and copied into each
    stopped agent's file (`lib/registry.ts:145-153`, `lib/stoppedAgents.ts:147`). The whole environment of up to
-   256 agent processes is cached to find their sessions (`lib/processEnv.ts:121`), and an OpenRouter key is cached
-   and never read (`lib/gatewayRuntime.ts:100`). The saved-API store is parsed at every launch, keys included,
-   to learn whether one exists (`lib/apiConnectionMetadata.ts:33-52`). A connected service's secret passes
+   256 agent processes was cached to find their sessions (`lib/processEnv.ts`), and an OpenRouter key cached and
+   never read (`lib/gatewayRuntime.ts`), until 15 November: both went with the reads that filled them
+   (`src/architecture.environment.spec.ts`). The saved-API store was parsed at every launch, keys included,
+   to learn whether one exists (`lib/apiConnectionMetadata.ts:33-52`), until 15 November: a launch reads a list
+   without the keys now. A connected service's secret passes
    through the core in the clear (`lib/connectors/vaultOps.ts:22-25`).
 8. **Any process of this OS user is the owner on both local doors, an agent's included** (`localWsServer.ts:474`,
    `backendSocket.ts:411-416`). An agent that reads other people's text, a Swarm task or a pull request, holds the
@@ -265,11 +364,19 @@ today that the rule says it should not, most serious first:
 9. **It writes into the person's folder.** A start appends a "Saved APIs" block to the instruction file of the
    folder it launches in, once the person has saved an API (`lib/apiInstructions.ts:23-32`, from
    `core/agents/create.ts:426`, `launch.ts:68`, `fork.ts:180`). Its comment says only workspaces Harness made; the
-   code does not check. To confirm with a test, then fix.
-10. **Test hooks ship in the core** (`core/stall.ts`, `core/main.ts:2076, 3460`).
+   code does not check. Fixed on 15 November: the note goes only into a project folder Harness made, directly in
+   the projects root (`~/harnesses`, `lib/projectFolder.ts` `projectsRoot`) as resolved on disk, and no Git checkout.
+   For a folder the person chose, the note is not written and the saved APIs are not read
+   (`lib/apiInstructions.spec.ts`, `e2e/storeProcess.e2e.ts`). A Store harness's own bootstrap still goes into the
+   folder it runs in (`dsh/runtime.ts`): that is how its instructions reach its engine.
+10. **Test hooks ship in the core** (`core/stall.ts`, `core/main.ts:2076, 3460`). They stay (13 November): a fault
+    that holds the core's event loop has to run in the core's process, and each does nothing unless
+    `HARNESSD_TEST_FAULTS` names it, which only whoever starts the daemon sets.
 
-What already holds: the core's one call to another host is the sign-in's refresh (`lib/authSession.ts:357`); the
-E2EE keys are the gateway's; both local doors refuse another OS user and a web page (the private socket's mode,
+What already holds: the core calls no other host, with the Swarm on or off (13 November): the gateway renews the
+sign-in (decision 4, `lib/authRefresh.ts`) and sends a Swarm chat file to the backend (`gateway/upload.ts`), and
+`src/architecture.spec.ts` reads every file of the core's process and lists what can open a connection, each on this
+computer. The E2EE keys are the gateway's; both local doors refuse another OS user and a web page (the private socket's mode,
 the local credential, the Host and Origin check, `lib/loopbackRequest.ts:22-29`); a service's process connects
 with the master's token.
 
@@ -285,7 +392,8 @@ Decided by anh Dee on 2026-11-13, each as recommended: "ok do it all. test caref
    what a restart or a restore needs stays in the core.
 3. **Harness OS: one process, or the same walls.** Recommended: decide when work on Harness OS resumes. Until then
    it is the one named exception to the rule.
-4. **Who refreshes the sign-in.** The core does, and that refresh is its one call to another host. Every daemon
+4. **Who refreshes the sign-in.** Done 13 November: the gateway. Before, the core did, and that refresh was its one
+   call to another host. Every daemon
    process runs as the same OS account and can read the session file, so the gateway refreshing it loses no
    secrecy (the October plan's open decision 3). Recommended: the gateway refreshes; then the core calls no other
    host at all, and a test can hold that.

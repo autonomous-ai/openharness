@@ -14,12 +14,18 @@ export { questionControlFor } from '../engines/questionControls.js'
  * declared in core/api.ts, which it loads either way.
  */
 export { engineTranscriptFor } from '../engines/transcripts.js'
+// A conversation kept in a database read whole, for a service in this process (core/api.ts `transcripts`): theirs, as
+// each service's own process reads it (lib/databaseHistory.ts), loaded only once one asks (engines/inProcess.ts).
+export { databaseHistory } from '../engines/storeHistory.js'
 export { liveFor } from '../engines/live.js'
+// The other engines' live streams, and their reads, in this process: as their worker serves them.
+export { otherEngineRequests } from '../engines/others/otherEnginesProcess.js'
 export { screenFor } from '../engines/screens.js'
 export { submissionFor } from '../engines/submissions.js'
 export { nativeControlFor } from '../engines/nativeControls.js'
 export { backgroundJobFor } from '../engines/backgroundJobs.js'
 export { providerMoveFor } from '../engines/providerMoves.js'
+export { prepareResume } from '../engines/resumePreparation.js'
 export { modelControlFor } from '../engines/modelControls.js'
 export { runtimeFor } from '../engines/runtime.js'
 export { startGateway } from '../gateway/start.js'
@@ -50,4 +56,5 @@ export { startUsageInCore } from './usage.js'
 export { startViewers } from './viewers.js'
 export { startWifi } from './wifi.js'
 export { startWindowNames } from './windowNames.js'
+export { startEngineProbe } from './engineProbe.js'
 export { startWorkspaces } from './workspaces.js'

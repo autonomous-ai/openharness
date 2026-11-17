@@ -244,7 +244,7 @@ export function newAgentPayload(args: NewArgs, cwd: string | null, baseEngine = 
   const harness = args.agent.includes('/') ? args.agent : null
   const terminal = args.agent === 'terminal'
   const engine = harness ? baseEngine : args.agent
-  // A mode is sent only when the person typed one (Swarm v3, task #4215): the agent starts with its owner's own settings.
+  // A mode is sent only when the person typed one (task #4215): the agent starts with its owner's own settings.
   // The default `auto` once went to every engine, which the daemon refused for the ten with no PERMISSION_MODES row
   // (`INVALID_PERMISSION_MODE`), and then to every engine that had it. A typed mode is sent as typed, so the daemon's
   // refusal stays the answer where a choice was made. A row that claims Auto while running without the flag is the more

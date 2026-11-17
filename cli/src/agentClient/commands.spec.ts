@@ -7,7 +7,6 @@ import { RefusedError, type Rpc } from '../messages/rpc.js'
 import { AgentClientError, type Daemon, type PushedEvent, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
 import { agentSettingsPath } from '../lib/agentSettings.js'
-import { LEAD_PROTECTED_DETAIL } from '../lib/closeAgentService.js'
 import { setAgentSettingsForTest, signedOutForTest, TEST_ACCOUNT } from '../testing/agentSettings.js'
 import type { Frame } from './model.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
@@ -1141,8 +1140,8 @@ describe('harness delete', () => {
 
   it('says purge\'s own refusals as they are', async () => {
     const lead = setupDelete()
-    lead.d.extra.agent_purge = () => ({ error: 'LEAD_PROTECTED', detail: LEAD_PROTECTED_DETAIL })
-    expect(await lead.run([KID])).toMatchObject({ code: EXIT.failed, err: [LEAD_PROTECTED_DETAIL] })
+    lead.d.extra.agent_purge = () => ({ error: 'DELETE_IN_PROGRESS', detail: 'This harness is already being deleted.' })
+    expect(await lead.run([KID])).toMatchObject({ code: EXIT.failed, err: ['This harness is already being deleted.'] })
     expect(lead.requests('agent_purge')).toHaveLength(1)
     const refused = setupDelete({ error: 'DELETE_REFUSED', detail: 'The harness did not stop. No session data was deleted.' })
     expect(await refused.run([KID])).toMatchObject({ code: EXIT.failed, err: ['The harness did not stop. No session data was deleted.'] })
@@ -2665,7 +2664,7 @@ describe('wait and watch on pushed events', () => {
   })
 })
 
-describe('a Swarm session\'s tell and reply (the v3 Buddy is gone)', () => {
+describe('the tell and reply of an agent another agent started, with no starter here', () => {
   const asked = () => {
     const calls: Array<[string, Record<string, unknown>]> = []
     const record: Rpc = async (target, payload) => { calls.push([target.machineId, payload]); return { id: 'm0000001', state: 'queued' } }
@@ -2673,14 +2672,13 @@ describe('a Swarm session\'s tell and reply (the v3 Buddy is gone)', () => {
   }
   beforeEach(() => { setAgentSettingsForTest(dir, { agentsTellAgents: true }) })
 
-  // A Swarm session here (the Swarm started it: an agent, no starter on this machine), as a person's Buddy was: the person's
-  // own harness is not one it started, so neither is asked of the machine.
+  // The person's own harness is not one it started, so neither is asked of the machine.
   it('refuses its person\'s own harness, asking the machine nothing', async () => {
     const d = new FakeDaemon()
-    d.frames = [frame('swarm', { engine: 'claude', startedBy: 'agent' }), frame('web')]
+    d.frames = [frame('started', { engine: 'claude', startedBy: 'agent' }), frame('web')]
     const r = asked()
-    expect(await tellCommand(['web', '--', 'Builders', 'are', 'done.'], harness(d, { record: r.record, pane: '%swarm' }).deps)).toBe(EXIT.refused)
-    expect(await replyCommand(['web', '--', 'Yes, go ahead.'], harness(d, { record: r.record, pane: '%swarm' }).deps)).toBe(EXIT.refused)
+    expect(await tellCommand(['web', '--', 'Builders', 'are', 'done.'], harness(d, { record: r.record, pane: '%started' }).deps)).toBe(EXIT.refused)
+    expect(await replyCommand(['web', '--', 'Yes, go ahead.'], harness(d, { record: r.record, pane: '%started' }).deps)).toBe(EXIT.refused)
     expect(r.calls).toEqual([])
   })
 })

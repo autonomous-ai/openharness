@@ -1,0 +1,12 @@
+#!/bin/sh
+# Claude Code runs this when it is about to ask the person to allow a tool call. The launcher tells the Harness daemon
+# that the prompt waits, so the dial shows it; the prompt itself is answered in its own app. With no launcher nothing is
+# told. Not exec'd, and the launcher's output and exit code are dropped: what this hook prints is a decision to Claude
+# Code and its exit 2 a deny, and it decides nothing.
+# ~/.local/bin first: the installer puts the launcher there, and an app started from the Dock may not have it on PATH.
+if [ -x "$HOME/.local/bin/harness" ]; then
+  "$HOME/.local/bin/harness" device claude asked >/dev/null 2>&1
+elif command -v harness >/dev/null 2>&1; then
+  harness device claude asked >/dev/null 2>&1
+fi
+exit 0

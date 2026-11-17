@@ -96,25 +96,9 @@ HarnessActivity? harnessActivity(
   return HarnessActivity.idle;
 }
 
-/// The reader's agents that ask them in a Swarm tab ([superTabAgentsAsking]): what the tab's badge counts.
-int tabAgentsAsking(AppNotifier app, Swarm tab) =>
-    tab.superTabId == null ? 0 : app.superTabs.agentsAsking(tab.superTabId!);
-
-/// What a Swarm tab's count says: "2 agents ask you".
-String tabAgentsAskingLabel(int count) =>
-    count == 1 ? '1 agent asks you' : '$count agents ask you';
-
-/// What a Swarm tab's badge says, or null when it counts nothing.
-String? tabWaitingLabel(AppNotifier app, Swarm tab) {
-  final asking = tabAgentsAsking(app, tab);
-  return asking > 0 ? tabAgentsAskingLabel(asking) : null;
-}
-
 /// A viewer refers to its owner; showing the same harness twice adds no vote.
-/// An agent asking in a Swarm tab needs the person, like a question.
 HarnessActivity? tabActivity(AppNotifier app, Swarm tab) {
   if (tab.isStore || tab.isOrchestrator) return null;
-  if (tabAgentsAsking(app, tab) > 0) return HarnessActivity.needsInput;
   HarnessActivity? result;
   final seen = <(String, String)>{};
   for (final pane in tab.panes) {
@@ -126,16 +110,4 @@ HarnessActivity? tabActivity(AppNotifier app, Swarm tab) {
     }
   }
   return result;
-}
-
-/// What needs this account across its Swarm tabs: its agents that ask it, each
-/// Swarm once. None from a Swarm it lost, none signed out. The Dock's badge.
-int swarmsNeedYou(AppNotifier app) {
-  if (app.currentUser == null) return 0;
-  var count = 0;
-  for (final id in {for (final tab in app.swarms) ?tab.superTabId}) {
-    if (app.superTabs.peek(id)?.accessRevoked == true) continue;
-    count += app.superTabs.agentsAsking(id);
-  }
-  return count;
 }

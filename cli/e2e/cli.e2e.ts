@@ -20,6 +20,8 @@ import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { LAUNCHD_LABEL, SYSTEMD_UNIT, launchdPlist, systemdUnit } from '../src/harnessd/platform.js'
+import { savedDaemonPort } from '../src/lib/daemonRecord.js'
+import { assertNodeAlone } from '../src/testing/testNode.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 
@@ -106,7 +108,10 @@ const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 /** The core a master starts on an installed bundle: from the core's entry in the lean bundle it carries,
  *  written out into the data folder. */
 const leanCore = (m: Machine) => new RegExp(` ${escape(join(m.daemon.dataDir, 'lean'))}/[0-9a-f]{16}/harnessd-core\\.mjs __run$`)
-const statusOf = async (m: Machine) => await (await fetch(`http://127.0.0.1:${m.daemon.port}/api/status`)).json() as Record<string, any>
+/** The port this machine's daemon bound, as the daemon recorded it (`daemon-<configured>.json`): `harness start` runs
+ *  it, so the harness never sees its output and cannot say which port it took. */
+const portOf = (m: Machine): number => savedDaemonPort(m.daemon.dataDir, m.daemon.configuredPort)
+const statusOf = async (m: Machine) => await (await fetch(`http://127.0.0.1:${portOf(m)}/api/status`)).json() as Record<string, any>
 
 describe('harness start, stop and status from the installed bundle', () => {
   let machine: Machine | undefined
@@ -134,11 +139,14 @@ describe('harness start, stop and status from the installed bundle', () => {
     const cli = join(cliDir, 'cli.js')
     copyFileSync(bundle, cli)
     copyFileSync(join(dirname(bundle), 'notify.mjs'), join(cliDir, 'notify.mjs'))
-    // The managed Node as the installer records it: a runtime folder, and current-node naming its binary.
+    // The managed Node as the installer records it: a runtime folder, and current-node naming its binary. The link
+    // names the run's Node (e2e/harness/testNode.ts), not the worker's: Node names itself by the real path behind a
+    // link, and the product looks beside that path for engines (audit of 2026-11-16,
+    // docs/plans/2026-11-16-e2e-isolation-3-design.md).
     const runtime = daemon.env.ADAPTER_RUNTIME_DIR!
     const node = join(runtime, 'node-e2e', 'bin', 'node')
     mkdirSync(dirname(node), { recursive: true })
-    symlinkSync(process.execPath, node)
+    symlinkSync(process.env.E2E_NODE_PATH!, node)
     writeFileSync(join(runtime, 'current-node'), `${node}\n`)
     const fakes = join(daemon.root, 'platform-bin')
     mkdirSync(fakes)
@@ -149,8 +157,6 @@ describe('harness start, stop and status from the installed bundle', () => {
     const env: NodeJS.ProcessEnv = {
       ...daemon.env, PATH: `${fakes}:${daemon.env.PATH}`, XDG_CONFIG_HOME: join(home, '.config'), HARNESSD_TEST_PLATFORM: platform,
     }
-    // The defaults, all under the throwaway home: never a folder of the person running the tests.
-    for (const name of ['ADAPTER_CLI_DIR', 'HARNESS_BIN_DIR', 'HARNESS_LOGS_DIR', 'HARNESS_ENV_FILE', 'DOTENV_CONFIG_PATH']) delete env[name]
     const definition = platform === 'launchd'
       ? join(home, 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`)
       : join(home, '.config', 'systemd', 'user', SYSTEMD_UNIT)
@@ -167,15 +173,35 @@ describe('harness start, stop and status from the installed bundle', () => {
 
   it('starts on an external Node reached through a managed-runtime symlink without relocating it', async () => {
     // Found by QA on a quiet machine: a Homebrew Node hard-linked under a daemon name aborted in dyld.
-    // install() deliberately points this managed path at the external interpreter running the fixture.
+    // install() deliberately points this managed path at a Node outside the runtime folder: the run's.
     const m = await install()
     const started = await harness(m, 'start')
     expect(started.status, said(started)).toBe(0)
     seen.add(pidOf(m)!)
-    expect((await fetch(`http://127.0.0.1:${m.daemon.port}/api/health`)).ok).toBe(true)
+    expect((await fetch(`http://127.0.0.1:${portOf(m)}/api/health`)).ok).toBe(true)
     expect(existsSync(join(dirname(dirname(m.node)), 'libexec', 'harnessd', 'harnessd'))).toBe(false)
     const stopped = await harness(m, 'stop')
     expect(stopped.status, said(stopped)).toBe(0)
+  })
+
+  // The product looks for npm-installed engines beside the Node the daemon runs on, whatever PATH says
+  // (lib/engineLaunch.ts `npmRuntimeBins`), and Node names itself by the real path behind the managed link: on a
+  // developer's Mac that was a version manager's folder, with their real engines in it (audit of 2026-11-16,
+  // docs/plans/2026-11-16-e2e-isolation-3-design.md). This reads one path and one listing, and makes no harness.
+  it('runs its core on the run\'s Node, alone in its folder, behind the managed link', async () => {
+    const m = await install()
+    const started = await harness(m, 'start')
+    expect(started.status, said(started)).toBe(0)
+    const master = pidOf(m)!
+    const core = (await statusOf(m)).corePid as number
+    seen.add(master).add(core)
+    // The core's line: the master names itself harnessd, which is all ps shows of it, and starts the core on its own Node.
+    const ran = commandOf(core).split(' ')[0]
+    // A yes or a no: at the base the path is the developer's own Node.
+    expect(ran === process.env.E2E_NODE_PATH, 'the core runs on the run\'s Node').toBe(true)
+    // Only after it: a refusal here names the run's folder, never the developer's.
+    expect(() => assertNodeAlone(ran)).not.toThrow()
+    expect((await harness(m, 'stop')).status).toBe(0)
   })
 
   it('without the service: start runs a master and core, an agent outlives stop in tmux and is back on the next start, and no platform is asked', async () => {
@@ -185,7 +211,7 @@ describe('harness start, stop and status from the installed bundle', () => {
     expect(started.stdout).toContain('● started · this computer only (not signed in)')
     const master = pidOf(m)!
     expect(alive(master)).toBe(true)
-    expect((await fetch(`http://127.0.0.1:${m.daemon.port}/api/health`)).ok).toBe(true)
+    expect((await fetch(`http://127.0.0.1:${portOf(m)}/api/health`)).ok).toBe(true)
     const status = await statusOf(m)
     expect(status.pid).toBe(master)
     const core = status.corePid as number

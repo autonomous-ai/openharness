@@ -274,7 +274,7 @@ describe('Containers', () => {
 
   it("sweep spares another daemon's containers and every unlisted volume", async () => {
     listed(entry('a1', 'd1'), entry('a9', 'd1', { State: 'exited' }), entry('a5', 'd2'))
-    expect(await containers.sweep(new Set(['a1']))).toBe(1)
+    expect(await containers.sweep(id => id === 'a1')).toBe(1)
     expect(argvs()[0]).toEqual(['ps', '-a', '--filter', 'label=harness.daemon=d1', '--format', 'json'])
     expect(argvs().slice(1)).toEqual([
       ['rm', '--force', '--time', '10', 'harness-browser-a9'], ['network', 'rm', 'harness-browser-a9'], ['secret', 'rm', 'harness-proxy-a9'],
@@ -285,7 +285,7 @@ describe('Containers', () => {
     // a1's browser went with its pane to b1, which runs it as harness-browser-a1. a1 ran again, started a new one
     // (p2) and is gone: its stray is p2, and harness-browser-a1 is b1's.
     listed(entry('b1', 'd1', { Names: ['harness-browser-a1'] }), entry('a1', 'd1', { Names: ['harness-browser-p2'], State: 'exited' }))
-    expect(await containers.sweep(new Set(['b1']))).toBe(1)
+    expect(await containers.sweep(id => id === 'b1')).toBe(1)
     expect(argvs().slice(1)).toEqual([
       ['rm', '--force', '--time', '10', 'harness-browser-p2'], ['network', 'rm', 'harness-browser-p2'], ['secret', 'rm', 'harness-proxy-p2'],
     ])
@@ -314,7 +314,7 @@ describe('Containers', () => {
     fake.reply('ps', { stdout: 'null' })
     expect(await containers.running()).toEqual([])
     listed({ ...entry('x', 'd1'), Labels: null })
-    expect(await containers.sweep(new Set())).toBe(0)
+    expect(await containers.sweep(() => false)).toBe(0)
   })
 })
 

@@ -67,7 +67,7 @@ lines = [l for l in lines if not l.startswith("S.")]
 
 assert lines[0] == "type=hello", lines
 pairs = [tuple(x.split("=", 1)) for x in lines[1:]]
-# Exactly these keys, in this order (owner decision 7 + the activity capability + the Super Tab wait).
+# Exactly these keys, in this order (owner decision 7 + the activity capability).
 assert pairs == [
     ("fw", "0.0.0"),
     ("product", "harness"),
@@ -79,10 +79,6 @@ assert pairs == [
     ("activity", "steps-v1"),
     ("stats", "turn-v1"),
     ("player", "library-v1"),
-    ("superTab", "wait-v1"),
-    ("swarmCard", "v1"),
-    ("swarmChat", "v1"),
-    ("swarmBuddy", "v1"),
     ("ota", "v1"),
     ("mac", "aa"),
     ("settings", "{"),

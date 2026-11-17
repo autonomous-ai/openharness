@@ -19,7 +19,7 @@ import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { windowsAfterExit } from '../../lib/windows/engineStart.js'
 import { ensureGuestEngine, guestNodeDir, type GuestEngineBackend, type GuestEngineResult } from '../../lib/windows/guestEngine.js'
-import { guestHostHome, WINDOWS_GUEST_SETUP_VERSION } from '../../lib/windows/guestRequests.js'
+import { guestHostHome, WINDOWS_GUEST_SETUP_VERSION } from '../../lib/windows/guestTree.js'
 import { windowsEngineArgv, windowsLaunchRefusal } from '../../lib/windows/launch.js'
 import type { createPaneWatcher } from './newPane.js'
 

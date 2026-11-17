@@ -11,6 +11,7 @@ import '../core/app_version.dart';
 import '../core/sleep_aware.dart';
 import '../core/test_run.dart';
 import '../logging/app_log.dart';
+import '../logging/log_safe_error.dart';
 import '../logging/redact.dart';
 import '../core/models.dart';
 import 'local_daemon_transport.dart';
@@ -124,8 +125,8 @@ class WsRequestTimeout implements Exception {
 /// that had already thrown and could never run — the user got the wire code.
 ///
 /// [toString] is the sentence this used to be thrown with, so a call site that only prints it is
-/// unchanged.
-class WsRequestFailure implements Exception {
+/// unchanged. The logs write [logText] instead: the peer's [detail] can quote a prompt or a name.
+class WsRequestFailure implements Exception, LogSafeError {
   const WsRequestFailure({
     required this.responseType,
     required this.code,
@@ -151,6 +152,10 @@ class WsRequestFailure implements Exception {
   String toString() => detail == null || detail!.isEmpty
       ? '$responseType: $code'
       : '$responseType: $code — $detail';
+
+  /// A code that is not a short token (free text from the peer) shows as its length.
+  @override
+  String get logText => '${logToken(responseType)}: ${logToken(code)}';
 }
 
 /// One SSO-authenticated, machine-scoped connection to `/api/web-ws`.
@@ -899,18 +904,14 @@ class WsConn {
   ///
   /// Terminal traffic is the overwhelming majority of what crosses this socket
   /// and none of it is diagnostic — it is somebody's screen. Logging it would
-  /// bury every frame that matters, cost an fsync per keystroke, and write the
-  /// contents of their editor to disk. The hardware dial's events are dropped
-  /// for the volume alone.
+  /// bury every frame that matters under a line per keystroke. The hardware
+  /// dial's events are dropped for the volume alone. A frame line shows no
+  /// content anyway ([summariseForLog]); the types below kept out for what they
+  /// carry stay out.
   static const _unlogged = {
     // File paths and media contents are user data, not frame diagnostics.
     'agent_read_file',
     'agent_read_file_result',
-    // An agent's instructions: the person's own words, and the file they are in.
-    'agent_instructions_read',
-    'agent_instructions_read_result',
-    'agent_instructions_write',
-    'agent_instructions_write_result',
     // Conversation-derived: file names and the project folder.
     'agent_handoff_prepare',
     'agent_handoff_prepare_result',
@@ -924,8 +925,6 @@ class WsConn {
     'window_name_result',
     'git_project_info',
     'git_project_info_result',
-    'git_pull_requests_status',
-    'git_pull_requests_status_result',
     'terminal_output',
     'terminal_input',
     'terminal_resize',
@@ -951,7 +950,6 @@ class WsConn {
       !type.startsWith('orchestrator') &&
       // Browser settings carry a proxy's host and login, and a test its exit address.
       !type.startsWith('agent_browser') &&
-      !type.startsWith('super_tabs') &&
       !type.startsWith('route_') &&
       !type.startsWith('harness_share_') &&
       // Pair responses can contain retained memory quotations and one-use

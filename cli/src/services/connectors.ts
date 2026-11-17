@@ -160,6 +160,11 @@ export interface ConnectorsOverrides extends Partial<ConnectorsDeps> {
   /** The platform it runs on, and on Windows where its pipe is (a test's socket named as a pipe). */
   platform?: NodeJS.Platform
   pipePath?: () => string
+  /**
+   * The port the bridge bound, each time it listens: a spec that asks for any port dials this one, as a port freed for it to
+   * bind can be taken by any process in between. Production passes none.
+   */
+  listening?: (port: number) => void
 }
 
 export function startConnectors(core: CoreApi, ports: CorePorts, overrides: ConnectorsOverrides = {}): ServiceRequests {
@@ -184,6 +189,7 @@ export function startConnectors(core: CoreApi, ports: CorePorts, overrides: Conn
     : { key: () => String(vault.file('bridge.json').key ?? ''), harnessKey: () => String(vault.file('harness-key.json').key ?? '') }
   const bridge = createBridge(vault, bridgeKeys)
   bridge.unref()
+  bridge.on('listening', () => overrides.listening?.((bridge.address() as AddressInfo).port))
   // A port a test or HARNESS_CONNECTIONS_PORT names stays that port.
   const movable = overrides.port === undefined && env.HARNESS_CONNECTIONS_PORT === undefined
   listen(bridge, deps.port, deps.retryMs, movable ? {

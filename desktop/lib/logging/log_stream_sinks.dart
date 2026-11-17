@@ -9,6 +9,7 @@ library;
 
 import 'app_log.dart';
 import 'cli_log.dart';
+import 'log_safe_error.dart';
 import 'log_stream.dart';
 
 /// Writes one event to each of [sinks], in order.
@@ -66,7 +67,7 @@ class StreamAppLog implements AppLog {
       level,
       category,
       message,
-      error: error?.toString(),
+      error: error == null ? null : logErrorText(error),
       stackTrace: stackTrace?.toString(),
     );
   }

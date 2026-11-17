@@ -11,7 +11,7 @@ Step 2 moves the top reads, one group per pull request, chosen from that line. S
 
 **Spec:** the task's brief (#3041); Watch Production (#2773) thread of 11-05.
 
-This plan is written and carried out by its Engineer, test first; there is no execution handoff.
+This plan is written and carried out test first; there is no execution handoff.
 
 ## Why not Prisma's query events
 
@@ -37,8 +37,8 @@ engine: it still converts the command to BSON and every reply document to Extend
 Prisma's query building and per-field result shaping, so they may cost less per document, but not nothing. The new line
 measures raw commands too, so step 2 compares engine µs per document of a model read against a raw read on the same
 collection before moving anything. If raw reads are about as costly, the fix is the plain `mongodb` driver for the top
-reads; that is a second connection pool per pod against Atlas M20's connection limit and more memory, and it goes to the
-PM with those costs before any code (River, 11-05).
+reads; that is a second connection pool per pod against Atlas M20's connection limit and more memory, and it waits for a
+decision on those costs before any code (11-05).
 
 ## Design
 
@@ -57,7 +57,7 @@ PM with those costs before any code (River, 11-05).
 
 ## Global Constraints
 
-No behaviour change; no new settings or switches. Swarm code stays out of `cli/src/core`. Each moved query keeps its
+No behaviour change; no new settings or switches. Each moved query keeps its
 results and its index, with an explain test (backend AGENTS.md rule 3). One pull request per group of queries.
 
 ## Review Focus
@@ -92,8 +92,8 @@ Files: `src/lib/queryStats.ts`, `src/lib/queryStats.test.ts`, `src/lib/prisma.ts
 
 - [ ] Read `prisma by query` beside `cpu by thread` at peak; post the top operations by engine ms, their engine µs per
       document, and raw against model reads.
-- [ ] Open the next pull request for the top group behind GET changes and hosts readings/changes, with an explain test
-      for each moved query, or bring the plain driver's costs to the PM.
+- [ ] Open the next pull request for the top group of queries, with an explain test
+      for each moved query, or bring the plain driver's costs for a decision.
 
 ### 4. Before and after
 

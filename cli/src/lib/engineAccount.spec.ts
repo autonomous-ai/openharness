@@ -97,9 +97,9 @@ describe('engineAccount', () => {
     expect(asked.calls).toEqual([])
   })
 
-  it('counts a saved model API as a sign-in, so a machine with no subscription can take Swarm work', async () => {
+  it('counts a saved model API as a sign-in, so a machine with no subscription can start agents', async () => {
     // Headless run, 2026-11-03: a working OpenRouter key was saved for the team account, and the machine still read
-    // "not signed in", so no Swarm start was admitted.
+    // "not signed in", so no start was admitted.
     const root = home()
     const data = join(root, '.harness', 'cli', 'data', 'api-connections')
     mkdirSync(data, { recursive: true })
@@ -110,6 +110,30 @@ describe('engineAccount', () => {
     expect((await engineAccount('claude', { home: root, env: {}, run: signedOut.run })).signedIn).toBe(true)
     // Codex's own launch needs its config, so a saved API alone does not sign it in.
     expect((await engineAccount('codex', { home: root, env: {}, run: signedOut.run })).signedIn).toBe(false)
+  })
+
+  // The checked read every launch holds the file to decides, loaded only where an API was saved: a file it refuses
+  // would not serve a launch, and a machine that said "signed in" on it was sent work it could not start.
+  it('counts no saved API the launch could not use: another header, or a file the checked read refuses', async () => {
+    const saved = (row: Record<string, unknown>) => {
+      const root = home()
+      const data = join(root, '.harness', 'cli', 'data', 'api-connections')
+      mkdirSync(data, { recursive: true })
+      writeFileSync(join(data, 'connections.json'), JSON.stringify({ version: 1, connections: [{ id: 'openrouter', provider: 'openrouter',
+        name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', keyEnv: 'OPENROUTER_API_KEY', authHeader: 'Authorization', authPrefix: 'Bearer', apiKey: 'sk-x', ...row }] }))
+      return root
+    }
+    const signedOut = cli()
+    const account = async (root: string) => (await engineAccount('claude', { home: root, env: {}, run: signedOut.run })).signedIn
+    expect(await account(saved({}))).toBe(true)
+    // In any letter case, and with the space the checked read trims.
+    expect(await account(saved({ authHeader: 'authorization', authPrefix: 'bearer ' }))).toBe(true)
+    expect(await account(saved({ authHeader: 'x-api-key', authPrefix: '' }))).toBe(false)
+    // A name a launch may not set in an agent's environment: the checked read refuses the whole file.
+    expect(await account(saved({ keyEnv: 'NODE_OPTIONS' }))).toBe(false)
+    expect(await account(saved({ apiKey: '' }))).toBe(false)
+    // No file at all asks nothing of the checked read.
+    expect(await account(home())).toBe(false)
   })
 
   it.skipIf(process.platform === 'win32')('runs the CLI found on the given PATH, with the given environment', async () => {

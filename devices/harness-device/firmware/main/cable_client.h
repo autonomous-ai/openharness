@@ -46,7 +46,18 @@ typedef struct {
     // showing an empty line.
     char machine_id[ID_MAX];
     char machine[CABLE_NAME_MAX];
+    // WHERE THE AGENT RUNS AND WHAT THE DIAL MAY DO WITH IT. `host` is the daemon's short id (orca,
+    // ghostty, ...), empty when it did not say. `caps` is a CABLE_CAP_* set: an agent that lives outside
+    // Harness can be watched but not spoken to, and the dial holds back what it cannot take. A daemon
+    // that predates the field sends none, which reads as everything, so nothing changes for it.
+    char host[16];
+    uint8_t caps;
 } project_t;
+#define CABLE_CAP_S 1      // status
+#define CABLE_CAP_V 2      // voice
+#define CABLE_CAP_F 4      // focus
+#define CABLE_CAP_A 8      // answer
+#define CABLE_CAPS_ALL 15
 
 
 // The firmware version reported in `hello` and printed at boot, so a device on someone's desk can be
@@ -114,6 +125,7 @@ typedef struct {
     uint32_t generation;
     int total;
     bool window;
+    bool machine_view;   // agents.end said `view: machine`: this computer's agents rather than a tab's (no window)
 } cable_agent_snapshot_t;
 // A complete roster and its workspace identity are copied under the same lock.
 // Returns -1 while a new roster is being assembled, leaving the UI intact.
@@ -170,7 +182,6 @@ typedef struct {
     bool read_on_dial;
     uint32_t display_revision;
     uint32_t received_ms; // ms() when the row was filed; rows expire 6 h later (notice_expire)
-    uint8_t swarm;        // the dial's own Swarm entry, kept across notif.replace: 1 needs you, 2 stuck, 3 the Lead said (0 the desktop's)
 } cable_notif_t;
 
 bool cable_client_notification_read(const char *agent_id, const char *read_token);
@@ -178,24 +189,19 @@ bool cable_client_notification_read(const char *agent_id, const char *read_token
 // The user tapped a swarm. Not answered — see above.
 void cable_client_select_swarm(const char *swarm_id);
 
-// ── the Swarms (Super Tabs), named by `swarmCard:"v1"` and `superTab:"wait-v1"` in the hello ───────────
-// The Harness Pro's frames, unchanged (cli/src/cable/cableSession.ts; devices/harness-pro/docs/cable.md):
-//   in   supertabs {ids}                   the Swarms and their order, ≤16, the desktop's open ones first
-//        supertab {id, tab, name, count, leads:[{id, projectId, project, engine, owner, local, state, since?, order?}]}
-//                                          one Swarm, ≤12 Leads; `tab` is its desk tab or ""; `order` is the project's
-//                                          place in the app (absent from an older daemon: the frame's order)
-//        supertab.recap {tab, lead, text, at, none, thread?}    the open Lead's last message
-//        supertab.focus {tab, lead}        the desktop moved to that Lead
-//        question {…, superTab, attention} a Super Tab wait (id "supertab:…"); never an answer screen here
-//   out  supertab.recap.get / supertab.open / supertab.select {tab, lead}
-// A Lead id is not an agent id: it never goes into focus, agent.open or voice.begin. Only its `local` harness id does.
-// `t` is one of the three requests; `lead` is "" only for an open (the dial left the Swarm).
-void cable_client_supertab_send(const char *t, const char *tab, const char *lead);
-// `supertab.side` {tab, side}: the dial swiped that Swarm to its Buddy side (true) or its PM side (spec
-// 2026-10-29-round-dial-pm-buddy). A tab id it cannot hold sends nothing.
-void cable_client_supertab_thread_leave(const char *tab, const char *lead);   // {t: supertab.thread.leave, tab, lead}
-void cable_client_supertab_side(const char *tab, bool buddy);
-void cable_client_supertab_side_kept(const char *tab);
+// ── the apps, named by `appFilter:"v1"` in the hello (spec 2026-11-14-dial-app-filter) ────────────────
+// With no window the dial holds one app's agents (Harness, Orca, Ghostty, ...):
+//   in   apps {shown, apps:[{id, name, count, waiting}]}   ≤16, the daemon's order, in the machine view only
+//   out  app.pick {app}                                     the app to show; answered with `apps` and its ring
+// An id goes back in `app.pick`, so one that cannot be held whole is dropped, never cut.
+#define CABLE_MAX_APPS 16
+#define CABLE_APP_ID_MAX 16
+typedef struct {
+    char id[CABLE_APP_ID_MAX];
+    char name[24];
+    uint16_t count, waiting;   // its agents, and how many of them wait on the reader; 0..999
+} cable_app_t;
+void cable_client_pick_app(const char *app);
 
 // Send what the user asked for, into `agent_id`. Fire-and-forget: everything after this arrives back as
 // `turn.started` / `turn.done`, or as `turn.error` in words a person can act on.

@@ -1,6 +1,6 @@
 # Desktop test shards by measured time Implementation Plan
 
-> **For agentic workers:** implemented the project's way (project instructions, Engineer): task by task, each failing test
+> **For agentic workers:** implemented task by task, each failing test
 > committed before the code that passes it; one review on the pull request.
 
 **Goal:** Every Desktop CI shard finishes with at least 25% of its 10-minute limit left, and a shard that runs out of time

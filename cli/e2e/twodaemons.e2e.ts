@@ -243,11 +243,13 @@ describe('two daemons on one computer', () => {
 
   it('two masters racing for one pid file: one daemon serves, and the other master leaves saying why', async () => {
     const first = await make('first', { env: { HARNESSD_INITIAL_BACKOFF_MS: '200' } })
-    const second = await make('second', { beside: first, dataDir: first.dataDir, port: first.port, env: { HARNESSD_INITIAL_BACKOFF_MS: '200' } })
+    const second = await make('second', { beside: first, dataDir: first.dataDir, port: first.configuredPort, env: { HARNESSD_INITIAL_BACKOFF_MS: '200' } })
     await Promise.all([first.start({ ready: 'none' }), second.start({ ready: 'none' })])
     await until('a daemon to serve', async () => {
-      const ok = (await fetch(`http://127.0.0.1:${first.port}/api/health`).catch(() => null))?.ok
-      return ok && existsSync(first.socketPath) && pidFile(first) ? true : null
+      // Either master's core may be the one that serves, and the other may never say a port: the pid file names it.
+      const serving = [first, second].find((daemon) => daemon.pid !== null && daemon.pid === pidFile(first))
+      if (!serving || !existsSync(first.socketPath)) return null
+      return (await fetch(`http://127.0.0.1:${serving.port}/api/health`, { signal: AbortSignal.timeout(5_000) }).catch(() => null))?.ok ? true : null
     }, 90_000, 200)
     const winner = [first, second].find((daemon) => daemon.pid === pidFile(first))
     expect(winner, `the pid file names ${pidFile(first)}; the masters are ${first.pid} and ${second.pid}`).toBeDefined()
@@ -259,7 +261,7 @@ describe('two daemons on one computer', () => {
 
     // One daemon, and it is the one the pid file names: its master and core answer, the loser's core is gone.
     expect(pidFile(first)).toBe(winner!.pid)
-    const answer = await status(first.port)
+    const answer = await status(winner!.port)
     expect([answer.pid, answer.corePid]).toEqual([winner!.pid, winner!.corePid()])
     expect(IsolatedDaemon.alive(loser.corePid())).toBe(false)
     expect(existsSync(join(first.dataDir, 'adapter.safe-mode'))).toBe(false)
@@ -306,14 +308,16 @@ describe('two daemons on one computer', () => {
 
   it('a dev daemon started on the release daemon\'s port takes another, and the release daemon keeps its own', async () => {
     const release = await make('release')
-    const dev = await make('dev', { beside: release, port: release.port })
     await release.start()
+    // The port release holds, whichever it took. Asked for the one release was configured with, dev could find it free
+    // (release moved off it, and whoever had it left) and never be refused.
+    const dev = await make('dev', { beside: release, port: release.port })
     const atRelease = await LocalClient.connect(release)
     const ours = await create(release, atRelease, 'claude', 'release-claude')
     const oursPid = await panePid(release, ours.tmuxPane)
     await dev.start()
-    expect(dev.log()).toContain(`[hooks] control port ${release.port} unavailable; assigning a separate port`)
-    const devPort = JSON.parse(readFileSync(join(dev.dataDir, `daemon-${release.port}.json`), 'utf8')).port as number
+    expect(dev.log()).toContain(`[hooks] control port ${dev.configuredPort} unavailable; assigning a separate port`)
+    const devPort = JSON.parse(readFileSync(join(dev.dataDir, `daemon-${dev.configuredPort}.json`), 'utf8')).port as number
     expect(devPort).not.toBe(release.port)
     // The release daemon still answers on its port, as itself.
     const answer = await status(release.port)

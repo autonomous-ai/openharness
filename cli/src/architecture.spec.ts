@@ -94,24 +94,6 @@ function importsFor(path: string, text: string): Array<{ from: string; dynamic: 
 const IN_PROCESS_ONLY = 'services/inline.ts'
 
 /**
- * The Swarm's doors: the only imports of its code from outside it, each dynamic and taken only while the Swarm is on
- * (`HARNESS_SWARM`, harnessd/swarmSwitch.ts), or, for the CLI's own commands, only when one is run. A walk passes over
- * them, so a process with the Swarm off loads none of its code; a static import of the same file is walked.
- */
-const SWARM_DOORS: Readonly<Record<string, readonly string[]>> = {
-  // Its side of the core's process, of the services that act on it when they run there, and its own service when that
-  // runs there too (`HARNESSD_SERVICES=none`, or no master).
-  'core/main.ts': ['superTabs/inCore.ts', 'superTabs/inServices.ts', 'services/superTabs.ts'],
-  // Its side of the services that act on it, in their own processes, and its own service's process, which the master
-  // starts only while it is on (harnessd/services.ts `servicesOn`).
-  'serviceProcess.ts': ['superTabs/inServices.ts', 'services/superTabsProcess.ts'],
-  // `harness super-tab` and git's credential helper in a Swarm session: from the sources every daemon process runs cli.ts.
-  'cli.ts': ['superTabs/command.ts', 'superTabs/gitCredential.ts'],
-}
-/** The Swarm's code (Super Tabs): its folder, its libraries and its service. */
-const isSwarmCode = (file: string): boolean => /^superTabs\//.test(file) || /^lib\/swarm/.test(file) || /^services\/superTabs(Process)?\.ts$/.test(file)
-
-/**
  * The files whose `import()`s the core's walk does not follow: the loader of the other twelve engines' code,
  * which the core loads in its own process only once one of their sessions needs it
  * (docs/design/2026-10-08-other-engines-out-of-core.md). An `import()` of their code anywhere else is followed.
@@ -124,6 +106,11 @@ const LAZY_LOADERS = new Set(['engines/inProcess.ts'])
  * where the core grew 38% in five weeks unseen (docs/design/2026-11-12-core-audit.md).
  */
 const CORE_FILES = 'architecture.coreFiles.txt'
+/** Node's modules that open a connection, and the two others that do. */
+const NETWORK_MODULES: ReadonlySet<string> = new Set(['http', 'https', 'http2', 'net', 'tls', 'dgram', 'undici', 'ws'])
+/** What opens a connection without an import, and where it is reached from. */
+const GLOBAL_OPENERS: ReadonlySet<string> = new Set(['fetch', 'WebSocket', 'EventSource'])
+const GLOBAL_OBJECTS: ReadonlySet<string> = new Set(['globalThis', 'global', 'window', 'self'])
 
 /**
  * The code a process started on `entry` runs: every file its imports reach, as each file's lines
@@ -147,9 +134,9 @@ function closureOf(entry: string): Map<string, number> {
 }
 
 /** Whether the walk follows an import of `target` written in `importer`: every one but an `import()` of
- *  `IN_PROCESS_ONLY`, one through a Swarm door (`SWARM_DOORS`), or one written in a lazy loader. */
+ *  `IN_PROCESS_ONLY`, or one written in a lazy loader. */
 function followed(importer: string, target: string, dynamic: boolean): boolean {
-  return !dynamic || (target !== IN_PROCESS_ONLY && !SWARM_DOORS[importer]?.includes(target) && !LAZY_LOADERS.has(importer))
+  return !dynamic || (target !== IN_PROCESS_ONLY && !LAZY_LOADERS.has(importer))
 }
 
 /** Each file read and parsed once, however many walks pass through it. */
@@ -216,6 +203,8 @@ const EDGE: RegExp[] = [
   /^engines\/worker\/\w+Requests\.ts$/,
   // The pilot reader implementations and their host are never loaded by supervised core.
   /^engines\/(worker\/process|transcripts|(claude|codex)\/(transcript|\w+ReaderProcess))\.ts$/,
+  // Nor the other engines' worker: its readers, its requests and its process (docs/design/2026-11-12-core-audit.md, section 3).
+  /^engines\/others\//,
   // Nor their transcripts' normalizers, Codex's rollout and sub-agent readers, or what replays their history: their
   // readers' and live parsers', in their workers. Core reads only what they declare: adoption, activity and
   // their stores (docs/design/2026-10-08-engine-launch.md, (c5)). Search's normalizer table is search's.
@@ -223,8 +212,6 @@ const EDGE: RegExp[] = [
   /^lib\/(normalize|transcriptReader)\.ts$/, /^lib\/sessionSearch\/externals\/(claude|codex)\.ts$/,
   /^engines\/(runtime|(claude|codex)\/runtimeProfile)\.ts$/, /^lib\/runtimeProfile\.ts$/,
   /^gateway\//, /^lib\/e2ee\//, /^cable\//, /^device\//, /^lib\/autonomous-device\//, /^sharing\//, /^orchestrator\//, /^services\//,
-  // The Swarm (Super Tabs) is a subsystem that can be switched off: the core loads its code only through its doors.
-  /^superTabs\//,
   /^lib\/grid(Attach|Credentials|Derive|Ensure|Envelope|Exec|FleetRpc|Handoff|Install|McpUrl|Models|ModelsPayload|Picture|Presence|Reader|Target|Wake)\.ts$/,
   /^lib\/localModels\.ts$/,
   // The grid and saved-API launch builders are models': the core asks it for a launch (ModelsPort.gridLaunch) and keeps
@@ -288,8 +275,9 @@ const FACETS_FREE_OF_THEM: Array<[string, string]> = [
   ['core/transcripts/attach.ts', '(o3)'],
   ['core/transcripts/history.ts', '(o3)'],
   ['core/transcripts/lastTurn.ts', '(o3)'],
-  ['core/transcripts/databaseHistory.ts', '(o3)'],
-  ['core/engines/cursorTasks.ts', '(o3)'],
+  // Their history and last turns are their worker's (engines/others/): the core's port and its list of them hold none.
+  ['core/engines/readers.ts', 'the worker'],
+  ['engines/otherEngines.ts', 'the worker'],
   ['core/turns/agyBackstop.ts', '(o3)'],
   // What the core reads of their model and effort, and how a switch of theirs would be driven.
   ['lib/runtimeProfileState.ts', '(o4)'],
@@ -348,40 +336,6 @@ describe('the daemon\'s shape', () => {
     expect(wrong, 'The core calls services only through CorePorts, and is handed the socket\'s pieces as dependencies (src/core/AGENTS.md).').toEqual([])
   })
 
-  it('the core imports nothing of the Swarm\'s, not even its types: its code is loaded only while it is on', () => {
-    // Dee's rule (v1's last item): the daemon core stays small and reliable, and the Swarm is a subsystem that can be
-    // switched off. What the core needs of it is in core/api.ts; what the Swarm runs in the core's process is
-    // handed in by the core's entry from its doors, imported dynamically and only while the Swarm is on.
-    const wrong = importsIn('core').filter(({ from }) => /(^|\/)superTabs\//.test(from) || /(^|\/)lib\/swarm/.test(from))
-      .map(({ file, from }) => `${file} imports ${from}`)
-    expect(wrong, 'Declare what the core needs of the Swarm in core/api.ts, and hand its code in from superTabs/inCore.ts.').toEqual([])
-    const main = importsFor('core/main.ts', readFileSync(join(SRC, 'core', 'main.ts'), 'utf8')).filter(({ from }) => /(^|\/)superTabs(\/|\.js$)/.test(from))
-    expect(main).toEqual([{ from: '../superTabs/inCore.js', dynamic: true }, { from: '../superTabs/inServices.js', dynamic: true },
-      { from: '../services/superTabs.js', dynamic: true }])
-    expect(followed('core/main.ts', 'superTabs/inCore.ts', true)).toBe(false)
-    expect(followed('core/main.ts', 'superTabs/inCore.ts', false)).toBe(true)
-    expect(followed('services/models.ts', 'superTabs/inServices.ts', true)).toBe(true)
-  }, WALK_TIMEOUT_MS)
-
-  // The audit of 2026-11-12 (docs/design/2026-11-12-core-audit.md): the door re-exported the service's own start, for a
-  // core that runs it in its own process, so every core with the Swarm on, the default, loaded the whole service: 118
-  // files and 28,739 lines it never ran, edge files among them (the transcript normalizers, the handoff, the Codex
-  // profiles), in the process that must never go down. A core that runs the service itself now loads it by an import of
-  // its own (core/main.ts), and what the door hands every core is listed here, file by file.
-  it('with the Swarm on, the core\'s process loads the Swarm\'s side of it and none of its service', () => {
-    const core = closureOf('core/main.ts')
-    const door = [...closureOf('superTabs/inCore.ts').keys()].filter((file) => !core.has(file)).sort()
-    expect(door, 'What the Swarm runs in the core\'s process is its side of the core alone. Its service runs in its own process: reach it through a port in core/api.ts. A file every Swarm session needs in the core is added here, with the review that says why.').toEqual([
-      'lib/agentInstructions.ts', 'lib/superTabAttachmentProxy.ts', 'lib/swarmEngineArgs.ts', 'lib/swarmGitHub.ts', 'lib/swarmSkills.ts',
-      'superTabs/cleanupCloses.ts', 'superTabs/inCore.ts', 'superTabs/inCore/adoption.ts', 'superTabs/inCore/agents.ts',
-      'superTabs/inCore/attention.ts', 'superTabs/inCore/cards.ts', 'superTabs/inCore/deliveries.ts', 'superTabs/inCore/devices.ts',
-      'superTabs/inCore/launch.ts', 'superTabs/inCore/role.ts', 'superTabs/inCore/terminal.ts', 'superTabs/leadSwitch.ts',
-      'superTabs/readContract.ts', 'superTabs/retention.ts', 'superTabs/wire.ts',
-    ])
-    // None of it is an edge file but the Swarm's own side.
-    expect(door.filter((file) => !/^superTabs\//.test(file) && EDGE.some((pattern) => pattern.test(file)))).toEqual([])
-  }, WALK_TIMEOUT_MS)
-
   // The review of #4241: the first cut of that fix imported the service with an `await` at the line that starts it, in
   // the middle of the wiring. The wiring ran in one go until then, and its closures count on it ("declared further down:
   // read when …, never now"): a wait there gives the services already started a turn of the loop before the core is whole.
@@ -396,32 +350,8 @@ describe('the daemon\'s shape', () => {
     expect(started).toBeGreaterThan(0)
     expect(hooks).toBeGreaterThan(started)
     expect(statements.slice(started, hooks).filter(waits).map((statement) => statement.getText(source).split('\n')[0]),
-      'Load what the wiring needs before it starts, beside the doors (`swarmService` in core/main.ts).').toEqual([])
+      'Load what the wiring needs before it starts, as `services/inline.ts` is in core/main.ts.').toEqual([])
   })
-
-  // The review of #1765: with the Swarm off, every core still loaded its skills through the registry, and with every
-  // service in the core's process (`HARNESSD_SERVICES=none`) its retention, observers and grid code, and the agent cleanup
-  // kept its members. Every import of its code from outside it is now a door, and no process's start reaches it.
-  it('with the Swarm off no process loads its code, imports included: its code is reached only through its doors', () => {
-    const resolveFrom = (file: string, from: string): string => {
-      const base = resolve(dirname(join(SRC, file)), from)
-      return relative(SRC, [base.replace(/\.js$/, '.ts'), `${base}.ts`, join(base, 'index.ts')].find((candidate) => { try { return statSync(candidate).isFile() } catch { return false } }) ?? base)
-    }
-    const sources = (dir: string): string[] => readdirSync(join(SRC, dir), { withFileTypes: true }).flatMap((entry) => entry.isDirectory()
-      ? sources(join(dir, entry.name)) : /\.ts$/.test(entry.name) && !/\.(spec|test|e2e)\.ts$/.test(entry.name) ? [join(dir, entry.name)] : [])
-    const outside = sources('.').filter((file) => !isSwarmCode(file) && !file.startsWith('testing/'))
-    const doors = outside.flatMap((file) => importsFor(file, readFileSync(join(SRC, file), 'utf8'))
-      .map(({ from, dynamic }) => ({ file, target: resolveFrom(file, from), dynamic })).filter(({ target }) => isSwarmCode(target)))
-    expect(doors.filter(({ file, target, dynamic }) => !dynamic || !SWARM_DOORS[file]?.includes(target)).map(({ file, target }) => `${file} imports ${target}`),
-      'Hand the Swarm\'s code in through superTabs/inCore.ts or superTabs/inServices.ts, loaded only while it is on.').toEqual([])
-    expect(doors.map(({ file, target }) => `${file} → ${target}`).sort()).toEqual(Object.entries(SWARM_DOORS).flatMap(([file, targets]) => targets.map((target) => `${file} → ${target}`)).sort())
-    // The core (normal and inline), the master, the services' process and each service: none reaches the Swarm's code.
-    const entries = ['coreProcess.ts', 'leanCoreEntry.ts', 'core/main.ts', 'services/inline.ts', 'leanEntry.ts', 'masterProcess.ts', 'serviceProcess.ts',
-      ...sources('services').filter((file) => /Process\.ts$/.test(file) && !isSwarmCode(file))]
-    for (const entry of entries) expect([...closureOf(entry).keys()].filter(isSwarmCode), entry).toEqual([])
-    // The Swarm's own entries do reach it: the walk passes over a door, and only a door.
-    expect([...closureOf('superTabs/inServices.ts').keys()].filter(isSwarmCode).length).toBeGreaterThan(5)
-  }, WALK_TIMEOUT_MS)
 
   it('live transcript coordination depends on engine contracts, with neutral folding mechanics', () => {
     const owners = new Set(['core/transcripts/attach.ts', 'core/transcripts/ingest.ts', 'core/transcripts/normalizers.ts'])
@@ -540,6 +470,13 @@ describe('the daemon\'s shape', () => {
     }
   })
 
+  it('resume publication loads no history repair implementation in the default core', () => {
+    const implementations = new Set(['engines/kit/resumeRepair.ts', 'engines/resumePreparation.ts', 'engines/resumeRepairs.ts'])
+    for (const entry of ['core/main.ts', 'core/agents/launch.ts', 'lib/resumeAgentService.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => implementations.has(file)), entry).toEqual([])
+    }
+  })
+
   it('the core loads the other engines\' code only through engines/inProcess.ts, but for the files still listed', () => {
     const closure = closureOf('core/main.ts')
     const reached = [...closure.keys()].filter(theirs).sort()
@@ -647,6 +584,112 @@ describe('the daemon\'s shape', () => {
     expect(loaded.filter((file) => !listed.includes(file)).map((file) => `${file}, imported by ${importer(file)}`), `The core's process would load a file it does not load today. The core stays small (cli/AGENTS.md, Protect the core): code a session can run without belongs to a component in a process of its own. If every session needs the file, add its line to src/${CORE_FILES}, in order, and say why in the pull request.`).toEqual([])
     expect(listed.filter((file) => !loaded.includes(file)), `The core's process no longer loads these: delete their lines from src/${CORE_FILES}.`).toEqual([])
     expect(listed, `Keep src/${CORE_FILES} in order, each file once: lines kept in order merge without conflicts.`).toEqual([...new Set(listed)].sort())
+  }, WALK_TIMEOUT_MS)
+
+  // The core meets the outside least (cli/AGENTS.md, Protect the core, rule 4). Its one call to another host was the
+  // sign-in's renewal, which the gateway's process makes now (the core audit of 2026-11-12, decision 4). Whatever can
+  // open a connection, a network module imported for its code (not its types) or a `fetch`, is in one of these files,
+  // and each listens on this computer or connects to it alone.
+  it('the core\'s process opens no connection to another host: what can open one is listed, with what it does', () => {
+    const OPENS: Record<string, string> = {
+      'core/main.ts': 'listens: the daemon\'s local HTTP server, on loopback and its private socket',
+      'hookServer.ts': 'listens: the engines\' hooks, on this computer',
+      'lib/localSocket.ts': 'the daemon\'s own Unix socket, to ask whether a daemon serves here already',
+      'lib/loopbackGet.ts': 'a GET to this computer\'s loopback alone',
+      'lib/ptyHost/client.ts': 'the Windows terminal host\'s pipe on this computer',
+      'lib/ptyHost/launch.ts': 'the Windows terminal host\'s pipe on this computer',
+      'lib/windows/dataFolderClaim.ts': 'a named pipe on this computer that claims the data folder',
+      'lib/windows/pipeClient.ts': 'a named pipe on this computer',
+      'localWsServer.ts': 'listens: the windows\' and the services\' WebSocket, on this computer',
+    }
+    // Read as code, not as lines: a comment or a string that names `fetch` opens nothing, and `(deps.fetch ?? fetch)(…)`,
+    // the shape of an upload the core made until 2026-11-13, does (a line pattern missed it, review of 2026-11-13).
+    const opensIn = (code: string): boolean => {
+      const source = ts.createSourceFile('file.ts', code, ts.ScriptTarget.Latest, true)
+      let opens = false
+      const networkModule = (specifier: ts.Expression | undefined): boolean =>
+        !!specifier && ts.isStringLiteral(specifier) && NETWORK_MODULES.has(specifier.text.replace(/^node:/, ''))
+      // Whether [name] is one of the file's own in a scope around [node] (a parameter, a variable, a function, a class
+      // or an import), and so not the global: a git fetch, a parameter named fetch (review of 2026-11-13: one flag for
+      // the whole file missed a global call beside a local one).
+      const shadowed = (node: ts.Node, name: string): boolean => {
+        const binds = (binding: ts.BindingName): boolean => (ts.isIdentifier(binding) ? binding.text === name
+          : binding.elements.some((element) => !ts.isOmittedExpression(element) && binds(element.name)))
+        const imports = (statement: ts.ImportDeclaration): boolean => {
+          const clause = statement.importClause
+          return !!clause && (clause.name?.text === name || (!!clause.namedBindings && (ts.isNamespaceImport(clause.namedBindings)
+            ? clause.namedBindings.name.text === name : clause.namedBindings.elements.some((element) => element.name.text === name))))
+        }
+        const declares = (statements: ts.NodeArray<ts.Statement>): boolean => statements.some((statement) =>
+          (ts.isVariableStatement(statement) && statement.declarationList.declarations.some((declaration) => binds(declaration.name)))
+          || ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name?.text === name)
+          || (ts.isImportDeclaration(statement) && imports(statement)))
+        for (let scope = node.parent; scope; scope = scope.parent) {
+          if (ts.isFunctionLike(scope) && scope.parameters.some((parameter) => binds(parameter.name))) return true
+          if ((ts.isBlock(scope) || ts.isSourceFile(scope) || ts.isModuleBlock(scope)) && declares(scope.statements)) return true
+          if (ts.isCaseBlock(scope) && scope.clauses.some((clause) => declares(clause.statements))) return true
+          if ((ts.isForStatement(scope) || ts.isForOfStatement(scope) || ts.isForInStatement(scope)) && scope.initializer
+            && ts.isVariableDeclarationList(scope.initializer) && scope.initializer.declarations.some((declaration) => binds(declaration.name))) return true
+          if (ts.isCatchClause(scope) && scope.variableDeclaration && binds(scope.variableDeclaration.name)) return true
+        }
+        return false
+      }
+      const inType = (node: ts.Node): boolean => {
+        for (let up = node.parent; up && !ts.isStatement(up); up = up.parent) if (ts.isTypeNode(up)) return true
+        return false
+      }
+      const visit = (node: ts.Node): void => {
+        if (opens) return
+        if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && networkModule(node.moduleSpecifier)) {
+          const clause = ts.isImportDeclaration(node) ? node.importClause : undefined
+          const typeOnly = ts.isImportDeclaration(node)
+            ? !!clause && (clause.isTypeOnly || (!clause.name && !!clause.namedBindings && ts.isNamedImports(clause.namedBindings)
+              && clause.namedBindings.elements.every((element) => element.isTypeOnly)))
+            : node.isTypeOnly
+          if (!typeOnly) opens = true
+        }
+        // `import('node:net')`, `require('https')`.
+        if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))
+          && networkModule(node.arguments[0])) opens = true
+        // The global `fetch` as a value: called, passed or a fallback; never a property of something else, a key, a type,
+        // or the file's own.
+        if (ts.isIdentifier(node) && node.text === 'fetch' && !inType(node) && !shadowed(node, 'fetch')) {
+          const parent = node.parent
+          const named = (ts.isPropertyAccessExpression(parent) && parent.name === node)
+            || ((ts.isPropertyAssignment(parent) || ts.isPropertySignature(parent) || ts.isPropertyDeclaration(parent) || ts.isMethodDeclaration(parent)
+              || ts.isParameter(parent) || ts.isVariableDeclaration(parent) || ts.isBindingElement(parent) || ts.isFunctionDeclaration(parent)
+              || ts.isImportSpecifier(parent) || ts.isShorthandPropertyAssignment(parent)) && parent.name === node)
+          if (!named) opens = true
+        }
+        // The globals that open one when made: Node's own WebSocket and EventSource.
+        if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && GLOBAL_OPENERS.has(node.expression.text) && node.expression.text !== 'fetch'
+          && !shadowed(node, node.expression.text)) opens = true
+        // Reached through the global object: `globalThis.fetch`, `global.WebSocket`, `globalThis['fetch']`.
+        if ((ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && GLOBAL_OBJECTS.has(node.expression.text) && GLOBAL_OPENERS.has(node.name.text))
+          || (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && GLOBAL_OBJECTS.has(node.expression.text)
+            && ts.isStringLiteral(node.argumentExpression) && GLOBAL_OPENERS.has(node.argumentExpression.text))) opens = true
+        ts.forEachChild(node, visit)
+      }
+      visit(source)
+      return opens
+    }
+    const loaded = new Set(closureOf('core/main.ts').keys())
+    const opening = [...loaded].filter((file) => opensIn(readFileSync(join(SRC, file), 'utf8'))).sort()
+    expect(opening.filter((file) => !OPENS[file]), 'A file the core\'s process loads can open a connection: the core calls no other host. Make the call in the component that faces it (the gateway, for the backend), or, for one on this computer only, list it here and say what it does.').toEqual([])
+    expect(Object.keys(OPENS).filter((file) => !opening.includes(file)), 'Opens no connection, or is no longer loaded: remove it from the list.').toEqual([])
+    // What it finds, so a change to how it reads cannot quietly find nothing.
+    for (const code of ["import http from 'node:http'", "import { request } from 'http'", "import { connect } from 'node:net'", 'const { request } = await import("node:https")',
+      "export { connect } from 'node:tls'", 'const answer = await fetch (url)', "import { WebSocket } from 'ws'", "import { request } from 'undici'",
+      "const net = require('net')", 'const answer = await (deps.fetch ?? fetch)(url)', 'send(fetch)', 'globalThis.fetch(url)', "import http, { type Server } from 'node:http'",
+      'function run(fetch: Fetcher) { return fetch(1) }\nawait fetch("https://backend")', 'new WebSocket("wss://backend")', 'const events = new EventSource(url)',
+      "globalThis['fetch'](url)", 'global.fetch(url)', 'const s = new global.WebSocket(url)']) {
+      expect(opensIn(code), code).toBe(true)
+    }
+    for (const code of ["import type { IncomingMessage } from 'node:http'", "import { type Server } from 'net'", "import { join } from 'node:path'", 'const fetched = prefetch',
+      '// fetch it again', "const said = 'fetch('", 'deps.fetch(url)', 'const deps: { fetch?: typeof fetch } = {}', '({ fetch: myFetch })',
+      'function go(fetch: Fetcher) { return fetch(url) }', "const fetch = remote ?? 'origin'\nif (fetch) await fetchOnce(fetch)",
+      'let socket: WebSocket | null = null', "import { WebSocket as Ws } from 'node:stream'\nconst x = 1", 'for (const fetch of fetches) await fetch', 'try { go() } catch (fetch) { log(fetch) }'])
+      expect(opensIn(code), code).toBe(false)
   }, WALK_TIMEOUT_MS)
 
   it('finds what it checks: imports of every kind, in every folder', () => {

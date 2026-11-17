@@ -19,10 +19,16 @@ import 'package:flutter/semantics.dart'
     show CustomSemanticsAction, SemanticsService;
 import 'package:xterm/xterm.dart' show Terminal, TerminalKey, TerminalStyle;
 
+import 'package:harness_mobile/chat/chat_attach_sheet.dart';
+import 'package:harness_mobile/chat/chat_composer.dart';
+import 'package:harness_mobile/chat/chat_mic_button.dart';
+import 'package:harness_mobile/chat/chat_view.dart';
+import 'package:harness_mobile/chat/chat_view_store.dart';
 import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/logging/typing_trace.dart';
 import 'package:harness_mobile/core/models.dart'
     show Agent, AgentProject, ConnectionStatus;
+import 'package:harness_mobile/core/runtime_model_name.dart';
 import 'package:harness_mobile/core/first_task.dart';
 import 'package:harness_mobile/terminal/terminal_prompt_zone.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -57,7 +63,6 @@ import 'delete_agent.dart';
 import 'held_height.dart';
 import 'machines_tab.dart';
 import 'new_agent_chooser.dart';
-import 'out_of_sight.dart';
 import 'phone_sheet.dart';
 import 'phone_status.dart';
 import 'settings_page.dart';
@@ -84,8 +89,6 @@ import 'welcome/focus_hints.dart';
 
 import 'package:harness_mobile/demo/sample_mode.dart';
 import 'package:harness_mobile/notify/notifications_ask.dart';
-import 'package:harness_mobile/swarm/swarm_home_root.dart';
-import 'package:harness_mobile/swarm/swarm_mark.dart';
 
 import 'voice_input_controller.dart';
 
@@ -824,29 +827,13 @@ class _TerminalPageState extends State<TerminalPage>
     setState(() => _facts = facts);
   }
 
-  SwarmHomeChoice? _swarmHome;
-
-  void _swarmHomeChanged() {
-    if (mounted) setState(() {});
-  }
-
-  /// Back to Swarm Home, while this terminal is what Swarm Home's agent opened: the terminal is the
-  /// root page then, so no pop can leave it. Null with Swarm off, with Swarm Home showing, and
-  /// outside the shell.
-  VoidCallback? get _backToSwarm {
-    final home = _swarmHome;
-    if (home == null || !home.harnessOverSwarm) return null;
-    return PhoneShellScope.maybeOf(context)?.onShowSwarm;
-  }
-
   @override
   void initState() {
     super.initState();
     if (kTypingTrace) typingEvent('switch: terminal page mounted');
     WidgetsBinding.instance.addObserver(this);
-    // Not a dependency (the scope never notifies): the shell's own choice of root is what changes.
-    _swarmHome = PhoneShellScope.maybeOf(context)?.home
-      ?..addListener(_swarmHomeChanged);
+    widget.notifier.addListener(_onNotifier);
+    chatViewStore.addListener(_onChatView);
     _lifecycle =
         WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed;
     // A session already taking input when the page comes ticks nothing to raise from.
@@ -861,25 +848,6 @@ class _TerminalPageState extends State<TerminalPage>
     // Which of the page's rebuilds an inherited widget asked for — against
     // `page.update` (its parent) and `page.build` (all of them).
     if (kTypingTrace) typingCount('page.deps');
-    _listenToApp(!OutOfSight.of(context));
-  }
-
-  /// Whether [_onNotifier] is listening.
-  bool _listeningToApp = false;
-
-  /// Listens to the app only while this page can be seen. Out of sight
-  /// (Harness under Swarm Home, [OutOfSight]) every tick of the app was a
-  /// read of the facts, and a rebuild whenever one moved, for a page nobody
-  /// is looking at. Shown again, the rebuild that brings it back reads the
-  /// facts afresh in [build], so nothing is missed.
-  void _listenToApp(bool on) {
-    if (on == _listeningToApp) return;
-    _listeningToApp = on;
-    if (on) {
-      widget.notifier.addListener(_onNotifier);
-    } else {
-      widget.notifier.removeListener(_onNotifier);
-    }
   }
 
   /// Releases the resize hold when this page is parked mid-animation.
@@ -890,7 +858,7 @@ class _TerminalPageState extends State<TerminalPage>
   void didUpdateWidget(TerminalPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (kTypingTrace) typingCount('page.update');
-    if (_listeningToApp && !identical(oldWidget.notifier, widget.notifier)) {
+    if (!identical(oldWidget.notifier, widget.notifier)) {
       oldWidget.notifier.removeListener(_onNotifier);
       widget.notifier.addListener(_onNotifier);
     }
@@ -922,7 +890,7 @@ class _TerminalPageState extends State<TerminalPage>
 
   @override
   void dispose() {
-    _swarmHome?.removeListener(_swarmHomeChanged);
+    chatViewStore.removeListener(_onChatView);
     _endCardTimer?.cancel();
     // A take started here must not come back to a page that is gone.
     final session = widget.notifier
@@ -944,7 +912,7 @@ class _TerminalPageState extends State<TerminalPage>
     _scrollback.dispose();
     _dropFindBack();
     _find?.dispose();
-    _listenToApp(false);
+    widget.notifier.removeListener(_onNotifier);
     _daemon?.noteQuestion(
       this,
       machineId: widget.machineId,
@@ -1660,6 +1628,106 @@ class _TerminalPageState extends State<TerminalPage>
   /// terminal (the desktop, on a click there) while the take was being spoken. Speaking to a
   /// harness is as plain a claim on it as a tap or a scroll, and so are a tapped answer and
   /// Interrupt; [why] names which in the log. Null when it cannot be had in 6s.
+  /// Settings ▸ Chat UI or this agent's own switch moved.
+  void _onChatView() {
+    if (mounted) setState(() {});
+  }
+
+  /// This agent shows as chat (`chat/chat_view.dart`) — when it is chosen, and the agent keeps a
+  /// conversation to show: a shell has none, and an agent whose engine has not named its session yet
+  /// has nothing to read.
+  bool get _showsChat {
+    if (!chatViewStore.showsChat(widget.machineId, widget.agentId)) {
+      return false;
+    }
+    final agent = widget.notifier
+        .stateOf(widget.machineId)
+        ?.agents
+        .where((a) => a.id == widget.agentId)
+        .firstOrNull;
+    return agent != null &&
+        agent.sessionId != null &&
+        agent.engine != null &&
+        agent.engine != 'terminal';
+  }
+
+  void _setShowsChat(bool chat) => unawaited(
+    chatViewStore.setShowsChat(widget.machineId, widget.agentId, chat),
+  );
+
+  /// A message from Chat UI's composer: the same `message` the mic's words go as, on a terminal this
+  /// phone takes back first if another has it.
+  Future<bool> _sendChat(String text) async {
+    final session = await _sessionForInput(why: 'chat');
+    if (session == null) {
+      if (mounted) _flash('✗ not sent', error: true);
+      return false;
+    }
+    return session.sendComposerText(text);
+  }
+
+  /// The chip in Chat UI's composer: the engine as people know it, then the model and effort the
+  /// daemon saw it running (`Claude Opus 5.5 · Medium`) — read the way the desktop reads it — or the
+  /// grid model it was moved to.
+  static String? _chatModelLabel(Agent? agent) {
+    if (agent == null || agent.engine == null) return null;
+    final engine = engineIdentity(
+      agent.engine,
+      displayName: agent.engineDisplayName,
+    ).label;
+    final grid = agent.gridModel;
+    if (grid != null && grid.isNotEmpty) return '$engine $grid';
+    final running = runtimeModelDetails(
+      agent.selectedModel,
+      agentId: agent.id,
+      engine: agent.engine,
+    );
+    return running == null
+        ? engine
+        : '$engine ${modelLabelWithEffort(running.name, running.effort)}';
+  }
+
+  /// Chat UI's `+`: a picture or a file for the agent, the same ways the key strip's `img` offers —
+  /// and only those the machine's CLI can take.
+  void _attachToChat(TerminalSession session, MachineState? machine) {
+    final images = machine?.terminalImagePasteAvailable == true;
+    final files = machine?.terminalPasteFileAvailable == true;
+    final options = <ChatAttachOption>[
+      if (images)
+        (
+          icon: LucideIcons.image,
+          title: 'Photos',
+          detail: null,
+          onTap: () => unawaited(_sendImage(session, ImageSource.gallery)),
+        ),
+      if (images)
+        (
+          icon: LucideIcons.camera,
+          title: 'Camera',
+          detail: null,
+          onTap: () => unawaited(_sendImage(session, ImageSource.camera)),
+        ),
+      if (files)
+        (
+          icon: LucideIcons.paperclip,
+          title: 'Files',
+          detail: 'PDF, text, code…',
+          onTap: () => unawaited(_sendFile(session)),
+        ),
+    ];
+    if (options.isEmpty) {
+      _flash('This computer cannot take attachments yet', error: true);
+      return;
+    }
+    unawaited(showChatAttachSheet(context, options));
+  }
+
+  /// Stop from Chat UI: Esc, as in the agent's own terminal.
+  Future<void> _stopChat() async {
+    final session = await _sessionForInput(why: 'chat');
+    session?.terminal.keyInput(TerminalKey.escape);
+  }
+
   Future<TerminalSession?> _sessionForInput({String why = 'voice'}) async {
     TerminalSession? current() =>
         widget.notifier.paneOfAgent(widget.machineId, widget.agentId)?.session;
@@ -2543,6 +2611,16 @@ class _TerminalPageState extends State<TerminalPage>
     // Read once: the body reserves it, and search subtracts what the body
     // already took. See [_navigationBar].
     final navigationBar = _navigationBar;
+    // This agent as chat: its conversation over the terminal, which stays attached under it — the
+    // open question is read off the terminal's screen and its answer keyed into it.
+    final chat = agent != null && !agentGone && _showsChat
+        ? widget.notifier.chatConversations.open(
+            widget.machineId,
+            widget.agentId,
+            agent.sessionId!,
+            streamsText: agent.engine == 'opencode' || agent.engine == 'kilo',
+          )
+        : null;
     return Scaffold(
       // On the terminal's palette, which stays dark in a light app — see [TerminalLook].
       backgroundColor: TerminalLook.read(context, () => AppPalette.windowBg),
@@ -2732,7 +2810,11 @@ class _TerminalPageState extends State<TerminalPage>
                                                   // Whether it also HOLDS one that is already
                                                   // up is a separate question, and the pager asks
                                                   // it on every swipe — see [_shouldFocus].
-                                                  focused: _shouldFocus,
+                                                  // Never under Chat UI: the composer
+                                                  // has the keyboard there.
+                                                  focused:
+                                                      _shouldFocus &&
+                                                      chat == null,
                                                   // What the bar is finding — see [_openFind].
                                                   find: _find,
                                                   // Asks again when `focused` did
@@ -2874,6 +2956,22 @@ class _TerminalPageState extends State<TerminalPage>
                                   else if (session != null &&
                                       !session.hasScreen)
                                     Positioned.fill(child: placeholder),
+                                  if (chat != null)
+                                    Positioned.fill(
+                                      child: ChatTranscriptView(
+                                        conversation: chat,
+                                        // Under the title, which floats over the
+                                        // page's top as it does over a terminal.
+                                        topInset: 72,
+                                        question: _questionWatcher?.view,
+                                        onAnswer: (view, number) => _tapAnswer(
+                                          view,
+                                          (label: '', number: number),
+                                        ),
+                                        onAnswerInTerminal: () =>
+                                            _setShowsChat(false),
+                                      ),
+                                    ),
                                   // The mic and Search, floating in the
                                   // terminal's bottom-right corner — see
                                   // [TerminalActionColumn].
@@ -2915,6 +3013,28 @@ class _TerminalPageState extends State<TerminalPage>
                           // its field has one, at the terminal's foot while not.
                           if (session != null && _find != null)
                             TerminalFindBar(find: _find!, onClose: _closeFind)
+                          else if (chat != null)
+                            ListenableBuilder(
+                              listenable: chat,
+                              builder: (context, _) => ChatComposer(
+                                working: chat.working,
+                                // A terminal another app holds is taken back by the send
+                                // itself ([_sendChat]), as a tap on it would be.
+                                onSend: _sendChat,
+                                onStop: () => unawaited(_stopChat()),
+                                onAttach: session != null
+                                    ? () => _attachToChat(session, machine)
+                                    : null,
+                                model: _chatModelLabel(agent),
+                                // The phone's own voice input, as the terminal's mic.
+                                mic: session == null
+                                    ? null
+                                    : ChatMicButton(
+                                        voice: widget.voice,
+                                        session: session,
+                                      ),
+                              ),
+                            )
                           else if (session != null)
                             TerminalInputDock(
                               session: session,
@@ -2970,9 +3090,6 @@ class _TerminalPageState extends State<TerminalPage>
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             TerminalTitle(
-                              backInset: _backToSwarm == null
-                                  ? 0
-                                  : _BackToSwarm.inset,
                               sample: SampleMode.maybeOf(context) != null,
                               name:
                                   agent?.displayName ?? _cachedAgentName ?? '',
@@ -2989,14 +3106,8 @@ class _TerminalPageState extends State<TerminalPage>
                               // The paired daemon at the title's right end: its
                               // sprite, a tap from its sheet. Nothing outside the
                               // signed-in shell (the sample). See `daemon_chip.dart`.
-                              // Before it, while Swarm is on: what the Swarms ask of
-                              // the person, a tap from them. See `swarm_mark.dart`.
-                              daemon: const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  SwarmMark(margin: EdgeInsets.only(left: 12)),
-                                  DaemonChip(margin: EdgeInsets.only(left: 12)),
-                                ],
+                              daemon: const DaemonChip(
+                                margin: EdgeInsets.only(left: 12),
                               ),
                               // Only over a screen: with none, [_MachineAway] says it
                               // in the terminal's place, and saying it twice is noise.
@@ -3028,30 +3139,11 @@ class _TerminalPageState extends State<TerminalPage>
                         ),
                       ),
                     ),
-                    // The way back to Swarm, for a terminal opened from it. ⚠️ The terminal is
-                    // then the ROOT page, so there is nothing under it to pop and iOS has no
-                    // system back: the only way out was the dim Swarm mark in the title, which
-                    // folds away with it while the history is read. This stays, outside the slide.
-                    if (_backToSwarm case final toSwarm?) ...[
-                      Positioned(
-                        top: 0,
-                        left: 0,
-                        child: _BackToSwarm(onBack: toSwarm),
-                      ),
-                      if (defaultTargetPlatform == TargetPlatform.iOS)
-                        Positioned(
-                          top: 0,
-                          bottom: 0,
-                          left: 0,
-                          width: _BackToSwarm.edge,
-                          child: _EdgeBack(onBack: toSwarm),
-                        ),
-                    ],
                     // ⚠️ No `[42/1380]` at the top right while reading back, by the owner's
                     // call (2026-09-27): "we don't need the scrolling indicator". The history
                     // scrolls like any list; scrolling down is the way back to the stream.
                     // The line above the mic: what is going on, in a few words — see [_statusLine].
-                    if (!_ownsInput && _find == null)
+                    if (!_ownsInput && _find == null && chat == null)
                       Positioned(
                         left: 0,
                         right: 0,
@@ -3075,7 +3167,7 @@ class _TerminalPageState extends State<TerminalPage>
                         ),
                       ),
                     // How loud the take is: a glow behind the mic that swells with the voice.
-                    if (!_ownsInput && _find == null)
+                    if (!_ownsInput && _find == null && chat == null)
                       ListenableBuilder(
                         listenable: widget.voice,
                         builder: (context, _) =>
@@ -3101,7 +3193,7 @@ class _TerminalPageState extends State<TerminalPage>
                     // way the home screen stays whole under Siri. Laid over the
                     // whole page so its capsule, rising as it talks, still takes
                     // taps.
-                    if (!_ownsInput && _find == null)
+                    if (!_ownsInput && _find == null && chat == null)
                       Positioned(
                         left: 0,
                         right: 0,
@@ -3254,6 +3346,19 @@ class _TerminalPageState extends State<TerminalPage>
       sections: [
         PhoneSheetSection(
           actions: [
+            // This agent as chat or as its terminal, whatever Settings ▸ Chat UI says for the rest.
+            if (_showsChat)
+              PhoneSheetAction(
+                icon: LucideIcons.squareTerminal300,
+                label: 'Show terminal',
+                onTap: () => _setShowsChat(false),
+              )
+            else
+              PhoneSheetAction(
+                icon: LucideIcons.messagesSquare300,
+                label: 'Show chat',
+                onTap: () => _setShowsChat(true),
+              ),
             // First, because it is the one used mid-conversation: iOS has no paste gesture on a
             // terminal (long-press is selection there), and the soft keyboard has no paste key.
             // Hidden rather than dimmed while the stream is read-only: reclaiming is the header's
@@ -4736,36 +4841,14 @@ class _AnchoredTerminalState extends State<_AnchoredTerminal> {
   void initState() {
     super.initState();
     widget.reading.addListener(_toggled);
+    widget.terminal?.addListener(_output);
     terminalFontStore.addListener(_changed);
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _listenToOutput(!OutOfSight.of(context));
-  }
-
-  /// Whether [_output] is listening.
-  bool _listeningToOutput = false;
-
-  /// Follows the output only while the terminal can be seen. Out of sight
-  /// (Harness under Swarm Home, [OutOfSight]) the output stays in the buffer,
-  /// and the rebuild that shows the terminal again places it by what is there
-  /// then.
-  void _listenToOutput(bool on) {
-    if (on == _listeningToOutput) return;
-    _listeningToOutput = on;
-    if (on) {
-      widget.terminal?.addListener(_output);
-    } else {
-      widget.terminal?.removeListener(_output);
-    }
   }
 
   @override
   void didUpdateWidget(_AnchoredTerminal old) {
     super.didUpdateWidget(old);
-    if (_listeningToOutput && !identical(old.terminal, widget.terminal)) {
+    if (!identical(old.terminal, widget.terminal)) {
       old.terminal?.removeListener(_output);
       widget.terminal?.addListener(_output);
     }
@@ -4779,7 +4862,7 @@ class _AnchoredTerminalState extends State<_AnchoredTerminal> {
 
   @override
   void dispose() {
-    _listenToOutput(false);
+    widget.terminal?.removeListener(_output);
     widget.reading.removeListener(_toggled);
     terminalFontStore.removeListener(_changed);
     super.dispose();
@@ -5089,64 +5172,6 @@ class _SampleEndCard extends StatelessWidget {
       ),
     );
   }
-}
-
-/// The way back to Swarm Home over the terminal's top left corner: a chevron, as iOS draws back on
-/// a pushed page, on the terminal's own ground so the output never reads through it. It sits
-/// outside the header's slide, so it is there while the history is read back too.
-class _BackToSwarm extends StatelessWidget {
-  const _BackToSwarm({required this.onBack});
-
-  final VoidCallback onBack;
-
-  /// Room the title leaves for it: what its box takes, less the gutter the title keeps anyway,
-  /// so the name starts where the box ends and no letter is under it.
-  static const inset = TtyBackButton.width - Tty.origin;
-
-  /// The width of the iOS edge swipe's strip ([_EdgeBack]).
-  static const edge = 20.0;
-
-  @override
-  Widget build(BuildContext context) {
-    final tty = Tty.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: tty.ground,
-        borderRadius: const BorderRadius.only(bottomRight: Radius.circular(14)),
-      ),
-      child: TtyBackButton(onPressed: onBack),
-    );
-  }
-}
-
-/// iOS's edge swipe back: a drag from the left edge that goes far enough, or is flung. A strip
-/// only [_BackToSwarm.edge] wide, so the terminal keeps every other touch. Android has no such
-/// swipe and is not given one: its system back is the shell's.
-class _EdgeBack extends StatefulWidget {
-  const _EdgeBack({required this.onBack});
-
-  final VoidCallback onBack;
-
-  @override
-  State<_EdgeBack> createState() => _EdgeBackState();
-}
-
-class _EdgeBackState extends State<_EdgeBack> {
-  double _dragged = 0;
-
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-    key: const ValueKey('terminal-edge-back'),
-    behavior: HitTestBehavior.translucent,
-    onHorizontalDragStart: (_) => _dragged = 0,
-    onHorizontalDragUpdate: (details) => _dragged += details.delta.dx,
-    onHorizontalDragEnd: (details) {
-      if (_dragged > 80 || (details.primaryVelocity ?? 0) > 700) {
-        HapticFeedback.selectionClick();
-        widget.onBack();
-      }
-    },
-  );
 }
 
 /// Find's hold on the back gesture — see `_TerminalPageState._findBack`.

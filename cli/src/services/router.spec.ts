@@ -150,14 +150,29 @@ describe('the router', () => {
     expect(lines).toEqual([])
   })
 
-  it('answers a session Jev is sure of, and logs why', async () => {
+  it('answers a session Jev is sure of, and logs it by id and odds, never by its name', async () => {
     const jev = vi.fn(async () => ({ target: said('s0', 0.8, ['s0', 's1', 'new']) }))
     const { router: made, lines } = router({ jev })
     expect(await startRouter(fakeCore(), made).route_decide!({ text: 'refund it', sessions: DESK }, OWNER))
       .toEqual({ decided: 'session', id: 'a1', via: 'jev', p: 0.8, trace: '2 sessions · jev: "billing retries" 0.80, then "Prometheus alerts" 0.10' })
-    expect(lines).toEqual(['session — 2 sessions · jev: "billing retries" 0.80, then "Prometheus alerts" 0.10'])
+    // The trace names the sessions for the client that asked; the log is not the client's, so it keeps the outcome alone.
+    expect(lines).toEqual(['session a1 p=0.80 — 2 sessions'])
     // Jev was asked the task as the client sent it, trimmed.
     expect(jev).toHaveBeenCalledWith({ message: 'refund it' }, expect.objectContaining({ target: expect.any(Object) }), undefined)
+  })
+
+  it('logs the pick by its harness, not its computer, and counts the sessions Jev was shown', async () => {
+    // The desktop names a session `<computer>\n<harness>`: every session on one computer starts alike.
+    const desk = Array.from({ length: 45 }, (_, i) => ({ id: `0f3c9a1e-77aa-4b2c-9d10-5e6f7a8b9c0d\n${i}e1a2b3c-aaaa-bbbb-cccc-ddddeeeeffff`, name: `topic ${i}` }))
+    const jev = vi.fn(async () => ({ target: said('s3', 0.9, [...Array.from({ length: 40 }, (_, i) => `s${i}`), 'new']) }))
+    const { router: made, lines } = router({ jev })
+    expect(await startRouter(fakeCore(), made).route_decide!({ text: 'go', sessions: desk }, OWNER)).toMatchObject({ decided: 'session', id: desk[3]!.id })
+    // Forty of the forty-five are shown to Jev, and those are what the pick was weighed against.
+    expect(lines).toEqual(['session 3e1a2b3c p=0.90 — 40 sessions'])
+    // An id a client made up is logged as an id, never as words or a line break.
+    const { router: odd, lines: oddLines } = router({ jev: vi.fn(async () => ({ target: said('s0', 0.9, ['s0', 'new']) })) })
+    await startRouter(fakeCore(), odd).route_decide!({ text: 'go', sessions: [{ id: 'fix login\r\n[route] x', name: 'x' }] }, OWNER)
+    expect(oddLines).toEqual(['session _route__ p=0.90 — 1 sessions'])
   })
 
   it('answers new work with the project and agent Jev chose, handing back the client\'s own ids', async () => {
@@ -174,7 +189,7 @@ describe('the router', () => {
       agents: [{ id: 'claude', name: 'Claude Code' }, { id: 'codex', name: 'Codex' }],
     }, OWNER)
     expect(answer).toEqual({ decided: 'new', via: 'jev', reason: 'Jev: new work', project: '/Users/me/Pictures', agent: 'claude' })
-    expect(lines).toEqual(['new (Jev: new work) — 2 sessions · jev: "new" 0.90, then "billing retries" 0.05'])
+    expect(lines).toEqual(['new (Jev: new work) — 2 sessions'])
   })
 
   it('answers new work with no project or agent when Jev was not sure, for the client to place', async () => {
@@ -182,7 +197,7 @@ describe('the router', () => {
     const { router: made, lines } = router({ jev })
     expect(await startRouter(fakeCore(), made).route_decide!({ text: 'go', sessions: DESK }, OWNER))
       .toEqual({ decided: 'new', via: 'unsure', reason: 'Jev was not sure' })
-    expect(lines).toEqual(['new (Jev was not sure) — 2 sessions · jev: "Prometheus alerts" 0.50, then "billing retries" 0.30'])
+    expect(lines).toEqual(['new (Jev was not sure) — 2 sessions'])
     // And decides the same without a log.
     expect(await startRouter(fakeCore(), { jev }).route_decide!({ text: 'go', sessions: DESK }, OWNER))
       .toEqual({ decided: 'new', via: 'unsure', reason: 'Jev was not sure' })
@@ -195,13 +210,13 @@ describe('the router', () => {
       .toEqual({ error: 'JEV_UNAVAILABLE', detail: 'no OpenRouter key on this computer' })
     expect(lines).toEqual([
       'jev could not answer: no OpenRouter key on this computer',
-      'nothing decided (no OpenRouter key on this computer) — 2 sessions · jev: failed',
+      'nothing decided (no OpenRouter key on this computer) — 2 sessions',
     ])
     // A router with no Jev at all, with a log and without.
     const { router: none, lines: noneLines } = router()
     expect(await startRouter(fakeCore(), none).route_decide!({ text: 'go', sessions: DESK }, OWNER))
       .toEqual({ error: 'JEV_UNAVAILABLE', detail: 'Jev is not set up' })
-    expect(noneLines).toEqual(['nothing decided (Jev is not set up) — 2 sessions · jev: not set up'])
+    expect(noneLines).toEqual(['nothing decided (Jev is not set up) — 2 sessions'])
     expect(await startRouter(fakeCore(), {}).route_decide!({ text: 'go' }, OWNER)).toEqual({ error: 'JEV_UNAVAILABLE', detail: 'Jev is not set up' })
   })
 
@@ -283,6 +298,6 @@ describe('the router this computer runs', () => {
     expect(createJevDecide).toHaveBeenCalledOnce()
     expect(await handlers.route_decide!({ text: 'go', sessions: DESK }, OWNER)).toEqual({ decided: 'new', via: 'unsure', reason: 'Jev was not sure' })
     expect(client.asked).toEqual([{ message: 'go' }])
-    expect(log.mock.calls).toEqual([['[route] new (Jev was not sure) — 2 sessions · jev: no answer']])
+    expect(log.mock.calls).toEqual([['[route] new (Jev was not sure) — 2 sessions']])
   })
 })

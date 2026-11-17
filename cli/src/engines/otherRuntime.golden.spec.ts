@@ -5,7 +5,8 @@
  * wires them for an engine no worker serves (`new RuntimeProfileState(() => undefined)`):
  *
  * - every pane through `ingestPane`, for every engine, from a fresh session: what it reports changed and the state;
- * - every transcript through `hydrate`, and line by line through `ingest` and `transcriptFields`;
+ * - every transcript through the live worker's fold and line producer, applying its ProfileEvidence through
+ *   `hydrateEvidence` and `evidence`, and retaining the core's transcriptFields compatibility result;
  * - every config file a config-reading engine (Hermes, Muse, Amp, Command Code) reads, through `ingestConfig`;
  * - the catalogs OpenCode, Kilo and Devin warm on attach, from each output their specs hold, and every pane of
  *   theirs read against the catalog;
@@ -27,6 +28,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
+import type { ProfileEvidence } from './facets/runtime.js'
 import { specStrings } from '../testing/specLiterals.js'
 import * as takeoverScreens from '../lib/__fixtures__/takeoverScreens.js'
 import * as rewindPickers from '../lib/__fixtures__/rewindPickers.js'
@@ -74,11 +76,50 @@ async function loadCore() {
   const { RuntimeProfileState } = await import('../lib/runtimeProfileState.js')
   const { RuntimeProfileController } = await import('../lib/runtimeControl.js')
   const { encodeRuntimeProfile } = await import('../engines/kit/runtime.js')
-  return { RuntimeProfileState, RuntimeProfileController, encodeRuntimeProfile }
+  const { createOtherStreams } = await import('./others/streams.js')
+  return { RuntimeProfileState, RuntimeProfileController, encodeRuntimeProfile, createOtherStreams }
 }
 let core: Awaited<ReturnType<typeof loadCore>>
-const manager = (): Manager => new core.RuntimeProfileState(() => undefined)
+const configReads = new Set<Promise<boolean>>()
+const manager = (): Manager => {
+  const m = new core.RuntimeProfileState(() => undefined)
+  const read = m.ingestConfig.bind(m)
+  m.ingestConfig = (...args) => {
+    const pending = read(...args)
+    configReads.add(pending)
+    void pending.finally(() => configReads.delete(pending)).catch(() => {})
+    return pending
+  }
+  return m
+}
 const stateOf = (m: Manager, s: RegisteredSession) => ({ state: m.getState(s.sessionId), selected: m.selectedModel(s) })
+
+/** The production worker interprets the same frozen records; only its plain evidence crosses back to core. */
+async function workerEvidence(engine: Engine, lines: string[]): Promise<{ folded: ProfileEvidence[]; live: ProfileEvidence[][] }> {
+  const listeners = new Map<string, (event: never) => void>()
+  const streams = core.createOtherStreams({
+    watcher: { on: (name: string, listener: (event: never) => void) => { listeners.set(name, listener); return {} as never },
+      addSession: async () => {}, removeSession: async () => {}, pollSession: async () => {} },
+    log: () => {},
+  })
+  const file = join(root, 'profile.jsonl')
+  writeFileSync(file, lines.join('\n') + '\n')
+  const session = { agentId: `agent-${engine}`, sessionId: `session-${engine}`, engine, transcriptPath: file, store: join(root, 'absent.db') }
+  try {
+    const folded = await streams.open({ token: 'fold', session, live: false, abandon: false, held: false })
+    expect(folded).not.toBeNull()
+    streams.forget('fold')
+    expect(await streams.open({ token: 'live', session: { ...session, transcriptPath: null }, live: false, abandon: false, held: false })).not.toBeNull()
+    const live = lines.map(text => {
+      listeners.get('line')!({ sessionId: session.sessionId, engine, text } as never)
+      const frames = streams.stream('live')!.frames()
+      const evidence = frames.flatMap(frame => frame.evidence ?? [])
+      if (frames.length) streams.ack({ live: frames.at(-1)!.serial })
+      return evidence
+    })
+    return JSON.parse(JSON.stringify({ folded: folded!.evidence, live }))
+  } finally { streams.clear() }
+}
 
 let golden: Golden
 const recorded: Golden = { strings: {}, cases: {} }
@@ -152,7 +193,8 @@ beforeAll(async () => {
   }))
 })
 
-afterAll(() => {
+afterAll(async () => {
+  await settle()
   vi.useRealTimers()
   Object.defineProperty(process, 'platform', platform)
   for (const [name, value] of Object.entries(saved)) if (value === undefined) delete process.env[name]; else process.env[name] = value
@@ -160,9 +202,15 @@ afterAll(() => {
   if (RECORD) writeFileSync(GOLDEN, JSON.stringify(recorded, null, 1) + '\n')
 })
 
-/** Let a read the manager started and did not wait for (Command Code's config, after a model change) finish. */
-// Only Date is faked, so this waits in real time, and what the read stamps is still the pinned clock.
-const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 30))
+/** Drain the config reads queued after synchronous observations, without a wall-clock sleep. */
+async function settle(): Promise<void> {
+  for (let round = 0; round < 20; round++) {
+    await Promise.resolve()
+    if (!configReads.size) return
+    await Promise.all([...configReads])
+  }
+  throw new Error('golden config reads did not settle')
+}
 
 describe('the other engines\' runtime profiles, through the core', () => {
   it('has inputs', () => {
@@ -174,12 +222,13 @@ describe('the other engines\' runtime profiles, through the core', () => {
     it(`${engine}: every pane, every transcript, and a switch`, async () => {
       check(`${engine} panes`, readPanes(engine, panes))
       for (const transcript of transcripts) {
+        const evidence = await workerEvidence(engine, transcript.lines)
         const m = manager()
         const s = sessionOf(engine, 'hydrated')
-        m.hydrate(s, transcript.lines)
+        m.hydrateEvidence(s, evidence.folded)
         const hydrated = stateOf(m, s)
         const live = sessionOf(engine, 'live')
-        const lines = transcript.lines.map((line) => [m.ingest(live, line, true), m.transcriptFields(live, line)])
+        const lines = evidence.live.map((read, index) => [m.evidence(live, read, true), m.transcriptFields(live, transcript.lines[index])])
         await settle()
         check(`${engine} transcript: ${transcript.id}`, { hydrated, lines, live: stateOf(m, live) })
       }

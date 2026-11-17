@@ -287,7 +287,7 @@ describe('createGridAccess — grid set up when a feature asks', () => {
   })
 
   it('waits twice as long after each failure in a row, never more than ten minutes', async () => {
-    // DESKTOP-0TFH0OJ, 2026-10-26: a held Swarm start asked every 2 seconds (core/agents/pendingLaunches.ts) and each
+    // DESKTOP-0TFH0OJ, 2026-10-26: a held start asked every 2 seconds (core/agents/pendingLaunches.ts) and each
     // ask ran grid's installer again, which failed the same way 13,658 times in two days.
     let now = 0
     const attempt = vi.fn(async () => result('no-cli'))

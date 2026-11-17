@@ -6,68 +6,19 @@ import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { createLaunchHelpers } from './launch.js'
 import { createLaunchAuthority } from './launchAuthority.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
-import type { SwarmSkillGrant } from '../../lib/swarmSkills.js'
-import { createSwarmSkillAdoption } from '../../superTabs/inCore/adoption.js'
 
 const entry = { agentId: 'agent', sessionId: 'conversation', cwd: '/workspace' } as RegisteredSession
 const built: Extract<LaunchOverridesResult, { ok: true }> = { ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } }
-const setup = (adoptSwarmSkill?: ReturnType<typeof createSwarmSkillAdoption>) => {
+const setup = () => {
   const deps = {
-    ...(adoptSwarmSkill ? { adoptSwarmSkill } : {}),
     workspaceMissing: vi.fn((): { error: string; detail: string } | null => null),
     relaunchOverrides: vi.fn(async (): Promise<LaunchOverridesResult> => built),
     downgradedPermission: vi.fn(async () => ({ bypassPermission: false })),
-    prepareSessionResume: vi.fn(), refreshGridWebSearch: vi.fn(),
+    prepareSessionResume: vi.fn(async (_entry: RegisteredSession, _current: () => boolean) => {}), refreshGridWebSearch: vi.fn(),
     launch: vi.fn(() => ({ argv: ['engine'] })),
   }
   return { deps, build: createRestoreLaunch(deps) }
 }
-
-// Security review 1 of #2255: boot restore and a host move relaunched an old Swarm session with no saved role without asking the
-// Swarm, so it came back without its guard.
-describe('an old Swarm session with no saved role', () => {
-  const legacy = { ...entry, engine: 'claude', startedBy: 'agent' } as RegisteredSession
-  const swarm = (grant: SwarmSkillGrant | null | undefined) => {
-    const save = vi.fn()
-    const role = vi.fn(async () => grant)
-    return { save, role, adopt: createSwarmSkillAdoption({ role, save, authority: () => () => true, candidate: () => false }) }
-  }
-  it('is restored with its role, saved on its row before the launch is built', async () => {
-    const s = swarm({ role: 'agent' }), { deps, build } = setup(s.adopt)
-    expect(await build(legacy, { current: () => true })).toEqual({ argv: ['engine'] })
-    const tagged = expect.objectContaining({ swarmSkill: { role: 'agent', key: 'agent' } })
-    expect(deps.relaunchOverrides).toHaveBeenCalledWith(tagged, tagged, expect.any(Function))
-    expect(deps.launch).toHaveBeenCalledWith(tagged, { agentId: 'agent' }, built.overrides, { bypassPermission: false })
-    expect(s.save).toHaveBeenCalledWith('agent', { role: 'agent', key: 'agent' })
-  })
-  it('is held, never launched, while its role cannot be read', async () => {
-    const { deps, build } = setup(swarm(undefined).adopt)
-    // What its pane shows the person while it waits: plain words, no ids.
-    expect(await build(legacy, { current: () => true })).toEqual({ held: 'superTabs',
-      detail: 'Waiting for the Swarm to confirm this agent\'s role. It starts by itself once the Swarm answers.' })
-    expect(deps.relaunchOverrides).not.toHaveBeenCalled()
-    expect(deps.launch).not.toHaveBeenCalled()
-  })
-  it('is left alone when the restore is cancelled while its role is read', async () => {
-    let current = true
-    const role = vi.fn(async () => { current = false; return { role: 'agent' as const } })
-    const { deps, build } = setup(createSwarmSkillAdoption({ role, save: vi.fn(), authority: () => () => true, candidate: () => false }))
-    expect(await build(legacy, { current: () => current })).toEqual({ cancelled: true })
-    expect(deps.relaunchOverrides).not.toHaveBeenCalled()
-  })
-  it('moves to another host with its role, writing nothing while its old engine runs', async () => {
-    const s = swarm({ role: 'agent' }), { deps, build } = setup(s.adopt)
-    expect(await build(legacy, { resumeSessionId: 'conversation', current: () => true, prepare: false })).toMatchObject({ argv: ['engine'] })
-    expect(deps.launch).toHaveBeenCalledWith(expect.objectContaining({ swarmSkill: { role: 'agent', key: 'agent' } }),
-      { resumeSessionId: 'conversation', agentId: 'agent' }, built.overrides, { bypassPermission: false })
-    expect(s.save).not.toHaveBeenCalled()
-  })
-  it('does not move while its role cannot be read', async () => {
-    const { deps, build } = setup(swarm(undefined).adopt)
-    expect(await build(legacy, { resumeSessionId: 'conversation', current: () => true, prepare: false })).toMatchObject({ held: 'superTabs' })
-    expect(deps.launch).not.toHaveBeenCalled()
-  })
-})
 
 describe('a guest\'s harness at boot', () => {
   it('is never relaunched as the owner: refused before a workspace or service is touched', async () => {
@@ -89,6 +40,21 @@ describe('a restore launch Windows refuses', () => {
   })
 })
 
+describe('the grid a restore launch puts its engine on', () => {
+  it('is its launch record\'s, as refreshed for this launch, or none on the engine\'s own login, prepared or not', async () => {
+    const override = { networkId: 'api', networkName: 'Saved', baseUrl: 'https://saved.example/now/v1', apiKey: 'k', model: 'm' }
+    for (const prepare of [undefined, false] as const) {
+      const { deps, build } = setup()
+      deps.relaunchOverrides.mockResolvedValueOnce({ ok: true, overrides: { ...built.overrides, gridLaunchRecord: { override, webSearch: 'on' } } })
+      expect(await build(entry, { current: () => true, prepare })).toMatchObject({ grid: { baseUrl: 'https://saved.example/now/v1', model: 'm' } })
+      const { model: _model, ...modelless } = override
+      deps.relaunchOverrides.mockResolvedValueOnce({ ok: true, overrides: { ...built.overrides, gridLaunchRecord: { override: modelless, webSearch: 'on' } } })
+      expect(await build(entry, { current: () => true, prepare })).toMatchObject({ grid: { baseUrl: 'https://saved.example/now/v1', model: null } })
+      expect(await build(entry, { current: () => true, prepare })).toMatchObject({ grid: null })
+    }
+  })
+})
+
 describe('a launch built without preparation', () => {
   it('writes neither the conversation nor the row, and builds the same launch', async () => {
     const { deps, build } = setup()
@@ -96,9 +62,11 @@ describe('a launch built without preparation', () => {
     expect(deps.prepareSessionResume).not.toHaveBeenCalled()
     expect(deps.refreshGridWebSearch).not.toHaveBeenCalled()
     expect(deps.launch).toHaveBeenCalledWith(entry, { resumeSessionId: 'conversation', agentId: 'agent' }, built.overrides, { bypassPermission: false })
-    const prepared = await build(entry, { resumeSessionId: 'conversation', current: () => true })
-    expect(prepared).toEqual({ argv: ['engine'] })
-    expect(deps.prepareSessionResume).toHaveBeenCalledWith(entry)
+    const current = () => true
+    const prepared = await build(entry, { resumeSessionId: 'conversation', current })
+    expect(prepared).toEqual({ argv: ['engine'], grid: null })
+    // The history is replaced only while this restore holds.
+    expect(deps.prepareSessionResume).toHaveBeenCalledWith(entry, current)
     expect(deps.refreshGridWebSearch).toHaveBeenCalledTimes(1)
   })
 
@@ -109,18 +77,41 @@ describe('a launch built without preparation', () => {
     if (!('argv' in launch) || !launch.deferred) throw new Error('expected a deferred launch')
     expect(launch.deferred.overrides).toBe(built.overrides)
     expect(launch.deferred.permission).toEqual({ bypassPermission: true, permissionMode: 'plan' })
-    launch.deferred.prepare()
-    expect(deps.prepareSessionResume).toHaveBeenCalledWith(entry)
+    await launch.deferred.prepare()
+    expect(deps.prepareSessionResume).toHaveBeenCalledWith(entry, expect.any(Function))
     expect(deps.refreshGridWebSearch).toHaveBeenCalledWith('agent', built.overrides)
     expect(deps.relaunchOverrides).toHaveBeenCalledTimes(1)
     // A preparation that fails says so to its caller, which falls back (hostMove/moveAgent.ts).
-    deps.prepareSessionResume.mockImplementationOnce(() => { throw new Error('rollout unreadable') })
-    expect(() => launch.deferred!.prepare()).toThrow('rollout unreadable')
+    deps.prepareSessionResume.mockRejectedValueOnce(new Error('rollout unreadable'))
+    await expect(launch.deferred!.prepare()).rejects.toThrow('rollout unreadable')
     // Nothing to resume: nothing to prepare, only the grid's web search.
     const fresh = await build(entry, { current: () => true, prepare: false })
     if (!('argv' in fresh) || !fresh.deferred) throw new Error('expected a deferred launch')
-    fresh.deferred.prepare()
+    await fresh.deferred.prepare()
     expect(deps.prepareSessionResume).toHaveBeenCalledTimes(2)
+    expect(deps.refreshGridWebSearch).toHaveBeenCalledTimes(2)
+  })
+
+  it('hands the move\'s own wait to the repair: once the move stops waiting, the history is left as it is', async () => {
+    const { deps, build } = setup()
+    const launch = await build(entry, { resumeSessionId: 'conversation', current: () => true, prepare: false })
+    if (!('argv' in launch) || !launch.deferred) throw new Error('expected a deferred launch')
+    let waiting = true
+    await launch.deferred.prepare(() => waiting)
+    const holds = vi.mocked(deps.prepareSessionResume).mock.lastCall![1]
+    expect(holds()).toBe(true)
+    waiting = false
+    expect(holds()).toBe(false)
+  })
+
+  it('writes no grid for a move that stopped holding while its history was prepared', async () => {
+    const { deps, build } = setup()
+    let current = true
+    const launch = await build(entry, { resumeSessionId: 'conversation', current: () => current, prepare: false })
+    if (!('argv' in launch) || !launch.deferred) throw new Error('expected a deferred launch')
+    deps.prepareSessionResume.mockImplementationOnce(async () => { current = false })
+    await launch.deferred.prepare()
+    expect(deps.refreshGridWebSearch).not.toHaveBeenCalled()
   })
 })
 
@@ -132,7 +123,7 @@ describe('restore preparation keeps session authority in core', () => {
     if (stage === 'unknown flags') deps.downgradedPermission.mockResolvedValue({ bypassPermission: false, nativeHold: 'Waiting for executable help.' } as never)
     const result = await build(entry, { current: () => true })
     expect(deps.downgradedPermission).toHaveBeenCalledWith(entry, native)
-    if (stage === 'ready') expect(result).toEqual({ argv: ['engine'] })
+    if (stage === 'ready') expect(result).toEqual({ argv: ['engine'], grid: null })
     else {
       expect(result).toMatchObject({ held: 'native' })
       expect(deps.launch).not.toHaveBeenCalled()
@@ -151,13 +142,13 @@ describe('restore preparation keeps session authority in core', () => {
     const apiNotes = vi.fn()
     const helpers = createLaunchHelpers({
       authority: createLaunchAuthority({ byAgent: () => live, revision: () => 1, cancelled: () => false }),
-      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), setTail: vi.fn(),
+      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
       launchOverridesDeps: { machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(),
         capabilities: async () => ({ sessionEnv: true }), writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(async () => true), readCodexConfig: () => null },
     })
     const { deps } = setup()
     const build = createRestoreLaunch({ ...deps, relaunchOverrides: helpers.relaunchOverrides })
-    expect(await build(requested, { current: () => true })).toEqual({ argv: ['engine'] })
+    expect(await build(requested, { current: () => true })).toEqual({ argv: ['engine'], grid: null })
     expect(apiNotes).toHaveBeenCalledWith('/workspace', requested.engine)
     expect(deps.launch).toHaveBeenCalledWith(requested, { agentId: requested.agentId }, expect.any(Object), expect.any(Object))
   })
@@ -169,7 +160,7 @@ describe('restore preparation keeps session authority in core', () => {
     const apiNotes = vi.fn()
     const helpers = createLaunchHelpers({
       authority: createLaunchAuthority({ byAgent: () => live, revision: () => 1, cancelled: () => false }),
-      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), setTail: vi.fn(),
+      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
       launchOverridesDeps: { machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(),
         capabilities: async () => ({ sessionEnv: true }), writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(async () => true), readCodexConfig: () => null,
         dshLaunch: async () => { live.permissionMode = 'ask'; return { ok: true, launch: { env: {}, args: [] } } } },
@@ -186,7 +177,7 @@ describe('restore preparation keeps session authority in core', () => {
 
   it.each([undefined, 'conversation'])('applies confirmed preparation only to the current owner: resume %s', async resumeSessionId => {
     const { deps, build } = setup()
-    expect(await build(entry, { resumeSessionId, current: () => true })).toEqual({ argv: ['engine'] })
+    expect(await build(entry, { resumeSessionId, current: () => true })).toEqual({ argv: ['engine'], grid: null })
     expect(deps.prepareSessionResume).toHaveBeenCalledTimes(resumeSessionId ? 1 : 0)
     expect(deps.refreshGridWebSearch).toHaveBeenCalledWith('agent', built.overrides)
     expect(deps.launch).toHaveBeenCalledWith(entry, { resumeSessionId, agentId: 'agent' }, built.overrides, { bypassPermission: false })
@@ -200,7 +191,7 @@ describe('restore preparation keeps session authority in core', () => {
     else deps.downgradedPermission.mockImplementation(async () => { await pending; return { bypassPermission: false } })
     let current = true
     const replacement = { transcript: 'new turn', tail: 42, grid: 'new grid' }
-    deps.prepareSessionResume.mockImplementation(() => { replacement.transcript = 'repaired old turn'; replacement.tail = 0 })
+    deps.prepareSessionResume.mockImplementation(async () => { replacement.transcript = 'repaired old turn'; replacement.tail = 0 })
     deps.refreshGridWebSearch.mockImplementation(() => { replacement.grid = 'old grid' })
     const result = build(entry, { resumeSessionId: 'conversation', current: () => current })
     await vi.waitFor(() => expect(stage === 'Store' ? deps.relaunchOverrides : deps.downgradedPermission).toHaveBeenCalled())
@@ -229,9 +220,20 @@ describe('restore preparation keeps session authority in core', () => {
     expect(deps.downgradedPermission).not.toHaveBeenCalled()
   })
 
+  // The history is prepared a chunk at a time now (engines/kit/resumeRepair.ts): the restore may have stopped holding
+  // by the time it is done, and then it launches nothing and writes no grid.
+  it('a restore that stops holding while its history is prepared is cancelled, with nothing written after', async () => {
+    const { deps, build } = setup()
+    let current = true
+    deps.prepareSessionResume.mockImplementationOnce(async () => { current = false })
+    expect(await build(entry, { resumeSessionId: 'conversation', current: () => current })).toEqual({ cancelled: true })
+    expect(deps.refreshGridWebSearch).not.toHaveBeenCalled()
+    expect(deps.launch).not.toHaveBeenCalled()
+  })
+
   it.each([new Error('unreadable'), 'unreadable'])('reports resume repair errors without applying grid changes', async error => {
     const { deps, build } = setup()
-    deps.prepareSessionResume.mockImplementation(() => { throw error })
+    deps.prepareSessionResume.mockImplementation(async () => { throw error })
     expect(await build(entry, { resumeSessionId: 'conversation', current: () => true }))
       .toEqual({ error: 'RESUME_PREPARATION_FAILED', detail: 'unreadable' })
     expect(deps.refreshGridWebSearch).not.toHaveBeenCalled()

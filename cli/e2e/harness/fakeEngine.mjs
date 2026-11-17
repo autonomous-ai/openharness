@@ -2,6 +2,9 @@
 // under test. It behaves the way the daemon depends on the real CLIs behaving, and nothing more:
 //
 //   - answers `--version` / `--help` probes;
+//   - as `codex app-server`, reads its stdin, answers nothing and ends when that stdin ends;
+//   - as `codex queue --thread <id> --message=<text>`, notes the call in `codex-queue` under the test's root when that
+//     thread's rollout is in its CODEX_HOME, else exits 1 having noted nothing, as 0.167 does;
 //   - runs the hooks its own settings carry, as the real CLIs run them: the commands the daemon
 //     installed (lib/hooks.ts), through a shell, from inside the pane, with the event on stdin, killed at
 //     their timeout and waited for. So the real `hook/notify.mjs` is what reaches the daemon, with its
@@ -29,8 +32,7 @@
 // refused, and the goal paused with no further output), `!compactmid` compacts in the
 // middle of a turn as an automatic compaction does, `!version` answers with the version this
 // process is, `!env <prefix>[,<prefix>…]` with the names of the variables in its environment that start with a
-// prefix (never their values), as an agent that reads its own environment can, `!cores <tag>` with the one value it
-// tells, its share of the machine's cores (`HARNESS_CORES`), `!goal` and `!goal done`
+// prefix (never their values), as an agent that reads its own environment can, `!goal` and `!goal done`
 // (Codex) start and achieve a goal the way Codex 0.160 shows one under its composer, `!browse` (Codex) leaves Codex browsing its transcript in its default fullscreen
 // mode, and `!browse scrollback` in its scrollback mode, `!transcript` (Claude Code) leaves it in its
 // transcript view, as ctrl+o does, `!overlay` (Codex) in its transcript overlay, as ctrl+t does in its
@@ -54,9 +56,11 @@
 // it draws or announces anything (an engine's first run after an update). `unreadableDescriptorMs` is how long,
 // once started, it holds a descriptor the daemon's process reader has no name for, as Codex 0.162.1 did for its
 // first seconds in a clean macOS VM (2026-10-12): every read of its process was refused until then ("the native
-// control descriptor type is unavailable"). `firstHookDelayMs` is how long
-// its first SessionStart takes to reach the daemon once the engine is up: the hook command starting on a
-// loaded machine, while the daemon has already found the engine and its conversation. `root` is the
+// control descriptor type is unavailable"). `helpDelayMs` is how long its help (`--help` or `-h`) takes to answer, as
+// a fresh Codex's first run held the launch script's help probe open for seconds. `holdsRollout: false` (Codex) keeps
+// no rollout open, so a test can prove the daemon learned its home from something else (enginehomes.e2e.ts).
+// `firstHookDelayMs` is how long its first SessionStart takes to reach the daemon once the engine is up: the hook
+// command starting on a loaded machine, while the daemon has already found the engine and its conversation. `root` is the
 // test's throwaway root, the only place whose hooks it will run, and `hookLog` where it notes every hook
 // it ran. `trustPrompt` makes it ask whether to trust a folder its own config has no answer for. Codex
 // refuses to resume a conversation it archived, as the real one does.
@@ -65,6 +69,9 @@
 // Run `fg` to bring Claude Code back."; Codex 0.160: "`ctrl-z` is reserved for suspending the terminal
 // on Unix"): it gives the terminal back and stops its whole process group with SIGTSTP. Continued from
 // that stop it takes the terminal again; continued from any stop it repaints, and nothing more.
+// It notes that stop, and the continue that ends it, in `suspends` under the test's root, each with its
+// pid: the proof a test has of a Ctrl+Z, as Codex prints nothing and bash 5.3 keeps its "Stopped" notice
+// for a prompt an agent's pane never reaches (#1612, suspend.e2e.ts).
 //
 // Codex runs as npm installs it: a Node wrapper, the command the pane starts, with the engine as its
 // child in the same process group and terminal (`codexWrapper`).
@@ -72,7 +79,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 /**
@@ -83,7 +90,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
  */
 const HOOK_EVENTS = {
   // PostToolUse: Agent Messages' hook (engines/kit/messagesHook.ts), run after each tool of the `!work` directive.
-  claude: new Set(['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionEnd', 'PostToolUse']),
+  // Notification: run once a permission dialog has waited on the person (`permitDialog`).
+  claude: new Set(['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionEnd', 'PostToolUse', 'Notification']),
   codex: new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse']),
 }
 
@@ -116,7 +124,15 @@ const heldHookUrl = new URL('./heldHook.mjs', import.meta.url).href
  * it is one the wrapper listens for (then the wrapper exits 0).
  */
 async function codexWrapper(config) {
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2)], {
+  const args = process.argv.slice(2)
+  const probe = args.length === 1 && ['--help', '-h', '--version', '-V'].includes(args[0])
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...args], {
+    // Named `codex` from its start, as the native binary npm's launcher runs is: the daemon reads the rollout a
+    // launcher's child holds open only from a child of the engine's own name (processTable.ts `engineChildren`).
+    // A probe's child keeps Node's name: the real Codex 0.167.0's is `<vendor>/codex --help`, which discovery skips,
+    // while `codex <script> --help` was recorded as the engine until it exited, and a close then said a conversation
+    // was kept (CLI end to end run 43746252131, shard 4; docs/plans/2026-11-16-codex-help-race-design.md).
+    ...(probe ? {} : { argv0: 'codex' }),
     stdio: 'inherit',
     env: { ...process.env, [CODEX_NATIVE]: JSON.stringify(config) },
   })
@@ -168,6 +184,9 @@ export async function run(engine, config = {}, { native = false } = {}) {
     return
   }
   if (args.includes('--help') || args.includes('-h')) {
+    // A slow first run of a fresh Codex held the launch script's help probe open (2.9 s measured,
+    // engines/kit/launchStartup.ts `ownedFlagProbe`); a test holds it open the same way, not unref'd so the process stays.
+    if (config.helpDelayMs) await new Promise((resolve) => setTimeout(resolve, config.helpDelayMs))
     // The flags the daemon looks for in the real CLIs' help before it launches them, less the ones this
     // release has dropped.
     process.stdout.write((engine === 'codex'
@@ -200,6 +219,35 @@ export async function run(engine, config = {}, { native = false } = {}) {
     // Who asked, by its pid: Claude Code's engine worker, not the core (#4146).
     if (config.root) appendFileSync(join(config.root, 'background-job-queries'), `${process.ppid}\n`)
     process.stdout.write('[]\n')
+    return
+  }
+  // `codex app-server [-c …]`, as a rate-limit read (lib/codexRateLimits.ts) or a provider move starts it. The real
+  // server speaks JSON-RPC on stdio and exits when its stdin ends; this one answers nothing, so a read finds no limits,
+  // but it ends with its stdin too. It used to draw its TUI instead and outlive its daemon: 14 pairs of the fake were
+  // found orphaned on 2026-11-14. A read is no launch, so it is kept out of the launch-argv ledger.
+  if (engine === 'codex' && args[0] === 'app-server') {
+    process.stdin.resume()
+    process.stdin.on('end', () => process.exit(0))
+    return
+  }
+  // `codex queue` (0.167) puts a message in a thread's queue for its next turn and starts nothing: no session, no hook. A
+  // malformed id, or a thread with no rollout in the home, is refused with exit 1 and nothing queued (the spike in
+  // docs/specs/2026-11-15-device-codex.md). A queue is no launch, so it is kept out of the launch-argv ledger.
+  if (engine === 'codex' && args[0] === 'queue') {
+    const home = process.env.CODEX_HOME || config.codexHome
+    if (!within(config.root, home)) throw new Error('fake Codex queue outside its throwaway home')
+    const thread = args[args.indexOf('--thread') + 1] ?? ''
+    const known = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(thread) && (() => {
+      try {
+        return readdirSync(join(home, 'sessions'), { recursive: true }).map((path) => basename(String(path)))
+          .some((name) => name.startsWith('rollout-') && name.endsWith(`-${thread}.jsonl`))
+      } catch { return false }
+    })()
+    if (!known) {
+      process.stderr.write(`Error: no thread ${thread} in ${home}\n`)
+      process.exit(1)
+    }
+    appendFileSync(join(config.root, 'codex-queue'), `${JSON.stringify({ args, codexHome: process.env.CODEX_HOME ?? null })}\n`)
     return
   }
   // Every launch's argv, for a test to read what an agent was started with.
@@ -406,6 +454,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
   const procStart = (() => { try { return execFileSync('ps', ['-o', 'lstart=', '-p', String(process.pid)]).toString().trim() } catch { return '' } })()
   const announceProcess = () => {
     if (engine === 'codex') {
+      if (config.holdsRollout === false) return
       if (held !== null) closeSync(held)
       held = openSync(transcript, 'r')
     } else if (procStart) {
@@ -420,7 +469,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
   let parent = null
   const claude = (record) => {
     const uuid = randomUUID()
-    write({ parentUuid: parent, isSidechain: false, userType: 'external', cwd, sessionId, version, timestamp: now(), uuid, ...record })
+    // `entrypoint`: who drives it, `cli` from a terminal (lib/sessionSearch/externals/claude.ts reads it to list a session).
+    write({ parentUuid: parent, isSidechain: false, userType: 'external', entrypoint: 'cli', cwd, sessionId, version, timestamp: now(), uuid, ...record })
     parent = uuid
   }
   const codex = (type, payload) => write({ timestamp: now(), type, payload })
@@ -450,8 +500,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
   /**
    * The JSON an event hands its hooks on stdin, in each CLI's own shape: what notify.mjs reads (session,
    * transcript, folder, the event and its source, prompt or reason) and the rest of what the real CLIs
-   * were recorded sending (src/lib/__fixtures__/swarm-prompt-hooks.json: Claude Code's prompt id and
-   * permission mode, Codex's turn id, model and permission mode).
+   * were recorded sending (Claude Code's prompt id and permission mode, Codex's turn id, model and
+   * permission mode).
    */
   const hookInput = (event, fields) => ({
     session_id: sessionId,
@@ -853,11 +903,13 @@ export async function run(engine, config = {}, { native = false } = {}) {
     for (const key of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[ABCD]|\x1b|\r|\n|\x7f|./gs) ?? []) {
       if (!dialog) return
       noteDialogKey(key)
+      dialog.idle?.refresh()
       const settle = (choice) => {
         // An old dialog can survive in tmux scrollback after a redraw/resize, as in the chaos run.
         // Keep the whole frame for that acceptance case; the composer below it is the live screen.
         if (dialog.keepInScrollback) process.stdout.write('\r\n')
         else eraseDialog()
+        clearTimeout(dialog.idle)
         const asked = dialog; dialog = null; notes = asked.notes ?? ''; drawComposer(); asked.resolve(choice)
       }
       if (dialog.kind === 'many') {
@@ -1231,15 +1283,24 @@ export async function run(engine, config = {}, { native = false } = {}) {
     }
     return finish(allowed ? `ran ${command}` : `did not run ${command}`)
   }
+  // A permission dialog in the composer's place, as the CLIs draw theirs, until it is answered. Claude Code also says
+  // so to its Notification hooks once the dialog has waited 6 s with no key (2.1.x: `permission_prompt`, "Claude needs
+  // your permission to use Bash"): each key starts the wait again, and an answer in time sends none. Codex has no such hook.
+  const PERMIT_NOTICE_MS = 6_000
+  const permitDialog = (command, resolve) => {
+    eraseComposer()
+    dialog = { kind: 'permit', command, cursor: 0, drawn: 0, resolve, idle: setTimeout(() => {
+      void runHooks('Notification', { message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' })
+    }, PERMIT_NOTICE_MS) }
+    drawDialog()
+  }
   // `!permitnext`: the request waiting for the next paste.
   let armed = null
   const askOnPaste = () => {
     if (!armed) return
     const { command, turn: turnOf } = armed
     armed = null
-    eraseComposer()
-    dialog = { kind: 'permit', command, cursor: 0, drawn: 0, resolve: (row) => { void permitted(command, row, turnOf) } }
-    drawDialog()
+    permitDialog(command, (row) => { void permitted(command, row, turnOf) })
   }
 
   const handle = async (raw) => {
@@ -1368,16 +1429,6 @@ export async function run(engine, config = {}, { native = false } = {}) {
         codex('response_item', { type: 'function_call_output', call_id: id, output: `ran ${directive[2]}` })
       }
     }
-    // A turn that says what it does, runs a tool, and thinks before its answer, as a Swarm PM's did (Devon, 2026-11-12): its answer is
-    // the text after its last tool, written as Claude Code writes a message that thought first.
-    if (engine === 'claude' && directive?.[1] === 'narrate') {
-      const id = `call_${turn}`
-      claude({ type: 'assistant', message: { id: `msg_${turn}_n`, role: 'assistant', model: claudeModel, content: [{ type: 'text', text: `On it: ${directive[2]}` }], stop_reason: 'tool_use' } })
-      claude({ type: 'assistant', message: { id: `msg_${turn}_n`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id, name: 'Bash', input: { command: directive[2] } }], stop_reason: 'tool_use' } })
-      claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `ran ${directive[2]}` }] } })
-      await finish(`answer ${turn}: ${prompt}`, true)
-      return
-    }
     if (engine === 'claude' && directive?.[1] === 'background') {
       // Claude Code 2.1.322's Bash tool with `run_in_background` (recorded 2026-11-12, docs/plans/2026-11-12-background-count-plan.md):
       // the command runs in a shell that is the engine's direct child and that the trailing `pwd` keeps alive while it
@@ -1486,8 +1537,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
     if (directive?.[1] === 'permit') {
       const command = directive[2] || 'printf hi'
       await new Promise((resolve) => setTimeout(resolve, 2_000))
-      // The dialog takes the composer's place, as the CLIs draw theirs, until it is answered.
-      const row = await new Promise((resolve) => { eraseComposer(); dialog = { kind: 'permit', command, cursor: 0, drawn: 0, resolve }; drawDialog() })
+      const row = await new Promise((resolve) => permitDialog(command, resolve))
       await permitted(command, row)
       return
     }
@@ -1608,12 +1658,6 @@ export async function run(engine, config = {}, { native = false } = {}) {
       await finish(`env ${directive[2]}: ${names.join(',') || '(none)'}`)
       return
     }
-    // A Swarm agent's share of its machine's cores (superTabs/inCore/launch.ts), the one value an answer tells: a share is a
-    // count, never a secret. The tag tells this answer from earlier ones in the same thread.
-    if (directive?.[1] === 'cores') {
-      await finish(`cores ${directive[2]}: ${process.env.HARNESS_CORES ?? '(none)'}`)
-      return
-    }
     if (engine === 'codex' && directive?.[1] === 'goal') {
       bottom = goalBottom(directive[2] === 'done' ? 'Goal achieved (1m)' : 'Pursuing goal (1m)')
       await finish(`answer ${turn}: ${prompt}`)
@@ -1701,18 +1745,26 @@ export async function run(engine, config = {}, { native = false } = {}) {
     pastes.clear()
     return text
   }
+  const noteSuspend = (what) => {
+    if (!config.root) return
+    try { appendFileSync(join(config.root, 'suspends'), `${what} ${process.pid}\n`) } catch { /* a note, never a failure */ }
+  }
   // Ctrl+Z, as the real CLIs do it: give the terminal back, and stop the whole process group (the
   // npm Codex's wrapper with it) once the terminal is restored; in raw mode the terminal sends no
   // SIGTSTP of its own. Raw mode comes back only from this stop: Claude Code arms a one-time SIGCONT
   // handler here, Codex takes the terminal again when its stop returns.
+  // Both are noted for the test: `stopped` before the SIGTSTP, as nothing runs between it and the
+  // continue, and `continued` from this stop's own handler alone, which only a `fg` reaches.
   const suspend = () => {
     process.stdout.write('\x1b[?2004l')
     if (engine === 'claude') process.stdout.write('\r\nClaude Code has been suspended. Run `fg` to bring Claude Code back.\r\n')
     process.stdin.setRawMode?.(false)
     process.once('SIGCONT', () => {
+      noteSuspend('continued')
       process.stdin.setRawMode?.(true)
       process.stdout.write('\x1b[?2004h')
     })
+    noteSuspend('stopped')
     process.kill(0, 'SIGTSTP')
   }
   // Continued, whoever stopped it, the renderer repaints, and that is all: after a stop from outside

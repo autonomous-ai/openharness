@@ -10,10 +10,6 @@ process.env.TZ = 'UTC'
 const golden = fileURLToPath(new URL('./__fixtures__/grid-assignment-shapes.golden.json', import.meta.url))
 const relay = 'https://grid.example/g/home/relay/v1'
 const api = 'https://saved.example/inference/v1'
-const vars: Partial<Record<AgentEngine, [string, string]>> = {
-  claude: ['ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL'], hermes: ['OPENAI_BASE_URL', 'HERMES_INFERENCE_MODEL'],
-  grok: ['GROK_MODELS_BASE_URL', 'IGNORED_MODEL'], copilot: ['COPILOT_PROVIDER_BASE_URL', 'COPILOT_MODEL'],
-}
 
 it('keeps every assignment and saved-API instruction shape on both platforms', async () => {
   const root = mkdtempSync(join(tmpdir(), 'assignment-golden-'))
@@ -30,71 +26,39 @@ it('keeps every assignment and saved-API instruction shape on both platforms', a
       mkdirSync(storeDir, { recursive: true })
       const shapes = gridAssignmentShapes(dir)
       const out: Record<string, unknown> = {}
-      const assignment = async (name: string, engine: AgentEngine, env: Record<string, string>, args = '') => {
-        out[name] = await shapes.assignment(engine, { ...env, SECRET_API_KEY: 'never-forward-this-key' }, args)
+      const assignment = async (name: string, engine: AgentEngine, args = '') => {
+        out[name] = await shapes.assignment(engine, args)
       }
       for (const engine of ENGINES) {
-        await assignment(`${engine}/plain`, engine, {})
-        // The old classifier accepts a provider argument for any engine without its own URL variable.
-        await assignment(`${engine}/provider-argument`, engine, {}, `engine -c model_providers.grid.base_url="${relay}" -m chosen`)
-      }
-      for (const [engine, [urlVar, modelVar]] of Object.entries(vars) as Array<[AgentEngine, [string, string]]>) {
-        for (const url of ['', ' ', 'not-a-url', 'https://other.example/v1', 'https://grid.example/relayish/v1', relay, ` ${relay} `]) {
-          for (const model of ['', 'chosen', 'Auto', 'aUtO']) {
-            await assignment(`${engine}/env/${url}/${model}`, engine, { [urlVar]: url, [modelVar]: model }, `engine -m ${model || 'argv-model'}`)
-          }
-        }
+        await assignment(`${engine}/plain`, engine)
+        // A provider argument counts for every engine whose grid may be in its command line.
+        await assignment(`${engine}/provider-argument`, engine, `engine -c model_providers.grid.base_url="${relay}" -m chosen`)
       }
       for (const args of ['', `-c model_providers.other.base_url=${relay}`, `-c model_providers.other.base_url="${relay}" -m chosen`,
         `-c model_providers.other.base_url="${relay}" -m Auto`, '-c model_providers.grid.base_url="bad" -m chosen']) {
-        await assignment(`codex/argv/${args}`, 'codex', { OPENAI_BASE_URL: relay }, args)
+        await assignment(`codex/argv/${args}`, 'codex', args)
       }
-      const piDir = join(dir, 'pi')
-      mkdirSync(piDir)
-      for (const [name, content] of Object.entries({ broken: '{', absent: '{}', wrong: '{"providers":{"other":{"baseUrl":"' + relay + '"}}}',
-        direct: JSON.stringify({ providers: { grid: { baseUrl: 'https://other.example/v1' } } }),
-        valid: JSON.stringify({ providers: { grid: { baseUrl: relay } } }) })) {
-        writeFileSync(join(piDir, 'models.json'), content)
-        for (const args of ['', '--model grid/chosen', '--model grid/Auto', '--model other/chosen']) {
-          await assignment(`pi/${name}/${args}`, 'pi', { PI_CODING_AGENT_DIR: piDir }, args)
-        }
-      }
-      await assignment('pi/missing-file', 'pi', { PI_CODING_AGENT_DIR: join(dir, 'missing') }, '--model grid/chosen')
-      const config = join(dir, 'opencode.json')
-      for (const [name, content] of Object.entries({ broken: '{', absent: '{}', many: JSON.stringify({ provider: { one: {}, two: {} } }),
-        noModel: JSON.stringify({ provider: { grid: { options: { baseURL: relay } } } }),
-        manyModels: JSON.stringify({ provider: { grid: { options: { baseURL: relay }, models: { one: {}, two: {} } } } }),
-        direct: JSON.stringify({ provider: { grid: { options: { baseURL: 'https://other.example/v1' }, models: { chosen: {} } } } }),
-        model: JSON.stringify({ provider: { grid: { options: { baseURL: relay }, models: { chosen: {} } } } }),
-        router: JSON.stringify({ provider: { grid: { options: { baseURL: relay }, models: { aUtO: {} } } } }) })) {
-        writeFileSync(config, content)
-        await assignment(`opencode/${name}`, 'opencode', { OPENCODE_CONFIG: config }, '-m ignored/wrong')
-      }
-      await assignment('opencode/missing-file', 'opencode', { OPENCODE_CONFIG: join(dir, 'missing.json') })
       for (const engine of gridCapableEngines()) for (const model of [null, 'chosen']) {
         const built = buildGridEngineLaunch(engine, { networkId: 'home', networkName: 'Home', baseUrl: relay, apiKey: 'fake-grid-key', ...(model === null ? {} : { model }) },
           { hermesSystemManaged: false, opencodeMajor: 2 })
         if (!built.ok) { out[`${engine}/launch-roundtrip/${model}`] = built; continue }
-        const env = { ...built.launch.env }
         const args = [...built.launch.args]
         if (built.launch.configDir) {
           const configs = built.launch.configDir
           const path = join(dir, `config-${engine}-${model}`)
           mkdirSync(path)
           for (const file of configs.files) writeFileSync(join(path, file.name), file.content)
-          const handOff = gridConfigHandOff(configs, path)
-          Object.assign(env, handOff.env)
-          args.push(...handOff.args)
+          args.push(...gridConfigHandOff(configs, path).args)
         }
-        await assignment(`${engine}/launch-roundtrip/${model}`, engine, env, args.join(' '))
+        await assignment(`${engine}/launch-roundtrip/${model}`, engine, args.join(' '))
       }
       const connection = { id: 'saved', provider: 'custom', name: 'Saved', baseUrl: api, keyEnv: 'SAVED_API_KEY', authHeader: 'Authorization', authPrefix: 'Bearer', apiKey: 'fake-saved-key' }
-      await assignment('saved/before-save', 'claude', { ANTHROPIC_BASE_URL: api, ANTHROPIC_MODEL: 'chosen' })
+      await assignment('saved/before-save', 'codex', `-c model_providers.saved.base_url=${api} -m chosen`)
       writeFileSync(join(storeDir, 'connections.json'), JSON.stringify({ version: 1, connections: [connection] }))
       shapes.remember()
       out['saved/list'] = shapes.list()
-      await assignment('saved/anthropic', 'claude', { ANTHROPIC_BASE_URL: api.replace(/\/v1$/, ''), ANTHROPIC_MODEL: 'chosen' })
-      await assignment('saved/openai', 'codex', {}, `-c model_providers.saved.base_url=${api} -m chosen`)
+      await assignment('saved/anthropic', 'codex', `-c model_providers.saved.base_url=${api.replace(/\/v1$/, '')} -m chosen`)
+      await assignment('saved/openai', 'codex', `-c model_providers.saved.base_url=${api} -m chosen`)
       for (const engine of [...ENGINES, 'gemini']) {
         const work = join(dir, `instructions-${engine}`)
         mkdirSync(work)
@@ -105,21 +69,22 @@ it('keeps every assignment and saved-API instruction shape on both platforms', a
       }
       writeFileSync(join(storeDir, 'connections.json'), JSON.stringify({ version: 1, connections: [] }))
       shapes.remember()
-      await assignment('saved/after-removal', 'codex', {}, `-c model_providers.saved.base_url=${api} -m chosen`)
+      await assignment('saved/after-removal', 'codex', `-c model_providers.saved.base_url=${api} -m chosen`)
       const work = join(dir, 'instructions-empty')
       mkdirSync(work)
       shapes.instructions(work, 'claude')
       out['instructions/no-saved-api'] = readdirSync(work)
       writeFileSync(join(storeDir, 'connections.json'), '{')
+      // The note reads the list without keys, not the store (lib/apiConnectionMetadata.ts): that is what is unreadable here.
+      writeFileSync(join(storeDir, 'list.json'), '{')
       try { shapes.instructions(work, 'claude') } catch (error) { out['instructions/unreadable'] = (error as Error).message }
       shapes.remember() // Best effort recognition never erases remembered endpoints.
-      await assignment('saved/unreadable', 'codex', {}, `-c model_providers.saved.base_url=${api} -m chosen`)
+      await assignment('saved/unreadable', 'codex', `-c model_providers.saved.base_url=${api} -m chosen`)
       result[os] = out
     }
     const text = JSON.stringify(result, null, 2) + '\n'
     expect(text).not.toContain(root)
     expect(text).not.toContain('fake-saved-key')
-    expect(text).not.toContain('never-forward-this-key')
     if (process.env.RECORD_GRID_ASSIGNMENT_GOLDEN === '1') writeFileSync(golden, text)
     expect(result).toEqual(JSON.parse(readFileSync(golden, 'utf8')))
   } finally {

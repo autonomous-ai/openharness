@@ -38,8 +38,6 @@ import { machineBillingAllowsDataPlane } from './billingState.js'
 import { normalizeComputerId } from './deviceAuth.js'
 import { authenticateAccessToken, SsoAuthError } from './ssoAuth.js'
 import { relayAccountPushes } from './adapterAccountPushes.js'
-import { relaySwarmDeliveries } from './swarmDeliveryPushes.js'
-import { relaySwarmHostChanges } from './swarmHostPushes.js'
 import { DAEMONS } from '../config/env.js'
 import { parseAutonomousEnvironment } from './autonomousEnvironment.js'
 import { machineService } from '../services/MachineService.js'
@@ -67,7 +65,6 @@ import { ShortTurnGuard } from './shortTurnGuard.js'
 import { markCpuKind } from './selfProfile.js'
 import { createConnectionRoutes } from './terminalRoute.js'
 import { recordRelay } from './relayStats.js'
-import { computerSignedIn } from '../superTabs/computerMoves.js'
 
 const wss = createWss(WS_LIMITS.adapter, { echoFirstProtocol: true })
 
@@ -202,8 +199,8 @@ export function handleAdapterUpgrade(req: IncomingMessage, socket: Duplex, head:
     }
     let machine = (await machineService.resolveOrCreateForComputer(user.sub, user.autonomousEnv, computerId, label ?? 'computer', claimedMachineId, 'computer')).machine
     // Before it attaches: a Harness Team account's former machine now served by the person's own sign-in is theirs, listed
-    // again (MachineService.listForUser), and kept by the job that soft-deletes the rest (superTabs/migration/teamMachinesJob.ts;
-    // this goes with it, on or after 2026-12-10). Any other row is stamped by the connect's own update below.
+    // again (MachineService.listForUser). This goes with the Team rows' filters, on or after 2026-12-10. Any other row is
+    // stamped by the connect's own update below.
     if (machine.sessionKind === 'team') {
       await prisma.machine.update({ where: { machineId: machine.machineId }, data: { sessionKind: 'computer' } })
       machine = { ...machine, sessionKind: 'computer' }
@@ -214,10 +211,6 @@ export function handleAdapterUpgrade(req: IncomingMessage, socket: Duplex, head:
     if (!(await claimMachineOwner(machineId, computerId, PRESENCE_TTL_SEC))) { denyBusy(); return }
     const row = machine
     wss.handleUpgrade(req, socket, head, (ws) => void attachAdapter(ws, row, label, computerId, clientVersion, countryCode, user.harnessSessionId))
-    // A computer is signed in as one account at a time: Swarm entries of the account signed in here before move to this one
-    // (superTabs/computerMoves.ts, #3122). Never awaited: the connect does not wait on Swarms.
-    void computerSignedIn({ machineId, ownerId: user.sub, computerId, autonomousEnv: user.autonomousEnv })
-      .catch(error => logger.warn('[swarm] computer move failed', { machineId, error: String(error) }))
   })().catch((err) => {
     if (err instanceof AppError) {
       // 403 is the revoked-machine answer from `resolveOrCreateForComputer`, 429 its new-id rate limit
@@ -251,10 +244,6 @@ async function attachAdapter(ws: WebSocket, machine: AttachedMachine, label?: st
   // What changed for the ACCOUNT on some worker (its tabs, its machine list): this computer's app
   // re-reads through its daemon rather than polling for it. See adapterAccountPushes.ts.
   const accountPushesUnsub = await relayAccountPushes(userId, send, { zoo: DAEMONS.on })
-  // Work waiting for this machine's Swarm agents: its host reads it at once (swarmDeliveryPushes.ts).
-  const swarmPushesUnsub = await relaySwarmDeliveries(machineId, send)
-  // A commit that changed what this machine's host reads: it reads its Swarm changes at once (swarmHostPushes.ts, WS Phase 2a).
-  const swarmHostUnsub = await relaySwarmHostChanges(machineId, send)
 
   // Last desktop-app state THIS socket asserted. Socket-scoped on purpose: a new adapter connection
   // starts with no claim and must re-assert, so a fresh value can never renew a stale one.
@@ -594,7 +583,7 @@ async function attachAdapter(ws: WebSocket, machine: AttachedMachine, label?: st
         const now = new Date()
         const agentId = typeof f.agentId === 'string' && TURN_AGENT_ID_RE.test(f.agentId) ? f.agentId : undefined
         if (agentId && allowTurnWrite(now.getTime())) {
-          void recordTurnStarted(userId, machineId, agentId, now)
+          void recordTurnStarted(userId, now)
             .catch((err) => logger.warn('turn tracking failed', { machineId, agentId, error: String(err) }))
         }
       }
@@ -628,8 +617,6 @@ async function attachAdapter(ws: WebSocket, machine: AttachedMachine, label?: st
     routes.close()
     terminalDownUnsub()
     accountPushesUnsub()
-    swarmPushesUnsub()
-    swarmHostUnsub()
     // Only the CURRENT owner tears the role down — a superseded socket must not mark the fresh
     // connection offline. A superseded socket still releases its own liveness tracking above.
     if (owners.get(machineId) === ws) {

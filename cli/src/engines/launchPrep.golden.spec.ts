@@ -25,10 +25,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { env } from '../config/env.js'
 import type { InstalledDsh } from '../dsh/installed.js'
 import { prepareHarnessLaunch } from '../dsh/runtime.js'
-import type { ApiConnections } from '../lib/apiConnections.js'
+import type { ApiConnectionMetadata } from '../lib/apiConnectionMetadata.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
 import { resetEngineHomes } from '../lib/engineHomes.js'
-import { folderTrust, prepareResume, type ResumeSource } from './launchPrep.js'
+import { folderTrust } from './launchPrep.js'
+import { prepareResume, type ResumeSource } from './resumePreparation.js'
 import { PROCESS_ENGINES, type AgentEngine } from './types.js'
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/launch-prep.golden.json', import.meta.url))
@@ -117,6 +118,11 @@ function snapshot(dir: string): Snapshot {
 
 function attempt<T>(run: () => T): { value: T } | { threw: string } {
   try { return { value: run() } } catch (error) { return { threw: normalize(error instanceof Error ? error.message : String(error)) } }
+}
+
+/** The same, for a preparation that settles later: what it settled with, or the message it was refused with. */
+async function settled<T>(run: () => Promise<T>): Promise<{ value: T } | { threw: string }> {
+  try { return { value: await run() } } catch (error) { return { threw: normalize(error instanceof Error ? error.message : String(error)) } }
 }
 
 const write = (path: string, text: string | Buffer, mode = 0o644): void => {
@@ -382,7 +388,7 @@ const RESUME_CASES: ResumeCase[] = [
 ]
 
 /** Where the agent's Codex home is: its own profile, the daemon's, or one the person moved (remembered). */
-function resumeCase(scenario: ResumeCase, where: Where): unknown {
+async function resumeCase(scenario: ResumeCase, where: Where): Promise<unknown> {
   const dir = fresh(`resume-${where}-${scenario.name}`)
   const home = join(dir, where === 'profile' ? 'profile' : where === 'default' ? 'daemon' : 'moved')
   mkdirSync(join(home, 'sessions'), { recursive: true })
@@ -399,7 +405,7 @@ function resumeCase(scenario: ResumeCase, where: Where): unknown {
     // Only the profile's cases name paths of their own (setup, source); the others run in their own home.
     scenario.setup?.(dir)
     const source: ResumeSource = { engine: 'codex', sessionId: SESSION, transcriptPath: file, codexHome: where === 'profile' ? home : null, ...scenario.source?.(dir) }
-    const result = attempt(() => prepareResume(source))
+    const result = await settled(() => prepareResume(source, () => true))
     return { result: JSON.parse(normalize(JSON.stringify(result))), files: snapshot(dir) }
   } finally {
     env.CODEX_HOME = before
@@ -408,12 +414,12 @@ function resumeCase(scenario: ResumeCase, where: Where): unknown {
   }
 }
 
-function resumeCases(): Record<string, unknown> {
+async function resumeCases(): Promise<Record<string, unknown>> {
   const cases: Record<string, unknown> = {}
-  for (const scenario of RESUME_CASES) cases[`profile · ${scenario.name}`] = resumeCase(scenario, 'profile')
+  for (const scenario of RESUME_CASES) cases[`profile · ${scenario.name}`] = await resumeCase(scenario, 'profile')
   for (const name of ['a reasoning id', 'found by id', 'nothing to repair', 'no rollout at all']) {
     const scenario = RESUME_CASES.find((candidate) => candidate.name === name)!
-    for (const where of ['default', 'moved'] as const) cases[`${where} · ${name}`] = resumeCase(scenario, where)
+    for (const where of ['default', 'moved'] as const) cases[`${where} · ${name}`] = await resumeCase(scenario, where)
   }
   return cases
 }
@@ -479,8 +485,8 @@ function instructionCases(): Record<string, unknown> {
     cases[`harness · ${engine} · a symlinked instruction file`] = { first: attempt(() => prepareHarnessLaunch(harnessPackage(linked), lws, engine, 'runtime-1') && 'prepared'), after: instructionFiles(lws), shared: snapshot(linked)['shared.md'] }
   }
   // The saved APIs' note.
-  const withApis = { list: () => [{ id: 'openrouter' }] } as unknown as ApiConnections
-  const noApis = { list: () => [] } as unknown as ApiConnections
+  const withApis: Pick<ApiConnectionMetadata, 'saved'> = { saved: () => true }
+  const noApis: Pick<ApiConnectionMetadata, 'saved'> = { saved: () => false }
   const states: Record<string, (ws: string, file: string) => void> = {
     'no file': () => undefined,
     'a file of the person\'s': (ws, file) => write(join(ws, file), '# Mine\n\n\n'),
@@ -498,8 +504,8 @@ function instructionCases(): Record<string, unknown> {
         mkdirSync(ws)
         const file = engine === 'claude' ? 'CLAUDE.md' : engine === 'gemini' ? 'GEMINI.md' : 'AGENTS.md'
         setup(ws, file)
-        const first = attempt(() => { prepareApiInstructions(store, ws, engine); return 'done' })
-        const second = attempt(() => { prepareApiInstructions(store, ws, engine); return 'done' })
+        const first = attempt(() => { prepareApiInstructions(store, ws, engine, dir); return 'done' })
+        const second = attempt(() => { prepareApiInstructions(store, ws, engine, dir); return 'done' })
         cases[`apis · ${engine} · ${state} · ${apis}`] = { first, second, files: snapshot(dir) }
       }
     }
@@ -508,8 +514,8 @@ function instructionCases(): Record<string, unknown> {
 }
 
 describe('launch preparation writes what it did before Claude Code and Codex declared it', () => {
-  it('folder trust, resumable history and instruction files match the record', () => {
-    const actual: Golden = { trust: trustCases(), resume: resumeCases(), instructions: instructionCases() }
+  it('folder trust, resumable history and instruction files match the record', async () => {
+    const actual: Golden = { trust: trustCases(), resume: await resumeCases(), instructions: instructionCases() }
     if (RECORD) {
       if (ROOT_USER) throw new Error('record as a user other than root: the permission cases are part of the record')
       const block = (cases: Record<string, unknown>): string => Object.entries(cases).map(([key, value]) => ` ${JSON.stringify(key)}: ${JSON.stringify(value)}`).join(',\n')

@@ -9,7 +9,8 @@ import type { NativeLaunch } from '../../engines/nativeLaunch.js'
  */
 import { join } from 'node:path'
 import { env } from '../../config/env.js'
-import { prepareResume, repairedItemsName } from '../../engines/launchPrep.js'
+import { repairedItemsName } from '../../engines/launchPrep.js'
+import { REPAIR_LIMITS, type HistoryRepair, type ResumeSource, type Unrepaired } from '../../engines/facets/resumeRepair.js'
 import { bringPiSessionHome } from '../../lib/piSessionHome.js'
 import { gridConfigRoot } from '../../lib/gridConfigDir.js'
 import { dropPermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
@@ -34,6 +35,16 @@ export function gridLaunchThrough(models: () => Pick<ModelsPort, 'gridLaunch'>) 
   }
 }
 
+/** Why a history was left unrepaired, in the daemon log's words. */
+const UNREPAIRED: Record<Unrepaired, string> = {
+  too_large: `its history is over ${REPAIR_LIMITS.maxBytes / 1024 ** 3} GiB, or a record over ${REPAIR_LIMITS.maxRecordBytes / 1024 ** 2} MiB`,
+  timed_out: `the repair took over ${REPAIR_LIMITS.deadlineMs / 1000} s`,
+  cancelled: 'what asked for it stopped waiting',
+  unavailable: 'Codex\'s worker did not provide a usable preparation',
+  busy: 'the bounded repair capacity is in use',
+  cleanup_failed: 'RESUME_REPAIR_CLEANUP_FAILED: private staging needs recovery',
+}
+
 export interface LaunchHelperDeps {
   /** Capture dispatch authority before a service can yield to Stop or a replacement binding. */
   authority: (agentId: string) => () => boolean
@@ -41,11 +52,11 @@ export interface LaunchHelperDeps {
   prepareApiTools: (cwd: string | null | undefined, engine: string) => void
   launchOverridesDeps: LaunchOverridesDeps
   setGridLaunch: typeof registry.setGridLaunch
-  /** Moves a session's tail to a byte (Watcher.setTail). */
-  setTail: (sessionId: string, offset: number) => void
+  /** The publication coordinator moves the tail in the same turn as its atomic replacement. */
+  prepareResume: (source: ResumeSource, current: () => boolean) => Promise<HistoryRepair>
 }
 
-export function createLaunchHelpers({ authority, prepareApiTools, launchOverridesDeps, setGridLaunch, setTail }: LaunchHelperDeps) {
+export function createLaunchHelpers({ authority, prepareApiTools, launchOverridesDeps, setGridLaunch, prepareResume }: LaunchHelperDeps) {
   // Whatever the source (the row itself, or a grid override the desktop just sent), the agent's DSH,
   // workspace, named agent and who started it come from the row: a retarget must not silently drop the harness
   // the agent is, or bring a pane opened as `harness-compute` back as a general session.
@@ -58,7 +69,7 @@ export function createLaunchHelpers({ authority, prepareApiTools, launchOverride
     session = structuredClone(session)
     const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed or stopped during launch preparation.' } as const
     if (!current()) return changed
-    const result = await buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, dshRuntime: session.dshRuntime ?? null, swarmSkill: session.swarmSkill, cwd: session.cwd, name: session.defaultName ?? null, agent: session.agent ?? null, scmLaunch: session.scmLaunch ?? null, startedBy: session.startedBy ?? null, launchArgs: session.launchArgs, ...source, gridLaunch: source.gridLaunch ?? null, openclawLocal: session.openclawLocal ?? null }, configKey, current, native)
+    const result = await buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, dshRuntime: session.dshRuntime ?? null, cwd: session.cwd, agent: session.agent ?? null, scmLaunch: session.scmLaunch ?? null, startedBy: session.startedBy ?? null, launchArgs: session.launchArgs, ...source, gridLaunch: source.gridLaunch ?? null, openclawLocal: session.openclawLocal ?? null }, configKey, current, native)
     if (!current()) return changed
     if (!result.ok && (result.unavailable || result.error === 'AGENT_CHANGED')) return result
     // Saved-API instructions remain available after an ordinary semantic refusal, as before.
@@ -115,7 +126,12 @@ export function createLaunchHelpers({ authority, prepareApiTools, launchOverride
     return { ...choice, ...(nativeHold ? { nativeHold } : {}) }
   }
 
-  const prepareSessionResume = (session: RegisteredSession): void => {
+  /**
+   * The conversation made resumable once its engine has stopped; true when its history was replaced. `current` is the
+   * operation's own: the history is replaced only while it holds, and is left as it was once it does not. Throws when
+   * the history could not be prepared; one too large or too slow to read here is left as it is, as the log says.
+   */
+  const prepareSessionResume = async (session: RegisteredSession, current: () => boolean): Promise<boolean> => {
     if (session.engine === 'pi') {
       // A Pi an older grid launch moved into the daemon's own folder resumes from its own home now.
       const roots = [gridConfigRoot(), join(env.ADAPTER_DATA_DIR, 'grid-launch-config')]
@@ -129,14 +145,15 @@ export function createLaunchHelpers({ authority, prepareApiTools, launchOverride
         console.warn(`[resume] ${sid(session.agentId)} · could not bring pi's conversation home · ${error instanceof Error ? error.message : error}`)
       }
     }
-    const repair = prepareResume(session)
-    if (repair.repairedItems) {
-      // The rollout we tail was just shrunk in place. Move the tail to the repaired length now, before
-      // the resumed engine appends, or the watcher would read the whole repaired history as new lines
-      // and the live normalizer would replay the conversation into web/device. See Watcher.setTail.
-      if (repair.repairedBytes !== undefined) setTail(session.sessionId, repair.repairedBytes)
-      console.log(`[resume] repaired ${repair.repairedItems} ${repairedItemsName(session.engine)} · backup: ${repair.backupPath}`)
+    const repair = await prepareResume(session, current)
+    if (repair.unrepaired) {
+      console.warn(`[resume] ${sid(session.agentId)} · ${repairedItemsName(session.engine)} not repaired: ${UNREPAIRED[repair.unrepaired]} · the history is left as it is`)
     }
+    if (repair.repairedItems) {
+      // Publication already moved Watcher's cursor in the rename's turn, before another reader or the engine runs.
+      console.log(`[resume] repaired ${repair.repairedItems} ${repairedItemsName(session.engine)} · private backup kept`)
+    }
+    return repair.repairedItems > 0
   }
   return { relaunchOverrides, refreshGridWebSearch, downgradedPermission, prepareSessionResume }
 }

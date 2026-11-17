@@ -280,7 +280,7 @@ export function startSharedMachines(core: CoreApi, overrides: Partial<SharedMach
   if (port) {
     schedule(port, START_MS)
     // A harness shared or taken back (`harness_shares`) changes no machine's sharing: read again on every one of those, every
-    // member's daemon followed each Swarm agent's invitations with this read (review of #1977, 2026-10-28).
+    // member's daemon followed each invitation with this read (review of #1977, 2026-10-28).
     core.account.onNotice((notice) => { if (notice.type === 'machines_changed' && notice.reason !== 'harness_shares') schedule(port, NOTICE_MS) })
   }
 

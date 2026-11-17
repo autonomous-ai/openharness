@@ -39,7 +39,7 @@ import { PtyHostStream } from './ptyHost/stream.js'
 import { submitContent, submitSettleMs } from './submitTiming.js'
 import type { TerminalBackend, TerminalBackendPrepared } from './terminalBackend.js'
 import { TMUX_KEYS } from './terminalKeys.js'
-import { processIdentityOf, sameProcessIdentity, terminalRouteKey } from './terminalRuntime.js'
+import { processAmong, processIdentityOf, sameProcessIdentity, terminalRouteKey } from './terminalRuntime.js'
 import { windowsBlockedReason } from './windows/launch.js'
 import { windowsProcessRows } from './windows/processTable.js'
 import { defaultWindowsShell } from './windows/shell.js'
@@ -686,7 +686,8 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
    * `validate` as it runs on [platform]. On Windows the engine found under the pane's root must also be in the
    * pane's Job (`jobPids`): every process the root started is, unless it broke away, and nothing else is. A pid
    * the table shows under the root but the Job does not hold is another process that has its number. A failed
-   * `jobPids` is `unknown`, never `gone`: no evidence either way.
+   * `jobPids` is `unknown`, never `gone`: no evidence either way. The recorded process of a pane with no engine
+   * in it is held to the Job as an engine is.
    */
   async validateOn(platform: NodeJS.Platform, runtime: PtyRuntimeRef, expected: TerminalProcessExpectation): Promise<RuntimeValidation> {
     let found: Awaited<ReturnType<typeof lookupPaneEngineProcess>>
@@ -695,19 +696,27 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     } catch {
       return { state: 'unknown', reason: 'pty host runtime probe failed' }
     }
-    if (!found.ok) return { state: found.unknown ? 'unknown' : 'gone', reason: found.reason }
-    // A saved marker that can never equal one read today (see `TmuxBackend.validate`; a Windows `w:` marker
-    // can): the pane still runs a matching engine, take it.
-    const compared = expected.processIdentity && comparableStartMarker(expected.processIdentity.startMarker)
-    if (compared && !sameProcessIdentity(expected.processIdentity, found.identity)) {
-      return { state: 'gone', reason: 'process changed under ptyhost pane', replaced: true }
+    let pid: number
+    if (found.ok) {
+      // A saved marker that can never equal one read today (see `TmuxBackend.validate`; a Windows `w:` marker
+      // can): the pane still runs a matching engine, take it.
+      const compared = expected.processIdentity && comparableStartMarker(expected.processIdentity.startMarker)
+      if (compared && !sameProcessIdentity(expected.processIdentity, found.identity)) {
+        return { state: 'gone', reason: 'process changed under ptyhost pane', replaced: true }
+      }
+      pid = found.identity.pid
+    } else if (expected.processIdentity && processAmong(expected.processIdentity, found.paneProcesses)) {
+      // The process the agent was bound to, under another name while its engine loads (see `TmuxBackend.validate`).
+      pid = expected.processIdentity.pid
+    } else {
+      return { state: found.unknown ? 'unknown' : 'gone', reason: found.reason }
     }
     if (platform !== 'win32') return { state: 'alive' }
     const client = this.clientFor(runtime)
     if (!client) return { state: 'unknown', reason: UNAVAILABLE }
     const job = await client.call({ op: 'jobPids', pane: runtime.paneId })
     if (job.state !== 'ok') return { state: 'unknown', reason: `pty host could not list the pane job: ${job.reason}` }
-    if (!job.value.pids.includes(found.identity.pid)) return { state: 'gone', reason: 'process is not in the pane job' }
+    if (!job.value.pids.includes(pid)) return { state: 'gone', reason: 'process is not in the pane job' }
     return { state: 'alive' }
   }
 

@@ -16,11 +16,11 @@ describe('the last hour', () => {
   it('sums every minute of the last 60 and drops older ones, so the newest line alone covers the hour', () => {
     const { h, minute, last } = hour({ cpuPerMinute: 600 })
     for (let i = 0; i < 61; i++) {
-      h.request('GET /api/super-tabs/:tabId/changes', 10, false)
+      h.request('GET /api/harness-shares', 10, false)
       minute()
     }
     expect(last()).toMatchObject({ message: 'last hour', pod: 'pod-1', minutes: 60, windowMs: 3_600_000, requests: 60, cpuMs: 36_000 })
-    expect(last().routes['GET /api/super-tabs/:tabId/changes']).toMatchObject({ n: 60, perMinute: 1, ms: 600, errors: 0 })
+    expect(last().routes['GET /api/harness-shares']).toMatchObject({ n: 60, perMinute: 1, ms: 600, errors: 0 })
   })
 
   it('says how much of the hour it covers after a restart', () => {
@@ -93,7 +93,7 @@ describe('the line\'s size (review of #1880)', () => {
   it('stays under 12 KB, below the 16 KiB where the container runtime splits a log line, and says how many routes it cut', () => {
     // The worst case: long patterns, the CPU profile on, and the top lists by time, DB bytes and busy time all different.
     const { h, minute, last } = hour({ cpuPerMinute: 1_000 })
-    const name = (i: number) => `GET /api/super-tabs/:tabId/projects/:projectId/conversations/:conversationId/part-${i}`
+    const name = (i: number) => `GET /api/machines/:machineId/agents/:agentId/routes/part-${i}`
     for (let i = 0; i < 120; i++) h.request(name(i), i < 40 ? 10_000 - i : 1, false)
     const db = new Map<string, { n: number; ms: number; bytes: number }>(), busy = new Map<string, number>()
     for (let i = 0; i < 120; i++) {

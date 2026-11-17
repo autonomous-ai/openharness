@@ -68,7 +68,7 @@ it.each([true, false])('completes native Codex preparation before its dispatch c
   const creator = createAgentCreator({ native: (engine, source) => inspectNativeLaunch(engine, source),
     createBackend: {} as CreateAgentDeps['createBackend'], registry: {} as CreateAgentDeps['registry'],
     externalResume: async () => { throw Error('unexpected external resume') }, watchNewPane: async () => {},
-    announceSession: () => {}, attachDsh: () => {}, prepareApiTools: () => {},
+    announceSession: () => {}, attach: () => {}, prepareApiTools: () => {},
     hookPort: 19473, hooksDisabled: false, installOpencodePlugin: async () => true,
     gridLaunchMachine: () => ({}) as never, buildGridLaunch: async () => { throw Error('unexpected grid') },
     terminalHintMachineName: () => 'Fixture', blocksFolder: () => false, gridSetup: () => null, privateGridName: async () => null,
@@ -78,7 +78,8 @@ it.each([true, false])('completes native Codex preparation before its dispatch c
   const receipts = new AgentCreationReceipts(join(root, 'receipts'))
   const requests = createLaunchRequests({ receipts, createAgent: () => creator, prepareCreate: creator.prepare,
     forkAgent: () => null, resumeAgent: () => null, restartAgent: () => null,
-    byAgent: () => pending, stoppedAgent: () => undefined, toProject: async () => ({ agentId: pending.agentId }) as never, modelTarget: async () => null })
+    byAgent: () => pending, stoppedAgent: () => undefined, toProject: async () => ({ agentId: pending.agentId }) as never, modelTarget: async () => null,
+    workspaces: () => null })
   stop = requests.stop
   const replies: Record<string, unknown>[] = []
   const input = { creationId: 'native_trust_fixture_1', engine: 'codex', cwd, bypassPermission: false, prompt: 'original prompt' }

@@ -2,7 +2,7 @@
 import type { LiveEvent } from '../kit/events.js'
 import type { LiveTurn } from '../facets/live.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { record, sessionEvent } from './protocol.js'
+import { record, sessionEvent, subagentFinished } from './protocol.js'
 import type { RuntimeRecord } from '../facets/runtime.js'
 import { runtimeRecord } from './runtimeProtocol.js'
 import type { TranscriptClose } from '../../lib/transcriptControls.js'
@@ -102,8 +102,7 @@ export function liveEvent(value: unknown): value is LiveEvent {
   const p = value.payload
   if (value.type === 'turn_started') return typeof p.userMessage === 'string'
   if (value.type === 'turn_ended') return p.aborted === undefined || p.aborted === true
-  return value.type === 'subagent_finished' && typeof p.id === 'string' && typeof p.status === 'string'
-    && (p.summary === undefined || typeof p.summary === 'string')
+  return subagentFinished(value)
 }
 
 export function livePage(value: unknown): value is LivePage {

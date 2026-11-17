@@ -1,11 +1,11 @@
 /**
  * Discovery: what the reconciler's scans of the terminal backends and their processes mean for the
  * registry. A process no row owns opens an agent; a row's own process updates it (runtimes, identity,
- * permissions, profile homes, DSH), gives it back its DSH and a browser its person left on, and wakes a
- * dormant one; a row whose engine exited keeps its conversation or goes dormant; a row whose pane is gone
- * is removed, unless restore never ran. A new agent that takes the pane its previous agent ended in (an
- * engine typed into the shell an exit left, or a process opened over a bound agent) takes that agent's
- * browser with the pane (decision 19).
+ * permissions, profile homes, DSH), is looked at again for the services that follow agents (its DSH's viewer, a
+ * browser its person left on), and wakes a dormant one; a row whose engine exited keeps its conversation or goes
+ * dormant; a row whose pane is gone is removed, unless restore never ran. A new agent that takes the pane its previous
+ * agent ended in (an engine typed into the shell an exit left, or a process opened over a bound agent) is said to have
+ * taken it, and what went with the pane goes to it (decision 19; core/agentLife.ts `taken`).
  *
  * Moved verbatim out of the reconciler's options in `runForeground` (the core boundary, step 10:
  * docs/design/2026-10-03-harnessd.md). The reconciler itself, with what it scans, stays there.
@@ -29,14 +29,12 @@ import { bypassPermissionActive, permissionModeFromArgv } from '../../lib/proces
 export interface DiscoveryDeps {
   registry: Pick<typeof registry,
     'byRuntimeEngine' | 'openProcessAgent' | 'adoptEngine' | 'reinstateArchived' | 'updateRuntimes' | 'updateProcessIdentity' | 'setBypassPermission'
-    | 'setPermissionMode' | 'setCodexHome' | 'setHermesHome' | 'setDsh' | 'byAgent' | 'setLaunch' | 'setActive'
+    | 'setPermissionMode' | 'setCodexHome' | 'setHermesHome' | 'byAgent' | 'setLaunch' | 'setActive'
     | 'terminalAvailable' | 'setTerminalAvailable'>
-  attachDsh: (session: RegisteredSession) => void
-  /** The agent browser's look at a running agent whose Browser is on (agents/lifecycle.ts `observed`). */
-  attachBrowser: (session: RegisteredSession) => void
-  /** [to] took the pane [from] ended in, whose Browser was [on]: its browser goes with the pane (agents/lifecycle.ts
-   *  `taken`). */
-  moveBrowser: (from: string, to: RegisteredSession, on: boolean) => void
+  /** A look at a running agent, for the services that follow agents (core/agentLife.ts `running`). */
+  attach: (session: RegisteredSession) => void
+  /** [to] took the pane [from] ended in (core/agentLife.ts `taken`). */
+  taken: (from: string, to: RegisteredSession) => void
   forgetSession: (id: string, opts?: { force?: boolean; agentId?: string }) => void
   announceSession: (session: RegisteredSession) => void
   bindObservedAgent: (observed: DiscoveredTerminalAgent) => Promise<void>
@@ -59,7 +57,7 @@ export interface DiscoveryDeps {
 }
 
 export function createDiscoveryHandlers({
-  registry, attachDsh, attachBrowser, moveBrowser, forgetSession, announceSession, bindObservedAgent, syncRecapPool, attachSession,
+  registry, attach, taken, forgetSession, announceSession, bindObservedAgent, syncRecapPool, attachSession,
   invalidateTerminalControl, input, deviceInput, questionWatcher, stopHeartbeat, retainExitedSession,
   stoppedAgents, send, restoreDegraded, terminals,
 }: DiscoveryDeps) {
@@ -89,18 +87,18 @@ export function createDiscoveryHandlers({
       && stoppedAgents.resumeReservedAt(saved.agentId) === null)
   }
   /**
-   * The agent the shell an exit left named ([previous]) has a new agent, [adopted], in its pane: the browser goes with
-   * the pane, with the flag its saved record kept. Not while a resume of it is under way (its browser comes back with
-   * it), and not once it is purged.
+   * The agent the shell an exit left named ([previous]) has a new agent, [adopted], in its pane: it takes what went with
+   * the pane. Not while a resume of it is under way (what went with the pane comes back with it), and not once it is
+   * purged (no saved record).
    */
   const paneTaken = (previous: string, adopted: RegisteredSession): void => {
     if (stoppedAgents.resumeReservedAt(previous) !== null) return
     let saved: RegisteredSession | null
     try { saved = stoppedAgents.get(previous) } catch (error) {
-      console.warn(`[discovery] saved harnesses unreadable; ${sid(adopted.agentId)} takes no browser: ${error instanceof Error ? error.message : error}`)
+      console.warn(`[discovery] saved harnesses unreadable; ${sid(adopted.agentId)} takes nothing of its pane: ${error instanceof Error ? error.message : error}`)
       return
     }
-    if (saved) moveBrowser(previous, adopted, saved.browser === true)
+    if (saved) taken(previous, adopted)
   }
   /**
    * Every `openclaw` command renames its process to `openclaw` (`onboard`, `logs --follow`, `doctor`, `sessions` too:
@@ -127,10 +125,9 @@ export function createDiscoveryHandlers({
       gateway: observed.gateway,
       grid: observed.grid,
       codexHome: observed.codexHome,
-      dsh: observed.dsh,
     })
     if (!opened) return
-    if (opened.entry.dsh) attachDsh(opened.entry)
+    attach(opened.entry)
     if (opened.evicted) {
       console.log(`[discovery] ${observed.primaryRuntimeKey} replaced ${sid(opened.evicted.agentId)}`)
       // ⚠️ THE REGISTRY ALREADY DROPPED IT; NOBODY HAD TOLD THE CLIENTS. That
@@ -144,8 +141,9 @@ export function createDiscoveryHandlers({
         force: true,
         agentId: opened.evicted.agentId,
       })
-      // A new agent in its pane takes its browser. After the forget, so its browser's stop comes first.
-      if (opened.isNew) moveBrowser(opened.evicted.agentId, opened.entry, opened.evicted.browser === true)
+      // A new agent in its pane takes what went with it. After the forget, so the end of the agent it took it from is
+      // said first.
+      if (opened.isNew) taken(opened.evicted.agentId, opened.entry)
     }
 
     if (opened.isNew || launching) {
@@ -158,8 +156,8 @@ export function createDiscoveryHandlers({
     if (externalResumePending(current.externalResume)) return
     if (observed.engine === 'openclaw' && current.engine !== 'openclaw' && !await showsOpenclaw(observed)) return
     const wasDormant = !current.active
-    // Read BEFORE the update, because the update is what overwrites it. `undefined` means the probe
-    // could not look, which never counts as a move — see `probeGridAssignment`'s three answers.
+    // Read BEFORE the update, because the update is what overwrites it. `undefined` means the command
+    // line says nothing of the grid, which never counts as a move (lib/gridAssignmentWire.ts `gridAssignmentEvidence`).
     const gridMoved = observed.grid !== undefined
       && !sameGridAssignment(current.grid ?? null, observed.grid)
     const wasLaunching = current.launch?.state !== undefined && current.launch.state !== 'ready'
@@ -198,16 +196,12 @@ export function createDiscoveryHandlers({
     // that did not yet) learns it here, before any pane recreation ever needs it.
     // `observed.engine`, not `current.engine`: for a terminal that just adopted one, the row's
     // engine was `terminal` a line ago, which has no bypass flag and would read every launch as "no".
-    // Not a Swarm agent's (task #4215): its mode is the one it started in, Auto-approve, or its person chose. One Harness
-    // started in full mode before then still runs with that flag until it relaunches, and read back the relaunch would skip
-    // permissions again.
-    const own = !current.swarmSkill
-    if (own) registry.setBypassPermission(current.agentId, bypassPermissionActive(observed.engine, observed.args))
+    registry.setBypassPermission(current.agentId, bypassPermissionActive(observed.engine, observed.args))
     // And the exact MODE, fill-only: a row that recorded one at create is authoritative, and one
     // that never did (adopted from a terminal, written by an older build, created by a path that
     // passes no mode) learns it from the same argv — so its restart brings back
     // `--dangerously-skip-permissions`, not the auto mode `bypassPermission` alone would pick.
-    if (own && !current.permissionMode) {
+    if (!current.permissionMode) {
       const mode = permissionModeFromArgv(observed.engine, observed.args)
       if (mode) registry.setPermissionMode(current.agentId, mode)
     }
@@ -215,22 +209,17 @@ export function createDiscoveryHandlers({
     // under learns it from the process, before the hook path validates a transcript against it.
     // Fill-only — a profile the row already knows is never re-derived.
     if (observed.codexHome && !current.codexHome) registry.setCodexHome(current.agentId, observed.codexHome)
-    // …and a Hermes home the same way, when the process names one. A row that learns it here never
-    // has to look its session up store by store (openharness#191). A home Harness worked out is marked, so a
-    // relaunch does not export it; a row that has it unmarked (an older daemon saved over the mark) is marked again.
-    if (observed.hermesHome && (!current.hermesHome || (observed.hermesHomeDerived && !current.hermesHomeDerived
-      && current.hermesHome === observed.hermesHome))) {
-      if (observed.hermesHomeDerived) registry.setHermesHome(current.agentId, observed.hermesHome, true)
-      else registry.setHermesHome(current.agentId, observed.hermesHome)
+    // …and a Hermes home the same way, from the store its process holds open. A row that learns it here never
+    // has to look its session up store by store (openharness#191). The daemon's path of a sandbox's home is marked, so
+    // a relaunch does not export it. A home the row has is never marked: a descriptor cannot tell an older daemon's
+    // row from one Harness launched by name, whose relaunch must export it.
+    if (observed.hermesHome && !current.hermesHome) {
+      registry.setHermesHome(current.agentId, observed.hermesHome, observed.hermesHomeDerived === true)
     }
-    // And the DSH: a row minted by discovery (or written before the field existed) learns it from
-    // the process's own `HARNESS_DSH`, and gets its viewer and verdict watch from here on.
-    if (observed.dsh && !current.dsh) registry.setDsh(current.agentId, observed.dsh)
+    // And it is looked at again for the services that follow agents: whatever path brought this agent back to running,
+    // it passes here (decision 14), and a viewer follows its harness's update. The registry's row now, not the scan's.
     const live = registry.byAgent(current.agentId)
-    if (live?.dsh) attachDsh(live)
-    // And its browser, if its person left it on, for the same reason: whatever path brought this agent back to running,
-    // it passes here (decision 14). The registry's row now, not the scan's, so a Stop since the scan began is kept.
-    if (live?.browser) attachBrowser(live)
+    if (live) attach(live)
     // This live process, in this row's own pane, is what "started" means — for a resumed row as
     // much as any other. A resume used to be held back here until its `SessionStart` hook landed,
     // on the grounds that only the hook proves WHICH conversation reopened. Two things were wrong

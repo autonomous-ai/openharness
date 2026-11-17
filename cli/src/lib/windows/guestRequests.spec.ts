@@ -1,9 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import {
-  GUEST_REQUEST_MAX_BYTES, WINDOWS_GUEST_ROOT, GuestRequestError, canonicalGuestEmail, guestAnswerFile, guestHomeFor,
-  guestRequestFile, guestWorkspaceFor, newGuestRequestId, parseGuestSetupAnswer, parseGuestSetupRequest,
-} from './guestRequests.js'
+import { GUEST_REQUEST_MAX_BYTES, GuestRequestError, canonicalGuestEmail, guestAnswerFile, guestHomeFor, guestRequestFile, guestWorkspaceFor, newGuestRequestId, parseGuestSetupAnswer, parseGuestSetupRequest } from './guestRequests.js'
+import { WINDOWS_GUEST_ROOT } from './guestTree.js'
 
 const OWNER = 'C:\\Users\\owner'
 const USER = `hg_${createHash('sha256').update('member@example.com').digest('hex').slice(0, 12)}`

@@ -7,7 +7,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { runGuestCommand, type GuestRunner } from '../guestAccounts.js'
+import { runGuestCommand, type GuestRunner } from '../guestRunner.js'
 import { ps } from './powershellQuote.js'
 
 export type AdminResult =

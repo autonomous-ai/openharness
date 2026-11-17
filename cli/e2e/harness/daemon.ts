@@ -9,6 +9,9 @@
  * every hook event to the daemon, with its deadline and its offline registry writes. Before a daemon
  * starts, every folder it could install hooks into is checked to be inside the test's root
  * (`assertHooksContained`), and every file it says it wrote is checked again once it is up.
+ *
+ * It runs on a copy of the worker's Node alone in its folder (e2e/harness/testNode.ts), so it finds no engine beside
+ * its Node.
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
@@ -23,7 +26,10 @@ import { daemonEnvironment } from '../../src/testing/daemonEnvironment.js'
 import { GH_FORBIDDEN_STUB } from '../../src/testing/ghStub.js'
 import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
+import { endRootProcesses } from '../../src/testing/rootProcesses.js'
+import { assertSocketPathFits } from '../../src/testing/socketPathRoom.js'
 import { alive } from '../../src/testing/spawnedRuns.js'
+import { assertNodeAlone } from '../../src/testing/testNode.js'
 import { forgetGroup, forgetTmux, leaderGone, watchGroup, watchTmux } from './reaper.js'
 
 const exec = promisify(execFile)
@@ -83,10 +89,15 @@ export interface DaemonOptions {
   foreground?: boolean
   /** Start with these arguments to node instead (a launcher the test provides), in the daemon's environment. */
   launch?: string[]
-  /** Run this bundle (an installed `cli.js`) instead of the checkout's source. */
+  /** Run the daemon on this Node instead of the run's own (`E2E_NODE_PATH`): a managed Node under the runtime folder.
+   *  It must be alone in its folder too. */
+  node?: string
+  /** Run this bundle (an installed `cli.js`, its `notify.mjs` beside it: `assertHookScriptBeside`) instead of
+   *  the checkout's source. */
   scriptPath?: string
   /** Keep the daemon's data folder here instead of under the throwaway root (a test volume). The fake
-   *  engines read their hook credential from it, so it is set for them too. */
+   *  engines read their hook credential from it, so it is set for them too. Its socket path is never measured:
+   *  where it sits is the test's subject (noSocket.e2e.ts passes one too long on purpose). */
   dataDir?: string
   /** Run beside this daemon, as a dev daemon runs beside the release one on one computer: its home, its
    *  tmux server, the engines' transcript folders and the projects, with a data folder, port and engines
@@ -101,6 +112,11 @@ export interface DaemonOptions {
   graphicsQuery?: { title: string; titleAfterMs: number }
 }
 
+/** The port a daemon is configured with: its `PORT`, which names its socket, its record and its artifacts. It is free
+ *  when picked and closed before the daemon binds it, so another process can take it first (cli-e2e run 43568618113,
+ *  shard 2). For a daemon with a socket that is harmless: it then listens on another port and says which, and the
+ *  harness reads that one (`listeningPort`). One with no socket cannot move (hookServer.ts) and fails to start
+ *  (noSocket.e2e.ts's first case). */
 async function freePort(): Promise<number> {
   const server = createServer()
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
@@ -108,6 +124,21 @@ async function freePort(): Promise<number> {
   await new Promise<void>((done) => server.close(() => done()))
   if (!address || typeof address === 'string') throw new Error('no free port')
   return address.port
+}
+
+/** The port in the last `[hooks] listening on 127.0.0.1:<n> (` line of a daemon's output (hookServer.ts), or null
+ *  before it said one. The last, so a core started again on another port is followed. The bracket after the number is
+ *  part of the match on purpose: output arrives in chunks, and a line cut inside its port would read as a shorter one. */
+export function listeningPort(output: string): number | null {
+  const said = [...output.matchAll(/\[hooks\] listening on 127\.0\.0\.1:(\d+) \(/g)]
+  return said.length ? Number(said[said.length - 1][1]) : null
+}
+
+/** listeningPort of [output]; before the daemon said one, an error by name rather than a guess. */
+function saidPort(output: string): number {
+  const port = listeningPort(output)
+  if (port === null) throw new Error('the daemon has not said which port it listens on yet')
+  return port
 }
 
 /** Inside `root`, or `root` itself. */
@@ -186,6 +217,17 @@ export function assertHooksContained(root: string, env: NodeJS.ProcessEnv): void
 }
 
 /**
+ * A daemon whose `cli.js` has no `notify.mjs` beside it refuses every hook install
+ * (`engines/kit/notifyHooks.ts` `requireHookScript`), and its test then fails far from the cause: six tests
+ * of the nightly run of 2026-11-12 failed on `NATIVE_LAUNCH_HELD` or a hook timeout. It never copies the
+ * file, which would hide a layout no build produces.
+ */
+export function assertHookScriptBeside(scriptPath: string): void {
+  if (existsSync(join(dirname(scriptPath), 'notify.mjs'))) return
+  throw new Error(`${scriptPath} has no notify.mjs beside it: its daemon refuses every hook install (lay it out with buildWithLean)`)
+}
+
+/**
  * The files a daemon's log says it installed hooks or plugins into, found them already in, or left alone.
  * The update line names the hook script first and the file it rewrote after ` in `.
  */
@@ -212,11 +254,17 @@ export const until = async <T>(what: string, probe: () => Promise<T | null | und
   throw new Error(`timed out after ${ms}ms waiting for ${what}${last ? ` (last error: ${String(last)})` : ''}`)
 }
 
+/** The shell of every tile, the same on every machine and never the developer's choice: under theirs, a bash, fish or
+ *  tcsh user ran every tile in it, and bash and fish run path_helper too. CI installs zsh and macOS ships it. No second
+ *  shell to fall back to: that would be a second rule to keep true. */
+const TILE_SHELL = '/bin/zsh'
+
 /** How many daemons have been started beside another in this process: each gets its own folder. */
 let besideCount = 0
 
 /** The executable a daemon finds for [name]: the fake engine, run with [config]. A test that wants one engine of a daemon
- *  to behave otherwise writes it over the daemon's own, before it starts. */
+ *  to behave otherwise writes it over the daemon's own, before it starts. It keeps the worker's Node, since a fake engine
+ *  looks up no engine. */
 export const fakeEngineShim = (name: 'claude' | 'codex', config: EngineConfig & Record<string, unknown>): string =>
   `#!${process.execPath}\nimport(${JSON.stringify(pathToFileURL(join(here, 'fakeEngine.mjs')).href)}).then((m) => m.run(${JSON.stringify(name)}, ${JSON.stringify(config)}))\n`
 
@@ -229,11 +277,14 @@ export class IsolatedDaemon {
   private constructor(
     readonly root: string,
     readonly tmux: IsolatedTmux,
-    readonly port: number,
+    /** What `PORT` is set to: it names the daemon's socket (`daemon-<n>.sock`), its record and its artifacts. */
+    readonly configuredPort: number,
     readonly env: NodeJS.ProcessEnv,
     readonly options: DaemonOptions,
     /** What the fake engines' wrappers hand `fakeEngine.mjs` (updates.e2e.ts writes releases with it). */
     readonly engineConfig: EngineConfig,
+    /** Where the fake open notes each run's arguments. */
+    private readonly opensLog: string,
   ) {}
 
   static async create(options: DaemonOptions = {}): Promise<IsolatedDaemon> {
@@ -247,16 +298,38 @@ export class IsolatedDaemon {
     // names: the socket lives in the data folder, and a Unix socket's path has room for 96 bytes.
     const own = beside ? join(root, `b${++besideCount}`) : root
     const dirs = {
-      home: join(root, 'home'), data: options.dataDir ?? join(own, beside ? 'd' : 'data'), runtime: join(own, 'runtime'), auth: join(own, 'auth'),
+      home: tmux.env.HOME!, data: options.dataDir ?? join(own, beside ? 'd' : 'data'), runtime: join(own, 'runtime'), auth: join(own, 'auth'),
       bin: join(own, 'bin'), dsh: join(own, 'dsh'), claudeProjects: join(root, 'claude', 'projects'), codexHome: join(root, 'codex'),
-      projects: join(root, 'projects'),
+      projects: join(root, 'projects'), tmp: join(own, 't'),
+    }
+    try {
+      if (!existsSync(TILE_SHELL)) throw new Error(`${TILE_SHELL} is required: a daemon under test runs its tiles under zsh`)
+      // A data folder the harness gives a daemon under a TMPDIR too long for its socket falls back to one under the
+      // test's home, as long, and the test failed later with `EINVAL connect` and no word of why: refused here, before
+      // anything is made in the root. A test's own data folder is not measured: where it sits is that test's subject
+      // (noSocket.e2e.ts passes one too long on purpose).
+      if (options.dataDir === undefined) assertSocketPathFits(join(dirs.data, `daemon-${port}.sock`))
+    } catch (error) {
+      // A daemon beside another made nothing yet, and the root it shares is the other's.
+      if (!beside) {
+        await tmux.close()
+        forgetTmux(tmux.socket)
+      }
+      throw error
     }
     for (const dir of Object.values(dirs)) await mkdir(dir, { recursive: true })
-    // A zsh user as most are, with a .zshrc of their own (empty: nothing of anyone's). With none, the zsh
-    // of Debian, Ubuntu and Fedora opens its new-user setup menu in every terminal tile and every shell an
-    // engine leaves behind, and a test typing into one types into the menu. The person with no startup
-    // files at all has their own case (shells.e2e.ts). Appended, never truncated: a test's own stays.
-    await writeFile(join(dirs.home, '.zshrc'), '', { flag: 'a' })
+    // A tile's login zsh gets back the PATH it was handed. macOS's /etc/zprofile runs path_helper, which puts
+    // /etc/paths (/usr/local/bin first) and /etc/paths.d ahead of it, so `claude` or `codex` typed into a tile was the
+    // developer's real engine, under their login (audit of 2026-11-15; seven cases of enginehomes.e2e.ts on a
+    // developer's Mac). .zshenv is read before /etc/zprofile and notes the PATH; .zprofile is read right after it and
+    // sets it again, before any .zshrc and any later .zprofile line a test writes, which keep the last word. Noted, not
+    // written here: a daemon beside another shares this home and has a bin of its own. Not exported, so no child sees
+    // it. A test that types an engine's name appends to these two files and never truncates them. Only zsh is covered:
+    // a test that types one under bash or tcsh sets its PATH back itself.
+    if (!beside) {
+      await writeFile(join(dirs.home, '.zshenv'), 'HARNESS_E2E_PATH=$PATH\n', { flag: 'a' })
+      await writeFile(join(dirs.home, '.zprofile'), '[[ -n $HARNESS_E2E_PATH ]] && PATH=$HARNESS_E2E_PATH\n', { flag: 'a' })
+    }
     const config: EngineConfig = {
       port, dataDir: dirs.data, claudeProjectsDir: dirs.claudeProjects, codexHome: dirs.codexHome,
       claudeModel: options.claudeModel, codexModel: options.codexModel, modelControlGate: options.modelControlGate,
@@ -276,15 +349,44 @@ export class IsolatedDaemon {
     // helper (lib/guestAccounts.ts), which may be installed on the Mac the tests run on. Refused, as for an owner who
     // never turned guest access on.
     await writeFile(join(dirs.bin, 'sudo'), '#!/bin/sh\necho "sudo: a password is required" >&2\nexit 1\n', { mode: 0o755 })
+    // Nor does it ever reach the real Orca app on the Mac the tests run on, which every session here may be running
+    // inside: with no `orca` on its PATH a daemon runs the Orca app's own, and a listed Orca agent asks it for a list.
+    // Refused, until a test writes its own (harness/fakeOrca.ts).
+    await writeFile(join(dirs.bin, 'orca'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    // A pick on the dial brings that app forward with `open -b` (services/devices), and dialAppFilter.e2e.ts taps and
+    // picks VS Code and Ghostty: with the real open, a dial test on a Mac would bring the developer's own apps forward.
+    // Out of bin: the devices run open by its path, never by name. One line of arguments per run, for `opens()`.
+    const fakeOpen = join(own, 'fake-open')
+    const opensLog = join(own, 'opens.log')
+    await writeFile(fakeOpen, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${opensLog}'\n`, { mode: 0o755 })
     const env = daemonEnvironment(tmux.env, {
       NODE_ENV: 'test',
       HOME: dirs.home,
+      // Its profile, under that home too. On Windows os.homedir() follows USERPROFILE, not HOME, so every default
+      // under it was the developer's real profile (audit of 2026-11-15).
+      // No XDG_* is named: a daemon inherits none (src/testing/daemonEnvironment.ts), so each falls under this home.
+      // Naming XDG_CONFIG_HOME would also move Cursor's config folder to .config/cursor (engines/cursor/contract.ts).
+      USERPROFILE: dirs.home,
+      LOCALAPPDATA: join(dirs.home, 'AppData', 'Local'),
+      APPDATA: join(dirs.home, 'AppData', 'Roaming'),
       // A login shell in a pane must not load anyone's zsh configuration.
       ZDOTDIR: dirs.home,
+      // Its tiles' shell, not the developer's: a test that wants another names it in its own env.
+      SHELL: TILE_SHELL,
       PORT: String(port),
       // A bridge port of its own: on 51793, the developer's daemon's, one daemon under test left running took the
       // port from it, and another asked `lsof` every 5.5 s which account held it (2026-11-11).
       HARNESS_CONNECTIONS_PORT: '0',
+      // Its temporary folder, and its children's: an agent in its pane took the worker's, and every screenshot of
+      // `harness browser` (1 MiB) outlived its test there. One letter: the daemon puts no socket here, and tmux has its
+      // own (TMUX_TMPDIR), but a child's socket in it must fit too.
+      TMPDIR: dirs.tmp,
+      // The same folder for Windows' os.tmpdir(), which reads these and not TMPDIR: with neither, a daemon there fell
+      // back to %SystemRoot%\temp, outside its root (PM, 2026-11-15).
+      TEMP: dirs.tmp, TMP: dirs.tmp,
+      // Its tmux server's folder, by name (src/testing/isolatedTmux.ts): the daemon's bare tmux calls must reach the
+      // fixture's private server, whatever else it inherits.
+      TMUX_TMPDIR: tmux.env.TMUX_TMPDIR,
       ADAPTER_DATA_DIR: dirs.data,
       ADAPTER_RUNTIME_DIR: dirs.runtime,
       ADAPTER_COMPUTER_ID: 'e2e-computer-0000-0000-000000000001',
@@ -293,12 +395,34 @@ export class IsolatedDaemon {
       DSH_DIR: dirs.dsh,
       CLAUDE_PATH: join(dirs.bin, 'claude'),
       CODEX_PATH: join(dirs.bin, 'codex'),
+      // /usr/local/bin/hermes is the one recipe path outside any home (lib/engineInstall.ts), and a daemon looks at the
+      // recipe's paths only when no override is set: one that installs Hermes hooks ran that file's --version
+      // (engines/hermesRecord.ts). Missing until a test writes its own Hermes here.
+      HERMES_PATH: join(dirs.bin, 'hermes'),
       CLAUDE_PROJECTS_DIR: dirs.claudeProjects,
       CODEX_HOME: dirs.codexHome,
-      PATH: `${dirs.bin}:${process.env.PATH}`,
+      // Its fakes and stubs first, then the fixture's linked tools and the system's folders (src/testing/testPath.ts),
+      // never the worker's PATH: the developer's folders are absolute, so the throwaway home hid none of them, and
+      // every engine but the two pinned ones was theirs (audit of 2026-11-15).
+      PATH: `${dirs.bin}:${tmux.env.PATH}`,
       // Signed out, and nothing reaches beyond the machine.
       BACKEND_WS_URL: 'ws://127.0.0.1:9',
       WEB_URL: 'http://127.0.0.1:9',
+      // Nor the Store's catalog on GitHub (dsh/catalog.ts): a published one turned a fixture registry of two into the
+      // live shelf of 23. Named here: the worker's own (vitest.setup.ts) is not inherited.
+      HARNESS_STORE_CATALOG_URL: 'http://127.0.0.1:9/catalog.json',
+      // Nor grid's release server: removed roots on one Mac kept a 19 MB runtime/grid-0.3.63-darwin-arm64 each
+      // (2026-11-14). Grid's set-up on a grid feature's first use (services/models.ts installCli: the picker's Set up,
+      // a Get, a Use) installs the managed grid, and a managed grid already here follows its pin on every models start.
+      // With no manifest to read, installCli goes on to grid's public installer: that is switched off too.
+      ADAPTER_GRID_RUNTIME_METADATA_URL: 'http://127.0.0.1:9/grid.json',
+      DISABLE_GRID_INSTALL: 'true',
+      // Nor the developer's grid login: their GRID_HOME's session would name their grid and fetch its models from
+      // their control plane, and their HARNESS_GRID_BIN would skip the set-up above (empty counts as unset).
+      GRID_HOME: join(dirs.home, '.grid'),
+      GRID_CONTROL_PLANE_URL: 'http://127.0.0.1:9',
+      HARNESS_GRID_BIN: '',
+      HARNESS_OPEN_BIN: fakeOpen,
       // Claude Code's and Codex's hooks, installed as on a person's computer, into this home and CODEX_HOME
       // (assertHooksContained), and run by the fake engines. Every other engine's installer writes into
       // folders these tests have no engine for.
@@ -316,15 +440,9 @@ export class IsolatedDaemon {
       TERMINAL_BACKENDS: 'tmux',
       TMUX_REAP_INTERVAL_MS: '5000',
       TERMINAL_RECONCILE_INTERVAL_MS: '5000',
-      // The Swarm switch (harnessd/services.ts), as the run was started with: `HARNESS_SWARM=off npm run test:e2e` runs
-      // every daemon of the suite with the Swarm off. A test's own env still decides.
-      ...(process.env.HARNESS_SWARM !== undefined ? { HARNESS_SWARM: process.env.HARNESS_SWARM } : {}),
       ...options.env,
     })
-    // A Claude Code home moved in the environment this run was started from is the person's: the daemon
-    // would adopt it and install its hooks there (lib/engineHomes.ts). Only a test may move one.
-    if (!options.env || !('CLAUDE_CONFIG_DIR' in options.env)) delete env.CLAUDE_CONFIG_DIR
-    return new IsolatedDaemon(root, tmux, port, env, options, config)
+    return new IsolatedDaemon(root, tmux, port, env, options, config, opensLog)
   }
 
   /** What the fake engines noted of every hook they ran (fakeEngine.mjs `hookLog`); kept once the root is gone. */
@@ -332,6 +450,11 @@ export class IsolatedDaemon {
     try { return readFileSync(this.engineConfig.hookLog, 'utf8') } catch { return this.closedHookLog }
   }
   private closedHookLog = ''
+
+  /** The arguments of every run of the fake open, in order: none while it has not run. */
+  opens(): string[][] {
+    try { return readFileSync(this.opensLog, 'utf8').split('\n').filter(Boolean).map((line) => line.split(' ')) } catch { return [] }
+  }
 
   /** Throws when the daemon said it put hooks outside the root, or an engine refused hooks found there. */
   private assertHooksStayedInside(): void {
@@ -343,7 +466,11 @@ export class IsolatedDaemon {
 
   get dataDir(): string { return this.env.ADAPTER_DATA_DIR! }
   get computerId(): string { return this.env.ADAPTER_COMPUTER_ID! }
-  get socketPath(): string { return join(this.dataDir, `daemon-${this.port}.sock`) }
+  get socketPath(): string { return join(this.dataDir, `daemon-${this.configuredPort}.sock`) }
+  /** The port its control server answers on, as the daemon last said it: not the configured one, which another process
+   *  may have taken first. The last line, so a core the master starts again on another port is followed, as
+   *  `corePid()` follows it. */
+  get port(): number { return saidPort(this.output) }
   get projectsDir(): string { return join(this.root, 'projects') }
   /** The process `harness start` would have started: the master, or a core run on its own. */
   get pid(): number | null { return this.child?.pid ?? null }
@@ -365,8 +492,19 @@ export class IsolatedDaemon {
    *  `'none'` as soon as the process is started. */
   async start(options: { ready?: 'none' | 'port' | 'wired' } = {}): Promise<void> {
     if (this.child) throw new Error('already running')
-    // Checked at every start: a test writes a shell profile, or the data folder remembers a home, between them.
+    // Checked at every start: a test writes a shell profile, or the data folder remembers a home, between them,
+    // and a test may name its script after `create` (`masterIpcExit.e2e.ts`).
     assertHooksContained(this.root, this.env)
+    if (this.options.scriptPath) assertHookScriptBeside(this.options.scriptPath)
+    // The product looks for npm-installed engines beside the Node the daemon runs on (lib/engineLaunch.ts
+    // `npmRuntimeBins`), and on a developer's Mac the worker's Node was in the version manager's folder with their real
+    // engines, which freshMachineEngines.e2e.ts's daemon found "already installed" (audit of 2026-11-16,
+    // docs/plans/2026-11-16-e2e-isolation-3-design.md). No fallback to the worker's Node: it would reopen that without a
+    // word. Checked at every start, so a test's own Node is held to it too. The master starts the core and the services
+    // on the same Node, and the hooks are written with it.
+    const node = this.options.node || process.env.E2E_NODE_PATH
+    if (!node) throw new Error('E2E_NODE_PATH is not set: run the end-to-end tests through vitest.e2e.config.ts')
+    assertNodeAlone(node)
     const heap = this.options.heapMiB ? [`--max-old-space-size=${this.options.heapMiB}`] : []
     const entry = this.options.noMaster ? ['__run'] : this.options.foreground ? ['start', '-f'] : ['__harnessd']
     // Readiness is judged from what this start prints, never from an earlier boot's lines.
@@ -376,7 +514,7 @@ export class IsolatedDaemon {
     const script = bundle ? [bundle] : ['--import', 'tsx', 'src/cli.ts']
     // A process group of its own, which the core and the services join: one signal reaches all of them, whether or
     // not the master is still there, and the worker's reaper (reaper.ts) ends it should the worker go without closing it.
-    const child = spawn(process.execPath, this.options.launch ?? [...heap, ...script, ...entry], {
+    const child = spawn(node, this.options.launch ?? [...heap, ...script, ...entry], {
       cwd: CLI_ROOT, env: this.env, stdio: ['ignore', 'pipe', 'pipe'], ...ownProcessGroup(),
     })
     this.child = child
@@ -386,7 +524,7 @@ export class IsolatedDaemon {
       child.once('exit', () => leaderGone(child.pid!))
     }
     // The whole log, as files, for a failing test's CI artifacts (E2E_ARTIFACTS_DIR, artifacts.ts).
-    const logName = `daemon-${this.port}.log`
+    const logName = `daemon-${this.configuredPort}.log`
     artifactLog(logName, `---- ${new Date().toISOString()} start (pid ${child.pid}, ${script.at(-1)} ${entry.join(' ')}, data ${this.dataDir})\n`)
     const take = (chunk: Buffer) => {
       const text = chunk.toString('utf8')
@@ -403,8 +541,13 @@ export class IsolatedDaemon {
     if (options.ready === 'none') return
     await Promise.race([exited, (async () => {
       await until('the daemon to answer on its port', async () => {
-        const response = await fetch(`http://127.0.0.1:${this.port}/api/health`).catch(() => null)
-        return response?.ok ? true : null
+        // The port this start said, never an earlier boot's: a start can move it. Every miss throws, so the timeout
+        // names the last one (`until`): no port said yet, a refused connection, or an answer that is not healthy. Each
+        // ask has a deadline of its own: `until` checks its 60 s only between asks, and a fetch nobody answers waits 300 s.
+        const port = saidPort(this.output.slice(from))
+        const response = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(5_000) })
+        if (!response.ok) throw new Error(`port ${port} answered /api/health with ${response.status}`)
+        return true
       }, 60_000, 200)
       await until('the daemon socket', () => existsSync(this.socketPath), 10_000)
       // The port answers ~1,100 lines of startup before every handler is wired (see the startup-race
@@ -437,15 +580,6 @@ export class IsolatedDaemon {
     const exited = leader.exitCode !== null || leader.signalCode !== null
     if (!pgid || (exited && alive(pgid))) return
     try { process.kill(-pgid, 'SIGKILL') } catch { /* empty */ }
-  }
-
-  /** A crash of every one of its processes at once, the core and the services with the master: no shutdown path runs in any. */
-  async crash(): Promise<void> {
-    const child = this.child
-    if (!child) return
-    const exited = new Promise<void>((done) => child.once('exit', () => done()))
-    try { process.kill(-child.pid!, 'SIGKILL') } catch { /* gone */ }
-    await exited
   }
 
   /** The way a crash ends it: no shutdown path runs. */
@@ -504,7 +638,7 @@ export class IsolatedDaemon {
         const screen = await this.tmux.run('capture-pane', '-p', '-J', '-S', '-200', '-t', line.split('\t')[0]).catch((error) => String(error))
         text += `==== ${line}\n${screen}\n`
       }
-      artifactLog(`daemon-${this.port}-panes.txt`, text)
+      artifactLog(`daemon-${this.configuredPort}-panes.txt`, text)
     } catch { /* no server any more: nothing on screen to keep */ }
   }
 
@@ -517,7 +651,7 @@ export class IsolatedDaemon {
     try { this.assertHooksStayedInside() } catch (error) { escaped = error }
     // A failed test prints it after this close has removed the root.
     this.closedHookLog = this.hookLog()
-    artifactLog(`daemon-${this.port}-engine-hooks.log`, this.closedHookLog)
+    artifactLog(`daemon-${this.configuredPort}-engine-hooks.log`, this.closedHookLog)
     // A core or service whose master died during the test must not outlive it: 20 such cores, left by a
     // run whose masters crashed, spun on their closed output pipes for the rest of a parallel suite. They
     // are in their master's process group, every start's.
@@ -526,11 +660,20 @@ export class IsolatedDaemon {
       forgetGroup(leader.pid!)
     }
     this.groups.clear()
-    // A daemon beside another shares its tmux server: that one closes it.
+    // A daemon beside another shares its tmux server and its root: that one closes them.
+    let left: string[] = []
     if (!this.options.beside) {
+      // The server names the root on its own command line: stopped first, its panes with it, so the sweep meets only
+      // what left the daemon's groups.
+      await this.tmux.run('kill-server').catch(() => { /* already gone */ })
+      // The census of 2026-11-14 found 14 fake `codex app-server` pairs outliving their runs: a Codex rate-limit read
+      // runs in a process group of its own (lib/codexRateLimits.ts), out of reach of the daemon's groups. Ended before
+      // the root is removed, so nothing that names it writes into it as it goes.
+      left = await endRootProcesses(this.root)
       await this.tmux.close()
       forgetTmux(this.tmux.socket)
     }
     if (escaped) throw escaped
+    if (left.length) throw new Error(`a daemon under test left processes that would not end (root ${this.root}): ${left.join('; ')}`)
   }
 }

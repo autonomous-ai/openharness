@@ -8,16 +8,20 @@ import { StoppedAgentStore } from './stoppedAgents.js'
 import { AgentCreationReceiptError } from './agentCreationReceipt.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { SessionCheckpointStore } from './sessionCheckpoint.js'
-import { PurgeAgentService, inspectNativeHistory, eraseNativeHistory, sessionDataBytes, type PurgeRequest } from './purgeAgentService.js'
+import { PurgeAgentService, inspectNativeHistory, eraseNativeHistory, sessionDataBytes, type PurgeDeps, type PurgeRequest } from './purgeAgentService.js'
 import { builtinSqlite } from './sqliteBuiltin.js'
 import type { StopAgentOptions } from './stopAgentService.js'
 import * as worktrees from './worktreeDeletion.js'
+import { WORKSPACES_OFF } from '../core/api.js'
 
 let root: string, session: RegisteredSession, stopped: StoppedAgentStore, checkpoints: SessionCheckpointStore
 let service: PurgeAgentService, target: Omit<PurgeRequest, 'mode'>, now: number
 let stop = vi.fn<(id: string, options: StopAgentOptions) => Promise<void>>()
 let deleted = vi.fn<(session: RegisteredSession) => void>()
 let eraseRecords = vi.fn<(session: RegisteredSession) => Promise<void>>()
+let eraseFirst = vi.fn<(session: RegisteredSession) => Promise<void>>()
+/** Workspaces as the purge finds them at each call: up, on this module's functions, unless a test takes them down. */
+let workspaces: PurgeDeps['worktrees']
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'harness-purge-'))
   const codexHome = join(root, 'profile'), cwd = join(root, 'project')
@@ -36,14 +40,27 @@ beforeEach(() => {
     stopped.save(registry.byAgent(id)!)
     registry.removeAgent(id)
   })
-  deleted = vi.fn(); eraseRecords = vi.fn(async () => {}); now = 1000
+  deleted = vi.fn(); eraseRecords = vi.fn(async () => {}); eraseFirst = vi.fn(async () => {}); now = 1000
+  workspaces = () => worktrees.worktreeAnswers(worktrees)
   service = new PurgeAgentService({ live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stopped.list()],
-    stopped, checkpoints, stop, restarting: () => false, deleted, eraseRecords, now: () => now })
+    worktrees: () => workspaces(), stopped, checkpoints, stop, restarting: () => false, deleted, eraseRecords, eraseFirst, now: () => now })
   target = { agentId: session.agentId, sessionId: session.sessionId, createdAt: session.registeredAt }
 })
 afterEach(() => { for (const row of registry.list()) registry.removeAgent(row.agentId); rmSync(root, { recursive: true, force: true }); vi.restoreAllMocks() })
 const review = () => service.request({ ...target, mode: 'inspect' })
 const remove = (reviewId: unknown) => service.request({ ...target, mode: 'delete', reviewId: String(reviewId) })
+
+it('says where a harness works is unknown while workspaces do not answer, and asks git nothing itself', async () => {
+  workspaces = () => WORKSPACES_OFF
+  expect(await service.worktreeRequest({ ...target, mode: 'describe' })).toEqual({ workspace: { kind: 'unavailable', path: session.cwd,
+    canDelete: false, reason: 'The working folder could not be verified. Reopen Inspect to try again.' } })
+  expect(await service.worktreeRequest({ ...target, mode: 'inspect' }))
+    .toEqual({ error: 'WORKTREE_DELETE_REFUSED', stopped: false, detail: expect.stringContaining('The worktree could not be checked.') })
+  // Delete's own review offers the session data alone, and says why not the worktree.
+  expect(await service.request({ ...target, mode: 'inspect', includeWorktree: true })).toMatchObject({ choices: {
+    sessionData: { available: true }, worktreeData: { available: false, reason: expect.stringContaining('did not answer') } } })
+  expect(stop).not.toHaveBeenCalled()
+})
 
 it('workspace inspection is read-only and binds the selected session identity', async () => {
   expect(await service.worktreeRequest({ ...target, mode: 'describe' })).toMatchObject({ workspace: { kind: 'folder', path: realpathSync(session.cwd!), canDelete: false } })
@@ -115,6 +132,28 @@ describe('selected session and worktree cleanup', () => {
     expect(plan).toMatchObject({ choices: { sessionData: { available: false }, worktreeData: { available: true } } })
     expect(await service.request({ ...target, mode: 'delete', reviewId: String(plan.reviewId), choices: choices(false, true), path: tree.path })).toMatchObject({ deleted: true, historyKept: true })
     expect(existsSync(originalPath)).toBe(true)
+  })
+  // A worktree's removal is git's, in the workspaces service: asked again before the stop, the harness's first step that
+  // cannot be undone, so a delete it cannot finish leaves the harness running and every file where it was.
+  it.each(['workspaces down', 'the worktree changed'])('refuses a delete before the stop when %s since the review', async (since) => {
+    const tree = treeReview()
+    const inspect = vi.spyOn(worktrees, 'inspectWorktree').mockResolvedValue(tree)
+    const eraseTree = vi.spyOn(worktrees, 'removeReviewedWorktree').mockResolvedValue()
+    for (const sessionData of [true, false]) {
+      const plan = await service.request({ ...target, mode: 'inspect', includeWorktree: true })
+      const alone = await service.worktreeRequest({ ...target, mode: 'inspect' })
+      if (since === 'workspaces down') workspaces = () => WORKSPACES_OFF
+      else inspect.mockResolvedValue({ ...tree, signature: 'changed-since' })
+      const both = await service.request({ ...target, mode: 'delete', reviewId: String(plan.reviewId), choices: choices(sessionData, true), path: tree.path })
+      const worktree = await service.worktreeRequest({ ...target, mode: 'delete', reviewId: String(alone.reviewId), path: tree.path })
+      const why = since === 'workspaces down' ? 'did not answer' : 'changed. Review it again'
+      expect(both).toMatchObject({ error: 'DELETE_REFUSED', stopped: false, worktreeDeleted: false, sessionDeleted: false, detail: expect.stringContaining(why) })
+      expect(worktree).toEqual({ error: 'WORKTREE_DELETE_REFUSED', stopped: false, detail: expect.stringContaining(why) })
+      expect(stop).not.toHaveBeenCalled(); expect(eraseTree).not.toHaveBeenCalled(); expect(deleted).not.toHaveBeenCalled()
+      expect(registry.byAgent(session.agentId)).toBeDefined()
+      expect(existsSync(session.transcriptPath!)).toBe(true)
+      workspaces = () => worktrees.worktreeAnswers(worktrees); inspect.mockResolvedValue(tree)
+    }
   })
   it('holds remaining history after worktree deletion and retries only that remaining stage', async () => {
     const tree = treeReview()
@@ -191,6 +230,26 @@ describe('every record of a harness', () => {
     expect(existsSync(join(root, 'earlier-session.checkpoint'))).toBe(false)
   })
 
+  // What another process keeps of the harness (its told lines, the agent cleanup's) is erased before anything here:
+  // that process may be down, and a refusal after the conversation had gone left a harness that would not delete.
+  it('erases what another process keeps first, and refused there deletes nothing; asked again, it finishes', async () => {
+    eraseFirst.mockRejectedValueOnce(new Error('Harness could not erase what this harness was told, so nothing was deleted.'))
+    const refused = await deleteOnce()
+    expect(refused).toMatchObject({ error: 'DELETE_REFUSED', sessionDeleted: false, worktreeDeleted: false, stopped: true })
+    expect(String(refused.detail)).toBe('Harness could not erase what this harness was told, so nothing was deleted. The harness is stopped; refresh before trying again.')
+    // The conversation is still there, and so is everything else of it.
+    expect(existsSync(session.transcriptPath!)).toBe(true)
+    expect(eraseRecords).not.toHaveBeenCalled()
+    expect(deleted).not.toHaveBeenCalled()
+    expect(stopped.get(session.agentId)).not.toBeNull()
+    expect(await deleteOnce()).toMatchObject({ deleted: true, sessionDeleted: true })
+    expect(eraseFirst).toHaveBeenCalledTimes(2)
+    expect(eraseFirst).toHaveBeenLastCalledWith(expect.objectContaining({ agentId: session.agentId }))
+    expect(existsSync(session.transcriptPath!)).toBe(false)
+    expect(eraseFirst.mock.invocationCallOrder[1]).toBeLessThan(eraseRecords.mock.invocationCallOrder[0]!)
+    expect(deleted).toHaveBeenCalledOnce()
+  })
+
   it('is refused, and says why, when its other records cannot be erased; asked again, it finishes', async () => {
     eraseRecords.mockRejectedValueOnce(new Error('The agent ledger is busy. Try again.'))
     const refused = await deleteOnce()
@@ -215,22 +274,6 @@ describe('every record of a harness', () => {
     eraseRecords.mockRejectedValueOnce(new AgentCreationReceiptError('CREATION_STORAGE_FAILED', 'The creation folder ~/x is not usable by this account (permissions).'))
     expect(String((await deleteOnce()).detail)).toContain("saved launch request. The creation folder ~/x is not usable by this account (permissions). Try deleting it again.")
   })
-})
-
-// Security review 2 of #2493: a Swarm Product Manager stopped by its engine's switch, or by a crash, is reopened on its saved
-// conversation; deleting it left nothing to reopen. Its review is read as any other; its deletion is refused before anything.
-it('refuses to delete a Swarm Product Manager\'s saved conversation, live or stopped, deleting and stopping nothing', async () => {
-  const leadProtected = vi.fn((id: string) => id === session.agentId)
-  const svc = new PurgeAgentService({ live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stopped.list()],
-    stopped, checkpoints, stop, restarting: () => false, deleted, eraseRecords, now: () => now, leadProtected })
-  const plan = await svc.request({ ...target, mode: 'inspect' })
-  expect(plan.reviewId).toEqual(expect.any(String))
-  expect(await svc.request({ ...target, mode: 'delete', reviewId: String(plan.reviewId) }))
-    .toEqual({ error: 'LEAD_PROTECTED', detail: 'This harness is the Product Manager of a Swarm project. Delete its project first to stop it.' })
-  expect(existsSync(session.transcriptPath!)).toBe(true)
-  expect(stop).not.toHaveBeenCalled()
-  expect(eraseRecords).not.toHaveBeenCalled()
-  expect(deleted).not.toHaveBeenCalled()
 })
 
 it('rejects an absent, expired, rotated or replaced review before stopping', async () => {

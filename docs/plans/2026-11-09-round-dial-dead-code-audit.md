@@ -122,9 +122,8 @@ How it was checked:
   - `scripts/upload-firmware.sh:24-25,185-192` passes `-DDEVICE_FORCE_PROD=1`. That is harmless once
     the CMake block is gone: CMake only warns "Manually-specified variables were not used". It can be
     dropped with its comment, or left as is.
-  - Docs: `prototype/habitat/README.md:47`, `CREATURE_GALLERY.md:89`, `TUX.md:159` and
-    `docs/superpowers/plans/2026-10-28-round-dial-swarm-chat.md` mention `-DDEVICE_FORCE_PROD=1` in build
-    commands. Those are historical and need no change.
+  - Docs: `prototype/habitat/README.md:47`, `CREATURE_GALLERY.md:89` and `TUX.md:159` mention
+    `-DDEVICE_FORCE_PROD=1` in build commands. Those are historical and need no change.
 
 ### D5. `screen.html`, `device-stages.html`
 
@@ -402,20 +401,6 @@ and docs named below.
     `gen_companion_art.py` (reads `daemons/tools/illustrated/`), `gen_display_fallbacks.py` (needs
     Python 3.14 for Unicode 16), `gen_lvgl_assets.py`.
   - All of these generate compiled or tested files.
-
-### Feature removal, not in scope (kept out of the DEAD list on purpose)
-
-The Swarm thread / PM / Buddy code is live and tested. Removing it is a separate decision:
-- `main/ui/habitat/supertab.c/h` (thread fields; `ht_supertabs_thread_leave`, `supertab.h:95`).
-- `main/cable_client.c/h` (`cable_client_supertab_thread_leave`, `cable_client_supertab_side`,
-  `cable_client_supertab_side_kept`, `cable_client.h:238-240`, and about 38 thread/buddy sites in
-  cable_client.c).
-- `main/ui/habitat/ui_habitat.c` (about 162 matching sites: the thread face, the Swarm picker, the
-  PM/Buddy sides).
-- Tests: `test/test_supertab.c`, `test/test_cable_supertab.py`, `test/test_cable_models.py`, and
-  `test/test_touch_ui.py` (about 290 matching lines).
-
-None of the 83 functions in D11 belongs to that feature.
 
 ---
 

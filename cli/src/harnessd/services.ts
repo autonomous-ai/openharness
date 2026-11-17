@@ -10,7 +10,6 @@
  * running is ./serviceSupervisor.ts, the master's alone. The core's process loaded that, and the core's
  * supervisor with it, for the table below (the audit of 2026-11-12).
  */
-import { SWARM_ENV, swarmOn } from './swarmSwitch.js'
 
 export interface ServiceSpec {
   /** The process's name: what the master logs it as and the process is titled (`harnessd <name>`). */
@@ -27,7 +26,14 @@ export interface ServiceSpec {
   /** The core protocol (./protocol.ts) from which a core asks for this process on demand; 3, the experiments',
    *  when unset. A core that speaks an older one never asks for it, and it is started as that core binds. */
   askedSince?: number
+  /** What happens to agents that this process's services must not miss while it is down, by service: the core holds
+   *  each of these for that service from its own start until the service hears it (core/agentLife.ts). */
+  hears?: Readonly<Record<string, readonly HeldAgentLife[]>>
 }
+
+/** The kinds of what happens to an agent that a service in its own process can be held (core/api.ts `AgentLife`): a stop
+ *  a person or an agent made, a purge, and a new agent in the pane one ended in. */
+export type HeldAgentLife = 'stopped' | 'purged' | 'taken'
 
 /** A process the services run in: the services it hosts, and its memory budget. */
 export type ServiceHostSpec = Omit<ServiceSpec, 'name'>
@@ -50,7 +56,12 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // contains transient parsing; RSS additionally bounds file buffers outside V8's heap.
   'engine-claude': { services: ['engine-claude'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 0 },
   'engine-codex': { services: ['engine-codex'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 0 },
-  search: { services: ['search'], heapLimitMiB: 1_024, rssLimitMiB: 2_048 },
+  // The fourteen other engines in one worker (engines/others/otherEnginesProcess.ts): their conversations read from their
+  // transcripts and stores, at most sixteen reads at once with replies capped at 4 MiB, each engine's code loaded
+  // only once one of its sessions is read. Started on demand, as theirs are: a computer that runs none never pays.
+  'engine-others': { services: ['engine-others'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 0 },
+  // A purged conversation is never left searchable: its purge is held for search while it is down (core/agentLife.ts).
+  search: { services: ['search'], heapLimitMiB: 1_024, rssLimitMiB: 2_048, hears: { search: ['purged'] } },
   // Its file watches on every harness's workspace; the viewer servers it starts are processes of their
   // own, outside this budget. The Store beside them: its installs run git and the harnesses' toolchains
   // in their own processes too, and take minutes, which is what it must not spend in the core.
@@ -71,7 +82,11 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // the bundle rather than messaging: here it costs the edge host about 1 MiB on, and 0.4 MiB off
   // (e2e/footprint.e2e.ts, 2026-10-12). The Harness OS computer's management (services/osDevice.ts) holds one
   // timestamp and runs its commands bounded, or detached when they must outlive this process.
-  edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'goals', 'hachi'], heapLimitMiB: 384, rssLimitMiB: 768 },
+  // The engine probe (services/engineProbe.ts) holds this process's login-shell environment, read once; the shells
+  // a probe starts, four at once, are processes of their own, outside this budget.
+  // A harness stopped while the host is down still closes the harnesses it started: held for the cleanup.
+  edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'goals', 'hachi', 'engineProbe'], heapLimitMiB: 384, rssLimitMiB: 768,
+    hears: { agentCleanup: ['stopped'] } },
   // The orchestrator (services/orchestratorProcess.ts), an experiment: started only once it is on, for a
   // saved project or a request (core/api.ts `EXPERIMENTS`). Its projects' files and the frames of their
   // Directors; the agents it runs are the core's.
@@ -83,7 +98,6 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // The router (services/routerProcess.ts), an experiment: started at its first request. A few decisions in
   // flight, each one bounded Jev answer.
   router: { services: ['router'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
-  superTabs: { services: ['superTabs'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
   // Cloud agents (services/cloudProcess.ts), an experiment: started once one is on, for a saved harness or a
   // request. A timer and a bounded look per working harness, and each conversation read a file at a time.
   cloud: { services: ['cloud'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
@@ -114,11 +128,23 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // prints for minutes and a setup that waits on a password dialog. Chrome itself runs in Podman's containers, outside
   // this budget. Started only once a browser is wanted here (core/agentBrowserLink.ts): a computer that never ticked
   // Browser never pays for it.
-  agentBrowser: { services: ['agentBrowser'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 7 },
+  // A purge and a pane's new agent are held for it while it is down: a deleted agent's login, and a pane's logins that go
+  // with the pane (decision 19).
+  agentBrowser: { services: ['agentBrowser'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 7, hears: { agentBrowser: ['purged', 'taken'] } },
 }
 
 /** Every service this build can run outside the core's process: what `HARNESSD_SERVICES` names. */
 export const KNOWN_SERVICES: readonly string[] = Object.values(SERVICE_HOSTS).flatMap((host) => host.services)
+
+/** What the core holds for each service of [outOfProcess] while it is down (`hears`), by service. A service in the
+ *  core's process is told as it happens, and none is held for it. */
+export function heldAgentLife(outOfProcess: ReadonlySet<string>, hosts: Readonly<Record<string, ServiceHostSpec>> = SERVICE_HOSTS): Record<string, readonly HeldAgentLife[]> {
+  const held: Record<string, readonly HeldAgentLife[]> = {}
+  for (const host of Object.values(hosts)) {
+    for (const [service, kinds] of Object.entries(host.hears ?? {})) if (outOfProcess.has(service)) held[service] = kinds
+  }
+  return held
+}
 
 /**
  * The updater's process (services/updaterProcess.ts): checks for a newer build of the CLI and of hn, and
@@ -144,6 +170,15 @@ export const ENGINE_SUBMISSION_ENV = 'HARNESSD_ENGINE_SUBMISSION'
 export const ENGINE_NATIVE_CONTROL_ENV = 'HARNESSD_ENGINE_NATIVE_CONTROL'
 export const ENGINE_BACKGROUND_JOB_ENV = 'HARNESSD_ENGINE_BACKGROUND_JOB'
 export const ENGINE_PROVIDER_MOVE_ENV = 'HARNESSD_ENGINE_PROVIDER_MOVE'
+export const ENGINE_RESUME_REPAIR_ENV = 'HARNESSD_ENGINE_RESUME_REPAIR'
+/**
+ * What the other engines' worker serves, as a version: `<master pid>:<version>`. 1 is their history and last turn; 2
+ * adds their live streams (engines/others/streams.ts), which a core under a master of 1 runs in its own process.
+ * A version only grows, each one serving what the ones before it did: a core asks the worker only for what the
+ * version its master says covers, and reads the rest in its own process, as under a master from before the worker.
+ */
+export const ENGINE_OTHERS_ENV = 'HARNESSD_ENGINE_OTHERS'
+export const ENGINE_OTHERS_VERSION = 2
 
 /**
  * What a master puts in its core's environment about the services it runs in their own processes: the
@@ -155,7 +190,17 @@ export function serviceProcessesEnv(specs: readonly ServiceSpec[], masterPid: nu
   // The services, not the processes: a core knows what it routes by service, and one from before the
   // edge host still finds the services it knows here (workspaces) and runs the rest itself.
   const names = specs.flatMap((spec) => spec.services).join(',')
-  return { [SERVICE_PROCESSES_ENV]: names, HARNESSD_SERVICES: names || 'none', [ENGINE_LIVE_ENV]: `${masterPid}:1`, [ENGINE_RUNTIME_ENV]: `${masterPid}:1`, [ENGINE_SCREEN_ENV]: `${masterPid}:1`, [ENGINE_MODEL_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_QUESTION_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_SUBMISSION_ENV]: `${masterPid}:1`, [ENGINE_NATIVE_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_BACKGROUND_JOB_ENV]: `${masterPid}:1`, [ENGINE_PROVIDER_MOVE_ENV]: `${masterPid}:1` }
+  return { [SERVICE_PROCESSES_ENV]: names, HARNESSD_SERVICES: names || 'none', [ENGINE_LIVE_ENV]: `${masterPid}:1`, [ENGINE_RUNTIME_ENV]: `${masterPid}:1`, [ENGINE_SCREEN_ENV]: `${masterPid}:1`, [ENGINE_MODEL_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_QUESTION_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_SUBMISSION_ENV]: `${masterPid}:1`, [ENGINE_NATIVE_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_BACKGROUND_JOB_ENV]: `${masterPid}:1`, [ENGINE_PROVIDER_MOVE_ENV]: `${masterPid}:1`, [ENGINE_RESUME_REPAIR_ENV]: `${masterPid}:1`, [ENGINE_OTHERS_ENV]: `${masterPid}:${ENGINE_OTHERS_VERSION}` }
+}
+
+/**
+ * The version of the other engines' worker this core's master runs (`ENGINE_OTHERS_ENV`), 0 for none: a master from
+ * before it, no master, or an environment another master left, which names its pid and not this core's parent.
+ */
+export function otherEnginesVersion(env: NodeJS.ProcessEnv, parentPid: number): number {
+  if (env.HARNESSD_SUPERVISED !== '1' || !env.HARNESSD_SERVICE_TOKEN) return 0
+  const said = /^(\d+):([1-9]\d{0,5})$/.exec(env[ENGINE_OTHERS_ENV] ?? '')
+  return said && said[1] === String(parentPid) ? Number(said[2]) : 0
 }
 
 /** An older master may inherit a newer master's environment after rollback. Trust only this parent. */
@@ -183,15 +228,6 @@ export function servicesTheMasterRuns(env: NodeJS.ProcessEnv, known: readonly st
   return new Set(said.split(',').map((name) => name.trim()).filter((name) => known.includes(name)))
 }
 
-/** The Swarm switch (harnessd/swarmSwitch.ts): off, the Swarm's service is left out of every process the master starts. */
-export { SWARM_ENV, swarmOn }
-const SWARM_SERVICES: ReadonlySet<string> = new Set(['superTabs'])
-
-/** The services of `known` that run on this computer, wherever they run: all of them, but the Swarm's while it is off. */
-export function servicesOn(env: NodeJS.ProcessEnv, known: readonly string[]): string[] {
-  return swarmOn(env) ? [...known] : known.filter((name) => !SWARM_SERVICES.has(name))
-}
-
 /**
  * The processes to run the services in: every service this build knows, unless `HARNESSD_SERVICES`
  * names a subset, by service (`search,workspaces`) or by process (`edge`, every service it hosts); `none`
@@ -207,9 +243,8 @@ export function serviceSpecs(env: NodeJS.ProcessEnv, hosts: Readonly<Record<stri
   const named = env.HARNESSD_SERVICES === undefined ? null
     : new Set(env.HARNESSD_SERVICES.split(',').map((name) => name.trim()).filter((name) => name && name !== 'none'))
   const heap = Number(env.HARNESSD_SERVICE_HEAP_LIMIT_MIB)
-  const on = new Set(servicesOn(env, Object.values(hosts).flatMap((host) => host.services)))
   return Object.entries(hosts).flatMap(([name, host]) => {
-    const services = host.services.filter((service) => on.has(service) && (!named || named.has(service) || named.has(name)))
+    const services = host.services.filter((service) => !named || named.has(service) || named.has(name))
     // A process on demand named outright runs from the start, as every service named does (a test, support).
     const onDemand = host.onDemand && !named ? { onDemand: true } : {}
     const { onDemand: _given, ...rest } = host
@@ -243,6 +278,11 @@ export function masterRunsEngineBackgroundJob(env: NodeJS.ProcessEnv, parentPid:
 /** A new core must not ask an older worker host for a provider move its Codex worker does not serve. */
 export function masterRunsEngineProviderMove(env: NodeJS.ProcessEnv, parentPid: number): boolean {
   return masterRunsLiveEngines(env, parentPid) && env[ENGINE_PROVIDER_MOVE_ENV] === `${parentPid}:1`
+}
+
+/** Compatibility with masters before 2026-11-15; review inline repair removal on 2026-12-15. */
+export function masterRunsEngineResumeRepair(env: NodeJS.ProcessEnv, parentPid: number): boolean {
+  return masterRunsLiveEngines(env, parentPid) && env[ENGINE_RESUME_REPAIR_ENV] === `${parentPid}:1`
 }
 
 /** A new core must not send an older worker host a stop its Codex worker cannot speak. */

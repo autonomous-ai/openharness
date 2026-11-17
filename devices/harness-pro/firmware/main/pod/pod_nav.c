@@ -86,98 +86,6 @@ static void opened(const pod_nav_t *n, pod_model_t *m, const char *id)
 }
 
 
-// ---- the Lead view ----
-// Point a Lead frame at lead j of sw: the ids, the index, the harness a talk goes to (the Lead's `local` when the roster holds it; empty otherwise, which
-// is a remote Lead), and the text back at its top.
-static void lead_point(pod_frame_t *f, const pod_model_t *m, const pod_swarm_t *sw, int j) {
-    const pod_lead_t *l = &sw->leads[j];
-    set_id(f->swarm, sw->id);
-    set_id(f->lead_id, l->id);
-    f->lead = (int8_t)j;
-    if (l->local[0] && pod_model_find(m, l->local)) set_id(f->agent, l->local);
-    else f->agent[0] = 0;
-}
-
-static void lead_step(const pod_model_t *m, pod_frame_t *f, int dir) {
-    const pod_swarm_t *sw = pod_model_swarm(m, f->swarm);
-    const int at = pod_model_lead_index(sw, f->lead_id);
-    if (!sw || at < 0 || sw->lead_n < 2) return;
-    lead_point(f, m, sw, (at + dir + sw->lead_n) % sw->lead_n);
-    f->scroll = 0;
-}
-
-static bool is_lead_frame(const pod_frame_t *f) { return f->swarm[0] && (f->view == POD_V_LEAD || f->view == POD_V_TALK); }
-
-const pod_lead_t *pod_nav_lead(const pod_nav_t *n, const pod_model_t *m, const pod_swarm_t **swarm) {
-    if (swarm) *swarm = NULL;
-    if (!n->depth || !is_lead_frame(&n->stack[n->depth - 1])) return NULL;
-    const pod_frame_t *f = &n->stack[n->depth - 1];
-    const pod_swarm_t *sw = pod_model_swarm(m, f->swarm);
-    const int j = pod_model_lead_index(sw, f->lead_id);
-    if (j < 0) return NULL;
-    if (swarm) *swarm = sw;
-    return &sw->leads[j];
-}
-
-bool pod_nav_open_lead(pod_nav_t *n, pod_model_t *m, const char *swarm_id, int lead) {
-    if (n->depth != 1 || n->stack[0].view != POD_V_TABS) return false;
-    const pod_swarm_t *sw = pod_model_swarm(m, swarm_id);
-    if (!sw || lead < 0 || lead >= sw->lead_n) return false;
-    pod_frame_t f;
-    memset(&f, 0, sizeof f);
-    f.view = POD_V_LEAD;
-    f.tab = POD_TAB_RECENT;
-    lead_point(&f, m, sw, lead);
-    return push(n, &f);
-}
-
-bool pod_nav_follow_lead(pod_nav_t *n, pod_model_t *m, const char *swarm_id, const char *lead_id) {
-    if (!n->depth) pod_nav_init(n);
-    const pod_swarm_t *sw = pod_model_swarm(m, swarm_id);
-    const int j = pod_model_lead_index(sw, lead_id);
-    if (j < 0) return false;
-    const pod_frame_t *cur = &n->stack[n->depth - 1];
-    if (cur->view == POD_V_TALK) return false;
-    if (cur->view == POD_V_LEAD && !strcmp(cur->swarm, sw->id) && !strcmp(cur->lead_id, lead_id)) return false;
-    int16_t pg[POD_HOME_PAGES_MAX];
-    const int cnt = pod_home_pages(m, pg, POD_HOME_PAGES_MAX);
-    pod_frame_t home, lf;
-    memset(&home, 0, sizeof home);
-    memset(&lf, 0, sizeof lf);
-    home.view = POD_V_TABS;
-    home.scroll = n->stack[0].scroll;
-    for (int i = 0; i < cnt; i++) if (pod_home_swarm(m, pg[i]) == sw) { home.scroll = pg[i]; break; }   // Home on the Swarm's card: Back lands there
-    lf.view = POD_V_LEAD;
-    lf.tab = POD_TAB_RECENT;
-    lead_point(&lf, m, sw, j);
-    n->stack[0] = home;
-    n->stack[1] = lf;
-    n->depth = 2;
-    n->sending = false;
-    n->work_page = 0;
-    n->swarm_page = (uint8_t)(j / 3);   // the card's pet page holding the Lead
-    return true;
-}
-
-// pod_nav_sync for a Lead frame. KEEP while its data may still come (the link is down or the Swarm list has not arrived since it came up, or the Swarm is
-// listed but not received); GONE when the Swarm is no longer listed, or the Lead left and none is left (or it was a talk). A Lead that left while others
-// remain is replaced by the one that took its place (the next Lead, else the last): the view moves on, it is not closed.
-enum { LEAD_KEEP, LEAD_GONE };
-static int lead_sync(const pod_model_t *m, pod_frame_t *f) {
-    if (!m->linked || !m->swarm_ids) return LEAD_KEEP;
-    const pod_swarm_t *sw = pod_model_swarm(m, f->swarm);
-    if (!sw) {
-        for (int i = 0; i < m->want_n; i++) if (!strcmp(m->want[i], f->swarm)) return LEAD_KEEP;
-        return LEAD_GONE;
-    }
-    const int j = pod_model_lead_index(sw, f->lead_id);
-    if (j >= 0) { lead_point(f, m, sw, j); return LEAD_KEEP; }
-    if (sw->lead_n < 1 || f->view == POD_V_TALK) return LEAD_GONE;
-    lead_point(f, m, sw, f->lead >= 0 && f->lead < sw->lead_n ? f->lead : sw->lead_n - 1);
-    f->scroll = 0;
-    return LEAD_KEEP;
-}
-
 static pod_out_t step(pod_nav_t *n, pod_model_t *m, int dir) {
     pod_frame_t *f = &n->stack[n->depth - 1];
     const pod_agent_t *l[POD_AGENTS_MAX];
@@ -275,10 +183,6 @@ static pod_out_t nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, 
     }
     case POD_A_PREV:
     case POD_A_NEXT:
-        if (f->swarm[0]) {   // a Lead's view steps through the Swarm's Leads; the talk opened from it does not move
-            if (f->view == POD_V_LEAD) lead_step(m, f, a == POD_A_NEXT ? 1 : -1);
-            break;
-        }
         if (is_agent_view(f->view)) return step(n, m, a == POD_A_NEXT ? 1 : -1);
         break;
     case POD_A_FOLLOW:
@@ -290,26 +194,10 @@ static pod_out_t nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, 
         }
         break;
     case POD_A_TALK:
-        if (f->view == POD_V_LEAD) {   // the round's rule: the Lead's `local` whenever set (roster or not: the daemon pins the face by it), else its own Swarm id when arg says the daemon routes it
-            const pod_swarm_t *sw = NULL;
-            const pod_lead_t *l = pod_nav_lead(n, m, &sw);
-            const char *id = !l ? NULL : l->local[0] ? l->local : arg && f->lead_id[0] ? f->lead_id : NULL;
-            if (!id) break;
-            n->talk_prev = POD_V_LEAD;
-            n->talk_buddy = l->chat == POD_CHAT_BUDDY && l->has_buddy;   // the voice view signs the face pinned now, whatever the desktop flips mid-recording
-            if (n->talk_buddy) {
-                pod_copy_str(n->talk_name, sizeof n->talk_name, l->buddy.name);
-                pod_copy_str(n->talk_engine, sizeof n->talk_engine, l->buddy.engine);
-            }
-            f->view = POD_V_TALK;
-            n->talk_started_ms = now_ms;
-            return out_fx(POD_FX_VOICE_BEGIN, id);
-        }
         if (f->view == POD_V_AGENT || f->view == POD_V_RECAP) {
             const pod_agent_t *talk_to = pod_model_find(m, f->agent);
             if (!talk_to || talk_to->state == POD_OFFLINE) break;   // an offline machine has nobody to hear it
             n->talk_prev = f->view;
-            n->talk_buddy = false;
             f->view = POD_V_TALK;
             n->talk_started_ms = now_ms;
             return out_fx(POD_FX_VOICE_BEGIN, f->agent);
@@ -319,7 +207,7 @@ static pod_out_t nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, 
             n->sending = true;       // stay on the voice screen; pod_nav_flip_recaps releases it
             n->sent_seen = false;
             n->send_started_ms = now_ms;
-            set_id(n->sent_agent, f->agent);   // empty for a remote Lead: release_send waits it out
+            set_id(n->sent_agent, f->agent);
             return out_fx(POD_FX_VOICE_END, f->agent);
         }
         break;
@@ -354,14 +242,12 @@ static pod_out_t nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, 
         break;
     case POD_A_SCROLL: {
         long s = (long)f->scroll + arg;
-        if (f->view == POD_V_TABS) { f->scroll = (int16_t)pod_home_clamp(m, s < -32768 ? -32768 : s > 32767 ? 32767 : (int)s); n->work_page = n->swarm_page = 0; break; }
+        if (f->view == POD_V_TABS) { f->scroll = (int16_t)pod_home_clamp(m, s < -32768 ? -32768 : s > 32767 ? 32767 : (int)s); n->work_page = 0; break; }
         f->scroll = (int16_t)(s < 0 ? 0 : s > 32767 ? 32767 : s);
         break;
     }
     case POD_A_NONE:
     case POD_A_BANNER:
-    case POD_A_LEAD:
-    case POD_A_SIDE:
         break;
     }
     return out_none();
@@ -379,7 +265,7 @@ void pod_nav_talk_over(pod_nav_t *n) {
     pod_frame_t *f = &n->stack[n->depth - 1];
     if (f->view != POD_V_TALK) return;
     n->sending = false;
-    f->view = f->swarm[0] ? POD_V_LEAD : n->talk_prev == POD_V_RECAP ? POD_V_RECAP : POD_V_AGENT;   // the talk a Lead's view opened ends back on it
+    f->view = n->talk_prev == POD_V_RECAP ? POD_V_RECAP : POD_V_AGENT;
 }
 
 void pod_nav_unsend(pod_nav_t *n) {
@@ -394,10 +280,9 @@ static void release_send(pod_nav_t *n, const pod_model_t *m, pod_frame_t *f) {
     const pod_agent_t *a = pod_model_find(m, n->sent_agent);
     if (a && a->sent) n->sent_seen = true;
     bool turn = a && a->state == POD_WORKING && !a->sent && (n->sent_seen || (int32_t)(a->since_ms - n->send_started_ms) >= 0);
-    const bool remote = f->swarm[0] && !f->agent[0];   // a remote Lead has no turn to see here: the screen holds its time
-    if (turn || (!a && !remote) || (int32_t)(m->clock_ms - n->send_started_ms) >= (int32_t)POD_SENT_WAIT_MS) {
+    if (turn || !a || (int32_t)(m->clock_ms - n->send_started_ms) >= (int32_t)POD_SENT_WAIT_MS) {
         n->sending = false;
-        f->view = f->swarm[0] ? POD_V_LEAD : turn ? POD_V_AGENT : n->talk_prev == POD_V_RECAP ? POD_V_RECAP : POD_V_AGENT;
+        f->view = turn ? POD_V_AGENT : n->talk_prev == POD_V_RECAP ? POD_V_RECAP : POD_V_AGENT;
     }
 }
 
@@ -430,9 +315,6 @@ pod_out_t pod_nav_sync(pod_nav_t *n, pod_model_t *m) {
         const int pages = (pod_home_working(m) + 2) / 3;   // the Working card's pet pages: the stored page follows the working set down
         if (n->depth != 1 || n->stack[0].scroll != POD_HOME_WORKING) n->work_page = 0;
         else if (n->work_page >= pages) n->work_page = (uint8_t)(pages > 0 ? pages - 1 : 0);
-        const pod_swarm_t *sw = pod_home_swarm(m, n->stack[0].scroll);   // the Swarm card's Lead pages follow its Leads down; a Lead view over the card keeps its page
-        const int lp = sw ? (sw->lead_n + 2) / 3 : 0;
-        if (n->swarm_page >= lp) n->swarm_page = (uint8_t)(lp > 0 ? lp - 1 : 0);
     }
     uint8_t keep = n->depth;
     for (uint8_t i = 1; i < n->depth; i++) {
@@ -448,10 +330,6 @@ pod_out_t pod_nav_sync(pod_nav_t *n, pod_model_t *m) {
             f->tab = (int8_t)idx;
         }
         if (f->view == POD_V_TAB || f->view == POD_V_INBOX) continue;
-        if (f->swarm[0]) {   // a Lead's view, or the talk opened from it
-            if (lead_sync(m, f) == LEAD_GONE) { keep = i; break; }
-            if (f->view == POD_V_LEAD) continue;
-        }
         const pod_agent_t *l[POD_AGENTS_MAX];
         int cnt = frame_list(m, f, l, POD_AGENTS_MAX);
         bool found = false;
@@ -506,7 +384,7 @@ bool pod_nav_follow(pod_nav_t *n, pod_model_t *m, const char *agent_id, uint32_t
     n->stack[0] = tabs; n->stack[1] = tf; n->stack[2] = af;
     n->depth = 3;
     n->sending = false;
-    n->work_page = n->swarm_page = 0;
+    n->work_page = 0;
     opened(n, m, a->id);
     pod_nav_flip_recaps(n, m);
     return true;
@@ -523,7 +401,7 @@ bool pod_nav_follow_tab(pod_nav_t *n, pod_model_t *m) {
     if (cur->view == POD_V_TABS && n->depth == 1) {
         if (cur->scroll == sel) return false;
         cur->scroll = (int16_t)sel;
-        n->work_page = n->swarm_page = 0;
+        n->work_page = 0;
         return true;
     }
     if (cur->view != POD_V_AGENT && cur->view != POD_V_RECAP) return false;

@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
 
-vi.mock('../../lib/gatewayRuntime.js', async (real) => ({ ...await real<object>(), probeGatewayRuntime: vi.fn(async () => ({ kind: 'ori' })) }))
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { RestartAgentDeps } from '../../lib/restartAgent.js'
 import type { RestoreLaunch } from '../../lib/restoreAgents.js'
@@ -25,9 +24,12 @@ function session(): RegisteredSession {
 }
 
 const OVERRIDES = { env: { GRID: '1' }, extraArgs: ['--grid'], clearEnv: [] }
-function deferredLaunch(prepare = vi.fn()): RestoreLaunch {
+/** The grid the move's launch puts the engine on (core/agents/restoreLaunch.ts, from its launch record). */
+const GRID = { baseUrl: 'https://saved.example/now/v1', model: 'm' }
+function deferredLaunch(prepare = vi.fn(), grid: RestoreLaunch['grid'] = GRID): RestoreLaunch {
   return {
     argv: ['claude', '--resume', 's1'],
+    grid,
     paneLaunch: { afterExit: ['pwsh'], clearInherited: ['ANTHROPIC_API_KEY'] } as unknown as RestoreLaunch['paneLaunch'],
     deferred: { prepare, overrides: OVERRIDES, permission: { permissionMode: 'plan', bypassPermission: false } },
   }
@@ -139,6 +141,21 @@ describe('the move, wired to the core', () => {
     expect(vi.mocked(w.log).mock.calls.flat().join('\n')).toContain('[terminal] move a1: ')
   })
 
+  it('writes on the row the grid the move\'s launch puts the engine on, in the new pane or back in the old', async () => {
+    for (const grid of [GRID, null]) {
+      const moved = wiring({ buildLaunch: vi.fn(async () => deferredLaunch(vi.fn(), grid)) })
+      const deps = hostMoveDeps(moved.row, () => true, moved.w)
+      await deps.buildLaunch(moved.row, { resumeSessionId: 's1', current: () => true, prepare: false })
+      deps.swap('a1', NEW, NEW_ID)
+      expect(moved.w.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', NEW_ID, undefined, grid)
+      const back = wiring({ buildLaunch: vi.fn(async () => deferredLaunch(vi.fn(), grid)) })
+      const fallback = hostMoveDeps(back.row, () => true, back.w)
+      await fallback.buildLaunch(back.row, { resumeSessionId: 's1', current: () => true, prepare: false })
+      expect(await fallback.relaunchOld(back.row)).toBe(true)
+      expect(back.w.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', { ...OLD_ID, pid: 44 }, undefined, grid)
+    }
+  })
+
   it('throws when the row was not switched', () => {
     const { w } = wiring()
     vi.mocked(w.registry.updateRuntimes).mockReturnValue(false)
@@ -173,9 +190,9 @@ describe('the move, wired to the core', () => {
     const prepare = vi.fn()
     const { w } = wiring({ buildLaunch: vi.fn(async () => deferredLaunch(prepare)) })
     const deps = hostMoveDeps(session(), () => true, w)
-    await expect(deps.prepareResume(session())).rejects.toThrow()
+    await expect(deps.prepareResume(session(), () => true)).rejects.toThrow()
     await deps.buildLaunch(session(), { resumeSessionId: 's1', current: () => true, prepare: false })
-    await deps.prepareResume(session())
+    await deps.prepareResume(session(), () => true)
     expect(prepare).toHaveBeenCalledTimes(1)
     expect(w.buildLaunch).toHaveBeenCalledTimes(1)
   })
@@ -187,7 +204,7 @@ describe('the move, wired to the core', () => {
     // No launch yet: nothing to relaunch with.
     expect(await deps.relaunchOld(row)).toBe(false)
     await deps.buildLaunch(row, { resumeSessionId: 's1', current: () => true, prepare: false })
-    await deps.prepareResume(row)
+    await deps.prepareResume(row, () => true)
     expect(await deps.relaunchOld(row)).toBe(true)
     const [, place, overrides, permissionMode] = vi.mocked(w.paneSwapDeps).mock.calls.at(-1)!
     expect(place).toEqual({ backend: old, runtime: OLD })
@@ -197,9 +214,9 @@ describe('the move, wired to the core', () => {
     // Prepared already, before the stop: not prepared twice.
     expect(prepare).toHaveBeenCalledTimes(1)
     expect(swapDeps.prepareResume).not.toHaveBeenCalled()
-    // Committed as a restart commits (`commitRelaunchedEngine`): gateway, active, the pane released, announced, and
-    // its grid assignment refreshed.
-    expect(w.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', { ...OLD_ID, pid: 44 }, 'ori')
+    // Committed as a restart commits (`commitRelaunchedEngine`): its process with no gateway and the launch's grid,
+    // active, the pane released, announced, and its grid assignment refreshed.
+    expect(w.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', { ...OLD_ID, pid: 44 }, undefined, GRID)
     expect(w.registry.setActive).toHaveBeenCalledWith('a1', true)
     expect(old.releaseHold).toHaveBeenCalledWith(OLD)
     expect(w.announce).toHaveBeenCalled()

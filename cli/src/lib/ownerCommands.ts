@@ -1,11 +1,11 @@
-import type { LocalWsServerOptions } from '../localWsServer.js'
+import type { RouteAnswer, SendResult } from '../core/api.js'
 import { ROUTE_COMMAND_TYPES } from './relayFrames.js'
 export { ROUTE_COMMAND_TYPES } from './relayFrames.js'
 
 /** ⌘K's task delivery from a remote owner's app, as the desktop does it, behind the paired-owner boundary. */
 export class OwnerCommands {
-  onRouteTask?: LocalWsServerOptions['onRouteTask']
-  onRouteSend?: LocalWsServerOptions['onRouteSend']
+  onRouteTask?: (text: string) => Promise<RouteAnswer>
+  onRouteSend?: (agentId: string, text: string) => Promise<SendResult>
   private readonly pending = new Map<AbortController, string>()
 
   async request(connId: string, type: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {

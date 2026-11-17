@@ -18,8 +18,9 @@ import { sqliteReadAll } from './sqliteRead.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import type { SessionCheckpointStore } from './sessionCheckpoint.js'
 import type { StopAgentOptions } from './stopAgentService.js'
-import { LEAD_PROTECTED_DETAIL, unusedChat } from './closeAgentService.js'
-import { inspectWorkspace, inspectWorktree, removeReviewedWorktree, type WorktreeReview } from './worktreeDeletion.js'
+import { unusedChat } from './closeAgentService.js'
+import type { WorkspacesPort } from '../core/api.js'
+import type { WorkspaceTarget, WorktreeReview } from './worktreeDeletion.js'
 
 const exec = promisify(execFile)
 /** [withProcess] false for a harness reviewed before its engine's process was known: the one it gains is the engine
@@ -30,6 +31,8 @@ const identity = (s: RegisteredSession, withProcess = true) => JSON.stringify([s
 const STILL_STARTING = 'This harness is still starting. Try again in a moment.'
 const conversation = (s: RegisteredSession) => JSON.stringify([s.engine, s.codexHome, s.hermesHome, s.sessionId])
 const fail = (message: string): never => { throw new Error(message) }
+/** The harness as a review of its folder reads it (lib/worktreeDeletion.ts). */
+const targetOf = (s: RegisteredSession): WorkspaceTarget => ({ cwd: s.cwd ?? null, transcriptPath: s.transcriptPath ?? null, codexHome: s.codexHome ?? null, hermesHome: s.hermesHome ?? null })
 type File = { path: string; dev: bigint; ino: bigint; bytes: number }
 type History = { file?: File; missingFile?: string; database?: string; databaseFile?: File; statements?: string[];
   bytes: number | null; verify?: (openedFileKey?: string) => void;
@@ -205,13 +208,21 @@ export type WorktreeRequest = Omit<PurgeRequest, 'mode'> & { mode: 'describe' | 
 export interface PurgeDeps {
   live(id: string): RegisteredSession | undefined
   sessions(): RegisteredSession[]
+  /** A harness's worktree, read, reviewed and removed by the workspaces service, which runs the git (core/api.ts
+   *  `WorkspacesPort`): the core runs none. Read at each call, as the service may be off or back. */
+  worktrees(): Pick<WorkspacesPort, 'describeWorkspace' | 'reviewWorktree' | 'removeWorktree'>
   stopped: StoppedAgentStore
   checkpoints: SessionCheckpointStore
   stop(id: string, options: StopAgentOptions): Promise<void>
   restarting(id: string): boolean
   deleted(session: RegisteredSession): void
-  /** Erases what else Harness keeps of the harness (its told lines, its creation requests), after its conversation and
-   *  before [deleted]. Rejecting refuses the delete and keeps the archive, so the delete can be asked again. */
+  /** Erases what another process keeps of the harness (its told lines, which the agent cleanup holds), before anything
+   *  of it is deleted here: that process may be down, and a delete refused for it after the conversation had gone left a
+   *  harness with no conversation that would not delete (the review of 2026-11-13). Rejecting refuses the delete with
+   *  nothing deleted. Only where session data is deleted. */
+  eraseFirst?(session: RegisteredSession): Promise<void>
+  /** Erases what else Harness keeps of the harness (its creation requests), after its conversation and before
+   *  [deleted]. Rejecting refuses the delete and keeps the archive, so the delete can be asked again. */
   eraseRecords?(session: RegisteredSession): Promise<void>
   /** A fresh read of the pane says the engine is waiting at its folder-trust question (Codex's "Do you trust the contents of this directory?"). */
   atFolderTrust?(session: RegisteredSession): Promise<boolean>
@@ -220,10 +231,6 @@ export interface PurgeDeps {
   inspect?: typeof inspectNativeHistory
   erase?: typeof eraseNativeHistory
   now?: () => number
-  /** Whether the agent may be the Product Manager of an active Swarm project (superTabs/leadSwitch.ts `mayBeLead`): never
-   *  deleted, live or stopped. Its host reopens a stopped one on its saved conversation, and deleting it left nothing to reopen,
-   *  in the moments after its engine's switch stopped it among others (security review 2 of #2493). */
-  leadProtected?(agentId: string): boolean
 }
 
 /**
@@ -263,12 +270,14 @@ export class PurgeAgentService {
       for (const [id, review] of this.worktreeReviews) if (review.expires <= now) this.worktreeReviews.delete(id)
       const current = this.current(request, false)
       if (request.mode === 'describe') {
-        const signature = identity(current), workspace = await inspectWorkspace(current, this.deps.sessions())
+        const signature = identity(current)
+        const workspace = await this.deps.worktrees().describeWorkspace(targetOf(current), this.others(current))
+          ?? { kind: 'unavailable', path: current.cwd ?? null, canDelete: false, reason: 'The working folder could not be verified. Reopen Inspect to try again.' }
         if (identity(this.current(request, false)) !== signature) throw new Error('The harness changed. Reopen Inspect to check its workspace again.')
         return { workspace }
       }
       if (request.mode === 'inspect') {
-        const signature = identity(current), worktree = await inspectWorktree(current, this.deps.sessions())
+        const signature = identity(current), worktree = await this.review(current)
         if (identity(this.current(request, false)) !== signature) throw new Error('The harness changed. Review its worktree again.')
         const reviewId = randomUUID()
         if (this.worktreeReviews.size >= 64) this.worktreeReviews.delete(this.worktreeReviews.keys().next().value!)
@@ -284,6 +293,9 @@ export class PurgeAgentService {
       this.jobs.add(request.agentId)
       this.worktreeJobs.set(request.agentId, review.worktree.path)
       try {
+        // Asked before anything changes: with workspaces down, or the worktree no longer what was reviewed, the harness
+        // keeps running and nothing is removed.
+        await this.unchanged(review.worktree, current)
         if (this.deps.live(request.agentId)) await this.deps.stop(request.agentId, { current: () => {
           const live = this.deps.live(request.agentId)
           return !!live && identity(live) === review.signature
@@ -292,7 +304,7 @@ export class PurgeAgentService {
         stopped = true
         const saved = this.current(request, false), reservation = this.deps.stopped.beginResume(request.agentId)
         if (!reservation) throw new Error('Another operation is using this harness. Its worktree was kept.')
-        try { await removeReviewedWorktree(review.worktree, saved, this.deps.sessions(), request.discardChanges === true) }
+        try { await this.remove(review.worktree, saved, request.discardChanges === true) }
         finally { this.deps.stopped.finishResume(request.agentId, reservation) }
         return { deleted: true, path: review.worktree.path, historyKept: true, branchKept: true }
       } finally { this.jobs.delete(request.agentId); this.worktreeJobs.delete(request.agentId) }
@@ -302,11 +314,36 @@ export class PurgeAgentService {
     }
   }
 
+  /** The folders every other harness here works in, live or stopped: a worktree one of them is in is kept. */
+  private others(s: RegisteredSession): string[] {
+    return [...new Set(this.deps.sessions().flatMap(other => other.agentId !== s.agentId && other.cwd ? [other.cwd] : []))]
+  }
+
+  /** The harness's worktree, reviewed by workspaces; why not, thrown in its words. */
+  private async review(s: RegisteredSession): Promise<WorktreeReview> {
+    const answer = await this.deps.worktrees().reviewWorktree(targetOf(s), this.others(s))
+    return answer.ok ? answer.review : fail(answer.reason)
+  }
+
+  /** The reviewed worktree is still exactly what was reviewed: asked of workspaces before the first step that changes
+   *  anything (a stop), so a delete it cannot finish is refused with the harness running and nothing removed. */
+  private async unchanged(reviewed: WorktreeReview, s: RegisteredSession): Promise<void> {
+    const now = await this.review(s)
+    if (now.path !== reviewed.path || now.dev !== reviewed.dev || now.ino !== reviewed.ino || now.signature !== reviewed.signature) {
+      fail('The worktree or its changes changed. Review it again before deleting.')
+    }
+  }
+
+  private async remove(review: WorktreeReview, s: RegisteredSession, discardChanges: boolean): Promise<void> {
+    const removed = await this.deps.worktrees().removeWorktree(review, targetOf(s), this.others(s), discardChanges)
+    if (!removed.ok) fail(removed.reason)
+  }
+
   /**
    * An engine waiting at its folder-trust question has opened no conversation, and cannot before it is answered. Stop
    * is told so, as Close tells it of a chat it saw empty: otherwise a Codex with no bound conversation is held while
    * the shared server runs ("Cannot confirm which conversation is open"), and where the process cannot be read its
-   * conversation is held too, so two agents a Super Tab started into an untrusted folder could not be deleted
+   * conversation is held too, so two agents started into an untrusted folder could not be deleted
    * (2026-10-22). Anything that ever bound a conversation is not this, whatever the screen shows.
    */
   private async unstartedChat(live: RegisteredSession | undefined): Promise<Pick<StopAgentOptions, 'withoutConversation' | 'confirmUnusedConversation'>> {
@@ -339,7 +376,6 @@ export class PurgeAgentService {
     const worktreeData = request.choices?.worktreeData === true
     try {
       if (this.busy(request.agentId)) return { error: 'DELETE_IN_PROGRESS', detail: 'This harness is already being deleted.' }
-      if (request.mode !== 'inspect' && this.deps.leadProtected?.(request.agentId)) return { error: 'LEAD_PROTECTED', detail: LEAD_PROTECTED_DETAIL }
       const now = this.deps.now?.() ?? Date.now()
       for (const [id, review] of this.reviews) if (review.expires <= now) this.reviews.delete(id)
       const current = this.current(request, request.mode === 'inspect' ? !request.includeWorktree : sessionData)
@@ -358,7 +394,7 @@ export class PurgeAgentService {
         }
         let worktree: WorktreeReview | undefined, worktreeReason = ''
         if (request.includeWorktree) {
-          try { worktree = await inspectWorktree(current, this.deps.sessions()) }
+          try { worktree = await this.review(current) }
           catch (error) { worktreeReason = error instanceof Error ? error.message : 'The worktree could not be verified.' }
         }
         if (identity(this.current(request, !request.includeWorktree), !!current.processIdentity) !== signature) return fail('The harness changed while checking its data. Try again.')
@@ -392,6 +428,8 @@ export class PurgeAgentService {
       this.jobs.add(request.agentId)
       if (worktreeData) this.worktreeJobs.set(request.agentId, review.worktree!.path)
       try {
+        // Before anything changes, as for a worktree alone (`worktreeRequest`).
+        if (worktreeData && !worktreeDeleted) await this.unchanged(review.worktree!, current)
         if (this.deps.live(request.agentId)) {
           await this.deps.stop(request.agentId, { current: () => {
             const live = this.deps.live(request.agentId)
@@ -417,9 +455,10 @@ export class PurgeAgentService {
         try {
           const files = sessionData ? checkpointsOf(saved, this.deps.checkpoints).map(file) : []
           if (sessionData) review.history!.verify?.()
+          if (sessionData) await this.deps.eraseFirst?.(saved)
           if (worktreeData && !worktreeDeleted) {
             const removedWorkspace = sessionData ? review.history!.prepareWorkspaceRemoval?.(review.worktree!) : undefined
-            await removeReviewedWorktree(review.worktree!, saved, this.deps.sessions(), request.discardChanges === true)
+            await this.remove(review.worktree!, saved, request.discardChanges === true)
             worktreeDeleted = true
             review.worktreeDeleted = true
             removedWorkspace?.()

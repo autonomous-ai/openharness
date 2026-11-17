@@ -3,7 +3,8 @@
  * other hears as the same call. The relay itself is a stand-in here (gateway/gateway.spec.ts and the socket's
  * specs hold its rules); what this holds is that nothing is lost or renamed on the way between the processes.
  */
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
+import { clearAuthSession, writeAuthSession } from '../lib/authSession.js'
 import type { GatewayEvents, GatewayOps, GatewayPort, WindowRelay } from '../core/api.js'
 import { createGatewayLink } from '../core/gatewayLink.js'
 import { GATEWAY_CALLS } from '../lib/gatewayWire.js'
@@ -21,22 +22,18 @@ const clear: TerminalBinaryClear = { kind: TerminalBinaryKind.input, streamId: S
 
 function stubGateway() {
   const port = {
-    usageLaunch: vi.fn(), usageCounter: vi.fn(), connect: vi.fn(), serveThisComputerOnly: vi.fn(), holdRequests: vi.fn(), openRequests: vi.fn(), connected: vi.fn(() => true),
+    usage: vi.fn(), usageCounter: vi.fn(), connect: vi.fn(), serveThisComputerOnly: vi.fn(), holdRequests: vi.fn(), openRequests: vi.fn(), connected: vi.fn(() => true),
     broadcast: vi.fn(), commander: vi.fn(), user: vi.fn(), reply: vi.fn(), target: vi.fn(() => true), terminal: vi.fn(() => true),
     terminalBinary: vi.fn(() => true), observer: vi.fn(() => true), windowOpened: vi.fn(), localClients: vi.fn(), local: vi.fn(async () => {}),
     device: vi.fn(() => true), deviceClient: vi.fn(), stop: vi.fn(async () => {}),
   } satisfies GatewayPort
   const answer = { status: 200, body: { ok: true } }
   const ops = {
+    accessToken: vi.fn(async () => 'never asked: the process answers the core from its own renewal'),
     backend: vi.fn(async (_method: string, _path: string, _body?: unknown) => answer),
     machines: vi.fn(async (_fallback?: boolean) => answer), mintGridName: vi.fn(async (): Promise<string | null> => 'private-grid'),
     status: vi.fn(async () => ({ fingerprint: 'AB12', pairs: [], pending: null })),
-    pair: vi.fn(async () => answer), listPairs: vi.fn(async () => answer), revoke: vi.fn(async () => answer), revokeAll: vi.fn(async () => answer),
-    setRemotePassword: vi.fn(async () => answer), clearRemotePassword: vi.fn(async () => answer), remotePasswordStatus: vi.fn(async () => answer),
-    trustLinkedPeer: vi.fn(async () => answer), groupList: vi.fn(async () => answer), groupSync: vi.fn(async () => answer),
-    groupRemove: vi.fn(async () => answer), devicesList: vi.fn(async () => answer), devicesRemove: vi.fn(async () => answer),
-    devicesHistory: vi.fn(async () => answer), devicesDismiss: vi.fn(async () => answer), devicesRebaseline: vi.fn(async () => answer),
-    wifi: vi.fn(async () => ({ result: { devices: [] } })), wifiService: vi.fn(), revokeIdentity: vi.fn(),
+    wifiService: vi.fn(), revokeIdentity: vi.fn(),
     account: vi.fn(), reachable: vi.fn(),
     lane: {
       hello: vi.fn(async (machineId: string) => ({ type: 'e2e_hello', machineId })), welcome: vi.fn(async () => true),
@@ -70,7 +67,8 @@ function stubGateway() {
       return session
     }),
   } satisfies WindowRelay
-  return { port, ops, windowRelay, sessions, stop: vi.fn(async () => {}) }
+  const requests = { gateway_http: vi.fn(async (payload: Record<string, unknown>) => ({ status: 200, body: { devices: [], asked: payload.target } })) }
+  return { port, ops, windowRelay, requests, sessions, stop: vi.fn(async () => {}) }
 }
 
 function wire() {
@@ -78,8 +76,10 @@ function wire() {
   const gateways: Array<ReturnType<typeof stubGateway>> = []
   const hosts: GatewayHost[] = []
   const linkStop = vi.fn()
+  // The process's own renewal of the sign-in (lib/authRefresh.ts), which reaches no backend here.
+  const tokens = { accessToken: vi.fn(async (_options?: { force?: boolean; failedToken?: string }) => 'token-a') }
   const service = runGatewayService({
-    dataDir: '/data', socketPath: '/data/daemon.sock', machineId: 'computer-1', token: 'token',
+    dataDir: '/data', socketPath: '/data/daemon.sock', machineId: 'computer-1', token: 'token', tokens,
     run: (given) => { options = given; return { stop: linkStop } },
     start: (host) => { hosts.push(host); const stub = stubGateway(); gateways.push(stub); return stub as unknown as StartedGateway },
   })
@@ -89,7 +89,6 @@ function wire() {
     device: vi.fn(), deviceRevoked: vi.fn(), toWindows: vi.fn(), tabFrame: vi.fn(),
     browserRoute: vi.fn(), browserRouteLost: vi.fn(), browserTransportError: vi.fn(),
   }
-  const tokens = { accessToken: vi.fn(async () => 'token-a') }
   const backend = vi.fn(async () => ({ status: 200, body: { data: { acct: 'a' } } }))
   const link = createGatewayLink({
     events: heard as unknown as GatewayEvents,
@@ -100,7 +99,7 @@ function wire() {
       try { return { ...await options.requests[type](payload, { local: true, owner: true }) } } catch { return { error: 'SERVICE_FAILED' } }
     },
     start: () => ({ machineId: 'machine-1', computerId: 'computer-1', autonomousEnv: 'prod', signedIn: true, account: { machineId: 'machine-1', signIn: null } }),
-    tokens, backend,
+    backend, wifiServing: async () => true,
   })
   const core: CoreConnection = {
     query: (query, payload = {}) => link.answer(query, payload),
@@ -130,25 +129,42 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(gateway.ops.reachable).toHaveBeenCalledWith(['m2'])
     expect(gateway.ops.wifiService).toHaveBeenCalledWith(true)
     expect(gateway.port.connect).toHaveBeenCalled()
-    w.link.port.usageLaunch?.({ id: 'creation-fixture-1', phase: 'start' })
-    expect(gateway.port.usageLaunch).toHaveBeenCalledWith({ id: 'creation-fixture-1', phase: 'start' })
+    w.link.port.usage?.({ kind: 'observed', payload: { measure: 'collector_days' } })
+    expect(gateway.port.usage).toHaveBeenCalledWith({ kind: 'observed', payload: { measure: 'collector_days' } })
     w.link.port.usageCounter?.('create_failed')
     expect(gateway.port.usageCounter).toHaveBeenCalledWith('create_failed')
-    // Its tokens and its reads of the backend are the core's to hand out.
-    expect(await w.hosts[0].tokens.accessToken({ force: true })).toBe('token-a')
-    expect(w.tokens.accessToken).toHaveBeenCalledWith({ force: true })
-    w.tokens.accessToken.mockRejectedValueOnce(Object.assign(new Error('session over'), { code: 'INVALID_REFRESH' }))
-    await expect(w.hosts[0].tokens.accessToken()).rejects.toMatchObject({ name: 'AuthSessionError', code: 'INVALID_REFRESH' })
+    // Its tokens are its process's own to renew, one renewal for every start (the core audit of 2026-11-12, decision
+    // 4): it asks the core for none.
+    expect(w.hosts[0].tokens).toBe(w.tokens)
     // The core going stops it; the next core builds a new one, signed out this time serving this computer only.
     w.disconnect()
     expect(gateway.stop).toHaveBeenCalled()
-    await expect(w.hosts[0].tokens.accessToken()).rejects.toMatchObject({ code: 'UNAVAILABLE' })
     w.link.port.serveThisComputerOnly()
     w.link.port.openRequests()
     w.connect()
     expect(w.gateways).toHaveLength(2)
     expect(w.gateways[1].port.serveThisComputerOnly).toHaveBeenCalled()
     expect(w.gateways[1].port.holdRequests).not.toHaveBeenCalled()
+    expect(w.hosts[1].tokens).toBe(w.tokens)
+  })
+
+  it('hands the core the account\'s token from its own renewal, and the session\'s own refusal', async () => {
+    // Expired on disk: the core reads a token that needs no renewal itself, and asks this process to renew one.
+    writeAuthSession({ version: 1, accessToken: 'expired', refreshToken: 'r-1', expiresAt: Date.now() - 1, autonomousEnv: 'prod', computerId: 'computer-1', updatedAt: 1 })
+    onTestFinished(() => clearAuthSession())
+    const w = wire()
+    w.connect()
+    expect(await w.link.ops.accessToken({ force: true, failedToken: 'expired' })).toBe('token-a')
+    expect(w.tokens.accessToken).toHaveBeenLastCalledWith({ force: true, failedToken: 'expired' })
+    expect(await w.link.ops.accessToken()).toBe('token-a')
+    expect(w.tokens.accessToken).toHaveBeenLastCalledWith({ force: false })
+    w.tokens.accessToken.mockRejectedValueOnce(Object.assign(new Error('session over'), { code: 'INVALID_REFRESH' }))
+    await expect(w.link.ops.accessToken()).rejects.toMatchObject({ name: 'AuthSessionError', code: 'INVALID_REFRESH', message: 'session over' })
+    // Even with no gateway started: the renewal is the process's, not a start's.
+    w.disconnect()
+    expect(await w.link.ops.accessToken()).toBe('token-a')
+    // Not the gateway's own: its processes never ask the core for a token any more.
+    expect(w.gateways[0].ops.accessToken).not.toHaveBeenCalled()
   })
 
   it('stops the gateway, and its usage collector with it, before its link closes as the process goes', async () => {
@@ -291,29 +307,27 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(heard.browserTransportError).toHaveBeenCalledTimes(1)
   })
 
-  it('answers the core\'s commands about the keys from the gateway it runs, and 503 with none running', async () => {
+  it('answers the core\'s calls from the gateway it runs, and 503 with none running', async () => {
     const w = wire()
-    expect(await w.link.ops.listPairs()).toEqual({ status: 503, body: { error: 'GATEWAY_UNAVAILABLE' } })
+    expect(await w.link.ops.backend('GET', '/api/desk')).toEqual({ status: 503, body: { error: 'GATEWAY_UNAVAILABLE' } })
     w.connect()
-    const { ops } = w.gateways[0]
     expect(await w.link.ops.status()).toEqual({ fingerprint: 'AB12', pairs: [], pending: null })
-    for (const ask of [
-      () => w.link.ops.pair('CODE'), () => w.link.ops.listPairs(), () => w.link.ops.revoke('1'), () => w.link.ops.revokeAll(),
-      () => w.link.ops.setRemotePassword('pw'), () => w.link.ops.clearRemotePassword(), () => w.link.ops.remotePasswordStatus(),
-      () => w.link.ops.trustLinkedPeer({ pub: 'P', machineId: 'm', label: 'l' }), () => w.link.ops.groupList(), () => w.link.ops.groupSync(),
-      () => w.link.ops.groupRemove('2'), () => w.link.ops.devicesList(), () => w.link.ops.devicesRemove('P'), () => w.link.ops.devicesHistory(),
-      () => w.link.ops.devicesDismiss({ baseline: true }), () => w.link.ops.devicesRebaseline(true, { seq: 2, hash: 'h' }),
-    ]) expect(await ask()).toEqual({ status: 200, body: { ok: true } })
-    expect(ops.pair).toHaveBeenCalledWith('CODE')
-    expect(ops.revoke).toHaveBeenCalledWith('1')
-    expect(ops.setRemotePassword).toHaveBeenCalledWith('pw')
-    expect(ops.trustLinkedPeer).toHaveBeenCalledWith({ pub: 'P', machineId: 'm', label: 'l' })
-    expect(ops.groupRemove).toHaveBeenCalledWith('2')
-    expect(ops.devicesRemove).toHaveBeenCalledWith('P')
-    expect(ops.devicesDismiss).toHaveBeenCalledWith({ baseline: true })
-    expect(ops.devicesRebaseline).toHaveBeenCalledWith(true, { seq: 2, hash: 'h' })
-    expect(await w.link.ops.wifi({ op: 'pair', device: 'dev', code: 'C' })).toEqual({ result: { devices: [] } })
-    expect(ops.wifi).toHaveBeenCalledWith({ op: 'pair', device: 'dev', code: 'C', id: '' })
+    expect(await w.link.ops.backend('GET', '/api/desk')).toEqual({ status: 200, body: { ok: true } })
+  })
+
+  it('answers its routes of the door from the gateway it runs, and asks the core whether the Wi-Fi device\'s service serves', async () => {
+    const w = wire()
+    const asker = { local: true, owner: true }
+    const route = { method: 'GET', target: '/api/autonomous-device/list' }
+    // Not started: the request fails, and its route answers for it (core/serviceRoutes.ts).
+    expect(() => w.options().requests.gateway_http!(route, asker)).toThrow('the gateway has not started')
+    w.connect()
+    expect(await w.options().requests.gateway_http!(route, asker)).toEqual({ status: 200, body: { devices: [], asked: '/api/autonomous-device/list' } })
+    expect(w.gateways[0].requests.gateway_http).toHaveBeenCalledWith(route, asker)
+    // Only the core can ask for that service's process: asked over the link, and no once the link is gone.
+    expect(await w.hosts[0].wifiServing!()).toBe(true)
+    w.disconnect()
+    expect(await w.hosts[0].wifiServing!()).toBe(false)
   })
 
   it('runs the fleet\'s lane\'s sessions in the gateway it runs, and seals nothing with none running', async () => {
@@ -491,7 +505,7 @@ describe('the gateway\'s process, spoken to by the core', () => {
 })
 
 describe('account HTTP across the gateway service link', () => {
-  it('performs backend and machine requests in the gateway, with the core supplying only tokens', async () => {
+  it('performs backend and machine requests in the gateway, the core supplying nothing', async () => {
     const w = wire()
     w.connect()
     const { ops } = w.gateways[0]

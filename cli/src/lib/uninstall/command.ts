@@ -24,7 +24,7 @@
  * it, then what it leaves or what to do.
  */
 import { posix, win32 } from 'node:path'
-import type { HookFileRemoval } from '../../engines/kit/hookRemoval.js'
+import type { HookFileRemoval } from '../../engines/kit/hookRemovalOutcome.js'
 import type { SpawnLockOwner, SpawnLockPurpose } from '../daemonSpawnLock.js'
 import type { AgentsStopped } from './agents.js'
 import type { PtyHostEnd } from './ptyHosts.js'
@@ -127,7 +127,7 @@ export interface UninstallDeps {
   /** The Harness terminal pane this command was typed in (HARNESS_PANE on Windows, TMUX_PANE elsewhere), if any. */
   pane: string | null
   /**
-   * Writes the uninstall marker (removal.ts UNINSTALL_MARKER): the desktop app starts no daemon while it is there.
+   * Writes the uninstall marker (marker.ts UNINSTALL_MARKER): the desktop app starts no daemon while it is there.
    * The step that removes the files removes it last; [unmarkUninstalling] does on every other way out.
    */
   markUninstalling(): void

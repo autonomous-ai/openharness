@@ -9,8 +9,9 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 
 const readAuthSession = vi.hoisted(() => vi.fn())
 const accessToken = vi.hoisted(() => vi.fn())
-vi.mock('./authSession.js', () => ({
-  readAuthSession,
+vi.mock('./authSession.js', () => ({ readAuthSession }))
+// The renewal, in a file of its own so the core's process loads none of it (lib/authRefresh.ts).
+vi.mock('./authRefresh.js', () => ({
   AuthSessionManager: class {
     accessToken = accessToken
   },

@@ -9,7 +9,7 @@ import type { CloudCore } from '../core/api.js'
 import type { CloudHarness } from '../lib/cloudAgents.js'
 import type { Bridge } from './bridge.js'
 import { repositoryOf } from '../lib/cloudAgents.js'
-import { nameFor, startCloudService } from './service.js'
+import { cloudCard, nameFor, startCloudService } from './service.js'
 import { CloudError, type CloudAdapter, type CloudUpdate } from './types.js'
 
 const owner = { local: true, owner: true }
@@ -222,6 +222,8 @@ describe('a cloud harness', () => {
     devin.looks.push({ messages: [{ id: 'm1', text: 'Opened #42.', at: 'x' }], state: 'idle' })
     await tick()
     expect(published()[0].said).toBe('Opened #42.')
+    // And those words as the dial's card reads them: worked out here, where the maker is faced, never in the core.
+    expect(published()[0].card).toEqual({ recap: 'Opened #42.', text: 'Opened #42.' })
     first.stop()
     const file = join(dataDir, 'cloud', 'harnesses.json')
     const saved = JSON.parse(readFileSync(file, 'utf8'))
@@ -229,12 +231,43 @@ describe('a cloud harness', () => {
     writeFileSync(file, JSON.stringify(saved))
     start({ 'devin-cloud': devin }).republish()
     expect(published()[0].said).toBe('Opened #42.')
-    // Nothing said at all: nothing to find.
+    expect(published()[0].card).toEqual({ recap: 'Opened #42.', text: 'Opened #42.' })
+    // The card is never saved: it is worked out from what was.
+    expect(JSON.stringify(JSON.parse(readFileSync(file, 'utf8')))).not.toContain('"card"')
+    // Nothing said at all: nothing to find, and no card.
     saved.harnesses[0].harness.said = null
     writeFileSync(file, JSON.stringify(saved))
     rmSync(join(dataDir, 'cloud', `${saved.harnesses[0].harness.agentId}.jsonl`))
     start({ 'devin-cloud': devin }).republish()
     expect(published()[0].said).toBeNull()
+    expect(published()[0].card).toBeNull()
+  })
+
+  it('works a card out of words: a headline and the text under it, or none where they hold nothing to show', () => {
+    expect(cloudCard('Opened #42.')).toEqual({ recap: 'Opened #42.', text: 'Opened #42.' })
+    expect(cloudCard('## Booked\n\nBooked for **9:30** at Hair Lab.')).toEqual({ recap: 'Booked for 9:30 at Hair Lab.', text: 'Booked Booked for 9:30 at Hair Lab.' })
+    expect(cloudCard('**  **')).toBeNull()
+    expect(cloudCard('')).toBeNull()
+  })
+
+  it('reads a maker\'s markdown into the card\'s two lines, and none from words that hold nothing to say', async () => {
+    const devin = maker()
+    const service = start({ 'devin-cloud': devin })
+    await service.port.create({ engine: 'devin-cloud', prompt: 'book it', repository: 'acme/api' })
+    devin.looks.push({ messages: [{ id: 'm1', text: '## Booked\n\nBooked for **9:30** at Hair Lab. See you Saturday.', at: 'x' }], state: 'idle' })
+    await tick()
+    expect(published()[0].card).toEqual({ recap: 'Booked for 9:30 at Hair Lab. See you Saturday.', text: 'Booked Booked for 9:30 at Hair Lab. See you Saturday.' })
+    // Told again with nothing new said: the same card, not worked out again.
+    const card = published()[0].card
+    service.republish()
+    expect(published()[0].card).toBe(card)
+    // Only markers: something said, and nothing a card can show.
+    await service.port.create({ engine: 'devin-cloud', prompt: 'and this', repository: 'acme/api' })
+    devin.looks.push({ messages: [{ id: 'm2', text: '**  **', at: 'x' }], state: 'idle' })
+    await tick()
+    const marked = published().find((row) => row.said === '**  **')
+    expect(marked).toBeDefined()
+    expect(marked!.card).toBeNull()
   })
 
   it('is watched again after a restart, and tells a reconnected core everything again', async () => {

@@ -12,6 +12,7 @@ import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { cursorDataDir } from '../../engines/cursor/contract.js'
 import { HERMES_SANDBOX_HOLD } from '../../engines/hermes/contract.js'
 import { isOpenclawLocalStopped, openclawLocalStopped, OPENCLAW_SCREEN_HOLDS, OPENCLAW_STATES, readOpenclawScreen, type OpenclawScreen } from '../../engines/openclaw/contract.js'
+import { OTHER_ENGINE_STATES } from '../../engines/otherEngines.js'
 import { continuationOf } from '../../engines/sessionFiles.js'
 import { sessionStoreOf } from '../../engines/sessionStoreContracts.js'
 import type { TurnRecaps } from '../turns/recaps.js'
@@ -39,6 +40,8 @@ const REPAIR_EAGER_ATTEMPTS = 24   // ≈2 min at the 5s sweep
 
 /** What an OpenClaw agent says while its pane shows a screen its TUI cannot work for Harness on. */
 const OPENCLAW_HOLDS = new Set<string>(Object.values(OPENCLAW_SCREEN_HOLDS))
+/** What the other engines' reader says on a row while its worker is out or it rebuilds the live view. */
+const OTHER_ENGINE_HOLDS = new Set<string>(Object.values(OTHER_ENGINE_STATES))
 
 /**
  * The hold a pane's screen gives its agent. A stopped local run keeps the reason it was seen with once OpenClaw's later
@@ -102,11 +105,24 @@ export interface BindDeps {
   openclawStateDir: (pid: number) => Promise<string | null>
   /** What a Hermes's record of its own terminal says (hermesTerminal.ts). Absent, a Hermes is bound by its hooks and the repair. */
   hermesTerminal?: ReturnType<typeof createHermesTerminal>
+  /** Whether the session's live stream is still held, to be resumed where it stopped, by its reader itself. */
+  followsLive: (sessionId: string) => boolean
+}
+
+/** What one pass over a process works with: its authority check, its holds, and its contained native reads and registrations. */
+interface BindPass {
+  current: () => boolean
+  hold: (error: unknown) => boolean
+  commit: (input: Parameters<BindDeps['registry']['register']>[0]) => ReturnType<BindDeps['registry']['register']> | null
+  /** `empty` says when a completed read read nothing, so it counts as none: an OpenClaw pane with no screen. */
+  read: <T>(work: () => Promise<T>, empty?: (value: T) => boolean) => Promise<{ value: T } | null>
+  mayClaim: (id: string) => boolean
 }
 
 export function createBinding({
   registry, mirror, forgetSession, clients, attachSession, announceSession, stoppedAgents, syncRecapPool,
   input, submitAgent, deviceInput, homes, owners, capturePane, openclawPaneRead, openclawPaneDue, openclawStateDir, hermesTerminal,
+  followsLive,
 }: BindDeps) {
   /**
    * Forks whose engine session has not reported in yet, agentId → the SOURCE's sessionId. A fork's tile
@@ -128,6 +144,34 @@ export function createBinding({
     if (openclawFolderReads.size >= 256) openclawFolderReads.clear()
     openclawFolderReads.set(agentId, tuiProcess(tui))
     return openclawStateDir(tui.pid)
+  }
+  /**
+   * The hold a failed native read set, agentId → that hold as the row stored it: its reason, and the row's
+   * `evidenceRevision` right after. Nothing else let that hold go: a Codex at its folder-trust question has no
+   * conversation to check or register, so one process read that failed while the npm wrapper was still starting its
+   * native child held it for good, and `harness wait` never saw the question (e2e/agentClient.e2e.ts, "an agent is told,
+   * not left waiting…", CLI end to end runs 43670913136 shard 5 and 43503224991). Every later change to the row's
+   * evidence raises its revision, so a hold another reason set since, or the same words set again by another path, is
+   * never this one. In memory only, as holds are.
+   */
+  const readHolds = new Map<string, { reason: string; revision: number | undefined }>()
+  /** The agent's row, while it still carries the hold remembered for it. */
+  const readHeld = (agentId: string): RegisteredSession | undefined => {
+    const remembered = readHolds.get(agentId)
+    if (!remembered) return undefined
+    const row = registry.byAgent(agentId)
+    return row?.identityHold === remembered.reason && row.evidenceRevision === remembered.revision ? row : undefined
+  }
+  /**
+   * First goes every entry whose agent is gone or whose row moved on, so one whose agent is gone lasts only until the
+   * next hold is remembered. At 256 the map starts over, as `openclawFolderReads` does: a hold forgotten that way stays
+   * until its own reason clears it, as every hold did before.
+   */
+  const rememberReadHold = (agentId: string): void => {
+    for (const id of readHolds.keys()) if (!readHeld(id)) readHolds.delete(id)
+    if (readHolds.size >= 256) readHolds.clear()
+    const row = registry.byAgent(agentId)
+    if (row?.identityHold) readHolds.set(agentId, { reason: row.identityHold, revision: row.evidenceRevision })
   }
 
   const handleRegistered = async (entry: RegisteredSession, meta: RegisteredMeta): Promise<void> => {
@@ -290,7 +334,15 @@ export function createBinding({
     const found = registry.byProcess(observed.engine, observed.processIdentity)
     if (!found || changing(found.agentId) || isRecentlyDeleted(found.agentId)) return
     let agent: RegisteredSession = found
-    if (agent.identityHold && agent.sessionId && agent.transcriptPath) {
+    // The other engines' reader hold is otherStreams' to clear while it holds the session's stream, with its resume from
+    // the byte the core held. Revalidated then, it was cleared and the session attached again while the worker was down;
+    // on the worker's return a second stream opened from the transcript's end, and the turn typed meanwhile came as
+    // history (#4362, CLI end to end shard 5, e2e/otherEngines.e2e.ts). A reader that gave up on a session (five
+    // retries, then nothing queued, or a stream lost with its worker still connected) takes it up on no later
+    // connection, or on none that may come: this pass is the row's one rescue, as before #4362, or it stays held until
+    // the daemon restarts.
+    if (agent.identityHold && agent.sessionId && agent.transcriptPath
+      && !(OTHER_ENGINE_HOLDS.has(agent.identityHold) && followsLive(agent.sessionId))) {
       try {
         const previous = agent.sessionId
         const retried = registry.revalidateBinding(agent.agentId)
@@ -308,11 +360,19 @@ export function createBinding({
     const authority = paneReadIdentity(agent)
     const current = () => !changing(agent.agentId) && !isRecentlyDeleted(agent.agentId)
       && paneReadIdentity(registry.byProcess(observed.engine, observed.processIdentity)) === authority
-    const hold = (error: unknown) => {
-      if (!current()) return
+    // Whether this pass completed a native read that read something, and whether anything in it said to hold the agent: a
+    // read that failed, a refused register, Hermes's follower. A register refused in the words of the hold already there
+    // changes nothing on the row (its transcript check reads with the lookups' own scan), and still says to hold.
+    let ran = false, held = false
+    /** Whether this set a hold on the row: one already there in the same words is left as it is. */
+    const hold = (error: unknown): boolean => {
+      held = true
+      if (!current()) return false
       const reason = error instanceof Error ? error.message : String(error)
-      if (registry.setIdentityHold(agent.agentId, reason)) announceSession(agent)
+      const set = registry.setIdentityHold(agent.agentId, reason)
+      if (set) announceSession(agent)
       console.log(`[discovery] ${sid(agent.agentId)} binding held · ${reason}`)
+      return set
     }
     const commit = (input: Parameters<typeof registry.register>[0]) => {
       try { return registry.register(input) }
@@ -320,10 +380,13 @@ export function createBinding({
     }
     // Only native reads are contained here. A rejected lookup cannot end the serial
     // discovery/readiness pass or bind an unwritten session as if evidence were absent.
-    const read = async <T>(work: () => Promise<T>): Promise<{ value: T } | null> => {
-      try { return { value: await work() } }
-      catch (error) {
-        hold(error)
+    const read = async <T>(work: () => Promise<T>, empty?: (value: T) => boolean): Promise<{ value: T } | null> => {
+      try {
+        const value = await work()
+        if (!empty?.(value)) ran = true
+        return { value }
+      } catch (error) {
+        if (hold(error)) rememberReadHold(agent.agentId)
         return null
       }
     }
@@ -335,7 +398,26 @@ export function createBinding({
       const ownerStarted = Date.parse(owner.processIdentity?.startMarker ?? '')
       return !Number.isFinite(ownerStarted) || (Number.isFinite(observedStarted) && observedStarted > ownerStarted)
     }
-
+    await bindPass(observed, agent, { current, hold, commit, read, mayClaim })
+    // A pass whose native reads all completed, and that nothing in it held, lets go of the hold an earlier pass's failed
+    // read set, and of no other: the row must still carry that very hold, and be the row this pass began with
+    // (`current`), so every read here began after the hold was set (core rule 6). A pass that read nothing, or that
+    // threw, proves nothing.
+    const row = readHeld(agent.agentId)
+    if (!row) { readHolds.delete(agent.agentId); return }
+    if (!ran || held || !current()) return
+    readHolds.delete(agent.agentId)
+    registry.setIdentityHold(agent.agentId, undefined)
+    announceSession(row)
+    console.log(`[discovery] ${sid(agent.agentId)} binding released · its native evidence was read completely`)
+    // An agent bound or woken while held never had its stream attached: discovery skips a held agent as it wakes, and a
+    // held row attaches nothing. So it is attached now, with the hold gone and without waiting; one already attached is
+    // left as it is.
+    if (row.sessionId) void attachSession(row).catch((error) => console.error(
+      `[agent] ${sid(row.agentId)} transcript attachment is unavailable: ${error instanceof Error ? error.message : error}`))
+  }
+  /** One pass over a process an agent runs: what it reads, and the session it binds from that. */
+  const bindPass = async (observed: DiscoveredTerminalAgent, agent: RegisteredSession, { current, hold, commit, read, mayClaim }: BindPass): Promise<void> => {
     // Copilot can change session WITHOUT changing process: `/resume` inside the CLI opens another one,
     // and the pane then shows a conversation the daemon is not streaming. Every other engine here
     // starts a new process for that, which is why this path used to stop at `agent.sessionId`.
@@ -352,7 +434,7 @@ export function createBinding({
       // One a message was typed into is read on every pass until the message is confirmed: the run it starts shows on the
       // pane before the store, which may never show it (live.ts NO_SESSION_MS counts from the first pass that reads it).
       if (agent.sessionId && !openclawPaneDue(agent.sessionId) && !input.awaitingConfirmation(agent.agentId)) return
-      const captured = await read(() => capturePane(agent.agentId))
+      const captured = await read(() => capturePane(agent.agentId), (screen) => !screen)
       if (!captured?.value || !current()) return
       const screen = readOpenclawScreen(captured.value)
       // Told on every pass, the ones that say a state too: a pass that reads the Gateway gone is what lets the stream
@@ -587,7 +669,7 @@ export function createBinding({
       sessionId,
       transcriptPath,
       ...(hermesHome ? { hermesHome } : {}),
-      // A home Harness worked out, from the process's HOME or a sandbox's path of it: a relaunch must not export it.
+      // The daemon's path of a sandboxed process's home: a relaunch must not export it.
       ...(hermesHome && followed && observed.hermesHomeDerived ? { hermesHomeDerived: true as const } : {}),
       cwd: observed.cwd,
       source,

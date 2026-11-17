@@ -428,8 +428,10 @@ export class DeviceFleet implements MachineFleet {
         // A specialist on another Mac is as silent here as one on this one.
         ...(payload.subagent === true ? { subagent: true } : {}),
         // How loudly it ends, decided by that machine's recaps, which know its agents: this dial has no list of them, and
-        // decided again here a Swarm agent on another of the person's Macs alerted (#2648's review).
+        // decided again here an agent on another of the person's Macs that ends quietly alerted (#2648's review).
         ...(kind === 'summary' && isTier(payload.tier) ? { tier: payload.tier } : {}),
+        // A card with no tier is decided on this dial, where Needs you lowers a turn unless it failed.
+        ...(kind === 'summary' && payload.failed === true ? { failed: true } : {}),
       })
       return
     }

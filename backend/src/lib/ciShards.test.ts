@@ -4,7 +4,7 @@ import { durationShards, readTimingHints } from './ciShards.test-support.js'
 
 const entry = (key: string, durationMs: number) => ({ key, durationMs, value: key })
 
-describe('CI shards of the Super Tab integration suite (task #2459)', () => {
+describe('CI shards of the backend integration suite (task #2459)', () => {
   it('puts every file in exactly one shard, longest first onto the least-loaded shard', () => {
     const files = [entry('a', 100), entry('b', 600), entry('c', 300), entry('d', 300), entry('e', 200), entry('f', 100)]
     const shards = durationShards(files, 4)
@@ -29,8 +29,8 @@ describe('CI shards of the Super Tab integration suite (task #2459)', () => {
   })
 
   it('reads hints for integration files only; unknown files are left to the default cost', () => {
-    const hints = readTimingHints({ schema: 1, defaultDurationMs: 30000, durationMs: { 'integration/superTabs.test.ts': 400000 } })
-    expect(hints.durationMs['integration/superTabs.test.ts']).toBe(400000)
+    const hints = readTimingHints({ schema: 1, defaultDurationMs: 30000, durationMs: { 'integration/shareRaces.test.ts': 400000 } })
+    expect(hints.durationMs['integration/shareRaces.test.ts']).toBe(400000)
     expect(hints.defaultDurationMs).toBe(30000)
     expect(() => readTimingHints({ schema: 2, defaultDurationMs: 1, durationMs: {} })).toThrow('Invalid')
     expect(() => readTimingHints({ schema: 1, defaultDurationMs: 1, durationMs: { 'src/a.test.ts': 5 } })).toThrow('src/a.test.ts')
@@ -41,7 +41,7 @@ describe('CI shards of the Super Tab integration suite (task #2459)', () => {
   // The config lists the files by hand, one a line, and Vitest skips a name that matches no file: a deleted test's line left
   // in, or a new test's line left out, went unseen (#3596 and #3603 left three stale; a test never listed never runs).
   it('lists every integration test file once, and no file that is gone', () => {
-    const config = readFileSync(new URL('../../vitest.super-tabs.config.ts', import.meta.url), 'utf8')
+    const config = readFileSync(new URL('../../vitest.integration.config.ts', import.meta.url), 'utf8')
     const listed = [...config.matchAll(/'(integration\/[^']+\.test\.ts)'/g)].map(match => match[1]!)
     const present = readdirSync(new URL('../../integration/', import.meta.url)).filter(name => name.endsWith('.test.ts')).map(name => `integration/${name}`)
     expect(listed.filter((file, i) => listed.indexOf(file) !== i)).toEqual([])
