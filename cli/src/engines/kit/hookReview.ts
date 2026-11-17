@@ -6,8 +6,8 @@
  * The record is the engine's own, written as the engine writes it on "Trust all": a table per hook in its
  * config file, keyed by the settings file in the real path of the engine's home, the event, the block and
  * the hook, holding the hash the engine computes of the hook. The hash is the engine's: the hook normalized
- * (its matcher only where the engine honours one, a timeout always, `async`), every object's keys sorted,
- * compact JSON, sha256. It is matched against `codex app-server` `hooks/list` of codex-cli 0.169.0
+ * (its matcher only where the engine honours one, a timeout always, clamped as the engine clamps it, `async`),
+ * every object's keys sorted, compact JSON, sha256. It is matched against `codex app-server` `hooks/list` of codex-cli 0.169.0
  * (hookReview.spec.ts). Should an engine hash differently, it sees a changed hook and asks again, which is
  * where it was before.
  *
@@ -37,12 +37,21 @@ function sortedKeys(value: unknown): unknown {
 
 const identityHash = (identity: unknown): string => `sha256:${createHash('sha256').update(JSON.stringify(sortedKeys(identity))).digest('hex')}`
 
+/** Events Codex gives 1 s when none is named and caps at 3 s, hashing the clamped value (codex-rs
+ *  `normalize_command_hook`, `SESSION_END_DEFAULT_TIMEOUT_SEC`/`SESSION_END_MAX_TIMEOUT_SEC`, 0.150.0 to 0.169.0). */
+const SHORT_EVENTS = new Set(['interrupt', 'session_end'])
+
+/** The timeout the engine hashes: a short event's clamped to 1-3 s, any other at least 1. */
+const hashedTimeout = (label: string, timeout: number | undefined, defaultTimeout: number): number =>
+  SHORT_EVENTS.has(label) ? Math.min(3, Math.max(1, timeout ?? 1)) : Math.max(1, timeout ?? defaultTimeout)
+
 /** The engine's hash of one command hook, as `hooks/list` reports it in `currentHash`. */
 export function reviewHash(record: HookReviewRecord, event: string, matcher: string | undefined, hook: { command: string; timeout?: number; async?: boolean }): string {
+  const label = record.events[event]
   return identityHash({
-    event_name: record.events[event],
+    event_name: label,
     ...(record.matcherEvents.includes(event) && matcher !== undefined ? { matcher } : {}),
-    hooks: [{ type: 'command', command: hook.command, timeout: Math.max(1, hook.timeout ?? record.defaultTimeout), async: hook.async === true }],
+    hooks: [{ type: 'command', command: hook.command, timeout: hashedTimeout(label, hook.timeout, record.defaultTimeout), async: hook.async === true }],
   })
 }
 
