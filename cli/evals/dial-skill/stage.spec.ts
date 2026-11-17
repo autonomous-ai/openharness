@@ -146,7 +146,7 @@ describe('stage', () => {
     for (const st of [claude, oracle]) {
       for (const key of Object.keys(st.env)) {
         expect(ALLOWED, key).toContain(key)
-        expect(key).not.toMatch(/^(ANTHROPIC|OPENAI|ORCA|HARNESS|TMUX|CLAUDE_CODE|GH_|GITHUB)/)
+        expect(key).not.toMatch(/^(ANTHROPIC|OPENAI|ORCA|HARNESS|TMUX|CLAUDE_CODE_ENTRYPOINT|GH_|GITHUB)/)
       }
       // Claude finds its sign-in in the keychain through HOME, so HOME stays the person's.
       expect(st.env.HOME).toBe(process.env.HOME)

@@ -52,6 +52,8 @@ export function stage(s: Scenario, agent: AgentKind, opts: { skill: boolean; bas
     SHELL: '/bin/zsh',
     ZDOTDIR: join(root, 'zdotdir'),
     TMPDIR: join(root, 'tmp'),
+    // Claude Code keeps its own per-repo folder there, else in /private/tmp/claude-<uid>/, which no unstage reaches.
+    CLAUDE_CODE_TMPDIR: join(root, 'tmp'),
     GIT_CONFIG_GLOBAL: join(root, 'gitconfig'),
     npm_config_userconfig: join(root, 'npmrc'),
     // The sandbox refuses writes to ~/.npm, and npm reads that EPERM as root-owned files to `sudo chown`: an obstacle
