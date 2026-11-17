@@ -2091,6 +2091,25 @@ describe('ObservedSource and the Herdr terminal a session the scan found runs in
     expect(s.src.list()[0].paneKeys).toEqual(['herdr-app:t9'])
   })
 
+  // The pairing's Herdr is no hook's: kept while the hook's caller is walked, the session would sit on Herdr's page with
+  // no Herdr pane, Herdr's own row of its terminal unfolded beside it.
+  it('a hook whose hints name no app keeps the app the scan gave it while its caller is walked, not the pairing\'s', async () => {
+    let walked: (apps: ReadonlyMap<number, string>) => void = () => {}
+    const apps = vi.fn(async (_pids: readonly number[]): Promise<ReadonlyMap<number, string>> => new Map([[11, 'vscode']]))
+    const s = paired({ apps })
+    found(s, 'a', 11)
+    s.terminals.set(11, 't7')
+    await s.src.scanOpen()
+    expect(placeOf(s.src.list()[0])).toEqual({ host: 'herdr', app: 'herdr', appPending: undefined, paneKeys: ['herdr-app:t7'] })
+    apps.mockImplementationOnce(() => new Promise((resolve) => { walked = resolve }))
+    s.src.ingest(s.ev('turn-start', { sessionId: 'a', callerPid: 11, cwd: '/x/a', hostHints: {} }))
+    expect(apps).toHaveBeenLastCalledWith([11])
+    expect(placeOf(s.src.list()[0])).toEqual({ host: 'terminal', app: 'vscode', appPending: undefined, paneKeys: undefined })
+    walked(new Map())
+    await flushed()
+    expect(placeOf(s.src.list()[0])).toEqual({ host: 'terminal', app: 'terminal', appPending: undefined, paneKeys: undefined })
+  })
+
   it('a hook heard while the scan\'s reads ran keeps its own place', async () => {
     let answer: (text: string | undefined) => void = () => {}
     const lastAnswer = vi.fn(() => new Promise<string | undefined>((resolve) => { answer = resolve }))
