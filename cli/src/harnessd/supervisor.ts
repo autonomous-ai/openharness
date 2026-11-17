@@ -67,6 +67,8 @@ export interface SupervisorDeps {
   bundle?(): string | null
   /** Start the process that runs [service] on demand (./serviceSupervisor.ts `ServiceSupervisor.want`): the core asked for it. */
   want?(service: string): void
+  /** Actual child handles, bounded by the master's declared service hosts. */
+  serviceProcesses?(): Array<{ name: string; pid: number | null }>
   /**
    * The core bound speaking an older protocol than this master (./serviceSupervisor.ts `ServiceSupervisor.unasked`): it
    * never asks for a process that became on demand after its protocol, and expects it to run, as it did.
@@ -180,6 +182,7 @@ export type SupervisorState = 'idle' | 'starting' | 'listening' | 'running' | 'r
 export type ExitReason = 'crashed' | 'hung' | 'did-not-bind' | 'not-ready' | 'memory' | 'update' | 'stopped'
 
 export interface SupervisorStatus {
+  services?: Array<{ name: string; pid: number | null }>
   state: SupervisorState
   corePid: number | null
   restarts: number
@@ -295,6 +298,7 @@ export class Supervisor {
 
   status(): SupervisorStatus {
     return {
+      ...(this.deps.serviceProcesses ? { services: this.deps.serviceProcesses() } : {}),
       state: this.state,
       corePid: this.core?.pid ?? null,
       restarts: this.restarts,
@@ -409,6 +413,9 @@ export class Supervisor {
     if (this.bound) this.core?.send({ type: 'harnessd:status', status })
   }
 
+  /** Service lifecycle changes push evidence; there is no process-table polling. */
+  servicesChanged(): void { this.publish() }
+
   private spawn(): void {
     this.bound = false
     this.coreProtocol = HARNESSD_PROTOCOL
@@ -488,6 +495,7 @@ export class Supervisor {
         // beside it, as it did when the gateway started with every other process. A core too old to ask sends
         // none, before or after.
         this.deps.want?.(message.service)
+        this.publish()
         return
       case 'harnessd:stop': {
         const why = 'the core asked to stop (harness stop)'

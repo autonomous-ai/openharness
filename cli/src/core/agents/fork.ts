@@ -13,7 +13,6 @@ import { statSync } from 'node:fs'
 import type { BackendSocket } from '../../backendSocket.js'
 import { harnessEnvToClear } from '../../dsh/sessionEnv.js'
 import { captureDshWorkspace, type DshThrough } from './dshThrough.js'
-import * as opencodeLaunch from '../../engines/launchControl.js'
 import type { TurnRecaps } from '../turns/recaps.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
@@ -41,6 +40,7 @@ import { OPENCLAW_LOCAL } from '../../engines/openclaw/contract.js'
 type ForkAgent = NonNullable<BackendSocket['onForkAgent']>
 
 export interface ForkAgentDeps {
+  opencodeMajor?: () => Promise<number | null>
   native?: (engine: AgentEngine, source: NativeLaunchSource, authority: LaunchAuthority) => Promise<NativeLaunchResult>
   prepareNative?: LaunchOverridesDeps['prepareNative']
   authority?: (agentId: string) => () => boolean
@@ -65,7 +65,7 @@ export interface ForkAgentDeps {
   dshLaunch: Pick<DshThrough, 'describe' | 'launch'>
 }
 
-export function createAgentForker({
+export function createAgentForker({ opencodeMajor,
   native: inspectNative, prepareNative, authority: captureAuthority,
   createBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, mirror, pendingForkInherit, watchNewPane, announceSession, attach, prepareInstructions, relaunchOverrides, gridName, dshLaunch,
 }: ForkAgentDeps) {
@@ -102,7 +102,6 @@ export function createAgentForker({
     }
     const plan = planFork({ engine, sessionId: source.sessionId, name: sourceName, cwd: source.cwd }, memory, prompt)
     if (!plan.ok) return { ok: false, error: plan.error, detail: plan.detail }
-    const opencode = engine === 'opencode' ? opencodeLaunch : null
 
     const label = authority.label
     const inspected = await inspectNative?.(engine, source, { ...authority, current: owner })
@@ -153,7 +152,7 @@ export function createAgentForker({
     const installIfMissing = enginePathOverride(engine) ? undefined : engineInstallRecipe(engine)
     // Same guard as a relaunch (`buildLaunchOverrides`): an opencode agent recorded on v1 forks on v2
     // as a general session rather than handing the v2 TUI an `--agent` it exits on.
-    const forkMajor = built.overrides.native ? built.overrides.native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null
+    const forkMajor = built.overrides.native ? built.overrides.native.opencodeMajor : engine === 'opencode' ? await opencodeMajor?.() ?? null : null
     const extraArgs = [...built.overrides.extraArgs, ...dshArgs, ...(source.agent && supportsNamedAgent(engine, forkMajor) ? namedAgentArgs(engine, source.agent, forkMajor) : [])]
     const firstPrompt = plan.level === 'native' ? (prompt ?? undefined) : plan.firstPrompt
     // An engine that takes it typed gets it on its row instead, typed once its pane is ready (core/agents/bind.ts).

@@ -111,14 +111,10 @@ describe('the lean bundle a release carries', () => {
     expect([...loads('core')].filter((name) => files.get(name)!.includes(marker))).toEqual([])
   })
 
-  it('loads native hook declarations eagerly without importing the optional compatibility entry', () => {
-    const core = loads('core')
-    // This is native source data written into Amp's plugin file, not Amp's optional transcript reader.
-    // Readiness and launch must not depend on an import() before the core can install that file.
+  it('keeps vendor hook templates outside default core while retaining setup and explicit compatibility code', () => {
     const declaration = 'Mirrors this Amp thread to the machine adapter'
-    expect([...core].filter(name => files.get(name)!.includes(declaration))).toHaveLength(1)
-    expect([...core].some(name => name.startsWith('core-hooks-'))).toBe(false)
-    expect([...files.keys()].some(name => name.startsWith('core-hooks-'))).toBe(true)
+    expect([...files.values()].some(code => code.includes(declaration))).toBe(true)
+    expect([...loads('core')].some(name => files.get(name)!.includes(declaration))).toBe(false)
   })
 
   it('keeps rollout parsing and rewriting outside the default core bundle closure', () => {

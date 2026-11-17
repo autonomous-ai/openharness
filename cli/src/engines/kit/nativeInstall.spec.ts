@@ -66,6 +66,14 @@ it('does not reserve or dispatch after cancellation', async () => {
   expect(install.dispatch).not.toHaveBeenCalled()
 })
 
+it('does not dispatch a prepared installation when its caller refuses commit', async () => {
+  const install = controller()
+  const authorize = vi.fn(async () => false)
+  expect(await install.ensure('opencode', recipe, environment, 'refused-commit', () => true, authorize)).toMatchObject({ complete: false })
+  expect(install.dispatch).not.toHaveBeenCalled()
+  expect(authorize).toHaveBeenCalledOnce()
+})
+
 it('reads installation obligations after reconstruction without creating a missing history', async () => {
   const install = controller()
   expect(await install.status('opencode', 'request', () => true)).toBeNull()

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { HERMES_HOOK_SETTINGS } from '../hermes/contract.js'
+import { HERMES_HOOK_SETTINGS } from '../hermes/setup.js'
 import { editPassthrough, installNativeYamlHooks, removeNativeYamlHooks } from './nativeHookYaml.js'
 
 // A home's preparation can be held before it starts, so the homes finish in the order a test chooses.

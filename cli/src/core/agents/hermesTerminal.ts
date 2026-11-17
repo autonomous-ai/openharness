@@ -36,7 +36,13 @@ export interface HermesTerminalDeps {
   now: () => number
 }
 export type HermesObserved = Pick<DiscoveredTerminalAgent, 'processIdentity' | 'runtimes' | 'primaryRuntimeKey' | 'hermesHome'> & { sandboxed: boolean }
-export interface HermesPass { current: () => boolean; mayClaim: (sessionId: string) => boolean; hold: (error: unknown) => void }
+export interface HermesPass {
+  current: () => boolean
+  mayClaim: (sessionId: string) => boolean
+  hold: (error: unknown) => void
+  /** An abandoned reader needs fresh native evidence even if this record was already confirmed. */
+  refresh?: boolean
+}
 /** `'none'`: no record, the caller goes on as before. `'wait'`: nothing to do this pass. A session: commit it now. */
 export type HermesFollow = 'none' | 'wait' | { sessionId: string; hermesHome?: string }
 
@@ -101,7 +107,7 @@ export function createHermesTerminal(deps: HermesTerminalDeps) {
     const home = agent.hermesHome ?? observed.hermesHome ?? deps.defaultHome
     const stamp = await deps.stamp(home, names)
     let known = run.known
-    if (known?.stamp !== stamp) {
+    if (pass.refresh || known?.stamp !== stamp) {
       const read: TerminalRecordRead = Number.isFinite(startedAtMs)
         ? await deps.read(home, names, startedAtMs - START_SLACK_MS)
         : { state: 'none' }
@@ -121,8 +127,8 @@ export function createHermesTerminal(deps: HermesTerminalDeps) {
     }
     if (sessionId === agent.sessionId) {
       // The registry fails a resumed row that reports another conversation until something confirms its own; with no
-      // hook, the record does, once (the commit stamps `lastHookAt`).
-      if (agent.resumeOnly && agent.lastHookAt === 0) return { sessionId }
+      // hook, the record does, once (the commit stamps `lastHookAt`). An abandoned reader needs it again.
+      if (pass.refresh || (agent.resumeOnly && agent.lastHookAt === 0)) return { sessionId }
       run.known = { stamp, settled: 'wait' }
       return 'wait'
     }

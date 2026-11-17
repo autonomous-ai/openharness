@@ -49,8 +49,3 @@ export function folderTrust(engine: AgentEngine, profile?: string | null, enviro
     },
   }
 }
-
-/** What `prepareResume` repairs in `engine`'s history, in the daemon's log's words. */
-export function repairedItemsName(engine: string): string {
-  return launchContract(engine)?.resumeRepair?.names.items ?? 'items'
-}

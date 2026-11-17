@@ -44,10 +44,10 @@ describe('runtime profile routing', () => {
     expect(await p.effortAllowed(s, t.target.model, 'low', null)).toBe(false)
     expect(await p.codexCatalog(s)).toMatchObject([{ slug: t.target.model }])
     expect(await p.modelsForSessions([s])).toEqual([{ id: t.target.id, displayName: 'Worker choice' }])
-    // Only an inline reader knows a workspace: a worker's session has none, and the inline one is not asked.
-    const workspace = vi.spyOn(t.local, 'workspace').mockReturnValue('/inline/workspace')
-    expect(p.workspace(s)).toBeNull()
-    expect(workspace).not.toHaveBeenCalled()
+    // A workspace arrives through accepted live evidence; inline readers are not consulted.
+    const display = vi.spyOn(t.local, 'display').mockReturnValue({ selectedModel: 'inline-model', workspace: '/inline/workspace' })
+    expect(p.display(s).workspace).toBeNull()
+    expect(display).not.toHaveBeenCalled()
     expect(inline).not.toHaveBeenCalled()
     expect(() => p.ingest(s, '{}')).toThrow('ENGINE_INVALID_REQUEST')
     expect(() => p.hydrate(s, [])).toThrow('ENGINE_INVALID_REQUEST')
@@ -110,7 +110,7 @@ describe('runtime profile routing', () => {
     p.stop(); t.local.onChanged?.('later'); expect(changed).toHaveBeenLastCalledWith('local-session')
   })
 
-  it('preserves explicit inline compatibility and the unchanged other-engine methods', async () => {
+  it('preserves explicit inline compatibility', async () => {
     const t = setup(false), { profiles: p, session: s, local } = t
     const pane = vi.spyOn(local, 'ingestPane').mockReturnValue(true)
     const config = vi.spyOn(local, 'ingestConfig').mockResolvedValue(true)
@@ -139,15 +139,35 @@ describe('runtime profile routing', () => {
     expect(await p.effortAllowed(s, 'model', 'high', null)).toBe(true)
     expect(await p.codexCatalog(s)).toEqual([])
     expect(await p.modelsForSession(s)).toEqual([])
-    vi.spyOn(local, 'workspace').mockReturnValue('/openclaw/workspace')
-    expect(p.workspace(s)).toBe('/openclaw/workspace')
+    vi.spyOn(local, 'display').mockReturnValue({ selectedModel: null, workspace: '/openclaw/workspace' })
+    expect(p.display(s).workspace).toBe('/openclaw/workspace')
     expect((await p.prepareFrames(s, [frame(undefined)]))()).toBe(true)
     expect(p.getState('missing')).toEqual(blankRuntimeState())
     expect(p.selectedModel(s)).toBeNull()
-    expect(p.cursorTarget('missing', 'id')).toBeNull()
-    expect(p.devinTarget('missing', 'id')).toBeNull()
-    expect(p.commandcodeTarget('missing', 'id')).toBeNull()
-    expect(p.hermesTarget('missing', 'id')).toBeNull()
     expect(t.read).not.toHaveBeenCalled()
   })
+})
+
+
+it('has no inline fallback in default mode, including a session without optional support', async () => {
+  const s = { agentId: 'unsupported', sessionId: 'session', engine: 'codex', model: null, cliVersion: null } as RegisteredSession
+  const read = vi.fn(async () => { throw Error('unexpected worker read') })
+  const p = createRuntimeProfiles({ handles: () => false, resolve: () => s,
+    transport: { read, connected: vi.fn(), disconnected: vi.fn() } })
+  active.push(p)
+  await p.withoutChangeEvents(async () => {
+    expect(p.ingest(s, '{}')).toBe(false)
+    p.hydrate(s, [])
+    expect(p.transcriptFields(s, '{}')).toEqual([])
+    expect(() => p.beginHydrate(s)).toThrow('ENGINE_INVALID_REQUEST')
+    expect(p.ingestPane(s, 'pane')).toBe(false)
+    expect(await p.ingestConfig(s)).toBe(false)
+    expect(await p.supportsControl(s)).toBe(false)
+    expect(await p.effortAllowed(s, 'model', 'high', null)).toBe(false)
+    expect(await p.codexCatalog(s)).toEqual([])
+    expect(await p.modelsForSession(s)).toEqual([])
+    expect(p.selectedModel(s)).toBeNull()
+    expect(p.getState(s.sessionId)).toEqual(blankRuntimeState())
+  })
+  expect(read).not.toHaveBeenCalled()
 })

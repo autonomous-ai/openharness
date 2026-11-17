@@ -22,6 +22,11 @@ export function launchContract(engine: AgentEngine | string): EngineLaunch | und
   return Object.hasOwn(engineLaunches, engine) ? engineLaunches[engine as MigratedEngine] : undefined
 }
 
+/** The native history item named in a resume repair report. */
+export function repairedItemsName(engine: string): string {
+  return launchContract(engine)?.resumeRepair?.names.items ?? 'items'
+}
+
 /** The instruction file Harness writes its own notes into for `engine`, where it declares one. */
 export function instructionFileOf(engine: AgentEngine | string): string | undefined {
   return launchContract(engine)?.instructionFile

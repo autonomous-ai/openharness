@@ -12,7 +12,7 @@ import { GRID_CONFLICTING_ENV_VARS, GRID_KEY_VAR, type GridLaunchOverride } from
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 import { HARNESS_INSTRUCTIONS } from './agentAttribution.js'
 import { writeMachineMcp } from './machineMcp.js'
-import { missingHookScript } from '../engines/kit/notifyHooks.js'
+import { missingHookScript } from '../engines/kit/hookScript.js'
 import type { NativeLaunch } from '../engines/nativeLaunch.js'
 
 const GRID: GridLaunchOverride = {
@@ -30,7 +30,7 @@ vi.mock('../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
-vi.mock('../engines/kit/notifyHooks.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
+vi.mock('../engines/kit/hookScript.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
 
 function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
   const calls: string[] = []

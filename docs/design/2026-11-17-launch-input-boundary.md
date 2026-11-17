@@ -215,3 +215,20 @@ Logs: `/tmp/harness-launch-validation-correction-affected-1.log`,
 core gate, this Store compatibility follow-up and repeated fixed cost acceptance.
 The guest bootstrap uses a fixture helper, not a configured OS guest; real guest
 parity and native Windows/Linux execution are not claimed by these checks.
+
+## Caller-only correction measurement, 17 November
+
+The quiet ABBA comparison against Registry source `be06331d6c` completed for corrected caller source
+`81d3cd7255` (56 children, actual outer exit 0, all child exit/EOF/group/guardian/private-root cleanup receipts
+complete). The workload and custody inputs are frozen under SHA-256
+`26ee3ed8cf18ea26a5ac1c11113adc80084a66e9432e82d55e26dc8784e936e2`.
+Paired median CPU overhead per valid call is Models +12.993 microseconds, Store +11.933 microseconds and guest
++7.525 microseconds; ordinary launch control is +0.153 microseconds. These replace the earlier duplicate-check
+candidate's +24.999/+18.095/+13.544 microseconds, without removing the mandatory caller checks.
+
+All samples, including the different-work unsafe-admission/refusal cases, are retained in
+`/tmp/core-launch-caller-cost-v3-abba/manifest.json`; the summary is
+`/tmp/core-launch-caller-cost-v3-summary.json` (SHA-256
+`2338b9e8b1855a26e752216ca396b145e7a60f948cf678ac154365a698b75612`). This is in-memory caller cost after imports
+and warmup, excluding IPC, providers, native panes and publication. It shows a partial correction, not zero
+overhead or overall launch-latency acceptance; the change remains held for performance review.

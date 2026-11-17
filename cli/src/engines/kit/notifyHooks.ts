@@ -1,59 +1,17 @@
 /** The notify.mjs command and JSON merge primitives shared by shell-hook engines. */
-import { existsSync } from 'node:fs'
-import { basename, dirname, isAbsolute, join, posix, win32 } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { posix, win32 } from 'node:path'
 import { env } from '../../config/env.js'
 import { engineName } from '../../lib/agentNames.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
-import { insideWindowsRoots } from '../../lib/secureState.js'
-import { STABLE_NOTIFY } from '../../lib/windows/installNames.js'
 import { HookScriptMissing } from './hookHeld.js'
 import { HookPreparationHeld } from './nativeHookFiles.js'
 import { cursorDataDir } from '../cursor/contract.js'
 import { nativeHookLocations } from './nativeLocations.js'
 import { hostPlatform } from './windowsFiles.js'
-
-// notify.mjs location depends on the layout (import.meta.url is the REAL executing file at runtime):
-//  - packaged/bundled: cli.js at ~/.harness/cli/cli.js → notify.mjs is a SIBLING (dist/ bundle too).
-//  - a core started from the lean bundle (leanEntry.ts): its file is lean/<sha>/ in the data folder, which
-//    holds no notify.mjs, and its script (process.argv[1]) is the cli.js it was read from: the sibling of that.
-//  - dev/per-file:      notifyHooks.js at <appRoot>/{src,dist}/engines/kit/ → ../../../hook/notify.mjs.
-// Prefer the sibling, fall back to the dev path.
-const cliDir = dirname(fileURLToPath(import.meta.url))
-
-/**
- * Where notify.mjs is, best first. Windows' installed layout (lib/windows/installLayout.ts) keeps one CLI folder per
- * version, with a stable `cli\notify.mjs` beside them that the updater refreshes. The hook lines name that one, so
- * they do not change at each update, and Codex does not ask to review them again.
- */
-export function hookScriptCandidates(dir: string, script: string | undefined, platform: NodeJS.Platform = hostPlatform(),
-  cliRoot: string = env.ADAPTER_CLI_DIR): string[] {
-  const stable = platform === 'win32' && insideWindowsRoots(dir, [cliRoot]) ? [win32.join(cliRoot, STABLE_NOTIFY)] : []
-  return [...stable, join(dir, 'notify.mjs'), ...(script ? [join(dirname(script), 'notify.mjs')] : []), join(dir, '..', '..', '..', 'hook', 'notify.mjs')]
-}
-export const HOOK_SCRIPT = hookScriptCandidates(cliDir, process.argv[1]).find(existsSync) ?? join(cliDir, '..', '..', '..', 'hook', 'notify.mjs')
-
-/**
- * The engines whose hook install was refused because notify.mjs was not there. Only they are told it is missing: an engine
- * whose hooks do not run it, that installs none here (no Windows runner), or whose hooks are off was never refused for it,
- * and blaming the file would hide the reason that does clear by waiting (#3954 review).
- */
-const refusedForScript = new Set<string>()
-
-/** The notify.mjs every hook line names, when it is not there; null when it is. With [engine], null too unless that
- *  engine's install was refused for it. */
-export function missingHookScript(engine?: string): string | null {
-  if (engine !== undefined && !refusedForScript.has(engine)) return null
-  return existsSync(HOOK_SCRIPT) ? null : HOOK_SCRIPT
-}
-
-/** Refuses [engine]'s install when its hook lines would name a notify.mjs that is not there ([HookScriptMissing]). */
-export function requireHookScript(engine: NotifyEngine): void {
-  const missing = missingHookScript()
-  if (!missing) return
-  refusedForScript.add(engine)
-  throw new HookScriptMissing(missing)
-}
+import { HOOK_SCRIPT, type NotifyEngine } from './hookScript.js'
+import { quoteHookCommand, type HookRunner } from './hookCommand.js'
+export { quoteHookCommand, type HookRunner } from './hookCommand.js'
+export { HOOK_SCRIPT, hookScriptCandidates, missingHookScript, requireHookScript } from './hookScript.js'
 
 /** An engine that declares no Windows hook runner gets no hooks there. That is said once per install and is not a failure. */
 export function hooksNotOnWindows(engine: string): true {
@@ -94,76 +52,6 @@ export interface HookBlock {
   hooks: CommandHook[]
 }
 export type Settings = { hooks?: Record<string, HookBlock[]> } & Record<string, unknown>
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`
-}
-
-/**
- * What runs an engine's hook command. Each engine declares it for Windows (facets/hooks.ts `HookSettings.win32Runner`,
- * nativeHookSettings.ts `NativeHookSettings.win32Runner`). Off Windows every engine runs its hooks in a POSIX shell (`bash`).
- * - `argv`: the engine starts the program with its arguments and no shell (Claude Code's exec form, `command` + `args`).
- * - `bash`: a POSIX shell reads the line.
- * - `cmd`: `cmd.exe` reads it, meant for a line the engine wraps in quotes (`/d /s /c "…"` — Command Code via Node's
- *   shell:true). It refuses `" % ! & | < > ^ ( )` and a trailing backslash rather than escape them.
- * - `powershell`: PowerShell reads it (Copilot CLI's `command` fills its `powershell` field on Windows; Codex runs it with
- *   `powershell.exe -NoProfile -Command`, its Windows session shell).
- */
-export type HookRunner = 'argv' | 'bash' | 'cmd' | 'powershell'
-
-const BARE_WORD = /^[A-Za-z0-9_-]+$/
-const refuse = (reason: string): never => { throw new HookPreparationHeld(`a hook argument ${reason}`) }
-
-/**
- * [argv] as [runner] takes it: the list itself for `argv`; for the others, one line that [runner] splits back into
- * exactly these arguments. Words (`--port`, `18473`, `codex`) stay bare and everything else is quoted, so the POSIX
- * line is byte for byte what every release wrote. An argument a runner would read as anything but itself is refused,
- * never escaped. The line holds only Harness's own paths and flags, so a path with such a character holds the hook
- * install with a reason.
- */
-export function quoteHookCommand(runner: HookRunner, argv: string[]): string | string[] {
-  if (!argv.length) refuse('list is empty')
-  for (const arg of argv) {
-    if (typeof arg !== 'string') refuse('is not text')
-    if (/[\0\r\n]/.test(arg)) refuse('holds a line break or NUL, which no hook runner passes whole')
-  }
-  switch (runner) {
-    case 'argv': return [...argv]
-    case 'bash': return argv.map((arg) => BARE_WORD.test(arg) ? arg : shellQuote(arg)).join(' ')
-    case 'cmd': return argv.map(withoutTrailingSeparators).map((arg) => {
-      // cmd.exe expands %…% (and !…! with delayed expansion) even inside quotes, and a quote ends them. `& | < > ^ ( )`
-      // are refused too, in case an engine does not wrap the line: unquoted, cmd.exe reads them as its own syntax. A
-      // trailing backslash would escape the closing quote for the program's own parser (CommandLineToArgvW's rules).
-      if (/["%!&|<>^()]/.test(arg)) refuse('holds one of " % ! & | < > ^ ( ), which cmd.exe reads as more than text')
-      if (arg.endsWith('\\')) refuse('ends in a backslash, which would escape its closing quote')
-      return BARE_WORD.test(arg) ? arg : `"${arg}"`
-    }).join(' ')
-    case 'powershell': return `& ${argv.map(withoutTrailingSeparators).map((arg) => {
-      // Inside single quotes PowerShell reads only a quote, typographic ones too. Windows PowerShell 5.1 passes a
-      // double quote inside an argument to a native program unescaped.
-      if (arg === '') refuse('is empty, which Windows PowerShell 5.1 drops')
-      if (arg.endsWith('\\')) refuse('ends in a backslash, which would escape its closing quote')
-      if (/["\u2018\u2019\u201a\u201b]/.test(arg)) refuse('holds a double or typographic quote, which PowerShell passes on differently')
-      return BARE_WORD.test(arg) ? arg : `'${arg.replace(/'/g, "''")}'`
-    }).join(' ')}`
-  }
-}
-
-/**
- * A Windows folder without its trailing backslashes, which name the same folder: `CODEX_HOME=C:\codex\`, as the
- * environment dialog takes a folder, turned that engine's hooks off as "ends in a backslash" (final review R2-3). A root
- * (`C:\`, `\\server\share\`) has nothing to drop, and anything that is not an absolute path is left as it is.
- */
-function withoutTrailingSeparators(arg: string): string {
-  if (!win32.isAbsolute(arg)) return arg
-  const root = win32.parse(arg).root
-  let end = arg.length
-  while (end > root.length && arg[end - 1] === '\\') end--
-  return arg.slice(0, end)
-}
-
-/** The engines whose hook lines run notify.mjs; the others (OpenCode, Pi, Amp, …) report through a plugin of their own. */
-type NotifyEngine = 'claude' | 'codex' | 'cursor' | 'hermes' | 'commandcode' | 'devin' | 'grok' | 'agy' | 'copilot'
 
 /** notify.mjs's argument list for [engine]: the managed Node, the script, and Harness's own flags. No user input. */
 export function hookArgv(

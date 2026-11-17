@@ -1,4 +1,6 @@
 import { otherEngineRequests } from '../engines/others/otherEnginesProcess.js'
+import { preloadEngine } from '../engines/inProcess.js'
+import { RuntimeProfileState } from '../lib/runtimeProfileState.js'
 import { questionControlFor } from '../engines/questionControls.js'
 import { modelControlFor } from '../engines/modelControls.js'
 import { screenFor } from '../engines/screens.js'
@@ -6,6 +8,8 @@ import { submissionFor } from '../engines/submissions.js'
 import { nativeControlFor } from '../engines/nativeControls.js'
 import { backgroundJobFor } from '../engines/backgroundJobs.js'
 import { providerMoveFor } from '../engines/providerMoves.js'
+import { hermesBackground } from '../engines/others/storageRequests.js'
+import { exportDatabase } from '../engines/others/checkpoint.js'
 import { prepareResume } from '../engines/resumePreparation.js'
 import { describe, expect, it } from 'vitest'
 import { engineTranscriptFor } from '../engines/transcripts.js'
@@ -22,6 +26,7 @@ import { startEngineProbe } from './engineProbe.js'
 import { startHandoff } from './handoff.js'
 import * as inline from './inline.js'
 import { startModels } from './models.js'
+import { createLocalNativeSetup } from './nativeSetup.js'
 import { startMessagesInCore } from './messages.js'
 import { startMonitor } from './monitor.js'
 import { startOrchestrator } from './orchestrator.js'
@@ -46,6 +51,6 @@ import { startWorkspaces } from './workspaces.js'
 
 describe('the services the core runs in its own process only when they do not run in theirs', () => {
   it('are their own starts, unchanged: the same services either way', () => {
-    expect({ ...inline }).toEqual({ otherEngineRequests, engineTranscriptFor, databaseHistory, liveFor, runtimeFor, screenFor, submissionFor, nativeControlFor, backgroundJobFor, providerMoveFor, prepareResume, modelControlFor, questionControlFor, startAgentBrowser, startAgentCleanup, startCloud, startConnectors, startDevices, startEngineProbe, startGoals, startHachiInCore, startHandoff, startGateway, startMemory, startModels, startMonitor, startOrchestrator, startOsDevice, startMachineAddons, startProjects, startRecaps, startRouter, startSearch, startSharedMachines, startSharing, startShell, startStoreInCore, startMessagesInCore, startUsageInCore, startViewers, startWifi, startWindowNames, startWorkspaces })
+    expect({ ...inline }).toEqual({ RuntimeProfileState, preloadEngine, hermesBackground, exportDatabase, otherEngineRequests, engineTranscriptFor, databaseHistory, liveFor, runtimeFor, screenFor, submissionFor, nativeControlFor, backgroundJobFor, providerMoveFor, prepareResume, modelControlFor, questionControlFor, createLocalNativeSetup, startAgentBrowser, startAgentCleanup, startCloud, startConnectors, startDevices, startEngineProbe, startGoals, startHachiInCore, startHandoff, startGateway, startMemory, startModels, startMonitor, startOrchestrator, startOsDevice, startMachineAddons, startProjects, startRecaps, startRouter, startSearch, startSharedMachines, startSharing, startShell, startStoreInCore, startMessagesInCore, startUsageInCore, startViewers, startWifi, startWindowNames, startWorkspaces })
   })
 })

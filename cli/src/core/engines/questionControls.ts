@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import type { EngineQuestionControl } from '../../engines/facets/questionControl.js'
 import { createQuestionControlHost } from '../../engines/worker/questionControlHost.js'
-import { questionControlAction, questionControlEnvelope, questionControlStep, questionStepText,
+import { questionControlAction, questionControlEnvelope, questionControlStep, questionStepHints, questionStepText,
   QUESTION_CONTROL_APPLY, QUESTION_CONTROL_CAPABILITIES, QUESTION_CONTROL_HOST, QUESTION_CONTROL_IN_FLIGHT,
   QUESTION_CONTROL_QUERY_MS, QUESTION_CONTROL_VERSION, QUESTION_CONTROL_WAIT_MS, QUESTION_CONTROL_WRITES } from '../../engines/worker/questionControlProtocol.js'
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -18,6 +18,7 @@ interface Grant {
   service: string
   session: RegisteredSession
   text: string | undefined
+  hints: ReadonlySet<string>
   allowed(): boolean
   pending: boolean
   writes: number
@@ -43,7 +44,8 @@ export function createQuestionControls(deps: QuestionControlsDeps) {
       const grant = grants.get(payload.token), action = payload.action
       if (!grant || grant.service !== service) return denied
       if (!grant.allowed() || grant.pending || ++grant.writes > QUESTION_CONTROL_WRITES
-        || (action.kind === 'text' && action.text !== grant.text)) { grants.delete(payload.token); return denied }
+        || (action.kind === 'text' && action.text !== grant.text)
+        || (action.kind === 'key' && (/^[a-z0-9]$/.test(action.key) || action.key === 'BTab') && !grant.hints.has(action.key))) { grants.delete(payload.token); return denied }
       // The approved text goes in once: typed a second time it would be a different answer from the one approved.
       if (action.kind === 'text') grant.text = undefined
       grant.pending = true
@@ -70,9 +72,9 @@ export function createQuestionControls(deps: QuestionControlsDeps) {
       failure = undefined
       try {
         return await run(QUESTION_CONTROL_WAIT_MS, async (allowed, call) => {
-          if (!questionControlStep(step)) throw unavailable()
+          if (!questionControlStep(step, engine)) throw unavailable()
           const value = structuredClone(step)
-          admitted = { service, session, text: questionStepText(value), allowed: () => allowed() && grants.has(token), pending: false, writes: 0, dispatched: 0 }
+          admitted = { service, session, text: questionStepText(value), hints: questionStepHints(value), allowed: () => allowed() && grants.has(token), pending: false, writes: 0, dispatched: 0 }
           grants.set(token, admitted)
           if (isolated) await call(QUESTION_CONTROL_APPLY, { step: value, token })
           else {

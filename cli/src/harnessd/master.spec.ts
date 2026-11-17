@@ -603,9 +603,9 @@ describe('runMaster', { timeout: 60_000 }, () => {
     } finally { log.mockRestore() }
   })
 
-  it('starts the services and the core from the lean bundle when given one, telling the core which CLI it runs for', async () => {
+  it('starts the services and the core from the lean bundle when given one, telling both which CLI they run for', async () => {
     // The lean bundle cli.js carries (./leanBundle.ts): each service, and the core, parses its own code, not
-    // the CLI's. A core started from it is told the cli.js it came from, its CLI to everything it hands on.
+    // the CLI's. Each child is told the cli.js it came from, for helpers and commands it hands on.
     const pidFile = join(dir, 'adapter.pid')
     const seen = join(dir, 'seen')
     const body = (who: string) => `
@@ -635,7 +635,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
       })
       const roles = (): Array<Record<string, string>> => jsonLines(seen)
       await until('the core and the service', () => roles().length >= 2)
-      expect(roles().sort((a, b) => a.role.localeCompare(b.role))).toEqual([{ role: '__run', from: 'lean core', cli }, { role: 'service:search', from: 'lean', cli: null }])
+      expect(roles().sort((a, b) => a.role.localeCompare(b.role))).toEqual([{ role: '__run', from: 'lean core', cli }, { role: 'service:search', from: 'lean', cli }])
       expect(lines.some((line) => line.endsWith(`[harnessd] services run from ${lean}`))).toBe(true)
       signals.get('SIGTERM')!()
       await until('the master to finish', () => exits.length > 0)

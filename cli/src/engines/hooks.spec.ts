@@ -1,9 +1,10 @@
+import { hookContracts, engineHookInstallations } from './hookInstallations.js'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, expect, it, vi } from 'vitest'
-import { admitHook, engineHooks, hookContracts, hooksFor } from './hooks.js'
+import { admitHook, engineHooks, hooksFor } from './hooks.js'
 import { engineFor } from './registry.js'
 import { liveFor } from './live.js'
 
@@ -20,8 +21,8 @@ it('declares each engine\'s hooks once, for the full engine interface and the ho
 })
 
 it('composes only what a contract declares: Claude Code corrects transcripts and closes turns, Codex admits', () => {
-  expect(Object.keys(engineHooks.claude).sort()).toEqual(['install', 'installIn', 'onStop', 'transcriptFor'])
-  expect(Object.keys(engineHooks.codex).sort()).toEqual(['admit', 'install', 'installIn'])
+  expect(Object.keys(engineHooks.claude).sort()).toEqual(['onStop', 'transcriptFor'])
+  expect(Object.keys(engineHooks.codex).sort()).toEqual(['admit'])
 })
 
 it('keeps every contract plain data: nothing in it runs', () => {
@@ -34,7 +35,7 @@ it('keeps every contract plain data: nothing in it runs', () => {
 it('installs Claude hooks into the requested home through its facet', async () => {
   const home = mkdtempSync(join(tmpdir(), 'claude-hook-facet-'))
   try {
-    await engineHooks.claude.installIn(19473, home)
+    await engineHookInstallations.claude.installIn(19473, home)
     const file = join(home, 'settings.json')
     const first = readFileSync(file, 'utf8')
     const settings = JSON.parse(first)
@@ -45,7 +46,7 @@ it('installs Claude hooks into the requested home through its facet', async () =
     expect(command).toContain('--port 19473')
     expect(command).toContain(fileURLToPath(new URL('../../hook/notify.mjs', import.meta.url)))
     expect(command).not.toContain('--engine')
-    await engineHooks.claude.installIn(19473, home)
+    await engineHookInstallations.claude.installIn(19473, home)
     expect(readFileSync(file, 'utf8')).toBe(first)
   } finally { rmSync(home, { recursive: true, force: true }) }
 })

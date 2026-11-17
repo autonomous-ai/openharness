@@ -13,7 +13,7 @@ import { tmpdir, userInfo } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 
 import { env } from '../config/env.js'
-import { HOOK_SCRIPT, missingHookScript } from '../engines/kit/notifyHooks.js'
+import { HOOK_SCRIPT, missingHookScript } from '../engines/kit/hookScript.js'
 import { GUEST_HELPER_PATH } from './guestAccounts.js'
 import { runGuestCommand, type GuestRunner } from './guestRunner.js'
 import { guestHelperScript, guestSudoersTemplate, helperScriptVersion } from './guestHelperAssets.js'

@@ -228,8 +228,8 @@ it.each(['same', 'repaired'] as const)('composes discovery, retry and inline att
     setIdentityHold: (_id: string, reason: string) => { row.identityHold = reason; return false },
     bySession: () => row,
   }
-  const bind = createBinding({ registry, attachSession: run.attach.attachSession,
-    announceSession: vi.fn(), stoppedAgents: { save: vi.fn() }, syncRecapPool: vi.fn(), followsLive: () => false,
+  const bind = createBinding({ registry, attachSession: run.attach.attachSession, captureReader: run.attach.captureReader, followsLive: () => false,
+    announceSession: vi.fn(), stoppedAgents: { save: vi.fn() }, syncRecapPool: vi.fn(),
   } as unknown as BindDeps)
   const discover = createDiscoveryHandlers({ registry, bindObservedAgent: bind.bindObservedAgent,
     attachSession: run.attach.attachSession, announceSession: vi.fn(), syncRecapPool: vi.fn(), attach: vi.fn(), taken: vi.fn(),
@@ -643,6 +643,23 @@ describe('attaching a session', () => {
   })
 
   describe('a session it already follows', () => {
+    it('does not keep a never-folded file tail just because its database reader is ready', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const run = setup(), s = session('hermes', undefined, { active: true, resumeOnly: true, boundAt: null, lastHookAt: 0 })
+      await run.attach.attachSession(s)
+      expect(run.others.streams.ready(s.sessionId)).toBe(true)
+      expect(run.attach.neverFoldedHistory.has(s.sessionId)).toBe(true)
+      // A transcript discovered later still needs its first tail, even with the existing DB reader.
+      s.transcriptPath = transcript()
+      const keep = run.attach.captureReader(s), confirmed = { ...s, boundAt: 123, lastHookAt: 123 }
+      bindings.set(s.agentId, confirmed)
+      expect(keep(confirmed)).toBe(false)
+      const tail = vi.spyOn(run.others.streams, 'tail')
+      expect(await run.attach.attachSession(confirmed)).toBe(true)
+      expect(tail).toHaveBeenCalledWith(s.sessionId, s.transcriptPath, true)
+      expect(run.attach.neverFoldedHistory.has(s.sessionId)).toBe(false)
+    })
+
     it('only makes sure the tail runs — from the start for one that never folded anything', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup()

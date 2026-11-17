@@ -90,6 +90,16 @@ describe('Supervisor', () => {
   })
   afterEach(() => vi.useRealTimers())
 
+  it('pushes actual service child evidence on want and lifecycle changes', () => {
+    let pid: number | null = null
+    const supervisor = make({}, { serviceProcesses: () => [{ name: 'engine-others', pid }], want: () => { pid = 42 } })
+    supervisor.start(); core().up()
+    core().say({ type: 'harnessd:want', service: 'engine-others' })
+    expect(core().sent.at(-1)).toMatchObject({ type: 'harnessd:status', status: { services: [{ name: 'engine-others', pid: 42 }] } })
+    pid = null; supervisor.servicesChanged()
+    expect(core().sent.at(-1)).toMatchObject({ type: 'harnessd:status', status: { services: [{ name: 'engine-others', pid: null }] } })
+  })
+
   it('starts one core, claims the pid file once it is bound, and runs it once it is ready', () => {
     const supervisor = make()
     expect(new Supervisor({ wallClock: () => 7 } as never).status())

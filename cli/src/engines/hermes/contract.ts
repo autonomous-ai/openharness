@@ -1,22 +1,20 @@
-/**
- * What the core knows of Hermes without loading its code: declared data (docs/design/2026-10-08-other-engines-out-of-
- * core.md). It imports nothing of Hermes's code.
- */
 import { join } from 'node:path'
-import { env as hookEnvironment } from '../../config/env.js'
 import type { StoreHomes } from '../kit/storeHomes.js'
 import type { StoreSourceRule } from '../kit/storeSource.js'
+
 
 /** The store a Hermes home keeps its sessions in. */
 export function hermesDbPath(home: string): string {
   return join(home, 'state.db')
 }
 
+
 /**
  * A session Hermes 0.23's unified runtime creates: `local-` and a sha256 hexdigest (`hermes_state_keys.py`
  * `local_identity()`), for every local surface alike, the CLI's, the TUI's, an editor's, the desktop's, Kanban's.
  */
 const HERMES_LOCAL_ID = 'local-[0-9a-f]{64}'
+
 
 /**
  * Every id a Hermes store keeps a conversation under: the CLI's and the gateway's (`YYYYMMDD_HHMMSS_<hex>`), the
@@ -29,6 +27,7 @@ export const HERMES_HISTORY_ID_RE = new RegExp(
   `^(?:[0-9]{8}_[0-9]{6}_[0-9a-fA-F]{4,16}|${HERMES_LOCAL_ID}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$`,
 )
 
+
 /**
  * Hermes keeps one store per home: `hermes -p <name>` runs against `~/.hermes/profiles/<name>`, with its own
  * `state.db` (engines/hermes/home.ts). Session control verifies fresh pools in kit/storePool.ts;
@@ -36,14 +35,18 @@ export const HERMES_HISTORY_ID_RE = new RegExp(
  */
 export const HERMES_HOMES: StoreHomes = { profiles: 'profiles', store: hermesDbPath, max: 64, ttlMs: 30_000 }
 
+
 // Validate the original bytes. SQLite text substr/length stop at NUL and would turn a malformed
 // source such as "cli\0tool" into interactive authority, or a malformed id into a valid prefix.
 export const HERMES_ID_SQL = "CASE WHEN typeof(id) = 'text' AND length(CAST(id AS BLOB)) <= 128 AND instr(CAST(id AS BLOB), x'00') = 0 THEN id END"
+
 export const HERMES_SOURCE_SQL = "CASE WHEN typeof(source) = 'text' AND length(CAST(source AS BLOB)) <= 128 AND instr(CAST(source AS BLOB), x'00') = 0 THEN source END"
+
 // The creator's column is nullable and NULL means "not stamped yet" (`hermes_state_compression.py`
 // `_UNSET_CREATED_SOURCES`), so it reads as '' and only a malformed value reads as NULL.
 export const HERMES_CREATED_SOURCE_SQL = "CASE WHEN created_source IS NULL THEN '' WHEN typeof(created_source) = 'text'"
   + " AND length(CAST(created_source AS BLOB)) <= 128 AND instr(CAST(created_source AS BLOB), x'00') = 0 THEN created_source END"
+
 
 /**
  * A Hermes sub-agent is a full Hermes session of its own and runs the same shell hooks, so it announces itself to
@@ -78,6 +81,7 @@ export const HERMES_SOURCE: StoreSourceRule = {
   },
 }
 
+
 /**
  * The pane a Hermes 0.22+ session was opened from. Hermes now runs every session, and every shell hook, inside one shared
  * gateway with the gateway's own environment (agent/shell_hooks.py `_spawn`), so a hook names the gateway's pane, not
@@ -94,45 +98,22 @@ export const HERMES_SESSION_PANE = {
   maxBuffer: 1 << 20,
 } as const
 
+
 /** A profile needs its own command as soon as config exists, before its first history row (#191). */
 export const HERMES_CONFIG_HOMES = { directory: 'profiles', file: 'config.yaml', max: 64 } as const
 
-/** pre_llm_call registers resumed sessions too; on_session_start only fires for a new one. */
-export const HERMES_HOOK_SETTINGS = {
-  home: hookEnvironment.HERMES_HOME,
-  homes: HERMES_CONFIG_HOMES,
-  begin: '# machine-adapter: session discovery (managed block — safe to delete)',
-  end: '# machine-adapter: end',
-  events: ['on_session_start', 'pre_llm_call'],
-  timeout: 10,
-  allowlist: 'shell-hooks-allowlist.json',
-  ownership: ['notify.mjs', '--engine hermes'],
-  messages: {
-    missing: '[hooks] no Hermes config at {file} — skipping (run hermes once first)',
-    foreign: '[hooks] {file} has its own `hooks:` block — leaving it untouched.',
-    manual: '[hooks] add these entries under it manually to mirror Hermes sessions:',
-    current: '[hooks] Hermes session hooks already installed',
-    installed: '[hooks] installed Hermes session hooks → {file}',
-    collapsed: '[hooks] installed Hermes session hooks (collapsed {removed} stale blocks) → {file}',
-    after: '[hooks] (takes effect on the next hermes session start)',
-    failed: '[hooks] failed to write Hermes config.yaml:',
-  },
-  // Each session then carries the pane it was opened from (`HERMES_SESSION_PANE`). Hermes 0.21 ignores the key.
-  passthrough: {
-    section: 'terminal', key: 'client_env_passthrough', names: HERMES_SESSION_PANE.names,
-    unlisted: '[hooks] {file} has no terminal.client_env_passthrough list to add Harness\'s pane names to:'
-      + ' sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness',
-  },
-} as const satisfies import('../kit/nativeHookYaml.js').NativeYamlHooks
 
 /** The store a Hermes holds open for its whole run (docs/plans/2026-11-15-process-env-secrets-plan.md, "Spike result"): its first group is the home. */
 export const HERMES_HELD_STORE = /^(.+)\/state\.db$/
 
+
 /** `hermes --version` prints `Hermes Agent v<a>.<b>.<c> (<date>)` first (`hermes_cli/main.py` `cmd_version`). */
 export const HERMES_VERSION = { output: /Hermes Agent v(\d+)\.(\d+)\.(\d+)/, args: ['--version'], timeoutMs: 5_000 } as const
 
+
 /** The first release that keeps a terminal record (`hermes_cli/terminal_breadcrumbs.py`, tag v0.21.6). */
 export const HERMES_RECORD_SINCE = [0, 21, 6] as const
+
 
 /**
  * The record Hermes's CLI writes each time it sets a terminal's session (`hermes_cli/terminal_breadcrumbs.py`):
@@ -151,6 +132,7 @@ export const HERMES_TERMINAL_RECORD = {
   time: 'ts',
 } as const
 
+
 /**
  * When a session ended, in seconds since the epoch, or NULL while it is open (`hermes_state.py` `end_session`): the
  * session a terminal leaves (`/new`, `/resume`, a branch, a compression split, its exit) is ended then, and one it
@@ -162,19 +144,16 @@ export const HERMES_SESSION_END = {
   maxBuffer: 1 << 16,
 } as const
 
+
 /** A home set to the TUI writes no terminal record (`hermes_cli/main.py` `_config_default_interface_early`). */
 export const HERMES_INTERFACE = { file: 'config.yaml', section: 'display', key: 'interface', tui: 'tui', maxBytes: 1 << 20 } as const
 
+
 export const HERMES_SANDBOX_HOLD = 'Hermes runs in a sandbox whose folder Harness cannot see'
+
 
 export const HERMES_TERMINAL_SAID = {
   sandbox: 'hermes runs in a sandbox · followed from its terminal record',
   fallback: 'hermes keeps no terminal record · its session switches are not followed',
   ignored: (reason: string): string => `hermes terminal record ignored · ${reason}`,
-} as const
-
-export const HERMES_HOOKS_SAID = {
-  removed: "[hooks] removed Harness's Hermes hooks → {file}",
-  kept: "[hooks] could not remove Harness's Hermes hooks from {file} · {reason}",
-  unknown: "[hooks] Hermes's version could not be read · its session hooks are kept",
 } as const

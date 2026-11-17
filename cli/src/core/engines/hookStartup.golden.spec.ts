@@ -15,11 +15,11 @@ const world = vi.hoisted(() => {
   }
   return { state, install }
 })
-vi.mock('../../engines/hooks.js', () => ({ engineHooks: {
+vi.mock('../../engines/nativeHookSetup.js', () => ({
+  engineHookInstallations: {
   claude: { install: (port: number) => world.install('claude', port), installIn: (port: number, home: string) => world.install('claude', port, home) },
   codex: { install: (port: number) => world.install('codex', port), installIn: (port: number, home: string) => world.install('codex', port, home) },
-} }))
-vi.mock('../../engines/nativeHooks.js', () => ({
+  },
   installCursorHooks: (port: number) => world.install('cursor', port),
   installOpencodePlugin: (port: number) => world.install('opencode', port),
   installKiloPlugin: (port: number) => world.install('kilo', port),
@@ -71,5 +71,13 @@ it('preserves the original vendor, adopted-home and refusal coordination', async
     }
   } finally { Object.defineProperty(process, 'platform', originalPlatform) }
   if (process.env.RECORD_HOOK_STARTUP_GOLDEN === '1') writeFileSync(artifact, JSON.stringify(record, null, 2) + '\n')
-  expect(record).toEqual(JSON.parse(readFileSync(artifact, 'utf8')))
+  // Default maintenance now awaits each bounded setup request. Home adoption still runs independently;
+  // preserve both dispatch orders and every argument, without pinning their former interleaving.
+  const dispatches = (value: typeof record) => Object.fromEntries(Object.entries(value).map(([platform, cases]) => [platform,
+    Object.fromEntries(Object.entries(cases as Record<string, { calls: unknown[][] }>).map(([name, snapshot]) => [name,
+      { ...snapshot, calls: snapshot.calls.filter(call => call[2] === '<default-home>'),
+        adopted: snapshot.calls.filter(call => call[2] !== '<default-home>') },
+    ])),
+  ]))
+  expect(dispatches(record)).toEqual(dispatches(JSON.parse(readFileSync(artifact, 'utf8'))))
 })

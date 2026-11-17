@@ -41,7 +41,7 @@ import * as scmProjects from './scm/scmProjects.js'
 import * as machineResources from './lib/machineResources.js'
 import * as projectFolder from './lib/projectFolder.js'
 import * as projectPreview from './lib/projectPreview.js'
-import * as opencodeVersion from './engines/launchControl.js'
+import * as opencodeVersion from './engines/opencode/version.js'
 import { randomUUID } from 'node:crypto'
 import { fakeGridAnswers, installFakeGrid, type FakeGrid } from './lib/__fixtures__/fakeGrid.js'
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
@@ -3746,13 +3746,23 @@ describe('the models lists pushed to the windows', () => {
   })
 
   // `agents_list`, the launch replies and the updates build frames here; only pushed frames carried it (E2E 2026-11-10).
-  it('carries the engine\'s own workspace in every frame it builds', async () => {
+  it('carries model and workspace from the runtime display projection in every live frame', async () => {
     const socket = relaySocket('token')
     const agent = { agentId: 'a-ws', sessionId: 'agent:main:plain', engine: 'openclaw', cwd: '/tmp', runtimes: [], registeredAt: 1, active: true } as unknown as RegisteredSession
-    expect((await socket.toProject(agent)).workspace).toBeUndefined()
-    socket.workspaceProvider = (s) => (s.sessionId === 'agent:main:plain' ? '/root/.openclaw/workspace' : null)
-    expect((await socket.toProject(agent)).workspace).toBe('/root/.openclaw/workspace')
-    await socket.stop()
+    try {
+      const absent = await socket.toProject(agent)
+      expect(absent.selectedModel).toBeNull()
+      expect(absent.workspace).toBeUndefined()
+      const display = vi.fn((): { selectedModel: string | null; workspace: string | null } => ({ selectedModel: 'runtime-v1:a-ws:openclaw:model@auto', workspace: '/root/.openclaw/workspace' }))
+      Object.assign(socket, { runtimeDisplayProvider: display })
+      expect(await socket.toProject(agent)).toMatchObject({ selectedModel: 'runtime-v1:a-ws:openclaw:model@auto', workspace: '/root/.openclaw/workspace' })
+      expect(display).toHaveBeenCalledOnce()
+      expect(display).toHaveBeenCalledWith(agent)
+      display.mockReturnValue({ selectedModel: null, workspace: null })
+      const empty = await socket.toProject(agent)
+      expect(empty.selectedModel).toBeNull()
+      expect(empty.workspace).toBeUndefined()
+    } finally { await socket.stop() }
   })
 
   it('answers the grid commands\' handshake itself, so a Grid harness never reads models being down as "update Harness"', async () => {

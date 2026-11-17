@@ -16,9 +16,8 @@ import { WORKSPACES_OFF, type Asker, type WorkspacesPort } from '../api.js'
 import { DSH_ID_RE } from '../../dsh/id.js'
 import { dshUnavailable, type DshDescribeAnswer, type DshDescription } from '../../dsh/launchWire.js'
 import { homeIsAbsolute } from '../../engines/kit/homeAdoption.js'
-import { folderTrust } from '../../engines/launchPrep.js'
+import type { PrepareFolderTrust } from '../../engines/folderTrustPreparation.js'
 import type { NativeLaunchResult, NativeLaunchSource } from '../../engines/nativeLaunch.js'
-import * as opencodeLaunch from '../../engines/launchControl.js'
 import { OPENCLAW_KEY, OPENCLAW_LOCAL } from '../../engines/openclaw/contract.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { parseLaunchArgs } from '../../lib/launchArgs.js'
@@ -65,9 +64,11 @@ export interface LaunchRequestDeps {
   receipts: Pick<AgentCreationReceipts, 'run' | 'status' | 'createdLaunchModel' | 'creator' | 'has' | 'runIntent' | 'pendingIntents' | 'pendingIntent' | 'cancelIntent'>
   /** Each launch, read when a request comes in: null on a machine that cannot launch agents. */
   createAgent: () => CreateAgent | null
-  prepareCreate?: (input: Parameters<CreateAgent>[0], authority: LaunchAuthority, context?: { local: boolean }) => Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>>
+  prepareCreate?: (input: Parameters<CreateAgent>[0], authority: LaunchAuthority,
+    context?: { local: boolean; folderTrustAttempted?: true }) => Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>>
   /** The engine itself made ready, installed first when it is missing (engines/prepareNativeLaunch.ts): what a new
    *  project waits for before its folder is made. */
+  opencodeMajor?: () => Promise<number | null>
   prepareEngine?: (engine: CreateInput['engine'], source: NativeLaunchSource, authority: Pick<CreationAuthority, 'id' | 'current'>) => Promise<NativeLaunchResult>
   forkAgent: () => ForkAgent | null
   resumeAgent: () => ResumeAgent | null
@@ -88,6 +89,7 @@ export interface LaunchRequestDeps {
   /** Workspaces, which make the folder a create asks git for (a clone, a worktree, the folder itself on another branch):
    *  the core runs no git. Null while they are off. */
   workspaces: () => WorkspacesPort | null
+  prepareFolderTrust?: PrepareFolderTrust
 }
 
 type Reply = (result: Record<string, unknown>) => void
@@ -102,7 +104,7 @@ export const WORKSPACES_WAIT_MS = 10 * 60_000
 const WORKSPACES_GONE = { state: 'failed' as const, error: 'SERVICE_UNAVAILABLE',
   detail: 'Could not make the project folder: Harness\'s workspaces service was not available for 10 minutes. Try again, or restart Harness.' }
 
-export function createLaunchRequests({ describeDsh = async id => dshUnavailable(id), receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, claudeHomeListed, workspaces }: LaunchRequestDeps) {
+export function createLaunchRequests({ describeDsh = async id => dshUnavailable(id), receipts, createAgent, prepareCreate, prepareEngine, opencodeMajor, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, claudeHomeListed, workspaces, prepareFolderTrust }: LaunchRequestDeps) {
   /** Since when each create has waited for workspaces, by its creation id: in memory, as its hold is retried in this
    *  core. An entry lasts only while its create waits: it goes when the create goes on, gives up or is cancelled. */
   const waitingSince = new Map<string, number>()
@@ -123,18 +125,20 @@ export function createLaunchRequests({ describeDsh = async id => dshUnavailable(
       if (!installed.ok) return { error: installed.error, detail: installed.detail }
       if (installed.refusal) return { error: 'INVALID_DSH', detail: installed.refusal }
     }
-    if (input.agent && !supportsNamedAgent(input.engine, input.engine === 'opencode' ? await opencodeLaunch.opencodeMajorVersion() : null)) {
+    if (input.agent && !supportsNamedAgent(input.engine, input.engine === 'opencode' ? (await opencodeMajor?.() ?? null) : null)) {
       return { error: 'AGENT_UNSUPPORTED', detail: new NamedAgentUnsupportedError(input.engine).message }
     }
     return null
   }
 
-  const executeCreate = async (input: CreateInput, projectFolder: ProjectFolder | null, local: boolean, invoke: CreateAgent, validated = false, known?: DshDescription): Promise<AgentCreationOutcome> => {
+  const executeCreate = async (input: CreateInput, projectFolder: ProjectFolder | null, local: boolean, invoke: CreateAgent, validated = false,
+    current: () => boolean = () => true, environment?: NodeJS.ProcessEnv, known?: DshDescription): Promise<AgentCreationOutcome> => {
     const description = known ?? (input.dsh ? await describeDsh(input.dsh, input.engine) : undefined)
     if (!validated) {
       const refusal = await validateInstalled(input, description)
       if (refusal) return { state: 'failed', ...refusal }
     }
+    if (!current()) return { state: 'unconfirmed' }
     const { dsh, resumeSessionId } = input
     let preparedFolder: string | undefined
     /** A new project's folder, which this made empty: removed again if nothing starts in it. */
@@ -163,6 +167,7 @@ export function createLaunchRequests({ describeDsh = async id => dshUnavailable(
       scmLaunchRecord = prepared.scmLaunchRecord ?? null
       if (prepared.clonedVia) clonedVia = prepared.clonedVia
     }
+    if (!current()) return { state: 'unconfirmed' }
     if (projectFolder && preparedFolder) {
       // Only a folder this daemon just made EMPTY is one the engine need not ask about. A clone or
       // the person's own repo is theirs to answer for (engines/kit/folderTrust.ts); a worktree gets only
@@ -171,13 +176,14 @@ export function createLaunchRequests({ describeDsh = async id => dshUnavailable(
       // source folder: nothing to record.
       try {
         // A Codex agent on its own profile reads its trust from that profile's config.toml, not ~/.codex.
-        const engineTrust = folderTrust(input.engine, input.codexHome ?? input.claudeHome ?? null)
-        if (engineTrust && (projectFolder.source === 'new'
-          || (projectFolder.source === 'worktree' && preparedFolder.startsWith(join(projectsRoot(), 'worktrees') + sep)
-            && engineTrust.trusts(projectFolder.gitSource)))) {
-          engineTrust.record(preparedFolder)
+        if (projectFolder.source === 'new' && !dsh
+          || projectFolder.source === 'worktree' && preparedFolder.startsWith(join(projectsRoot(), 'worktrees') + sep)) {
+          await prepareFolderTrust?.({ engine: input.engine, cwd: preparedFolder, environment,
+            profile: input.codexHome ?? input.claudeHome ?? null,
+            ...(projectFolder.source === 'new' ? { empty: true } : { source: projectFolder.gitSource }),
+          }, current)
         }
-      } catch (error) { console.warn(`[agent] pre-trust ${preparedFolder} · ${error instanceof Error ? error.message : error}`) }
+      } catch { console.warn('[trust] FOLDER_TRUST_UNAVAILABLE') }
     } else if (!dsh && !resumeSessionId && local && dirname(input.cwd) === projectsRoot()) {
       // On the LOCAL machine the desktop makes a new workspace ITSELF and sends the path as a plain
       // cwd, so `projectFolder` above never sees it. Such a folder is empty and is trusted the way a
@@ -192,12 +198,14 @@ export function createLaunchRequests({ describeDsh = async id => dshUnavailable(
       //   · from a LOCAL frame. agent_create is not backend-only, so a relayed peer would otherwise
       //     name an empty path on this host and have it trusted.
       //
-      // DSH trust is decided in cli.ts, where the template count is known; leave that to it.
+      // Materialized templates retain the engine's own trust prompt.
       try {
         const empty = await readdir(input.cwd).then((names) => names.length === 0, () => false)
-        if (empty) folderTrust(input.engine, input.codexHome ?? input.claudeHome ?? null)?.record(input.cwd)
-      } catch (error) { console.warn(`[agent] pre-trust ${input.cwd} · ${error instanceof Error ? error.message : error}`) }
+        if (empty && current()) await prepareFolderTrust?.({ engine: input.engine, cwd: input.cwd, environment,
+          profile: input.codexHome ?? input.claudeHome ?? null, empty: true }, current)
+      } catch { console.warn('[trust] FOLDER_TRUST_UNAVAILABLE') }
     }
+    if (!current()) return { state: 'unconfirmed' }
     const result = await invoke(preparedFolder ? { ...input, cwd: preparedFolder, scmLaunchRecord } : input)
     if (result.ok) return { state: 'created', agentId: result.session.agentId, ...(clonedVia ? { clonedVia } : {}) }
     // tmux may have executed before a timeout; registration cleanup is best-effort.
@@ -250,10 +258,13 @@ export function createLaunchRequests({ describeDsh = async id => dshUnavailable(
         const folder = waitForFolder(authority, projectFolder)
         if (folder !== 'go') return folder
         const invoke: CreateAgent = async (prepared) => {
-          const ready = await prepareCreate(prepared, { ...authority, label }, { local })
+          // executeCreate has already made this project's trust decision, including an
+          // unavailable optional preparation. A retry here would double its five-second wait.
+          const ready = await prepareCreate(prepared, { ...authority, label }, { local, folderTrustAttempted: true })
           return ready.ok ? ready.dispatch() : { ok: false, error: ready.error, ...(ready.detail ? { detail: ready.detail } : {}) }
         }
-        return () => executeCreate(input, projectFolder, local, invoke)
+        return () => executeCreate(input, projectFolder, local, invoke, false,
+          () => authority.current() && (!engine || engine.ok && engine.launch.current()), engine?.ok ? engine.launch.environment : undefined)
       }
       const ready = await prepareCreate(input, { ...authority, label }, { local })
       if (!authority.current()) return null
@@ -288,7 +299,7 @@ export function createLaunchRequests({ describeDsh = async id => dshUnavailable(
     const projectFolder = (saved.projectFolder ?? null) as ProjectFolder | null
     const folder = waitForFolder(authority, projectFolder)
     if (folder !== 'go') return folder
-    return () => executeCreate(input, projectFolder, saved.local as boolean, invoke)
+    return () => executeCreate(input, projectFolder, saved.local as boolean, invoke, false, authority.current)
   } })
 
   /** Recover by stable runtime identity; a deleted agent must never become a fresh launch. */
@@ -582,7 +593,7 @@ export function createLaunchRequests({ describeDsh = async id => dshUnavailable(
             selection: model.state === 'ok' ? model.selection : null, label: buildHarnessSessionLabel(engine), local: asker.local }, model.state === 'ok' ? modelHold : launchHold)
           : model.state === 'ok'
           ? pending.start(creationId, fingerprint, { kind: 'model-create-v1', input, selection: model.selection, projectFolder, local: asker.local }, modelHold)
-          : receipts.run(creationId, fingerprint, () => executeCreate(input, projectFolder, asker.local, create, true, installed?.ok ? installed : undefined))
+          : receipts.run(creationId, fingerprint, () => executeCreate(input, projectFolder, asker.local, create, true, undefined, undefined, installed?.ok ? installed : undefined))
         void operation.then(async (status) => {
           reply({ creationId, ...await creationStatusPayload(status) })
         }).catch(() => reply({ error: 'INTERNAL' }))

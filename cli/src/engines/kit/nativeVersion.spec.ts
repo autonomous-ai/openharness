@@ -118,7 +118,7 @@ it('keeps the production resolver asynchronous when only the interactive shell c
   vi.stubEnv('HOME', root); vi.stubEnv('USERPROFILE', root); vi.stubEnv('PATH', join(root, 'empty-path'))
   vi.stubEnv('SHELL', shell); vi.stubEnv('NODE_ENV', 'production'); vi.stubEnv('OPENCODE_PATH', '')
   vi.resetModules()
-  const { opencodeMajorVersion } = await import('../launchControl.js')
+  const { opencodeMajorVersion } = await import('../opencode/version.js')
   const timer = setTimeout(() => writeFileSync(release, ''), 20)
   try { expect(await opencodeMajorVersion()).toBe(2) }
   finally { clearTimeout(timer) }

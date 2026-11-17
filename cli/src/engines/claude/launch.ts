@@ -35,7 +35,7 @@ export const launch: EngineLaunch = {
    */
   trust: {
     home: { variable: 'CLAUDE_CONFIG_DIR', otherwise: 'home' }, file: '.claude.json',
-    format: 'json', projects: 'projects', accepted: 'hasTrustDialogAccepted', entry: { allowedTools: [] },
+    format: 'json', projects: 'projects', accepted: 'hasTrustDialogAccepted', entry: { allowedTools: [] }, repositoryBoundary: '.git',
   },
   /**
    * `.mcp.json` in a folder above, such as the home's, is asked about as "New MCP server found in this project". Its

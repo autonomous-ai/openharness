@@ -184,6 +184,34 @@ withBuiltin('HermesReader pages by bytes', () => {
     return { events, reader: new HermesReader({ dbPath: db, sessionId: SID, onEvents: (e) => events.push(...e), pollMs: 20 }) }
   }
 
+  it('reconciles a newly open turn once when recovery hydration first cannot read the store', async () => {
+    put(1, 'user', 'history'); put(2, 'assistant', 'completed history', 'stop'); put(3, 'user', 'current turn')
+    const events: LiveEvent[] = []
+    const reader = new HermesReader({ dbPath: db, sessionId: SID, onEvents: batch => events.push(...batch), resumeTurnOpen: false, pollMs: 60_000 })
+    vi.mocked(sqliteReadAll).mockResolvedValueOnce({ ok: false, reason: 'transient' })
+    try {
+      await reader.start()
+      expect(events).toEqual([])
+      await reader.poll()
+      expect(events).toEqual([{ type: 'turn_started', payload: { userMessage: 'current turn' } }])
+      await reader.poll()
+      expect(events).toHaveLength(1)
+      put(4, 'assistant', 'answer', 'stop')
+      await reader.poll(); await reader.poll()
+      expect(events.filter(event => event.type === 'turn_ended')).toHaveLength(1)
+    } finally { reader.stop() }
+  })
+
+  it('never resurrects a completed historical start from a trailing empty user row during recovery', async () => {
+    put(1, 'user', 'completed prompt'); put(2, 'assistant', 'completed answer', 'stop'); put(3, 'user', '')
+    const events: LiveEvent[] = []
+    const reader = new HermesReader({ dbPath: db, sessionId: SID, onEvents: batch => events.push(...batch), resumeTurnOpen: false, pollMs: 60_000 })
+    try {
+      await reader.start(); await reader.poll()
+      expect(events).toEqual([])
+    } finally { reader.stop() }
+  })
+
   it('reads a session larger than the row cap whole, a page at a time, and a reader seeds from it', async () => {
     for (let i = 0; i < 80; i++) turn(i, 500 * KIB) // 39 MiB
     const rows = await readHermesMessages(db, SID)

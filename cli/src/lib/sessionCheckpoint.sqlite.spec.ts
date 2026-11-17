@@ -6,6 +6,9 @@ import { KIB, MIB, pageReads, withinBudget } from '../testing/storePages.js'
 import type { RegisteredSession } from './registry.js'
 import { builtinSqlite, closeSqliteHandles, type DatabaseLike } from './sqliteBuiltin.js'
 import { sqliteReadAll } from './sqliteRead.js'
+import type { StorageEngine } from '../engines/worker/storageProtocol.js'
+import type { CheckpointDeps } from './sessionCheckpoint.js'
+const workerExport: CheckpointDeps = { exportDatabase: async (s, stage, _ownership, source) => (await import('../engines/others/checkpoint.js')).exportDatabase(s.engine as StorageEngine, { sessionId: s.sessionId, hermesHome: s.hermesHome, openclawStateDir: s.openclawStateDir, pid: s.processIdentity?.pid }, stage, source) }
 import { enableOffThreadSqlite, resetOffThreadSqlite } from './sqliteThread.js'
 
 // The real reads, seen: a conversation table is read in pages (#4188). vi.resetModules() keeps this mock, and with it
@@ -51,7 +54,7 @@ it.each(['opencode', 'kilo', 'hermes', 'devin'] as const)('backs up only the sel
   const { SessionCheckpointStore } = await import('./sessionCheckpoint.js')
   const directory = join(root, 'backups')
   mkdirSync(directory, { mode: 0o700 })
-  await new SessionCheckpointStore(directory).save({ agentId: 'fixture', sessionId: 'wanted', engine, hermesHome: root } as RegisteredSession)
+  await new SessionCheckpointStore(directory, workerExport).save({ agentId: 'fixture', sessionId: 'wanted', engine, hermesHome: root } as RegisteredSession)
   const manifest = JSON.parse(readFileSync(join(directory, readdirSync(directory).find(f => f.endsWith('.json'))!), 'utf8'))
   const backup = readFileSync(join(directory, manifest.file), 'utf8')
   expect(backup).toContain('history in WAL')
@@ -75,7 +78,7 @@ it('backs up an OpenCode 2 conversation from its v2 tables, and a v1 one from th
   const { SessionCheckpointStore, SessionCheckpointError } = await import('./sessionCheckpoint.js')
   const directory = join(root, 'backups')
   mkdirSync(directory, { mode: 0o700 })
-  const store = new SessionCheckpointStore(directory)
+  const store = new SessionCheckpointStore(directory, workerExport)
   const backup = async (sessionId: string) => {
     await store.save({ agentId: sessionId, sessionId, engine: 'opencode' } as RegisteredSession)
     const manifest = readdirSync(directory).filter(f => f.endsWith('.json'))
@@ -139,7 +142,7 @@ withBuiltin('a conversation larger than the row cap', () => {
     conversation(engine, Array.from({ length: 80 }, () => 'x'.repeat(500 * KIB)))
     enableOffThreadSqlite()
     const { SessionCheckpointStore } = await import('./sessionCheckpoint.js')
-    await new SessionCheckpointStore(directory).save({ agentId: 'fixture', sessionId: 'wanted', engine, hermesHome: root } as RegisteredSession)
+    await new SessionCheckpointStore(directory, workerExport).save({ agentId: 'fixture', sessionId: 'wanted', engine, hermesHome: root } as RegisteredSession)
     const saved = savedOf(directory)
     expect(saved.tables[table[engine]]).toHaveLength(80)
     expect(saved.tables[table[engine]].map((row) => Object.keys(row))).toEqual(Array.from({ length: 80 }, () => ['id', engine === 'opencode' || engine === 'kilo' ? 'message_id' : 'session_id', 'body']))
@@ -153,9 +156,9 @@ withBuiltin('a conversation larger than the row cap', () => {
     // The read threads stay off: on the caller's thread, before #4188, this row was read and saved.
     conversation('hermes', ['before', 'x'.repeat(33 * MIB), 'after'])
     const { SessionCheckpointStore, SessionCheckpointError } = await import('./sessionCheckpoint.js')
-    await expect(new SessionCheckpointStore(directory).save({ agentId: 'fixture', sessionId: 'wanted', engine: 'hermes', hermesHome: root } as RegisteredSession))
+    await expect(new SessionCheckpointStore(directory, workerExport).save({ agentId: 'fixture', sessionId: 'wanted', engine: 'hermes', hermesHome: root } as RegisteredSession))
       .rejects.toBeInstanceOf(SessionCheckpointError)
-    expect(readdirSync(directory)).toEqual([])
+    expect(readdirSync(directory).filter(name => name !== '.stages')).toEqual([])
   })
 
   it('backs up an OpenClaw conversation larger than the row cap, a compressed row as hex and sized as hex', async () => {
@@ -172,7 +175,7 @@ withBuiltin('a conversation larger than the row cap', () => {
     for (let seq = 100; seq < 104; seq++) compressed.all(seq, 1.5 * MIB, 4 * MIB, window)
     enableOffThreadSqlite()
     const { SessionCheckpointStore } = await import('./sessionCheckpoint.js')
-    await new SessionCheckpointStore(directory).save({ agentId: 'fixture', sessionId: 'agent:main:plain', engine: 'openclaw', openclawStateDir: root } as RegisteredSession)
+    await new SessionCheckpointStore(directory, workerExport).save({ agentId: 'fixture', sessionId: 'agent:main:plain', engine: 'openclaw', openclawStateDir: root } as RegisteredSession)
     const saved = savedOf(directory)
     const events = saved.tables.transcript_events
     expect(events.map((row) => row.seq)).toEqual([...Array.from({ length: 88 }, (_, i) => i), 100, 101, 102, 103])

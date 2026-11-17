@@ -1,4 +1,4 @@
-import { missingHookScript } from './notifyHooks.js'
+import { missingHookScript } from './hookScript.js'
 
 /**
  * What a launch held because [engine]'s hooks are not in place says: [waiting] while they may still be, the file and what

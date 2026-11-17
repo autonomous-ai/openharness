@@ -147,7 +147,7 @@ export function createNativeInstallations({ directory, node = managedNodePath, d
   // Outside the claim directory: recreating or emptying that directory cannot erase its active owner.
   const authorityFile = `${directory}.authority`
   const examine = async (engine: AgentEngine, inputRecipe: EngineInstallRecipe, inputEnvironment: Record<string, string>, request: string,
-    current: () => boolean, query = false): Promise<NativeInstallation | null> => {
+    current: () => boolean, query = false, authorize?: () => Promise<boolean>): Promise<NativeInstallation | null> => {
     try {
       if (!current()) return hold('The saved launch request changed before installation.')
       // Snapshot caller-owned objects before any yield. The fingerprint and executed bytes agree.
@@ -326,7 +326,11 @@ export function createNativeInstallations({ directory, node = managedNodePath, d
       if (maybe(`${file}.dispatch`)) return hold('The installer dispatch witness is missing; its previous worker may still own the installation.')
       if (!claimCurrent()) return hold('Waiting to confirm the installer claim.')
       // Another request may settle an inert reservation, but cannot replay or cancel an actual installer.
-      const kind = current() && claim.request === request ? 'run' : 'cancelled'
+      // Setup prepares this immutable claim before asking core to authorize installation. A refused or lost
+      // commit can settle the inert claim, but can never start an installer. Recheck the claim after the reply.
+      const approved = current() && claim.request === request && (!authorize || await authorize())
+      if (!claimCurrent()) return hold('Waiting to confirm the installer claim.')
+      const kind = approved && current() ? 'run' : 'cancelled'
       const markerBytes = JSON.stringify({ token: claim.token, claim: hash, kind } satisfies Dispatch)
       await publish(claim.witness, markerBytes, claimCurrent)
       const slot = readRecord(claim.witness)
@@ -346,8 +350,9 @@ export function createNativeInstallations({ directory, node = managedNodePath, d
       return hold('Waiting to confirm durable engine installation ownership.')
     }
   }
-  const ensure = async (engine: AgentEngine, recipe: EngineInstallRecipe, environment: Record<string, string>, request: string, current: () => boolean): Promise<NativeInstallation> =>
-    (await examine(engine, recipe, environment, request, current))!
+  const ensure = async (engine: AgentEngine, recipe: EngineInstallRecipe, environment: Record<string, string>, request: string, current: () => boolean,
+    authorize?: () => Promise<boolean>): Promise<NativeInstallation> =>
+    (await examine(engine, recipe, environment, request, current, false, authorize))!
   const status = (engine: AgentEngine, request: string, current: () => boolean) => examine(engine,
     { command: '', source: '', executable: { names: [] } }, {}, request, current, true)
   return { ensure, status }

@@ -301,7 +301,7 @@ describe('the core\'s request gate (core/main.ts)', () => {
     // `publishStoppedAgent` reads these while restoring agents and in the first reconcile, and those
     // frames go out whether or not requests are open.
     const restore = at('await restoreAgents({')
-    for (const provider of ['activityFrameProvider', 'runtimeProfileProvider', 'framePartsProvider']) {
+    for (const provider of ['activityFrameProvider', 'runtimeDisplayProvider', 'framePartsProvider']) {
       expect(at(`backend.${provider} =`), `backend.${provider} must be bound before restoreAgents`).toBeLessThan(restore)
     }
   })
@@ -323,7 +323,7 @@ describe('the core\'s request gate (core/main.ts)', () => {
     // start their dependency recovery only after the master knows core is ready.
     expect(tail).toEqual(['backend.openRequests()', 'daemonBoot.openRequests = null', 'coreLink.ready()', "console.log('[cli] ready')",
       'installedHooks = env.DISABLE_HOOK_INSTALL ? undefined',
-      ': installEngineHooks(hookPort, { only: env.HOOK_INSTALL_ENGINES, loginShell: loginShellEnvPromise })',
+      ': installEngineHooks(hookPort, { only: env.HOOK_INSTALL_ENGINES, loginShell: loginShellEnvPromise, setup: nativeSetup })',
       'void heldLaunches.restoreHeld()', 'externalResumes.open()', 'launches.open()'])
     expect(logged).toBeGreaterThan(ready)
   })

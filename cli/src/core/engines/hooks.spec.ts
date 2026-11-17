@@ -1,22 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import * as hooks from '../../engines/nativeHooks.js'
-import { engineHooks } from '../../engines/hooks.js'
+import * as hooks from '../../engines/nativeHookSetup.js'
+import { engineHookInstallations as engineHooks } from '../../engines/nativeHookSetup.js'
 import { RegistryOwnershipChanged, type RegisteredSession } from '../../lib/registry.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import { confirmHomes, recoverEngineHomes } from '../../lib/engineHomes.js'
 import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn, PROCESS_RECORD_WAIT_MS, type EngineHookDeps } from './hooks.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import { createPaneOperations } from '../agents/paneOperations.js'
-import { missingHookScript } from '../../engines/kit/notifyHooks.js'
+import { startEngineSetup } from '../../services/engineSetup.js'
+import { createNativeSetupLink } from '../../engines/kit/nativeSetupLink.js'
+import type { NativeSetup } from '../../engines/kit/nativeSetup.js'
+import type { AgentEngine } from '../../engines/types.js'
+import { missingHookScript } from '../../engines/kit/hookScript.js'
 
-vi.mock('../../engines/hooks.js', async (real) => {
-  const actual = await real<typeof import('../../engines/hooks.js')>()
-  return { ...actual, engineHooks: {
-    claude: { ...actual.engineHooks.claude, install: vi.fn(() => true), installIn: vi.fn(() => true) },
-    codex: { ...actual.engineHooks.codex, install: vi.fn(() => true), installIn: vi.fn(() => true) },
-  } }
-})
-vi.mock('../../engines/kit/notifyHooks.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
+vi.mock('../../engines/kit/hookScript.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
 vi.mock('../../lib/engineHomes.js', () => ({
   confirmHomes: vi.fn(() => ({ claude: null, codex: null })),
   recoverEngineHomes: vi.fn(() => ({ claude: [], codex: [] })),
@@ -28,8 +25,12 @@ vi.mock('../../engines/inProcess.js', async (real) => {
   return { ...actual, loadEngine: vi.fn(() => loading.stalled ? new Promise(() => {}) : Promise.resolve(null)) }
 })
 vi.mock('../../lib/terminalAgentDiscovery.js', async (real) => ({ ...await real<object>(), processRows: vi.fn(async () => []) }))
-vi.mock('../../engines/nativeHooks.js', async (real) => ({
+vi.mock('../../engines/nativeHookSetup.js', async (real) => ({
   ...await real<object>(),
+  engineHookInstallations: {
+    claude: { install: vi.fn(() => true), installIn: vi.fn(() => true) },
+    codex: { install: vi.fn(() => true), installIn: vi.fn(() => true) },
+  },
   installCursorHooks: vi.fn(),
   installOpencodePlugin: vi.fn(),
   installKiloPlugin: vi.fn(),
@@ -490,12 +491,63 @@ describe('installing every engine\'s hooks', () => {
     hooks.installCopilotHooks,
   ]
   const startupArgs = (install: unknown) => install === hooks.installOpencodePlugin || install === hooks.installHermesHooks
-    ? [4242, undefined, { current: expect.any(Function) }] : [4242, { current: expect.any(Function) }]
+    ? [4242, undefined, { current: expect.any(Function), retainConflicts: true }] : [4242, { current: expect.any(Function), retainConflicts: true }]
   beforeEach(() => { vi.spyOn(console, 'warn').mockImplementation(() => {}) })
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); loading.stalled = false })
 
+  it.each([0, 8])('refreshes all thirteen through bounded setup while %s saved homes drain', async savedCount => {
+    let release!: () => void, entered!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const first = new Promise<void>(resolve => { entered = resolve })
+    const rendered: string[] = [], saved = Array.from({ length: savedCount }, (_, index) => `/fixture/saved-${index}`)
+    let savedFinished!: () => void, finished = 0
+    const savedDone = savedCount ? new Promise<void>(resolve => { savedFinished = resolve }) : Promise.resolve()
+    vi.mocked(recoverEngineHomes).mockReturnValue({ claude: saved, codex: [] })
+    const worker: NativeSetup = {
+      probe: async () => null, downloading: async () => false,
+      opencodeMajor: async () => 2, hermesKeepsRecord: async () => true,
+      installations: { ensure: async () => ({ complete: false, detail: 'unused' }), status: async () => null },
+      prepareFiles: async input => {
+        if (!input.files[0].file.endsWith('/settings.json')) rendered.push(input.engine)
+        entered(); await gate
+        return { version: 1, files: [{ index: 0, content: '{}' }] }
+      },
+    }
+    const service = startEngineSetup('/fixture', worker)
+    const link = createNativeSetupLink((type, payload) => Promise.resolve(service.requests[type]!(payload, { local: true, owner: true })))
+    ;(engineHooks.claude.installIn as Mock).mockImplementation(async (_port: number, home: string, options: { current: () => boolean }) => {
+      const candidate = await link.prepareFiles!({ engine: 'claude', environment: {}, port: 4242,
+        files: [{ file: `${home}/settings.json`, directory: home, content: '{}' }] }, home, options.current)
+      if (++finished === savedCount) savedFinished()
+      return candidate !== null
+    })
+    const engines: AgentEngine[] = ['claude', 'codex', 'cursor', 'opencode', 'kilo', 'pi', 'amp', 'hermes', 'devin', 'commandcode', 'grok', 'agy', 'copilot']
+    const answers: boolean[] = []
+    for (const [index, install] of installs.entries()) (install as Mock).mockImplementationOnce(async (...args: unknown[]) => {
+      const { current } = args.at(-1) as { current: () => boolean }
+      const engine = engines[index]
+      const candidate = await link.prepareFiles!({ engine, environment: {}, port: 4242,
+        files: [{ file: `/fixture/${engine}.json`, directory: '/fixture', content: '{}' }] }, engine, current)
+      answers.push(candidate !== null)
+      return candidate !== null
+    })
+    const controller = installEngineHooks(4242, { environment: {}, setup: link })
+    try {
+      await first
+      release()
+      await controller.settled; await savedDone
+      expect(rendered).toEqual(engines)
+      expect(answers).toEqual(engines.map(() => true))
+      expect(vi.mocked(console.warn).mock.calls.flat().some(line => /SETUP_BUSY|install skipped|preparation is unavailable/.test(String(line)))).toBe(false)
+    } finally {
+      release(); controller.close(); service.stop()
+      vi.mocked(recoverEngineHomes).mockReturnValue({ claude: [], codex: [] })
+      ;(engineHooks.claude.installIn as Mock).mockReset().mockReturnValue(true)
+    }
+  })
+
   it('points all thirteen at the bound port without loading optional code', async () => {
-    await installEngineHooks(4242)
+    await installEngineHooks(4242).settled
     for (const install of installs) expect(install).toHaveBeenCalledWith(...startupArgs(install))
     expect(console.warn).not.toHaveBeenCalled()
     expect(loadEngine).not.toHaveBeenCalled()
@@ -510,39 +562,44 @@ describe('installing every engine\'s hooks', () => {
     expect(loadEngine).not.toHaveBeenCalled()
   })
 
-  it('keeps other native installers moving while the bounded version probe waits', async () => {
-    let finish!: () => void
-    vi.mocked(hooks.installOpencodePlugin).mockImplementationOnce(() => new Promise<boolean>(done => { finish = () => done(true) }))
+  it('returns control while the bounded version probe waits and then continues maintenance', async () => {
+    let finish!: () => void, entered!: () => void
+    const probing = new Promise<void>(resolve => { entered = resolve })
+    vi.mocked(hooks.installOpencodePlugin).mockImplementationOnce(() => new Promise<boolean>(done => { finish = () => done(true); entered() }))
     let completed = false
     const installed = installEngineHooks(4242)
     const pending = installed.settled.then(() => { completed = true })
-    expect(hooks.installCopilotHooks).toHaveBeenCalledWith(...startupArgs(hooks.installCopilotHooks))
-    await Promise.resolve()
+    await probing
+    expect(hooks.installCopilotHooks).not.toHaveBeenCalled()
     expect(completed).toBe(false)
     finish()
     await pending
     installed.close()
     expect(completed).toBe(true)
+    expect(hooks.installCopilotHooks).toHaveBeenCalledWith(...startupArgs(hooks.installCopilotHooks))
   })
 
-  it('returns shutdown authority while all thirteen native preparations are still waiting', async () => {
-    const writes: Array<{ current: () => boolean; finish: (ready: boolean) => void }> = []
-    for (const install of installs) (install as Mock).mockImplementationOnce((...args: unknown[]) => {
-      const { current } = args.at(-1) as { current: () => boolean }
-      return new Promise<boolean>(finish => { writes.push({ current, finish }) })
+  it('returns shutdown authority before maintenance and revokes the only pending preparation', async () => {
+    let entered!: () => void, finish!: (ready: boolean) => void, current!: () => boolean
+    const started = new Promise<void>(resolve => { entered = resolve })
+    ;(installs[0] as Mock).mockImplementationOnce((...args: unknown[]) => {
+      current = (args.at(-1) as { current: () => boolean }).current
+      return new Promise<boolean>(resolve => { finish = resolve; entered() })
     })
     const installed = installEngineHooks(4242, { environment: {} })
-    expect(writes).toHaveLength(13)
-    expect(writes.every(write => write.current())).toBe(true)
+    await started
+    expect(current()).toBe(true)
     installed.close()
-    expect(writes.every(write => !write.current())).toBe(true)
-    for (const write of writes) write.finish(false)
+    expect(current()).toBe(false)
+    finish(false)
     await installed.settled
+    for (const install of installs.slice(1)) expect(install).not.toHaveBeenCalled()
   })
 
   it('contains an asynchronous native installer rejection', async () => {
     vi.mocked(hooks.installOpencodePlugin).mockRejectedValueOnce(new Error('probe unavailable'))
-    const installed = await installEngineHooks(4242)
+    const installed = installEngineHooks(4242)
+    await installed.settled
     expect(hooks.installCopilotHooks).toHaveBeenCalledWith(...startupArgs(hooks.installCopilotHooks))
     expect(console.warn).toHaveBeenCalledWith('[hooks] opencode install skipped · probe unavailable')
     installed.close()
@@ -551,6 +608,16 @@ describe('installing every engine\'s hooks', () => {
   it('does not launch from an obsolete native installation', async () => {
     vi.mocked(hooks.installOpencodePlugin).mockResolvedValueOnce(false)
     expect(await installOpencodePluginBeforeSpawn(4242)).toBe(false)
+  })
+
+  it('passes optional version observations into hook preparation without loading their implementation', async () => {
+    const setup = { opencodeMajor: async () => 1, hermesKeepsRecord: async () => true }
+    expect(await installOpencodePluginBeforeSpawn(4242, undefined, setup)).toBe(true)
+    expect(hooks.installOpencodePlugin).toHaveBeenLastCalledWith(4242, undefined, { setup })
+    const installed = installEngineHooks(4242, { environment: {}, setup })
+    await installed.settled
+    expect(hooks.installCursorHooks).toHaveBeenCalledWith(4242, expect.objectContaining({ setup }))
+    installed.close()
   })
 
   it('passes the confirmed executable through to native preparation', async () => {
@@ -563,7 +630,8 @@ describe('installing every engine\'s hooks', () => {
   it('reports synchronous and asynchronous holds without suppressing sibling installers', async () => {
     ;(hooks.installCursorHooks as Mock).mockReturnValueOnce(false)
     vi.mocked(hooks.installOpencodePlugin).mockResolvedValueOnce(false)
-    const installed = await installEngineHooks(4242, { environment: {} })
+    const installed = installEngineHooks(4242, { environment: {} })
+    await installed.settled
     expect(console.warn).toHaveBeenCalledWith('[hooks] cursor install skipped · native hook preparation is unavailable')
     expect(console.warn).toHaveBeenCalledWith('[hooks] opencode install skipped · native hook preparation is unavailable')
     expect(hooks.installCopilotHooks).toHaveBeenCalledWith(...startupArgs(hooks.installCopilotHooks))
@@ -590,14 +658,15 @@ describe('installing every engine\'s hooks', () => {
     vi.useFakeTimers()
     vi.mocked(recoverEngineHomes).mockReturnValue({ claude: ['/fixture/claude'], codex: [] })
     vi.mocked(engineHooks.claude.installIn).mockResolvedValueOnce(false)
-    const installed = await installEngineHooks(4242, { environment: {} })
+    const installed = installEngineHooks(4242, { environment: {} })
+    await installed.settled
     await vi.advanceTimersByTimeAsync(0)
     try {
       expect(console.warn).toHaveBeenCalledWith('[hooks] home adoption held · Claude Code hook preparation is unavailable')
       expect(engineHooks.claude.installIn).toHaveBeenCalledTimes(1)
       await vi.advanceTimersByTimeAsync(1_000)
       expect(engineHooks.claude.installIn).toHaveBeenCalledTimes(2)
-      expect(engineHooks.claude.installIn).toHaveBeenLastCalledWith(4242, '/fixture/claude', { current: expect.any(Function) })
+      expect(engineHooks.claude.installIn).toHaveBeenLastCalledWith(4242, '/fixture/claude', { current: expect.any(Function), retainConflicts: true })
     } finally {
       installed.close(); vi.useRealTimers()
       vi.mocked(recoverEngineHomes).mockReturnValue({ claude: [], codex: [] })
@@ -608,7 +677,7 @@ describe('installing every engine\'s hooks', () => {
     const order: string[] = []
     for (const [index, install] of installs.entries()) (install as Mock).mockImplementationOnce(() => { order.push(String(index)); return index === 3 ? Promise.resolve(true) : true })
     const done = installEngineHooks(4242)
-    expect(order).toEqual(installs.map((_, index) => String(index)))
+    expect(order).toEqual([])
     await done.settled
     done.close()
     expect(order).toEqual(installs.map((_, index) => String(index)))
@@ -616,21 +685,21 @@ describe('installing every engine\'s hooks', () => {
 
   it('only the engines asked for (HOOK_INSTALL_ENGINES), the homes they moved included', async () => {
     vi.mocked(recoverEngineHomes).mockReturnValueOnce({ claude: ['/w/claude'], codex: ['/w/codex'] })
-    await installEngineHooks(4242, { only: new Set(['codex']), environment: {} })
+    await installEngineHooks(4242, { only: new Set(['codex']), environment: {} }).settled
     expect(engineHooks.codex.install).toHaveBeenCalledWith(...startupArgs(engineHooks.codex.install))
-    expect(engineHooks.codex.installIn).toHaveBeenCalledWith(4242, '/w/codex', { current: expect.any(Function) })
+    expect(engineHooks.codex.installIn).toHaveBeenCalledWith(4242, '/w/codex', { current: expect.any(Function), retainConflicts: true })
     for (const install of installs.filter((one) => one !== engineHooks.codex.install)) expect(install).not.toHaveBeenCalled()
     expect(engineHooks.claude.installIn).not.toHaveBeenCalled()
     // Claude Code's and Codex's alone load none of the other engines' code.
     expect(loadEngine).not.toHaveBeenCalled()
-    await installEngineHooks(4242, { only: new Set(['kilo']), environment: {} })
+    await installEngineHooks(4242, { only: new Set(['kilo']), environment: {} }).settled
     expect(hooks.installKiloPlugin).toHaveBeenCalledWith(...startupArgs(hooks.installKiloPlugin))
     expect(hooks.installCursorHooks).not.toHaveBeenCalled()
   })
 
   it.each([false, true])('installs every vendor with optional imports unavailable (stalled=%s)', async (stalled) => {
     loading.stalled = stalled
-    await installEngineHooks(4242, { environment: {} })
+    await installEngineHooks(4242, { environment: {} }).settled
     for (const install of installs) expect(install).toHaveBeenCalledWith(...startupArgs(install))
     expect(loadEngine).not.toHaveBeenCalled()
     expect(console.warn).not.toHaveBeenCalled()
@@ -639,9 +708,9 @@ describe('installing every engine\'s hooks', () => {
   // lib/engineHomes.ts: with CLAUDE_CONFIG_DIR or CODEX_HOME in the person's profile, no agent ever bound.
   it('puts the hooks in every home adopted on an earlier boot, at every start', async () => {
     vi.mocked(recoverEngineHomes).mockReturnValueOnce({ claude: ['/w/claude'], codex: ['/w/codex'] })
-    await installEngineHooks(4242, { environment: {} })
-    expect(engineHooks.claude.installIn).toHaveBeenCalledWith(4242, '/w/claude', { current: expect.any(Function) })
-    expect(engineHooks.codex.installIn).toHaveBeenCalledWith(4242, '/w/codex', { current: expect.any(Function) })
+    await installEngineHooks(4242, { environment: {} }).settled
+    expect(engineHooks.claude.installIn).toHaveBeenCalledWith(4242, '/w/claude', { current: expect.any(Function), retainConflicts: true })
+    expect(engineHooks.codex.installIn).toHaveBeenCalledWith(4242, '/w/codex', { current: expect.any(Function), retainConflicts: true })
     expect(recoverEngineHomes).toHaveBeenCalledTimes(1)
   })
 
@@ -652,16 +721,17 @@ describe('installing every engine\'s hooks', () => {
     vi.mocked(confirmHomes)
       .mockReturnValueOnce({ claude: '/m/claude', codex: null })
       .mockReturnValueOnce({ claude: null, codex: '/s/codex' })
-    void installEngineHooks(4242, { environment: own, loginShell: Promise.resolve(shell) })
+    const installed = installEngineHooks(4242, { environment: own, loginShell: Promise.resolve(shell) })
     expect(confirmHomes).toHaveBeenCalledWith(own)
-    expect(engineHooks.claude.installIn).toHaveBeenCalledWith(4242, '/m/claude', { current: expect.any(Function) })
+    expect(engineHooks.claude.installIn).toHaveBeenCalledWith(4242, '/m/claude', { current: expect.any(Function), retainConflicts: true })
     await Promise.resolve()
     expect(log).toHaveBeenCalledWith('[hooks] Claude Code hooks installed in its adopted home')
-    await Promise.resolve()
+    await installed.settled
     expect(confirmHomes).toHaveBeenLastCalledWith(shell)
-    expect(engineHooks.codex.installIn).toHaveBeenCalledWith(4242, '/s/codex', { current: expect.any(Function) })
+    expect(engineHooks.codex.installIn).toHaveBeenCalledWith(4242, '/s/codex', { current: expect.any(Function), retainConflicts: true })
     await Promise.resolve()
     expect(log).toHaveBeenCalledWith('[hooks] Codex hooks installed in its adopted home')
+    installed.close()
   })
 
   it('reads the daemon\'s own environment when none is given, and logs nothing when nothing moved', async () => {
@@ -669,7 +739,7 @@ describe('installing every engine\'s hooks', () => {
     vi.stubEnv('CODEX_HOME', '/fixture/codex')
     vi.stubEnv('CLAUDE_CONFIG_DIR', '/fixture/claude')
     try {
-      await installEngineHooks(4242)
+      await installEngineHooks(4242).settled
       expect(confirmHomes).toHaveBeenCalledWith({ CODEX_HOME: '/fixture/codex', CLAUDE_CONFIG_DIR: '/fixture/claude' })
       expect(log).not.toHaveBeenCalled()
     } finally { vi.unstubAllEnvs() }
@@ -691,7 +761,8 @@ describe('installing every engine\'s hooks', () => {
   it('reports held home adoption without withholding other installers, then recovers', async () => {
     vi.useFakeTimers()
     vi.mocked(confirmHomes).mockImplementationOnce(() => { throw new Error('fixture durability unavailable') })
-    const installed = await installEngineHooks(4242, { environment: {} })
+    const installed = installEngineHooks(4242, { environment: {} })
+    await installed.settled
     await vi.advanceTimersByTimeAsync(0)
     try {
       expect(console.warn).toHaveBeenCalledWith('[hooks] home adoption held · fixture durability unavailable')
@@ -705,7 +776,7 @@ describe('installing every engine\'s hooks', () => {
   it('one at a time: a vendor whose install throws is skipped and named, and the rest still install', async () => {
     vi.mocked(engineHooks.codex.install).mockImplementationOnce(() => { throw new Error('config.toml is read-only') })
     vi.mocked(hooks.installGrokHooks).mockImplementationOnce(() => { throw 'settings mid-write' })
-    await installEngineHooks(4242)
+    await installEngineHooks(4242).settled
     expect(console.warn).toHaveBeenCalledWith('[hooks] codex install skipped · config.toml is read-only')
     expect(console.warn).toHaveBeenCalledWith('[hooks] grok install skipped · settings mid-write')
     for (const install of installs) expect(install).toHaveBeenCalledTimes(1)

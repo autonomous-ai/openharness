@@ -43,7 +43,7 @@ export interface AttachDeps {
   terminalGone: (session: RegisteredSession) => Promise<boolean>
   normalizers: SessionNormalizers
   /** The other engines' streams, in their worker (core/engines/otherStreams.ts). */
-  others: Pick<OtherStreams, 'open' | 'get' | 'closeIf' | 'drain' | 'tail' | 'release' | 'forget' | 'unavailable'>
+  others: Pick<OtherStreams, 'open' | 'get' | 'ready' | 'closeIf' | 'drain' | 'tail' | 'release' | 'forget' | 'unavailable'>
   watcher: Pick<Watcher, 'addSession' | 'removeSession' | 'pollSession' | 'hold' | 'tails'>
   setInterpretationHold: (agentId: string, revision: number | undefined, reason?: string, create?: boolean) => boolean
   announceSession: (session: RegisteredSession) => void
@@ -741,7 +741,23 @@ export function createAttach({
       else pendingAttaches.delete(key)
     })
   }
-  return { attachSession, attaches, neverFoldedHistory, replayedFirstTurn, forget, beforeCancel, afterStop, holdStop, holdAdmissionStop, holdInterpretation, captureAdmissionStop }
+  /** A native Resume confirmation can fill boundAt without repeating a completed reader's archive/probe work. */
+  const captureReader = (session: RegisteredSession): ((confirmed: RegisteredSession) => boolean) => {
+    const key = session.sessionId, lifetime = lifetimes.get(key), reader = others.get(key)
+    const identity = paneReadIdentity(session), boundAt = session.boundAt
+    const ready = (row: RegisteredSession): boolean => !!lifetime && !!reader && row.engine === 'hermes' && row.active
+      && paneReadIdentity(resolve(row.agentId)) === paneReadIdentity(row)
+      && lifetimes.get(key) === lifetime && others.get(key) === reader && others.ready(key)
+      && !row.identityHold && !row.interpretationHold && !pendingAttaches.has(key)
+      && !relaunchMarks?.read(key) && !turnReplacements.retains(row) && !recoveryRetries.has(key)
+      && !supersededReads.has(key) && !supersededRetries.has(key)
+      // Fileless DB readers also set this file-tail flag; their actual worker handle proves readiness above.
+      && (!row.transcriptPath || !neverFoldedHistory.has(key))
+    if (!session.resumeOnly || session.lastHookAt !== 0 || boundAt !== null || !ready(session)) return () => false
+    return confirmed => confirmed.boundAt !== null && confirmed.lastHookAt > 0 && ready(confirmed)
+      && paneReadIdentity({ ...confirmed, boundAt }) === identity
+  }
+  return { attachSession, captureReader, attaches, neverFoldedHistory, replayedFirstTurn, forget, beforeCancel, afterStop, holdStop, holdAdmissionStop, holdInterpretation, captureAdmissionStop }
 }
 
 export type Attach = ReturnType<typeof createAttach>

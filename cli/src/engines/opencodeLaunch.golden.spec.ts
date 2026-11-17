@@ -134,6 +134,7 @@ it('records create, fork, relaunch and actual retarget dispatch before the extra
     const source = row('opencode', true), events: unknown[] = []
     const event = (entry: unknown[]) => { events.push(entry); appendFileSync(calls, JSON.stringify({ control: entry }) + '\n') }
     const retarget = createAgentRetargeter({
+      opencodeMajor: opencodeMajorVersion,
       purgeBusy: () => false,
       // The pane's own backend, tmux here: the retarget clears its session environment and hands the pane back.
       terminals: (() => {

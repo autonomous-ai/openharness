@@ -4,6 +4,7 @@ import type { ScreenReading } from '../engines/facets/screen.js'
 import type { RegisteredSession, registry as liveRegistry } from './registry.js'
 import { terminalRouteKey } from './terminalRuntime.js'
 import type { StopAgentOptions } from './stopAgentService.js'
+import type { DatabaseCheckpointProof } from './databaseCheckpoint.js'
 import { resumeMode } from './resumeCapability.js'
 import { sid } from './log.js'
 
@@ -118,7 +119,7 @@ export interface CloseAgentServiceDeps {
   activity(s: RegisteredSession): Promise<CloseActivity>
   /** Cheap revocation after the final activity read, at each physical Stop boundary. */
   idleCurrent?(s: RegisteredSession): boolean
-  checkpoint(s: RegisteredSession, phase: 'before' | 'after'): Promise<void>
+  checkpoint(s: RegisteredSession, phase: 'before' | 'after', current?: () => boolean, databaseProof?: DatabaseCheckpointProof): Promise<void>
   stop(agentId: string, options: StopAgentOptions): Promise<void>
   changed(s: RegisteredSession): void
   openTabs?: { assertHidden(s: RegisteredSession): Promise<void>; isHidden(s: RegisteredSession): boolean }
@@ -336,10 +337,10 @@ export class CloseAgentService {
           if (this.deps.idleCurrent?.(latest) === false) idleRevoked = true
           return !idleRevoked
         },
-        checkpoint: (s, phase) => {
+        checkpoint: (s, phase, databaseProof) => {
           // The record saved before the stop is the one a resume starts from.
           if (phase === 'before' && keptNone(s)) unkept = true
-          return this.deps.checkpoint(s, phase)
+          return this.deps.checkpoint(s, phase, () => !!current(), databaseProof)
         },
         confirmUnusedConversation: async captured => {
           // A missing ID alone could be failed discovery of active work. Only

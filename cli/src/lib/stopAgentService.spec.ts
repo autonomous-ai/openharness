@@ -15,6 +15,7 @@ import { createForgetSession } from '../core/agents/forget.js'
 import { env } from '../config/env.js'
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { IdentityReadUnavailable, ObservedConversationUnavailable } from '../engines/kit/identityScan.js'
+vi.mock('./databaseCheckpoint.js', () => ({ databaseCheckpointEvidence: vi.fn(async () => undefined) }))
 vi.mock('./captureResumeIdentity.js', () => ({ captureResumeIdentity: vi.fn(async session => session) }))
 vi.mock('../engines/transcriptBindings.js', async original => ({ ...await original<object>(),
   controlTranscriptEvidence: vi.fn(),

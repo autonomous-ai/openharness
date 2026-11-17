@@ -17,7 +17,6 @@ import { MODEL_MANAGER_ID } from '../../dsh/builtinIds.js'
 import type { DshAccount } from '../../dsh/launch.js'
 import { harnessEnvToClear } from '../../dsh/sessionEnv.js'
 import type { DshThrough } from './dshThrough.js'
-import * as opencodeLaunch from '../../engines/launchControl.js'
 import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { OPENCLAW_LOCAL } from '../../engines/openclaw/contract.js'
 import { engineLabel } from '../../lib/agentNames.js'
@@ -39,9 +38,9 @@ import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPreparation.js'
 import type { publishGridConfigDir } from '../../lib/publishedGridConfig.js'
 import { nativeHookLocations } from '../../engines/kit/nativeLocations.js'
-import { engineHooks } from '../../engines/hooks.js'
+import { engineHookInstallations as engineHooks } from '../../engines/nativeHookSetup.js'
 import { hooksHeldDetail } from '../../engines/kit/hooksHeldDetail.js'
-import { folderTrust } from '../../engines/launchPrep.js'
+import type { PrepareFolderTrust } from '../../engines/folderTrustPreparation.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
@@ -61,6 +60,7 @@ const MODEL_MANAGER_GRID_WAIT_MS = 8_000
 type CreateAgent = NonNullable<BackendSocket['onCreateAgent']>
 
 export interface CreateAgentDeps {
+  opencodeMajor?: () => Promise<number | null>
   publishConfig?: typeof publishGridConfigDir
   native?: (engine: AgentEngine, source: NativeLaunchSource, authority: LaunchAuthority) => Promise<NativeLaunchResult>
   /** The backend new panes are made on; null where none is configured or could be readied. */
@@ -77,6 +77,7 @@ export interface CreateAgentDeps {
   /** A look at the new agent, for the services that follow agents (core/agentLife.ts `running`). */
   attach: (session: RegisteredSession) => void
   prepareInstructions: (cwd: string | null | undefined, engine: string) => Promise<void>
+  prepareFolderTrust?: PrepareFolderTrust
   /** The hook server's port, which installed engine hooks post to. */
   hookPort: number
   /** Whether engine hooks are installed at all (DISABLE_HOOK_INSTALL). */
@@ -113,10 +114,11 @@ function hooksHeld(engine: string, waiting: string) {
 
 export function createAgentCreator({
   native: inspectNative, publishConfig, createBackend: initialBackend, recoverBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, externalResume, watchNewPane, announceSession, attach,
-  prepareInstructions, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
+  prepareInstructions, prepareFolderTrust, hookPort, hooksDisabled, opencodeMajor, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
   gridSetup, privateGridName, dshLaunch, syncProfileHome,
 }: CreateAgentDeps) {
-  const prepare = async (input: Parameters<CreateAgent>[0], authority: LaunchAuthority, context?: { local: boolean }): Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>> => {
+  const prepare = async (input: Parameters<CreateAgent>[0], authority: LaunchAuthority,
+    context?: { local: boolean; folderTrustAttempted?: true }): Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>> => {
     if (input.resumeSessionId) return { ok: true, dispatch: () => externalResume(input) }
     const stale = () => ({ ok: false as const, error: 'LAUNCH_AUTHORITY_CHANGED', unavailable: 'launch', detail: 'Waiting for the original launch request’s authority.' })
     if (!authority.current()) return stale()
@@ -141,7 +143,7 @@ export function createAgentCreator({
     }
     // The local Desktop already made this workspace. Observe emptiness before any
     // preparation writes, but grant trust only after its dependencies are ready.
-    const trustEmptyProject = context?.local === true && !dsh && dirname(cwd) === projectsRoot()
+    const trustEmptyProject = context?.local === true && !context.folderTrustAttempted && !dsh && dirname(cwd) === projectsRoot()
       && await readdir(cwd).then(names => names.length === 0, () => false)
     if (!authority.current()) return stale()
     // A harness can pin its permission mode (`dshPinnedPermissionMode`): the Grid harness starts model
@@ -185,7 +187,6 @@ export function createAgentCreator({
       return { ok: false, ...refusal }
     }
     // Native version and model control are eager; optional readers never decide whether a launch can proceed.
-    const opencode = engine === 'opencode' ? opencodeLaunch : null
     // Harness-created sessions are easy to distinguish from a user's organic tmux sessions while
     // retaining the engine and a collision-resistant creation suffix for diagnostics. Computed
     // before the grid block because a file-configured engine keys its config directory on it.
@@ -237,11 +238,6 @@ export function createAgentCreator({
       try {
         dshAccount = { privateGrid: await privateGridName().catch(() => null) }
         if (!current()) return stale()
-        // Asked BEFORE the template goes in: afterwards every folder has content.
-        // Not there yet is empty; unreadable is not — trust is only ever granted on evidence.
-        const emptyBefore = await readdir(cwd).then((names) => names.length === 0,
-          (error: NodeJS.ErrnoException) => error.code === 'ENOENT')
-        if (!current()) return stale()
         const materialized = await dshLaunch.materialize({ dsh, workspace: cwd, account: dshAccount, engine, key: label })
         if (!current()) return stale()
         if (!materialized.ok) {
@@ -250,15 +246,9 @@ export function createAgentCreator({
         }
         for (const warning of materialized.warnings) console.warn(`[dsh] ${dsh} materialize · ${warning}`)
         console.log(`[dsh] ${dsh} materialized ${cwd} · created ${materialized.created.length} · kept ${materialized.kept.length}`)
-        // The template just went into an EMPTY folder: everything in it is the harness's, and Claude Code
-        // need not ask. Laid into a folder that already held something — a clone, the person's own repo —
-        // it proves nothing about the rest, so trust stays the person's call (engines/kit/folderTrust.ts).
-        if (emptyBefore && materialized.created.some((item) => item.startsWith('template'))) {
-          try {
-            // In the agent's own profile when it has one: that config.toml is the one a Codex agent reads.
-            folderTrust(engine, engine === 'claude' ? claudeHome : codexHome)?.record(cwd)
-          } catch (error) { console.warn(`[dsh] pre-trust ${cwd} · ${error instanceof Error ? error.message : error}`) }
-        }
+        // Store's template label is not proof of its final contents: another writer may have
+        // added work while materialization or init awaited. Keep the engine's own question.
+        if (materialized.created.some(item => item.startsWith('template'))) console.warn('[trust] TEMPLATE_TRUST_UNCONFIRMED')
       } catch (error) {
         const detail = `could not prepare the workspace for ${dsh} · ${error instanceof Error ? error.message : error}`
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
@@ -306,20 +296,25 @@ export function createAgentCreator({
     }
     if (!current()) return stale()
     if (trustEmptyProject) {
+      const trustCurrent = () => {
+        try { return current() && workspaceIdentity().identity === originalWorkspace.identity } catch { return false }
+      }
       try {
         // A clone or user edit can arrive while dependencies are being prepared.
         // Trust only the same physical workspace, still empty at the write boundary.
         const files = new NativeFiles()
-        const empty = files.entries(cwd).length === 0
+        const eligible = files.entries(cwd).length === 0
         if (!current()) return stale()
-        if (empty && workspaceIdentity().identity === originalWorkspace.identity) {
+        if (eligible && workspaceIdentity().identity === originalWorkspace.identity) {
           files.verify()
           const environment = native ? { ...native.environment, ...gridLaunch?.env, ...dshEnv } : undefined
           const profile = engine === 'codex' && environment ? nativeHookLocations(environment).CODEX_HOME : engine === 'claude' ? claudeHome : codexHome
-          folderTrust(engine, profile, environment)?.record(cwd)
+          await prepareFolderTrust?.({ engine, cwd, profile, environment, empty: true }, trustCurrent)
         }
-      } catch (error) { console.warn(`[agent] pre-trust ${cwd} · ${error instanceof Error ? error.message : error}`) }
+      } catch { console.warn('[trust] FOLDER_TRUST_UNAVAILABLE') }
+      if (!trustCurrent()) return stale()
     }
+    if (!current()) return stale()
     if (native && !await native.prepareHooks(hooksDisabled ? 0 : hookPort, authority.current,
       { ...gridLaunch?.env, ...dshEnv }, gridLaunch ? gridConflictingEnvToClear(gridLaunch) : [])) return hooksHeld(engine, 'Waiting to confirm the engine’s native hooks.')
     // Harness configuration can change the profile after executable discovery. Binding and Resume
@@ -362,7 +357,7 @@ export function createAgentCreator({
     // The person's machine MCP servers (lib/machineMcp.ts, #1872), beside the grid's and their own: read at each launch,
     // as every relaunch reads them again (`buildLaunchOverrides`).
     const machineMcp = machineMcpLaunchArgs(engine, cwd)
-    const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...told])
+    const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : engine === 'opencode' ? await opencodeMajor?.() ?? null : null) : []), ...machineMcp, ...told])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
     const firstPrompt = prompt

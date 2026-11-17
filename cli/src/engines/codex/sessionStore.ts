@@ -1,5 +1,5 @@
 import type { SessionStoreContract } from '../facets/sessionStore.js'
-import { hooks } from './hookContract.js'
+import { hookAuthority as hooks } from './hookAuthority.js'
 import { launch } from './launch.js'
 
 const rollouts = launch.resumeRepair!.sessions
