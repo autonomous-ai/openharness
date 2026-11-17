@@ -586,6 +586,11 @@ describe('the daemon\'s shape', () => {
     expect(main).not.toMatch(/\bengineNow\s*\(\s*['"]opencode['"]/)
   })
 
+  it('service counter forwarding loads no product vocabulary in core', () => {
+    const forbidden = /(^|\/)(serviceMetrics|productUsageContract|productHealthContract)\.ts$/
+    expect([...closureOf('core/agentQueries.ts').keys()].filter(file => forbidden.test(file))).toEqual([])
+  })
+
   it('the gateway reaches the core only through core/api.ts: never a core module, the registry, cli.ts or the socket', () => {
     // It speaks to the core through GatewayPort and GatewayEvents alone, so that it can run in a process of
     // its own (step 10, R2) without taking any of the core with it.

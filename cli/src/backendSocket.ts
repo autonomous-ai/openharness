@@ -6,7 +6,7 @@ import type { MessageReceipt } from './lib/sessionInput.js'
 import { isLocalOnly, withoutUpdate } from './lib/cardUpdate.js'
 import { slimForRelay } from './lib/slimForRelay.js'
 import type { PurgeAgentService } from './lib/purgeAgentService.js'
-import { MESSAGES_REQUESTS, SHARE_REQUESTS, type Asker, type LocalWindows, type WindowSurface, type BackendNotice, type GatewayEvents, type GatewayPort, type ModelsPort, type RemoteClient, type RemoteRole, type RemoteTransport, type TabFrame } from './core/api.js'
+import { MESSAGES_REQUESTS, SHARE_REQUESTS, type Asker, type LocalWindows, type WindowSurface, type BackendNotice, type GatewayEvents, type GatewayPort, type UsageEvent, type ModelsPort, type RemoteClient, type RemoteRole, type RemoteTransport, type TabFrame } from './core/api.js'
 import { ServiceUnavailableError } from './core/serviceHost.js'
 import { countWindows } from './lib/windowSurfaces.js'
 import type { ClientStreams } from './core/clientStreams.js'
@@ -916,8 +916,11 @@ export class BackendSocket {
     this.usageOutcomes.observed(payload)
   }
 
+  /** Raw observations stay on the existing bounded, best-effort gateway usage channel. */
+  reportUsage(event: UsageEvent): void { this.toGateway('usage', gateway => gateway.usage?.(event)) }
+
   /** What the usage report counts of the requests answered here, raw: the gateway names the counters (core/usageOutcomes.ts). */
-  private readonly usageOutcomes = createUsageOutcomes({ send: (event) => this.toGateway('usage', (gateway) => gateway.usage?.(event)) })
+  private readonly usageOutcomes = createUsageOutcomes({ send: event => this.reportUsage(event) })
 
   /** Routes a request to the service that answers it, in its own process (core/serviceLinks.ts) or in
    *  this one (core/serviceHost.ts): false when none does and the socket answers it itself. */

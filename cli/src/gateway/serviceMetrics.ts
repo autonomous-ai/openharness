@@ -1,5 +1,5 @@
 /**
- * The counters a daemon service in its own process may hand the core to count (core/agentQueries.ts `count`), from the
+ * The gateway admits a service counter only for its authenticated originating feature, from the
  * names the contract declares (lib/productUsageContract.ts): Hachi's, which its services in the edge host count, and the
  * agent browser's, which its process counts. Kept here, not in the contract: the contract is the backend's vocabulary,
  * byte for byte (backend/src/lib/productUsage.test.ts), and which of its names a daemon service may count is the
@@ -7,7 +7,7 @@
  * (gateway/productUsage.ts): the launch twins, from the create, and the days the person typed to Hachi, from
  * `hachi_turns_person`.
  */
-import { PRODUCT_USAGE_AGENT_BROWSER_METRICS, PRODUCT_USAGE_HACHI_METRICS } from './productUsageContract.js'
+import { PRODUCT_USAGE_AGENT_BROWSER_METRICS, PRODUCT_USAGE_HACHI_METRICS } from '../lib/productUsageContract.js'
 
 type HachiMetric = typeof PRODUCT_USAGE_HACHI_METRICS[number]
 export const HACHI_DAEMON_METRICS = PRODUCT_USAGE_HACHI_METRICS.filter(
@@ -15,5 +15,11 @@ export const HACHI_DAEMON_METRICS = PRODUCT_USAGE_HACHI_METRICS.filter(
     !metric.startsWith('ui_desktop_') && !metric.startsWith('launch_hachi_') && metric !== 'hachi_person_turn_days')
 export type HachiDaemonMetric = typeof HACHI_DAEMON_METRICS[number]
 
-/** Every counter a service may hand the core: no other name is counted. */
-export const SERVICE_METRICS: ReadonlySet<string> = new Set<string>([...HACHI_DAEMON_METRICS, ...PRODUCT_USAGE_AGENT_BROWSER_METRICS])
+const hachi: ReadonlySet<string> = new Set(HACHI_DAEMON_METRICS)
+const browser: ReadonlySet<string> = new Set(PRODUCT_USAGE_AGENT_BROWSER_METRICS)
+
+/** The source is core-authenticated provenance, never a field the observing feature supplies. */
+export function serviceMetricAllowed(service: string, metric: string): boolean {
+  if (service === 'agentBrowser') return browser.has(metric)
+  return (service === 'hachi' || service === 'goals' || service === 'agentCleanup') && hachi.has(metric)
+}

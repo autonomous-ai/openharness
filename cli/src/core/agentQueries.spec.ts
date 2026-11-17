@@ -35,20 +35,22 @@ describe('what a service in its own process may ask the core of the agents', () 
     expect(await answerAgentQuery(core, 'agentUsage', { target })).toMatchObject({ value: { totalTokens: 4 } })
   })
 
-  it('hands on one of the counters a service may count (Hachi\'s, the agent browser\'s), and refuses any other name', () => {
-    const count = vi.fn()
-    const core = fakeCore({ count })
-    expect(answerAgentQuery(core, 'count', { metric: 'hachi_wake_done' })).toEqual({ ok: true })
-    expect(answerAgentQuery(core, 'count', { metric: 'agent_browser_failed_podman_old' })).toEqual({ ok: true })
-    expect(count.mock.calls).toEqual([['hachi_wake_done'], ['agent_browser_failed_podman_old']])
-    // The App's, the launch twins and the person's days are counted where they happen, never by a service.
-    for (const metric of ['ui_desktop_hachi_switch_on', 'launch_hachi_started_claude', 'hachi_person_turn_days', 'create_requests', 'agent_browser_made_up', 'PRIVATE_CANARY', 7]) {
-      expect(answerAgentQuery(core, 'count', { metric })).toEqual({ error: 'INVALID_REQUEST' })
+  it('forwards one bounded observation with authenticated provenance, never a payload-selected source', () => {
+    const report = vi.fn(), count = vi.fn(), core = fakeCore({ count })
+    const origin = { service: 'agentBrowser', report }
+    expect(answerAgentQuery(core, 'count', { metric: 'agent_browser_failed_podman_old', service: 'hachi', private: 'CANARY' }, origin)).toEqual({ ok: true })
+    expect(report).toHaveBeenCalledExactlyOnceWith({ kind: 'service', service: 'agentBrowser', metric: 'agent_browser_failed_podman_old' })
+    expect(count).not.toHaveBeenCalled()
+    // Admission belongs to the recorder; acknowledgement does not promise a stored counter.
+    expect(answerAgentQuery(core, 'count', { metric: 'unrecognized_counter' }, origin)).toEqual({ ok: true })
+    for (const metric of ['', 'x'.repeat(129), 'PRIVATE_CANARY', 'a-b', 'a\n', 7, null]) {
+      expect(answerAgentQuery(core, 'count', { metric }, origin)).toEqual({ error: 'INVALID_REQUEST' })
     }
-    expect(answerAgentQuery(core, 'count')).toEqual({ error: 'INVALID_REQUEST' })
-    expect(count).toHaveBeenCalledTimes(2)
-    // A core that offers no counter takes it and counts nothing.
-    expect(answerAgentQuery(fakeCore(), 'count', { metric: 'hachi_turns_person' })).toEqual({ ok: true })
+    expect(answerAgentQuery(core, 'count', {}, origin)).toEqual({ error: 'INVALID_REQUEST' })
+    expect(report).toHaveBeenCalledTimes(2)
+    // No reporting owner: work remains available and no inline counter is invoked instead.
+    expect(answerAgentQuery(core, 'count', { metric: 'hachi_turns_person' })).toEqual({ ok: true })
+    expect(count).not.toHaveBeenCalled()
   })
 
   // `harness browser` in an agent's pane names it so (core/api.ts `ofPane`), held to the command's parents' pids.

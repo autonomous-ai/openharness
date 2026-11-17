@@ -1684,6 +1684,8 @@ export interface UsageAnswer {
   message?: string
 }
 export type UsageEvent =
+  /** A bounded optional counter; core supplies the authenticated originating service, gateway admits its name. */
+  | { kind: 'service'; service: string; metric: string }
   | { kind: 'request'; request: UsageRequest }
   /** [first]: the request's first answer, the one its counters count; a later one says only what became of a launch. */
   | { kind: 'answer'; request: UsageRequest; answer: UsageAnswer; first: boolean; elapsedMs: number }

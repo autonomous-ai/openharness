@@ -118,12 +118,14 @@ describe('the gateway in its own process, as the core sees it', () => {
   it('drops optional measurement before relay traffic and never wakes a stopped gateway', () => {
     const { link, kinds, setBuffered, want } = setup()
     link.port.usageCounter?.('create_requests')
+    link.port.usage?.({ kind: 'service', service: 'hachi', metric: 'hachi_wake_done' })
     expect(kinds()).toEqual([])
     expect(want).not.toHaveBeenCalled()
     link.connected()
     setBuffered(GATEWAY_USAGE_BUFFER_LIMIT)
     link.port.usageCounter?.('create_requests')
     link.port.usage?.({ kind: 'observed', payload: { measure: 'collector_days' } })
+    link.port.usage?.({ kind: 'service', service: 'hachi', metric: 'hachi_wake_done' })
     link.port.broadcast({ type: 'turn_started' })
     expect(kinds()).toEqual(['start', 'broadcast'])
     // About a guest's harness: the gateway is told whose, to seal it for that guest's sessions.

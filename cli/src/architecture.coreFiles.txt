@@ -412,8 +412,6 @@ lib/processProof.ts
 lib/processSignals.ts
 lib/processTable.ts
 lib/processTree.ts
-lib/productHealthContract.ts
-lib/productUsageContract.ts
 lib/projectFolder.ts
 lib/projectPath.ts
 lib/ptyHost/client.ts
@@ -443,7 +441,6 @@ lib/runtimeActivity.ts
 lib/runtimeControl.ts
 lib/runtimeProfileWire.ts
 lib/secureState.ts
-lib/serviceMetrics.ts
 lib/sessionCheckpoint.ts
 lib/sessionInput.ts
 lib/sessionRepair.ts

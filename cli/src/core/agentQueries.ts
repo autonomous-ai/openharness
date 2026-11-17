@@ -9,15 +9,12 @@ import { usageTargetKey, usageTarget, validUsageTarget } from '../lib/agentUsage
  * - `agentUsage`: an agent's cached usage reading;
  * - `agent_of_pane`: the live agent of a pane and whether it is a guest's, held to the parents of the command that names
  *   it (`CoreApi.agents.ofPane`): `harness browser` names its pane so;
- * - `count`: one of the counters a service may hand on, none other (lib/serviceMetrics.ts `SERVICE_METRICS`): a service
- *   in its own process has no other way to the recorder;
+ * - `count`: a bounded observation forwarded with authenticated service provenance; the gateway owns admission;
  * - `hachi_goal_done`: a goal Hachi closed, for every window of the account (`clients.hachiGoalDone`), which decides
  *   whether it is the live Hachi's.
  * Each is read as it is asked, so the service works from the registry as it is at that moment.
  */
-import type { ProductUsageMetric } from '../lib/productUsageContract.js'
-import { SERVICE_METRICS } from '../lib/serviceMetrics.js'
-import type { CoreApi, HachiGoalDone } from './api.js'
+import type { CoreApi, HachiGoalDone, UsageEvent } from './api.js'
 
 const INVALID = { error: 'INVALID_REQUEST' }
 
@@ -26,15 +23,17 @@ function pidsOf(value: unknown): number[] | null {
   return Array.isArray(value) && value.every(pid => Number.isSafeInteger(pid) && pid > 0) ? value as number[] : null
 }
 
-export function answerAgentQuery(core: Pick<CoreApi, 'agents' | 'usage' | 'count' | 'clients'>, query: string, payload: Record<string, unknown> = {}): Record<string, unknown> | Promise<Record<string, unknown>> {
+export function answerAgentQuery(core: Pick<CoreApi, 'agents' | 'usage' | 'clients'>, query: string, payload: Record<string, unknown> = {},
+  observation?: { service: string; report(event: UsageEvent): void }): Record<string, unknown> | Promise<Record<string, unknown>> {
   if (query === 'hachi_goal_done') {
     const { agentId, goalId, title } = payload
     core.clients.hachiGoalDone?.({ agentId, goalId, title } as HachiGoalDone)
     return { ok: true }
   }
   if (query === 'count') {
-    if (typeof payload.metric !== 'string' || !SERVICE_METRICS.has(payload.metric)) return INVALID
-    core.count?.(payload.metric as ProductUsageMetric)
+    const metric = payload.metric
+    if (typeof metric !== 'string' || metric.length > 128 || !/^[a-z0-9_]+$/.test(metric)) return INVALID
+    observation?.report({ kind: 'service', service: observation.service, metric })
     return { ok: true }
   }
   if (query === 'agentUsage') {

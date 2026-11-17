@@ -4549,6 +4549,18 @@ describe('opening the app', () => {
     expect(opened).toEqual(['desktop', 'tui', 'desktop'])
   })
 
+  it('forwards a service observation through the existing gateway recorder without duplicate inline counts', () => {
+    const socket = new BackendSocket('fixture'), counted: string[] = []
+    const usage = vi.fn((event: UsageEvent) => countUsage(event, metric => counted.push(metric), () => {}))
+    socket.useGateway({ holdRequests: () => {}, serveThisComputerOnly: () => {}, localClients: () => {}, usage } as never)
+    socket.reportUsage({ kind: 'service', service: 'agentBrowser', metric: 'agent_browser_failed_podman_old' })
+    socket.reportUsage({ kind: 'service', service: 'hachi', metric: 'hachi_wake_done' })
+    socket.reportUsage({ kind: 'service', service: 'agentBrowser', metric: 'hachi_wake_done' })
+    socket.reportUsage({ kind: 'service', service: 'hachi', metric: 'unrecognized_counter' })
+    expect(usage).toHaveBeenCalledTimes(4)
+    expect(counted).toEqual(['agent_browser_failed_podman_old', 'hachi_wake_done'])
+  })
+
   it('counts hn\'s own observations from hn alone, as fixed counters', async () => {
     const socket = new BackendSocket('fixture')
     const counted: string[] = []

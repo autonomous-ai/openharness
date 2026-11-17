@@ -960,7 +960,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     dshInstallStatus: (status) => backendRef?.send({ type: 'dsh_install_status', payload: status }),
     // The recaps' cards and recaps (services/recaps.ts) down the doors they took from here, and a turn's final answer.
     turnCard: (frame) => backendRef?.sendCommander(frame), turnSummary: (frame) => backendRef?.send(frame), lastTurn: (sessionId) => readLastTurn(sessionId),
-    // A service's product counters (lib/serviceMetrics.ts), to the gateway's report, as the socket's own are.
+    // Inline feature counters retain their existing typed path; process observations carry service provenance below.
     count: (metric) => backendRef?.countUsage(metric),
     // The backend mints and remembers the account's grid name; this CLI holds neither the account's
     // email nor its id. An older backend (no route) answers nothing, which the grid reconcile treats as
@@ -1723,7 +1723,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     startWaits: Object.fromEntries([...Object.values(READER_SERVICES), OTHER_ENGINES_SERVICE].map(service => [service, READER_START_MS])),
     want: (service) => experimentHooks.want(service),
     // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
-    answer: async (service, query, payload, authority) => (query === 'client_streams' && streamEndpoints.has(service) && authority.current?.() === true ? { ok: clientStreams.serving(service) } : null) ?? frameParts.answer(service, query, payload, () => authority.current?.() === true) ?? await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload, authority)
+    answer: async (service, query, payload, authority) => (query === 'count' && authority.current?.() === true
+      ? answerAgentQuery(coreApi, query, payload, { service, report: event => backend.reportUsage(event) }) : null)
+      ?? (query === 'client_streams' && streamEndpoints.has(service) && authority.current?.() === true ? { ok: clientStreams.serving(service) } : null) ?? frameParts.answer(service, query, payload, () => authority.current?.() === true) ?? await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload, authority)
       // Agent Messages is answered what it uses and nothing more, never what an experiment may ask (core/messagesLink.ts).
       ?? (service === 'messages' ? await messagesLink.answer(query, payload) : null)
       // What happens to agents, for a service that follows them (core/agentLife.ts): the live agents' rows, which only a
