@@ -73,7 +73,8 @@ import { apiCommand, apiUsage } from './lib/apiCommand.js'
 import { connectionsCommand, connectionsUsage } from './lib/connectors/command.js'
 // Static, not import(): --help prints DEVICE_USAGE, so the module loads at start anyway, and the core and services never load cli.ts.
 import { DEVICE_USAGE, runDeviceCommand } from './deviceClaude/command.js'
-import { claudeRun } from './devices/claudePlugin.js'
+import { claudeRun, claudeRunIn } from './devices/claudePlugin.js'
+import { orcaHomesDeps, readOrcaHomes } from './devices/orcaHomes.js'
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { machineChoices, newCommand, type MachineRow, type NewMachine } from './lib/newCommand.js'
@@ -3126,6 +3127,8 @@ switch (cmd) {
       platform: process.platform,
       stdin: process.stdin,
       claude: claudeRun,
+      orcaHomes: () => readOrcaHomes(orcaHomesDeps()).then((read) => read.homes.claude),
+      claudeIn: claudeRunIn,
       codexHome: env.CODEX_HOME,
       codex: () => installedEngineBin('codex') !== null,
       env: process.env,
