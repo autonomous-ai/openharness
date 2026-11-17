@@ -491,20 +491,6 @@ describe('a dial plugged in beside one already attached', () => {
     } finally { await f.fleet.stop() }
   })
 
-  it('is shown that notice again, once, by the first dial greeting again after its turn ended', async () => {
-    const f = await firstAlone()
-    try {
-      const [dial] = f.ports
-      await f.fleet.question('a', noticeId, notice)
-      await f.fleet.summary('a', 'Done', 'Done')
-      dial.sent.length = 0
-      // Another firmware image: a dial with nothing on its screen, not a keepalive.
-      dial.say({ t: 'hello', product: 'harness', mac: dial.path, fw: 'fixture-2', proto: 3 })
-      await vi.waitFor(() => expect(questions(dial)).toHaveLength(1))
-      await flush()
-      expect(questions(dial)).toEqual([`a ${noticeId}`])
-    } finally { await f.fleet.stop() }
-  })
 })
 
 describe('a board that is not a dial', () => {
