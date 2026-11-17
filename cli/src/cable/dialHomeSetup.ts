@@ -135,6 +135,10 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
     deps.count(engine, 'left removed')
   }
 
+  /** Claude Code's setup is its plugin's, which the plugin's own pass counts: its skill only follows it, so the day's
+   *  tally counts no write of it but a failed one. */
+  const countsWrites = (engine: DialEngine): boolean => engine === 'codex'
+
   /** One file's result, in the pass's line and the day's tally. */
   const tally = (counts: Counts, engine: DialEngine, result: string): void => {
     if (result === 'written' || result === 'updated') counts[engine].wrote++
@@ -143,7 +147,7 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
       counts[engine].failed++
       deps.count(engine, 'failed', 'write')
     }
-    if (result === 'updated') deps.count(engine, 'updated')
+    if (result === 'updated' && countsWrites(engine)) deps.count(engine, 'updated')
   }
 
   /** The whole record, so the dial and the plugin's version stay beside the homes. */
@@ -288,7 +292,7 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
       if (result === 'written') tally(counts, engine, removeSkill(skills))
       return 'refused'
     }
-    if (result === 'written') deps.count(engine, 'set up')
+    if (result === 'written' && countsWrites(engine)) deps.count(engine, 'set up')
     return stillOn(engine, counts) ? 'done' : 'off'
   }
 
