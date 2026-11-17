@@ -8,7 +8,8 @@ export default defineConfig({
     globalSetup: ['./src/__fixtures__/vitestRun.ts'],
     setupFiles: ['./vitest.tmpdir.ts', './vitest.setup.ts'],
     // The VS Code extension's tests too: the CLI's build inlines the extension, and PR CI runs this suite for it.
-    include: ['src/**/*.test.ts', 'src/**/*.spec.ts', '../plugins/harness-device-vscode/src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'src/**/*.spec.ts', '../plugins/harness-device-vscode/src/**/*.test.ts',
+      '../plugins/harness-device-vscode/src/**/*.spec.ts'],
     // Half the machine's cores (src/testing/suiteWorkers.ts).
     maxWorkers: suiteWorkers(),
     // Many cases do real I/O: git, child processes, and disk flushes, each a full drive flush on macOS (F_FULLFSYNC).
