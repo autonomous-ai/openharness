@@ -1,3 +1,5 @@
+import { jsonStringBytes } from '../lib/jsonStringBytes.js'
+
 /** The shared question snapshot contract. Connection owners retain interest and physical send ownership. */
 export const QUESTION_OBSERVATION_BYTES = 16 * 1024 * 1024
 export const QUESTION_OBSERVATION_CONNECTION_FRAMES = 256
@@ -22,27 +24,8 @@ export function questionFrameBytes(frame: unknown, limit: number): number | null
   let bytes = 0
   const add = (size: number): boolean => (bytes += size) <= limit
   const string = (value: string): boolean => {
-    // Counting dominated legal maximum-frame profiles; one native string codec avoids repeated escape scans.
-    // UTF-16 length is a lower bound, so even an unbounded inline value is refused before a native scan.
-    const remaining = limit - bytes - 2
-    if (value.length > remaining) return false
-    const utf8 = Buffer.byteLength(value)
-    if (utf8 > remaining) return false
-    bytes += 2
-    if (!/["\\\u0000-\u001f\ud800-\udfff]/.test(value)) return add(utf8)
-    for (let start = 0; start < value.length;) {
-      let end = Math.min(start + 4096, value.length)
-      const high = value.charCodeAt(end - 1)
-      if (high >= 0xd800 && high <= 0xdbff) {
-        const low = value.charCodeAt(end)
-        if (low >= 0xdc00 && low <= 0xdfff) end--
-      }
-      // Only a primitive string reaches stringify: at most 6 * 4096 + 2 bytes, with no toJSON lookup.
-      // Keeping pairs together makes concatenated fragment contents equal the whole JSON string.
-      if (!add(Buffer.byteLength(JSON.stringify(value.slice(start, end))) - 2)) return false
-      start = end
-    }
-    return true
+    const size = jsonStringBytes(value, limit - bytes)
+    return size !== null && add(size)
   }
   const value = (item: unknown, depth: number): boolean => {
     if (depth > 8) return false

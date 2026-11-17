@@ -362,6 +362,7 @@ lib/hostMove/quiet.ts
 lib/hostMove/seed.ts
 lib/hostTheme.ts
 lib/installedCopy.ts
+lib/jsonStringBytes.ts
 lib/keepAbandonedConversation.ts
 lib/launchArgs.ts
 lib/launchContribution.ts

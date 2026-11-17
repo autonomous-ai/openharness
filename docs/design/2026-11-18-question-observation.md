@@ -188,3 +188,33 @@ unchanged Unicode delivery and full-frame admission/refusal. They do not require
 fragment/copy count. Forty focused tests and TypeScript pass; thirty tests
 under the canonical core configuration independently cover all four measures at 100%. Its same frozen
 maximum/escaped probes and shared string-primitive extraction remain pending.
+
+At `272c6a3183`, the unchanged maximum-frame ABBA retained all 60 samples: matched legacy sync medians
+18.776/18.409 ms, with the same complete-ID output; candidate observer sync median/max 33.153/36.112 ms
+and loop maximum 44.073 ms. The separate escaped probe retained all ten samples: sync median/max
+57.822/65.664 ms, loop maximum 77.595 ms, server CPU median 161.461 ms and snapshot median 192.954 ms.
+Both runs proved actual zero outer/worker/receiver exits, physical socket/group/guardian/EOF cleanup,
+unchanged frozen hashes and private-root removal. These are isolated caller measurements; responsiveness
+acceptance remains open pending a matched escaped legacy comparison and final merged/native gates.
+
+## Shared string primitive
+
+The measured counter is frozen. Move only its primitive string counting into `lib/jsonStringBytes.ts`,
+exporting `jsonStringBytes(value: string, limit: number): number | null`, including both JSON quotes in
+the result. It keeps the exact UTF-16/UTF-8 lower-bound refusals, bounded primitive fragments and unsplit
+surrogate pairs. It introduces no state, options, tree traversal or transport policy. The core still owns
+the question frame's depth, plain-object, descriptor and admission rules. Its architecture file list gains
+this pure helper because session questions need exact bounded byte admission; no feature code is imported.
+
+The second actual caller is the Wi-Fi process's peer-frame preflight. That process owns its own iterative
+tree traversal and accepted JSON policy: existing addon JSON can be over 2,000 levels deep within its byte
+budget, so the question-specific depth limit must not move into the helper. Extracting the shared primitive
+does not expand the core's authority, inputs or budgets. Direct primitive contract tests and the existing
+physical question caller tests will verify the move; final-source cost and native gates stay separate.
+
+The extraction passes 44 focused tests in three files with 100% per-file coverage for the primitive and
+question module, plus TypeScript and all 30 architecture checks. The canonical core configuration's 30
+question tests independently retain 100% coverage. The shared API test first failed because its new module
+was absent; that verifies the extraction contract, not a newly discovered behavior bug. An initial restricted
+sandbox run could not bind its private loopback sockets (`EPERM`); its exact runner group was interrupted
+and verified gone before the same focused command passed with loopback access. No new cost run was made.
