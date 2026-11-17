@@ -229,8 +229,8 @@ describe('the device without the app', () => {
       engine.type('before the dial')
       await until('its Stop hook to run', () => engine.ran(d, 'Stop'), 30_000, 100)
     }
-    mine.named(d, 'Tho 7f3a91c2', 'user')
-    made.named(d, 'Fix login 5d2e8c41', 'derived')
+    await mine.named(d, 'Tho 7f3a91c2', { nameSource: 'user' })
+    await made.named(d, 'Fix login 5d2e8c41', { nameSource: 'derived' })
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
     const roster = await showing(dial, 'both agents already running listed', (r) => ids(r).includes(mine.id) && ids(r).includes(made.id), 0, 15_000)
     expect(roster.rows.find((r) => r.id === mine.id)).toMatchObject({ name: 'Tho 7f3a91c2' })

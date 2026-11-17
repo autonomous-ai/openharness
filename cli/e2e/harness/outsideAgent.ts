@@ -135,16 +135,29 @@ export class Outside {
     this.tab.stdin!.write('\r')
   }
 
+  /** Its process record (fakeEngine.mjs announceProcess), in the config folder it runs in, which nothing rewrites later. */
+  private record(d: IsolatedDaemon): string {
+    return join(this.home ?? dirname(d.env.CLAUDE_PROJECTS_DIR!), 'sessions', `${this.pid}.json`)
+  }
+
+  /** Until its process record says it is idle, as Claude Code's says once a turn and its Stop hooks are over. */
+  async idle(d: IsolatedDaemon): Promise<void> {
+    await until(`${this.folder} to be idle in its record`, () => {
+      try { return (JSON.parse(readFileSync(this.record(d), 'utf8')) as { status?: unknown }).status === 'idle' || null } catch { return null }
+    }, 30_000, 100)
+  }
+
   /**
-   * Named as Claude Code names a session in its own process record: [nameSource] `user` for a name the person gave it,
-   * `derived` for one Claude Code made up. The record is the one the engine wrote as it started (fakeEngine.mjs
-   * announceProcess) in the config folder it runs in, which nothing rewrites later; written beside it and renamed over,
-   * so the daemon never reads half.
+   * Named as Claude Code names a session in its own process record: [fields].nameSource `user` for a name the person
+   * gave it, `derived` for one Claude Code made up; the Claude app's record has `entrypoint: 'claude-desktop'` and no
+   * nameSource. Once the engine is idle, as it writes its record again only at its next prompt, so this write never
+   * races its own; written beside it and renamed over, so the daemon never reads half.
    */
-  named(d: IsolatedDaemon, name: string, nameSource: 'user' | 'derived'): void {
-    const record = join(this.home ?? dirname(d.env.CLAUDE_PROJECTS_DIR!), 'sessions', `${this.pid}.json`)
+  async named(d: IsolatedDaemon, name: string, fields: { nameSource?: 'user' | 'derived'; entrypoint?: string }): Promise<void> {
+    await this.idle(d)
+    const record = this.record(d)
     const row = JSON.parse(readFileSync(record, 'utf8')) as Record<string, unknown>
-    writeFileSync(`${record}.tmp`, JSON.stringify({ ...row, name, nameSource }))
+    writeFileSync(`${record}.tmp`, JSON.stringify({ ...row, name, ...fields }))
     renameSync(`${record}.tmp`, record)
   }
 

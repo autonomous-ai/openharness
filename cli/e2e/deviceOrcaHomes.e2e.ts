@@ -183,7 +183,7 @@ esac
     const engine = await Outside.startIn(d, 'in-orca-home', home, {})
     outside.push(engine)
     await turn(d, engine)
-    engine.named(d, 'Tho 7f3a91c2', 'user')
+    await engine.named(d, 'Tho 7f3a91c2', { nameSource: 'user' })
     const dial = await plugged(desk)
     await listed(dial, engine, 'the agent by the name it was given', (row) => row.name === 'Tho 7f3a91c2')
     expect(d.log()).not.toContain('7f3a91c2')
