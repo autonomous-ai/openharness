@@ -95,7 +95,7 @@ export function inHerdr(hints: Readonly<Record<string, string>>): boolean {
 }
 
 /** The terminals' own variables, beside the multiplexers': a terminal started from a cmux terminal keeps its CMUX_*. */
-const NOT_CMUX = [...NEARER_HOSTS, 'HC_TERMINAL_ID', 'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_TERMINAL_HANDLE']
+const NOT_CMUX = [...NEARER_HOSTS, 'HC_TERMINAL_ID', 'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE']
 
 /** The bundle ids a cmux terminal carries: the release app's, or Ghostty's, which cmux is built on. cmux NIGHTLY sets the
  *  same variables, and a tap's link goes to the release app alone, which has no such surface. */
