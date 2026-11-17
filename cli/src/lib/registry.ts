@@ -1949,7 +1949,13 @@ class Registry {
       this.terminalAvailableAgents.add(entry.agentId)
       if (entry.firstTask) firstTaskKept(agentId)
       return structuredClone(committed)
-    }).catch(() => { console.error('[registry] pending admission failed'); return null })
+    }).catch(error => {
+      console.error('[registry] pending admission failed')
+      // Read as a taken route, a storage refusal opened and closed three panes and answered "tmux pane could not
+      // be registered" (e2e/diskfull.e2e.ts, 2026-11-17). Its caller answers it by name instead.
+      if (error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed) throw error
+      return null
+    })
   }
 
   /** A stopped agent gets a new terminal route while keeping its saved conversation and identity.
