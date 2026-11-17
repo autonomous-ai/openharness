@@ -100,7 +100,16 @@ describe('a start that becomes the daemon', () => {
     const line = narrowOwnEnvironment(env, 'darwin')
     // The shell's token is gone; what the person put in the file is the daemon's, as after a background start.
     expect(env).toEqual({ PATH: '/bin', HARNESS_ENV_FILE: file, FROM_FILE: 'in-the-file', SENTINEL_TOKEN: 'from-the-file' })
-    expect(line).toBe('[env] started with 2 variables; 3 left out (docs/cli.md#the-daemons-environment)')
+    // Only GH_TOKEN is gone: FROM_FILE and SENTINEL_TOKEN came back from the file.
+    expect(line).toBe('[env] started with 4 variables; 1 left out (docs/cli.md#the-daemons-environment)')
+  })
+  it('counts what the env file gives a background start\'s daemon as its own, not as left out', () => {
+    const file = join(folder, 'harness.env')
+    writeFileSync(file, 'FROM_FILE=in-the-file\n')
+    // The CLI read the file as it loaded; the daemon it spawns reads it again as it starts (config/loadEnv.ts).
+    const given: NodeJS.ProcessEnv = { PATH: '/bin', HARNESS_ENV_FILE: file, FROM_FILE: 'in-the-file', GH_TOKEN: 'g' }
+    expect(startEnvLine(given, startEnvironment(given, 'linux')))
+      .toBe('[env] started with 3 variables; 1 left out (docs/cli.md#the-daemons-environment)')
   })
   it('narrows with no env file named', () => {
     const env: NodeJS.ProcessEnv = { HOME: '/h', CLAUDE_CODE_MESSAGING_TOKEN: 't', NODE_OPTIONS: '--require /fake/hook.cjs' }
