@@ -14,7 +14,7 @@ const S4 = S(4)
 const W = 'EEEEEEEE-1111-4222-8333-444444444444'
 const key = (surface: string) => `cmux:${surface.toLowerCase()}`
 const LOG_LINE =
-  /^\[cmux\] (watch · (none|on)|listed · \d+ agents|over · \d+ left out|list · (failed|too-big)|read · ([a-z][a-z0-9-]{0,31}|all) · \d+)$/
+  /^\[cmux\] (watch · (none|on)|listed · \d+ agents|over · \d+ left out|list · (no-binary|failed|timeout|too-big) · ([a-z][a-z0-9-]{0,31}|all)|read · ([a-z][a-z0-9-]{0,31}|all) · \d+)$/
 
 /** One record of cmux's, as the client tells it: Claude Code idle at S1, in /work/api, by a live pid. */
 const record = (more: Partial<CmuxSession> = {}): CmuxSession => ({
@@ -376,16 +376,16 @@ describe('the cmux source (docs/plans/2026-11-17-dial-cmux-design.md)', () => {
       s.change('claude-hook-sessions.json')
       await s.reply(2, { ok: false, fault: 'timeout' })
       expect(listed(s)).toEqual([key(S1)])
-      expect(lists()).toEqual(['[cmux] list · failed'])
+      expect(lists()).toEqual(['[cmux] list · failed · claude'])
       s.change('claude-hook-sessions.json')
       await s.reply(3, ok([record()]))
       s.change('claude-hook-sessions.json')
       await s.reply(4, { ok: false, fault: 'too-big' })
       expect(listed(s)).toEqual([key(S1)])
-      expect(lists()).toEqual(['[cmux] list · failed', '[cmux] list · too-big'])
+      expect(lists()).toEqual(['[cmux] list · failed · claude', '[cmux] list · too-big · claude'])
       s.change('codex-hook-sessions.json')
       await s.reject(5)
-      expect(lists()).toEqual(['[cmux] list · failed', '[cmux] list · too-big', '[cmux] list · failed'])
+      expect(lists()).toEqual(['[cmux] list · failed · claude', '[cmux] list · too-big · claude', '[cmux] list · failed · codex'])
       expect(listed(s)).toEqual([key(S1)])
     })
 

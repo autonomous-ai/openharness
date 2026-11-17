@@ -279,7 +279,7 @@ export class CmuxSource implements HostSource {
     if (!answer.ok) {
       if (this.failing.has(word)) return
       this.failing.add(word)
-      this.deps.log(`[cmux] list · ${answer.fault === 'too-big' ? 'too-big' : 'failed'}`)
+      this.deps.log(`[cmux] list · ${answer.fault} · ${word ?? 'all'}`)
       return
     }
     this.failing.delete(word)
