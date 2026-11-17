@@ -1,0 +1,33 @@
+# Harness Max on the Orange Pi 4 Pro's 1480 x 320 bar (DRM/KMS, no X), started through the Phase 0 boot wrapper
+# (/usr/local/sbin/phase0-flutter-start) for its fbcon unbind, HDMI hpd_mask and start guard. Installed by
+# deploy-orangepi.sh as /etc/systemd/system/harness-max-demo.service.
+#
+# No [Install]: the board still boots into Near. Starting this stops Near and starting Near stops this (Conflicts=
+# works both ways): `near-demo` on the Mac, or `sudo systemctl start near-app`, puts Near back.
+[Unit]
+Description=Harness Max demo on the bar display (DRM/KMS)
+Conflicts=near-app.service phase0-flutter.service lightdm.service
+# Ordering against the conflicting UIs makes systemd finish stopping them before this starts: one DRM master at a time.
+After=systemd-udevd.service near-app.service phase0-flutter.service lightdm.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+# Its own guard file: a hung Max start skips only the next Max start, never Near's boot.
+Environment=PHASE0_GUARD=/var/lib/harness-max/start-pending
+# Dumb buffers only: the GPU module is not needed.
+Environment=PHASE0_MODPROBE=
+# --demo, or --live from ~/harness-max/mode.env (written by `deploy-orangepi.sh --live`).
+Environment=HARNESS_MAX_ARGS=--demo
+EnvironmentFile=-/home/orangepi/harness-max/mode.env
+# The wrapper runs this with sh, which expands $HARNESS_MAX_ARGS; exec keeps the wrapper's SIGTERM going to the app.
+Environment="PHASE0_APP_CMD=exec setpriv --reuid=orangepi --regid=orangepi --init-groups env HOME=/home/orangepi /home/orangepi/harness-max/bin/harness-max $HARNESS_MAX_ARGS"
+# The A76 pair (cpu6, cpu7): the bar's scaled paint takes half the time it takes on the A55 cores.
+CPUAffinity=6 7
+ExecStart=/usr/local/sbin/phase0-flutter-start
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=10
+# Only the wrapper gets SIGTERM; it stops the app and clears the guard (see phase0-flutter.service).
+KillMode=mixed

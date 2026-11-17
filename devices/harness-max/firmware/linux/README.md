@@ -1,0 +1,77 @@
+# Harness Max as a Linux program
+
+The Max firmware's own sources, built as a Linux (or macOS) program: the same app, lanes, compositor and cable
+protocol as the ESP32-P4 image, over Linux drivers. A board change is a build target. `../sources.cmake` is the one
+list of portable sources; `../main/CMakeLists.txt` adds the ESP32-P4 drivers to it, this directory adds:
+
+- `esp/`: the FreeRTOS and ESP-IDF calls the shared sources make, on pthreads and the C library. NVS is a text file,
+  `~/.config/harness-max/nvs`. The firmware updater refuses every image (the version is `0.0.99-dev` and the board
+  `harness-max-linux`, which the daemon never offers one).
+- `display/`: `pro_display.h` over an SDL window (`MAX_LINUX_OUTPUT=sdl`, the mouse is the finger) or DRM/KMS plus
+  evdev touch (`MAX_LINUX_OUTPUT=drm`, `/dev/dri/card0`). `glass_fit.c` scales and turns the glass to the output, and
+  maps a touch back.
+- `audio/`: `audio/audio_capture.h` and the beep over SDL (macOS) or ALSA's `default` device (Linux). No microphone:
+  recording fails as on a device whose codec does not answer.
+- `cable/`: `cable_link.h` with the far end picked when the program starts: `--demo` (the default) runs the scripted
+  daemon in `../main/demo` inside the program, `--live` takes a real daemon over TCP in the USB framing.
+
+The glass is 1920 x 415 by default, the Orange Pi bar's shape at the device's width (1480 x 320 scaled by 0.771);
+`-DMAX_GLASS_H=480` builds the ESP32-P4 panel's 1920 x 480.
+
+## The simulator (macOS)
+
+Needs Homebrew's `sdl2` (sdl2-compat) and `pkg-config`, CMake (3.20 or newer for `ctest --test-dir`; ESP-IDF's
+works), Python with Pillow (the fonts are baked
+at build time), and ESP-IDF's cJSON (`~/esp/esp-idf-5.5.4`, else `-DCJSON_DIR=.../components/json/cJSON`).
+
+```sh
+cmake -S devices/harness-max/firmware/linux -B build/max-sim            # -DMAX_GLASS_H=480 for the panel's glass
+cmake --build build/max-sim -j
+ctest --test-dir build/max-sim                                         # the host tests of this directory
+build/max-sim/harness-max                                              # the demo
+build/max-sim/harness-max --live                                       # waits for a daemon on port 7531
+build/max-sim/harness-max --screenshot 8 lanes.bmp                     # saves the glass after 8 s and quits
+```
+
+A daemon reaches `--live` with `HARNESS_CABLE_TCP=localhost:7531` (or `<address>:7531` for a board), the dev-only TCP
+transport of `cli/src/cable/cableTcp.ts`. `--port N` listens on another port.
+
+**`--live` is for development only.** The port is open on every interface with no authentication: anyone on the
+network can drive the bar and read what the daemon sends to it. Use it on a trusted network.
+
+## The Orange Pi 4 Pro's bar
+
+The bar is the 11.9" 1480 x 320 HDMI panel, which the board drives as 320 x 1480 portrait: the program turns the
+picture a quarter and scales 1920 x 415 to 1480 x 320, and turns touch back. From the Mac:
+
+```sh
+devices/harness-max/firmware/linux/deploy-orangepi.sh            # the demo
+devices/harness-max/firmware/linux/deploy-orangepi.sh --live     # a daemon on the Mac drives it
+```
+
+It copies the sources to the board, builds there (`MAX_LINUX_OUTPUT=drm`), runs the host tests, installs
+`~/harness-max/bin/harness-max` and restarts `harness-max-demo.service` (`orangepi/`), which starts it through the
+Phase 0 boot wrapper for its fbcon and HDMI hotplug handling. The board comes from `HARNESS_MAX_BOARD` /
+`HARNESS_MAX_SSH_OPTS` or near-demo's `~/.config/near/board.env`. The first run asks for the board's sudo password once
+to install the unit and a sudoers rule for switching. The board needs `cmake pkg-config libdrm-dev libasound2-dev
+python3-pil` from apt.
+
+Switching the bar (each service stops the other; there is one DRM master at a time):
+
+| To | On the Mac | On the board |
+| --- | --- | --- |
+| Harness Max | `deploy-orangepi.sh` | `sudo systemctl start harness-max-demo` |
+| Near | `near-demo` | `sudo systemctl start near-app` |
+
+The unit has no `[Install]`: a reboot comes back to Near.
+
+## Known
+
+- Touch near the top right of the bar reads 35-40 px left of the finger. The program maps the panel's raw axes as
+  libinput and flutter-pi do, and the Near app records the same offset on this panel, so it is the panel's own; it is
+  not corrected here. Make targets near that corner wider than they look.
+- The board bakes the text in Liberation Sans, the Mac in Helvetica (the Pro's font choice in `../sources.cmake`).
+- Frame time on the bar (measured 2026-11-17, the unit's A76 pair, `ondemand` governor): a clock or status change
+  0.4-0.6 ms, a lane change up to 9 ms, a full-screen change about 47 ms, the first frame 58 ms (102 ms when not
+  pinned to the A76 pair, hence `CPUAffinity=`). The scaled paint is at most 3 ms of a frame; the rest is the
+  renderer. The program idles at about 2% of one core.

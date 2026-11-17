@@ -34,6 +34,9 @@ idf.py -B build -DPROJECT_VER=0.0.99-dev build
   touch back. If the picture comes out upside down, set `MAX_TURN_FLIPPED` to 1 in `main/display/max_turn.h`: the
   finger turns with it.
 
+The same sources also build as a Linux program: a simulator window on the Mac, and the Orange Pi 4 Pro's bar for
+demos. See `linux/README.md`.
+
 ## Flash
 
 The bring-up board is a Waveshare ESP32-P4-NANO. Its USB-C is a CH343 USB-UART bridge on UART0, which flashes with the
