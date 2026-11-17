@@ -120,7 +120,9 @@ export function createAgentForker({
       if (!workspace) return { ok: false, error: 'CWD_NOT_FOUND' }
       const installed = await dshLaunch.describe(source.dsh, engine)
       if (!current()) return changed
-      if (!installed.ok) return installed
+      // Keep the fork's existing refusal when the Store confirms its package was removed.
+      if (!installed.ok) return installed.error === 'INVALID_DSH'
+        ? { ...installed, detail: `${source.dsh} is no longer installed on this machine` } : installed
       // Narrowed above; a closure would lose that, so the checked values are named here.
       const cwd = source.cwd
       const prepared = await dshLaunch.launch({ dsh: source.dsh, workspace: cwd, engine, key: label,

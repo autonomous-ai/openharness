@@ -108,3 +108,10 @@ The existing Hachi off/on control caught readiness retained across a disabled
 interval; settings invalidation restored it. The final narrow run passed all 216
 tests in eight Store, consumer, create and fork files, and CLI types passed. Full
 required gates and private E2Es remain pending the parent's quiet-window release.
+
+Integration review on 17 November caught a changed missing-package refusal in the
+real Store fork golden. The fork now keeps its established `INVALID_DSH` wording
+after the Store confirms removal, while unavailable Store replies stay unavailable.
+It reads no installed index. The focused regression first failed one case with one
+unavailability control passing; after correction, all 38 fork and Store launch
+golden tests passed on macOS, and source types passed. Broad gates remain pending.

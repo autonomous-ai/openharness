@@ -311,6 +311,21 @@ describe('forking an agent', () => {
     expect(createAndRegisterPane).not.toHaveBeenCalled()
   })
 
+  it.each([
+    [{ ok: false, error: 'INVALID_DSH', detail: 'blender is not installed on this machine' },
+      { ok: false, error: 'INVALID_DSH', detail: 'blender is no longer installed on this machine' }],
+    [{ ok: false, error: 'DSH_UNAVAILABLE', detail: 'Waiting for the Store.', unavailable: 'store' },
+      { ok: false, error: 'DSH_UNAVAILABLE', detail: 'Waiting for the Store.', unavailable: 'store' }],
+  ] as const)('preserves the fork refusal when Store describes %j', async (answer, expected) => {
+    const describe = vi.fn(async () => answer)
+    const run = setup(source({ dsh: 'blender' }), { dshLaunch: { describe, launch: launchDsh } })
+    expect(await run.fork({ agentId: 'a1', name: null, prompt: null })).toEqual(expected)
+    expect(describe).toHaveBeenCalledExactlyOnceWith('blender', 'claude')
+    expect(launchDsh).not.toHaveBeenCalled()
+    expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
+  })
+
   it('refuses what the plan refuses, a harness no longer installed, a launch it refuses, and a pane it cannot make', async () => {
     vi.mocked(planFork).mockReturnValueOnce({ ok: false, error: 'FORK_UNSUPPORTED', detail: 'amp cannot fork' } as never)
     expect(await setup().fork({ agentId: 'a1', name: null, prompt: null })).toEqual({ ok: false, error: 'FORK_UNSUPPORTED', detail: 'amp cannot fork' })
