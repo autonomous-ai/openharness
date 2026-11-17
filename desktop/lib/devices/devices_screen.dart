@@ -14,6 +14,8 @@ import '../core/test_run.dart';
 import '../state/app_state.dart';
 import '../widgets/visible_tick.dart';
 import '../widgets/desktop_chrome.dart';
+import 'device_app_offer.dart';
+import 'device_app_row.dart';
 import 'device_artwork.dart';
 import 'device_settings.dart';
 import 'device_setup_dialog.dart';
@@ -63,7 +65,10 @@ class _DevicesTabState extends State<DevicesTab>
   }
 
   @override
-  void onTick() => unawaited(widget.notifier.refreshDevices());
+  void onTick() {
+    unawaited(widget.notifier.refreshDevices());
+    unawaited(widget.notifier.deviceAppOffer.refresh());
+  }
 
   @override
   void onScreenChanged(bool onScreen) {
@@ -83,6 +88,7 @@ class _DevicesTabState extends State<DevicesTab>
     builder: (context, _) => DevicesScreen(
       controller: controller,
       wifi: wifi,
+      deviceAppOffer: widget.notifier.deviceAppOffer,
       showCompanion: widget.notifier.experimentalFeatures.enabled(
         ExperimentalFeature.focusBarCreature,
       ),
@@ -98,6 +104,7 @@ class DevicesScreen extends StatefulWidget {
     super.key,
     required this.controller,
     this.wifi,
+    this.deviceAppOffer,
     this.showCompanion = false,
     this.openShop,
     this.onRefresh,
@@ -109,6 +116,9 @@ class DevicesScreen extends StatefulWidget {
 
   /// The robots paired over the network. Null leaves Add device to the USB cable alone.
   final WifiRobotsController? wifi;
+
+  /// The menu-bar app's offer, as a row above a dial on this computer's settings. Null: no row.
+  final DeviceAppOffer? deviceAppOffer;
 
   /// Whether the desktop companion is on (Experimental), for the rows that follow it.
   final bool showCompanion;
@@ -611,7 +621,7 @@ class _DevicesScreenState extends State<DevicesScreen>
                                     1.5;
                             final beside = wide && pet != null && pet.editing;
                             final showcase = _DeviceShowcase(device: selected);
-                            final settings = DeviceSettingsPanel(
+                            final panel = DeviceSettingsPanel(
                               key: ValueKey(selected.key),
                               device: selected,
                               controller: widget.controller,
@@ -621,6 +631,20 @@ class _DevicesScreenState extends State<DevicesScreen>
                               petGap: beside ? _petGap : 0,
                               pickPetFile: widget.pickPetFile,
                               showCompanion: widget.showCompanion,
+                            );
+                            final offer = widget.deviceAppOffer;
+                            // The menu-bar app follows this computer's front app, so only a dial plugged in here
+                            // is offered it. One Column either way, so the panel keeps its state as the row comes
+                            // and goes.
+                            final settings = Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                if (offer != null &&
+                                    selected.local &&
+                                    selected.status.attached)
+                                  DeviceAppRow(offer: offer),
+                                panel,
+                              ],
                             );
                             if (!wide) {
                               _settle(false);
