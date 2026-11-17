@@ -766,14 +766,27 @@ describe('Orca\'s Claude Code homes', () => {
       .toEqual({ code: 1, out: [], err: ['Could not save the dial setting.'] })
   })
 
-  /** Claude Code's default home in a throwaway folder, its plugin on there: the command run in an Orca terminal has the
-   *  account's home as its own (CLAUDE_CONFIG_DIR), and this one beside it, sharing its `plugins/`. */
-  function defaultHomeOn(): string {
+  /** Claude Code's default home in a throwaway folder, its plugin on there. [shared]: the command's own home (its
+   *  CLAUDE_CONFIG_DIR) links its `plugins/` to this one's, as Orca links each account's: the command run in an Orca
+   *  terminal. Otherwise each holds its own, as in a home the person moved. */
+  function defaultHomeOn(shared = true): string {
     const home = join(folder(), '.claude')
-    mkdirSync(home)
+    mkdirSync(join(home, 'plugins'), { recursive: true })
     writeFileSync(join(home, 'settings.json'), JSON.stringify({ enabledPlugins: { 'harness-device@openharness': true } }))
+    if (shared) symlinkSync(join(home, 'plugins'), join(claudeHome, 'plugins'))
+    else mkdirSync(join(claudeHome, 'plugins'))
     return home
   }
+
+  // The command's own uninstall takes nothing ~/.claude names there: its plugin is none of the command's.
+  it('a default home with plugins of its own is left alone', async () => {
+    const defaultHome = defaultHomeOn(false)
+    for (const verb of ['enable', 'disable']) {
+      const { calls, claude, claudeIn } = claudes((home) => home === null ? INSTALLED : listed(true))
+      expect(await device(['claude', verb], { claude, claudeIn, defaultClaudeHome: defaultHome }), verb).toEqual(ok)
+      expect(calls.filter((call) => call.home !== null), verb).toEqual([])
+    }
+  })
 
   it('the command\'s own home is not run twice', async () => {
     const dataDir = folder()
