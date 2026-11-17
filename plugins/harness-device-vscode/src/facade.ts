@@ -1,4 +1,5 @@
-// The window made from VS Code's API: each terminal's shell pid, asked once and kept, so state() answers at once.
+// The window made from VS Code's API: each terminal's shell pid, kept so state() answers at once, and read again at each
+// terminal event, since VS Code relaunches a shell in the same Terminal with a new pid.
 import type { ApiTerminal, Disposable, VscodeApi } from './vscodeApi'
 import { windowState, type WindowFacade } from './window'
 
@@ -10,30 +11,36 @@ export function windowFacade(api: VscodeApi): WindowFacade & Disposable {
   const tell = () => {
     for (const changed of [...listeners]) changed()
   }
-  const ask = (terminal: ApiTerminal) => {
-    if (pids.has(terminal)) return
-    pids.set(terminal, undefined)
-    Promise.resolve(terminal.processId).then(
-      (pid) => {
-        // A terminal closed before its answer came is not brought back.
-        if (disposed || !pids.has(terminal) || pid === undefined) return
-        pids.set(terminal, pid)
-        tell()
-      },
-      // A shell that failed to start has no pid to list.
-      () => {},
-    )
+  const readAll = () => {
+    for (const terminal of api.window.terminals) {
+      if (!pids.has(terminal)) pids.set(terminal, undefined)
+      Promise.resolve(terminal.processId).then(
+        (pid) => {
+          // A terminal closed before its answer came is not brought back.
+          if (disposed || !pids.has(terminal) || pids.get(terminal) === pid) return
+          pids.set(terminal, pid)
+          tell()
+        },
+        // A shell that failed to start has no pid to list.
+        () => {},
+      )
+    }
   }
   const pidOf = (terminal: ApiTerminal | undefined) => (terminal ? pids.get(terminal) : undefined)
 
-  for (const terminal of api.window.terminals) ask(terminal)
+  readAll()
   const subscriptions = [
-    api.window.onDidOpenTerminal(ask),
+    api.window.onDidOpenTerminal(readAll),
     api.window.onDidCloseTerminal((terminal) => {
       pids.delete(terminal)
       tell()
+      readAll()
     }),
-    api.window.onDidChangeActiveTerminal(tell),
+    api.window.onDidChangeActiveTerminal(() => {
+      tell()
+      readAll()
+    }),
+    api.window.onDidChangeTerminalState(readAll),
     api.window.onDidChangeWindowState(tell),
   ]
 
