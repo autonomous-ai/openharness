@@ -52,12 +52,13 @@ import { createOrcaAdapter, createOrcaReads, orcaDeps, type OrcaFocusWatch, type
 import { readRecordName } from '../cable/hosts/recordName.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
 import { learnApps, readProcessNames, type ProcessName } from '../cable/hosts/scannedApp.js'
+import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
 import { createTmuxAdapter } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
-import { vscodeStreams } from '../cable/hosts/vscodeTerminals.js'
+import { vscodeStreams, type VscodeTerminal } from '../cable/hosts/vscodeTerminals.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
 import { createEngineTally } from '../cable/engineTally.js'
 import { startVscodeExtensionUpdate } from '../cable/vscodeExtensionUpdate.js'
@@ -669,6 +670,28 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const entry = outside(agentId)
     return entry ? waiting(entry) : null
   }
+  /** The terminal the dial's scroll goes to: the shown agent's, while VS Code is in front (the rule a swipe uses) and a
+   *  window holds it (docs/plans/2026-11-17-dial-vscode-extension-design.md, §4). */
+  const scrollTerminal = (): VscodeTerminal | undefined => {
+    const agentId = cableHost.latestFront() === 'vscode' ? cableHost.shownAgentId() : undefined
+    const pid = agentId === undefined ? undefined : termPid(observed?.paneOf(agentId, 'vscode') ?? '')
+    return pid === undefined ? undefined : vscode.terminalOf(pid)
+  }
+  /** The route the stroke on the glass took at its `down`, kept to its `up`: Harness's windows are never left holding a
+   *  drag whose `up` went to VS Code. A `move` or an `up` with no `down` before it chooses then. */
+  let stroke: { terminal: VscodeTerminal; lines: ReturnType<typeof createScrollLines> } | 'windows' | undefined
+  const routeScroll = (phase: 'down' | 'move' | 'up', dy: number, velocity: number): void => {
+    let route = stroke
+    if (phase === 'down' || !route) {
+      const terminal = scrollTerminal()
+      route = terminal ? { terminal, lines: createScrollLines() } : 'windows'
+    }
+    stroke = phase === 'up' ? undefined : route
+    if (route === 'windows') core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } })
+    // Whole lines, and an up's velocity is not played: the scroll stops where the finger stops. A window that went takes
+    // nothing more of the stroke, which never turns to Harness's windows midway.
+    else vscode.scroll(route.terminal, route.lines.take(phase, dy))
+  }
 
   const cableHost = new DaemonCableHost({
     // The cloud harnesses too, where the core offers them: tiles on the desk the dial walks like any other.
@@ -745,7 +768,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     turned: noteMove,
     localFollowed: (cause, outcome) => log(FOLLOWED[cause === 'attach' ? attachAsk : cause][outcome]),
     swarmSelected: (swarmId) => core.clients.sendLocal({ type: 'dial_swarm', payload: { swarmId } }),
-    scrolled: (phase, dy, velocity) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } }),
+    // Guarded as a notice into the dial is: a throw on the scroll path (a window's stream) is logged, never the session's.
+    scrolled: (phase, dy, velocity) => part.call('dial', () => routeScroll(phase, dy, velocity)),
     // Gestures stay at this desk. The device inventory and its settings also reach the owner's other
     // machines, through the encrypted device-management event.
     dialStatus: (status) => {
