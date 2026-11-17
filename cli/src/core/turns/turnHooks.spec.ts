@@ -711,6 +711,29 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     expect(next.turnOpen).toBe(true)
   })
 
+  // The wall clock set back an hour during a turn, as an NTP correction does (e2e/clockjump.e2e.ts): by the times taken
+  // before the step, its Stop ran before its prompt hook and before the turn opened, and the end held for it waited.
+  stopRule('the wall clock set back during a turn: its Stop delivers its end, read before it or after it', async () => {
+    vi.setSystemTime(10_000_000)
+    const run = await hookDriven()
+    run.hooks.onPromptHook('s1', 9_999_000)
+    run.hooks.transcript('s1', END, { turn: turnOf('t1', 9_999_500) })
+    vi.setSystemTime(10_000_000 - 3_600_000)
+    run.hooks.onTurnStop({ sessionId: 's1', firedAt: Date.now() })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', END)
+    // Its end read after it.
+    vi.setSystemTime(20_000_000)
+    run.hooks.onPromptHook('s1', 19_999_000)
+    const turn = parse(run, 't2', 19_999_500)
+    vi.setSystemTime(20_000_000 - 3_600_000)
+    run.hooks.onTurnStop({ sessionId: 's1', firedAt: Date.now() })
+    await vi.advanceTimersByTimeAsync(200)
+    end(run, turn)
+    expect(run.deps.emit).toHaveBeenCalledTimes(2)
+    expect(run.hooks.held('s1')).toBe(false)
+  })
+
   // A /goal loop: the Stop of the pass before reached the daemon 520 ms after the next pass began (end to end, under
   // load). The pass opened after that Stop ran, so it is left open; its own Stop closes it.
   it.runIf(engine === 'claude')('a continued /goal pass is closed by its own Stop', async () => {
@@ -973,6 +996,16 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
       expect(run.deps.tell).not.toHaveBeenCalled()
       expect(run.deps.awaitDialog).not.toHaveBeenCalled()
       expect(run.hooks.withheld('s1')).toBe(false)
+    })
+
+    it('a wait hook run after the wall clock was set back opens, whatever the prompt hook\'s time before the step', () => {
+      vi.setSystemTime(10_000_000)
+      const run = waiting()
+      run.hooks.onPromptHook('s1', 9_999_000)
+      vi.setSystemTime(10_000_000 - 3_600_000)
+      run.hooks.onWait({ sessionId: 's1', firedAt: Date.now() })
+      expect(run.deps.awaitDialog).toHaveBeenCalledExactlyOnceWith('s1')
+      expect(run.hooks.withheld('s1')).toBe(true)
     })
 
     it('an agent the lease no longer knows waits all the same', () => {
