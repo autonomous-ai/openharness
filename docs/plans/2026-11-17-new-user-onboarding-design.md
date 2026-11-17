@@ -233,7 +233,9 @@ command still exits 0 when the default home succeeded. `disable` runs `claude pl
 then removes the default home's plugin as today and records the removal. Since `plugins/` is shared, an uninstall in one
 home removes the files every home names, and the other homes' own uninstall would then find nothing and leave their
 entry on; disabled first, each Orca home's entry reads off (check 8). A home that fails prints `Could not turn off
-Claude Code in one Orca account.`, and the command exits 1. `status` is unchanged (the default home's).
+Claude Code in one Orca account.`, and the command exits 1. While any Orca home is still on, the default home's
+plugin is not removed (the removal would take the shared files that home still names, and a second `disable` could then
+never turn it off): the command exits 1, and the next `disable` finishes the job (orchestrator, 2026-11-17). `status` is unchanged (the default home's).
 
 The hook (`asked`) and the mod's `link` already check the plugin in the settings of their own `CLAUDE_CONFIG_DIR`, so
 an Orca session's hook reaches the dial with no change.
