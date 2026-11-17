@@ -574,6 +574,210 @@ describe('ObservedSource codex and open sessions', () => {
   })
 })
 
+// A turn outside a pane ends by its engine's own hooks, as a Harness pane's does: its Stop is told as done only once
+// 1.5 s pass with no word of the turn going on, and a lead's subagents keep it working.
+describe('ObservedSource and a turn\'s end by hook', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  const codex = { engine: 'codex', sessionId: 'c1', transcriptPath: '/c/r.jsonl' } as const
+  /** Every state the listeners are told from now on, in order. */
+  const told = (src: ObservedSource): string[] => {
+    const states: string[] = []
+    src.onChange(() => { states.push(src.list()[0].state) })
+    return states
+  }
+
+  it('a Codex turn-stop reads working until 1.5 s of quiet, then done with its answer', async () => {
+    const { src, answers, ev } = setup()
+    answers.set('/c/r.jsonl', 'Codex says hi')
+    src.ingest(ev('turn-start', codex))
+    src.ingest(ev('turn-stop', codex))
+    await vi.advanceTimersByTimeAsync(1_499)
+    expect(src.list()[0]).toMatchObject({ state: 'working', unseenDone: false })
+    await vi.advanceTimersByTimeAsync(1)
+    expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true, lastAnswer: 'Codex says hi' })
+  })
+
+  it('a turn that starts within the 1.5 s is never done, and works', async () => {
+    const lastAnswer = vi.fn(async () => 'x')
+    const { src, ev } = setup({ lastAnswer })
+    src.ingest(ev('turn-start', codex))
+    src.ingest(ev('turn-stop', codex))
+    const states = told(src)
+    await vi.advanceTimersByTimeAsync(1_000)
+    src.ingest(ev('turn-start', codex))
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state: 'working', unseenDone: false })
+    expect(states).not.toContain('done')
+    expect(lastAnswer).not.toHaveBeenCalled()
+  })
+
+  it.each([['needs-input', 'needs-you'], ['turn-error', 'error']] as const)('%s within the 1.5 s is never done', async (event, state) => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('turn-stop'))
+    const states = told(src)
+    src.ingest(ev(event))
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state, unseenDone: false })
+    expect(states).not.toContain('done')
+  })
+
+  it('a prompt asked within the 1.5 s is never done', async () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('turn-stop'))
+    src.ingest({ engine: 'claude', sessionId: 's1', event: 'asked', tool: 'Bash' })
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state: 'needs-you', unseenDone: false })
+  })
+
+  it('a session that ends within the 1.5 s is never done', async () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('turn-stop'))
+    src.ingest(ev('session-end'))
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state: 'working', unseenDone: false })
+  })
+
+  // The person stopped the turn: nothing to tell as done, as a Claude turn stopped with Esc.
+  it.each([['within the 1.5 s', ['turn-start', 'turn-stop']], ['mid-turn', ['turn-start']]] as const)(
+    'turn-aborted %s ends the turn idle, never done', async (_when, before) => {
+      const lastAnswer = vi.fn(async () => 'x')
+      const { src, ev } = setup({ lastAnswer })
+      for (const event of before) src.ingest(ev(event, codex))
+      const states = told(src)
+      src.ingest(ev('turn-aborted', codex))
+      expect(src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false })
+      await graced()
+      expect(src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false })
+      expect(states).not.toContain('done')
+      expect(lastAnswer).not.toHaveBeenCalled()
+    })
+
+  it('a lead whose subagent runs stays working past its Stop, and its owner reading idle does not end it', async () => {
+    const { src, clock, open, owners, working, ev } = setup()
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('subagent-start'))
+    src.ingest(ev('turn-stop'))
+    await graced()
+    expect(src.list()[0].state).toBe('working')
+    working.set('s1', false)
+    clock.t += 3_000
+    await src.checkWorking()
+    expect(src.list()[0]).toMatchObject({ state: 'working', unseenDone: false })
+  })
+
+  it('a lead whose subagents all stopped is done 1.5 s after its Stop', async () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('subagent-start'))
+    src.ingest(ev('subagent-stop'))
+    src.ingest(ev('turn-stop'))
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
+  })
+
+  it('its owner reading idle does not end a turn whose Stop waits out the 1.5 s', async () => {
+    const { src, clock, open, owners, working, ev } = setup()
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    working.set('s1', false)
+    src.ingest(ev('turn-start'))
+    clock.t += 3_000
+    src.ingest(ev('turn-stop'))
+    await src.checkWorking()
+    expect(src.list()[0].state).toBe('working')
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
+  })
+
+  it('a subagent-stop with none running counts none below 0', async () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('subagent-stop'))
+    src.ingest(ev('subagent-start'))
+    src.ingest(ev('turn-stop'))
+    await graced()
+    expect(src.list()[0].state).toBe('working')
+  })
+
+  it('counts 64 subagents at most: the 65th start is not counted, and logged once with no session', async () => {
+    const { src, ev, logs } = setup()
+    src.ingest(ev('turn-start'))
+    for (let i = 0; i < 65; i++) src.ingest(ev('subagent-start'))
+    for (let i = 0; i < 64; i++) src.ingest(ev('subagent-stop'))
+    src.ingest(ev('turn-stop'))
+    await graced()
+    expect(src.list()[0].state).toBe('done')
+    expect(logs.filter((line) => line.includes('subagent'))).toEqual(['[observed] subagent not counted · 64 running'])
+  })
+
+  it('a new turn counts its subagents afresh', async () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('subagent-start'))
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('turn-stop'))
+    await graced()
+    expect(src.list()[0].state).toBe('done')
+  })
+
+  // A SubagentStop that was lost would keep the lead working for good.
+  it('10 minutes with no event for the session count none, and the next Stop is done', async () => {
+    const { src, clock, ev, logs } = setup()
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('subagent-start'))
+    src.ingest(ev('turn-stop'))
+    await graced()
+    clock.t += 599_999
+    await src.checkWorking()
+    src.ingest(ev('turn-stop'))
+    await graced()
+    expect(src.list()[0].state).toBe('working')
+    clock.t += 600_000
+    await src.checkWorking()
+    expect(logs.filter((line) => line.includes('subagent'))).toEqual(['[observed] subagent count reset · no event in 10 min'])
+    src.ingest(ev('turn-stop'))
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
+  })
+
+  // Its Finished comes from its Stop: an owner reading idle with no Stop is a turn the person stopped (Esc).
+  it('a Codex turn with no Stop, after one with a Stop, ends idle once its owner reads idle', async () => {
+    const lastAnswer = vi.fn(async () => 'x')
+    const { src, clock, open, owners, working, ev } = setup({ lastAnswer })
+    open.set('c1', 'terminal')
+    owners.set('c1', { pid: 100, engine: 'codex' })
+    src.ingest(ev('turn-start', codex))
+    src.ingest(ev('turn-stop', codex))
+    await graced()
+    expect(lastAnswer).toHaveBeenCalledTimes(1)
+    src.ingest(ev('turn-start', codex))
+    working.set('c1', false)
+    clock.t += 3_000
+    await src.checkWorking()
+    expect(src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false })
+    expect(lastAnswer).toHaveBeenCalledTimes(1)
+  })
+
+  // An older Codex sends no Stop: its owner reading idle is the only word that its turn is over.
+  it('a Codex session that never sent a Stop is done once its owner reads idle', async () => {
+    const { src, clock, open, owners, working, ev } = setup()
+    open.set('c1', 'terminal')
+    owners.set('c1', { pid: 100, engine: 'codex' })
+    src.ingest(ev('turn-start', codex))
+    working.set('c1', false)
+    clock.t += 3_000
+    await src.checkWorking()
+    expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
+  })
+})
+
 describe('ObservedSource and the app the scan learns', () => {
   /** A session found open in a terminal, its owner `pid`. */
   const found = (s: ReturnType<typeof setup>, sessionId: string, pid: number): void => {
