@@ -656,6 +656,15 @@ describe('restoreAgents — which agents get a pane back', () => {
     expect(h.calls).toEqual(['updateIdentity:agent-a:1003'])
   })
 
+  it('re-identifies a live row whose engine\'s hook dropped its ready launch during the survey', async () => {
+    const h = harness([row()], { livePanes: ['%3'], alivePanes: ['%3'] })
+    const live = h.deps.liveProcess
+    // What a hook's registration does to the row (registry.ts `register`): no `launch`.
+    h.deps.liveProcess = async (entry, runtime) => { delete h.rows.get('agent-a')!.launch; return live(entry, runtime) }
+    await restoreAgents(h.deps)
+    expect(h.calls).toContain('updateIdentity:agent-a:1003')
+  })
+
   it('does not touch a live row that still knows its process', async () => {
     const h = harness([row({ processIdentity: identity(1003) })], { livePanes: ['%3'] })
     await restoreAgents(h.deps)
