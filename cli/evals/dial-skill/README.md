@@ -47,15 +47,17 @@ npx vitest run --config evals/dial-skill/vitest.config.ts
   `SendMessage` and `ListAgents` are denied to the agent, so a run never reaches the person's accounts, phone or other
   Claude sessions, and the eval does not measure push competing with the dial.
 - A run leaves in the profile only what `claude -p` writes at startup (`.claude.json`, its backups, `session-env/`,
-  caches); the empty `projects/<temp repo>/` folder Claude makes for each run is removed with the run. To check, list
-  what in the profile changed during the pass:
+  `sessions/`, `plugins/store/…`, caches); the empty `projects/<temp repo>/` folder Claude makes for each run is
+  removed with the run. To check, list what in the profile changed during the pass:
 
   ```sh
   marker=$(mktemp)   # before the pass
   find -H "$CLAUDE_CONFIG_DIR"/ "$CLAUDE_CONFIG_DIR"/*/ -newer "$marker" | sort -u   # after it
   ```
 
-  Only the startup files above may appear; a new `projects/` entry is a run that was not cleaned up.
+  Only the startup files above may appear; a new `projects/` entry is a run that was not cleaned up. The profile is
+  shared with the person's other live Claude sessions, so a change dated outside the pass's time window is theirs, not
+  the eval's.
 - Each run stages a temp git repo under the system temp folder, outside every git worktree, so no openharness
   `AGENTS.md` loads and no answer key is in reach.
 - A fake `harness` records rings; the scenario's fakes (`gh`, `aws`, `shipit`…) come first on a curated `PATH` that
