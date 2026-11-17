@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { AppLinkDeps } from './appLink.js'
 import { detectApp, detectHost } from './hostDetect.js'
 import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
 import { createVscodeAdapter } from './vscode.js'
@@ -6,12 +7,15 @@ import { createVscodeAdapter } from './vscode.js'
 const OPEN = '/usr/bin/open'
 /** A Claude Code session's id, as its hook names it. */
 const UUID = '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+const UUID2 = '3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f'
+const VSCODE = 'com.microsoft.VSCode'
+const link = (id: string) => `vscode://anthropic.claude-code/open?session=${id}`
 
 interface Call { file: string; args: string[]; timeoutMs: number }
-type Deps = Parameters<typeof createVscodeAdapter>[0]
+type Deps = AppLinkDeps
 
 /** A recording runner that runs nothing, so no spec opens the developer's own VS Code: each call answers the next of
- *  [codes], then exit 0. The opener holds this adapter alone. */
+ *  [codes], then exit 0. VS Code is in front unless told. The opener holds this adapter alone. */
 function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = []) {
   const calls: Call[] = []
   const logs: string[] = []
@@ -21,6 +25,7 @@ function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = []) {
       return { code: codes.length ? codes.shift()! : 0, stdout: '' }
     },
     platform: 'darwin',
+    inFront: () => true,
     ...over,
   }
   const adapter = createVscodeAdapter(deps)
@@ -37,19 +42,23 @@ const run = (file: string, ...args: string[]): Call => ({ file, args, timeoutMs:
 const forward = (bundle: string): Call => run(OPEN, '-b', bundle)
 
 describe('the VS Code adapter', () => {
-  it('its id is vscode, it taps before its app, and only macOS can focus', async () => {
+  it('its id is vscode, a tap is its link instead of its app, and only macOS can focus or show', async () => {
     const pane = { adapter: 'vscode', id: UUID }
     const { adapter } = recorder()
     expect(adapter.id).toBe('vscode')
-    expect(adapter.tap).toBe('before')
-    expect(adapter.show).toBeUndefined()
-    expect(adapter.canShow).toBeUndefined()
+    expect(adapter.tap).toBe('instead')
+    expect(adapter.show).toBeTypeOf('function')
+    expect(adapter.canShow).toBeTypeOf('function')
     expect(adapter.type).toBeUndefined()
     expect(adapter.canFocus(pane)).toBe(true)
+    expect(adapter.canShow(pane)).toBe(true)
+    expect(recorder({ inFront: () => false }).adapter.canShow(pane)).toBe(false)
     for (const platform of ['linux', 'win32'] as const) {
       const elsewhere = recorder({ platform })
       expect(elsewhere.adapter.canFocus(pane), platform).toBe(false)
+      expect(elsewhere.adapter.canShow(pane), platform).toBe(false)
       expect(await elsewhere.adapter.focus(pane), platform).toBe(false)
+      expect(await elsewhere.adapter.show(pane, 'a1'), platform).toBe('failed')
       expect(elsewhere.calls).toEqual([])
     }
   })
@@ -64,29 +73,29 @@ describe('the VS Code adapter', () => {
   ])('HARNESS_OPEN_BIN %j: an absolute path is the open a tap runs; empty, relative and none run /usr/bin/open', async (bin, file) => {
     const { calls, adapter } = recorder({ bin })
     expect(await adapter.focus({ adapter: 'vscode', id: UUID })).toBe(true)
-    expect(calls).toEqual([run(file, `vscode://anthropic.claude-code/open?session=${UUID}`)])
+    expect(calls).toEqual([run(file, '-b', VSCODE, link(UUID))])
   })
 
   it('a pane id not in its form runs nothing', async () => {
     const { calls, adapter } = recorder()
     for (const id of ['sess-1', UUID.toUpperCase(), `${UUID}&x=y`, `${UUID}/..`, `local_${UUID}`, '', '--args']) {
       expect(await adapter.focus({ adapter: 'vscode', id }), id).toBe(false)
+      expect(await adapter.show({ adapter: 'vscode', id }, 'a1'), id).toBe('failed')
     }
     expect(calls).toEqual([])
   })
 })
 
 describe('a tap on a session in the VS Code extension\'s tab (docs/specs/2026-11-15-device-wave1-checks.md, F3)', () => {
-  const VSCODE = 'com.microsoft.VSCode'
   const CURSOR = 'com.todesktop.230313mzl4w4u92'
   const TAB = { __CFBundleIdentifier: VSCODE, CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' }
-  const tabLink = run(OPEN, `vscode://anthropic.claude-code/open?session=${UUID}`)
+  const tabLink = run(OPEN, '-b', VSCODE, link(UUID))
 
-  it('the VS Code extension\'s tab: its session\'s link, then VS Code comes forward', async () => {
+  it('the VS Code extension\'s tab: its session\'s link, sent to VS Code alone', async () => {
     const { calls, logs, opener } = recorder()
     expect(target(TAB)).toEqual({ bundle: VSCODE, pane: { adapter: 'vscode', id: UUID } })
     expect(await opener.open('a1', target(TAB))).toBe(true)
-    expect(calls).toEqual([tabLink, forward(VSCODE)])
+    expect(calls).toEqual([tabLink])
     expect(logs).toEqual([])
   })
 
@@ -132,5 +141,39 @@ describe('a tap on a session in the VS Code extension\'s tab (docs/specs/2026-11
     expect(linux.opener.can(target(TAB))).toBe(false)
     expect(await linux.opener.open('a1', target(TAB))).toBe(false)
     expect(linux.calls).toEqual([])
+  })
+})
+
+describe('a rest on a session in the VS Code extension\'s tab (docs/plans/2026-11-17-dial-vscode-follow-design.md)', () => {
+  const pane = (id: string) => ({ adapter: 'vscode', id })
+
+  it('with VS Code in front, a rest runs the session\'s link once, sent to VS Code alone', async () => {
+    const { calls, adapter } = recorder()
+    expect(await adapter.show(pane(UUID), 'a1')).toBe('ok')
+    expect(calls).toEqual([run(OPEN, '-b', VSCODE, link(UUID))])
+  })
+
+  it('a rest whose link fails is failed and brings nothing forward', async () => {
+    const { calls, adapter } = recorder({}, [1])
+    expect(await adapter.show(pane(UUID), 'a1')).toBe('failed')
+    expect(calls).toEqual([run(OPEN, '-b', VSCODE, link(UUID))])
+  })
+
+  it('a second rest on the same agent while its link runs is busy; another agent\'s runs', async () => {
+    const calls: Call[] = []
+    const waiting: Array<() => void> = []
+    const { adapter } = recorder({
+      run: (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        return new Promise((resolve) => waiting.push(() => resolve({ code: 0, stdout: '' })))
+      },
+    })
+    const first = adapter.show(pane(UUID), 'a1')
+    expect(await adapter.show(pane(UUID), 'a1')).toBe('busy')
+    const other = adapter.show(pane(UUID2), 'a2')
+    waiting.forEach((release) => release())
+    expect(await first).toBe('ok')
+    expect(await other).toBe('ok')
+    expect(calls).toEqual([run(OPEN, '-b', VSCODE, link(UUID)), run(OPEN, '-b', VSCODE, link(UUID2))])
   })
 })

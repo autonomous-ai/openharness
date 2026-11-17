@@ -2824,16 +2824,20 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(said().filter((line) => line === '[device] open · codex · fallback')).toHaveLength(2)
   })
 
-  it('a session in the VS Code extension\'s tab opens by its link, then VS Code comes forward', async () => {
-    const SESSION = '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+  // A Claude Code session in the VS Code extension's tab opens by the extension's link, sent to VS Code alone
+  // (docs/plans/2026-11-17-dial-vscode-follow-design.md).
+  const VSCODE = 'com.microsoft.VSCode'
+  const UUID = '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+  const UUID2 = '3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f'
+  const vscodeLink = (id: string) => `vscode://anthropic.claude-code/open?session=${id}`
+  const tabLink = (id: string): [string, string[], number] => ['/usr/bin/open', ['-b', VSCODE, vscodeLink(id)], 10_000]
+
+  it('a session in the VS Code extension\'s tab opens by its link, sent to VS Code alone', async () => {
     const { port } = startHere({ orca: mac })
-    port.observed(hook('session-start', { sessionId: SESSION, hostHints: { __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
+    port.observed(hook('session-start', { sessionId: UUID, hostHints: { __CFBundleIdentifier: VSCODE, CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
     attach(port)
-    expect(await host().openAgent(observedAgentId('claude', SESSION))).toBeUndefined()
-    expect(orcaRuns).toEqual([
-      ['/usr/bin/open', [`vscode://anthropic.claude-code/open?session=${SESSION}`], 10_000],
-      ['/usr/bin/open', ['-b', 'com.microsoft.VSCode'], 10_000],
-    ])
+    expect(await host().openAgent(observedAgentId('claude', UUID))).toBeUndefined()
+    expect(orcaRuns).toEqual([tabLink(UUID)])
   })
 
   // The end-to-end harness points HARNESS_OPEN_BIN at a fake that opens nothing (e2e/harness/daemon.ts): a link opened by
@@ -2841,20 +2845,19 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   it('the Claude app\'s, the Codex app\'s and VS Code\'s links run HARNESS_OPEN_BIN as their open', async () => {
     vi.stubEnv('HARNESS_OPEN_BIN', '/tmp/e2e/fake-open')
     const CLAUDE = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
-    const VSCODE = '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+    const VSCODE_ID = '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
     const { port } = startHere({ orca: mac })
     port.observed(hook('session-start', { hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop', CLAUDE_CODE_HOST_SESSION_ID: CLAUDE } }))
-    port.observed(hook('session-start', { sessionId: VSCODE, hostHints: { __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
+    port.observed(hook('session-start', { sessionId: VSCODE_ID, hostHints: { __CFBundleIdentifier: VSCODE, CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
     port.observed(hook('session-start', inApp))
     attach(port)
     expect(await host().openAgent(ID)).toBeUndefined()
     expect(await host().openAgent(CX)).toBeUndefined()
-    expect(await host().openAgent(observedAgentId('claude', VSCODE))).toBeUndefined()
+    expect(await host().openAgent(observedAgentId('claude', VSCODE_ID))).toBeUndefined()
     expect(orcaRuns).toEqual([
       ['/tmp/e2e/fake-open', ['-b', 'com.anthropic.claudefordesktop', `claude://code/continue?session=${CLAUDE}`], 10_000],
       ['/tmp/e2e/fake-open', ['-b', 'com.openai.codex', `codex://threads/${THREAD}`], 10_000],
-      ['/tmp/e2e/fake-open', [`vscode://anthropic.claude-code/open?session=${VSCODE}`], 10_000],
-      ['/tmp/e2e/fake-open', ['-b', 'com.microsoft.VSCode'], 10_000],
+      ['/tmp/e2e/fake-open', ['-b', VSCODE, vscodeLink(VSCODE_ID)], 10_000],
     ])
   })
 
@@ -3139,6 +3142,127 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     host().swipeEnded(CX, 'rest')
     await swiped('failed')
     expect(orcaRuns).toEqual([threadLink])
+  })
+
+  // A swipe that rests on a Claude Code session in the VS Code extension's tab shows that tab, while VS Code is in front
+  // (docs/plans/2026-11-17-dial-vscode-follow-design.md).
+  const V1 = observedAgentId('claude', UUID)
+  const V2 = observedAgentId('claude', UUID2)
+  const extension = { __CFBundleIdentifier: VSCODE, CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' }
+  /** Two Claude Code sessions in VS Code's extension tabs on macOS, as `inClaudeApp` is for the Claude app. */
+  const inVscode = async (over: Parameters<typeof start>[0] = {}) => {
+    vi.useFakeTimers()
+    const listener = fakeListener()
+    const started = startHere({ orca: mac, listen: listener.listen, ...over })
+    started.port.observed(hook('session-start', { sessionId: UUID, hostHints: extension }))
+    started.port.observed(hook('session-start', { sessionId: UUID2, hostHints: extension }))
+    attach(started.port)
+    await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+    const front = (app: string) => { expect(listener.front(app)).toBeUndefined() }
+    return { ...started, front }
+  }
+  it('with VS Code in front, a rest on a VS Code extension agent runs one link, sent to VS Code alone', async () => {
+    const { front } = await inVscode()
+    front('vscode')
+    expect(host().swipeSwitches(V1)).toBe(true)
+    host().swipeEnded(V1, 'rest')
+    await swiped('ok')
+    expect(orcaRuns).toEqual([tabLink(UUID)])
+    expect(said()).toEqual(['[device] swipe · ok'])
+  })
+
+  it('two VS Code extension agents: a rest on each runs its own session\'s link exactly once, never the other\'s', async () => {
+    const { front } = await inVscode()
+    front('vscode')
+    host().swipeEnded(V1, 'rest')
+    await swiped('ok')
+    host().swipeEnded(V2, 'rest')
+    await vi.waitFor(() => expect(said()).toEqual(['[device] swipe · ok', '[device] swipe · ok']))
+    expect(orcaRuns).toEqual([tabLink(UUID), tabLink(UUID2)])
+  })
+
+  it('another app in front, none, or no front known: no rest is asked for on a VS Code extension agent', async () => {
+    const { front } = await inVscode()
+    expect(host().swipeSwitches(V1)).toBe(false)
+    // Cursor runs the same extension, which says the same word: its front is not VS Code's.
+    for (const app of ['claude', 'orca', 'cursor', 'none']) {
+      front(app)
+      expect(host().swipeSwitches(V1), app).toBe(false)
+    }
+    // A rest asked all the same shows nothing.
+    host().swipeEnded(V1, 'rest')
+    await swiped('failed')
+    expect(orcaRuns).toEqual([])
+  })
+
+  it('a front that changes during the rest runs none on a VS Code extension agent', async () => {
+    const { front } = await inVscode()
+    front('vscode')
+    expect(host().swipeSwitches(V1)).toBe(true)
+    front('orca')
+    const sent = seen.cable.calls.length
+    host().swipeEnded(V1, 'rest')
+    await swiped('failed')
+    expect(orcaRuns).toEqual([])
+    expect(seen.cable.calls).toHaveLength(sent)
+  })
+
+  it('a VS Code link still running drops the next rest for that agent: busy', async () => {
+    let shown = () => {}
+    const { front } = await inVscode({ orca: { ...mac, run: (file, args, timeoutMs) => {
+      orcaRuns.push([file, args, timeoutMs])
+      return new Promise((done) => { shown = () => done({ code: 0, stdout: '' }) })
+    } } })
+    front('vscode')
+    host().swipeEnded(V1, 'rest')
+    await vi.waitFor(() => expect(orcaRuns).toHaveLength(1))
+    host().swipeEnded(V1, 'rest')
+    await swiped('busy')
+    expect(orcaRuns).toEqual([tabLink(UUID)])
+    shown()
+    await swiped('ok')
+    expect(said()).toEqual(['[device] swipe · busy', '[device] swipe · ok'])
+  })
+
+  it('a rest whose VS Code link fails stays failed, and brings nothing forward', async () => {
+    const { front } = await inVscode({ orca: exiting(1) })
+    front('vscode')
+    const sent = seen.cable.calls.length
+    host().swipeEnded(V1, 'rest')
+    await swiped('failed')
+    expect(orcaRuns).toEqual([tabLink(UUID)])
+    expect(seen.cable.calls).toHaveLength(sent)
+  })
+
+  it('a session in VS Code\'s integrated terminal has no rest, with VS Code in front', async () => {
+    const TERMINAL = '7e8f9a0b-1c2d-4e3f-8a4b-5c6d7e8f9a0b'
+    const { port, front } = await inVscode()
+    port.observed(hook('session-start', { sessionId: TERMINAL, hostHints: { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: VSCODE } }))
+    front('vscode')
+    expect(host().swipeSwitches(observedAgentId('claude', TERMINAL))).toBe(false)
+    host().swipeEnded(observedAgentId('claude', TERMINAL), 'rest')
+    await swiped('failed')
+    expect(orcaRuns).toEqual([])
+  })
+
+  it('on Linux a VS Code extension agent has no rest', async () => {
+    const { front } = await inVscode({ orca })
+    front('vscode')
+    expect(host().swipeSwitches(V1)).toBe(false)
+    host().swipeEnded(V1, 'rest')
+    await swiped('failed')
+    expect(orcaRuns).toEqual([])
+  })
+
+  it('no swipe line carries the VS Code session, the link or the bundle', async () => {
+    const { front } = await inVscode({ orca: exiting(0, 1) })
+    front('vscode')
+    host().swipeEnded(V1, 'rest')
+    await swiped('ok')
+    host().swipeEnded(V1, 'rest')
+    await swiped('failed')
+    expect(said()).toEqual(['[device] swipe · ok', '[device] swipe · failed'])
+    expect(logs.filter((line) => [UUID, V1, 'vscode://', VSCODE].some((secret) => line.includes(secret)))).toEqual([])
   })
 
   it('no swipe line carries a handle, a session or an agent', async () => {
