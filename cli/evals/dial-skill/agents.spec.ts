@@ -89,7 +89,10 @@ describe('claudeArgs', () => {
       '--add-dir', join(root, 'rec'), join(root, 'tmp'),
       '--settings', JSON.stringify(CLAUDE_SANDBOX),
     ])
-    expect(AGENT_CONFIG.timeoutMs).toBe(600_000)
+  })
+
+  it('holds no bound of its own: the runner gives each run its share of --timeout-s', () => {
+    expect(AGENT_CONFIG).not.toHaveProperty('timeoutMs')
   })
 
   it('keeps the sandbox on for writes, with a network allowlist and no unsandboxed fallback', () => {
@@ -160,6 +163,14 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(SAMPLE)}))`)
     await line.gone
   })
 
+  it('leaves the agent unbounded at a timeout of 0, as --timeout-s 0 leaves the case', async () => {
+    const bin = shellAgent(`/bin/sleep 0.3\ncat ${JSON.stringify(SAMPLE)}`)
+
+    const run = await runAgent('claude', need, staged(), config(bin, 0))
+
+    expect(run.answer).toContain('WEATHER_API_KEY')
+  })
+
   it('kills an agent that ignores SIGTERM 10 s later', async () => {
     const line = lifeline()
     const bin = shellAgent(`trap '' TERM\nexec 3>${JSON.stringify(line.path)}\n/bin/sleep 600 3>&3 &\nwait`)
@@ -215,7 +226,7 @@ describe('runAgent stand-ins', () => {
     fake(join('bin', 'harness'), `require('node:fs').appendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + '\\n')
 console.log('shown')`)
 
-    const run = await runAgent(agent, scenario, staged(), AGENT_CONFIG)
+    const run = await runAgent(agent, scenario, staged(), config(''))
 
     const recorded = existsSync(calls) ? readFileSync(calls, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []
     expect(recorded).toEqual(rings)

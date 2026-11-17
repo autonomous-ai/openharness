@@ -301,6 +301,24 @@ describe('run-eval.mjs with claude', () => {
     expect(callsMade()).toEqual(['judge'])
   })
 
+  it('kills an agent that outlives a short --timeout-s within that ceiling, leaving the judge its share', () => {
+    const pidFile = join(tmp, 'agent.pid')
+    fakeClaude(`require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))
+setTimeout(() => {}, 60_000)`)
+
+    const out = runEval(['--variant', 'baseline', '--agents', 'claude', '--cases', 'add-version-flag', '--timeout-s', '4', '--approve-harness'])
+
+    const pid = Number(readFileSync(pidFile, 'utf8'))
+    const alive = (() => {
+      try { process.kill(pid, 0); return true } catch { return false }
+    })()
+    if (alive) process.kill(pid, 'SIGKILL')
+    expect(out.status).toBe(1)
+    // Half of a 4 s ceiling: too short to hold the judge's two 120 s calls, so the judge keeps the other half.
+    expect(jsonl('baseline', 'errors.jsonl')).toMatchObject([{ failure_class: 'timeout', error: 'claude ran past 2 s' }])
+    expect(alive).toBe(false)
+  })
+
   it('keeps a run cut off at --max-turns as truncated, without judging it', () => {
     fakeClaude(TRUNCATED)
 
