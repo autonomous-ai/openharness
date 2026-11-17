@@ -35,8 +35,9 @@ export interface DialHomeSetup {
   attached(): void
   /** The open scan read these owners. */
   scanned(owners: Iterable<RolloutOwner>): void
-  /** A dial attached here once, and `disable` has not removed [engine]. */
-  wanted(engine: DialEngine): boolean
+  /** A dial attached here once, and `disable` has not removed [engine]; undefined when dial-skill.json is there but
+   *  could not be read, so whether it did is not known. */
+  wanted(engine: DialEngine): boolean | undefined
   /** The CLI version that last set the plugin up or brought it current; undefined: never on this computer. */
   plugin(): string | undefined
   /** false when the record could not be saved. */
@@ -442,8 +443,9 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
     },
 
     wanted(engine) {
+      if (!record.dial) return false
       const removed = deps.removed()
-      return record.dial && !removed.unread && removed[engine] !== true
+      return removed.unread ? undefined : removed[engine] !== true
     },
 
     plugin: () => record.plugin,

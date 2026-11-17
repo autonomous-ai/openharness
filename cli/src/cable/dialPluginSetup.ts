@@ -12,8 +12,9 @@ export interface DialPluginSetupDeps {
   version: string
   /** Claude Code as the daemon finds it; [shell]: the login shell's PATH read anew for it, which starts that shell. */
   claude(shell: boolean): Promise<ClaudeRun | null>
-  /** A dial attached here once, and `disable` has not removed Claude Code; read anew at each call. */
-  wanted(): boolean
+  /** A dial attached here once, and `disable` has not removed Claude Code; read anew at each call. undefined: not known
+   *  (dial-skill.json could not be read), and nothing is installed, recorded or undone on it. */
+  wanted(): boolean | undefined
   recorded(): string | undefined
   record(version: string): boolean
   now(): number
@@ -70,8 +71,11 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
     const done = deps.recorded() === undefined ? await claudeSetUp(claude) : await claudeUpdate(claude)
     if (!done.ok) return failed(done.step)
     // A `disable` that landed while the install or the update ran found nothing to undo yet: it is undone here, and
-    // nothing recorded.
-    if (!deps.wanted()) return undo(claude)
+    // nothing recorded. One not known is neither: a moment's read error never uninstalls a plugin the person keeps, and
+    // the next pass finds it current and records it.
+    const still = deps.wanted()
+    if (still === false) return undo(claude)
+    if (still === undefined) return false
     recordAs(COUNTED[done.outcome])
     return done.outcome === 'installed' || done.outcome === 'updated'
   }
@@ -85,6 +89,7 @@ export function createDialPluginSetup(deps: DialPluginSetupDeps): DialPluginSetu
         // The in-memory checks first: wanted() reads dial-skill.json, which a scan with the plugin set up never reads.
         if (deps.recorded() === deps.version || deps.now() < retryAt) return false
         const wanted = deps.wanted()
+        if (wanted === undefined) return false
         return wanted || undoOwed ? await run(wanted, attached) : false
       } catch {
         return failed('error')
