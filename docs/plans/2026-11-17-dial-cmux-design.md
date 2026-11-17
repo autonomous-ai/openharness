@@ -206,11 +206,15 @@ anywhere (`observed.ts`): cmux's mode matters only when those do not take them.
 ### The hook and the app (`notify.mjs`, `hostDetect.ts`, firmware)
 
 - `CMUX_SURFACE_ID` and `CMUX_WORKSPACE_ID` join `HOST_HINTS` after `HC_TERMINAL_ID`, on macOS only, and count toward
-  `MAX_HINTS`. The copy in `hookNotify.spec.ts` changes with it.
+  `MAX_HINTS`. The copy in `hookNotify.spec.ts` changes with it. The hook leaves both out when `HERDR_PANE_ID`,
+  `HERDR_SESSION` or `HC_TERMINAL_ID` is in its own environment: a herdr or hc session started in a cmux terminal is the
+  nearer host, and a named one sends no id of its own, so cmux's alone would point the dial's words at herdr's screen or
+  a shell (final review).
 - `inCmux(hints)`, beside `inHerdr` and for the same reason (every program started in a cmux terminal inherits its
   variables: `code .`, WezTerm, kitty, tmux): both CMUX hints are UUIDs, `TERM_PROGRAM` is `ghostty` or absent, and no
   nearer or other app's variable is set (`NEARER_HOSTS`, `HC_TERMINAL_ID`, `KITTY_WINDOW_ID`, `WEZTERM_PANE`,
-  `ORCA_TERMINAL_HANDLE`). `detectHost` and `detectApp` answer `cmux` when `inCmux`, ahead of `TERM_PROGRAM`;
+  `ORCA_TERMINAL_HANDLE`, `ORCA_AGENT_SESSION_ID`), and the bundle id is absent, `com.cmuxterm.app` or Ghostty's (so
+  cmux NIGHTLY is not read as cmux). `open.ts` `bundleOf` brings cmux for such a place. `detectHost` and `detectApp` answer `cmux` when `inCmux`, ahead of `TERM_PROGRAM`;
   `detectApp` also maps `com.cmuxterm.app` by `APP_BUNDLES`. The adapter's `paneOf` asks `inCmux` too.
 - `cmux` joins `NAMES` (display `cmux`, after `ghostty`, so `codex` stays right after `claude`) and `APP_BUNDLES`;
   `APP_IDS` becomes 18 (`hostDetect.spec.ts`, and the "Seventeen ids" comment). The APPS pick brings it by #4373's path
