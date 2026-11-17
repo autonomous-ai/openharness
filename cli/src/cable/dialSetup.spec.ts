@@ -102,7 +102,8 @@ describe('createDialSetup', () => {
     expect(readSetup(r.dataDir)).toMatchObject({ dial: true, plugin: '0.6.59' })
     // The plugin goes into the Claude Code home whose settings the homes read.
     expect(r.looked).toEqual([r.claudeHome])
-    expect(r.counted).toEqual([['codex', 'set up'], ['claude', 'set up'], ['claude', 'set up']])
+    // One Claude Code setup: the plugin's, which its skill follows.
+    expect(r.counted).toEqual([['codex', 'set up'], ['claude', 'set up']])
   })
 
   it('a computer that never had a dial gets nothing, and claude is not looked for', async () => {

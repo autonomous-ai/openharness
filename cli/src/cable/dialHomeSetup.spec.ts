@@ -197,10 +197,8 @@ describe('the devices set the dial skill up', () => {
     expect(sorted(listed.claude)).toEqual(sorted([r.claudeHome, claudeAdopted, claudeListed].map(skillsOf)))
     expect(sorted(listed.codex)).toEqual(sorted([r.codexHome, codexAdopted, codexListed].map(skillsOf)))
     expect(r.lines).toEqual([counts([3, 0], [3, 0])])
-    expect(r.counted).toEqual([
-      ['claude', 'updated'], ['claude', 'set up'], ['claude', 'set up'],
-      ['codex', 'updated'], ['codex', 'set up'], ['codex', 'set up'],
-    ])
+    // Claude Code's setup is its plugin's, which the plugin's own pass counts: the skill only follows it.
+    expect(r.counted).toEqual([['codex', 'updated'], ['codex', 'set up'], ['codex', 'set up']])
   })
 
   it('a default home that is missing is not made: only the command makes one', () => {
