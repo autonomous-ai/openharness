@@ -19,7 +19,7 @@
 import { basename } from 'node:path'
 import {
   OPENCODE_PERMISSION, OPENCODE_SESSION,
-  type OpencodeAnswer, type OpencodeClient, type OpencodeEvent, type OpencodeFault,
+  type OpencodeAnswer, type OpencodeClient, type OpencodeEvent, type OpencodeFault, type OpencodePrompt,
 } from './opencodeClient.js'
 import { MAX_CWD, shown } from './herdrSource.js'
 import { MAX_TEXT } from './orca.js'
@@ -236,8 +236,13 @@ export class OpencodeSource implements HostSource {
     const session = row.agent.sessionId
     if (row.agent.state === 'working' || this.sending.has(session)) return refuse('busy', busy)
     this.sending.add(session)
-    const outcome = await this.deps.client.prompt(session, text, this.deps.messageId())
-    this.sending.delete(session)
+    let outcome: OpencodePrompt
+    try {
+      outcome = await this.deps.client.prompt(session, text, this.deps.messageId())
+    } finally {
+      // One that throws leaves the session free for the next words, not busy for good.
+      this.sending.delete(session)
+    }
     if (outcome === 'sent') {
       this.deps.count('opencode')
       return { ok: true }
