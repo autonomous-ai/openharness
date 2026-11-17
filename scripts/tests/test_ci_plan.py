@@ -92,14 +92,28 @@ class SelectionTests(unittest.TestCase):
             "backend/src/app.ts": {"backend"}, "companions/src/a.ts": {"companions"},
             "website/app/page.tsx": {"website"}, "os/root/usr/lib/session": {"os"},
             "provider/spec.md": {"provider"}, "devices/harness-device/firmware/main/main.c": {"firmware"},
-            "devices/harness-pro/firmware/main/app/pro_app.c": {"firmware", "pro"},
-            "devices/harness-pro/README.md": {"firmware", "pro"}, "devices/harness-pro-other/x.c": {"firmware"},
+            "devices/harness-pro/firmware/main/app/pro_app.c": {"firmware", "pro", "max"},
+            "devices/harness-pro/README.md": {"firmware", "pro", "max"}, "devices/harness-pro-other/x.c": {"firmware"},
+            "devices/harness-max/firmware/main/app/max_app.c": {"firmware", "max"},
+            "devices/harness-max-other/x.c": {"firmware"},
             "mobile/pubspec.lock": {"mobile"}, "daemons/tools/card.mjs": {"daemons"},
             "pty/src/stream.rs": {"pty"},
             "device-app/src-tauri/src/lib.rs": {"device-app"}, "device-app/ui/src/main.ts": {"device-app"},
         }.items():
             with self.subTest(path=path):
                 self.assertEqual(planner.owners(path), expected)
+
+    def test_harness_max_runs_its_own_build_and_goldens_and_a_pro_change_runs_them_too(self):
+        # Harness Max compiles the Pro's sources where they are, so a Pro-only change can break Max's build.
+        self.assertEqual(planner.JOBS["max"], {"max-firmware-build", "max-golden"})
+        self.assertEqual(planner.MANUAL["max"], {"max"})
+        self.assertEqual(planner.select(["devices/harness-max/firmware/main/app/max_app.c"])[0], {"firmware", "max"})
+        self.assertEqual(planner.select(["devices/harness-pro/firmware/main/cable/pro_cable.c"])[0],
+                         {"firmware", "pro", "max"})
+        self.assertEqual(planner.select(["devices/harness-device/firmware/main/main.c"])[0], {"firmware"})
+        # A Pro change on main is an input of Max's result, so Update branch does not reuse it.
+        self.assertTrue(planner.reads("max", "devices/harness-pro/firmware/main/display/terminal.h"))
+        self.assertFalse(planner.reads("pro", "devices/harness-max/firmware/main/app/max_app.c"))
 
     def test_the_device_app_runs_its_own_suite_and_no_other(self):
         for path in ("device-app/src-tauri/src/keepalive.rs", "device-app/src-tauri/Cargo.lock",

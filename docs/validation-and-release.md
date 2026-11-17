@@ -82,6 +82,7 @@ beside the CLI's own suite); the CLI reads `pty/`, `tui/` and `store/`, Desktop 
 | `companions/`, `website/`, `os/`, `provider/`, `mobile/`, `daemons/` | that component's one check | 1–4 min |
 | `devices/` | `firmware-checks` | 1–2 min |
 | `devices/harness-pro/` | also `pro-firmware-build` (ESP-IDF v5.5.4 build of `harness_pro.bin`, which must fit `ota_0`) and `pro-golden` (`test/golden.sh --check` with Liberation Sans, on macOS arm64 where the baseline is recorded: float maths in the code-drawn shapes differs on Linux x86-64) | build ~4 min, golden ~1 min |
+| `devices/harness-max/`, `devices/harness-pro/` (Max compiles the Pro's sources) | also `max-firmware-build` (`harness_max.bin` must fit `ota_0`) and `max-golden` (as `pro-golden`) | build ~4 min, golden ~1 min |
 | anything else (docs, workflows, scripts) | `process-checks` only | about 1.5 min |
 
 `plan` (actionlint and suite selection), `process-checks` and `ci/required` always
