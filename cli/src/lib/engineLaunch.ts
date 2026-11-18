@@ -616,28 +616,30 @@ function sourcedOnce(script: string): string {
  * launch built again ([build]) for each retry, with a one-time file of its own: the shell of the pane before it removed
  * its file as it read it, and a retry handed that argv ran a file already gone (CI, cli/e2e/scale.e2e.ts, 2026-11-19).
  * A pane closed at once (its registration refused) may never have read its file: the retry removes it, which nothing
- * else would before the sweep an hour on.
+ * else would before the sweep an hour on. A launch with no such file (Windows, or no data folder) runs again as it is:
+ * on Windows the pane's other launch facts were read from it (`windowsPaneLaunch`'s `held`).
  */
 export function launchAttempts(first: string[], build: () => string[]): (attempt: number) => string[] {
   let last = first
   return (attempt) => {
-    if (attempt === 1) return first
-    removeLaunchFile(last)
+    const file = attempt === 1 ? null : launchFileOf(last)
+    if (!file) return last
+    try { rmSync(file, { force: true }) } catch { /* the sweep takes it */ }
     last = build()
     return last
   }
 }
 
-/** Removes the one-time file [argv] names: the argument `sourcedOnce` or `throughPosixShell` made, exactly. */
-function removeLaunchFile(argv: readonly string[]): void {
+/** The one-time file [argv] names: the argument `sourcedOnce` or `throughPosixShell` made, exactly; null without one. */
+function launchFileOf(argv: readonly string[]): string | null {
   for (const arg of argv) {
     const name = /([\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}\.sh)'$/.exec(arg)?.[1]
     if (!name) continue
     const file = join(env.ADAPTER_DATA_DIR, 'launch', name)
     const quoted = shellSingleQuote(file)
-    if (arg !== `. ${quoted}` && arg !== `exec ${posixRunner()} ${quoted}`) continue
-    try { rmSync(file, { force: true }) } catch { /* the sweep takes it */ }
+    if (arg === `. ${quoted}` || arg === `exec ${posixRunner()} ${quoted}`) return file
   }
+  return null
 }
 
 /**

@@ -121,7 +121,7 @@ describe('createAndRegisterPane', () => {
   it('gives the retry pane a launch file of its own, as the first pane\'s shell removed its file on reading it', async () => {
     const { registry } = await loadRegistryModule()
     // Loaded after the reset, so its one-time launch files land in this test's data folder.
-    const { buildEngineLaunchArgv } = await import('./engineLaunch.js')
+    const { buildEngineLaunchArgv, launchAttempts } = await import('./engineLaunch.js')
     registry.load()
     ;(await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/other' }))
     const panes = fakeTmux([succeeded('%1'), succeeded('%2')])
@@ -135,9 +135,10 @@ describe('createAndRegisterPane', () => {
       return panes.create()
     } }
 
+    const build = () => buildEngineLaunchArgv('codex', { cwd: '/tmp/demo' }, '/bin/sh', undefined, 'grid', null)
     const result = await createAndRegisterPane({
       tmuxBackend, registry, engine: 'codex', cwd: '/tmp/demo', sessionLabel: 'harness-codex-1',
-      argv: () => buildEngineLaunchArgv('codex', { cwd: '/tmp/demo' }, '/bin/sh', undefined, 'grid', null),
+      argv: launchAttempts(build(), build),
     })
 
     expect(result.ok && result.spawned.runtime.paneId).toBe('%2')
