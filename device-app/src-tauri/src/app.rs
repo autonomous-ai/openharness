@@ -2420,6 +2420,24 @@ mod tests {
     }
 
     #[test]
+    fn a_silent_update_orca_did_not_answer_runs_again_at_the_next_behind() {
+        // Orca was not running, or did not answer in time: the next Behind runs it again, with no fingerprint.
+        for error in [OrcaError::NotRunning, OrcaError::Timeout] {
+            let mut app = settled(Some(OrcaStatus::Behind));
+            hear(&mut app, failed(error));
+            app.handle(opened(B + 300));
+            assert_eq!(connects(&hear(&mut app, status(Some(OrcaStatus::Behind)))), [None], "{error:?}");
+        }
+        // Any other failure counts as run.
+        for error in [OrcaError::Failed, OrcaError::Off, OrcaError::NoPlugin] {
+            let mut app = settled(Some(OrcaStatus::Behind));
+            hear(&mut app, failed(error));
+            app.handle(opened(B + 300));
+            assert!(connects(&hear(&mut app, status(Some(OrcaStatus::Behind)))).is_empty(), "{error:?}");
+        }
+    }
+
+    #[test]
     fn done_takes_the_row_away_cancel_and_a_failure_keep_it() {
         let mut app = asking();
         let effects = hear(&mut app, connected());
