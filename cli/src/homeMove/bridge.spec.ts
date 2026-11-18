@@ -319,9 +319,9 @@ describe('the bridge\'s record', () => {
     expect(boot.uptime).toBeGreaterThan(process.uptime())
   })
 
-  it('the move\'s time is btime of /proc/stat plus /proc/uptime, the clock /proc start times use', () => {
-    const proc: Record<string, string> = { '/proc/stat': 'cpu  1 2 3\nbtime 1700000000\nprocesses 9\n', '/proc/uptime': '1234.56 999.00\n' }
-    expect(procNow((path) => proc[path])).toBeCloseTo(1_700_001_234.56)
-    expect(() => procNow((path) => path === '/proc/stat' ? 'cpu  1 2 3\n' : proc[path])).toThrow()
+  it('the move\'s time is btime of /proc/stat plus /proc/uptime, in seconds since the epoch', () => {
+    const files: Record<string, string> = { '/proc/stat': 'cpu  1 2 3\nbtime 1700000000\nprocesses 9\n', '/proc/uptime': '1234.56 999.00\n' }
+    expect(procNow((path) => files[path])).toBeCloseTo(1_700_001_234.56)
+    expect(() => procNow((path) => path === '/proc/stat' ? 'cpu  1 2 3\n' : files[path])).toThrow()
   })
 })
