@@ -6,6 +6,7 @@ const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
 const OTHER = 'local_0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
 const CLAUDE = 'com.anthropic.claudefordesktop'
 const OPEN = '/usr/bin/open'
+const FALLBACK = '[device] open · claude · fallback'
 
 interface Call { file: string; args: string[]; timeoutMs: number }
 type Deps = Parameters<typeof createClaudeAppAdapter>[0]
@@ -14,6 +15,7 @@ type Deps = Parameters<typeof createClaudeAppAdapter>[0]
  *  of [codes], then exit 0. */
 function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = []) {
   const calls: Call[] = []
+  const logs: string[] = []
   const deps: Deps = {
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
@@ -21,9 +23,10 @@ function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = []) {
     },
     platform: 'darwin',
     inFront: () => true,
+    log: (line) => { logs.push(line) },
     ...over,
   }
-  return { calls, adapter: createClaudeAppAdapter(deps) }
+  return { calls, logs, adapter: createClaudeAppAdapter(deps) }
 }
 
 /** The recorder, each command held until it is let go, so a link can be caught still running. */
@@ -42,6 +45,9 @@ function holding() {
 const place = (hints: Record<string, string>): Place => ({ host: 'claude', app: 'claude', hints })
 const pane = (id: string) => ({ adapter: 'claude', id })
 const link = (session: string): Call => ({ file: OPEN, args: ['-b', CLAUDE, `claude://code/continue?session=${session}`], timeoutMs: 10_000 })
+const forward: Call = { file: OPEN, args: ['-b', CLAUDE], timeoutMs: 10_000 }
+/** A session the open scan found: the app its parents name and the id its record holds, and no hook's hints yet. */
+const scanned = (over: Partial<Place> = {}): Place => ({ host: 'terminal', app: 'claude', hints: {}, hostSession: SESSION, ...over })
 
 describe('the Claude app adapter', () => {
   it('its id is claude, and its link takes the place of open -b', () => {
@@ -65,6 +71,26 @@ describe('the Claude app adapter', () => {
     }
   })
 
+  it('paneOf takes the id the scan read from the record of a session the Claude app runs', () => {
+    const { adapter } = recorder()
+    expect(adapter.paneOf(scanned())).toEqual(pane(SESSION))
+  })
+
+  it('paneOf refuses the record\'s id under any other app, with none, or in any other form', () => {
+    const { adapter } = recorder()
+    for (const app of ['ghostty', 'terminal', 'herdr', 'codex', 'orca', 'unknown']) {
+      expect(adapter.paneOf(scanned({ app })), app).toBeUndefined()
+    }
+    expect(adapter.paneOf(scanned({ hostSession: undefined }))).toBeUndefined()
+    const forged = ['local_', 'local_a/b', 'local_x&source=y', `local_${'a'.repeat(65)}`, 'session_abc', '--args', '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b']
+    for (const hostSession of forged) expect(adapter.paneOf(scanned({ hostSession })), hostSession).toBeUndefined()
+  })
+
+  it('the hook\'s hints win over the record\'s id', () => {
+    const { adapter } = recorder()
+    expect(adapter.paneOf(scanned({ hints: { __CFBundleIdentifier: CLAUDE, CLAUDE_CODE_HOST_SESSION_ID: OTHER } }))).toEqual(pane(OTHER))
+  })
+
   it('canFocus is macOS only; canShow also needs the app in front, asked each time', () => {
     for (const platform of ['linux', 'win32'] as const) {
       const { adapter } = recorder({ platform })
@@ -80,16 +106,11 @@ describe('the Claude app adapter', () => {
     expect(adapter.canShow(pane(SESSION))).toBe(false)
   })
 
-  it('focus runs the continue link alone', async () => {
-    const { calls, adapter } = recorder()
+  it('focus runs the continue link alone, and nothing is said', async () => {
+    const { calls, logs, adapter } = recorder()
     expect(await adapter.focus(pane(SESSION))).toBe(true)
     expect(calls).toEqual([link(SESSION)])
-
-    for (const code of [1, null]) {
-      const failed = recorder({}, [code])
-      expect(await failed.adapter.focus(pane(SESSION)), String(code)).toBe(false)
-      expect(failed.calls).toEqual([link(SESSION)])
-    }
+    expect(logs).toEqual([])
 
     const linux = recorder({ platform: 'linux' })
     expect(await linux.adapter.focus(pane(SESSION))).toBe(false)
@@ -100,6 +121,25 @@ describe('the Claude app adapter', () => {
     expect(forged.calls).toEqual([])
   })
 
+  it('a link that exits non-zero or times out brings the app forward once, in one line with no session id', async () => {
+    for (const code of [1, null]) {
+      const { calls, logs, adapter } = recorder({}, [code])
+      expect(await adapter.focus(pane(SESSION)), String(code)).toBe(true)
+      expect(calls).toEqual([link(SESSION), forward])
+      expect(logs).toEqual([FALLBACK])
+      for (const line of logs) expect(line).not.toContain(SESSION)
+    }
+  })
+
+  it('a link and an app that both fail answer false', async () => {
+    for (const codes of [[1, 1], [null, null]]) {
+      const { calls, logs, adapter } = recorder({}, codes)
+      expect(await adapter.focus(pane(SESSION)), String(codes)).toBe(false)
+      expect(calls).toEqual([link(SESSION), forward])
+      expect(logs).toEqual([FALLBACK])
+    }
+  })
+
   // The end-to-end harness points HARNESS_OPEN_BIN at a fake that opens nothing (e2e/harness/daemon.ts), as open.ts
   // takes it.
   it.each([
@@ -107,11 +147,11 @@ describe('the Claude app adapter', () => {
     ['', OPEN],
     ['fake-open', OPEN],
     [undefined, OPEN],
-  ])('HARNESS_OPEN_BIN %j: an absolute path is the open a tap and a rest run; empty, relative and none run /usr/bin/open', async (bin, file) => {
-    const { calls, adapter } = recorder({ bin })
+  ])('HARNESS_OPEN_BIN %j: an absolute path is the open a tap, its fallback and a rest run; empty, relative and none run /usr/bin/open', async (bin, file) => {
+    const { calls, adapter } = recorder({ bin }, [1])
     expect(await adapter.focus(pane(SESSION))).toBe(true)
     expect(await adapter.show(pane(SESSION), 'a1')).toBe('ok')
-    expect(calls).toEqual([{ ...link(SESSION), file }, { ...link(SESSION), file }])
+    expect(calls).toEqual([{ ...link(SESSION), file }, { ...forward, file }, { ...link(SESSION), file }])
   })
 })
 
@@ -124,9 +164,10 @@ describe('a rest on a Claude app session', () => {
 
   it('a link that exits non-zero, or never exits, is failed, and no app is brought forward', async () => {
     for (const code of [1, null]) {
-      const { calls, adapter } = recorder({}, [code])
+      const { calls, logs, adapter } = recorder({}, [code])
       expect(await adapter.show(pane(SESSION), 'a1'), String(code)).toBe('failed')
       expect(calls).toEqual([link(SESSION)])
+      expect(logs).toEqual([])
     }
   })
 
