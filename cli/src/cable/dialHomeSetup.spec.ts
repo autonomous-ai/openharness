@@ -563,10 +563,11 @@ describe('the devices set the dial skill up', () => {
     })
   })
 
-  it('an engine disable removed counts left removed once, until dial-skill.json changes', () => {
+  it('an engine disable removed counts left removed once, until the engine is read on again', () => {
     const other = folder()
     const r = rig()
     writeRemoved(r.dataDir, 'codex', true)
+    const leftRemoved = () => r.counted.filter(([, kind]) => kind === 'left removed')
 
     r.writer.started()
     r.writer.attached()
@@ -574,10 +575,20 @@ describe('the devices set the dial skill up', () => {
     r.writer.scanned([ownerIn(other)])
     expect(r.counted).toEqual([['codex', 'left removed']])
 
-    // A second disable writes the file again.
+    // VS Code's disable and enable, Claude Code's enable and a second disable of Codex each write the file again: none
+    // is a new removal of Codex, and the day's line counts it once.
+    for (const [what, removed] of [['vscode', true], ['vscode', false], ['claude', false], ['codex', true]] as const) {
+      writeRemoved(r.dataDir, what, removed)
+      r.writer.scanned([])
+    }
+    expect(leftRemoved()).toEqual([['codex', 'left removed']])
+
+    // An enable a scan read, then a disable, is one.
+    writeRemoved(r.dataDir, 'codex', false)
+    r.writer.scanned([])
     writeRemoved(r.dataDir, 'codex', true)
     r.writer.scanned([])
-    expect(r.counted).toEqual([['codex', 'left removed'], ['codex', 'left removed']])
+    expect(leftRemoved()).toEqual([['codex', 'left removed'], ['codex', 'left removed']])
   })
 
   /** [count] existing skills folders, each in a home of its own under one throwaway folder. */
