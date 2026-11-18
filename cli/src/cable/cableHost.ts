@@ -739,8 +739,8 @@ export class DaemonCableHost implements CableHost {
     return this.onMachine(agentId, opts)?.agent.app
   }
 
-  /** A pick from the dial's list of apps. With a window, on the tab nothing is picked; on an app's ring Harness is the
-   *  window's tab, and any other app the filter's pick. */
+  /** A pick from the dial's list of apps. With a window, on the tab another app with agents turns the dial to its ring;
+   *  on an app's ring Harness is the window's tab, and any other app the filter's pick. */
   pickApp(app: string, cause: 'pick' | 'notice' = 'pick'): AppPick {
     if (cause === 'pick') this.wiring.appPicked?.()
     const answer = this.answerPick(app, cause)
@@ -751,7 +751,15 @@ export class DaemonCableHost implements CableHost {
 
   private answerPick(app: string, cause: 'pick' | 'notice'): AppPick {
     if (this.swarms === null) return this.filter.pick(app, cause)
-    if (this.view === 'tabs') return 'ignored'
+    if (this.view === 'tabs') {
+      // A notice's pick on the tab is not the dial's switch. The filter holds the app even when it already shows it, or
+      // the next read's D1 would show Harness again and turn the view straight back to the tab.
+      if (cause !== 'pick' || app === 'harness' || !this.filter.hold(app)) return 'ignored'
+      // Picked off the tab: the app Harness was picked over no longer holds the tab when it gets agents in front.
+      this.pickedOver = undefined
+      this.setView('apps', 'pick')
+      return 'switched'
+    }
     if (app !== 'harness') return this.filter.pick(app, cause)
     this.pickedOver = this.filter.settledApp()
     this.setView('tabs', 'pick')
