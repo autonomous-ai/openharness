@@ -7,10 +7,9 @@
 import { spawn } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
-import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { CLI_ROOT, IsolatedDaemon, fakeEngineShim, until } from './harness/daemon.js'
 import { MISSING_HELPER } from '../src/engines/kit/identityScan.js'
 
 /** `harness <args>` as a person's shell runs it: not a terminal, so plain text. */
@@ -36,9 +35,8 @@ describe.runIf(process.platform === 'darwin')('a build without its native helper
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
     // A Codex that runs no hooks: one that does is bound by its SessionStart, which needs no native read, and the
     // hold lasted only until then. Without hooks the descriptors are the only way to its conversation.
-    const module = pathToFileURL(join(CLI_ROOT, 'e2e', 'harness', 'fakeEngine.mjs')).href
     const config = { ...d.engineConfig, withoutHooks: ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop', 'Interrupt', 'PermissionRequest', 'PreToolUse'] }
-    writeFileSync(join(d.root, 'bin', 'codex'), `#!${process.execPath}\nimport(${JSON.stringify(module)}).then((m) => m.run('codex', ${JSON.stringify(config)}))\n`, { mode: 0o755 })
+    writeFileSync(join(d.root, 'bin', 'codex'), fakeEngineShim('codex', config), { mode: 0o755 })
     await d.start()
     const client = await LocalClient.connect(d)
     const dir = join(d.projectsDir, 'held')
@@ -56,8 +54,9 @@ describe.runIf(process.platform === 'darwin')('a build without its native helper
     expect(JSON.parse(shown.out), shown.err).toMatchObject({ state: 'held', namedState: MISSING_HELPER, needsPerson: true })
     const listed = await harness(d, ['ps', '--json'])
     expect(JSON.parse(listed.out).harnesses, listed.err).toEqual([expect.objectContaining({ name: 'held', state: 'held' })])
-    // Once by the end of the test: the daemon has no per-pass signal to wait on, so how many passes ran since is
-    // not bounded here.
+    // Once by the end of the test, a few seconds after the hold: no more than that. The daemon gives no per-pass signal
+    // to wait on, and no sleep stands in for one, so one more 5 s pass or none may have run by now. That a later pass
+    // logs nothing is bind.spec.ts's ('logs a hold once, ...').
     expect(d.log().split(`binding held · ${MISSING_HELPER}`)).toHaveLength(2)
     client.close()
   }, 180_000)

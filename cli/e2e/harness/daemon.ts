@@ -565,8 +565,10 @@ esac
     // and a test may name its script after `create` (`masterIpcExit.e2e.ts`).
     assertHooksContained(this.root, this.env)
     if (this.options.scriptPath) assertHookScriptBeside(this.options.scriptPath)
-    // An installed bundle may embed a helper of its own.
-    if (this.options.withoutProcessImages && this.options.scriptPath) throw new Error('withoutProcessImages runs the sources; it cannot run a given bundle')
+    // An installed bundle may embed a helper of its own, and a test's own launcher starts what it says.
+    if (this.options.withoutProcessImages && (this.options.scriptPath || this.options.launch)) {
+      throw new Error('withoutProcessImages runs the sources; it cannot run a given bundle or launcher')
+    }
     // The product looks for npm-installed engines beside the Node the daemon runs on (lib/engineLaunch.ts
     // `npmRuntimeBins`), and on a developer's Mac the worker's Node was in the version manager's folder with their real
     // engines, which freshMachineEngines.e2e.ts's daemon found "already installed" (audit of 2026-11-16,
