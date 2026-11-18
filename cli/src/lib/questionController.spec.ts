@@ -147,6 +147,12 @@ describe('asynchronous question evidence', () => {
       expect(await toggled(['Tea', 'Coffee', 'Milk'], 'tea, coff')).toEqual(['Tea', 'Coffee'])
     })
 
+    it('reads each piece trimmed, as before, so a full stop before a space still matches', async () => {
+      // norm drops a trailing full stop before it trims: " No. " reads "no." unless the piece is trimmed first.
+      expect(await toggled(['Tea', 'Coffee', 'No'], 'tea, coff, No. ')).toEqual(['Tea', 'Coffee', 'No'])
+      expect(await toggled(['Yes, continue', 'Yes, stop', 'No'], 'Yes, stop, No. ')).toEqual(['Yes, stop', 'No'])
+    })
+
     it('reads a long answer in time that grows with its length', () => {
       // The answer is outside text and the core reads it in line: trying every run of pieces as a label held the
       // core 12 s on this 3 KB answer, its time growing with the cube of the pieces (2026-11-18).
