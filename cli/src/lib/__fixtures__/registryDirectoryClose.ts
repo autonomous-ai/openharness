@@ -7,7 +7,7 @@ const fs = require('node:fs') as typeof import('node:fs')
 const [directory, mode] = process.argv.slice(2) as [string, 'published' | 'preparation' | 'status']
 const file = join(directory, 'registry.json'), receipt = join(directory, 'close-receipt.json')
 const original = { close: fs.closeSync, stat: fs.fstat, rename: fs.renameSync, open: fs.open }
-let armed = mode === 'status', published = false, selected: number | undefined
+let armed = false, published = false, selected: number | undefined
 let attempts = 0, afterFailureWrites = 0, cleanExit = false
 let outcome: unknown, refused: unknown
 fs.open = ((...args: Parameters<typeof fs.open>) => {
@@ -46,13 +46,20 @@ process.once('exit', code => fs.writeFileSync(receipt, JSON.stringify({ attempts
   uncertainDescriptorOpen: selected !== undefined && (() => { try { return fs.fstatSync(selected).isDirectory() } catch { return false } })(),
 })))
 
+const { registry } = await import('../registry.js')
+await registry.load()
+await registry.flush()
 if (mode === 'status') {
+  const load = registry.load.bind(registry)
+  registry.load = async () => {
+    await load()
+    // Status catches its flush failure; migration must finish before that fault is armed.
+    registry.list()[0]!.cwd = directory
+    armed = true; published = false
+  }
   process.argv = [process.execPath, fileURLToPath(new URL('../../cli.ts', import.meta.url)), 'status']
   await import('../../cli.js')
 } else {
-  const { registry } = await import('../registry.js')
-  await registry.load()
-  await registry.flush()
   const row = registry.list()[0]!
   const plan = { id: '12345678-1234-1234-1234-123456789012', identity: 'fixture-owner', requestedAt: 1790900000000, state: 'waiting' as const }
   armed = true; published = false
@@ -62,4 +69,7 @@ if (mode === 'status') {
   refused = await registry.setClosePlan(row.agentId, null).then(() => ({ unexpectedSuccess: true }), failure)
   // No awaited promise can claim this writer ended. Node itself must exit with that fd still owned.
   void registry.flush({ exiting: true }).then(() => { cleanExit = true }, () => { cleanExit = true })
+  // The extracted storage owner must end too; its IPC handle cannot keep this fixture process alive.
+  const { closeSessionStorageFixture } = await import('../../testing/sessionStorageFixture.js')
+  await closeSessionStorageFixture((await import('../sessionStorage.js')).sessionStorage)
 }
