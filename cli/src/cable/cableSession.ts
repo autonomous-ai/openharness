@@ -34,6 +34,7 @@ import { SerialLink, findDialPort } from './serial.js'
 import { PLAYER_PAGE_SIZE, playerPage, type PlayerSession } from './playerLibrary.js'
 import { PassageCarry, withCarriedPassage, type CarryRead } from './passageCarry.js'
 import { VoiceDraft, type DraftPin } from './voiceDraft.js'
+import { dialText, noticeSummary } from './dialText.js'
 import { QuestionInbox, type ReviewedAnswer, type AnswerReceipt, type QuestionSpeech } from './questionInbox.js'
 import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
 import { partitionTexts } from '../lib/questionController.js'
@@ -171,8 +172,6 @@ export interface ActivitySnapshot {
 
 /** The device keeps 192 B of the agent's latest sentence (cable.md); a longer one is cut on a character boundary. */
 const ACTION_MAX_BYTES = 188
-/** A drawer row's words on the device (cable_notif_t summary, 240 B with its end): eight rows stay one frame. */
-const NOTICE_SUMMARY_MAX = 239
 /** An agent's name and machine on the device (CABLE_NAME_MAX, 40 B with its end). */
 const NAME_MAX = 39
 
@@ -248,36 +247,6 @@ function clipUtf8(text: string, max: number): string {
   if (Buffer.byteLength(flat, 'utf8') <= max) return flat
   const decoded = new TextDecoder('utf-8').decode(Buffer.from(flat, 'utf8').subarray(0, max - 3))
   return `${decoded.replace(/\uFFFD+$/, '')}\u2026`
-}
-
-/**
- * A drawer row's text as the dial keeps it (firmware recap_preview): whitespace folded to one space, cut on a whole
- * character at `max` bytes, no ellipsis. The dial matches a read row by its words, so a question asked whole and then
- * carried in a drawer stays read; and a window's question text, a plan of kilobytes, made the drawer frame too big to
- * send, every question it carried with it (2026-11-18). It is cut sooner where its JSON passes twice `max`, a field of
- * quotes: JSON writes a control character six bytes wide, and eight rows of them passed the frame cap. Folding them
- * instead changed the words of a question the dial had filed with them, and a read question came back unread. Half an
- * emoji is written '?' here as `send` writes it for the dial: counted as the three bytes UTF-8 gives it, the cut fell
- * short of the dial's own and a read question came back unread.
- */
-function dialText(text: string, max: number): string {
-  let out = ''
-  let bytes = 0
-  let width = 0
-  let space = false
-  for (const char of text) {
-    if (char === ' ' || (char >= '\t' && char <= '\r')) { space = bytes > 0; continue }
-    const ch = /[\ud800-\udfff]/u.test(char) ? '?' : char
-    const gap = space ? 1 : 0
-    const size = Buffer.byteLength(ch, 'utf8')
-    const wide = ch === '"' || ch === '\\' ? 2 : ch < ' ' ? 6 : size
-    if (bytes + gap + size > max || width + gap + wide > 2 * max) break
-    out += space ? ` ${ch}` : ch
-    bytes += gap + size
-    width += gap + wide
-    space = false
-  }
-  return out
 }
 
 /** Whether the dial keeps a drawer row of this agent: it skips an id of ID_MAX (48 B) or more. One with a control
@@ -3359,7 +3328,7 @@ export class CableSession {
           summary = summary ? extendShortRecap(summary, saved?.text ?? '') : saved?.recap ?? ''
         } catch { /* keep the supplied text if history cannot be read */ }
       }
-      return { agentId: item.agentId, name: who.name, machine: who.machine, summary: dialText(summary, NOTICE_SUMMARY_MAX),
+      return { agentId: item.agentId, name: who.name, machine: who.machine, summary: noticeSummary(summary),
         question: item.question, ...(notificationReadToken(item.readToken) ? { readToken: item.readToken } : {}) }
     }))
     if (this.notificationReplay !== replay) return
@@ -3381,7 +3350,7 @@ export class CableSession {
     const eight = [
       ...open.map(({ agentId, questions }) => {
         const { name, machine } = this.whoIs(agentId)
-        return { agentId, name, machine, summary: dialText(questions[0].q, NOTICE_SUMMARY_MAX), question: true }
+        return { agentId, name, machine, summary: noticeSummary(questions[0].q), question: true }
       }),
       ...rest.filter((row) => row.question),
       ...rest.filter((row) => !row.question),
