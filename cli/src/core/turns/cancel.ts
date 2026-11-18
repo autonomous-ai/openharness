@@ -6,7 +6,6 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 10: docs/design/2026-10-03-harnessd.md).
  */
 import type { QuestionWatcher } from '../../lib/questionController.js'
-import type { WifiFeed } from '../wifi.js'
 import type { TurnRecaps } from './recaps.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
@@ -18,8 +17,6 @@ export interface CancelDeps {
   beforeCancel?: (session: RegisteredSession) => void
   normalizers: Pick<SessionNormalizers, 'closeTurns'>
   input: Pick<SessionInputController, 'cancel' | 'cancelConfirmed'>
-  /** The Wi-Fi device's service, wherever it runs (core/wifi.ts). */
-  device: () => Pick<WifiFeed, 'turnEnded'> | undefined
   stopHeartbeat: (sessionId: string) => void
   questionWatcher: Pick<QuestionWatcher, 'stop'>
   mirror: Pick<TurnRecaps, 'cancel'>
@@ -27,11 +24,11 @@ export interface CancelDeps {
   /** When each open turn started (the heartbeats'): the WiFi device reads an agent as running by it. */
   turnStartedAt: Map<string, number>
   /** Every window is told how the agent reads now (core/turns/heartbeats.ts). */
-  tell: (sessionId: string) => void
+  tell: (sessionId: string, cause?: 'cancel') => void
 }
 
 export function createCancel({
-  resolve, normalizers, input, device, stopHeartbeat, questionWatcher, mirror, turnActivity, turnStartedAt, tell, beforeCancel,
+  resolve, normalizers, input, stopHeartbeat, questionWatcher, mirror, turnActivity, turnStartedAt, tell, beforeCancel,
 }: CancelDeps) {
   // Web cancel (C-c) interrupts the turn — claude writes no end_turn line to close it, so stop the
   // heartbeat and mark the turn closed here (mirrors the hosted runtime stopping its heartbeat on cancel). We do
@@ -44,7 +41,6 @@ export function createCancel({
     // Cursor's sub-agents end with its turn's cancel, in its worker (engines/others/streams.ts).
     normalizers.closeTurns(sessionId)
     const cancelled = confirmed ? input.cancelConfirmed(record?.agentId ?? sessionId) : (input.cancel(record?.agentId ?? sessionId), Promise.resolve(true))
-    device()?.turnEnded(record?.agentId ?? sessionId, true)
     stopHeartbeat(sessionId)
     questionWatcher.stop(sessionId)
     mirror.cancel(sessionId) // close the device's "Working…" tile (bare done, no recap) — a cancel emits no turn_ended
@@ -54,7 +50,7 @@ export function createCancel({
     // end by hook reads idle until its next turn starts (core/turns/turnHooks.ts).
     turnStartedAt.delete(sessionId)
     turnActivity.observe(sessionId, 'turn_ended')
-    tell(sessionId)
+    tell(sessionId, 'cancel')
     return cancelled
   }
   return cancelAgent

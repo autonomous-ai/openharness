@@ -9,7 +9,7 @@ import { createRuntimeProfiles, type RuntimeProfiles } from './runtimeProfiles.j
 
 const active: RuntimeProfiles[] = []
 const frame = (runtime: LiveFrame['runtime']): LiveFrame => ({ raw: 'opaque vendor record', runtime, profile: true,
-  observe: false, events: [], replay: false, turn: { turnOpen: false, identity: 'turn', continued: false } })
+  events: [], replay: false, turn: { turnOpen: false, identity: 'turn', continued: false } })
 function setup(isolated = true) {
   const session = { agentId: 'agent', sessionId: 'session', engine: 'codex', model: null, cliVersion: '0.144.0',
     cwd: '/tmp', transcriptPath: '/tmp/transcript' } as RegisteredSession

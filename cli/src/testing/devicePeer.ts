@@ -56,6 +56,10 @@ export class GatewayDeviceFixture {
     if (!held || !this.socket) return
     this.socket.message({ type: 'request', epoch: this.epoch.toString(16).padStart(32, '0'), connId, identity: held.identity, incarnation: held.incarnation, opened: { payload } })
   }
+  async card(frame: Extract<GatewayDeviceFrame, { type: 'recap' }>['frame'], fullText: string | null): Promise<void> {
+    await this.ready
+    this.socket?.message({ type: 'recap', epoch: this.epoch.toString(16).padStart(32, '0'), frame, fullText })
+  }
   drop(connId: string): void {
     const held = this.sessions.get(connId)
     this.sessions.delete(connId)

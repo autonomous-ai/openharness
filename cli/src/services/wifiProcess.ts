@@ -11,7 +11,6 @@
 import type { RecentTurn } from '../cable/cableHost.js'
 import { emptyPorts, type AgentView, type CoreApi, type CorePorts, type ForkResult, type ServiceRequests, type WifiPort, type WifiResume, type WifiView } from '../core/api.js'
 import type { AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'
-import type { LiveEvent } from '../lib/normalize.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
 import { processCoreApi } from './processCoreApi.js'
 import { startWifi } from './wifi.js'
@@ -19,6 +18,9 @@ import { inputIn } from './turnsLink.js'
 import { followLink } from './followLink.js'
 import { observeQuestions } from '../agentClient/questions.js'
 import { env } from '../config/env.js'
+import { DeviceEvidencePool } from '../lib/autonomous-device/evidenceReader.js'
+import { DeviceFeedPool } from '../lib/autonomous-device/sessionFeed.js'
+import { DeviceWorkBudget } from '../lib/autonomous-device/pendingWork.js'
 
 export interface WifiServiceOptions {
   dataDir: string
@@ -37,6 +39,9 @@ const list = <T>(value: unknown): T[] => (Array.isArray(value) ? value as T[] : 
 export function runWifiService(options: WifiServiceOptions): ServiceProcess {
   const following = followLink({})
   let core: CoreConnection | null = null
+  let noticeEpoch = 0, noticesAvailable = true, stopped = false
+  let lost!: () => void
+  let noticeLost = new Promise<void>(resolve => { lost = resolve })
   /** The core says `resume` as it takes the link, a moment before it says the link is open: what answers it
    *  asks the core, and so waits for that (found end to end: the ask failed, and the service never built). */
   let linked!: () => void
@@ -58,7 +63,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     }
     return pending
   }
-  const submit = async (agentId: string, text: string, deliveryId: string, context: (agent: AgentView) => void, current: () => boolean = () => true): Promise<void> => {
+  const submit = async (agentId: string, text: string, deliveryId: string, context: (agent: AgentView) => void | Promise<void>, current: () => boolean = () => true): Promise<void> => {
     const origin = core
     if (!origin) throw new Error('the Wi-Fi device is not connected to the core')
     await inputContract(origin)
@@ -72,7 +77,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
       built?.port.delivery({ sessionId: agentId, deliveryId, state: 'rejected', reason: 'agent_gone' })
       return
     }
-    context(agent as unknown as AgentView)
+    await context(agent as unknown as AgentView)
     if (core !== origin) throw new Error('the original core connection ended')
     if (!current()) return
     const answer = await origin.query('input', { version: 1, agentId, text, deliveryId, when: 'composer' })
@@ -101,6 +106,16 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     const unasked = processCoreApi(options.dataDir, 'wifi')
     return {
       ...unasked,
+      conversations: { ...unasked.conversations, resolve: async id => {
+        const origin = core
+        if (!origin) throw new Error('CORE_EVIDENCE_UNAVAILABLE')
+        const answer = await origin.query('resolve', { id })
+        // onEvent has enqueued every notice preceding this response. Normalized observation is
+        // outside this owner, so waiting this prefix cannot wait on its own event handler.
+        if (!await heardPrefix() || core !== origin) throw new Error('CORE_EVIDENCE_UNAVAILABLE')
+        const value = object(answer.value)
+        return value.agentId === id && typeof value.sessionId === 'string' && typeof value.engine === 'string' ? value as unknown as AgentView : null
+      } },
       agents: { ...unasked.agents, follow: following.follow },
       machine: { id: () => machineId, computerId: () => options.machineId, name: () => '' },
       turns: { ...unasked.turns, recent: async (agentId, n) => list<RecentTurn>((await ask('recent', { agentId, n })).turns) },
@@ -137,13 +152,13 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
           return true
         },
         reveal: (operationId, agentId) => tell('reveal', { operationId, agentId }),
-        transcripts: (agentId, seen) => tell('transcripts', { agentId, seen }),
-        watching: (agentIds) => tell('watching', { agentIds }),
-        streams: (agentIds) => tell('streams', { agentIds }),
       },
     }
   }
 
+  const evidencePool = new DeviceEvidencePool()
+  const feedPool = new DeviceFeedPool()
+  const focusWork = new DeviceWorkBudget(), noticeWork = new DeviceWorkBudget()
   /** The service for this machine, built (again) when the core names another. */
   const build = (machineId: string): WifiPort | null => {
     if (built?.machineId === machineId) return built.port
@@ -152,7 +167,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     const ports: CorePorts = emptyPorts()
     let requests: ServiceRequests
     try {
-      requests = (options.start ?? startWifi)(api(machineId), ports, { submit, cancel,
+      requests = (options.start ?? startWifi)(api(machineId), ports, { submit, cancel, evidencePool, feedPool, focusWork,
         peer: { composition: 'services', port: env.PORT, token: options.token },
         observeQuestions: listener => observeQuestions({ dataDir: options.dataDir, port: env.PORT, machineId }, listener),
       })
@@ -166,12 +181,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
 
   /** What the core tells the service (`service_event`), by kind: the port's own calls, across the link. */
   const heard: Record<string, (port: WifiPort, payload: Record<string, unknown>) => unknown> = {
-    card: (port, { frame, fullText }) => port.card(object(frame), typeof fullText === 'string' ? fullText : undefined),
-    turnEnded: (port, { agentId, aborted }) => port.turnEnded(text(agentId), aborted === true),
-    stream: (port, { agentId, events }) => port.stream(text(agentId), list<LiveEvent>(events)),
-    transcript: (port, { agentId, sessionId, engine, line }) => port.transcript(text(agentId), text(sessionId), text(engine), text(line)),
     delivery: (port, { event }) => port.delivery(object(event) as unknown as AutonomousDeviceDelivery),
-    agentGone: (port, { agentId }) => port.agentGone(text(agentId)),
     disconnected: port => port.disconnected(),
     appFocus: (port, { machineId, agentId, connId }) => port.appFocus(text(machineId), typeof agentId === 'string' ? agentId : null, text(connId)),
     revealed: (port, { operationId, agentId }) => port.revealed(text(operationId), text(agentId)),
@@ -180,21 +190,49 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
   /** Everything the core says, in the order it said it: a request is taken, the window's focus applied
    *  and the service resumed (each against the agents as the core lists them then) before what came after. */
   let heardSoFar: Promise<unknown> = Promise.resolve()
-  const inOrder = (run: () => unknown): void => {
-    heardSoFar = heardSoFar.then(run).catch((error: unknown) => console.warn(`[wifi] ${error instanceof Error ? error.message : String(error)}`))
+  const disconnect = (): void => {
+    // Revoke before waking a pre-connect resume or invoking a component callback.
+    noticeEpoch++; noticesAvailable = false; core = null; sharedCore = null
+    lost(); linked()
+    link = new Promise<void>(resolve => { linked = resolve })
+    following.disconnected()
+    built?.port.disconnected()
+  }
+  const heardPrefix = async (): Promise<boolean> => {
+    const epoch = noticeEpoch
+    await Promise.race([heardSoFar, noticeLost])
+    return noticesAvailable && noticeEpoch === epoch
+  }
+  const inOrder = (payload: Record<string, unknown>, run: (current: () => boolean) => unknown, beforeConnected = false): void => {
+    if (stopped || !noticesAvailable && !(beforeConnected && !core)) return
+    const epoch = noticeEpoch
+    const current = () => !stopped && noticeEpoch === epoch && (noticesAvailable || beforeConnected && !core)
+    const release = noticeWork.reserve(payload)
+    if (!release) { disconnect(); console.warn('[wifi] WIFI_NOTICE_BACKPRESSURE'); return }
+    const timer = setTimeout(() => {
+      if (current()) { disconnect(); console.warn('[wifi] WIFI_NOTICE_TIMEOUT') }
+    }, 15_000)
+    timer.unref?.()
+    heardSoFar = heardSoFar.then(() => { if (current()) return run(current) }).catch(() => {
+      if (current()) { disconnect(); console.warn('[wifi] WIFI_NOTICE_FAILED') }
+    }).finally(() => { clearTimeout(timer); release() })
   }
   /** The core's first word on each connection: which machine this is, then what it holds for the service. */
-  const connected = async (state: Record<string, unknown>): Promise<void> => {
-    await link
+  const connected = async (state: Record<string, unknown>, originalLink: Promise<void>, current: () => boolean): Promise<void> => {
+    await originalLink
     const origin = core
-    if (!origin) return
+    if (!current() || !origin) return
     await inputContract(origin).catch(() => { /* Only input is unavailable; the other device operations still work. */ })
-    if (core !== origin) return
+    if (!current() || core !== origin) return
     const machine = await origin.query('machine', {})
-    if (core !== origin) return
+    if (!current() || core !== origin) return
     const port = build(text(machine.id))
-    if (core === sharedCore) await following.connected((query, payload) => origin.query(query, payload))
-    if (core !== origin) return
+    if (core === sharedCore) await following.connected(async (query, payload) => {
+      const answer = await origin.query(query, payload)
+      if (!current() || core !== origin) throw new Error('WIFI_NOTICE_UNAVAILABLE')
+      return answer
+    })
+    if (!current() || core !== origin) return
     await port?.resume({
       focus: state.focus && typeof state.focus === 'object' ? state.focus as WifiResume['focus'] : null,
     })
@@ -208,35 +246,32 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     requests: {
       wifi_focus_current: async (payload, asker, closed) => {
         const origin = core, service = built
-        await heardSoFar
-        if (!origin || core !== origin || !service || built !== service) return { current: false }
+        if (!await heardPrefix() || !origin || core !== origin || !service || built !== service) return { current: false }
         const answer = await service.requests.wifi_focus_current!(payload, asker, closed)
         return core === origin && built === service ? answer : { current: false }
       },
       wifi_serving: async (payload, asker, closed) => {
-        await heardSoFar
+        if (!await heardPrefix()) return { serving: false }
         return built?.requests.wifi_serving?.(payload, asker, closed) ?? { serving: false }
       },
       // Its routes of the door (`harness device receipt`, the add-ons), handed on by the core as they came: answered
       // once what the core said before is heard, and, while the service could not be built, as one that is down.
       wifi_http: async (payload, asker, closed) => {
-        await heardSoFar
-        if (!built) return { error: 'SERVICE_UNAVAILABLE' }
+        if (!await heardPrefix() || !built) return { error: 'SERVICE_UNAVAILABLE' }
         return built.requests.wifi_http!(payload, asker, closed)
       },
     },
     onEvent: (payload) => {
       const kind = text(payload.kind)
-      if (kind === 'resume') { inOrder(() => connected(payload)); return }
+      if (kind === 'resume') { const originalLink = link; inOrder(payload, current => connected(payload, originalLink, current), true); return }
       const origin = core
-      const whenCurrent = (run: () => unknown): void => inOrder(() => { if (origin && core === origin) return run() })
+      const whenCurrent = (run: () => unknown): void => inOrder(payload, () => { if (origin && core === origin) return run() })
       if (kind === 'agent') { whenCurrent(() => following.heard(payload)); return }
       if (kind === 'input') {
         const event = inputIn(payload)
         if (event) whenCurrent(() => built?.port.input?.(event))
         return
       }
-      if (kind === 'input_events') { whenCurrent(() => { if (core === sharedCore) built?.port.events?.(text(payload.agentId), list<LiveEvent>(payload.events)) }); return }
       if (!Object.hasOwn(heard, kind)) return
       whenCurrent(() => {
         if (built) return heard[kind](built.port, payload)
@@ -244,17 +279,17 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     },
     // runServiceProcess reuses its query facade across sockets. This callback, not that facade's
     // object identity, establishes the connection captured by an input operation.
-    onConnected: (connection) => { core = { ...connection }; linked() },
-    onDisconnected: () => {
-      following.disconnected()
-      built?.port.disconnected?.()
-      core = null
-      sharedCore = null
-      link = new Promise<void>((resolve) => { linked = resolve })
+    onConnected: (connection) => {
+      if (stopped) return
+      if (core) disconnect()
+      if (!noticesAvailable) { noticeLost = new Promise<void>(resolve => { lost = resolve }); noticesAvailable = true }
+      core = { ...connection }; linked()
     },
+    onDisconnected: disconnect,
   })
   return {
     stop: async () => {
+      stopped = true; disconnect()
       service.stop()
       await built?.port.stop()
     },

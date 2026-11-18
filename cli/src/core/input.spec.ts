@@ -77,6 +77,17 @@ const delivery = (deliveryId: string) => ({ deliveryId }) as unknown as SessionI
 describe('the session input controller\'s dependencies', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it('copies the current activity stamp at dispatch for the concrete operation session', () => {
+    const activity = { epoch: 'core', revision: 7, state: 'idle', validForMs: 0 }
+    const run = deps({ activity: () => activity } as unknown as Partial<InputDeps>)
+    const input = sessionInputDeps(run.deps)
+    input.onInput!({ agentId: 'a1', deliveryId: 'd', sessionId: 's1', phase: 'dispatching', when: 'composer', content: 'hello' })
+    activity.revision = 8
+    expect(run.deps.deliveries.input).toHaveBeenCalledWith(expect.objectContaining({ activity: { epoch: 'core', revision: 7 } }))
+    input.onInput!({ agentId: 'a1', deliveryId: 'other', sessionId: 'replaced', phase: 'dispatching', when: 'composer' })
+    expect(vi.mocked(run.deps.deliveries.input!).mock.lastCall![0]).not.toHaveProperty('activity')
+  })
+
   it.each(['entry', 'validation', 'capture', 'screen', 'enter'])('refuses a writer whose caller leaves during %s', async boundary => {
     const run = deps()
     let current = boundary !== 'entry'

@@ -25,10 +25,14 @@ export function inputIn(payload: Payload): SessionInputProgress | null {
   if (!event || !id(event.agentId) || !id(event.deliveryId) || !['composer', 'turn'].includes(String(event.when))
     || !INPUT_PHASES.has(String(event.phase)) || event.sessionId !== undefined && (typeof event.sessionId !== 'string' || event.sessionId.length > 200)
     || event.duringTurn !== undefined && typeof event.duringTurn !== 'boolean'
+    || event.activity !== undefined && (!event.activity || typeof event.activity !== 'object' || Array.isArray(event.activity)
+      || typeof (event.activity as Payload).epoch !== 'string' || !(event.activity as Payload).epoch || String((event.activity as Payload).epoch).length > 128
+      || !Number.isSafeInteger((event.activity as Payload).revision) || Number((event.activity as Payload).revision) < 0)
     || event.content !== undefined && (typeof event.content !== 'string' || Buffer.byteLength(event.content) > 24 * 1024)) return null
   return { agentId: event.agentId, deliveryId: event.deliveryId, when: event.when as SessionInputProgress['when'],
     phase: event.phase as SessionInputProgress['phase'], ...(event.sessionId === undefined ? {} : { sessionId: event.sessionId as string }),
     ...(event.duringTurn === undefined ? {} : { duringTurn: event.duringTurn as boolean }),
+    ...(event.activity === undefined ? {} : { activity: { epoch: (event.activity as Payload).epoch as string, revision: (event.activity as Payload).revision as number } }),
     ...(event.content === undefined ? {} : { content: event.content as string }) }
 }
 

@@ -2,7 +2,8 @@
  * The Wi-Fi device's service in the devices' process (services/wifiProcess.ts), as the core sees it: the
  * port the core calls (`WifiPort`) and what the core answers when the service asks (step 9, D3).
  *
- * The remaining input facts, transcript lines and normalized stream batches use this ordered link.
+ * Input facts and window notifications use this ordered link. Transcript evidence and normalized
+ * event observation belong to the component and do not traverse this port.
  * On reconnection the core publishes only the current window focus; authenticated relay sessions and
  * application hello state come from the gateway peer. What a person asks of it
  * (`harness device receipt`, its add-ons) are its routes of the door (core/serviceRoutes.ts).
@@ -23,7 +24,6 @@ export interface WifiLinkDeps {
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 const number = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) ? value : 0)
-const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [])
 const object = (value: unknown): Record<string, unknown> => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {})
 
 export function createWifiLink(deps: WifiLinkDeps) {
@@ -33,15 +33,9 @@ export function createWifiLink(deps: WifiLinkDeps) {
 
   const port: WifiPort = {
     resume: async (state) => event('resume', { ...state }),
-    card: (frame, fullText) => event('card', { frame, ...(fullText === undefined ? {} : { fullText }) }),
-    turnEnded: (agentId, aborted) => event('turnEnded', { agentId, aborted }),
-    stream: (agentId, events) => event('stream', { agentId, events }),
     input: progress => event('input', { event: progress }),
     disconnected: () => event('disconnected'),
-    events: (agentId, events) => event('input_events', { agentId, events }),
-    transcript: (agentId, sessionId, engine, line) => event('transcript', { agentId, sessionId, engine, line }),
     delivery: (delivery) => event('delivery', { event: delivery }),
-    agentGone: (agentId) => event('agentGone', { agentId }),
     appFocus: async (machineId, agentId, connId) => event('appFocus', { machineId, agentId, connId }),
     revealed: (operationId, agentId) => event('revealed', { operationId, agentId }),
     // Its own process: the master stops it.
@@ -72,9 +66,6 @@ export function createWifiLink(deps: WifiLinkDeps) {
     scroll: ({ phase, dy, velocity }) => { if (phase === 'down' || phase === 'move' || phase === 'up') core.wifi.scroll(phase, number(dy), number(velocity)) },
     focusApp: ({ agentId, expiresAt, focusRevision }) => { core.wifi.focusApp(text(agentId), number(expiresAt), text(focusRevision)) },
     reveal: ({ operationId, agentId }) => core.wifi.reveal(text(operationId), text(agentId)),
-    transcripts: ({ agentId, seen }) => core.wifi.transcripts(text(agentId), number(seen)),
-    watching: ({ agentIds }) => core.wifi.watching(strings(agentIds)),
-    streams: ({ agentIds }) => core.wifi.streams(strings(agentIds)),
   }
 
   return {

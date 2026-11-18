@@ -17,6 +17,14 @@ describe('delivered turns from a service in its own process', () => {
   it('accepts only bounded, well-formed generic input facts', () => {
     const event = { agentId: 'a', deliveryId: 'd', when: 'composer', phase: 'dispatching', sessionId: 's', duringTurn: true, content: 'hello' }
     expect(inputIn({ kind: 'input', event })).toEqual(event)
+    const activity = { epoch: 'core', revision: 8 }
+    const copied = inputIn({ kind: 'input', event: { ...event, activity } })
+    activity.revision = 9
+    expect(copied?.activity).toEqual({ epoch: 'core', revision: 8 })
+    for (const activity of [null, [], {}, { epoch: '' }, { epoch: 'x'.repeat(129), revision: 1 },
+      { epoch: 'core', revision: -1 }, { epoch: 'core', revision: Infinity }, { epoch: 'core', revision: 0.5 }]) {
+      expect(inputIn({ kind: 'input', event: { ...event, activity } })).toBeNull()
+    }
     expect(inputIn({ kind: 'input', event: { agentId: 'a', deliveryId: 'd', when: 'turn', phase: 'written' } }))
       .toEqual({ agentId: 'a', deliveryId: 'd', when: 'turn', phase: 'written' })
     for (const payload of [{}, { kind: 'input' }, { kind: 'other', event }]) expect(inputIn(payload)).toBeNull()

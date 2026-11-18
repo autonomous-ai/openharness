@@ -37,7 +37,7 @@ function setup(replyEffort?: string) {
   const emit = vi.fn(), addSession = vi.fn(async () => {})
   const attach = createAttach({ setInterpretationHold: () => false, announceSession: vi.fn(), liveFor, normalizers, others: noOtherStreams(), runtimeProfiles: profiles, resolve: () => session,
     terminalGone: async () => false, watcher: { removeSession: async () => {}, pollSession: async () => {}, hold: async () => hold, tails: () => true, addSession },
-    cursorDiscovery: { add: async () => {} }, device: () => undefined,
+    cursorDiscovery: { add: async () => {} },
     captureTerminal: async () => null, emit,
     tokenUsage: { changed: () => {} }, questionWatcher: { start: vi.fn() }, terminalLabel: () => 'private fixture',
     storeOf: async () => null, concurrency: 1,

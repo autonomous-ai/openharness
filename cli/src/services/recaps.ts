@@ -23,6 +23,7 @@ import { CommanderMirror, SUBAGENT_IDLE_MS } from '../lib/commander.js'
 import { deriveTurnSummary } from '../lib/deviceRecap.js'
 import { createTierDecider, type TierDecision, type TierInput } from '../lib/notifyTier.js'
 import { devicePeerPresence } from '../lib/autonomous-device/peerPresence.js'
+import { isLocalOnly, withoutUpdate } from '../lib/cardUpdate.js'
 import { devicePeerKey } from '../lib/autonomous-device/peerEndpoint.js'
 
 export interface RecapsOptions {
@@ -74,7 +75,12 @@ export function createRecaps(core: CoreApi, options: RecapsOptions = {}): Recaps
     // waiting on the person keeps the card busy: the core withdraws Working while it waits (core/turns/turnHooks.ts),
     // and the dial keeps its tile working under the question (core/questions.ts).
     verifiedWorking: (sessionId) => working.get(sessionId) === true || notifications.asking(sessionId),
-    send: (frame) => core.clients.turnCard(frame),
+    send: (frame) => {
+      // The callback owns this exact pair. A later core card publication may reenter another turn.
+      const fullText = frame.payload.kind === 'summary' ? mirror.lastFullText(frame.dbSessionId) : undefined
+      if (wifiWatching && !isLocalOnly(frame)) presence?.card(withoutUpdate(frame), fullText)
+      core.clients.turnCard(frame)
+    },
     // turn_summary_pending / turn_summary → the web indicator.
     sendWeb: (frame) => core.clients.turnSummary(frame as Parameters<CoreApi['clients']['turnSummary']>[0]),
     hasDevice: () => watchers.device || wifiWatching,

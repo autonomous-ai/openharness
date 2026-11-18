@@ -35,6 +35,49 @@ function setup(engine = 'claude', overrides: Partial<AutonomousDeviceServiceOpti
 }
 
 describe('Device result membership from captured engine evidence', () => {
+  it('refuses retained evidence beyond the shared byte budget without producing a result or retrying input', async () => {
+    const f = setup()
+    await f.send('A', 'hello')
+    const text = 'x'.repeat(8_192)
+    for (let index = 0; index < 2_049; index++) f.ingest({ type: 'assistant', uuid: `part-${index}`, message: {
+      id: `message-${index}`, content: [{ type: 'text', text }],
+    } })
+    expect(f.service.receipt('owner', 'A')).toMatchObject({ state: 'unknown', error: { code: 'RESULT_EVIDENCE_MISSING' } })
+    expect(f.results()).toEqual([])
+    expect(f.submit).toHaveBeenCalledOnce()
+  })
+
+  it.each([{ engine: 'claude', perAgent: 8_192, agents: 9 }, { engine: 'codex', perAgent: 16_384, agents: 5 }])(
+    'bounds $engine evidence records across all agents and releases forgotten ownership', async ({ engine, perAgent, agents }) => {
+      const list = Array.from({ length: agents }, (_, index) => ({ agentId: `agent-${index}`, engine, name: 'Agent', state: 'working' }))
+      const f = setup(engine, { agents: () => list })
+      for (const agent of list) {
+        await f.service.request('owner', { type: 'turn.send', requestId: randomUUID(), machineId: 'machine',
+          agentId: agent.agentId, idempotencyKey: agent.agentId, text: 'hello' })
+        const receipt = f.service.receipt('owner', agent.agentId)!
+        f.service.inputDispatched(agent.agentId, receipt.deliveryId, 'hello', 'session')
+        f.service.delivery({ sessionId: agent.agentId, deliveryId: receipt.deliveryId, state: 'delivered' })
+      }
+      const row = (index: number) => engine === 'claude'
+        ? { type: 'assistant', uuid: `node-${index}`, message: { id: 'message', content: [{ type: 'text', text: 'x' }] } }
+        : { type: 'event_msg', ordinal: index, payload: { type: 'agent_message', message: 'x' } }
+      for (const agent of list) for (let index = 0; index < perAgent; index++) {
+        f.service.observeTranscript(agent.agentId, 'session', engine, JSON.stringify(row(index)))
+      }
+      const last = list.at(-1)!.agentId
+      expect(f.service.receipt('owner', last)).toMatchObject({ state: 'unknown', error: { code: 'RESULT_EVIDENCE_MISSING' } })
+      expect(f.service.receipt('owner', list[0].agentId)?.state).toBe('delivered')
+      expect(f.results()).toEqual([])
+      f.service.agentGone(list[0].agentId)
+      await f.service.request('owner', { type: 'turn.send', requestId: randomUUID(), machineId: 'machine',
+        agentId: last, idempotencyKey: 'after-release', text: 'later' })
+      const later = f.service.receipt('owner', 'after-release')!
+      f.service.inputDispatched(last, later.deliveryId, 'later', 'session')
+      f.service.observeTranscript(last, 'session', engine, JSON.stringify(row(perAgent + 1)))
+      expect(f.service.receipt('owner', 'after-release')).toMatchObject({ state: 'queued', error: null })
+    },
+  )
+
   it('only parses transcripts for dispatched Device work in its bound session', async () => {
     const spy = vi.spyOn(DeviceResultEvidence.prototype, 'ingest')
     try {
@@ -81,7 +124,7 @@ describe('Device result membership from captured engine evidence', () => {
     DeviceResultSchema.parse(f.results()[0])
     const original = structuredClone(f.results()[0])
     for (const row of capture.records) f.ingest(row)
-    f.service.turnEnded('agent')
+    f.service.turnEnded('agent', null)
     f.service.commander({ type: 'commander_event', agentId: 'agent', payload: { kind: 'summary', text: 'unrelated latest recap' } })
     expect(f.results()).toEqual([original])
     const replay: any[] = []
@@ -113,7 +156,7 @@ describe('Device result membership from captured engine evidence', () => {
     f.ingest({ ...queued, parentUuid: claude.records[0].uuid })
     f.ingest({ type: 'assistant', uuid: 'other-branch-final', parentUuid: claude.records[0].uuid,
       message: { id: 'final', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Only A' }] } })
-    f.service.turnEnded('agent')
+    f.service.turnEnded('agent', null)
     expect(f.results()[0].payload.correlation.inputs.map((i: any) => i.idempotencyKey)).toEqual(['A'])
     expect(f.service.receipt('owner', 'B')?.state).toBe('unknown')
   })
@@ -123,7 +166,7 @@ describe('Device result membership from captured engine evidence', () => {
     await f.send('A', claude.inputs[0]); await f.send('B', claude.inputs[1], variant === 'different-owner' ? 'other' : 'owner')
     if (variant === 'identical-prompts') await f.send('duplicate-text', claude.inputs[1])
     for (const row of claude.records) f.ingest(variant === 'missing-parent' && row.message?.stop_reason === 'end_turn' ? { ...row, parentUuid: 'missing' } : row)
-    f.service.turnEnded('agent')
+    f.service.turnEnded('agent', null)
     expect(f.results()).toHaveLength(0)
     expect(f.service.receipt('owner', 'A')?.state).toBe('unknown')
     expect(f.service.receipt(variant === 'different-owner' ? 'other' : 'owner', 'B')?.state).not.toBe('completed')
@@ -136,7 +179,7 @@ describe('Device result membership from captured engine evidence', () => {
       if (copy.type === 'response_item') delete copy.payload.internal_chat_message_metadata_passthrough
       f.ingest(copy)
     }
-    f.service.turnEnded('agent')
+    f.service.turnEnded('agent', null)
     expect(f.results()).toHaveLength(0)
     expect(f.service.receipt('owner', 'B')?.state).toBe('delivered')
   })
@@ -144,7 +187,7 @@ describe('Device result membership from captured engine evidence', () => {
   it('session gone and bare turn.done never fabricate completion', async () => {
     const f = setup(); const a = await f.send('A', 'A')
     f.service.delivery({ deliveryId: a.deliveryId, sessionId: 'agent', state: 'started' })
-    f.service.turnEnded('agent')
+    f.service.turnEnded('agent', null)
     expect(f.service.receipt('owner', 'A')).toMatchObject({ state: 'unknown', error: { code: 'RESULT_EVIDENCE_MISSING' } })
     f.service.agentGone('agent'); expect(f.results()).toHaveLength(0)
   })
@@ -330,9 +373,10 @@ it('preserves structured question/answer RPCs without treating an answer acknowl
 it('keeps legacy engine task and question summaries on their existing path', async () => {
   const f = setup('commandcode', { fullText: () => 'Complete legacy answer' })
   const a = await f.send('A', 'Legacy task')
+  f.service.inputProgress({ agentId: 'agent', sessionId: 'session', deliveryId: a.deliveryId, when: 'composer', phase: 'dispatching', activity: { epoch: 'core', revision: 1 } })
   f.service.delivery({ deliveryId: a.deliveryId, sessionId: 'agent', state: 'started' })
-  f.service.turnStarted('agent')
-  f.service.turnEnded('agent')
+  f.service.turnStarted('agent', { sessionId: 'session', epoch: 'core', revision: 2 })
+  f.service.turnEnded('agent', { sessionId: 'session', epoch: 'core', revision: 3 })
   f.service.commander({ type: 'commander_event', agentId: 'agent', payload: { kind: 'summary', text: 'Legacy preview' } })
   expect(f.service.receipt('owner', 'A')?.state).toBe('completed')
   expect(f.results()[0].payload).toEqual({ kind: 'summary', text: 'Legacy preview', fullText: 'Complete legacy answer' })

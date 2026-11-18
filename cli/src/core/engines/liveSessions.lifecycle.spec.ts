@@ -12,7 +12,7 @@ const reply = (ask: LivePull, over: Partial<LivePage> = {}): LivePage => ({ fram
     turn: { identity: `${ask.token}:turn`, turnOpen: true, continued: false }, closed: false,
     prepareEnd: null, completeUntil: null, stamp: null },
   content: false, more: false, records: 0, turnFrom: 0, profileFrom: 0, end: 10, lastStarted: null, ...over })
-const frame: LiveFrame = { raw: 'record', profile: true, observe: true, events: [], replay: false,
+const frame: LiveFrame = { raw: 'record', profile: true,  events: [], replay: false,
   turn: { identity: 'turn', turnOpen: true, continued: false } }
 
 function setup(consoleLog = false) {

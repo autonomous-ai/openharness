@@ -12,7 +12,7 @@ import { fakeCore } from '../testing/fakeCore.js'
 import { devicePeerPresence } from '../lib/autonomous-device/peerPresence.js'
 
 vi.mock('../lib/autonomous-device/peerPresence.js', () => ({ devicePeerPresence: vi.fn(options => ({
-  start: vi.fn(), stop: vi.fn(async () => options.changed(false, false)),
+  start: vi.fn(), stop: vi.fn(async () => options.changed(false, false)), card: vi.fn(() => true),
 })) }))
 
 const { createRecaps, startRecaps } = await import('./recaps.js')
@@ -44,6 +44,32 @@ describe('the recaps', () => {
     vi.useRealTimers()
     vi.restoreAllMocks()
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('captures the full text paired with the exact summary before a reentrant core card publication changes it', () => {
+    const f = setup({ peer: { composition: 'services', port: 23456, token: 't'.repeat(32) } })
+    const options = vi.mocked(devicePeerPresence).mock.calls.at(-1)![0]
+    const peer = vi.mocked(devicePeerPresence).mock.results.at(-1)!.value
+    options.changed(true, false)
+    let text = 'this completed turn'
+    vi.spyOn(f.recaps.mirror, 'lastFullText').mockImplementation(() => text)
+    vi.mocked(f.core.clients.turnCard).mockImplementation(() => { text = 'a later turn' })
+    const frame = { type: 'commander_event' as const, agentId: 'a1', dbSessionId: 's1', payload: { kind: 'summary', text: 'short' } }
+    f.opts.send(frame)
+    expect(peer.card).toHaveBeenCalledExactlyOnceWith(frame, 'this completed turn')
+    expect(f.core.clients.turnCard).toHaveBeenCalledExactlyOnceWith(frame)
+  })
+
+  it('keeps local-only cards and the cable processing sentence off the Wi-Fi peer', () => {
+    const f = setup({ peer: { composition: 'services', port: 23456, token: 't'.repeat(32) } })
+    vi.mocked(devicePeerPresence).mock.calls.at(-1)![0].changed(true, false)
+    const peer = vi.mocked(devicePeerPresence).mock.results.at(-1)!.value
+    for (const kind of ['tool_end', 'turn_started', 'reply_text']) f.opts.send({ type: 'commander_event', agentId: 'a1', dbSessionId: 's1', payload: { kind, text: 'local' } })
+    const processing = { type: 'commander_event' as const, agentId: 'a1', dbSessionId: 's1', payload: { kind: 'processing', text: 'Working', update: 'cable sentence' } }
+    f.opts.send(processing)
+    expect(peer.card).toHaveBeenCalledExactlyOnceWith({ ...processing, payload: { kind: 'processing', text: 'Working' } }, undefined)
+    expect(f.core.clients.turnCard).toHaveBeenCalledTimes(4)
+    expect(f.core.clients.turnCard).toHaveBeenLastCalledWith(processing)
   })
 
   it('starts in the core\'s process behind its port', async () => {

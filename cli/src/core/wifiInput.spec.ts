@@ -1,10 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createInput, type InputDeps } from './input.js'
 import { createDeliveries } from './deliveries.js'
-import { createWifiCore } from './wifi.js'
+import { createDeviceEvidence } from '../lib/autonomous-device/evidenceReader.js'
+import type { DeviceSessionFeedOptions } from '../lib/autonomous-device/sessionFeed.js'
 import { createWifiLink } from './wifiLink.js'
 import { agentView } from './api.js'
 import type { ServiceFrame } from './serviceLinks.js'
@@ -22,22 +23,24 @@ const captured = JSON.parse(readFileSync(new URL('../../../docs/contracts/autono
 const stopped: Array<() => Promise<void>> = []
 afterEach(async () => { for (const stop of stopped.splice(0)) await stop(); vi.useRealTimers(); vi.restoreAllMocks() })
 
-/** The real session writer, core feed/link, worker adapter and component; only the transport and terminal are replaced. */
+/** The real session writer, shared core input link, worker adapter and component; only the transport and terminal are replaced. */
 async function bridge() {
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-09-24T00:00:00Z'))
   const dataDir = mkdtempSync(join(tmpdir(), 'wifi-input-bridge-'))
-  const session = { agentId: 'agent', sessionId: 'session', engine: 'claude', active: true, cliVersion: '2.1.283' } as RegisteredSession
+  const file = join(dataDir, 'session.jsonl'); writeFileSync(file, '')
+  const session = { agentId: 'agent', sessionId: 'session', engine: 'claude', active: true, cliVersion: '2.1.283',
+    transcriptPath: file, boundAt: 1, processIdentity: { pid: 42, startMarker: '1970-01-01T00:00:00Z' }, evidenceRevision: 1 } as RegisteredSession
   const core = fakeCore({ dataDir, machine: { id: () => 'machine' }, agents: { byAgent: () => agentView(session) },
     wifi: { view: async () => ({ agents: [{ agentId: 'agent', name: 'Agent', engine: 'claude', state: 'working' }], store: [], hasWindow: true }) } })
-  let options!: ServiceProcessOptions, component!: AutonomousDeviceService
+  let options!: ServiceProcessOptions, component!: AutonomousDeviceService, feed!: DeviceSessionFeedOptions, armed = false
   const frames: ServiceFrame[] = [], watchedAtDispatch: boolean[] = []
   const notify = (frame: ServiceFrame): boolean => {
     const copy = JSON.parse(JSON.stringify(frame)) as ServiceFrame
     frames.push(copy)
     const payload = copy.payload as Record<string, any>
     if (payload.kind === 'input' && payload.event.phase === 'dispatching') {
-      watchedAtDispatch.push(wifi.feed.needsTranscript('agent', 'session', 'claude'))
+      watchedAtDispatch.push(armed)
     }
     queueMicrotask(() => options.onEvent!(payload))
     return true
@@ -46,19 +49,11 @@ async function bridge() {
     submit: (id, text, deliveryId, extra) => input.submitInput(id, { content: text, deliveryId, when: extra?.when ?? 'turn', current: extra?.current }),
     cancel: id => input.input.cancelDelivery(id), deliverers: new Set(['wifi']),
     tell: (_maker, event) => notify({ type: 'service_event', payload: { kind: 'delivery', event } }),
-    // The composition root arms the transcript feed before publishing dispatch to the worker.
-    tellInput: (_maker, event) => {
-      if (event.phase === 'dispatching' && event.deliveryId && event.content !== undefined) {
-        wifi.feed.inputDispatched(event.agentId)
-      }
-      link.port.input(event)
-    },
+    tellInput: (_maker, event) => link.port.input(event),
   })
   const link = createWifiLink({ core, notify })
-  const wifi = createWifiCore({ port: () => link.port, doors: core.wifi, fullText: () => undefined })
-  core.wifi = wifi.api
   const paste = vi.fn<InputDeps['terminal']['submitTerminalAction']>(async (_id, _text, effect) => {
-    expect(wifi.feed.needsTranscript('agent', 'session', 'claude')).toBe(true)
+    expect(armed).toBe(true)
     expect(effect?.allowed?.()).not.toBe(false)
     expect(await effect?.beforeEnter?.()).toBeNull()
     return { state: 'succeeded', dispatch: 'executed' }
@@ -81,16 +76,27 @@ async function bridge() {
   }
   const worker = runWifiService({ dataDir, machineId: 'machine', socketPath: join(dataDir, 'unused.sock'), token: 'fixture',
     run: given => { options = given; return { stop: () => {} } },
-    start: (api, ports, deps) => startWifi(api, ports, { ...deps, service: value => component = new AutonomousDeviceService(value) }),
+    start: (api, ports, deps) => startWifi(api, ports, { ...deps,
+      service: value => component = new AutonomousDeviceService(value),
+      observeSessions: options => { feed = options; return { ready: Promise.resolve(), close: vi.fn(), stop: vi.fn(async () => {}), barrier: vi.fn(async () => {}) } },
+      evidence: options => {
+        const reader = createDeviceEvidence(options)
+        return { ...reader, arm: async (...args) => { await reader.arm(...args); armed = true } }
+      },
+    }),
   })
   const drain = async () => { await vi.advanceTimersByTimeAsync(0); await options.requests!.wifi_http!({ method: 'GET', target: '/not-a-route' }, { local: true, owner: true }) }
-  stopped.push(async () => { input.input.forget('agent'); await worker.stop(); wifi.stopped(); rmSync(dataDir, { recursive: true, force: true }) })
+  stopped.push(async () => { input.input.forget('agent'); await worker.stop(); rmSync(dataDir, { recursive: true, force: true }) })
   deliveries.ready()
   options.onConnected!(connection)
-  wifi.started(null)
+  void link.port.resume({ focus: null })
   await drain()
   frames.length = 0
-  return { component, wifi, frames, paste, watchedAtDispatch, drain,
+  return { component, frames, paste, watchedAtDispatch, drain,
+    finish: async () => {
+      appendFileSync(file, captured.records.map((row: unknown) => JSON.stringify(row)).join("\n") + "\n")
+      await feed.receive("agent", [{ type: "turn_ended", payload: {} }], () => true)
+    },
     send: (index = 0) => component.request('device', { type: 'turn.send', requestId: `00000000-0000-4000-8000-00000000000${index + 1}`, machineId: 'machine',
       agentId: 'agent', idempotencyKey: index === 0 ? 'inputA' : 'inputB', text: captured.inputs[index] }),
   }
@@ -107,12 +113,8 @@ describe('Wi-Fi input through the admitted shared worker cohort', () => {
     expect(f.paste).toHaveBeenCalledTimes(2)
     expect(f.watchedAtDispatch).toEqual([true, true])
     expect(f.component.receipt('device', 'inputA')).toMatchObject({ state: 'delivered', input: { phase: 'accepted' } })
-    const batch = [{ type: 'turn_started', payload: { userMessage: captured.inputs[0] } }, { type: 'turn_ended', payload: {} }] as const
-    f.wifi.feed.events('agent', batch)
-    await f.drain()
     const inputFrames = [...f.frames]
-    for (const row of captured.records) f.wifi.feed.observeTranscript('agent', 'session', 'claude', JSON.stringify(row))
-    await f.drain()
+    await f.finish()
     expect(f.component.receipt('device', 'inputA')).toMatchObject({ state: 'completed' })
     expect(f.component.receipt('device', 'inputB')).toMatchObject({ state: 'completed' })
     expect(await f.send()).toMatchObject({ status: 'duplicate', receipt: { state: 'completed' } })
@@ -128,9 +130,8 @@ describe('Wi-Fi input through the admitted shared worker cohort', () => {
         fact('delivery', { deliveryId, sessionId: 'agent', state: 'delivered' }),
         fact('input', { ...progress, phase: 'composer_available' }))
     }
-    expected.push({ type: 'service_event', payload: { kind: 'input_events', agentId: 'agent', events: batch } })
     expect(inputFrames).toEqual(expected)
-    expect(inputFrames).toHaveLength(11)
+    expect(inputFrames).toHaveLength(10)
     expect(inputFrames.reduce((bytes, frame) => bytes + Buffer.byteLength(JSON.stringify(frame)), 0))
       .toBe(expected.reduce((bytes, frame) => bytes + Buffer.byteLength(JSON.stringify(frame)), 0))
   })

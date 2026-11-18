@@ -475,9 +475,11 @@ machine_select.payload.eventsProtocol = 1
 connected.payload.eventsProtocol = 1
 events_observe { requestId, scope: "all" | { agentIds: string[] } }
 events_observe_result { requestId, ok: true, generation }
-session_event { generation, frame: <existing app frame>, batch?: { id, index, count } }
+session_event.payload = { generation, frame: <existing app frame>, batch?: { id, index, count, replay?: true } }
 ```
 
+Request and result fields likewise use the existing `payload` object. A negotiated Desktop window
+defaults to its existing all-agent event scope; an explicit tool has no event scope before its request.
 An empty named scope removes interest; it does not claim foreground presence. Scope is installed
 before the successful reply and the connection's ordered socket carries every subsequent event.
 No event history or per-turn answer is retained in core. The existing tool/question admission is
@@ -502,6 +504,25 @@ The exact physical send and component assembly census still requires source revi
 a historical universal event maximum. Any new overload refusal must be named and tested, including
 escaped content, large tool inputs and a slow app as well as a slow device observer.
 
+Selected negotiated transport limits are 16 MiB + 4 KiB encoded bytes per envelope, 32 MiB actual
+pending send bytes across physical connections, 256 pending event frames per connection and 4,096
+across connections. They extend the existing physical callback/close owner with a fixed event quota;
+there is no second send queue. The pure iterative peer byte walker moves unchanged to
+`lib/boundedJsonBytes.ts` for this second consumer, retaining its 4,096-depth, visit, cycle, plain-data,
+UTF-8 and escape policies. Question frames keep their existing separate depth-eight policy and quota.
+The exact escaped question maximum (16,777,216 serialized bytes, six bytes per NUL) fits inside the
+new envelope with its metadata, as an actual socket fixture verifies. Production questions still use
+the question observation protocol; normalized event observation neither duplicates their content nor
+creates question interest. Legacy unnegotiated sends keep their original transport behavior.
+
+A negotiated connection must drain its outstanding event writes within 20 seconds. The deadline
+closes that physical socket with `SESSION_EVENTS_DRAIN_TIMEOUT`; callback or actual socket close
+alone releases its charges. Oversize/backpressure/unavailable are fixed no-content named failures,
+close that observer and leave other clients operating. Metrics count frames, bytes, peak retained
+bytes/frames and refusals without content or identifiers. Batch `replay:true` distinguishes explicit
+historical replay from resumed attach: both already have `frame.replay:true`, but the old devices
+caller skipped only explicit replay and still received resumed batches. No core batch array is kept.
+
 ### Proposed component raw-evidence owner
 
 The only candidate file authority is a current `AgentView` from the existing `resolve` contract,
@@ -517,8 +538,9 @@ Bytes that arrive before the maker's `dispatching` fact can stay in the file beh
 offset, rather than a second in-memory line queue. Parse only after the matching dispatch fact has
 installed its exact adapted hash/time/session. Read fixed-size chunks, retain at most one bounded
 partial record, and verify inode/device and the captured boundary before accepting appended evidence.
-Replacement, truncation, overflow, stale binding, lost core connection or read failure marks the
-existing receipt unknown by a fixed no-content reason and never repeats Enter.
+Replacement, truncation, overflow, stale binding or read failure marks the existing receipt unknown
+by a fixed no-content reason and never repeats Enter. Core disconnect marks it `CORE_DISCONNECTED`
+and suspends read authority while preserving the original capture as evidence, as described below.
 
 A first input can precede both session binding and transcript creation. It therefore needs a pending
 capture bound to the original live process, installed before input, followed by the first authoritative
@@ -554,6 +576,72 @@ For first binding, the ordinary app `agent_synced` is only a trigger to the exis
 query. It never supplies a path or process authority. Binding already announces that ordinary frame
 (`agents/bind.ts` → `announceSession` → `sessionSync`); no extra `follow({each:true})` scan fan-out or
 new discover permission is needed. One existing capture owns its in-flight resolve and a dirty bit.
+
+The reader's resource pool belongs to the devices process, not one `startWifi` construction. The
+process adapter supplies the same pool when an account/machine change replaces the built component;
+the old component's stop revokes logical authority but cannot reset actual read, file-descriptor or
+buffer credit. Inline construction owns one pool for its component lifetime. The pool admits at most
+512 capture records, including retired records with unsettled physical work, and four actual read
+operations. Each reader's agent index points into those same records; it is not another work queue.
+Pending records contain only a dirty bit and one shared drain promise, never a chain per notification.
+No new component is allowed to silently allocate an independent pool during the process rebuild path.
+
+Selected physical-read proposal: capture a regular file using `O_NOFOLLOW`, install its filesystem
+watch before input and remember its device/inode and bounded prefix/boundary digest. For a file ending
+in an unfinished record, capture the beginning of that partial record rather than dropping it or
+treating its suffix as a new line. Finding that beginning reads backward in at most 64 KiB chunks and
+refuses a partial record beyond the raw-byte cap. No record is emitted during unverified asynchronous
+I/O. A drain captures one file-size endpoint, admits that bounded raw window, reads into its admitted
+buffer in at most 64 KiB operations, verifies a second read of exactly that window against its hash
+using the same buffer, then rechecks the file/boundary and fresh authoritative binding
+before synchronously supplying complete records to the existing evidence parser. At most 16 MiB total
+window buffers are admitted across the process; four fixed 1 KiB boundary scratch areas account for
+the additional 4 KiB. There is no extra per-read 64 KiB buffer beside the admitted window. An unfinished
+last record stays in the file behind the cursor and is read again when it grows, so it owns no second
+in-memory partial queue. A fixed 15-second operation deadline revokes observation and reports the
+gap, but physical credit remains charged until the read and descriptor close actually settle.
+The second window read is required by the observed in-place rewrite RED
+(`/tmp/core-wifi-evidence-rewrite-red.log`): verifying only the old cursor accepts newly read bytes
+that changed before final validation. It doubles bounded snapshot read I/O; its cost must be measured
+with the actual component workload, without allocating another window or adding an unbounded retry.
+
+This selects a NEW maximum 16 MiB unread capture window, including first-binding catch-up. A larger
+backlog is explicitly `EVIDENCE_TOO_LARGE` and keeps the accepted receipt unknown; it is not read
+without a bound or silently skipped. First binding reads from byte zero, so it never pretends an
+omitted history prefix is a continuous proof. The first-binding transition requires the original live
+process birth/engine, no identity/interpretation hold, and unchanged bounded `earlierSessionIds`;
+the captured empty binding becomes exactly the fresh core-resolved binding. `evidenceRevision` is a
+global registry counter, so adjacent revision numbers are not assumed. Once bound, every binding
+field/revision is exact within one core boot. A changed process, intervening rotation history or missing authority marks
+the receipt unknown. The actual bind/rebind caller tests remain required to prove this transition.
+
+The normalized session observer has the enabled service's lifetime, including periods without a
+device hello or stream subscription: the old core feed retained each current answer in that state,
+so a later mid-turn subscriber still receives its full final answer. Raw captures also remain while
+accepted native receipts need evidence. The question observer retains its narrower last-hello
+audience lifetime. Explicit disable/core disconnect revokes all feed authority and closes its watches;
+late work keeps physical charges but cannot publish into a replacement generation.
+
+Core replacement preserves the original capture identity, file boundary and parser ancestry; they
+are evidence, not permission to read. Disconnect closes watches and revokes every in-flight read's
+connection identity. It releases unused pre-dispatch reservations, but cannot release an actual read,
+buffer or descriptor until physical settlement. A new core connection resolves the original agent
+again. Process birth, engine, session, path, bind time, hold state and prior-session history must still
+match. The old core's evidence revision is not carried across boots. A fresh revision is accepted
+only after the original file boundary is verified, a bounded snapshot is read and the same fresh
+core proof is rechecked. Old operations cannot regain authority when that new connection starts.
+An originally unbound process may still take only its first binding under the same history/process
+rules. Successful evidence can reconcile an unknown receipt; no reconnect path retries input.
+
+The result parser accounts all agents against one 16 MiB UTF-8 retained-string budget and 65,536
+record budget. Claude nodes charge their key, parent, matched input ID, answer text and message ID.
+Codex deduplication keys, turn bucket keys and every member occupy records; a null unmatched member
+still occupies one record. Per-agent eviction releases its exact charge before replacing a node/key,
+so a full global budget does not refuse an equal-size replacement solely due to transient accounting.
+Turn completion, agent removal and evidence loss release owned charges. Refusal discards that agent's
+proof, logs fixed `EVIDENCE_BACKPRESSURE`, and marks its affected receipts `RESULT_EVIDENCE_MISSING`;
+it cannot manufacture a partial result or repeat input. JSON parsing remains bounded by the raw
+window cap; encoded retained-string accounting is not a claim about object/UTF-16 heap overhead.
 
 Raw file observation and app events are different channels. Their ordering is not automatically the
 old raw-before-normalized order: a fast app `turn_ended` can otherwise mark a native receipt unknown
@@ -644,6 +732,69 @@ prove the missing caller behavior, not a completed reader's safety or capacity v
 
 ### Proposed files and next validation selection
 
+Recap cards use the existing authenticated peer with one fixed `recap` frame containing the exact
+`commander_event`, its captured matching `fullText` (or null), and the current peer epoch. Only the
+recaps role may originate it; devices cannot forge a recap and recaps cannot send device requests,
+ready, hello, routing identities or revocations. Gateway translates only the epoch to its current
+ready devices peer. Both hops retain the existing byte/frame/callback-close custody and fixed drain
+deadline; no replay queue, socket or core cache is added. The producer takes `mirror.lastFullText`
+in the original synchronous send callback, after `rememberFullText`; that source already clips its
+stored full text to 8,192 bytes. Failed/oversized/unavailable handoff is named and the original
+core/cable card continues; no accepted input is retried or completed from a missing recap.
+
+A peer summary may arrive before the component finishes the earlier normalized end. Its receiver
+therefore waits for one `agent_recent {agentId,n:1}` reply on the existing observation socket, then
+for a marker appended to that receiver's existing FIFO. The returned recap text is discarded; only
+the immutable peer pair is published. Causality is provided by the actual funnel: every normalized
+app send precedes `mirror.ingest`, which sends the lifecycle that produces the peer summary. No
+extra recaps-to-core read is needed. This promises order relative to preceding normalized batches,
+not global order between independent core/cloud card producers. Live tool cards add no query.
+
+At most four barrier requests exist across all component/connection constructions in a devices
+process. Each reserves one record and its bounded request bytes from the existing 4,096-record /
+16 MiB + 4 KiB feed pool, and its deadline is 15 seconds. The same FIFO holds response markers;
+there is no second event queue. A missing earlier batch tail is a visible gap. Logical timeout or
+disable rejects publication authority, but an unanswered query retains its barrier/frame/byte credit
+until its actual response or physical socket close. The peer's incoming summary handler remains
+charged until the await actually settles. This overhead needs final same-workload measurement.
+
+Existing core/cloud commander cards continue through negotiated session observation. The shared
+publisher attaches optional outer `payload.source` from trusted call-site metadata, preserving the
+original `payload.frame` unchanged. It performs no producer-specific filtering. The only production
+`clients.turnCard` callers are `services/recaps.ts` and `core/recapsLink.ts`; the latter is invoked only
+for the authenticated recaps service in main. The inline former is the same known producer. That
+existing narrow door labels publication `recaps`; direct core/cloud `sendCommander` calls default to
+`core`. Incoming frame/payload fields cannot choose this outer provenance. Devices ignores observed
+recaps-origin cards in favor of the captured peer pair, and consumes core/cloud cards normally.
+Desktop continues ordinary dispatch of the original frame and ignores producer provenance.
+
+Dispatch/observation ordering uses the existing activity epoch/revision and the concrete engine
+session ID, not another core clock. The generic dispatch notice copies its activity stamp at the
+actual write admission. Normalized frames already contain that stamp and session ID. Cancel adds
+`cause: 'cancel'` to its existing `agent_activity`; it does not synthesize `turn_ended`, promise an
+engine kill, or change Desktop's completed-turn count. Its publication remains before the awaited
+confirmed-cancel result. A late cancel/end cannot complete or interrupt a dispatch stamped at or
+after that event, or one from another session/epoch. Missing concrete proof remains unknown.
+
+Only receipt-affecting end/cancel batches use the existing conversations resolve request on the
+same service connection as input notices. Its response is followed by the notice-owner prefix
+already enqueued at response time; this ensures earlier dispatch/delivery notices are applied before
+the end. Normalized batches are received outside that notice owner, so this adds no self-dependency.
+The reader also uses this captured-connection resolve implementation; the previous adapter's
+`CONVERSATIONS_OFF` is insufficient. A query itself has no deadline. The feed's existing 15-second
+deadline makes loss visible and revokes the handler's authority, while its process-owned four-slot
+pool retains actual handler/frame charges until query settlement. There is no query-per-token path,
+extra event queue, input retry, or claim that the extra round trip has passed cost validation.
+
+Reader identity retention additionally has a 64 KiB selected JSON identity limit and 4 MiB total
+across the physical capture pool. Each of the four reads may hold two bounded verification snapshots
+(at most another 512 KiB); history remains at most 32 IDs of 256 characters. Admission counts before
+copying or comparing, including a second delivery against an existing capture. Capture identity
+credit remains charged after logical retirement until the actual read and FD close settle. These
+are new private overload limits. Refusal reports `EVIDENCE_BACKPRESSURE` and unavailable evidence.
+Complete raw records must be valid UTF-8 before parser publication; incomplete trailing bytes remain
+in the file behind the LF cursor. No replacement-character text is manufactured as evidence.
+
 Raw evidence: component `lib/autonomous-device/` reader and its specs, `services/wifi.ts` and
 `wifiProcess.ts`, with deletion from `core/wifi.ts`, `transcripts/attach.ts`, `transcripts/ingest.ts`,
 `core/main.ts`, `core/api.ts` and `core/wifiLink.ts`. Existing shared input delivery authority stays.
@@ -657,3 +808,92 @@ adjacency; mid-turn full final; slow observer physical settlement; audience tear
 stale binding/path replacement and deliberate gaps; final focus races above. Then affected per-file
 core/service coverage, types and architecture. Packaged native Wi-Fi/inline and cost comparisons stay
 with the coordinator after the integrated source is frozen.
+
+### Existing ordered-work owners: admission and actual settlement
+
+`startWifi.appFocus` appends each window move to `focusing`, then refreshes the view before applying it.
+Its callers are the core's window-focus port notifications and `wifiProcess.heard.appFocus`; these are
+port calls/notices, outside both the inline and external 100-request limits. `runWifiService.inOrder`
+appends resume, agent lifecycle, validated input, delivery, focus and reveal notices to `heardSoFar`.
+The transport does not await `onEvent`, and the same prefix is awaited by reads and service requests.
+Neither original owner bounds retained closures if its first handler never settles.
+
+Keep those two chains. Each gets a process-owned accounting object with at most 100 accepted entries
+and 16 MiB of encoded retained JSON payload, measured by `boundedJsonBytes` before retaining the
+payload. This is a wire-payload budget, not an exact JavaScript heap measurement. The accounting
+helper stores only two counters; it creates no queue, map or service API. Focus uses the same owner
+across inline reconstruction; the process adapter supplies a shared focus owner to every rebuilt
+service and retains its separate notice owner for its entire process lifetime.
+
+Every accepted operation has a 15-second logical deadline. A timeout or admission refusal first
+revokes its captured component/link generation, then emits a fixed no-content failure name
+(`WIFI_FOCUS_TIMEOUT`, `WIFI_FOCUS_BACKPRESSURE`, `WIFI_NOTICE_TIMEOUT`, or
+`WIFI_NOTICE_BACKPRESSURE`). Serving becomes unavailable and old queued effects cannot run. The
+existing chain, payload credit and handler remain owned until actual settlement. A replacement
+connection cannot release that credit. Focus callers receive the logical refusal; requests waiting
+on a notice prefix race only that generation's shared revocation signal, not a second work queue.
+Fresh connection/resume can recover only within remaining physical capacity.
+
+The resume-before-connected case captures the original link wait and notice generation. Disconnect
+releases that wait after revoking its generation, so an old resume cannot wait on or build against a
+replacement core. Every post-await read/build/follow/resume checks the same captured generation and
+connection. A rejected follower query cannot publish catch-up from a revoked generation.
+
+The extraction removes `core/wifi.ts`, its separate stream/transcript/seen maps, normalized/raw feed
+port calls and native worker `LiveFrame.observe`. Session events are already ordinary app data;
+`lib/sessionEvents.ts` names their shared negotiated envelope and transport limits. The pure
+`lib/boundedJsonBytes.ts` and `lib/jsonStringBytes.ts` enforce physical send admission for the app
+transport and authenticated component peer without serializing an oversized frame. Those three
+pure files replace the removed core feature module in the process import census; no component
+reader, queue or state enters the core. Desktop is the second production negotiated consumer.
+
+
+### Uncertain descriptor close
+
+A rejected `FileHandle.close()` cannot establish descriptor release. The existing physical capture
+retains the handle object, its owner, metadata credit and one of the four actual read slots until
+process exit. The logical request fails with unavailable evidence and logs `EVIDENCE_CLOSE_FAILED`;
+there is no close retry against a possibly reused descriptor number and no reliance on GC. A raw
+buffer whose read has already settled is actually discarded and its byte credit may be released.
+Stop scans this owner's captures in the existing process pool, including retired captures, and
+reports `EVIDENCE_DRAIN_PENDING` after its existing two-second wait. Normal callback/close settlement
+continues to release each physical charge exactly once. Inline reconstruction shares the same
+process-owned raw, event and focus pools as its predecessors.
+
+The direct recap producer and the component's core/cloud event consumer preserve the original
+card policy: local-only tool-end/turn-start/reply-text cards stay off the Wi-Fi path, and processing
+cards omit the cable's `update` sentence. The shared app publisher preserves its original frame.
+Delayed normalized starts, as well as ends/cancels, must carry a matching later activity stamp before
+they can consume the current non-native input's pending start. A prior turn's delayed start cannot
+turn the newer request into an overlapping-input uncertainty.
+
+An explicit end/cancel boundary marks the existing raw capture dirty and awaits its current physical
+read. A boundary arriving during a read belongs to that same operation; its existing 15-second
+deadline bounds any additional passes. Settling an old core connection may synchronously start a
+fresh read, so the boundary awaits that fresh pending promise before applying the normalized end.
+Token/tool batches do not force a core query or raw-file drain. Filesystem notices drive those reads.
+The actual dispatch session is retained for non-native receipts too: lifecycle catch-up that changes
+that binding invalidates an old receipt before a delayed old normalized end can complete it.
+
+### Cutover validation, 2026-11-18
+
+The selected core/service gate passed 679 cases in 26 files, with 100% statements, branches,
+functions and lines in every changed covered runtime file: `core/api`, `core/input`, `core/wifiAgents`,
+`core/wifiLink`, `core/transcripts/attach`, `core/transcripts/ingest`, `core/turns/cancel`,
+`core/turns/funnel`, `core/turns/heartbeats`, `services/recaps`, `services/turnsLink`, `services/wifi`
+and `services/wifiProcess`. Its companion suites include the existing messages/conversations/
+experiments/connectors API callers and bind/resume coverage. The selected transport/peer/reader/
+architecture gate passed 810 cases in 24 files. TypeScript and `git diff --check` passed.
+
+Behavioral REDs preceded the reader, observer, admission and receipt changes. Later caller REDs
+also caught a stale non-native dispatch binding, an old-reader/new-reader settlement handoff, and
+per-token forced evidence drains; each was corrected with its failing caller retained. The final
+service cases cover production observation over an isolated private Unix socket, actual decoder/
+writer recap ordering, first binding, core replacement, file rewrite/close custody, bounded retries,
+reentrant focus drainage and late callbacks. Existing encrypted peer boundary tests remain intact.
+
+These are macOS source/fixture checks. The coordinator still owns final combined packaged Wi-Fi and
+inline acceptance, restored nonfocused-question behavior, and hot-path cost measurements. Windows
+execution is deferred by the user. No native, Windows or performance acceptance is claimed here.
+The remaining `wifiAgents` door is stateless; this slice removes feature observation/relay state and
+raw/normalized feed plumbing rather than claiming that every named feature door has disappeared.

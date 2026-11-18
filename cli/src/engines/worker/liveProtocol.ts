@@ -54,7 +54,6 @@ export interface LiveFrame {
   runtime?: RuntimeRecord | null
   /** Profile metadata can begin before the turn's parser window. */
   profile: boolean
-  observe: boolean
   events: LiveEvent[]
   failure?: string
   /** See `LiveRead.at` and `LiveRead.over`. */
@@ -116,7 +115,7 @@ export function livePage(value: unknown): value is LivePage {
     && (value.failed === undefined || value.failed === true)
     && (value.lastStarted === null || (liveEvent(value.lastStarted) && value.lastStarted.type === 'turn_started'))
     && value.frames.every(f => record(f) && typeof f.raw === 'string' && typeof f.profile === 'boolean'
-      && typeof f.observe === 'boolean' && typeof f.replay === 'boolean' && liveTurn(f.turn)
+      && typeof f.replay === 'boolean' && liveTurn(f.turn)
       && (f.runtime === undefined || f.runtime === null || runtimeRecord(f.runtime))
       && (f.failure === undefined || typeof f.failure === 'string') && (f.at === undefined || Number.isSafeInteger(f.at))
       && (f.over === undefined || f.over === true) && Array.isArray(f.events) && f.events.every(liveEvent))

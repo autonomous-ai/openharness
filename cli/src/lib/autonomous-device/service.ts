@@ -3,6 +3,7 @@ import { DeviceResultEvidence, inputHash, type ResultEvidence } from './resultEv
 import type { DeviceResultJournal } from './resultJournal.js'
 import type { AgentLife, AgentView } from '../../core/api.js'
 import type { SessionInputProgress } from '../sessionInput.js'
+import type { SessionEventProof } from '../sessionEvents.js'
 import { submissionPolicy } from '../../engines/submissionPolicies.js'
 import type { AutonomousDeviceStore } from './store.js'
 import { DEVICE_STORE_CAPABILITIES, DeviceStoreError } from './storeContract.js'
@@ -70,6 +71,7 @@ export interface AutonomousDeviceServiceOptions {
 }
 interface Entry { deviceId: string; digest: string; receipt: AutonomousDeviceReceipt
   promptHash?: string; reservedAt?: number; dispatchedAt?: number; sessionId?: string; evidenceManaged?: boolean; consumed?: boolean
+  dispatch?: SessionEventProof
 }
 interface ResultRecord { deviceId: string; evidenceId: string; at: number; agentId: string; payload: Record<string, unknown> }
 const CAPABILITIES = ['focus.get', 'focus.ensure', 'focus.step', 'scroll', 'agents.list', 'turn.send', 'turn.stop', 'status', 'recap', 'question.answer', 'receipt.get', 'agent.subscribe', 'agent.unsubscribe'] as const
@@ -119,6 +121,7 @@ export class AutonomousDeviceService {
     (agent, text, at) => this.consumeInput(agent, text, at),
     (agent, evidence) => this.recordResult(agent, evidence),
     (agent, ids) => this.evidenceUnknown(agent, ids),
+    agent => { console.warn('[wifi] EVIDENCE_BACKPRESSURE'); this.evidenceLost(agent) },
   )
   /** Cheap no-op for ordinary app/orchestrator agents; only dispatched Device work opts in. */
   needsTranscript(agentId: string, sessionId: string, engine: string): boolean {
@@ -138,10 +141,6 @@ export class AutonomousDeviceService {
     }
     return false
   }
-  /** Whether it still reads this agent's transcript: the core sends its lines only while it does (core/wifi.ts). */
-  watchesTranscript(agentId: string): boolean { return this.transcriptAgents.has(agentId) }
-  /** The agents whose transcripts it reads. */
-  transcriptWatches(): string[] { return [...this.transcriptAgents] }
   observeTranscript(agentId: string, sessionId: string, engine: string, line: string): void {
     if (!this.needsTranscript(agentId, sessionId, engine)) return
     if (this.transcriptSessions.get(agentId) !== sessionId) {
@@ -149,6 +148,15 @@ export class AutonomousDeviceService {
       this.transcriptSessions.set(agentId, sessionId)
     }
     this.evidence.ingest(agentId, engine, line)
+  }
+  evidenceLost(agentId: string): void {
+    for (const entry of this.deliveries.values()) if (entry.evidenceManaged && entry.receipt.agentId === agentId
+      && entry.receipt.serverInstanceId === this.serverInstanceId && !['completed', 'rejected'].includes(entry.receipt.state)) {
+      this.update(entry, 'unknown', 'RESULT_EVIDENCE_MISSING')
+    }
+    this.transcriptAgents.delete(agentId)
+    this.transcriptSessions.delete(agentId)
+    this.evidence.forget(agentId)
   }
   inputDispatched(agentId: string, deliveryId: string, text: string, sessionId?: string): void {
     const entry = this.deliveries.get(deliveryId)
@@ -172,6 +180,10 @@ export class AutonomousDeviceService {
   inputProgress(event: SessionInputProgress): void {
     const entry = event.deliveryId ? this.deliveries.get(event.deliveryId) : undefined
     if (!entry || entry.receipt.agentId !== event.agentId || entry.receipt.serverInstanceId !== this.serverInstanceId) return
+    if (event.phase === 'dispatching' && event.sessionId && !entry.sessionId) entry.sessionId = event.sessionId
+    if (event.phase === 'dispatching' && !entry.dispatch && event.sessionId && event.activity) {
+      entry.dispatch = { sessionId: event.sessionId, epoch: event.activity.epoch, revision: event.activity.revision }
+    }
     if (event.phase === 'dispatching' && event.content !== undefined) this.inputDispatched(event.agentId, event.deliveryId!, event.content, event.sessionId)
     const context = this.inputContexts.get(entry)
     const policy = context ? submissionPolicy(context.engine) : undefined
@@ -192,9 +204,14 @@ export class AutonomousDeviceService {
   }
   /** A new core is not a new component generation: keep every admission until its own proof settles it. */
   coreDisconnected(): void {
+    this.eventsUnavailable('CORE_DISCONNECTED')
+  }
+  eventsUnavailable(code = 'SESSION_EVENTS_UNAVAILABLE'): void {
+    this.streams.unavailable()
+    this.turns.clear(); this.openTurns.clear(); this.pendingStarts.clear(); this.ambiguousTurns.clear()
     for (const entry of this.entries.values()) {
       if (entry.receipt.serverInstanceId === this.serverInstanceId && entry.receipt.operation === 'turn.send'
-        && !['completed', 'rejected'].includes(entry.receipt.state)) this.update(entry, 'unknown', 'CORE_DISCONNECTED')
+        && !['completed', 'rejected'].includes(entry.receipt.state)) this.update(entry, 'unknown', code)
     }
   }
   /** Existing agent lifecycle catch-up fences receipts across a missed end or a changed binding. */
@@ -427,8 +444,6 @@ export class AutonomousDeviceService {
   readonly addons: DeviceAddons
   /** Live events of one agent, for its subscribers only. Never recorded in the replay log. */
   stream(agentId: string, events: readonly LiveEvent[]): void { this.streams.ingest(agentId, events) }
-  /** The agents a device subscribed to: the core sends their tools' events too (core/wifi.ts). */
-  streamedAgents(): string[] { return this.streams.agents() }
   /** The device's last link closed: its subscriptions end with it, and a reconnect subscribes again. */
   deviceOffline(deviceId: string): void { this.streams.dropDevice(deviceId); this.addons.offline(deviceId) }
 
@@ -509,6 +524,7 @@ export class AutonomousDeviceService {
     this.event('receipt.updated', entry.receipt.agentId, { receipt: structuredClone(entry.receipt), idempotencyKey: entry.receipt.idempotencyKey })
   }
   agentGone(agentId: string): void {
+    this.streams.forget(agentId)
     this.transcriptAgents.delete(agentId)
     this.evidence.forget(agentId)
     this.transcriptSessions.delete(agentId)
@@ -593,7 +609,10 @@ export class AutonomousDeviceService {
     start()
     return true
   }
-  turnStarted(agentId: string): void {
+  turnStarted(agentId: string, proof: SessionEventProof | null): void {
+    const pending = this.turns.get(agentId)
+    if (pending && (!proof || !pending.dispatch || proof.sessionId !== pending.dispatch.sessionId
+      || proof.epoch !== pending.dispatch.epoch || proof.revision <= pending.dispatch.revision)) return
     this.openTurns.add(agentId)
     if (!this.pendingStarts.delete(agentId)) {
       const previous = this.turns.get(agentId)
@@ -606,16 +625,22 @@ export class AutonomousDeviceService {
     const entry = this.turns.get(agentId)
     this.event('turn.started', agentId, entry ? { turnId: entry.receipt.turnId, idempotencyKey: entry.receipt.idempotencyKey } : {})
   }
-  turnEnded(agentId: string, aborted = false): void {
+  turnEnded(agentId: string, proof: SessionEventProof | null, aborted = false): void {
+    const before = (entry: Entry): boolean | null => {
+      if (!proof || !entry.dispatch) return null
+      return proof.sessionId === entry.dispatch.sessionId && proof.epoch === entry.dispatch.epoch && entry.dispatch.revision < proof.revision
+    }
     // Session-wide close is not evidence for Device native inputs. Raw engine evidence owns completion.
     for (const entry of this.entries.values()) if (entry.evidenceManaged && entry.receipt.agentId === agentId
-      && entry.receipt.state === 'started') this.update(entry, 'unknown', aborted ? 'TURN_INTERRUPTED' : 'RESULT_EVIDENCE_MISSING')
+      && entry.receipt.state === 'started' && before(entry) !== false) this.update(entry, 'unknown', aborted && before(entry) ? 'TURN_INTERRUPTED' : 'RESULT_EVIDENCE_MISSING')
+    const entry = this.turns.get(agentId)
+    if (entry && before(entry) === false) return
     this.ambiguousTurns.delete(agentId)
     this.openTurns.delete(agentId)
     this.pendingStarts.delete(agentId)
-    const entry = this.turns.get(agentId)
     if (entry) {
-      this.update(entry, aborted ? 'unknown' : 'completed', aborted ? 'TURN_INTERRUPTED' : undefined)
+      const matched = before(entry)
+      this.update(entry, aborted || !matched ? 'unknown' : 'completed', !matched ? 'RESULT_EVIDENCE_MISSING' : aborted ? 'TURN_INTERRUPTED' : undefined)
       this.turns.delete(agentId)
     }
     this.event(aborted ? 'turn.error' : 'turn.done', agentId, entry ? { turnId: entry.receipt.turnId, idempotencyKey: entry.receipt.idempotencyKey } : {})

@@ -32,6 +32,7 @@ export interface InputDeps {
   /** Claude Code's and Codex's reading of a prompt typed into their pane, from their worker (core/engines/submissions.ts). */
   submission: SubmissionReader
   resolve: (id: string) => RegisteredSession | undefined
+  activity?: (sessionId: string) => { epoch: string; revision: number } | undefined
   terminal: Pick<TerminalControl, 'captureTerminal' | 'validateTerminal' | 'submitTerminalAction' | 'keyTerminalAction' | 'pinTerminalControl'>
   /** The turns delivered under a caller's own id (core/deliveries.ts): the Wi-Fi device's, Agent Messages', the orchestrator's. */
   deliveries: {
@@ -180,7 +181,11 @@ export function sessionInputDeps(
     onDelivery: (event) => {
       deliveries.settled(event)
     },
-    onInput: (event) => deliveries.input?.(event),
+    onInput: (event) => {
+      const activity = event.phase === 'dispatching' && event.sessionId && resolve(event.agentId)?.sessionId === event.sessionId
+        ? deps.activity?.(event.sessionId) : undefined
+      deliveries.input?.({ ...event, ...(activity ? { activity: { epoch: activity.epoch, revision: activity.revision } } : {}) })
+    },
     beforeTeamWrite: async (session) => (await readTeamHold(deps, session)).hold,
     validateRuntime: validateTerminal,
     // Typed into the pane as it stands, a draft or a running turn included, under the pane's write lock.

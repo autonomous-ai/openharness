@@ -73,7 +73,7 @@ async function setup(home: string | null = null) {
     watcher: { addSession: vi.fn(async () => {}), removeSession: vi.fn(async () => {}), pollSession: vi.fn(async () => {}),
       hold: vi.fn(async () => null), tails: () => false },
     setInterpretationHold: registry.setInterpretationHold.bind(registry), announceSession: vi.fn(),
-    cursorDiscovery: { add: vi.fn(async () => {}) }, device: () => undefined, runtimeProfiles,
+    cursorDiscovery: { add: vi.fn(async () => {}) }, runtimeProfiles,
     captureTerminal: vi.fn(async () => null), emit, tokenUsage: { changed: vi.fn() },
     questionWatcher: { start: vi.fn() }, terminalLabel: () => 'private fixture', storeOf, concurrency: 1,
   })

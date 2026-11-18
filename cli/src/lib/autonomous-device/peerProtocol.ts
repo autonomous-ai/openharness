@@ -17,7 +17,11 @@ export interface DevicePeerSession extends DeviceSessionProof {
   readonly hello: boolean
 }
 type Routed = DeviceSessionProof & { connId: string; epoch: string }
+export type DeviceRecapFrame = { type: 'recap'; epoch: string; frame: {
+  type: 'commander_event'; agentId: string; dbSessionId: string; payload: Record<string, unknown>
+}; fullText: string | null }
 export type GatewayDeviceFrame =
+  | DeviceRecapFrame
   | { type: 'snapshot'; epoch: string; machineId: string; sessions: DevicePeerSession[] }
   | { type: 'session'; epoch: string; session: DevicePeerSession }
   | { type: 'drop'; epoch: string; connId: string; incarnation: string }
@@ -25,6 +29,7 @@ export type GatewayDeviceFrame =
   | ({ type: 'request'; opened: Record<string, unknown> } & Routed)
   | { type: 'presence'; epoch: string; watching: boolean; joined: boolean }
 export type DevicesGatewayFrame =
+  | DeviceRecapFrame
   | { type: 'ready'; epoch: string }
   | ({ type: 'send'; frameType: 'autonomous_device_result' | 'autonomous_device_event'; payload: Record<string, unknown> } & Routed)
   | ({ type: 'hello'; hello: boolean } & Routed)
@@ -44,6 +49,10 @@ const proof = (value: Record<string, unknown>): boolean => text(value.connId) &&
 const session = (value: unknown): value is DevicePeerSession => object(value)
   && keys(value, ['connId', 'identity', 'incarnation', 'direct', 'hello']) && proof(value)
   && typeof value.direct === 'boolean' && typeof value.hello === 'boolean'
+const recap = (value: Record<string, unknown>): value is DeviceRecapFrame => value.type === 'recap'
+  && keys(value, ['type', 'epoch', 'frame', 'fullText']) && object(value.frame) && value.frame.type === 'commander_event'
+  && text(value.frame.agentId) && text(value.frame.dbSessionId) && object(value.frame.payload)
+  && (value.fullText === null || typeof value.fullText === 'string' && Buffer.byteLength(value.fullText) <= 8192)
 
 /** Called only after the raw frame byte admission; nested business content is checked by its owner. */
 export function gatewayDeviceFrame(value: unknown, role: DevicePeerRole): GatewayDeviceFrame | null {
@@ -51,6 +60,7 @@ export function gatewayDeviceFrame(value: unknown, role: DevicePeerRole): Gatewa
   if (role === 'recaps') return value.type === 'presence' && keys(value, ['type', 'epoch', 'watching', 'joined'])
     && typeof value.watching === 'boolean' && typeof value.joined === 'boolean' && (!value.joined || value.watching)
     ? value as GatewayDeviceFrame : null
+  if (recap(value)) return value
   if (value.type === 'snapshot') return keys(value, ['type', 'epoch', 'machineId', 'sessions']) && text(value.machineId)
     && Array.isArray(value.sessions) && value.sessions.length <= 64 && value.sessions.every(session)
     && new Set(value.sessions.map(each => each.connId)).size === value.sessions.length ? value as GatewayDeviceFrame : null
@@ -62,8 +72,9 @@ export function gatewayDeviceFrame(value: unknown, role: DevicePeerRole): Gatewa
   return null
 }
 
-export function devicesGatewayFrame(value: unknown): DevicesGatewayFrame | null {
+export function devicesGatewayFrame(value: unknown, role: DevicePeerRole = 'devices'): DevicesGatewayFrame | null {
   if (!object(value) || !text(value.epoch)) return null
+  if (role === 'recaps') return recap(value) ? value : null
   if (value.type === 'ready') return keys(value, ['type', 'epoch']) ? value as DevicesGatewayFrame : null
   if (!proof(value)) return null
   if (value.type === 'send') return keys(value, ['type', 'epoch', 'connId', 'identity', 'incarnation', 'frameType', 'payload'])

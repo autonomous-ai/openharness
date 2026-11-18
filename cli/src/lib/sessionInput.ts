@@ -100,6 +100,8 @@ export interface SessionInputProgress {
   sessionId?: string
   duringTurn?: boolean
   content?: string
+  /** Core activity at actual dispatch; pairs only with this operation's concrete session. */
+  activity?: { epoch: string; revision: number }
 }
 
 interface InputOperation {

@@ -11,7 +11,6 @@ import type { LiveFor, LiveParser, LiveTurn } from '../../engines/facets/live.js
 import { keepsStore } from '../../engines/otherEngines.js'
 import { OPENCLAW_STATES } from '../../engines/openclaw/contract.js'
 import type { StreamFrame } from '../../engines/worker/otherStreamProtocol.js'
-import type { WifiFeed } from '../wifi.js'
 import { sid } from '../../lib/log.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -34,7 +33,6 @@ export interface IngestDeps {
   bySession: (sessionId: string) => RegisteredSession | undefined
   tokenUsage: { changed(session: RegisteredSession): void }
   /** The Wi-Fi device's service, wherever it runs (core/wifi.ts): it proves its turns by the raw transcript. */
-  device: () => Pick<WifiFeed, 'needsTranscript' | 'observeTranscript'> | undefined
   runtimeProfiles: Pick<RuntimeProfileManager, 'ingest' | 'evidence'>
   normalizers: Pick<SessionNormalizers, 'liveParsers'>
   announceTurnAborted: (sessionId: string, engine: string, message: string, deviceMessage?: string) => void
@@ -46,7 +44,7 @@ export interface IngestDeps {
 }
 
 export function createIngest({
-  liveFor, has, bySession, tokenUsage, device, runtimeProfiles, normalizers, announceTurnAborted, emit, attachSession,
+  liveFor, has, bySession, tokenUsage, runtimeProfiles, normalizers, announceTurnAborted, emit, attachSession,
   setIdentityHold, announceSession,
 }: IngestDeps) {
   const { liveParsers } = normalizers
@@ -60,12 +58,6 @@ export function createIngest({
     const session = bySession(evt.sessionId)
     if (!session || session.identityHold || session.interpretationHold || session.engine !== evt.engine) return null
     tokenUsage.changed(session)
-    sideRead('device', evt.sessionId, () => {
-      const service = device()
-      if (service?.needsTranscript(session.agentId, evt.sessionId, session.engine)) {
-        service.observeTranscript(session.agentId, evt.sessionId, session.engine, evt.text)
-      }
-    })
     if (!profileAccepted) sideRead('runtime profile', evt.sessionId, () => runtimeProfiles.ingest(session, evt.text))
     return session
   }

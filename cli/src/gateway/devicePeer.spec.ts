@@ -59,6 +59,20 @@ function fixture() {
 }
 
 describe('gateway direct device peer', () => {
+  it('forwards a recaps card only from the current recaps role to the current ready devices epoch', () => {
+    const f = fixture(), devices = f.connect('devices'), recaps = f.connect('recaps')
+    const frame = { type: 'commander_event', agentId: 'a', dbSessionId: 's', payload: { kind: 'summary', text: 'short' } }
+    devices.message({ type: 'ready' })
+    recaps.message({ type: 'recap', frame, fullText: 'complete' })
+    expect(devices.socket.sent.at(-1)).toEqual({ type: 'recap', epoch: devices.epoch, frame, fullText: 'complete' })
+    const next = f.connect('recaps')
+    recaps.message({ type: 'recap', frame, fullText: 'old' })
+    expect(devices.socket.sent.at(-1)).toMatchObject({ fullText: 'complete' })
+    next.message({ type: 'ready' })
+    expect(next.socket.readyState).toBe(WebSocket.CLOSED)
+    devices.message({ type: 'recap', frame, fullText: 'forged' })
+    expect(devices.socket.readyState).toBe(WebSocket.CLOSED)
+  })
   it('keeps one actual wake across ready deadlines, replacement and stop until its handler settles', async () => {
     vi.useFakeTimers()
     const f = fixture()

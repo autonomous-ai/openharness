@@ -21,6 +21,35 @@ describe('AgentStreams', () => {
   beforeEach(() => { vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers() })
 
+  it('bounds open-turn records across agents and explicitly ends affected streams when the budget is lost', () => {
+    const h = hub()
+    h.streams.subscribe('device', 'agent', 60, ALL)
+    h.streams.ingest('agent', [{ type: 'turn_started', payload: { userMessage: 'first' } }, text('retained')])
+    for (let index = 0; index < 1024; index++) h.streams.ingest(`other-${index}`, [{ type: 'turn_started', payload: { userMessage: '' } }])
+    expect(h.sent.some(item => item.frame.kind === 'stream.end' && (item.frame.payload as any).reason === 'unavailable')).toBe(true)
+    expect(h.streams.count()).toBe(0)
+    expect(() => h.streams.subscribe('device', 'agent', 60, ALL)).toThrow(expect.objectContaining({ code: 'SESSION_EVENTS_UNAVAILABLE' }))
+    h.streams.ingest('agent', [text('partial after the gap'), { type: 'turn_ended', payload: {} }])
+    expect(h.sent.some(item => item.frame.kind === 'stream.final')).toBe(false)
+    h.streams.ingest('agent', [{ type: 'turn_started', payload: { userMessage: 'fresh' } }, text('complete')])
+    h.streams.subscribe('device', 'agent', 60, ALL)
+    h.streams.ingest('agent', [{ type: 'turn_ended', payload: {} }])
+    expect(h.sent.at(-1)!.frame).toMatchObject({ kind: 'stream.final', payload: { text: 'complete' } })
+  })
+
+  it('bounds retained answer bytes independently of turn count and releases a completed turn', () => {
+    const h = hub(), answer = 'x'.repeat(16_388)
+    h.streams.subscribe('device', 'agent-0', 60, ALL)
+    for (let index = 0; index < 1023; index++) h.streams.ingest(`agent-${index}`, [{ type: 'turn_started', payload: { userMessage: '' } }, text(answer)])
+    h.streams.ingest('agent-0', [{ type: 'turn_ended', payload: {} }])
+    h.streams.subscribe('device', 'agent-1', 60, ALL)
+    h.streams.ingest('agent-1023', [{ type: 'turn_started', payload: { userMessage: '' } }, text(answer)])
+    expect(h.sent.some(item => item.frame.kind === 'stream.end' && (item.frame.payload as any).reason === 'unavailable')).toBe(false)
+    h.streams.ingest('agent-1024', [{ type: 'turn_started', payload: { userMessage: '' } }, text(answer)])
+    expect(h.sent.some(item => item.frame.kind === 'stream.end' && (item.frame.payload as any).reason === 'unavailable')).toBe(true)
+    expect(h.streams.count()).toBe(0)
+  })
+
   it('sends nothing for an agent nobody subscribed to', () => {
     const h = hub()
     h.streams.ingest('agent', [{ type: 'turn_started', payload: { userMessage: 'hi' } }, toolStart, text('a'), toolEnd, { type: 'turn_ended', payload: {} }])

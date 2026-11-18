@@ -84,11 +84,11 @@ const logged = (frame: Frame): boolean => env.LOG_FRAMES && !String(frame.type).
 
 export type Frame = Record<string, unknown>
 
-export type LocalSendQuota = ClientStreamQuota | { kind: 'questions' }
+export type LocalSendQuota = ClientStreamQuota | { kind: 'questions' | 'events' }
 export interface LocalClientSink {
   sendFrame(frame: Frame, quota?: ClientStreamQuota): boolean
   /** Snapshot progress follows physical question-send settlement, including socket close. */
-  sendFrame(frame: Frame, quota: { kind: 'questions' }, settled?: (sent: boolean) => void): boolean
+  sendFrame(frame: Frame, quota: { kind: 'questions' | 'events' }, settled?: (sent: boolean) => void): boolean
   sendBinary: (frame: Uint8Array, quota?: ClientStreamQuota) => boolean
   /** Physical transport close. Logical unregister must not retire pending sends. */
   close?: (code: number, reason: string) => void
@@ -98,7 +98,11 @@ interface LocalQuestionObservation {
   generation: string
   snapshot?: { cancel(): void }
 }
-interface LocalClient extends LocalClientSink { questionProtocol?: 1; questionObservation?: LocalQuestionObservation }
+interface LocalEventObservation { scope: 'all' | ReadonlySet<string>; generation: string }
+interface LocalClient extends LocalClientSink {
+  questionProtocol?: 1; questionObservation?: LocalQuestionObservation
+  eventsProtocol?: 1; eventObservation?: LocalEventObservation
+}
 
 export class BackendSocket {
   /** This machine's name as Harness shows it (Machines), from the backend's `machine_meta`. Null
@@ -617,19 +621,32 @@ export class BackendSocket {
 
   /** Send an up-frame (event or RPC reply) to every window here and to the WEB audience: the gateway seals
    *  what carries content and queues it while the link is down. */
-  send(frame: Frame): void {
+  send(frame: Frame, batch?: import('./lib/sessionEvents.js').SessionEventBatch): void {
     this.monitorCompletions.observe(frame)
     // The orchestrator's state it cannot read (a full disk: reading makes its folder) must not cost every
     // frame after it (e2e/diskfull.e2e.ts).
     try { this.onFrameSent?.(frame) } catch { /* the frame goes out regardless */ }
     if (logged(frame)) logFrame('→', 'web', frame)
+    const eventAgent = batch || frame.type === 'agent_synced' || frame.type === 'agent_deleted' || frame.type === 'agent_activity' ? eventAgentId(frame) : null
+    if (eventAgent) this.publishSessionEvent(frame, eventAgent, batch)
     for (const [connId, sink] of this.localClients) {
+      if (eventAgent && sink.eventsProtocol === 1) continue
       // A tool dropped every event it was sent: an agent's `harness wait` was handed each harness's every text_delta.
       if (this.toolClients.has(connId)) continue
       if (!sink.sendFrame(frame)) void this.unregisterLocalClient(connId)
     }
     this.toolWatches.tell(frame)
     this.toRemoteApps(frame)
+  }
+
+  /** Provenance comes from the trusted publisher call, never a field in a client-supplied frame. */
+  private publishSessionEvent(frame: Frame, agentId: string, batch?: import('./lib/sessionEvents.js').SessionEventBatch, source?: string): void {
+    for (const [connId, sink] of this.localClients) {
+      const observation = sink.eventsProtocol === 1 ? sink.eventObservation : undefined
+      if (observation && (observation.scope === 'all' || observation.scope.has(agentId))) this.sendSessionEvent(connId, sink, observation, {
+        type: 'session_event', payload: { generation: observation.generation, frame, ...(batch ? { batch } : {}), ...(source ? { source } : {}) },
+      })
+    }
   }
 
   /** An up-frame for the owner's apps away from this desk alone — the relay's web audience, sealed by the
@@ -767,8 +784,10 @@ export class BackendSocket {
 
   /** Send a DEVICE-audience frame (commanderEligible, not web): the gateway seals user/data frames under
    *  the group key, so the backend relays only ciphertext; system/presence frames pass through. */
-  sendCommander(frame: Frame): void {
+  sendCommander(frame: Frame, source = 'core'): void {
     this.onOutboundCommander?.(frame)
+    const agentId = frame.type === 'commander_event' || frame.type === 'agent_deleted' ? eventAgentId(frame) : null
+    if (agentId) this.publishSessionEvent(frame, agentId, undefined, source)
     // A harness that stopped is `agent_deleted` to the devices alone (`publishStoppedAgent`).
     this.toolWatches.tell(frame)
     if (isLocalOnly(frame)) return
@@ -778,14 +797,16 @@ export class BackendSocket {
   }
 
   /** Attach one authenticated loopback desktop client to the same RPC and event plane as cloud web. */
-  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean; surface?: WindowSurface; watch?: readonly 'dial'[]; questionProtocol?: 1 } = {}): boolean {
+  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean; surface?: WindowSurface; watch?: readonly 'dial'[]; questionProtocol?: 1; eventsProtocol?: 1 } = {}): boolean {
     if (!isLocalClientId(connId) || this.localClients.has(connId)) return false
     const surface = opts.surface ?? 'desktop'
     // The app holds a connection per machine and dials again on every reconnect and link retry:
     // an open is its surface going from no window to one, not each connection (5,675 "desktop opens"
     // across 68 active installations on the first measured day).
     const firstOfSurface = !opts.tool && this.localWindows()[surface] === 0
-    this.localClients.set(connId, { ...sink, questionProtocol: opts.questionProtocol })
+    this.localClients.set(connId, { ...sink, questionProtocol: opts.questionProtocol, eventsProtocol: opts.eventsProtocol,
+      ...(!opts.tool && opts.eventsProtocol === 1 ? { eventObservation: { scope: 'all' as const, generation: randomUUID() } } : {}),
+    })
     if (!opts.tool && opts.questionProtocol !== 1) this.legacyQuestionWindows++
     if (opts.tool) this.toolClients.add(connId)
     else if (opts.surface === 'tui') this.tuiClients.add(connId)
@@ -830,7 +851,7 @@ export class BackendSocket {
       if (!sent && this.localClients.get(connId) === client && client.questionObservation === observation) {
         observation.snapshot?.cancel()
         client.questionObservation = undefined
-        this.toolWatches.content(connId, false)
+        this.toolWatches.content(connId, client.eventObservation !== undefined)
         client.close?.(1013, 'QUESTION_OBSERVATION_UNAVAILABLE')
       }
     }
@@ -854,7 +875,7 @@ export class BackendSocket {
       scope = named.size ? named : null
     } else { reply({ error: 'BAD_REQUEST' }); return }
     if (scope && (!this.questionSnapshot || !client.close)) { reply({ error: 'UNSUPPORTED' }); return }
-    if (!this.toolWatches.content(connId, scope !== null)) { reply({ error: 'TOO_MANY' }); return }
+    if (!this.toolWatches.content(connId, scope !== null || client.eventObservation !== undefined)) { reply({ error: 'TOO_MANY' }); return }
     if (client.questionProtocol !== 1) {
       client.questionProtocol = 1
       if (!this.toolClients.has(connId)) this.legacyQuestionWindows--
@@ -874,10 +895,47 @@ export class BackendSocket {
       close: reason => {
         if (client.questionObservation !== observation) return
         client.questionObservation = undefined
-        this.toolWatches.content(connId, false)
+        this.toolWatches.content(connId, client.eventObservation !== undefined)
         client.close!(1013, reason)
       },
     })
+  }
+
+  private sendSessionEvent(connId: string, client: LocalClient, observation: LocalEventObservation, frame: Frame): void {
+    const current = () => this.localClients.get(connId) === client && client.eventObservation === observation
+    if (!current()) return
+    let done = false
+    const finish = (sent: boolean): void => {
+      if (done) return
+      done = true
+      if (sent || !current()) return
+      client.eventObservation = undefined
+      if (this.toolClients.has(connId)) this.toolWatches.content(connId, client.questionObservation !== undefined)
+      client.close?.(1013, 'SESSION_EVENTS_UNAVAILABLE')
+    }
+    try { if (!client.sendFrame(frame, { kind: 'events' }, finish)) finish(false) }
+    catch { finish(false) }
+  }
+
+  private observeEvents(connId: string, payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void): void {
+    const client = this.localClients.get(connId)
+    if (!client) { reply({ error: 'OWNER_REQUIRED' }); return }
+    if (client.eventsProtocol !== 1 || !client.close) { reply({ error: 'UNSUPPORTED' }); return }
+    const raw = payload.scope
+    let scope: LocalEventObservation['scope'] | null
+    if (raw === 'all') scope = 'all'
+    else {
+      const named = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as { agentIds?: unknown }).agentIds : undefined
+      if (!Array.isArray(named)) { reply({ error: 'BAD_REQUEST' }); return }
+      if (named.length > TOOL_WATCH_MAX_AGENTS) { reply({ error: 'TOO_MANY' }); return }
+      if (named.some(id => typeof id !== 'string' || !id || id.length > 128)) { reply({ error: 'BAD_REQUEST' }); return }
+      scope = named.length ? new Set(named as string[]) : null
+    }
+    if (this.toolClients.has(connId) && !this.toolWatches.content(connId, scope !== null || client.questionObservation !== undefined)) {
+      reply({ error: 'TOO_MANY' }); return
+    }
+    client.eventObservation = scope ? { scope, generation: randomUUID() } : undefined
+    reply({ ok: true, ...(client.eventObservation ? { generation: client.eventObservation.generation } : {}) })
   }
 
   /** A service's fixed-name product counter (core/api.ts `CoreApi.count`), into the gateway's report as the socket's own. */
@@ -1242,6 +1300,11 @@ export class BackendSocket {
         case 'questions_observe':
           if (!local) { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
           this.observeQuestions(connId, payload, result => reply(type, requestId, result))
+          return
+
+        case 'events_observe':
+          if (!local) { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
+          this.observeEvents(connId, payload, result => reply(type, requestId, result))
           return
 
         // The conversation an agent holds, and how long it is (core/transcripts/history.ts, bound by cli.ts).

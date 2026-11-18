@@ -14,6 +14,8 @@ import { localCredentialMatches } from './lib/localCredential.js'
 import { peerIsThisAccount, type PeerAccount } from './lib/peerAccount.js'
 import type { Frame, LocalClientSink, LocalSendQuota } from './backendSocket.js'
 import { replayLegacyQuestions, questionFrameBytes, QUESTION_OBSERVATION_BYTES, QUESTION_OBSERVATION_CONNECTION_FRAMES, QUESTION_OBSERVATION_FRAMES } from './core/questionObservation.js'
+import { boundedJsonBytes } from './lib/boundedJsonBytes.js'
+import { SESSION_EVENT_BYTES, SESSION_EVENT_SEND_BYTES, SESSION_EVENT_CONNECTION_FRAMES, SESSION_EVENT_FRAMES, SESSION_EVENT_DRAIN_MS } from './lib/sessionEvents.js'
 import {
   clientStreamLocalFrame,
   decodeTerminalLocal,
@@ -45,7 +47,7 @@ import { LOCAL_JSON_MAX_BYTES } from './lib/localJsonLimit.js'
 export interface LocalWsBackend {
   /** `tool`: `harness pair` or the harnessd MCP server — answered like any local client, never presence.
    *  `watch`: what a tool asked to be sent as it changes; a window is sent it anyway. */
-  registerLocalClient: (connId: string, sink: LocalClientSink, opts?: { tool?: boolean; surface?: 'tui'; watch?: readonly 'dial'[]; questionProtocol?: 1 }) => boolean
+  registerLocalClient: (connId: string, sink: LocalClientSink, opts?: { tool?: boolean; surface?: 'tui'; watch?: readonly 'dial'[]; questionProtocol?: 1; eventsProtocol?: 1 }) => boolean
   unregisterLocalClient: (connId: string) => Promise<void>
   handleLocalFrame: (connId: string, frame: Frame) => void
   handleLocalBinary: (connId: string, frame: TerminalBinaryClear, raw?: Uint8Array) => Promise<void>
@@ -269,6 +271,7 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
   const windowSinks = new Map<string, LocalClientSink>()
   // A separate declared class on this physical send owner, shared by all observation connections.
   const questionBudget = { bytes: 0, frames: 0, peakBytes: 0, peakFrames: 0 }
+  const eventBudget = { bytes: 0, frames: 0, peakBytes: 0, peakFrames: 0 }
   // The desktop reports the same desk on one connection per machine. Losing a
   // remote relay must not erase the desk while another connection still holds it.
   // Map order records the latest announcement, including a replacement socket.
@@ -339,11 +342,19 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     /** Set when this connection is one of the core's services, not a window. */
     let serviceLink: { receive(frame: Frame): void; receiveBinary(bytes: Uint8Array): void; closed(): void } | null = null
     // Ownership records only: ws owns each actual write. Logical unregister never clears these callbacks.
-    const questionSends = new Set<(sent: boolean) => void>()
-    let questionFrames = 0, questionBytes = 0, questionRefusals = 0
+    const observationSends = new Set<(sent: boolean) => void>()
+    const observations = {
+      questions: { pending: 0, frames: 0, bytes: 0, refused: 0 },
+      events: { pending: 0, frames: 0, bytes: 0, refused: 0 },
+    }
+    let eventDeadline: ReturnType<typeof setTimeout> | undefined
     ws.once('close', () => {
-      for (const settled of questionSends) settled(false)
-      if (questionFrames || questionRefusals) console.log(`[question-observation] closed · frames=${questionFrames} bytes=${questionBytes} peakBytes=${questionBudget.peakBytes} peakFrames=${questionBudget.peakFrames} refused=${questionRefusals}`)
+      clearTimeout(eventDeadline)
+      for (const settled of observationSends) settled(false)
+      for (const kind of ['questions', 'events'] as const) {
+        const stats = observations[kind], budget = kind === 'questions' ? questionBudget : eventBudget
+        if (stats.frames || stats.refused) console.log(`[${kind === 'questions' ? 'question-observation' : 'session-events'}] closed · frames=${stats.frames} bytes=${stats.bytes} peakBytes=${budget.peakBytes} peakFrames=${budget.peakFrames} refused=${stats.refused}`)
+      }
     })
 
     const refusedStream = (quota: ClientStreamQuota): false => {
@@ -361,36 +372,50 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       sendFrame: (frame: Frame, quota?: LocalSendQuota, settled?: (sent: boolean) => void) => {
         if (ws.readyState !== WebSocket.OPEN) { settled?.(false); return false }
         if (quota && 'kind' in quota) {
+          const questions = quota.kind === 'questions', budget = questions ? questionBudget : eventBudget
+          const stats = observations[quota.kind]
+          const limit = questions ? QUESTION_OBSERVATION_BYTES : SESSION_EVENT_BYTES
+          const total = questions ? QUESTION_OBSERVATION_BYTES : SESSION_EVENT_SEND_BYTES
+          const connectionFrames = questions ? QUESTION_OBSERVATION_CONNECTION_FRAMES : SESSION_EVENT_CONNECTION_FRAMES
+          const totalFrames = questions ? QUESTION_OBSERVATION_FRAMES : SESSION_EVENT_FRAMES
+          const prefix = questions ? 'QUESTION_OBSERVATION' : 'SESSION_EVENTS'
           let bytes: number | null
-          try { bytes = questionFrameBytes(frame, QUESTION_OBSERVATION_BYTES) } catch { bytes = null }
-          if (bytes === null || questionBudget.bytes + bytes > QUESTION_OBSERVATION_BYTES ||
-            questionSends.size >= QUESTION_OBSERVATION_CONNECTION_FRAMES || questionBudget.frames >= QUESTION_OBSERVATION_FRAMES) {
-            questionRefusals++
-            const reason = bytes === null ? 'QUESTION_OBSERVATION_TOO_LARGE' : 'QUESTION_OBSERVATION_BACKPRESSURE'
-            console.warn(`[question-observation] ${reason}`)
+          try { bytes = questions ? questionFrameBytes(frame, limit) : boundedJsonBytes(frame, limit) } catch { bytes = null }
+          if (bytes === null || budget.bytes + bytes > total || stats.pending >= connectionFrames || budget.frames >= totalFrames) {
+            stats.refused++
+            const reason = `${prefix}_${bytes === null ? 'TOO_LARGE' : 'BACKPRESSURE'}`
+            console.warn(`[${questions ? 'question-observation' : 'session-events'}] ${reason}`)
             close(1013, reason)
             settled?.(false)
             return false
           }
-          questionBudget.bytes += bytes
-          questionBudget.frames++
-          questionBudget.peakBytes = Math.max(questionBudget.peakBytes, questionBudget.bytes)
-          questionBudget.peakFrames = Math.max(questionBudget.peakFrames, questionBudget.frames)
-          questionFrames++; questionBytes += bytes
+          budget.bytes += bytes
+          budget.frames++
+          budget.peakBytes = Math.max(budget.peakBytes, budget.bytes)
+          budget.peakFrames = Math.max(budget.peakFrames, budget.frames)
+          stats.pending++; stats.frames++; stats.bytes += bytes
+          if (!questions && !eventDeadline) {
+            eventDeadline = setTimeout(() => {
+              console.warn('[session-events] SESSION_EVENTS_DRAIN_TIMEOUT')
+              close(1013, 'SESSION_EVENTS_DRAIN_TIMEOUT')
+            }, SESSION_EVENT_DRAIN_MS)
+            eventDeadline.unref?.()
+          }
           let done = false
           const finish = (sent: boolean): void => {
             if (done) return
             done = true
-            questionSends.delete(finish)
-            questionBudget.bytes -= bytes
-            questionBudget.frames--
+            observationSends.delete(finish)
+            budget.bytes -= bytes
+            budget.frames--; stats.pending--
+            if (!questions && !stats.pending) { clearTimeout(eventDeadline); eventDeadline = undefined }
             settled?.(sent)
           }
-          questionSends.add(finish)
+          observationSends.add(finish)
           try {
-            ws.send(JSON.stringify(frame), error => { finish(!error); if (error) close(1013, 'QUESTION_OBSERVATION_UNAVAILABLE') })
+            ws.send(JSON.stringify(frame), error => { finish(!error); if (error) close(1013, `${prefix}_UNAVAILABLE`) })
             return true
-          } catch { finish(false); close(1013, 'QUESTION_OBSERVATION_UNAVAILABLE'); return false }
+          } catch { finish(false); close(1013, `${prefix}_UNAVAILABLE`); return false }
         }
         let release: (() => void) | null | undefined
         try {
@@ -480,6 +505,7 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         // `harness tui` says so; every other window is the desktop app. Each is its own presence.
         const registration = { ...(tool ? { tool: true, watch } : payload.client === 'tui' ? { surface: 'tui' as const } : {}),
           ...(payload.questionProtocol === 1 ? { questionProtocol: 1 as const } : {}),
+          ...(payload.eventsProtocol === 1 ? { eventsProtocol: 1 as const } : {}),
         }
         if (!options.backend.registerLocalClient(connId, terminalSink, registration)) {
           close(1011, 'local registration failed')
@@ -498,6 +524,7 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             // A tool's frame only: the window's handshake parser is shared with the relay path (below).
             ...(tool ? { features: [...LOCAL_TOOL_FEATURES] } : {}),
             ...(payload.questionProtocol === 1 ? { questionProtocol: 1 } : {}),
+            ...(payload.eventsProtocol === 1 ? { eventsProtocol: 1 } : {}),
           },
         })
         // Right after, not inside `connected`: the window's handshake parser is shared with the

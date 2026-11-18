@@ -37,11 +37,11 @@ function fixture(beforeReady: () => Promise<void> = async () => {}) {
     connector = options
     return { start: () => { live = true }, stop: async () => { live = false; generation++ } }
   })
-  const failed = vi.fn(), changed = vi.fn()
+  const failed = vi.fn(), changed = vi.fn(), card = vi.fn(async () => {})
   const service = new AutonomousDeviceService({ machineId: 'machine', agents: () => [], submit: () => {},
     cancelDelivery: () => true, stop: async () => true, answer: async () => true, recent: () => [] })
   const relay = deviceRelayOverGateway({ dataDir: '/unused', port: 23456, key: Buffer.alloc(32), service, machineId: 'machine',
-    beforeReady, beforeRequest: async () => {}, beforeSend: () => {}, maySend: () => writable, clientChanged: changed, failed })
+    beforeReady, beforeRequest: async () => {}, maySend: () => writable, clientChanged: changed, failed, card } as Parameters<typeof deviceRelayOverGateway>[0])
   relay.start()
   const open = () => {
     const socket = new Socket(), own = ++generation
@@ -54,11 +54,25 @@ function fixture(beforeReady: () => Promise<void> = async () => {}) {
   const request = (body: Record<string, unknown>, target = socket, epoch = 'peer') => target.message({ type: 'request', epoch,
     connId: held.connId, identity: held.identity, incarnation: held.incarnation, opened: { payload: body } })
   const stop = async () => { await relay.stop(); socket.close() }
-  return { relay, service, socket, open, held, snapshot, request, failed, changed, stop,
+  return { relay, service, socket, open, held, snapshot, request, failed, changed, card, stop,
     block: () => { writable = false }, unblock: () => { writable = true; relay.drain() } }
 }
 
 describe('devices use the authenticated gateway peer directly', () => {
+  it('holds a peer summary through its asynchronous component barrier and refuses its replaced generation', async () => {
+    const f = fixture(), waiting = deferred()
+    f.card.mockImplementationOnce(async (_frame?: unknown, _text?: unknown, current?: () => boolean) => {
+      await waiting.promise
+      expect(current?.()).toBe(false)
+    })
+    f.snapshot(); await f.socket.written(frame => frame.type === 'ready')
+    const frame = { type: 'commander_event', agentId: 'agent', dbSessionId: 'session', payload: { kind: 'summary', text: 'short' } }
+    f.socket.message({ type: 'recap', epoch: 'peer', frame, fullText: 'complete' })
+    expect(f.card).toHaveBeenCalledWith(frame, 'complete', expect.any(Function))
+    f.open()
+    waiting.resolve()
+    await f.stop()
+  })
   it.each(['drop', 'session', 'revoked'])('tears down a pending restored question audience when its last route leaves by %s', async kind => {
     const observation = deferred(), f = fixture(() => observation.promise)
     f.snapshot(f.socket, 'peer', true)

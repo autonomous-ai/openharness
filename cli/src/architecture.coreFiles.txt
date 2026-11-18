@@ -147,7 +147,6 @@ core/usageLink.ts
 core/usageOutcomes.ts
 core/viewersLink.ts
 core/viewersWake.ts
-core/wifi.ts
 core/wifiAgents.ts
 core/wifiLink.ts
 core/windowFocus.ts
@@ -289,6 +288,7 @@ lib/authSession.ts
 lib/backgroundCommands.ts
 lib/binaryOnPath.ts
 lib/bootId.ts
+lib/boundedJsonBytes.ts
 lib/browserPrelude.ts
 lib/captureResumeIdentity.ts
 lib/cardUpdate.ts
@@ -428,6 +428,7 @@ lib/runtimeControl.ts
 lib/runtimeProfileWire.ts
 lib/secureState.ts
 lib/sessionCheckpoint.ts
+lib/sessionEvents.ts
 lib/sessionInput.ts
 lib/sessionRepair.ts
 lib/sessionSearch/externals/types.ts

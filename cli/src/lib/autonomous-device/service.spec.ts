@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { AUTONOMOUS_DEVICE_CAPABILITIES, AutonomousDeviceService, type AutonomousDeviceFrame } from './service.js'
+import type { AgentView } from '../../core/api.js'
 
 // Legacy-engine fixture retains the original lifecycle contract; native evidence has its own results suite.
 function fixture(now?: () => number, fullAnswer?: string) {
@@ -13,6 +14,18 @@ function fixture(now?: () => number, fullAnswer?: string) {
 }
 
 describe('Autonomous device local-agent service', () => {
+  it('keeps a non-native receipt tied to its actual dispatch session across lifecycle catch-up', async () => {
+    const f = fixture()
+    await f.service.request('device', f.send())
+    const deliveryId = f.service.receipt('device', 'intent1')!.deliveryId
+    f.service.inputProgress({ agentId: 'agent', deliveryId, when: 'composer', phase: 'dispatching', sessionId: 'original',
+      content: 'hello', activity: { epoch: 'boot', revision: 10 } })
+    f.service.delivery({ sessionId: 'agent', deliveryId, state: 'started' })
+    f.service.agentLife({ kind: 'running', session: { agentId: 'agent', sessionId: 'replacement' } as AgentView })
+    f.service.turnEnded('agent', { sessionId: 'original', epoch: 'boot', revision: 11 })
+    expect(f.service.receipt('device', 'intent1')).toMatchObject({ state: 'unknown', error: { code: 'AGENT_GONE' } })
+    expect(f.submit).toHaveBeenCalledOnce()
+  })
   it('reconciles question generations in place, deduplicates replay and refuses stale state while disconnected', async () => {
     const f = fixture()
     const status = () => f.service.request('device', { type: 'status', requestId: randomUUID(), machineId: 'machine', agentId: 'agent' })
@@ -326,10 +339,11 @@ describe('Autonomous device local-agent service', () => {
   })
   it('correlates completion only to the delivery whose start was observed', async () => {
     const f = fixture(); await f.service.request('device', f.send())
-    f.service.turnEnded('agent')
+    f.service.turnEnded('agent', null)
     expect(f.service.receipt('device', 'intent1')?.state).toBe('queued')
+    f.service.inputProgress({ agentId: 'agent', sessionId: 'session', deliveryId: f.submit.mock.calls[0][2], when: 'composer', phase: 'dispatching', activity: { epoch: 'core', revision: 1 } })
     f.service.delivery({ deliveryId: f.submit.mock.calls[0][2], sessionId: 'agent', state: 'started' })
-    f.service.turnEnded('agent')
+    f.service.turnEnded('agent', { sessionId: 'session', epoch: 'core', revision: 2 })
     expect(f.service.receipt('device', 'intent1')).toMatchObject({ state: 'completed', turnId: expect.any(String) })
   })
   it('resyncs an old instance and replays only newer events for the current one', () => {

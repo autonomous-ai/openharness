@@ -10,7 +10,7 @@ import type { DeviceSessionProof } from '../lib/autonomous-device/relay.js'
 import type { GatewayDevicePeer, RelayGateway } from './gateway.js'
 
 type Request = Extract<GatewayDeviceFrame, { type: 'request' }>
-type Failure = DevicePeerFailure | DevicePeerPressure | 'PEER_HELD_CAPACITY' | 'PEER_HELD_EXPIRED' | 'PEER_READY_DEADLINE' | 'PEER_REPLY_UNAVAILABLE'
+type Failure = DevicePeerFailure | DevicePeerPressure | 'PEER_HELD_CAPACITY' | 'PEER_HELD_EXPIRED' | 'PEER_READY_DEADLINE' | 'PEER_REPLY_UNAVAILABLE' | 'PEER_RECAP_UNAVAILABLE'
 type Peer = { channel: DevicePeerChannel; epoch: string; ready: boolean; first: boolean; watching: boolean | null }
 
 export function startGatewayDevicePeer(gateway: RelayGateway, options: {
@@ -125,6 +125,15 @@ export function startGatewayDevicePeer(gateway: RelayGateway, options: {
     return promise
   }
   const receive = (peer: Peer, frame: DevicePeerFrame): void => {
+    if (frame.type === 'recap') {
+      if (stopped || recaps !== peer || frame.epoch !== peer.epoch) return
+      const target = devices
+      if (!target?.ready) { say('PEER_RECAP_UNAVAILABLE'); return }
+      const wire = encodeDevicePeerFrame({ ...frame, epoch: target.epoch })
+      if (wire === null) { say('PEER_FRAME_OVERSIZED'); return }
+      if (target.channel.send(wire) !== 'sent') say('PEER_RECAP_UNAVAILABLE')
+      return
+    }
     if (!current(peer) || frame.epoch !== peer.epoch) return
     if (frame.type === 'ready') {
       peer.ready = true; options.ready(); waiting?.finish(true); flush(); presence(); return

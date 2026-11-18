@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { deviceErrorText } from '../cardText.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { createEventFunnel, funnelFor, outsideConsumers, type FunnelDeps } from './funnel.js'
+import { createEventFunnel, funnelFor, type FunnelDeps } from './funnel.js'
 import { createShortTurnGuard } from './shortTurnGuard.js'
+import { createServiceLinks, type ServiceFrame } from '../serviceLinks.js'
+import { createDeliveries } from '../deliveries.js'
 
 type Event = Parameters<ReturnType<typeof funnelFor>>[1][number]
 const started = (userMessage = 'go'): Event => ({ type: 'turn_started', payload: { userMessage } }) as Event
@@ -27,7 +29,6 @@ function setup(engine = 'claude', over: Partial<FunnelDeps> = {}) {
     search: { touch: vi.fn(log('search')) },
     turnStartedAt: new Map(),
     input: { onTurnStarted: vi.fn(log('input started')), onTurnEnded: vi.fn(log('input ended')) },
-    device: () => ({ events: vi.fn(log('device events')), stream: vi.fn(log('device stream')) }),
     startHeartbeat: vi.fn(log('heartbeat')),
     questionWatcher: { start: vi.fn(log('questions start')), noteTurnStart: vi.fn(log('questions pre-turn')), stop: vi.fn(log('questions stop')) },
     mirror: { ingest: vi.fn(log('mirror')) },
@@ -38,6 +39,44 @@ function setup(engine = 'claude', over: Partial<FunnelDeps> = {}) {
 
 describe('the event funnel', () => {
   afterEach(() => vi.restoreAllMocks())
+
+  it('enqueues dispatch and started notices before a read response requested at the earlier app send point', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const wire: ServiceFrame[] = [], token = 't'.repeat(48)
+    const links = createServiceLinks({ token, owned: { wifi: [] },
+      answer: async () => ({ value: { agentId: 'a1', sessionId: 's1' } }) })
+    const link = links.accept('wifi', token, { sendFrame: frame => { wire.push(frame); return true } }, vi.fn())!
+    const deliveries = createDeliveries({ deliverers: new Set(['wifi']), submit: vi.fn(), cancel: () => false,
+      tell: (service, event) => { links.notify(service, { type: 'service_event', payload: { kind: 'delivery', event } }) },
+      tellInput: (service, event) => { links.notify(service, { type: 'service_event', payload: { kind: 'input', event } }) } })
+    deliveries.ready()
+    deliveries.answer('wifi', 'input', { version: 1, agentId: 'a1', text: 'go', deliveryId: 'd', when: 'composer' },
+      { current: () => true, ownsRequest: () => false })
+    deliveries.input({ agentId: 'a1', deliveryId: 'd', phase: 'dispatching', when: 'composer', sessionId: 's1', activity: { epoch: 'core', revision: 1 } })
+    const f = setup('opencode', {
+      clients: { send: () => link.receive({ type: 'service_query', payload: { query: 'resolve', id: 'a1', requestId: 'barrier' } }) },
+      input: { onTurnStarted: () => deliveries.settled({ sessionId: 'a1', deliveryId: 'd', state: 'started' }), onTurnEnded: vi.fn() },
+    })
+    f.funnel('s1', [started()])
+    expect(wire.map(frame => frame.payload?.kind)).toEqual(['input', 'delivery'])
+    await vi.waitFor(() => expect(wire).toHaveLength(3))
+    expect(wire[2]).toMatchObject({ type: 'service_query_result', payload: { requestId: 'barrier' } })
+    link.closed()
+  })
+
+  it('carries original batch provenance at each existing app send point without delaying its side effects', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const f = setup()
+    f.funnel('s1', [ended(), started('next')])
+    const calls = vi.mocked(f.deps.clients.send).mock.calls as unknown as Array<[unknown, unknown]>
+    expect(calls.map(call => call[1])).toEqual([
+      { id: expect.any(Number), index: 0, count: 2 }, { id: expect.any(Number), index: 1, count: 2 },
+    ])
+    expect((calls[0][1] as { id: number }).id).toBe((calls[1][1] as { id: number }).id)
+    expect(f.calls.indexOf('input ended')).toBeLessThan(f.calls.indexOf('send turn_started'))
+    f.funnel('s1', [text()])
+    expect((calls[2][1] as { id: number }).id).not.toBe((calls[0][1] as { id: number }).id)
+  })
 
   it('tells of an agent working on each live turn start and progress, never on its end or a re-read', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -87,28 +126,7 @@ describe('the event funnel', () => {
     expect((deps.mirror.ingest as ReturnType<typeof vi.fn>).mock.calls[0][0][0].payload.outputTail).toBe('tail')
   })
 
-  it('carries on past a device service that throws: every consumer after it still gets the event', () => {
-    vi.spyOn(console, 'log').mockImplementation(() => {})
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const boom = (what: string) => vi.fn(() => { throw new Error(`${what} unplugged`) })
-    const { funnel, calls } = setup('claude', {
-      device: () => ({ events: boom('device'), stream: boom('device') }),
-    })
-    funnel('s1', [started(), text(), ended()])
-    expect(calls).toEqual([
-      'send turn_started', 'search',
-      'input started', 'heartbeat', 'questions start', 'questions pre-turn',
-      'send text_delta',
-      'send turn_ended', 'search',
-      'input ended', 'questions stop',
-      'mirror',
-    ])
-    // Once a minute per consumer: the devices failed three times and said so once.
-    expect(error.mock.calls.map(([line]) => line)).toEqual(['[funnel] devices failed · device unplugged'])
-  })
-
-
-  it('fans a live turn out in its exact order: the app first, the recaps after the batch, the device stream last', () => {
+  it('fans a live turn out in its exact order: the app first, the recaps after the batch', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const { funnel, calls } = setup()
     funnel('s1', [started(), text(), ended()])
@@ -118,11 +136,11 @@ describe('the event funnel', () => {
       'send text_delta',
       'send turn_ended', 'search',
       'input ended', 'questions stop',
-      'device events', 'mirror', 'device stream',
+      'mirror',
     ])
   })
 
-  it('marks a turn picked up at attach as such, and still streams it to the device', () => {
+  it('marks a turn picked up at attach as replay', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const { funnel, calls, deps } = setup()
     funnel('s1', [started()], { resumed: true })
@@ -130,7 +148,7 @@ describe('the event funnel', () => {
     expect(calls).toEqual([
       'send turn_started', 'search',
       'input started', 'heartbeat', 'questions start',
-      'device events', 'mirror', 'device stream',
+      'mirror',
     ])
     const frame = vi.mocked(deps.clients.send).mock.calls[0][0] as Record<string, any>
     expect(frame.replay).toBe(true)
@@ -138,11 +156,10 @@ describe('the event funnel', () => {
     expect(vi.mocked(deps.mirror.ingest).mock.calls[0][2]).toEqual({ replay: true })
   })
 
-  it('re-reads a transcript as history: nothing streamed to the device', () => {
+  it('re-reads a transcript as history with explicit replay metadata', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const { funnel, calls, deps } = setup()
     funnel('s1', [started(), ended()], { replay: true })
-    expect(calls).not.toContain('device stream')
     expect(calls).toContain('questions pre-turn')
     const end = vi.mocked(deps.clients.send).mock.calls[1][0] as Record<string, any>
     expect(end.replay).toBe(true)
@@ -216,7 +233,7 @@ describe('the event funnel', () => {
     const commandcode = setup('commandcode')
     commandcode.funnel('s1', [ended()])
     expect(commandcode.calls).not.toContain('questions stop')
-    expect(commandcode.calls).toContain('device stream')
+    expect(commandcode.calls).toContain('send turn_ended')
   })
 
   it('carries the turn\'s activity, says when a turn ends without a start, and counts OpenCode\'s usage', () => {
@@ -239,7 +256,7 @@ describe('the event funnel', () => {
     })
     expect(() => run.funnel('s1', [ended(), started()])).not.toThrow()
     // The full batch still reaches the component; the funnel does not interpret its native boundary.
-    expect(run.calls).toContain('device stream')
+    expect(run.calls).toContain('send turn_started')
     expect(String(log.mock.calls[1][0])).toContain('engine=claude')
   })
 
@@ -251,9 +268,9 @@ describe('the event funnel', () => {
     expect(calls).toEqual([])
   })
 
-  it('works without search or a device service', () => {
+  it('works without search', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    const { funnel, calls } = setup('claude', { search: null, device: () => undefined })
+    const { funnel, calls } = setup('claude', { search: null })
     funnel('s1', [started(), ended()])
     expect(calls).toEqual([
       'send turn_started', 'input started', 'heartbeat', 'questions start', 'questions pre-turn',
@@ -296,45 +313,5 @@ describe('createEventFunnel', () => {
       deviceErrorText('rate limited', 'commandcode'),
     ])
     expect(String(log.mock.calls[0][0])).toContain('aborted by devin error')
-  })
-})
-
-describe('a consumer outside the core', () => {
-  it('is logged at most once a minute, with how many failures went unsaid, and never stops the caller', () => {
-    const lines: string[] = []
-    let at = 0
-    const outside = outsideConsumers({ log: (line) => lines.push(line), now: () => at })
-    const ran: string[] = []
-    outside('devices', () => { throw new Error('serial port gone') })
-    at += 10_000
-    outside('devices', () => { throw 'still gone' })
-    outside('recaps', () => { ran.push('recaps') })
-    at += 60_000
-    outside('devices', () => { throw 'back and gone again' })
-    at += 60_001
-    outside('devices', () => { throw new Error('once more') })
-    expect(ran).toEqual(['recaps'])
-    expect(lines).toEqual([
-      '[funnel] devices failed · serial port gone',
-      '[funnel] devices failed · back and gone again · 1 more since',
-      '[funnel] devices failed · once more',
-    ])
-  })
-
-  it('reports to the error log by default', () => {
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    outsideConsumers()('devices', () => { throw new Error('x') })
-    expect(error).toHaveBeenCalledWith('[funnel] devices failed · x')
-    error.mockRestore()
-  })
-
-  it('says whose it is, and fails a consumer named in the end-to-end suite\'s faults without running it', () => {
-    const lines: string[] = []
-    const ran: string[] = []
-    const outside = outsideConsumers({ log: (line) => lines.push(line), prefix: 'devices', faults: new Set(['dial']) })
-    outside('dial', () => { ran.push('dial') })
-    outside('window', () => { ran.push('window') })
-    expect(ran).toEqual(['window'])
-    expect(lines).toEqual(['[devices] dial failed · injected fault: dial'])
   })
 })

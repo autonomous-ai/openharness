@@ -17,13 +17,11 @@ function setup(engines: Record<string, string>, over: Partial<IngestDeps> = {}) 
   const sessions = new Map(Object.entries(engines).map(([sessionId, engine]) =>
     [sessionId, { agentId: `agent-${sessionId}`, sessionId, engine, transcriptPath: `/t/${sessionId}.jsonl` } as RegisteredSession]))
   const normalizers = createSessionNormalizers(noOtherStreams(), { held: () => false, closed: () => {}, forget: () => {} })
-  const service = { needsTranscript: vi.fn(() => false), observeTranscript: vi.fn() }
   const deps: IngestDeps = {
     liveFor,
     has: (sessionId) => sessions.has(sessionId),
     bySession: (sessionId) => sessions.get(sessionId),
     tokenUsage: { changed: vi.fn() },
-    device: () => service,
     runtimeProfiles: { ingest: vi.fn(), evidence: vi.fn() },
     normalizers,
     announceTurnAborted: vi.fn(),
@@ -33,7 +31,7 @@ function setup(engines: Record<string, string>, over: Partial<IngestDeps> = {}) 
     announceSession: vi.fn(),
     ...over,
   }
-  return { deps, sessions, normalizers, service, ingest: createIngest(deps) }
+  return { deps, sessions, normalizers, ingest: createIngest(deps) }
 }
 
 const line = (sessionId: string, engine: string, text = '{}'): LineEvent => ({ sessionId, engine, text } as LineEvent)
@@ -44,7 +42,7 @@ describe('ingesting a transcript line', () => {
   it('accepts worker events only for the bound engine, preserving replay and side reads without constructing a parser', () => {
     const p = setup({ s1: 'claude' }, { liveFor: () => { throw new Error('worker events are already normalized') } })
     const frame: LiveFrame = { raw: CLAUDE_PROMPT, events: [{ type: 'turn_started', payload: { userMessage: 'hello' } }],
-      profile: true, observe: true, replay: true, turn: { identity: 'worker:turn', turnOpen: true, continued: false } }
+      profile: true, replay: true, turn: { identity: 'worker:turn', turnOpen: true, continued: false } }
     p.ingest.acceptFrame('unknown', 'claude', frame)
     p.ingest.acceptFrame('s1', 'codex', frame)
     expect(p.deps.emit).not.toHaveBeenCalled()
@@ -68,7 +66,7 @@ describe('ingesting a transcript line', () => {
   it('hands a worker frame\'s time, own end and turn on with its events', () => {
     const run = setup({ s1: 'claude' })
     const turn = { identity: 'worker:turn', turnOpen: false, continued: true, openedAt: 1_000 }
-    const frame: LiveFrame = { raw: '{}', events: [{ type: 'turn_ended', payload: {} }], profile: false, observe: true,
+    const frame: LiveFrame = { raw: '{}', events: [{ type: 'turn_ended', payload: {} }], profile: false,
       replay: false, at: 2_000, over: true, turn }
     run.ingest.acceptFrame('s1', 'claude', frame)
     expect(vi.mocked(run.deps.emit).mock.calls).toStrictEqual([['s1', frame.events, { replay: false, at: 2_000, over: true, turn }]])
@@ -90,40 +88,30 @@ describe('ingesting a transcript line', () => {
     expect(run.normalizers.hasState('s1')).toBe(false)
     expect(run.deps.tokenUsage.changed).not.toHaveBeenCalled()
     expect(run.deps.runtimeProfiles.ingest).not.toHaveBeenCalled()
-    expect(run.service.needsTranscript).not.toHaveBeenCalled()
   })
 
-  it('counts tokens, shows the device its raw lines when it asks, and reads the runtime from each line', () => {
-    const { ingest, deps, service, sessions } = setup({ s1: 'claude' })
+  it('counts tokens and reads the runtime from each line', () => {
+    const { ingest, deps, sessions } = setup({ s1: 'claude' })
     ingest.ingestLine(line('s1', 'claude', CLAUDE_PROMPT))
     expect(deps.tokenUsage.changed).toHaveBeenCalledWith(sessions.get('s1'))
-    expect(service.observeTranscript).not.toHaveBeenCalled()
-    service.needsTranscript.mockReturnValue(true)
     ingest.ingestLine(line('s1', 'claude', CLAUDE_PROMPT))
-    expect(service.observeTranscript).toHaveBeenCalledWith('agent-s1', 's1', 'claude', CLAUDE_PROMPT)
     expect(deps.runtimeProfiles.ingest).toHaveBeenCalledWith(sessions.get('s1'), CLAUDE_PROMPT)
-    const none = setup({ s1: 'claude' }, { device: () => undefined })
-    expect(none.ingest.ingestLine(line('s1', 'claude', CLAUDE_PROMPT))).toEqual(expect.any(Array))
   })
 
-  it('gives a line to its engine though the device or the runtime profile cannot take it in, and says so once a session', () => {
+  it('gives a line to its engine though the runtime profile cannot take it in, and says so once a session', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const clean = setup({ s1: 'claude' })
     const expected = clean.ingest.ingestLine(line('s1', 'claude', CLAUDE_PROMPT))
     expect(expected).not.toEqual([])
-    const { ingest, deps, service } = setup({ s1: 'claude', s2: 'claude' })
-    service.needsTranscript.mockReturnValue(true)
-    service.observeTranscript.mockImplementation(() => { throw new Error('evidence unreadable') })
+    const { ingest, deps } = setup({ s1: 'claude', s2: 'claude' })
     vi.mocked(deps.runtimeProfiles.ingest).mockImplementation(() => { throw 'profile unreadable' })
-    // The line's events are the ones it has without the two readers: a turn's start, here.
+    // The line's events are the ones it has without the profile reader: a turn's start, here.
     expect(ingest.ingestLine(line('s1', 'claude', CLAUDE_PROMPT))).toEqual(expected)
     ingest.ingestLine(line('s1', 'claude', '{}'))
     ingest.ingestLine(line('s2', 'claude', CLAUDE_PROMPT))
     expect(deps.runtimeProfiles.ingest).toHaveBeenCalledTimes(3)
     expect(error.mock.calls).toEqual([
-      ['[transcripts] the device could not take in a line of s1; the line goes on to its engine: evidence unreadable'],
       ['[transcripts] the runtime profile could not take in a line of s1; the line goes on to its engine: profile unreadable'],
-      ['[transcripts] the device could not take in a line of s2; the line goes on to its engine: evidence unreadable'],
       ['[transcripts] the runtime profile could not take in a line of s2; the line goes on to its engine: profile unreadable'],
     ])
   })

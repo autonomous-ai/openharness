@@ -15,6 +15,8 @@ import { observeQuestions } from '../agentClient/questions.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { startWifi } from './wifi.js'
 import { GatewayDeviceFixture } from '../testing/devicePeer.js'
+import { observeDeviceSessions } from '../lib/autonomous-device/sessionFeed.js'
+import { listenLocalSocket, localSocketPath } from '../lib/localSocket.js'
 
 let peer: GatewayDeviceFixture
 vi.mock('../lib/autonomous-device/peerConnection.js', () => ({ devicePeerConnection: vi.fn(options => {
@@ -23,16 +25,18 @@ vi.mock('../lib/autonomous-device/peerConnection.js', () => ({ devicePeerConnect
 }) }))
 
 let server: http.Server | undefined, local: LocalWsServer | undefined, port: WifiPort | undefined, dataDir: string | undefined
+let unix: Awaited<ReturnType<typeof listenLocalSocket>> | undefined
 afterEach(async () => {
   await port?.stop()
   await local?.close()
+  await unix?.close()
   await new Promise<void>(resolve => server?.close(() => resolve()) ?? resolve())
   if (dataDir) rmSync(dataDir, { recursive: true, force: true })
-  port = undefined; local = undefined; server = undefined; dataDir = undefined
+  port = undefined; local = undefined; server = undefined; dataDir = undefined; unix = undefined
   vi.restoreAllMocks()
 })
 
-it('keeps all-agent questions working with only the real Wi-Fi tool connection, including initial state and reconnect closes', async () => {
+it('keeps all-agent questions working through real component tool connections, including initial state and reconnect closes', async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'wifi-questions-'))
   const backend = new BackendSocket('machine-1')
   const asking = createQuestions({
@@ -48,7 +52,8 @@ it('keeps all-agent questions working with only the real Wi-Fi tool connection, 
   expect(watcher.hasDevice('unfocused')).toBe(false)
   watcher.onQuestion('unfocused', 'existing', [{ key: 'Which?', q: 'Which?', options: ['One'], multi: false }])
   server = http.createServer()
-  local = attachLocalWsServer(server, { machineId: 'machine-1', backend, openQuestions: () => asking.snapshot('local') })
+  if (process.platform !== 'win32') unix = await listenLocalSocket((_req, res) => res.end(), localSocketPath(dataDir, 18473)!)
+  local = attachLocalWsServer(server, { machineId: 'machine-1', backend, openQuestions: () => asking.snapshot('local'), localSocketServer: unix?.server })
   await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
   const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`
   const core = fakeCore({ dataDir, wifi: { view: vi.fn(async () => ({ hasWindow: false, store: [], agents: ['agent', 'unfocused'].map(agentId => ({
@@ -59,6 +64,8 @@ it('keeps all-agent questions working with only the real Wi-Fi tool connection, 
   startWifi(core, ports, {
     service: options => service = new AutonomousDeviceService(options),
     observeQuestions: listener => observeQuestions({ port: 1, dataDir: dataDir!, machineId: 'machine-1' }, listener, () => new WebSocket(url)),
+    ...(unix ? {} : { observeSessions: (options: Parameters<typeof observeDeviceSessions>[1]) =>
+      observeDeviceSessions({ port: 1, dataDir: dataDir!, machineId: 'machine-1' }, options, () => new WebSocket(url)) }),
   })
   port = ports.wifi!
   const client = { role: 'device' as const, identity: 'fixture-device', direct: true, label: 'Fixture' }

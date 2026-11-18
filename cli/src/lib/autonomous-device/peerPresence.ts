@@ -1,6 +1,8 @@
-/** Recaps sees only current Wi-Fi audience facts, never device identities, requests or content. */
+/** Recaps sees current audience only, and publishes its own captured cards; no device authority. */
 import { devicePeerConnection } from './peerConnection.js'
 import { devicePeerBudgets, devicePeerChannel, type DevicePeerChannel } from './peerChannel.js'
+import { encodeDevicePeerFrame } from './peerJson.js'
+import type { DeviceRecapFrame } from './peerProtocol.js'
 
 export function devicePeerPresence(options: {
   dataDir: string; port: number; key: Buffer | null
@@ -21,6 +23,15 @@ export function devicePeerPresence(options: {
     channel = own
   } })
   return {
+    card(frame: DeviceRecapFrame['frame'], fullText?: string): boolean {
+      const own = channel, epoch = own?.epoch()
+      if (!running || !own || !epoch) { options.failed('PEER_RECAP_UNAVAILABLE'); return false }
+      const wire = encodeDevicePeerFrame({ type: 'recap', epoch, frame, fullText: fullText ?? null })
+      if (wire === null) { options.failed('PEER_FRAME_OVERSIZED'); return false }
+      const sent = own.send(wire) === 'sent'
+      if (!sent) options.failed('PEER_RECAP_UNAVAILABLE')
+      return sent
+    },
     start() { if (running) return; running = true; connection.start() },
     async stop() {
       running = false

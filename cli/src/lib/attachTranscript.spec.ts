@@ -228,13 +228,12 @@ describe('replayAttachSpan', () => {
     const read = await replayAttachSpan(file, { end: 32, turnFrom: 16, profileFrom: 8, head: '{"a":1}', seeds: ['{"s":0}'] }, {
       profile: (line) => seen.push(`profile ${line}`),
       fold: (line) => seen.push(`fold ${line}`),
-      observe: (line) => seen.push(`observe ${line}`),
     })
     expect(seen).toEqual([
       'profile {"a":1}', 'fold {"s":0}',
       'profile {"b":2}',
-      'profile {"c":3}', 'observe {"c":3}', 'fold {"c":3}',
-      'profile {"d":4}', 'observe {"d":4}', 'fold {"d":4}',
+      'profile {"c":3}', 'fold {"c":3}',
+      'profile {"d":4}', 'fold {"d":4}',
     ])
     expect(read).toEqual({ next: 32, records: 2, content: true })
   })
@@ -453,18 +452,6 @@ describe('the review of the first cut', () => {
     await watcher.stop()
   })
 
-  it('shows the device the record Codex writes before the opener, which is the turn\'s input', async () => {
-    const input = cx('response_item', {
-      type: 'message', role: 'user', content: [{ type: 'input_text', text: 'go' }],
-      internal_chat_message_metadata_passthrough: { turn_id: 't1', content_item_kinds: ['user.text'] },
-    })
-    writeFileSync(file, [codex.meta(), codex.started('t1'), codex.context('gpt-6', 'high', 'default'), input, codex.userItem('go'), codex.reasoning('x')].join('\n') + '\n')
-    const observed: string[] = []
-    await attachTranscript(file, codexAttachRules(() => []), { profile: () => {}, fold: () => {}, observe: (line) => observed.push(line) })
-    expect(observed).toContain(input)
-    expect(observed[0]).toBe(codex.started('t1'))
-  })
-
   it('treats a transcript that is missing as an empty history, as the whole read did', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
@@ -520,12 +507,11 @@ describe('the review of the first cut', () => {
           if (!folded.length) { appendFileSync(file, now); folded.push(line); throw new Error('boom') }
           folded.push(line)
         },
-        observe: () => { throw new Error('device') },
       })
       expect(read).toMatchObject({ next: Buffer.byteLength(content), records: 3, failed: false })
       expect(folded).toEqual([codex.started('t1'), codex.user('a'), codex.complete('t1')])
       expect(warn).toHaveBeenCalledOnce()
-      expect(warn.mock.calls[0][0]).toContain('7 record(s) could not be taken in: Error: profile')
+      expect(warn.mock.calls[0][0]).toContain('4 record(s) could not be taken in: Error: profile')
       const watcher = new Watcher()
       const lines: string[] = []
       watcher.on('line', (event: LineEvent) => lines.push(event.text))

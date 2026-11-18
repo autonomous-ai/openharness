@@ -107,13 +107,13 @@ function attachTo(db: string, row: RegisteredSession, emit: AttachDeps['emit']) 
   const others = inProcessOtherStreams({ bySession, frame: (session, frame) => ingest.acceptStreamFrame(session, frame) })
   stops.push(others.stop)
   const normalizers = createSessionNormalizers(others.streams, { held: () => false, closed: () => {}, forget: () => {} })
-  ingest = createIngest({ liveFor, has: () => true, bySession, tokenUsage: { changed: vi.fn() }, device: () => undefined,
+  ingest = createIngest({ liveFor, has: () => true, bySession, tokenUsage: { changed: vi.fn() },
     runtimeProfiles: runtimeProfiles as never, normalizers, announceTurnAborted, emit: emit as never, attachSession: vi.fn(async () => true),
     setIdentityHold, announceSession })
   const attach = createAttach({
     liveFor, resolve: (id) => (id === row.agentId ? row : undefined), terminalGone: async () => false, normalizers, others: others.streams,
     watcher: { addSession: vi.fn(async () => {}), removeSession: vi.fn(async () => {}), pollSession: vi.fn(async () => {}), hold: vi.fn(async () => null), tails: vi.fn(() => false) },
-    setInterpretationHold: () => false, announceSession, cursorDiscovery: { add: vi.fn(async () => {}) }, device: () => undefined,
+    setInterpretationHold: () => false, announceSession, cursorDiscovery: { add: vi.fn(async () => {}) },
     runtimeProfiles: runtimeProfiles as unknown as AttachDeps['runtimeProfiles'], captureTerminal: vi.fn(async () => null), emit,
     tokenUsage: { changed: () => {} }, questionWatcher: { start: vi.fn() }, terminalLabel: () => 'tmux:%1',
     storeOf: createStoreOf({ opencode: '/db/opencode.db', kilo: '/db/kilo.db', devin: '/db/devin.db', openclaw: opened }, async () => '/db/hermes.db'),

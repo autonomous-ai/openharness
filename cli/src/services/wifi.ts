@@ -6,9 +6,9 @@
  *
  * What the service reads in line while it answers (the agents, the Store's evidence on them, whether a
  * window is there) is the core's answer to `view`, asked again before each request and each move of the
- * window's focus, so what it answers is as fresh as when it ran in the core. What the core reads in line
- * of it (transcript/stream interests) is acknowledged by the following ordered
- * view query before a dependent direct reply leaves here. Relay sessions come from the gateway peer.
+ * window's focus, so what it answers is as fresh as when it ran in the core. Raw evidence is read here;
+ * normalized events use the same negotiated local transport as Desktop. Relay sessions come from the
+ * gateway peer, and the core keeps no component observation interests.
  *
  * What a person asks of it on this computer (`harness device receipt`, `harness autonomous-device addon`) comes as its
  * routes of the door, handed on by the core as they came (core/serviceRoutes.ts) and checked here
@@ -25,8 +25,19 @@ import { AutonomousDeviceService, type AutonomousDeviceFrame } from '../lib/auto
 import { deviceRefusal, deviceRoutes } from '../lib/autonomous-device/localHttp.js'
 import { createDeviceStore } from '../lib/autonomous-device/storeRuntime.js'
 import { observeQuestions, type QuestionListener, type QuestionObservation } from '../agentClient/questions.js'
+import { createDeviceEvidence, DeviceEvidencePool } from '../lib/autonomous-device/evidenceReader.js'
+import { observeDeviceSessions, DeviceFeedPool, type DeviceSessionFeedOptions, type DeviceSessionFeed } from '../lib/autonomous-device/sessionFeed.js'
+import type { LiveEvent } from '../engines/kit/events.js'
+import { sessionEventProof } from '../lib/sessionEvents.js'
+import { DeviceWorkBudget } from '../lib/autonomous-device/pendingWork.js'
+import { isLocalOnly, withoutUpdate } from '../lib/cardUpdate.js'
 
 export { WIFI_FALLBACKS, WIFI_REQUESTS } from '../core/api.js'
+
+// Inline reconstruction must not forget a previous instance's still-running view query.
+const inlineFocusWork = new DeviceWorkBudget()
+const inlineEvidencePool = new DeviceEvidencePool()
+const inlineFeedPool = new DeviceFeedPool()
 
 export interface WifiDeps {
   /** Explicit composition: an absent service token never silently creates an unrelated peer authority. */
@@ -35,13 +46,17 @@ export interface WifiDeps {
   service?: (options: ConstructorParameters<typeof AutonomousDeviceService>[0]) => AutonomousDeviceService
   store?: typeof createDeviceStore
   /** Process adapter: captures one core connection through capability probe, read and submit. */
-  submit?: (agentId: string, text: string, deliveryId: string, context: (agent: AgentView) => void, current?: () => boolean) => Promise<void>
+  submit?: (agentId: string, text: string, deliveryId: string, context: (agent: AgentView) => void | Promise<void>, current?: () => boolean) => Promise<void>
   cancel?: (deliveryId: string) => void
+  evidence?: typeof createDeviceEvidence
+  evidencePool?: DeviceEvidencePool
+  feedPool?: DeviceFeedPool
+  focusWork?: DeviceWorkBudget
+  observeSessions?: (options: DeviceSessionFeedOptions) => DeviceSessionFeed
   /** Same authenticated local tool transport in an external process and explicit inline mode. */
   observeQuestions?: (listener: QuestionListener) => QuestionObservation
 }
 
-const same = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((item, i) => item === b[i])
 
 export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}): ServiceRequests {
   const machineId = core.machine.id()
@@ -78,9 +93,6 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
   }
   /** A summary card's whole answer, while the service reads it. */
   let fullText: string | undefined
-  /** How many of an agent's prompts the core told of: the core stops sending its lines as of the count. */
-  const seen = new Map<string, number>()
-  let streamed: string[] = []
 
   const store = (deps.store ?? createDeviceStore)({
     dataDir: core.dataDir, machineId,
@@ -101,8 +113,21 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
     scroll: (phase, dy, velocity) => core.wifi.scroll(phase, dy, velocity),
     agents: () => view.agents,
     submit: async (agentId, text, deliveryId) => {
-      const context = (agent: AgentView): void => service!.inputContext(deliveryId, agent)
-      const current = (): boolean => service!.inputCurrent(deliveryId)
+      const epoch = coreEpoch
+      const current = (): boolean => !stopped && coreConnected && coreEpoch === epoch && service!.inputCurrent(deliveryId)
+      try { await ensureFeed() } catch {
+        service!.delivery({ sessionId: agentId, deliveryId, state: 'rejected', reason: 'SESSION_EVENTS_UNAVAILABLE' })
+        return
+      }
+      if (!current()) return
+      const context = async (agent: AgentView): Promise<void> => {
+        try { await evidence.arm(agent, deliveryId) }
+        catch {
+          service!.delivery({ sessionId: agentId, deliveryId, state: 'rejected', reason: 'EVIDENCE_UNAVAILABLE' })
+          return
+        }
+        service!.inputContext(deliveryId, agent)
+      }
       if (deps.submit) { await deps.submit(agentId, text, deliveryId, context, current); return }
       const agent = await core.conversations.resolve(agentId)
       if (!current()) return
@@ -110,7 +135,8 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
         service!.delivery({ sessionId: agentId, deliveryId, state: 'rejected', reason: 'agent_gone' })
         return
       }
-      context(agent)
+      await context(agent)
+      if (!current()) return
       core.turns.deliver(agentId, text, deliveryId, { when: 'composer', current })
     },
     // Told, not asked: the one caller (an unpairing) goes on whatever the answer.
@@ -126,6 +152,93 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
     emit: (frame, deviceId) => emit(frame, deviceId),
   }))
   if (!service) throw new Error('the Wi-Fi device service could not be started')
+  const evidence = (deps.evidence ?? createDeviceEvidence)({
+    pool: deps.evidencePool ?? inlineEvidencePool,
+    resolve: agentId => core.conversations.resolve(agentId),
+    observe: (agentId, sessionId, engine, line) => service.observeTranscript(agentId, sessionId, engine, line),
+    gap: agentId => service.evidenceLost(agentId),
+    needed: (agentId, sessionId, engine) => service.needsTranscript(agentId, sessionId, engine),
+    failed: code => console.warn(`[wifi] ${code}`),
+  })
+  const feedPool = deps.feedPool ?? inlineFeedPool
+  let feed: DeviceSessionFeed | null = null, feedRetries = 0
+  let feedRetry: ReturnType<typeof setTimeout> | undefined
+  const stopFeed = (): DeviceSessionFeed | null => {
+    clearTimeout(feedRetry); feedRetry = undefined
+    const previous = feed; feed = null; previous?.close()
+    return previous
+  }
+  const applyEvents = async (agentId: string, events: readonly LiveEvent[], current: () => boolean,
+    observed: Parameters<DeviceSessionFeedOptions['receive']>[1]): Promise<void> => {
+    // Filesystem notifications already drive live evidence. Only a receipt boundary needs
+    // an ordering drain; token/tool traffic must not turn into per-token core/file queries.
+    if (events.some(event => event.type === 'turn_ended')) await evidence.flush(agentId)
+    if (!current()) return
+    const busyInput = submissionPolicy(view.agents.find(agent => agent.agentId === agentId)?.engine)?.typesWhileBusy === true
+    for (let index = 0; index < events.length; index++) {
+      const event = events[index]
+      if (event.type === 'turn_started') service.turnStarted(agentId, sessionEventProof(observed[index]))
+      else if (event.type === 'turn_ended' && !(busyInput && events[index + 1]?.type === 'turn_started')) service.turnEnded(agentId,
+        sessionEventProof(observed[index]), event.payload.aborted === true)
+    }
+  }
+  const ensureFeed = (): Promise<void> => {
+    if (stopped || !coreConnected) return Promise.reject(new Error('SESSION_EVENTS_UNAVAILABLE'))
+    if (feed) return feed.ready
+    clearTimeout(feedRetry); feedRetry = undefined
+    const epoch = coreEpoch
+    const own = (deps.observeSessions ?? (options => observeDeviceSessions({
+      dataDir: core.dataDir, port: core.daemon.port, machineId,
+    }, options)))({ pool: feedPool,
+      receive: async (agentId, frames, active, source) => {
+        const current = () => active() && !stopped && coreConnected && coreEpoch === epoch && feed === own
+        if (!current()) return
+        if (frames.length === 1 && frames[0].type === 'agent_synced') { evidence.changed(agentId); changed(); return }
+        if (frames.length === 1 && frames[0].type === 'agent_deleted') { service.agentGone(agentId); evidence.forget(agentId); return }
+        if (frames.length === 1 && frames[0].type === 'commander_event') {
+          if (source !== 'recaps' && !isLocalOnly(frames[0])) service.commander(withoutUpdate(frames[0]))
+          return
+        }
+        const cancel = frames.length === 1 && frames[0].type === 'agent_activity' && frames[0].payload.cause === 'cancel'
+        if (cancel || frames.some(frame => frame.type === 'turn_ended')) {
+          // The service-link response follows earlier input notices; the adapter applies that prefix
+          // before resolving. Token events make no such query. The feed retains actual handler credit.
+          await core.conversations.resolve(agentId)
+          if (!current()) return
+        }
+        if (cancel) {
+          await evidence.flush(agentId)
+          if (current()) service.turnEnded(agentId, sessionEventProof(frames[0]), true)
+          return
+        }
+        if (frames.length === 1 && frames[0].type === 'agent_activity') return
+        // Only consumed fields need a local interpretation contract; other normalized events retain
+        // their positions so end→start adjacency cannot be invented by filtering an original batch.
+        for (const frame of frames) {
+          const p = frame.payload
+          if (frame.type === 'text_delta' && typeof p.content !== 'string'
+            || frame.type === 'turn_started' && typeof p.userMessage !== 'string'
+            || frame.type === 'tool_start' && (typeof p.id !== 'string' || typeof p.tool !== 'string')
+            || frame.type === 'tool_end' && (typeof p.id !== 'string' || typeof p.tool !== 'string' || typeof p.isError !== 'boolean')) throw new Error('SESSION_EVENTS_PROTOCOL')
+        }
+        await applyEvents(agentId, frames as unknown as readonly LiveEvent[], current, frames)
+        if (current()) service.stream(agentId, frames as unknown as readonly LiveEvent[])
+      },
+      unavailable: code => {
+        if (feed !== own || coreEpoch !== epoch || stopped || !coreConnected) return
+        feed = null; own.close()
+        console.warn(`[wifi] ${code}`)
+        service.eventsUnavailable()
+        if (feedRetries++ < 5) {
+          feedRetry = setTimeout(() => { feedRetry = undefined; void ensureFeed().catch(() => {}) }, 1_000)
+          feedRetry.unref?.()
+        }
+      },
+    })
+    feed = own
+    void own.ready.catch(() => {})
+    return own.ready
+  }
   let questionEpoch = 0, retries = 0
   let observation: QuestionObservation | null = null
   let reconnect: ReturnType<typeof setTimeout> | undefined
@@ -180,30 +293,30 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
   }
   // Inline composition hears the same facts directly; a process adapter feeds the port below.
   const stopInput = deps.submit ? undefined : core.turns.onInput?.(event => port.input?.(event))
-  const stopDelivery = deps.submit ? undefined : core.turns.onDelivery(event => service.delivery(event))
+  const stopDelivery = deps.submit ? undefined : core.turns.onDelivery(event => port.delivery(event))
   const stopAgents = core.agents.follow?.(event => service.agentLife(event))
-
-  /** Which streams and which transcripts it follows, told to the core as they change. */
-  const reportStreams = (): void => {
-    const now = service.streamedAgents().sort()
-    if (same(now, streamed)) return
-    streamed = now
-    core.wifi.streams(now)
-    changed()
-  }
-  const reportTranscript = (agentId: string): void => {
-    if (!service.watchesTranscript(agentId)) core.wifi.transcripts(agentId, seen.get(agentId) ?? 0)
-  }
 
   const relay = deviceRelayOverGateway({
     dataDir: core.dataDir, port: deps.peer?.port ?? core.daemon.port,
     key: devicePeerKey(deps.peer?.composition ?? 'services', deps.peer?.token === undefined ? undefined : { HARNESSD_SERVICE_TOKEN: deps.peer.token }),
     service, machineId,
-    beforeSend: reportStreams,
     maySend: () => coreConnected && !stopped && applied === notices,
     clientChanged: () => { if (!relay.connected()) stopQuestions() },
+    card: async (frame, text, peerCurrent) => {
+      const origin = feed, epoch = coreEpoch
+      const current = () => peerCurrent() && origin !== null && feed === origin && coreEpoch === epoch && coreConnected && !stopped
+      if (!current()) return
+      const payload = frame.payload as Record<string, unknown>
+      if (payload.kind === 'summary') {
+        try { await origin!.barrier(String(frame.agentId)) }
+        catch { console.warn('[wifi] SESSION_SUMMARY_UNAVAILABLE'); throw new Error('SESSION_SUMMARY_UNAVAILABLE') }
+        if (!current()) return
+      }
+      fullText = text
+      try { service.commander(frame) } finally { fullText = undefined }
+    },
     failed: code => console.warn(`[wifi] ${code}`),
-    beforeReady: ensureQuestions,
+    beforeReady: async () => { await ensureFeed(); await ensureQuestions() },
     beforeRequest: refresh,
   })
   function emit(frame: AutonomousDeviceFrame, deviceId?: string): void {
@@ -212,67 +325,60 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
 
   /** The window's focus moves in the order the windows moved it, each against the agents as they are. */
   let focusing: Promise<void> = Promise.resolve()
+  const focusWork = deps.focusWork ?? inlineFocusWork
 
   const port: WifiPort = {
     resume: async ({ focus }) => {
+      stopFeed(); feedRetries = 0
       coreConnected = true
       const epoch = ++coreEpoch
-      // The core starts over from what this run follows (it has forgotten, or never knew).
-      seen.clear()
-      core.wifi.watching(service.transcriptWatches())
-      streamed = service.streamedAgents().sort()
-      core.wifi.streams(streamed)
       notices++
       if (focus) port.appFocus(focus.machineId, focus.agentId, focus.connId).catch(() => { /* said by the move itself */ })
       await refresh()
-      if (!stopped && coreConnected && coreEpoch === epoch) relay.start()
-    },
-    card: (frame, text) => {
-      if (frame.type === 'commander_question' || frame.type === 'commander_question_close') return
-      fullText = text
-      try { service.commander(frame) } finally { fullText = undefined }
-    },
-    turnEnded: (agentId, aborted) => service.turnEnded(agentId, aborted),
-    events: (agentId, events) => {
-      const busyInput = submissionPolicy(view.agents.find(agent => agent.agentId === agentId)?.engine)?.typesWhileBusy === true
-      for (let index = 0; index < events.length; index++) {
-        const event = events[index]
-        if (event.type === 'turn_started') service.turnStarted(agentId)
-        else if (event.type === 'turn_ended' && !(busyInput && events[index + 1]?.type === 'turn_started')) service.turnEnded(agentId, event.payload.aborted === true)
+      if (!stopped && coreConnected && coreEpoch === epoch) {
+        evidence.connected(); await ensureFeed()
+        if (!stopped && coreConnected && coreEpoch === epoch) relay.start()
       }
     },
     input: (event) => {
-      const watching = service.watchesTranscript(event.agentId)
-      if (event.phase === 'dispatching' && event.deliveryId && event.content !== undefined) seen.set(event.agentId, (seen.get(event.agentId) ?? 0) + 1)
       service.inputProgress(event)
-      // In the inline composition there is no process maker to arm the existing transcript feed.
-      if (!deps.submit && !watching && service.watchesTranscript(event.agentId)) core.wifi.watching(service.transcriptWatches())
-      reportTranscript(event.agentId)
+      evidence.input(event)
     },
-    disconnected: () => { coreConnected = false; coreEpoch++; stopQuestions(); void relay.stop(); service.coreDisconnected() },
-    stream: (agentId, events) => service.stream(agentId, events),
-    transcript: (agentId, sessionId, engine, line) => {
-      service.observeTranscript(agentId, sessionId, engine, line)
-      reportTranscript(agentId)
-    },
-    delivery: (event) => service.delivery(event),
-    agentGone: (agentId) => {
-      service.agentGone(agentId)
-      reportTranscript(agentId)
+    disconnected: () => { coreConnected = false; coreEpoch++; stopQuestions(); stopFeed(); evidence.disconnected(); void relay.stop(); service.coreDisconnected() },
+    delivery: (event) => {
+      service.delivery(event)
+      if (event.state === 'completed' || event.state === 'rejected') evidence.settled(event.sessionId, event.deliveryId)
     },
     appFocus: (machineId, agentId, connId) => {
+      if (stopped || !coreConnected) return Promise.reject(new Error('CORE_VIEW_UNAVAILABLE'))
       const epoch = coreEpoch
-      const moved = focusing.then(refresh).then(() => {
-        // Stop, disconnect and resume all revoke this captured epoch, including after refresh settled.
-        if (coreEpoch !== epoch) return
-        service.appFocus(machineId, agentId, connId)
+      const release = focusWork.reserve({ machineId, agentId, connId })
+      if (!release) {
+        port.disconnected()
+        console.warn('[wifi] WIFI_FOCUS_BACKPRESSURE')
+        return Promise.reject(new Error('WIFI_FOCUS_BACKPRESSURE'))
+      }
+      const current = () => !stopped && coreConnected && coreEpoch === epoch
+      let resolve!: () => void, reject!: (error: unknown) => void
+      const reply = new Promise<void>((done, fail) => { resolve = done; reject = fail })
+      const timer = setTimeout(() => {
+        if (current()) { port.disconnected(); console.warn('[wifi] WIFI_FOCUS_TIMEOUT') }
+        reject(new Error('WIFI_FOCUS_TIMEOUT'))
+      }, 15_000)
+      timer.unref?.()
+      const actual = focusing.then(async () => {
+        if (!current()) return
+        await refresh()
+        if (current()) service.appFocus(machineId, agentId, connId)
       })
-      // A move that fails is that move's: the next waits for it, not on it.
-      focusing = moved.catch(() => {})
-      return moved
+      // Logical timeout revokes authority; only actual handler settlement releases the retained charge.
+      focusing = actual.then(() => { clearTimeout(timer); release(); resolve() }, error => {
+        clearTimeout(timer); release(); reject(error)
+      })
+      return reply
     },
     revealed: (operationId, agentId) => store.acknowledgeReveal(operationId, agentId),
-    stop: async () => { stopped = true; coreEpoch++; stopQuestions(); stopInput?.(); stopDelivery?.(); stopAgents?.(); store.stopUiDelivery(); await relay.stop() },
+    stop: async () => { stopped = true; coreEpoch++; stopQuestions(); const feed = stopFeed(); stopInput?.(); stopDelivery?.(); stopAgents?.(); store.stopUiDelivery(); await Promise.all([relay.stop(), evidence.stop(), feed?.stop()]) },
   }
   store.startUiDelivery()
   ports.wifi = port

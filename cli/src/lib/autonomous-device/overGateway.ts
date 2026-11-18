@@ -21,10 +21,9 @@ export function deviceRelayOverGateway(deps: {
   machineId: string
   beforeReady(): Promise<void>
   beforeRequest(): Promise<void>
-  /** Existing core interest/revision notices must be applied before any dependent direct reply. */
-  beforeSend(): void
   maySend(): boolean
   clientChanged(): void
+  card(frame: Record<string, unknown>, fullText: string | undefined, current: () => boolean): Promise<void>
   failed(code: string): void
 }): DeviceRelayOverGateway {
   const sessions = new Map<string, DevicePeerSession>(), budgets = devicePeerBudgets()
@@ -41,12 +40,10 @@ export function deviceRelayOverGateway(deps: {
   const writer = devicePeerWriter({ budgets, channel: () => peer?.channel ?? null, failed: deps.failed, maySend: deps.maySend })
   const route = (connId: string, proof: DeviceRelayProof) => ({ connId, identity: proof.identity, incarnation: proof.incarnation, epoch: proof.peerEpoch })
   const relay = new AutonomousDeviceRelay(session, (connId, frame, proof) => {
-    deps.beforeSend()
     const original = peer
     if (!writer.send({ type: 'send', ...route(connId, proof), frameType: frame.type as 'autonomous_device_result' | 'autonomous_device_event',
       payload: frame.payload as Record<string, unknown> }, () => current(connId, proof))) original?.channel.close()
   }, deps.service, deps.machineId, (connId, proof, frames, allowed, hello) => {
-    deps.beforeSend()
     const original = peer
     const start = writer.replay(route(connId, proof), frames, () => current(connId, proof), allowed, hello)
     if (!start) original?.channel.close()
@@ -105,6 +102,9 @@ export function deviceRelayOverGateway(deps: {
           for (const [connId, held] of sessions) if (held.identity === frame.identity) sessions.delete(connId)
           relay.revoke(frame.identity)
           deps.clientChanged()
+        } else if (frame.type === 'recap') {
+          if (!own.ready) { deps.failed('PEER_PROTOCOL_INVALID'); own.channel.close(); return }
+          await deps.card(frame.frame, frame.fullText ?? undefined, own.current)
         } else if (frame.type === 'request') {
           if (!own.ready) { deps.failed('PEER_PROTOCOL_INVALID'); own.channel.close(); return }
           const proof = { identity: frame.identity, incarnation: frame.incarnation, peerEpoch: frame.epoch }

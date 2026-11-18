@@ -49,7 +49,6 @@ import { createServer, type Server } from 'http'
 import { homedir, hostname } from 'os'
 import { env } from '../config/env.js'
 import { VERSION } from '../version.js'
-import { isLocalOnly, withoutUpdate } from '../lib/cardUpdate.js'
 import { elapsedSecondsOf } from '../lib/footerTimer.js'
 import { sqlitePreflightMessage } from '../lib/sqliteAvailability.js'
 import { loginShellCaptureLine, warmLoginShellEnvironment } from '../lib/loginShellEnv.js'
@@ -235,7 +234,6 @@ import { writeDaemonRecord } from '../lib/daemonRecord.js'
 import { publishHookRoute } from '../lib/hookRoutes.js'
 import { BackendSocket, isLocalClientId } from '../backendSocket.js'
 import { createGatewayLink, laneOf, tabKeyOf, tabRelayOf } from './gatewayLink.js'
-import { createWifiCore } from './wifi.js'
 import { createWindowFocus } from './windowFocus.js'
 import { createDevicesWake, DEVICES_ON_DEMAND } from './devicesWake.js'
 import { wakeModels } from './modelsWake.js'
@@ -876,11 +874,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       serviceLinksRef?.notify(service, { type: 'service_event', payload: { kind: 'delivery', event } }, currentOnly ? undefined : { untilDelivered: true })
     },
     tellInput: (service, event) => {
-      if (service === 'wifi') {
-        if (event.phase === 'dispatching' && event.deliveryId && event.content !== undefined) wifiCore.feed.inputDispatched(event.agentId)
-        wifiLink.port.input(event)
-        return
-      }
       serviceLinksRef?.notify(service, { type: 'service_event', payload: { kind: 'input', event } })
     },
     // The experiments' turns (the orchestrator's first), and Agent Messages' typed messages (core/api.ts).
@@ -897,17 +890,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     notify: (service, frame, opts) => serviceLinksRef?.notify(service, frame, opts) ?? false,
     hears: heldAgentLife(outOfProcess),
   })
-  // The remaining Wi-Fi transcript/stream interests and final window focus revision fence live here.
-  // Device relay sessions and presence are owned by the gateway and devices components.
   const machineIdNow = (): string => backendRef?.machineId ?? ''
-  const wifiCore = createWifiCore({
-    port: () => ports.wifi,
-    fullText: (agentId) => mirror.lastFullText(registry.byAgent(agentId)?.sessionId ?? agentId),
-    doors: wifiDoors({
-      registry, machineId: machineIdNow, packageId: session => { const id = frameParts.read(session.agentId).dsh; return typeof id === 'string' ? id : session.dsh ?? null }, displayName: projectDisplayName, running: (sessionId) => turnStartedAt.has(sessionId),
-      socket: () => backendRef ?? null, answer: (request) => cloudAgents?.answer(request) ?? questions.answer(request),
-      stop: (agentId) => cancelAgent(agentId, true), devices: () => ports.devices,
-    }),
+  const wifi = wifiDoors({
+    registry, machineId: machineIdNow, packageId: session => { const id = frameParts.read(session.agentId).dsh; return typeof id === 'string' ? id : session.dsh ?? null }, displayName: projectDisplayName, running: (sessionId) => turnStartedAt.has(sessionId),
+    socket: () => backendRef ?? null, answer: (request) => cloudAgents?.answer(request) ?? questions.answer(request),
+    stop: (agentId) => cancelAgent(agentId, true), devices: () => ports.devices,
   })
   // The cloud agents' doors (core/agents/cloud.ts), handed to the core API now and built once the questions and
   // the socket are, below; the cloud service starts after both.
@@ -946,7 +933,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onNotice: (listener) => experimentHooks.onNotice(listener),
     dshInstallStatus: (status) => backendRef?.send({ type: 'dsh_install_status', payload: status }),
     // The recaps' cards and recaps (services/recaps.ts) down the doors they took from here, and a turn's final answer.
-    turnCard: (frame) => backendRef?.sendCommander(frame), turnSummary: (frame) => backendRef?.send(frame), lastTurn: (sessionId) => readLastTurn(sessionId),
+    turnCard: (frame) => backendRef?.sendCommander(frame, 'recaps'), turnSummary: (frame) => backendRef?.send(frame), lastTurn: (sessionId) => readLastTurn(sessionId),
     // Inline feature counters retain their existing typed path; process observations carry service provenance below.
     count: (metric) => backendRef?.countUsage(metric),
     // The backend mints and remembers the account's grid name; this CLI holds neither the account's
@@ -1008,7 +995,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     devicesChanged: (payload) => backendRef?.send({ type: 'harness_devices_changed', payload }),
     // A goal Hachi closed: every window here and the owner's apps away, sealed for them (createCoreApi checks it).
     hachiGoalDone: (notice) => backendRef?.send({ type: 'hachi_goal_done', payload: { ...notice } }),
-    wifi: wifiCore.api,
+    wifi,
     dialWatching: (watching) => {
       const attached = watching && !dialWatching
       dialWatching = watching
@@ -1435,7 +1422,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     others: otherStreams,
     watcher,
     cursorDiscovery,
-    device: () => wifiCore.feed,
     runtimeProfiles,
     captureTerminal,
     emit: (sessionId, events, read) => (turnHooksRef?.transcript ?? emitSessionEvents)(sessionId, events, read),
@@ -1464,6 +1450,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The shared input operation and writer for every pane caller (core/input.ts).
   const inputs = createInput({
     shortTurns,
+    activity: sessionId => turnActivity.snapshot(sessionId),
     readScreen: screens.read,
     submission: submissions,
     resolve: (id) => registry.resolve(id),
@@ -1499,7 +1486,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // whose composer is already free. Keep this through the first new-worker release's 30-day window
   // and supported-cutover proof; forgetting the shared input stores no device state in this process.
   const inputLifecycle = {
-    forget: (agentId: string): void => { input.forget(agentId); wifiCore.feed.agentGone(agentId) },
+    forget: (agentId: string): void => input.forget(agentId),
     awaitingConfirmation: (agentId: string): boolean => input.awaitingConfirmation(agentId),
   }
   // A window that connects while a message waits for its engine reads it off the agent's frame, pushed or listed. A message is
@@ -1769,7 +1756,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // The gateway first hears what it starts from, then the shared tabs it held before a restart.
       if (service === 'gateway') { gatewayLink?.connected(); tabRelay.connected() }
       if (service === 'devices') devicesLink.connected()
-      if (service === 'wifi') { ports.wifi = { ...wifiLink.port }; wifiCore.started(focusState.state().voice) }
+      if (service === 'wifi') {
+        ports.wifi = { ...wifiLink.port }
+        void ports.wifi.resume({ focus: focusState.state().voice }).catch(() => {})
+      }
       const streamSink = clientStreams.connected(service)
       if (streamSink) streamSinks.set(service, streamSink)
       devicesWake.connected(service)
@@ -1798,7 +1788,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // Agent Messages' process went: its tabs' sockets have no one to hear them, and it opens them again as it starts.
       if (service === 'messages') tabRelay.closeOpened()
       if (service === 'devices') devicesLink.disconnected()
-      if (service === 'wifi') { ports.wifi = null; wifiCore.stopped() }
+      if (service === 'wifi') ports.wifi = null
       if (service === 'recaps') recapsLink.disconnected()
       clientStreams.disconnected(service)
       streamSinks.delete(service)
@@ -1989,7 +1979,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     turnStartedAt,
     prompts: turnPrompts,
     input,
-    device: () => wifiCore.feed,
     startHeartbeat,
     questionWatcher,
     mirror,
@@ -2469,7 +2458,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     has: (sessionId) => registry.has(sessionId),
     bySession: (sessionId) => registry.bySession(sessionId),
     tokenUsage: { changed: target => usageLink.port.changed(target) },
-    device: () => wifiCore.feed,
     runtimeProfiles,
     normalizers,
     announceTurnAborted,
@@ -2808,7 +2796,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     resolve: (id) => registry.resolve(id),
     normalizers,
     input,
-    device: () => wifiCore.feed,
     stopHeartbeat,
     questionWatcher,
     mirror,
@@ -3385,7 +3372,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // resumed there as its link connects), or here.
   if (!outOfProcess.has('wifi')) {
     serviceHost!.start('wifi', (core, started) => inline!.startWifi(core, started, { peer: { composition: 'inline', port: env.PORT } }), coreApi, WIFI_FALLBACKS, WIFI_REQUESTS)
-    if (ports.wifi) wifiCore.started(focusState.state().voice)
+    void ports.wifi?.resume({ focus: focusState.state().voice }).catch(() => {})
   }
 
 
@@ -3396,9 +3383,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // that frame nor whoever is sending it, which the guards and the devices' port see to.
   backend.onOutboundCommander = (frame) => {
     const card = frame as Record<string, unknown>
-    // The Pro's extras ride to the devices alone: the Wi-Fi device gets the card as it always did, and a
-    // summary reaches the dial with the turn's whole answer, as it does the Wi-Fi device.
-    if (!isLocalOnly(card)) wifiCore.card(withoutUpdate(card))
+    // The dial's summary carries the whole answer. Wi-Fi receives its immutable card/text pair
+    // directly from recaps and observes independent core/cloud cards through the app transport.
     const payload = card.payload as Record<string, unknown> | undefined
     const full = card.type === 'commander_event' && payload?.kind === 'summary' && typeof card.agentId === 'string'
       ? mirror.lastFullText(registry.byAgent(card.agentId)?.sessionId ?? card.agentId) ?? cloudAgents?.said(card.agentId) : undefined

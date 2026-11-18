@@ -18,7 +18,6 @@ import type { AgentEngine } from '../../engines/types.js'
 import { pollsQuestions, type QuestionWatcher } from '../../lib/questionController.js'
 import { attachTranscript, type AttachRead } from '../../lib/attachTranscript.js'
 import { AttachTracker } from '../../lib/attachTracker.js'
-import type { WifiFeed } from '../wifi.js'
 import { sid } from '../../lib/log.js'
 import { foldTranscript, TranscriptFold } from '../../engines/kit/transcriptFold.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
@@ -48,8 +47,6 @@ export interface AttachDeps {
   setInterpretationHold: (agentId: string, revision: number | undefined, reason?: string, create?: boolean) => boolean
   announceSession: (session: RegisteredSession) => void
   cursorDiscovery: Pick<CursorTranscriptDiscovery, 'add'>
-  /** The Wi-Fi device's service, wherever it runs (core/wifi.ts): it proves its turns by the raw transcript. */
-  device: () => Pick<WifiFeed, 'needsTranscript' | 'observeTranscript'> | undefined
   runtimeProfiles: Pick<RuntimeProfileManager, 'transcriptFields' | 'hydrate' | 'ingest' | 'ingestConfig' | 'capturePane' | 'hydrateEvidence'> & {
     beginHydrate(session: RegisteredSession): ProfileHydration
     ingestPane(session: RegisteredSession, text: string, silent?: boolean): boolean | Promise<boolean>
@@ -75,7 +72,7 @@ export interface AttachDeps {
 }
 
 export function createAttach({
-  liveFor, resolve, remoteLive, terminalGone, normalizers, others, watcher, cursorDiscovery, device, runtimeProfiles, captureTerminal, emit,
+  liveFor, resolve, remoteLive, terminalGone, normalizers, others, watcher, cursorDiscovery, runtimeProfiles, captureTerminal, emit,
   tokenUsage, questionWatcher, terminalLabel, storeOf, concurrency, relaunchMarks,
   wholeReadCapBytes = WHOLE_READ_CAP_BYTES, settled, setInterpretationHold, announceSession,
 }: AttachDeps) {
@@ -295,11 +292,6 @@ export function createAttach({
     let historySuperseded = false
     let historyCurrent: (() => boolean) | undefined
     let abandonedByCore = false
-    let observed = false
-    sideRead('device', session.sessionId, () => { observed = !!device()?.needsTranscript(session.agentId, session.sessionId, session.engine) })
-    const observe = observed && !session.interpretationHold
-      ? (line: string): void => { if (current()) sideRead('device', session.sessionId, () => device()?.observeTranscript(session.agentId, session.sessionId, session.engine, line)) }
-      : undefined
     // Returns `turnOpen` rather than assigning it: every engine folds exactly once, and a second call
     // quietly overwriting the first is the kind of mistake a returned value makes impossible to write.
     const take = (out: { history: LiveEvent[]; live: LiveEvent[]; turnOpen: boolean }): boolean => {
@@ -383,7 +375,6 @@ export function createAttach({
         profileHydration = profile
         prepared = await remote.prepare(session, { live, end: historyEnd(), ...(closes ? { closes } : {}) }, frame => {
           if (frame.profile && !profile.ingestFrames) sideRead('runtime profile', session.sessionId, () => profile.ingest(frame.raw))
-          if (frame.observe && observe) observe(frame.raw)
         }, profile.ingestFrames)
         if (current() && profile.config) await profile.config()
       } catch {
@@ -418,7 +409,6 @@ export function createAttach({
         profile: (line) => profile.ingest(line),
         fold: (line) => stream.push(line),
         close: reason => { parser!.closeTurn(reason); historyExplicitlyClosed = true },
-        observe,
       }, { fromStart: live, end: historyEnd(), closes })
       if ((session.interpretationHold && read.failed) || (handover.hold && (read.failed || handover.hold.expired))) {
         return keepLiveNormalizer(read.failed ? 'could not read the transcript' : 'outlasted its hold on the tail')
@@ -482,7 +472,6 @@ export function createAttach({
       const evidence = opened.evidence
       sideRead('runtime profile', session.sessionId, () => runtimeProfiles.hydrateEvidence(session, evidence))
     } else if (!fromEnd) {
-      if (observe) for (const line of lines) observe(line)
       sideRead('runtime profile', session.sessionId, () => runtimeProfiles.hydrate(session, lines))
     }
     if (!profileHydration?.config) await runtimeProfiles.ingestConfig(session, true)

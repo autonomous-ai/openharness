@@ -124,7 +124,6 @@ function setup(over: Partial<AttachDeps> = {}) {
   let deps!: AttachDeps
   const others = streamsFor(() => deps, () => deps.emit)
   const normalizers = createSessionNormalizers(over.others as never ?? others.streams, { held: () => false, closed: () => {}, forget: () => {} })
-  const service = { needsTranscript: vi.fn(() => false), observeTranscript: vi.fn() }
   const profile = { ingest: vi.fn(), commit: vi.fn() }
   deps = {
     liveFor,
@@ -143,7 +142,6 @@ function setup(over: Partial<AttachDeps> = {}) {
     normalizers,
     watcher: { addSession: vi.fn(async () => {}), removeSession: vi.fn(async () => {}), pollSession: vi.fn(async () => {}), hold: vi.fn(async () => null), tails: vi.fn(() => false) },
     cursorDiscovery: { add: vi.fn(async () => {}) },
-    device: () => service,
     runtimeProfiles: {
       transcriptFields: vi.fn(() => []),
       beginHydrate: vi.fn(() => profile),
@@ -166,7 +164,7 @@ function setup(over: Partial<AttachDeps> = {}) {
     concurrency: 2,
     ...over,
   }
-  return { deps, normalizers, service, profile, others, attach: createAttach(deps) }
+  return { deps, normalizers, profile, others, attach: createAttach(deps) }
 }
 
 const made = (kind: string) => fakes.made.filter((entry) => entry.kind === kind).map((entry) => entry.instance)
@@ -177,8 +175,8 @@ function remoteSetup(open = false, over: Partial<AttachDeps> = {}) {
   const candidate = { state: { handle }, page: { cursor: { offset: 20 }, lastStarted: open ? started() : null },
     records: 1, content: true } as unknown as PreparedLive
   const frames: LiveFrame[] = [
-    { raw: 'metadata', profile: true, observe: false, events: [], replay: false, turn },
-    { raw: 'record', profile: false, observe: true, events: [], replay: false, turn },
+    { raw: 'metadata', profile: true, events: [], replay: false, turn },
+    { raw: 'record', profile: false, events: [], replay: false, turn },
   ]
   const remote: NonNullable<AttachDeps['remoteLive']> = {
     handles: engine => engine === 'claude', current: vi.fn(() => true),
@@ -290,12 +288,10 @@ it.each(['prepare', 'config'] as const)('discards worker history when identity b
   expect(run.deps.emit).not.toHaveBeenCalled()
 })
 
-it('discards an inline fold held during its file read, without observing it on a device', async () => {
+it('discards an inline fold held during its file read, without applying profile or parser effects', async () => {
   const run = setup(), row = session('codex', transcript([{ events: [started()], open: true }]))
-  run.service.needsTranscript.mockReturnValue(true)
   run.profile.ingest.mockImplementation(() => { row.identityHold = 'header changed' })
   expect(await run.attach.attachSession(row)).toBe(true)
-  expect(run.service.observeTranscript).not.toHaveBeenCalled()
   expect(run.profile.commit).not.toHaveBeenCalled()
   expect(run.normalizers.hasState(row.sessionId)).toBe(false)
   expect(run.deps.emit).not.toHaveBeenCalled()
@@ -470,14 +466,12 @@ describe('attaching a session whose engine\'s code could not be loaded', () => {
 
 describe('attaching a session', () => {
 
-  it('installs worker state after hydration, keeps device/profile observations and reuses only a current binding', async () => {
+  it('installs worker state after hydration, keeps profile observations and reuses only a current binding', async () => {
     const p = remoteSetup(true), s = session('claude', '/private/transcript')
-    p.service.needsTranscript.mockReturnValue(true)
     expect(await p.attach.attachSession(s)).toBe(true)
     expect(p.deps.liveFor).not.toHaveBeenCalled()
     expect(p.remote.prepare).toHaveBeenCalledWith(s, { live: false, end: undefined }, expect.any(Function), undefined)
     expect(p.profile.ingest).toHaveBeenCalledExactlyOnceWith('metadata')
-    expect(p.service.observeTranscript).toHaveBeenCalledExactlyOnceWith(s.agentId, s.sessionId, s.engine, 'record')
     expect(p.profile.commit).toHaveBeenCalledOnce()
     expect(p.normalizers.liveParsers.get(s.sessionId)).toBe(p.handle)
     expect(p.remote.install).toHaveBeenCalledWith(p.candidate)
@@ -741,42 +735,17 @@ describe('attaching a session', () => {
       expect(run.attach.neverFoldedHistory.has('codex-s')).toBe(true)
     })
 
-    it('shows the device the raw lines it subscribed to, on either path', async () => {
-      vi.spyOn(console, 'log').mockImplementation(() => {})
-      const run = setup()
-      run.service.needsTranscript.mockReturnValue(true)
-      await run.attach.attachSession(session('claude', transcript([CLAUDE_PROMPT])))
-      await run.attach.attachSession(session('terminal', transcript([{ events: [] }])))
-      expect(run.service.observeTranscript).toHaveBeenCalledWith('claude-agent', 'claude-s', 'claude', expect.any(String))
-      expect(run.service.observeTranscript).toHaveBeenCalledWith('terminal-agent', 'terminal-s', 'terminal', '{"events":[]}')
-      const none = setup({ device: () => undefined })
-      expect(await none.attach.attachSession(session('terminal', transcript([{}])))).toBe(true)
-    })
-
-    it('attaches a session whose device or runtime profile cannot take in its lines, on either path', async () => {
+    it('attaches a session whose runtime profile cannot take in its lines, on either path', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-      // Asking the device whether it watches the session throws: the attach goes on without it.
-      const asking = setup()
-      asking.service.needsTranscript.mockImplementation(() => { throw new Error('device state unreadable') })
-      expect(await asking.attach.attachSession(session('terminal', transcript([{ events: [] }])))).toBe(true)
-      expect(asking.normalizers.liveParsers.has('terminal-s')).toBe(true)
-      expect(asking.service.observeTranscript).not.toHaveBeenCalled()
-      // The device watches, but cannot take a line in; the profile cannot be hydrated either.
       const run = setup()
-      run.service.needsTranscript.mockReturnValue(true)
-      run.service.observeTranscript.mockImplementation(() => { throw new Error('evidence unreadable') })
       vi.mocked(run.deps.runtimeProfiles.hydrate).mockImplementation(() => { throw 'profile unreadable' })
       expect(await run.attach.attachSession(session('terminal', transcript([{ events: [] }, { events: [] }])))).toBe(true)
       expect(await run.attach.attachSession(session('claude', transcript([CLAUDE_PROMPT])))).toBe(true)
       expect(run.normalizers.liveParsers.has('terminal-s')).toBe(true)
-      expect(run.service.observeTranscript).toHaveBeenCalledWith('claude-agent', 'claude-s', 'claude', expect.any(String))
       expect(run.profile.commit).toHaveBeenCalled()
       expect(error.mock.calls).toEqual([
-        ['[transcripts] the device could not take in a line of terminal; the line goes on to its engine: device state unreadable'],
-        ['[transcripts] the device could not take in a line of terminal; the line goes on to its engine: evidence unreadable'],
         ['[transcripts] the runtime profile could not take in a line of terminal; the line goes on to its engine: profile unreadable'],
-        ['[transcripts] the device could not take in a line of claude-s; the line goes on to its engine: evidence unreadable'],
       ])
     })
 
@@ -1116,7 +1085,7 @@ describe('attaching a session', () => {
       // The engine was in the middle of its answer when the first read ended: that record is the tail's, whole.
       if (written === 'half written') appendFileSync(file, answer.slice(0, 40))
       const emit = vi.fn(), usage = vi.fn()
-      createIngest({ liveFor, has: () => true, bySession: () => row, device: () => undefined,
+      createIngest({ liveFor, has: () => true, bySession: () => row,
         runtimeProfiles: { ingest: vi.fn(), evidence: vi.fn() }, tokenUsage: { changed: usage }, normalizers: run.normalizers,
         announceTurnAborted: vi.fn(), setIdentityHold: vi.fn(), announceSession: vi.fn(), emit, attachSession: run.attach.attachSession }).wireWatcher(watcher)
       try {
@@ -1398,7 +1367,7 @@ describe('attaching a session', () => {
         const run = setup({ watcher })
         const file = transcript([CLAUDE_PROMPT]), row = session('claude', file), end = statSync(file).size
         const emit = vi.fn(), usage = vi.fn()
-        createIngest({ liveFor, has: () => true, bySession: () => row, device: () => undefined,
+        createIngest({ liveFor, has: () => true, bySession: () => row,
           runtimeProfiles: { ingest: vi.fn(), evidence: vi.fn() }, tokenUsage: { changed: usage }, normalizers: run.normalizers,
           announceTurnAborted: vi.fn(), setIdentityHold: vi.fn(), announceSession: vi.fn(), emit, attachSession: run.attach.attachSession }).wireWatcher(watcher)
         try {
@@ -1679,7 +1648,7 @@ it.each(['config', 'watcher'] as const)('holds real watcher ingestion through de
   const run = setup({ watcher })
   const file = transcript([]), row = session('claude', file)
   const emit = vi.fn(), ingestProfile = vi.fn(), token = vi.fn()
-  const ingest = createIngest({ liveFor, has: () => true, bySession: () => row, device: () => undefined,
+  const ingest = createIngest({ liveFor, has: () => true, bySession: () => row,
     runtimeProfiles: { ingest: ingestProfile, evidence: vi.fn() }, tokenUsage: { changed: token }, normalizers: run.normalizers,
     announceTurnAborted: vi.fn(), setIdentityHold: vi.fn(), announceSession: vi.fn(), emit, attachSession: run.attach.attachSession })
   ingest.wireWatcher(watcher)
@@ -1818,7 +1787,7 @@ it.each(['inline', 'worker'] as const)('preserves eager cancel while the %s reco
   await vi.waitFor(() => expect(run.deps.watcher.addSession).toHaveBeenCalledOnce())
   const cancel = createCancel({ resolve: () => row, normalizers: run.normalizers,
     input: { cancel: vi.fn(), cancelConfirmed: vi.fn(async () => true) },
-    device: () => undefined, stopHeartbeat: vi.fn(), questionWatcher: { stop: vi.fn() }, mirror: { cancel: vi.fn() },
+    stopHeartbeat: vi.fn(), questionWatcher: { stop: vi.fn() }, mirror: { cancel: vi.fn() },
     turnActivity: { observe: vi.fn() }, turnStartedAt: new Map(), tell: vi.fn(),
   })
   await cancel(row.agentId)

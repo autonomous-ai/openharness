@@ -1,8 +1,8 @@
 /**
  * The event funnel: the one place a session's live events fan out from, to the app, search, input, the
- * device service, the heartbeat, the question watcher and the recaps. The
+ * heartbeat, the question watcher and the recaps. The
  * order is exact and it matters: per event, the frame goes to the app before anything acts on it; the
- * recaps hear the whole batch after the loop; the device stream comes last and never on a replay.
+ * recaps hear the whole batch after the loop. Negotiated app consumers receive its batch identity.
  *
  * Until the core has built what the funnel feeds, events wait: a hook can register a session the instant
  * the hook server binds. `arm` installs the funnel and delivers what waited, in order. `emit` is the same
@@ -12,7 +12,6 @@
  */
 import { withoutOutputTail } from '../../lib/cardUpdate.js'
 import { correlateAgentEvent } from '../../lib/agentEvent.js'
-import type { WifiFeed } from '../wifi.js'
 import type { TurnRecaps } from './recaps.js'
 import type { QuietTitles } from '../agents/quietTitles.js'
 import type { ShortTurnGuard } from './shortTurnGuard.js'
@@ -24,6 +23,7 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
 import { promptLine } from '../../lib/activitySummary.js'
 import { isProgressEvent, type TurnActivity } from '../../lib/turnActivity.js'
+import type { SessionEventBatch } from '../../lib/sessionEvents.js'
 
 type Events = ReturnType<CursorNormalizer['ingest']>
 type EmitOptions = { resumed?: boolean; replay?: boolean }
@@ -31,7 +31,7 @@ type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Re
 
 export interface FunnelClients {
   /** The app. */
-  send(frame: Frame): void
+  send(frame: Frame, batch?: SessionEventBatch): void
   /** The dial. */
   sendCommander(frame: Frame): void
 }
@@ -53,12 +53,9 @@ export interface FunnelDeps {
    *  Not cleared when the turn ends: an idle agent with no recap is summarised by its last prompt. */
   prompts?: Map<string, string>
   input: Pick<SessionInputController, 'onTurnStarted' | 'onTurnEnded'>
-  device: () => Pick<WifiFeed, 'events' | 'stream'> | undefined
   startHeartbeat: (sessionId: string) => void
   questionWatcher: Pick<QuestionWatcher, 'start' | 'noteTurnStart' | 'stop'>
   mirror: Pick<TurnRecaps, 'ingest'>
-  /** How a consumer outside the core is called ([outsideConsumers]). */
-  outside?: OutsideConsumers
   /** The agent's engine is working now: a live turn start or its progress, never a re-read (the mover's quiet clock,
    *  lib/hostMove/quiet.ts). */
   working?: (agentId: string) => void
@@ -70,52 +67,20 @@ export interface FunnelDeps {
   quietTitles?: Pick<QuietTitles, 'turnStarted'>
 }
 
-type OutsideConsumers = (consumer: string, call: () => void) => void
-
-/**
- * A consumer outside the core — the device service — answers for itself: one that
- * throws is logged, at most once a minute per consumer and with how many were not, and every consumer
- * after it still gets the event. The heartbeat, the question watcher and the recaps must not miss a
- * turn because a device was unplugged mid-call. The services on the boundary are guarded the same way
- * (core/serviceHost.ts), and so are the dial and the window bridges on the local socket (cli.ts).
- */
-export function outsideConsumers(options: {
-  log?: (line: string) => void
-  now?: () => number
-  /** What the lines start with: `[funnel]` by default. */
-  prefix?: string
-  /** Consumers to fail on every call, for the end-to-end suite only (`HARNESSD_TEST_FAULTS`). */
-  faults?: ReadonlySet<string>
-} = {}): OutsideConsumers {
-  const log = options.log ?? ((line: string) => console.error(line))
-  const now = options.now ?? Date.now
-  const prefix = options.prefix ?? 'funnel'
-  const said = new Map<string, { at: number; quiet: number }>()
-  return (consumer, call) => {
-    try {
-      if (options.faults?.has(consumer)) throw new Error(`injected fault: ${consumer}`)
-      call()
-    } catch (error) {
-      const at = now()
-      const last = said.get(consumer)
-      if (last && at - last.at < 60_000) { last.quiet++; return }
-      log(`[${prefix}] ${consumer} failed · ${error instanceof Error ? error.message : String(error)}${last?.quiet ? ` · ${last.quiet} more since` : ''}`)
-      said.set(consumer, { at, quiet: 0 })
-    }
-  }
-}
-
 /** The funnel itself, over what it feeds. */
 export function funnelFor({
   bySession, tokenUsage, agentIdFor, turnActivity, isSubagentSession, clients, search, turnStartedAt, prompts, input,
-  device, startHeartbeat, questionWatcher, mirror, outside = outsideConsumers(), working, shortTurns,
+  startHeartbeat, questionWatcher, mirror, working, shortTurns,
   quietTitles, quietTurnOpen,
 }: FunnelDeps) {
+  let batch = 0
   return (sessionId: string, events: Events, opts?: EmitOptions): void => {
     if (!events.length || !bySession(sessionId)?.active) return
     const usageSession = bySession(sessionId)
     if (usageSession?.engine === 'opencode') tokenUsage.changed(usageSession)
-    for (const event of events) {
+    const id = ++batch
+    for (let index = 0; index < events.length; index++) {
+      const event = events[index]
       const agentId = agentIdFor(sessionId)
       const replay = !!(opts?.resumed || opts?.replay)
       turnActivity.observe(sessionId, event.type, replay)
@@ -149,7 +114,7 @@ export function funnelFor({
         // (docs/design/2026-11-12-hachi.md, "Hachi's own turns"). Read before the recaps hear this batch, which ends the mark.
         else if (!replay && quietTurnOpen?.(sessionId)) frame.subagent = true
       }
-      clients.send(withoutOutputTail(frame))
+      clients.send(withoutOutputTail(frame), { id, index, count: events.length, ...(opts?.replay ? { replay: true as const } : {}) })
       if (event.type === 'turn_started' || event.type === 'turn_ended') search?.touch(sessionId)
       if (event.type === 'turn_started') {
         turnStartedAt.set(sessionId, Date.now())
@@ -184,12 +149,7 @@ export function funnelFor({
         // stops once mirror.heartbeat() reads it idle, which is at once while the recaps are off.
       }
     }
-    // Receipt lifecycle must precede a recap; interpretation stays in the component and sees the
-    // original batch, including events between an end and a start. Streaming still follows the recap.
-    if (!opts?.replay) outside('devices', () => device()?.events(agentIdFor(sessionId), events))
     mirror.ingest(events, sessionId, { replay: !!(opts?.resumed || opts?.replay) })
-    // Subscribed devices only (lib/autonomous-device/stream.ts). A transcript re-read is history, not live.
-    if (!opts?.replay) outside('devices', () => device()?.stream(agentIdFor(sessionId), events))
   }
 }
 

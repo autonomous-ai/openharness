@@ -66,8 +66,8 @@ function fixture(engine = 'claude') {
     type: 'turn.send', requestId: randomUUID(), machineId: 'machine', agentId: 'agent', idempotencyKey: id, text,
     ...(focusRevision ? { focusRevision } : {}),
   })
-  const start = (text: string) => { inputs.input.onTurnStarted('agent', text); service.turnStarted('agent') }
-  const end = () => { inputs.input.onTurnEnded('agent'); service.turnEnded('agent') }
+  const start = (text: string) => { inputs.input.onTurnStarted('agent', text); service.turnStarted('agent', null) }
+  const end = () => { inputs.input.onTurnEnded('agent'); service.turnEnded('agent', null) }
   const transcript = (row: unknown) => service.observeTranscript('agent', 'session', engine, JSON.stringify(row))
   const user = (text: string, uuid = randomUUID()) => transcript({ type: 'user', uuid, timestamp: new Date().toISOString(), message: { content: text } })
   return { inputs, deps, service, inject, key, delivery, progress, events, send, start, end, transcript, user,

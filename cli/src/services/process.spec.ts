@@ -356,6 +356,20 @@ describe('a service in its own process', () => {
     await expect(core!.query('agents')).rejects.toThrow('not connected to the core')
   })
 
+  it('invokes every earlier input notice before resolving the following read response', async () => {
+    const order: string[] = []
+    let core!: Parameters<NonNullable<ServiceProcessOptions['onConnected']>>[0]
+    const service = run({ onConnected: connection => { core = connection }, onEvent: payload => { order.push(String(payload.kind)) } })
+    socket().open(); socket().say({ type: 'connected', payload: {} })
+    const asked = core.query('resolve', { id: 'a' }).then(() => { order.push('response') })
+    socket().say({ type: 'service_event', payload: { kind: 'input' } })
+    socket().say({ type: 'service_event', payload: { kind: 'delivery' } })
+    socket().say({ type: 'service_query_result', payload: { requestId: 'search-1', value: { agentId: 'a' } } })
+    await asked
+    expect(order).toEqual(['input', 'delivery', 'response'])
+    service.stop()
+  })
+
   it('tells the core without asking, carries bytes both ways, and hears when the core goes (the gateway)', () => {
     const onBinary = vi.fn()
     const onDisconnected = vi.fn()

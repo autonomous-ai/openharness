@@ -24,34 +24,15 @@ describe('the Wi-Fi device in the devices\' process, as the core sees it', () =>
     ])
   })
 
-  it('forwards one intact live batch without interpreting engine policy', () => {
-    const { wifi, sent, kinds, core } = link()
-    const events = [{ type: 'turn_ended', payload: {} }, { type: 'turn_started', payload: { userMessage: 'next' } }] as never
-    wifi.port.events('a', events)
-    expect(sent).toEqual([{ type: 'service_event', payload: { kind: 'input_events', agentId: 'a', events } }])
-    expect(kinds()).toEqual(['input_events'])
-    expect(core.agents.byAgent).not.toHaveBeenCalled()
-  })
-
   it('tells it everything as notices, in the order the core said it', async () => {
     const { wifi, sent, kinds } = link()
     await wifi.port.resume({ focus: null })
-    wifi.port.card({ type: 'commander_event' })
-    wifi.port.card({ type: 'commander_event' }, 'whole')
-    wifi.port.turnEnded('a', true)
-    wifi.port.stream('a', [])
-    wifi.port.transcript('a', 's', 'claude', 'line')
     wifi.port.delivery({ deliveryId: 'd', sessionId: 'a', state: 'delivered' })
-    wifi.port.agentGone('a')
     await wifi.port.appFocus('m', null, 'w')
     wifi.port.revealed('op', 'a')
     await wifi.port.stop()
-    expect(kinds()).toEqual(['resume', 'card', 'card', 'turnEnded', 'stream',
-      'transcript', 'delivery', 'agentGone', 'appFocus', 'revealed'])
+    expect(kinds()).toEqual(['resume', 'delivery', 'appFocus', 'revealed'])
     expect(sent[0].payload).toEqual({ kind: 'resume', focus: null })
-    expect(sent[1].payload).toEqual({ kind: 'card', frame: { type: 'commander_event' } })
-    expect(sent[2].payload).toEqual({ kind: 'card', frame: { type: 'commander_event' }, fullText: 'whole' })
-    expect(sent[5].payload).toEqual({ kind: 'transcript', agentId: 'a', sessionId: 's', engine: 'claude', line: 'line' })
   })
 
   it('answers what it asks through the core\'s Wi-Fi doors', async () => {
@@ -104,10 +85,7 @@ describe('the Wi-Fi device in the devices\' process, as the core sees it', () =>
     expect(core.wifi.scroll).toHaveBeenLastCalledWith('up', 0, 0)
     expect(core.wifi.focusApp).toHaveBeenCalledWith('a', 5, 'r')
     expect(core.wifi.reveal).toHaveBeenCalledWith('op', 'a')
-    for (const kind of ['send', 'hello', 'joined', 'ready', 'unpaired', 'focus']) expect(log).toHaveBeenCalledWith(`[services] wifi said ${kind}, which the core does not hear`)
-    expect(core.wifi.transcripts).toHaveBeenCalledWith('a', 2)
-    expect(core.wifi.watching).toHaveBeenCalledWith(['a'])
-    expect(core.wifi.streams).toHaveBeenCalledWith([])
+    for (const kind of ['send', 'hello', 'joined', 'ready', 'unpaired', 'focus', 'transcripts', 'watching', 'streams']) expect(log).toHaveBeenCalledWith(`[services] wifi said ${kind}, which the core does not hear`)
     wifi.notice({ kind: 'toString' })
     wifi.notice({})
     expect(log).toHaveBeenCalledWith('[services] wifi said toString, which the core does not hear')

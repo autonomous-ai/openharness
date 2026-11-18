@@ -216,7 +216,7 @@ export class LiveStreams {
     let records = 0
     if (preparing && stream.head && stream.span.head !== null) {
       const raw = stream.span.head
-      frames.push(this.frame({ raw, profile: true, observe: false, events: [], replay: false, turn: { ...stream.turn } }))
+      frames.push(this.frame({ raw, profile: true, events: [], replay: false, turn: { ...stream.turn } }))
       bytes += Buffer.byteLength(raw)
     }
     stream.head = false
@@ -227,7 +227,7 @@ export class LiveStreams {
       const result = fold ? this.ingest(stream, ask.token, raw, offset) : { events: [] }
       if (fold) records++
       const events = preparing && !ask.replay ? [] : result.events
-      const frame = this.frame({ raw, profile: true, observe: fold, events, replay: offset < (ask.cursor?.historyUntil ?? 0), turn: { ...stream.turn },
+      const frame = this.frame({ raw, profile: true, events, replay: offset < (ask.cursor?.historyUntil ?? 0), turn: { ...stream.turn },
         ...(!preparing && result.failure !== undefined ? { failure: result.failure } : {}),
         ...(result.at === undefined ? {} : { at: result.at }), ...(!preparing && result.over ? { over: true as const } : {}) })
       frames.push(frame)

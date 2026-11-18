@@ -11,7 +11,6 @@ import type { StoreAgent } from '../lib/autonomous-device/store.js'
 import type { RegisteredSession, registry } from '../lib/registry.js'
 import type { BackendSocket } from '../backendSocket.js'
 import type { CoreApi, DevicesPort, WifiView } from './api.js'
-import type { WifiCoreDeps } from './wifi.js'
 
 const canonicalPath = (path: string | null): string | null => {
   if (!path) return null
@@ -84,7 +83,7 @@ export interface WifiDoorsDeps extends Pick<WifiAgentsDeps, 'registry' | 'machin
 
 /** The doors the Wi-Fi device's service reaches the core through (`CoreApi.wifi`), each the one call it
  *  made when it ran in the core's process. */
-export function wifiDoors(deps: WifiDoorsDeps): WifiCoreDeps['doors'] {
+export function wifiDoors(deps: WifiDoorsDeps): CoreApi['wifi'] {
   const { registry, machineId, socket } = deps
   const hasWindow = (): boolean => !!socket()?.hasLocalClient()
   return {

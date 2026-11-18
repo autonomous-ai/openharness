@@ -520,8 +520,7 @@ describe('the core API services stand on', () => {
     for (const member of ['resume', 'appFocus', 'stop'] as const) {
       expect(readFallback(WIFI_FALLBACKS[member]), member).toEqual({ deferred: true, value: undefined })
     }
-    for (const member of ['card', 'turnEnded', 'stream', 'transcript', 'delivery',
-      'events', 'input', 'disconnected', 'agentGone', 'revealed'] as const) {
+    for (const member of ['delivery', 'input', 'disconnected', 'revealed'] as const) {
       expect(WIFI_FALLBACKS[member], member).toBeUndefined()
     }
   })
@@ -534,8 +533,7 @@ describe('the core API services stand on', () => {
     expect(await WIFI_OFF.stepFocus('next')).toBe('no_app')
     expect(WIFI_OFF.scroll('down', 0, 0)).toBe(false)
     expect(WIFI_OFF.focusApp('a', 0, 'r')).toBe(false)
-    for (const call of [() => WIFI_OFF.reveal('o', 'a'), () => WIFI_OFF.transcripts('a', 0), () => WIFI_OFF.watching([]),
-      () => WIFI_OFF.streams([])]) expect(call()).toBeUndefined()
+    expect(WIFI_OFF.reveal('o', 'a')).toBeUndefined()
   })
 
   it('falls back, when Agent Messages fails, to writing none of its deliveries', () => {

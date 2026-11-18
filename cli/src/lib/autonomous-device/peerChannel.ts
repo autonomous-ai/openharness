@@ -67,8 +67,8 @@ export function devicePeerChannel(socket: WebSocket, options: {
     let frame: DevicePeerFrame | null
     try {
       const value: unknown = JSON.parse(raw.toString('utf8'))
-      frame = options.side === 'gateway' ? devicesGatewayFrame(value) : gatewayDeviceFrame(value, options.role)
-      if (!frame || (options.side === 'gateway' && options.role !== 'devices')) throw new Error()
+      frame = options.side === 'gateway' ? devicesGatewayFrame(value, options.role) : gatewayDeviceFrame(value, options.role)
+      if (!frame) throw new Error()
       if (epoch === null) {
         if (frame.type !== (options.role === 'devices' ? 'snapshot' : 'presence')) throw new Error()
         epoch = frame.epoch
