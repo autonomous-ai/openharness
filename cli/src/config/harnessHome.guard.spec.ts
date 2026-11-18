@@ -2,7 +2,8 @@
  * Every path under the account's ~/.harness is built by config/harnessHome.ts, so a later change of the home's layout
  * (XDG, docs/plans/2026-11-18-harness-paths-design.md) is one table. This guard fails on a hand-built one, in the shapes
  * the code used before the module: a `.harness` segment joined onto a home, `.harness` straight after home text, a
- * pattern that matches a home path, and the module's HARNESS_HOME_NAME used elsewhere. A project's or workspace's `.harness/` and `.harness-<name>` files are not the home.
+ * pattern that matches a home path, and the module's HARNESS_HOME_NAME used elsewhere. A project's or workspace's
+ * `.harness/` and `.harness-<name>` files are not the home.
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
