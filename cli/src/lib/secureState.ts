@@ -18,7 +18,8 @@ import {
 } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { dirname, win32 } from 'node:path'
+import { basename, dirname, win32 } from 'node:path'
+import { errorKind } from './log.js'
 
 const PRIVATE_DIRECTORY_MODE = 0o700
 const PRIVATE_FILE_MODE = 0o600
@@ -301,4 +302,143 @@ export function atomicWriteFile(
 /** `atomicWriteFile` of `JSON.stringify(value, null, 2)`. */
 export function atomicWriteJson(file: string, value: unknown, kind: StateKind, options?: AtomicWriteOptions): boolean {
   return atomicWriteFile(file, JSON.stringify(value, null, 2), kind, options)
+}
+
+// An older build still writes in place, so during an update a reader can find its file mid-write for a moment.
+export const READ_TRIES = 5
+export const READ_WAIT_MS = 20
+// Enough for every state file one process reads; a broken one then costs its readers one stat after the first read.
+const REMEMBERED_FILES = 64
+
+export type StateRead<T> = { state: 'ok'; value: T } | { state: 'missing' } | { state: 'unreadable'; failure: string }
+
+/** A trust file that cannot be read, which a write would replace. The message holds the file's base name only. */
+export class StateFileUnreadable extends Error {
+  override readonly name = 'StateFileUnreadable'
+  constructor(readonly base: string, readonly failure: string) {
+    super(`${base} cannot be read (${failure}). Move it aside to start over.`)
+  }
+}
+
+/** A trust file and its reader's parse, for whoever names the unreadable ones. */
+export interface TrustFile { file: string; parse(text: string): unknown }
+
+interface Unreadable {
+  identity: string
+  failure: string
+  /** Its trust line is logged. */
+  said?: boolean
+  /** It could not be set aside: not tried again on every read. */
+  stuck?: boolean
+}
+// By path, oldest first.
+const unreadableFiles = new Map<string, Unreadable>()
+
+/** What a file is remembered by: a write in place or a rename over it changes it. Undefined when missing. */
+function identityOf(file: string): string | undefined {
+  try {
+    const { dev, ino, size, mtimeMs } = statSync(file)
+    return `${dev}:${ino}:${size}:${mtimeMs}`
+  } catch (error) {
+    // A folder that cannot be searched stays so: it is remembered by its error.
+    return isMissing(error) ? undefined : errorCode(error) || 'unreadable'
+  }
+}
+
+function remember(file: string, identity: string | undefined, failure: string): void {
+  unreadableFiles.delete(file)
+  if (identity === undefined) return
+  unreadableFiles.set(file, { identity, failure })
+  if (unreadableFiles.size > REMEMBERED_FILES) unreadableFiles.delete(unreadableFiles.keys().next().value!)
+}
+
+function readOnce<T>(file: string, parse: (text: string) => T): StateRead<T> {
+  let text: string
+  try {
+    text = readFileSync(file, 'utf8')
+  } catch (error) {
+    if (isMissing(error)) return { state: 'missing' }
+    return { state: 'unreadable', failure: errorCode(error) || 'unreadable' }
+  }
+  try {
+    return { state: 'ok', value: parse(text) }
+  } catch (error) {
+    // A fixed word, never the error's message: JSON.parse quotes the file in it.
+    return { state: 'unreadable', failure: error instanceof SyntaxError ? 'not valid JSON' : 'unexpected content' }
+  }
+}
+
+/** Read and parse, with the retry and the memory of an unreadable file. Logs nothing, moves nothing. */
+export function probeState<T>(file: string, parse: (text: string) => T): StateRead<T> {
+  const known = unreadableFiles.get(file)
+  if (known && known.identity === identityOf(file)) return { state: 'unreadable', failure: known.failure }
+  for (let attempt = 1; ; attempt++) {
+    // Taken before the read: a write after it changes it, so a file that became whole is never remembered as broken.
+    const identity = identityOf(file)
+    const read = readOnce(file, parse)
+    if (read.state !== 'unreadable') {
+      unreadableFiles.delete(file)
+      return read
+    }
+    if (attempt === READ_TRIES) {
+      remember(file, identity, read.failure)
+      return read
+    }
+    pauseSync(READ_WAIT_MS)
+  }
+}
+
+/**
+ * `probeState`, then the kind: a trust file is logged once and left as it is (its store fails closed); a cache file
+ * is set aside, logged, and answered as missing.
+ */
+export function readState<T>(file: string, kind: StateKind, parse: (text: string) => T): StateRead<T> {
+  const read = probeState(file, parse)
+  if (read.state !== 'unreadable') return read
+  const base = basename(file)
+  const memory = unreadableFiles.get(file)
+  if (kind === 'trust') {
+    if (!memory?.said) console.warn(`[state] ${base} cannot be read (${read.failure}); left as it is. Move it aside to start over.`)
+    if (memory) memory.said = true
+    return read
+  }
+  if (!memory?.stuck && setAsideUnreadable(file)) {
+    console.warn(`[state] ${base} could not be read (${read.failure}); kept as ${base}.unreadable, starting empty.`)
+  }
+  return { state: 'missing' }
+}
+
+/** A trust file a write depends on: its value, null when missing, a thrown StateFileUnreadable otherwise. */
+export function requireState<T>(file: string, parse: (text: string) => T): T | null {
+  const read = readState(file, 'trust', parse)
+  if (read.state === 'unreadable') throw new StateFileUnreadable(basename(file), read.failure)
+  return read.state === 'ok' ? read.value : null
+}
+
+/** Rename to `<file>.unreadable`, over an older one. Never throws: a failure is one log line. True when set aside. */
+export function setAsideUnreadable(file: string): boolean {
+  try {
+    renameOver(file, `${file}.unreadable`)
+    unreadableFiles.delete(file)
+    return true
+  } catch (error) {
+    console.warn(`[state] ${basename(file)} could not be set aside (${errorKind(error)})`)
+    const memory = unreadableFiles.get(file)
+    if (memory) memory.stuck = true
+    return false
+  }
+}
+
+/** The text as a JSON array; valid JSON of another type is not this file's content either. */
+export function jsonArray(text: string): unknown[] {
+  const value: unknown = JSON.parse(text)
+  if (!Array.isArray(value)) throw new TypeError('not a JSON array')
+  return value
+}
+
+/** The text as a JSON object: not null, not an array. */
+export function jsonObject(text: string): Record<string, unknown> {
+  const value: unknown = JSON.parse(text)
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new TypeError('not a JSON object')
+  return value as Record<string, unknown>
 }
