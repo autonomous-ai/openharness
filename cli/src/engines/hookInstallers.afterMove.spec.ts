@@ -44,6 +44,8 @@ interface Phase {
 
 let root = '', home = '', oldRoot = ''
 let after: Phase
+/** The record of the person's trust in their own Codex hook: its key, by its place, and its hash. */
+let ownTrust: [string, string]
 const saved: Record<string, string | undefined> = {}
 const savedArgv = process.argv[1]
 const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
@@ -132,6 +134,13 @@ beforeAll(async () => {
     ...Object.values(before.plugins)]) expect(read(file)).toContain(oldRoot)
   addOwn(claudeFile())
   addOwn(join(codexHome(), 'hooks.json'))
+  // The person trusts it in Codex, which records it by its place (kit/hookReview.ts).
+  const { reviewHash } = await import('./kit/hookReview.js')
+  const reviewed = codexContract.settings.reviewed!
+  const place = json(join(codexHome(), 'hooks.json')).hooks!.Stop.length - 1
+  ownTrust = [`${join(realpathSync(codexHome()), 'hooks.json')}:${reviewed.events.Stop}:${place}:0`, reviewHash(reviewed, 'Stop', undefined, OWN.hooks[0]!)]
+  const config = join(codexHome(), reviewed.file)
+  write(config, `${read(config)}\n[hooks.state.${JSON.stringify(ownTrust[0])}]\ntrusted_hash = ${JSON.stringify(ownTrust[1])}\n`)
 
   // The move: the XDG roots hold the tree, so the rule picks them. The next start installs from there.
   const xdg = xdgRoots(home, {})
@@ -169,13 +178,13 @@ describe('the hook installers after the move', () => {
       expect(ours(settings, event).map((block) => block.hooks.map((hook) => hook.command))).toEqual([[command]])
     }
     expect(read(file)).not.toContain(oldRoot)
-    // Every Harness hook in the file, Agent Messages' too, has its record holding the hash of the hook as it is now. The
-    // person's Stop hook now goes before ours, so the old record at its place stays: its hash matches no hook in the file.
+    // Every Harness hook in the file, Agent Messages' too, has its record holding the hash of the hook as it is now. Ours
+    // kept their places, so the person's Stop hook keeps its own, and its record with it: no record names a hook that is gone.
     const config = parseToml(read(join(codexHome(), 'config.toml'))) as { hooks: { state: Record<string, { trusted_hash: string }> } }
     const recorded = Object.fromEntries(Object.entries(config.hooks.state).map(([key, { trusted_hash }]) => [key, trusted_hash]))
     const needed = after.reviewRecords(codexContract.settings.reviewed!, join(realpathSync(codexHome()), 'hooks.json'), settings, 'linux')
     expect(needed.size).toBe(codexContract.settings.events.length + 1)
-    expect(recorded).toMatchObject(Object.fromEntries(needed))
+    expect(recorded).toEqual({ ...Object.fromEntries(needed), [ownTrust[0]]: ownTrust[1] })
   })
 
   it("Codex's harness.rules names the new cli.js", () => {
@@ -220,11 +229,12 @@ describe('the hook installers after the move', () => {
     expect(read(join(own, 'settings.json'))).not.toContain(positional)
   })
 
-  it("a person's own hook beside ours is kept", () => {
+  it("a person's own hook beside ours is kept, at its place", () => {
     for (const file of [claudeFile(), join(codexHome(), 'hooks.json')]) {
       const stop = json(file).hooks!.Stop
       expect(stop.filter((block) => !after.isOurs(block, 'linux'))).toEqual([OWN])
       expect(stop).toHaveLength(2)
+      expect(stop[1]).toEqual(OWN)
     }
   })
 })
