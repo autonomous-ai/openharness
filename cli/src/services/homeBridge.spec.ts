@@ -58,6 +58,8 @@ function movedHome() {
     mkdirSync(join(root, name), { recursive: true, mode: 0o700 })
     symlinkSync(join(root, name), join(oldHome, name))
   }
+  // The move's commit marks the data root Harness's: without it the rule keeps ~/.harness, and no bridge is served.
+  writeFileSync(join(data, '.harness-root'), '1\n', { mode: 0o600 })
   makeRealFolders(oldHome)
   const dataDir = join(data, 'cli', LONG)
   mkdirSync(dataDir)
