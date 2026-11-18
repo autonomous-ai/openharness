@@ -256,10 +256,13 @@ const orca = {
   mtime: () => null,
 }
 /** What the devices ran as `codex`: recorded, so no spec runs the developer's own. */
-const codexRuns: Array<[string, string[], { cwd: string; env: Record<string, string>; timeoutMs: number }]> = []
+const codexRuns: Array<[string, string[], { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number }]> = []
 const codex: NonNullable<DevicesDeps['codex']> = {
   run: async (file, args, options) => { codexRuns.push([file, args, options]); return 0 },
   binary: () => '/opt/codex/bin/codex',
+  parentEnv: () => ({ PATH: '/usr/bin' }),
+  // Never the developer's own shell: a spec reads when it would have been read.
+  readLoginShell: vi.fn(),
   platform: 'linux',
 }
 /** What the devices asked of herdr's socket: recorded, so no spec reaches the developer's own herdr. It takes every
@@ -4086,9 +4089,24 @@ describe('codex queue, for Codex outside a pane (docs/specs/2026-11-15-device-co
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sv' }])
     expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
     expect(codexRuns).toEqual([['/opt/codex/bin/codex', ['queue', '--thread', THREAD, '--message=run the tests'],
-      { cwd: homedir(), env: { CODEX_HOME: env.CODEX_HOME }, timeoutMs: 10_000 }]])
+      { cwd: homedir(), env: { PATH: '/usr/bin', CODEX_HOME: env.CODEX_HOME }, timeoutMs: 10_000 }]])
     expect(said()).toEqual(['[device] voice · codex'])
     expect(orcaRuns).toEqual([])
+  })
+
+  // The interactive shell can take its 5 s: a computer whose dial never meets a Codex session never starts it.
+  it('the login shell is read once a Codex session is listed, never for a computer with none', async () => {
+    const { port } = start({ faults: ['fleet'] })
+    const CLAUDE = observedAgentId('claude', 'sess-1')
+    port.observed(hook('session-start', { engine: 'claude', sessionId: 'sess-1', callerPid: 4343, transcriptPath: '/t/sess-1.jsonl' }))
+    seen.host.watching!(true)
+    port.swarms(null)
+    expect((await listed()).map(({ id }) => id)).toEqual([CLAUDE])
+    expect(codex.readLoginShell).not.toHaveBeenCalled()
+
+    port.observed(hook('session-start'))
+    for (let i = 0; i < 3; i++) expect(await listed()).toContainEqual({ id: ID, name: 'api', caps: 'sv' })
+    expect(codex.readLoginShell).toHaveBeenCalledTimes(1)
   })
 
   it('a Codex app session\'s words still go through codex queue, and nothing is opened', async () => {

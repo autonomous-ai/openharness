@@ -2,7 +2,7 @@ import { type ChildProcess, execFile } from 'node:child_process'
 import { once } from 'node:events'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { CODEX_THREAD, codexQueueDeps, createCodexQueue, type CodexQueueDeps, type CodexRunEnd } from './codexQueue.js'
 import { writeExecutable } from '../../testing/executableFixture.js'
@@ -12,6 +12,16 @@ vi.mock('node:child_process', async (original) => {
   const real = await original<typeof import('node:child_process')>()
   return { ...real, execFile: vi.fn(real.execFile) }
 })
+
+// The login shell, never a real one: each spec says what it gave and when its read ends.
+const shell = vi.hoisted(() => ({ env: {} as NodeJS.ProcessEnv, read: (): Promise<NodeJS.ProcessEnv> => Promise.resolve({}) }))
+vi.mock('../../lib/loginShellEnv.js', async (original) => ({
+  ...await original<typeof import('../../lib/loginShellEnv.js')>(),
+  loginShellEnvironment: () => shell.env,
+  warmLoginShellEnvironment: () => shell.read(),
+  // The module's own rule, restated: the real one reads the module's cache, which this mock never fills.
+  oneShotParentEnv: () => ({ ...shell.env, ...process.env }),
+}))
 
 const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
 const OTHER = '9b2f4c1e-7d3a-4e5b-8c6d-0e1f2a3b4c5d'
@@ -24,8 +34,13 @@ beforeEach(() => {
 })
 afterEach(() => {
   vi.unstubAllEnvs()
+  shell.env = {}
+  shell.read = () => Promise.resolve({})
   rmSync(dir, { recursive: true, force: true })
 })
+
+/** Every job the microtask queue holds has run: a read of the login shell that has ended has been taken. */
+const settled = () => new Promise((resolve) => setImmediate(resolve))
 
 /** A file that can be run, at [path]. */
 function executable(path: string, body = '#!/bin/sh\nexit 0\n'): string {
@@ -66,6 +81,8 @@ function recorder(over: Partial<CodexQueueDeps> = {}, ends: CodexRunEnd[] = []) 
       return ends.length ? ends.shift()! : 0
     },
     binary: () => FAKE_CODEX,
+    parentEnv: () => ({ PATH: '/usr/bin' }),
+    readLoginShell: vi.fn(),
     platform: 'darwin',
     home: '/home/u/.codex',
     cwd: '/home/u',
@@ -84,6 +101,8 @@ function held() {
       return new Promise((resolve) => waiting.push(resolve))
     },
     binary: () => FAKE_CODEX,
+    parentEnv: () => ({ PATH: '/usr/bin' }),
+    readLoginShell: vi.fn(),
     platform: 'linux',
     home: '/home/u/.codex',
     cwd: '/home/u',
@@ -106,7 +125,7 @@ describe('codex queue', () => {
     expect(calls).toEqual([[
       FAKE_CODEX,
       ['queue', '--thread', THREAD, '--message=fix the login bug'],
-      { cwd: '/home/u', env: { CODEX_HOME: '/home/u/.codex' }, timeoutMs: 10_000 },
+      { cwd: '/home/u', env: { PATH: '/usr/bin', CODEX_HOME: '/home/u/.codex' }, timeoutMs: 10_000 },
     ]])
   })
 
@@ -279,5 +298,128 @@ describe('codex queue', () => {
     expect(binary()).toBe(onPath)
     vi.advanceTimersByTime(1)
     expect(binary()).toBeNull()
+  })
+
+  it('codex on the login shell\'s PATH is found before the daemon\'s, and CODEX_PATH before both', () => {
+    vi.useFakeTimers({ toFake: ['performance'] })
+    onTestFinished(() => { vi.useRealTimers() })
+    const login = join(dir, 'login')
+    const daemon = join(dir, 'daemon')
+    mkdirSync(login)
+    mkdirSync(daemon)
+    const fromLogin = executable(join(login, 'codex'))
+    const fromDaemon = executable(join(daemon, 'codex'))
+    shell.env = { PATH: login }
+    vi.stubEnv('PATH', daemon)
+    vi.stubEnv('CODEX_PATH', '')
+    const { binary } = codexQueueDeps()
+    expect(binary()).toBe(fromLogin)
+    rmSync(fromLogin)
+    vi.advanceTimersByTime(30_000)
+    expect(binary()).toBe(fromDaemon)
+
+    executable(fromLogin)
+    mkdirSync(join(dir, 'other'))
+    const own = executable(join(dir, 'other', 'my-codex'))
+    vi.stubEnv('CODEX_PATH', own)
+    vi.advanceTimersByTime(30_000)
+    expect(binary()).toBe(own)
+    // Its own path, missing: a launch would not run the codex on either PATH, so neither does the queue.
+    vi.stubEnv('CODEX_PATH', join(dir, 'missing', 'codex'))
+    vi.advanceTimersByTime(30_000)
+    expect(binary()).toBeNull()
+  })
+
+  // A look taken while the login shell was not read yet saw the daemon's PATH alone.
+  it('a look taken before the login shell was read is taken again once it is read', async () => {
+    vi.useFakeTimers({ toFake: ['performance'] })
+    onTestFinished(() => { vi.useRealTimers() })
+    const login = join(dir, 'login')
+    const daemon = join(dir, 'daemon')
+    mkdirSync(login)
+    mkdirSync(daemon)
+    vi.stubEnv('CODEX_PATH', '')
+    vi.stubEnv('PATH', daemon)
+    let ended!: (env: NodeJS.ProcessEnv) => void
+    shell.read = () => new Promise((resolve) => { ended = resolve })
+    const deps = codexQueueDeps()
+    expect(deps.binary()).toBeNull()
+    const fromLogin = executable(join(login, 'codex'))
+    shell.env = { PATH: login }
+    expect(deps.binary()).toBeNull()
+    deps.readLoginShell()
+    await settled()
+    expect(deps.binary()).toBeNull()
+    ended(shell.env)
+    await settled()
+    expect(deps.binary()).toBe(fromLogin)
+  })
+
+  it('a read that gives nothing changes nothing and never throws', async () => {
+    const onPath = executable(join(dir, 'codex'))
+    vi.stubEnv('CODEX_PATH', '')
+    vi.stubEnv('PATH', dir)
+    const deps = codexQueueDeps()
+    expect(() => deps.readLoginShell()).not.toThrow()
+    await settled()
+    expect(deps.binary()).toBe(onPath)
+    expect(deps.parentEnv().PATH).toBe(dir)
+  })
+
+  it('the run\'s environment is the login shell\'s with the daemon\'s on top, PATH the login shell\'s then the daemon\'s, CODEX_HOME the daemon\'s', async () => {
+    shell.env = { PATH: '/login/bin', CODEX_HOME: '/login/codex', ONLY_LOGIN: '1', BOTH: 'login' }
+    vi.stubEnv('PATH', '/daemon/bin')
+    vi.stubEnv('BOTH', 'daemon')
+    const calls: Call[] = []
+    const queue = createCodexQueue({
+      ...codexQueueDeps(),
+      run: async (...call) => { calls.push(call); return 0 },
+      binary: () => FAKE_CODEX,
+      home: '/daemon/codex',
+      cwd: dir,
+    })
+    expect(await queue.send(THREAD, 'hi')).toEqual({ outcome: 'queued' })
+    expect(calls).toHaveLength(1)
+    expect(calls[0][2].env).toMatchObject({ PATH: `/login/bin${delimiter}/daemon/bin`, CODEX_HOME: '/daemon/codex', ONLY_LOGIN: '1', BOTH: 'daemon' })
+  })
+
+  // An empty segment is the folder codex runs in, the home folder: `env node` would run a `node` from there.
+  it('an empty PATH on either side adds no empty segment', () => {
+    const { parentEnv } = codexQueueDeps()
+    vi.stubEnv('PATH', '/daemon/bin')
+    expect(parentEnv().PATH).toBe('/daemon/bin')
+    shell.env = { PATH: '/login/bin' }
+    vi.stubEnv('PATH', '')
+    expect(parentEnv().PATH).toBe('/login/bin')
+    // Neither: no PATH at all, so the system's default is searched, never the folder.
+    shell.env = { PATH: '' }
+    expect(parentEnv().PATH).toBeUndefined()
+  })
+
+  // The interactive shell can take its 5 s: a computer whose dial never meets a Codex session never starts it.
+  it('the login shell is read on first use: never at creation, once however often it is asked, never on Windows', async () => {
+    const readLoginShell = vi.fn()
+    const { queue } = recorder({ readLoginShell })
+    expect(readLoginShell).not.toHaveBeenCalled()
+    queue.can()
+    queue.can()
+    await queue.send(THREAD, 'hi')
+    expect(readLoginShell).toHaveBeenCalledTimes(1)
+
+    const sentFirst = vi.fn()
+    await recorder({ readLoginShell: sentFirst }).queue.send(THREAD, 'hi')
+    expect(sentFirst).toHaveBeenCalledTimes(1)
+
+    const refused = vi.fn()
+    expect(await recorder({ readLoginShell: refused }).queue.send('my session', 'hi')).toEqual(REFUSED)
+    expect(refused).not.toHaveBeenCalled()
+
+    const windowsRead = vi.fn()
+    const windowsBinary = vi.fn(() => FAKE_CODEX)
+    const windows = recorder({ platform: 'win32', readLoginShell: windowsRead, binary: windowsBinary })
+    expect(windows.queue.can()).toBe(false)
+    expect(await windows.queue.send(THREAD, 'hi')).toEqual({ outcome: 'failed', reason: 'no binary' })
+    expect(windowsRead).not.toHaveBeenCalled()
+    expect(windowsBinary).not.toHaveBeenCalled()
   })
 })
