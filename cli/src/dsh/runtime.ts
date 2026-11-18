@@ -96,6 +96,13 @@ function movedSnapshot(data: RuntimeSnapshot): RuntimeSnapshot {
     args: data.args.map(movedDshPath), skills: data.skills.map(skill => ({ ...skill, dir: movedDshPath(skill.dir) })) }
 }
 
+/** A saved runtime with its paths at the dsh folder's new place, and whether that changed any of them. */
+function savedRuntime(path: string): { data: RuntimeSnapshot; moved: boolean } {
+  const saved = Snapshot.parse(JSON.parse(readFileSync(path, 'utf8')))
+  const data = movedSnapshot(saved)
+  return { data, moved: JSON.stringify(data) !== JSON.stringify(saved) }
+}
+
 function isLink(path: string): boolean {
   try { return lstatSync(path).isSymbolicLink() } catch { return false }
 }
@@ -224,14 +231,17 @@ export function prepareHarnessLaunch(dsh: InstalledDsh, workspace: string, engin
     if (!existsSync(from)) throw new Error(`The original harness runtime is missing: ${from}`)
   }
   if (isLink(from)) throw new Error(`Harness runtime snapshot is a symlink: ${from}`)
-  const data = existsSync(from) ? movedSnapshot(Snapshot.parse(JSON.parse(readFileSync(from, 'utf8')))) : snapshot(dsh, ws, engine)
+  const saved = existsSync(from) ? savedRuntime(from) : null
+  const data = saved?.data ?? snapshot(dsh, ws, engine)
   if (data.engine !== engine || (data.id !== dsh.id && !dsh.manifest.formerly?.includes(data.id))) {
     throw new Error(`Harness runtime belongs to ${data.id} / ${data.engine}, not ${dsh.id} / ${engine}`)
   }
+  // The runtime already at [file]: the one read, or the fork destination's own.
+  let own = sourceKey ? null : saved
   if (sourceKey && (existsSync(file) || isLink(file))) {
     if (isLink(file)) throw new Error(`Harness runtime snapshot is a symlink: ${file}`)
-    const saved = movedSnapshot(Snapshot.parse(JSON.parse(readFileSync(file, 'utf8'))))
-    if (JSON.stringify(saved) !== JSON.stringify(data)) throw new Error(`The fork destination already has a different harness runtime: ${file}`)
+    own = savedRuntime(file)
+    if (JSON.stringify(own.data) !== JSON.stringify(data)) throw new Error(`The fork destination already has a different harness runtime: ${file}`)
   }
   const skillsDir = join(dir, 'skills')
   ensureRuntimeDir(base, skillsDir)
@@ -276,8 +286,8 @@ export function prepareHarnessLaunch(dsh: InstalledDsh, workspace: string, engin
     '',
   ].join('\n')
   writeManagedFile(env.HARNESS_CONTEXT_FILE!, context)
-  // Written once, and again when the move of Harness's folder gave its paths their new place.
-  const body = `${JSON.stringify(data, null, 2)}\n`
-  if (!existsSync(file) || readFileSync(file, 'utf8') !== body) writeManagedFile(file, body)
+  // Written once, and again only when the move of Harness's folder gave its paths their new place: otherwise a saved
+  // runtime keeps its bytes.
+  if (!own || own.moved) writeManagedFile(file, `${JSON.stringify(data, null, 2)}\n`)
   return { env, args: [...data.args, ...(adapter.contextArgs?.(env.HARNESS_CONTEXT_FILE!) ?? []), ...(adapter.envArgs?.(env) ?? [])] }
 }
