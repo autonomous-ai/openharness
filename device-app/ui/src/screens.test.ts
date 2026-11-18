@@ -57,6 +57,35 @@ describe('screens', () => {
     expect(buttons()).toEqual([])
   })
 
+  it('install: the step under the spinner', async () => {
+    const step = () => page().querySelector('.body.muted')?.textContent ?? null
+    await mount(at('install', 'working', ['Installing tmux…']))
+    expect(spinner()).not.toBeNull()
+    expect(step()).toBe('Installing tmux…')
+
+    push(at('install', 'working', ['Downloading Harness…', 'a second line']))
+    expect(step()).toBe('Downloading Harness…')
+    expect(text()).not.toContain('a second line')
+
+    push(at('install', 'working'))
+    expect(spinner()).not.toBeNull()
+    expect(page().querySelectorAll('.content > *')).toHaveLength(2)
+  })
+
+  it('install: the spinner is named by the heading and the step', async () => {
+    // The text of each element the spinner's aria-labelledby names, as a screen reader reads it.
+    const name = () =>
+      (spinner()?.getAttribute('aria-labelledby') ?? '')
+        .split(' ')
+        .map((id) => document.getElementById(id)?.textContent)
+        .join(' ')
+    await mount(at('install', 'working', ['Installing tmux…']))
+    expect(name()).toBe('Setting up Harness Installing tmux…')
+
+    push(at('install', 'working'))
+    expect(name()).toBe('Setting up Harness')
+  })
+
   it('sign-in: offer, browser, done', async () => {
     await mount(at('sign_in', 'offer'))
     expect(heading()).toBe('Sign in')
@@ -142,6 +171,10 @@ describe('screens', () => {
     expect(text()).toContain(outside)
 
     push(at('sign_in', 'failed', [outside]))
+    expect(page().querySelector('img')).toBeNull()
+    expect(text()).toContain(outside)
+
+    push(at('install', 'working', [outside]))
     expect(page().querySelector('img')).toBeNull()
     expect(text()).toContain(outside)
   })

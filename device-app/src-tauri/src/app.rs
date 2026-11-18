@@ -1,5 +1,6 @@
 //! The app's rules: a pure reducer from an event to the effects it asks for.
 
+use crate::install::GETTING_READY;
 use crate::keepalive::{Keep, KeepAlive};
 use crate::model::{about_credits, due, menu, menu_log};
 use crate::types::{
@@ -31,6 +32,8 @@ pub struct App {
     window: Option<View>,
     /// The sign-in that runs, as its screen draws it.
     login: Option<View>,
+    /// The install's step, kept after it ends until the first screen is chosen.
+    step: &'static str,
     /// The CLI was found and the account has not answered since: its first answer chooses the first screen.
     awaiting_account: bool,
     /// The last time an event told, for the keep-alive.
@@ -75,6 +78,7 @@ impl App {
             menu: Vec::new(),
             window: None,
             login: None,
+            step: GETTING_READY,
             awaiting_account: false,
             now,
             last_read: now,
@@ -192,6 +196,12 @@ impl App {
                 self.keep.start_done(ok);
                 effects.push(Effect::SpawnWatch);
             }
+            // A step that comes late, or again, draws nothing.
+            Event::InstallStep(step) if self.state.cli == CliState::Installing && step != self.step => {
+                self.step = step;
+                self.redraw(Screen::Install, effects);
+            }
+            Event::InstallStep(_) => {}
             // The runner found a CLI after it. The window stays on Install until the first screen is chosen.
             Event::InstallDone(Ok(())) => {
                 self.found(effects);
@@ -431,6 +441,7 @@ impl App {
             return;
         }
         self.state.cli = CliState::Installing;
+        self.step = GETTING_READY;
         effects.push(Effect::RunInstall);
         self.show(Some(self.view_of(Screen::Install)), effects);
     }
@@ -464,7 +475,7 @@ impl App {
     /// The screen as it stands: what runs shows its progress, else the offer.
     fn view_of(&self, screen: Screen) -> View {
         match screen {
-            Screen::Install => screen_at(screen, Phase::Working, Vec::new()),
+            Screen::Install => screen_at(screen, Phase::Working, vec![self.step.to_string()]),
             Screen::SignIn => self.login.clone().unwrap_or_else(|| screen_at(screen, Phase::Offer, Vec::new())),
         }
     }
@@ -520,6 +531,7 @@ fn screen_at(screen: Screen, phase: Phase, lines: Vec<String>) -> View {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::install::{DOWNLOADING_HARNESS, GETTING_READY, INSTALLING_TMUX};
     use crate::types::{
         Action, DialStatus, Effect, Event, LoginEvent, MenuAction, MenuItem, NotifyMode, Phase, Saved, Screen,
         UpdateFailure, View,
@@ -658,9 +670,9 @@ mod tests {
         let (app, effects) = App::new(Saved::default(), false, false, B);
         assert!(has(&effects, &Effect::RunInstall));
         assert!(!has(&effects, &Effect::SpawnWatch));
-        assert_eq!(shows(&effects), [shown(Screen::Install, Phase::Working, &[])]);
+        assert_eq!(shows(&effects), [shown(Screen::Install, Phase::Working, &[GETTING_READY])]);
         assert_eq!(rows(&effects)[0], "Setting up Harness");
-        assert_eq!(app.view(), shown(Screen::Install, Phase::Working, &[]));
+        assert_eq!(app.view(), shown(Screen::Install, Phase::Working, &[GETTING_READY]));
     }
 
     #[test]
@@ -725,7 +737,7 @@ mod tests {
         }
         assert!(!has(&effects, &Effect::SpawnWatch));
         assert!(shows(&effects).is_empty());
-        assert_eq!(app.view(), shown(Screen::Install, Phase::Working, &[]));
+        assert_eq!(app.view(), shown(Screen::Install, Phase::Working, &[GETTING_READY]));
         assert_eq!(rows(&effects)[0], "Starting Harness");
 
         // Started at once, outside the slot, and once: a tick in the next slot asks nothing while it runs.
@@ -753,7 +765,35 @@ mod tests {
 
         let effects = app.handle(Event::Act(Action::Retry));
         assert!(has(&effects, &Effect::RunInstall));
-        assert_eq!(shows(&effects), [shown(Screen::Install, Phase::Working, &[])]);
+        assert_eq!(shows(&effects), [shown(Screen::Install, Phase::Working, &[GETTING_READY])]);
+    }
+
+    #[test]
+    fn the_install_screen_shows_its_step() {
+        let at = |step: &str| shown(Screen::Install, Phase::Working, &[step]);
+        let (mut app, effects) = App::new(Saved::default(), false, false, B);
+        assert_eq!(shows(&effects), [at(GETTING_READY)]);
+        assert_eq!(shows(&app.handle(Event::InstallStep(INSTALLING_TMUX))), [at(INSTALLING_TMUX)]);
+        assert!(shows(&app.handle(Event::InstallStep(INSTALLING_TMUX))).is_empty());
+
+        // A closed window stays closed.
+        app.handle(Event::WindowClosed);
+        assert!(shows(&app.handle(Event::InstallStep(DOWNLOADING_HARNESS))).is_empty());
+        assert_eq!(app.view(), None);
+
+        // Retry starts again at the beginning.
+        let mut app = fresh();
+        app.handle(Event::InstallStep(DOWNLOADING_HARNESS));
+        app.handle(Event::InstallDone(Err(vec!["a".into()])));
+        assert_eq!(shows(&app.handle(Event::Act(Action::Retry))), [at(GETTING_READY)]);
+
+        // The last step stays until the first screen is chosen; a step that comes after the install is not drawn.
+        let mut app = fresh();
+        app.handle(Event::InstallStep(INSTALLING_TMUX));
+        app.handle(Event::InstallDone(Ok(())));
+        assert_eq!(app.view(), at(INSTALLING_TMUX));
+        assert!(shows(&app.handle(Event::InstallStep(DOWNLOADING_HARNESS))).is_empty());
+        assert_eq!(app.view(), at(INSTALLING_TMUX));
     }
 
     #[test]
