@@ -1782,6 +1782,12 @@ describe.each([["install.sh", installer], ["install-cli.sh", installCli]])("scri
     expect(roots("Linux", [], { XDG_DATA_HOME: "/d/", XDG_STATE_HOME: "/s/" })).toEqual(["/d/harness", "/s/harness"]);
   });
 
+  // Spelled as node:path's join spells them: every trailing / dropped, and a run of / read as one.
+  it("Linux, an absolute XDG variable is spelled as the CLI spells it", () => {
+    expect(roots("Linux", [], { XDG_DATA_HOME: "/d//", XDG_STATE_HOME: "//s///" })).toEqual(["/d/harness", "/s/harness"]);
+    expect(roots("Linux", [], { XDG_DATA_HOME: "/a//b/", XDG_STATE_HOME: "/" })).toEqual(["/a/b/harness", "/harness"]);
+  });
+
   it("Linux, a data root of the person's own XDG_DATA_HOME is the switch", () => {
     expect(roots("Linux", [".harness", "data/harness"], { XDG_DATA_HOME: "~/data" })).toEqual(["~/data/harness", "~/.local/state/harness"]);
   });
