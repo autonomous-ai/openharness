@@ -251,7 +251,7 @@ export async function nativeProcessControl(pids: readonly number[], parent: numb
     return parseNativeProcessControl(nativeText(bytes), pids, parent, budget)
   } catch (error) {
     if (probeFailed && await replacedImage(probeFailed, pids, budget)) {
-      throw new IdentityReadUnavailable(REPLACED_PROGRAM)
+      throw new IdentityReadUnavailable('', REPLACED_PROGRAM)
     }
     if (error instanceof IdentityReadUnavailable) throw error
     return nativeUnavailable('the native control probe could not start')

@@ -33,6 +33,7 @@ import { isNameChosen, projectDisplayName, sessionDisplayTitle, type RegisteredS
 import { engineCanFork } from './forkAgent.js'
 import { resumeMode, type ResumeMode } from './resumeCapability.js'
 import type { DshVerdict } from '../dsh/verdict.js'
+import { MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
 import { OTHER_ENGINE_STATES } from '../engines/otherEngines.js'
 import { isOpenclawLocalStopped, OPENCLAW_STATES } from '../engines/openclaw/contract.js'
 
@@ -234,7 +235,7 @@ function frameTitle(s: RegisteredSession): string | null {
  * half of "last used" — when a person last opened it, from any app — and a client sorts by the later
  * of the two.
  */
-const NAMED_STATES = new Set<string>([...Object.values(OPENCLAW_STATES), ...Object.values(OTHER_ENGINE_STATES)])
+const NAMED_STATES = new Set<string>([...Object.values(OPENCLAW_STATES), ...Object.values(OTHER_ENGINE_STATES), MISSING_HELPER, REPLACED_PROGRAM])
 
 export async function agentFrame(
   s: RegisteredSession,
