@@ -7,20 +7,39 @@ export interface QuestionListener {
   end(generation: string): void
   unavailable(code: string): void
 }
-export interface QuestionObservation { ready: Promise<void>; close(): void }
+export interface QuestionAnswerBudget { reserve(payload: unknown): (() => void) | null }
+export interface QuestionObservation {
+  ready: Promise<void>
+  answer(agentId: string, requestId: string, answers: Record<string, string>, current: () => boolean): Promise<boolean>
+  close(): void
+}
+type PendingAnswer = { resolve(ok: boolean): void; release(): void; current(): boolean; timer: ReturnType<typeof setTimeout>; active: boolean }
 
-/** One read-only owner tool connection. Its consumer owns reconnection and never retries an effect here. */
-export function observeQuestions(where: Where, listener: QuestionListener, connect: Connect = connectSocket): QuestionObservation {
+/** One owner-tool question connection. Answers use the observed socket once; its consumer owns reconnection. */
+export function observeQuestions(where: Where, listener: QuestionListener, connect: Connect = connectSocket, budget?: QuestionAnswerBudget): QuestionObservation {
   let socket: ClientSocket | undefined
   let closed = false, complete = false, selected = false, began = false
   let generation: string | undefined
   const requestId = randomUUID()
+  const pending = new Map<string, PendingAnswer>()
+  const settle = (entry: PendingAnswer, ok: boolean): void => {
+    if (!entry.active) return
+    entry.active = false
+    clearTimeout(entry.timer)
+    entry.resolve(ok)
+  }
+  const released = (): void => {
+    for (const entry of pending.values()) { settle(entry, false); entry.release() }
+    pending.clear()
+  }
   let resolve!: () => void, reject!: (error: Error) => void
   const ready = new Promise<void>((done, fail) => { resolve = done; reject = fail })
   const fail = (code: string, notify = true): void => {
     if (closed) return
     closed = true
     clearTimeout(deadline)
+    // A logical timeout or close request does not prove a buffered effect left this socket.
+    for (const entry of pending.values()) settle(entry, false)
     if (!complete) reject(new AgentClientError(code, 'Question observation is unavailable.'))
     socket?.close()
     if (notify) listener.unavailable(code)
@@ -36,7 +55,7 @@ export function observeQuestions(where: Where, listener: QuestionListener, conne
         if (!closed) connected.send(JSON.stringify({ type: 'machine_select', payload: { machineId: where.machineId, localProtocolVersion: 1, tool: true, questionProtocol: 1 } }))
       })
       connected.on('error', () => fail('QUESTION_OBSERVATION_UNAVAILABLE'))
-      connected.on('close', code => fail(code === 1013 ? 'QUESTION_OBSERVATION_BACKPRESSURE' : 'QUESTION_OBSERVATION_UNAVAILABLE'))
+      connected.on('close', code => { released(); fail(code === 1013 ? 'QUESTION_OBSERVATION_BACKPRESSURE' : 'QUESTION_OBSERVATION_UNAVAILABLE') })
       connected.on('message', (raw, binary) => {
         if (closed || binary) return
         let parsed: unknown
@@ -47,6 +66,16 @@ export function observeQuestions(where: Where, listener: QuestionListener, conne
           fail('QUESTION_OBSERVATION_PROTOCOL'); return
         }
         const payload = frame.payload as Record<string, unknown>
+        if (frame.type === 'question_response_result') {
+          const entry = typeof payload.requestId === 'string' ? pending.get(payload.requestId) : undefined
+          if (entry) {
+            settle(entry, payload.ok === true && entry.current())
+            pending.delete(payload.requestId as string)
+            // A correlated reply proves this exact request was read, even for a refusal.
+            entry.release()
+          }
+          return
+        }
         if (frame.type === 'machine_select_error' || frame.type === 'frame_too_large') { fail('QUESTION_OBSERVATION_UNAVAILABLE'); return }
         if (!selected && frame.type === 'connected') {
           if (payload.questionProtocol !== 1) { fail('QUESTION_OBSERVATION_UNSUPPORTED'); return }
@@ -83,5 +112,24 @@ export function observeQuestions(where: Where, listener: QuestionListener, conne
       })
     } catch { fail('QUESTION_OBSERVATION_UNAVAILABLE') }
   })()
-  return { ready, close: () => fail('QUESTION_OBSERVATION_CLOSED', false) }
+  const answer: QuestionObservation['answer'] = async (agentId, questionId, answers, current) => {
+    if (closed || !complete || !current()) return false
+    if (pending.has(questionId)) { console.warn('[questions] QUESTION_ANSWER_BUSY'); return false }
+    const frame = { type: 'question_response', payload: { agentId, requestId: questionId, answers, allowPermissions: false } }
+    const release = budget?.reserve(frame)
+    if (!release) { console.warn('[questions] QUESTION_ANSWER_BACKPRESSURE'); return false }
+    if (closed || !current()) { release(); return false }
+    return new Promise<boolean>(resolve => {
+      const entry: PendingAnswer = { resolve, release, current, active: true, timer: setTimeout(() => {
+        console.warn('[questions] QUESTION_ANSWER_TIMEOUT')
+        // Retire the generation before this question id can be used by another attempt.
+        fail('QUESTION_ANSWER_TIMEOUT')
+      }, 30_000) }
+      entry.timer.unref?.()
+      pending.set(questionId, entry)
+      try { socket!.send(JSON.stringify(frame)) }
+      catch { console.warn('[questions] QUESTION_ANSWER_UNAVAILABLE'); fail('QUESTION_OBSERVATION_UNAVAILABLE') }
+    })
+  }
+  return { ready, answer, close: () => fail('QUESTION_OBSERVATION_CLOSED', false) }
 }

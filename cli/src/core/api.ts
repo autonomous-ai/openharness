@@ -380,8 +380,6 @@ export interface CoreApi {
     view(): Promise<WifiView>
     /** Stop a live agent's turn; resolves whether it stopped. */
     stop(agentId: string): Promise<boolean>
-    /** Answer a live agent's question, never a permission dialog; resolves whether the terminal took it. */
-    answer(agentId: string, requestId: string, answers: Record<string, string>): Promise<boolean>
     /** Start an agent for an installed Store harness in `cwd`, with the device's fixed, safe launch
      *  arguments; refused when another agent works there. */
     create(packageId: string, engine: string, cwd: string): Promise<ForkResult>
@@ -1515,7 +1513,7 @@ export interface WifiPort {
 /** The Wi-Fi device's doors, for a service that is not it: nothing is listed, sent, made or moved. */
 export const WIFI_OFF: CoreApi['wifi'] = {
   view: async () => ({ agents: [], store: [], hasWindow: false }),
-  stop: async () => false, answer: async () => false,
+  stop: async () => false,
   create: async () => ({ ok: false, error: 'UNSUPPORTED' }),
   stepFocus: async () => 'no_app', scroll: () => false, focusApp: () => false, reveal: () => {},
 }

@@ -129,8 +129,6 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
           return lastView
         },
         stop: async (agentId) => (await ask('stop', { agentId })).ok === true,
-        // Not `requestId`: the link's query carries its own under that name.
-        answer: async (agentId, questionRequestId, answers) => (await ask('answer', { agentId, questionRequestId, answers })).ok === true,
         create: async (packageId, engine, cwd) => {
           const { requestId: _id, ...result } = await ask('create', { packageId, engine, cwd })
           return result as unknown as ForkResult
@@ -159,6 +157,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
   const evidencePool = new DeviceEvidencePool()
   const feedPool = new DeviceFeedPool()
   const focusWork = new DeviceWorkBudget(), noticeWork = new DeviceWorkBudget()
+  const answerWork = new DeviceWorkBudget()
   /** The service for this machine, built (again) when the core names another. */
   const build = (machineId: string): WifiPort | null => {
     if (built?.machineId === machineId) return built.port
@@ -169,7 +168,8 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     try {
       requests = (options.start ?? startWifi)(api(machineId), ports, { submit, cancel, evidencePool, feedPool, focusWork,
         peer: { composition: 'services', port: env.PORT, token: options.token },
-        observeQuestions: listener => observeQuestions({ dataDir: options.dataDir, port: env.PORT, machineId }, listener),
+        answerWork,
+        observeQuestions: (listener, budget) => observeQuestions({ dataDir: options.dataDir, port: env.PORT, machineId }, listener, undefined, budget),
         observeSessions: observer => observeDeviceSessions({ dataDir: options.dataDir, port: env.PORT, machineId }, observer),
       })
     } catch (error) {

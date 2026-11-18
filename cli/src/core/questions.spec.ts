@@ -2,6 +2,7 @@ import { parseEngineQuestionPane } from '../engines/screens.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { createQuestionResponse, createQuestions, type QuestionDeps } from './questions.js'
+import { AskQuestionController, questionRequestId } from '../lib/questionController.js'
 
 const agents = new Map<string, RegisteredSession>([
   ['s1', { agentId: 'a1', sessionId: 's1', engine: 'claude' } as RegisteredSession],
@@ -39,6 +40,24 @@ const waiting = (sessionId: string, agentId = sessionId) => ({
 
 describe('questions', () => {
   afterEach(() => vi.restoreAllMocks())
+
+  it.each(['permission', 'capture replacement', 'interpretation replacement', 'confirmed'] as const)('keeps the ordinary response provider guarded for %s', async mode => {
+    const row = { agentId: 'a', sessionId: 's', engine: 'claude', active: true } as RegisteredSession
+    const question = { kind: 'question' as const, question: 'Continue?', rows: [{ number: '1', label: 'Yes', checked: false }],
+      multi: false, typeRow: null, ...(mode === 'permission' ? { permission: true } : {}) }
+    const apply = vi.fn(async () => true), release = vi.fn(), sendKey = vi.fn(async () => true), sendText = vi.fn(async () => true)
+    let reads = 0
+    const controller = new AskQuestionController({ getSession: () => row, questionControlFor: () => ({ apply }),
+      capture: async () => { if (mode === 'capture replacement') row.sessionId = 'replacement'; return 'captured' },
+      readQuestion: async () => { if (mode === 'interpretation replacement') row.sessionId = 'replacement'; return reads++ ? null : question },
+      sendKey, sendText, acquireControl: () => release, wait: async () => {} })
+    const payload = { agentId: 'a', requestId: questionRequestId('s', question), answers: { 'Continue?': 'Yes' }, allowPermissions: false }
+    const result = await new Promise<Record<string, unknown>>(resolve => createQuestionResponse(answer => controller.answer(answer))(payload, resolve))
+    expect(result).toMatchObject(mode === 'confirmed' ? { ok: true } : { error: mode === 'permission' ? 'ANSWER_FAILED' : 'STALE_QUESTION' })
+    expect(apply).toHaveBeenCalledTimes(mode === 'confirmed' ? 1 : 0)
+    expect(sendKey).not.toHaveBeenCalled(); expect(sendText).not.toHaveBeenCalled()
+    expect(release).toHaveBeenCalledOnce()
+  })
 
   it('knows the AskUserQuestion open for a session, and since when; not a permission prompt, not one answered', () => {
     vi.spyOn(Date, 'now').mockReturnValue(1234)

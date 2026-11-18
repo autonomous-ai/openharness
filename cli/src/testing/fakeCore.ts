@@ -82,7 +82,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
     daemon: { command: 'harness', port: 18473, machineId: () => 'machine-1', autonomousEnv: 'prod', ...over.daemon },
     wifi: {
       view: vi.fn(async () => ({ agents: [], store: [], hasWindow: true })),
-      stop: vi.fn(async () => true), answer: vi.fn(async () => true),
+      stop: vi.fn(async () => true),
       create: vi.fn(async () => ({ ok: false as const, error: 'UNSUPPORTED' })),
       stepFocus: vi.fn(async () => 'no_agents' as const), scroll: vi.fn(() => true), focusApp: vi.fn(() => true), reveal: vi.fn(),
       ...over.wifi,

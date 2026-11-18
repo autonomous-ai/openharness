@@ -100,14 +100,13 @@ describe('the Wi-Fi device\'s doors into the core', () => {
     const agents = [agent({ agentId: 'a', sessionId: 's-a', engine: 'codex' })]
     const socket = { hasLocalClient: vi.fn(() => over.window !== false), sendFirstLocal: vi.fn(() => true), onCreateAgent: null }
     const devices = { stepFocus: vi.fn(async () => ({ machineId: 'mac', agentId: 'a' })), scroll: vi.fn() }
-    const answer = vi.fn(async () => ({ ok: true }))
     const stop = vi.fn(async () => true)
     const doors = wifiDoors({
       registry: registryOf(agents), machineId: () => 'mac', displayName: () => 'A', running: () => false,
-      socket: () => (over.socket === false ? null : socket), answer, stop,
+      socket: () => (over.socket === false ? null : socket), stop,
       devices: () => (over.devices === false ? null : devices),
     })
-    return { doors, socket, devices, answer, stop }
+    return { doors, socket, devices, stop }
   }
 
   it('lists the agents and says whether a window is there', async () => {
@@ -116,12 +115,10 @@ describe('the Wi-Fi device\'s doors into the core', () => {
     expect((await doorsWith({ socket: false }).doors.view()).hasWindow).toBe(false)
   })
 
-  it('stops a turn and answers a question, never a permission dialog', async () => {
-    const { doors, answer, stop } = doorsWith()
+  it('stops a turn and refuses unsupported creation', async () => {
+    const { doors, stop } = doorsWith()
     expect(await doors.stop('a')).toBe(true)
     expect(stop).toHaveBeenCalledWith('a')
-    expect(await doors.answer('a', 'r', { q: 'yes' })).toBe(true)
-    expect(answer).toHaveBeenCalledWith({ agentId: 'a', requestId: 'r', answers: { q: 'yes' }, allowPermissions: false })
     expect(await doors.create('p', 'claude', '/x')).toEqual({ ok: false, error: 'UNSUPPORTED' })
   })
 

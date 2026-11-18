@@ -8,7 +8,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import { BackendSocket } from '../backendSocket.js'
 import { attachLocalWsServer, type LocalWsServer } from '../localWsServer.js'
-import { createQuestions } from '../core/questions.js'
+import { createQuestionResponse, createQuestions } from '../core/questions.js'
 import { emptyPorts, type WifiPort } from '../core/api.js'
 import { AutonomousDeviceService } from '../lib/autonomous-device/service.js'
 import { observeQuestions } from '../agentClient/questions.js'
@@ -63,7 +63,7 @@ it('keeps all-agent questions working through real component tool connections, i
   const ports = emptyPorts()
   startWifi(core, ports, {
     service: options => service = new AutonomousDeviceService(options),
-    observeQuestions: listener => observeQuestions({ port: 1, dataDir: dataDir!, machineId: 'machine-1' }, listener, () => new WebSocket(url)),
+    observeQuestions: (listener, budget) => observeQuestions({ port: 1, dataDir: dataDir!, machineId: 'machine-1' }, listener, () => new WebSocket(url), budget),
     ...(unix ? {} : { observeSessions: (options: Parameters<typeof observeDeviceSessions>[1]) =>
       observeDeviceSessions({ port: 1, dataDir: dataDir!, machineId: 'machine-1' }, options, () => new WebSocket(url)) }),
   })
@@ -90,6 +90,14 @@ it('keeps all-agent questions working through real component tool connections, i
   await vi.waitFor(() => expect(watcher.hasDevice('unfocused')).toBe(true))
   expect((await status('unfocused')).openQuestion).toBeNull()
   expect((await status('agent')).openQuestion).toMatchObject({ requestId: 'live' })
+  const answer = vi.fn(async () => ({ ok: true as const }))
+  backend.questionProvider = createQuestionResponse(answer)
+  const answered = await service.request('fixture-device', { type: 'question.answer', requestId: randomUUID(), machineId: 'machine-1',
+    agentId: 'agent', questionRequestId: 'live', answers: { 'Continue?': 'Yes' }, idempotencyKey: randomUUID() })
+  expect(answered.receipt).toMatchObject({ state: 'completed' })
+  expect(answer).toHaveBeenCalledExactlyOnceWith({ agentId: 'agent', requestId: 'live', answers: { 'Continue?': 'Yes' }, allowPermissions: false })
+  expect((await status('agent')).openQuestion).toBeNull()
+  expect(backend.hasLocalClient()).toBe(false)
   peer.drop('device')
   await vi.waitFor(() => expect(watcher.hasDevice('agent')).toBe(false))
 })

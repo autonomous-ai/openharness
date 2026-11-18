@@ -9,7 +9,7 @@
  * (`harness device receipt`, its add-ons) are its routes of the door (core/serviceRoutes.ts).
  *
  * What it asks of the core is `CoreApi`'s Wi-Fi doors, as it would call them in the core's process:
- * the agents as it lists them, a stop, an answer, an agent made for a Store harness, a step along the desk
+ * the agents as it lists them, a stop, an agent made for a Store harness, a step along the desk
  * and a recent turn, as queries; the rest as notices.
  */
 import type { CoreApi, WifiPort } from './api.js'
@@ -24,7 +24,6 @@ export interface WifiLinkDeps {
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 const number = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) ? value : 0)
-const object = (value: unknown): Record<string, unknown> => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {})
 
 export function createWifiLink(deps: WifiLinkDeps) {
   const { core } = deps
@@ -51,9 +50,6 @@ export function createWifiLink(deps: WifiLinkDeps) {
     // carries that, as it did when the service ran in the core's process.
     recent: async ({ agentId, n }) => ({ turns: await core.turns.recent(text(agentId), typeof n === 'number' ? n : 3) }),
     stop: async ({ agentId }) => ({ ok: await core.wifi.stop(text(agentId)) }),
-    // The question's id travels as `questionRequestId`: a query's own `requestId` is the link's.
-    answer: async ({ agentId, questionRequestId, answers }) =>
-      ({ ok: await core.wifi.answer(text(agentId), text(questionRequestId), object(answers) as Record<string, string>) }),
     create: async ({ packageId, engine, cwd }) => ({ ...await core.wifi.create(text(packageId), text(engine), text(cwd)) }),
     stepFocus: async ({ direction, currentAgentId }) => {
       const step = await core.wifi.stepFocus(direction === 'previous' ? 'previous' : 'next', typeof currentAgentId === 'string' ? currentAgentId : undefined)

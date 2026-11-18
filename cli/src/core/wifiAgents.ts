@@ -73,8 +73,6 @@ export interface WifiDoorsDeps extends Pick<WifiAgentsDeps, 'registry' | 'machin
   registry: WifiAgentsDeps['registry'] & Pick<typeof registry, 'resolve'>
   /** The socket, once it exists: the windows on this computer, and how an agent is created. */
   socket(): Pick<BackendSocket, 'hasLocalClient' | 'sendFirstLocal' | 'onCreateAgent'> | null
-  /** A device's answer to a question: never a permission dialog's. */
-  answer(request: { agentId: string; requestId: string; answers: Record<string, string>; allowPermissions: false }): Promise<{ ok: boolean }>
   /** Stop a live agent's turn, as the stop button does. */
   stop(agentId: string): Promise<boolean>
   /** The dials' walk along the desk and their stroke, which the device borrows. */
@@ -89,7 +87,6 @@ export function wifiDoors(deps: WifiDoorsDeps): CoreApi['wifi'] {
   return {
     view: async () => wifiView({ ...deps, hasWindow }),
     stop: (agentId) => deps.stop(agentId),
-    answer: async (agentId, requestId, answers) => (await deps.answer({ agentId, requestId, answers, allowPermissions: false })).ok,
     create: wifiCreate({ registry, machineId, createAgent: () => socket()?.onCreateAgent ?? null }),
     // The dial's walk and stroke: `dial_focus` and `dial_scroll` to the window. Without a window the forward
     // is a no-op, so it says so up front; without the devices there is no desk to walk.

@@ -21,7 +21,7 @@ import { DeviceFeedPool, type DeviceSessionFeed } from '../lib/autonomous-device
 const real = vi.hoisted(() => ({ started: 0, options: null as ServiceProcessOptions | null }))
 vi.mock('./wifi.js', () => ({ startWifi: () => { real.started++ } }))
 vi.mock('./process.js', () => ({ runServiceProcess: (options: ServiceProcessOptions) => { real.options = options; return { stop: () => {} } } }))
-vi.mock('../agentClient/questions.js', () => ({ observeQuestions: vi.fn(() => ({ ready: Promise.resolve(), close: vi.fn() })) }))
+vi.mock('../agentClient/questions.js', () => ({ observeQuestions: vi.fn(() => ({ ready: Promise.resolve(), answer: vi.fn(async () => true), close: vi.fn() })) }))
 
 /** A Wi-Fi port that records what reached it, in order. */
 function wifiPort(machineId: string, log: string[]) {
@@ -308,9 +308,10 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.connect(); f.event({ kind: 'resume' })
     await f.options().requests!.wifi_http({}, { local: true, owner: true })
     const listener = { begin: vi.fn(), question: vi.fn(), end: vi.fn(), unavailable: vi.fn() }
-    const observation = f.adapter().observeQuestions!(listener)
+    const budget = f.adapter().answerWork!
+    const observation = f.adapter().observeQuestions!(listener, budget)
     await observation.ready
-    expect(observeQuestions).toHaveBeenCalledWith({ dataDir: '/data', port: env.PORT, machineId: 'machine-1' }, listener)
+    expect(observeQuestions).toHaveBeenCalledWith({ dataDir: '/data', port: env.PORT, machineId: 'machine-1' }, listener, undefined, budget)
     observation.close()
   })
 
@@ -663,10 +664,6 @@ describe('the Wi-Fi device in the devices\' process', () => {
     expect(await f.api().turns.recent('a', 2)).toEqual([{ recap: 'x' }])
     f.answer('stop', { ok: true })
     expect(await wifi.stop('a')).toBe(true)
-    f.answer('answer', { ok: 'yes' })
-    expect(await wifi.answer('a', 'r', { q: '1' })).toBe(false)
-    // The question's id under a name of its own: the link's query has a `requestId` of its own.
-    expect(f.connection.query).toHaveBeenCalledWith('answer', { agentId: 'a', questionRequestId: 'r', answers: { q: '1' } })
     f.answer('create', { requestId: 'x', ok: true, agentId: 'made' })
     expect(await wifi.create('p', 'claude', '/w')).toEqual({ ok: true, agentId: 'made' })
     f.answer('stepFocus', { step: 'no_app' })

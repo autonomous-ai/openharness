@@ -896,7 +896,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const machineIdNow = (): string => backendRef?.machineId ?? ''
   const wifi = wifiDoors({
     registry, machineId: machineIdNow, packageId: session => { const id = frameParts.read(session.agentId).dsh; return typeof id === 'string' ? id : session.dsh ?? null }, displayName: projectDisplayName, running: (sessionId) => turnStartedAt.has(sessionId),
-    socket: () => backendRef ?? null, answer: (request) => cloudAgents?.answer(request) ?? questions.answer(request),
+    socket: () => backendRef ?? null,
     stop: (agentId) => cancelAgent(agentId, true), devices: () => ports.devices,
   })
   // The cloud agents' doors (core/agents/cloud.ts), handed to the core API now and built once the questions and

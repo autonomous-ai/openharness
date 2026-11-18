@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,11 +14,12 @@ import { devicePeerConnection } from '../lib/autonomous-device/peerConnection.js
 import { devicePeerKey } from '../lib/autonomous-device/peerEndpoint.js'
 import { GatewayDeviceFixture } from '../testing/devicePeer.js'
 import { observeQuestions, type QuestionListener } from '../agentClient/questions.js'
+import type { ClientSocket } from '../agentClient/daemon.js'
 import type { DeviceSessionFeedOptions } from '../lib/autonomous-device/sessionFeed.js'
 import type { createDeviceEvidence } from '../lib/autonomous-device/evidenceReader.js'
 
 vi.mock('../agentClient/questions.js', () => ({ observeQuestions: vi.fn((_where, listener: QuestionListener) => ({
-  ready: Promise.resolve().then(() => { listener.begin('fixture'); listener.end('fixture') }), close: vi.fn(),
+  ready: Promise.resolve().then(() => { listener.begin('fixture'); listener.end('fixture') }), answer: vi.fn(async () => true), close: vi.fn(),
 })) }))
 
 const peers: GatewayDeviceFixture[] = []
@@ -101,6 +103,66 @@ async function joinDevice(core: CoreApi, connId = 'c1'): Promise<void> {
 const KEY = Buffer.alloc(32, 7).toString('base64')
 
 describe('the Wi-Fi device, with the dials', () => {
+  it('answers on its existing owner-tool question socket with the question id and no permission authority', async () => {
+    const actual = await vi.importActual<typeof import('../agentClient/questions.js')>('../agentClient/questions.js')
+    const socket = new EventEmitter() as EventEmitter & ClientSocket
+    const wire: Array<{ type: string; payload: Record<string, unknown> }> = []
+    const frame = (type: string, payload: Record<string, unknown>) => socket.emit('message', { toString: () => JSON.stringify({ type, payload }) }, false)
+    socket.close = vi.fn(() => { socket.emit('close', 1000) })
+    socket.send = text => {
+      const sent = JSON.parse(text); wire.push(sent)
+      if (sent.type === 'machine_select') queueMicrotask(() => frame('connected', { questionProtocol: 1 }))
+      if (sent.type === 'questions_observe') queueMicrotask(() => {
+        frame('questions_observe_result', { requestId: sent.payload.requestId, ok: true, generation: 'g' })
+        frame('questions_begin', { generation: 'g' }); frame('questions_end', { generation: 'g' })
+      })
+    }
+    const core = fakeCore({ dataDir, wifi: { view: vi.fn(async () => ({ agents: [agent], store: [], hasWindow: true })) } })
+    let given!: ConstructorParameters<typeof AutonomousDeviceService>[0]
+    startWifi(core, emptyPorts(), {
+      service: options => { given = options; return new AutonomousDeviceService(options) },
+      observeQuestions: (listener, budget) => actual.observeQuestions({ dataDir, port: 1, machineId: 'machine-1' }, listener,
+        () => { queueMicrotask(() => queueMicrotask(() => socket.emit('open'))); return socket }, budget),
+    })
+    await joinDevice(core)
+    const answer = given.answer('agent', 'the-question-id', { q: 'yes' })
+    await Promise.resolve()
+    expect(wire.filter(frame => frame.type === 'question_response')).toEqual([{ type: 'question_response', payload: {
+      agentId: 'agent', requestId: 'the-question-id', answers: { q: 'yes' }, allowPermissions: false,
+    } }])
+    frame('question_response_result', { requestId: 'the-question-id', ok: true })
+    expect(await answer).toBe(true)
+    expect(wire.filter(frame => frame.type === 'machine_select')).toHaveLength(1)
+  })
+
+  it('does not confirm an answer after its original core or question observation ended', async () => {
+    for (const lost of ['core', 'observation', 'resume', 'stop'] as const) {
+      let listener!: QuestionListener, settle!: (ok: boolean) => void, current!: () => boolean
+      const answer = vi.fn((_agent: string, _id: string, _answers: Record<string, string>, active: () => boolean) => {
+        current = active; return new Promise<boolean>(resolve => { settle = resolve })
+      })
+      const core = fakeCore({ dataDir, wifi: { view: vi.fn(async () => ({ agents: [agent], store: [], hasWindow: true })) } })
+      const ports = emptyPorts(); let given!: ConstructorParameters<typeof AutonomousDeviceService>[0]
+      startWifi(core, ports, { service: options => { given = options; return new AutonomousDeviceService(options) },
+        observeQuestions: heard => { listener = heard; return { ready: Promise.resolve().then(() => { heard.begin('g'); heard.end('g') }), answer, close: vi.fn() } } })
+      await joinDevice(core)
+      answer.mockResolvedValueOnce(false)
+      expect(await given.answer('agent', 'negative', { q: 'yes' })).toBe(false)
+      const pending = given.answer('agent', 'q', { q: 'yes' })
+      expect(current()).toBe(true)
+      if (lost === 'core') ports.wifi!.disconnected()
+      else if (lost === 'observation') listener.unavailable('QUESTION_ANSWER_TIMEOUT')
+      else if (lost === 'resume') await ports.wifi!.resume({ focus: null })
+      else await ports.wifi!.stop()
+      expect(current()).toBe(false)
+      settle(true)
+      expect(await pending).toBe(false)
+      if (lost !== 'resume') expect(await given.answer('agent', 'q', { q: 'yes' })).toBe(false)
+      expect(answer).toHaveBeenCalledTimes(2)
+      await ports.wifi!.stop()
+    }
+  })
+
   it('bounds the existing focus chain and retains its actual charge through disconnect and replacement', async () => {
     const f = started(); await f.hello()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -271,9 +333,9 @@ describe('the Wi-Fi device, with the dials', () => {
     const listeners: QuestionListener[] = []
     const observe = vi.fn((listener: QuestionListener) => {
       listeners.push(listener)
-      if (listeners.length > 1) return { ready: Promise.reject(new Error('connection lost')), close: vi.fn() }
+      if (listeners.length > 1) return { ready: Promise.reject(new Error('connection lost')), answer: vi.fn(async () => false), close: vi.fn() }
       listener.begin('initial'); listener.end('initial')
-      return { ready: Promise.resolve(), close: vi.fn() }
+      return { ready: Promise.resolve(), answer: vi.fn(async () => true), close: vi.fn() }
     })
     const core = fakeCore({ dataDir }), ports = emptyPorts()
     startWifi(core, ports, { observeQuestions: observe })
@@ -294,7 +356,7 @@ describe('the Wi-Fi device, with the dials', () => {
     const observe = vi.fn((listener: QuestionListener) => {
       listeners.push(listener)
       listener.begin(`g${listeners.length}`); listener.end(`g${listeners.length}`)
-      return { ready: Promise.resolve(), close }
+      return { ready: Promise.resolve(), answer: vi.fn(async () => true), close }
     })
     const core = fakeCore({ dataDir }), ports = emptyPorts()
     startWifi(core, ports, { observeQuestions: observe, service: options => service = new AutonomousDeviceService(options) })
@@ -322,7 +384,7 @@ describe('the Wi-Fi device, with the dials', () => {
     let done!: () => void, listener!: QuestionListener, service!: AutonomousDeviceService
     const close = vi.fn(), observe = vi.fn((heard: QuestionListener) => {
       listener = heard
-      return { ready: new Promise<void>(resolve => { done = resolve }), close }
+      return { ready: new Promise<void>(resolve => { done = resolve }), answer: vi.fn(async () => true), close }
     })
     const core = fakeCore({ dataDir }), ports = emptyPorts()
     startWifi(core, ports, { observeQuestions: observe, service: options => service = new AutonomousDeviceService(options) })
@@ -345,7 +407,7 @@ describe('the Wi-Fi device, with the dials', () => {
     let done!: () => void, listener!: QuestionListener
     const close = vi.fn(), observe = vi.fn((heard: QuestionListener) => {
       listener = heard
-      return { ready: new Promise<void>(resolve => { done = resolve }), close }
+      return { ready: new Promise<void>(resolve => { done = resolve }), answer: vi.fn(async () => true), close }
     })
     const core = fakeCore({ dataDir }), ports = emptyPorts()
     startWifi(core, ports, { observeQuestions: observe })
@@ -366,7 +428,7 @@ describe('the Wi-Fi device, with the dials', () => {
     let done!: () => void, listener!: QuestionListener
     const close = vi.fn(), observe = vi.fn((heard: QuestionListener) => {
       listener = heard
-      return { ready: new Promise<void>(resolve => { done = resolve }), close }
+      return { ready: new Promise<void>(resolve => { done = resolve }), answer: vi.fn(async () => true), close }
     })
     const core = fakeCore({ dataDir }), ports = emptyPorts()
     startWifi(core, ports, { observeQuestions: observe })
@@ -384,7 +446,7 @@ describe('the Wi-Fi device, with the dials', () => {
   it('refuses observation while core is absent and closes a synchronously refused observer before hello succeeds', async () => {
     const close = vi.fn(), observe = vi.fn((listener: QuestionListener) => {
       listener.unavailable('QUESTION_OBSERVATION_UNSUPPORTED')
-      return { ready: Promise.reject(new Error('unsupported')), close }
+      return { ready: Promise.reject(new Error('unsupported')), answer: vi.fn(async () => false), close }
     })
     const core = fakeCore({ dataDir }), ports = emptyPorts()
     startWifi(core, ports, { observeQuestions: observe })
@@ -406,7 +468,7 @@ describe('the Wi-Fi device, with the dials', () => {
     const close = vi.fn()
     const observing = vi.mocked(observeQuestions).mockImplementationOnce((_where, heard) => {
       listener = heard
-      return { ready: new Promise<void>(resolve => { done = resolve }), close }
+      return { ready: new Promise<void>(resolve => { done = resolve }), answer: vi.fn(async () => true), close }
     })
     const before = observing.mock.calls.length
     const f = started({ wifi: { view: vi.fn(async () => ({ agents: [agent, { ...agent, agentId: 'unfocused' }], store: [], hasWindow: false })) } })
@@ -714,13 +776,12 @@ describe('the Wi-Fi device, with the dials', () => {
     expect(core.wifi.reveal).toHaveBeenCalledWith('op', 'a')
   })
 
-  it('hands question answers to the core and keeps transcript receipt evidence in the component', async () => {
+  it('keeps transcript receipt evidence in the component and refuses an answer before its observation exists', async () => {
     const core = fakeCore({ dataDir })
     let given: ConstructorParameters<typeof AutonomousDeviceService>[0] | undefined
     startWifi(core, emptyPorts(), { service: (options) => { given = options; return new AutonomousDeviceService(options) } })
     expect(given!.inputConsumed).toBeUndefined()
-    expect(await given!.answer('agent', 'r', { q: 'yes' })).toBe(true)
-    expect(core.wifi.answer).toHaveBeenCalledWith('agent', 'r', { q: 'yes' })
+    expect(await given!.answer('agent', 'r', { q: 'yes' })).toBe(false)
   })
 
   it('gives up a pairing the device asked to give up, over its own session', async () => {

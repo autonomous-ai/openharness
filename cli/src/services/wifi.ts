@@ -24,7 +24,7 @@ import { DeviceResultJournal } from '../lib/autonomous-device/resultJournal.js'
 import { AutonomousDeviceService, type AutonomousDeviceFrame } from '../lib/autonomous-device/service.js'
 import { deviceRefusal, deviceRoutes } from '../lib/autonomous-device/localHttp.js'
 import { createDeviceStore } from '../lib/autonomous-device/storeRuntime.js'
-import { observeQuestions, type QuestionListener, type QuestionObservation } from '../agentClient/questions.js'
+import { observeQuestions, type QuestionAnswerBudget, type QuestionListener, type QuestionObservation } from '../agentClient/questions.js'
 import { createDeviceEvidence, DeviceEvidencePool } from '../lib/autonomous-device/evidenceReader.js'
 import { observeDeviceSessions, DeviceFeedPool, type DeviceSessionFeedOptions, type DeviceSessionFeed } from '../lib/autonomous-device/sessionFeed.js'
 import type { LiveEvent } from '../engines/kit/events.js'
@@ -38,6 +38,7 @@ export { WIFI_FALLBACKS, WIFI_REQUESTS } from '../core/api.js'
 const inlineFocusWork = new DeviceWorkBudget()
 const inlineEvidencePool = new DeviceEvidencePool()
 const inlineFeedPool = new DeviceFeedPool()
+const inlineAnswerWork = new DeviceWorkBudget()
 
 export interface WifiDeps {
   /** Explicit composition: an absent service token never silently creates an unrelated peer authority. */
@@ -52,9 +53,10 @@ export interface WifiDeps {
   evidencePool?: DeviceEvidencePool
   feedPool?: DeviceFeedPool
   focusWork?: DeviceWorkBudget
+  answerWork?: DeviceWorkBudget
   observeSessions?: (options: DeviceSessionFeedOptions) => DeviceSessionFeed
   /** Same authenticated local tool transport in an external process and explicit inline mode. */
-  observeQuestions?: (listener: QuestionListener) => QuestionObservation
+  observeQuestions?: (listener: QuestionListener, budget: QuestionAnswerBudget) => QuestionObservation
 }
 
 
@@ -146,7 +148,12 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       return true
     },
     stop: (agentId) => core.wifi.stop(agentId),
-    answer: (agentId, requestId, answers) => core.wifi.answer(agentId, requestId, answers),
+    answer: async (agentId, requestId, answers) => {
+      const original = observation, epoch = coreEpoch, generation = questionEpoch
+      const current = () => !stopped && coreConnected && coreEpoch === epoch && questionEpoch === generation && observation === original
+      if (!original || !current()) return false
+      return await original.answer(agentId, requestId, answers, current) && current()
+    },
     recent: (agentId, n) => core.turns.recent(agentId, n),
     fullText: () => fullText,
     emit: (frame, deviceId) => emit(frame, deviceId),
@@ -279,14 +286,15 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       end: generation => { if (questionEpoch === epoch) service.endQuestions(generation) },
       unavailable: code => unavailable(epoch, code),
     }
-    const next = deps.observeQuestions ? deps.observeQuestions(listener) : observeQuestions({
+    const budget = deps.answerWork ?? inlineAnswerWork
+    const next = deps.observeQuestions ? deps.observeQuestions(listener, budget) : observeQuestions({
       dataDir: core.dataDir, port: core.daemon.port, machineId: core.daemon.machineId(),
-    }, listener)
+    }, listener, undefined, budget)
     const ready = next.ready.then(() => {
       if (questionEpoch !== epoch) throw new Error('The original question observation ended')
       retries = 0
     })
-    if (questionEpoch === epoch) observation = { ready, close: () => next.close() }
+    if (questionEpoch === epoch) observation = { ready, answer: (...args) => next.answer(...args), close: () => next.close() }
     else next.close()
     void ready.catch(() => unavailable(epoch, 'QUESTION_OBSERVATION_UNAVAILABLE'))
     return ready

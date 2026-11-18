@@ -19,7 +19,7 @@ import { funnelFor } from '../core/turns/funnel.js'
 
 const peers: GatewayDeviceFixture[] = []
 
-vi.mock('../agentClient/questions.js', () => ({ observeQuestions: vi.fn(() => ({ ready: Promise.resolve(), close: vi.fn() })) }))
+vi.mock('../agentClient/questions.js', () => ({ observeQuestions: vi.fn(() => ({ ready: Promise.resolve(), answer: vi.fn(async () => false), close: vi.fn() })) }))
 vi.mock('../lib/autonomous-device/peerConnection.js', () => ({ devicePeerConnection: vi.fn(options => {
   const peer = new GatewayDeviceFixture(options); peers.push(peer); return peer
 }) }))
