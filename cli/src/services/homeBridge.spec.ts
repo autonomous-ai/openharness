@@ -4,7 +4,7 @@
  * the Store's count are handed in; tmux is a private server of the test's own.
  */
 import { createHash } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
@@ -248,6 +248,42 @@ describe('the home bridge service', () => {
     await settle()
     expect(readdirSync(join(h.oldHome, 'connections'))).toEqual([])
     // The daemon's own socket and route are served all the same.
+    expect(sameFile(oldSocketLink(h), h.socket)).toBe(true)
+    bridge.stop()
+  })
+
+  it('with the account\'s own runtime folder an old hook running the new hook script looks there: the socket is linked there too, and goes with the bridge', async () => {
+    fakeInterval()
+    const h = movedHome()
+    const run = join(h.home, 'run')
+    mkdirSync(run, { mode: 0o700 })
+    const inRun = join(run, 'harness', hashed(h.bridge.oldDataDir))
+    let users = [row({ name: 'claude' })]
+    const { bridge } = start(h, { environment: { HOME: h.home, HARNESS_CONNECTIONS_DIR: h.connections, XDG_RUNTIME_DIR: run }, rows: () => users })
+    await settle()
+    expect(sameFile(join(inRun, SOCKET), h.socket)).toBe(true)
+    expect(statSync(inRun).mode & 0o777).toBe(0o700)
+    // An old hook script still looks in the state root's short folder.
+    expect(sameFile(oldSocketLink(h), h.socket)).toBe(true)
+    users = []
+    await vi.advanceTimersByTimeAsync(CHECK_MS)
+    await settle()
+    expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(false)
+    expect(existsSync(inRun)).toBe(false)
+    expect(lstatSync(h.socket).nlink).toBe(1)
+    bridge.stop()
+  })
+
+  it.each<[string, (run: string) => string]>([
+    ['open to others', (run) => { chmodSync(run, 0o750); return run }],
+    ['a link to the account\'s own', (run) => { const link = `${run}-link`; symlinkSync(run, link); return link }],
+  ])('a runtime folder %s is none: no client looks there, and nothing is linked in it', async (_, named) => {
+    const h = movedHome()
+    const run = join(h.home, 'run')
+    mkdirSync(run, { mode: 0o700 })
+    const { bridge } = start(h, { environment: { HOME: h.home, HARNESS_CONNECTIONS_DIR: h.connections, XDG_RUNTIME_DIR: named(run) }, rows: () => [row({ name: 'claude' })] })
+    await settle()
+    expect(readdirSync(run)).toEqual([])
     expect(sameFile(oldSocketLink(h), h.socket)).toBe(true)
     bridge.stop()
   })
