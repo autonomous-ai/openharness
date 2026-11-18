@@ -178,6 +178,11 @@ int main(void) {
     ui_question_close("agent","question-request");
     assert(!s.voice_open && s.view==HOME && abort_requested && queued.kind==A_VOICE_ABORT);
     finish_audio(); ui_voice_error("Transcription failed"); assert(s.view==HOME && !s.q.speech_error[0]);
+    // Closed while voice is still starting: the start queued behind it finds its generation gone and records nothing.
+    s.view=QUESTION; s.q.valid=true; question_voice.revision=s.q.revision; dispatch(question_voice);
+    action_t start=queued; assert(s.voice_open && s.voice_start_pending);
+    ui_question_close("agent","question-request"); assert(!s.voice_open && s.view==HOME);
+    work(start); assert(!recording && starts==3);
     reset(); carry.active=true; strcpy(carry.id,"carry-test"); carry.deadline=now+100;
     dispatch((action_t){.kind=A_VOICE,.value=3,.id="agent",.text="wrong"});
     assert(!s.voice_open && !starts);
