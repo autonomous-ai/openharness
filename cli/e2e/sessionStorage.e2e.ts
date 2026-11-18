@@ -2,7 +2,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -13,11 +13,44 @@ import type { SessionStorage } from '../src/lib/sessionStorage.js'
 import type { StoredGridLaunch } from '../src/lib/sessionStorageWire.js'
 import { LocalClient } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
+import { processTable } from '../src/testing/spawnedRuns.js'
+import { rootProcesses } from '../src/testing/rootProcesses.js'
 
 let root: string
 let daemon: IsolatedDaemon | undefined
 const stores: SessionStorage[] = []
 const clients: LocalClient[] = []
+const children = new Map<ChildProcess, Promise<unknown>>()
+const ownedPids = new Set<number>(), ownedGroups = new Set<number>()
+function ownChild(child: ChildProcess): Promise<unknown> {
+  if (child.pid) ownedPids.add(child.pid)
+  const settled = Promise.all([once(child, 'exit'), once(child, 'close'), child.connected ? once(child, 'disconnect') : Promise.resolve()])
+  void settled.catch(() => {})
+  children.set(child, settled)
+  return settled
+}
+async function closeStorage(storage: SessionStorage): Promise<void> {
+  const child = (storage as unknown as { child?: ChildProcess }).child
+  const settled = child ? children.get(child) ?? ownChild(child) : undefined
+  const results = await Promise.allSettled([storage.close(), settled])
+  const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+  if (errors.length) throw new AggregateError(errors, 'Storage child cleanup did not settle')
+}
+function rememberDaemon(): void {
+  if (!daemon) return
+  for (const child of (daemon as unknown as { groups: Set<ChildProcess> }).groups) if (child.pid) {
+    ownedPids.add(child.pid); ownedGroups.add(child.pid)
+  }
+  const table = processTable()
+  let added: boolean
+  do {
+    added = false
+    for (const row of table) if (ownedPids.has(row.ppid) && !ownedPids.has(row.pid)) {
+      ownedPids.add(row.pid); added = true
+    }
+  } while (added)
+  if (daemon.corePid()) ownedPids.add(daemon.corePid()!)
+}
 const bundle = () => {
   const file = process.env.E2E_BUNDLE_PATH
   if (!file) throw new Error('Session storage acceptance requires an exact packaged artifact')
@@ -32,9 +65,25 @@ beforeEach(() => {
 })
 afterEach(async () => {
   for (const client of clients.splice(0)) client.close()
-  await daemon?.close(); daemon = undefined
-  for (const storage of stores.splice(0)) await storage.close()
+  const errors: unknown[] = []
+  try { rememberDaemon() } catch (error) { errors.push(error) }
+  for (const child of children.keys()) if (child.exitCode === null && child.signalCode === null) {
+    try { child.kill('SIGKILL') } catch (error) { errors.push(error) }
+  }
+  const cleanup = await Promise.allSettled([daemon?.close(), ...stores.splice(0).map(closeStorage), ...children.values()])
+  for (const result of cleanup) if (result.status === 'rejected') errors.push(result.reason)
+  try {
+    const table = processTable()
+    expect(table.filter(row => ownedPids.has(row.pid) || ownedGroups.has(row.pgid)).map(row => ({ pid: row.pid, pgid: row.pgid }))).toEqual([])
+    if (daemon) {
+      expect(rootProcesses(daemon.root, table).all).toEqual([])
+      expect(existsSync(daemon.tmux.socket)).toBe(false)
+      expect(existsSync(daemon.root)).toBe(false)
+    }
+  } catch (error) { errors.push(error) }
+  daemon = undefined; children.clear(); ownedPids.clear(); ownedGroups.clear()
   vi.unstubAllEnvs()
+  if (errors.length) throw new AggregateError(errors, 'Packaged storage cleanup did not settle')
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -82,8 +131,8 @@ describe('packaged required session storage', () => {
         } finally { await publication.discard() }
       }))
       const child = (storage as unknown as { child: ChildProcess }).child
-      const exited = once(child, 'exit')
-      child.kill('SIGKILL'); await exited
+      const settled = ownChild(child)
+      child.kill('SIGKILL'); await settled
       // The replacement inherits the original inode, even though publication replaced its path.
       expect((await storage.resolveSelected(original)).apiKey === key).toBe(true)
       const next = await storage.read({ kind: 'registry' })
@@ -91,7 +140,7 @@ describe('packaged required session storage', () => {
       expect(JSON.stringify(next).includes(key)).toBe(false)
       expect(readFileSync(join(storage.root, 'registry.json'), 'utf8').includes(key)).toBe(true)
     } finally { await source.release() }
-    await storage.close()
+    await closeStorage(storage)
     const restarted = await storageAt(file, storage.root)
     const image = await restarted.read({ kind: 'registry' })
     if (image.state !== 'image' || !image.json) throw new Error('Restart image unavailable')
@@ -114,11 +163,13 @@ describe('packaged required session storage', () => {
         [WORKER_COHORT_ENV]: `${process.pid}:${WORKER_CONTRACT - 1}:${WORKER_PLAN}:${fingerprint(selected)}` },
       stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true,
     })
+    const settled = ownChild(child)
     let ready = false, expired = false
     child.on('message', () => { ready = true })
     const timer = setTimeout(() => { expired = true; child.kill('SIGKILL') }, 5_000)
     try {
       const [code] = await once(child, 'exit')
+      await settled
       expect(expired).toBe(false)
       expect(code).toBe(2)
       expect(ready).toBe(false)
@@ -145,6 +196,7 @@ describe('packaged required session storage', () => {
     }, 60_000, 250)
     expect(JSON.stringify(first).includes(key)).toBe(false)
     expect(readFileSync(join(daemon.dataDir, 'registry.json'), 'utf8').includes(key)).toBe(true)
+    rememberDaemon()
     client.close(); await daemon.stop(); await daemon.tmux.run('kill-server')
     await daemon.start()
     client = await LocalClient.connect(daemon); clients.push(client)
