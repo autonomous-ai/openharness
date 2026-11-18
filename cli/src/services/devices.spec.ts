@@ -1,3 +1,4 @@
+import { serviceSession } from '../testing/sessionSnapshot.js'
 import { deviceDeskFor, publishDeviceDesk } from './deviceDesk.js'
 // The devices (services/devices.ts): what the core tells them reaches the dial and the window bridges, what
 // they say reaches the core through its API alone, and the fleet failing costs the dial nothing.
@@ -1864,7 +1865,7 @@ describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping
     port.desk(['a1', 'cloud_1'], true)
     port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: ['a1', 'cloud_1'], panes: 2 }], tiles: [] })
     vi.mocked(core.agents.advertised).mockReturnValue([{ agentId: 'a1', registeredAt: 1, engine: 'claude' }] as RegisteredSession[])
-    core.agents.cloud = () => [{ agentId: 'cloud_1', registeredAt: 2, engine: 'fo' }] as unknown as RegisteredSession[]
+    core.agents.serviceSessions = () => [serviceSession('cloud_1', { registeredAt: 2, engine: 'fo' })]
     seen.fleet!.fail = true
     expect(await deviceDeskFor(dataDir, core.machine.id())!.stepFocus('next', 'a1', () => true)).toEqual(expect.objectContaining({ agentId: 'cloud_1' }))
   })

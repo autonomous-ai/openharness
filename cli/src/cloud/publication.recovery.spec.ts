@@ -1,3 +1,5 @@
+import { cloudPresentation } from '../lib/cloudAgents.js'
+import { type SessionOwnerCore as CloudCore } from '../lib/sessionOwnerWire.js'
 import { createQuestionPresentations } from '../core/questions.js'
 import { cloudFactory } from '../testing/sessionFactories.js'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -5,8 +7,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
 import { startCloudService } from './service.js'
-import { createCloudAgents } from '../core/agents/cloud.js'
-import type { CloudCore } from '../core/api.js'
+import { createCloudOwners } from '../testing/cloudOwners.js'
+
 import type { CloudAdapter } from './types.js'
 
 const diskFault = vi.hoisted(() => ({ pending: false, intentRename: false, failWrites: 0, hits: 0, writes: 0 }))
@@ -42,7 +44,7 @@ function fixture() {
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }
   let service: ReturnType<typeof startCloudService>
   const native = new Set<string>()
-  const freshCore = () => createCloudAgents({ ownsFactory: cloudFactory, native: id => native.has(id), port: () => service?.port ?? null, clients, questions: createQuestionPresentations(), log: () => {} })
+  const freshCore = () => createCloudOwners({ ownsFactory: cloudFactory, native: id => native.has(id), port: () => service?.port ?? null, clients, questions: createQuestionPresentations(), log: () => {} })
   let core = freshCore(), disconnected = false, lostAck = false, publicationCalls = 0, holdAcks = false
   const heldAcks: Array<() => void> = []
   let heldQuestion: 'ask' | 'unask' | null = null
@@ -50,12 +52,13 @@ function fixture() {
   let poll: (() => void) | undefined
   const rejected = () => { const result = Promise.reject(new Error('fixture disconnect')); void result.catch(() => {}); return result }
   const doors: CloudCore = {
-    checkpoint: () => disconnected ? rejected() : core.doors.checkpoint(),
-    publish: (rows, cards) => {
-      publicationCalls++
+    begin: value => { publicationCalls++; if (disconnected) return rejected(); beforePublish(); return core.doors.begin(value) },
+    append: value => disconnected ? rejected() : core.doors.append(value),
+    cancel: transfer => core.doors.cancel(transfer),
+    checkpoint: factory => disconnected ? rejected() : core.doors.checkpoint(factory),
+    end: transfer => {
       if (disconnected) return rejected()
-      beforePublish()
-      const result = core.doors.publish(rows, cards)
+      const result = core.doors.end(transfer)
       if (holdAcks) return new Promise(resolve => { heldAcks.push(() => resolve(result)) })
       return lostAck ? rejected() : result
     },
@@ -86,7 +89,7 @@ function fixture() {
     async create() {
       service.republish()
       expect(await service.port.create({ engine: 'devin-cloud', prompt: 'fixture' })).toHaveProperty('agent')
-      await vi.waitFor(() => expect(core.frames()[0]?.cloud.state).toBe('working'))
+      await vi.waitFor(() => expect(core.frames()[0]?.cloud.state).toBe('working')); await new Promise<void>(resolve => setImmediate(resolve))
       return core.frames()[0].id
     },
     async complete() {
@@ -99,10 +102,10 @@ function fixture() {
     releaseAck() { const next = heldAcks.shift(); expect(next).toBeDefined(); next!() },
     pendingAcks: () => heldAcks.length,
     releaseAll() { holdAcks = false; heldQuestion = null; for (const release of heldAcks.splice(0)) release() },
-    disconnect() { disconnected = true },
+    disconnect() { disconnected = true; core.disconnect() },
     dropAck() { lostAck = true },
-    reconnect() { disconnected = lostAck = false; return service.republish() },
-    restartComponent() { service.stop(); service = makeService() },
+    async reconnect() { disconnected = lostAck = false; core.reconnect(); await service.republish(); await new Promise<void>(resolve => setImmediate(resolve)) },
+    restartComponent() { service.stop(); core.disconnect(); service = makeService() },
     restartDaemon() { service.stop(); core = freshCore(); service = makeService() },
     nativeClaim(id: string) { native.add(id); core.nativeEntered(id, '') },
     nativeRetire(id: string) { native.delete(id) },
@@ -132,7 +135,7 @@ it('adopts a completion with a lost acknowledgement before applying a later rena
   try {
     const id = await f.create(); f.dropAck(); await f.complete()
     expect(f.completions()).toHaveLength(1)
-    await f.service.port.rename(id, 'Renamed', f.row())
+    await f.service.port.rename(id, 'Renamed', cloudPresentation(f.row()))
     f.restartComponent(); f.reconnect()
     await vi.waitFor(() => expect(f.core.frames()[0]?.name).toBe('Renamed'))
     expect(f.completions()).toHaveLength(1)
@@ -148,7 +151,7 @@ it.each(['missing', 'corrupt', 'unmatched', 'damaged checkpoint'] as const)('hol
     f.restartComponent(); f.reconnect()
     await vi.waitFor(async () => expect(await f.service.requests.cloud_agents({}, { owner: true, local: true }))
       .toMatchObject({ error: 'CLOUD_PUBLICATION_RECOVERY_REQUIRED' }))
-    expect(await f.service.port.rename(id, 'Must not be applied', f.row())).toMatchObject({ error: 'CLOUD_PUBLICATION_RECOVERY_REQUIRED' })
+    expect(await f.service.port.rename(id, 'Must not be applied', cloudPresentation(f.row()))).toMatchObject({ error: 'CLOUD_PUBLICATION_RECOVERY_REQUIRED' })
     f.restartComponent(); f.reconnect()
     await vi.waitFor(async () => expect(await f.service.requests.cloud_agents({}, { owner: true, local: true }))
       .toMatchObject({ error: 'CLOUD_PUBLICATION_RECOVERY_REQUIRED' }))
@@ -166,7 +169,7 @@ it.each(['reconnect', 'publication'] as const)('keeps native-owner recovery visi
     f.nativeClaim(id); f.nativeRetire(id)
     expect(await f.core.doors.checkpoint()).toEqual({ ok: false, error: 'SESSION_OWNER_CONFLICT' })
     if (trigger === 'reconnect') f.reconnect()
-    else await f.service.port.rename(id, 'Saved provider name', f.row())
+    else await f.service.port.rename(id, 'Saved provider name', cloudPresentation(f.row()))
     const held = async () => expect(await f.service.requests.cloud_agents({}, { owner: true, local: true }))
       .toMatchObject({ error: 'CLOUD_PUBLICATION_RECOVERY_REQUIRED', detail: expect.stringContaining('harness start --restart') })
     await vi.waitFor(held)
@@ -190,7 +193,7 @@ it.each(['before send', 'after apply'] as const)('keeps optimistic working out o
     void f.service.port.deliver(id, 'Next work')
     await vi.waitFor(() => expect(f.adapter.send).toHaveBeenCalledOnce())
     // A concurrent ordinary save must not make the other operation's optimistic state durable either.
-    await f.service.port.rename(id, 'After crash', f.row())
+    await f.service.port.rename(id, 'After crash', cloudPresentation(f.row()))
     const file = join(f.dataDir, 'cloud/harnesses.json')
     expect(JSON.parse(readFileSync(file, 'utf8')).harnesses[0].harness.state).toBe('idle')
     f.restartComponent(); f.reconnect()
@@ -255,9 +258,9 @@ it.each(['accepted', 'pending'] as const)('skips redundant writes/publications a
   const f = fixture()
   try {
     const id = await f.create(), file = join(f.dataDir, 'cloud/harnesses.json')
-    if (match === 'accepted') await f.service.port.rename(id, f.core.frames()[0].name, f.row())
+    if (match === 'accepted') await f.service.port.rename(id, f.core.frames()[0].name, cloudPresentation(f.row()))
     const saved = JSON.parse(readFileSync(file, 'utf8'))
-    expect(saved.publication[match].fingerprint).toBe(await f.core.doors.checkpoint())
+    expect(saved.publication[match].fingerprint).toBe((await f.core.doors.checkpoint() as { fingerprint: string }).fingerprint)
     if (match === 'accepted') expect(saved.publication.pending).toBeNull()
     else expect(saved.publication.accepted.fingerprint).not.toBe(saved.publication.pending.fingerprint)
     const before = { writes: diskFault.writes, publications: f.publicationCalls(), bytes: readFileSync(file, 'utf8') }
@@ -345,10 +348,10 @@ it('saves an idle changed rename and its publication intent in one synchronous w
   try {
     const id = await f.create(); await f.reconnect()
     const before = diskFault.writes
-    expect(await f.service.port.rename(id, 'Combined rename', f.row())).toHaveProperty('agent.name', 'Combined rename')
+    expect(await f.service.port.rename(id, 'Combined rename', cloudPresentation(f.row()))).toHaveProperty('agent.name', 'Combined rename')
     expect(diskFault.writes - before).toBe(1)
     expect(f.row().name).toBe('Combined rename')
-    expect(f.core.frames()[0].name).toBe('Combined rename')
+    await vi.waitFor(() => expect(f.core.frames()[0].name).toBe('Combined rename'))
   } finally { f.close() }
 })
 
@@ -384,7 +387,7 @@ it('keeps queued provider saves before their later intents and combines only the
     await vi.waitFor(() => expect(f.publicationCalls() - publications).toBe(3))
     expect(diskFault.writes - before).toBe(5)
     f.releaseAll(); await new Promise<void>(resolve => setImmediate(resolve)) // same post-cycle quiesce as the frozen relay workload
-    expect(await f.service.port.rename(id, 'Settled rename', f.row())).toHaveProperty('agent.name', 'Settled rename')
+    expect(await f.service.port.rename(id, 'Settled rename', cloudPresentation(f.row()))).toHaveProperty('agent.name', 'Settled rename')
     expect(diskFault.writes - before).toBe(6) // six per cycle+rename means96 for the frozen16-cycle workload
     expect(f.publicationCalls() - publications).toBe(4)
   } finally { f.releaseAll(); f.close() }
@@ -399,10 +402,11 @@ it('commits the provider snapshot and pending intent before the first core effec
       const saved = JSON.parse(readFileSync(join(f.dataDir, 'cloud/harnesses.json'), 'utf8'))
       observed.push({ writes: diskFault.writes - before, provider: saved.harnesses[0], journal: saved.publication })
     })
-    await f.service.port.rename(id, 'Durable before send', f.row())
+    await f.service.port.rename(id, 'Durable before send', cloudPresentation(f.row()))
+    await vi.waitFor(() => expect(f.core.frames()[0].name).toBe('Durable before send'))
     expect(observed).toEqual([expect.objectContaining({ writes: 1,
       provider: expect.objectContaining({ harness: expect.objectContaining({ name: 'Durable before send' }), remote: { id: 'fixture' } }),
-      journal: expect.objectContaining({ pending: expect.objectContaining({ fingerprint: await f.core.doors.checkpoint() }) }),
+      journal: expect.objectContaining({ pending: expect.objectContaining({ fingerprint: (await f.core.doors.checkpoint() as { fingerprint: string }).fingerprint }) }),
     })])
   } finally { f.close() }
 })
@@ -412,7 +416,7 @@ it.each(['temporary write', 'atomic rename'] as const)('saves the completed prov
   try {
     const id = await f.create(); await f.reconnect()
     // A no-change save materializes the current accepted-only journal; ACK itself performs no write.
-    await f.service.port.rename(id, f.row().name, f.row())
+    await f.service.port.rename(id, f.row().name, cloudPresentation(f.row()))
     const file = join(f.dataDir, 'cloud/harnesses.json'), prior = JSON.parse(readFileSync(file, 'utf8')).publication
     const before = diskFault.writes, publications = f.publicationCalls(), hits = diskFault.hits
     if (failure === 'temporary write') diskFault.pending = true; else diskFault.intentRename = true
@@ -439,7 +443,7 @@ it('keeps the prior atomic file and reports failure when both the intent and fal
     const file = join(f.dataDir, 'cloud/harnesses.json'), prior = readFileSync(file, 'utf8')
     const before = diskFault.writes, publications = f.publicationCalls()
     diskFault.failWrites = 2
-    await expect(f.service.port.rename(id, 'Not durable', f.row())).rejects.toThrow('fixture provider write failed')
+    await expect(f.service.port.rename(id, 'Not durable', cloudPresentation(f.row()))).rejects.toThrow('fixture provider write failed')
     expect(diskFault.writes - before).toBe(2)
     expect(readFileSync(file, 'utf8')).toBe(prior)
     expect(f.publicationCalls()).toBe(publications)
@@ -459,7 +463,7 @@ it('does not append a failed provider save behind an in-flight publication', asy
     expect(await f.service.port.deliver(id, 'Next queued work')).toEqual({ ok: true })
     const publications = f.publicationCalls(), before = diskFault.writes, oldName = f.row().name
     diskFault.failWrites = 1
-    await expect(f.service.port.rename(id, 'Never append', f.row())).rejects.toThrow('fixture provider write failed')
+    await expect(f.service.port.rename(id, 'Never append', cloudPresentation(f.row()))).rejects.toThrow('fixture provider write failed')
     expect(diskFault.writes - before).toBe(1)
     expect(f.row().name).toBe(oldName)
     f.releaseAll(); await new Promise<void>(resolve => setImmediate(resolve))
@@ -474,11 +478,11 @@ it.each(['disconnected', 'unavailable'] as const)('saves before append when publ
     const id = await f.create(); await f.reconnect()
     if (state === 'disconnected') { f.disconnect(); f.service.disconnected() }
     else {
-      f.dropAck(); await f.service.port.rename(id, 'Lost acknowledgement', f.row())
+      f.dropAck(); await f.service.port.rename(id, 'Lost acknowledgement', cloudPresentation(f.row()))
       await vi.waitFor(async () => expect(await f.service.requests.cloud_agents({}, { owner: true, local: true })).toMatchObject({ error: 'CLOUD_PUBLICATION_UNAVAILABLE' }))
     }
     const publications = f.publicationCalls(), before = diskFault.writes
-    expect(await f.service.port.rename(id, 'Saved offline', f.row())).toHaveProperty('agent.name', 'Saved offline')
+    expect(await f.service.port.rename(id, 'Saved offline', cloudPresentation(f.row()))).toHaveProperty('agent.name', 'Saved offline')
     expect(diskFault.writes - before).toBe(1)
     expect(f.publicationCalls()).toBe(publications)
     expect(f.row().name).toBe('Saved offline')
@@ -492,7 +496,7 @@ it('retains a no-change provider save without adding a publication', async () =>
   try {
     const id = await f.create(); await f.reconnect()
     const before = diskFault.writes, publications = f.publicationCalls()
-    await f.service.port.rename(id, f.row().name, f.row())
+    await f.service.port.rename(id, f.row().name, cloudPresentation(f.row()))
     expect(diskFault.writes - before).toBe(1)
     expect(f.publicationCalls()).toBe(publications)
     expect(JSON.parse(readFileSync(join(f.dataDir, 'cloud/harnesses.json'), 'utf8')).publication.pending).toBeNull()
@@ -533,7 +537,7 @@ it.each(['ask', 'unask'] as const)('does not append a failed provider save behin
     expect(f.pendingAcks()).toBe(1)
     const before = diskFault.writes, publications = f.publicationCalls(), oldName = f.row().name
     diskFault.failWrites = 1
-    await expect(f.service.port.rename(id, 'Failed while question waits', f.row())).rejects.toThrow('fixture provider write failed')
+    await expect(f.service.port.rename(id, 'Failed while question waits', cloudPresentation(f.row()))).rejects.toThrow('fixture provider write failed')
     expect(diskFault.writes - before).toBe(1)
     expect(f.row().name).toBe(oldName)
     f.releaseAll(); await new Promise<void>(resolve => setImmediate(resolve))

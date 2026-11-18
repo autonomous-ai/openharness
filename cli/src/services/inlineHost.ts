@@ -23,8 +23,11 @@
  *   again.
  */
 import { FAIL, readFallback, ServiceUnavailableError, SERVICE_REQUESTS_MAX, type Asker, type CoreApi, type CorePorts, type PortFallbacks, type ServiceRequest, type ServiceRequests } from '../core/api.js'
+import type { SessionOwnerCore } from '../lib/sessionOwnerWire.js'
 
 export interface ServiceHostOptions {
+  /** Composition alone binds a session door to this exact existing stop owner. Components receive only the bound door. */
+  bindOwners?: (service: string, identity: object, current: () => boolean) => SessionOwnerCore | undefined
   /** Failures within `windowMs` that switch a service off. */
   maxFailures?: number
   windowMs?: number
@@ -227,7 +230,7 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
         // The existing stop owner is this instance's authority, including while its constructor runs.
         stoppers.set(name, stopOwner)
         inject(name)
-        answers = start({ ...core, clients: { ...core.clients, sendWindow: delivery =>
+        answers = start({ ...core, owners: options.bindOwners?.(name, stopOwner, () => stoppers.get(name) === stopOwner && !off.has(name)), clients: { ...core.clients, sendWindow: delivery =>
           stoppers.get(name) === stopOwner && !off.has(name) ? core.clients.sendWindow(delivery) : false,
         } }, staging)
       } catch (error) {

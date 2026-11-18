@@ -1,13 +1,14 @@
+import type { ServiceSessionRow } from '../lib/sessionOwnerWire.js'
 import { describe, expect, it, vi } from 'vitest'
 import { readSessions, type CoreApiDeps, type ReadRecord, type SessionReadHeader, type SessionReadScope, type SessionReadValue } from './api.js'
 import type { RegisteredSession } from '../lib/registry.js'
-import { snapshotRow, snapshotMember } from '../testing/sessionSnapshot.js'
+import { snapshotRow, snapshotMember, serviceSession } from '../testing/sessionSnapshot.js'
 
 type Event = ReadRecord<SessionReadHeader, SessionReadValue>
 const row = (id: string) => ({ ...snapshotRow(id).session, defaultName: id }) as RegisteredSession
 function fixture(count: number, shown: number) {
   const members = new Map(Array.from({ length: count }, (_, i) => [`a${i}`, row(`a${i}`)]))
-  const cloud = new Map<string, RegisteredSession>()
+  const cloud = new Map<string, ServiceSessionRow>()
   const available = new Set([...members.keys()].slice(0, shown))
   const deps = {
     registry: {
@@ -16,7 +17,7 @@ function fixture(count: number, shown: number) {
       list: () => { throw new Error('WHOLE_REGISTRY_ARRAY') },
       advertised: () => { throw new Error('WHOLE_ADVERTISED_ARRAY') },
     } as unknown as CoreApiDeps['registry'],
-    cloudRead: { ids: () => cloud.keys(), row: (id: string) => cloud.get(id) },
+    serviceRead: { ids: () => cloud.keys(), row: (id: string) => cloud.get(id) },
     facts: vi.fn((value: RegisteredSession) => ({ displayName: value.defaultName!, terminalAvailable: available.has(value.agentId), parts: {} })),
     runtimeProfile: () => null, turns: { running: () => false } as unknown as CoreApiDeps['turns'],
     machine: { id: () => 'machine', computerId: () => 'computer', name: () => 'Desk' },
@@ -73,16 +74,16 @@ describe('existing registered and advertised membership scopes', () => {
 
   it.each(['registered', 'advertised'] as const)('keeps current Cloud row semantics and captured append order for %s', async scope => {
     const t = fixture(2, 1)
-    t.cloud.set('remote-a', row('remote-a')); t.cloud.set('remote-b', row('remote-b'))
+    t.cloud.set('remote-a', serviceSession('remote-a')); t.cloud.set('remote-b', serviceSession('remote-b'))
     const events = await t.capture(scope, () => {
       t.cloud.delete('remote-a')
-      t.cloud.set('remote-b', { ...row('remote-b'), sessionId: 'rebound', displayName: 'Current', runtimeProfile: 'model' } as RegisteredSession)
-      t.cloud.set('remote-late', row('remote-late'))
+      t.cloud.set('remote-b', { ...serviceSession('remote-b'), sessionId: 'rebound', displayName: 'Current', runtimeProfile: 'model' })
+      t.cloud.set('remote-late', serviceSession('remote-late'))
     })
     const values = events.filter(event => event.type === 'row').map(event => snapshotMember(event.payload.value))
     expect(values).toHaveLength(scope === 'registered' ? 4 : 3)
     expect(values.slice(-2)).toEqual([{ source: 'cloud', gone: 'remote-a' },
-      { source: 'cloud', row: { agentId: 'remote-b', sessionId: 'rebound', engine: 'claude', registeredAt: 1,
+      { source: 'cloud', row: { agentId: 'remote-b', sessionId: 'rebound', engine: 'fo', registeredAt: 1,
         transcriptPath: null, lastHookAt: 0, displayName: 'Current', selectedModel: 'model' } }])
   })
 })

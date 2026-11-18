@@ -177,7 +177,7 @@ export function startFleet(core: DevicesCore, deps: FleetDeps): { fleet: Fleet; 
     machineName: () => core.machine.name(),
     machineId: () => core.machine.id(),
     computerId: () => core.machine.computerId(),
-    sessions: () => [...core.agents.advertised(), ...core.agents.cloud?.() ?? []],
+    sessions: () => [...core.agents.advertised(), ...core.agents.serviceSessions?.() ?? []],
     refresh: deps.refresh,
     displayName: (session) => core.agents.displayName(session),
     runtimeProfile: (session) => core.agents.runtimeProfile(session),

@@ -1,4 +1,4 @@
-import { createCloudAgents } from './agents/cloud.js'
+import { createCloudOwners } from '../testing/cloudOwners.js'
 import { cloudFactory } from '../testing/sessionFactories.js'
 import { prepareCloudQuestion, cloudQuestionClose } from '../cloud/questions.js'
 import { parseEngineQuestionPane } from '../engines/screens.js'
@@ -129,7 +129,7 @@ describe('questions', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const { deps, asking } = setup(), watcher = given(asking.questionWatcher)
     const answer = vi.fn(async () => ({ ok: true })), port = { answer }
-    const cloud = createCloudAgents({ ownsFactory: cloudFactory, native: () => false, port: () => port as never,
+    const cloud = createCloudOwners({ ownsFactory: cloudFactory, native: () => false, port: () => port as never,
       clients: { send: vi.fn(), sendCommander: deps.clients.sendCommander, sendLocal: deps.clients.sendLocal },
       questions: asking.presentations, log: () => {} })
     cloud.doors.publish([{ agentId: 'cloud_1', agent: 'fo', name: 'Service', state: 'idle', activity: null,
@@ -171,16 +171,16 @@ describe('questions', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { deps, asking } = setup(), watcher = given(asking.questionWatcher)
-    const cloud = createCloudAgents({ ownsFactory: cloudFactory, native: () => false, port: () => null,
+    const cloud = createCloudOwners({ ownsFactory: cloudFactory, native: () => false, port: () => null,
       clients: { send: vi.fn(), sendCommander: deps.clients.sendCommander, sendLocal: deps.clients.sendLocal },
       questions: asking.presentations, log: () => {} })
     cloud.doors.publish([{ agentId: 'cloud_1', agent: 'fo', name: 'Service', state: 'idle', activity: null,
       repository: null, branch: null, links: [], messages: 0, createdAt: '0', updatedAt: '0' }])
     watcher.onQuestion('s1', 'cloud_q_collision', [{ q: 'Native', options: ['Yes'] }])
     expect(cloud.doors.ask('cloud_1', 'cloud_q_collision', prepareCloudQuestion('cloud_1', 'cloud_q_collision', { text: 'Service', choices: [] })))
-      .toEqual({ ok: false, error: 'CLOUD_QUESTION_INVALID' })
+      .toEqual({ ok: false, error: 'SESSION_OWNER_INVALID' })
     expect(cloud.doors.unask('cloud_1', 'cloud_q_collision', cloudQuestionClose('cloud_1', 'cloud_q_collision')))
-      .toEqual({ ok: false, error: 'CLOUD_QUESTION_INVALID' })
+      .toEqual({ ok: false, error: 'SESSION_OWNER_INVALID' })
     cloud.doors.ask('cloud_1', 'cloud_q_owned', prepareCloudQuestion('cloud_1', 'cloud_q_owned', { text: 'Owned', choices: [] }))
     const current = asking.openQuestions.get('cloud_1')
     vi.mocked(deps.input.setUserAction).mockClear()
@@ -199,14 +199,14 @@ describe('questions', () => {
     const { asking, deps } = setup(), watcher = given(asking.questionWatcher)
     watcher.onQuestion('cloud_1', 'native_request', [{ q: 'Native', options: ['Yes'] }])
     const native = asking.openQuestions.get('cloud_1')
-    const cloud = createCloudAgents({ ownsFactory: cloudFactory, native: () => false, port: () => null,
+    const cloud = createCloudOwners({ ownsFactory: cloudFactory, native: () => false, port: () => null,
       clients: { send: vi.fn(), sendCommander: deps.clients.sendCommander, sendLocal: deps.clients.sendLocal },
       questions: asking.presentations, log: () => {} })
     cloud.doors.publish([{ agentId: 'cloud_1', agent: 'fo', name: 'Service', state: 'idle', activity: null,
       repository: null, branch: null, links: [], messages: 0, createdAt: '0', updatedAt: '0' }])
     vi.mocked(deps.clients.sendLocal).mockClear()
     expect(cloud.doors.ask('cloud_1', 'cloud_q_one', prepareCloudQuestion('cloud_1', 'cloud_q_one', { text: 'Service', choices: [] })))
-      .toEqual({ ok: false, error: 'CLOUD_QUESTION_INVALID' })
+      .toEqual({ ok: false, error: 'SESSION_OWNER_INVALID' })
     cloud.doors.publish([])
     expect(asking.openQuestions.get('cloud_1')).toBe(native)
     expect(asking.presentations.request('native_request')?.frame).toBe(native)

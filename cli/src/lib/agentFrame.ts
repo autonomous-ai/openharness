@@ -1,4 +1,5 @@
 import type { ActivityFrame } from './turnActivity.js'
+import { sessionFrame, type SessionFacts } from './sessionPresentation.js'
 /**
  * The one shape an agent takes on the wire.
  *
@@ -267,10 +268,9 @@ export async function agentFrame(
   const updatedAt = await lastActivityAt(s)
   // Name remains a post-await read; the caller captured terminal membership before it.
   const facts = agentFacts(s, terminalAvailable)
-  const frame: AgentFrame = {
+  const view: SessionFacts = {
     id: s.agentId,
     sessionId: s.sessionId,
-    userId: '',
     name: facts.displayName,
     nameChosen: isNameChosen(s),
     title: frameTitle(s),
@@ -320,10 +320,6 @@ export async function agentFrame(
     // All five are real answers when null, for the reason the module doc gives: a frame that omits
     // them would erase a viewer URL or a verdict an earlier frame had reported.
     dsh: s.dsh ?? null,
-    dshName: null,
-    viewerUrl: null,
-    viewerName: null,
-    verdict: null,
     forkedFrom: s.forkedFrom ? { agentId: s.forkedFrom.agentId, name: s.forkedFrom.name } : null,
     parentAgentId: s.parentAgentId ?? null,
     startedBy: s.startedBy === 'agent' ? 'agent' : null,
@@ -334,8 +330,9 @@ export async function agentFrame(
     namedAgent: s.agent ?? null,
     waitingFor: waitingFor?.() ?? null,
   }
-  // Assigning onto the existing fields preserves their wire order; optional service fields append as before.
-  // Read the fenced parts last: another synchronous frame provider can invalidate the captured run too.
-  facts.parts = parts?.() ?? facts.parts
-  return Object.assign(frame, facts.parts)
+  // Keep the final fenced read after all native/common formatting: synchronous providers may revoke this run.
+  return sessionFrame(view, () => {
+    facts.parts = parts?.() ?? facts.parts
+    return facts.parts
+  }) as AgentFrame
 }

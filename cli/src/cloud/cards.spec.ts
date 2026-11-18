@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto'
+import { cloudPresentationFingerprint as cloudFingerprint } from './cards.js'
 import { expect, it } from 'vitest'
-import { cloudFingerprint, cloudHarnessIn, type CloudHarness } from '../lib/cloudAgents.js'
+import { cloudHarnessIn, type CloudHarness } from '../lib/cloudAgents.js'
 import { emptyPresentation, prepareCloudCards } from './cards.js'
 
 const createCloudCards = () => {
@@ -72,7 +74,7 @@ it.each<[string, CloudHarness[]]>([
   const rows = values.map(value => cloudHarnessIn(value)!)
   const prepared = prepareCloudCards(rows)
   expect(prepared.next.fingerprint).toBe(cloudFingerprint(rows))
-  expect(prepared.next.owners.map(owner => owner.fingerprint)).toEqual(rows.map(value => cloudFingerprint([value])))
+  expect(prepared.next.owners.map(owner => owner.fingerprint)).toEqual(rows.map(value => createHash('sha256').update(JSON.stringify([value])).digest('hex')))
   expect(prepared).toHaveProperty('imageBytes', Buffer.byteLength(JSON.stringify(rows)))
   const imageBytes = Buffer.byteLength(JSON.stringify(rows))
   expect(Buffer.byteLength(JSON.stringify({ harnesses: [], cards: prepared.cards })) - 2 + imageBytes)

@@ -1,11 +1,12 @@
+import { OWNER_ANSWER_DOWN as CLOUD_ANSWER_DOWN } from '../../lib/sessionOwnerWire.js'
 import { createQuestionPresentations } from '../questions.js'
 import { cloudFactory } from '../../testing/sessionFactories.js'
 import { answerExperimentQuery } from '../experimentQueries.js'
 import { fakeCore } from '../../testing/fakeCore.js'
 import { cloudQuestionClose, prepareCloudQuestion } from '../../cloud/questions.js'
 import { expect, it, vi } from 'vitest'
-import { createCloudAgents } from './cloud.js'
-import { CLOUD_ANSWER_DOWN } from '../api.js'
+import { createCloudOwners } from '../../testing/cloudOwners.js'
+
 import type { CloudHarness } from '../../lib/cloudAgents.js'
 
 const owner: CloudHarness = { agentId: 'cloud_1', agent: 'devin-cloud', name: 'Fixture', state: 'needs_input', activity: null,
@@ -14,7 +15,7 @@ function fixture(whenStarting?: () => Promise<boolean> | null) {
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, questions = createQuestionPresentations(), openQuestions = questions.openQuestions
   const answer = vi.fn(async () => ({ ok: true as const }))
   const port = { answer }
-  const cloud = createCloudAgents({ ownsFactory: cloudFactory, native: () => false, clients, questions, whenStarting, port: () => port as never, log: () => {} })
+  const cloud = createCloudOwners({ ownsFactory: cloudFactory, native: () => false, clients, questions, whenStarting, port: () => port as never, log: () => {} })
   cloud.doors.publish([owner])
   return { cloud, clients, openQuestions, questions, answer }
 }
@@ -35,7 +36,14 @@ it('a replaced request no longer routes an answer to the provider', () => {
 })
 
 const question = (id = 'cloud_q_one', agentId = 'cloud_1') => prepareCloudQuestion(agentId, id, { text: 'Choose', choices: ['Yes'] })
-const invalid = { ok: false, error: 'CLOUD_QUESTION_INVALID' }
+const invalid = { ok: false, error: 'SESSION_OWNER_INVALID' }
+it('admits a common request id without feature prefixes and preserves its exact answer route', async () => {
+  const { cloud, answer } = fixture()
+  const prepared = prepareCloudQuestion('cloud_1', 'request_1', { text: 'Which?', choices: ['Yes'] })
+  expect(cloud.doors.ask('cloud_1', 'request_1', prepared)).toEqual({ ok: true })
+  expect(await cloud.answer({ requestId: 'request_1', answers: { answer: 'Yes' } })).toEqual({ ok: true })
+  expect(answer).toHaveBeenCalledWith('cloud_1', 'request_1', { answer: 'Yes' })
+})
 it('admits only bounded exact question fields for the accepted owner, atomically', () => {
   const { cloud, clients, openQuestions } = fixture()
   const good = question()
@@ -49,11 +57,11 @@ it('admits only bounded exact question fields for the accepted owner, atomically
     { ...good.frame.payload, notification: null }, { ...good.frame.payload, notification: { id: 'other', kind: 'needsYou' } },
     { ...good.frame.payload, notification: { id: 'cloud_q_one', kind: 'done' } },
     { ...good.frame.payload, questions: null }, { ...good.frame.payload, questions: [] }]) bad.push({ ...good, frame: { ...good.frame, payload } })
-  for (const value of [null, { ...good.frame.payload.questions[0], key: 'other' }, { ...good.frame.payload.questions[0], q: 1 },
-    { ...good.frame.payload.questions[0], q: 'x'.repeat(501) }, { ...good.frame.payload.questions[0], multi: true },
-    { ...good.frame.payload.questions[0], canText: false }, { ...good.frame.payload.questions[0], options: null },
-    { ...good.frame.payload.questions[0], options: Array(7).fill('yes') }, { ...good.frame.payload.questions[0], options: [1] },
-    { ...good.frame.payload.questions[0], options: [''] }, { ...good.frame.payload.questions[0], options: new Array(1) }, { ...good.frame.payload.questions[0], options: ['x'.repeat(501)] },
+  for (const value of [null, { ...good.frame.payload.questions[0], key: '' }, { ...good.frame.payload.questions[0], q: 1 },
+    { ...good.frame.payload.questions[0], q: 'x'.repeat(22 * 1024) }, { ...good.frame.payload.questions[0], multi: 'true' },
+    { ...good.frame.payload.questions[0], canText: 0 }, { ...good.frame.payload.questions[0], options: null },
+    { ...good.frame.payload.questions[0], options: Array(30).fill('x'.repeat(1000)) }, { ...good.frame.payload.questions[0], options: [1] },
+    { ...good.frame.payload.questions[0], options: [''] }, { ...good.frame.payload.questions[0], options: new Array(1) }, { ...good.frame.payload.questions[0], options: ['x'.repeat(22 * 1024)] },
     { ...good.frame.payload.questions[0], options: [] }]) bad.push({ ...good, frame: { ...good.frame, payload: { ...good.frame.payload, questions: [value] } } })
   clients.sendCommander.mockClear()
   for (const value of bad) expect(cloud.doors.ask('cloud_1', 'cloud_q_one', value as never)).toEqual(invalid)
@@ -138,20 +146,20 @@ it('does not delete another question written to the shared session question slot
 })
 
 it('returns truthful prepared-question refusal through the real dispatcher and fences a stale close', async () => {
-  const { cloud, clients, openQuestions } = fixture(), core = fakeCore({ cloud: cloud.doors })
+  const { cloud, clients, openQuestions } = fixture(), core = fakeCore()
   let current = true
   const authority = { current: () => current, ownsRequest: () => false }, active = new Set(['cloud'])
   const payload = { agentId: 'cloud_1', questionId: 'cloud_q_one', question: question() }
-  expect(await answerExperimentQuery(core, active, 'cloud', 'cloud_ask', payload, undefined, authority)).toEqual({ ok: true })
-  expect(await answerExperimentQuery(core, active, 'cloud', 'cloud_ask', { ...payload, question: {} }, undefined, authority)).toEqual(invalid)
+  expect(await answerExperimentQuery(core, active, 'cloud', 'session_owner_ask', payload, undefined, authority, cloud.doors)).toEqual({ ok: true })
+  expect(await answerExperimentQuery(core, active, 'cloud', 'session_owner_ask', { ...payload, question: {} }, undefined, authority, cloud.doors)).toEqual(invalid)
   clients.sendLocal.mockClear()
   current = false
   const close = { agentId: 'cloud_1', questionId: 'cloud_q_one', close: question().close }
-  expect(await answerExperimentQuery(core, active, 'cloud', 'cloud_unask', close, undefined, authority)).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+  expect(await answerExperimentQuery(core, active, 'cloud', 'session_owner_unask', close, undefined, authority, cloud.doors)).toEqual({ error: 'SERVICE_UNAVAILABLE' })
   expect(clients.sendLocal).not.toHaveBeenCalled()
   expect(openQuestions.get('cloud_1')).toEqual(question().frame)
   current = true
-  expect(await answerExperimentQuery(core, active, 'cloud', 'cloud_unask', close, undefined, authority)).toEqual({ ok: true })
+  expect(await answerExperimentQuery(core, active, 'cloud', 'session_owner_unask', close, undefined, authority, cloud.doors)).toEqual({ ok: true })
   expect(openQuestions.size).toBe(0)
 })
 

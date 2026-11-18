@@ -138,8 +138,9 @@ import { createAgentEvents } from './agents/events.js'
 import { createSessionNormalizers } from './transcripts/normalizers.js'
 import { createInput } from './input.js'
 import { createQuestionResponse, createQuestions } from './questions.js'
-import { createCloudAgents, type CloudAgents } from './agents/cloud.js'
-import { createCloudLink } from './cloudLink.js'
+import { createSessionOwners, type SessionOwners } from './agents/sessionOwners.js'
+import { SESSION_OWNER_LIMITS } from '../lib/sessionOwnerWire.js'
+import { createSessionOwnerLink } from './sessionOwnerLink.js'
 import { activityOf, createTurnActivity } from './turns/activity.js'
 import { createLastTurnReader } from './transcripts/lastTurn.js'
 import { createEngineReaders } from './engines/readers.js'
@@ -194,7 +195,7 @@ import { createStoreOf } from './transcripts/stores.js'
 import { createOtherStreams } from './engines/otherStreams.js'
 import { paneReadIdentity } from './transcripts/readIdentity.js'
 import { isOtherEngine, OTHER_ENGINE_STATES, OTHER_ENGINES_SERVICE } from '../engines/otherEngines.js'
-import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, sendLocalWindow, type LocalWindowDelivery, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, GOALS_REQUESTS, TURN_DELIVERERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, VIEWERS_UNAVAILABLE, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, ENGINE_PROBE_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus } from './api.js'
+import { OWNER_FALLBACKS, CLOUD_REQUESTS, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, sendLocalWindow, type LocalWindowDelivery, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, GOALS_REQUESTS, TURN_DELIVERERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, VIEWERS_UNAVAILABLE, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, ENGINE_PROBE_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus } from './api.js'
 import { createFrameParts } from './frameParts.js'
 import { testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
@@ -749,9 +750,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Compatibility with explicit inline mode and older masters, until 2026-12-15.
   const inline = knownServices.some((name) => !outOfProcess.has(name)) || !othersStorage || !terminalScreenHosted || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted || !providerMoveHosted || !resumeRepairHosted
     ? await import('../services/inline.js') : null
-  let cloudAgents: CloudAgents | null = null
+  let sessionOwners: SessionOwners | null = null
   registry.onEnter = (engine, row) => {
-    cloudAgents?.nativeEntered(row.agentId, row.sessionId)
+    sessionOwners?.nativeEntered(row.agentId, row.sessionId)
     if (!othersRuntime) inline?.preloadEngine(engine)
   }
   if (!othersRuntime) {
@@ -897,14 +898,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const machineIdNow = (): string => backendRef?.machineId ?? ''
   // The existing open-turn fact, distinct from the app's leased activity state.
   const turnRunning = (sessionId: string): boolean => turnStartedAt.has(sessionId)
-  // The cloud agents' doors (core/agents/cloud.ts), handed to the core API now and built once the questions and
-  // the socket are, below; the cloud service starts after both.
-  const cloudDoors: CloudCore = {
-    publish: (harnesses, cards) => cloudAgents?.doors.publish(harnesses, cards) ?? { ok: false, error: 'CLOUD_PUBLICATION_INVALID' },
-    checkpoint: () => { if (!cloudAgents) throw new Error('CLOUD_PUBLICATION_UNAVAILABLE'); return cloudAgents.doors.checkpoint() },
-    ask: (agentId, requestId, question) => cloudAgents?.doors.ask(agentId, requestId, question) ?? { ok: false, error: 'CLOUD_QUESTION_INVALID' },
-    unask: (agentId, requestId, close) => cloudAgents?.doors.unask(agentId, requestId, close) ?? { ok: false, error: 'CLOUD_QUESTION_INVALID' },
-  }
   // Shared tabs' relay, a socket per shared tab held by the gateway (gateway/tabRelay.ts), and which of them the core saw
   // opened: opened again after a gateway-only restart, closed when Agent Messages' process goes (core/gatewayLink.ts).
   const tabRelay = tabRelayOf(() => gatewayOps.tabRelay)
@@ -914,10 +907,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // service's process reads as it is (lib/databaseHistory.ts). The core reads no store of its own for one.
   const databaseHistory = inline?.databaseHistory ?? ((): undefined => undefined)
   const coreApi = createCoreApi({
-    cloud: cloudDoors,
-    cloudRows: () => (cloudAgents?.dialRows() ?? []) as unknown as RegisteredSession[],
-    cloudRead: { ids: () => cloudAgents?.dialIds() ?? [][Symbol.iterator](),
-      row: agentId => cloudAgents?.dialRow(agentId) as unknown as RegisteredSession | undefined },
+    serviceRows: () => sessionOwners?.rows() ?? [],
+    serviceRead: { ids: () => sessionOwners?.ids() ?? [][Symbol.iterator](), row: agentId => sessionOwners?.row(agentId) },
     // Agents' terminals: a literal-argv launch, and a read-only view for Share's observers (core/terminalWatch.ts).
     terminals: { ...TERMINALS_OFF, ...createTerminalOpener({ createBackend, recoverBackend, registry, announceSession, blocksFolder: (cwd) => !!backendRef?.purgeAgentService?.blocksFolder(cwd), noBackendCode: createUnavailable }), watch: terminalWatch.watch },
     dataDir: env.ADAPTER_DATA_DIR,
@@ -964,11 +955,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       live: (agentId) => registry.byAgent(agentId),
       state: (session) => activityFrameContextRef?.(session)?.state,
       prompts: turnPrompts,
-      recent: (agentId) => cloudAgents?.recent(agentId) ?? mirror.recent(registry.resolve(agentId)?.sessionId || agentId, 1),
+      recent: (agentId) => sessionOwners?.recent(agentId) ?? mirror.recent(registry.resolve(agentId)?.sessionId || agentId, 1),
     }),
     activityText: async (agentId) => {
-      // A cloud harness says what it is doing on its frame ("Calling Hair Lab").
-      if (cloudAgents?.owns(agentId)) return cloudAgents.activity(agentId)
+      // Service-owned activity is already admitted common session state.
+      if (sessionOwners?.owns(agentId)) return sessionOwners.activity(agentId)
       const session = registry.resolve(agentId)
       if (!session || (session.engine !== 'claude' && session.engine !== 'codex')) return null
       const screen = await terminals.capture(session, { mode: 'visible', ansi: false })
@@ -976,10 +967,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     // The same footer for a Harness Pro, with its timer beside it (the agent's sentence comes from the cards).
     activitySnapshot: async (agentId) => {
-      if (cloudAgents?.owns(agentId)) {
-        const text = cloudAgents.activity(agentId)
-        return text ? { text } : null
-      }
+      if (sessionOwners?.owns(agentId)) return sessionOwners.activitySnapshot(agentId)
       const session = registry.resolve(agentId)
       if (!session || (session.engine !== 'claude' && session.engine !== 'codex')) return null
       const screen = await terminals.capture(session, { mode: 'visible', ansi: false })
@@ -1001,7 +989,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // The working tiles are the recaps' to say: asked, and sent to the dial when they answer.
       if (attached) for (const frame of openQuestions.values()) ports.devices?.card(frame)
       if (attached) void mirror.liveCards().then((cards) => { for (const frame of cards) ports.devices?.card(frame) })
-      if (attached) for (const frame of cloudAgents?.liveCards() ?? []) ports.devices?.card(frame)
+      if (attached) for (const frame of sessionOwners?.liveCards() ?? []) ports.devices?.card(frame)
     },
     // What a device or another machine asks of an agent here: the SAME handlers the backend socket
     // drives, called directly — the slash-command adaptation and the turn and question plumbing live there.
@@ -1047,15 +1035,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       running: turnRunning,
       send: (agentId, text) => backendRef?.onMessage?.(agentId, text),
       stop: (agentId) => backendRef?.onCancel?.(agentId),
-      recent: async (agentId, n) => cloudAgents?.recent(agentId) ?? mirror.recent(registry.resolve(agentId)?.sessionId || agentId, n),
+      recent: async (agentId, n) => sessionOwners?.recent(agentId) ?? mirror.recent(registry.resolve(agentId)?.sessionId || agentId, n),
       asks: async (agentId) => mirror.recentAsks(registry.resolve(agentId)?.sessionId || agentId),
       ...deliveries.turns,
     },
     questions: {
       // The device's own object, verbatim: rebuilt as `{ [requestId]: optionId }` it was keyed by the
       // REQUEST id, not the question key `asking.answer` expects, and named a question that does not exist.
-      answer: (agentId, requestId, answers) => { void (cloudAgents?.answer({ requestId, answers }) ?? asking.answer({ agentId, requestId, answers })) },
-      answerReviewed: async (answer) => (await (cloudAgents?.answer({ requestId: answer.requestId, answers: answer.answers }) ?? questions.answer({ agentId: answer.agentId, requestId: answer.requestId,
+      answer: (agentId, requestId, answers) => { void (sessionOwners?.answer({ requestId, answers }) ?? asking.answer({ agentId, requestId, answers })) },
+      answerReviewed: async (answer) => (await (sessionOwners?.answer({ requestId: answer.requestId, answers: answer.answers }) ?? questions.answer({ agentId: answer.agentId, requestId: answer.requestId,
         answers: answer.answers, expectedQuestions: answer.questions, selectedLabels: answer.selections, freeTextKeys: answer.freeTextKeys }))).ok,
     },
   })
@@ -1078,7 +1066,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const windowCore = (service: string): typeof coreApi => ({ ...coreApi,
     clients: { ...coreApi.clients, sendWindow: delivery => sendWindow(service, delivery) },
   })
-  const serviceHost = inline?.createServiceHost(ports, { faults: testFaults(harnessd.HARNESSD_TEST_FAULTS) })
+  const serviceHost = inline?.createServiceHost(ports, { faults: testFaults(harnessd.HARNESSD_TEST_FAULTS),
+    bindOwners: (service, identity, current) => sessionOwners?.bound({ service, identity, current }) })
   // Services publish bounded display fields without putting their state or interpretation in the core.
   const frameParts = createFrameParts({ core: coreApi, epoch: agentLife.frameEpoch, available: service => !serviceHost?.isOff(service) })
   framePartsRef = frameParts.forFrame
@@ -1539,18 +1528,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     waitOver: (sessionId) => turnHooksRef?.waitOver(sessionId),
   })
   const questions = asking.questions
-  // Cloud harnesses (core/agents/cloud.ts): listed with the rest; their questions shown as the panes' are, and
-  // answered through the cloud service.
+  // Native factories and declared service factories share one immutable ownership lookup.
   const factoryOwner = sessionFactoryOwners(ENGINES)
   const nativeFactory = (value: unknown): value is AgentEngine => factoryOwner(value)?.kind === 'native'
-  cloudAgents = createCloudAgents({ ownsFactory: value => {
-    const owner = factoryOwner(value)
-    return owner?.kind === 'service' && owner.service === 'cloud'
-  }, native: id => registry.resolve(id) !== undefined, port: () => serviceHost?.isOff('cloud') ? null : ports.cloud,
-    whenStarting: () => outOfProcess.has('cloud') ? serviceLinks.whenStarting('cloud') : null,
-    clients: backend, questions: asking.presentations })
-  const cloud = cloudAgents
-  backend.questionProvider = createQuestionResponse((payload) => cloud.answer(payload) ?? asking.answer(payload))
+  sessionOwners = createSessionOwners({ factoryOwner, native: id => registry.resolve(id) !== undefined,
+    port: service => serviceHost?.isOff(service) ? null : service === 'cloud' ? ports.cloud : null,
+    whenStarting: service => outOfProcess.has(service) ? serviceLinks.whenStarting(service) : null,
+    clients: backend, questions: asking.presentations, limits: SESSION_OWNER_LIMITS })
+  const ownerSessions = sessionOwners
+  backend.questionProvider = createQuestionResponse((payload) => ownerSessions.answer(payload) ?? asking.answer(payload))
   // An app away from this desk is told what is still being asked as it connects (core/questions.ts).
   backend.onRemoteAppJoined = () => asking.reannounceRemote()
   backend.questionSnapshot = () => asking.snapshot('local')
@@ -1562,7 +1548,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     toProject: (s) => backend.toProject(s), toStoppedProject: (s) => backend.toStoppedProject(s),
     // The monitor's readings, through its port (services/monitor.ts): none while it is off.
     harnessResourcesReader: () => (ports.monitor ?? MONITOR_OFF).resources(), harnessStorageReader: (agents, invalidate) => (ports.monitor ?? MONITOR_OFF).storage(agents, invalidate),
-    cloudFrames: () => cloud.frames(),
+    serviceFrames: () => ownerSessions.frames(),
   }).agentsList
   backend.agentGuest = (agentId) => registry.resolve(agentId)?.guest ?? null
   const questionWatcher = asking.questionWatcher
@@ -1742,7 +1728,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       ?? await answerSharedMachinesQuery(sharedMachinesAccount, service, query, payload)
       ?? answerDaemonQuery(coreApi, service, query)
       ?? (service === 'wifi' && query === 'create' ? wifiLink.answer(query, payload, () => authority.current?.() === true) : null)
-      ?? await answerExperimentQuery(coreApi, experiments, service, query, payload, undefined, authority)
+      ?? await answerExperimentQuery(coreApi, experiments, service, query, payload, undefined, authority,
+        sessionOwners?.bound({ service, identity: authority, current: () => authority.current?.() === true }))
       ?? await terminalWatch.answer(service, query, payload)
       ?? (service === 'orchestrator' ? orchestratorLink.answer(query, payload) : null)
       ?? (service === 'viewers' ? viewersLink.answer(query, payload)
@@ -1868,9 +1855,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (outOfProcess.has('orchestrator')) ports.orchestrator = orchestratorLink.port
   else serviceHost!.start('orchestrator', inline!.startOrchestrator, coreApi, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS)
   // Cloud agents, an experiment (services/cloud.ts): in its own process once it is on, asked through its port
-  // (core/cloudLink.ts), which starts it; or in this one behind the service host's guard.
-  if (outOfProcess.has('cloud')) ports.cloud = createCloudLink((type, payload) => serviceLinks.call('cloud', type, payload))
-  else serviceHost!.start('cloud', inline!.startCloud, coreApi, CLOUD_FALLBACKS, CLOUD_REQUESTS)
+  // (core/sessionOwnerLink.ts), which starts it; or in this one behind the service host's guard.
+  if (outOfProcess.has('cloud')) ports.cloud = createSessionOwnerLink((type, payload) => serviceLinks.call('cloud', type, payload))
+  else serviceHost!.start('cloud', inline!.startCloud, coreApi, OWNER_FALLBACKS, CLOUD_REQUESTS)
   backend.onFrameSent = (frame) => ports.orchestrator?.frame(frame)
   // Share (services/sharing.ts): in this process, or in its own once it is on (core/sharingLink.ts). Its
   // observers' frames reach it as the relay hands them over.
@@ -1970,10 +1957,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onAgentRename: (session, name) => { void terminals.setTitle(session, name) },
     onRuntimeProfileUpdate: (sessionId, selectedModel) => runtimeController.setProfile(sessionId, selectedModel),
   }).agentUpdate
-  // A cloud harness is no registry row: its rename goes to the cloud service (core/agents/cloud.ts).
+  // A service-owned session is no Registry row; its current owner handles its update.
   backend.agentUpdateProvider = async (payload, reply) => {
-    const cloud = cloudAgents?.update(payload)
-    if (cloud) reply(await cloud)
+    const serviceUpdate = sessionOwners?.update(payload)
+    if (serviceUpdate) reply(await serviceUpdate)
     else await agentUpdate(payload, reply)
   }
   runtimeProfiles.onChanged = (sessionId) => {
@@ -3005,7 +2992,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   binding.whileChanging((agentId) => restorePanes.busy(agentId) || restartJobs.busy(agentId) || stopJobs.has(agentId))
   const stopAgent = lifecycle.stopAgent
   const stopTerminalAgent = createStopRequest({ byAgent: (id) => registry.byAgent(id), stop: stopAgent })
-  backend.stopProvider = (payload) => cloud.stop(String(payload.agentId ?? payload.sessionId ?? '')) ?? stopTerminalAgent(payload)
+  backend.stopProvider = (payload) => ownerSessions.stopOwner(String(payload.agentId ?? payload.sessionId ?? '')) ?? stopTerminalAgent(payload)
   backend.purgeAgentService = lifecycle.purgeAgentService
   backend.purgeProvider = createPurgeRequest({ purgeAgentService: () => lifecycle.purgeAgentService, invalidateStorage: () => { void (ports.monitor ?? MONITOR_OFF).storage([], true) } })
   // Closing agents no window shows, and the cleanup preview (core/agents/close.ts).
@@ -3166,10 +3153,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The folders git makes for a create: workspaces', in the edge host (core/workspacesLink.ts).
     workspaces: () => ports.workspaces,
   })
-  // A cloud agent is made by its service (core/agents/cloud.ts); every other engine launches here.
+  // The declared owner creates the session; native factories use the existing launch path.
   // Answered when the service answers, never in the connection's line: the window's next requests go on.
   backend.createProvider = async (payload, asker, answer) => {
-    const made = cloud.create(payload)
+    const made = ownerSessions.create(payload)
     if (made) void made.then(answer)
     else await launches.create(payload, asker, answer)
   }
@@ -3179,21 +3166,21 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.forkProvider = launches.fork
 
   const submitAgent = inputs.submitAgent
-  // Words for a cloud harness go to its service, and a delivery among them is settled as the pane's are.
+  // Service-owned input uses the same delivery authority as input to a native pane.
   backend.onMessage = (id, content, deliveryId, options) => {
     if (options?.current?.() === false) return
     // An Agent Messages turn its mailbox no longer wants written waits, as a pane's does (core/input.ts).
-    if (cloud.owns(id) && deliveryId?.startsWith('team:') && !(ports.messages?.canWrite(deliveryId) ?? false)) {
+    if (ownerSessions.owns(id) && deliveryId?.startsWith('team:') && !(ports.messages?.canWrite(deliveryId) ?? false)) {
       deliveries.settled({ deliveryId, sessionId: id, state: 'rejected', reason: 'team_waiting_control' })
       return
     }
-    const sent = cloud.deliver(id, content)
+    const sent = ownerSessions.deliver(id, content)
     if (!sent) { submitAgent(id, content, deliveryId, undefined, options ? { content, deliveryId, when: options.when ?? 'turn', current: options.current } : undefined); return }
     if (deliveryId) void sent.then((result) => deliveries.settled({ deliveryId, sessionId: id, state: result.ok ? 'delivered' : 'rejected', ...(result.ok ? {} : { reason: result.error }) }))
   }
   backend.messageProvider = (payload, receipt) => {
     const agentId = typeof payload.agentId === 'string' ? payload.agentId : typeof payload.sessionId === 'string' ? payload.sessionId : ''
-    if (cloud.owns(agentId)) { void cloud.deliver(agentId, typeof payload.content === 'string' ? payload.content : ''); return }
+    if (ownerSessions.owns(agentId)) { void ownerSessions.deliver(agentId, typeof payload.content === 'string' ? payload.content : ''); return }
     inputs.messageRequest(payload, receipt)
   }
   backend.onCancelOrchestratorMessage = id => input.cancelDelivery(id)
@@ -3410,7 +3397,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // directly from recaps and observes independent core/cloud cards through the app transport.
     const payload = card.payload as Record<string, unknown> | undefined
     const full = card.type === 'commander_event' && payload?.kind === 'summary' && typeof card.agentId === 'string'
-      ? mirror.lastFullText(registry.byAgent(card.agentId)?.sessionId ?? card.agentId) ?? cloudAgents?.said(card.agentId) : undefined
+      ? mirror.lastFullText(registry.byAgent(card.agentId)?.sessionId ?? card.agentId) ?? sessionOwners?.said(card.agentId) : undefined
     ports.devices?.card(full ? { ...card, payload: { ...payload, fullText: full } } : card)
   }
 

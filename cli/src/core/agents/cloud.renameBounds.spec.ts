@@ -1,12 +1,14 @@
+import { encodeSessionFacts, type SessionFacts } from '../../lib/sessionPresentation.js'
+import { type SessionOwnerPort as CloudPort } from '../../lib/sessionOwnerWire.js'
 /** Existing caller/response limits must survive the common-owner representation migration. */
 import { expect, it, vi } from 'vitest'
-import { createCloudAgents } from './cloud.js'
+import { createCloudOwners } from '../../testing/cloudOwners.js'
 import { createQuestionPresentations } from '../questions.js'
 import { cloudFactory } from '../../testing/sessionFactories.js'
 import { prepareCloudPort } from '../../cloud/responses.js'
-import { cloudAgentFrame, cloudHarnessIn, type CloudHarness } from '../../lib/cloudAgents.js'
+import { cloudAgentFrame, cloudPresentation, cloudHarnessIn, type CloudHarness } from '../../lib/cloudAgents.js'
 import { boundedJsonBytes } from '../../lib/boundedJsonBytes.js'
-import type { CloudPort } from '../api.js'
+
 
 const ROW_BYTES = 192 * 1024
 const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value))
@@ -40,14 +42,14 @@ function fixture(row: CloudHarness, held = false) {
     create: async () => ({ ok: false, error: 'UNUSED' }), deliver: async () => ({ ok: true }),
     answer: async () => ({ ok: true }), stopHarness: async () => ({ ok: true }), rename: operation,
   })
-  const envelopes: Array<{ before: CloudHarness; reply: Awaited<ReturnType<CloudPort['rename']>> }> = []
+  const envelopes: Array<{ before: SessionFacts; reply: Awaited<ReturnType<CloudPort['rename']>> }> = []
   let selected: CloudPort = { ...prepared, rename: async (id, name, before) => {
     const reply = await prepared.rename(id, name, before)
     envelopes.push({ before, reply })
     return reply
   } }
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }
-  const owner = createCloudAgents({ ownsFactory: cloudFactory, native: () => false, port: () => selected,
+  const owner = createCloudOwners({ ownsFactory: cloudFactory, native: () => false, port: () => selected,
     clients, questions: createQuestionPresentations(), log: () => {} })
   expect(owner.doors.publish([row])).toEqual({ ok: true })
   clients.send.mockClear(); clients.sendCommander.mockClear()
@@ -59,11 +61,11 @@ it.each(['working', 'failed', 'starting', 'idle'] as const)('keeps near-limit %s
     const row = maximalRow(state, padded), t = fixture(row)
     const expected = cloudAgentFrame({ ...row, name: renamed })
     expect(await t.owner.update({ agentId: row.agentId, name: renamed })).toEqual({ agent: expected })
-    expect(t.operation).toHaveBeenCalledExactlyOnceWith(row.agentId, renamed, row)
+    expect(t.operation).toHaveBeenCalledExactlyOnceWith(row.agentId, renamed, JSON.parse(encodeSessionFacts(cloudPresentation(row))))
     expect(t.envelopes).toHaveLength(1)
     const { before, reply } = t.envelopes[0]
-    expect(Reflect.ownKeys(before)).toEqual(Object.keys(row))
-    expect(bytes(before)).toBe(ROW_BYTES)
+    expect(Reflect.ownKeys(before)).toEqual(Object.keys(JSON.parse(encodeSessionFacts(cloudPresentation(row)))))
+    expect(bytes(before)).toBeLessThanOrEqual(ROW_BYTES + 32 * 1024)
     expect(boundedJsonBytes(before, 512 * 1024)).toBe(bytes(before))
     expect(bytes(reply)).toBeLessThanOrEqual(ROW_BYTES + 32 * 1024)
     expect(boundedJsonBytes(reply, 256 * 1024)).toBe(bytes(reply))
@@ -75,7 +77,7 @@ it.each(['working', 'failed', 'starting', 'idle'] as const)('keeps near-limit %s
 
 it.each(['state advances', 'owner replaced', 'port replaced'] as const)('retains the captured boundary-sized rename while %s', async change => {
   const row = maximalRow('failed', 'updatedAt'), t = fixture(row, true)
-  const captured = JSON.stringify(row), pending = t.owner.update({ agentId: row.agentId, name: renamed })!
+  const captured = JSON.stringify(row), capturedFacts = encodeSessionFacts(cloudPresentation(row)), pending = t.owner.update({ agentId: row.agentId, name: renamed })!
   expect(t.operation).toHaveBeenCalledOnce()
   try {
     // A new immutable publication replaces provider facts while the response operation is held.
@@ -90,7 +92,7 @@ it.each(['state advances', 'owner replaced', 'port replaced'] as const)('retains
     row.links[0].label = 'Changed outside'; row.activity = 'Changed outside'
     t.release()
     const result = await pending
-    expect(JSON.stringify(t.envelopes[0].before)).toBe(captured)
+    expect(JSON.stringify(t.envelopes[0].before)).toBe(capturedFacts)
     if (change === 'state advances') {
       expect(result).toEqual({ agent: cloudAgentFrame({ ...JSON.parse(captured), name: renamed }) })
       expect(t.clients.send).toHaveBeenCalledOnce(); expect(t.clients.sendCommander).toHaveBeenCalledOnce()

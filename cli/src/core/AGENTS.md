@@ -35,10 +35,9 @@ The core stays small and secure, in the code and at run time: read
 ## Where things are
 
 - `agents/`: create, fork, restart, retarget, stop, resume, close, discovery, adoption, binding, the list.
-  `agents/cloud.ts`: agents a service owns, the cloud agents: listed with the rest from what the cloud
-  service publishes, their questions shown as a pane's are, the component's prepared cards admitted
-  against those owners and forwarded, and New Harness, words, an answer, a rename and Stop Harness for one handed
-  to its port (`cloudLink.ts` when it runs in its own process).
+  `agents/sessionOwners.ts`: one presentation per service-owned session, with native ownership taking precedence.
+  Common facts arrive through bounded current-link staging (`agents/sessionOwnerStage.ts`); questions and prepared cards
+  are admitted against current owners. Operations reach the owning service through `sessionOwnerLink.ts`.
 - `transcripts/`: attach (bounded reads from the end), ingest, live tail, relaunch marks, normalizers.
   Claude Code/Codex live interpretation is injected through `Engine.live`; core keeps parser handles
   and immutable turn snapshots, never edits their engine state. Supervised Claude Code/Codex parsers

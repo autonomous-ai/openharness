@@ -2,13 +2,13 @@
  * Cloud agents: agents that run on their maker's servers and are reached through its API rather than started
  * as a terminal program here (docs/design/2026-10-11-cloud-agents.md). The cloud service owns them
  * (services/cloud.ts); the core lists them beside the terminal agents and routes a person's answers,
- * messages and Stop to that service (core/agents/cloud.ts). This file is what the two, and the frames the
- * apps read, share.
+ * messages and Stop to that service. Provider normalization and preparation stay in this component and CLI.
+ * Core receives only the shared session facts produced here.
  *
  * A cloud agent's id is never an engine id (engines/types.ts `ENGINES`): it has no launch, transcript or pane,
  * and every per-engine table in the core would otherwise need a row for it that could only refuse.
  */
-import { createHash } from 'node:crypto'
+import { sessionFrame, type SessionFacts } from './sessionPresentation.js'
 import type { AgentFrame } from './agentFrame.js'
 
 export interface CloudAgentInfo {
@@ -195,62 +195,32 @@ export type CloudAgentFrame = Omit<AgentFrame, 'engine'> & { engine: CloudAgentI
  * terminal (as a stopped agent's), `location: 'cloud'` for the chat pane, and its repository as its project
  * so the footer and the pull request read it as they read any other.
  */
-export function cloudAgentFrame(harness: CloudHarness): CloudAgentFrame {
+export function cloudPresentation(harness: CloudHarness): SessionFacts {
   const working = harness.state === 'working' || harness.state === 'starting'
-  const project = harness.repository
-    ? { kind: 'git' as const, name: harness.repository.split('/').pop() ?? harness.repository, cwd: '', root: null,
-      remote: `https://github.com/${harness.repository}`, branch: harness.branch }
-    : null
   return {
-    id: harness.agentId,
-    sessionId: harness.agentId,
-    userId: '',
-    name: harness.name,
-    // Whether a person chose it is not known here: a client sends nothing for it (agentFrame.ts).
-    nameChosen: false,
-    title: null,
-    status: harness.state === 'stopped' ? 'stopped' : 'active',
-    activity: { state: working ? 'working' : 'idle', epoch: harness.agentId, revision: Date.parse(harness.updatedAt), validForMs: working ? 120_000 : 0 },
-    closePlan: null,
-    closeSupported: false,
-    launch: harness.state === 'failed' ? { state: 'failed', error: 'CLOUD_FAILED', detail: harness.activity ?? `${CLOUD_AGENTS[harness.agent].name} stopped with an error.` }
-      : harness.state === 'starting' ? { state: 'starting' } : { state: 'ready' },
-    createdAt: harness.createdAt,
-    updatedAt: harness.updatedAt,
-    lastOpenedAt: null,
-    tokenUsage: null,
-    outputStats: null,
-    tmuxPane: null,
-    terminal: { available: false, primary: '', runtimes: [] },
-    engine: harness.agent,
-    selectedModel: null,
-    grid: null,
-    codexHome: null,
-    project,
-    gitContext: { state: project ? 'workspace' : 'unavailable', current: project, observedAt: null, locations: [], pullRequests: [], truncated: false },
-    dsh: null,
-    dshName: null,
-    viewerUrl: null,
-    viewerName: null,
-    verdict: null,
-    forkedFrom: null,
-    forkable: false,
-    // A person starts a cloud harness from New Harness: no agent here or elsewhere started it.
-    parentAgentId: null,
-    startedBy: null,
-    resumeMode: 'conversation',
-    permissionMode: null,
-    bypassPermission: null,
-    namedAgent: null,
-    // A cloud harness is typed into by its own host: nothing here waits for it.
-    waitingFor: null,
-    location: 'cloud',
-    cloud: {
-      place: CLOUD_AGENTS[harness.agent].place, state: harness.state, activity: harness.activity, links: harness.links, messages: harness.messages,
+    id: harness.agentId, engine: harness.agent, name: harness.name,
+    createdAt: harness.createdAt, updatedAt: harness.updatedAt,
+    activity: { state: working ? 'working' : 'idle', epoch: harness.agentId,
+      revision: Date.parse(harness.updatedAt), validForMs: working ? 120_000 : 0 },
+    ...(harness.repository ? { project: { kind: 'git' as const,
+      name: harness.repository.split('/').pop() ?? harness.repository, cwd: '', root: null,
+      remote: `https://github.com/${harness.repository}`, branch: harness.branch } } : {}),
+    ...(harness.state === 'stopped' ? { status: 'stopped' } : {}),
+    ...(harness.state === 'failed' ? { launch: { state: 'failed' as const, error: 'CLOUD_FAILED',
+      detail: harness.activity ?? `${CLOUD_AGENTS[harness.agent].name} stopped with an error.` } }
+      : harness.state === 'starting' ? { launch: { state: 'starting' as const } } : {}),
+    app: { location: 'cloud', cloud: {
+      place: CLOUD_AGENTS[harness.agent].place, state: harness.state, activity: harness.activity,
+      links: harness.links, messages: harness.messages,
       ...(harness.providerStatus ? { providerStatus: { status: harness.providerStatus.status, detail: harness.providerStatus.detail } } : {}),
-    },
+    } },
+    ...(harness.said ? { turn: { fullText: harness.said, card: harness.card ?? null } } : {}),
+    ...(working ? { work: { ...(harness.activity === null ? {} : { text: harness.activity }),
+      processing: harness.activity === null ? { text: 'Working…' } : {} } } : {}),
   }
 }
 
-/** Recovery-only fingerprint of the normalized owner image already accepted by the core. */
-export const cloudFingerprint = (rows: readonly CloudHarness[]): string => createHash('sha256').update(JSON.stringify(rows)).digest('hex')
+/** The component's raw provider policy feeds the same standard serializer used by native sessions. */
+export function cloudAgentFrame(harness: CloudHarness): CloudAgentFrame {
+  return sessionFrame(cloudPresentation(harness)) as CloudAgentFrame
+}

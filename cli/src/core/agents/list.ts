@@ -9,7 +9,7 @@
  */
 import { isTerminalEngine } from '../../engines/types.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
-import type { CloudAgentFrame } from '../../lib/cloudAgents.js'
+import type { SessionFrame } from '../../lib/sessionPresentation.js'
 import type { MonitorActivity, MonitorCompletions } from '../../lib/harnessMonitor.js'
 import type { createHarnessResourcesReader } from '../../lib/harnessResources.js'
 import type { createHarnessStorageReader } from '../../lib/harnessTelemetry.js'
@@ -77,13 +77,13 @@ export interface AgentListDeps {
   monitorActivityProvider: ((sessionId: string) => MonitorActivity) | null
   /** How an agent's last turn ended, from the turn frames the socket sent. */
   monitorCompletions: Pick<MonitorCompletions, 'state'>
-  /** The cloud agents' harnesses (core/agents/cloud.ts): listed with the rest, with no pane. */
-  cloudFrames?: () => CloudAgentFrame[]
+  /** Service-owned session frames share the native public serializer. */
+  serviceFrames?: () => SessionFrame[]
 }
 
 export function createAgentList({
   deviceFactory, registry, stoppedAgents, toProject, toStoppedProject, harnessResourcesReader, harnessStorageReader,
-  monitorActivityProvider, monitorCompletions, cloudFrames = () => [],
+  monitorActivityProvider, monitorCompletions, serviceFrames = () => [],
 }: AgentListDeps) {
   /**
    * Answers `agents_list` through `reply`: before it returns, or, for the monitor's readings, once
@@ -96,7 +96,7 @@ export function createAgentList({
     guest?: string,
   ): Promise<void> => {
     // A guest sees the harnesses it started and nothing of the owner's (core/guestPolicy.ts): no stopped
-    // conversations, no cloud harnesses, no monitor readings.
+    // conversations, no service-owned sessions, no monitor readings.
     if (guest !== undefined) {
       const own = registry.advertised().filter((s) => !!guest && s.guest === guest)
       const frames = await Promise.all(own.map((s) => toProject(s)))
@@ -105,13 +105,13 @@ export function createAgentList({
       return
     }
     const sessions = registry.advertised()
-    const projects: Array<AgentFrame | CloudAgentFrame> = await Promise.all(sessions.map((s) => toProject(s)))
+    const projects: Array<AgentFrame | SessionFrame> = await Promise.all(sessions.map((s) => toProject(s)))
     // Older clients/devices keep their live-only contract. The desktop picker
     // explicitly asks for stopped work and receives no stale terminal routes.
     const savedSessions = payload.includeStopped === true && sessionRole() !== 'device' ? await stoppedAgents.available(sessions) : []
     projects.push(...await Promise.all(savedSessions.map(s => toStoppedProject(s))))
-    // A cloud harness is listed while it runs, and once stopped where stopped agents are asked for.
-    projects.push(...cloudFrames().filter((frame) => frame.status !== 'stopped' || (payload.includeStopped === true && sessionRole() !== 'device')))
+    // A service-owned session is listed while it runs, and once stopped where stopped agents are asked for.
+    projects.push(...serviceFrames().filter((frame) => frame.status !== 'stopped' || (payload.includeStopped === true && sessionRole() !== 'device')))
     // Ordered by creation time, oldest → newest — a stable tab order that doesn't reshuffle as
     // sessions become active (createdAt = the session's registeredAt). The id breaks a tie so the
     // order is TOTAL: without it two agents registered in the same millisecond fall through to array

@@ -190,42 +190,42 @@ describe('the core API a light service runs on in its own process', () => {
   })
 
   it('keeps publication acknowledgement and recovery reads truthful across the process door', async () => {
-    expect(processCoreApi('/data', 'cloud').cloud).toBeUndefined()
+    expect(processCoreApi('/data', 'cloud').owners).toBeUndefined()
     const ask = vi.fn(async (_query: string): Promise<Record<string, unknown>> => ({ ok: true }))
-    const doors = processCoreApi('/data', 'cloud', { ask }).cloud!
-    expect(await doors.publish([])).toEqual({ ok: true })
-    ask.mockResolvedValueOnce({ ok: false, error: 'CLOUD_PUBLICATION_INVALID' })
-    expect(await doors.publish([])).toEqual({ ok: false, error: 'CLOUD_PUBLICATION_INVALID' })
+    const doors = processCoreApi('/data', 'cloud', { ask }).owners!
+    expect(await doors.end('transfer')).toEqual({ ok: true })
+    ask.mockResolvedValueOnce({ ok: false, error: 'SESSION_OWNER_INVALID' })
+    expect(await doors.end('transfer')).toEqual({ ok: false, error: 'SESSION_OWNER_INVALID' })
     ask.mockResolvedValueOnce({})
-    await expect(doors.publish([])).rejects.toThrow('CLOUD_PUBLICATION_UNAVAILABLE')
+    await expect(doors.end('transfer')).rejects.toThrow('SESSION_OWNER_UNAVAILABLE')
     ask.mockResolvedValueOnce({ fingerprint: 'a'.repeat(64) })
-    expect(await doors.checkpoint()).toBe('a'.repeat(64))
+    expect(await doors.checkpoint('fo')).toEqual({ fingerprint: 'a'.repeat(64) })
     ask.mockResolvedValueOnce({ error: 'SERVICE_UNAVAILABLE' })
-    await expect(doors.checkpoint()).rejects.toThrow('CLOUD_PUBLICATION_UNAVAILABLE')
+    await expect(doors.checkpoint('fo')).rejects.toThrow('SESSION_OWNER_UNAVAILABLE')
     ask.mockRejectedValueOnce(new Error('gone'))
-    await expect(doors.publish([])).rejects.toThrow('gone')
+    await expect(doors.end('transfer')).rejects.toThrow('gone')
     await doors.ask('cloud_1', 'cloud_q_1', prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }))
     await doors.unask('cloud_1', 'cloud_q_1', cloudQuestionClose('cloud_1', 'cloud_q_1'))
     ask.mockResolvedValueOnce({ error: 'SERVICE_UNAVAILABLE' })
-    await expect(doors.ask('cloud_1', 'cloud_q_1', prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }))).rejects.toThrow('CLOUD_PUBLICATION_UNAVAILABLE')
+    await expect(doors.ask('cloud_1', 'cloud_q_1', prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }))).rejects.toThrow('SESSION_OWNER_UNAVAILABLE')
     ask.mockResolvedValueOnce({ error: 'SERVICE_UNAVAILABLE' })
-    await expect(doors.unask('cloud_1', 'cloud_q_1', cloudQuestionClose('cloud_1', 'cloud_q_1'))).rejects.toThrow('CLOUD_PUBLICATION_UNAVAILABLE')
+    await expect(doors.unask('cloud_1', 'cloud_q_1', cloudQuestionClose('cloud_1', 'cloud_q_1'))).rejects.toThrow('SESSION_OWNER_UNAVAILABLE')
     for (const method of ['ask', 'unask'] as const) {
-      ask.mockResolvedValueOnce({ ok: false, error: 'CLOUD_QUESTION_INVALID' })
+      ask.mockResolvedValueOnce({ ok: false, error: 'SESSION_OWNER_INVALID' })
       const value = method === 'ask' ? prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }) : cloudQuestionClose('cloud_1', 'cloud_q_1')
-      expect(await doors[method]('cloud_1', 'cloud_q_1', value as never)).toEqual({ ok: false, error: 'CLOUD_QUESTION_INVALID' })
+      expect(await doors[method]('cloud_1', 'cloud_q_1', value as never)).toEqual({ ok: false, error: 'SESSION_OWNER_INVALID' })
     }
-    expect(ask.mock.calls.map(([query]) => query)).toEqual(['cloud_publish', 'cloud_publish', 'cloud_publish',
-      'cloud_checkpoint', 'cloud_checkpoint', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'cloud_ask', 'cloud_unask', 'cloud_ask', 'cloud_unask'])
+    expect(ask.mock.calls.map(([query]) => query)).toEqual(['session_owner_end', 'session_owner_end', 'session_owner_end',
+      'session_owner_checkpoint', 'session_owner_checkpoint', 'session_owner_end', 'session_owner_ask', 'session_owner_unask', 'session_owner_ask', 'session_owner_unask', 'session_owner_ask', 'session_owner_unask'])
   })
 
   it('preserves the fixed owner conflict for publication and recovery without treating it as a fingerprint', async () => {
     const conflict = { ok: false, error: 'SESSION_OWNER_CONFLICT' }
     const ask = vi.fn(async () => conflict)
-    const doors = processCoreApi('/data', 'cloud', { ask }).cloud!
-    expect(await doors.publish([])).toEqual(conflict)
-    expect(await doors.checkpoint()).toEqual(conflict)
-    expect(ask.mock.calls).toEqual([['cloud_publish', { harnesses: [], cards: [] }], ['cloud_checkpoint', {}]])
+    const doors = processCoreApi('/data', 'cloud', { ask }).owners!
+    expect(await doors.end('transfer')).toEqual(conflict)
+    expect(await doors.checkpoint('fo')).toEqual(conflict)
+    expect(ask.mock.calls).toEqual([['session_owner_end', { transfer: 'transfer' }], ['session_owner_checkpoint', { factory: 'fo' }]])
   })
 
   it('acts on the core for an experiment: agents made, turns stopped and delivered, windows told, each asked', async () => {
@@ -336,4 +336,17 @@ describe('the core API a light service runs on in its own process', () => {
     expect(isSession(agent('a1'))).toBe(true)
     expect(isSession({ sessionId: 's' })).toBe(false)
   })
+})
+
+
+it('relays the exact staged owner envelopes and refuses a success without checkpoint evidence', async () => {
+  const ask = vi.fn(async (_query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => ({ ok: true }))
+  const door = processCoreApi('/data', 'cloud', { ask }).owners!
+  const begin = { format: 'session-facts-v1' as const, transfer: 't', factory: 'fo', before: 'a'.repeat(64), after: 'b'.repeat(64), count: 0 }
+  const append = { transfer: 't', index: 0, rows: [] }
+  expect(await door.begin(begin)).toEqual({ ok: true }); expect(await door.append(append)).toEqual({ ok: true })
+  expect(await door.cancel('t')).toEqual({ ok: true })
+  await expect(door.checkpoint('fo')).rejects.toThrow('SESSION_OWNER_UNAVAILABLE')
+  expect(ask.mock.calls).toEqual([['session_owner_begin', begin], ['session_owner_append', append],
+    ['session_owner_cancel', { transfer: 't' }], ['session_owner_checkpoint', { factory: 'fo' }]])
 })

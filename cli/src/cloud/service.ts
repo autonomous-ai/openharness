@@ -14,7 +14,9 @@ import { prepareCloudPort, type CloudCreateResult } from './responses.js'
 import { randomBytes } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { CloudCore, CloudResult, ServiceRequests } from '../core/api.js'
+import type { ServiceRequests } from '../core/api.js'
+import type { SessionOwnerCore, OwnerDelivery } from '../lib/sessionOwnerWire.js'
+import type { SessionFacts } from '../lib/sessionPresentation.js'
 import { CLOUD_AGENT_IDS, CLOUD_AGENTS, SAID_MAX, cloudAgentFrame, cloudHarnessIn, cloudRequestRefusal, isCloudAgent, repositoryOf, type CloudAgentId, type CloudCard, type CloudHarness } from '../lib/cloudAgents.js'
 import { deriveTurnSummary } from '../lib/deviceRecap.js'
 import { splitSummary } from '../lib/recapReads.js'
@@ -56,7 +58,7 @@ export function cloudCard(said: string): CloudCard | null {
 
 export interface CloudServiceOptions {
   dataDir: string
-  core: CloudCore
+  core: SessionOwnerCore
   bridge?: Bridge
   /** Swapped in tests for fakes of the makers. */
   adapters?: Partial<Record<CloudAgentId, CloudAdapter>>
@@ -354,7 +356,7 @@ export function startCloudService(options: CloudServiceOptions) {
     })
   }
 
-  const deliver = (agentId: string, text: string, existing?: CloudReservation): Promise<CloudResult> => admitted(reservation => { interrupt(agentId); return serial(agentId, async () => {
+  const deliver = (agentId: string, text: string, existing?: CloudReservation): Promise<OwnerDelivery> => admitted(reservation => { interrupt(agentId); return serial(agentId, async () => {
     const entry = entries.get(agentId)
     if (!entry) return { ok: false, error: 'UNKNOWN_AGENT', detail: 'That cloud harness is gone.' }
     const words = text.trim()
@@ -391,7 +393,7 @@ export function startCloudService(options: CloudServiceOptions) {
     return { ok: true }
   }) }, existing)
 
-  const answer = async (agentId: string, requestId: string, answers: Record<string, string>): Promise<CloudResult> => admitted(async reservation => {
+  const answer = async (agentId: string, requestId: string, answers: Record<string, string>): Promise<OwnerDelivery> => admitted(async reservation => {
     const entry = entries.get(agentId)
     const question = entry?.question
     if (!entry || !question || question.requestId !== requestId) return { ok: false, error: 'STALE_QUESTION', detail: 'That question was already answered.' }
@@ -406,10 +408,10 @@ export function startCloudService(options: CloudServiceOptions) {
   })
 
   /** Only the name Harness shows: nothing is asked of the maker, and its activity time stands. */
-  const rename = async (agentId: string, name: string, before: CloudHarness): Promise<CloudResult> => admitted(async reservation => {
+  const rename = async (agentId: string, name: string, before: SessionFacts): Promise<OwnerDelivery> => admitted(async reservation => {
     const entry = entries.get(agentId)
     if (!entry) return { ok: false, error: 'UNKNOWN_AGENT', detail: 'That cloud harness is gone.' }
-    if (entry.harness.agent !== before.agent || entry.harness.createdAt !== before.createdAt) return { ok: false, error: 'UNKNOWN_AGENT', detail: 'That cloud harness is gone.' }
+    if (entry.harness.agent !== before.engine || entry.harness.createdAt !== before.createdAt) return { ok: false, error: 'UNKNOWN_AGENT', detail: 'That cloud harness is gone.' }
     const trimmed = name.trim().slice(0, 120)
     if (!trimmed) return { ok: false, error: 'MISSING_NAME', detail: 'A harness needs a name.' }
     entry.harness.name = trimmed
@@ -417,7 +419,7 @@ export function startCloudService(options: CloudServiceOptions) {
     return { ok: true }
   })
 
-  const stopHarness = (agentId: string): Promise<CloudResult> => admitted(reservation => { interrupt(agentId); return serial(agentId, async () => {
+  const stopHarness = (agentId: string): Promise<OwnerDelivery> => admitted(reservation => { interrupt(agentId); return serial(agentId, async () => {
     const entry = entries.get(agentId)
     if (!entry) return { ok: false, error: 'UNKNOWN_AGENT', detail: 'That cloud harness is gone.' }
     const adapter = adapters[entry.harness.agent]

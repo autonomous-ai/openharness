@@ -24,7 +24,7 @@ describe('complete shared session facts at the component boundary', async () => 
   it('rejects malformed fixed member and launch tuples before projection or commit', async () => {
     const ordinary = (): unknown[] => ['registered', 'agent', 'session', 'claude', 1, null, 0,
       true, null, 'package', null, 'Name', true, null, false, true]
-    const cloud = (): unknown[] => ['cloud', 'remote', 'remote-session', 'fo', 2, null, 3, 'Cloud', null]
+    const cloud = (): unknown[] => ['service', 'remote', 'remote-session', 'fo', 2, null, 3, 'Cloud', null]
     const source = (members: unknown[]) => records([
       { type: 'begin', payload: { count: members.length, header: { version: 2,
         machine: { id: 'machine', computerId: 'computer', name: 'Desk' }, signedIn: true, environment: 'prod', hasWindow: true } } },
@@ -37,7 +37,7 @@ describe('complete shared session facts at the component boundary', async () => 
       .resolves.toBe('complete')
     expect(project).toHaveBeenCalledTimes(3)
     const malformed: unknown[] = [null, {}, [], ordinary().slice(0, -1), [...ordinary(), 'extra'], cloud().slice(0, -1), [...cloud(), 'extra'],
-      ['gone', 'other', 'removed'], ['gone', 'registered', ''], ['gone', 'cloud', 'removed', 'extra']]
+      ['gone', 'other', 'removed'], ['gone', 'registered', ''], ['gone', 'service', 'removed', 'extra']]
     for (const [index, value] of [[0, 'other'], [1, ''], [2, null], [3, ''], [4, Infinity], [5, 7], [6, '0'],
       [7, 0], [8, false], [9, true], [9, 7], [11, 7], [12, 7], [13, 7], [14, null], [15, null], [15, 7]] as const) {
       const member = ordinary(); member[index] = value; malformed.push(member)

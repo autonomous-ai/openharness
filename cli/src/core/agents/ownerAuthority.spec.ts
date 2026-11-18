@@ -1,3 +1,4 @@
+import { type SessionOwnerPort as CloudPort } from '../../lib/sessionOwnerWire.js'
 /** Native claims fence service operations even when the claim retires between two service reads. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -5,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { RegisteredSession, registry as Registry } from '../../lib/registry.js'
 import type { SessionStorage } from '../../lib/sessionStorage.js'
-import type { CloudPort, ReadRecord, SessionReadHeader, SessionReadValue } from '../api.js'
+import type { ReadRecord, SessionReadHeader, SessionReadValue } from '../api.js'
 import type { QuestionWatcherDeps } from '../../lib/questionController.js'
 import { closeSessionStorageFixture } from '../../testing/sessionStorageFixture.js'
 
@@ -94,9 +95,9 @@ async function peer() {
 }
 
 async function fixture(startHeld = false) {
-  const [{ createCloudAgents }, { createQuestions, createQuestionResponse }, { cloudFactory, deviceFactory },
+  const [{ createCloudOwners }, { createQuestions, createQuestionResponse }, { cloudFactory, deviceFactory },
     { prepareCloudQuestion, cloudQuestionClose }, { cloudAgentFrame }] = await Promise.all([
-    import('./cloud.js'), import('../questions.js'), import('../../testing/sessionFactories.js'),
+    import('../../testing/cloudOwners.js'), import('../questions.js'), import('../../testing/sessionFactories.js'),
     import('../../cloud/questions.js'), import('../../lib/cloudAgents.js'),
   ])
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn(), sendRemote: vi.fn() }
@@ -119,7 +120,7 @@ async function fixture(startHeld = false) {
   }
   let selected: CloudPort | null = port
   const start = gate(false), entered = gate(undefined)
-  const cloud = createCloudAgents({ ownsFactory: cloudFactory, native: id => registry.resolve(id) !== undefined, port: () => selected, clients,
+  const cloud = createCloudOwners({ ownsFactory: cloudFactory, native: id => registry.resolve(id) !== undefined, port: () => selected, clients,
     questions: asking.presentations, log,
     whenStarting: () => { if (!startHeld) return null; entered.resolve(undefined); return start.promise },
   })
@@ -204,7 +205,7 @@ describe('native and service ownership through actual callers', () => {
     // successor from desktop or the dial, even if that successor retired before this publication.
     expect(t.cloud.doors.publish([])).toEqual({ ok: true })
     expect(t.cloud.frames()).toEqual([])
-    expect(t.cloud.doors.checkpoint()).toBe((await import('../../lib/cloudAgents.js')).cloudFingerprint([]))
+    expect(t.cloud.doors.checkpoint()).toEqual({ fingerprint: (await import('../../cloud/cards.js')).cloudPresentationFingerprint([]) })
     if (state === 'current') expect(registry.byAgent(OWNER)?.engine).toBe('claude')
     expect(t.clients.send).not.toHaveBeenCalled()
     expect(t.clients.sendCommander).not.toHaveBeenCalled()
@@ -289,7 +290,7 @@ describe('native and service ownership through actual callers', () => {
       selectedModel: null, terminalAvailable: registry.terminalAvailable(row.agentId),
     })
     const list = createAgentList({ deviceFactory: t.deviceFactory, registry, stoppedAgents: { available: async () => [] },
-      toProject: project, toStoppedProject: project, cloudFrames: t.cloud.frames,
+      toProject: project, toStoppedProject: project, serviceFrames: t.cloud.frames,
       harnessResourcesReader: async () => ({ sampledAt: '2026-11-19T00:00:00.000Z', agents: [] }),
       harnessStorageReader: async () => new Map(), monitorActivityProvider: null, monitorCompletions: { state: () => 'idle' },
     })
@@ -305,7 +306,7 @@ describe('native and service ownership through actual callers', () => {
     const events: Array<ReadRecord<SessionReadHeader, SessionReadValue>> = []
     await readSessions({ registry,
       // The existing main.ts adapter; the shared-owner migration removes this cast with the old branch.
-      cloudRead: { ids: t.cloud.dialIds, row: id => t.cloud.dialRow(id) as unknown as RegisteredSession | undefined },
+      serviceRead: { ids: t.cloud.dialIds, row: id => t.cloud.dialRow(id) },
       facts: row => agentFacts(row, registry.terminalAvailable(row.agentId)), runtimeProfile: () => null,
       turns: fakeCore().turns,
       machine: { id: () => 'fixture', computerId: () => 'fixture', name: () => 'Fixture' },
@@ -353,7 +354,7 @@ describe('native and service ownership through actual callers', () => {
   it('keeps a typed recovery conflict after native retirement and refuses unchanged owner replay', async () => {
     const t = await fixture(); t.install()
     const fingerprint = await t.cloud.doors.checkpoint()
-    expect(fingerprint).toMatch(/^[a-f0-9]{64}$/)
+    expect(fingerprint).toEqual({ fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/) })
     expect(await nativeClaim()).not.toBeNull(); await nativeRetire()
     expect(await t.cloud.doors.checkpoint()).toEqual({ ok: false, error: 'SESSION_OWNER_CONFLICT' })
     expect(t.publish()).toEqual({ ok: false, error: 'SESSION_OWNER_CONFLICT' })
@@ -370,7 +371,7 @@ describe('native and service ownership through actual callers', () => {
     // A new request captures the new owner, and the prepared payload remains exactly the provider row.
     expect(await t.cloud.update({ agentId: OWNER, name: 'New name' })).toHaveProperty('agent.name', 'New name')
     const captured = vi.mocked(t.port.rename).mock.calls[0][2]
-    const expected = { ...t.row, said: null }
+    const expected = JSON.parse((await import('../../lib/sessionPresentation.js')).encodeSessionFacts((await import('../../lib/cloudAgents.js')).cloudPresentation({ ...t.row, said: null })))
     expect(captured).toEqual(expected)
     expect(new Set(Reflect.ownKeys(captured))).toEqual(new Set(Object.keys(expected)))
   })

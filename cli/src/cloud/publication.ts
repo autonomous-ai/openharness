@@ -1,15 +1,16 @@
 /** The Cloud component's bounded output owner. Core retains no receipts or notification history. */
 import { createHash } from 'node:crypto'
-import type { CloudCore, CloudQuestionClose, CloudQuestionPresentation } from '../core/api.js'
+import type { SessionOwnerCore, OwnerQuestionClose, OwnerQuestion } from '../lib/sessionOwnerWire.js'
 import { cloudHarnessIn, type CloudHarness } from '../lib/cloudAgents.js'
 import { cloudQuestionClose, prepareCloudQuestion } from './questions.js'
-import { emptyPresentation, prepareCloudCards, type CloudPresentation } from './cards.js'
+import { cloudPresentationFingerprint, emptyPresentation, prepareCloudCards, type CloudPresentation } from './cards.js'
+import { CLOUD_OWNER_FACTORY, transferCloudPresentation } from './transfer.js'
 
-export interface CloudJournal { version: 1; accepted: CloudPresentation; pending: CloudPresentation | null; checksum: string }
+export interface CloudJournal { version: 2; accepted: CloudPresentation; pending: CloudPresentation | null; checksum: string }
 type Question = { agentId: string; requestId: string; question: { text: string; choices: string[] } }
 type Action = { kind: 'publish'; changed: CloudHarness[]; removed: string[] }
-  | { kind: 'ask'; value: { agentId: string; requestId: string; question: CloudQuestionPresentation } }
-  | { kind: 'unask'; agentId: string; requestId: string; close: CloudQuestionClose }
+  | { kind: 'ask'; value: { agentId: string; requestId: string; question: OwnerQuestion } }
+  | { kind: 'unask'; agentId: string; requestId: string; close: OwnerQuestionClose }
 interface Queued { action: Action; bytes: number }
 export interface CloudReservation { actions: number; bytes: number; released: boolean }
 export const CLOUD_OUTPUT_ACTIONS = 64
@@ -40,12 +41,12 @@ function presentation(value: unknown): value is CloudPresentation {
 function journalIn(value: unknown): CloudJournal | null {
   if (!value || typeof value !== 'object') return null
   const journal = value as CloudJournal
-  return journal.version === 1 && presentation(journal.accepted) && (journal.pending === null || presentation(journal.pending))
+  return journal.version === 2 && presentation(journal.accepted) && (journal.pending === null || presentation(journal.pending))
     && Buffer.byteLength(JSON.stringify(journal)) <= 2 * CLOUD_OUTPUT_BYTES && journal.checksum === checksum(journal) ? journal : null
 }
 
 export function createCloudPublication(options: {
-  core: CloudCore
+  core: SessionOwnerCore
   saved: unknown
   /** Atomically writes this metadata alongside the last durable provider snapshot, never optimistic state. */
   persist(journal: CloudJournal): void
@@ -64,7 +65,7 @@ export function createCloudPublication(options: {
   let wire = new Map<string, CloudHarness>(), projected = new Map<string, CloudHarness>()
   const cancellations = new Set<() => void>()
   const state = (): CloudJournal => {
-    const body = { version: 1 as const, accepted, pending }
+    const body = { version: 2 as const, accepted, pending }
     return { ...body, checksum: checksum(body) }
   }
   const fail = (reason: string, permanent = false): void => {
@@ -72,9 +73,9 @@ export function createCloudPublication(options: {
     if (!unavailable || permanent) options.log(`[cloud] ${reason}`)
     unavailable = true
   }
-  const within = <T>(work: T | Promise<T>): Promise<T> => new Promise((resolve, reject) => {
+  const within = <T>(work: T | Promise<T>, waitMs = WAIT_MS): Promise<T> => new Promise((resolve, reject) => {
     const cancel = () => finish(() => reject(new Error('CLOUD_PUBLICATION_UNAVAILABLE')))
-    const timer = setTimeout(cancel, WAIT_MS).unref()
+    const timer = setTimeout(cancel, waitMs).unref()
     const finish = (done: () => void) => { clearTimeout(timer); cancellations.delete(cancel); done() }
     cancellations.add(cancel)
     Promise.resolve(work).then(value => finish(() => resolve(value)), () => finish(() => reject(new Error('CLOUD_PUBLICATION_UNAVAILABLE'))))
@@ -107,21 +108,28 @@ export function createCloudPublication(options: {
             pending = prepared.next
             persist()
             persisted = true
-            const result = await within(options.core.publish(rows, prepared.cards))
+            // The provider plus pending common image is durable before begin or the first append can await.
+            const result = await transferCloudPresentation(options.core, rows, prepared.cards, accepted.fingerprint,
+              prepared.next.fingerprint, within, () => generation === epoch && connected && !stopped, WAIT_MS)
             if (generation !== epoch) return
-            if (!result.ok) { fail(result.error === 'SESSION_OWNER_CONFLICT'
-              ? 'CLOUD_PUBLICATION_RECOVERY_REQUIRED' : 'CLOUD_PUBLICATION_INVALID', true); return }
+            if (!result.ok) {
+              if (result.error === 'SESSION_OWNER_CONFLICT') fail('CLOUD_PUBLICATION_RECOVERY_REQUIRED', true)
+              else if (result.error === 'SESSION_OWNER_LIMIT') fail('CLOUD_PUBLICATION_LIMIT', true)
+              else if (result.error === 'SESSION_OWNER_INVALID') fail('CLOUD_PUBLICATION_INVALID', true)
+              else fail('CLOUD_PUBLICATION_UNAVAILABLE')
+              return
+            }
             accepted = pending
             pending = null
           } else if (item.action.kind === 'ask') {
             const { agentId, requestId, question } = item.action.value
             const result = await within(options.core.ask(agentId, requestId, question))
             if (generation !== epoch) return
-            if (!result.ok) { fail('CLOUD_QUESTION_INVALID', true); return }
+            if (!result.ok) { fail(result.error === 'SERVICE_UNAVAILABLE' ? 'CLOUD_PUBLICATION_UNAVAILABLE' : 'CLOUD_QUESTION_INVALID', result.error !== 'SERVICE_UNAVAILABLE'); return }
           } else {
             const result = await within(options.core.unask(item.action.agentId, item.action.requestId, item.action.close))
             if (generation !== epoch) return
-            if (!result.ok) { fail('CLOUD_QUESTION_INVALID', true); return }
+            if (!result.ok) { fail(result.error === 'SERVICE_UNAVAILABLE' ? 'CLOUD_PUBLICATION_UNAVAILABLE' : 'CLOUD_QUESTION_INVALID', result.error !== 'SERVICE_UNAVAILABLE'); return }
           }
           queue.shift(); bytes -= item.bytes
         }
@@ -155,7 +163,6 @@ export function createCloudPublication(options: {
       const row = cloudHarnessIn(raw)
       if (!row || rows.has(row.agentId)) { fail('CLOUD_PUBLICATION_INVALID', true); throw new Error('CLOUD_PUBLICATION_INVALID') }
       if (Buffer.byteLength(JSON.stringify(row)) > ROW_BYTES) { fail('CLOUD_PUBLICATION_LIMIT', true); throw new Error('CLOUD_PUBLICATION_LIMIT') }
-      if (raw.card && JSON.stringify(raw.card) === JSON.stringify(row.card)) row.card = raw.card
       rows.set(row.agentId, row)
     }
     const encoded = JSON.stringify([...rows.values()])
@@ -166,7 +173,7 @@ export function createCloudPublication(options: {
     if (force) {
       wire = rows; projected = rows
       // Recovery already proved this exact nonempty image against an intact durable journal.
-      if (provenImage && createHash('sha256').update(encoded).digest('hex') === provenImage) return false
+      if (provenImage && cloudPresentationFingerprint(rows.values()) === provenImage) return false
     }
     const changed = [...rows.values()].filter(row => JSON.stringify(projected.get(row.agentId)) !== JSON.stringify(row))
     const removed = [...projected.keys()].filter(id => !rows.has(id))
@@ -201,9 +208,10 @@ export function createCloudPublication(options: {
       cancel(); initialized = true; connected = true; recovering = true; running = false
       queue = []; bytes = 0; wire = new Map(); projected = new Map()
       try {
-        const image = await within(options.core.checkpoint())
+        const checkpoint = await within(options.core.checkpoint(CLOUD_OWNER_FACTORY))
         if (generation !== epoch) return
-        if (typeof image !== 'string') { fail('CLOUD_PUBLICATION_RECOVERY_REQUIRED', true); return }
+        if (!('fingerprint' in checkpoint)) { fail('CLOUD_PUBLICATION_RECOVERY_REQUIRED', true); return }
+        const image = checkpoint.fingerprint
         // Empty authority is a fresh core, including an explicit operator restart after a journal hold.
         const empty = emptyPresentation(), retained = image !== empty.fingerprint
         if (!retained) accepted = empty

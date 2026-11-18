@@ -1,3 +1,4 @@
+import { serviceSession } from '../testing/sessionSnapshot.js'
 // The fleet service: the machine list kept fresh, the lane to the other machines, the router every
 // turn goes through, and ⌘K's two requests answered from it — with the dial nowhere in sight.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -293,7 +294,7 @@ describe('⌘K: which agent a typed task belongs to', () => {
     const core = fakeCore({
       agents: {
         advertised: vi.fn(() => [session('a1')]),
-        cloud: vi.fn(() => [{ ...session('cloud_1', 2, 'fo'), defaultName: 'haircut' } as RegisteredSession]),
+        serviceSessions: vi.fn(() => [serviceSession('cloud_1', { registeredAt: 2, engine: 'fo', defaultName: 'haircut', displayName: 'haircut' })]),
         displayName: vi.fn((s: RegisteredSession) => s.agentId),
       },
     })

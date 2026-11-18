@@ -1,7 +1,10 @@
+import { emptyOwnerCore } from '../testing/cloudOwners.js'
+import type { ServiceSessionRow } from '../lib/sessionOwnerWire.js'
+import { OWNER_DOWN as CLOUD_DOWN, OWNER_REPLY_DOWN as CLOUD_REPLY_DOWN, OWNER_ANSWER_DOWN as CLOUD_ANSWER_DOWN } from '../lib/sessionOwnerWire.js'
 import { SERVICE_HOSTS } from '../harnessd/services.js'
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { readSessions, SESSION_READ_HEADER_BYTES, SESSION_READ_MEMBERS_BYTES, AGENT_BROWSER_REQUESTS, CLOUD_DOWN, CLOUD_REPLY_DOWN, CLOUD_ANSWER_DOWN, CLOUD_FALLBACKS, CONNECTOR_SYNC_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, sendLocalWindow, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, PAIR_WAIT_MS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WORKSPACES_FALLBACKS, WORKSPACES_OFF, WORKSPACES_UNAVAILABLE, type CoreApiDeps } from './api.js'
+import { readSessions, SESSION_READ_HEADER_BYTES, SESSION_READ_MEMBERS_BYTES, AGENT_BROWSER_REQUESTS, OWNER_FALLBACKS, CONNECTOR_SYNC_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, sendLocalWindow, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, PAIR_WAIT_MS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WORKSPACES_FALLBACKS, WORKSPACES_OFF, WORKSPACES_UNAVAILABLE, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 import { answerAgentQuery } from './agentQueries.js'
@@ -219,7 +222,7 @@ describe('the core API services stand on', () => {
     deps.runtimeProfile = session => { order.push(`profile ${session.agentId}`); parts.dsh = session.agentId; return 'selected' }
     deps.turns.running = id => { order.push(`running ${id}`); return id === live.sessionId }
     deps.facts = session => { order.push(`facts ${session.agentId}`); return { displayName: session.agentId, terminalAvailable: session === live, parts } }
-    deps.cloudRead = { ids: () => ['cloud'][Symbol.iterator](), row: () => ({ ...live, agentId: 'cloud', displayName: 'Cloud name', runtimeProfile: 'cloud-profile' } as RegisteredSession) }
+    deps.serviceRead = { ids: () => ['cloud'][Symbol.iterator](), row: () => ({ ...live, agentId: 'cloud', displayName: 'Cloud name', runtimeProfile: 'cloud-profile' } as unknown as ServiceSessionRow) }
     const pending = capture(deps)
     parts.dsh = 'after-await'; live.launch = { state: 'ready' }
     const captured = await pending
@@ -235,13 +238,13 @@ describe('the core API services stand on', () => {
     expect(JSON.stringify(captured)).not.toContain('PRIVATE')
     expect(deps.stoppedAgents.list).not.toHaveBeenCalled()
     // Optional source fields keep their exact absence and fallback meaning, without inventing full rows.
-    deps.cloudRead = undefined; deps.facts = session => ({ displayName: session.agentId, terminalAvailable: true, parts: { dsh: null } })
+    deps.serviceRead = undefined; deps.facts = session => ({ displayName: session.agentId, terminalAvailable: true, parts: { dsh: null } })
     for (const launch of [{ state: 'starting' }, { state: 'ready' }, { state: 'failed', error: 'FAILED' },
       { state: 'failed', error: 'FAILED', detail: 'detail' }] as const) {
       live.launch = launch
       expect((await capture(deps)).registered[0].session.launch).toEqual(launch)
     }
-    deps.cloudRead = { ids: () => ['cloud'][Symbol.iterator](), row: () => live }
+    deps.serviceRead = { ids: () => ['cloud'][Symbol.iterator](), row: () => live as unknown as ServiceSessionRow }
     expect((await capture(deps)).cloud[0]).toMatchObject({ displayName: '', selectedModel: null })
   })
 
@@ -386,31 +389,31 @@ describe('the core API services stand on', () => {
 
   it.each(['credential', 'null', 'absent'] as const)('keeps %s launch custody out of every service agent read', async (kind) => {
     const override = storedGridFixture({ networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-agent-view-canary' })
-    const live = row('live'), stopped = row('stopped'), cloud = row('cloud')
-    for (const session of [live, stopped, cloud]) {
+    const live = row('live'), stopped = row('stopped')
+    for (const session of [live, stopped]) {
       if (kind === 'credential') session.gridLaunch = override
       else if (kind === 'null') session.gridLaunch = null
     }
-    const before = structuredClone([live, stopped, cloud])
+    const before = structuredClone([live, stopped])
     const deps = coreDeps()
     deps.registry.list = () => [live]
     deps.registry.advertised = () => [live]
     deps.registry.byAgent = id => id === live.agentId ? live : undefined
     deps.registry.resolve = id => id === live.sessionId ? live : undefined
     deps.stoppedAgents.list = async () => [stopped]
-    const core = createCoreApi({ ...deps, cloudRows: () => [cloud] })
+    const core = createCoreApi(deps)
     const views = [...await core.agents.all(), ...core.agents.live(), ...core.agents.advertised(),
-      core.agents.byAgent('live')!, core.agents.resolve('s-live')!, ...core.agents.cloud!()]
-    expect(views.map(session => session.agentId)).toEqual(['live', 'stopped', 'live', 'live', 'live', 'live', 'cloud'])
+      core.agents.byAgent('live')!, core.agents.resolve('s-live')!]
+    expect(views.map(session => session.agentId)).toEqual(['live', 'stopped', 'live', 'live', 'live', 'live'])
     for (const session of views) {
       expect(Object.hasOwn(session, 'gridLaunch')).toBe(false)
       expect(session).toEqual(row(session.agentId))
-      expect([live, stopped, cloud].includes(session)).toBe(false)
+      expect([live, stopped].includes(session)).toBe(false)
     }
-    expect([live, stopped, cloud]).toEqual(before)
+    expect([live, stopped]).toEqual(before)
     if (kind === 'credential') expect(live.gridLaunch).toBe(override)
     // Even a view taken before a key is assigned must not become a secret-bearing alias later.
-    for (const session of [live, stopped, cloud]) session.gridLaunch = override
+    for (const session of [live, stopped]) session.gridLaunch = override
     expect(JSON.stringify(views)).not.toContain(override.credential.binding)
     expect(views.every(session => !Object.hasOwn(session, 'gridLaunch'))).toBe(true)
     expect(core.agents.byAgent('missing')).toBeUndefined()
@@ -461,12 +464,12 @@ describe('the core API services stand on', () => {
     const conversations = { ...CONVERSATIONS_OFF }
     expect(createCoreApi({ ...deps, conversations }).conversations).toBe(conversations)
     // The cloud agents' doors, only from a core that offers them.
-    expect(core.cloud).toBeUndefined()
-    const cloud = { checkpoint: vi.fn(() => 'a'.repeat(64)), publish: vi.fn(() => ({ ok: true as const })), ask: vi.fn(), unask: vi.fn() }
-    expect(createCoreApi({ ...deps, cloud }).cloud).toBe(cloud)
-    expect(core.agents.cloud).toBeUndefined()
-    const rows = [{ agentId: 'cloud_1' }] as RegisteredSession[]
-    expect(createCoreApi({ ...deps, cloudRows: () => rows }).agents.cloud!()).toEqual(rows)
+    expect(core.owners).toBeUndefined()
+    const owners = emptyOwnerCore()
+    expect(createCoreApi({ ...deps, owners }).owners).toBe(owners)
+    expect(core.agents.serviceSessions).toBeUndefined()
+    const rows = [{ agentId: 'cloud_1' }] as ServiceSessionRow[]
+    expect(createCoreApi({ ...deps, serviceRows: () => rows }).agents.serviceSessions!()).toEqual(rows)
     expect(core.dataDir).toBe('/data')
     expect(await core.terminals.open({ argv: ['/bin/zsh'], cwd: '/work' })).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
     const terminals = { ...TERMINALS_OFF, open: vi.fn(async () => ({ ok: true as const, agentId: 'shell' })), watch: TERMINALS_OFF.watch }
@@ -797,10 +800,10 @@ describe('the core API services stand on', () => {
   })
 
   it('falls back, when cloud agents fail, to refusing each call with a reason a person reads', () => {
-    for (const member of ['create', 'rename', 'stopHarness'] as const) expect(readFallback(CLOUD_FALLBACKS[member])).toEqual({ deferred: true, value: CLOUD_REPLY_DOWN })
-    expect(readFallback(CLOUD_FALLBACKS.deliver)).toEqual({ deferred: true, value: CLOUD_DOWN })
-    expect(readFallback(CLOUD_FALLBACKS.answer)).toEqual({ deferred: true, value: CLOUD_ANSWER_DOWN })
-    expect(CLOUD_DOWN.detail).toContain('Cloud agents are not running here')
+    for (const member of ['create', 'rename', 'stopHarness'] as const) expect(readFallback(OWNER_FALLBACKS[member])).toEqual({ deferred: true, value: CLOUD_REPLY_DOWN })
+    expect(readFallback(OWNER_FALLBACKS.deliver)).toEqual({ deferred: true, value: CLOUD_DOWN })
+    expect(readFallback(OWNER_FALLBACKS.answer)).toEqual({ deferred: true, value: CLOUD_ANSWER_DOWN })
+    expect(CLOUD_DOWN.detail).toContain('Agents are not running here')
   })
 
   it('starts with every port empty: a service fills its own when it starts', () => {

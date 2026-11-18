@@ -16,8 +16,8 @@
  * - `observer_send`: a frame Share sealed for one of its observers, to the relay through the gateway;
  * - `account`: the account signed in here, its id and email, as the core reads it (`core.account.identity`), for Share
  *   alone: the observers a shared tab wants are derived for this account's harnesses;
- * - `cloud_publish`, `cloud_ask`, `cloud_unask`: the cloud agents' harnesses and their questions
- *   (`core.cloud`, core/agents/cloud.ts), for the cloud service alone;
+ * Session-owner stages and questions use the same authenticated handler, independently of experiment membership.
+ * Their bound door validates the service's immutable factory declaration and current owner authority.
  * The core answers them only for the experiments (core/api.ts `EXPERIMENTS`): creating an agent or
  * telling the windows something is no other process's to ask. The process's side is
  * services/processCoreApi.ts. Agent Messages, an experiment until 2026-10-12, asks a few of the same and is
@@ -28,11 +28,14 @@ import { isAbsolute } from 'node:path'
 import { experimentBackendAllowed, type AgentCreateRequest, type CoreApi } from './api.js'
 import { agentDshContext } from '../lib/agentFrame.js'
 import type { ServiceQueryAuthority } from './serviceLinks.js'
+import type { SessionOwnerCore, OwnerBegin, OwnerAppend, OwnerQuestion, OwnerQuestionClose } from '../lib/sessionOwnerWire.js'
 
 type Payload = Record<string, unknown>
-type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud'>
+type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_checkpoint', 'cloud_publish', 'cloud_ask', 'cloud_unask'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account'])
+const OWNER_QUERIES: ReadonlySet<string> = new Set(['session_owner_begin', 'session_owner_append', 'session_owner_end',
+  'session_owner_cancel', 'session_owner_checkpoint', 'session_owner_ask', 'session_owner_unask'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
 /** The existing ID-only Create shape. Unknown launch-identity fields never enter the creator. */
@@ -116,7 +119,20 @@ export const routeRefused = createRouteRefusals()
 
 /** The answer to an experiment's query, or null when it is not one of these. */
 export async function answerExperimentQuery(core: Core, experiments: ReadonlySet<string>, service: string, query: string, payload: Payload,
-  refused: ReturnType<typeof createRouteRefusals> = routeRefused, authority?: ServiceQueryAuthority): Promise<Payload | null> {
+  refused: ReturnType<typeof createRouteRefusals> = routeRefused, authority?: ServiceQueryAuthority, owners?: SessionOwnerCore): Promise<Payload | null> {
+  // This door is bound by composition to the exact authenticated service; factory admission is shared with native creation.
+  if (OWNER_QUERIES.has(query)) {
+    if (authority?.current?.() !== true || !owners) return { error: 'SERVICE_UNAVAILABLE' }
+    switch (query) {
+      case 'session_owner_begin': return await owners.begin(payload as unknown as OwnerBegin)
+      case 'session_owner_append': return await owners.append(payload as unknown as OwnerAppend)
+      case 'session_owner_end': return await owners.end(text(payload.transfer))
+      case 'session_owner_cancel': return await owners.cancel(text(payload.transfer))
+      case 'session_owner_checkpoint': return await owners.checkpoint(text(payload.factory))
+      case 'session_owner_ask': return await owners.ask(text(payload.agentId), text(payload.questionId), payload.question as OwnerQuestion)
+      case 'session_owner_unask': return await owners.unask(text(payload.agentId), text(payload.questionId), payload.close as OwnerQuestionClose)
+    }
+  }
   if (!QUERIES.has(query)) return null
   // `account` is also what models asks for the account's grid name, of its own link (core/modelsLink.ts): only
   // Share's is answered here. Seen 2026-10-18: since #1376 models got NOT_AN_EXPERIMENT back instead, so the backend's grid
@@ -155,21 +171,6 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) }
       }
-    case 'cloud_checkpoint':
-    case 'cloud_publish':
-    case 'cloud_ask':
-    case 'cloud_unask': {
-      if (service !== 'cloud' || !core.cloud) return { error: 'NOT_CLOUD' }
-      // Earlier asynchronous handlers can outlive this service connection; check at the effect itself.
-      if (authority?.current?.() !== true) return { error: 'SERVICE_UNAVAILABLE' }
-      if (query === 'cloud_checkpoint') {
-        const checkpoint = await core.cloud.checkpoint()
-        return typeof checkpoint === 'string' ? { fingerprint: checkpoint } : checkpoint
-      }
-      if (query === 'cloud_publish') return await core.cloud.publish(payload.harnesses as Parameters<NonNullable<Core['cloud']>['publish']>[0], payload.cards as Parameters<NonNullable<Core['cloud']>['publish']>[1])
-      else if (query === 'cloud_ask') return await core.cloud.ask(text(payload.agentId), text(payload.questionId), payload.question as Parameters<NonNullable<Core['cloud']>['ask']>[2])
-      else return await core.cloud.unask(text(payload.agentId), text(payload.questionId), payload.close as Parameters<NonNullable<Core['cloud']>['unask']>[2])
-    }
     case 'account': {
       const known = await core.account.identity()
       return known ? { ...known } : { error: 'ACCOUNT_UNAVAILABLE' }

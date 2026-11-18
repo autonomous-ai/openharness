@@ -103,7 +103,7 @@ export type DeviceSession = FleetSession & { displayName?: string; runtimeProfil
 export type DevicesCore = Omit<CoreApi, 'agents'> & {
   agents: Pick<CoreApi['agents'], 'runtimeModels' | 'setRuntime' | 'fork' | 'activityText' | 'activitySnapshot'> & {
     advertised(): DeviceSession[]
-    cloud?(): DeviceSession[]
+    serviceSessions?(): DeviceSession[]
     displayName(session: DeviceSession): string
     runtimeProfile(session: DeviceSession): string | null
   }
@@ -717,7 +717,7 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
 
   const cableHost = new DaemonCableHost({
     // The cloud harnesses too, where the core offers them: tiles on the desk the dial walks like any other.
-    sessions: () => [...core.agents.advertised(), ...core.agents.cloud?.() ?? []],
+    sessions: () => [...core.agents.advertised(), ...core.agents.serviceSessions?.() ?? []],
     refresh: refreshDisplay,
     displayName: (session) => core.agents.displayName(session),
     appFocus: () => focus.voice ?? undefined,
@@ -1581,7 +1581,7 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
     const current = frame.type === 'commander_event' && sessionId !== undefined ? () => {
       if (stopped || typeof agentId !== 'string' || typeof sessionId !== 'string' || !sessionId) return false
       const row = core.agents.advertised().find(row => row.agentId === agentId)
-        ?? core.agents.cloud?.().find(row => row.agentId === agentId)
+        ?? core.agents.serviceSessions?.().find(row => row.agentId === agentId)
       return row?.sessionId === sessionId
     } : () => true
     if (!current()) return

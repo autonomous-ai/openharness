@@ -45,7 +45,7 @@ describe('the agents a guest asks for', () => {
   it('only its own harnesses, oldest first; never the owner\'s, the stopped, the cloud ones or the monitor\'s readings', async () => {
     const [mine, also, older, owners, theirs] = [session('mine', { guest: 'kim@acme.io' }), session('also', { guest: 'kim@acme.io' }), session('older', { guest: 'kim@acme.io' }), session('owners'), session('theirs', { guest: 'lee@acme.io' })]
     const cloud = vi.fn(() => [])
-    const { created, replies, deps } = setup([mine, also, older, owners, theirs], [session('saved', { guest: 'kim@acme.io' })], { cloudFrames: cloud })
+    const { created, replies, deps } = setup([mine, also, older, owners, theirs], [session('saved', { guest: 'kim@acme.io' })], { serviceFrames: cloud })
     created.set('older', '2026-10-05T09:00:00.000Z')
     await createAgentList(deps).agentsList({ includeStopped: true, monitor: true }, () => 'web', (r) => { replies.push(r) }, 'kim@acme.io')
     // Made at the same time, the id breaks the tie.
@@ -92,7 +92,7 @@ describe('the cloud harnesses', () => {
 
   it('are listed with the rest in the same order, and a stopped one only where stopped agents are asked for', async () => {
     const a1 = session('a1')
-    const { ask, replies } = setup([a1], [], { cloudFrames: () => [cloud('cloud_1', '2026-10-05T09:00:00.000Z'), cloud('cloud_2', '2026-10-05T11:00:00.000Z', 'stopped')] })
+    const { ask, replies } = setup([a1], [], { serviceFrames: () => [cloud('cloud_1', '2026-10-05T09:00:00.000Z'), cloud('cloud_2', '2026-10-05T11:00:00.000Z', 'stopped')] })
     await ask({})
     expect(replies[0].agents.map((agent: { id: string }) => agent.id)).toEqual(['cloud_1', 'a1'])
     await ask({ includeStopped: true })
@@ -111,7 +111,7 @@ describe('the agents a device asks for', () => {
       status: 'active', selectedModel: null, location: 'cloud' } as never
     const { replies, ask } = setup([session('native'), session('excluded', { engine: 'codex' }),
       session('unknown', { engine: 'unknown' as never }), session('shell', { engine: 'terminal' })], [],
-    { deviceFactory, cloudFrames: () => [cloud] })
+    { deviceFactory, serviceFrames: () => [cloud] })
     await ask({}, 'device')
     expect(JSON.stringify(replies)).toBe(JSON.stringify([{ agents: [
       { id: 'cloud_1', name: 'Cloud', selectedModel: null },

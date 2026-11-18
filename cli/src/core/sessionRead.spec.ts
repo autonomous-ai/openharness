@@ -1,19 +1,20 @@
+import type { ServiceSessionRow } from '../lib/sessionOwnerWire.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readSessions, SESSION_READ_MEMBERS_BYTES, type CoreApiDeps, type ReadRecord, type SessionReadHeader, type SessionReadValue } from './api.js'
 import type { RegisteredSession } from '../lib/registry.js'
-import { snapshotRow, snapshotMember } from '../testing/sessionSnapshot.js'
+import { snapshotRow, snapshotMember, serviceSession } from '../testing/sessionSnapshot.js'
 
 type Event = ReadRecord<SessionReadHeader, SessionReadValue>
 const legacy = (events: Event[]) => events.map(event => event.type === 'row'
   ? { ...event, payload: { ...event.payload, value: snapshotMember(event.payload.value) } } : event)
 const row = (id: string) => ({ ...snapshotRow(id).session, defaultName: `Name ${id}` }) as RegisteredSession
 function fixture() {
-  const members = new Map(['a', 'b', 'c'].map(id => [id, row(id)])), cloud = new Map<string, RegisteredSession>()
+  const members = new Map(['a', 'b', 'c'].map(id => [id, row(id)])), cloud = new Map<string, ServiceSessionRow>()
   const identity = { machine: 'machine', computer: 'computer', signedIn: true, environment: 'prod' }
   const facts = vi.fn((value: RegisteredSession) => ({ displayName: value.defaultName!, terminalAvailable: true, parts: {} }))
   const deps = {
     registry: { list: () => { throw new Error('must not materialize registry') }, rows: () => members.values(), byAgent: (id: string) => members.get(id) } as unknown as CoreApiDeps['registry'],
-    cloudRead: { ids: () => cloud.keys(), row: (id: string) => cloud.get(id) }, facts, runtimeProfile: () => null,
+    serviceRead: { ids: () => cloud.keys(), row: (id: string) => cloud.get(id) }, facts, runtimeProfile: () => null,
     turns: { running: () => false } as unknown as CoreApiDeps['turns'],
     machine: { id: () => identity.machine, computerId: () => identity.computer, name: () => 'Desk' },
     signedIn: () => identity.signedIn, environment: () => identity.environment, hasWindow: () => true, log: vi.fn(),
@@ -92,11 +93,11 @@ describe('complete membership and current per-row facts', () => {
   it('reads a same-id re-add and current Cloud metadata without retaining old row objects', async () => {
     vi.useFakeTimers()
     const t = fixture(); t.members.clear(); t.members.set('a', row('a'))
-    t.cloud.set('cloud-a', row('cloud-a')); t.cloud.set('cloud-b', row('cloud-b'))
+    t.cloud.set('cloud-a', serviceSession('cloud-a')); t.cloud.set('cloud-b', serviceSession('cloud-b'))
     const pending = t.start()
     t.members.delete('a'); t.members.set('a', { ...row('a'), sessionId: 'readded' })
-    t.cloud.set('late', row('late')); t.cloud.delete('cloud-a')
-    t.cloud.set('cloud-b', { ...row('cloud-b'), sessionId: 'new-cloud', displayName: 'New Cloud', runtimeProfile: 'selected' } as RegisteredSession)
+    t.cloud.set('late', serviceSession('late')); t.cloud.delete('cloud-a')
+    t.cloud.set('cloud-b', { ...serviceSession('cloud-b'), sessionId: 'new-cloud', displayName: 'New Cloud', runtimeProfile: 'selected' })
     await t.advance(); await t.advance(); await t.advance(); await t.advance(); await t.advance(); await pending
     expect(legacy(t.events)[1]).toMatchObject({ payload: { value: { row: { session: { sessionId: 'readded' } } } } })
     expect(legacy(t.events)[2]).toMatchObject({ payload: { value: { source: 'cloud', gone: 'cloud-a' } } })

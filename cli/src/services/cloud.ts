@@ -14,8 +14,8 @@ export { CLOUD_REQUESTS } from '../core/api.js'
 
 /** The service on a core's doors, its port in `ports.cloud`: what its process keeps to tell a reconnected core again. */
 export function startCloudOn(core: CoreApi, ports: CorePorts, options: Partial<CloudServiceOptions> = {}): CloudService {
-  if (!core.cloud) throw new Error('this core offers cloud agents no doors')
-  const service = startCloudService({ dataDir: core.dataDir, core: core.cloud, ...options })
+  if (!core.owners) throw new Error('this core offers no session owner door')
+  const service = startCloudService({ dataDir: core.dataDir, core: core.owners, ...options })
   ports.cloud = Object.assign(service.port, { stop: () => service.stop() })
   return service
 }

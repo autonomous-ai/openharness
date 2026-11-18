@@ -34,20 +34,20 @@ describe('cloud agents in their own process', () => {
     expect(port.stopHarness).toHaveBeenCalledWith('cloud_1')
 
     // Before a core connects, what it tells the core goes nowhere; once one does, it is asked of that core.
-    await expect(core!.cloud!.publish([])).rejects.toThrow('not connected')
+    await expect(core!.owners!.end('transfer')).rejects.toThrow('not connected')
     const query = vi.fn(async () => ({ ok: true }))
     options!.onConnected!({ query } as unknown as CoreConnection)
     expect(republish).toHaveBeenCalled()
-    await core!.cloud!.publish([])
-    await core!.cloud!.ask('cloud_1', 'cloud_q_1', prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }))
-    await core!.cloud!.unask('cloud_1', 'cloud_q_1', cloudQuestionClose('cloud_1', 'cloud_q_1'))
+    await core!.owners!.end('transfer')
+    await core!.owners!.ask('cloud_1', 'cloud_q_1', prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }))
+    await core!.owners!.unask('cloud_1', 'cloud_q_1', cloudQuestionClose('cloud_1', 'cloud_q_1'))
     expect(query.mock.calls).toEqual([
-      ['cloud_publish', { harnesses: [], cards: [] }], ['cloud_ask', { agentId: 'cloud_1', questionId: 'cloud_q_1', question: prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }) }],
-      ['cloud_unask', { agentId: 'cloud_1', questionId: 'cloud_q_1', close: cloudQuestionClose('cloud_1', 'cloud_q_1') }],
+      ['session_owner_end', { transfer: 'transfer' }], ['session_owner_ask', { agentId: 'cloud_1', questionId: 'cloud_q_1', question: prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }) }],
+      ['session_owner_unask', { agentId: 'cloud_1', questionId: 'cloud_q_1', close: cloudQuestionClose('cloud_1', 'cloud_q_1') }],
     ])
     options!.onDisconnected!()
     expect(disconnected).toHaveBeenCalledOnce()
-    await expect(core!.cloud!.publish([])).rejects.toThrow('not connected')
+    await expect(core!.owners!.end('transfer')).rejects.toThrow('not connected')
   })
 
   it('runs as a real service by default', () => {

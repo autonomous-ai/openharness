@@ -1,3 +1,4 @@
+import { OWNER_FAILURES, type OwnerFailure, type OwnerResult, type SessionOwnerCore } from '../lib/sessionOwnerWire.js'
 import { usageTarget, usageTargetKey, usageSnapshot, validUsage, validUsageTarget } from '../lib/agentUsageWire.js'
 /**
  * The core API a light service runs on in its own process (the edge host: usage, the monitor, the project
@@ -14,7 +15,7 @@ import { usageTarget, usageTargetKey, usageSnapshot, validUsage, validUsageTarge
  * each asked of the core over its link (`ask`). The agents it reads come as the apps are shown them (`service_query shown`): each with its
  * name, whether its terminal is there and its harness's viewer.
  */
-import { LOCAL_WINDOW_OFF, AGENT_ACTIONS_OFF, CONNECTOR_SYNC_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, type AgentView, type CloudCore, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
+import { LOCAL_WINDOW_OFF, AGENT_ACTIONS_OFF, CONNECTOR_SYNC_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, type AgentView, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { turnsLink } from './turnsLink.js'
 
@@ -216,35 +217,32 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
     // Hachi's daemon counters, handed to the core (core/agentQueries.ts `count`), which refuses any other name. A count
     // the core cannot take now is lost: counters are measures, never state.
     count: (metric) => { void ask?.('count', { metric }).catch(() => {}) },
-    // Cloud owns delivery recovery; admission acknowledgements must reach its ordered publisher.
-    ...(ask ? {
-      cloud: {
-        publish: async (harnesses, cards = []) => {
-          const result = await ask('cloud_publish', { harnesses, cards })
-          if (result.ok === true) return { ok: true }
-          if (result.ok === false && result.error === 'CLOUD_PUBLICATION_INVALID') return { ok: false, error: 'CLOUD_PUBLICATION_INVALID' }
-          if (result.ok === false && result.error === 'SESSION_OWNER_CONFLICT') return { ok: false, error: 'SESSION_OWNER_CONFLICT' }
-          throw new Error('CLOUD_PUBLICATION_UNAVAILABLE')
-        },
-        checkpoint: async () => {
-          const result = await ask('cloud_checkpoint', {})
-          if (result.ok === false && result.error === 'SESSION_OWNER_CONFLICT') return { ok: false, error: 'SESSION_OWNER_CONFLICT' }
-          if (typeof result.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(result.fingerprint)) throw new Error('CLOUD_PUBLICATION_UNAVAILABLE')
-          return result.fingerprint
-        },
-        ask: async (agentId, requestId, question) => {
-          const result = await ask('cloud_ask', { agentId, questionId: requestId, question })
-          if (result.ok === true) return { ok: true }
-          if (result.ok === false && result.error === 'CLOUD_QUESTION_INVALID') return { ok: false, error: 'CLOUD_QUESTION_INVALID' }
-          throw new Error('CLOUD_PUBLICATION_UNAVAILABLE')
-        },
-        unask: async (agentId, requestId, close) => {
-          const result = await ask('cloud_unask', { agentId, questionId: requestId, close })
-          if (result.ok === true) return { ok: true }
-          if (result.ok === false && result.error === 'CLOUD_QUESTION_INVALID') return { ok: false, error: 'CLOUD_QUESTION_INVALID' }
-          throw new Error('CLOUD_PUBLICATION_UNAVAILABLE')
-        },
-      } satisfies CloudCore,
-    } : {}),
+    // The component owns recovery; every private stage waits for its actual admission result.
+    ...(ask ? { owners: ownerCore(ask) } : {}),
+  }
+}
+
+
+/** No implicit success: malformed or missing acknowledgements keep the component unavailable. */
+function ownerCore(ask: (query: string, payload: Payload) => Promise<Payload>): SessionOwnerCore {
+  const result = (answer: Payload): OwnerResult => {
+    if (answer.ok === true) return { ok: true }
+    if (answer.ok === false && OWNER_FAILURES.includes(answer.error as OwnerFailure)) return { ok: false, error: answer.error as OwnerFailure }
+    throw new Error('SESSION_OWNER_UNAVAILABLE')
+  }
+  return {
+    begin: async value => result(await ask('session_owner_begin', { ...value })),
+    append: async value => result(await ask('session_owner_append', { ...value })),
+    end: async transfer => result(await ask('session_owner_end', { transfer })),
+    cancel: async transfer => result(await ask('session_owner_cancel', { transfer })),
+    checkpoint: async factory => {
+      const answer = await ask('session_owner_checkpoint', { factory })
+      if (typeof answer.fingerprint === 'string' && /^[a-f0-9]{64}$/.test(answer.fingerprint)) return { fingerprint: answer.fingerprint }
+      const refused = result(answer)
+      if (!refused.ok) return refused
+      throw new Error('SESSION_OWNER_UNAVAILABLE')
+    },
+    ask: async (agentId, requestId, question) => result(await ask('session_owner_ask', { agentId, questionId: requestId, question })),
+    unask: async (agentId, requestId, close) => result(await ask('session_owner_unask', { agentId, questionId: requestId, close })),
   }
 }

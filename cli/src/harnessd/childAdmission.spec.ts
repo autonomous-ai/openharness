@@ -13,7 +13,7 @@ describe('child code admission before runtime effects', () => {
     expect(childAdmissionFailure(env, 42, '/current.js', () => disk)).toBeNull()
     expect(childAdmissionFailure(previousEnvironment, 42, '/current.js', () => disk)).toContain('executed worker contract')
     expect(childAdmissionFailure(env, 42, '/previous.js', () => disk, previous)).toContain('executed worker contract')
-    expect(WORKER_CONTRACT).toBe(6)
+    expect(WORKER_CONTRACT).toBe(7)
   })
 
   it('leaves a deliberate standalone process alone without reading any file', () => {
@@ -48,7 +48,7 @@ describe('child code admission before runtime effects', () => {
     const previousPlan = 'bf081b9d36cdc601439eaad4d8952a18d06e6c89ff63c0317d218b75f1e410f7'
     const previous = { contract: 3, plan: previousPlan }
     const previousEnvironment = { ...env, [WORKER_COHORT_ENV]: `42:3:${previousPlan}:${disk}` }
-    expect(WORKER_CONTRACT).toBe(6)
+    expect(WORKER_CONTRACT).toBe(7)
     expect(WORKER_PLAN).not.toBe(previousPlan)
     expect(childAdmissionFailure(previousEnvironment, 42, '/previous.js', () => disk, previous)).toBeNull()
     expect(childAdmissionFailure(env, 42, '/current.js', () => disk)).toBeNull()
@@ -58,7 +58,7 @@ describe('child code admission before runtime effects', () => {
   it('refuses a mixed required-storage cohort while preserving complete historical rollback', () => {
     const previous = { contract: 2, plan: WORKER_PLAN }
     const previousEnvironment = { ...env, [WORKER_COHORT_ENV]: `42:2:${WORKER_PLAN}:${disk}` }
-    expect(WORKER_CONTRACT).toBe(6)
+    expect(WORKER_CONTRACT).toBe(7)
     expect(childAdmissionFailure(previousEnvironment, 42, '/previous.js', () => disk, previous)).toBeNull()
     expect(childAdmissionFailure(previousEnvironment, 42, '/current.js', () => disk)).toContain('executed worker contract')
     expect(childAdmissionFailure(env, 42, '/previous.js', () => disk, previous)).toContain('executed worker contract')
@@ -66,7 +66,7 @@ describe('child code admission before runtime effects', () => {
   it('refuses the breaking Create payload across contracts three and four with the same host plan', () => {
     const previous = { contract: 3, plan: WORKER_PLAN }
     const previousEnvironment = { ...env, [WORKER_COHORT_ENV]: `42:3:${WORKER_PLAN}:${disk}` }
-    expect(WORKER_CONTRACT).toBe(6)
+    expect(WORKER_CONTRACT).toBe(7)
     expect(childAdmissionFailure(previousEnvironment, 42, '/previous.js', () => disk, previous)).toBeNull()
     expect(childAdmissionFailure(env, 42, '/current.js', () => disk)).toBeNull()
     expect(childAdmissionFailure(previousEnvironment, 42, '/current.js', () => disk)).toContain('executed worker contract')
@@ -75,7 +75,7 @@ describe('child code admission before runtime effects', () => {
   it('refuses removed private desk calls across contracts four and five with the same host plan', () => {
     const previous = { contract: 4, plan: WORKER_PLAN }
     const previousEnvironment = { ...env, [WORKER_COHORT_ENV]: `42:4:${WORKER_PLAN}:${disk}` }
-    expect(WORKER_CONTRACT).toBe(6)
+    expect(WORKER_CONTRACT).toBe(7)
     expect(childAdmissionFailure(previousEnvironment, 42, '/previous.js', () => disk, previous)).toBeNull()
     expect(childAdmissionFailure(env, 42, '/current.js', () => disk)).toBeNull()
     expect(childAdmissionFailure(previousEnvironment, 42, '/current.js', () => disk)).toContain('executed worker contract')

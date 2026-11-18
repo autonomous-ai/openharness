@@ -5,7 +5,7 @@ import type { ClientStreamQuota } from '../lib/clientStreamQueue.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import type { PreparedHandoff, HandoffPermit, HandoffOutcome } from '../lib/handoffAuthority.js'
 import type { AgentTokenUsage, AgentUsageTarget } from '../lib/agentUsageWire.js'
-import type { CloudAgentFrame, CloudHarness } from '../lib/cloudAgents.js'
+import { OWNER_DOWN, OWNER_REPLY_DOWN, OWNER_ANSWER_DOWN, type SessionOwnerCore, type SessionOwnerPort, type ServiceSessionRow } from '../lib/sessionOwnerWire.js'
 import type { SharedTrustPeer } from '../lib/sharedMachinesAccount.js'
 import type { GridAssignmentProcess, GridAssignmentAnswer } from '../lib/gridAssignmentWire.js'
 import type { QuestionAnswerResult } from '../lib/questionController.js'
@@ -114,7 +114,7 @@ export type SessionReadRegistered = readonly [source: 'registered', agentId: str
   storedDsh: string | null | false, launch: SessionReadLaunch | null, displayName: string, terminalAvailable: boolean,
   selectedModel: string | null, turnRunning: boolean,
   /** false: absent; true: exactly the stored string; otherwise the distinct published string. */ publishedDsh: string | boolean]
-export type SessionReadCloud = readonly [source: 'cloud', agentId: string, sessionId: string, engine: string,
+export type SessionReadService = readonly [source: 'service', agentId: string, sessionId: string, engine: string,
   registeredAt: number, transcriptPath: string | null, lastHookAt: number, displayName: string, selectedModel: string | null]
 export interface SessionReadHeader {
   version: 2
@@ -123,8 +123,8 @@ export interface SessionReadHeader {
   environment: string
   hasWindow: boolean
 }
-export type SessionReadValue = SessionReadRegistered | SessionReadCloud
-  | readonly [kind: 'gone', source: 'registered' | 'cloud', agentId: string]
+export type SessionReadValue = SessionReadRegistered | SessionReadService
+  | readonly [kind: 'gone', source: 'registered' | 'service', agentId: string]
 export type ReadRecord<Header = Record<string, unknown>, Row = Record<string, unknown>> =
   | { type: 'begin'; payload: { header: Header; count: number } }
   | { type: 'row'; payload: { index: number; value: Row } }
@@ -214,10 +214,8 @@ export interface CoreApi {
     resolve(id: string): AgentView | undefined
     /** The live agents the apps are shown. */
     advertised(): AgentView[]
-    /** The running cloud harnesses (core/agents/cloud.ts) as rows an agent list reads: an id, a start, an
-     *  engine and a name, with no pane, transcript or process. Only the lists that show them ask (the dial,
-     *  the fleet); absent where a core or process offers none. */
-    cloud?(): AgentView[]
+    /** Declared service-owned sessions, with no native terminal, transcript or filesystem authority. */
+    serviceSessions?(): ServiceSessionRow[]
     /** Whether the agent's terminal is attached: a frame without one reads to the apps as "agent gone". */
     terminalAvailable(agentId: string): boolean
     /** Send the agent's frame to the apps again. */
@@ -412,8 +410,8 @@ export interface CoreApi {
    *  serves and the machine it serves as. An experiment writes them into the prompts of the agents it runs
    *  (`… orchestrator --port 18473 --machine …`). */
   daemon: DaemonAddress
-  /** The cloud agents' doors into the core (services/cloud.ts): absent from a core or a process that offers them none. */
-  cloud?: CloudCore
+  /** Bound only by the host to the current authenticated service instance. */
+  owners?: SessionOwnerCore
 }
 
 /** An ID-only session create for components; launch identity stays with the core. */
@@ -905,7 +903,7 @@ export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[];
   // Request-only too: it keeps nothing, and asks Jev only when a client asks it.
   router: { requests: ROUTER_REQUESTS, state: [] },
   // Cloud agents. Its harnesses: one was started here, and is watched again as the daemon starts. A New Harness
-  // for one, an answer or a message to one wakes it too (its port's calls, core/agents/cloud.ts).
+  // for one, an answer or a message to one wakes it too (its declared session port).
   cloud: { requests: CLOUD_REQUESTS, state: ['cloud/harnesses.json'] },
 }
 
@@ -1331,68 +1329,8 @@ export interface MessagesPort {
  *  a settings write tells it nothing. */
 export const MESSAGES_FALLBACKS: PortFallbacks<MessagesPort> = { canWrite: false, settingsChanged: undefined }
 
-/**
- * The cloud agents' doors into the core (docs/design/2026-10-11-cloud-agents.md, "The one core change"): the
- * harnesses its service owns, which have no pane, and the questions they ask. The core lists them beside the
- * terminal agents and tells every client what changed (core/agents/cloud.ts).
- */
-export type SessionOwnerConflict = { ok: false; error: 'SESSION_OWNER_CONFLICT' }
-export type CloudPublicationResult = { ok: true } | { ok: false; error: 'CLOUD_PUBLICATION_INVALID' } | SessionOwnerConflict
-export type CloudCheckpoint = string | SessionOwnerConflict
-
-/** Component-prepared public question bytes, admitted only for its current accepted owner. */
-export interface CloudQuestionFrame {
-  type: 'commander_question'
-  agentId: string
-  dbSessionId: string
-  payload: { requestId: string; questions: [{ key: 'answer'; q: string; options: string[]; multi: false; canText: true }]; notification: { id: string; kind: 'needsYou' } }
-}
-export interface CloudQuestionClose {
-  type: 'commander_question_close'
-  agentId: string
-  dbSessionId: string
-  payload: { requestId: string }
-}
-export interface CloudQuestionPresentation { frame: CloudQuestionFrame; close: CloudQuestionClose; dial: boolean }
-export type CloudQuestionResult = { ok: true } | { ok: false; error: 'CLOUD_QUESTION_INVALID' }
-
-export interface CloudCore {
-  /** Every cloud harness and its component-prepared cards, admitted together under the private worker cohort. */
-  publish(harnesses: CloudHarness[], cards?: TurnCardFrame[]): CloudPublicationResult | Promise<CloudPublicationResult>
-  /** Recovery only: fingerprint the current accepted owner rows; no publication history is retained here. */
-  checkpoint(): CloudCheckpoint | Promise<CloudCheckpoint>
-  /** One waits on the person: shown wherever questions show; the answer comes back through `CloudPort.answer`. */
-  ask(agentId: string, requestId: string, question: CloudQuestionPresentation): CloudQuestionResult | Promise<CloudQuestionResult>
-  /** That question is no longer asked. */
-  unask(agentId: string, requestId: string, close: CloudQuestionClose): CloudQuestionResult | Promise<CloudQuestionResult>
-}
-
-/** What the cloud service answers the core: done, or why not, in words a person reads. */
-export type CloudResult = { ok: true; detail?: string } | { ok: false; error: string; detail?: string }
-
-/** Component-prepared public replies; the port carries no provider records. */
-export type CloudRefusal = { error: string; detail?: string }
-export type CloudCreateReply = { agent: CloudAgentFrame } | CloudRefusal
-export type CloudRenameReply = { agent: CloudAgentFrame; renamed: { type: 'agent_renamed'; payload: { agentId: string; name: string; engine: string } } } | CloudRefusal
-export type CloudStopReply = { deleted: true; detail?: string } | CloudRefusal
-
-/** The core's calls into the cloud agents' service: a New Harness for one, a person's words, an answer, a new name, a Stop. */
-export interface CloudPort {
-  create(request: Record<string, unknown>): Promise<CloudCreateReply>
-  deliver(agentId: string, text: string): Promise<CloudResult>
-  answer(agentId: string, requestId: string, answers: Record<string, string>): Promise<QuestionAnswerResult>
-  /** The captured accepted row preserves the caller's rename snapshot, without another retained catalogue. */
-  rename(agentId: string, name: string, before: CloudHarness): Promise<CloudRenameReply>
-  /** Stop Harness. Not `stop`: a service host reads a port's `stop` as stopping the service itself. */
-  stopHarness(agentId: string): Promise<CloudStopReply>
-}
-
-/** A call the cloud service could not take: it is off, failing, or slower than the core waits. */
-export const CLOUD_DOWN = { ok: false as const, error: 'SERVICE_UNAVAILABLE', detail: 'Cloud agents are not running here. Try again in a moment.' }
-export const CLOUD_REPLY_DOWN: CloudRefusal = { error: CLOUD_DOWN.error, detail: CLOUD_DOWN.detail }
-export const CLOUD_ANSWER_DOWN: QuestionAnswerResult = { ok: false, error: 'ANSWER_FAILED', detail: CLOUD_DOWN.detail }
-/** What the core gets when the cloud service fails: each call is refused with a reason, and nothing is lost but it. */
-export const CLOUD_FALLBACKS: PortFallbacks<CloudPort> = { create: later(CLOUD_REPLY_DOWN), deliver: later(CLOUD_DOWN), answer: later(CLOUD_ANSWER_DOWN), rename: later(CLOUD_REPLY_DOWN), stopHarness: later(CLOUD_REPLY_DOWN) }
+/** One operation contract and fallback for declared session owners, independent of any provider. */
+export const OWNER_FALLBACKS: PortFallbacks<SessionOwnerPort> = { create: later(OWNER_REPLY_DOWN), deliver: later(OWNER_DOWN), answer: later(OWNER_ANSWER_DOWN), rename: later(OWNER_REPLY_DOWN), stopHarness: later(OWNER_REPLY_DOWN) }
 
 /** What a delivered turn answers: delivered, or refused with the machine's name and a reason a person can read. */
 export type SendResult = { ok: true } | { ok: false; machine: string; reason: string }
@@ -2099,7 +2037,7 @@ export interface CorePorts {
   sharing: SharingPort | null
   recaps: RecapsPort | null
   agentCleanup: AgentCleanupPort | null
-  cloud: CloudPort | null
+  cloud: SessionOwnerPort | null
   sharedMachines: SharedMachinesCorePort | null
 }
 
@@ -2167,12 +2105,12 @@ export interface CoreApiDeps {
   hasWindow: CoreApi['clients']['hasWindow']
   devicesChanged: CoreApi['clients']['devicesChanged']
   dialWatching: CoreApi['clients']['dialWatching']
-  /** The cloud agents' doors (core/agents/cloud.ts). */
-  cloud?: CloudCore
-  /** The running cloud harnesses as list rows (`agents.cloud`). */
-  cloudRows?: () => RegisteredSession[]
-  /** Current Cloud membership and one current row, without a temporary projected catalog. */
-  cloudRead?: { ids(): IterableIterator<string>; row(agentId: string): RegisteredSession | undefined }
+  /** A host-bound session owner door; the unbound core API supplies none. */
+  owners?: SessionOwnerCore
+  /** The service-owned sessions as typed lean list rows. */
+  serviceRows?: () => ServiceSessionRow[]
+  /** Current service membership and one current row, without a temporary projected catalogue. */
+  serviceRead?: { ids(): IterableIterator<string>; row(agentId: string): ServiceSessionRow | undefined }
   lastTurn: CoreApi['transcripts']['lastTurn']
   /** Where a turn's cards and recaps go: the devices, and the apps. Only their own frame types reach these. */
   turnCard: CoreApi['clients']['turnCard']
@@ -2185,7 +2123,7 @@ export interface CoreApiDeps {
 }
 
 /** Complete membership once; current facts for each member when it is emitted. Never an atomic whole-time view. */
-export function readSessions(deps: Pick<CoreApiDeps, 'registry' | 'cloudRead' | 'facts' | 'runtimeProfile' | 'turns' | 'machine' | 'signedIn' | 'environment' | 'hasWindow' | 'log'>,
+export function readSessions(deps: Pick<CoreApiDeps, 'registry' | 'serviceRead' | 'facts' | 'runtimeProfile' | 'turns' | 'machine' | 'signedIn' | 'environment' | 'hasWindow' | 'log'>,
   receive: SessionReadReceiver, signal?: AbortSignal, scope: SessionReadScope = 'registered'): Promise<void> {
   return new Promise((resolve, reject) => {
     const started = performance.now(), ids: string[] = []
@@ -2221,15 +2159,15 @@ export function readSessions(deps: Pick<CoreApiDeps, 'registry' | 'cloudRead' | 
       }
       for (const row of scope === 'registered' ? deps.registry.rows() : deps.registry.advertisedRows()) member(row.agentId)
       const registeredCount = ids.length
-      if (deps.cloudRead) for (const id of deps.cloudRead.ids()) member(id)
+      if (deps.serviceRead) for (const id of deps.serviceRead.ids()) member(id)
       const count = ids.length
       const rows = function* (): Generator<SessionReadValue> {
         for (let index = 0; index < count; index++) {
           const agentId = ids[index]
           if (index >= registeredCount) {
-            const row = deps.cloudRead!.row(agentId) as (AgentView & { displayName?: unknown; runtimeProfile?: unknown }) | undefined
-            if (!row) { yield ['gone', 'cloud', agentId]; continue }
-            yield ['cloud', row.agentId, row.sessionId, row.engine, row.registeredAt, row.transcriptPath, row.lastHookAt,
+            const row = deps.serviceRead!.row(agentId)
+            if (!row) { yield ['gone', 'service', agentId]; continue }
+            yield ['service', row.agentId, row.sessionId, row.engine, row.registeredAt, row.transcriptPath, row.lastHookAt,
               typeof row.displayName === 'string' ? row.displayName : '', typeof row.runtimeProfile === 'string' ? row.runtimeProfile : null]
             continue
           }
@@ -2280,7 +2218,7 @@ export function createCoreApi({
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorSync, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, dsh, facts, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, streamFrame, streamBytes, machine, activityText, activitySnapshot, activity, summaries,
   closeAgent, activityAt, follow, panePid,
-  signedIn, environment, machines, hasWindow, devicesChanged, dialWatching, cloud, cloudRows, cloudRead, lastTurn, turnCard, turnSummary,
+  signedIn, environment, machines, hasWindow, devicesChanged, dialWatching, owners, serviceRows, serviceRead, lastTurn, turnCard, turnSummary,
   count, hachiGoalDone, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
   // The recaps reach the devices and the apps through their own two doors, and only with their own frames.
@@ -2302,13 +2240,13 @@ export function createCoreApi({
     agents: {
       all: async () => { const stopped = await stoppedAgents.list(); return [...registry.list(), ...stopped].map(agentView) },
       live: () => registry.list().map(agentView),
-      readSessions: (scope, receive, signal) => readSessions({ registry, cloudRead, facts, runtimeProfile, turns, machine, signedIn, environment, hasWindow, log }, receive, signal, scope),
+      readSessions: (scope, receive, signal) => readSessions({ registry, serviceRead, facts, runtimeProfile, turns, machine, signedIn, environment, hasWindow, log }, receive, signal, scope),
       facts: row => { const current = registry.byAgent(row.agentId); return current && facts ? facts(current) : null },
       displayName: projectDisplayName,
       byAgent: (agentId) => { const session = registry.byAgent(agentId); return session && agentView(session) },
       resolve: (id) => { const session = registry.resolve(id); return session && agentView(session) },
       advertised: () => registry.advertised().map(agentView),
-      ...(cloudRows ? { cloud: () => cloudRows().map(agentView) } : {}),
+      ...(serviceRows ? { serviceSessions: serviceRows } : {}),
       terminalAvailable: (agentId) => registry.terminalAvailable(agentId),
       sync: syncSession,
       runtimeModels,
@@ -2367,6 +2305,6 @@ export function createCoreApi({
       ...(goalDone ? { hachiGoalDone: goalDone } : {}),
     },
     daemon,
-    ...(cloud ? { cloud } : {}),
+    ...(owners ? { owners } : {}),
   }
 }

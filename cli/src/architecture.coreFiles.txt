@@ -15,7 +15,6 @@ core/agentQueries.ts
 core/agents/adopt.ts
 core/agents/bind.ts
 core/agents/close.ts
-core/agents/cloud.ts
 core/agents/conversationOwners.ts
 core/agents/create.ts
 core/agents/discovery.ts
@@ -44,11 +43,12 @@ core/agents/quietTitles.ts
 core/agents/restart.ts
 core/agents/restoreLaunch.ts
 core/agents/retarget.ts
+core/agents/sessionOwnerStage.ts
+core/agents/sessionOwners.ts
 core/agents/swap.ts
 core/agents/update.ts
 core/api.ts
 core/clientStreams.ts
-core/cloudLink.ts
 core/connectorsLink.ts
 core/connectorsQueries.ts
 core/conversationQueries.ts
@@ -105,6 +105,7 @@ core/recapsLink.ts
 core/serviceHost.ts
 core/serviceLinks.ts
 core/serviceRoutes.ts
+core/sessionOwnerLink.ts
 core/sharedMachinesLink.ts
 core/sharedMachinesQueries.ts
 core/sharingLink.ts
@@ -296,7 +297,6 @@ lib/claudeHomes.ts
 lib/clientStreamContract.ts
 lib/clientStreamQueue.ts
 lib/closeAgentService.ts
-lib/cloudAgents.ts
 lib/computerIdentity.ts
 lib/conversationIdentity.ts
 lib/createAgentPane.ts
@@ -423,7 +423,11 @@ lib/runtimeProfileWire.ts
 lib/secureState.ts
 lib/sessionCheckpoint.ts
 lib/sessionEvents.ts
+lib/sessionFactValues.ts
+lib/sessionFactsAdmission.ts
 lib/sessionInput.ts
+lib/sessionOwnerWire.ts
+lib/sessionPresentation.ts
 lib/sessionPublication.ts
 lib/sessionRepair.ts
 lib/sessionSearch/externals/types.ts

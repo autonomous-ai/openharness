@@ -1,3 +1,4 @@
+import { emptyOwnerCore } from '../testing/cloudOwners.js'
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,36 +12,36 @@ import { answerExperimentQuery, answerDaemonQuery, createForExperiment, createRo
 const agent = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/w' }) as RegisteredSession
 const experiments = new Set(['orchestrator'])
 
-describe('the cloud agents\' doors', () => {
-  it('preserves native-owner conflict as a refusal through the real query dispatcher', async () => {
+describe('authenticated session-owner doors', () => {
+  it('preserves each typed stage/checkpoint refusal through the actual dispatcher', async () => {
     const conflict = { ok: false, error: 'SESSION_OWNER_CONFLICT' } as const
-    const core = fakeCore({ cloud: { checkpoint: () => conflict, publish: () => conflict,
-      ask: () => ({ ok: true }), unask: () => ({ ok: true }) } })
+    const owners = { ...emptyOwnerCore(), begin: () => conflict, append: () => conflict, end: () => conflict, cancel: () => conflict, checkpoint: () => conflict }
     const authority = { current: () => true, ownsRequest: () => false }
-    for (const query of ['cloud_checkpoint', 'cloud_publish']) {
-      expect(await answerExperimentQuery(core, new Set(['cloud']), 'cloud', query, {}, undefined, authority)).toEqual(conflict)
+    for (const query of ['begin', 'append', 'end', 'cancel', 'checkpoint']) {
+      expect(await answerExperimentQuery(fakeCore(), new Set(), 'cloud', `session_owner_${query}`, {}, undefined, authority, owners)).toEqual(conflict)
     }
   })
 
-  it('are the cloud service\'s alone, and carry its harnesses and questions to the core', async () => {
-    const cloud = { checkpoint: vi.fn(() => 'a'.repeat(64)), publish: vi.fn(() => ({ ok: true as const })), ask: vi.fn(() => ({ ok: true as const })), unask: vi.fn(() => ({ ok: true as const })) }
-    const core = fakeCore({ cloud })
-    const both = new Set(['orchestrator', 'cloud'])
-    const ask = (query: string, payload: Record<string, unknown>) => answerExperimentQuery(core, both, 'cloud', query, payload,
-      undefined, { current: () => true, ownsRequest: () => false })
-    const cards = [{ type: 'commander_event', agentId: 'cloud_1', dbSessionId: 'cloud_1', payload: { kind: 'done', text: 'done' } }]
-    expect(await ask('cloud_publish', { harnesses: [{ agentId: 'cloud_1' }], cards })).toEqual({ ok: true })
-    expect(cloud.publish).toHaveBeenLastCalledWith([{ agentId: 'cloud_1' }], cards)
-    await ask('cloud_publish', { harnesses: 'x' })
-    expect(cloud.publish).toHaveBeenLastCalledWith('x', undefined)
-    await ask('cloud_ask', { agentId: 'cloud_1', questionId: 'cloud_q_1', requestId: 'the-link-s-own', question: { text: 'Which?', choices: [] } })
-    expect(cloud.ask).toHaveBeenCalledWith('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] })
-    await ask('cloud_ask', {})
-    expect(cloud.ask).toHaveBeenLastCalledWith('', '', undefined)
-    await ask('cloud_unask', { agentId: 'cloud_1', questionId: 'cloud_q_1' })
-    expect(cloud.unask).toHaveBeenCalledWith('cloud_1', 'cloud_q_1', undefined)
-    expect(await answerExperimentQuery(core, both, 'orchestrator', 'cloud_publish', {})).toEqual({ error: 'NOT_CLOUD' })
-    expect(await answerExperimentQuery(fakeCore(), both, 'cloud', 'cloud_publish', {})).toEqual({ error: 'NOT_CLOUD' })
+  it('passes exact typed payloads independently of experiment membership, refusing missing or stale authority', async () => {
+    const empty = emptyOwnerCore(), owners = { begin: vi.fn(empty.begin), append: vi.fn(empty.append), end: vi.fn(empty.end), cancel: vi.fn(empty.cancel), checkpoint: vi.fn(empty.checkpoint), ask: vi.fn(empty.ask), unask: vi.fn(empty.unask) }
+    const authority = { current: () => true, ownsRequest: () => false }
+    const ask = (query: string, payload: Record<string, unknown>) => answerExperimentQuery(fakeCore(), new Set(), 'cloud', query, payload, undefined, authority, owners)
+    const begin = { format: 'session-facts-v1', transfer: 't', factory: 'fo', before: 'a'.repeat(64), after: 'b'.repeat(64), count: 0 }
+    const append = { transfer: 't', index: 0, rows: [] }
+    await ask('session_owner_begin', begin); expect(owners.begin).toHaveBeenCalledWith(begin)
+    await ask('session_owner_append', append); expect(owners.append).toHaveBeenCalledWith(append)
+    for (const method of ['end', 'cancel'] as const) { await ask(`session_owner_${method}`, { transfer: 't' }); expect(owners[method]).toHaveBeenCalledWith('t') }
+    await ask('session_owner_checkpoint', { factory: 'fo' }); expect(owners.checkpoint).toHaveBeenCalledWith('fo')
+    await ask('session_owner_ask', { agentId: 'a', questionId: 'q', question: {} }); expect(owners.ask).toHaveBeenCalledWith('a', 'q', {})
+    await ask('session_owner_unask', { agentId: 'a', questionId: 'q', close: {} }); expect(owners.unask).toHaveBeenCalledWith('a', 'q', {})
+    await ask('session_owner_ask', {}); expect(owners.ask).toHaveBeenLastCalledWith('', '', undefined)
+    for (const query of ['begin', 'append', 'end', 'cancel', 'checkpoint', 'ask', 'unask']) {
+      for (const proof of [undefined, { ...authority, current: () => false }]) {
+        expect(await answerExperimentQuery(fakeCore(), new Set(), 'cloud', `session_owner_${query}`, {}, undefined, proof, owners)).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+      }
+      expect(await answerExperimentQuery(fakeCore(), new Set(), 'cloud', `session_owner_${query}`, {}, undefined, authority)).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+    }
+    expect(await ask('cloud_publish', {})).toBeNull()
   })
 })
 

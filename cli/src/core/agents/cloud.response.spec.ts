@@ -1,12 +1,15 @@
+import { encodeSessionFacts, type SessionFacts } from '../../lib/sessionPresentation.js'
+import { cloudPresentationFingerprint as cloudFingerprint } from '../../cloud/cards.js'
+import { OWNER_DOWN as CLOUD_DOWN, type SessionOwnerPort as CloudPort } from '../../lib/sessionOwnerWire.js'
 import { createQuestionPresentations } from '../questions.js'
 import { cloudFactory } from '../../testing/sessionFactories.js'
 import { ENGINES } from '../../engines/types.js'
 import { SERVICE_HOSTS, sessionFactoryOwners } from '../../harnessd/services.js'
 import { describe, expect, it, vi } from 'vitest'
-import { CLOUD_DOWN, type CloudPort } from '../api.js'
-import { cloudAgentFrame, cloudFingerprint, cloudHarnessIn, type CloudHarness } from '../../lib/cloudAgents.js'
+
+import { cloudAgentFrame, cloudPresentation, cloudHarnessIn, type CloudHarness } from '../../lib/cloudAgents.js'
 import { prepareCloudQuestion } from '../../cloud/questions.js'
-import { createCloudAgents } from './cloud.js'
+import { createCloudOwners } from '../../testing/cloudOwners.js'
 
 const owner: CloudHarness = { agentId: 'cloud_1', agent: 'devin-cloud', name: 'Original', state: 'working', activity: null,
   repository: null, branch: null, links: [], messages: 0, createdAt: '2026-10-11T10:00:00.000Z', updatedAt: '2026-10-11T10:00:00.000Z' }
@@ -18,7 +21,7 @@ function setup() {
   const rename = vi.fn(() => new Promise(done => { resolve = done }))
   let current = { rename } as unknown as CloudPort | null
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }
-  const cloud = createCloudAgents({ ownsFactory: cloudFactory, native: () => false, port: () => current, clients, questions: createQuestionPresentations(), log: () => {} })
+  const cloud = createCloudOwners({ ownsFactory: cloudFactory, native: () => false, port: () => current, clients, questions: createQuestionPresentations(), log: () => {} })
   cloud.doors.publish([owner]); clients.send.mockClear(); clients.sendCommander.mockClear()
   return { cloud, clients, rename, resolve: (value: unknown) => resolve(value), replace: () => { current = { rename } as unknown as CloudPort }, disable: () => { current = null } }
 }
@@ -30,7 +33,7 @@ describe('prepared Cloud operation responses', () => {
     expect(await answer).toEqual({ agent: prepared().agent })
     expect(t.clients.send).toHaveBeenCalledWith(prepared().renamed)
     expect(t.clients.sendCommander).toHaveBeenCalledWith(prepared().renamed)
-    expect(t.rename).toHaveBeenCalledWith(owner.agentId, 'Renamed', expect.objectContaining(owner))
+    expect(t.rename).toHaveBeenCalledWith(owner.agentId, 'Renamed', expect.objectContaining(cloudPresentation(owner)))
   })
 
   it.each(['removed', 'owner replaced', 'service replaced', 'service disabled'])('refuses a late rename after %s', async reason => {
@@ -52,7 +55,7 @@ function immediate(value: unknown, starting?: () => Promise<boolean> | null, own
   const call = vi.fn(async () => value)
   let port = { create: call, deliver: call, answer: call, rename: call, stopHarness: call } as unknown as CloudPort
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, log = vi.fn()
-  const cloud = createCloudAgents({ ownsFactory, native: () => false, port: () => port, whenStarting: starting, clients, questions: createQuestionPresentations(), log })
+  const cloud = createCloudOwners({ ownsFactory, native: () => false, port: () => port, whenStarting: starting, clients, questions: createQuestionPresentations(), log })
   cloud.doors.publish([owner]); cloud.doors.ask(owner.agentId, 'cloud_q_1', prepareCloudQuestion(owner.agentId, 'cloud_q_1', { text: 'Which?', choices: [] }))
   clients.send.mockClear(); clients.sendCommander.mockClear()
   return { cloud, call, clients, log, replace: () => { port = { ...port } } }
@@ -65,10 +68,9 @@ it('admits a prepared reply only for this selected build owner, rather than a se
     const selected = owners(value)
     return selected?.kind === 'service' && selected.service === 'cloud'
   })
-  expect(await t.cloud.update({ agentId: owner.agentId, name: 'Renamed' })).toMatchObject({ error: 'SERVICE_UNAVAILABLE' })
+  expect(t.cloud.update({ agentId: owner.agentId, name: 'Renamed' })).toBeNull()
   expect(t.clients.send).not.toHaveBeenCalled()
   expect(t.clients.sendCommander).not.toHaveBeenCalled()
-  expect(t.log).toHaveBeenLastCalledWith('[cloud] CLOUD_RESPONSE_INVALID')
 })
 
 it('captures the first physical port after readiness, and refuses a failed start without invoking it', async () => {
@@ -125,7 +127,7 @@ it('admits only bounded prepared rename replies for the captured owner and name'
   const malformed: unknown[] = [null, [], {}, { ok: true }, { error: '' }, { error: 'X', detail: 3 }, { error: 'X', extra: true },
     { ...good, extra: true }, { ...good, agent: null },
     ...[{ id: 7 }, { id: 'terminal' }, { id: 'cloud_' + 'x'.repeat(80) }, { sessionId: 'cloud_other' }, { engine: 'unknown' },
-      { location: 'local' }, { name: 3 }, { name: 'x'.repeat(121) }, { createdAt: 4 }, { id: 'cloud_other', sessionId: 'cloud_other' },
+      { name: 3 }, { name: 'x'.repeat(121) }, { createdAt: 4 }, { id: 'cloud_other', sessionId: 'cloud_other' },
       { engine: 'fo' }, { createdAt: '2026-10-12T10:00:00Z' }, { name: 'Wrong' }].map(change => ({ ...good, agent: { ...good.agent, ...change } })),
     { ...good, renamed: null }, { ...good, renamed: { ...good.renamed, type: 'agent_deleted' } },
     { ...good, renamed: { ...good.renamed, payload: {} } },
@@ -135,7 +137,7 @@ it('admits only bounded prepared rename replies for the captured owner and name'
     const t = immediate(result)
     expect(await t.cloud.update({ agentId: owner.agentId, name: 'Renamed' })).toMatchObject({ error: 'SERVICE_UNAVAILABLE' })
     expect(t.clients.send).not.toHaveBeenCalled(); expect(t.clients.sendCommander).not.toHaveBeenCalled()
-    expect(t.log).toHaveBeenLastCalledWith('[cloud] CLOUD_RESPONSE_INVALID')
+    expect(t.log).toHaveBeenLastCalledWith('[sessions] SESSION_RESPONSE_INVALID')
   }
 })
 
@@ -158,13 +160,21 @@ it('checks prepared create, answer, Stop and delivery shapes on the same inline 
 
 it('keeps owner incarnation metadata out of checkpoints, frames and raw prepared rename keys', async () => {
   const t = setup(), normalized = cloudHarnessIn(owner)!
-  expect(t.cloud.doors.checkpoint()).toBe(cloudFingerprint([normalized]))
+  expect(t.cloud.doors.checkpoint()).toEqual({ fingerprint: cloudFingerprint([normalized]) })
   expect(JSON.stringify(t.cloud.frames())).toBe(JSON.stringify([cloudAgentFrame(normalized)]))
   const pending = t.cloud.update({ agentId: owner.agentId, name: 'Renamed' })
-  const args = t.rename.mock.calls[0] as unknown as [string, string, CloudHarness]
-  expect(JSON.stringify(args[2])).toBe(JSON.stringify(normalized))
-  expect(Reflect.ownKeys(args[2])).toEqual(Reflect.ownKeys(normalized))
+  const args = t.rename.mock.calls[0] as unknown as [string, string, SessionFacts]
+  expect(JSON.stringify(args[2])).toBe(encodeSessionFacts(cloudPresentation(normalized)))
+  expect(Reflect.ownKeys(args[2])).toEqual(Object.keys(JSON.parse(encodeSessionFacts(cloudPresentation(normalized)))))
   expect(Object.getOwnPropertySymbols(args[2])).toEqual([])
   t.resolve(prepared())
   expect(await pending).toEqual({ agent: prepared().agent })
+})
+
+it('turns a component operation rejection into the fixed public unavailable response without events', async () => {
+  const t = immediate(prepared())
+  t.call.mockRejectedValueOnce(new Error('private provider detail'))
+  expect(await t.cloud.update({ agentId: owner.agentId, name: 'Renamed' })).toEqual({ error: 'SERVICE_UNAVAILABLE', detail: CLOUD_DOWN.detail })
+  expect(t.clients.send).not.toHaveBeenCalled(); expect(t.clients.sendCommander).not.toHaveBeenCalled()
+  expect(t.log).not.toHaveBeenCalledWith(expect.stringContaining('private provider detail'))
 })

@@ -118,7 +118,7 @@ describe('services over the authenticated local pipe protocol', () => {
     }
     const cloud = { agentId: 'cloud', sessionId: 'cloud-session', engine: 'fo', registeredAt: 500,
       transcriptPath: '/history/cloud', lastHookAt: 501, displayName: 'Cloud', runtimeProfile: 'cloud-model' }
-    const deps = { registry, cloudRead: { ids: function* () { yield cloud.agentId }, row: () => cloud },
+    const deps = { registry, serviceRead: { ids: function* () { yield cloud.agentId }, row: () => cloud },
       facts: (row: RegisteredSession) => agentFacts(row, shown.has(row.agentId), parts.read(row.agentId)),
       runtimeProfile: (row: RegisteredSession) => row.engine === 'terminal' ? null : 'selected-model',
       turns: { running: (id: string) => id === 'session-0' }, machine: { id: () => 'machine', computerId: () => 'computer', name: () => 'Desk' },

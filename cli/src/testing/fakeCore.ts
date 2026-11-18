@@ -87,7 +87,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
 
     // Only a spec that gives a counter has one, as only a core that offers it does.
     ...(over.count ? { count: over.count } : {}),
-    // Only a spec that gives the cloud agents doors has them, as only a core that offers them does.
-    ...(over.cloud ? { cloud: Object.assign({ checkpoint: vi.fn(() => 'a'.repeat(64)), publish: vi.fn(() => ({ ok: true as const })), ask: vi.fn(), unask: vi.fn() }, over.cloud) } : {}),
+    // Service-owned sessions have only the explicitly bound door supplied by the caller.
+    ...(over.owners ? { owners: over.owners } : {}),
   }
 }

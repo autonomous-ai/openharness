@@ -38,14 +38,14 @@ function checked(value: unknown): ReadRecord<SessionReadHeader, SessionReadValue
     const member = payload.value
     if (!count(payload.index) || !tuple(member)) return invalid()
     if (member[0] === 'gone') {
-      if (member.length !== 3 || (member[1] !== 'registered' && member[1] !== 'cloud') || !string(member[2]) || !member[2]) return invalid()
+      if (member.length !== 3 || (member[1] !== 'registered' && member[1] !== 'service') || !string(member[2]) || !member[2]) return invalid()
     } else if (member[0] === 'registered') {
       const [, , , , , , , active, cwd, storedDsh, launching, displayName, terminalAvailable, selectedModel, turnRunning, publishedDsh] = member
       if (member.length !== 16 || !base(member) || typeof active !== 'boolean' || !nullableString(cwd)
         || !(storedDsh === false || nullableString(storedDsh)) || !launch(launching) || !string(displayName)
         || typeof terminalAvailable !== 'boolean' || !nullableString(selectedModel) || typeof turnRunning !== 'boolean'
         || !(publishedDsh === false || string(publishedDsh) || publishedDsh === true && string(storedDsh))) return invalid()
-    } else if (member[0] === 'cloud') {
+    } else if (member[0] === 'service') {
       if (member.length !== 9 || !base(member) || !string(member[7]) || !nullableString(member[8])) return invalid()
     } else return invalid()
   } else return invalid()

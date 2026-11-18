@@ -34,7 +34,7 @@ function setup(questionAnswer: (...args: unknown[]) => unknown = () => null) {
   const wifiLink = createWifiLink({ core, notify: () => true }), empty = { answer: () => null }
   const followed = vi.fn(() => ({ following: true })), resolved = vi.fn(async () => ({ agentId: 'agent' }))
   const dispatch = runInNewContext(program, {
-    coreApi: core, backend: { reportUsage: vi.fn() }, streamEndpoints: new Set(), clientStreams: { serving: vi.fn() },
+    coreApi: core, sessionOwners: null, backend: { reportUsage: vi.fn() }, streamEndpoints: new Set(), clientStreams: { serving: vi.fn() },
     frameParts: empty, questionControls: { answer: questionAnswer }, modelControls: empty, nativeControls: empty,
     engineReaders: empty, gatewayLink: { answer: () => ({ from: 'gateway' }) }, agentLife: { followed }, deliveries: empty,
     messagesLink: { answer: () => ({ from: 'messages' }) }, TURN_DELIVERERS: ['wifi'], answerConversationQuery: resolved,
