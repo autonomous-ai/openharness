@@ -1,8 +1,16 @@
 /** An inherited IPC child; no listener, caller-selected paths, Registry or session lifecycle. */
 import { isAbsolute } from 'node:path'
+import { performance } from 'node:perf_hooks'
 import { sessionStorageFrames } from '../lib/sessionStorageFrames.js'
-import { SessionStorageUnavailable, sessionImageProof, type SessionStorageOperation } from '../lib/sessionStorageWire.js'
+import { SESSION_STORAGE_REQUEST_MS, SessionStorageUnavailable, sessionImageProof, type SessionStorageOperation } from '../lib/sessionStorageWire.js'
 import { createSessionImageCodec, type RetainedSessionImage } from './sessionImage.js'
+
+/** Parent owns the original deadline; a child never compares another process's wall clock. */
+export function sessionStorageDeadline(remainingMs: unknown): number {
+  if (typeof remainingMs !== 'number' || !Number.isFinite(remainingMs)
+    || remainingMs <= 0 || remainingMs > SESSION_STORAGE_REQUEST_MS) throw new SessionStorageUnavailable('expired')
+  return performance.now() + remainingMs
+}
 
 export function runSessionStorage(): void {
   if (!process.send || !process.connected) throw new Error('Session storage requires its parent link')
@@ -33,14 +41,13 @@ export function runSessionStorage(): void {
         if (busy) { stop(); return }
         busy = true
         void (async () => {
-          const request = message as { expires?: unknown; operation?: SessionStorageOperation }
+          const request = message as { remainingMs?: unknown; operation?: SessionStorageOperation }
           try {
-            if (typeof request?.expires !== 'number' || !Number.isFinite(request.expires)
-              || request.expires <= Date.now()) throw new SessionStorageUnavailable('expired')
+            const expires = sessionStorageDeadline(request?.remainingMs)
             const operation = request.operation
             let value: unknown
             switch (operation?.kind) {
-              case 'stopped-query': value = await codec.queryStopped(operation.query, request.expires); break
+              case 'stopped-query': value = await codec.queryStopped(operation.query, expires); break
               case 'read': value = await codec.read(operation.document, operation.retain); break
               case 'equal': value = await codec.equal(operation.proof); break
               case 'prepare': value = await codec.prepare(operation.document, operation.source, operation.value, operation.reservation, operation.rawSource); break
@@ -50,6 +57,7 @@ export function runSessionStorage(): void {
               case 'discard': await codec.discard(operation.temporary, operation.identity); value = null; break
               default: throw new SessionStorageUnavailable('invalid')
             }
+            if (performance.now() >= expires) throw new SessionStorageUnavailable('expired')
             await frames!.send(id, { ok: true, value })
           } catch (error) {
             const code = error instanceof SessionStorageUnavailable ? error.code : 'unsafe'

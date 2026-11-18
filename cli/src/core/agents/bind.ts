@@ -227,6 +227,7 @@ export function createBinding({
       try { await owners?.settle([conversationKey(entry)]) }
       catch (error) { console.warn(`[agent] ${sid(entry.agentId)} could not settle who owns ${sid(entry.sessionId)}: ${error instanceof Error ? error.message : error}`) }
     }
+    if (!current()) return
     syncRecapPool()
     if (meta.isNew) {
       registry.inheritName(entry.agentId, entry.sessionId)

@@ -1,6 +1,5 @@
 /** Required session storage reuses this core's admitted payload, never its canonical helper path. */
 import { join } from 'node:path'
-import { createArtifactPreparation } from './executionArtifactProcess.js'
 import { executedEntry, SESSION_STORAGE_ENTRY_ENV, SESSION_STORAGE_HASH_ENV, type ExecutedEntry } from './executedEntry.js'
 import type { ExecutionArtifact } from './executionArtifacts.js'
 
@@ -35,7 +34,10 @@ export async function ownProcessSessionStorage(directory: string, close: () => P
   if (entry?.file.endsWith('.ts')) return { close }
   return ownSessionStorage({
     entry: () => entry,
-    prepare: (file, hash) => createArtifactPreparation({ directory: join(directory, 'lean'), node: process.execPath }).prepare(file, hash).result,
+    prepare: async (file, hash) => {
+      const { createArtifactPreparation } = await import('./executionArtifactProcess.js')
+      return createArtifactPreparation({ directory: join(directory, 'lean'), node: process.execPath }).prepare(file, hash).result
+    },
     configure: (file, hash) => {
       process.env[SESSION_STORAGE_ENTRY_ENV] = file
       process.env[SESSION_STORAGE_HASH_ENV] = hash

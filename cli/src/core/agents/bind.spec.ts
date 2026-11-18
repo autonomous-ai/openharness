@@ -121,6 +121,18 @@ function registered(run: ReturnType<typeof setup>, entry: RegisteredSession, met
 }
 
 describe('binding a registered session to its agent', () => {
+  it.each(['archive lookup', 'archive save', 'owner settlement'] as const)('does not attach a binding replaced during %s', async phase => {
+    const owners = { settle: vi.fn(async () => []) }
+    const run = setup({ owners }), entry = agent({ resumeOnly: true })
+    const replace = () => { run.byAgent.set('a1', agent({ sessionId: 'replacement' })) }
+    if (phase === 'archive lookup') vi.mocked(run.deps.stoppedAgents.get).mockImplementationOnce(async () => { replace(); return null })
+    if (phase === 'archive save') vi.mocked(run.deps.stoppedAgents.save).mockImplementationOnce(async () => { replace() })
+    if (phase === 'owner settlement') owners.settle.mockImplementationOnce(async () => { replace(); return [] })
+    await registered(run, entry, meta({ isNew: true }))
+    expect(run.deps.attachSession).not.toHaveBeenCalled()
+    expect(run.deps.announceSession).not.toHaveBeenCalled()
+  })
+
   it.each(['rebound', 'evicted', 'orphaned'] as const)('stops attachment when %s cleanup replaces the selected binding', async phase => {
     const run = setup(), entry = agent()
     vi.mocked(run.deps.forgetSession).mockImplementationOnce(async () => { run.byAgent.set('a1', agent({ sessionId: 'replacement' })) })

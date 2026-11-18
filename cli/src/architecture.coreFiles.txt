@@ -270,13 +270,8 @@ engines/worker/storageProtocol.ts
 engines/worker/submissionProtocol.ts
 harnessd/baseNode.ts
 harnessd/bundleFingerprint.ts
-harnessd/childCapture.ts
 harnessd/coreLink.ts
 harnessd/executedEntry.ts
-harnessd/executionArtifactChild.ts
-harnessd/executionArtifactProcess.ts
-harnessd/executionArtifacts.ts
-harnessd/leanBundle.ts
 harnessd/processName.ts
 harnessd/protocol.ts
 harnessd/services.ts

@@ -62,6 +62,27 @@ function faultChild(fault: 'after-sync' | 'replace-before-open'): void {
 }
 
 describe('required session storage process', () => {
+  it('keeps its request deadline independent of a caller wall-clock change', async () => {
+    writeFileSync(join(root, 'registry.json'), JSON.stringify([row()]), { mode: 0o600 })
+    vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 8, 26, 9, 30))
+    const image = await storage.read({ kind: 'registry' })
+    expect(image.state).toBe('image')
+    expect(containsKey(image)).toBe(false)
+  })
+
+  it('reaps a late reply before releasing the original expired request', async () => {
+    await storage.read({ kind: 'registry' })
+    const owner = storage as unknown as { active: { expires: number }; child?: ChildProcess }
+    const child = owner.child!
+    let exited = false
+    child.once('exit', () => { exited = true })
+    const read = storage.read({ kind: 'registry' })
+    owner.active.expires = 0
+    await expect(read).rejects.toMatchObject({ code: 'disconnected' })
+    expect(exited).toBe(true)
+    expect(owner.child).toBeUndefined()
+  })
+
   it('does not settle a missing temporary whose original directory was displaced', async () => {
     const prepared = await storage.prepare({ kind: 'registry' }, null, [])
     const moved = `${root}-displaced`

@@ -133,6 +133,7 @@ export class SessionStorage {
         this.terminate(); return
       }
       const active = this.active
+      if (performance.now() >= active.expires) { this.terminate(); return }
       this.active = undefined
       clearTimeout(this.timer)
       answer.ok ? active.resolve(answer.value) : active.reject(new SessionStorageUnavailable(answer.code as SessionStorageFailure))
@@ -180,7 +181,7 @@ export class SessionStorage {
     if (this.closed || this.closeFailed) return Promise.reject(new SessionStorageUnavailable('disconnected'))
     if (this.queue.length >= SESSION_STORAGE_QUEUE) return Promise.reject(new SessionStorageUnavailable('busy'))
     return new Promise<T>((resolve, reject) => {
-      this.queue.push({ id: this.nextId++, expires: Date.now() + SESSION_STORAGE_REQUEST_MS, operation,
+      this.queue.push({ id: this.nextId++, expires: performance.now() + SESSION_STORAGE_REQUEST_MS, operation,
         resolve: value => resolve(value as T), reject })
       void this.drain()
     })
@@ -189,17 +190,19 @@ export class SessionStorage {
   private async drain(): Promise<void> {
     if (this.active || !this.queue.length) return
     const pending = this.queue.shift()!
-    if (Date.now() >= pending.expires) {
+    if (performance.now() >= pending.expires) {
       pending.reject(new SessionStorageUnavailable('expired'))
       void this.drain()
       return
     }
     this.active = pending
-    this.timer = setTimeout(() => this.terminate(), Math.max(1, pending.expires - Date.now()))
+    this.timer = setTimeout(() => this.terminate(), Math.max(1, pending.expires - performance.now()))
     try {
       await this.start()
       if (this.active !== pending) return
-      await this.frames!.send(pending.id, { expires: pending.expires, operation: pending.operation })
+      const remainingMs = pending.expires - performance.now()
+      if (remainingMs <= 0) { this.terminate(); return }
+      await this.frames!.send(pending.id, { remainingMs, operation: pending.operation })
     } catch {
       if (this.child) this.terminate()
       else if (this.active === pending) {
@@ -240,7 +243,7 @@ export class SessionStorage {
 
   private async prepareImage(document: SessionDocument, source: SessionImageProof | null, value: unknown, rawSource?: SessionImageProof): Promise<SessionPreparedImage> {
     if (this.preparationWaiting >= SESSION_STORAGE_QUEUE) throw new SessionStorageUnavailable('busy')
-    const expires = Date.now() + SESSION_STORAGE_REQUEST_MS, previous = this.preparationTail
+    const expires = performance.now() + SESSION_STORAGE_REQUEST_MS, previous = this.preparationTail
     let release!: () => void
     this.preparationTail = new Promise(resolve => { release = resolve })
     this.preparationWaiting++
@@ -248,7 +251,7 @@ export class SessionStorage {
     this.preparationWaiting--
     let reservation: OwnedReservation | undefined
     try {
-      if (this.closed || Date.now() >= expires) throw new SessionStorageUnavailable('expired')
+      if (this.closed || performance.now() >= expires) throw new SessionStorageUnavailable('expired')
       const target = this.path(document)
       await privateRegistryDirectory(dirname(target))
       const directoryIdentity = sessionSourceIdentity(lstatSync(dirname(target), { bigint: true }))

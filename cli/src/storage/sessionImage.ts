@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { closeSync, constants, fstatSync, readSync, type Dir } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve as resolvePath, sep } from 'node:path'
+import { performance } from 'node:perf_hooks'
 import { parseGridLaunchOverride, type GridLaunchOverride } from '../lib/gridLaunchWire.js'
 import { privateRegistryDirectory } from '../lib/registryPersistence.js'
 import { SessionStorageUnavailable, sessionDocument, sessionImageProof, storedGridLaunch, sessionFileIdentity,
@@ -291,7 +292,7 @@ export function createSessionImageCodec(root: string, retained: readonly Retaine
     try { for (;;) {
       const entry = await directoryHandle.read()
       if (!entry) break
-      if (++count > STOPPED_AUTHORITY_ENTRIES || Date.now() >= expires) throw new SessionStorageUnavailable('expired')
+      if (++count > STOPPED_AUTHORITY_ENTRIES || performance.now() >= expires) throw new SessionStorageUnavailable('expired')
       if (!entry.name.endsWith('.json')) continue
       const agentId = entry.name.slice(0, -5)
       if (agentId === query.exceptAgentId) continue

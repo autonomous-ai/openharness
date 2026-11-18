@@ -102,6 +102,8 @@ const LAZY_LOADERS = new Set(['engines/inProcess.ts'])
 /** Only this edge opens the terminal host implementation: configured startup or a Windows guest. */
 const PTY_HOST_DOOR = { importer: 'core/main.ts', target: 'core/ptyHost.ts' }
 const TMUX_BACKEND_DOOR = { importer: 'core/main.ts', target: 'lib/tmuxBackend.ts' }
+/** An already admitted core reuses its payload; only standalone packaged startup prepares a cohort. */
+const STORAGE_PREPARATION_DOOR = { importer: 'harnessd/sessionStorageOwner.ts', target: 'harnessd/executionArtifactProcess.ts' }
 
 /**
  * Every file the core's process loads, one a line and in order: the walk from `core/main.ts` with every door shut.
@@ -141,7 +143,8 @@ function closureOf(entry: string): Map<string, number> {
 function followed(importer: string, target: string, dynamic: boolean): boolean {
   return !dynamic || (target !== IN_PROCESS_ONLY && !LAZY_LOADERS.has(importer)
     && !(importer === PTY_HOST_DOOR.importer && target === PTY_HOST_DOOR.target)
-    && !(importer === TMUX_BACKEND_DOOR.importer && target === TMUX_BACKEND_DOOR.target))
+    && !(importer === TMUX_BACKEND_DOOR.importer && target === TMUX_BACKEND_DOOR.target)
+    && !(importer === STORAGE_PREPARATION_DOOR.importer && target === STORAGE_PREPARATION_DOOR.target))
 }
 
 /** Each file read and parsed once, however many walks pass through it. */
@@ -694,6 +697,20 @@ describe('the daemon\'s shape', () => {
     expect(followed(TMUX_BACKEND_DOOR.importer, TMUX_BACKEND_DOOR.target, false)).toBe(true)
     expect(followed('core/agents/create.ts', TMUX_BACKEND_DOOR.target, true)).toBe(true)
     expect(followed(TMUX_BACKEND_DOOR.importer, 'lib/tmuxStream.ts', true)).toBe(true)
+  }, WALK_TIMEOUT_MS)
+
+  it('loads artifact preparation only for the standalone storage startup edge', () => {
+    const cold = closureOf('core/main.ts'), opened = closureOf(STORAGE_PREPARATION_DOOR.target)
+    const implementation = ['harnessd/childCapture.ts', 'harnessd/executionArtifactChild.ts',
+      'harnessd/executionArtifactProcess.ts', 'harnessd/executionArtifacts.ts', 'harnessd/leanBundle.ts']
+    expect(implementation.filter(file => cold.has(file))).toEqual([])
+    expect([...opened.keys()].filter(file => !cold.has(file)).sort()).toEqual(implementation.sort())
+    expect(importsFor(STORAGE_PREPARATION_DOOR.importer, readFileSync(join(SRC, STORAGE_PREPARATION_DOOR.importer), 'utf8'))
+      .filter(({ from }) => from === './executionArtifactProcess.js')).toEqual([{ from: './executionArtifactProcess.js', dynamic: true }])
+    expect(followed(STORAGE_PREPARATION_DOOR.importer, STORAGE_PREPARATION_DOOR.target, true)).toBe(false)
+    expect(followed(STORAGE_PREPARATION_DOOR.importer, STORAGE_PREPARATION_DOOR.target, false)).toBe(true)
+    expect(followed('core/main.ts', STORAGE_PREPARATION_DOOR.target, true)).toBe(true)
+    expect(followed(STORAGE_PREPARATION_DOOR.importer, 'harnessd/executionArtifacts.ts', true)).toBe(true)
   }, WALK_TIMEOUT_MS)
 
   it('the core\'s process loads no edge file but those listed, and reports source size for review', () => {

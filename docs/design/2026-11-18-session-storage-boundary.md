@@ -44,7 +44,10 @@ Node mechanism labels the child `harnessd-storage` where supported, with its exi
 ## Typed transport and bounds
 
 One active image preparation and one active read per child; at most 64 queued caller operations, matching the
-current Registry write queue. Calls carry a monotonically allocated id, child incarnation and absolute deadline.
+current Registry write queue. Calls carry a monotonically allocated id, child incarnation and bounded remaining
+duration. Parent queue time uses its monotonic clock; the child starts a monotonic deadline from the remaining
+duration (strictly positive, at most five seconds). Parent timeout and reply admission retain the original deadline,
+so transport time never extends final authority. Wall-clock changes in either process cannot expire a fresh request.
 Admit at most 1 MiB per IPC frame. Images use an ordered begin/page/end transfer, so a peer cannot allocate an
 arbitrary array from a claimed count. Keep one page in each direction and credit it before sending another.
 Cancellation and actual settlement are separate states. Parsing, byte hashing and JSON encoding of raw images
@@ -62,7 +65,7 @@ completed bounded-image claim. Preserved unknown fields survive reconstruction u
 The canonical wire types are `SessionDocument`, `SessionImageProof`, `SessionStorageOperation`,
 `SessionPreparedImage` and `StoppedArchiveQuery` in `cli/src/lib/sessionStorageWire.ts`. An image proof is
 `{ document, identity, bytes, sha256 }`; `identity` preserves the complete BigInt stat tuple as a decimal string.
-A request carries `{ expires, operation }`, and its reply is `{ ok: true, value }` or `{ ok: false, code }`.
+A request carries `{ remainingMs, operation }`, and its reply is `{ ok: true, value }` or `{ ok: false, code }`.
 The exact operations are `read`, `equal`, `prepare`, `discard`, `import`, `release`, `resolve` and
 `stopped-query`. `read` optionally names a retained source lease. `prepare` carries the selected document,
 source proof, safe candidate metadata, exact empty temporary reservation, and optional raw-source proof for
@@ -323,9 +326,11 @@ Every session needs the required storage transport, publication fence and stoppe
 `lib/sessionStorage.ts`, `sessionStorageWire.ts`, `sessionStorageFrames.ts`, `sessionPublication.ts` and
 `stoppedAuthorityMetadata.ts`. Raw image codecs remain outside the core closure. The new bootstrap owner needs
 `harnessd/sessionStorageOwner.ts` and `executedEntry.ts`; its immutable no-master execution path reuses
-`bundleFingerprint.ts`, `childCapture.ts`, `executionArtifactChild.ts`, `executionArtifactProcess.ts`,
-`executionArtifacts.ts`, `leanBundle.ts` and `workerContract.ts`. These are session bootstrap dependencies,
-independent of whether models or any optional service runs. Their first-use cost remains in the measured acceptance.
+`bundleFingerprint.ts` and `workerContract.ts`. Only standalone packaged startup dynamically loads
+`executionArtifactProcess.ts`, `childCapture.ts`, `executionArtifactChild.ts`, `executionArtifacts.ts` and
+`leanBundle.ts` to prepare its initial cohort; admitted supervised and explicit source entries load none of them
+through this door. These are session bootstrap dependencies, independent of optional services. Their standalone
+first-use cost remains in the measured acceptance.
 
 ### Current implementation checks
 
