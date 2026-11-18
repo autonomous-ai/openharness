@@ -1370,6 +1370,9 @@ export class CableSession {
             ...(this.host.selectPassage ? ['selection'] : []),
             ...(this.host.visit ? ['visit'] : []),
             ...(this.host.answerReviewed ? ['question.review'] : []),
+            // The dial shows its TABS | APPS switch only when told, so a list kept from an earlier machine view
+            // never becomes a control nothing answers.
+            ...(this.appFilter && this.host.pickApp ? ['apps.switch'] : []),
             // The desktop will carry this device's preferences. A device that does not see this keeps
             // its own settings screens and never reports.
             'settings',
