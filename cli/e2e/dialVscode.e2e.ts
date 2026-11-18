@@ -411,7 +411,7 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     tui('fullscreen')
     const front = watch(d)
     front(VSCODE)
-    await turned(dial, a, "A's terminal shown", () => window.shows[0])
+    await dial.turnUntil(a.id, "A's terminal shown", () => window.shows[0])
 
     // A stroke toward older lines: 128 is 320 px, 20 lines of 16 (scrollLines.ts), two pages of 8. The loop presses a line's
     // keys before it scrolls its lines, so once the window scrolled the stroke's 20 lines, any key of it came.
