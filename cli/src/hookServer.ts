@@ -675,11 +675,9 @@ export function startHookServer(
             callerPid: Number.isSafeInteger(body.callerPid) && body.callerPid! > 0 ? body.callerPid : undefined,
             ...(bySessionPane ? { bySessionPane } : {}),
             // A relaunch records its engine's process a moment after the engine starts, and a hook in that
-            // moment waits for the record, up to 20s. Its client does not: the engine's hook command gives
-            // up on a reply after 500ms and then writes the registry itself, as for a daemon that is down
-            // (hook/notify.mjs, fallbackRegister), with a row of its own in place of the agent's, which
-            // the running daemon's next save took in. Told the registration is pending, it writes nothing,
-            // as for a transcript not yet written below, and the wait goes on here.
+            // moment waits for the record, up to 20s. Its client does not: the engine waits on its hook
+            // command, which gives up on a reply after 500ms (hook/notify.mjs). Told the registration is
+            // pending, it ends at once, and the wait goes on here.
             // Hermes admission has a separate bounded queue after resolution. Do not
             // claim a slot before one exists: its hook client can retry this live hold.
             onWait: () => { deferred = true; answer(202, { pending: false, retry: true, detail: 'Waiting for the engine process record; admission is not queued yet.' }) },

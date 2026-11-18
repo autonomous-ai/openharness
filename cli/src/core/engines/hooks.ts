@@ -15,7 +15,8 @@ import type { NativeHookOptions } from '../../engines/kit/nativeLocations.js'
 import type { OpencodeLaunchSnapshot } from '../../engines/launchControl.js'
 import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
-import { RegistryOwnershipChanged, validTerminalRuntime } from '../../lib/registry.js'
+import { validTerminalRuntime } from '../../lib/registry.js'
+import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import { hermesGatewayProcess, type ProcessRow } from '../../lib/processTable.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
@@ -41,8 +42,8 @@ export interface EngineHookDeps {
  * starts its engine before it records it: a resume looks for the process every 250ms, a create or a
  * fork backs off to 750ms, and a restart finds it the same way and then probes it, twice over when it
  * falls back to a new conversation (two 8s discovery budgets, swap.ts). The hook itself is answered
- * before the wait (`onWait`): its client gives up on a reply after 500ms and then writes the registry
- * itself (hook/notify.mjs), so only the daemon's record waits.
+ * before the wait (`onWait`): its engine waits on it, and its client gives up on a reply after 500ms
+ * (hook/notify.mjs), so only the daemon's record waits.
  */
 export const PROCESS_RECORD_WAIT_MS = 20_000
 /** How often a waiting hook reads the rows on its panes again: memory, not a process table. */
@@ -161,10 +162,13 @@ export function createEngineHooks(deps: EngineHookDeps) {
     for (const runtime of resolved) {
       try { if (!await agentReconciler.triggerHint(runtime, engine)) overdue = true }
       catch (error) {
-        if (!(error instanceof RegistryOwnershipChanged)) throw error
-        // A pane commit can supersede discovery's observation. Match fresh evidence through the existing wait.
+        if (!(error instanceof IdentityReadUnavailable)) throw error
+        // A pane commit can supersede discovery's observation, or the process it observed change before it could
+        // publish it. Match fresh evidence through the existing wait. Answered 500, the hook client wrote the
+        // registry itself while this daemon ran, and the agent it replaced never bound (e2e/scale.e2e.ts).
         overdue = true
-        console.log('[hooks] reconciliation owner changed; checking current process evidence')
+        // Its message is one of a fixed set (IdentityReadUnavailable), never a path or a process's content.
+        console.log(`[hooks] reconciliation held · ${error.message} · checking current process evidence`)
       }
     }
 
@@ -202,7 +206,7 @@ export function createEngineHooks(deps: EngineHookDeps) {
     }
     // Cursor may admit a unique runtime without recorded ancestry. A hook from the engine just
     // dispatched there must not rewrite its row before that pane operation has committed its route.
-    // Acknowledge now so the hook client never falls back to writing the registry itself.
+    // Acknowledge now, as before the wait above: the engine waits on its hook.
     for (;;) {
       const pending = choice.agent && panePending?.(choice.agent.agentId)
       if (!pending) break

@@ -1212,6 +1212,43 @@ describe('hook notify terminal scope', () => {
     expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))).toEqual([])
   })
 
+  it.each([['SessionStart', 500], ['SessionStart', 503], ['UserPromptSubmit', 500]] as const)(
+    'does not fall back when the daemon answers %s with %i: a daemon that answers is running', async (event, status) => {
+      // A 500 taken for an outage wrote a row of the hook's own in place of the agent's, and the running daemon's next
+      // save took it in: the agent the daemon had created was gone (e2e/scale.e2e.ts, 2026-11-18).
+      const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-refused-'))
+      tmpDirs.push(dir)
+      const claudeProjectsDir = join(dir, 'claude-projects')
+      const dataDir = join(dir, 'data')
+      const transcriptPath = join(claudeProjectsDir, 'demo', 'session-refused.jsonl')
+      mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+      mkdirSync(dataDir, { recursive: true })
+      writeLegacyStateFile(join(dataDir, 'registry.json'), '[]')
+      writeFileSync(transcriptPath, '{}\n')
+      const received: string[] = []
+      const server = createServer((req, res) => {
+        received.push(req.url ?? '')
+        req.resume()
+        res.writeHead(status).end(JSON.stringify({ error: 'INTERNAL' }))
+      })
+      servers.push(server)
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+      const address = server.address()
+      if (!address || typeof address === 'string') throw new Error('test server did not bind a TCP port')
+
+      await runHook({
+        port: address.port,
+        tmuxPane: '%7',
+        processEngine: 'claude',
+        dataDir,
+        claudeProjectsDir,
+        input: { hook_event_name: event, session_id: 'session-refused', transcript_path: transcriptPath, cwd: '/tmp/demo' },
+      })
+
+      expect(received).toContain('/api/hook/session-start')
+      expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))).toEqual([])
+    })
+
   it('does not write fallback registry entries outside tmux or outside the transcript root', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-invalid-'))
     tmpDirs.push(dir)

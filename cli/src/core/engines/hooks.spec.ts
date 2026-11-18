@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import * as hooks from '../../engines/nativeHooks.js'
 import { engineHooks } from '../../engines/hooks.js'
 import { RegistryOwnershipChanged, type RegisteredSession } from '../../lib/registry.js'
+import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import { confirmHomes, recoverEngineHomes } from '../../lib/engineHomes.js'
 import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn, PROCESS_RECORD_WAIT_MS, type EngineHookDeps } from './hooks.js'
@@ -90,6 +91,18 @@ describe('which agent a hook belongs to', () => {
     vi.mocked(processRows).mockResolvedValue(tree([300, 100], [100, 1]) as never)
     vi.mocked(deps.agentReconciler.triggerHint).mockRejectedValueOnce(new RegistryOwnershipChanged('fixture changed'))
     expect(await hooks.resolveHookAgent({ engine, runtimeHints: [hint('%1')], callerPid: 300 })).toEqual(current)
+  })
+
+  // A pass whose observation changed before it could publish it fails every hook that waits on it. Answered 500,
+  // the hook client wrote the registry itself while the daemon ran, and the agent it replaced never bound (e2e/scale.e2e.ts).
+  it('matches current evidence after a reconciliation could not publish what it observed', async () => {
+    const current = agent('current', 100)
+    const { deps, hooks } = setup({ '%1': current })
+    vi.mocked(processRows).mockResolvedValue(tree([300, 100], [100, 1]) as never)
+    vi.mocked(deps.agentReconciler.triggerHint).mockRejectedValueOnce(new IdentityReadUnavailable('the observed process changed before publication'))
+    expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })).toEqual(current)
+    // Any of the pass's holds lands here: the log says which.
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('the observed process changed before publication'))
   })
 
   it.each(['committed', 'removed'] as const)('keeps Cursor resolution through a superseded reconciliation until pane %s', async outcome => {
@@ -352,8 +365,8 @@ describe('which agent a hook belongs to', () => {
       await hook.waiting()
       await new Promise((resolve) => setTimeout(resolve, 250))
       expect(hook.answer()).toBeUndefined()
-      // Said before the wait, so the hook is answered then: its client gives up after 500ms and writes
-      // the registry itself (hook/notify.mjs).
+      // Said before the wait, so the hook is answered then: its engine waits on it, and its client gives
+      // up after 500ms (hook/notify.mjs).
       expect(onWait).toHaveBeenCalledTimes(1)
       // What restart.ts does once the new process is found and probed.
       onPane['%1'] = agent('a1', 200)
@@ -388,6 +401,23 @@ describe('which agent a hook belongs to', () => {
       expect(hook.answer()).toBeUndefined()
       expect(onWait).toHaveBeenCalledTimes(1)
       // The pass, done at last, opens the agent on the pane with the engine the hook came from.
+      onPane['%1'] = agent('a1', 200)
+      await hook.asked
+      expect(hook.answer()).toEqual(agent('a1', 200))
+    })
+
+    it('when the pass that would open its agent could not publish what it observed, waits for the agent to appear on its pane', async () => {
+      const onPane: Record<string, RegisteredSession> = {}
+      vi.mocked(processRows).mockResolvedValue(newEngine() as never)
+      const failed = setup(onPane, { agentReconciler: {
+        triggerHint: vi.fn(async () => { throw new IdentityReadUnavailable('the observed process changed before publication') }),
+        nudge: vi.fn(),
+      } as unknown as EngineHookDeps['agentReconciler'] })
+      const onWait = vi.fn()
+      const hook = ask(failed.hooks, ['%1'], onWait)
+      await hook.waiting()
+      expect(onWait).toHaveBeenCalledTimes(1)
+      // The next pass opens the agent.
       onPane['%1'] = agent('a1', 200)
       await hook.asked
       expect(hook.answer()).toEqual(agent('a1', 200))
