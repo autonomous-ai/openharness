@@ -212,9 +212,9 @@ static void situation(void) {
     members.count[0] = 2; snprintf(members.id[0][0], ID_MAX, "a1"); snprintf(members.id[0][1], ID_MAX, "a2");
     pod_ui_swarms(&U, sw, 1, &members, "s0", NULL, 0);
     pro_app_link(true, "mac");
-    ROWS[0] = (pro_agent_row_t){"a1", "Alpha", "claude", "m-a", "Mac"};
-    ROWS[1] = (pro_agent_row_t){"a2", "Bravo", "codex", "m-a", "Mac"};
-    ROWS[2] = (pro_agent_row_t){"a3", "Charlie", "claude", "m-b", "Box"};
+    ROWS[0] = (pro_agent_row_t){"a1", "Alpha", "claude", "m-a", "Mac", NULL, NULL};
+    ROWS[1] = (pro_agent_row_t){"a2", "Bravo", "codex", "m-a", "Mac", NULL, NULL};
+    ROWS[2] = (pro_agent_row_t){"a3", "Charlie", "claude", "m-b", "Box", NULL, NULL};
     pro_app_agents(ROWS, 3);
     machines("online", "online");
     render();

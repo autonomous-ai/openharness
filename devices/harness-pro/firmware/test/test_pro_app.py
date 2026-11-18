@@ -901,7 +901,7 @@ static void *cable_task(void *arg) {
     pro_app_swarms(CS, SWARMS_MAX, &CM, "s3", CT, SWARM_TILES_MAX);
     for (int n = 0; n < POD_AGENTS_MAX; n++) {
         snprintf(CIDS[n], ID_MAX, "a%d", n + 1);
-        CA[n] = (pro_agent_row_t){CIDS[n], "Agent", "claude", "m1", "mac"};
+        CA[n] = (pro_agent_row_t){CIDS[n], "Agent", "claude", "m1", "mac", NULL, NULL};
     }
     pro_app_agents(CA, POD_AGENTS_MAX);
     pro_app_agents(NULL, 0);
@@ -1565,10 +1565,10 @@ static void pro_app_test_voice_gate(void) {
     snprintf(m[1].id, sizeof m[1].id, "m-link"); snprintf(m[1].name, sizeof m[1].name, "Pc"); snprintf(m[1].state, sizeof m[1].state, "needs-link");
     pro_app_machines(m, 2, "m-off");
     static pro_agent_row_t rows[4];
-    rows[0] = (pro_agent_row_t){"a1", "Alpha", "claude", "m-ok", "Mac"};
-    rows[1] = (pro_agent_row_t){"a2", "Bravo", "codex", "m-off", "Box"};
-    rows[2] = (pro_agent_row_t){"a3", "Charlie", "claude", "m-link", "Pc"};
-    rows[3] = (pro_agent_row_t){"a4", "Shell", "terminal", "m-ok", "Mac"};
+    rows[0] = (pro_agent_row_t){"a1", "Alpha", "claude", "m-ok", "Mac", NULL, NULL};
+    rows[1] = (pro_agent_row_t){"a2", "Bravo", "codex", "m-off", "Box", NULL, NULL};
+    rows[2] = (pro_agent_row_t){"a3", "Charlie", "claude", "m-link", "Pc", NULL, NULL};
+    rows[3] = (pro_agent_row_t){"a4", "Shell", "terminal", "m-ok", "Mac", NULL, NULL};
     pro_app_agents(rows, 4);
     CHECK(pro_app_voice_block_reason("a1") == NULL);
     CHECK(!strcmp(pro_app_voice_block_reason("a2"), "This computer is offline."));
@@ -1683,7 +1683,7 @@ static void pro_app_test_roster_and_swarms(void) {
     setup();
     static pro_agent_row_t rows[POD_AGENTS_MAX + 4];
     static char ids[POD_AGENTS_MAX + 4][ID_MAX];
-    for (int i = 0; i < POD_AGENTS_MAX + 4; i++) { snprintf(ids[i], ID_MAX, "r%d", i); rows[i] = (pro_agent_row_t){ids[i], NULL, "claude", "m", "mac"}; }
+    for (int i = 0; i < POD_AGENTS_MAX + 4; i++) { snprintf(ids[i], ID_MAX, "r%d", i); rows[i] = (pro_agent_row_t){ids[i], NULL, "claude", "m", "mac", NULL, NULL}; }
     rows[1] = rows[0];                                         // a duplicate id
     rows[2].id = "";                                           // no id
     pro_app_agents(rows, POD_AGENTS_MAX + 4);
