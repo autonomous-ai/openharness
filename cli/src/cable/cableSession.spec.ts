@@ -2332,6 +2332,23 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  it('bounds the name and machine on a summary and a question, so a hostile name cannot push either past the cap', async () => {
+    // Several KB each, its JSON wider still: quotes and control characters escape, the rest is multibyte.
+    const long = '"\u0001é😀\\'.repeat(800)
+    const { session, port } = await connect(makeHost({ describe: () => ({ name: long, engine: 'claude', machine: long }) }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' }); await settle()
+      await session.summary('a1', 'recap', 'body')
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      for (const t of ['summary', 'question']) {
+        const frame = port.sent.find((m) => m.t === t)
+        expect(frame).toBeDefined()
+        for (const text of [frame!.name, frame!.machine] as string[]) expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(39)
+      }
+      expect(port.isOpen).toBe(true)
+    } finally { await session.stop() }
+  })
+
   it('marks a summary quiet when the window already has that agent on screen', async () => {
     const { session, port } = await connect(makeHost({}))
     port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
