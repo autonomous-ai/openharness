@@ -24,7 +24,7 @@ code = r'''
 #include <string.h>
 typedef struct cJSON { int unused; } cJSON;
 typedef struct { const char *name, *kind; } board_t;
-static const board_t *board(void) { static const board_t b = {"pro-stub", "kind-stub"}; return &b; }
+static const board_t *board(void) { static const board_t b = {"pro-stub", KIND}; return &b; }
 static cJSON root_obj;
 static const char *pro_cable_fw_version(void) { return "0.0.0"; }
 static bool device_mac_str(char *o, size_t n) { snprintf(o, n, "aa"); return true; }
@@ -50,12 +50,19 @@ static void config_load_voicelang(char *o, size_t n) { snprintf(o, n, "en"); }
 int main(void) { send_hello(); return 0; }
 '''
 
-with tempfile.TemporaryDirectory() as d:
-    src = Path(d) / "hello.c"
-    src.write_text(code)
-    exe = Path(d) / "hello"
-    subprocess.run(["cc", "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Werror", "-o", str(exe), str(src)], check=True)
-    lines = subprocess.run([str(exe)], check=True, capture_output=True, text=True).stdout.split()
+def hello(kind):
+    """The hello's lines on a board of this kind."""
+    with tempfile.TemporaryDirectory() as d:
+        src = Path(d) / "hello.c"
+        src.write_text(code)
+        exe = Path(d) / "hello"
+        subprocess.run(["cc", "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Werror", f'-DKIND="{kind}"', "-o", str(exe),
+                        str(src)], check=True)
+        return subprocess.run([str(exe)], check=True, capture_output=True, text=True).stdout.split()
+
+
+lines = hello("kind-stub")
+max_lines = hello("max")
 
 # The settings object: every key the app's DeviceSettings.fromJson requires, with its JSON type. Otherwise the app
 # drops the whole object.
@@ -83,6 +90,13 @@ assert pairs == [
     ("mac", "aa"),
     ("settings", "{"),
 ], pairs
+# Harness Max compiles this file and says "max": the same hello and appFilter, so the daemon sends it the shown app's
+# ring and `apps` (docs/specs/2026-11-14-dial-app-filter.md). The Pro never says it.
+max_pairs = [tuple(x.split("=", 1)) for x in max_lines[1:] if not x.startswith("S.")]
+want_max = [("board", "max") if k == "board" else (k, v) for k, v in pairs]
+want_max.insert(want_max.index(("ota", "v1")) + 1, ("appFilter", "v1"))
+assert max_pairs == want_max, max_pairs
+assert "appFilter" not in {k for k, _ in pairs}
 keys = {k for k, _ in pairs}
 for round_only in ("carry", "draft", "speech", "form", "visit", "workspace", "selection", "metrics", "pcm16"):
     assert round_only not in keys and round_only not in body, f"hello mentions {round_only}"

@@ -35,7 +35,7 @@ static int checks;
 
 // ---- the recorder --------------------------------------------------------------------------------------
 enum { EV_STATS, EV_LINK, EV_AGENTS, EV_SWARMS, EV_LIBRARY, EV_CONTEXT, EV_TURN, EV_SUMMARY, EV_QUESTION, EV_QCLOSE, EV_FOCUS,
-       EV_VOICE, EV_MACHINES, EV_NREPLACE, EV_NSEEN, EV_ASK, EV_QSTATE, EV_RECEIPT, EV_FORM, EV_VFORM, EV_TOAST };
+       EV_VOICE, EV_MACHINES, EV_NREPLACE, EV_NSEEN, EV_ASK, EV_QSTATE, EV_RECEIPT, EV_FORM, EV_VFORM, EV_TOAST, EV_APPS };
 typedef struct { int kind; char id[64]; char a[2400], b[2400], c[2400], d[128]; long n1, n2, n3, n4, n5; } ev_t;
 #define EV_MAX 64
 static ev_t evs[EV_MAX];
@@ -44,6 +44,8 @@ static cable_swarm_t rec_swarms[SWARMS_MAX];
 static cable_swarm_members_t rec_members;
 static cable_tile_t rec_tiles[SWARM_TILES_MAX];
 static char rec_agent_ids[POD_AGENTS_MAX][ID_MAX];
+static char rec_agent_host[POD_AGENTS_MAX][32], rec_agent_caps[POD_AGENTS_MAX][32];   // "<null>" for NULL
+static struct { char id[32], name[64]; int count, waiting; } rec_apps[PRO_APPS_MAX];
 
 static ev_t *add(int kind, const char *id)
 {
@@ -61,8 +63,26 @@ void pro_app_agents(const pro_agent_row_t *rows, int n)
 {
     ev_t *e = add(EV_AGENTS, NULL);
     e->n1 = n;
-    for (int i = 0; i < n && i < POD_AGENTS_MAX; i++) snprintf(rec_agent_ids[i], ID_MAX, "%s", rows[i].id);
+    for (int i = 0; i < n && i < POD_AGENTS_MAX; i++) {
+        snprintf(rec_agent_ids[i], ID_MAX, "%s", rows[i].id);
+        snprintf(rec_agent_host[i], sizeof rec_agent_host[i], "%s", rows[i].host ? rows[i].host : "<null>");
+        snprintf(rec_agent_caps[i], sizeof rec_agent_caps[i], "%s", rows[i].caps ? rows[i].caps : "<null>");
+    }
     if (n > 0) { put(e->a, rows[0].name); put(e->b, rows[0].machine); put(e->c, rows[0].engine); }
+}
+void pro_app_apps(const char *shown, const pro_app_row_t *rows, int n)
+{
+    ev_t *e = add(EV_APPS, NULL);
+    e->n1 = n;
+    put(e->a, shown);
+    CHECK(n >= 0 && n <= PRO_APPS_MAX);
+    for (int i = 0; i < n; i++) {
+        CHECK(rows[i].id && rows[i].name);
+        snprintf(rec_apps[i].id, sizeof rec_apps[i].id, "%s", rows[i].id);
+        snprintf(rec_apps[i].name, sizeof rec_apps[i].name, "%s", rows[i].name);
+        rec_apps[i].count = rows[i].count;
+        rec_apps[i].waiting = rows[i].waiting;
+    }
 }
 void pro_app_swarms(const cable_swarm_t *items, int n, const cable_swarm_members_t *members, const char *selected,
                     const cable_tile_t *tiles, int tile_n)
@@ -1514,6 +1534,115 @@ static void test_answer_and_form_sends(void)
     free(long_id); free(long_agent); free(long_form);
 }
 
+// The Max's apps (spec docs/specs/2026-11-14-dial-app-filter.md): each agent's host and caps, `apps` and app.pick.
+static void test_agent_host_and_caps(void)
+{
+    welcome();
+    reset();
+    char *long_host = repeat("h", PRO_APP_ID_BYTES);   // one byte over an app id
+    feed("{\"t\":\"agents.begin\"}");
+    feed("{\"t\":\"agent\",\"id\":\"o1\",\"name\":\"auth\",\"host\":\"orca\",\"caps\":\"sv\"}");
+    feed("{\"t\":\"agent\",\"id\":\"h1\",\"host\":\"harness\",\"caps\":\"svfa\"}");
+    feed("{\"t\":\"agent\",\"id\":\"n1\"}");                                        // an older daemon: neither
+    feed("{\"t\":\"agent\",\"id\":\"e1\",\"host\":\"vscode\",\"caps\":\"\"}");       // nothing the device may do
+    feedf("{\"t\":\"agent\",\"id\":\"l1\",\"host\":\"%s\",\"caps\":\"sxvq\"}", long_host);
+    feed("{\"t\":\"agent\",\"id\":\"x1\",\"host\":7,\"caps\":5}");                  // not strings: as if absent
+    feed("{\"t\":\"agent\",\"id\":\"m1\",\"host\":\"0123456789abcdef\",\"caps\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaavvvvvvvvvvvvvvvv\"}");
+    feed("{\"t\":\"agents.end\"}");
+    CHECK(nev == 1 && evs[0].kind == EV_AGENTS && evs[0].n1 == 7);
+    CHECK(!strcmp(rec_agent_host[0], "orca") && !strcmp(rec_agent_caps[0], "sv"));
+    CHECK(!strcmp(rec_agent_host[1], "harness") && !strcmp(rec_agent_caps[1], "svfa"));
+    CHECK(!strcmp(rec_agent_host[2], "<null>") && !strcmp(rec_agent_caps[2], "<null>"));   // NULL caps: all four
+    CHECK(!strcmp(rec_agent_host[3], "vscode") && !strcmp(rec_agent_caps[3], ""));
+    // A host too long for an app id is none; an unknown letter grants nothing, as the dial reads caps.
+    CHECK(!strcmp(rec_agent_host[4], "<null>") && !strcmp(rec_agent_caps[4], "sv"));
+    CHECK(!strcmp(rec_agent_host[5], "<null>") && !strcmp(rec_agent_caps[5], "<null>"));
+    // 16 bytes is a whole host; caps of any length keep the letters they grant.
+    CHECK(!strcmp(rec_agent_host[6], "0123456789abcdef") && !strcmp(rec_agent_caps[6], "va"));
+    // The next roster does not keep the last one's fields.
+    reset();
+    feed("{\"t\":\"agents.begin\"}");
+    feed("{\"t\":\"agent\",\"id\":\"o1\"}");
+    feed("{\"t\":\"agents.end\"}");
+    CHECK(nev == 1 && !strcmp(rec_agent_host[0], "<null>") && !strcmp(rec_agent_caps[0], "<null>"));
+    free(long_host);
+}
+
+static void test_apps(void)
+{
+    welcome();
+    reset();
+    feed("{\"t\":\"apps\",\"shown\":\"orca\",\"apps\":[{\"id\":\"orca\",\"name\":\"Orca\",\"count\":5,\"waiting\":1},"
+         "{\"id\":\"harness\",\"name\":\"Harness\",\"count\":3,\"waiting\":0},{\"id\":\"vscode\",\"name\":\"VS Code\",\"count\":1,\"waiting\":0}]}");
+    CHECK(nev == 1 && evs[0].kind == EV_APPS && !strcmp(evs[0].a, "orca") && evs[0].n1 == 3);
+    CHECK(!strcmp(rec_apps[0].id, "orca") && !strcmp(rec_apps[0].name, "Orca") && rec_apps[0].count == 5 && rec_apps[0].waiting == 1);
+    CHECK(!strcmp(rec_apps[1].id, "harness") && rec_apps[1].count == 3 && rec_apps[1].waiting == 0);
+    CHECK(!strcmp(rec_apps[2].id, "vscode") && !strcmp(rec_apps[2].name, "VS Code") && rec_apps[2].count == 1);
+
+    // An id goes back in app.pick, so one the daemon would not take is dropped, never cut, and a second one is dropped.
+    // The counts are held to 0..999, as the dial holds them; a name is cut on a character.
+    char *long_name = repeat("\xC3\xA9", CABLE_NAME_MAX);
+    reset();
+    feedf("{\"t\":\"apps\",\"shown\":\"harness\",\"apps\":[{\"name\":\"no id\"},{\"id\":\"\"},{\"id\":\"0123456789abcdefg\"},"
+          "{\"id\":\"Orca\"},{\"id\":\"or ca\"},{\"id\":7},{\"id\":\"harness\",\"count\":-2,\"waiting\":2.5},"
+          "{\"id\":\"harness\",\"name\":\"again\"},{\"id\":\"0123456789abcdef\",\"name\":\"%s\",\"count\":1e9,\"waiting\":\"4\"},"
+          "{\"id\":\"terminal-app\"}]}", long_name);
+    CHECK(nev == 1 && evs[0].n1 == 3 && !strcmp(evs[0].a, "harness"));
+    CHECK(!strcmp(rec_apps[0].id, "harness") && !strcmp(rec_apps[0].name, "") && rec_apps[0].count == 0 && rec_apps[0].waiting == 2);
+    CHECK(!strcmp(rec_apps[1].id, "0123456789abcdef") && rec_apps[1].count == 999 && rec_apps[1].waiting == 0);
+    CHECK(strlen(rec_apps[1].name) <= CABLE_NAME_MAX - 1 && strlen(rec_apps[1].name) >= CABLE_NAME_MAX - 2 && utf8_ok(rec_apps[1].name));
+    CHECK(!strcmp(rec_apps[2].id, "terminal-app") && rec_apps[2].count == 0);
+    free(long_name);
+
+    // More than PRO_APPS_MAX: the first ones. A shown too long to be an id, or not a string, is none.
+    char *rows = malloc(32 * 40);
+    rows[0] = 0;
+    for (int i = 0; i < 20; i++) sprintf(rows + strlen(rows), "%s{\"id\":\"a%d\",\"count\":1}", i ? "," : "", i);
+    reset();
+    feedf("{\"t\":\"apps\",\"shown\":\"0123456789abcdefg\",\"apps\":[%s]}", rows);
+    feedf("{\"t\":\"apps\",\"shown\":3,\"apps\":[%s]}", rows);
+    CHECK(nev == 2 && evs[0].n1 == PRO_APPS_MAX && !strcmp(evs[0].a, "") && !strcmp(evs[1].a, ""));
+    CHECK(!strcmp(rec_apps[PRO_APPS_MAX - 1].id, "a15"));
+    free(rows);
+    // No agents: no apps and nothing shown, which is still a list.
+    reset();
+    feed("{\"t\":\"apps\",\"shown\":\"\",\"apps\":[]}");
+    feed("{\"p\":{\"apps\":[]},\"t\":\"apps\"}");   // enveloped, no shown
+    CHECK(nev == 2 && evs[0].n1 == 0 && !strcmp(evs[0].a, "") && evs[1].n1 == 0 && !strcmp(evs[1].a, ""));
+
+    // No list: malformed, dropped and counted.
+    uint32_t bad0, unknown0, bad1, unknown1;
+    pro_cable_counters(&bad0, &unknown0);
+    reset();
+    feed("{\"t\":\"apps\",\"shown\":\"orca\"}");
+    feed("{\"t\":\"apps\",\"shown\":\"orca\",\"apps\":{\"id\":\"orca\"}}");
+    pro_cable_counters(&bad1, &unknown1);
+    CHECK(nev == 0 && bad1 == bad0 + 2 && unknown1 == unknown0);
+
+    // Outside a session it is not heard.
+    end_session();
+    reset();
+    feed("{\"t\":\"apps\",\"shown\":\"orca\",\"apps\":[{\"id\":\"orca\",\"count\":1}]}");
+    CHECK(nev == 0);
+    welcome();
+}
+
+static void test_app_pick(void)
+{
+    welcome();
+    reset();
+    nowait_sent = 0;
+    CHECK(pro_cable_app_pick("orca", true) && nsent == 1 && nowait_sent == 0);
+    CHECK(!strcmp(sent[0], "{\"t\":\"app.pick\",\"app\":\"orca\"}"));
+    CHECK(pro_cable_app_pick("terminal-app", false) && nowait_sent == 1 && strstr(sent[1], "\"app\":\"terminal-app\""));
+    CHECK(pro_cable_app_pick("0123456789abcdef", true) && nsent == 3);   // 16 bytes, the daemon's longest
+    // What the daemon would ignore is not sent: none, empty, too long, or not an app id.
+    CHECK(!pro_cable_app_pick(NULL, true) && !pro_cable_app_pick("", true) && !pro_cable_app_pick("0123456789abcdefg", true));
+    CHECK(!pro_cable_app_pick("Orca", true) && !pro_cable_app_pick("or ca", true) && !pro_cable_app_pick("or\"ca", false));
+    CHECK(!pro_cable_app_pick("orca\xC3\xA9", true));
+    CHECK(nsent == 3);
+}
+
 int main(void)
 {
     pro_cable_start();   // the lock and the machine table; no tasks run on the host
@@ -1545,6 +1674,9 @@ int main(void)
     test_form_and_toast();
     test_voice_form();
     test_answer_and_form_sends();
+    test_agent_host_and_caps();
+    test_apps();
+    test_app_pick();
     printf("test_pro_cable: %d checks passed\n", checks);
     return 0;
 }

@@ -232,6 +232,9 @@ static void send_hello(void)
     msg_string(&root, "stats", "turn-v1");
     msg_string(&root, "player", "library-v1");
     msg_string(&root, "ota", "v1");
+    // The Max shows one app's agents at a time (docs/specs/2026-11-14-dial-app-filter.md): `apps` in, app.pick out. The
+    // Pro holds the window's tab, so its hello stays the one the daemon has always had from it.
+    if (board()->kind && !strcmp(board()->kind, "max")) msg_string(&root, "appFilter", "v1");
     char mac[24] = "";
     device_mac_str(mac, sizeof(mac));
     msg_string(&root, "mac", mac);
@@ -428,6 +431,8 @@ static void track_seq(const cJSON *root, bool welcome)
 
 typedef struct {
     char id[ID_MAX], name[CABLE_NAME_MAX], engine[12], machine_id[ID_MAX], machine[CABLE_NAME_MAX];
+    char host[PRO_APP_ID_BYTES], caps[sizeof "svfa"];
+    bool has_host, has_caps;   // absent is NULL in the row: no host, and caps that read as all four
 } agent_store_t;
 static EXT_RAM_BSS_ATTR agent_store_t s_agent_store[POD_AGENTS_MAX];
 static pro_agent_row_t s_agent_rows[POD_AGENTS_MAX];
@@ -452,6 +457,18 @@ static void handle_agent(const cJSON *p)
     if (machine_id && strlen(machine_id) < sizeof a->machine_id) snprintf(a->machine_id, sizeof a->machine_id, "%s", machine_id);
     const char *machine = str_of(p, "machine");
     if (machine) copy_cut(a->machine, sizeof a->machine, machine);
+    // The agent's nearest app, compared with the apps' ids: one too long to be an id is none, never cut into another.
+    const char *host = str_of(p, "host");
+    a->has_host = host && strlen(host) < sizeof a->host;
+    if (a->has_host) memcpy(a->host, host, strlen(host) + 1);
+    // The letters it grants, as the round dial reads them: each of s v f a it holds, and nothing for any other letter.
+    // Kept as that set, so a string of any length is read whole and never grants more by being cut.
+    const char *caps = str_of(p, "caps");
+    a->has_caps = caps != NULL;
+    size_t granted = 0;
+    for (const char *c = "svfa"; caps && *c; c++)
+        if (strchr(caps, *c)) a->caps[granted++] = *c;
+    a->caps[granted] = 0;
     s_agent_count++;
 }
 
@@ -461,10 +478,69 @@ static void handle_agents_end(void)
     s_agents_building = false;
     for (int i = 0; i < s_agent_count; i++) {
         const agent_store_t *a = &s_agent_store[i];
-        s_agent_rows[i] = (pro_agent_row_t){ a->id, a->name, a->engine, a->machine_id, a->machine };
+        s_agent_rows[i] = (pro_agent_row_t){ a->id, a->name, a->engine, a->machine_id, a->machine,
+                                             a->has_host ? a->host : NULL, a->has_caps ? a->caps : NULL };
     }
     ESP_LOGI(TAG, "agents: %d", s_agent_count);
     pro_app_agents(s_agent_rows, s_agent_count);
+}
+
+// ── the apps (the Max's hello says appFilter "v1") ──────────────────────────────────────────────────
+// docs/specs/2026-11-14-dial-app-filter.md. An app's id goes back in app.pick, which the daemon takes only at 16 bytes or
+// less; its ids are hostDetect.ts's, [a-z0-9-]. The bar holds only an id it could send back.
+static bool app_id_ok(const char *id)
+{
+    const size_t n = id ? strnlen(id, PRO_APP_ID_BYTES) : 0;
+    if (n < 1 || n >= PRO_APP_ID_BYTES) return false;
+    for (size_t i = 0; i < n; i++)
+        if (!((id[i] >= 'a' && id[i] <= 'z') || (id[i] >= '0' && id[i] <= '9') || id[i] == '-')) return false;
+    return true;
+}
+
+bool pro_cable_app_pick(const char *app, bool wait)
+{
+    if (!app_id_ok(app)) return false;
+    cJSON *root = msg("app.pick");
+    msg_string(&root, "app", app);
+    return send_json_with(root, wait);
+}
+
+// A count as the round dial holds it: a number, 0..999 (a fraction is cut); anything else is 0.
+static int app_count_of(const cJSON *o, const char *key)
+{
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(o, key);
+    return !cJSON_IsNumber(v) || !(v->valuedouble > 0) ? 0 : v->valuedouble > 999 ? 999 : (int)v->valuedouble;
+}
+
+// Static: 16 rows of ids and names are over the cable_link task's 1 KB frame budget.
+static char s_app_ids[PRO_APPS_MAX][PRO_APP_ID_BYTES], s_app_names[PRO_APPS_MAX][CABLE_NAME_MAX];
+static char s_app_shown[PRO_APP_ID_BYTES];
+static pro_app_row_t s_app_rows[PRO_APPS_MAX];
+
+// apps {shown, apps:[{id, name, count, waiting}]}: the whole list, replaced on arrival, before the ring it names. No list
+// is a malformed frame. A row whose id the bar could not send back, or a second row with the same id, is dropped; a name
+// is only drawn, so it is cut on a character. A `shown` that is not an id is none.
+static void handle_apps(const cJSON *p)
+{
+    const cJSON *list = cJSON_GetObjectItemCaseSensitive(p, "apps"), *it = NULL;
+    if (!cJSON_IsArray(list)) { s_bad++; return; }
+    int n = 0;
+    cJSON_ArrayForEach(it, list) {
+        if (n >= PRO_APPS_MAX) break;
+        const char *id = str_of(it, "id"), *name = str_of(it, "name");
+        if (!app_id_ok(id)) continue;
+        bool duplicate = false;
+        for (int i = 0; i < n; i++) duplicate = duplicate || !strcmp(s_app_ids[i], id);
+        if (duplicate) continue;
+        memcpy(s_app_ids[n], id, strlen(id) + 1);
+        copy_cut(s_app_names[n], sizeof s_app_names[n], name ? name : "");
+        s_app_rows[n] = (pro_app_row_t){ s_app_ids[n], s_app_names[n], app_count_of(it, "count"), app_count_of(it, "waiting") };
+        n++;
+    }
+    const char *shown = str_of(p, "shown");
+    snprintf(s_app_shown, sizeof s_app_shown, "%s", app_id_ok(shown) ? shown : "");
+    ESP_LOGI(TAG, "apps: %d", n);
+    pro_app_apps(s_app_shown, s_app_rows, n);
 }
 
 // ── tabs ────────────────────────────────────────────────────────────────────────────────────────────
@@ -1107,6 +1183,7 @@ static void handle_message(const cJSON *root)
     if (!strcmp(t, "agents.begin")) { s_agent_count = 0; s_agents_building = true; return; }
     if (!strcmp(t, "agent")) { handle_agent(p); return; }
     if (!strcmp(t, "agents.end")) { handle_agents_end(); return; }
+    if (!strcmp(t, "apps")) { handle_apps(p); return; }
     if (!strcmp(t, "agent.updated")) { send_json(msg("agents.list")); return; }   // cheapest correct answer: re-ask
     if (!strcmp(t, "machines.begin")) { cable_machines_begin(&s_machines); return; }
     if (!strcmp(t, "machine")) { stage_machine(p); return; }
